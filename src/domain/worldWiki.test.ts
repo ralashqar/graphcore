@@ -490,6 +490,45 @@ test('deriveWorldWiki splits narrative RPG game nodes into game-specific wiki se
   assert.ok(wiki.gaps.some((gap) => gap.sectionKind === 'game_quests'))
 })
 
+test('deriveWorldWiki keeps story projects in story wiki when narrative scene nodes exist', () => {
+  const actor = createEntity({
+    key: 'world.actor.anya',
+    name: 'Anya Sorin',
+    nodeType: 'actor',
+    summary: 'The maintenance worker carrying the revolt.',
+  })
+  const scene = createEntity({
+    key: 'world.narrative_scene.chapter-8',
+    name: 'Chapter 8: The Human Override',
+    nodeType: 'narrative_scene',
+    summary: 'Anya accepts first-week leadership in the fragile post-Aster order.',
+  })
+
+  const wiki = deriveWorldWiki({
+    snapshot: createSnapshot({
+      draft: {
+        id: 'draft-1',
+        name: 'Draft 1',
+        version: 1,
+        isPrimary: true,
+        updatedAt: '2026-04-28T08:00:00.000Z',
+        metadata: {
+          projectContext: {
+            projectType: 'story',
+            projectSubtype: 'fiction_novel',
+            brainProfile: 'story',
+          },
+        },
+      },
+      worldEntities: [actor, scene],
+    }),
+  })
+
+  assert.equal(wiki.sections.some((section) => section.kind.startsWith('game_')), false)
+  assert.deepEqual(wiki.sections.find((section) => section.kind === 'cast')?.entityKeys, [actor.key])
+  assert.deepEqual(wiki.sections.find((section) => section.kind === 'timeline')?.entityKeys, [scene.key])
+})
+
 test('deriveWorldWiki scopes custom wiki views to source entities', () => {
   const included = createEntity({ key: 'world.actor.included', name: 'Included', nodeType: 'actor', summary: 'Included profile.' })
   const hidden = createEntity({ key: 'world.actor.hidden', name: 'Hidden', nodeType: 'actor', summary: 'Hidden profile.' })

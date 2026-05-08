@@ -40,6 +40,7 @@ import {
   worldPromptGenerationStatusRequestSchema,
   worldPromptGenerationStatusResponseSchema,
   worldPromptInitialSeedContextSchema,
+  worldPromptNodeEvolutionResolutionSchema,
   worldPromptSeedInferenceRequestSchema,
   worldPromptSeedInferenceResponseSchema,
   worldPromptTurnSchema,
@@ -62,6 +63,7 @@ import {
   type WorldPromptEvent,
   type WorldPromptGenerationJob,
   type WorldPromptGenerationJobStep,
+  type WorldPromptNodeEvolutionResolution,
   type WorldPromptIncrementalBuildBrief,
   type WorldPromptIncrementalManifest,
   type WorldPromptIncrementalWorkItem,
@@ -139,8 +141,10 @@ import {
 } from './entity-icon-generation.ts'
 import {
   appendRefinementHistory,
+  hasTruncationArtifact,
   mergeCanonicalContext,
   mergeCanonicalText,
+  replaceCanonicalSummary,
 } from '../../../src/domain/worldPromptRefinement.ts'
 import {
   deriveWorldTimeline,
@@ -993,6 +997,22 @@ function normalizePlannerOperation(rawOp: unknown, index: number) {
         }
       }
       break
+    case 'update_entity_canon':
+      if (typeof record.targetEntityKey === 'string') {
+        record.payload = {
+          targetEntityKey: record.targetEntityKey,
+          factAdditions: Array.isArray(record.factAdditions) ? record.factAdditions : [],
+          supersedeFactIds: Array.isArray(record.supersedeFactIds) ? record.supersedeFactIds : [],
+          currentStatePatch: record.currentStatePatch && typeof record.currentStatePatch === 'object' ? record.currentStatePatch : {},
+          summaryPatch: typeof record.summaryPatch === 'string' ? record.summaryPatch : null,
+          contextPatch: typeof record.contextPatch === 'string' ? record.contextPatch : null,
+          mergeSummary: record.mergeSummary === true,
+          mergeContext: record.mergeContext === true,
+          rationale: typeof record.rationale === 'string' ? record.rationale : '',
+          risk: record.risk === 'high' || record.risk === 'medium' ? record.risk : 'low',
+        }
+      }
+      break
     case 'replace_entity':
       if (typeof record.targetEntityKey === 'string') {
         record.payload = {
@@ -1056,6 +1076,42 @@ function normalizePlannerOperation(rawOp: unknown, index: number) {
               },
         }
       }
+      break
+    case 'sequence_patch':
+      record.payload = record.payload && typeof record.payload === 'object'
+        ? record.payload
+        : {
+            sequenceKey: record.sequenceKey ?? null,
+            reason: record.reason ?? '',
+            unitUpserts: record.unitUpserts ?? [],
+            unitUpdates: record.unitUpdates ?? [],
+            relationshipUpserts: record.relationshipUpserts ?? [],
+            relationshipArchives: record.relationshipArchives ?? [],
+            auditSummary: record.auditSummary ?? {},
+          }
+      break
+    case 'relationship_rewire_patch':
+      record.payload = record.payload && typeof record.payload === 'object'
+        ? record.payload
+        : {
+            reason: record.reason ?? '',
+            rewires: record.rewires ?? [],
+            auditSummary: record.auditSummary ?? {},
+          }
+      break
+    case 'entity_merge_patch':
+      record.payload = record.payload && typeof record.payload === 'object'
+        ? record.payload
+        : {
+            sourceEntityKey: record.sourceEntityKey,
+            targetEntityKey: record.targetEntityKey,
+            reason: record.reason ?? '',
+            transferRelationships: record.transferRelationships ?? true,
+            transferGraphConnections: record.transferGraphConnections ?? true,
+            transferDerivedResults: record.transferDerivedResults ?? true,
+            archiveSource: record.archiveSource ?? true,
+            auditSummary: record.auditSummary ?? {},
+          }
       break
     case 'create_derived_result':
       record.payload = {
@@ -2350,10 +2406,11 @@ function buildWorldPromptSearchQuery(prompt: string) {
   return Array.from(new Set(tokens)).slice(0, 10).join(' ')
 }
 
-function trimPlannerText(value: string, maxLength: number) {
+function trimPlannerText(value: string, maxLength: number, options?: { ellipsis?: boolean }) {
   const compact = value.replace(/\s+/g, ' ').trim()
   if (compact.length <= maxLength) return compact
-  return `${compact.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
+  const clipped = compact.slice(0, Math.max(0, options?.ellipsis === false ? maxLength : maxLength - 1)).trimEnd()
+  return options?.ellipsis === false ? clipped.replace(/[\s,;:]+$/g, '') : `${clipped}…`
 }
 
 function summarizeEntityForPlanner(
@@ -4135,19 +4192,33 @@ function optimizePlannerOpsForMode(input: {
   const normalizedOps = input.plan.wave1Ops.map((op) => {
     const cloned = structuredClone(op) as PromptToWorldOp
     if (cloned.op === 'upsert_entity') {
-      cloned.payload.entity.summary = trimPlannerText(cloned.payload.entity.summary ?? '', 180)
+      cloned.payload.entity.summary = trimPlannerText(cloned.payload.entity.summary ?? '', 240, { ellipsis: false })
       cloned.payload.entity.context = allowRichContext
         ? trimPlannerText(cloned.payload.entity.context ?? '', 420)
         : ''
     }
     if (cloned.op === 'update_entity') {
       if (typeof cloned.payload.changes.summary === 'string') {
-        cloned.payload.changes.summary = trimPlannerText(cloned.payload.changes.summary, 180)
+        cloned.payload.changes.summary = trimPlannerText(cloned.payload.changes.summary, 240, { ellipsis: false })
       }
       if (typeof cloned.payload.changes.context === 'string') {
         cloned.payload.changes.context = allowRichContext
           ? trimPlannerText(cloned.payload.changes.context, 420)
-          : undefined
+        : undefined
+      }
+    }
+    if (cloned.op === 'update_entity_canon') {
+      cloned.payload.factAdditions = cloned.payload.factAdditions.map((fact) => ({
+        ...fact,
+        text: trimPlannerText(fact.text, 320, { ellipsis: false }),
+      }))
+      if (typeof cloned.payload.summaryPatch === 'string') {
+        cloned.payload.summaryPatch = trimPlannerText(cloned.payload.summaryPatch, 320, { ellipsis: false })
+      }
+      if (typeof cloned.payload.contextPatch === 'string') {
+        cloned.payload.contextPatch = allowRichContext
+          ? trimPlannerText(cloned.payload.contextPatch, 420)
+          : null
       }
     }
     if (cloned.op === 'upsert_relationship' && typeof cloned.payload.relationship.notes === 'string') {
@@ -4633,10 +4704,11 @@ function countScopeOps(ops: PromptToWorldOp[], snapshot: WorldPromptSnapshot) {
   for (const op of ops) {
     if (op.op === 'assistant_note') continue
     counts.actionableOps += 1
-    if (op.op === 'upsert_entity' || op.op === 'update_entity' || op.op === 'replace_entity') {
+    if (op.op === 'upsert_entity' || op.op === 'update_entity' || op.op === 'update_entity_canon' || op.op === 'replace_entity') {
       counts.entityOps += 1
       const targetsExisting =
         op.op === 'update_entity'
+          || op.op === 'update_entity_canon'
           || op.op === 'replace_entity'
           || (
             op.op === 'upsert_entity'
@@ -4653,6 +4725,12 @@ function countScopeOps(ops: PromptToWorldOp[], snapshot: WorldPromptSnapshot) {
     }
     if (op.op === 'upsert_relationship' || op.op === 'update_relationship') {
       counts.relationshipOps += 1
+      continue
+    }
+    if (op.op === 'sequence_patch') {
+      counts.entityOps += op.payload.unitUpserts.length + op.payload.unitUpdates.length
+      counts.relationshipOps += op.payload.relationshipUpserts.length + op.payload.relationshipArchives.length
+      counts.existingEntityModificationOps += op.payload.unitUpdates.length
       continue
     }
     if (op.op === 'queue_image_generation' || op.op === 'queue_cinematic_generation') {
@@ -5711,11 +5789,22 @@ function impactForOp(op: PromptToWorldOp) {
   switch (op.op) {
     case 'upsert_entity':
     case 'update_entity':
+    case 'update_entity_canon':
     case 'replace_entity':
       return { nodeCount: 1, edgeCount: 0, queueCount: 0 }
     case 'upsert_relationship':
     case 'update_relationship':
       return { nodeCount: 0, edgeCount: 1, queueCount: 0 }
+    case 'sequence_patch':
+      return {
+        nodeCount: op.payload.unitUpserts.length + op.payload.unitUpdates.length,
+        edgeCount: op.payload.relationshipUpserts.length + op.payload.relationshipArchives.length,
+        queueCount: 0,
+      }
+    case 'relationship_rewire_patch':
+      return { nodeCount: 0, edgeCount: op.payload.rewires.length, queueCount: 0 }
+    case 'entity_merge_patch':
+      return { nodeCount: 1, edgeCount: 1, queueCount: 0 }
     case 'create_derived_result':
       return { nodeCount: 1, edgeCount: 3, queueCount: 0 }
     case 'queue_image_generation':
@@ -5757,6 +5846,7 @@ function summarizePlannedGraphChanges(input: {
   const newNodes = selectedOps.filter((op) => op.op === 'upsert_entity' && !op.payload.targetEntityKey).length
   const nodeUpdates = selectedOps.filter((op) => (
     op.op === 'update_entity'
+    || op.op === 'update_entity_canon'
     || op.op === 'replace_entity'
     || (op.op === 'upsert_entity' && Boolean(op.payload.targetEntityKey))
   )).length
@@ -5768,6 +5858,7 @@ function summarizePlannedGraphChanges(input: {
   const outputs = selectedOps.filter((op) => op.op === 'create_derived_result').length
   const queuedOutputs = selectedOps.filter((op) => op.op === 'queue_image_generation' || op.op === 'queue_cinematic_generation').length
   const wikiUpdates = selectedOps.filter((op) => op.op === 'update_world_wiki_metadata').length
+  const patchOps = selectedOps.filter((op) => op.op === 'sequence_patch' || op.op === 'relationship_rewire_patch' || op.op === 'entity_merge_patch').length
   const runnableCount = input.runnableOps.filter((op) => op.op !== 'assistant_note').length
 
   const parts = [
@@ -5775,6 +5866,7 @@ function summarizePlannedGraphChanges(input: {
     nodeUpdates > 0 ? pluralizeCount(nodeUpdates, 'node update') : null,
     newLinks > 0 ? pluralizeCount(newLinks, 'new link') : null,
     linkUpdates > 0 ? pluralizeCount(linkUpdates, 'link update') : null,
+    patchOps > 0 ? pluralizeCount(patchOps, 'structural patch', 'structural patches') : null,
     outputs > 0 ? pluralizeCount(outputs, 'linked output') : null,
     queuedOutputs > 0 ? pluralizeCount(queuedOutputs, 'queued output') : null,
     wikiUpdates > 0 ? pluralizeCount(wikiUpdates, 'wiki update') : null,
@@ -6045,6 +6137,19 @@ function buildPreviewItem(op: PromptToWorldOp): WorldPromptPlanPreviewItem {
         estimatedImpact: impact,
         status: 'preview',
       }
+    case 'update_entity_canon':
+      return {
+        id: op.id,
+        kind: 'entity_canon',
+        title: op.payload.auditSummary.title ?? op.payload.targetEntityKey,
+        summary: op.payload.auditSummary.summary || op.payload.rationale || 'Update durable canon facts or current state.',
+        targetKeys: [op.payload.targetEntityKey],
+        diffMode: 'touches_existing',
+        touchesCanon: true,
+        approvalRequired,
+        estimatedImpact: impact,
+        status: 'preview',
+      }
     case 'replace_entity':
       return {
         id: op.id,
@@ -6085,6 +6190,53 @@ function buildPreviewItem(op: PromptToWorldOp): WorldPromptPlanPreviewItem {
         targetKeys: [op.payload.targetRelationshipKey],
         diffMode,
         touchesCanon,
+        approvalRequired,
+        estimatedImpact: impact,
+        status: 'preview',
+      }
+    case 'sequence_patch':
+      return {
+        id: op.id,
+        kind: 'sequence_patch',
+        title: op.payload.auditSummary.title ?? 'Sequence rewired',
+        summary: op.payload.auditSummary.summary || op.payload.reason || 'Apply a structural sequence edit atomically.',
+        targetKeys: [
+          ...op.payload.unitUpserts.map((entry) => entry.targetEntityKey ?? '').filter(Boolean),
+          ...op.payload.unitUpdates.map((entry) => entry.targetEntityKey),
+          ...op.payload.relationshipArchives.map((entry) => entry.targetRelationshipKey),
+        ],
+        diffMode: 'touches_existing',
+        touchesCanon,
+        approvalRequired,
+        estimatedImpact: impact,
+        status: 'preview',
+      }
+    case 'relationship_rewire_patch':
+      return {
+        id: op.id,
+        kind: 'relationship_rewire_patch',
+        title: op.payload.auditSummary.title ?? 'Relationship rewired',
+        summary: op.payload.auditSummary.summary || op.payload.reason || 'Move or rename existing links atomically.',
+        targetKeys: op.payload.rewires.flatMap((entry) => [
+          entry.targetRelationshipKey,
+          entry.sourceEntityKey ?? '',
+          entry.targetEntityKey ?? '',
+        ]).filter(Boolean),
+        diffMode: 'touches_existing',
+        touchesCanon: true,
+        approvalRequired,
+        estimatedImpact: impact,
+        status: 'preview',
+      }
+    case 'entity_merge_patch':
+      return {
+        id: op.id,
+        kind: 'entity_merge_patch',
+        title: op.payload.auditSummary.title ?? 'Entities merged',
+        summary: op.payload.auditSummary.summary || op.payload.reason || 'Merge duplicate or overlapping entities and transfer links.',
+        targetKeys: [op.payload.sourceEntityKey, op.payload.targetEntityKey],
+        diffMode: 'touches_existing',
+        touchesCanon: true,
         approvalRequired,
         estimatedImpact: impact,
         status: 'preview',
@@ -6209,6 +6361,21 @@ function promptOpNeedsApproval(op: PromptToWorldOp) {
   }
   return op.applyMode === 'needs_approval'
     || approvalReason.length > 0
+}
+
+const STORY_CANON_NODE_TYPES = new Set(['actor', 'group', 'place', 'object', 'concept', 'event', 'sequence_unit'])
+const APP_CANON_NODE_TYPES = new Set(['app', 'persona', 'business_goal', 'feature', 'user_flow', 'screen', 'section', 'component', 'data_model', 'action', 'api_endpoint', 'backend_function', 'external_service', 'design_system', 'capability', 'screen_mockup', 'image_region', 'animation_spec', 'tower', 'code_file'])
+
+function projectTypeAllowsWorldNodeType(projectContext: WorldPromptSnapshot['projectContext'], nodeType: WorldEntity['nodeType']) {
+  if (projectContextIsApp(projectContext)) return APP_CANON_NODE_TYPES.has(nodeType)
+  if (!projectContext || projectContext.projectType === 'story' || projectContext.brainProfile === 'story') {
+    return STORY_CANON_NODE_TYPES.has(nodeType)
+  }
+  return true
+}
+
+function promptExplicitlyRequestsDirectRiskApply(prompt: string | null | undefined) {
+  return /\b(apply\s+directly|go\s+ahead|do\s+it|make\s+the\s+change|yes,\s*apply|apply\s+now)\b/i.test(prompt ?? '')
 }
 
 type StorySequenceOpIssue = {
@@ -7320,6 +7487,9 @@ type AppliedWorldGraphRecords = {
   worldOperators?: WorldOperator[]
   worldResults?: WorldResult[]
   worldGraphConnections?: WorldGraphConnection[]
+  deleted?: {
+    worldRelationshipKeys?: string[]
+  }
 }
 
 function mergeRecordsByKey<T extends { key: string }>(current: T[], incoming: T[] | undefined) {
@@ -7341,10 +7511,33 @@ function mergeAppliedWorldGraphIntoSnapshot(snapshot: WorldPromptSnapshot, appli
   }
   snapshot.worldEntities = mergeRecordsByKey(snapshot.worldEntities, applied.worldEntities)
   snapshot.worldRelationships = mergeRecordsByKey(snapshot.worldRelationships, applied.worldRelationships)
+  if (applied.deleted?.worldRelationshipKeys?.length) {
+    const deletedKeys = new Set(applied.deleted.worldRelationshipKeys)
+    snapshot.worldRelationships = snapshot.worldRelationships.filter((relationship) => !deletedKeys.has(relationship.key))
+  }
   snapshot.worldViews = mergeRecordsByKey(snapshot.worldViews, applied.worldViews)
   snapshot.worldOperators = mergeRecordsByKey(snapshot.worldOperators, applied.worldOperators)
   snapshot.worldResults = mergeRecordsByKey(snapshot.worldResults, applied.worldResults)
   snapshot.worldGraphConnections = mergeRecordsByKey(snapshot.worldGraphConnections, applied.worldGraphConnections)
+}
+
+function readRpcStringArray(record: Record<string, unknown> | null | undefined, key: string) {
+  const value = record?.[key]
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+}
+
+function appliedPromptOpEventPayload(result: {
+  applied?: AppliedWorldGraphRecords
+  deleted?: { worldRelationshipKeys?: string[] }
+  sequencePatchAudit?: Record<string, unknown>
+  audit?: Record<string, unknown>
+}) {
+  return {
+    applied: result.applied,
+    deleted: result.deleted,
+    sequencePatchAudit: result.sequencePatchAudit,
+    audit: result.audit,
+  }
 }
 
 async function ensureLinkedDefinition(input: {
@@ -8318,12 +8511,20 @@ function describePromptOp(op: PromptToWorldOp) {
       return `Add or extend ${op.payload.entity.name}`
     case 'update_entity':
       return `Update ${op.payload.targetEntityKey}`
+    case 'update_entity_canon':
+      return op.payload.auditSummary.title ?? `Update canon for ${op.payload.targetEntityKey}`
     case 'replace_entity':
       return `Replace ${op.payload.targetEntityKey}`
     case 'upsert_relationship':
       return `Link ${op.payload.relationship.sourceEntityKey ?? op.payload.relationship.sourceRef?.name ?? 'source'} to ${op.payload.relationship.targetEntityKey ?? op.payload.relationship.targetRef?.name ?? 'target'}`
     case 'update_relationship':
       return `Update relationship ${op.payload.targetRelationshipKey}`
+    case 'sequence_patch':
+      return op.payload.auditSummary.title ?? 'Rewire sequence'
+    case 'relationship_rewire_patch':
+      return op.payload.auditSummary.title ?? `Rewire ${op.payload.rewires.length} relationship${op.payload.rewires.length === 1 ? '' : 's'}`
+    case 'entity_merge_patch':
+      return op.payload.auditSummary.title ?? `Merge ${op.payload.sourceEntityKey} into ${op.payload.targetEntityKey}`
     case 'create_derived_result':
       return `Create ${op.payload.title ?? op.payload.operatorType}`
     case 'queue_image_generation':
@@ -8407,6 +8608,7 @@ async function generatePromptPlan(input: {
   sessionMemoryState: WorldPromptSessionMemoryState
   recentMessages: WorldPromptMessage[]
   selectedSuggestion?: WorldPromptSuggestionRecord | null
+  nodeEvolution?: WorldPromptNodeEvolutionResolution | null
   onPlannerProgress?: (progress: WorldPromptPlannerProgress, extras?: { plannerOutline?: string[] }) => Promise<void> | void
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
@@ -8520,7 +8722,7 @@ async function generatePromptPlan(input: {
     'You can either plan graph mutations or answer graph-aware advisory questions.',
     `Planner mode: ${plannerMode}.`,
     `Return only the fields present in the schema for this mode. Do not invent omitted top-level keys.`,
-    'Allowed operations for wave1Ops: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
+    'Allowed operations for wave1Ops: upsert_entity, update_entity, update_entity_canon, replace_entity, upsert_relationship, update_relationship, sequence_patch, relationship_rewire_patch, entity_merge_patch, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
     'Favor additive graph growth.',
     ...promptStrategy.plannerGuidance,
     'Every upsert_entity must include entity.metadata.visual.description, entity.metadata.visual.traits, and legacy entity.metadata.visualDescription composed as "<neutral description> Traits: X, Y, Z".',
@@ -8531,8 +8733,13 @@ async function generatePromptPlan(input: {
     'Use graph_diagnosis for prompts that ask what is weak, missing, thin, underdeveloped, or structurally lacking in the current world.',
     'Use refinement_only when the prompt mainly enriches existing nodes or relationships rather than expanding the world broadly.',
     'For advisory_question and graph_diagnosis, fill answer, answerMode, optionCandidates, and diagnosticFindings. Do not force graph operations unless the user is clearly asking for applied changes.',
-    'Use update_entity when the user is refining or clarifying an existing node summary, context, aliases, or tags without changing the node identity.',
-    'Use update_relationship when the user is refining relationship details, tone, notes, or confidence for an existing link.',
+    'Use update_entity_canon when the prompt evolves canon on an existing node: durable facts, current state, history, or selective summary/context changes. Use update_entity only for simple presentation text, aliases, tags, or metadata edits.',
+    'If nodeEvolution is present, align create vs update decisions to it. Do not let fuzzy string matches override the semantic nodeEvolution decision.',
+    'For state_change decisions, prefer update_entity_canon with currentStatePatch and factAdditions. For update_existing decisions, prefer update_entity_canon with factAdditions and mergeSummary/mergeContext only when the display profile should change. For event_or_sequence_change decisions, create or update the relevant event/sequence canon and link it to the affected node.',
+    'For update_entity_canon summaryPatch, provide a complete clean replacement display summary in one or two sentences. Never concatenate prior summaries, never include ellipses, and never output truncated text.',
+    'Use update_relationship only when the user is refining relationship notes, tone, state, strength, or confidence for an existing link; do not use it to move endpoints, change a verb, or reorder story flow.',
+    'For non-sequence endpoint or verb changes on existing links, use relationship_rewire_patch. For duplicate or overlapping canon nodes, use entity_merge_patch.',
+    'For structural story sequence changes such as insert, reorder, split, merge, or moving a chapter/episode/beat between two existing sequence units, use sequence_patch so unit ordinals and precedes links are changed atomically.',
     'Use queue_image_generation only for actor, place, or object nodes when the prompt is visually explicit.',
     'Use queue_cinematic_generation only when the prompt explicitly requests a cinematic, scene, shot, trailer, storyboard, or cutscene.',
     'Do not invent hard deletions. Use replace_entity only for explicit localized correction prompts where an existing node has the wrong identity or type.',
@@ -8653,6 +8860,7 @@ async function generatePromptPlan(input: {
     resolvedFocus: retrievalIntent.resolvedFocus,
     entityRequirements,
     promptIntentHint,
+    nodeEvolution: input.nodeEvolution ?? null,
     selectedSuggestionId: input.payload.selectedSuggestionId,
     selectedSuggestion: input.selectedSuggestion
       ? {
@@ -8946,6 +9154,15 @@ function sanitizePromptOp(input: {
 
   if (op.op === 'upsert_entity') {
     const entity = op.payload.entity
+    if (!projectTypeAllowsWorldNodeType(input.snapshot.projectContext, entity.nodeType)) {
+      op.applyMode = 'needs_approval'
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: Boolean(op.payload.targetEntityKey),
+        canonTouch: true,
+        approvalReason: `Node type ${entity.nodeType} is not allowed for this project type`,
+      })
+    }
     entity.source = entity.source ?? 'ai'
     entity.ensureLinkedDefinition = entity.ensureLinkedDefinition ?? true
     let resolved = resolveEntityReference(input.snapshot, {
@@ -9073,6 +9290,15 @@ function sanitizePromptOp(input: {
       || op.payload.changes.nodeType !== undefined
       || op.payload.changes.linkedDefinitionKey !== undefined
     )
+    if (op.payload.changes.nodeType && !projectTypeAllowsWorldNodeType(input.snapshot.projectContext, op.payload.changes.nodeType)) {
+      op.applyMode = 'needs_approval'
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: true,
+        canonTouch: true,
+        approvalReason: `Node type ${op.payload.changes.nodeType} is not allowed for this project type`,
+      })
+    }
     const canonTouch = entityIsCanonLocked(target)
     const sequenceApprovalReason = annotateStorySequenceCompletenessGuard({
       op,
@@ -9096,6 +9322,50 @@ function sanitizePromptOp(input: {
     })
   }
 
+  if (op.op === 'update_entity_canon') {
+    const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+    if (!target) {
+      op.applyMode = 'needs_approval'
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: true,
+        approvalReason: 'Missing entity target',
+      })
+    }
+    if (typeof op.payload.summaryPatch === 'string' && hasTruncationArtifact(op.payload.summaryPatch)) {
+      op.payload.summaryPatch = null
+      op.payload.mergeSummary = false
+    }
+    const hasFactAdditions = op.payload.factAdditions.some((fact) => fact.text.trim().length > 0)
+    const hasSupersessions = op.payload.supersedeFactIds.length > 0 || op.payload.factAdditions.some((fact) => fact.supersedesFactIds.length > 0)
+    const hasCurrentStatePatch = Object.keys(op.payload.currentStatePatch ?? {}).length > 0
+    const hasSummaryPatch = Boolean(op.payload.mergeSummary && op.payload.summaryPatch?.trim())
+    const hasContextPatch = Boolean(op.payload.mergeContext && op.payload.contextPatch?.trim())
+    if (!hasFactAdditions && !hasSupersessions && !hasCurrentStatePatch && !hasSummaryPatch && !hasContextPatch) {
+      op.applyMode = 'needs_approval'
+      return annotatePromptOpMetadata({
+        op,
+        touchesExisting: true,
+        approvalReason: 'Empty entity canon update',
+      })
+    }
+    const canonTouch = entityIsCanonLocked(target)
+    const risky = op.payload.risk === 'high' || hasSupersessions || /retcon|replace|contradict|no longer/i.test(op.payload.rationale)
+    if (canonTouch || risky) {
+      op.applyMode = 'needs_approval'
+    }
+    return annotatePromptOpMetadata({
+      op,
+      touchesExisting: true,
+      canonTouch,
+      approvalReason: canonTouch
+        ? 'Touches canon-locked entity'
+        : risky
+          ? 'Risky canon evolution requires preview approval'
+          : null,
+    })
+  }
+
   if (op.op === 'replace_entity') {
     const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
     if (!target) {
@@ -9108,6 +9378,15 @@ function sanitizePromptOp(input: {
     }
 
     if (op.payload.replacementMode === 'create' && op.payload.replacementEntity) {
+      if (!projectTypeAllowsWorldNodeType(input.snapshot.projectContext, op.payload.replacementEntity.nodeType)) {
+        op.applyMode = 'needs_approval'
+        return annotatePromptOpMetadata({
+          op,
+          touchesExisting: true,
+          canonTouch: true,
+          approvalReason: `Node type ${op.payload.replacementEntity.nodeType} is not allowed for this project type`,
+        })
+      }
       op.payload.replacementEntity.source = op.payload.replacementEntity.source ?? 'ai'
       op.payload.replacementEntity.ensureLinkedDefinition = op.payload.replacementEntity.ensureLinkedDefinition ?? true
       const resolvedReplacement = resolveEntityReference(input.snapshot, {
@@ -9279,6 +9558,81 @@ function sanitizePromptOp(input: {
     })
   }
 
+  if (op.op === 'sequence_patch') {
+    const sequenceEntityKeys = new Set(input.snapshot.worldEntities
+      .filter((entity) => entity.nodeType === 'sequence_unit')
+      .map((entity) => entity.key))
+    const invalidUnitUpdate = op.payload.unitUpdates.some((entry) => !sequenceEntityKeys.has(entry.targetEntityKey))
+    const invalidRelationshipArchive = op.payload.relationshipArchives.some((entry) => {
+      const relationship = input.snapshot.worldRelationships.find((candidate) => candidate.key === entry.targetRelationshipKey) ?? null
+      if (!relationship) return false
+      return !sequenceEntityKeys.has(relationship.sourceEntityKey) || !sequenceEntityKeys.has(relationship.targetEntityKey)
+    })
+    const invalidRelationshipUpsert = op.payload.relationshipUpserts.some((entry) => {
+      const sourceKey = entry.relationship.sourceEntityKey ?? ''
+      const targetKey = entry.relationship.targetEntityKey ?? ''
+      return !sequenceEntityKeys.has(sourceKey) || !sequenceEntityKeys.has(targetKey)
+    })
+    if (invalidUnitUpdate || invalidRelationshipArchive || invalidRelationshipUpsert) {
+      op.applyMode = 'needs_approval'
+    }
+    return annotatePromptOpMetadata({
+      op,
+      touchesExisting: true,
+      canonTouch: true,
+      approvalReason: invalidUnitUpdate || invalidRelationshipArchive || invalidRelationshipUpsert
+        ? 'Sequence patch references non-sequence endpoints'
+        : null,
+    })
+  }
+
+  if (op.op === 'relationship_rewire_patch') {
+    const issues: string[] = []
+    for (const rewire of op.payload.rewires) {
+      const target = input.snapshot.worldRelationships.find((relationship) => relationship.key === rewire.targetRelationshipKey) ?? null
+      if (!target) {
+        issues.push(`Missing relationship ${rewire.targetRelationshipKey}`)
+        continue
+      }
+      const source = rewire.sourceEntityKey
+        ? input.snapshot.worldEntities.find((entity) => entity.key === rewire.sourceEntityKey) ?? null
+        : input.snapshot.worldEntities.find((entity) => entity.key === target.sourceEntityKey) ?? null
+      const targetEntity = rewire.targetEntityKey
+        ? input.snapshot.worldEntities.find((entity) => entity.key === rewire.targetEntityKey) ?? null
+        : input.snapshot.worldEntities.find((entity) => entity.key === target.targetEntityKey) ?? null
+      if (!source) issues.push(`Missing source endpoint ${rewire.sourceEntityKey ?? target.sourceEntityKey}`)
+      if (!targetEntity) issues.push(`Missing target endpoint ${rewire.targetEntityKey ?? target.targetEntityKey}`)
+      if (source && targetEntity && source.key === targetEntity.key) issues.push(`Relationship ${target.key} would point to the same entity`)
+    }
+    if (issues.length > 0 || !promptExplicitlyRequestsDirectRiskApply(input.prompt)) {
+      op.applyMode = 'needs_approval'
+    }
+    return annotatePromptOpMetadata({
+      op,
+      touchesExisting: true,
+      canonTouch: true,
+      approvalReason: issues[0] ?? (!promptExplicitlyRequestsDirectRiskApply(input.prompt) ? 'Relationship rewire requires preview approval' : null),
+    })
+  }
+
+  if (op.op === 'entity_merge_patch') {
+    const source = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.sourceEntityKey) ?? null
+    const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+    let approvalReason: string | null = null
+    if (!source) approvalReason = `Missing merge source ${op.payload.sourceEntityKey}`
+    else if (!target) approvalReason = `Missing merge target ${op.payload.targetEntityKey}`
+    else if (source.key === target.key) approvalReason = 'Entity merge source and target must be different'
+    else if (source.nodeType !== target.nodeType) approvalReason = 'Entity merge crosses node types'
+    else if (!promptExplicitlyRequestsDirectRiskApply(input.prompt)) approvalReason = 'Entity merge requires preview approval'
+    if (approvalReason) op.applyMode = 'needs_approval'
+    return annotatePromptOpMetadata({
+      op,
+      touchesExisting: true,
+      canonTouch: true,
+      approvalReason,
+    })
+  }
+
   if (op.op === 'create_derived_result') {
     const source = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.sourceEntityKey) ?? null
     const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
@@ -9375,6 +9729,9 @@ async function createPromptWorldEntity(input: {
   preferredKey?: string | null
 }) {
   const entity = normalizeWorldEntityCreateInputVisual(input.entity)
+  if (!projectTypeAllowsWorldNodeType(input.snapshot.projectContext, entity.nodeType)) {
+    throw new Error(`Node type ${entity.nodeType} is not allowed for this project type.`)
+  }
   const { linkedDefinitionKey, createdDefinition } = await ensureLinkedDefinition({
     client: input.client,
     snapshot: input.snapshot,
@@ -9605,6 +9962,9 @@ async function applyPromptOp(input: {
 
   if (input.op.op === 'upsert_entity') {
     const promptEntity = normalizeWorldEntityCreateInputVisual(input.op.payload.entity)
+    if (!projectTypeAllowsWorldNodeType(input.snapshot.projectContext, promptEntity.nodeType)) {
+      throw new Error(`Node type ${promptEntity.nodeType} is not allowed for this project type.`)
+    }
     const target = !isProjectedCreate(input.op) && input.op.payload.targetEntityKey
       ? input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.targetEntityKey) ?? null
       : null
@@ -9752,6 +10112,9 @@ async function applyPromptOp(input: {
     const target = input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.targetEntityKey) ?? null
     if (!target) throw new Error(`World entity ${input.op.payload.targetEntityKey} not found.`)
     const changes = input.op.payload.changes
+    if (changes.nodeType && !projectTypeAllowsWorldNodeType(input.snapshot.projectContext, changes.nodeType)) {
+      throw new Error(`Node type ${changes.nodeType} is not allowed for this project type.`)
+    }
     const nextAliases = changes.aliases ? Array.from(new Set([...target.aliases, ...changes.aliases])) : target.aliases
     const nextTags = changes.tags ? Array.from(new Set([...target.tags, ...changes.tags])) : target.tags
     const nextCustomProperties = changes.customProperties
@@ -9859,6 +10222,179 @@ async function applyPromptOp(input: {
     }
   }
 
+  if (input.op.op === 'update_entity_canon') {
+    const target = input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.targetEntityKey) ?? null
+    if (!target) throw new Error(`World entity ${input.op.payload.targetEntityKey} not found.`)
+    const baseMetadata = { ...(target.metadata ?? {}) } as Record<string, unknown>
+    const previousFacts = readEntityCanonFacts(baseMetadata)
+    const previousFactsById = new Map(previousFacts.map((fact) => [fact.factId, fact]))
+    const now = new Date().toISOString()
+    const addedFacts: Record<string, unknown>[] = []
+    const factAdditions = input.op.payload.factAdditions
+      .map((fact, index) => {
+        const text = fact.text.trim()
+        if (!text) return null
+        const factId = normalizeCanonFactId(fact.factId ?? '') || normalizeCanonFactId(`${input.op.id}.fact.${index + 1}`)
+        if (previousFactsById.has(factId)) return null
+        const nextFact = {
+          factId,
+          kind: fact.kind,
+          text,
+          sourceTurnId: fact.sourceTurnId ?? input.turnId,
+          sourceEventId: fact.sourceEventId ?? null,
+          status: fact.status ?? 'active',
+          supersedesFactIds: fact.supersedesFactIds,
+          metadata: {
+            ...(fact.metadata ?? {}),
+            opId: input.op.id,
+            recordedAt: now,
+          },
+        }
+        addedFacts.push(nextFact)
+        return nextFact
+      })
+      .filter((fact): fact is Record<string, unknown> => Boolean(fact))
+    const supersedeFactIds = Array.from(new Set([
+      ...input.op.payload.supersedeFactIds,
+      ...factAdditions.flatMap((fact) => Array.isArray(fact.supersedesFactIds) ? fact.supersedesFactIds as string[] : []),
+    ].map(normalizeCanonFactId).filter(Boolean)))
+    const addedFactIds = new Set(factAdditions.map((fact) => String(fact.factId)))
+    const supersededFacts: Record<string, unknown>[] = []
+    const supersedingFactIds = Array.from(addedFactIds)
+    const nextFacts = [
+      ...previousFacts.map((fact) => {
+        if (!supersedeFactIds.includes(fact.factId) || fact.status === 'superseded') return fact
+        const nextFact = {
+          ...fact,
+          status: 'superseded',
+          supersededAt: now,
+          supersededByFactIds: Array.from(new Set([
+            ...(Array.isArray(fact.supersededByFactIds) ? fact.supersededByFactIds.filter((value): value is string => typeof value === 'string') : []),
+            ...supersedingFactIds,
+          ])),
+        }
+        supersededFacts.push(nextFact)
+        return nextFact
+      }),
+      ...factAdditions,
+    ]
+    const previousCurrentState = isRecord(baseMetadata.currentState) ? baseMetadata.currentState : {}
+    const currentStatePatch = input.op.payload.currentStatePatch ?? {}
+    const nextCurrentState = Object.keys(currentStatePatch).length > 0
+      ? {
+          ...previousCurrentState,
+          ...currentStatePatch,
+          updatedAt: now,
+          sourceTurnId: input.turnId,
+        }
+      : previousCurrentState
+    const summaryMerge = input.op.payload.mergeSummary
+      ? replaceCanonicalSummary({ existing: target.summary, incoming: input.op.payload.summaryPatch })
+      : { text: target.summary, changed: false, strategy: 'unchanged' as const }
+    const contextMerge = input.op.payload.mergeContext
+      ? mergeCanonicalContext({ existing: target.context, incoming: input.op.payload.contextPatch })
+      : { text: target.context, changed: false, strategy: 'unchanged' as const }
+    let nextMetadata: Record<string, unknown> = {
+      ...baseMetadata,
+      canonFacts: nextFacts,
+      currentState: nextCurrentState,
+      lastCanonEvolution: {
+        opId: input.op.id,
+        turnId: input.turnId,
+        rationale: input.op.payload.rationale,
+        risk: input.op.payload.risk,
+        factIds: factAdditions.map((fact) => fact.factId),
+        supersededFactIds: supersedeFactIds,
+        currentStateChanged: JSON.stringify(previousCurrentState) !== JSON.stringify(nextCurrentState),
+        recordedAt: now,
+      },
+    }
+    nextMetadata = appendRefinementHistory({
+      metadata: nextMetadata,
+      field: 'summary',
+      previousText: target.summary,
+      incomingText: input.op.payload.summaryPatch,
+      resultText: summaryMerge.text,
+      strategy: summaryMerge.strategy,
+      changed: summaryMerge.changed,
+    })
+    nextMetadata = appendRefinementHistory({
+      metadata: nextMetadata,
+      field: 'context',
+      previousText: target.context,
+      incomingText: input.op.payload.contextPatch,
+      resultText: contextMerge.text,
+      strategy: contextMerge.strategy,
+      changed: contextMerge.changed,
+    })
+    const updateResponse = await input.client
+      .from('world_entities')
+      .update({
+        summary: summaryMerge.text,
+        context: contextMerge.text,
+        metadata: nextMetadata,
+      })
+      .eq('draft_id', input.snapshot.draft.id)
+      .eq('key', target.key)
+      .select('id, key, name, summary, context, node_type, aliases, tags, status, thumbnail_asset_key, linked_definition_key, source, custom_properties, metadata, created_at, updated_at')
+      .single()
+    if (updateResponse.error) throw new Error(updateResponse.error.message)
+    const updatedEntity = worldEntitySchema.parse({
+      id: updateResponse.data.id,
+      key: updateResponse.data.key,
+      name: updateResponse.data.name,
+      summary: updateResponse.data.summary ?? '',
+      context: updateResponse.data.context ?? '',
+      nodeType: updateResponse.data.node_type,
+      aliases: updateResponse.data.aliases ?? [],
+      tags: updateResponse.data.tags ?? [],
+      status: updateResponse.data.status,
+      thumbnailAssetKey: updateResponse.data.thumbnail_asset_key,
+      linkedDefinitionKey: updateResponse.data.linked_definition_key,
+      source: updateResponse.data.source,
+      customProperties: updateResponse.data.custom_properties ?? {},
+      metadata: updateResponse.data.metadata ?? {},
+      createdAt: updateResponse.data.created_at,
+      updatedAt: updateResponse.data.updated_at,
+    })
+    await syncLinkedDefinitionFromWorldEntity({
+      client: input.client,
+      draftId: input.snapshot.draft.id,
+      entity: updatedEntity,
+    })
+    const linkedEntity = await ensureAppliedEntityLinkedDefinition({
+      client: input.client,
+      snapshot: input.snapshot,
+      entity: updatedEntity,
+    })
+    return {
+      applied: { worldEntities: [linkedEntity.entity] },
+      definitions: linkedEntity.createdDefinition ? [linkedEntity.createdDefinition] : [],
+      queue: null,
+      note: null,
+      audit: {
+        title: input.op.payload.auditSummary.title ?? 'Canon updated',
+        summary: input.op.payload.auditSummary.summary || input.op.payload.rationale,
+        targetEntityKey: target.key,
+        before: {
+          summary: compactAuditValue(target.summary),
+          context: compactAuditValue(target.context),
+          currentState: compactAuditValue(previousCurrentState),
+          activeFactCount: previousFacts.filter((fact) => fact.status === 'active').length,
+        },
+        after: {
+          summary: compactAuditValue(updatedEntity.summary),
+          context: compactAuditValue(updatedEntity.context),
+          currentState: compactAuditValue(nextCurrentState),
+          activeFactCount: nextFacts.filter((fact) => fact.status === 'active').length,
+        },
+        addedFacts,
+        supersededFacts,
+        currentStateChanged: JSON.stringify(previousCurrentState) !== JSON.stringify(nextCurrentState),
+      },
+    }
+  }
+
   if (input.op.op === 'replace_entity') {
     const target = input.snapshot.worldEntities.find((entity) => entity.key === input.op.payload.targetEntityKey) ?? null
     if (!target) throw new Error(`World entity ${input.op.payload.targetEntityKey} not found.`)
@@ -9881,6 +10417,9 @@ async function applyPromptOp(input: {
       } else {
         if (!input.op.payload.replacementEntity) {
           throw new Error('replace_entity in create mode requires replacementEntity.')
+        }
+        if (!projectTypeAllowsWorldNodeType(input.snapshot.projectContext, input.op.payload.replacementEntity.nodeType)) {
+          throw new Error(`Node type ${input.op.payload.replacementEntity.nodeType} is not allowed for this project type.`)
         }
         const created = await createPromptWorldEntity({
           client: input.client,
@@ -10179,6 +10718,11 @@ async function applyPromptOp(input: {
   if (input.op.op === 'update_relationship') {
     const target = input.snapshot.worldRelationships.find((relationship) => relationship.key === input.op.payload.targetRelationshipKey) ?? null
     if (!target) throw new Error(`World relationship ${input.op.payload.targetRelationshipKey} not found.`)
+    const attemptedStructuralChange = Boolean(
+      (input.op.payload.changes.sourceEntityKey && input.op.payload.changes.sourceEntityKey !== target.sourceEntityKey)
+      || (input.op.payload.changes.targetEntityKey && input.op.payload.changes.targetEntityKey !== target.targetEntityKey)
+      || (input.op.payload.changes.verb && input.op.payload.changes.verb !== target.verb),
+    )
     const notesMerge = mergeCanonicalText({
       existing: target.notes,
       incoming: input.op.payload.changes.notes,
@@ -10187,6 +10731,17 @@ async function applyPromptOp(input: {
     let nextMetadata: Record<string, unknown> = {
       ...(target.metadata ?? {}),
       ...(input.op.payload.changes.metadata ?? {}),
+    }
+    if (attemptedStructuralChange) {
+      nextMetadata.worldPromptIgnoredStructuralChange = {
+        reason: 'update_relationship is limited to notes/state/strength/confidence/metadata; use sequence_patch for endpoint, verb, or story-flow rewiring.',
+        attempted: {
+          sourceEntityKey: input.op.payload.changes.sourceEntityKey ?? null,
+          targetEntityKey: input.op.payload.changes.targetEntityKey ?? null,
+          verb: input.op.payload.changes.verb ?? null,
+        },
+        ignoredAt: new Date().toISOString(),
+      }
     }
     nextMetadata = appendRefinementHistory({
       metadata: nextMetadata,
@@ -10201,8 +10756,11 @@ async function applyPromptOp(input: {
       .from('world_relationships')
       .update({
         notes: notesMerge.text,
+        direction: input.op.payload.changes.direction ?? target.direction,
         strength: input.op.payload.changes.strength ?? target.strength,
         confidence: input.op.payload.changes.confidence ?? target.confidence,
+        source: input.op.payload.changes.source ?? target.source,
+        state: input.op.payload.changes.state ?? target.state,
         metadata: nextMetadata,
       })
       .eq('draft_id', input.snapshot.draft.id)
@@ -10228,6 +10786,146 @@ async function applyPromptOp(input: {
     })
     input.snapshot.worldRelationships = input.snapshot.worldRelationships.map((relationship) => relationship.key === updated.key ? updated : relationship)
     return { applied: { worldRelationships: [updated] }, queue: null, note: null }
+  }
+
+  if (input.op.op === 'sequence_patch') {
+    const response = await input.client.rpc('apply_world_sequence_patch', {
+      p_draft_id: input.snapshot.draft.id,
+      p_patch: input.op.payload,
+    })
+    if (response.error) throw new Error(response.error.message)
+    const rpcResult = isRecord(response.data) ? response.data : {}
+    const touchedEntityKeys = readRpcStringArray(rpcResult, 'touchedEntityKeys')
+    const touchedRelationshipKeys = readRpcStringArray(rpcResult, 'touchedRelationshipKeys')
+    const deletedRelationshipKeys = readRpcStringArray(rpcResult, 'deletedRelationshipKeys')
+    const worldEntities = await loadWorldEntitiesByDraftAndKeys(input.client, input.snapshot.draft.id, touchedEntityKeys)
+    input.snapshot.worldEntities = mergeRecordsByKey(input.snapshot.worldEntities, worldEntities)
+    if (deletedRelationshipKeys.length > 0) {
+      const deletedKeys = new Set(deletedRelationshipKeys)
+      input.snapshot.worldRelationships = input.snapshot.worldRelationships.filter((relationship) => !deletedKeys.has(relationship.key))
+    }
+    const worldRelationships = await loadWorldRelationshipsByDraftAndKeys(
+      input.client,
+      input.snapshot.draft.id,
+      touchedRelationshipKeys,
+      input.snapshot.worldEntities,
+    )
+    input.snapshot.worldRelationships = mergeRecordsByKey(input.snapshot.worldRelationships, worldRelationships)
+    const audit = isRecord(rpcResult.sequencePatchAudit)
+      ? {
+          ...rpcResult.sequencePatchAudit,
+          touchedEntityKeys,
+          touchedRelationshipKeys,
+          archivedRelationshipKeys: deletedRelationshipKeys,
+        }
+      : {
+          title: 'Sequence rewired',
+          reason: input.op.payload.reason,
+          touchedEntityKeys,
+          touchedRelationshipKeys,
+          archivedRelationshipKeys: deletedRelationshipKeys,
+        }
+    return {
+      applied: {
+        worldEntities,
+        worldRelationships,
+        deleted: { worldRelationshipKeys: deletedRelationshipKeys },
+      },
+      deleted: { worldRelationshipKeys: deletedRelationshipKeys },
+      sequencePatchAudit: audit,
+      queue: null,
+      note: null,
+    }
+  }
+
+  if (input.op.op === 'relationship_rewire_patch') {
+    const response = await input.client.rpc('apply_world_relationship_rewire_patch', {
+      p_draft_id: input.snapshot.draft.id,
+      p_patch: input.op.payload,
+    })
+    if (response.error) throw new Error(response.error.message)
+    const rpcResult = isRecord(response.data) ? response.data : {}
+    const touchedEntityKeys = readRpcStringArray(rpcResult, 'touchedEntityKeys')
+    const touchedRelationshipKeys = readRpcStringArray(rpcResult, 'touchedRelationshipKeys')
+    const worldEntities = await loadWorldEntitiesByDraftAndKeys(input.client, input.snapshot.draft.id, touchedEntityKeys)
+    input.snapshot.worldEntities = mergeRecordsByKey(input.snapshot.worldEntities, worldEntities)
+    const worldRelationships = await loadWorldRelationshipsByDraftAndKeys(
+      input.client,
+      input.snapshot.draft.id,
+      touchedRelationshipKeys,
+      input.snapshot.worldEntities,
+    )
+    input.snapshot.worldRelationships = mergeRecordsByKey(input.snapshot.worldRelationships, worldRelationships)
+    const audit = isRecord(rpcResult.relationshipRewireAudit)
+      ? rpcResult.relationshipRewireAudit
+      : {
+          title: 'Relationship rewired',
+          reason: input.op.payload.reason,
+          touchedEntityKeys,
+          touchedRelationshipKeys,
+        }
+    return {
+      applied: { worldEntities, worldRelationships },
+      audit,
+      queue: null,
+      note: null,
+    }
+  }
+
+  if (input.op.op === 'entity_merge_patch') {
+    const response = await input.client.rpc('apply_world_entity_merge_patch', {
+      p_draft_id: input.snapshot.draft.id,
+      p_patch: input.op.payload,
+    })
+    if (response.error) throw new Error(response.error.message)
+    const rpcResult = isRecord(response.data) ? response.data : {}
+    const touchedEntityKeys = readRpcStringArray(rpcResult, 'touchedEntityKeys')
+    const touchedRelationshipKeys = readRpcStringArray(rpcResult, 'touchedRelationshipKeys')
+    const deletedRelationshipKeys = readRpcStringArray(rpcResult, 'deletedRelationshipKeys')
+    const touchedOperatorKeys = readRpcStringArray(rpcResult, 'touchedOperatorKeys')
+    const touchedResultKeys = readRpcStringArray(rpcResult, 'touchedResultKeys')
+    const touchedConnectionKeys = readRpcStringArray(rpcResult, 'touchedConnectionKeys')
+    const worldEntities = await loadWorldEntitiesByDraftAndKeys(input.client, input.snapshot.draft.id, touchedEntityKeys)
+    input.snapshot.worldEntities = mergeRecordsByKey(input.snapshot.worldEntities, worldEntities)
+    if (deletedRelationshipKeys.length > 0) {
+      const deletedKeys = new Set(deletedRelationshipKeys)
+      input.snapshot.worldRelationships = input.snapshot.worldRelationships.filter((relationship) => !deletedKeys.has(relationship.key))
+    }
+    const worldRelationships = await loadWorldRelationshipsByDraftAndKeys(
+      input.client,
+      input.snapshot.draft.id,
+      touchedRelationshipKeys,
+      input.snapshot.worldEntities,
+    )
+    input.snapshot.worldRelationships = mergeRecordsByKey(input.snapshot.worldRelationships, worldRelationships)
+    const worldOperators = await loadWorldOperatorsByDraftAndKeys(input.client, input.snapshot.draft.id, touchedOperatorKeys)
+    const worldResults = await loadWorldResultsByDraftAndKeys(input.client, input.snapshot.draft.id, touchedResultKeys)
+    const worldGraphConnections = await loadWorldGraphConnectionsByDraftAndKeys(input.client, input.snapshot.draft.id, touchedConnectionKeys)
+    input.snapshot.worldOperators = mergeRecordsByKey(input.snapshot.worldOperators, worldOperators)
+    input.snapshot.worldResults = mergeRecordsByKey(input.snapshot.worldResults, worldResults)
+    input.snapshot.worldGraphConnections = mergeRecordsByKey(input.snapshot.worldGraphConnections, worldGraphConnections)
+    const audit = isRecord(rpcResult.entityMergeAudit)
+      ? rpcResult.entityMergeAudit
+      : {
+          title: 'Entities merged',
+          reason: input.op.payload.reason,
+          sourceEntityKey: input.op.payload.sourceEntityKey,
+          targetEntityKey: input.op.payload.targetEntityKey,
+        }
+    return {
+      applied: {
+        worldEntities,
+        worldRelationships,
+        worldOperators,
+        worldResults,
+        worldGraphConnections,
+        deleted: { worldRelationshipKeys: deletedRelationshipKeys },
+      },
+      deleted: { worldRelationshipKeys: deletedRelationshipKeys },
+      audit,
+      queue: null,
+      note: null,
+    }
   }
 
   if (input.op.op === 'create_derived_result') {
@@ -10963,6 +11661,8 @@ function summarizeAppliedOps(ops: PromptToWorldOp[]) {
       switch (op.op) {
         case 'upsert_entity':
           return op.payload.entity.name
+        case 'update_entity_canon':
+          return op.payload.auditSummary.title ?? `canon update for ${op.payload.targetEntityKey}`
         case 'replace_entity':
           return op.payload.replacementMode === 'create'
             ? `replace ${op.payload.targetEntityKey} with ${op.payload.replacementEntity?.name ?? 'new entity'}`
@@ -12189,9 +12889,11 @@ const WORLD_PROMPT_GENERATION_STEP_PHASES = [
   { key: 'finalize', phase: 'finalize', label: 'Finalize world' },
 ] as const
 const WORLD_PROMPT_FLY_GENERATION_STEP = { key: 'full_stream', phase: 'full_stream', label: 'Building world' } as const
+const WORLD_PROMPT_UPDATE_GENERATION_STEP = { key: 'prompt_update', phase: 'prompt_update', label: 'Applying prompt update' } as const
 
 type WorldPromptGenerationStepPhase =
   | typeof WORLD_PROMPT_FLY_GENERATION_STEP['phase']
+  | typeof WORLD_PROMPT_UPDATE_GENERATION_STEP['phase']
   | typeof WORLD_PROMPT_GENERATION_STEP_PHASES[number]['phase']
 
 function resolveInitialSeedGenerationRuntime() {
@@ -12480,10 +13182,267 @@ async function createInitialSeedGenerationJobSteps(input: {
     .sort((left, right) => left.orderIndex - right.orderIndex)
 }
 
+async function createPromptUpdateGenerationJob(input: {
+  client: SupabaseClient
+  session: WorldPromptSession
+  turn: WorldPromptTurn
+  payload: WorldPromptStartTurnRequest
+  summaryMemory: string
+  sessionMemoryState: WorldPromptSessionMemoryState
+  recentMessages: WorldPromptMessage[]
+  selectedSuggestion: WorldPromptSuggestionRecord | null
+  continuationMode: string
+  retrievalIntent: ReturnType<typeof buildWorldPromptRetrievalIntent>
+  canonIntent: CanonIntentClassification
+}) {
+  const response = await input.client
+    .from('world_prompt_generation_jobs')
+    .insert({
+      draft_id: input.payload.snapshot.draft.id,
+      session_id: input.session.id,
+      turn_id: input.turn.id,
+      kind: 'prompt_update_stream',
+      status: 'queued',
+      counts: createStreamCounts(),
+      metadata: {
+        runtime: 'fly',
+        streamMode: 'incremental_prompt_update',
+        model: input.payload.model,
+        prompt: input.payload.prompt,
+        payload: input.payload,
+        summaryMemory: input.summaryMemory,
+        sessionMemoryState: input.sessionMemoryState,
+        recentMessages: input.recentMessages,
+        selectedSuggestion: input.selectedSuggestion,
+        continuationMode: input.continuationMode,
+        retrievalIntent: input.retrievalIntent,
+        canonIntent: input.canonIntent,
+        snapshot: input.payload.snapshot,
+      },
+    })
+    .select(GENERATION_JOB_SELECT)
+    .single()
+  if (response.error) throw new Error(response.error.message)
+  return mapGenerationJobRow(response.data as WorldPromptGenerationJobRow)
+}
+
+async function createPromptUpdateGenerationJobSteps(input: {
+  client: SupabaseClient
+  job: WorldPromptGenerationJob
+}) {
+  const entry = WORLD_PROMPT_UPDATE_GENERATION_STEP
+  const response = await input.client
+    .from('world_prompt_generation_job_steps')
+    .insert({
+      job_id: input.job.id,
+      draft_id: input.job.draftId,
+      session_id: input.job.sessionId,
+      turn_id: input.job.turnId,
+      step_key: entry.key,
+      phase: entry.phase,
+      status: 'queued',
+      order_index: 0,
+      counts: createStreamCounts(),
+      metadata: {
+        label: entry.label,
+        runtime: 'fly',
+      },
+    })
+    .select(GENERATION_JOB_STEP_SELECT)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as WorldPromptGenerationJobStepRow[])
+    .map((row) => mapGenerationJobStepRow(row))
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+}
+
 function nextQueuedGenerationStep(steps: WorldPromptGenerationJobStep[]) {
   return steps
     .filter((step) => step.status === 'queued')
     .sort((left, right) => left.orderIndex - right.orderIndex)[0] ?? null
+}
+
+async function runPromptUpdateGenerationJob(input: {
+  client: SupabaseClient
+  authHeader: string
+  jobId: string
+  stepId?: string
+}) {
+  let job = await loadGenerationJobById(input.client, input.jobId)
+  if (job.status === 'cancelled') return job
+  let step = input.stepId ? await loadGenerationJobStepById(input.client, input.stepId) : null
+  if (step && step.status === 'cancelled') return job
+  const metadata = job.metadata ?? {}
+  const payload = worldPromptStartTurnRequestSchema.parse(metadata.payload ?? {
+    prompt: metadata.prompt,
+    model: metadata.model,
+    snapshot: metadata.snapshot,
+  })
+  const session = await loadSessionById(input.client, job.sessionId)
+  const turn = await loadTurnById(input.client, job.turnId)
+  const writeEvent = await createEventWriter({
+    client: input.client,
+    sessionId: job.sessionId,
+    turnId: job.turnId,
+    draftId: job.draftId,
+  })
+  const usageRecorder = createWorldPromptTokenUsageRecorder()
+  const summaryMemory = typeof metadata.summaryMemory === 'string' ? metadata.summaryMemory : session.summaryMemory
+  const sessionMemoryState = worldPromptSessionMemoryStateSchema.parse(metadata.sessionMemoryState ?? readSessionMemoryState({
+    lastContext: session.lastContext,
+    summaryMemory,
+    selectedRootEntityKey: payload.selectedRootEntityKey ?? session.selectedRootEntityKey,
+    selectedViewKey: payload.selectedViewKey ?? session.selectedViewKey,
+    selectedThreadKey: payload.selectedThreadKey ?? (typeof session.lastContext?.selectedThreadKey === 'string' ? session.lastContext.selectedThreadKey : null),
+  }))
+  const recentMessages = Array.isArray(metadata.recentMessages) ? metadata.recentMessages as WorldPromptMessage[] : []
+  const selectedSuggestion = worldPromptSuggestionRecordSchema.safeParse(metadata.selectedSuggestion).success
+    ? worldPromptSuggestionRecordSchema.parse(metadata.selectedSuggestion)
+    : null
+  const continuationMode = typeof metadata.continuationMode === 'string' ? metadata.continuationMode : 'freeform_initial'
+  const canonIntent = isRecord(metadata.canonIntent)
+    ? metadata.canonIntent as CanonIntentClassification
+    : classifyCanonIntent({
+        payload,
+        plannerMode: 'direct_build',
+        entityRequirements: analyzeWorldPromptEntityRequirements(payload.prompt),
+        selectedSuggestion,
+      })
+
+  job = await updateGenerationJob(input.client, job.id, {
+    status: 'running',
+    started_at: job.startedAt ?? new Date().toISOString(),
+    heartbeat_at: new Date().toISOString(),
+    error_message: null,
+  })
+  if (step) {
+    step = await updateGenerationJobStep(input.client, step.id, {
+      status: 'running',
+      started_at: step.startedAt ?? new Date().toISOString(),
+      heartbeat_at: new Date().toISOString(),
+      error_message: null,
+    })
+  }
+
+  await writeEvent('planner_status', {
+    plannerStatus: 'planning',
+    plannerProgress: {
+      phase: 'prompt_update',
+      message: 'Starting live prompt update.',
+      sequence: 0,
+    },
+    canonIntent,
+    turn: { id: turn.id },
+    job,
+  })
+  await writeEvent('context_retrieved', {
+    canonIntent,
+    transaction: {
+      id: `turn.${turn.id}`,
+      title: 'Canon change set',
+      intent: canonIntent.intent,
+      risk: canonIntent.intent === 'retcon_replace' || canonIntent.intent === 'structural_rewire'
+        ? 'high'
+        : canonIntent.intent === 'expand_canon'
+          ? 'medium'
+          : 'low',
+      status: 'planning',
+      summary: 'Loaded prompt context for streamed canon update.',
+    },
+    turn: { id: turn.id },
+  })
+
+  const nodeEvolution = await resolveNodeEvolutionIntent({
+    payload,
+    model: payload.model,
+    turnId: turn.id,
+    canonIntent,
+    usageRecorder,
+  })
+  if (nodeEvolution) {
+    await persistNodeEvolutionResolution({
+      client: input.client,
+      turn,
+      resolution: nodeEvolution,
+    })
+    await emitNodeEvolutionEvents({
+      writeEvent,
+      turnId: turn.id,
+      resolution: nodeEvolution,
+      canonIntent,
+    })
+  }
+
+  try {
+    const result = await executeIncrementalWorldPromptTurn({
+      client: input.client,
+      authHeader: input.authHeader,
+      payload,
+      session,
+      turn,
+      summaryMemory,
+      sessionMemoryState,
+      recentMessages,
+      selectedSuggestion,
+      continuationMode,
+      nodeEvolution,
+      writeEvent,
+      usageRecorder,
+    })
+    const counts = {
+      ...createStreamCounts(),
+      ops: result.events.filter((event) => event.eventType === 'op_applied').length,
+      entities: result.worldEntities.length,
+      relationships: result.worldRelationships.length,
+    }
+    job = await updateGenerationJob(input.client, job.id, {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      heartbeat_at: new Date().toISOString(),
+      counts,
+      token_usage: usageRecorder.summary(),
+      error_message: null,
+    })
+    if (step) {
+      await updateGenerationJobStep(input.client, step.id, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(),
+        counts,
+        token_usage: usageRecorder.summary(),
+        error_message: null,
+      })
+    }
+    return job
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Prompt update generation job failed.'
+    await updateTurn(input.client, turn.id, {
+      status: 'failed',
+      error_message: message,
+      assistant_summary: stripInternalPlannerDiagnostics(message),
+    }).catch(() => undefined)
+    await writeEvent('turn_failed', {
+      diagnostics: [message],
+      note: stripInternalPlannerDiagnostics(message),
+      turn: { id: turn.id },
+    }).catch(() => undefined)
+    job = await updateGenerationJob(input.client, job.id, {
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      heartbeat_at: new Date().toISOString(),
+      error_message: message,
+      token_usage: usageRecorder.summary(),
+    })
+    if (step) {
+      await updateGenerationJobStep(input.client, step.id, {
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        heartbeat_at: new Date().toISOString(),
+        error_message: message,
+        token_usage: usageRecorder.summary(),
+      }).catch(() => undefined)
+    }
+    throw error
+  }
 }
 
 async function runWorldPromptGenerationJob(input: {
@@ -12493,6 +13452,9 @@ async function runWorldPromptGenerationJob(input: {
   stepId?: string
 }) {
   let job = await loadGenerationJobById(input.client, input.jobId)
+  if (job.kind === 'prompt_update_stream') {
+    return await runPromptUpdateGenerationJob(input)
+  }
   if (job.status === 'cancelled') return job
   let step = input.stepId ? await loadGenerationJobStepById(input.client, input.stepId) : null
   if (step && step.status === 'cancelled') return job
@@ -12891,7 +13853,7 @@ async function runWorldPromptGenerationJob(input: {
     } else {
       await writeEvent('op_applied', {
         op: { ...op, status: 'applied' },
-        applied: result.applied,
+        ...appliedPromptOpEventPayload(result),
         turn: { id: turn.id },
       }, { opId: op.id })
     }
@@ -13757,6 +14719,59 @@ type WorldPromptEventWriter = (
   options?: { opId?: string | null; metadata?: Record<string, unknown> },
 ) => Promise<WorldPromptEvent>
 
+type CanonIntent = 'add_canon' | 'expand_canon' | 'refine_canon' | 'structural_rewire' | 'retcon_replace' | 'diagnose_only' | 'visual_request' | 'output_request'
+
+type CanonIntentClassification = {
+  intent: CanonIntent
+  confidence: number
+  reason: string
+  routingReason: string
+  promptMode: 'add' | 'deepen' | 'rewire' | 'retcon' | 'ask' | 'visual' | null
+}
+
+function readPromptMode(sourceContext: WorldPromptStartTurnRequest['sourceContext']): CanonIntentClassification['promptMode'] {
+  const mode = sourceContext?.promptMode
+  return mode === 'add' || mode === 'deepen' || mode === 'rewire' || mode === 'retcon' || mode === 'ask' || mode === 'visual'
+    ? mode
+    : null
+}
+
+function classifyCanonIntent(input: {
+  payload: WorldPromptStartTurnRequest
+  plannerMode: PlannerMode
+  entityRequirements: WorldPromptEntityRequirements
+  selectedSuggestion?: WorldPromptSuggestionRecord | null
+}): CanonIntentClassification {
+  const prompt = input.payload.prompt
+  const normalized = prompt.toLowerCase()
+  const sourceContext = input.payload.sourceContext ?? null
+  const sourceCharCount = sourceContext?.charCount ?? sourceContext?.extractedText?.length ?? 0
+  const promptMode = readPromptMode(sourceContext)
+
+  if (promptMode === 'visual' || /\b(image|visual|concept art|portrait|thumbnail|reference sheet|hero art|splash)\b/i.test(prompt)) {
+    return { intent: 'visual_request', confidence: 0.78, reason: 'Prompt mode or wording asks for visual generation.', routingReason: 'visual requests use media queues or output routing.', promptMode }
+  }
+  if (/\b(export|output|ebook|comic|cinematic|video|poster|pdf|manuscript|story bible|lore guide)\b/i.test(prompt)) {
+    return { intent: 'output_request', confidence: 0.72, reason: 'Prompt appears to request an output artifact.', routingReason: 'output requests should route to Output Studio when applicable.', promptMode }
+  }
+  if (promptMode === 'ask' || input.plannerMode !== 'direct_build' || /\b(what|why|diagnose|analy[sz]e|suggest|recommend|missing|weak|should we)\b/i.test(prompt)) {
+    return { intent: 'diagnose_only', confidence: 0.7, reason: 'Prompt asks for analysis or guidance rather than mutation.', routingReason: 'diagnostic turns can stay synchronous.', promptMode }
+  }
+  if (promptMode === 'retcon' || /\b(retcon|replace|remove|delete|archive|no longer|instead of|change .* to|rewrite canon)\b/i.test(prompt)) {
+    return { intent: 'retcon_replace', confidence: 0.82, reason: 'Prompt asks to replace or contradict existing canon.', routingReason: 'retcons need preview or a durable streamed transaction.', promptMode }
+  }
+  if (promptMode === 'rewire' || /\b(insert|between|before|after|reorder|move|split|merge|renumber|rewire|restructure|sequence|chapter|episode|act|story flow|story arc|beats?|relationship endpoint)\b/i.test(prompt)) {
+    return { intent: 'structural_rewire', confidence: 0.84, reason: 'Prompt asks for structural graph or sequence changes.', routingReason: 'structural changes need atomic patch ops and audit cards.', promptMode }
+  }
+  if (promptMode === 'deepen' || /\b(deepen|refine|detail|elaborate|polish|strengthen|clarify|update)\b/i.test(prompt)) {
+    return { intent: 'refine_canon', confidence: 0.72, reason: 'Prompt asks to refine existing canon.', routingReason: 'small refinements can usually apply synchronously.', promptMode }
+  }
+  if (sourceCharCount > 6000 || input.entityRequirements.minimumEntityOps >= 8 || /\b(expand|continue|full|complete|whole|large|broad|multiple|cast|factions?|locations?|timeline|canon pass)\b/i.test(normalized)) {
+    return { intent: 'expand_canon', confidence: 0.76, reason: 'Prompt requests a broad canon expansion.', routingReason: 'broad updates are better handled by streamed Fly jobs.', promptMode }
+  }
+  return { intent: 'add_canon', confidence: 0.66, reason: 'Prompt is additive and local.', routingReason: 'safe additive changes can use the normal prompt path.', promptMode }
+}
+
 function shouldUseIncrementalPromptPlanning(input: {
   payload: WorldPromptStartTurnRequest
   plannerMode: PlannerMode
@@ -13778,6 +14793,288 @@ function shouldUseIncrementalPromptPlanning(input: {
     || requestedSequence
     || broadSeedLanguage
   )
+}
+
+function shouldRoutePromptUpdateToFly(input: {
+  payload: WorldPromptStartTurnRequest
+  plannerMode: PlannerMode
+  entityRequirements: WorldPromptEntityRequirements
+  selectedSuggestion?: WorldPromptSuggestionRecord | null
+  canonIntent: CanonIntentClassification
+}) {
+  if (input.payload.initialSeedMode !== 'standard') return false
+  if (input.plannerMode !== 'direct_build') return false
+  if (input.selectedSuggestion) return false
+  if (input.canonIntent.intent === 'structural_rewire' || input.canonIntent.intent === 'retcon_replace' || input.canonIntent.intent === 'expand_canon') return true
+  const prompt = input.payload.prompt
+  const sourceContext = input.payload.sourceContext ?? null
+  const sourceCharCount = sourceContext?.charCount ?? sourceContext?.extractedText?.length ?? 0
+  const structuralSequenceIntent = /\b(insert|between|before|after|reorder|move|split|merge|renumber|rewire|restructure|sequence|chapter|chapters|episode|episodes|act|acts|story\s+flow|story\s+arc|beats?)\b/i.test(prompt)
+  const broadGraphIntent = input.entityRequirements.minimumEntityOps >= 8
+    || sourceCharCount > 6000
+    || /\b(full|complete|whole|large|broad|expand|continue|add\s+multiple|relationships?|timeline|canon\s+pass)\b/i.test(prompt)
+  return structuralSequenceIntent || broadGraphIntent
+}
+
+function readCanonFactsFromMetadata(metadata: Record<string, unknown> | null | undefined) {
+  const facts = Array.isArray(metadata?.canonFacts)
+    ? metadata.canonFacts.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+    : []
+  return facts
+    .map((fact) => ({
+      factId: typeof fact.factId === 'string' ? fact.factId : '',
+      kind: typeof fact.kind === 'string' ? fact.kind : 'note',
+      text: typeof fact.text === 'string' ? trimPlannerText(fact.text, 220) : '',
+      status: typeof fact.status === 'string' ? fact.status : 'active',
+    }))
+    .filter((fact) => fact.text.length > 0)
+    .slice(-8)
+}
+
+function buildNodeEvolutionContext(input: {
+  prompt: string
+  snapshot: WorldPromptSnapshot
+  selectedRootEntityKey?: string | null
+  retrievedEntityKeys?: string[]
+}) {
+  const promptKey = normalizeName(input.prompt)
+  const mentionedKeys = input.snapshot.worldEntities
+    .filter((entity) => {
+      const names = [entity.name, ...entity.aliases]
+        .map((value) => normalizeName(value))
+        .filter((value) => value.length >= 3)
+      return names.some((name) => promptKey.includes(name))
+    })
+    .map((entity) => entity.key)
+  const expandedEntityKeys = Array.from(new Set([
+    input.selectedRootEntityKey ?? '',
+    ...(input.retrievedEntityKeys ?? []),
+    ...mentionedKeys,
+  ].filter(Boolean))).slice(0, 24)
+  const expandedKeySet = new Set(expandedEntityKeys)
+  const catalogLimit = input.snapshot.worldEntities.length <= 120 ? input.snapshot.worldEntities.length : 180
+  const catalog = input.snapshot.worldEntities.slice(0, catalogLimit).map((entity) => {
+    const metadata = (entity.metadata ?? {}) as Record<string, unknown>
+    const expanded = expandedKeySet.has(entity.key)
+    return {
+      key: entity.key,
+      name: entity.name,
+      nodeType: entity.nodeType,
+      aliases: entity.aliases.slice(0, 8),
+      tags: entity.tags.slice(0, 8),
+      summary: trimPlannerText(entity.summary, expanded ? 700 : 220),
+      context: expanded ? trimPlannerText(entity.context, 1200) : '',
+      currentState: isRecord(metadata.currentState) ? metadata.currentState : null,
+      canonFacts: readCanonFactsFromMetadata(metadata).slice(expanded ? -8 : -3),
+    }
+  })
+  const neighborhoodKeys = new Set(expandedEntityKeys)
+  const relationshipNeighborhood = input.snapshot.worldRelationships
+    .filter((relationship) => neighborhoodKeys.has(relationship.sourceEntityKey) || neighborhoodKeys.has(relationship.targetEntityKey))
+    .slice(0, 60)
+    .map((relationship) => ({
+      key: relationship.key,
+      sourceEntityKey: relationship.sourceEntityKey,
+      verb: relationship.verb,
+      targetEntityKey: relationship.targetEntityKey,
+      notes: trimPlannerText(relationship.notes, 180),
+      state: relationship.state,
+    }))
+  return {
+    projectContext: input.snapshot.projectContext,
+    worldOverview: readProjectWorldWikiPresentation(input.snapshot.draft.metadata),
+    selectedRootEntityKey: input.selectedRootEntityKey ?? null,
+    entityCatalog: catalog,
+    relationshipNeighborhood,
+    catalogEntityKeys: catalog.map((entity) => entity.key),
+    expandedEntityKeys,
+  }
+}
+
+async function resolveNodeEvolutionIntent(input: {
+  payload: WorldPromptStartTurnRequest
+  model: string
+  turnId: string
+  canonIntent: CanonIntentClassification
+  retrievedEntityKeys?: string[]
+  usageRecorder?: WorldPromptTokenUsageRecorder
+}) {
+  if (input.payload.initialSeedMode !== 'standard') return null
+  if (input.payload.snapshot.worldEntities.length === 0) return null
+  if (['diagnose_only', 'visual_request', 'output_request'].includes(input.canonIntent.intent)) return null
+
+  const schema = normalizeStrictJsonSchema(z.toJSONSchema(worldPromptNodeEvolutionResolutionSchema))
+  const context = buildNodeEvolutionContext({
+    prompt: input.payload.prompt,
+    snapshot: input.payload.snapshot,
+    selectedRootEntityKey: input.payload.selectedRootEntityKey,
+    retrievedEntityKeys: input.retrievedEntityKeys,
+  })
+  const prompt = JSON.stringify({
+    prompt: input.payload.prompt,
+    canonIntent: input.canonIntent,
+    nodeEvolutionContext: context,
+  })
+  const response = await runOpenAiResponses({
+    model: input.model,
+    input: prompt,
+    instructions: [
+      'You are GraphCore\'s semantic node-evolution resolver.',
+      'Decide whether each subject in the user prompt is new canon, an update to an existing node, a current-state change, an event/sequence change, a relationship change, a merge candidate, a retcon candidate, or needs clarification.',
+      'The entity catalog and relationship neighborhood are context only. Do not rely on string matching as the decision; infer semantically from the prompt plus existing summaries, context, currentState, canonFacts, and relationships.',
+      'Return decisions only. Do not emit graph operations.',
+      'Use targetEntityKey only when the intended existing node is semantically clear. If the prompt could refer to multiple nodes, use ask_clarification with low confidence.',
+      'Use state_change for mutable present-tense status. Use event_or_sequence_change when the change is an in-world happening that should remain in history. Use update_existing for durable profile/identity enrichment. Use retcon_candidate for contradictions or identity rewrites.',
+    ].join('\n'),
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'world_prompt_node_evolution_resolution',
+        schema,
+      },
+    },
+    reasoning: { effort: 'low' },
+    metadata: {
+      feature: 'world-prompt',
+      surface: 'node-evolution-resolution',
+      turnId: input.turnId,
+    },
+    store: false,
+    timeoutMs: 60_000,
+  })
+  input.usageRecorder?.record({
+    surface: 'node-evolution-resolution',
+    model: input.model,
+    response,
+    metadata: {
+      entityCount: input.payload.snapshot.worldEntities.length,
+      catalogEntityKeys: context.catalogEntityKeys.slice(0, 60),
+      expandedEntityKeys: context.expandedEntityKeys,
+    },
+  })
+  if (!response.response.ok) return null
+  const parsedJson = extractJsonBlock(response.outputText)
+  if (!parsedJson) return null
+  const parsed = worldPromptNodeEvolutionResolutionSchema.safeParse(parsedJson)
+  if (!parsed.success) return null
+  const validEntityKeys = new Set(input.payload.snapshot.worldEntities.map((entity) => entity.key))
+  return worldPromptNodeEvolutionResolutionSchema.parse({
+    ...parsed.data,
+    catalogEntityKeys: parsed.data.catalogEntityKeys.length > 0 ? parsed.data.catalogEntityKeys : context.catalogEntityKeys,
+    expandedEntityKeys: parsed.data.expandedEntityKeys.length > 0 ? parsed.data.expandedEntityKeys : context.expandedEntityKeys,
+    decisions: parsed.data.decisions.map((decision) => {
+      const targetEntityKey = decision.targetEntityKey && validEntityKeys.has(decision.targetEntityKey)
+        ? decision.targetEntityKey
+        : null
+      const targetEntityKeys = decision.targetEntityKeys.filter((key) => validEntityKeys.has(key))
+      return {
+        ...decision,
+        targetEntityKey,
+        targetEntityKeys,
+      }
+    }),
+  })
+}
+
+async function persistNodeEvolutionResolution(input: {
+  client: SupabaseClient
+  turn: WorldPromptTurn
+  resolution: WorldPromptNodeEvolutionResolution | null
+}) {
+  if (!input.resolution) return input.turn
+  return await updateTurn(input.client, input.turn.id, {
+    metadata: {
+      ...(input.turn.metadata ?? {}),
+      nodeEvolution: input.resolution,
+    },
+  })
+}
+
+function buildNodeEvolutionTransactionSummary(resolution: WorldPromptNodeEvolutionResolution | null) {
+  if (!resolution || resolution.decisions.length === 0) return null
+  const affectedEntityKeys = Array.from(new Set(resolution.decisions.flatMap((decision) => [
+    decision.targetEntityKey ?? '',
+    ...decision.targetEntityKeys,
+  ]).filter(Boolean)))
+  const highRisk = resolution.decisions.some((decision) => decision.risk === 'high' || decision.decision === 'retcon_candidate' || decision.decision === 'merge_candidate')
+  return {
+    summary: resolution.summary,
+    affectedEntityKeys,
+    approvalRequired: resolution.decisions.some((decision) => decision.decision === 'retcon_candidate' || decision.decision === 'ask_clarification'),
+    risk: highRisk ? 'high' as const : resolution.decisions.some((decision) => decision.risk === 'medium') ? 'medium' as const : 'low' as const,
+  }
+}
+
+async function emitNodeEvolutionEvents(input: {
+  writeEvent: WorldPromptEventWriter
+  turnId: string
+  resolution: WorldPromptNodeEvolutionResolution | null
+  canonIntent: CanonIntentClassification
+}) {
+  if (!input.resolution) return
+  const transactionSummary = buildNodeEvolutionTransactionSummary(input.resolution)
+  await input.writeEvent('entity_resolution', {
+    nodeEvolution: input.resolution,
+    canonIntent: input.canonIntent,
+    transaction: transactionSummary
+      ? {
+          id: `turn.${input.turnId}`,
+          title: 'Node evolution decision',
+          intent: input.canonIntent.intent,
+          status: 'planning',
+          ...transactionSummary,
+        }
+      : undefined,
+    turn: { id: input.turnId },
+  })
+  await input.writeEvent('node_evolution_decided', {
+    nodeEvolution: input.resolution,
+    canonIntent: input.canonIntent,
+    transaction: transactionSummary
+      ? {
+          id: `turn.${input.turnId}`,
+          title: 'Node evolution decision',
+          intent: input.canonIntent.intent,
+          status: transactionSummary.approvalRequired ? 'awaiting_approval' : 'validating',
+          ...transactionSummary,
+        }
+      : undefined,
+    turn: { id: input.turnId },
+  })
+}
+
+function normalizeCanonFactId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function compactAuditValue(value: unknown) {
+  if (typeof value === 'string') return trimPlannerText(value, 500)
+  if (Array.isArray(value)) return value.slice(0, 12)
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).slice(0, 20))
+  return value
+}
+
+function readEntityCanonFacts(metadata: Record<string, unknown> | null | undefined) {
+  return Array.isArray(metadata?.canonFacts)
+    ? metadata.canonFacts
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object'))
+        .map((entry) => ({
+          ...entry,
+          factId: typeof entry.factId === 'string' ? entry.factId : '',
+          kind: typeof entry.kind === 'string' ? entry.kind : 'note',
+          text: typeof entry.text === 'string' ? entry.text : '',
+          status: typeof entry.status === 'string' ? entry.status : 'active',
+          supersedesFactIds: Array.isArray(entry.supersedesFactIds)
+            ? entry.supersedesFactIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            : [],
+        }))
+        .filter((entry) => entry.factId || entry.text)
+    : []
 }
 
 function firstPlannerSentence(value: string, maxLength: number) {
@@ -14016,6 +15313,7 @@ function buildCompactWorkItemPrompt(input: {
   completedWorkItems: WorldPromptIncrementalWorkItem[]
   failedWorkItems: Array<{ item: WorldPromptIncrementalWorkItem; reason: string }>
   workItemIndex: number
+  nodeEvolution?: WorldPromptNodeEvolutionResolution | null
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const usage = input.usageRecorder?.summary()
@@ -14092,6 +15390,7 @@ function buildCompactWorkItemPrompt(input: {
       classification: input.manifest.classification,
       workItemCount: input.manifest.workItems.length,
     },
+    nodeEvolution: input.nodeEvolution ?? null,
     workItemContext: context,
   }
   const diagnostics: WorldPromptTokenBudgetDiagnostics = worldPromptTokenBudgetDiagnosticsSchema.parse({
@@ -14148,14 +15447,18 @@ function orderPromptOpsForIncrementalApply(ops: PromptToWorldOp[]) {
         return 2
       case 'update_world_wiki_metadata':
         return 3
+      case 'sequence_patch':
+      case 'relationship_rewire_patch':
+      case 'entity_merge_patch':
+        return 4
       case 'upsert_relationship':
       case 'update_relationship':
-        return 4
+        return 5
       case 'create_derived_result':
       case 'queue_image_generation':
       case 'queue_cinematic_generation':
       default:
-        return 5
+        return 6
     }
   }
   return [...ops].sort((a, b) => priority(a) - priority(b))
@@ -14407,6 +15710,7 @@ async function generateIncrementalWorkItemPlan(input: {
   repairFeedback?: string | null
   workItemIndex: number
   attempt: number
+  nodeEvolution?: WorldPromptNodeEvolutionResolution | null
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const promptStrategy = getWorldPromptStrategy(input.payload.snapshot.projectContext)
@@ -14424,6 +15728,7 @@ async function generateIncrementalWorkItemPlan(input: {
     completedWorkItems: input.completedWorkItems,
     failedWorkItems: input.failedWorkItems,
     workItemIndex: input.workItemIndex,
+    nodeEvolution: input.nodeEvolution ?? null,
     usageRecorder: input.usageRecorder,
   })
   const instructions = [
@@ -14432,13 +15737,19 @@ async function generateIncrementalWorkItemPlan(input: {
     'Do not repeat operations from completed work items. Prefer stable operation IDs prefixed with the work item ID.',
     'Use wave1Ops for all operations. Keep assistantSummary to one concise user-facing operational note.',
     'Use the buildBrief and ledger as continuity. Do not ask for hidden prior chat context; it is not available to this call.',
-    'Allowed operations: upsert_entity, update_entity, replace_entity, upsert_relationship, update_relationship, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
+    'Allowed operations: upsert_entity, update_entity, update_entity_canon, replace_entity, upsert_relationship, update_relationship, sequence_patch, relationship_rewire_patch, entity_merge_patch, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
+    'When nodeEvolution is present, follow its semantic create/update/state/retcon decision. Use update_entity_canon for existing-node canon facts and current-state changes; do not create duplicates just because a name is phrased differently.',
+    'For state_change decisions, update metadata.currentState through update_entity_canon and add a canon fact. For event_or_sequence_change decisions, create or update the event/sequence node and link it to the affected entity.',
+    'For update_entity_canon summaryPatch, provide a complete clean replacement display summary in one or two sentences. Never concatenate prior summaries, never include ellipses, and never output truncated text.',
     'For entity_batch items, create only the requested small set of concrete canon-ready entities.',
     'For every new or substantially updated entity, include metadata.visual.description, metadata.visual.traits, and legacy metadata.visualDescription. Identity visuals must be neutral defaults; reserve dynamic action/damage/lighting/weather for event or sequence_unit scene visuals.',
     ...promptStrategy.incrementalWorkItemGuidance,
     projectContextIsApp(input.payload.snapshot.projectContext)
       ? 'For app relationship_batch items, create app links only between existing/generated app graph nodes available in the ledger or relevant entity list.'
       : 'Valid entity node types are actor, group, place, object, concept, event, and sequence_unit. Never use wiki, location, faction, character, beat, lore, or title as nodeType values; map those to place, group, actor, sequence_unit, concept, or wiki metadata as appropriate.',
+    projectContextIsApp(input.payload.snapshot.projectContext)
+      ? null
+      : 'Story projects must use story node types only: actor, group, place, object, concept, event, sequence_unit. Never create app/game node types in story projects. For insert/reorder/split/merge story-flow edits, emit one sequence_patch op instead of separate relationship endpoint changes. Use relationship_rewire_patch for non-sequence link endpoint/verb rewires and entity_merge_patch for duplicate canon nodes.',
     projectContextIsApp(input.payload.snapshot.projectContext) && workItem.appSlice === 'towers_code_files'
       ? 'This is an approved-design implementation planning item. Create or repair only tower and code_file entities. Do not create or update app, persona, business_goal, feature, user_flow, screen, section, component, data_model, action, api_endpoint, backend_function, external_service, design_system, capability, screen_mockup, image_region, animation_spec, sequence_unit, actor, place, object, group, concept, or event nodes.'
       : null,
@@ -14597,6 +15908,7 @@ async function executeIncrementalWorldPromptTurn(input: {
   recentMessages: WorldPromptMessage[]
   selectedSuggestion?: WorldPromptSuggestionRecord | null
   continuationMode: string
+  nodeEvolution?: WorldPromptNodeEvolutionResolution | null
   writeEvent: WorldPromptEventWriter
   usageRecorder: WorldPromptTokenUsageRecorder
 }) {
@@ -14710,6 +16022,7 @@ async function executeIncrementalWorldPromptTurn(input: {
           repairFeedback,
           workItemIndex: workItemIndex + 1,
           attempt,
+          nodeEvolution: input.nodeEvolution ?? null,
           usageRecorder: input.usageRecorder,
         })
         turn = await persistTurnTokenUsage({
@@ -14793,6 +16106,19 @@ async function executeIncrementalWorldPromptTurn(input: {
     }
     const sanitizedOps = plannerOps.map((operation) => sanitizedById.get(operation.id) ?? operation)
     allGeneratedOps.push(...sanitizedOps)
+    for (const plannedOp of sanitizedOps.filter((op) => op.op !== 'assistant_note')) {
+      await input.writeEvent('op_planned', {
+        op: plannedOp,
+        workItem,
+        validation: {
+          status: promptOpNeedsApproval(plannedOp) ? 'warning' : 'passed',
+          issues: typeof plannedOp.metadata?.approvalReason === 'string'
+            ? [{ code: 'approval_required', message: plannedOp.metadata.approvalReason, severity: 'medium' }]
+            : [],
+        },
+        turn: { id: turn.id },
+      }, { opId: plannedOp.id, metadata: { workItemId: workItem.id } })
+    }
     const { autoOps, approvalOps } = splitPromptOpsByApproval(sanitizedOps)
     const orderedAutoOps = orderPromptOpsForIncrementalApply(autoOps)
     skippedRiskyOps.push(...approvalOps)
@@ -14853,6 +16179,26 @@ async function executeIncrementalWorldPromptTurn(input: {
         ...tokenUsageEventPayload(input.usageRecorder),
       }, { opId: op.id, metadata: { workItemId: workItem.id } })
 
+      if (await worldPromptOpAlreadyApplied({ client: input.client, turnId: turn.id, opId: op.id })) {
+        await input.writeEvent('op_skipped', {
+          op,
+          workItem,
+          validation: {
+            status: 'skipped',
+            issues: [{ code: 'already_applied', message: 'Skipped already-applied op during retry.', severity: 'low' }],
+            skippedOpIds: [op.id],
+          },
+          turn: { id: turn.id },
+        }, { opId: `${op.id}.retry-skip`, metadata: { workItemId: workItem.id } })
+        continue
+      }
+      await input.writeEvent('op_validated', {
+        op,
+        validation: { status: 'passed', issues: [] },
+        workItem,
+        turn: { id: turn.id },
+      }, { opId: `${op.id}.validated`, metadata: { workItemId: workItem.id } })
+
       const result = await applyPromptOp({
         client: input.client,
         authHeader: input.authHeader,
@@ -14887,7 +16233,7 @@ async function executeIncrementalWorldPromptTurn(input: {
       } else {
         await input.writeEvent('op_applied', {
           op: { ...op, status: 'applied' },
-          applied: result.applied,
+          ...appliedPromptOpEventPayload(result),
           classification: manifest.classification,
           workItem,
         }, { opId: op.id, metadata: { workItemId: workItem.id } })
@@ -15183,6 +16529,24 @@ async function executeIncrementalWorldPromptTurn(input: {
     turn,
     session: workingSession,
   })
+  await input.writeEvent('transaction_completed', {
+    transaction: {
+      id: `turn.${turn.id}`,
+      title: 'Canon change set',
+      intent: turn.metadata?.canonIntent && isRecord(turn.metadata.canonIntent) ? (turn.metadata.canonIntent as Record<string, unknown>).intent : undefined,
+      status: 'completed',
+      summary: assistantSummary,
+      affectedEntityKeys: Array.from(touchedEntityKeys),
+      affectedRelationshipKeys: Array.from(touchedRelationshipKeys),
+      counts: {
+        entities: touchedEntityKeys.size,
+        relationships: touchedRelationshipKeys.size,
+        ops: allGeneratedOps.filter((op) => op.op !== 'assistant_note').length,
+      },
+    },
+    turn,
+    session: workingSession,
+  })
   await input.writeEvent('turn_completed', {
     turn,
     classification: manifest.classification,
@@ -15404,6 +16768,13 @@ export async function startWorldPromptTurn(input: {
     selectedThreadKey: payload.selectedThreadKey,
     selectedViewKey: payload.selectedViewKey,
   })
+  const entityRequirements = analyzeWorldPromptEntityRequirements(payload.prompt)
+  const canonIntent = classifyCanonIntent({
+    payload,
+    plannerMode: initialRetrievalIntent.plannerMode,
+    entityRequirements,
+    selectedSuggestion,
+  })
 
   const insertedTurn = await input.client
     .from('world_prompt_turns')
@@ -15434,6 +16805,7 @@ export async function startWorldPromptTurn(input: {
         resolvedMode: initialRetrievalIntent.resolvedMode,
         resolvedIntent: initialRetrievalIntent.resolvedIntent,
         resolvedFocus: initialRetrievalIntent.resolvedFocus,
+        canonIntent,
       },
     })
     .select(TURN_SELECT)
@@ -15455,6 +16827,23 @@ export async function startWorldPromptTurn(input: {
     await writeEvent('turn_started', {
       session: workingSession,
       turn,
+    })
+    await writeEvent('intent_classified', {
+      canonIntent,
+      transaction: {
+        id: `turn.${turn.id}`,
+        title: 'Canon change set',
+        intent: canonIntent.intent,
+        risk: canonIntent.intent === 'retcon_replace' || canonIntent.intent === 'structural_rewire'
+          ? 'high'
+          : canonIntent.intent === 'expand_canon'
+            ? 'medium'
+            : 'low',
+        status: 'planning',
+        summary: canonIntent.reason,
+        approvalRequired: canonIntent.intent === 'retcon_replace',
+      },
+      turn: { id: turn.id },
     })
 
     const rawActiveSessionSuggestions = payload.selectedSuggestionId
@@ -15510,13 +16899,94 @@ export async function startWorldPromptTurn(input: {
     })
     await input.onTurnReady?.({ session: workingSession, turn })
 
-    const entityRequirements = analyzeWorldPromptEntityRequirements(payload.prompt)
-    if (shouldUseIncrementalPromptPlanning({
+    const useIncrementalPromptPlanning = shouldUseIncrementalPromptPlanning({
       payload,
       plannerMode: initialRetrievalIntent.plannerMode,
       entityRequirements,
       selectedSuggestion,
+    })
+    if (useIncrementalPromptPlanning && shouldRoutePromptUpdateToFly({
+      payload,
+      plannerMode: initialRetrievalIntent.plannerMode,
+      entityRequirements,
+      selectedSuggestion,
+      canonIntent,
     })) {
+      const job = await createPromptUpdateGenerationJob({
+        client: input.client,
+        session: workingSession,
+        turn,
+        payload,
+        summaryMemory: compacted.summaryMemory,
+        sessionMemoryState,
+        recentMessages: compacted.recentMessages,
+        selectedSuggestion,
+        continuationMode,
+        retrievalIntent: initialRetrievalIntent,
+        canonIntent,
+      })
+      const steps = await createPromptUpdateGenerationJobSteps({ client: input.client, job })
+      turn = await updateTurn(input.client, turn.id, {
+        metadata: {
+          ...(turn.metadata ?? {}),
+          executionStrategy: 'incremental_fly',
+          promptUpdateJobId: job.id,
+          streamedPromptUpdate: true,
+        },
+      })
+      const queuedEvent = await writeEvent('planner_status', {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'prompt_update',
+          message: 'Queued a live prompt update job.',
+          sequence: 1,
+          done: false,
+        },
+        turn: { id: turn.id },
+        job,
+      })
+      return worldPromptStartTurnResponseSchema.parse({
+        ok: true,
+        session: workingSession,
+        turn,
+        messages: [userMessage],
+        events: [queuedEvent],
+        suggestions: [],
+        threads: [],
+        definitions: [],
+        projectContext: responseProjectContext,
+        worldEntities: payload.snapshot.worldEntities,
+        worldRelationships: payload.snapshot.worldRelationships,
+        worldViews: payload.snapshot.worldViews,
+        worldOperators: payload.snapshot.worldOperators,
+        worldResults: payload.snapshot.worldResults,
+        worldGraphConnections: payload.snapshot.worldGraphConnections,
+        job,
+        steps,
+      })
+    }
+    const nodeEvolution = await resolveNodeEvolutionIntent({
+      payload,
+      model: payload.model,
+      turnId: turn.id,
+      canonIntent,
+      retrievedEntityKeys: initialRetrievalIntent.anchorEntityKeys,
+      usageRecorder: tokenUsageRecorder,
+    })
+    if (nodeEvolution) {
+      turn = await persistNodeEvolutionResolution({
+        client: input.client,
+        turn,
+        resolution: nodeEvolution,
+      })
+      await emitNodeEvolutionEvents({
+        writeEvent,
+        turnId: turn.id,
+        resolution: nodeEvolution,
+        canonIntent,
+      })
+    }
+    if (useIncrementalPromptPlanning) {
       return await executeIncrementalWorldPromptTurn({
         client: input.client,
         authHeader: input.authHeader,
@@ -15528,6 +16998,7 @@ export async function startWorldPromptTurn(input: {
         recentMessages: compacted.recentMessages,
         selectedSuggestion,
         continuationMode,
+        nodeEvolution,
         writeEvent,
         usageRecorder: tokenUsageRecorder,
       })
@@ -15541,6 +17012,7 @@ export async function startWorldPromptTurn(input: {
       sessionMemoryState,
       recentMessages: compacted.recentMessages,
       selectedSuggestion,
+      nodeEvolution,
       usageRecorder: tokenUsageRecorder,
       onPlannerProgress: async (plannerProgress, extras) => {
         await throwIfTurnCancelled(input.client, turn.id)
@@ -15645,6 +17117,26 @@ export async function startWorldPromptTurn(input: {
     })
     const opsToRun = execution.selectedOps
     const { autoOps: autoRunnableOps, approvalOps: skippedRiskyOps } = splitPromptOpsByApproval(opsToRun)
+    for (const plannedOp of opsToRun.filter((op) => op.op !== 'assistant_note')) {
+      await writeEvent('op_planned', {
+        op: plannedOp,
+        validation: {
+          status: promptOpNeedsApproval(plannedOp) ? 'warning' : 'passed',
+          issues: typeof plannedOp.metadata?.approvalReason === 'string'
+            ? [{ code: 'approval_required', message: plannedOp.metadata.approvalReason, severity: 'medium' }]
+            : [],
+        },
+        transaction: {
+          id: `turn.${turn.id}`,
+          title: 'Canon change set',
+          intent: canonIntent.intent,
+          risk: skippedRiskyOps.length > 0 || canonIntent.intent === 'retcon_replace' || canonIntent.intent === 'structural_rewire' ? 'high' : 'low',
+          status: skippedRiskyOps.length > 0 ? 'awaiting_approval' : 'validating',
+          approvalRequired: skippedRiskyOps.length > 0,
+        },
+        turn: { id: turn.id },
+      }, { opId: plannedOp.id })
+    }
     await writeEvent('planner_status', {
       plannerStatus: execution.mode === 'blocked' ? 'blocked' : 'planning',
       plannerFailure: plannerFailure ?? undefined,
@@ -15817,6 +17309,31 @@ export async function startWorldPromptTurn(input: {
           turn: { id: turn.id },
         }, { opId: op.id })
 
+        if (await worldPromptOpAlreadyApplied({ client: input.client, turnId: turn.id, opId: op.id })) {
+          await writeEvent('op_skipped', {
+            op,
+            validation: {
+              status: 'skipped',
+              issues: [{ code: 'already_applied', message: 'Skipped already-applied op during retry.', severity: 'low' }],
+              skippedOpIds: [op.id],
+            },
+            turn: { id: turn.id },
+          }, { opId: `${op.id}.retry-skip` })
+          continue
+        }
+        await writeEvent('op_validated', {
+          op,
+          validation: { status: 'passed', issues: [] },
+          transaction: {
+            id: `turn.${turn.id}`,
+            title: 'Canon change set',
+            intent: canonIntent.intent,
+            risk: canonIntent.intent === 'retcon_replace' || canonIntent.intent === 'structural_rewire' ? 'high' : 'low',
+            status: 'applying',
+          },
+          turn: { id: turn.id },
+        }, { opId: `${op.id}.validated` })
+
         const result = await applyPromptOp({
           client: input.client,
           authHeader: input.authHeader,
@@ -15853,7 +17370,7 @@ export async function startWorldPromptTurn(input: {
         } else {
           await writeEvent('op_applied', {
             op: { ...op, status: 'applied' },
-            applied: result.applied,
+            ...appliedPromptOpEventPayload(result),
             classification: execution.classification,
             scope: execution.scope,
           }, { opId: op.id })
@@ -16082,6 +17599,27 @@ export async function startWorldPromptTurn(input: {
       session: workingSession,
     })
 
+    await writeEvent('transaction_completed', {
+      transaction: {
+        id: `turn.${turn.id}`,
+        title: 'Canon change set',
+        intent: canonIntent.intent,
+        status: 'completed',
+        risk: skippedRiskyOps.length > 0 || canonIntent.intent === 'retcon_replace' || canonIntent.intent === 'structural_rewire' ? 'high' : 'low',
+        summary: assistantSummary,
+        affectedEntityKeys: Array.from(touchedEntityKeys),
+        affectedRelationshipKeys: Array.from(touchedRelationshipKeys),
+        approvalRequired: skippedRiskyOps.length > 0,
+        counts: {
+          entities: touchedEntityKeys.size,
+          relationships: touchedRelationshipKeys.size,
+          ops: autoRunnableOps.filter((op) => op.op !== 'assistant_note').length,
+        },
+      },
+      turn,
+      session: workingSession,
+    })
+
     await writeEvent('turn_completed', {
       plannerFailure: plannerFailure ?? undefined,
       turn,
@@ -16303,7 +17841,7 @@ export async function approveWorldPromptOp(input: {
   mergeAppliedWorldGraphIntoSnapshot(mutableSnapshot, result.applied)
   await writeEvent('op_approved', {
     op: { ...pending.op, status: 'approved' },
-    applied: result.applied,
+    ...appliedPromptOpEventPayload(result),
   }, { opId: pending.op.id })
   if (result.queue) {
     await writeEvent('queue_started', {
@@ -16482,7 +18020,7 @@ export async function applyWorldPromptPreview(input: {
       await writeEvent('op_applied', {
         classification: turn.metadata?.classification as WorldPromptClassification | undefined,
         op: { ...op, status: 'applied' },
-        applied: result.applied,
+        ...appliedPromptOpEventPayload(result),
         preview,
         scope: preview.scopeDecision,
       }, { opId: op.id })

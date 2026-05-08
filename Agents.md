@@ -103,6 +103,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Content pass → Graph pass separation
 - Validation and repair layers
 - Patch proposal and review workflow
+- Hybrid execution: small prompt turns may run in the Supabase Edge Function, while broad or structural canon edits enqueue durable `world_prompt_generation_jobs.kind = "prompt_update_stream"` work for the Fly worker using the `prompt_update` job-step phase
 
 **Capabilities**:
 - Natural language understanding for game design
@@ -110,12 +111,22 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Content scaffolding and archetype reuse
 - Graph relationship modeling
 - Error correction and validation
+- Live canon-update events through `world_prompt_events`, including full `payload.applied` rows so the client can merge graph state as each operation lands
+- Atomic story-flow rewiring through the `sequence_patch` operation and `apply_world_sequence_patch` RPC, used for inserting, reordering, splitting, or merging `sequence_unit` nodes and their sequence relationships
+- Canon-intent classification for prompt turns (`add_canon`, `expand_canon`, `refine_canon`, `structural_rewire`, `retcon_replace`, `diagnose_only`, `visual_request`, `output_request`) with confidence and routing reason stored on turn metadata and emitted through feed events
+- Project-type guardrails for prompt-to-graph updates, preventing story projects from drifting into app/game ontology and app projects from generating story node types unless the project type changes explicitly
+- Atomic relationship/entity structural patch operations: `relationship_rewire_patch` through `apply_world_relationship_rewire_patch` and `entity_merge_patch` through `apply_world_entity_merge_patch`, both returning touched rows and before/after audit metadata for realtime feed cards
+- LLM-led node evolution resolution before prompt-update planning. The resolver receives the prompt, compact existing-node catalog, expanded summaries/context for likely relevant nodes, current state, canon facts, and relationship neighborhood, then emits `entity_resolution` / `node_evolution_decided` feed events. Deterministic matching may gather context, but the LLM decides whether to create a new node, update existing canon, change current state, create event/sequence history, propose a relationship change, flag a merge, flag a retcon, or ask for clarification.
+- Structured per-entity canon memory in `world_entities.metadata.canonFacts[]` and `metadata.currentState`. The `update_entity_canon` operation is preferred for evolving existing-node canon; it merges durable facts by stable fact IDs, supersedes old facts instead of deleting them, patches current state, and updates summary/context only when explicitly requested by the resolver/planner.
 
 **Workflow**:
 1. **Content Pass**: Creates or reuses content definitions (items, characters, locations)
 2. **Graph Pass**: Builds narrative graphs, choices, and relationships
-3. **Validation**: Ensures patch integrity and compatibility
-4. **Proposal**: Stores patch for user review and approval
+3. **Canon Intent Pass**: Classifies the requested change, constrains prompt mode behavior, and decides Edge vs Fly streaming execution
+4. **Node Evolution Pass**: Uses the LLM to decide create vs update vs state/event/retcon handling before graph ops are planned
+5. **Structural Patch Pass**: Applies sequence-safe, relationship-rewire, entity-merge, or entity-canon operations when graph topology or durable node memory must change atomically
+6. **Validation**: Ensures patch integrity, project-type compatibility, relationship endpoint validity, canon fact idempotency, and retry safety
+7. **Proposal/Execution**: Stores risky patches for review when needed, or applies safe live updates through Edge/Fly orchestration with audit events
 
 ### Visual Asset Generation Agent
 **Purpose**: Creates visual assets for game content using AI image generation.

@@ -5,6 +5,7 @@ export type WorldPromptRefinementStrategy =
   | 'initialized'
   | 'unchanged'
   | 'expanded'
+  | 'replaced'
   | 'preserved_existing'
   | 'merged_distinct'
 
@@ -21,6 +22,11 @@ const REFINEMENT_HISTORY_LIMIT = 24
 
 function normalizeText(value: string | null | undefined) {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+}
+
+export function hasTruncationArtifact(value: string | null | undefined) {
+  const normalized = normalizeText(value)
+  return /(?:\.\.\.|…|â€¦)/.test(normalized)
 }
 
 function normalizeKey(value: string) {
@@ -105,6 +111,40 @@ export function mergeCanonicalText(input: {
     text: mergedText,
     changed: mergedText !== current,
     strategy: 'merged_distinct' as const,
+  }
+}
+
+export function replaceCanonicalSummary(input: {
+  existing: string
+  incoming?: string | null
+}) {
+  const current = normalizeText(input.existing)
+  const next = normalizeText(input.incoming)
+  if (!next || hasTruncationArtifact(next)) {
+    return {
+      text: input.existing,
+      changed: false,
+      strategy: 'unchanged' as const,
+    }
+  }
+  if (!current) {
+    return {
+      text: next,
+      changed: normalizeText(input.existing) !== next,
+      strategy: 'initialized' as const,
+    }
+  }
+  if (current === next) {
+    return {
+      text: current,
+      changed: false,
+      strategy: 'unchanged' as const,
+    }
+  }
+  return {
+    text: next,
+    changed: true,
+    strategy: current && next.includes(current) ? 'expanded' as const : 'replaced' as const,
   }
 }
 

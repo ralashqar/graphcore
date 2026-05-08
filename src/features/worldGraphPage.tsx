@@ -1449,12 +1449,14 @@ export function WorldGraphPage({
   const [showPinnedNodes] = useState(true)
   const [fallbackPinnedNodeKeys, setFallbackPinnedNodeKeys] = useState<string[]>([])
   const [worldPromptText, setWorldPromptText] = useState('')
+  const [worldPromptMode, setWorldPromptMode] = useState<'add' | 'deepen' | 'rewire' | 'retcon' | 'ask' | 'visual'>('add')
   const [worldPromptPanelMode, setWorldPromptPanelMode] = useState<'expanded' | 'compact'>('expanded')
   const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
   const [wikiStyleExpanded, setWikiStyleExpanded] = useState(false)
   const [wikiSubView, setWikiSubView] = useState<'wiki' | 'feed'>('wiki')
   const [worldFeedFilter, setWorldFeedFilter] = useState<WorldFeedFilter>('all')
   const [selectedWorldFeedEntryId, setSelectedWorldFeedEntryId] = useState<string | null>(null)
+  const [newWorldFeedEntryIds, setNewWorldFeedEntryIds] = useState<Set<string>>(() => new Set())
   const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
@@ -1467,6 +1469,8 @@ export function WorldGraphPage({
   const wikiDocumentRef = useRef<HTMLDivElement | null>(null)
   const savedWikiScrollTopRef = useRef(0)
   const handledAutoLensTurnIdRef = useRef<string | null>(null)
+  const seenWorldFeedEntryIdsRef = useRef<Set<string>>(new Set())
+  const hydratedWorldFeedEntryIdsRef = useRef(false)
   useEffect(() => {
     if (!wikiDetailModal) return undefined
     function handleKeyDown(event: KeyboardEvent) {
@@ -1973,6 +1977,26 @@ export function WorldGraphPage({
     }),
     [activePromptTurn, activeSessionSuggestions, entityByKey, sessionEvents, sessionMessages, sessionTurns, worldRelationships],
   )
+  useEffect(() => {
+    const entryIds = new Set(worldFeedModel.entries.map((entry) => entry.id))
+    if (!hydratedWorldFeedEntryIdsRef.current) {
+      hydratedWorldFeedEntryIdsRef.current = true
+      seenWorldFeedEntryIdsRef.current = entryIds
+      return
+    }
+    const freshIds = [...entryIds].filter((id) => !seenWorldFeedEntryIdsRef.current.has(id))
+    seenWorldFeedEntryIdsRef.current = new Set([...seenWorldFeedEntryIdsRef.current, ...entryIds])
+    if (freshIds.length === 0) return
+    setNewWorldFeedEntryIds((current) => new Set([...current, ...freshIds]))
+    const timeoutId = window.setTimeout(() => {
+      setNewWorldFeedEntryIds((current) => {
+        const next = new Set(current)
+        for (const id of freshIds) next.delete(id)
+        return next
+      })
+    }, 700)
+    return () => window.clearTimeout(timeoutId)
+  }, [worldFeedModel.entries])
   const worldFeedGroups = useMemo(() => {
     if (worldFeedFilter === 'all') return worldFeedModel.groups
     return worldFeedModel.groups
@@ -2260,10 +2284,7 @@ export function WorldGraphPage({
     () => wikiModel.sections.some((section) => section.kind === 'app' || section.kind.startsWith('app_')),
     [wikiModel.sections],
   )
-  const wikiHasGameSections = useMemo(
-    () => wikiModel.sections.some((section) => section.kind === 'game' || section.kind.startsWith('game_')),
-    [wikiModel.sections],
-  )
+  const isExplicitGameProject = projectContext?.projectType === 'game' || projectContext?.projectSubtype === 'narrative_rpg_mobile'
   const narrativeRpgReadiness = useMemo(() => evaluateNarrativeRpgReadiness({
     entities: worldEntities,
     relationships: worldRelationships,
@@ -2381,9 +2402,9 @@ export function WorldGraphPage({
     const heroEntity = wikiModel.overview.heroEntityKey ? entityByKey.get(wikiModel.overview.heroEntityKey) ?? null : null
     if (heroEntity) return iconForWorldEntity(heroEntity.nodeType)
     if (projectContext?.projectType === 'app' || wikiHasAppSections) return 'app'
-    if (projectContext?.projectType === 'game' || wikiHasGameSections) return 'thread'
+    if (isExplicitGameProject) return 'thread'
     return 'graph'
-  }, [entityByKey, projectContext?.projectType, wikiHasAppSections, wikiHasGameSections, wikiModel.overview.heroEntityKey])
+  }, [entityByKey, isExplicitGameProject, projectContext?.projectType, wikiHasAppSections, wikiModel.overview.heroEntityKey])
   const wikiWorldConceptAsset = useMemo(() => {
     const assetKey = trimOptionalString(wikiModel.overview.worldConceptAssetKey)
     if (!assetKey) return null
@@ -2405,7 +2426,7 @@ export function WorldGraphPage({
     ? imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? null
     : null
   const wikiOverviewImageUrl = liveWorldConceptImageUrl ?? wikiWorldConceptImageUrl ?? wikiHeroEntityImageUrl
-  const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game Overview' : 'World Overview'
+  const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : isExplicitGameProject ? 'Game Overview' : 'World Overview'
   const wikiOverviewActionGaps = useMemo(() => {
     const actionKinds: Array<[WorldWikiGap['kind'], string]> = [
       ['world_synopsis', 'Generate synopsis'],
@@ -4418,11 +4439,24 @@ export function WorldGraphPage({
     setWorldPromptError(null)
     setIsPromptSubmitting(true)
     setBusyMessage('Generating world updates from prompt...')
+    const sourceContext = contextOverrides?.sourceContext
+      ? { ...contextOverrides.sourceContext, promptMode: worldPromptMode }
+      : {
+          kind: 'prompt' as const,
+          title: 'Feed prompt',
+          fileName: null,
+          mimeType: null,
+          url: null,
+          extractedText: '',
+          charCount: 0,
+          truncated: false,
+          promptMode: worldPromptMode,
+        }
     try {
       await onStartWorldPromptTurn({
         prompt,
         sessionKey,
-        sourceContext: contextOverrides?.sourceContext,
+        sourceContext,
         selectedSuggestionId: selectedSuggestionId ?? null,
         selectedRootEntityKey: contextOverrides?.selectedRootEntityKey ?? selectedEntity?.key ?? null,
         selectedViewKey: contextOverrides?.selectedViewKey ?? selectedView.key,
@@ -5613,7 +5647,7 @@ export function WorldGraphPage({
   }
 
   function renderNarrativeRpgPlayablePanel() {
-    if (!(projectContext?.projectSubtype === 'narrative_rpg_mobile' || wikiHasGameSections)) return null
+    if (!isExplicitGameProject) return null
     const visibleBlockers = narrativeRpgReadiness.blockers.slice(0, 5)
     const visibleWarnings = narrativeRpgReadiness.warnings.slice(0, 4)
     const promptPayload = JSON.stringify({
@@ -6196,6 +6230,34 @@ export function WorldGraphPage({
             {entry.changedFields.map((field) => <span key={field}>{field}</span>)}
           </div>
         ) : null}
+        {entry.transaction ? (
+          <div className="world-feed-audit-block">
+            {typeof entry.transaction.intent === 'string' ? <span>Intent: {entry.transaction.intent.replace(/_/g, ' ')}</span> : null}
+            {typeof entry.transaction.risk === 'string' ? <span>Risk: {entry.transaction.risk}</span> : null}
+            {typeof entry.transaction.status === 'string' ? <span>Status: {entry.transaction.status.replace(/_/g, ' ')}</span> : null}
+          </div>
+        ) : null}
+        {entry.nodeEvolution && Array.isArray(entry.nodeEvolution.decisions) ? (
+          <div className="world-feed-audit-block">
+            {entry.nodeEvolution.decisions.slice(0, 5).map((decision, index) => {
+              if (!decision || typeof decision !== 'object') return null
+              const record = decision as Record<string, unknown>
+              const subject = typeof record.subject === 'string' && record.subject.trim() ? record.subject : `Decision ${index + 1}`
+              const decisionLabel = typeof record.decision === 'string' ? record.decision.replace(/_/g, ' ') : 'node decision'
+              const confidence = typeof record.confidence === 'number' ? ` (${Math.round(record.confidence * 100)}%)` : ''
+              return <span key={`${subject}:${index}`}>{subject}: {decisionLabel}{confidence}</span>
+            })}
+          </div>
+        ) : null}
+        {entry.audit ? (
+          <div className="world-feed-audit-block">
+            {Object.entries(entry.audit).slice(0, 6).map(([key, value]) => (
+              <span key={key}>
+                {key.replace(/([A-Z])/g, ' $1')}: {Array.isArray(value) ? `${value.length} item${value.length === 1 ? '' : 's'}` : typeof value === 'object' && value !== null ? 'updated' : String(value)}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {connectedEntityKeys.length > 0 ? (
           <div className="world-feed-detail-links">
             <span className="eyebrow">Connected</span>
@@ -6224,8 +6286,10 @@ export function WorldGraphPage({
     const entity = entry.entityKey ? entityByKey.get(entry.entityKey) ?? null : null
     const relationship = entry.relationshipKey ? relationshipByKey.get(entry.relationshipKey) ?? null : null
     const isRelationship = entry.kind === 'relationship_created' || entry.kind === 'relationship_updated'
+    const isSequenceRewired = entry.kind === 'sequence_rewired' || entry.kind === 'relationship_rewired' || entry.kind === 'entity_merged'
     const primaryThumbEntity = entity ?? (entry.thumbnailEntityKeys?.[0] ? entityByKey.get(entry.thumbnailEntityKeys[0]) ?? null : null)
     const isSelected = selectedWorldFeedEntryId === entry.id
+    const isNew = newWorldFeedEntryIds.has(entry.id)
     const inspectEntry = () => setSelectedWorldFeedEntryId(entry.id)
     const handleCardKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
       if (event.key !== 'Enter' && event.key !== ' ') return
@@ -6235,7 +6299,7 @@ export function WorldGraphPage({
     return (
       <article
         key={entry.id}
-        className={`world-feed-card is-${entry.kind} tone-${entry.tone ?? 'normal'}${isSelected ? ' is-selected' : ''}`}
+        className={`world-feed-card is-${entry.kind} tone-${entry.tone ?? 'normal'}${isSelected ? ' is-selected' : ''}${isNew ? ' is-new' : ''}`}
         onClick={inspectEntry}
         onKeyDown={handleCardKeyDown}
         role="button"
@@ -6254,6 +6318,21 @@ export function WorldGraphPage({
                 <strong>{(entry.relationshipVerb || relationship?.verb || 'linked').replace(/_/g, ' ')}</strong>
               </span>
               {renderWorldFeedEndpoint(relationship?.targetEntityKey, entry.targetLabel ?? 'Target')}
+            </div>
+          ) : isSequenceRewired ? (
+            <div className="world-feed-sequence-card">
+              <div className="world-feed-card-title-row">
+                {renderWorldFeedThumb(primaryThumbEntity, 'content')}
+                <div className="world-feed-card-title">
+                  <strong>{entry.title}</strong>
+                  {entry.detail ? <p>{entry.detail}</p> : null}
+                </div>
+              </div>
+              {entry.changedFields && entry.changedFields.length > 0 ? (
+                <div className="world-feed-card-chips">
+                  {entry.changedFields.map((field) => <span key={field}>{field}</span>)}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="world-feed-card-title-row">
@@ -6330,6 +6409,28 @@ export function WorldGraphPage({
           </div>
           <div className="world-feed-composer">
             <label htmlFor="world-feed-composer-input">Prompt this world</label>
+            <div className="world-feed-mode-row" role="radiogroup" aria-label="Prompt mode">
+              {[
+                ['add', 'Add'],
+                ['deepen', 'Deepen'],
+                ['rewire', 'Rewire'],
+                ['retcon', 'Retcon'],
+                ['ask', 'Ask'],
+                ['visual', 'Visual'],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  aria-checked={worldPromptMode === key}
+                  className={worldPromptMode === key ? 'is-active' : ''}
+                  disabled={isPromptBusy}
+                  onClick={() => setWorldPromptMode(key as typeof worldPromptMode)}
+                  role="radio"
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <textarea
               id="world-feed-composer-input"
               disabled={isPromptBusy}

@@ -28,6 +28,7 @@ export const worldPromptSourceContextSchema = z.object({
   extractedText: z.string().default(''),
   charCount: z.number().int().nonnegative().default(0),
   truncated: z.boolean().default(false),
+  promptMode: z.enum(['add', 'deepen', 'rewire', 'retcon', 'ask', 'visual']).optional(),
 }).default({
   kind: 'prompt',
   title: '',
@@ -55,20 +56,40 @@ export const worldPromptMessageRoleSchema = z.enum(['system', 'user', 'assistant
 export const worldPromptEventTypeSchema = z.enum([
   'turn_started',
   'message_created',
+  'intent_classified',
+  'context_retrieved',
+  'entity_resolution',
+  'node_evolution_decided',
   'planner_status',
   'work_item_started',
   'work_item_completed',
   'work_item_failed',
   'assistant_note',
+  'op_planned',
+  'op_validated',
+  'op_repaired',
+  'op_skipped',
   'op_applied',
   'op_needs_approval',
   'op_approved',
   'op_rejected',
   'queue_started',
+  'transaction_completed',
   'turn_cancel_requested',
   'turn_completed',
   'turn_failed',
 ])
+export const worldPromptCanonIntentSchema = z.enum([
+  'add_canon',
+  'expand_canon',
+  'refine_canon',
+  'structural_rewire',
+  'retcon_replace',
+  'diagnose_only',
+  'visual_request',
+  'output_request',
+])
+export const worldPromptCanonTransactionRiskSchema = z.enum(['low', 'medium', 'high'])
 export const promptToWorldApplyModeSchema = z.enum(['auto', 'needs_approval'])
 export const worldPromptOpStatusSchema = z.enum(['pending', 'applied', 'approved', 'rejected', 'failed'])
 export const worldPromptQueueTypeSchema = z.enum(['image_generation', 'cinematic_generation'])
@@ -99,9 +120,9 @@ export const worldPromptClassificationSchema = z.enum([
 export const worldPromptSuggestionUiKindSchema = z.enum(['next_move', 'clarification', 'advisory', 'diagnostic'])
 export const worldPromptSuggestionExecutionModeSchema = z.enum(['answer_only', 'plan_only', 'apply_if_selected'])
 export const worldPromptGenerationJobStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
-export const worldPromptGenerationJobKindSchema = z.enum(['initial_seed_stream'])
+export const worldPromptGenerationJobKindSchema = z.enum(['initial_seed_stream', 'prompt_update_stream'])
 export const worldPromptGenerationStepStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'skipped', 'cancelled'])
-export const worldPromptGenerationStepPhaseSchema = z.enum(['full_stream', 'world_bible', 'core_entities', 'sequence_units', 'relationships', 'finalize'])
+export const worldPromptGenerationStepPhaseSchema = z.enum(['full_stream', 'world_bible', 'core_entities', 'sequence_units', 'relationships', 'finalize', 'prompt_update'])
 export const worldPromptAnswerModeSchema = z.enum(['answer_only', 'answer_plus_options', 'answer_plus_preview'])
 export const worldPromptResolvedModeSchema = z.enum(['answer_only', 'preview_first_wave', 'apply_compact_wave', 'blocked'])
 export const worldPromptResolvedIntentSchema = z.enum(['graph_build', 'refinement', 'advisory', 'diagnosis'])
@@ -120,11 +141,16 @@ export const worldPromptPlannerProgressPhaseSchema = z.enum([
   'finalizing_world',
   'finalizing_plan',
   'applying_changes',
+  'prompt_update',
 ])
 export const worldPromptPreviewModeSchema = z.enum(['plan_only', 'staged_first_wave'])
 export const worldPromptPreviewItemKindSchema = z.enum([
   'entity',
+  'entity_canon',
   'relationship',
+  'sequence_patch',
+  'relationship_rewire_patch',
+  'entity_merge_patch',
   'derived_result',
   'image_queue',
   'cinematic_queue',
@@ -161,6 +187,63 @@ const promptToWorldUpsertEntityPayloadSchema = z.object({
 const promptToWorldUpdateEntityPayloadSchema = z.object({
   targetEntityKey: z.string(),
   changes: worldEntityCreateInputSchema.partial(),
+})
+
+export const worldPromptNodeEvolutionDecisionSchema = z.object({
+  subject: z.string().default(''),
+  decision: z.enum([
+    'create_new',
+    'update_existing',
+    'state_change',
+    'event_or_sequence_change',
+    'relationship_change',
+    'merge_candidate',
+    'retcon_candidate',
+    'ask_clarification',
+  ]),
+  targetEntityKey: z.string().nullable().default(null),
+  targetEntityKeys: z.array(z.string()).default([]),
+  nodeTypeHint: worldEntityNodeTypeSchema.nullable().default(null),
+  confidence: z.number().min(0).max(1).default(0.6),
+  rationale: z.string().default(''),
+  risk: worldPromptCanonTransactionRiskSchema.default('low'),
+  storySignificant: z.boolean().default(false),
+  suggestedFactKind: z.enum(['identity', 'profile', 'state', 'history', 'relationship', 'sequence', 'visual', 'note']).default('note'),
+})
+
+export const worldPromptNodeEvolutionResolutionSchema = z.object({
+  summary: z.string().default(''),
+  decisions: z.array(worldPromptNodeEvolutionDecisionSchema).default([]),
+  catalogEntityKeys: z.array(z.string()).default([]),
+  expandedEntityKeys: z.array(z.string()).default([]),
+})
+
+const promptToWorldCanonFactSchema = z.object({
+  factId: z.string().optional(),
+  kind: z.enum(['identity', 'profile', 'state', 'history', 'relationship', 'sequence', 'visual', 'note']).default('note'),
+  text: z.string().default(''),
+  sourceTurnId: z.string().nullable().default(null),
+  sourceEventId: z.string().nullable().default(null),
+  status: z.enum(['active', 'superseded', 'retracted']).default('active'),
+  supersedesFactIds: z.array(z.string()).default([]),
+  metadata: looseRecordSchema.default({}),
+})
+
+const promptToWorldUpdateEntityCanonPayloadSchema = z.object({
+  targetEntityKey: z.string(),
+  factAdditions: z.array(promptToWorldCanonFactSchema).default([]),
+  supersedeFactIds: z.array(z.string()).default([]),
+  currentStatePatch: looseRecordSchema.default({}),
+  summaryPatch: z.string().nullable().default(null),
+  contextPatch: z.string().nullable().default(null),
+  mergeSummary: z.boolean().default(false),
+  mergeContext: z.boolean().default(false),
+  rationale: z.string().default(''),
+  risk: worldPromptCanonTransactionRiskSchema.default('low'),
+  auditSummary: z.object({
+    title: z.string().default('Canon updated'),
+    summary: z.string().default(''),
+  }).partial().default({}),
 })
 
 const promptToWorldReplaceEntityPayloadSchema = z.object({
@@ -210,6 +293,71 @@ const promptToWorldUpdateRelationshipPayloadSchema = z.object({
     state: z.enum(['confirmed', 'suggested', 'inferred']).optional(),
     metadata: looseRecordSchema.optional(),
   }),
+})
+
+const promptToWorldSequencePatchPayloadSchema = z.object({
+  sequenceKey: z.string().nullable().default(null),
+  reason: z.string().default(''),
+  unitUpserts: z.array(z.object({
+    targetEntityKey: z.string().nullable().default(null),
+    entity: worldEntityCreateInputSchema.extend({
+      nodeType: z.literal('sequence_unit').default('sequence_unit'),
+      ensureLinkedDefinition: z.boolean().default(false),
+    }),
+  })).default([]),
+  unitUpdates: z.array(z.object({
+    targetEntityKey: z.string(),
+    changes: worldEntityCreateInputSchema.partial(),
+  })).default([]),
+  relationshipUpserts: z.array(promptToWorldUpsertRelationshipPayloadSchema).default([]),
+  relationshipArchives: z.array(z.object({
+    targetRelationshipKey: z.string(),
+    reason: z.string().default(''),
+  })).default([]),
+  auditSummary: z.object({
+    title: z.string().default('Sequence rewired'),
+    summary: z.string().default(''),
+    oldChain: z.array(z.string()).default([]),
+    newChain: z.array(z.string()).default([]),
+    shiftedOrdinals: z.array(z.object({
+      entityKey: z.string(),
+      from: z.number().nullable().default(null),
+      to: z.number().nullable().default(null),
+    })).default([]),
+    archivedRelationshipKeys: z.array(z.string()).default([]),
+    createdRelationshipKeys: z.array(z.string()).default([]),
+  }).partial().default({}),
+})
+
+const promptToWorldRelationshipRewirePatchPayloadSchema = z.object({
+  reason: z.string().default(''),
+  rewires: z.array(z.object({
+    targetRelationshipKey: z.string(),
+    sourceEntityKey: z.string().nullable().optional(),
+    targetEntityKey: z.string().nullable().optional(),
+    verb: z.string().min(1).optional(),
+    direction: z.enum(['outbound', 'inbound', 'bidirectional']).optional(),
+    notes: z.string().optional(),
+    metadata: looseRecordSchema.optional(),
+  })).min(1),
+  auditSummary: z.object({
+    title: z.string().default('Relationship rewired'),
+    summary: z.string().default(''),
+  }).partial().default({}),
+})
+
+const promptToWorldEntityMergePatchPayloadSchema = z.object({
+  sourceEntityKey: z.string(),
+  targetEntityKey: z.string(),
+  reason: z.string().default(''),
+  transferRelationships: z.boolean().default(true),
+  transferGraphConnections: z.boolean().default(true),
+  transferDerivedResults: z.boolean().default(true),
+  archiveSource: z.boolean().default(true),
+  auditSummary: z.object({
+    title: z.string().default('Entities merged'),
+    summary: z.string().default(''),
+  }).partial().default({}),
 })
 
 const promptToWorldCreateDerivedResultPayloadSchema = z.object({
@@ -337,6 +485,10 @@ export const promptToWorldOpSchema = z.discriminatedUnion('op', [
     payload: promptToWorldUpdateEntityPayloadSchema,
   }),
   promptToWorldOpBaseSchema.extend({
+    op: z.literal('update_entity_canon'),
+    payload: promptToWorldUpdateEntityCanonPayloadSchema,
+  }),
+  promptToWorldOpBaseSchema.extend({
     op: z.literal('replace_entity'),
     payload: promptToWorldReplaceEntityPayloadSchema,
   }),
@@ -347,6 +499,18 @@ export const promptToWorldOpSchema = z.discriminatedUnion('op', [
   promptToWorldOpBaseSchema.extend({
     op: z.literal('update_relationship'),
     payload: promptToWorldUpdateRelationshipPayloadSchema,
+  }),
+  promptToWorldOpBaseSchema.extend({
+    op: z.literal('sequence_patch'),
+    payload: promptToWorldSequencePatchPayloadSchema,
+  }),
+  promptToWorldOpBaseSchema.extend({
+    op: z.literal('relationship_rewire_patch'),
+    payload: promptToWorldRelationshipRewirePatchPayloadSchema,
+  }),
+  promptToWorldOpBaseSchema.extend({
+    op: z.literal('entity_merge_patch'),
+    payload: promptToWorldEntityMergePatchPayloadSchema,
   }),
   promptToWorldOpBaseSchema.extend({
     op: z.literal('create_derived_result'),
@@ -968,6 +1132,40 @@ export const worldPromptEventPayloadSchema = z.object({
   classification: worldPromptClassificationSchema.optional(),
   answer: z.string().optional(),
   answerMode: worldPromptAnswerModeSchema.optional(),
+  canonIntent: z.object({
+    intent: worldPromptCanonIntentSchema,
+    confidence: z.number().min(0).max(1).default(0.6),
+    reason: z.string().default(''),
+    routingReason: z.string().default(''),
+    promptMode: z.enum(['add', 'deepen', 'rewire', 'retcon', 'ask', 'visual']).nullable().default(null),
+  }).partial().optional(),
+  transaction: z.object({
+    id: z.string().default(''),
+    title: z.string().default('Canon change set'),
+    intent: worldPromptCanonIntentSchema.optional(),
+    risk: worldPromptCanonTransactionRiskSchema.default('low'),
+    status: z.enum(['planning', 'validating', 'awaiting_approval', 'applying', 'completed', 'failed', 'cancelled', 'skipped']).default('planning'),
+    summary: z.string().default(''),
+    beforeSummary: z.string().default(''),
+    afterSummary: z.string().default(''),
+    affectedEntityKeys: z.array(z.string()).default([]),
+    affectedRelationshipKeys: z.array(z.string()).default([]),
+    approvalRequired: z.boolean().default(false),
+    undoAvailable: z.boolean().default(false),
+    counts: looseRecordSchema.default({}),
+  }).partial().optional(),
+  nodeEvolution: worldPromptNodeEvolutionResolutionSchema.partial().optional(),
+  validation: z.object({
+    status: z.enum(['passed', 'warning', 'failed', 'repaired', 'skipped']).default('passed'),
+    issues: z.array(z.object({
+      code: z.string().default(''),
+      message: z.string().default(''),
+      severity: z.enum(['low', 'medium', 'high']).default('medium'),
+      targetKeys: z.array(z.string()).default([]),
+    })).default([]),
+    skippedOpIds: z.array(z.string()).default([]),
+    repairedOpIds: z.array(z.string()).default([]),
+  }).partial().optional(),
   diagnosticFindings: z.array(worldPromptDiagnosticFindingSchema).default([]),
   suggestions: z.array(worldPromptSuggestionSchema).default([]),
   suggestionIds: z.array(z.string()).default([]).optional(),
@@ -996,6 +1194,30 @@ export const worldPromptEventPayloadSchema = z.object({
     worldResults: z.array(worldResultSchema).default([]),
     worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
     worldViews: z.array(worldViewSchema).default([]),
+    deleted: z.object({
+      worldRelationshipKeys: z.array(z.string()).default([]),
+    }).partial().optional(),
+  }).partial().optional(),
+  deleted: z.object({
+    worldRelationshipKeys: z.array(z.string()).default([]),
+  }).partial().optional(),
+  audit: looseRecordSchema.optional(),
+  sequencePatchAudit: z.object({
+    title: z.string().default('Sequence rewired'),
+    summary: z.string().default(''),
+    reason: z.string().default(''),
+    sequenceKey: z.string().nullable().default(null),
+    oldChain: z.array(z.string()).default([]),
+    newChain: z.array(z.string()).default([]),
+    shiftedOrdinals: z.array(z.object({
+      entityKey: z.string(),
+      from: z.number().nullable().default(null),
+      to: z.number().nullable().default(null),
+    })).default([]),
+    archivedRelationshipKeys: z.array(z.string()).default([]),
+    createdRelationshipKeys: z.array(z.string()).default([]),
+    touchedEntityKeys: z.array(z.string()).default([]),
+    touchedRelationshipKeys: z.array(z.string()).default([]),
   }).partial().optional(),
   diagnostics: z.array(z.string()).default([]),
   note: z.string().optional(),
@@ -1081,6 +1303,8 @@ export const worldPromptStartTurnResponseSchema = z.object({
   worldOperators: z.array(worldOperatorSchema).default([]),
   worldResults: z.array(worldResultSchema).default([]),
   worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
+  job: worldPromptGenerationJobSchema.optional(),
+  steps: z.array(worldPromptGenerationJobStepSchema).default([]).optional(),
 })
 
 export const worldPromptSeedInferenceRequestSchema = z.object({
@@ -1261,6 +1485,7 @@ export type WorldPromptSnapshot = z.infer<typeof worldPromptSnapshotSchema>
 export type WorldPromptStartTurnRequest = z.infer<typeof worldPromptStartTurnRequestSchema>
 export type WorldPromptStartTurnResponse = z.infer<typeof worldPromptStartTurnResponseSchema>
 export type WorldPromptSourceContext = z.infer<typeof worldPromptSourceContextSchema>
+export type WorldPromptNodeEvolutionResolution = z.infer<typeof worldPromptNodeEvolutionResolutionSchema>
 export type WorldPromptProjectContextInference = z.infer<typeof worldPromptProjectContextInferenceSchema>
 export type WorldPromptInitialSeedMode = z.infer<typeof worldPromptInitialSeedModeSchema>
 export type WorldPromptInitialSeedContext = z.infer<typeof worldPromptInitialSeedContextSchema>

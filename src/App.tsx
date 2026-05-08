@@ -598,6 +598,7 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
   }
 
   if (payload.applied) {
+    const deletedRelationshipKeys = new Set(payload.deleted?.worldRelationshipKeys ?? payload.applied.deleted?.worldRelationshipKeys ?? [])
     nextSnapshot = normalizeSnapshot({
       ...nextSnapshot,
       draft: payload.applied.draft?.metadata
@@ -610,7 +611,11 @@ function mergeWorldPromptEventIntoSnapshot(snapshot: ProjectSnapshot, event: Wor
           }
         : nextSnapshot.draft,
       worldEntities: payload.applied.worldEntities ? mergeResourcesByKey(nextSnapshot.worldEntities, payload.applied.worldEntities) : nextSnapshot.worldEntities,
-      worldRelationships: payload.applied.worldRelationships ? mergeResourcesByKey(nextSnapshot.worldRelationships, payload.applied.worldRelationships) : nextSnapshot.worldRelationships,
+      worldRelationships: (
+        payload.applied.worldRelationships
+          ? mergeResourcesByKey(nextSnapshot.worldRelationships, payload.applied.worldRelationships)
+          : nextSnapshot.worldRelationships
+      ).filter((relationship) => !deletedRelationshipKeys.has(relationship.key)),
       worldOperators: payload.applied.worldOperators ? mergeResourcesByKey(nextSnapshot.worldOperators, payload.applied.worldOperators) : nextSnapshot.worldOperators,
       worldResults: payload.applied.worldResults ? mergeResourcesByKey(nextSnapshot.worldResults, payload.applied.worldResults) : nextSnapshot.worldResults,
       worldGraphConnections: payload.applied.worldGraphConnections ? mergeResourcesByKey(nextSnapshot.worldGraphConnections, payload.applied.worldGraphConnections) : nextSnapshot.worldGraphConnections,
@@ -4342,6 +4347,8 @@ export default function App() {
       sessions: [result.session],
       turns: [result.turn],
       messages: result.messages,
+      generationJobs: result.job ? [result.job] : [],
+      generationJobSteps: result.steps ?? [],
       suggestions: result.suggestions,
       threads: result.threads,
     })

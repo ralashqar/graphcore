@@ -7,6 +7,7 @@ import {
   worldPromptProjectContextInferenceSchema,
   worldPromptEventPayloadSchema,
   worldPromptIncrementalManifestSchema,
+  promptToWorldOpSchema,
   worldPromptSeedGenerationRequestSchema,
   worldPromptSeedInferenceRequestSchema,
   worldPromptStartTurnRequestSchema,
@@ -67,6 +68,121 @@ test('world prompt start request accepts source context', () => {
 
   assert.equal(parsed.sourceContext?.kind, 'file')
   assert.equal(parsed.sourceContext?.fileName, 'outline.txt')
+})
+
+test('world prompt source context accepts feed prompt mode', () => {
+  const parsed = worldPromptStartTurnRequestSchema.parse({
+    prompt: 'Insert a new chapter between chapter 2 and 3.',
+    sourceContext: {
+      kind: 'prompt',
+      title: 'Feed prompt',
+      extractedText: '',
+      charCount: 0,
+      truncated: false,
+      promptMode: 'rewire',
+    },
+    snapshot: minimalSnapshot,
+  })
+
+  assert.equal(parsed.sourceContext?.promptMode, 'rewire')
+})
+
+test('canon transaction event payload and structural patch ops validate', () => {
+  const relationshipPatch = promptToWorldOpSchema.parse({
+    id: 'op-rewire-1',
+    op: 'relationship_rewire_patch',
+    payload: {
+      reason: 'The stewardship link should point at the protocol instead.',
+      rewires: [{
+        targetRelationshipKey: 'rel-1',
+        sourceEntityKey: 'anya',
+        targetEntityKey: 'protocol',
+        verb: 'stewards',
+      }],
+    },
+  })
+  const mergePatch = promptToWorldOpSchema.parse({
+    id: 'op-merge-1',
+    op: 'entity_merge_patch',
+    payload: {
+      sourceEntityKey: 'ghostline-collective-duplicate',
+      targetEntityKey: 'ghostline-collective',
+      reason: 'Duplicate faction created by prompt update.',
+    },
+  })
+  const payload = worldPromptEventPayloadSchema.parse({
+    canonIntent: {
+      intent: 'structural_rewire',
+      confidence: 0.9,
+      reason: 'Insert/relink language detected.',
+      promptMode: 'rewire',
+    },
+    transaction: {
+      id: 'turn.turn-1',
+      intent: 'structural_rewire',
+      risk: 'high',
+      status: 'validating',
+      affectedEntityKeys: ['anya', 'protocol'],
+      affectedRelationshipKeys: ['rel-1'],
+      approvalRequired: true,
+    },
+    validation: {
+      status: 'warning',
+      issues: [{ code: 'approval_required', message: 'Relationship rewire requires preview approval.', severity: 'medium' }],
+    },
+    op: relationshipPatch,
+    audit: { title: 'Relationship rewired' },
+  })
+
+  assert.equal(relationshipPatch.op, 'relationship_rewire_patch')
+  assert.equal(mergePatch.op, 'entity_merge_patch')
+  assert.equal(payload.canonIntent?.intent, 'structural_rewire')
+  assert.equal(payload.transaction?.risk, 'high')
+})
+
+test('entity canon update op and node evolution events validate', () => {
+  const op = promptToWorldOpSchema.parse({
+    id: 'op-canon-1',
+    op: 'update_entity_canon',
+    payload: {
+      targetEntityKey: 'world.actor.anya',
+      factAdditions: [{
+        factId: 'turn-1.fact.1',
+        kind: 'state',
+        text: 'Anya now carries the first-week leadership burden.',
+      }],
+      currentStatePatch: {
+        role: 'acting field leader',
+      },
+      rationale: 'The prompt changes Anya current role without replacing her identity.',
+      risk: 'low',
+    },
+  })
+  const payload = worldPromptEventPayloadSchema.parse({
+    nodeEvolution: {
+      summary: 'Anya is an existing-node state change, not a new character.',
+      decisions: [{
+        subject: 'Anya Sorin',
+        decision: 'state_change',
+        targetEntityKey: 'world.actor.anya',
+        confidence: 0.91,
+        rationale: 'The prompt refers to the existing named character and changes her current role.',
+        risk: 'low',
+        suggestedFactKind: 'state',
+      }],
+    },
+    op,
+    audit: {
+      title: 'Anya current state updated',
+      addedFacts: [{ factId: 'turn-1.fact.1' }],
+      currentStateChanged: true,
+    },
+  })
+
+  assert.equal(op.op, 'update_entity_canon')
+  assert.equal(op.payload.factAdditions[0]?.kind, 'state')
+  assert.equal(payload.nodeEvolution?.decisions?.[0]?.decision, 'state_change')
+  assert.equal(payload.audit?.currentStateChanged, true)
 })
 
 test('incremental manifest and work item event payloads validate', () => {

@@ -141,6 +141,25 @@ export function readProjectWorldWikiPresentation(snapshot: Pick<WikiSnapshot, 'd
   return readWorldWikiPresentationMetadata(metadata.worldWiki)
 }
 
+function readProjectContextMetadata(snapshot: Pick<WikiSnapshot, 'draft'>) {
+  return looseRecord(looseRecord(snapshot.draft?.metadata).projectContext)
+}
+
+function readProjectTypeMetadata(snapshot: Pick<WikiSnapshot, 'draft'>) {
+  const projectType = readString(readProjectContextMetadata(snapshot).projectType)
+  return projectType === 'story'
+    || projectType === 'game'
+    || projectType === 'brand'
+    || projectType === 'ugc'
+    || projectType === 'app'
+    ? projectType
+    : ''
+}
+
+function readProjectSubtypeMetadata(snapshot: Pick<WikiSnapshot, 'draft'>) {
+  return readString(readProjectContextMetadata(snapshot).projectSubtype)
+}
+
 function mergeWikiPresentation(...entries: WorldWikiPresentationMetadata[]) {
   const merged: WorldWikiPresentationMetadata = {}
   for (const entry of entries) {
@@ -403,6 +422,12 @@ export function deriveWorldWiki(input: {
     ...gameDialogueNodes,
   ]
   const hasGameSystemNodes = gameNodes.length > 0
+  const projectType = readProjectTypeMetadata(input.snapshot)
+  const projectSubtype = readProjectSubtypeMetadata(input.snapshot)
+  const useAppWikiSections = projectType === 'app' || (!projectType && hasAppNodes)
+  const useGameWikiSections = projectType === 'game'
+    || projectSubtype === 'narrative_rpg_mobile'
+    || (!projectType && !hasAppNodes && hasGameSystemNodes)
   const relevantThreads = input.snapshot.worldThreads
     .filter((thread) => thread.status === 'open' || thread.status === 'resolved')
     .filter((thread) => thread.linkedEntityKeys.some((key) => scopedEntityKeys.has(key)) || scopedEntityKeys.size === 0)
@@ -422,8 +447,18 @@ export function deriveWorldWiki(input: {
   const generatedFromFingerprint = wiki.generatedFromFingerprint || ''
   const wikiStale = Boolean(generatedFromFingerprint && generatedFromFingerprint !== wikiFingerprint)
   const projectSummary = input.snapshot.project.summary.trim()
-  const synopsis = wiki.synopsis || projectSummary || sectionSummary([...appNodes, ...gameNodes, ...actors, ...events, ...lore], '')
-  const heroEntity = [...appNodes, ...gameNodes, ...places, ...actors, ...events, ...lore].find((entity) => entity.thumbnailAssetKey) ?? appNodes[0] ?? gameNodes[0] ?? places[0] ?? actors[0] ?? events[0] ?? null
+  const synopsisSourceNodes = useAppWikiSections
+    ? [...appNodes, ...actors, ...events, ...lore]
+    : useGameWikiSections
+      ? [...gameNodes, ...actors, ...places, ...groups, ...events, ...lore]
+      : [...actors, ...events, ...lore, ...places, ...groups, ...objects]
+  const heroCandidates = useAppWikiSections
+    ? [...appNodes, ...places, ...actors, ...events, ...lore]
+    : useGameWikiSections
+      ? [...gameNodes, ...places, ...actors, ...events, ...lore]
+      : [...places, ...actors, ...events, ...lore, ...groups, ...objects]
+  const synopsis = wiki.synopsis || projectSummary || sectionSummary(synopsisSourceNodes, '')
+  const heroEntity = heroCandidates.find((entity) => entity.thumbnailAssetKey) ?? heroCandidates[0] ?? null
   const toneTags = uniq([
     ...(wiki.toneTags ?? []),
     ...scopedEntities.flatMap((entity) => readWikiPresentation(entity).toneTags ?? []),
@@ -448,14 +483,14 @@ export function deriveWorldWiki(input: {
     || toneTags.length > 0
     || Object.keys(colorScheme).length > 0,
   )
-  const styleSectionTitle = hasAppNodes ? 'Brand & Visual System' : 'Art Direction'
+  const styleSectionTitle = useAppWikiSections ? 'Brand & Visual System' : 'Art Direction'
   const styleSectionSummary = artStyleDescription
     || brandAtlasPrompt
     || worldConceptPrompt
     || colorSchemeSummary(colorScheme)
     || (visualMotifs.length > 0 ? `Visual motifs: ${visualMotifs.join(', ')}` : '')
     || (toneTags.length > 0 ? `Tone: ${toneTags.join(', ')}` : '')
-    || (hasAppNodes ? 'No app brand system metadata yet.' : 'No visual style metadata yet.')
+    || (useAppWikiSections ? 'No app brand system metadata yet.' : 'No visual style metadata yet.')
 
   const timeline = deriveWorldTimeline({
     entities: input.snapshot.worldEntities.filter((entity) => scopedEntityKeys.size === 0 || scopedEntityKeys.has(entity.key)),
@@ -476,8 +511,13 @@ export function deriveWorldWiki(input: {
     const connections = input.snapshot.worldGraphConnections.filter((connection) => connection.targetNodeKey === result.key || connection.sourceNodeKey === result.key)
     return connections.some((connection) => resultEntityKeys.has(connection.sourceNodeKey) || resultEntityKeys.has(connection.targetNodeKey))
   })
+  const storyFlowNodes = sequence.units.length > 0
+    ? sequence.units.map((unit) => unit.entity)
+    : events.length > 0
+      ? events
+      : gameNarrativeNodes
 
-  const appSections = hasAppNodes
+  const appSections = useAppWikiSections
     ? [
         makeSection({
           kind: 'app_product',
@@ -554,7 +594,7 @@ export function deriveWorldWiki(input: {
       ]
     : []
 
-  const gameSections = !hasAppNodes && hasGameSystemNodes
+  const gameSections = !useAppWikiSections && useGameWikiSections
     ? [
         makeSection({
           kind: 'game_world',
@@ -607,7 +647,7 @@ export function deriveWorldWiki(input: {
       ]
     : []
 
-  const storyWorldSections = hasAppNodes || hasGameSystemNodes
+  const storyWorldSections = useAppWikiSections || useGameWikiSections
     ? []
     : [
         makeSection({
@@ -621,10 +661,12 @@ export function deriveWorldWiki(input: {
           title: 'Story Flow',
           summary: sequence.units.length > 0
             ? `${sequence.units.length} authored story beat${sequence.units.length === 1 ? '' : 's'} in the sequence.`
-            : timeline.events.length > 0 ? `${timeline.events.length} event${timeline.events.length === 1 ? '' : 's'} in the derived chronology.` : 'No story sequence or event chronology yet.',
-          entityKeys: sequence.units.length > 0
-            ? sequence.units.slice(0, 12).map((unit) => unit.entity.key)
-            : events.slice(0, 12).map((entity) => entity.key),
+            : timeline.events.length > 0
+              ? `${timeline.events.length} event${timeline.events.length === 1 ? '' : 's'} in the derived chronology.`
+              : gameNarrativeNodes.length > 0
+                ? `${gameNarrativeNodes.length} narrative scene${gameNarrativeNodes.length === 1 ? '' : 's'} in the story flow.`
+                : 'No story sequence or event chronology yet.',
+          entityKeys: storyFlowNodes.slice(0, 12).map((entity) => entity.key),
         }),
         makeSection({
           kind: 'places',
@@ -651,7 +693,7 @@ export function deriveWorldWiki(input: {
           entityKeys: objects.slice(0, 8).map((entity) => entity.key),
         }),
       ]
-  const storyArcSection = hasAppNodes || hasGameSystemNodes
+  const storyArcSection = useAppWikiSections || useGameWikiSections
     ? null
     : makeSection({
         kind: 'threads',
@@ -663,8 +705,8 @@ export function deriveWorldWiki(input: {
   const sections = [
     makeSection({
       kind: 'overview',
-      title: hasAppNodes ? 'Product Overview' : 'Overview',
-      summary: synopsis || (hasAppNodes ? 'The app overview will grow from graph canon.' : 'The world overview will grow from graph canon.'),
+      title: useAppWikiSections ? 'Product Overview' : 'Overview',
+      summary: synopsis || (useAppWikiSections ? 'The app overview will grow from graph canon.' : 'The world overview will grow from graph canon.'),
       entityKeys: heroEntity ? [heroEntity.key] : [],
     }),
     makeSection({
@@ -767,8 +809,8 @@ export function deriveWorldWiki(input: {
     gaps.push({
       key: 'world-wiki-gap-art-style',
       kind: 'world_art_style',
-      label: hasAppNodes ? 'Define app art direction' : 'Define art style',
-      prompt: hasAppNodes
+      label: useAppWikiSections ? 'Define app art direction' : 'Define art style',
+      prompt: useAppWikiSections
         ? 'Targeted app wiki metadata task: define a concise app-specific art style description for this product graph and store it as project wiki metadata.artStyleDescription using one update_world_wiki_metadata operation. Make it more specific than the broad preset: UI surface treatment, imagery, icon language, motion mood, density, and finish. Do not diagnose graph gaps and do not add new graph nodes unless necessary.'
         : 'Targeted wiki metadata task: define a concise art style description for this story/world graph and store it as project wiki metadata.artStyleDescription using one update_world_wiki_metadata operation. Make it more specific than the broad preset: medium, lighting, palette mood, texture, camera/illustration language, and recurring visual rules. Do not diagnose graph gaps and do not add new graph nodes unless necessary.',
       entityKey: null,
@@ -780,8 +822,8 @@ export function deriveWorldWiki(input: {
     gaps.push({
       key: 'world-wiki-gap-brand-atlas-prompt',
       kind: 'brand_atlas_prompt',
-      label: hasAppNodes ? 'Draft app brand atlas prompt' : 'Draft brand atlas prompt',
-      prompt: hasAppNodes
+      label: useAppWikiSections ? 'Draft app brand atlas prompt' : 'Draft brand atlas prompt',
+      prompt: useAppWikiSections
         ? 'Targeted app wiki metadata task: create a visual-only brand atlas image prompt for this app and store it as project wiki metadata.brandAtlasPrompt using one update_world_wiki_metadata operation. Use the title, product promise, logline/synopsis, app archetype, art style description, visual motifs, and color scheme if present. The prompt should describe a single premium brand-board image with mobile screen language, UI components, palette swatches, icon style, and mood references; avoid GraphCore, schema, node IDs, and implementation wording. Do not diagnose graph gaps or add new graph nodes.'
         : 'Targeted wiki metadata task: create a visual-only brand atlas image prompt for this story/world and store it as project wiki metadata.brandAtlasPrompt using one update_world_wiki_metadata operation. Use the generated title, logline, synopsis, genre, art style description, visual motifs, and tone. The prompt should describe a single cohesive visual world/brand-board image with key motifs, materials, palette, lighting, typography mood, and representative subjects; avoid GraphCore, schema, node IDs, and implementation wording. Do not diagnose graph gaps or add new graph nodes.',
       entityKey: null,
@@ -789,7 +831,7 @@ export function deriveWorldWiki(input: {
       sectionKind: 'style',
     })
   }
-  if (hasAppNodes && !colorSchemeHasCoreColors(colorScheme)) {
+  if (useAppWikiSections && !colorSchemeHasCoreColors(colorScheme)) {
     gaps.push({
       key: 'world-wiki-gap-color-scheme',
       kind: 'color_scheme',

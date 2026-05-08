@@ -1305,6 +1305,167 @@ test('buildWorldFeedViewModel derives entity and relationship update cards from 
   assert.equal(feed.groups[0]?.label, 'Just now')
 })
 
+test('buildWorldFeedViewModel derives canon transaction and patch audit cards', () => {
+  const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
+  const protocol = createWorldPresentationTestEntity('world.concept.protocol', 'Protocol', 'concept')
+  const turn = makeTurn({ id: 't-transaction', prompt: 'Rewire the stewardship link.' })
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [
+      makeEvent({
+        id: 'e-intent',
+        turnId: turn.id,
+        eventType: 'intent_classified',
+        payload: {
+          canonIntent: { intent: 'structural_rewire', confidence: 0.9, reason: 'Rewire wording detected.' },
+          transaction: { id: `turn.${turn.id}`, intent: 'structural_rewire', risk: 'high', status: 'planning', summary: 'Rewire wording detected.' },
+        },
+        createdAt: '2026-04-22T10:00:00.000Z',
+      }),
+      makeEvent({
+        id: 'e-rewire',
+        turnId: turn.id,
+        eventType: 'op_applied',
+        payload: {
+          op: {
+            id: 'op-rewire',
+            op: 'relationship_rewire_patch',
+            payload: {
+              reason: 'Canon link moved.',
+              rewires: [{ targetRelationshipKey: 'rel-1', sourceEntityKey: hero.key, targetEntityKey: protocol.key, verb: 'stewards' }],
+              auditSummary: { title: 'Relationship rewired' },
+            },
+          },
+          applied: {
+            worldEntities: [hero, protocol],
+            worldRelationships: [],
+            worldOperators: [],
+            worldResults: [],
+            worldGraphConnections: [],
+            worldViews: [],
+          },
+          audit: {
+            title: 'Relationship rewired',
+            touchedEntityKeys: [hero.key, protocol.key],
+            touchedRelationshipKeys: ['rel-1'],
+          },
+        },
+        createdAt: '2026-04-22T10:01:00.000Z',
+      }),
+    ],
+    entityByKey: new Map([[hero.key, hero], [protocol.key, protocol]]),
+    relationships: [],
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const transactionEntry = feed.entries.find((entry) => entry.kind === 'canon_transaction')
+  assert.equal(transactionEntry?.title, 'Canon intent classified')
+  assert.equal(transactionEntry?.transaction?.risk, 'high')
+
+  const rewireEntry = feed.entries.find((entry) => entry.kind === 'relationship_rewired')
+  assert.equal(rewireEntry?.filter, 'relationships')
+  assert.deepEqual(rewireEntry?.thumbnailEntityKeys, [hero.key, protocol.key])
+  assert.deepEqual(rewireEntry?.changedFields, ['1 links rewired'])
+})
+
+test('buildWorldFeedViewModel derives node evolution and canon fact update cards', () => {
+  const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
+  const updatedHero = {
+    ...hero,
+    metadata: {
+      canonFacts: [{
+        factId: 'op-canon.fact.1',
+        kind: 'state',
+        text: 'Hero now carries the city watch command.',
+        status: 'active',
+      }],
+      currentState: {
+        role: 'city watch commander',
+      },
+    },
+  }
+  const turn = makeTurn({ id: 't-node-evolution', prompt: 'Hero now commands the city watch.' })
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [
+      makeEvent({
+        id: 'e-node-evolution',
+        turnId: turn.id,
+        eventType: 'node_evolution_decided',
+        payload: {
+          nodeEvolution: {
+            summary: 'Hero is an existing-node state change.',
+            decisions: [{
+              subject: 'Hero',
+              decision: 'state_change',
+              targetEntityKey: hero.key,
+              confidence: 0.92,
+              rationale: 'The prompt changes the existing hero current role.',
+              risk: 'low',
+            }],
+          },
+          transaction: {
+            id: `turn.${turn.id}`,
+            status: 'validating',
+            risk: 'low',
+            affectedEntityKeys: [hero.key],
+          },
+        },
+        createdAt: '2026-04-22T10:00:00.000Z',
+      }),
+      makeEvent({
+        id: 'e-canon-update',
+        turnId: turn.id,
+        eventType: 'op_applied',
+        payload: {
+          op: {
+            id: 'op-canon',
+            op: 'update_entity_canon',
+            payload: {
+              targetEntityKey: hero.key,
+              factAdditions: [{ factId: 'op-canon.fact.1', kind: 'state', text: 'Hero now carries the city watch command.' }],
+              currentStatePatch: { role: 'city watch commander' },
+              rationale: 'State changed without replacing identity.',
+              risk: 'low',
+              auditSummary: { title: 'Hero current state updated' },
+            },
+          },
+          applied: {
+            worldEntities: [updatedHero],
+            worldRelationships: [],
+            worldOperators: [],
+            worldResults: [],
+            worldGraphConnections: [],
+            worldViews: [],
+          },
+          audit: {
+            title: 'Hero current state updated',
+            targetEntityKey: hero.key,
+            addedFacts: [{ factId: 'op-canon.fact.1' }],
+            currentStateChanged: true,
+          },
+        },
+        createdAt: '2026-04-22T10:01:00.000Z',
+      }),
+    ],
+    entityByKey: new Map([[hero.key, updatedHero]]),
+    relationships: [],
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const decisionEntry = feed.entries.find((entry) => entry.kind === 'node_evolution')
+  assert.equal(decisionEntry?.filter, 'wiki')
+  assert.equal(decisionEntry?.title, 'Node evolution decided')
+  assert.deepEqual(decisionEntry?.connectedEntityKeys, [hero.key])
+
+  const canonEntry = feed.entries.find((entry) => entry.kind === 'entity_canon_updated')
+  assert.equal(canonEntry?.filter, 'entities')
+  assert.equal(canonEntry?.title, 'Hero current state updated')
+  assert.deepEqual(canonEntry?.changedFields, ['1 facts added', 'current state changed'])
+})
+
 test('buildWorldFeedViewModel includes active running turn and turn summary counts', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
   const activeTurn = makeTurn({
