@@ -81,6 +81,9 @@ export type WorldWikiModel = {
     coreConflict: string
     visualMotifs: string[]
     artStyleDescription: string
+    worldConceptPrompt: string
+    worldConceptAssetKey: string
+    worldConceptVisualJobId: string
     brandAtlasPrompt: string
     brandAtlasAssetKey: string
     colorScheme: Record<string, string>
@@ -429,11 +432,16 @@ export function deriveWorldWiki(input: {
   const themes = uniq(wiki.themes ?? []).slice(0, 8)
   const visualMotifs = uniq(wiki.visualMotifs ?? []).slice(0, 8)
   const artStyleDescription = wiki.artStyleDescription || ''
+  const worldConceptPrompt = wiki.worldConceptPrompt || ''
+  const worldConceptAssetKey = wiki.worldConceptAssetKey || ''
+  const worldConceptVisualJobId = wiki.worldConceptVisualJobId || ''
   const brandAtlasPrompt = wiki.brandAtlasPrompt || ''
   const brandAtlasAssetKey = wiki.brandAtlasAssetKey || ''
   const colorScheme = cleanColorScheme(wiki.colorScheme)
   const hasStyleMetadata = Boolean(
     artStyleDescription
+    || worldConceptPrompt
+    || worldConceptAssetKey
     || brandAtlasPrompt
     || brandAtlasAssetKey
     || visualMotifs.length > 0
@@ -443,6 +451,7 @@ export function deriveWorldWiki(input: {
   const styleSectionTitle = hasAppNodes ? 'Brand & Visual System' : 'Art Direction'
   const styleSectionSummary = artStyleDescription
     || brandAtlasPrompt
+    || worldConceptPrompt
     || colorSchemeSummary(colorScheme)
     || (visualMotifs.length > 0 ? `Visual motifs: ${visualMotifs.join(', ')}` : '')
     || (toneTags.length > 0 ? `Tone: ${toneTags.join(', ')}` : '')
@@ -871,6 +880,9 @@ export function deriveWorldWiki(input: {
       coreConflict: wiki.coreConflict || '',
       visualMotifs,
       artStyleDescription,
+      worldConceptPrompt,
+      worldConceptAssetKey,
+      worldConceptVisualJobId,
       brandAtlasPrompt,
       brandAtlasAssetKey,
       colorScheme,

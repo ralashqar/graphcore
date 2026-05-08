@@ -51,12 +51,14 @@ import { createAssemblyGraph } from './domain/environmentAssembly'
 import type {
   WorldEntity,
   WorldOperator,
+  WorldWikiPresentationMetadata,
   WorldEntityCreateInput,
   WorldResult,
   WorldRelationship,
   WorldRelationshipCreateInput,
   WorldViewCreateInput,
 } from './domain/worldGraph'
+import { readWorldWikiPresentationMetadata } from './domain/worldWiki'
 import {
   isPendingInitialSeedGenerationTurn,
   worldPromptEventPayloadSchema,
@@ -98,6 +100,7 @@ import { normalizeNode } from './domain/nodeLibrary'
 import { classifyOutputPrompt } from './domain/outputWorkflow'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
+import type { VisualGenerationJob } from './domain/visualGeneration'
 import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
 import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
@@ -197,11 +200,57 @@ function createLocalEntityId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+function readAssetGenerationState(asset: ProjectSnapshot['assets'][number] | null | undefined) {
+  const generation = asset?.metadata.generation
+  if (!generation || typeof generation !== 'object' || Array.isArray(generation)) return ''
+  return typeof generation.state === 'string' ? generation.state.trim() : ''
+}
+
+function isPendingGeneratedAsset(asset: ProjectSnapshot['assets'][number] | null | undefined) {
+  const state = readAssetGenerationState(asset)
+  return state === 'pending' || state === 'running'
+}
+
+function trimOptionalString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readMetadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
 function slugifyWorldValue(value: string) {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
+}
+
+function buildWorldConceptImagePrompt(input: {
+  wiki: WorldWikiPresentationMetadata
+  projectName: string
+  projectDescription: string
+  artStyleDescription: string
+}) {
+  const colorText = Object.entries(input.wiki.colorScheme ?? {})
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(', ')
+  const visualMotifs = input.wiki.visualMotifs ?? []
+  const toneTags = input.wiki.toneTags ?? []
+  const title = input.wiki.title || input.projectName
+  return [
+    `Create one cinematic world concept art image for "${title}".`,
+    input.wiki.logline ? `Logline: ${input.wiki.logline}.` : '',
+    input.wiki.synopsis || input.projectDescription ? `World overview: ${input.wiki.synopsis || input.projectDescription}.` : '',
+    input.wiki.genre ? `Genre: ${input.wiki.genre}.` : '',
+    input.wiki.artStyleDescription || input.artStyleDescription ? `Art direction: ${input.wiki.artStyleDescription || input.artStyleDescription}.` : '',
+    visualMotifs.length > 0 ? `Visual motifs: ${visualMotifs.join(', ')}.` : '',
+    toneTags.length > 0 ? `Tone: ${toneTags.join(', ')}.` : '',
+    colorText ? `Color palette: ${colorText}.` : '',
+    'Show a single wide establishing scene that communicates the world at a glance. Use dramatic composition, coherent lighting, atmospheric depth, and clear readable focal architecture or environment. Do not make a collage, brand board, UI mockup, logo sheet, text poster, schema diagram, or GraphCore-branded image.',
+  ].filter(Boolean).join('\n')
 }
 
 function buildOptimisticWorldEntityKey(snapshot: ProjectSnapshot, input: WorldEntityCreateInput) {
@@ -1121,7 +1170,7 @@ export default function App() {
   const [patchPreview, setPatchPreview] = useState<(PromptPatchResponse & { id: string; prompt: string; status: string }) | null>(null)
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('graph')
   const [activeInitialSeedSessionKey, setActiveInitialSeedSessionKey] = useState<string | null>(null)
-  const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('graph')
+  const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('wiki')
   const [activeLibrarySection, setActiveLibrarySection] = useState<LibrarySection>('characters')
   const [selectedAssetKey, setSelectedAssetKey] = useState<string | null>(null)
   const [selectedArchetypeKey, setSelectedArchetypeKey] = useState<string | null>(null)
@@ -1545,7 +1594,7 @@ export default function App() {
         const loaded = await workspaceService.load({
           projectId: snapshot.project.id,
           draftId,
-        }, { profile: targetProfile, hydrateAssetUrls: false })
+        }, { profile: targetProfile, hydrateAssetUrls: targetProfile === 'world' })
         if (cancelled || loaded.source !== 'supabase') return
         const current = snapshotRef.current
         const nextSnapshot = current
@@ -1684,6 +1733,24 @@ export default function App() {
   const selectedNode = useMemo(() => selectedGraph?.nodes.find((node) => node.key === selectedNodeKey) ?? null, [selectedGraph, selectedNodeKey])
   const selectedEdge = useMemo(() => selectedGraph?.edges.find((edge) => edge.key === selectedEdgeKey) ?? null, [selectedEdgeKey, selectedGraph])
   const selectedAsset = useMemo(() => snapshot?.assets.find((asset) => asset.key === selectedAssetKey) ?? snapshot?.assets[0] ?? null, [selectedAssetKey, snapshot])
+  const worldWikiMetadata = useMemo(() => readWorldWikiPresentationMetadata(snapshot?.draft.metadata.worldWiki), [snapshot?.draft.metadata.worldWiki])
+  const worldConceptAsset = useMemo(() => {
+    const assetKey = trimOptionalString(worldWikiMetadata.worldConceptAssetKey)
+    if (!assetKey) return null
+    return snapshot?.assets.find((asset) => asset.key === assetKey) ?? null
+  }, [snapshot?.assets, worldWikiMetadata.worldConceptAssetKey])
+  const worldConceptImageUrl = useMemo(() => (
+    worldConceptAsset && !isPendingGeneratedAsset(worldConceptAsset)
+      ? resolveAssetSourceUrl(worldConceptAsset)
+      : null
+  ), [worldConceptAsset])
+  const worldConceptGenerationStatus = isPendingGeneratedAsset(worldConceptAsset)
+    ? 'generating'
+    : worldConceptAsset
+      ? 'ready'
+      : trimOptionalString(worldWikiMetadata.worldConceptVisualJobId)
+        ? 'generating'
+        : 'missing'
   const activeGameIsEmpty = loadedState?.source === 'supabase'
     && !!snapshot
     && snapshot.worldEntities.length === 0
@@ -2526,7 +2593,11 @@ export default function App() {
     }
     const mergeAssets = (existing: ProjectSnapshot['assets'], incoming: ProjectSnapshot['assets'] = []) => {
       const byKey = new Map(existing.map((entry) => [entry.key, entry]))
-      for (const entry of incoming) byKey.set(entry.key, entry)
+      for (const entry of incoming) {
+        const current = byKey.get(entry.key) ?? null
+        if (current && isPendingGeneratedAsset(entry) && !isPendingGeneratedAsset(current)) continue
+        byKey.set(entry.key, entry)
+      }
       return [...byKey.values()]
     }
     const workflowId = options?.replaceWorkflowGraphId
@@ -4303,8 +4374,65 @@ export default function App() {
     return workspaceService.getWorldEntityIconBatchStatus(jobId)
   }
 
+  async function applyCompletedWorldConceptVisualJob(job: VisualGenerationJob) {
+    const role = trimOptionalString(job.targetKeys.role) || trimOptionalString(job.input.role)
+    if (job.kind !== 'wiki_visual' || role !== 'world_concept_image') return
+    if (job.status !== 'completed' && job.status !== 'completed_with_errors') return
+
+    const outputAsset = job.outputs.assets.find((asset) => asset.role === 'world_concept_image') ?? job.outputs.assets[0] ?? null
+    const assetKey = trimOptionalString(outputAsset?.assetKey)
+      || trimOptionalString(job.targetKeys.assetKey)
+      || trimOptionalString(job.input.assetKey)
+    if (!assetKey) return
+
+    const current = snapshotRef.current ?? snapshot
+    if (!current || current.project.id !== job.projectId || current.draft.id !== job.draftId) return
+
+    let completedAsset = current.assets.find((asset) => asset.key === assetKey) ?? null
+    if (!completedAsset || isPendingGeneratedAsset(completedAsset) || !resolveAssetSourceUrl(completedAsset)) {
+      try {
+        const signedAssets = await workspaceService.signProjectAssetUrls(current.project.id, [assetKey])
+        completedAsset = signedAssets.find((asset) => asset.key === assetKey) ?? completedAsset
+      } catch (error) {
+        console.warn('[GraphCore] failed to sign completed world concept asset from visual job status.', error)
+      }
+    }
+
+    const draftMetadata = readMetadataRecord(current.draft.metadata)
+    const worldWiki = readMetadataRecord(draftMetadata.worldWiki)
+    const { worldConceptVisualJobId: _completedJobId, ...worldWikiWithoutActiveJob } = worldWiki
+    const nextMetadata = {
+      ...draftMetadata,
+      worldWiki: {
+        ...worldWikiWithoutActiveJob,
+        worldConceptPrompt:
+          trimOptionalString(worldWiki.worldConceptPrompt)
+          || trimOptionalString(job.input.sourcePrompt)
+          || trimOptionalString(job.input.imagePrompt)
+          || trimOptionalString(job.input.prompt),
+        worldConceptAssetKey: assetKey,
+      },
+    }
+
+    const nextSnapshot = normalizeSnapshot({
+      ...current,
+      draft: {
+        ...current.draft,
+        metadata: nextMetadata,
+      },
+      assets: completedAsset
+        ? mergeResourcesByKey(current.assets, [completedAsset])
+        : current.assets.filter((asset) => asset.key !== assetKey || !isPendingGeneratedAsset(asset)),
+    })
+    commitPersistedSnapshot(nextSnapshot)
+  }
+
   async function getVisualGenerationStatus(jobId: string) {
-    return workspaceService.getVisualGenerationStatus(jobId)
+    const status = await workspaceService.getVisualGenerationStatus(jobId)
+    if (status.terminal) {
+      await applyCompletedWorldConceptVisualJob(status.job)
+    }
+    return status
   }
 
   async function startVisualGenerationJob(request: Parameters<typeof workspaceService.startVisualGenerationJob>[1]) {
@@ -4315,6 +4443,130 @@ export default function App() {
       throw new Error('Visual generation requires a live Supabase-backed draft.')
     }
     return workspaceService.startVisualGenerationJob(snapshot, request)
+  }
+
+  async function generateWorldConceptImageFromGlobal() {
+    const current = snapshotRef.current ?? snapshot
+    if (!current) {
+      throw new Error('Load a live GraphCore draft before generating a world concept image.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('World concept image generation requires a live Supabase-backed draft.')
+    }
+    const wiki = readWorldWikiPresentationMetadata(current.draft.metadata.worldWiki)
+    const existingAssetKey = trimOptionalString(wiki.worldConceptAssetKey)
+    const existingAsset = existingAssetKey
+      ? current.assets.find((asset) => asset.key === existingAssetKey) ?? null
+      : null
+    if (isPendingGeneratedAsset(existingAsset)) {
+      throw new Error('A world concept image is already generating.')
+    }
+
+    const sourcePrompt = trimOptionalString(wiki.worldConceptPrompt)
+    const imagePrompt = sourcePrompt || buildWorldConceptImagePrompt({
+      wiki,
+      projectName: current.project.name,
+      projectDescription: current.project.summary,
+      artStyleDescription:
+        typeof current.projectContext?.artStyleDescription === 'string'
+          ? current.projectContext.artStyleDescription
+          : typeof current.gameSpec?.theme?.artStyleDescription === 'string'
+            ? current.gameSpec.theme.artStyleDescription
+            : '',
+    })
+    const titleSlug = slugifyWorldValue(wiki.title || current.project.name || 'world').replace(/-/g, '_') || 'world'
+    const randomSuffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+      : Math.random().toString(36).slice(2, 14)
+    const assetKey = uniqueValue(current.assets.map((asset) => asset.key), `world_concept_${titleSlug}_${randomSuffix}`)
+    const storagePath = `generated/wiki-concept-images/${current.draft.id}/${assetKey}.webp`
+    const result = await workspaceService.startVisualGenerationJob(current, {
+      kind: 'wiki_visual',
+      provider: 'fal',
+      model: 'openai/gpt-image-2',
+      targetKeys: {
+        assetKey,
+        role: 'world_concept_image',
+        wikiField: 'worldConceptAssetKey',
+      },
+      input: {
+        assetKey,
+        storagePath,
+        role: 'world_concept_image',
+        imagePrompt,
+        sourcePrompt: sourcePrompt || imagePrompt,
+        quality: 'low',
+        outputFormat: 'webp',
+        mimeType: 'image/webp',
+        imageSize: { width: 1536, height: 864 },
+        wiki: {
+          title: wiki.title,
+          logline: wiki.logline,
+          synopsis: wiki.synopsis,
+          genre: wiki.genre,
+          artStyleDescription: wiki.artStyleDescription,
+          visualMotifs: wiki.visualMotifs,
+          toneTags: wiki.toneTags,
+          colorScheme: wiki.colorScheme,
+        },
+      },
+      metadata: {
+        runtime: 'fly',
+        queuedBy: 'global_workspace',
+      },
+    })
+    const pendingAsset: ProjectSnapshot['assets'][number] = {
+      id: createLocalEntityId('asset-world-concept'),
+      projectId: current.project.id,
+      key: assetKey,
+      name: `${wiki.title || current.project.name || 'World'} Concept Image`,
+      kind: 'image',
+      mimeType: 'image/webp',
+      storagePath,
+      metadata: {
+        generatedBy: 'world_concept_image',
+        visualJobId: result.job.id,
+        jobKind: 'wiki_visual',
+        provider: 'fal',
+        model: 'openai/gpt-image-2',
+        role: 'world_concept_image',
+        prompt: imagePrompt,
+        sourcePrompt: sourcePrompt || imagePrompt,
+        storageBucket: 'project-assets',
+        storagePath,
+        generation: {
+          state: 'pending',
+          jobId: result.job.id,
+          placeholder: true,
+          source: 'visual_generation',
+        },
+      },
+      llmHints: {},
+    }
+    const nextMetadata = {
+      ...current.draft.metadata,
+      worldWiki: {
+        ...wiki,
+        worldConceptPrompt: sourcePrompt || imagePrompt,
+        worldConceptAssetKey: assetKey,
+        worldConceptVisualJobId: result.job.id,
+      },
+    }
+    const nextSnapshot = normalizeSnapshot({
+      ...current,
+      draft: {
+        ...current.draft,
+        metadata: nextMetadata,
+      },
+      assets: mergeResourcesByKey(current.assets, [pendingAsset]),
+    })
+    snapshotRef.current = nextSnapshot
+    setSnapshot(nextSnapshot)
+    setBundle(compileBundle(nextSnapshot))
+    void refreshLiveSnapshot().catch((error) => {
+      console.warn('[GraphCore] failed to refresh snapshot after starting world concept image generation.', error)
+    })
+    return result
   }
 
   async function startAppCodeGeneration() {
@@ -6997,7 +7249,18 @@ export default function App() {
                 projectName={snapshot.project.name}
                 releases={snapshot.releases}
                 sourceReason={loadedState?.reason}
+                worldConceptImageUrl={worldConceptImageUrl}
+                worldConceptPrompt={trimOptionalString(worldWikiMetadata.worldConceptPrompt)}
+                worldConceptStatus={worldConceptGenerationStatus}
+                worldConceptVisualJobId={trimOptionalString(worldWikiMetadata.worldConceptVisualJobId)}
                 onSave={handleSaveGlobalProjectContext}
+                onGenerateWorldConceptImage={generateWorldConceptImageFromGlobal}
+                onGetVisualGenerationStatus={getVisualGenerationStatus}
+                onOpenWiki={() => {
+                  setWorldViewMode('wiki')
+                  setActiveTab('graph')
+                }}
+                onRefreshLiveSnapshot={refreshLiveSnapshot}
               />
             ) : null}
           </Suspense>

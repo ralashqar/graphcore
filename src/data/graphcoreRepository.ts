@@ -2733,6 +2733,11 @@ function findMissingAssetReferences(snapshot: ProjectSnapshot) {
   const assetKeys = new Set(snapshot.assets.map((asset) => asset.key))
   const missing = new Set<string>()
 
+  const draftMetadata = readRepositoryRecord(snapshot.draft.metadata)
+  const worldWiki = readRepositoryRecord(draftMetadata.worldWiki)
+  addMissingAssetKey(worldWiki.worldConceptAssetKey, assetKeys, missing)
+  addMissingAssetKey(worldWiki.brandAtlasAssetKey, assetKeys, missing)
+
   for (const definition of snapshot.definitions) {
     if (definition.iconAssetKey && !assetKeys.has(definition.iconAssetKey)) {
       missing.add(definition.iconAssetKey)
@@ -3011,7 +3016,7 @@ export async function loadProjectSnapshot(
 ): Promise<SnapshotLoadResult> {
   const profile = options?.profile ?? DEFAULT_SNAPSHOT_LOAD_PROFILE
   const promptHistoryLimit = Math.max(1, options?.promptHistoryLimit ?? DEFAULT_PROMPT_HISTORY_LIMIT)
-  const shouldHydrateAssetUrls = options?.hydrateAssetUrls ?? (profile === 'full' || profile === 'content')
+  const shouldHydrateAssetUrls = options?.hydrateAssetUrls ?? (profile === 'full' || profile === 'content' || profile === 'world')
   const includeFull = profile === 'full'
   const includeContent = profile === 'full' || profile === 'content' || profile === 'world'
   const includeJobs = profile === 'full' || profile === 'jobs' || profile === 'world'
@@ -3282,7 +3287,7 @@ export async function loadProjectSnapshot(
           .eq('draft_id', draft.id)
           .order('created_at', { ascending: true })
       : Promise.resolve(emptyPostgrestResponse()),
-    (includeFull || profile === 'content')
+    (includeFull || profile === 'content' || profile === 'world')
       ? supabase
           .from('project_assets')
           .select(assetSelect)

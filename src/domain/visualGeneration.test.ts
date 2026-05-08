@@ -11,7 +11,7 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, '../..')
 
-test('visual generation schemas accept generic icon and brand atlas jobs', () => {
+test('visual generation schemas accept generic icon, brand atlas, and wiki visual jobs', () => {
   const createdAt = new Date().toISOString()
   const iconJob = visualGenerationJobSchema.parse({
     id: 'job-icon',
@@ -55,6 +55,16 @@ test('visual generation schemas accept generic icon and brand atlas jobs', () =>
   })
 
   assert.equal(atlasJob.job.outputs.assets[0].role, 'brand_atlas')
+
+  const wikiVisualRequest = visualGenerationStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    kind: 'wiki_visual',
+    targetKeys: { assetKey: 'world_concept_project', role: 'world_concept_image' },
+    input: { imagePrompt: 'single cinematic world concept scene', quality: 'low', outputFormat: 'webp' },
+  })
+  assert.equal(wikiVisualRequest.kind, 'wiki_visual')
+  assert.equal(wikiVisualRequest.input.outputFormat, 'webp')
 })
 
 test('visual generation start request supports app mockup and analysis kinds', () => {
@@ -131,6 +141,30 @@ test('entity icon endpoint and Fly worker use the generic visual job pipeline', 
   assert.match(worker, /processFlyVisualGenerationJobs/)
   assert.match(visualWorker, /world_entity_icon_grid/)
   assert.match(visualWorker, /brand_atlas/)
+  assert.match(visualWorker, /processWikiVisualJob/)
+  assert.match(visualWorker, /job\.kind === 'wiki_visual'/)
+  assert.match(visualWorker, /world_concept_image/)
+})
+
+test('initial streamed seed queues world concept image after wiki metadata and before icon batch boundary', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/world-prompt.ts'), 'utf8')
+
+  assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,180}await maybeQueueInitialSeedWorldConceptImage\('world_wiki_metadata'\)/)
+  assert.match(source, /op\.op === 'upsert_entity' && op\.payload\.entity\.nodeType === 'sequence_unit'[\s\S]{0,180}await maybeQueueInitialSeedIconBatch\('first_sequence_unit'\)/)
+  assert.match(source, /kind:\s*'wiki_visual'/)
+  assert.match(source, /role:\s*'world_concept_image'/)
+  assert.match(source, /quality:\s*'low'/)
+  assert.match(source, /outputFormat:\s*'webp'/)
+})
+
+test('generic visual generation start persists pending world concept wiki assets', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/start-visual-generation-job/index.ts'), 'utf8')
+
+  assert.match(source, /persistPendingWorldConceptImage/)
+  assert.match(source, /payload\.kind === 'wiki_visual' && role === 'world_concept_image'/)
+  assert.match(source, /generatedBy:\s*'world_concept_image'/)
+  assert.match(source, /worldConceptAssetKey:\s*input\.assetKey/)
+  assert.match(source, /worldConceptVisualJobId:\s*input\.jobId/)
 })
 
 test('entity reference sheet jobs route through Fly visual worker with medium webp output', () => {

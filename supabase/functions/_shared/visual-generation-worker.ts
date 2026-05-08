@@ -824,6 +824,120 @@ async function processBrandAtlasJob(client: DatabaseClient, job: VisualJob, work
   return { assetKey }
 }
 
+async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, workerId: string) {
+  const role = readString(job.targetKeys.role) || readString(job.input.role) || 'wiki_visual'
+  if (role !== 'world_concept_image') {
+    throw new Error(`Wiki visual role "${role}" is not implemented yet.`)
+  }
+
+  const prompt = readString(job.input.imagePrompt) || readString(job.input.prompt)
+  if (!prompt) throw new Error('Wiki visual job is missing an image prompt.')
+
+  const assetKey = readString(job.input.assetKey) || readString(job.targetKeys.assetKey)
+  const storagePath = readString(job.input.storagePath) || (assetKey ? `generated/wiki-concept-images/${job.draftId}/${assetKey}.webp` : '')
+  if (!assetKey || !storagePath) {
+    throw new Error('Wiki visual job is missing an asset key or storage path.')
+  }
+
+  const outputFormat = readString(job.input.outputFormat) || 'webp'
+  const mimeType = readString(job.input.mimeType) || (outputFormat === 'png' ? 'image/png' : outputFormat === 'jpeg' || outputFormat === 'jpg' ? 'image/jpeg' : 'image/webp')
+  const quality = readString(job.input.quality) || 'low'
+  const imageSize = job.input.imageSize ?? { width: 1536, height: 864 }
+
+  const falApiKey = Deno.env.get('FAL_KEY')
+  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
+  const model = normalizeFalImageModel(Deno.env.get('VISUAL_GENERATION_FAL_MODEL') ?? job.model)
+  const falResult = await waitForFalImage({
+    client,
+    job,
+    workerId,
+    apiKey: falApiKey,
+    model,
+    prompt,
+    phasePrefix: 'wiki_visual',
+    imageSize,
+    quality,
+    outputFormat,
+  })
+
+  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  await heartbeat(client, job.id, workerId, { phase: 'wiki_visual_uploading_asset', imageBytes: imageBytes.byteLength })
+  await uploadBytes(client, storagePath, imageBytes, mimeType)
+
+  const sourcePrompt = readString(job.input.sourcePrompt)
+  await upsertAssetRows(client, [{
+    project_id: job.projectId,
+    key: assetKey,
+    name: 'World Concept Image',
+    kind: 'image',
+    mime_type: mimeType,
+    storage_path: storagePath,
+    metadata: buildGeneratedAssetMetadata({
+      job,
+      generatedBy: 'world_concept_image',
+      model,
+      prompt,
+      storagePath,
+      falResult,
+      extra: {
+        sourcePrompt,
+        role,
+        quality,
+        outputFormat,
+      },
+    }),
+  }])
+
+  const draftResponse = await client
+    .from('project_drafts')
+    .select('metadata')
+    .eq('id', job.draftId)
+    .single()
+  if (draftResponse.error) throw new Error(draftResponse.error.message)
+  const currentMetadata = asRecord(draftResponse.data?.metadata)
+  const currentWiki = asRecord(currentMetadata.worldWiki)
+  const updateDraftResponse = await client
+    .from('project_drafts')
+    .update({
+      metadata: {
+        ...currentMetadata,
+        worldWiki: {
+          ...currentWiki,
+          worldConceptPrompt: readString(currentWiki.worldConceptPrompt) || sourcePrompt || prompt,
+          worldConceptAssetKey: assetKey,
+          worldConceptVisualJobId: null,
+        },
+      },
+    })
+    .eq('id', job.draftId)
+  if (updateDraftResponse.error) throw new Error(updateDraftResponse.error.message)
+
+  const outputs = {
+    assets: [{
+      assetKey,
+      storagePath,
+      targetKind: 'world_wiki',
+      targetKey: 'worldConceptAssetKey',
+      role,
+    }],
+  }
+  await completeJob(client, job.id, workerId, outputs, {
+    phase: 'completed',
+    provider: 'fal',
+    model,
+    falRequestId: falResult.requestId,
+    falStatusUrl: falResult.statusUrl,
+    falResponseUrl: falResult.responseUrl,
+    falImageUrl: falResult.imageUrl,
+    assetKey,
+    role,
+    quality,
+    outputFormat,
+  })
+
+  return { assetKey }
+}
+
 function mapWorldEntityRow(row: Record<string, unknown>) {
   return {
     id: readString(row.id),
@@ -1518,6 +1632,8 @@ export async function processFlyVisualGenerationJobs(input: {
       await processEntityIconGridJob(input.client, job, input.workerId)
     } else if (job.kind === 'brand_atlas') {
       await processBrandAtlasJob(input.client, job, input.workerId)
+    } else if (job.kind === 'wiki_visual') {
+      await processWikiVisualJob(input.client, job, input.workerId)
     } else if (job.kind === 'entity_reference_sheet' || job.kind === 'character_sheet') {
       await processEntityReferenceSheetJob(input.client, job, input.workerId)
     } else if (job.kind === 'app_screen_mockup') {

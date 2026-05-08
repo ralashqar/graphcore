@@ -1,9 +1,23 @@
 import type { AuthChangeEvent, Provider, Session } from '@supabase/supabase-js'
 
 import { appRedirectUrl } from '../shared/appRoutes'
-import { supabase } from '../utils/supabase'
+import { completeSupabaseAuthRedirectFromUrl, supabase } from '../utils/supabase'
+
+let authRedirectHandled = false
+
+async function completeAuthRedirectOnce() {
+  if (authRedirectHandled) return
+  authRedirectHandled = true
+  try {
+    await completeSupabaseAuthRedirectFromUrl()
+  } catch (error) {
+    console.warn('[GraphCore] Supabase auth redirect could not be completed.', error)
+  }
+}
 
 export async function getCurrentSession() {
+  await completeAuthRedirectOnce()
+
   const {
     data: { session },
     error,

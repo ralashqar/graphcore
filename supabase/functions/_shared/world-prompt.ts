@@ -7782,6 +7782,183 @@ async function enqueueInitialSeedEntityIconBatch(input: {
   }
 }
 
+function buildInitialSeedWorldConceptPrompt(wiki: Record<string, unknown>, projectContext: ProjectContext) {
+  const title = asCompactString(wiki.title)
+  const logline = asCompactString(wiki.logline)
+  const synopsis = asCompactString(wiki.synopsis)
+  const genre = asCompactString(wiki.genre)
+  const artStyleDescription = asCompactString(wiki.artStyleDescription) || projectContext.artStyleDescription
+  const visualMotifs = asStringArray(wiki.visualMotifs)
+  const toneTags = asStringArray(wiki.toneTags)
+  const colorScheme = isRecord(wiki.colorScheme)
+    ? Object.entries(wiki.colorScheme).map(([key, value]) => `${key}: ${String(value)}`).join(', ')
+    : ''
+  return [
+    'Create one cinematic world concept artwork for the top hero image of a story/wiki page.',
+    title ? `World title: ${title}.` : '',
+    logline ? `Logline: ${logline}.` : '',
+    synopsis ? `World overview: ${synopsis}.` : '',
+    genre ? `Genre: ${genre}.` : '',
+    artStyleDescription ? `Art direction: ${artStyleDescription}.` : '',
+    visualMotifs.length > 0 ? `Recurring visual motifs: ${visualMotifs.join(', ')}.` : '',
+    toneTags.length > 0 ? `Tone: ${toneTags.join(', ')}.` : '',
+    colorScheme ? `Palette notes: ${colorScheme}.` : '',
+    'Composition: a single immersive establishing scene with strong depth, readable silhouettes, atmospheric scale, and one calm edge area suitable for overlaid UI.',
+    'Do not make a collage, mood board, brand board, UI mockup, typography sheet, logo sheet, diagram, or internal schema image. No embedded text, captions, watermarks, GraphCore branding, node IDs, or interface elements.',
+  ].filter(Boolean).join('\n')
+}
+
+async function enqueueInitialSeedWorldConceptImage(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  job: WorldPromptGenerationJob
+  projectContext: ProjectContext
+  trigger: string
+}) {
+  const currentMetadata = asRecord(input.snapshot.draft.metadata)
+  const currentWiki = asRecord(currentMetadata.worldWiki)
+  const existingAssetKey = asCompactString(currentWiki.worldConceptAssetKey)
+  if (existingAssetKey) {
+    return {
+      jobId: asCompactString(currentWiki.worldConceptVisualJobId) || null,
+      assetKey: existingAssetKey,
+      prompt: asCompactString(currentWiki.worldConceptPrompt),
+      reused: true,
+      skippedReason: 'existing_asset',
+    }
+  }
+
+  const activeJobResponse = await input.client
+    .from('visual_generation_jobs')
+    .select('id, target_keys, input')
+    .eq('project_id', input.snapshot.project.id)
+    .eq('draft_id', input.snapshot.draft.id)
+    .eq('kind', 'wiki_visual')
+    .in('status', ['queued', 'running'])
+    .order('created_at', { ascending: false })
+    .limit(5)
+  if (activeJobResponse.error) throw new Error(activeJobResponse.error.message)
+  const activeJob = (activeJobResponse.data ?? []).find((row: Record<string, unknown>) => {
+    const targetKeys = asRecord(row.target_keys)
+    return asCompactString(targetKeys.role) === 'world_concept_image'
+  }) as Record<string, unknown> | undefined
+  if (activeJob?.id) {
+    const targetKeys = asRecord(activeJob.target_keys)
+    const inputRecord = asRecord(activeJob.input)
+    return {
+      jobId: String(activeJob.id),
+      assetKey: asCompactString(targetKeys.assetKey),
+      prompt: asCompactString(inputRecord.imagePrompt),
+      reused: true,
+      skippedReason: 'active_job',
+    }
+  }
+
+  const prompt = asCompactString(currentWiki.worldConceptPrompt) || buildInitialSeedWorldConceptPrompt(currentWiki, input.projectContext)
+  const title = asCompactString(currentWiki.title) || input.snapshot.project.name || 'world'
+  const assetKey = `world_concept_${slugifyStreamKey(title) || 'world'}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+  const storagePath = `generated/wiki-concept-images/${input.snapshot.draft.id}/${assetKey}.webp`
+  const now = new Date().toISOString()
+
+  const jobResponse = await input.client
+    .from('visual_generation_jobs')
+    .insert({
+      project_id: input.snapshot.project.id,
+      draft_id: input.snapshot.draft.id,
+      requested_by: null,
+      status: 'queued',
+      kind: 'wiki_visual',
+      provider: 'fal',
+      model: 'openai/gpt-image-2',
+      target_keys: {
+        assetKey,
+        role: 'world_concept_image',
+        wikiField: 'worldConceptAssetKey',
+      },
+      input: {
+        imagePrompt: prompt,
+        sourcePrompt: prompt,
+        assetKey,
+        storagePath,
+        mimeType: 'image/webp',
+        quality: 'low',
+        outputFormat: 'webp',
+        imageSize: { width: 1536, height: 864 },
+      },
+      metadata: {
+        runtime: 'fly',
+        queuedBy: 'initial_seed_world_wiki_metadata',
+        generationJobId: input.job.id,
+        generationTurnId: input.job.turnId,
+        trigger: input.trigger,
+        role: 'world_concept_image',
+      },
+    })
+    .select('id')
+    .single()
+  if (jobResponse.error || !jobResponse.data) throw new Error(jobResponse.error?.message ?? 'Failed to queue world concept image.')
+
+  const visualJobId = String(jobResponse.data.id)
+  const assetResponse = await input.client
+    .from('project_assets')
+    .insert({
+      project_id: input.snapshot.project.id,
+      key: assetKey,
+      name: 'World Concept Image',
+      kind: 'image',
+      mime_type: 'image/webp',
+      storage_path: storagePath,
+      metadata: {
+        generatedBy: 'world_concept_image',
+        visualJobId,
+        jobKind: 'wiki_visual',
+        provider: 'fal',
+        model: 'openai/gpt-image-2',
+        storageBucket: 'project-assets',
+        storagePath,
+        prompt,
+        sourcePrompt: prompt,
+        role: 'world_concept_image',
+        generation: {
+          jobId: visualJobId,
+          state: 'pending',
+          queuedAt: now,
+          source: 'visual_generation',
+        },
+      },
+    })
+  if (assetResponse.error) throw new Error(assetResponse.error.message)
+
+  const nextWiki = {
+    ...currentWiki,
+    worldConceptPrompt: prompt,
+    worldConceptAssetKey: assetKey,
+    worldConceptVisualJobId: visualJobId,
+  }
+  const nextMetadata = {
+    ...currentMetadata,
+    worldWiki: nextWiki,
+  }
+  const draftResponse = await input.client
+    .from('project_drafts')
+    .update({ metadata: nextMetadata })
+    .eq('id', input.snapshot.draft.id)
+  if (draftResponse.error) throw new Error(draftResponse.error.message)
+
+  input.snapshot.draft.metadata = nextMetadata
+  if (!input.snapshot.assets.some((asset) => asset.key === assetKey)) {
+    input.snapshot.assets.push({ key: assetKey, name: 'World Concept Image', kind: 'image' })
+  }
+
+  return {
+    jobId: visualJobId,
+    assetKey,
+    prompt,
+    reused: false,
+    skippedReason: null,
+  }
+}
+
 async function insertPromptMessage(input: {
   client: SupabaseClient
   sessionId: string
@@ -11367,7 +11544,7 @@ function normalizeStreamColorScheme(value: unknown) {
 
 function normalizeStreamWikiMetadata(metadata: Record<string, unknown>) {
   const normalizedMetadata = { ...metadata }
-  for (const key of ['title', 'logline', 'synopsis', 'genre', 'narrationPov', 'coreConflict', 'artStyleDescription', 'brandAtlasPrompt', 'brandAtlasAssetKey', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
+  for (const key of ['title', 'logline', 'synopsis', 'genre', 'narrationPov', 'coreConflict', 'artStyleDescription', 'worldConceptPrompt', 'worldConceptAssetKey', 'worldConceptVisualJobId', 'brandAtlasPrompt', 'brandAtlasAssetKey', 'roleLabel', 'shortSummary', 'generatedFromFingerprint', 'updatedByTurnId']) {
     const rawValue = normalizedMetadata[key]
     if (Array.isArray(rawValue)) {
       normalizedMetadata[key] = rawValue.map((entry) => String(entry).trim()).filter(Boolean).join(', ')
@@ -11405,6 +11582,9 @@ function normalizeCompactStreamedWikiEnvelope(value: Record<string, unknown>) {
           coreConflict: asCompactString(value.coreConflict ?? value.conflict),
           visualMotifs: asStringArray(value.visualMotifs ?? value.motifs),
           artStyleDescription: asCompactString(value.artStyleDescription ?? value.artStyle ?? value.visualStyle),
+          worldConceptPrompt: asCompactString(value.worldConceptPrompt ?? value.conceptPrompt),
+          worldConceptAssetKey: asCompactString(value.worldConceptAssetKey),
+          worldConceptVisualJobId: asCompactString(value.worldConceptVisualJobId),
           brandAtlasPrompt: asCompactString(value.brandAtlasPrompt ?? value.atlasPrompt),
           brandAtlasAssetKey: asCompactString(value.brandAtlasAssetKey),
           colorScheme: normalizeStreamColorScheme(value.colorScheme ?? value.colors ?? value.palette),
@@ -12359,6 +12539,9 @@ async function runWorldPromptGenerationJob(input: {
   let repairedRecordCount = 0
   let unrepairedRecordCount = 0
   let coverageContinuationCount = 0
+  let autoWorldConceptImageQueued = isRecord(job.metadata?.autoWorldConceptGeneration)
+    && typeof job.metadata.autoWorldConceptGeneration.jobId === 'string'
+    && job.metadata.autoWorldConceptGeneration.jobId.trim().length > 0
   let autoIconBatchQueued = isRecord(job.metadata?.autoIconGeneration)
     && typeof job.metadata.autoIconGeneration.jobId === 'string'
     && job.metadata.autoIconGeneration.jobId.trim().length > 0
@@ -12496,6 +12679,68 @@ async function runWorldPromptGenerationJob(input: {
     }
   }
 
+  const maybeQueueInitialSeedWorldConceptImage = async (trigger: string) => {
+    if (autoWorldConceptImageQueued) return
+    autoWorldConceptImageQueued = true
+    try {
+      const conceptImage = await enqueueInitialSeedWorldConceptImage({
+        client: input.client,
+        snapshot: mutableSnapshot,
+        job,
+        projectContext,
+        trigger,
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoWorldConceptGeneration: {
+            jobId: conceptImage.jobId,
+            assetKey: conceptImage.assetKey,
+            promptChars: conceptImage.prompt.length,
+            reusedActiveJob: conceptImage.reused,
+            skippedReason: conceptImage.skippedReason,
+            trigger,
+            queuedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+      if (conceptImage.jobId) {
+        await writeEvent('planner_status', {
+          plannerStatus: 'planning',
+          plannerProgress: {
+            phase: 'finalizing_world',
+            message: conceptImage.reused
+              ? 'Found the queued world concept image for this wiki.'
+              : 'Queued the world concept image for the wiki hero.',
+            sequence: counts.ops + counts.notes + 1,
+          },
+          turn: { id: turn.id },
+          job,
+        })
+      }
+    } catch (error) {
+      console.warn('[GraphCore] initial seed world concept image enqueue failed', {
+        jobId: job.id,
+        turnId: turn.id,
+        trigger,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoWorldConceptGeneration: {
+            failed: true,
+            trigger,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            failedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+    }
+  }
+
   const handleEnvelope = async (envelope: WorldPromptStreamGraphOpEnvelope) => {
     await ensureJobIsActive()
     if (envelope.kind === 'note') {
@@ -12616,6 +12861,7 @@ async function runWorldPromptGenerationJob(input: {
       counts.relationships += 1
     } else if (op.op === 'update_world_wiki_metadata') {
       counts.wikiUpdates += 1
+      await maybeQueueInitialSeedWorldConceptImage('world_wiki_metadata')
     }
 
     if (Array.isArray(result.definitions)) {

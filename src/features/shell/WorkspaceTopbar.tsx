@@ -6,8 +6,8 @@ type TopbarNavItem =
   | { kind: 'workspace'; tab: Exclude<WorkspaceTab, 'graph'>; label: string; icon: EntityIconId }
 
 const TOPBAR_NAV_ITEMS: TopbarNavItem[] = [
-  { kind: 'world', mode: 'graph', label: 'Graph', icon: 'graph' },
   { kind: 'world', mode: 'wiki', label: 'Wiki', icon: 'content' },
+  { kind: 'world', mode: 'graph', label: 'World Graph', icon: 'graph' },
   { kind: 'world', mode: 'timeline', label: 'Timeline', icon: 'event' },
   { kind: 'world', mode: 'board', label: 'Board', icon: 'thread' },
   { kind: 'world', mode: 'code', label: 'Code', icon: 'code' },

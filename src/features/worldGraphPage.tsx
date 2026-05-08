@@ -182,21 +182,30 @@ function isWorldGraphSignableAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
   if (asset.kind !== 'image' && asset.kind !== 'video' && asset.kind !== 'mesh') return false
   if (resolveAssetSourceUrl(asset)) return false
-  if (isPendingWorldBrandAtlasAsset(asset)) return false
+  if (isPendingVisualAsset(asset)) return false
   const storagePath = asset.storagePath?.trim() ?? ''
   if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) return false
   const storageBucket = typeof asset.metadata.storageBucket === 'string' ? asset.metadata.storageBucket.trim() : ''
   return Boolean(storageBucket) || storagePath.startsWith('generated/')
 }
 
-function isPendingWorldBrandAtlasAsset(asset: AssetDefinition | null | undefined) {
+function isPendingVisualAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
-  if (asset.metadata.generatedBy !== 'world_brand_atlas') return false
   const generation = asset.metadata.generation && typeof asset.metadata.generation === 'object' && !Array.isArray(asset.metadata.generation)
     ? asset.metadata.generation as Record<string, unknown>
     : {}
   const state = typeof generation.state === 'string' ? generation.state : ''
   return state === 'pending' || state === 'running'
+}
+
+function isPendingWorldBrandAtlasAsset(asset: AssetDefinition | null | undefined) {
+  if (!asset) return false
+  if (asset.metadata.generatedBy !== 'world_brand_atlas') return false
+  return isPendingVisualAsset(asset)
+}
+
+function trimOptionalString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 function readWorldBrandAtlasVisualJobId(asset: AssetDefinition | null | undefined) {
@@ -1436,6 +1445,8 @@ export function WorldGraphPage({
   const [worldPromptText, setWorldPromptText] = useState('')
   const [worldPromptPanelMode, setWorldPromptPanelMode] = useState<'expanded' | 'compact'>('expanded')
   const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
+  const [wikiStyleExpanded, setWikiStyleExpanded] = useState(false)
+  const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
   const [seedInferenceResult, setSeedInferenceResult] = useState<WorldPromptSeedInferenceResponse | null>(null)
@@ -2244,9 +2255,27 @@ export function WorldGraphPage({
     if (projectContext?.projectType === 'game' || wikiHasGameSections) return 'thread'
     return 'graph'
   }, [entityByKey, projectContext?.projectType, wikiHasAppSections, wikiHasGameSections, wikiModel.overview.heroEntityKey])
-  const wikiOverviewImageUrl = wikiModel.overview.heroEntityKey
+  const wikiWorldConceptAsset = useMemo(() => {
+    const assetKey = trimOptionalString(wikiModel.overview.worldConceptAssetKey)
+    if (!assetKey) return null
+    return assetByKey.get(assetKey) ?? null
+  }, [assetByKey, wikiModel.overview.worldConceptAssetKey])
+  const wikiWorldConceptImageUrl = useMemo(() => {
+    if (!wikiWorldConceptAsset || isPendingVisualAsset(wikiWorldConceptAsset)) return null
+    const assetKey = wikiWorldConceptAsset.key
+    return resolveAssetSourceUrl(wikiWorldConceptAsset) ?? signedAssetUrlsByKey.get(assetKey) ?? null
+  }, [signedAssetUrlsByKey, wikiWorldConceptAsset])
+  const activeWorldConceptJobId = useMemo(() => (
+    trimOptionalString(wikiModel.overview.worldConceptVisualJobId)
+    || readWorldBrandAtlasVisualJobId(wikiWorldConceptAsset)
+    || null
+  ), [wikiModel.overview.worldConceptVisualJobId, wikiWorldConceptAsset])
+  const wikiWorldConceptPending = isPendingVisualAsset(wikiWorldConceptAsset)
+    || (Boolean(activeWorldConceptJobId) && !wikiWorldConceptImageUrl)
+  const wikiHeroEntityImageUrl = wikiModel.overview.heroEntityKey
     ? imageUrlByEntityKey.get(wikiModel.overview.heroEntityKey) ?? null
     : null
+  const wikiOverviewImageUrl = wikiWorldConceptImageUrl ?? wikiHeroEntityImageUrl
   const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game Overview' : 'World Overview'
   const wikiSynopsisLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App synopsis' : projectContext?.projectType === 'game' || wikiHasGameSections ? 'Game synopsis' : 'World synopsis'
   const wikiEmptySynopsisText = projectContext?.projectType === 'app' || wikiHasAppSections
@@ -2312,6 +2341,40 @@ export function WorldGraphPage({
       window.clearInterval(intervalId)
     }
   }, [activeBrandAtlasJobId, onGetVisualGenerationStatus, onRefreshLiveSnapshot, wikiBrandAtlasPending])
+  useEffect(() => {
+    if (!wikiWorldConceptPending) return
+    let disposed = false
+    let refreshed = false
+    const poll = async () => {
+      try {
+        if (activeWorldConceptJobId && typeof onGetVisualGenerationStatus === 'function') {
+          const status = await onGetVisualGenerationStatus(activeWorldConceptJobId)
+          if (disposed) return
+          if (status.terminal && !refreshed) {
+            refreshed = true
+            await onRefreshLiveSnapshot()
+          }
+          return
+        }
+        if (!refreshed) {
+          refreshed = true
+          await onRefreshLiveSnapshot()
+        }
+      } catch (error) {
+        if (!disposed) {
+          console.warn('[GraphCore] failed to refresh world concept image generation status.', error)
+        }
+      }
+    }
+    void poll()
+    const intervalId = window.setInterval(() => {
+      void poll()
+    }, activeWorldConceptJobId ? 3000 : 15000)
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [activeWorldConceptJobId, onGetVisualGenerationStatus, onRefreshLiveSnapshot, wikiWorldConceptPending])
   useEffect(() => {
     const runningJobs = appScreenArtJobs.filter((job) => ['queued', 'running'].includes(job.status))
     if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
@@ -4798,12 +4861,36 @@ export function WorldGraphPage({
   }
 
   function handleScrollToWikiSection(sectionKind: WorldWikiSection['kind']) {
+    setActiveWikiSectionKind(sectionKind)
     const section = document.getElementById(`world-wiki-section-${sectionKind}`)
     section?.scrollIntoView({
       behavior: 'smooth',
       block: 'start',
     })
   }
+
+  useEffect(() => {
+    if (viewMode !== 'wiki') return
+    const sectionKinds = wikiModel.sections.map((section) => section.kind)
+    const sections = sectionKinds
+      .map((kind) => document.getElementById(`world-wiki-section-${kind}`))
+      .filter((section): section is HTMLElement => Boolean(section))
+    if (sections.length === 0) return
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0]
+      if (!visible?.target.id) return
+      const kind = visible.target.id.replace(/^world-wiki-section-/, '') as WorldWikiSection['kind']
+      if (sectionKinds.includes(kind)) setActiveWikiSectionKind(kind)
+    }, {
+      root: document.querySelector('.world-wiki-document'),
+      rootMargin: '-18% 0px -62% 0px',
+      threshold: [0.12, 0.3, 0.58],
+    })
+    sections.forEach((section) => observer.observe(section))
+    return () => observer.disconnect()
+  }, [viewMode, wikiModel.sections])
 
   function buildWikiDetailBody(parts: Array<string | null | undefined>) {
     const seen = new Set<string>()
@@ -5138,111 +5225,141 @@ export function WorldGraphPage({
     const colorEntries = Object.entries(wikiModel.overview.colorScheme)
     const hasAtlas = Boolean(wikiModel.overview.brandAtlasPrompt.trim() || wikiBrandAtlasImageUrl)
     const atlasBody = wikiModel.overview.brandAtlasPrompt.trim() || 'No brand atlas prompt has been established yet.'
+    const styleSummary = wikiModel.overview.artStyleDescription || section.summary || 'Not established yet'
+    const styleMeta = [
+      wikiModel.overview.visualMotifs.length ? `${wikiModel.overview.visualMotifs.length} motifs` : null,
+      colorEntries.length ? `${colorEntries.length} colors` : null,
+      hasAtlas ? 'Atlas ready' : null,
+    ].filter((value): value is string => Boolean(value))
     return (
-      <section id={`world-wiki-section-${section.kind}`} key={section.kind} className={`world-wiki-section world-wiki-section-${section.kind}`}>
-        <div className="world-wiki-section-head">
-          <div>
-            <span className="eyebrow">{labelForWikiSection(section.kind)}</span>
-            <h3>{section.title}</h3>
-          </div>
-          {styleGaps.length > 0 ? (
-            <div className="world-wiki-section-actions">
-              {styleGaps.slice(0, 3).map((gap) => (
-                <button key={gap.key} className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
-                  {gap.label}
-                </button>
-              ))}
-            </div>
+      <section
+        id={`world-wiki-section-${section.kind}`}
+        key={section.kind}
+        className={`world-wiki-section world-wiki-section-${section.kind} ${wikiStyleExpanded ? 'is-expanded' : 'is-collapsed'}`}
+      >
+        <div className="world-wiki-style-summary-row">
+          <button
+            className="world-wiki-style-summary"
+            onClick={() => setWikiStyleExpanded((value) => !value)}
+            type="button"
+            aria-expanded={wikiStyleExpanded}
+          >
+            <span className="world-wiki-index-icon"><EntityIcon id={iconForWikiSection(section.kind)} /></span>
+            <span className="world-wiki-style-summary-copy">
+              <span className="eyebrow">{labelForWikiSection(section.kind)}</span>
+              <strong>{section.title}</strong>
+              <small>{styleSummary}</small>
+            </span>
+            {styleMeta.length > 0 ? <span className="world-wiki-style-summary-meta">{styleMeta.slice(0, 2).join(' / ')}</span> : null}
+            <span className="world-wiki-style-summary-toggle" aria-hidden="true">{wikiStyleExpanded ? '-' : '+'}</span>
+          </button>
+          {!wikiStyleExpanded && styleGaps.length > 0 ? (
+            <button className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(styleGaps[0])} type="button">
+              {styleGaps[0].label}
+            </button>
           ) : null}
         </div>
-        <div className={wikiBrandAtlasImageUrl ? 'world-wiki-style-grid has-atlas-image' : 'world-wiki-style-grid'}>
-          <button
-            className="world-wiki-style-card is-wide"
-            onClick={() => openWikiDetailModal({
-              title: section.title,
-              eyebrow: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App art direction' : 'Art style',
-              body: wikiModel.overview.artStyleDescription || section.summary,
-              icon: 'design',
-              meta: [
-                wikiModel.overview.genre || null,
-                wikiModel.overview.toneTags.length ? wikiModel.overview.toneTags.slice(0, 3).join(', ') : null,
-              ].filter((value): value is string => Boolean(value)),
-            })}
-            type="button"
-          >
-            <span className="eyebrow">Art Style</span>
-            <strong>{wikiModel.overview.artStyleDescription || 'Not established yet'}</strong>
-          </button>
-          <button
-            className={[
-              hasAtlas ? 'world-wiki-style-card is-atlas' : 'world-wiki-style-card is-atlas is-empty',
-              wikiBrandAtlasImageUrl ? 'has-image' : '',
-            ].filter(Boolean).join(' ')}
-            onClick={() => {
-              if (wikiBrandAtlasImageUrl) {
-                openBrandAtlasImageSplash(wikiBrandAtlasImageUrl)
-                return
-              }
-              openWikiDetailModal({
-                title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
-                eyebrow: 'Visual image prompt',
-                body: atlasBody,
-                icon: 'asset',
-                meta: wikiModel.overview.brandAtlasPrompt ? ['Prompt ready'] : ['Needs prompt'],
-              })
-            }}
-            type="button"
-            aria-label={wikiBrandAtlasImageUrl ? 'Open brand atlas image' : 'Open brand atlas prompt'}
-          >
-            {wikiBrandAtlasImageUrl ? <img src={wikiBrandAtlasImageUrl} alt="" /> : <span className="world-wiki-style-card-icon"><EntityIcon id="asset" /></span>}
-            {wikiBrandAtlasImageUrl ? null : (
-              <span>
-                <em>Brand Atlas</em>
-                <strong>{wikiBrandAtlasPending ? 'Image generating' : wikiModel.overview.brandAtlasPrompt ? 'Prompt ready' : 'No atlas prompt yet'}</strong>
-              </span>
-            )}
-          </button>
-          <div className="world-wiki-style-side-column">
-            <div className="world-wiki-style-card">
-              <span className="eyebrow">Visual Motifs</span>
-              {wikiModel.overview.visualMotifs.length > 0 ? (
-                <div className="world-wiki-chip-row">
-                  {wikiModel.overview.visualMotifs.map((motif) => <span key={motif} className="chip">{motif}</span>)}
+        {wikiStyleExpanded ? (
+          <>
+            {styleGaps.length > 0 ? (
+              <div className="world-wiki-section-actions world-wiki-style-gap-actions">
+                {styleGaps.slice(0, 3).map((gap) => (
+                  <button key={gap.key} className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
+                    {gap.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className={wikiBrandAtlasImageUrl ? 'world-wiki-style-grid has-atlas-image' : 'world-wiki-style-grid'}>
+              <button
+                className="world-wiki-style-card is-wide"
+                onClick={() => openWikiDetailModal({
+                  title: section.title,
+                  eyebrow: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App art direction' : 'Art style',
+                  body: wikiModel.overview.artStyleDescription || section.summary,
+                  icon: 'design',
+                  meta: [
+                    wikiModel.overview.genre || null,
+                    wikiModel.overview.toneTags.length ? wikiModel.overview.toneTags.slice(0, 3).join(', ') : null,
+                  ].filter((value): value is string => Boolean(value)),
+                })}
+                type="button"
+              >
+                <span className="eyebrow">Art Style</span>
+                <strong>{wikiModel.overview.artStyleDescription || 'Not established yet'}</strong>
+              </button>
+              <button
+                className={[
+                  hasAtlas ? 'world-wiki-style-card is-atlas' : 'world-wiki-style-card is-atlas is-empty',
+                  wikiBrandAtlasImageUrl ? 'has-image' : '',
+                ].filter(Boolean).join(' ')}
+                onClick={() => {
+                  if (wikiBrandAtlasImageUrl) {
+                    openBrandAtlasImageSplash(wikiBrandAtlasImageUrl)
+                    return
+                  }
+                  openWikiDetailModal({
+                    title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
+                    eyebrow: 'Visual image prompt',
+                    body: atlasBody,
+                    icon: 'asset',
+                    meta: wikiModel.overview.brandAtlasPrompt ? ['Prompt ready'] : ['Needs prompt'],
+                  })
+                }}
+                type="button"
+                aria-label={wikiBrandAtlasImageUrl ? 'Open brand atlas image' : 'Open brand atlas prompt'}
+              >
+                {wikiBrandAtlasImageUrl ? <img src={wikiBrandAtlasImageUrl} alt="" /> : <span className="world-wiki-style-card-icon"><EntityIcon id="asset" /></span>}
+                {wikiBrandAtlasImageUrl ? null : (
+                  <span>
+                    <em>Brand Atlas</em>
+                    <strong>{wikiBrandAtlasPending ? 'Image generating' : wikiModel.overview.brandAtlasPrompt ? 'Prompt ready' : 'No atlas prompt yet'}</strong>
+                  </span>
+                )}
+              </button>
+              <div className="world-wiki-style-side-column">
+                <div className="world-wiki-style-card">
+                  <span className="eyebrow">Visual Motifs</span>
+                  {wikiModel.overview.visualMotifs.length > 0 ? (
+                    <div className="world-wiki-chip-row">
+                      {wikiModel.overview.visualMotifs.map((motif) => <span key={motif} className="chip">{motif}</span>)}
+                    </div>
+                  ) : <strong>Not established yet</strong>}
                 </div>
-              ) : <strong>Not established yet</strong>}
-            </div>
-            <div className="world-wiki-style-card">
-              <span className="eyebrow">{projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Colors' : 'Palette Notes'}</span>
-              {colorEntries.length > 0 ? (
-                <div className="world-wiki-color-list">
-                  {colorEntries.slice(0, 8).map(([name, value]) => (
-                    <span key={name} className="world-wiki-color-row">
-                      <i style={{ background: value.split(/\s+/)[0] }} />
-                      <span><strong>{name}</strong><em>{value}</em></span>
-                    </span>
-                  ))}
+                <div className="world-wiki-style-card">
+                  <span className="eyebrow">{projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Colors' : 'Palette Notes'}</span>
+                  {colorEntries.length > 0 ? (
+                    <div className="world-wiki-color-list">
+                      {colorEntries.slice(0, 8).map(([name, value]) => (
+                        <span key={name} className="world-wiki-color-row">
+                          <i style={{ background: value.split(/\s+/)[0] }} />
+                          <span><strong>{name}</strong><em>{value}</em></span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : <strong>Not established yet</strong>}
                 </div>
-              ) : <strong>Not established yet</strong>}
+              </div>
             </div>
-          </div>
-        </div>
-        <div className="world-wiki-style-actions">
-          <button
-            className="ghost-button compact"
-            disabled={brandAtlasGenerating || wikiBrandAtlasPending || isPromptSubmitting}
-            onClick={() => void handleGenerateBrandAtlasImage()}
-            type="button"
-          >
-            {brandAtlasGenerating || wikiBrandAtlasPending
-              ? 'Generating atlas...'
-              : wikiModel.overview.brandAtlasPrompt
-                ? wikiBrandAtlasImageUrl
-                  ? 'Regenerate atlas image'
-                  : 'Generate atlas image'
-                : 'Draft atlas prompt'}
-          </button>
-          {brandAtlasError ? <span className="world-wiki-style-error">{brandAtlasError}</span> : null}
-        </div>
+            <div className="world-wiki-style-actions">
+              <button
+                className="ghost-button compact"
+                disabled={brandAtlasGenerating || wikiBrandAtlasPending || isPromptSubmitting}
+                onClick={() => void handleGenerateBrandAtlasImage()}
+                type="button"
+              >
+                {brandAtlasGenerating || wikiBrandAtlasPending
+                  ? 'Generating atlas...'
+                  : wikiModel.overview.brandAtlasPrompt
+                    ? wikiBrandAtlasImageUrl
+                      ? 'Regenerate atlas image'
+                      : 'Generate atlas image'
+                    : 'Draft atlas prompt'}
+              </button>
+              {brandAtlasError ? <span className="world-wiki-style-error">{brandAtlasError}</span> : null}
+            </div>
+          </>
+        ) : null}
       </section>
     )
   }
@@ -6371,7 +6488,11 @@ export function WorldGraphPage({
                       return (
                         <button
                           key={section.kind}
-                          className={section.gap ? 'world-wiki-index-row is-gap' : 'world-wiki-index-row'}
+                          className={[
+                            'world-wiki-index-row',
+                            section.gap ? 'is-gap' : '',
+                            activeWikiSectionKind === section.kind ? 'is-active' : '',
+                          ].filter(Boolean).join(' ')}
                           onClick={() => handleScrollToWikiSection(section.kind)}
                           type="button"
                         >
@@ -6427,15 +6548,6 @@ export function WorldGraphPage({
                 />
                 <div className="world-wiki-document">
                   <section id="world-wiki-section-overview" className="world-wiki-overview">
-                    <div className={`world-wiki-overview-media ${wikiOverviewImageUrl ? 'has-image' : 'has-icon'}`}>
-                      {wikiOverviewImageUrl ? (
-                        <img src={wikiOverviewImageUrl} alt="" />
-                      ) : (
-                        <div className="world-wiki-overview-placeholder">
-                          <EntityIcon id={wikiOverviewIcon} />
-                        </div>
-                      )}
-                    </div>
                     <div className="world-wiki-overview-copy">
                       <span className="eyebrow">{wikiOverviewLabel}</span>
                       <h2>{wikiModel.title}</h2>
@@ -6474,6 +6586,12 @@ export function WorldGraphPage({
                           {wikiModel.overview.synopsis || wikiEmptySynopsisText}
                         </span>
                       </button>
+                      <div className="world-wiki-overview-stats" aria-label="World wiki counts">
+                        <span><strong>{worldEntities.length}</strong><small>Entities</small></span>
+                        <span><strong>{worldRelationships.length}</strong><small>Links</small></span>
+                        <span><strong>{wikiModel.threadPages.length}</strong><small>Threads</small></span>
+                        <span><strong>{wikiModel.sequence.units.length || wikiModel.timeline.events.length}</strong><small>Beats</small></span>
+                      </div>
                       <div className="world-wiki-overview-actions">
                         {([
                           ['world_synopsis', 'Generate synopsis'],
@@ -6493,6 +6611,16 @@ export function WorldGraphPage({
                           {wikiModel.overview.toneTags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
                         </div>
                       ) : null}
+                    </div>
+                    <div className={`world-wiki-overview-media ${wikiOverviewImageUrl ? 'has-image' : 'has-icon'}${wikiWorldConceptPending ? ' is-pending' : ''}`}>
+                      {wikiOverviewImageUrl ? (
+                        <img src={wikiOverviewImageUrl} alt="" />
+                      ) : (
+                        <div className="world-wiki-overview-placeholder">
+                          <EntityIcon id={wikiOverviewIcon} />
+                          {wikiWorldConceptPending ? <span>Concept image generating</span> : null}
+                        </div>
+                      )}
                     </div>
                   </section>
                   {renderNarrativeRpgPlayablePanel()}
