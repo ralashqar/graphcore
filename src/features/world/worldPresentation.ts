@@ -190,6 +190,72 @@ export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'clarification_answer'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'continuation_without_suggestion'; label: string; detail?: string }
 
+export type WorldFeedFilter = 'all' | 'entities' | 'relationships' | 'wiki' | 'media' | 'suggestions'
+
+export const WORLD_FEED_FILTERS: Array<{ key: WorldFeedFilter; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'entities', label: 'Entities' },
+  { key: 'relationships', label: 'Relationships' },
+  { key: 'wiki', label: 'Wiki' },
+  { key: 'media', label: 'Media/Jobs' },
+  { key: 'suggestions', label: 'Suggestions' },
+]
+
+export type WorldFeedEntryKind =
+  | 'active_turn'
+  | 'prompt'
+  | 'assistant_note'
+  | 'turn_summary'
+  | 'entity_created'
+  | 'entity_updated'
+  | 'relationship_created'
+  | 'relationship_updated'
+  | 'wiki_updated'
+  | 'media_job'
+  | 'derived_result'
+  | 'suggestion'
+  | 'diagnostic'
+  | 'status'
+
+export type WorldFeedEntry = {
+  id: string
+  createdAt: string
+  kind: WorldFeedEntryKind
+  filter: WorldFeedFilter
+  title: string
+  detail: string
+  badge: string
+  tone?: 'normal' | 'working' | 'success' | 'warning' | 'error'
+  entityKey?: string
+  entityNodeType?: WorldEntity['nodeType']
+  relationshipKey?: string
+  sourceLabel?: string
+  targetLabel?: string
+  relationshipVerb?: string
+  thumbnailEntityKeys?: string[]
+  connectedEntityKeys?: string[]
+  changedFields?: string[]
+  fullDetail?: string
+  turnId?: string
+  turnLens?: WorldPromptTurnLens
+  resultKey?: string
+  suggestions?: WorldPromptSuggestion[]
+}
+
+export type WorldFeedGroup = {
+  id: string
+  label: string
+  entries: WorldFeedEntry[]
+}
+
+export type WorldFeedViewModel = {
+  entries: WorldFeedEntry[]
+  groups: WorldFeedGroup[]
+  countsByFilter: Record<WorldFeedFilter, number>
+  activeTurnEntry: WorldFeedEntry | null
+  suggestions: WorldPromptSuggestion[]
+}
+
 export type WorldPromptRailState =
   | 'idle'
   | 'working'
@@ -1805,6 +1871,386 @@ export function buildWorldPromptTranscriptEntries(input: {
   }
 
   return entries
+}
+
+function worldFeedFilterForTranscriptEntry(entry: WorldPromptTranscriptEntry): WorldFeedFilter | null {
+  switch (entry.kind) {
+    case 'entity_created':
+    case 'entity_updated':
+    case 'entity_replaced':
+      return 'entities'
+    case 'relationship_created':
+    case 'relationship_updated':
+      return 'relationships'
+    case 'derived_result_created':
+    case 'queue_started':
+    case 'planner_progress':
+      return 'media'
+    case 'advisory_answer':
+    case 'diagnostic_finding':
+    case 'suggestion_set':
+    case 'clarification_question':
+    case 'clarification_answer':
+    case 'continuation_without_suggestion':
+      return 'suggestions'
+    case 'turn_lens':
+    case 'user_message':
+    case 'assistant_message':
+    case 'system_status':
+    case 'preview_available':
+    case 'approval_required':
+      return 'wiki'
+    default:
+      return null
+  }
+}
+
+function worldFeedKindForTranscriptEntry(entry: WorldPromptTranscriptEntry): WorldFeedEntryKind {
+  switch (entry.kind) {
+    case 'entity_created':
+    case 'entity_updated':
+      return entry.kind
+    case 'entity_replaced':
+      return 'entity_updated'
+    case 'relationship_created':
+    case 'relationship_updated':
+      return entry.kind
+    case 'turn_lens':
+      return 'turn_summary'
+    case 'user_message':
+      return 'prompt'
+    case 'assistant_message':
+    case 'advisory_answer':
+      return 'assistant_note'
+    case 'derived_result_created':
+      return 'derived_result'
+    case 'queue_started':
+    case 'planner_progress':
+      return 'media_job'
+    case 'diagnostic_finding':
+      return 'diagnostic'
+    case 'suggestion_set':
+    case 'clarification_question':
+    case 'clarification_answer':
+    case 'continuation_without_suggestion':
+      return 'suggestion'
+    case 'preview_available':
+    case 'approval_required':
+      return 'wiki_updated'
+    case 'system_status':
+    default:
+      return 'status'
+  }
+}
+
+function worldFeedBadgeForEntry(entry: WorldPromptTranscriptEntry): string {
+  switch (entry.kind) {
+    case 'entity_created':
+      return 'New Entity'
+    case 'entity_updated':
+    case 'entity_replaced':
+      return 'Entity Update'
+    case 'relationship_created':
+      return 'New Link'
+    case 'relationship_updated':
+      return 'Link Update'
+    case 'turn_lens':
+      return 'Turn Summary'
+    case 'user_message':
+      return 'Prompt'
+    case 'assistant_message':
+    case 'advisory_answer':
+      return 'AI Note'
+    case 'derived_result_created':
+      return 'Output'
+    case 'queue_started':
+      return 'Queued'
+    case 'planner_progress':
+      return entry.done ? 'Progress' : 'Running'
+    case 'diagnostic_finding':
+      return 'Finding'
+    case 'suggestion_set':
+    case 'clarification_question':
+      return 'Suggestion'
+    case 'clarification_answer':
+      return 'Choice'
+    case 'preview_available':
+      return 'Preview'
+    case 'approval_required':
+      return 'Review'
+    default:
+      return 'Update'
+  }
+}
+
+function buildWorldFeedEntryFromTranscriptEntry(input: {
+  entry: WorldPromptTranscriptEntry
+  relationshipByKey: Map<string, WorldRelationship>
+}): WorldFeedEntry | null {
+  const filter = worldFeedFilterForTranscriptEntry(input.entry)
+  if (!filter) return null
+  const kind = worldFeedKindForTranscriptEntry(input.entry)
+  const base = {
+    id: input.entry.id,
+    createdAt: input.entry.createdAt,
+    kind,
+    filter,
+    badge: worldFeedBadgeForEntry(input.entry),
+  }
+
+  switch (input.entry.kind) {
+    case 'user_message':
+      return {
+        ...base,
+        title: 'Prompt submitted',
+        detail: input.entry.content,
+        fullDetail: input.entry.content,
+        tone: 'normal',
+      }
+    case 'assistant_message':
+      return {
+        ...base,
+        title: input.entry.pending ? 'AI update' : 'AI response',
+        detail: input.entry.content,
+        fullDetail: input.entry.content,
+        tone: input.entry.pending ? 'working' : 'normal',
+      }
+    case 'system_status':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? '',
+        fullDetail: input.entry.detail ?? '',
+        tone: input.entry.tone === 'error' ? 'error' : 'normal',
+      }
+    case 'planner_progress':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? input.entry.outline.slice(0, 3).join(' · '),
+        fullDetail: input.entry.detail ?? input.entry.outline.join(' · '),
+        tone: input.entry.done ? 'success' : 'working',
+      }
+    case 'turn_lens':
+      return {
+        ...base,
+        title: input.entry.detail || 'World updated',
+        detail: `${input.entry.turnLens.counts.entities} entities / ${input.entry.turnLens.counts.relationships} links / ${input.entry.turnLens.counts.derived} outputs`,
+        fullDetail: input.entry.turnLens.prompt,
+        thumbnailEntityKeys: input.entry.turnLens.entityKeys.slice(0, 1),
+        connectedEntityKeys: input.entry.turnLens.entityKeys,
+        tone: 'success',
+        turnId: input.entry.turnLens.turnId,
+        turnLens: input.entry.turnLens,
+      }
+    case 'entity_created':
+    case 'entity_updated':
+    case 'entity_replaced':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? '',
+        fullDetail: input.entry.detail ?? '',
+        thumbnailEntityKeys: [input.entry.entityKey],
+        connectedEntityKeys: [input.entry.entityKey],
+        tone: input.entry.kind === 'entity_created' ? 'success' : 'normal',
+        entityKey: input.entry.entityKey,
+        entityNodeType: input.entry.entityNodeType,
+        turnId: input.entry.turnLens?.turnId,
+        turnLens: input.entry.turnLens,
+      }
+    case 'relationship_created':
+    case 'relationship_updated': {
+      const relationship = input.relationshipByKey.get(input.entry.relationshipKey) ?? null
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? relationship?.notes ?? '',
+        fullDetail: input.entry.detail ?? relationship?.notes ?? '',
+        thumbnailEntityKeys: relationship ? [relationship.sourceEntityKey, relationship.targetEntityKey] : [],
+        connectedEntityKeys: relationship ? [relationship.sourceEntityKey, relationship.targetEntityKey] : [],
+        changedFields: relationship?.verb ? [relationship.verb.replace(/_/g, ' ')] : [],
+        tone: input.entry.kind === 'relationship_created' ? 'success' : 'normal',
+        relationshipKey: input.entry.relationshipKey,
+        sourceLabel: input.entry.sourceLabel,
+        targetLabel: input.entry.targetLabel,
+        relationshipVerb: relationship?.verb ?? '',
+        turnId: input.entry.turnLens?.turnId,
+        turnLens: input.entry.turnLens,
+      }
+    }
+    case 'derived_result_created':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? '',
+        fullDetail: input.entry.detail ?? '',
+        tone: 'success',
+        resultKey: input.entry.resultKey,
+        turnId: input.entry.turnLens?.turnId,
+        turnLens: input.entry.turnLens,
+      }
+    case 'queue_started':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? '',
+        fullDetail: input.entry.detail ?? '',
+        tone: 'working',
+      }
+    case 'advisory_answer':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? '',
+        fullDetail: input.entry.detail ?? '',
+        tone: 'normal',
+      }
+    case 'diagnostic_finding':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? '',
+        fullDetail: input.entry.detail ?? '',
+        tone: input.entry.severity === 'high' ? 'error' : 'warning',
+      }
+    case 'suggestion_set':
+    case 'clarification_question':
+      return {
+        ...base,
+        title: input.entry.label ?? 'Suggested next move',
+        detail: input.entry.suggestions.map((suggestion) => suggestion.label || suggestion.summary).filter(Boolean).join(' · '),
+        fullDetail: input.entry.suggestions.map((suggestion) => suggestion.summary || suggestion.label).filter(Boolean).join(' · '),
+        tone: 'normal',
+        suggestions: input.entry.suggestions,
+      }
+    case 'clarification_answer':
+    case 'continuation_without_suggestion':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? '',
+        fullDetail: input.entry.detail ?? '',
+        tone: 'normal',
+      }
+    case 'preview_available':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? 'A preview is ready to review.',
+        fullDetail: input.entry.detail ?? 'A preview is ready to review.',
+        tone: 'warning',
+        turnId: input.entry.turnId,
+      }
+    case 'approval_required':
+      return {
+        ...base,
+        title: input.entry.label,
+        detail: input.entry.detail ?? `${input.entry.ops.length} operation${input.entry.ops.length === 1 ? '' : 's'} need review.`,
+        fullDetail: input.entry.detail ?? `${input.entry.ops.length} operation${input.entry.ops.length === 1 ? '' : 's'} need review.`,
+        tone: 'warning',
+        turnId: input.entry.turnId,
+      }
+    default:
+      return null
+  }
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+}
+
+function groupLabelForWorldFeedDate(createdAt: string, now: Date) {
+  const created = new Date(createdAt)
+  if (Number.isNaN(created.getTime())) return 'Earlier'
+  const ageMs = now.getTime() - created.getTime()
+  if (ageMs >= 0 && ageMs < 15 * 60 * 1000) return 'Just now'
+  const createdDay = startOfLocalDay(created)
+  const today = startOfLocalDay(now)
+  if (createdDay === today) return 'Today'
+  if (createdDay === today - 24 * 60 * 60 * 1000) return 'Yesterday'
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(created)
+}
+
+function createWorldFeedGroups(entries: WorldFeedEntry[], now: Date): WorldFeedGroup[] {
+  const groups: WorldFeedGroup[] = []
+  const groupByLabel = new Map<string, WorldFeedGroup>()
+  for (const entry of entries) {
+    const label = groupLabelForWorldFeedDate(entry.createdAt, now)
+    const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'earlier'
+    let group = groupByLabel.get(label)
+    if (!group) {
+      group = { id, label, entries: [] }
+      groupByLabel.set(label, group)
+      groups.push(group)
+    }
+    group.entries.push(entry)
+  }
+  return groups
+}
+
+export function buildWorldFeedViewModel(input: {
+  events: WorldPromptEvent[]
+  messages: WorldPromptMessage[]
+  entityByKey: Map<string, WorldEntity>
+  relationships?: WorldRelationship[]
+  turns?: WorldPromptTurn[]
+  activeTurn?: WorldPromptTurn | null
+  suggestions?: WorldPromptSuggestion[]
+  now?: Date
+}): WorldFeedViewModel {
+  const relationshipByKey = new Map((input.relationships ?? []).map((relationship) => [relationship.key, relationship]))
+  const transcriptEntries = buildWorldPromptTranscriptEntries({
+    events: input.events,
+    messages: input.messages,
+    entityByKey: input.entityByKey,
+    turns: input.turns,
+  })
+  const entries = transcriptEntries
+    .map((entry) => buildWorldFeedEntryFromTranscriptEntry({ entry, relationshipByKey }))
+    .filter((entry): entry is WorldFeedEntry => Boolean(entry))
+
+  const activeTurnEntry = input.activeTurn && ['queued', 'streaming'].includes(input.activeTurn.status)
+    ? {
+        id: `active-turn:${input.activeTurn.id}`,
+        createdAt: input.activeTurn.createdAt,
+        kind: 'active_turn',
+        filter: 'all',
+        title: 'Generating world update',
+        detail: input.activeTurn.prompt,
+        fullDetail: input.activeTurn.prompt,
+        badge: input.activeTurn.status === 'queued' ? 'Queued' : 'Running',
+        tone: 'working',
+        turnId: input.activeTurn.id,
+      } satisfies WorldFeedEntry
+    : null
+
+  const sortedEntries = [
+    ...(activeTurnEntry ? [activeTurnEntry] : []),
+    ...entries,
+  ].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime() || right.id.localeCompare(left.id))
+
+  const countsByFilter = WORLD_FEED_FILTERS.reduce<Record<WorldFeedFilter, number>>((counts, filter) => {
+    counts[filter.key] = filter.key === 'all'
+      ? sortedEntries.length
+      : sortedEntries.filter((entry) => entry.filter === filter.key).length
+    return counts
+  }, {
+    all: 0,
+    entities: 0,
+    relationships: 0,
+    wiki: 0,
+    media: 0,
+    suggestions: 0,
+  })
+
+  return {
+    entries: sortedEntries,
+    groups: createWorldFeedGroups(sortedEntries, input.now ?? new Date()),
+    countsByFilter,
+    activeTurnEntry,
+    suggestions: input.suggestions ?? [],
+  }
 }
 
 function detailForBlockedClassification(classification: WorldPromptTurn['metadata']['classification'] | undefined) {

@@ -89,6 +89,12 @@ export function GlobalWorkspace({
     releasesSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [autoFocusReleasesNonce])
 
+  useEffect(() => {
+    if (worldConceptStatus !== 'ready' && !worldConceptImageUrl) return
+    setConceptGenerationPending(false)
+    setLocalConceptJobId(null)
+  }, [worldConceptImageUrl, worldConceptStatus])
+
   const presetGroups = useMemo(() => getArtStylePresetsByGroup(), [])
   const selectedPreset = ART_STYLE_PRESETS.find((preset) => preset.id === draftArtStylePreset) ?? ART_STYLE_PRESETS[0]
   const onboardingComplete = isProjectOnboardingComplete(projectContext)

@@ -142,6 +142,8 @@ import {
   buildWorldGraphPresentationPresetConfig,
   buildWorldNodeVisibilityReason,
   buildWorldPromptTranscriptEntries as buildWorldPromptTranscriptEntriesModel,
+  WORLD_FEED_FILTERS,
+  buildWorldFeedViewModel,
   buildWorldPromptSessionTokenMeter,
   buildWorldPromptTurnLenses,
   buildWorldInspectorViewModel,
@@ -154,6 +156,8 @@ import {
   type WorldGraphNodeRecord,
   type WorldGraphPresentationPreset,
   type WorldInspectorViewModel,
+  type WorldFeedEntry,
+  type WorldFeedFilter,
   type WorldNodeData,
   type WorldNodeVisualMode,
   type WorldPromptTranscriptEntry,
@@ -1448,6 +1452,9 @@ export function WorldGraphPage({
   const [worldPromptPanelMode, setWorldPromptPanelMode] = useState<'expanded' | 'compact'>('expanded')
   const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
   const [wikiStyleExpanded, setWikiStyleExpanded] = useState(false)
+  const [wikiSubView, setWikiSubView] = useState<'wiki' | 'feed'>('wiki')
+  const [worldFeedFilter, setWorldFeedFilter] = useState<WorldFeedFilter>('all')
+  const [selectedWorldFeedEntryId, setSelectedWorldFeedEntryId] = useState<string | null>(null)
   const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
@@ -1457,6 +1464,8 @@ export function WorldGraphPage({
   const [activeTurnLens, setActiveTurnLens] = useState<WorldPromptTurnLens | null>(null)
   const [flashTurnLens, setFlashTurnLens] = useState<WorldPromptTurnLens | null>(null)
   const [wikiDetailModal, setWikiDetailModal] = useState<WikiDetailModalState>(null)
+  const wikiDocumentRef = useRef<HTMLDivElement | null>(null)
+  const savedWikiScrollTopRef = useRef(0)
   const handledAutoLensTurnIdRef = useRef<string | null>(null)
   useEffect(() => {
     if (!wikiDetailModal) return undefined
@@ -1473,6 +1482,15 @@ export function WorldGraphPage({
     setRelationshipComposer(null)
     setCompositionComposer(null)
   }, [isWikiMode])
+  useEffect(() => {
+    if (!isWikiMode || wikiSubView !== 'wiki') return undefined
+    const frame = window.requestAnimationFrame(() => {
+      if (wikiDocumentRef.current) {
+        wikiDocumentRef.current.scrollTop = savedWikiScrollTopRef.current
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [isWikiMode, wikiSubView])
   const graphFilterState = useMemo(
     () => buildWorldGraphFilterState(displayFilters),
     [displayFilters],
@@ -1943,6 +1961,51 @@ export function WorldGraphPage({
   const assetByKey = useMemo(() => new Map(assets.map((asset) => [asset.key, asset])), [assets])
   const entityByKey = useMemo(() => new Map(worldEntities.map((entity) => [entity.key, entity])), [worldEntities])
   const relationshipByKey = useMemo(() => new Map(worldRelationships.map((relationship) => [relationship.key, relationship])), [worldRelationships])
+  const worldFeedModel = useMemo(
+    () => buildWorldFeedViewModel({
+      events: sessionEvents,
+      messages: sessionMessages,
+      entityByKey,
+      relationships: worldRelationships,
+      turns: sessionTurns,
+      activeTurn: activePromptTurn,
+      suggestions: activeSessionSuggestions,
+    }),
+    [activePromptTurn, activeSessionSuggestions, entityByKey, sessionEvents, sessionMessages, sessionTurns, worldRelationships],
+  )
+  const worldFeedGroups = useMemo(() => {
+    if (worldFeedFilter === 'all') return worldFeedModel.groups
+    return worldFeedModel.groups
+      .map((group) => ({
+        ...group,
+        entries: group.entries.filter((entry) => entry.filter === worldFeedFilter),
+      }))
+      .filter((group) => group.entries.length > 0)
+  }, [worldFeedFilter, worldFeedModel.groups])
+  const selectedWorldFeedEntry = useMemo(
+    () => selectedWorldFeedEntryId
+      ? worldFeedModel.entries.find((entry) => entry.id === selectedWorldFeedEntryId) ?? null
+      : null,
+    [selectedWorldFeedEntryId, worldFeedModel.entries],
+  )
+  useEffect(() => {
+    if (!selectedWorldFeedEntryId) return
+    if (worldFeedModel.entries.some((entry) => entry.id === selectedWorldFeedEntryId)) return
+    setSelectedWorldFeedEntryId(null)
+  }, [selectedWorldFeedEntryId, worldFeedModel.entries])
+  const feedRelationshipClusters = useMemo(() => {
+    const relationshipTime = (relationship: WorldRelationship) => new Date(relationship.updatedAt ?? relationship.createdAt ?? 0).getTime()
+    const sorted = [...worldRelationships].sort((left, right) => (
+      relationshipTime(right) - relationshipTime(left)
+    ))
+    return sorted.slice(0, 4).map((relationship) => ({
+      key: relationship.key,
+      source: entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey,
+      target: entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey,
+      verb: relationship.verb.replace(/_/g, ' '),
+      strength: Math.max(0.08, Math.min(1, relationship.strength ?? 0.5)),
+    }))
+  }, [entityByKey, worldRelationships])
   const operatorByKey = useMemo(() => new Map(worldOperators.map((operator) => [operator.key, operator])), [worldOperators])
   const resultByKey = useMemo(() => new Map(worldResults.map((result) => [result.key, result])), [worldResults])
   const threadByKey = useMemo(() => new Map(worldThreads.map((thread) => [thread.key, thread])), [worldThreads])
@@ -6017,6 +6080,407 @@ export function WorldGraphPage({
     )
   }
 
+  function handleSelectWikiSubView(nextSubView: 'wiki' | 'feed') {
+    if (wikiSubView === nextSubView) return
+    if (wikiSubView === 'wiki' && wikiDocumentRef.current) {
+      savedWikiScrollTopRef.current = wikiDocumentRef.current.scrollTop
+    }
+    setWikiSubView(nextSubView)
+  }
+
+  function renderWikiSubViewToggle() {
+    return (
+      <div className="world-wiki-subview-toggle" role="tablist" aria-label="Wiki view mode">
+        <button
+          aria-selected={wikiSubView === 'wiki'}
+          className={wikiSubView === 'wiki' ? 'is-active' : ''}
+          onClick={() => handleSelectWikiSubView('wiki')}
+          role="tab"
+          type="button"
+        >
+          <EntityIcon id="content" />
+          <span>Wiki</span>
+        </button>
+        <button
+          aria-selected={wikiSubView === 'feed'}
+          className={wikiSubView === 'feed' ? 'is-active' : ''}
+          onClick={() => handleSelectWikiSubView('feed')}
+          role="tab"
+          type="button"
+        >
+          <EntityIcon id="activity" />
+          <span>Feed</span>
+        </button>
+      </div>
+    )
+  }
+
+  function handleWorldFeedComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey) return
+    event.preventDefault()
+    void handleSubmitWorldPrompt()
+  }
+
+  function renderWorldFeedThumb(entity: WorldEntity | null, fallbackIcon: EntityIconId = 'content') {
+    const imageUrl = entity ? imageUrlByEntityKey.get(entity.key) ?? null : null
+    const iconId = entity ? iconForWorldEntity(entity.nodeType) : fallbackIcon
+    return (
+      <span className="world-feed-thumb" aria-hidden="true">
+        {imageUrl ? <img alt="" src={imageUrl} /> : <EntityIcon id={iconId} />}
+      </span>
+    )
+  }
+
+  function openWorldFeedEntryTarget(entry: WorldFeedEntry, target: 'wiki' | 'graph' = 'graph') {
+    if (entry.entityKey) {
+      selectWorldNode(entry.entityKey)
+    } else if (entry.relationshipKey) {
+      selectWorldEdge(entry.relationshipKey)
+    } else if (entry.resultKey) {
+      selectWorldNode(entry.resultKey)
+    }
+    if (target === 'wiki') {
+      handleSelectWikiSubView('wiki')
+    } else {
+      onWorldViewModeChange('graph')
+    }
+  }
+
+  function renderWorldFeedEndpoint(entityKey: string | null | undefined, fallbackLabel: string) {
+    const entity = entityKey ? entityByKey.get(entityKey) ?? null : null
+    return (
+      <button
+        className="world-feed-relationship-node"
+        onClick={(event) => {
+          event.stopPropagation()
+          if (entity) selectWorldNode(entity.key)
+        }}
+        type="button"
+      >
+        {renderWorldFeedThumb(entity, entity ? iconForWorldEntity(entity.nodeType) : 'graph')}
+        <strong>{entity?.name ?? fallbackLabel}</strong>
+      </button>
+    )
+  }
+
+  function renderWorldFeedDetailPanel(entry: WorldFeedEntry, variant: 'rail' | 'sheet' = 'rail') {
+    const relationship = entry.relationshipKey ? relationshipByKey.get(entry.relationshipKey) ?? null : null
+    const connectedEntityKeys = entry.connectedEntityKeys ?? [
+      ...(entry.entityKey ? [entry.entityKey] : []),
+      ...(relationship ? [relationship.sourceEntityKey, relationship.targetEntityKey] : []),
+    ]
+    const detailText = entry.fullDetail || entry.detail || 'No extra detail for this feed entry yet.'
+    return (
+      <section className={`world-feed-detail-panel is-${variant}`}>
+        <div className="world-feed-context-head">
+          <span className="eyebrow">Selected Entry</span>
+          <button onClick={() => setSelectedWorldFeedEntryId(null)} type="button">Clear</button>
+        </div>
+        <div className="world-feed-detail-title">
+          {renderWorldFeedThumb(connectedEntityKeys[0] ? entityByKey.get(connectedEntityKeys[0]) ?? null : null, entry.relationshipKey ? 'graph' : 'content')}
+          <div>
+            <span>{entry.badge}</span>
+            <strong>{entry.title}</strong>
+          </div>
+        </div>
+        <p>{detailText}</p>
+        {relationship ? (
+          <div className="world-feed-detail-relationship">
+            <strong>{entityByKey.get(relationship.sourceEntityKey)?.name ?? entry.sourceLabel ?? relationship.sourceEntityKey}</strong>
+            <span>{(entry.relationshipVerb || relationship.verb || 'linked').replace(/_/g, ' ')}</span>
+            <strong>{entityByKey.get(relationship.targetEntityKey)?.name ?? entry.targetLabel ?? relationship.targetEntityKey}</strong>
+          </div>
+        ) : null}
+        {entry.changedFields && entry.changedFields.length > 0 ? (
+          <div className="world-feed-detail-chips">
+            {entry.changedFields.map((field) => <span key={field}>{field}</span>)}
+          </div>
+        ) : null}
+        {connectedEntityKeys.length > 0 ? (
+          <div className="world-feed-detail-links">
+            <span className="eyebrow">Connected</span>
+            {connectedEntityKeys.slice(0, 6).map((entityKey) => {
+              const entity = entityByKey.get(entityKey) ?? null
+              if (!entity) return null
+              return (
+                <button key={entity.key} onClick={() => selectWorldNode(entity.key)} type="button">
+                  {renderWorldFeedThumb(entity)}
+                  <span>{entity.name}</span>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+        <div className="world-feed-detail-actions">
+          <button onClick={() => openWorldFeedEntryTarget(entry, 'wiki')} type="button">Open in Wiki</button>
+          <button onClick={() => openWorldFeedEntryTarget(entry, 'graph')} type="button">View in Graph</button>
+          {entry.turnLens ? <button onClick={() => openTurnLens(entry.turnLens as WorldPromptTurnLens)} type="button">Open Turn</button> : null}
+        </div>
+      </section>
+    )
+  }
+
+  function renderWorldFeedCard(entry: WorldFeedEntry) {
+    const entity = entry.entityKey ? entityByKey.get(entry.entityKey) ?? null : null
+    const relationship = entry.relationshipKey ? relationshipByKey.get(entry.relationshipKey) ?? null : null
+    const isRelationship = entry.kind === 'relationship_created' || entry.kind === 'relationship_updated'
+    const primaryThumbEntity = entity ?? (entry.thumbnailEntityKeys?.[0] ? entityByKey.get(entry.thumbnailEntityKeys[0]) ?? null : null)
+    const isSelected = selectedWorldFeedEntryId === entry.id
+    const inspectEntry = () => setSelectedWorldFeedEntryId(entry.id)
+    const handleCardKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      inspectEntry()
+    }
+    return (
+      <article
+        key={entry.id}
+        className={`world-feed-card is-${entry.kind} tone-${entry.tone ?? 'normal'}${isSelected ? ' is-selected' : ''}`}
+        onClick={inspectEntry}
+        onKeyDown={handleCardKeyDown}
+        role="button"
+        tabIndex={0}
+      >
+        <div className="world-feed-card-main">
+          <div className="world-feed-card-head">
+            <span>{entry.badge}</span>
+            {entry.entityNodeType ? <em>{labelForWorldEntity(entry.entityNodeType)}</em> : null}
+          </div>
+          {isRelationship ? (
+            <div className="world-feed-relationship">
+              {renderWorldFeedEndpoint(relationship?.sourceEntityKey, entry.sourceLabel ?? 'Source')}
+              <span className="world-feed-relationship-connector">
+                <span className="world-feed-relationship-line"><i /></span>
+                <strong>{(entry.relationshipVerb || relationship?.verb || 'linked').replace(/_/g, ' ')}</strong>
+              </span>
+              {renderWorldFeedEndpoint(relationship?.targetEntityKey, entry.targetLabel ?? 'Target')}
+            </div>
+          ) : (
+            <div className="world-feed-card-title-row">
+              {renderWorldFeedThumb(primaryThumbEntity, entry.kind === 'active_turn' || entry.kind === 'media_job' ? 'activity' : 'content')}
+              <div className="world-feed-card-title">
+                <strong>{entry.title}</strong>
+                {entry.detail ? <p>{entry.detail}</p> : null}
+              </div>
+            </div>
+          )}
+          {entry.kind === 'turn_summary' && entry.turnLens ? (
+            <div className="world-feed-card-chips">
+              <span>{entry.turnLens.counts.entities} entities</span>
+              <span>{entry.turnLens.counts.relationships} links</span>
+              <span>{entry.turnLens.counts.derived} outputs</span>
+            </div>
+          ) : entry.suggestions && entry.suggestions.length > 0 ? (
+            <div className="world-feed-card-chips">
+              {entry.suggestions.slice(0, 3).map((suggestion) => (
+                <button key={suggestion.id} disabled={isPromptBusy} onClick={() => void handleRunPromptSuggestion(suggestion)} type="button">
+                  {suggestion.label || suggestion.summary}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="world-feed-card-actions">
+            <button
+              onClick={(event) => {
+                event.stopPropagation()
+                setSelectedWorldFeedEntryId(entry.id)
+              }}
+              type="button"
+            >
+              Details
+            </button>
+            {(entry.entityKey || entry.relationshipKey || entry.resultKey) ? (
+              <button
+                onClick={(event) => {
+                  event.stopPropagation()
+                  openWorldFeedEntryTarget(entry, 'graph')
+                }}
+                type="button"
+              >
+                View Graph
+              </button>
+            ) : null}
+            {entry.turnLens ? (
+              <button
+                onClick={(event) => {
+                  event.stopPropagation()
+                  if (entry.turnLens) openTurnLens(entry.turnLens)
+                }}
+                type="button"
+              >
+                Open Turn
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </article>
+    )
+  }
+
+  function renderWorldFeedPanel() {
+    const submitDisabled = !worldPromptText.trim() || isPromptBusy
+    return (
+      <div className="world-feed-surface">
+        <aside className="world-feed-prompt-rail" aria-label="Create world updates">
+          {renderWikiSubViewToggle()}
+          <div className="world-feed-project-card">
+            <span className="eyebrow">Create Feed</span>
+            <strong>{wikiModel.title}</strong>
+            <small>{activePromptTurn ? 'World update running' : 'World active'}</small>
+          </div>
+          <div className="world-feed-composer">
+            <label htmlFor="world-feed-composer-input">Prompt this world</label>
+            <textarea
+              id="world-feed-composer-input"
+              disabled={isPromptBusy}
+              onChange={(event) => setWorldPromptText(event.target.value)}
+              onKeyDown={handleWorldFeedComposerKeyDown}
+              placeholder="Add a faction, resolve a tension, deepen a character, or change the canon..."
+              value={worldPromptText}
+            />
+            {worldPromptError ? <div className="world-feed-error">{worldPromptError}</div> : null}
+            <div className="world-feed-composer-actions">
+              <span>{selectedPromptSession?.model ?? 'gpt-5.4-mini'}</span>
+              {activePromptTurn ? (
+                <button disabled={isPromptCancelling} onClick={() => void handleCancelPromptTurn(activePromptTurn.id)} type="button">
+                  {isPromptCancelling ? 'Cancelling...' : 'Cancel'}
+                </button>
+              ) : (
+                <button disabled={submitDisabled} onClick={() => void handleSubmitWorldPrompt()} type="button">
+                  Generate
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="world-feed-suggestion-list">
+            <div className="world-feed-rail-head">
+              <span className="eyebrow">Suggestions</span>
+              <button onClick={() => void refreshSelectedPromptSuggestions('feed_manual_refresh')} type="button">Refresh</button>
+            </div>
+            {activeSessionSuggestions.slice(0, 5).map((suggestion) => (
+              <button key={suggestion.id} disabled={isPromptBusy} onClick={() => void handleRunPromptSuggestion(suggestion)} type="button">
+                <EntityIcon id="plus" />
+                <span>{suggestion.label || suggestion.summary}</span>
+              </button>
+            ))}
+            {activeSessionSuggestions.length === 0 ? <small>No active suggestions yet.</small> : null}
+          </div>
+          <div className="world-feed-session-actions">
+            <button onClick={() => setHistoryOpen(true)} type="button">Recent sessions</button>
+            <button onClick={() => void handleStartNewPromptSession()} type="button">New session</button>
+          </div>
+          {historyOpen ? (
+            <div className="world-feed-session-list">
+              <div className="world-feed-rail-head">
+                <span className="eyebrow">Sessions</span>
+                <button onClick={() => setHistoryOpen(false)} type="button">Close</button>
+              </div>
+              {worldPromptSessions.slice(0, 6).map((session) => (
+                <button
+                  key={session.key}
+                  className={selectedPromptSessionKey === session.key ? 'is-active' : ''}
+                  onClick={() => {
+                    setSelectedPromptSessionKey(session.key)
+                    setHistoryOpen(false)
+                  }}
+                  type="button"
+                >
+                  <strong>{session.title || 'World session'}</strong>
+                  <small>{activeSuggestionCountBySessionId[session.id] ?? 0} suggestion{(activeSuggestionCountBySessionId[session.id] ?? 0) === 1 ? '' : 's'}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </aside>
+        <main className="world-feed-main">
+          <header className="world-feed-header">
+            <div>
+              <span className="eyebrow">Live Canon</span>
+              <h2>World Feed</h2>
+              <p>Updates, discoveries, relationships, and generation work appear here as the world changes.</p>
+            </div>
+            <div className="world-feed-filter-row" role="tablist" aria-label="World feed filters">
+              {WORLD_FEED_FILTERS.map((filter) => (
+                <button
+                  key={filter.key}
+                  className={worldFeedFilter === filter.key ? 'is-active' : ''}
+                  onClick={() => setWorldFeedFilter(filter.key)}
+                  type="button"
+                >
+                  <span>{filter.label}</span>
+                  <em>{worldFeedModel.countsByFilter[filter.key]}</em>
+                </button>
+              ))}
+            </div>
+          </header>
+          <div className="world-feed-timeline">
+            {worldFeedGroups.length === 0 ? (
+              <div className="world-feed-empty">
+                <EntityIcon id="activity" />
+                <strong>No feed entries for this filter</strong>
+                <span>Prompt from the left rail to create new canon updates.</span>
+              </div>
+            ) : null}
+            {worldFeedGroups.map((group) => (
+              <section key={group.id} className="world-feed-group">
+                <div className="world-feed-time-marker"><span>{group.label}</span></div>
+                <div className="world-feed-group-list">
+                  {group.entries.map(renderWorldFeedCard)}
+                </div>
+              </section>
+            ))}
+          </div>
+        </main>
+        <aside className="world-feed-context-rail" aria-label="Feed context">
+          {selectedWorldFeedEntry ? renderWorldFeedDetailPanel(selectedWorldFeedEntry, 'rail') : null}
+          <section>
+            <div className="world-feed-context-head">
+              <span className="eyebrow">AI Suggestions</span>
+              <button onClick={() => void refreshSelectedPromptSuggestions('feed_context_refresh')} type="button">View all</button>
+            </div>
+            {activeSessionSuggestions.slice(0, 3).map((suggestion) => (
+              <button key={suggestion.id} className="world-feed-context-suggestion" disabled={isPromptBusy} onClick={() => void handleRunPromptSuggestion(suggestion)} type="button">
+                <strong>{suggestion.label || suggestion.summary}</strong>
+                <span>{suggestion.summary}</span>
+              </button>
+            ))}
+            {activeSessionSuggestions.length === 0 ? <p>No suggestions queued.</p> : null}
+          </section>
+          <section>
+            <div className="world-feed-context-head">
+              <span className="eyebrow">World Snapshot</span>
+              <button onClick={() => handleSelectWikiSubView('wiki')} type="button">Open Wiki</button>
+            </div>
+            <div className="world-feed-snapshot-grid">
+              <span><strong>{worldEntities.length}</strong><small>Entities</small></span>
+              <span><strong>{worldRelationships.length}</strong><small>Links</small></span>
+              <span><strong>{activeWorldThreads.length}</strong><small>Threads</small></span>
+              <span><strong>{worldResults.length}</strong><small>Outputs</small></span>
+            </div>
+            <button className="world-feed-context-action" onClick={() => onWorldViewModeChange('graph')} type="button">View World Graph</button>
+          </section>
+          <section>
+            <div className="world-feed-context-head">
+              <span className="eyebrow">Relationship Clusters</span>
+            </div>
+            {feedRelationshipClusters.map((cluster) => (
+              <button key={cluster.key} className="world-feed-tension-row" onClick={() => selectWorldEdge(cluster.key)} type="button">
+                <span><strong>{cluster.source}</strong><em>{cluster.verb}</em><strong>{cluster.target}</strong></span>
+                <i style={{ '--cluster-strength': cluster.strength } as CSSProperties} />
+              </button>
+            ))}
+            {feedRelationshipClusters.length === 0 ? <p>No relationship clusters yet.</p> : null}
+          </section>
+        </aside>
+        {selectedWorldFeedEntry ? (
+          <div className="world-feed-mobile-detail" role="dialog" aria-modal="false" aria-label="Selected feed entry">
+            {renderWorldFeedDetailPanel(selectedWorldFeedEntry, 'sheet')}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
   function renderWikiSection(section: WorldWikiSection) {
     if (section.kind === 'style') return renderWikiStyleSection(section)
     const visibleEntityKeys = section.entityKeys.slice(0, section.kind === 'cast' ? 8 : 6)
@@ -6560,8 +7024,10 @@ export function WorldGraphPage({
                 </div>
               </div>
             ) : viewMode === 'wiki' ? (
+              wikiSubView === 'feed' ? renderWorldFeedPanel() : (
               <div className="world-alt-surface world-wiki-surface">
                 <aside className="world-wiki-index" aria-label="Wiki sections">
+                  {renderWikiSubViewToggle()}
                   <div className="world-wiki-index-head">
                     <span className="eyebrow">Wiki</span>
                     <strong>{wikiModel.title}</strong>
@@ -6630,7 +7096,7 @@ export function WorldGraphPage({
                   onMouseDown={handleGrowWorkbenchResizeStart}
                   role="separator"
                 />
-                <div className="world-wiki-document">
+                <div className="world-wiki-document" ref={wikiDocumentRef}>
                   <section id="world-wiki-section-overview" className="world-wiki-overview">
                     <div className="world-wiki-overview-copy">
                       <span className="eyebrow">{wikiOverviewLabel}</span>
@@ -6696,6 +7162,7 @@ export function WorldGraphPage({
                   </div>
                 </div>
               </div>
+              )
             ) : viewMode === 'code' ? (
               renderAppCodeWorkspace()
             ) : (
@@ -6725,7 +7192,7 @@ export function WorldGraphPage({
           </div>
         </div>
 
-        {isWikiMode ? (
+        {isWikiMode && wikiSubView !== 'feed' ? (
           <div className={wikiPromptExpanded ? 'world-wiki-prompt-dock is-expanded' : 'world-wiki-prompt-dock'} onClick={(event) => event.stopPropagation()}>
             {wikiPromptExpanded ? (
               <div className="world-wiki-prompt-panel">

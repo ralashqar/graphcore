@@ -11,6 +11,7 @@ import {
   buildWorldRefinementHistoryViewModel,
   buildWorldPromptSessionTokenMeter,
   buildWorldPromptRailViewModel,
+  buildWorldFeedViewModel,
   buildWorldInspectorViewModel,
   buildWorldPromptTranscriptEntries,
   buildWorldPromptTurnLens,
@@ -1228,6 +1229,122 @@ test('buildWorldPromptTranscriptEntries renders update rows for refined entities
 
   assert.ok(entries.some((entry) => entry.kind === 'entity_updated' && entry.label === 'Updated Hero' && !entry.detail))
   assert.ok(entries.some((entry) => entry.kind === 'relationship_updated' && entry.label === 'Updated link between Hero and world.group.order' && !entry.detail))
+})
+
+test('buildWorldFeedViewModel derives entity and relationship update cards from prompt events', () => {
+  const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
+  const order = createWorldPresentationTestEntity('world.group.order', 'Order', 'group')
+  const relationship: WorldRelationship = {
+    id: 'rel-1',
+    key: 'world.rel.hero-order',
+    sourceEntityKey: hero.key,
+    targetEntityKey: order.key,
+    verb: 'protected_by',
+    direction: 'outbound',
+    strength: 0.8,
+    confidence: 0.95,
+    source: 'ai',
+    notes: 'The order shields the heir in secret.',
+    state: 'confirmed',
+    metadata: {},
+    createdAt: '2026-04-22T10:01:00.000Z',
+    updatedAt: '2026-04-22T10:01:00.000Z',
+  }
+  const turn = makeTurn({ id: 't-feed', prompt: 'Add a protected hero.' })
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [{
+      id: 'm-feed',
+      sessionId: 's1',
+      turnId: turn.id,
+      draftId: 'd1',
+      role: 'user',
+      content: turn.prompt,
+      metadata: {},
+      createdAt: '2026-04-22T10:00:00.000Z',
+    }],
+    events: [makeEvent({
+      id: 'e-feed',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        applied: {
+          worldEntities: [hero],
+          worldRelationships: [relationship],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    entityByKey: new Map([[hero.key, hero], [order.key, order]]),
+    relationships: [relationship],
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const entityEntry = feed.entries.find((entry) => entry.kind === 'entity_created')
+  assert.equal(entityEntry?.filter, 'entities')
+  assert.equal(entityEntry?.entityKey, hero.key)
+  assert.equal(entityEntry?.title, 'Added Hero')
+
+  const relationshipEntry = feed.entries.find((entry) => entry.kind === 'relationship_created')
+  assert.equal(relationshipEntry?.filter, 'relationships')
+  assert.equal(relationshipEntry?.relationshipKey, relationship.key)
+  assert.equal(relationshipEntry?.sourceLabel, 'Hero')
+  assert.equal(relationshipEntry?.targetLabel, 'Order')
+  assert.equal(relationshipEntry?.relationshipVerb, 'protected_by')
+  assert.deepEqual(relationshipEntry?.thumbnailEntityKeys, [hero.key, order.key])
+  assert.deepEqual(relationshipEntry?.connectedEntityKeys, [hero.key, order.key])
+  assert.deepEqual(relationshipEntry?.changedFields, ['protected by'])
+  assert.equal(feed.countsByFilter.entities, 1)
+  assert.equal(feed.countsByFilter.relationships, 1)
+  assert.equal(feed.groups[0]?.label, 'Just now')
+})
+
+test('buildWorldFeedViewModel includes active running turn and turn summary counts', () => {
+  const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
+  const activeTurn = makeTurn({
+    id: 't-running',
+    status: 'streaming',
+    prompt: 'Extend the rebellion.',
+    createdAt: '2026-04-22T10:05:00.000Z',
+  })
+  const completedTurn = makeTurn({ id: 't-completed', prompt: 'Add a hero.' })
+  const feed = buildWorldFeedViewModel({
+    activeTurn,
+    turns: [completedTurn, activeTurn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-completed',
+      turnId: completedTurn.id,
+      eventType: 'op_applied',
+      payload: {
+        applied: {
+          worldEntities: [hero],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    entityByKey: new Map([[hero.key, hero]]),
+    now: new Date('2026-04-22T10:06:00.000Z'),
+  })
+
+  assert.equal(feed.activeTurnEntry?.kind, 'active_turn')
+  assert.equal(feed.entries[0]?.id, `active-turn:${activeTurn.id}`)
+  const summary = feed.entries.find((entry) => entry.kind === 'turn_summary')
+  assert.equal(summary?.detail, '1 entities / 0 links / 0 outputs')
+  assert.equal(summary?.turnId, completedTurn.id)
 })
 
 test('buildWorldPromptTranscriptEntries renders derived results as output rows', () => {

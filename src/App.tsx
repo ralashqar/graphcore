@@ -1915,11 +1915,20 @@ export default function App() {
       ? resolveAssetSourceUrl(worldConceptAsset)
       : null
   ), [worldConceptAsset])
-  const worldConceptGenerationStatus = isPendingGeneratedAsset(worldConceptAsset)
+  const worldConceptPendingJobId = useMemo(() => {
+    const wikiJobId = trimOptionalString(worldWikiMetadata.worldConceptVisualJobId)
+    if (wikiJobId) return wikiJobId
+    const generation = getResourceGenerationMetadata(worldConceptAsset)
+    return trimOptionalString(generation?.jobId)
+      || trimOptionalString(worldConceptAsset?.metadata.visualJobId)
+  }, [worldConceptAsset, worldWikiMetadata.worldConceptVisualJobId])
+  const worldConceptGenerationStatus = worldConceptImageUrl
+    ? 'ready'
+    : isPendingGeneratedAsset(worldConceptAsset) && worldConceptPendingJobId
     ? 'generating'
     : worldConceptAsset
       ? 'ready'
-      : trimOptionalString(worldWikiMetadata.worldConceptVisualJobId)
+      : worldConceptPendingJobId
         ? 'generating'
         : 'missing'
   const activeGameIsEmpty = loadedState?.source === 'supabase'
@@ -7423,7 +7432,7 @@ export default function App() {
                 worldConceptImageUrl={worldConceptImageUrl}
                 worldConceptPrompt={trimOptionalString(worldWikiMetadata.worldConceptPrompt)}
                 worldConceptStatus={worldConceptGenerationStatus}
-                worldConceptVisualJobId={trimOptionalString(worldWikiMetadata.worldConceptVisualJobId)}
+                worldConceptVisualJobId={worldConceptPendingJobId}
                 onSave={handleSaveGlobalProjectContext}
                 onGenerateWorldConceptImage={generateWorldConceptImageFromGlobal}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}

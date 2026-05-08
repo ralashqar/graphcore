@@ -5,12 +5,42 @@ import { visualGenerationStartRequestSchema } from '../../../src/domain/visualGe
 
 type AuthedClient = Awaited<ReturnType<typeof requireUserClient>>['client']
 
+const worldConceptImageSize = { width: 1536, height: 864 } as const
+const worldConceptImageQuality = 'low'
+const worldConceptOutputFormat = 'webp'
+const worldConceptMimeType = 'image/webp'
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
 function readString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function isWorldConceptImageJob(input: {
+  kind: string
+  targetKeys: Record<string, unknown>
+  input: Record<string, unknown>
+}) {
+  const role = readString(input.targetKeys.role) || readString(input.input.role)
+  return input.kind === 'wiki_visual' && role === 'world_concept_image'
+}
+
+function normalizeVisualGenerationInput(input: {
+  kind: string
+  targetKeys: Record<string, unknown>
+  input: Record<string, unknown>
+}) {
+  if (!isWorldConceptImageJob(input)) return input.input
+  return {
+    ...input.input,
+    role: 'world_concept_image',
+    quality: worldConceptImageQuality,
+    outputFormat: worldConceptOutputFormat,
+    mimeType: worldConceptMimeType,
+    imageSize: worldConceptImageSize,
+  }
 }
 
 async function persistPendingWorldConceptImage(input: {
@@ -52,6 +82,9 @@ async function persistPendingWorldConceptImage(input: {
         prompt: input.imagePrompt,
         sourcePrompt: input.sourcePrompt || input.imagePrompt,
         role: 'world_concept_image',
+        quality: worldConceptImageQuality,
+        outputFormat: worldConceptOutputFormat,
+        imageSize: worldConceptImageSize,
         generation: {
           jobId: input.jobId,
           state: 'pending',
@@ -91,6 +124,7 @@ Deno.serve(async (request) => {
 
     const { client, user } = await requireUserClient(request, 'start-visual-generation-job')
     const payload = visualGenerationStartRequestSchema.parse(await request.json())
+    const normalizedInput = normalizeVisualGenerationInput(payload)
 
     const insertResponse = await client
       .from('visual_generation_jobs')
@@ -103,7 +137,7 @@ Deno.serve(async (request) => {
         provider: payload.provider,
         model: payload.model,
         target_keys: payload.targetKeys,
-        input: payload.input,
+        input: normalizedInput,
         metadata: payload.metadata,
       })
       .select(visualJobSelect)
@@ -112,11 +146,10 @@ Deno.serve(async (request) => {
     if (insertResponse.error) throw new Error(insertResponse.error.message)
     const job = mapVisualGenerationJobRow(insertResponse.data as VisualGenerationJobRow)
 
-    const role = readString(payload.targetKeys.role) || readString(payload.input.role)
-    if (payload.kind === 'wiki_visual' && role === 'world_concept_image') {
-      const assetKey = readString(payload.input.assetKey) || readString(payload.targetKeys.assetKey)
-      const storagePath = readString(payload.input.storagePath) || (assetKey ? `generated/wiki-concept-images/${payload.draftId}/${assetKey}.webp` : '')
-      const imagePrompt = readString(payload.input.imagePrompt) || readString(payload.input.prompt)
+    if (isWorldConceptImageJob({ kind: payload.kind, targetKeys: payload.targetKeys, input: normalizedInput })) {
+      const assetKey = readString(normalizedInput.assetKey) || readString(payload.targetKeys.assetKey)
+      const storagePath = readString(normalizedInput.storagePath) || (assetKey ? `generated/wiki-concept-images/${payload.draftId}/${assetKey}.webp` : '')
+      const imagePrompt = readString(normalizedInput.imagePrompt) || readString(normalizedInput.prompt)
       if (!assetKey || !storagePath || !imagePrompt) {
         throw new HttpError(400, 'World concept image jobs require assetKey, storagePath, and imagePrompt.')
       }
@@ -128,7 +161,7 @@ Deno.serve(async (request) => {
         assetKey,
         storagePath,
         imagePrompt,
-        sourcePrompt: readString(payload.input.sourcePrompt),
+        sourcePrompt: readString(normalizedInput.sourcePrompt),
       })
     }
 

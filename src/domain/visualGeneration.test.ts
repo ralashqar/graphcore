@@ -155,16 +155,41 @@ test('initial streamed seed queues world concept image after wiki metadata and b
   assert.match(source, /role:\s*'world_concept_image'/)
   assert.match(source, /quality:\s*'low'/)
   assert.match(source, /outputFormat:\s*'webp'/)
+  assert.match(source, /imageSize:\s*\{\s*width:\s*1536,\s*height:\s*864\s*\}/)
 })
 
-test('generic visual generation start persists pending world concept wiki assets', () => {
+test('generic visual generation start normalizes and persists pending world concept wiki assets', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/start-visual-generation-job/index.ts'), 'utf8')
 
+  assert.match(source, /const worldConceptImageQuality = 'low'/)
+  assert.match(source, /const worldConceptImageSize = \{\s*width:\s*1536,\s*height:\s*864\s*\} as const/)
+  assert.match(source, /function normalizeVisualGenerationInput/)
+  assert.match(source, /quality:\s*worldConceptImageQuality/)
+  assert.match(source, /imageSize:\s*worldConceptImageSize/)
   assert.match(source, /persistPendingWorldConceptImage/)
-  assert.match(source, /payload\.kind === 'wiki_visual' && role === 'world_concept_image'/)
+  assert.match(source, /input\.kind === 'wiki_visual' && role === 'world_concept_image'/)
   assert.match(source, /generatedBy:\s*'world_concept_image'/)
   assert.match(source, /worldConceptAssetKey:\s*input\.assetKey/)
   assert.match(source, /worldConceptVisualJobId:\s*input\.jobId/)
+})
+
+test('Fly wiki visual worker hard-forces low quality wide world concept images', () => {
+  const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
+
+  assert.match(visualWorker, /const worldConceptImageQuality = 'low'/)
+  assert.match(visualWorker, /const worldConceptImageSize = \{\s*width:\s*1536,\s*height:\s*864\s*\} as const/)
+  assert.match(visualWorker, /const outputFormat = worldConceptOutputFormat/)
+  assert.match(visualWorker, /const quality = worldConceptImageQuality/)
+  assert.match(visualWorker, /const imageSize = worldConceptImageSize/)
+})
+
+test('Fly visual worker bounds Fal image downloads so completed jobs cannot hang forever', () => {
+  const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
+
+  assert.match(visualWorker, /VISUAL_GENERATION_IMAGE_DOWNLOAD_TIMEOUT_MS/)
+  assert.match(visualWorker, /VISUAL_GENERATION_IMAGE_DOWNLOAD_ATTEMPTS/)
+  assert.match(visualWorker, /fetch\(imageUrl,\s*\{\s*signal:\s*controller\.signal\s*\}\)/)
+  assert.match(visualWorker, /wiki_visual_downloading_asset/)
 })
 
 test('entity reference sheet jobs route through Fly visual worker with medium webp output', () => {

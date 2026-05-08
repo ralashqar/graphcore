@@ -61,6 +61,12 @@ type FalImageResult = {
 
 const visualJobSelect = 'id, project_id, draft_id, requested_by, status, kind, provider, model, target_keys, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, created_at, updated_at'
 const falQueueBaseUrl = 'https://queue.fal.run'
+const worldConceptImageSize = { width: 1536, height: 864 } as const
+const worldConceptImageQuality = 'low'
+const worldConceptOutputFormat = 'webp'
+const worldConceptMimeType = 'image/webp'
+const imageDownloadTimeoutMs = Number(Deno.env.get('VISUAL_GENERATION_IMAGE_DOWNLOAD_TIMEOUT_MS') ?? 30_000)
+const imageDownloadAttempts = Number(Deno.env.get('VISUAL_GENERATION_IMAGE_DOWNLOAD_ATTEMPTS') ?? 3)
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -452,9 +458,28 @@ async function waitForFalImage(input: {
 }
 
 async function downloadImageBytes(imageUrl: string) {
-  const download = await fetch(imageUrl)
-  if (!download.ok) throw new Error(`Generated Fal image could not be downloaded (${download.status}).`)
-  return new Uint8Array(await download.arrayBuffer())
+  let lastError: unknown = null
+  const attempts = Number.isInteger(imageDownloadAttempts) && imageDownloadAttempts > 0 ? imageDownloadAttempts : 3
+  const timeoutMs = Number.isFinite(imageDownloadTimeoutMs) && imageDownloadTimeoutMs > 0 ? imageDownloadTimeoutMs : 30_000
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const download = await fetch(imageUrl, { signal: controller.signal })
+      if (!download.ok) throw new Error(`Generated Fal image could not be downloaded (${download.status}).`)
+      return new Uint8Array(await download.arrayBuffer())
+    } catch (error) {
+      lastError = error
+      if (attempt >= attempts) break
+      await new Promise((resolve) => setTimeout(resolve, Math.min(5_000, 750 * attempt)))
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError ?? 'Unknown download error')
+  throw new Error(`Generated Fal image could not be downloaded after ${attempts} attempts. ${message}`)
 }
 
 async function uploadBytes(client: DatabaseClient, path: string, bytes: Uint8Array, contentType: string) {
@@ -839,10 +864,10 @@ async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, work
     throw new Error('Wiki visual job is missing an asset key or storage path.')
   }
 
-  const outputFormat = readString(job.input.outputFormat) || 'webp'
-  const mimeType = readString(job.input.mimeType) || (outputFormat === 'png' ? 'image/png' : outputFormat === 'jpeg' || outputFormat === 'jpg' ? 'image/jpeg' : 'image/webp')
-  const quality = readString(job.input.quality) || 'low'
-  const imageSize = job.input.imageSize ?? { width: 1536, height: 864 }
+  const outputFormat = worldConceptOutputFormat
+  const mimeType = worldConceptMimeType
+  const quality = worldConceptImageQuality
+  const imageSize = worldConceptImageSize
 
   const falApiKey = Deno.env.get('FAL_KEY')
   if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
@@ -860,6 +885,7 @@ async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, work
     outputFormat,
   })
 
+  await heartbeat(client, job.id, workerId, { phase: 'wiki_visual_downloading_asset', falImageUrl: falResult.imageUrl })
   const imageBytes = await downloadImageBytes(falResult.imageUrl)
   await heartbeat(client, job.id, workerId, { phase: 'wiki_visual_uploading_asset', imageBytes: imageBytes.byteLength })
   await uploadBytes(client, storagePath, imageBytes, mimeType)
