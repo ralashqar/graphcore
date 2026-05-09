@@ -208,10 +208,11 @@ Deno.serve(async (request) => {
       .single()
     if (insertResponse.error) throw new Error(insertResponse.error.message)
 
+    const currentWiki = asRecord(currentMetadata.worldWiki)
     const nextMetadata = {
       ...currentMetadata,
       worldWiki: {
-        ...wiki,
+        ...currentWiki,
         brandAtlasAssetKey: assetKey,
       },
     }

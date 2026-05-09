@@ -4332,7 +4332,11 @@ export async function setActiveGame(projectId: string, draftId: string, options?
   }
 
   await setActiveWorkspaceGameState(workspaceMembership.workspace.id, projectId, draftId)
-  return loadProjectSnapshot({ projectId, draftId }, { profile: options?.profile ?? 'shell', hydrateAssetUrls: options?.hydrateAssetUrls ?? false })
+  return loadProjectSnapshot({ projectId, draftId }, {
+    ...options,
+    profile: options?.profile ?? 'shell',
+    hydrateAssetUrls: options?.hydrateAssetUrls ?? false,
+  })
 }
 
 export async function loadCachedProjectSnapshot(projectId: string, draftId: string): Promise<GraphCoreClientCacheSnapshot | null> {

@@ -9661,7 +9661,11 @@ button.world-prompt-row-result.is-clickable {
   height: 100%;
   max-height: 100%;
   display: grid;
-  grid-template-columns: minmax(286px, 320px) minmax(0, 1fr) minmax(248px, 300px);
+  grid-template-columns:
+    minmax(340px, var(--world-grow-workbench-width, 420px))
+    10px
+    minmax(0, 1fr)
+    minmax(248px, 300px);
   gap: 0;
   overflow: hidden;
   border-radius: 18px;
@@ -9687,11 +9691,16 @@ button.world-prompt-row-result.is-clickable {
 }
 
 .world-feed-prompt-rail {
-  border-right: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 18px 0 0 18px;
 }
 
 .world-feed-context-rail {
   border-left: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.world-feed-resizer {
+  min-height: 0;
+  height: 100%;
 }
 
 .world-feed-project-card,
@@ -9722,35 +9731,6 @@ button.world-prompt-row-result.is-clickable {
   color: rgba(248, 250, 252, 0.9);
   font-size: 0.78rem;
   font-weight: 850;
-}
-
-.world-feed-mode-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.world-feed-mode-row button {
-  min-width: 0;
-  height: 28px;
-  border: 0;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
-  color: rgba(203, 213, 225, 0.86);
-  font-size: 0.68rem;
-  font-weight: 850;
-  cursor: pointer;
-}
-
-.world-feed-mode-row button.is-active {
-  background: rgba(124, 92, 255, 0.28);
-  color: rgba(248, 250, 252, 0.96);
-  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.42);
-}
-
-.world-feed-mode-row button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
 }
 
 .world-feed-composer textarea {
@@ -9871,7 +9851,7 @@ button.world-prompt-row-result.is-clickable {
   min-height: 0;
   height: 100%;
   overflow: auto;
-  padding: 22px 24px 28px;
+  padding: 14px 18px 22px;
   background:
     radial-gradient(circle at 84% 0%, rgba(57, 216, 255, 0.07), transparent 30%),
     linear-gradient(180deg, rgba(13, 19, 32, 0.78), rgba(6, 10, 18, 0.96));
@@ -9879,14 +9859,14 @@ button.world-prompt-row-result.is-clickable {
 
 .world-feed-header {
   display: grid;
-  gap: 14px;
-  margin-bottom: 18px;
+  gap: 9px;
+  margin-bottom: 12px;
 }
 
 .world-feed-header h2 {
-  margin: 3px 0 4px;
+  margin: 1px 0 2px;
   color: rgba(248, 250, 252, 0.98);
-  font-size: clamp(1.75rem, 2.4vw, 2.55rem);
+  font-size: clamp(1.45rem, 1.8vw, 2.05rem);
   line-height: 1;
   letter-spacing: 0;
 }
@@ -9895,28 +9875,28 @@ button.world-prompt-row-result.is-clickable {
   max-width: 640px;
   margin: 0;
   color: rgba(203, 213, 225, 0.76);
-  font-size: 0.9rem;
-  line-height: 1.45;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .world-feed-filter-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 5px;
 }
 
 .world-feed-filter-row button {
-  min-height: 31px;
+  min-height: 27px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 9px;
-  padding: 6px 10px;
+  border-radius: 8px;
+  padding: 4px 8px;
   background: rgba(255, 255, 255, 0.03);
   color: rgba(203, 213, 225, 0.78);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   font-weight: 800;
 }
 
@@ -9934,62 +9914,177 @@ button.world-prompt-row-result.is-clickable {
 .world-feed-timeline {
   position: relative;
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .world-feed-timeline::before {
-  content: "";
-  position: absolute;
-  left: 96px;
-  top: 8px;
-  bottom: 10px;
-  width: 1px;
-  background: linear-gradient(180deg, rgba(124, 92, 255, 0.72), rgba(57, 216, 255, 0.14));
+  content: none;
 }
 
 .world-feed-group {
   position: relative;
   display: grid;
-  grid-template-columns: 86px 20px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
 }
 
 .world-feed-time-marker {
   position: relative;
-  display: flex;
-  justify-content: flex-start;
-  padding-top: 13px;
-  color: rgba(167, 139, 250, 0.92);
-  font-size: 0.68rem;
+  display: grid;
+  grid-template-columns: auto minmax(24px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding-top: 0;
+  color: rgba(167, 139, 250, 0.82);
+  font-size: 0.6rem;
   font-weight: 900;
   text-transform: uppercase;
 }
 
 .world-feed-time-marker::after {
   content: "";
-  position: absolute;
-  left: 91px;
-  top: 17px;
-  width: 11px;
-  height: 11px;
+  position: static;
+  width: auto;
+  height: 1px;
   border-radius: 999px;
-  background: #7c5cff;
-  box-shadow: 0 0 0 4px rgba(124, 92, 255, 0.18), 0 0 18px rgba(124, 92, 255, 0.68);
+  background: linear-gradient(90deg, rgba(124, 92, 255, 0.44), rgba(148, 163, 184, 0.08));
+  box-shadow: none;
 }
 
 .world-feed-group-list {
   display: grid;
-  gap: 12px;
-  grid-column: 3;
+  gap: 9px;
+  grid-column: 1;
+}
+
+.world-loading-spinner {
+  width: 16px;
+  aspect-ratio: 1 / 1;
+  display: inline-block;
+  border-radius: 999px;
+  border: 2px solid rgba(148, 163, 184, 0.22);
+  border-top-color: rgba(57, 216, 255, 0.9);
+  animation: world-prompt-spinner-spin 840ms linear infinite;
+}
+
+.world-wiki-section-loader,
+.world-feed-load-more {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.world-feed-load-more {
+  min-height: 56px;
+}
+
+.world-feed-load-more button {
+  min-height: 28px;
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(124, 92, 255, 0.18);
+  color: rgba(248, 250, 252, 0.9);
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.world-feed-load-more button:hover {
+  background: rgba(124, 92, 255, 0.28);
+}
+
+.world-feed-card,
+.world-feed-turn-divider {
+  content-visibility: auto;
+  contain-intrinsic-size: 86px;
+}
+
+.world-wiki-cell-reveal {
+  animation: world-feed-card-enter 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.world-feed-turn-divider {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(32px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0 4px;
+  color: rgba(203, 213, 225, 0.78);
+  cursor: pointer;
+}
+
+.world-feed-turn-divider.is-new {
+  animation: world-feed-card-enter 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.world-feed-turn-divider:focus-visible {
+  outline: 1px solid rgba(167, 139, 250, 0.48);
+  outline-offset: 4px;
+}
+
+.world-feed-turn-divider.is-selected .world-feed-turn-count {
+  border-color: rgba(167, 139, 250, 0.46);
+  background: rgba(124, 92, 255, 0.2);
+  color: rgba(248, 250, 252, 0.94);
+}
+
+.world-feed-turn-time {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  color: rgba(196, 181, 253, 0.9);
+  font-size: 0.66rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.world-feed-turn-time em {
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: none;
+}
+
+.world-feed-turn-rule {
+  display: block;
+  height: 1px;
+  min-width: 24px;
+  background: linear-gradient(90deg, rgba(124, 92, 255, 0.4), rgba(148, 163, 184, 0.08));
+}
+
+.world-feed-turn-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(203, 213, 225, 0.84);
+  font-size: 0.66rem;
+  font-weight: 850;
 }
 
 .world-feed-card {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-  padding: 12px;
-  border-radius: 12px;
+  gap: 7px;
+  padding: 9px;
+  border-radius: 10px;
   background:
     linear-gradient(180deg, rgba(18, 26, 40, 0.86), rgba(10, 15, 24, 0.86)),
     rgba(255, 255, 255, 0.025);
@@ -10019,8 +10114,14 @@ button.world-prompt-row-result.is-clickable {
   background:
     linear-gradient(180deg, rgba(24, 34, 52, 0.92), rgba(12, 18, 28, 0.9)),
     rgba(124, 92, 255, 0.035);
-  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.28), 0 14px 34px rgba(0, 0, 0, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.3), 0 10px 24px rgba(0, 0, 0, 0.14);
   outline: none;
+}
+
+.world-feed-card.is-selected {
+  background:
+    linear-gradient(180deg, rgba(31, 40, 62, 0.94), rgba(13, 19, 30, 0.92)),
+    rgba(124, 92, 255, 0.06);
 }
 
 .world-feed-card.tone-working {
@@ -10035,23 +10136,23 @@ button.world-prompt-row-result.is-clickable {
   min-width: 0;
   display: grid;
   align-content: start;
-  gap: 9px;
+  gap: 7px;
 }
 
 .world-feed-card-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
 }
 
 .world-feed-card-head span,
 .world-feed-card-head em {
-  border-radius: 7px;
-  padding: 4px 7px;
+  border-radius: 6px;
+  padding: 3px 6px;
   background: rgba(124, 92, 255, 0.18);
   color: rgba(196, 181, 253, 0.96);
-  font-size: 0.64rem;
+  font-size: 0.58rem;
   font-style: normal;
   font-weight: 900;
   text-transform: uppercase;
@@ -10065,24 +10166,24 @@ button.world-prompt-row-result.is-clickable {
 .world-feed-card-title-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 9px;
 }
 
 .world-feed-sequence-card {
   min-width: 0;
   display: grid;
-  gap: 9px;
+  gap: 7px;
 }
 
 .world-feed-thumb {
-  width: 52px;
+  width: 42px;
   aspect-ratio: 1 / 1;
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(2, 6, 23, 0.56);
   color: rgba(153, 246, 228, 0.84);
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
@@ -10098,14 +10199,14 @@ button.world-prompt-row-result.is-clickable {
 
 .world-feed-thumb svg,
 .world-feed-thumb .entity-icon-image {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
 }
 
 .world-feed-card-title {
   min-width: 0;
   display: grid;
-  gap: 5px;
+  gap: 3px;
 }
 
 .world-feed-card-title strong {
@@ -10114,32 +10215,36 @@ button.world-prompt-row-result.is-clickable {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: rgba(248, 250, 252, 0.96);
-  font-size: 1.02rem;
+  font-size: 0.9rem;
   line-height: 1.2;
 }
 
 .world-feed-card p {
-  max-width: 720px;
+  display: -webkit-box;
+  max-width: none;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   margin: 0;
   color: rgba(203, 213, 225, 0.8);
-  font-size: 0.82rem;
-  line-height: 1.45;
+  font-size: 0.74rem;
+  line-height: 1.34;
 }
 
 .world-feed-card-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 5px;
 }
 
 .world-feed-card-chips span,
 .world-feed-card-chips button {
   border: 0;
   border-radius: 999px;
-  padding: 5px 8px;
+  padding: 4px 7px;
   background: rgba(255, 255, 255, 0.055);
   color: rgba(203, 213, 225, 0.82);
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   font-weight: 800;
 }
 
@@ -10207,9 +10312,9 @@ button.world-prompt-row-result.is-clickable {
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(82px, 116px) minmax(96px, 142px) minmax(82px, 116px);
+  grid-template-columns: minmax(68px, 96px) minmax(74px, 110px) minmax(68px, 96px);
   justify-content: start;
-  gap: 9px;
+  gap: 7px;
   align-items: stretch;
   color: inherit;
   text-align: center;
@@ -10220,15 +10325,15 @@ button.world-prompt-row-result.is-clickable {
   min-width: 0;
   display: grid;
   place-items: center;
-  gap: 6px;
-  border-radius: 10px;
-  padding: 8px;
+  gap: 5px;
+  border-radius: 9px;
+  padding: 6px;
   background: rgba(255, 255, 255, 0.04);
 }
 
 .world-feed-relationship-node {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 42px auto;
+  grid-template-rows: 34px auto;
   justify-items: center;
   align-content: center;
   border: 0;
@@ -10238,14 +10343,14 @@ button.world-prompt-row-result.is-clickable {
 }
 
 .world-feed-relationship-node .world-feed-thumb {
-  width: 42px;
-  border-radius: 8px;
+  width: 34px;
+  border-radius: 7px;
 }
 
 .world-feed-relationship-node .world-feed-thumb svg,
 .world-feed-relationship-node .world-feed-thumb .entity-icon-image {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
 }
 
 .world-feed-relationship-node strong,
@@ -10255,13 +10360,13 @@ button.world-prompt-row-result.is-clickable {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: rgba(248, 250, 252, 0.92);
-  font-size: 0.8rem;
+  font-size: 0.7rem;
 }
 
 .world-feed-relationship-line {
   position: relative;
   width: 100%;
-  height: 16px;
+  height: 12px;
 }
 
 .world-feed-relationship-line i,
@@ -10274,16 +10379,16 @@ button.world-prompt-row-result.is-clickable {
 }
 
 .world-feed-relationship-line i {
-  left: 8px;
-  right: 8px;
+  left: 7px;
+  right: 7px;
   height: 1px;
   background: rgba(167, 139, 250, 0.72);
 }
 
 .world-feed-relationship-line::before,
 .world-feed-relationship-line::after {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-top: 1px solid rgba(167, 139, 250, 0.86);
   border-right: 1px solid rgba(167, 139, 250, 0.86);
 }
@@ -10318,8 +10423,8 @@ button.world-prompt-row-result.is-clickable {
 
 .world-feed-detail-panel {
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 11px;
   border-radius: 12px;
   background:
     linear-gradient(180deg, rgba(24, 34, 52, 0.86), rgba(10, 15, 24, 0.9)),
@@ -10330,8 +10435,8 @@ button.world-prompt-row-result.is-clickable {
 .world-feed-detail-title {
   min-width: 0;
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 9px;
   align-items: center;
 }
 
@@ -10358,10 +10463,13 @@ button.world-prompt-row-result.is-clickable {
 }
 
 .world-feed-detail-panel p {
+  max-height: min(260px, 38vh);
+  overflow: auto;
   margin: 0;
   color: rgba(203, 213, 225, 0.82);
   font-size: 0.8rem;
   line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .world-feed-detail-relationship {
@@ -10556,19 +10664,25 @@ button.world-prompt-row-result.is-clickable {
 
 @media (min-width: 1500px) {
   .world-feed-group-list {
-    grid-template-columns: repeat(2, minmax(360px, 1fr));
+    grid-template-columns: repeat(2, minmax(320px, 1fr));
     align-items: start;
   }
 
+  .world-feed-turn-divider,
   .world-feed-card.is-active_turn,
-  .world-feed-card.is-turn_summary {
+  .world-feed-card.is-sequence_rewired,
+  .world-feed-card.is-relationship_rewired,
+  .world-feed-card.is-entity_merged {
     grid-column: 1 / -1;
   }
 }
 
 @media (max-width: 1280px) {
   .world-feed-surface {
-    grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+    grid-template-columns:
+      minmax(300px, var(--world-grow-workbench-width, 380px))
+      10px
+      minmax(0, 1fr);
   }
 
   .world-feed-context-rail {
@@ -10588,49 +10702,70 @@ button.world-prompt-row-result.is-clickable {
 }
 
 @media (max-width: 900px) {
+  .world-wiki-overview-bottom-row,
+  .world-wiki-overview-tools {
+    align-items: stretch;
+  }
+
+  .world-wiki-overview-tools {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .world-wiki-overview-search {
+    flex: 1 1 220px;
+    min-width: min(100%, 220px);
+    max-width: none;
+  }
+
   .world-feed-surface {
     grid-template-columns: minmax(0, 1fr);
     overflow: auto;
   }
 
   .world-feed-prompt-rail,
+  .world-feed-resizer,
   .world-feed-main {
     height: auto;
     overflow: visible;
   }
 
+  .world-feed-resizer {
+    display: none;
+  }
+
   .world-feed-prompt-rail {
     border-right: 0;
     border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 18px 18px 0 0;
   }
 
   .world-feed-composer textarea {
     min-height: 112px;
   }
 
-  .world-feed-timeline::before {
-    left: 6px;
-  }
-
   .world-feed-group {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
-    padding-left: 22px;
   }
 
   .world-feed-time-marker {
-    justify-content: flex-start;
     padding-top: 0;
-  }
-
-  .world-feed-time-marker::after {
-    left: -21px;
-    right: auto;
-    top: 3px;
   }
 
   .world-feed-group-list {
     grid-column: 1;
+  }
+
+  .world-feed-turn-divider {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .world-feed-turn-rule {
+    display: none;
   }
 
   .world-feed-card {
@@ -12666,6 +12801,84 @@ button.world-wiki-style-card:hover {
   font-size: 0.66rem;
 }
 
+.world-wiki-overview-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.world-wiki-overview-search {
+  min-width: min(260px, 26vw);
+  max-width: min(340px, 32vw);
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(169, 140, 255, 0.16);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  background: rgba(9, 13, 24, 0.48);
+  color: rgba(223, 214, 255, 0.88);
+  backdrop-filter: blur(10px);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.world-wiki-overview-search:focus-within,
+.world-wiki-overview-search.has-value {
+  border-color: rgba(167, 139, 250, 0.42);
+  background: rgba(12, 18, 30, 0.68);
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.1);
+}
+
+.world-wiki-overview-search > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.world-wiki-overview-search input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(248, 250, 252, 0.94);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 750;
+  outline: none;
+}
+
+.world-wiki-overview-search input::placeholder {
+  color: rgba(203, 213, 225, 0.58);
+}
+
+.world-wiki-overview-search button {
+  width: 22px;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(203, 213, 225, 0.82);
+  cursor: pointer;
+}
+
+.world-wiki-overview-search button:hover {
+  background: rgba(124, 92, 255, 0.22);
+  color: rgba(248, 250, 252, 0.94);
+}
+
+.world-wiki-overview-search svg {
+  width: 13px;
+  height: 13px;
+}
+
 .world-wiki-overview-actions {
   margin-top: 8px;
 }
@@ -12676,7 +12889,6 @@ button.world-wiki-style-card:hover {
   justify-content: flex-end;
   gap: 6px;
   max-width: min(520px, 48vw);
-  margin-left: auto;
 }
 
 .world-wiki-overview-tags .chip {
@@ -12704,6 +12916,54 @@ button.world-wiki-style-card:hover {
 
 .world-wiki-section {
   padding: 10px 0 4px;
+}
+
+.world-wiki-search-collapse,
+.world-wiki-section {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    max-height 240ms ease,
+    padding 180ms ease,
+    margin 180ms ease;
+}
+
+.world-wiki-search-collapse {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: block;
+}
+
+.world-wiki-search-collapse.is-search-hidden,
+.world-wiki-section.is-search-hidden {
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  overflow: hidden !important;
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+
+.world-wiki-search-empty {
+  display: grid;
+  gap: 4px;
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(203, 213, 225, 0.84);
+  animation: world-feed-card-enter 260ms ease both;
+}
+
+.world-wiki-search-empty strong {
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 0.9rem;
+}
+
+.world-wiki-search-empty small {
+  color: rgba(148, 163, 184, 0.84);
+  font-size: 0.74rem;
 }
 
 .world-wiki-section-style {
@@ -12942,13 +13202,22 @@ button.world-wiki-style-card:hover {
 
 .world-wiki-overview-media.has-image {
   position: absolute !important;
-  inset: -18px -18px -18px -18px !important;
+  top: -18px !important;
+  right: -18px !important;
+  bottom: -18px !important;
+  left: -18px !important;
   z-index: 1 !important;
-  width: auto !important;
+  width: calc(100% + 36px) !important;
+  min-width: calc(100% + 36px) !important;
   max-width: none !important;
-  height: auto !important;
-  min-height: 0 !important;
+  height: calc(100% + 36px) !important;
+  min-height: calc(100% + 36px) !important;
   max-height: none !important;
+  justify-self: stretch !important;
+  align-self: stretch !important;
+  grid-column: 1 / -1 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
   opacity: 0.72 !important;
   transform: none !important;
   -webkit-mask-image: none !important;
@@ -12968,8 +13237,13 @@ button.world-wiki-style-card:hover {
 }
 
 .world-wiki-overview-media.has-image img {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
   width: 100% !important;
+  min-width: 100% !important;
   height: 100% !important;
+  min-height: 100% !important;
   max-width: none !important;
   max-height: none !important;
   object-fit: cover !important;
@@ -12982,8 +13256,14 @@ button.world-wiki-style-card:hover {
   }
 
   .world-wiki-overview-media.has-image {
-    inset: -12px -12px auto -12px !important;
+    top: -12px !important;
+    right: -12px !important;
+    bottom: auto !important;
+    left: -12px !important;
+    width: calc(100% + 24px) !important;
+    min-width: calc(100% + 24px) !important;
     height: min(240px, 60%) !important;
+    min-height: min(240px, 60%) !important;
   }
 }
 

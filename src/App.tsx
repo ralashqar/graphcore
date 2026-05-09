@@ -1703,7 +1703,11 @@ export default function App() {
     const draftId = snapshot.draft.id
     const targetProfile = activeTab === 'library' ? 'content' : 'world'
     const surfaceKey = `${draftId}:${targetProfile}`
-    if (lazyWorldLoadedDraftIdsRef.current.has(surfaceKey)) return
+    const currentProfile = loadedState.profile ?? null
+    const targetAlreadyHydrated = targetProfile === 'content'
+      ? currentProfile === 'content' || currentProfile === 'full'
+      : currentProfile === 'world' || currentProfile === 'full'
+    if (lazyWorldLoadedDraftIdsRef.current.has(surfaceKey) && targetAlreadyHydrated) return
     lazyWorldLoadedDraftIdsRef.current.add(surfaceKey)
 
     let cancelled = false
@@ -1716,6 +1720,7 @@ export default function App() {
         }, { profile: targetProfile, hydrateAssetUrls: targetProfile === 'world' })
         if (cancelled || loaded.source !== 'supabase') return
         const current = snapshotRef.current
+        if (!isSameProjectDraft(current, loaded.snapshot)) return
         const nextSnapshot = current
           ? mergeOutputSliceIntoSnapshot(loaded.snapshot, {
               assets: current.assets,
@@ -1746,7 +1751,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [activeTab, appRoute, loadedState?.source, snapshot?.draft.id, snapshot?.project.id])
+  }, [activeTab, appRoute, loadedState?.profile, loadedState?.source, snapshot?.draft.id, snapshot?.project.id])
 
   useEffect(() => {
     if (appRoute !== 'app') return
@@ -1915,11 +1920,39 @@ export default function App() {
     if (!assetKey) return null
     return snapshot?.assets.find((asset) => asset.key === assetKey) ?? null
   }, [snapshot?.assets, worldWikiMetadata.worldConceptAssetKey])
-  const worldConceptImageUrl = useMemo(() => (
+  const worldConceptDirectImageUrl = useMemo(() => (
     worldConceptAsset && !isPendingGeneratedAsset(worldConceptAsset)
       ? resolveAssetSourceUrl(worldConceptAsset)
       : null
   ), [worldConceptAsset])
+  const [signedWorldConceptImageUrl, setSignedWorldConceptImageUrl] = useState<{ assetKey: string; url: string } | null>(null)
+  useEffect(() => {
+    if (!worldConceptAsset || isPendingGeneratedAsset(worldConceptAsset) || worldConceptDirectImageUrl || loadedState?.source !== 'supabase') {
+      if (!worldConceptAsset || worldConceptDirectImageUrl || isPendingGeneratedAsset(worldConceptAsset)) {
+        setSignedWorldConceptImageUrl(null)
+      }
+      return undefined
+    }
+    let disposed = false
+    const assetKey = worldConceptAsset.key
+    void workspaceService.signProjectAssetUrls(worldConceptAsset.projectId || snapshot?.project.id || '', [assetKey])
+      .then((assets) => {
+        if (disposed) return
+        const signedAsset = assets.find((asset) => asset.key === assetKey) ?? null
+        const url = signedAsset ? resolveAssetSourceUrl(signedAsset) : null
+        if (url) setSignedWorldConceptImageUrl({ assetKey, url })
+      })
+      .catch((error) => {
+        if (!disposed) console.warn('[GraphCore] failed to sign world concept image for global preview.', error)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [loadedState?.source, snapshot?.project.id, worldConceptAsset, worldConceptDirectImageUrl])
+  const worldConceptImageUrl = worldConceptDirectImageUrl
+    ?? (signedWorldConceptImageUrl && signedWorldConceptImageUrl.assetKey === worldConceptAsset?.key
+      ? signedWorldConceptImageUrl.url
+      : null)
   const worldConceptPendingJobId = useMemo(() => {
     const wikiJobId = trimOptionalString(worldWikiMetadata.worldConceptVisualJobId)
     if (wikiJobId) return wikiJobId
@@ -2758,6 +2791,15 @@ export default function App() {
     setBundle(compileBundle(normalizedSnapshot))
   }
 
+  function isSameProjectDraft(left: ProjectSnapshot | null | undefined, right: ProjectSnapshot | null | undefined) {
+    return Boolean(
+      left
+      && right
+      && left.project.id === right.project.id
+      && left.draft.id === right.draft.id,
+    )
+  }
+
   function mergeOutputSliceIntoSnapshot(
     current: ProjectSnapshot,
     slice: {
@@ -2824,6 +2866,8 @@ export default function App() {
       worldGraphSyncPromiseRef.current = workspaceService
         .syncWorldGraphFromDefinitions(baseSnapshot)
         .then((nextSnapshot) => {
+          const current = snapshotRef.current
+          if (!isSameProjectDraft(current, nextSnapshot)) return current ?? nextSnapshot
           commitPersistedSnapshot(nextSnapshot)
           return nextSnapshot
         })
@@ -4521,13 +4565,14 @@ export default function App() {
   }
 
   async function generateWorldBrandAtlasImage(prompt?: string) {
-    if (!snapshot) {
+    const current = snapshotRef.current ?? snapshot
+    if (!current) {
       throw new Error('Load a live GraphCore draft before generating a brand atlas image.')
     }
     if (loadedState?.source !== 'supabase') {
       throw new Error('Brand atlas image generation requires a live Supabase-backed draft.')
     }
-    const result = await workspaceService.generateWorldBrandAtlasImage(snapshot, prompt)
+    const result = await workspaceService.generateWorldBrandAtlasImage(current, prompt)
     const asset = result.signedUrl
       ? {
           ...result.asset,
@@ -4537,13 +4582,31 @@ export default function App() {
           },
         }
       : result.asset
-    const nextSnapshot = normalizeSnapshot({
-      ...snapshot,
-      draft: {
-        ...snapshot.draft,
-        metadata: result.draftMetadata,
+    const currentDraftMetadata = readMetadataRecord(current.draft.metadata)
+    const currentWorldWiki = readMetadataRecord(currentDraftMetadata.worldWiki)
+    const resultDraftMetadata = readMetadataRecord(result.draftMetadata)
+    const resultWorldWiki = readMetadataRecord(resultDraftMetadata.worldWiki)
+    const preserveWikiString = (key: 'worldConceptPrompt' | 'worldConceptAssetKey' | 'worldConceptVisualJobId') => {
+      const nextValue = trimOptionalString(resultWorldWiki[key])
+      const currentValue = trimOptionalString(currentWorldWiki[key])
+      return nextValue || currentValue
+    }
+    const draftMetadata = {
+      ...resultDraftMetadata,
+      worldWiki: {
+        ...resultWorldWiki,
+        worldConceptPrompt: preserveWikiString('worldConceptPrompt'),
+        worldConceptAssetKey: preserveWikiString('worldConceptAssetKey'),
+        worldConceptVisualJobId: preserveWikiString('worldConceptVisualJobId'),
       },
-      assets: mergeResourcesByKey(snapshot.assets, [asset]),
+    }
+    const nextSnapshot = normalizeSnapshot({
+      ...current,
+      draft: {
+        ...current.draft,
+        metadata: draftMetadata,
+      },
+      assets: mergeResourcesByKey(current.assets, [asset]),
     })
     snapshotRef.current = nextSnapshot
     setSnapshot(nextSnapshot)
@@ -4867,6 +4930,7 @@ export default function App() {
         limit: 30,
       })
       const latest = snapshotRef.current ?? current
+      if (!isSameProjectDraft(latest, current)) return
       commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
         requests: result.requests,
         workflows: result.workflows,
@@ -4900,6 +4964,7 @@ export default function App() {
       runId,
     })
     const latest = snapshotRef.current ?? current
+    if (!isSameProjectDraft(latest, current)) return
     commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
       workflows: result.workflow ? [result.workflow] : [],
       nodes: result.nodes,
@@ -5114,14 +5179,16 @@ export default function App() {
     if (reloaded.source !== 'supabase') {
       throw new Error(reloaded.reason ?? 'Could not reload the live GraphCore draft.')
     }
+    const latest = snapshotRef.current
+    if (!latest || !isSameProjectDraft(latest, reloaded.snapshot)) return
     commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(reloaded.snapshot, {
-      assets: current.assets,
-      requests: current.outputRequests,
-      workflows: current.outputWorkflows,
-      nodes: current.outputWorkflowNodes,
-      edges: current.outputWorkflowEdges,
-      runs: current.outputWorkflowRuns,
-      artifacts: current.outputArtifacts,
+      assets: latest.assets,
+      requests: latest.outputRequests,
+      workflows: latest.outputWorkflows,
+      nodes: latest.outputWorkflowNodes,
+      edges: latest.outputWorkflowEdges,
+      runs: latest.outputWorkflowRuns,
+      artifacts: latest.outputArtifacts,
     }))
     try {
       const delta = await loadDraftDelta(reloaded.snapshot.draft.id, null)
@@ -6535,7 +6602,11 @@ export default function App() {
 
     try {
       await refreshWorkspaceState(
-        () => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId),
+        () => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId, {
+          profile: 'world',
+          hydrateAssetUrls: true,
+          skipCache: true,
+        }),
         { resetSelection: true, allowProjectChange: true },
       )
       setActiveTab('graph')

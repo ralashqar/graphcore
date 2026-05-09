@@ -3,8 +3,10 @@ import test from 'node:test'
 
 import {
   appendRefinementHistory,
+  hasTruncationArtifact,
   mergeCanonicalContext,
   mergeCanonicalText,
+  replaceCanonicalSummary,
 } from './worldPromptRefinement.ts'
 
 test('mergeCanonicalText preserves prior canon while appending distinct new detail', () => {
@@ -52,4 +54,26 @@ test('appendRefinementHistory records prior, incoming, and reconciled text witho
     incomingText: 'The council is also losing control of the ports.',
     resultText: 'The council keeps order in the capital. The council is also losing control of the ports.',
   })
+})
+
+test('replaceCanonicalSummary replaces display summary and rejects truncated patches', () => {
+  const replaced = replaceCanonicalSummary({
+    existing: 'Ilya’s younger sister, a factory coder whose looming bond to the AI gives the story urgency.',
+    incoming: 'Ilya’s younger sister survives the regime’s attempted bond to Aster and becomes a reluctant civic leader in liberation’s first week.',
+  })
+
+  assert.equal(replaced.strategy, 'replaced')
+  assert.equal(
+    replaced.text,
+    'Ilya’s younger sister survives the regime’s attempted bond to Aster and becomes a reluctant civic leader in liberation’s first week.',
+  )
+
+  const rejected = replaceCanonicalSummary({
+    existing: replaced.text,
+    incoming: 'Ilya’s younger sister becomes a central battleground but ultimately chooses to restore human conse…',
+  })
+
+  assert.equal(hasTruncationArtifact(rejected.text), false)
+  assert.equal(rejected.changed, false)
+  assert.equal(rejected.text, replaced.text)
 })

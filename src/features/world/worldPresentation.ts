@@ -238,6 +238,7 @@ export type WorldFeedEntry = {
   filter: WorldFeedFilter
   title: string
   detail: string
+  compactDetail?: string
   badge: string
   tone?: 'normal' | 'working' | 'success' | 'warning' | 'error'
   entityKey?: string
@@ -2225,6 +2226,38 @@ function worldFeedBadgeForEntry(entry: WorldPromptTranscriptEntry): string {
   }
 }
 
+function compactWorldFeedText(value: string, maxLength = 160) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxLength) return normalized
+  const clipped = normalized.slice(0, maxLength)
+  const lastBreak = Math.max(clipped.lastIndexOf(' '), clipped.lastIndexOf(','), clipped.lastIndexOf(';'))
+  const boundary = lastBreak >= Math.floor(maxLength * 0.68) ? lastBreak : maxLength
+  return `${normalized.slice(0, boundary).replace(/[\s,;:.-]+$/g, '')}...`
+}
+
+function compactLimitForWorldFeedEntry(entry: WorldFeedEntry) {
+  switch (entry.kind) {
+    case 'assistant_note':
+    case 'prompt':
+    case 'active_turn':
+    case 'diagnostic':
+      return 170
+    case 'turn_summary':
+    case 'relationship_created':
+    case 'relationship_updated':
+      return 96
+    default:
+      return 145
+  }
+}
+
+function withCompactWorldFeedDetail(entry: WorldFeedEntry): WorldFeedEntry {
+  return {
+    ...entry,
+    compactDetail: compactWorldFeedText(entry.detail, compactLimitForWorldFeedEntry(entry)),
+  }
+}
+
 function buildWorldFeedEntryFromTranscriptEntry(input: {
   entry: WorldPromptTranscriptEntry
   relationshipByKey: Map<string, WorldRelationship>
@@ -2585,9 +2618,10 @@ export function buildWorldFeedViewModel(input: {
   const entries = transcriptEntries
     .map((entry) => buildWorldFeedEntryFromTranscriptEntry({ entry, relationshipByKey }))
     .filter((entry): entry is WorldFeedEntry => Boolean(entry))
+    .map((entry) => withCompactWorldFeedDetail(entry))
 
   const activeTurnEntry = input.activeTurn && ['queued', 'streaming'].includes(input.activeTurn.status)
-    ? {
+    ? withCompactWorldFeedDetail({
         id: `active-turn:${input.activeTurn.id}`,
         createdAt: input.activeTurn.createdAt,
         kind: 'active_turn',
@@ -2598,7 +2632,7 @@ export function buildWorldFeedViewModel(input: {
         badge: input.activeTurn.status === 'queued' ? 'Queued' : 'Running',
         tone: 'working',
         turnId: input.activeTurn.id,
-      } satisfies WorldFeedEntry
+      } satisfies WorldFeedEntry)
     : null
 
   const sortedEntries = [

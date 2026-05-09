@@ -181,6 +181,10 @@ type SignedAssetUrlResponse = {
 }
 
 const worldGraphSignedAssetUrlCache = new Map<string, { storagePath: string; url: string }>()
+const WORLD_FEED_INITIAL_RENDER_LIMIT = 80
+const WORLD_FEED_RENDER_INCREMENT = 60
+const WIKI_SECTION_REVEAL_DELAY_MS = 120
+const WIKI_SECTION_REVEAL_STEP_MS = 90
 
 function isWorldGraphSignableAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
@@ -1449,14 +1453,16 @@ export function WorldGraphPage({
   const [showPinnedNodes] = useState(true)
   const [fallbackPinnedNodeKeys, setFallbackPinnedNodeKeys] = useState<string[]>([])
   const [worldPromptText, setWorldPromptText] = useState('')
-  const [worldPromptMode, setWorldPromptMode] = useState<'add' | 'deepen' | 'rewire' | 'retcon' | 'ask' | 'visual'>('add')
   const [worldPromptPanelMode, setWorldPromptPanelMode] = useState<'expanded' | 'compact'>('expanded')
   const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
   const [wikiStyleExpanded, setWikiStyleExpanded] = useState(false)
   const [wikiSubView, setWikiSubView] = useState<'wiki' | 'feed'>('wiki')
+  const [wikiSearchQuery, setWikiSearchQuery] = useState('')
   const [worldFeedFilter, setWorldFeedFilter] = useState<WorldFeedFilter>('all')
   const [selectedWorldFeedEntryId, setSelectedWorldFeedEntryId] = useState<string | null>(null)
   const [newWorldFeedEntryIds, setNewWorldFeedEntryIds] = useState<Set<string>>(() => new Set())
+  const [worldFeedVisibleEntryLimit, setWorldFeedVisibleEntryLimit] = useState(WORLD_FEED_INITIAL_RENDER_LIMIT)
+  const [wikiSectionVisibleCounts, setWikiSectionVisibleCounts] = useState<Record<string, number>>({})
   const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
   const [worldPromptError, setWorldPromptError] = useState<string | null>(null)
   const [isPromptSubmitting, setIsPromptSubmitting] = useState(false)
@@ -1467,6 +1473,8 @@ export function WorldGraphPage({
   const [flashTurnLens, setFlashTurnLens] = useState<WorldPromptTurnLens | null>(null)
   const [wikiDetailModal, setWikiDetailModal] = useState<WikiDetailModalState>(null)
   const wikiDocumentRef = useRef<HTMLDivElement | null>(null)
+  const worldFeedMainRef = useRef<HTMLElement | null>(null)
+  const worldFeedLoadMoreRef = useRef<HTMLDivElement | null>(null)
   const savedWikiScrollTopRef = useRef(0)
   const handledAutoLensTurnIdRef = useRef<string | null>(null)
   const seenWorldFeedEntryIdsRef = useRef<Set<string>>(new Set())
@@ -2006,6 +2014,53 @@ export function WorldGraphPage({
       }))
       .filter((group) => group.entries.length > 0)
   }, [worldFeedFilter, worldFeedModel.groups])
+  const worldFeedTotalEntryCount = useMemo(
+    () => worldFeedGroups.reduce((count, group) => count + group.entries.length, 0),
+    [worldFeedGroups],
+  )
+  const renderedWorldFeedGroups = useMemo(() => {
+    let remaining = worldFeedVisibleEntryLimit
+    return worldFeedGroups
+      .map((group) => {
+        if (remaining <= 0) return { ...group, entries: [] }
+        const entries = group.entries.slice(0, remaining)
+        remaining -= entries.length
+        return { ...group, entries }
+      })
+      .filter((group) => group.entries.length > 0)
+  }, [worldFeedGroups, worldFeedVisibleEntryLimit])
+  const hasDeferredWorldFeedEntries = worldFeedVisibleEntryLimit < worldFeedTotalEntryCount
+  const worldFeedRenderSignature = `${worldFeedFilter}:${worldFeedModel.entries[0]?.id ?? 'empty'}:${worldFeedTotalEntryCount}`
+  const loadMoreWorldFeedEntries = () => {
+    setWorldFeedVisibleEntryLimit((current) => Math.min(current + WORLD_FEED_RENDER_INCREMENT, worldFeedTotalEntryCount))
+  }
+  useEffect(() => {
+    setWorldFeedVisibleEntryLimit(WORLD_FEED_INITIAL_RENDER_LIMIT)
+  }, [worldFeedRenderSignature])
+  useEffect(() => {
+    if (!hasDeferredWorldFeedEntries) return undefined
+    const target = worldFeedLoadMoreRef.current
+    const root = worldFeedMainRef.current
+    if (!target) return undefined
+    if (!root) {
+      loadMoreWorldFeedEntries()
+      return undefined
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      loadMoreWorldFeedEntries()
+    }, { root, rootMargin: '900px 0px', threshold: 0.01 })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [hasDeferredWorldFeedEntries, worldFeedTotalEntryCount, worldFeedRenderSignature, worldFeedVisibleEntryLimit])
+  function handleWorldFeedScroll() {
+    if (!hasDeferredWorldFeedEntries) return
+    const container = worldFeedMainRef.current
+    if (!container) return
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    if (distanceToBottom > 900) return
+    loadMoreWorldFeedEntries()
+  }
   const selectedWorldFeedEntry = useMemo(
     () => selectedWorldFeedEntryId
       ? worldFeedModel.entries.find((entry) => entry.id === selectedWorldFeedEntryId) ?? null
@@ -2280,6 +2335,56 @@ export function WorldGraphPage({
     },
     view: selectedView,
   }), [effectiveProjectDraftMetadata, projectDraftId, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
+  const deferredWikiSearchQuery = useDeferredValue(wikiSearchQuery)
+  const normalizedWikiSearchQuery = deferredWikiSearchQuery.trim().toLocaleLowerCase()
+  const wikiSearchActive = normalizedWikiSearchQuery.length > 0
+  const wikiSearchMatchCount = useMemo(() => {
+    if (!wikiSearchActive) return null
+    return wikiModel.sections
+      .filter((section) => section.kind !== 'overview')
+      .reduce((count, section) => {
+        if (wikiSectionMatchesSearch(section)) return count + 1
+        const entityMatches = section.entityKeys.filter((key) => wikiEntityMatchesSearch(key)).length
+        const threadMatches = section.threadKeys.filter((key) => wikiThreadMatchesSearch(key)).length
+        const resultMatches = section.resultKeys.filter((key) => wikiResultMatchesSearch(key)).length
+        return count + entityMatches + threadMatches + resultMatches
+      }, 0)
+  }, [entityByKey, normalizedWikiSearchQuery, resultByKey, threadByKey, wikiModel.entityProfiles, wikiModel.sections, wikiSearchActive])
+  const wikiSectionRevealSignature = useMemo(() => (
+    wikiModel.sections
+      .map((section) => [
+        section.kind,
+        Array.from(new Set(section.entityKeys)).join(','),
+        Array.from(new Set(section.threadKeys)).join(','),
+        Array.from(new Set(section.resultKeys)).join(','),
+      ].join(':'))
+      .join('|')
+  ), [wikiModel.sections])
+  useEffect(() => {
+    if (worldViewMode !== 'wiki' || wikiSubView !== 'wiki') return undefined
+    const sectionTargets = wikiModel.sections.reduce<Record<string, number>>((targets, section) => {
+      if (section.kind === 'style') return targets
+      const entityTarget = Math.min(Array.from(new Set(section.entityKeys)).length, section.kind === 'cast' ? 8 : 6)
+      const threadTarget = Math.min(Array.from(new Set(section.threadKeys)).length, 6)
+      const resultTarget = Math.min(Array.from(new Set(section.resultKeys)).length, 6)
+      const total = entityTarget + threadTarget + resultTarget
+      if (total > 0) targets[section.kind] = total
+      return targets
+    }, {})
+    setWikiSectionVisibleCounts(Object.fromEntries(Object.keys(sectionTargets).map((key) => [key, 0])))
+    const firstBatchId = window.setTimeout(() => {
+      setWikiSectionVisibleCounts(Object.fromEntries(
+        Object.entries(sectionTargets).map(([key, total]) => [key, Math.min(total, 4)]),
+      ))
+    }, WIKI_SECTION_REVEAL_DELAY_MS)
+    const fullBatchId = window.setTimeout(() => {
+      setWikiSectionVisibleCounts(sectionTargets)
+    }, WIKI_SECTION_REVEAL_DELAY_MS + WIKI_SECTION_REVEAL_STEP_MS)
+    return () => {
+      window.clearTimeout(firstBatchId)
+      window.clearTimeout(fullBatchId)
+    }
+  }, [wikiModel.sections, wikiSectionRevealSignature, wikiSubView, worldViewMode])
   const wikiHasAppSections = useMemo(
     () => wikiModel.sections.some((section) => section.kind === 'app' || section.kind.startsWith('app_')),
     [wikiModel.sections],
@@ -2461,6 +2566,38 @@ export function WorldGraphPage({
     const assetKey = wikiBrandAtlasAsset.key
     return resolveAssetSourceUrl(wikiBrandAtlasAsset) ?? signedAssetUrlsByKey.get(assetKey) ?? null
   }, [signedAssetUrlsByKey, wikiBrandAtlasAsset])
+  const wikiOverviewGraphicUrl = wikiOverviewImageUrl
+  const wikiOverviewGraphicPending = wikiWorldConceptPending
+  const wikiOverviewSectionStyle = wikiOverviewGraphicUrl ? ({
+    width: '100%',
+    maxWidth: 'none',
+    justifySelf: 'stretch',
+    gridColumn: '1 / -1',
+    backgroundImage: [
+      'linear-gradient(90deg, #080b12 0%, rgba(8, 11, 18, 0.92) 18%, rgba(8, 11, 18, 0.52) 34%, rgba(8, 11, 18, 0.12) 54%, transparent 76%)',
+      'linear-gradient(180deg, rgba(8, 11, 18, 0.28) 0%, transparent 20%, transparent 68%, #060912 100%)',
+      `url(${JSON.stringify(wikiOverviewGraphicUrl)})`,
+    ].join(', '),
+    backgroundRepeat: 'no-repeat',
+    backgroundSize: '100% 100%, 100% 100%, cover',
+    backgroundPosition: '0 0, 0 0, 100% 0',
+  } satisfies CSSProperties) : undefined
+  const wikiOverviewGraphicMediaStyle = wikiOverviewGraphicUrl ? ({
+    display: 'none',
+  } satisfies CSSProperties) : undefined
+  const wikiOverviewGraphicImageStyle = wikiOverviewGraphicUrl ? ({
+    position: 'absolute',
+    inset: 0,
+    display: 'block',
+    width: '100%',
+    minWidth: '100%',
+    maxWidth: 'none',
+    height: '100%',
+    minHeight: '100%',
+    maxHeight: 'none',
+    objectFit: 'cover',
+    objectPosition: '100% 0',
+  } satisfies CSSProperties) : undefined
   useEffect(() => {
     if (!wikiBrandAtlasPending) return
     let disposed = false
@@ -4440,7 +4577,7 @@ export function WorldGraphPage({
     setIsPromptSubmitting(true)
     setBusyMessage('Generating world updates from prompt...')
     const sourceContext = contextOverrides?.sourceContext
-      ? { ...contextOverrides.sourceContext, promptMode: worldPromptMode }
+      ? (({ promptMode: _promptMode, ...sourceContextWithoutMode }) => sourceContextWithoutMode)(contextOverrides.sourceContext)
       : {
           kind: 'prompt' as const,
           title: 'Feed prompt',
@@ -4450,7 +4587,6 @@ export function WorldGraphPage({
           extractedText: '',
           charCount: 0,
           truncated: false,
-          promptMode: worldPromptMode,
         }
     try {
       await onStartWorldPromptTurn({
@@ -5298,6 +5434,65 @@ export function WorldGraphPage({
     window.addEventListener('mouseup', handlePointerUp)
   }
 
+  function wikiTextMatches(parts: Array<unknown>) {
+    if (!wikiSearchActive) return true
+    const haystack = parts
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (Array.isArray(part)) return part.filter((entry) => typeof entry === 'string').join(' ')
+        return ''
+      })
+      .join(' ')
+      .toLocaleLowerCase()
+    return haystack.includes(normalizedWikiSearchQuery)
+  }
+
+  function wikiSectionMatchesSearch(section: WorldWikiSection) {
+    return wikiTextMatches([
+      section.title,
+      section.summary,
+      labelForWikiSection(section.kind),
+    ])
+  }
+
+  function wikiEntityMatchesSearch(entityKey: string) {
+    const entity = entityByKey.get(entityKey) ?? null
+    if (!entity) return false
+    const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
+    return wikiTextMatches([
+      entity.name,
+      entity.nodeType,
+      labelForWorldEntity(entity.nodeType),
+      entity.summary,
+      entity.context,
+      profile?.roleLabel,
+      profile?.shortSummary,
+      entity.tags,
+    ])
+  }
+
+  function wikiThreadMatchesSearch(threadKey: string) {
+    const thread = threadByKey.get(threadKey) ?? null
+    if (!thread) return false
+    return wikiTextMatches([
+      thread.title,
+      thread.summary,
+      thread.status,
+      thread.priority,
+    ])
+  }
+
+  function wikiResultMatchesSearch(resultKey: string) {
+    const result = resultByKey.get(resultKey) ?? null
+    if (!result) return false
+    return wikiTextMatches([
+      result.title,
+      result.summary,
+      result.resultType,
+      result.status,
+    ])
+  }
+
   function renderWikiEntityCard(entityKey: string, variant: 'large' | 'compact' = 'compact') {
     const entity = entityByKey.get(entityKey) ?? null
     if (!entity) return null
@@ -5309,7 +5504,7 @@ export function WorldGraphPage({
     return (
       <button
         key={entity.key}
-        className={`world-wiki-entity-card is-${entity.nodeType} is-${variant}${active ? ' is-active' : ''}`}
+        className={`world-wiki-entity-card world-wiki-cell-reveal is-${entity.nodeType} is-${variant}${active ? ' is-active' : ''}`}
         onClick={() => {
           selectWorldNode(entity.key)
           setActiveInspectorTab('overview')
@@ -6282,6 +6477,27 @@ export function WorldGraphPage({
     )
   }
 
+  function formatWorldFeedTurnTimestamp(createdAt: string) {
+    const created = new Date(createdAt)
+    if (Number.isNaN(created.getTime())) {
+      return { label: 'Earlier', time: '' }
+    }
+    const now = new Date()
+    const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+    const createdDay = startOfDay(created)
+    const today = startOfDay(now)
+    const ageMs = now.getTime() - created.getTime()
+    const label = ageMs >= 0 && ageMs < 15 * 60 * 1000
+      ? 'Just now'
+      : createdDay === today
+        ? 'Today'
+        : createdDay === today - 24 * 60 * 60 * 1000
+          ? 'Yesterday'
+          : new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(created)
+    const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(created)
+    return { label, time }
+  }
+
   function renderWorldFeedCard(entry: WorldFeedEntry) {
     const entity = entry.entityKey ? entityByKey.get(entry.entityKey) ?? null : null
     const relationship = entry.relationshipKey ? relationshipByKey.get(entry.relationshipKey) ?? null : null
@@ -6290,11 +6506,32 @@ export function WorldGraphPage({
     const primaryThumbEntity = entity ?? (entry.thumbnailEntityKeys?.[0] ? entityByKey.get(entry.thumbnailEntityKeys[0]) ?? null : null)
     const isSelected = selectedWorldFeedEntryId === entry.id
     const isNew = newWorldFeedEntryIds.has(entry.id)
+    const displayDetail = entry.compactDetail ?? entry.detail
     const inspectEntry = () => setSelectedWorldFeedEntryId(entry.id)
     const handleCardKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
       if (event.key !== 'Enter' && event.key !== ' ') return
       event.preventDefault()
       inspectEntry()
+    }
+    if (entry.kind === 'turn_summary') {
+      const turnTime = formatWorldFeedTurnTimestamp(entry.createdAt)
+      return (
+        <article
+          key={entry.id}
+          className={`world-feed-turn-divider${isSelected ? ' is-selected' : ''}${isNew ? ' is-new' : ''}`}
+          onClick={inspectEntry}
+          onKeyDown={handleCardKeyDown}
+          role="button"
+          tabIndex={0}
+        >
+          <span className="world-feed-turn-time">
+            {turnTime.label}
+            {turnTime.time ? <em>{turnTime.time}</em> : null}
+          </span>
+          <span className="world-feed-turn-rule" aria-hidden="true" />
+          <span className="world-feed-turn-count">{displayDetail || entry.title}</span>
+        </article>
+      )
     }
     return (
       <article
@@ -6325,72 +6562,36 @@ export function WorldGraphPage({
                 {renderWorldFeedThumb(primaryThumbEntity, 'content')}
                 <div className="world-feed-card-title">
                   <strong>{entry.title}</strong>
-                  {entry.detail ? <p>{entry.detail}</p> : null}
+                  {displayDetail ? <p>{displayDetail}</p> : null}
                 </div>
               </div>
-              {entry.changedFields && entry.changedFields.length > 0 ? (
-                <div className="world-feed-card-chips">
-                  {entry.changedFields.map((field) => <span key={field}>{field}</span>)}
-                </div>
-              ) : null}
             </div>
           ) : (
             <div className="world-feed-card-title-row">
               {renderWorldFeedThumb(primaryThumbEntity, entry.kind === 'active_turn' || entry.kind === 'media_job' ? 'activity' : 'content')}
               <div className="world-feed-card-title">
                 <strong>{entry.title}</strong>
-                {entry.detail ? <p>{entry.detail}</p> : null}
+                {displayDetail ? <p>{displayDetail}</p> : null}
               </div>
             </div>
           )}
-          {entry.kind === 'turn_summary' && entry.turnLens ? (
-            <div className="world-feed-card-chips">
-              <span>{entry.turnLens.counts.entities} entities</span>
-              <span>{entry.turnLens.counts.relationships} links</span>
-              <span>{entry.turnLens.counts.derived} outputs</span>
-            </div>
-          ) : entry.suggestions && entry.suggestions.length > 0 ? (
+          {entry.suggestions && entry.suggestions.length > 0 ? (
             <div className="world-feed-card-chips">
               {entry.suggestions.slice(0, 3).map((suggestion) => (
-                <button key={suggestion.id} disabled={isPromptBusy} onClick={() => void handleRunPromptSuggestion(suggestion)} type="button">
+                <button
+                  key={suggestion.id}
+                  disabled={isPromptBusy}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleRunPromptSuggestion(suggestion)
+                  }}
+                  type="button"
+                >
                   {suggestion.label || suggestion.summary}
                 </button>
               ))}
             </div>
           ) : null}
-          <div className="world-feed-card-actions">
-            <button
-              onClick={(event) => {
-                event.stopPropagation()
-                setSelectedWorldFeedEntryId(entry.id)
-              }}
-              type="button"
-            >
-              Details
-            </button>
-            {(entry.entityKey || entry.relationshipKey || entry.resultKey) ? (
-              <button
-                onClick={(event) => {
-                  event.stopPropagation()
-                  openWorldFeedEntryTarget(entry, 'graph')
-                }}
-                type="button"
-              >
-                View Graph
-              </button>
-            ) : null}
-            {entry.turnLens ? (
-              <button
-                onClick={(event) => {
-                  event.stopPropagation()
-                  if (entry.turnLens) openTurnLens(entry.turnLens)
-                }}
-                type="button"
-              >
-                Open Turn
-              </button>
-            ) : null}
-          </div>
         </div>
       </article>
     )
@@ -6409,28 +6610,6 @@ export function WorldGraphPage({
           </div>
           <div className="world-feed-composer">
             <label htmlFor="world-feed-composer-input">Prompt this world</label>
-            <div className="world-feed-mode-row" role="radiogroup" aria-label="Prompt mode">
-              {[
-                ['add', 'Add'],
-                ['deepen', 'Deepen'],
-                ['rewire', 'Rewire'],
-                ['retcon', 'Retcon'],
-                ['ask', 'Ask'],
-                ['visual', 'Visual'],
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  aria-checked={worldPromptMode === key}
-                  className={worldPromptMode === key ? 'is-active' : ''}
-                  disabled={isPromptBusy}
-                  onClick={() => setWorldPromptMode(key as typeof worldPromptMode)}
-                  role="radio"
-                  type="button"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
             <textarea
               id="world-feed-composer-input"
               disabled={isPromptBusy}
@@ -6493,7 +6672,14 @@ export function WorldGraphPage({
             </div>
           ) : null}
         </aside>
-        <main className="world-feed-main">
+        <div
+          aria-label="Resize create feed rail"
+          className="world-grow-resizer world-wiki-resizer world-feed-resizer"
+          onDoubleClick={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
+          onMouseDown={handleGrowWorkbenchResizeStart}
+          role="separator"
+        />
+        <main className="world-feed-main" onScroll={handleWorldFeedScroll} ref={worldFeedMainRef}>
           <header className="world-feed-header">
             <div>
               <span className="eyebrow">Live Canon</span>
@@ -6522,7 +6708,7 @@ export function WorldGraphPage({
                 <span>Prompt from the left rail to create new canon updates.</span>
               </div>
             ) : null}
-            {worldFeedGroups.map((group) => (
+            {renderedWorldFeedGroups.map((group) => (
               <section key={group.id} className="world-feed-group">
                 <div className="world-feed-time-marker"><span>{group.label}</span></div>
                 <div className="world-feed-group-list">
@@ -6530,6 +6716,13 @@ export function WorldGraphPage({
                 </div>
               </section>
             ))}
+            {hasDeferredWorldFeedEntries ? (
+              <div className="world-feed-load-more" ref={worldFeedLoadMoreRef} aria-live="polite">
+                <span className="world-loading-spinner" aria-hidden="true" />
+                <small>Loading more feed entries...</small>
+                <button onClick={loadMoreWorldFeedEntries} type="button">Load more</button>
+              </div>
+            ) : null}
           </div>
         </main>
         <aside className="world-feed-context-rail" aria-label="Feed context">
@@ -6583,14 +6776,38 @@ export function WorldGraphPage({
   }
 
   function renderWikiSection(section: WorldWikiSection) {
-    if (section.kind === 'style') return renderWikiStyleSection(section)
-    const visibleEntityKeys = section.entityKeys.slice(0, section.kind === 'cast' ? 8 : 6)
-  const visibleThreadKeys = section.threadKeys.slice(0, 6)
-  const visibleResultKeys = section.resultKeys.slice(0, 6)
+    if (section.kind === 'style') {
+      const isStyleHiddenBySearch = wikiSearchActive && !wikiSectionMatchesSearch(section)
+      return (
+        <div key={section.kind} className={isStyleHiddenBySearch ? 'world-wiki-search-collapse is-search-hidden' : 'world-wiki-search-collapse'}>
+          {renderWikiStyleSection(section)}
+        </div>
+      )
+    }
+    const sectionMatchesSearch = wikiSectionMatchesSearch(section)
+    const cappedEntityKeys = Array.from(new Set(section.entityKeys)).slice(0, section.kind === 'cast' ? 8 : 6)
+      .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiEntityMatchesSearch(key))
+  const cappedThreadKeys = Array.from(new Set(section.threadKeys)).slice(0, 6)
+    .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiThreadMatchesSearch(key))
+  const cappedResultKeys = Array.from(new Set(section.resultKeys)).slice(0, 6)
+    .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiResultMatchesSearch(key))
+  const targetCellCount = cappedEntityKeys.length + cappedThreadKeys.length + cappedResultKeys.length
+  const visibleCellCount = Math.min(wikiSectionVisibleCounts[section.kind] ?? 0, targetCellCount)
+  const visibleEntityKeys = cappedEntityKeys.slice(0, visibleCellCount)
+  const remainingAfterEntities = Math.max(0, visibleCellCount - visibleEntityKeys.length)
+  const visibleThreadKeys = cappedThreadKeys.slice(0, remainingAfterEntities)
+  const remainingAfterThreads = Math.max(0, remainingAfterEntities - visibleThreadKeys.length)
+  const visibleResultKeys = cappedResultKeys.slice(0, remainingAfterThreads)
+  const hasDeferredSectionCells = visibleCellCount < targetCellCount
   const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
   const isCastSection = section.kind === 'cast'
+  const isSearchHidden = wikiSearchActive && !sectionMatchesSearch && targetCellCount === 0
   return (
-    <section id={`world-wiki-section-${section.kind}`} key={section.kind} className={`world-wiki-section world-wiki-section-${section.kind}`}>
+    <section
+      id={`world-wiki-section-${section.kind}`}
+      key={section.kind}
+      className={`world-wiki-section world-wiki-section-${section.kind}${isSearchHidden ? ' is-search-hidden' : ''}`}
+    >
       <div className="world-wiki-section-head">
           <div className={isCastSection ? 'world-wiki-section-title-row' : undefined}>
             {isCastSection ? <EntityIcon id={iconForWikiSection(section.kind)} /> : <span className="eyebrow">{labelForWikiSection(section.kind)}</span>}
@@ -6635,7 +6852,7 @@ export function WorldGraphPage({
               return (
                 <button
                   key={thread.key}
-                  className={active ? 'world-wiki-thread-card is-active' : 'world-wiki-thread-card'}
+                  className={active ? 'world-wiki-thread-card world-wiki-cell-reveal is-active' : 'world-wiki-thread-card world-wiki-cell-reveal'}
                   onClick={() => {
                     setSelectedPromptThreadKey(thread.key)
                     openWikiDetailModal({
@@ -6669,7 +6886,7 @@ export function WorldGraphPage({
               return (
                 <button
                   key={result.key}
-                  className="world-wiki-output-card"
+                  className="world-wiki-output-card world-wiki-cell-reveal"
                   onClick={() => {
                     selectWorldNode(result.key)
                     openWikiDetailModal({
@@ -6689,6 +6906,12 @@ export function WorldGraphPage({
                 </button>
               )
             })}
+          </div>
+        ) : null}
+        {hasDeferredSectionCells ? (
+          <div className="world-wiki-section-loader" aria-live="polite">
+            <span className="world-loading-spinner" aria-hidden="true" />
+            <small>Loading {section.title.toLowerCase()}...</small>
           </div>
         ) : null}
       </section>
@@ -7198,7 +7421,7 @@ export function WorldGraphPage({
                   role="separator"
                 />
                 <div className="world-wiki-document" ref={wikiDocumentRef}>
-                  <section id="world-wiki-section-overview" className="world-wiki-overview">
+                  <section id="world-wiki-section-overview" className="world-wiki-overview" style={wikiOverviewSectionStyle}>
                     <div className="world-wiki-overview-copy">
                       <span className="eyebrow">{wikiOverviewLabel}</span>
                       <h2>{wikiModel.title}</h2>
@@ -7235,19 +7458,39 @@ export function WorldGraphPage({
                         <span><strong>{wikiModel.threadPages.length}</strong><small>Threads</small></span>
                         <span><strong>{wikiModel.sequence.units.length || wikiModel.timeline.events.length}</strong><small>Beats</small></span>
                       </div>
-                      {wikiOverviewTags.length > 0 ? (
-                        <div className="world-wiki-overview-tags" aria-label="World tone tags">
-                          {wikiOverviewTags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
-                        </div>
-                      ) : null}
+                      <div className="world-wiki-overview-tools">
+                        <label className={wikiSearchQuery.trim() ? 'world-wiki-overview-search has-value' : 'world-wiki-overview-search'}>
+                          <span>Search wiki</span>
+                          <input
+                            aria-label="Search wiki"
+                            onChange={(event) => setWikiSearchQuery(event.target.value)}
+                            placeholder="Find canon..."
+                            type="search"
+                            value={wikiSearchQuery}
+                          />
+                          {wikiSearchQuery.trim() ? (
+                            <button aria-label="Clear wiki search" onClick={() => setWikiSearchQuery('')} type="button">
+                              <EntityIcon id="close" />
+                            </button>
+                          ) : null}
+                        </label>
+                        {wikiOverviewTags.length > 0 ? (
+                          <div className="world-wiki-overview-tags" aria-label="World tone tags">
+                            {wikiOverviewTags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
-                    <div className={`world-wiki-overview-media ${wikiOverviewImageUrl ? 'has-image' : 'has-icon'}${wikiWorldConceptPending ? ' is-pending' : ''}`}>
-                      {wikiOverviewImageUrl ? (
-                        <img src={wikiOverviewImageUrl} alt="" />
+                    <div
+                      className={`world-wiki-overview-media ${wikiOverviewGraphicUrl ? 'has-image' : 'has-icon'}${wikiOverviewGraphicPending ? ' is-pending' : ''}`}
+                      style={wikiOverviewGraphicMediaStyle}
+                    >
+                      {wikiOverviewGraphicUrl ? (
+                        <img src={wikiOverviewGraphicUrl} alt="" style={wikiOverviewGraphicImageStyle} />
                       ) : (
                         <div className="world-wiki-overview-placeholder">
                           <EntityIcon id={wikiOverviewIcon} />
-                          {wikiWorldConceptPending ? <span>Concept image generating</span> : null}
+                          {wikiOverviewGraphicPending ? <span>Concept image generating</span> : null}
                         </div>
                       )}
                     </div>
@@ -7255,6 +7498,13 @@ export function WorldGraphPage({
                   {renderNarrativeRpgPlayablePanel()}
                   {renderAppPreviewPipelinePanel()}
                   {renderInteractivePrototypeModal()}
+                  {wikiSearchActive && wikiSearchMatchCount === 0 ? (
+                    <div className="world-wiki-search-empty">
+                      <span className="eyebrow">Search</span>
+                      <strong>No wiki matches</strong>
+                      <small>Try a character, place, faction, story arc, output, or canon keyword.</small>
+                    </div>
+                  ) : null}
                   <div className="world-wiki-section-grid">
                     {wikiModel.sections.filter((section) => section.kind !== 'overview').map(renderWikiSection)}
                   </div>

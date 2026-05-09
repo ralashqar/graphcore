@@ -1299,10 +1299,41 @@ test('buildWorldFeedViewModel derives entity and relationship update cards from 
   assert.equal(relationshipEntry?.relationshipVerb, 'protected_by')
   assert.deepEqual(relationshipEntry?.thumbnailEntityKeys, [hero.key, order.key])
   assert.deepEqual(relationshipEntry?.connectedEntityKeys, [hero.key, order.key])
+  assert.equal(relationshipEntry?.compactDetail, 'The order shields the heir in secret.')
   assert.deepEqual(relationshipEntry?.changedFields, ['protected by'])
   assert.equal(feed.countsByFilter.entities, 1)
   assert.equal(feed.countsByFilter.relationships, 1)
   assert.equal(feed.groups[0]?.label, 'Just now')
+})
+
+test('buildWorldFeedViewModel keeps long AI responses compact while preserving full detail', () => {
+  const longResponse = [
+    'Expanded Anya’s first address scene into a screenplay-style canon pass with crowd beats and Ilya’s silent reactions.',
+    'The scene now tracks the pressure of public accountability, the risk of revenge, and the exact emotional handoff from survival to civic leadership.',
+    'Additional connective tissue clarifies why the crowd listens and what Anya refuses to become.',
+  ].join(' ')
+  const turn = makeTurn({ id: 't-long-ai', prompt: 'Expand Anya address.' })
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [{
+      id: 'm-ai',
+      sessionId: 's1',
+      turnId: turn.id,
+      draftId: 'd1',
+      role: 'assistant',
+      content: longResponse,
+      metadata: {},
+      createdAt: '2026-04-22T10:01:00.000Z',
+    }],
+    events: [],
+    entityByKey: new Map(),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const aiEntry = feed.entries.find((entry) => entry.kind === 'assistant_note')
+  assert.equal(aiEntry?.fullDetail, longResponse)
+  assert.ok((aiEntry?.compactDetail?.length ?? 0) <= 173)
+  assert.match(aiEntry?.compactDetail ?? '', /\.\.\.$/)
 })
 
 test('buildWorldFeedViewModel derives canon transaction and patch audit cards', () => {
@@ -1505,6 +1536,7 @@ test('buildWorldFeedViewModel includes active running turn and turn summary coun
   assert.equal(feed.entries[0]?.id, `active-turn:${activeTurn.id}`)
   const summary = feed.entries.find((entry) => entry.kind === 'turn_summary')
   assert.equal(summary?.detail, '1 entities / 0 links / 0 outputs')
+  assert.equal(summary?.compactDetail, summary?.detail)
   assert.equal(summary?.turnId, completedTurn.id)
 })
 

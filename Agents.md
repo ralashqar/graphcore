@@ -152,7 +152,7 @@ GraphCore runs AI workloads through protected Supabase Edge Functions that provi
 - Provider calls, downloads, crops, uploads, and graph/wiki target updates run on the Fly worker, not inside browser-held Edge requests
 - Entity icon jobs crop a generated grid into per-entity assets and update `world_entities.thumbnail_asset_key` plus linked definition icon keys
 - GPT Image 2 entity icon grid requests use low quality by default. Grids up to 2x2 request Fal `image_size = "square_hd"`; 3x3 and larger grids request custom `{ width: 2048, height: 2048 }` before worker-side cropping to per-entity WebP icons.
-- Brand atlas jobs update `project_drafts.metadata.worldWiki.brandAtlasAssetKey` after the generated atlas asset is uploaded
+- Brand atlas jobs update `project_drafts.metadata.worldWiki.brandAtlasAssetKey` after the generated atlas asset is uploaded. They must preserve `worldConceptPrompt`, `worldConceptAssetKey`, and `worldConceptVisualJobId`; the wiki hero/world concept image is an independent asset track and must not fall back to or be replaced by the brand atlas.
 
 ### Cinematic Script Agent
 **Purpose**: Generates cinematic content and video scripts optimized for UGC engagement.
