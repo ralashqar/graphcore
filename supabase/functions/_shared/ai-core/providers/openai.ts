@@ -1,18 +1,19 @@
-import { AiTextProvider, StandardTextRequest, StreamHooks, CoreMessage as GatewayMessage, AiModel } from '../registry.ts'
-import { generateText, streamText, generateObject, jsonSchema, CoreMessage } from 'npm:ai@4'
-import { createOpenAI } from 'npm:@ai-sdk/openai@1'
+import { AiTextProvider, AiImageProvider, StandardTextRequest, StandardImageRequest, StandardImageResponse, StreamHooks, CoreMessage as GatewayMessage, AiModel } from '../registry.ts'
+import { generateText, streamText, generateObject, jsonSchema, CoreMessage, experimental_generateImage as generateImage } from 'npm:ai@6'
+import { createOpenAI } from 'npm:@ai-sdk/openai@3'
 import { z } from 'npm:zod@4'
 
-export class OpenAiProvider implements AiTextProvider {
+export class OpenAiProvider implements AiTextProvider, AiImageProvider {
   id = 'openai'
   name = 'OpenAI'
-  supportedModalities: ('text'|'image'|'video'|'audio')[] = ['text']
+  supportedModalities: ('text'|'image'|'video'|'audio')[] = ['text', 'image']
 
   getAvailableModels(): AiModel[] {
     return [
       { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openai', modality: 'text', costCategory: 'expensive' },
       { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai', modality: 'text', costCategory: 'cheap' },
       { id: 'openai/o1-mini', name: 'o1 Mini', provider: 'openai', modality: 'text', costCategory: 'expensive' },
+      { id: 'openai/dall-e-3', name: 'DALL-E 3', provider: 'openai', modality: 'image', costCategory: 'expensive' },
       { id: 'auto', name: 'Auto (Best/Cheapest)', provider: 'auto', modality: 'text', costCategory: 'cheap' }
     ]
   }
@@ -90,5 +91,25 @@ export class OpenAiProvider implements AiTextProvider {
       temperature: req.temperature ?? 0.7,
     })
     return { object: result.object as T, usage: result.usage }
+  }
+
+  async generateImage(req: StandardImageRequest): Promise<StandardImageResponse> {
+    const openai = this.getClient()
+    const modelId = req.modelPreference && req.modelPreference !== 'auto' 
+      ? req.modelPreference.split('/')[1] 
+      : 'dall-e-3'
+
+    const result = await generateImage({
+      model: openai.image(modelId),
+      prompt: req.prompt,
+      n: req.numGenerations ?? 1,
+      aspectRatio: req.aspectRatio === '1:1' ? '1:1' : req.aspectRatio === '16:9' ? '16:9' : req.aspectRatio === '9:16' ? '9:16' : req.aspectRatio === '2:3' ? '9:16' : '1:1'
+    })
+
+    return {
+      images: result.images.map(img => ({
+        base64: img.base64
+      }))
+    }
   }
 }

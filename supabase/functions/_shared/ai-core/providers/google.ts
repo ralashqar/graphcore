@@ -1,17 +1,18 @@
-import { AiTextProvider, StandardTextRequest, StreamHooks, CoreMessage as GatewayMessage, AiModel } from '../registry.ts'
-import { generateText, streamText, generateObject, jsonSchema, CoreMessage } from 'npm:ai@4'
-import { createGoogleGenerativeAI } from 'npm:@ai-sdk/google@1'
+import { AiTextProvider, AiImageProvider, StandardTextRequest, StandardImageRequest, StandardImageResponse, StreamHooks, CoreMessage as GatewayMessage, AiModel } from '../registry.ts'
+import { generateText, streamText, generateObject, jsonSchema, CoreMessage, experimental_generateImage as generateImage } from 'npm:ai@6'
+import { createGoogleGenerativeAI } from 'npm:@ai-sdk/google@3'
 import { z } from 'npm:zod@4'
 
-export class GoogleProvider implements AiTextProvider {
+export class GoogleProvider implements AiTextProvider, AiImageProvider {
   id = 'google'
   name = 'Google'
-  supportedModalities: ('text'|'image'|'video'|'audio')[] = ['text']
+  supportedModalities: ('text'|'image'|'video'|'audio')[] = ['text', 'image']
 
   getAvailableModels(): AiModel[] {
     return [
       { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google', modality: 'text', costCategory: 'expensive' },
-      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google', modality: 'text', costCategory: 'cheap' }
+      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google', modality: 'text', costCategory: 'cheap' },
+      { id: 'google/imagen-3.0-generate-002', name: 'Imagen 3', provider: 'google', modality: 'image', costCategory: 'cheap' }
     ]
   }
 
@@ -80,5 +81,25 @@ export class GoogleProvider implements AiTextProvider {
     const text = await result.text
     const usage = await result.usage
     return { text, usage }
+  }
+
+  async generateImage(req: StandardImageRequest): Promise<StandardImageResponse> {
+    const google = this.getClient()
+    const modelId = req.modelPreference && req.modelPreference !== 'auto' && req.modelPreference.includes('imagen')
+      ? req.modelPreference.replace('google/', '')
+      : 'imagen-3.0-generate-002'
+
+    const result = await generateImage({
+      model: google.image(modelId),
+      prompt: req.prompt,
+      n: req.numGenerations ?? 1,
+      aspectRatio: req.aspectRatio === '1:1' ? '1:1' : req.aspectRatio === '16:9' ? '16:9' : req.aspectRatio === '9:16' ? '9:16' : req.aspectRatio === '2:3' ? '3:4' : '1:1' 
+    })
+
+    return {
+      images: result.images.map(img => ({
+        base64: img.base64
+      }))
+    }
   }
 }

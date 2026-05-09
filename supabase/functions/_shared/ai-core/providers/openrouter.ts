@@ -1,32 +1,32 @@
 import { AiTextProvider, StandardTextRequest, StreamHooks, CoreMessage as GatewayMessage, AiModel } from '../registry.ts'
 import { generateText, streamText, generateObject, jsonSchema, CoreMessage } from 'npm:ai@6'
-import { createGroq } from 'npm:@ai-sdk/groq@3'
+import { createOpenRouter } from 'npm:@openrouter/ai-sdk-provider'
 import { z } from 'npm:zod@4'
 
-export class GroqProvider implements AiTextProvider {
-  id = 'groq'
-  name = 'Groq'
+export class OpenRouterProvider implements AiTextProvider {
+  id = 'openrouter'
+  name = 'OpenRouter'
   supportedModalities: ('text'|'image'|'video'|'audio')[] = ['text']
 
   getAvailableModels(): AiModel[] {
     return [
-      { id: 'groq/llama-3.3-70b-versatile', name: 'Llama 3.3 70B', provider: 'groq', modality: 'text', costCategory: 'cheap' },
-      { id: 'groq/llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant', provider: 'groq', modality: 'text', costCategory: 'cheap' },
-      { id: 'groq/moonshotai/kimi-k2-instruct', name: 'Kimi K2 Instruct', provider: 'groq', modality: 'text', costCategory: 'cheap' },
-      { id: 'groq/deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 70B', provider: 'groq', modality: 'text', costCategory: 'cheap' }
+      { id: 'openrouter/meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B (OR)', provider: 'openrouter', modality: 'text', costCategory: 'cheap' },
+      { id: 'openrouter/anthropic/claude-3-5-sonnet', name: 'Claude 3.5 Sonnet (OR)', provider: 'openrouter', modality: 'text', costCategory: 'expensive' },
+      { id: 'openrouter/google/gemini-2.5-flash-preview', name: 'Gemini 2.5 Flash (OR)', provider: 'openrouter', modality: 'text', costCategory: 'cheap' },
+      { id: 'openrouter/deepseek/deepseek-r1', name: 'DeepSeek R1 (OR)', provider: 'openrouter', modality: 'text', costCategory: 'cheap' }
     ]
   }
 
   private getClient() {
-    return createGroq({
-      apiKey: Deno.env.get('GROQ_API_KEY') || '',
+    return createOpenRouter({
+      apiKey: Deno.env.get('OPENROUTER_API_KEY') || '',
     })
   }
 
   private resolveModelName(req: StandardTextRequest): string {
     const raw = req.modelPreference
-    if (raw.startsWith('groq/')) return raw.replace('groq/', '')
-    if (raw === 'auto') return 'llama-3.3-70b-versatile' // default fast free model
+    if (raw.startsWith('openrouter/')) return raw.replace('openrouter/', '')
+    if (raw === 'auto') return 'meta-llama/llama-3.3-70b-instruct'
     return raw
   }
 

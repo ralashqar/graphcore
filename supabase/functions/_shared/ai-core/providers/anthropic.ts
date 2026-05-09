@@ -1,6 +1,6 @@
 import { AiTextProvider, StandardTextRequest, StreamHooks, CoreMessage as GatewayMessage, AiModel } from '../registry.ts'
-import { generateText, streamText, generateObject, jsonSchema, CoreMessage } from 'npm:ai@4'
-import { createAnthropic } from 'npm:@ai-sdk/anthropic@1'
+import { generateText, streamText, generateObject, jsonSchema, CoreMessage } from 'npm:ai@6'
+import { createAnthropic } from 'npm:@ai-sdk/anthropic@3'
 import { z } from 'npm:zod@4'
 
 export class AnthropicProvider implements AiTextProvider {
@@ -10,6 +10,8 @@ export class AnthropicProvider implements AiTextProvider {
 
   getAvailableModels(): AiModel[] {
     return [
+      { id: 'anthropic/claude-opus-4-5', name: 'Claude Opus 4.5', provider: 'anthropic', modality: 'text', costCategory: 'expensive' },
+      { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'anthropic', modality: 'text', costCategory: 'expensive' },
       { id: 'anthropic/claude-3-7-sonnet-latest', name: 'Claude 3.7 Sonnet', provider: 'anthropic', modality: 'text', costCategory: 'expensive' },
       { id: 'anthropic/claude-3-5-haiku-latest', name: 'Claude 3.5 Haiku', provider: 'anthropic', modality: 'text', costCategory: 'cheap' }
     ]

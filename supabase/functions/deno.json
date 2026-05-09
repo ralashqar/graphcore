@@ -1,11 +1,12 @@
 {
   "imports": {
     "@supabase/functions-js": "jsr:@supabase/functions-js@^2",
-    "ai": "npm:ai@4",
-    "@ai-sdk/openai": "npm:@ai-sdk/openai@1",
-    "@ai-sdk/anthropic": "npm:@ai-sdk/anthropic@1",
-    "@ai-sdk/google": "npm:@ai-sdk/google@1",
-    "@ai-sdk/groq": "npm:@ai-sdk/groq@1",
+    "ai": "npm:ai@6",
+    "@ai-sdk/openai": "npm:@ai-sdk/openai@3",
+    "@ai-sdk/anthropic": "npm:@ai-sdk/anthropic@3",
+    "@ai-sdk/google": "npm:@ai-sdk/google@3",
+    "@ai-sdk/groq": "npm:@ai-sdk/groq@3",
+    "@openrouter/ai-sdk-provider": "npm:@openrouter/ai-sdk-provider@2",
     "zod": "npm:zod@4"
   },
   "nodeModulesDir": "auto"

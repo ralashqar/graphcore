@@ -14,7 +14,7 @@ export interface AiProvider {
   id: string
   name: string
   supportedModalities: Modality[]
-  getAvailableModels(modality: Modality): AiModel[]
+  getAvailableModels(): AiModel[]
 }
 
 // ----------------------------------------------------------------------------
@@ -111,12 +111,8 @@ class ProviderRegistry {
   getAllModels(modality?: Modality): AiModel[] {
     const models: AiModel[] = []
     for (const provider of this.providers.values()) {
-      const modalitiesToCheck = modality ? [modality] : provider.supportedModalities
-      for (const m of modalitiesToCheck) {
-        if (provider.supportedModalities.includes(m)) {
-          models.push(...provider.getAvailableModels(m))
-        }
-      }
+      const all = provider.getAvailableModels()
+      models.push(...(modality ? all.filter(m => m.modality === modality) : all))
     }
     return models
   }
