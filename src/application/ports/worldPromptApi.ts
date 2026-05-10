@@ -12,12 +12,11 @@ import type {
   WorldPromptResolveOpRequest,
   WorldPromptSeedGenerationRequest,
   WorldPromptSeedInferenceRequest,
-  WorldPromptSession,
   WorldPromptStartTurnRequest,
 } from '../../domain/worldPrompt'
 
 export type WorldPromptApi = {
-  createWorldPromptSession(snapshot: ProjectSnapshot, request: Omit<WorldPromptCreateSessionRequest, 'snapshot'>): Promise<WorldPromptSession | null>
+  createWorldPromptSession(snapshot: ProjectSnapshot, request: Omit<WorldPromptCreateSessionRequest, 'snapshot'>): Promise<unknown>
   startWorldPromptTurn(snapshot: ProjectSnapshot, request: Omit<WorldPromptStartTurnRequest, 'snapshot'>): Promise<unknown>
   startWorldSeedInference(snapshot: ProjectSnapshot, request: Omit<WorldPromptSeedInferenceRequest, 'snapshot'>): Promise<unknown>
   continueWorldSeedGeneration(snapshot: ProjectSnapshot, request: Omit<WorldPromptSeedGenerationRequest, 'snapshot'>): Promise<unknown>

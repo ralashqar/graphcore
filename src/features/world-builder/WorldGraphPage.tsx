@@ -16,6 +16,7 @@ import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState,
 import { resolveAssetSourceUrl } from '../../domain/assets'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../../domain/graphcore'
+import type { OutputArtifact, OutputRequest, OutputRequestStatusResponse, OutputWorkflowNode, OutputWorkflowRun } from '../../domain/outputWorkflow'
 import type { ProjectContext } from '../../domain/projectContext'
 import type {
   WorldEntity,
@@ -123,7 +124,7 @@ import {
   labelForWorldResult,
 } from '../../domain/worldGraphHelpers'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
-import type { WorldWorkspaceMode } from '../../shared/workspace'
+import type { WorldWikiSubView, WorldWorkspaceMode } from '../../shared/workspace'
 import {
   activePreviewForTurn,
   DEFAULT_WORLD_GRAPH_DISPLAY_FILTERS,
@@ -158,6 +159,8 @@ import { useWorldAssetUrls } from './hooks/useWorldAssetUrls'
 import { useWorldPromptPanelState } from './hooks/useWorldPromptPanelState'
 import { WorldFeedPanel } from './feed/WorldFeedPanel'
 import { WorldPromptChatPanel } from './prompt/WorldPromptPanels'
+import { WorldOutputLibraryPanel } from './wiki/WorldOutputLibraryPanel'
+import { buildOutputLibraryModel } from './wiki/outputLibraryPresentation'
 import { WorldWikiPanel, WorldWikiSubViewToggle } from './wiki/WorldWikiPanel'
 import {
   WorldWikiSectionView,
@@ -228,7 +231,12 @@ type WorldGraphPageProps = {
   worldPromptGenerationJobs: WorldPromptGenerationJob[]
   worldPromptGenerationJobSteps: WorldPromptGenerationJobStep[]
   worldPromptSuggestions: WorldPromptSuggestionRecord[]
+  outputRequests: OutputRequest[]
+  outputWorkflowRuns: OutputWorkflowRun[]
+  outputWorkflowNodes: OutputWorkflowNode[]
+  outputArtifacts: OutputArtifact[]
   worldViewMode: WorldWorkspaceMode
+  worldWikiSubView: WorldWikiSubView
   projectContext: ProjectContext | null
   showProjectOnboarding: boolean
   projectOnboardingSaving: boolean
@@ -241,6 +249,7 @@ type WorldGraphPageProps = {
   onSelectWorldEntity: (key: string | null) => void
   onSelectWorldView: (key: string | null) => void
   onWorldViewModeChange: (mode: WorldWorkspaceMode) => void
+  onWorldWikiSubViewChange: (subView: WorldWikiSubView) => void
   onCreateWorldEntity: (input: WorldEntityCreateInput) => Promise<void> | void
   onUpdateWorldEntity: (entityKey: string, changes: Partial<WorldEntityCreateInput>) => Promise<void> | void
   onDeleteWorldEntity: (entityKey: string) => Promise<void> | void
@@ -318,6 +327,17 @@ type WorldGraphPageProps = {
   onApplyWorldPromptPreview: (input: { turnId: string }) => Promise<void> | void
   onCancelWorldPromptTurn: (input: { turnId: string }) => Promise<void> | void
   onDismissWorldPromptSuggestion: (input: { suggestionId: string }) => Promise<void> | void
+  onStartOutputRequest: (request: {
+    prompt: string
+    sourceSurface?: string
+    pageCount?: number
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
+  }) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
+  onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
+  onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
+  onRequestDeleteOutputRequest: (requestId: string) => void
+  onOpenOutputStudio: (requestId?: string | null) => void
+  canRunOutputs: boolean
   onResolveWorldThread: (input: { threadKey: string }) => Promise<void> | void
   onParkWorldThread: (input: { threadKey: string }) => Promise<void> | void
   onSetWorldEntityCanonLock: (input: { entityKey: string; locked: boolean; reason?: string; lockedByTurnId?: string | null }) => Promise<void> | void
@@ -819,7 +839,12 @@ export function WorldGraphPage({
   worldPromptGenerationJobs,
   worldPromptGenerationJobSteps,
   worldPromptSuggestions,
+  outputRequests,
+  outputWorkflowRuns,
+  outputWorkflowNodes,
+  outputArtifacts,
   worldViewMode,
+  worldWikiSubView,
   projectContext,
   showProjectOnboarding,
   projectOnboardingSaving,
@@ -832,6 +857,7 @@ export function WorldGraphPage({
   onSelectWorldEntity,
   onSelectWorldView: _onSelectWorldView,
   onWorldViewModeChange,
+  onWorldWikiSubViewChange,
   onCreateWorldEntity,
   onUpdateWorldEntity,
   onDeleteWorldEntity,
@@ -870,6 +896,12 @@ export function WorldGraphPage({
   onApplyWorldPromptPreview: _onApplyWorldPromptPreview,
   onCancelWorldPromptTurn,
   onDismissWorldPromptSuggestion,
+  onStartOutputRequest,
+  onGetOutputRequestStatus,
+  onCancelOutputRequest,
+  onRequestDeleteOutputRequest,
+  onOpenOutputStudio,
+  canRunOutputs,
   onResolveWorldThread: _onResolveWorldThread,
   onParkWorldThread: _onParkWorldThread,
   onSetWorldEntityCanonLock,
@@ -976,7 +1008,7 @@ export function WorldGraphPage({
   const [fallbackPinnedNodeKeys, setFallbackPinnedNodeKeys] = useState<string[]>([])
   const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
   const [wikiStyleExpanded, setWikiStyleExpanded] = useState(false)
-  const [wikiSubView, setWikiSubView] = useState<'wiki' | 'feed'>('wiki')
+  const [wikiSubView, setWikiSubView] = useState<WorldWikiSubView>(worldWikiSubView)
   const [wikiSearchQuery, setWikiSearchQuery] = useState('')
   const [worldFeedFilter, setWorldFeedFilter] = useState<WorldFeedFilter>('all')
   const [selectedWorldFeedEntryId, setSelectedWorldFeedEntryId] = useState<string | null>(null)
@@ -1447,6 +1479,11 @@ export function WorldGraphPage({
   }, [onWorldViewModeChange, projectContext?.projectType, selectedView.mode, viewMode, worldViewMode])
 
   useEffect(() => {
+    if (wikiSubView === worldWikiSubView) return
+    setWikiSubView(worldWikiSubView)
+  }, [wikiSubView, worldWikiSubView])
+
+  useEffect(() => {
     if (!isWorldWorkspaceMode(viewMode)) return
     onWorldViewModeChange(viewMode)
   }, [onWorldViewModeChange, viewMode])
@@ -1659,6 +1696,13 @@ export function WorldGraphPage({
     worldResults,
     onSignProjectAssetUrls,
   })
+  const outputLibraryModel = useMemo(() => buildOutputLibraryModel({
+    assets,
+    outputArtifacts,
+    outputRequests,
+    outputWorkflowNodes,
+    outputWorkflowRuns,
+  }), [assets, outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns])
   const effectiveProjectDraftMetadata = liveProjectDraftMetadata ?? projectDraftMetadata
   useEffect(() => {
     if (worldViewMode !== 'wiki' || !projectDraftId) return
@@ -4799,8 +4843,18 @@ export function WorldGraphPage({
 
   function handleScrollToWikiSection(sectionKind: WorldWikiSection['kind']) {
     setActiveWikiSectionKind(sectionKind)
-    const section = document.getElementById(`world-wiki-section-${sectionKind}`)
-    section?.scrollIntoView({
+    if (wikiSubView !== 'wiki') {
+      setWikiSubView('wiki')
+      onWorldWikiSubViewChange('wiki')
+      window.requestAnimationFrame(() => {
+        document.getElementById(`world-wiki-section-${sectionKind}`)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+      })
+      return
+    }
+    document.getElementById(`world-wiki-section-${sectionKind}`)?.scrollIntoView({
       behavior: 'smooth',
       block: 'start',
     })
@@ -5615,17 +5669,32 @@ export function WorldGraphPage({
     )
   }
 
-  function handleSelectWikiSubView(nextSubView: 'wiki' | 'feed') {
+  function handleSelectWikiSubView(nextSubView: WorldWikiSubView) {
     if (wikiSubView === nextSubView) return
     if (wikiSubView === 'wiki' && wikiDocumentRef.current) {
       savedWikiScrollTopRef.current = wikiDocumentRef.current.scrollTop
     }
     setWikiSubView(nextSubView)
+    onWorldWikiSubViewChange(nextSubView)
   }
 
   function renderWikiSubViewToggle() {
     return (
       <WorldWikiSubViewToggle wikiSubView={wikiSubView} onSelectWikiSubView={handleSelectWikiSubView} />
+    )
+  }
+
+  function renderOutputLibraryPanel() {
+    return (
+      <WorldOutputLibraryPanel
+        canRunOutputs={canRunOutputs}
+        model={outputLibraryModel}
+        onCancelOutputRequest={onCancelOutputRequest}
+        onDeleteOutputRequest={onRequestDeleteOutputRequest}
+        onOpenOutputStudio={onOpenOutputStudio}
+        onRefreshOutputRequest={onGetOutputRequestStatus}
+        onStartOutputRequest={onStartOutputRequest}
+      />
     )
   }
 
@@ -5641,6 +5710,7 @@ export function WorldGraphPage({
         inspectorNodeKey={inspectorNodeKey}
         isPromptSubmitting={isPromptSubmitting}
         normalizedWikiSearchQuery={normalizedWikiSearchQuery}
+        outputLibraryModel={outputLibraryModel}
         projectContext={projectContext}
         resultByKey={resultByKey}
         section={section}
@@ -6187,6 +6257,7 @@ export function WorldGraphPage({
                   renderAppPreviewPipelinePanel={renderAppPreviewPipelinePanel}
                   renderInteractivePrototypeModal={renderInteractivePrototypeModal}
                   renderNarrativeRpgPlayablePanel={renderNarrativeRpgPlayablePanel}
+                  renderOutputLibraryPanel={renderOutputLibraryPanel}
                   renderWikiSection={renderWikiSection}
                 />
               )
@@ -6219,7 +6290,7 @@ export function WorldGraphPage({
           </div>
         </div>
 
-        {isWikiMode && wikiSubView !== 'feed' ? (
+        {isWikiMode && wikiSubView === 'wiki' ? (
           <div className={wikiPromptExpanded ? 'world-wiki-prompt-dock is-expanded' : 'world-wiki-prompt-dock'} onClick={(event) => event.stopPropagation()}>
             {wikiPromptExpanded ? (
               <div className="world-wiki-prompt-panel">

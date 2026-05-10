@@ -1,4 +1,4 @@
-import type { GameSummary, WorkspaceTab, WorldWorkspaceMode } from '../../shared/workspace'
+import type { GameSummary, WorkspaceTab, WorldWikiSubView, WorldWorkspaceMode } from '../../shared/workspace'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons'
 
 type TopbarNavItem =
@@ -22,11 +22,13 @@ type WorkspaceTopbarProps = {
   canResetProjectWorld?: boolean
   creditBalance?: number | null
   currentUserEmail?: string | null
+  worldWikiSubView?: WorldWikiSubView
   games: GameSummary[]
   onOpenActivity: () => void
   onOpenAuth: () => void
   onOpenBilling?: () => void
   onOpenNewGame: () => void
+  onOpenOutputsLibrary?: () => void
   onResetProjectWorld?: () => void
   onSelectGame: (projectId: string) => void
   onSetActiveTab: (tab: WorkspaceTab) => void
@@ -57,6 +59,7 @@ export function WorkspaceTopbar({
   onOpenAuth,
   onOpenBilling,
   onOpenNewGame,
+  onOpenOutputsLibrary,
   onResetProjectWorld,
   onSelectGame,
   onSetActiveTab,
@@ -66,6 +69,7 @@ export function WorkspaceTopbar({
   projectName,
   sourceLabel,
   worldViewMode,
+  worldWikiSubView = 'wiki',
   workspaceName,
 }: WorkspaceTopbarProps) {
   const userInitial = (currentUserEmail ?? 'G').trim().charAt(0).toUpperCase() || 'G'
@@ -99,7 +103,9 @@ export function WorkspaceTopbar({
             {navItems.map((item) => {
               const active = item.kind === 'world'
                 ? activeTab === 'graph' && worldViewMode === item.mode
-                : activeTab === item.tab
+                : item.tab === 'outputs'
+                  ? (activeTab === 'outputs' || (activeTab === 'graph' && worldViewMode === 'wiki' && worldWikiSubView === 'outputs'))
+                  : activeTab === item.tab
               return (
               <button
                 key={item.kind === 'world' ? `world:${item.mode}` : item.tab}
@@ -107,6 +113,10 @@ export function WorkspaceTopbar({
                 onClick={() => {
                   if (item.kind === 'world') {
                     onSetWorldViewMode(item.mode)
+                    return
+                  }
+                  if (item.tab === 'outputs' && onOpenOutputsLibrary) {
+                    onOpenOutputsLibrary()
                     return
                   }
                   onSetActiveTab(item.tab)

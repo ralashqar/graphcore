@@ -4,9 +4,8 @@ import type { WorldEntity, WorldRelationship } from '../../../domain/worldGraph'
 import type { WorldEntityIconGenerationJob } from '../../../domain/worldEntityIconGeneration'
 import type { WorldWikiGap, WorldWikiModel, WorldWikiSection } from '../../../domain/worldWiki'
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
+import type { WorldWikiSubView } from '../../../shared/workspace'
 import { iconForWikiSection } from './wikiSectionLabels'
-
-type WorldWikiSubView = 'wiki' | 'feed'
 
 type WorldWikiSubViewToggleProps = {
   wikiSubView: WorldWikiSubView
@@ -38,6 +37,16 @@ export function WorldWikiSubViewToggle({
       >
         <EntityIcon id="activity" />
         <span>Feed</span>
+      </button>
+      <button
+        aria-selected={wikiSubView === 'outputs'}
+        className={wikiSubView === 'outputs' ? 'is-active' : ''}
+        onClick={() => onSelectWikiSubView('outputs')}
+        role="tab"
+        type="button"
+      >
+        <EntityIcon id="cinematic" />
+        <span>Outputs</span>
       </button>
     </div>
   )
@@ -78,6 +87,7 @@ type WorldWikiPanelProps = {
   renderAppPreviewPipelinePanel: () => ReactNode
   renderInteractivePrototypeModal: () => ReactNode
   renderNarrativeRpgPlayablePanel: () => ReactNode
+  renderOutputLibraryPanel: () => ReactNode
   renderWikiSection: (section: WorldWikiSection) => ReactNode
 }
 
@@ -116,6 +126,7 @@ export function WorldWikiPanel({
   renderAppPreviewPipelinePanel,
   renderInteractivePrototypeModal,
   renderNarrativeRpgPlayablePanel,
+  renderOutputLibraryPanel,
   renderWikiSection,
 }: WorldWikiPanelProps) {
   return (
@@ -191,6 +202,8 @@ export function WorldWikiPanel({
         role="separator"
       />
       <div className="world-wiki-document" ref={wikiDocumentRef}>
+        {wikiSubView === 'outputs' ? renderOutputLibraryPanel() : (
+          <>
         <section id="world-wiki-section-overview" className="world-wiki-overview" style={wikiOverviewSectionStyle}>
           <div className="world-wiki-overview-copy">
             <span className="eyebrow">{wikiOverviewLabel}</span>
@@ -281,6 +294,8 @@ export function WorldWikiPanel({
         <div className="world-wiki-diagnostics">
           {wikiModel.diagnostics.map((diagnostic) => <span key={diagnostic}>{diagnostic}</span>)}
         </div>
+          </>
+        )}
       </div>
     </div>
   )

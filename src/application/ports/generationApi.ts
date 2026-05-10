@@ -7,6 +7,7 @@ import type {
 import type { CinematicRunStatusResponse, CinematicRunStartRequest, CinematicRunCancelRequest } from '../../domain/cinematics'
 import type { AssetDefinition, ProjectSnapshot } from '../../domain/graphcore'
 import type {
+  DeleteGeneratedMeshRequest,
   MeshGenerationPollRequest,
   MeshGenerationStartRequest,
   MeshGenerationStatusResponse,
@@ -45,7 +46,7 @@ export type GenerationApi = {
   cancelCinematicRun(request: CinematicRunCancelRequest): Promise<CinematicRunStatusResponse>
   startMeshGeneration(request: MeshGenerationStartRequest): Promise<MeshGenerationStatusResponse>
   pollMeshGeneration(request: MeshGenerationPollRequest): Promise<MeshGenerationStatusResponse>
-  deleteGeneratedMesh(request: Record<string, unknown>): Promise<MeshGenerationStatusResponse>
+  deleteGeneratedMesh(request: DeleteGeneratedMeshRequest): Promise<MeshGenerationStatusResponse>
   startWorldEntityIconBatch(snapshot: ProjectSnapshot): Promise<WorldEntityIconGenerationStartResponse>
   getWorldEntityIconBatchStatus(jobId: string): Promise<WorldEntityIconGenerationStatusResponse>
   generateWorldBrandAtlasImage(snapshot: ProjectSnapshot, prompt?: string): Promise<WorldBrandAtlasImageResponse>
@@ -56,7 +57,7 @@ export type GenerationApi = {
   getAppGenerationStatus(jobId: string): Promise<AppGenerationStatusResponse>
   cancelAppGenerationJob(jobId: string): Promise<AppGenerationCancelResponse>
   getAppPreviewSession(jobId: string): Promise<AppPreviewSessionResponse>
-  persistDefinitionPreviewImageBinding(snapshot: ProjectSnapshot, definitionKey: string, assetKey: string): Promise<ProjectSnapshot>
+  persistDefinitionPreviewImageBinding(snapshot: ProjectSnapshot, definitionKey: string, assetKey: string | null): Promise<void>
   loadDefinitionDetails(draftId: string, definitionKey: string): Promise<unknown>
   loadEnvironmentBlueprintDetails(draftId: string, environmentKey: string): Promise<unknown>
   loadGenerationJobDetails(draftId: string, jobId: string): Promise<unknown>

@@ -21,11 +21,11 @@ test('GraphCore application ports are backed by focused infrastructure adapters'
   const portsIndex = readSource('src/application/ports/index.ts')
   const adapterSource = readSource('src/infrastructure/graphcore/graphcoreApis.ts')
 
-  for (const portName of ['AssetApi', 'RealtimeApi', 'WorkspaceSnapshotApi', 'WorldGraphApi']) {
+  for (const portName of ['AssetApi', 'GenerationApi', 'OutputApi', 'RealtimeApi', 'WorkspaceSnapshotApi', 'WorldGraphApi', 'WorldPromptApi']) {
     assert.match(portsIndex, new RegExp(`\\b${portName}\\b`), `${portName} should be exported from the application port index`)
   }
 
-  for (const adapterName of ['graphcoreAssetApi', 'graphcoreRealtimeApi', 'graphcoreWorkspaceSnapshotApi', 'graphcoreWorldGraphApi']) {
+  for (const adapterName of ['graphcoreAssetApi', 'graphcoreGenerationApi', 'graphcoreOutputApi', 'graphcoreRealtimeApi', 'graphcoreWorkspaceSnapshotApi', 'graphcoreWorldGraphApi', 'graphcoreWorldPromptApi']) {
     assert.match(adapterSource, new RegExp(`\\b${adapterName}\\b`), `${adapterName} should be available as a focused infrastructure adapter`)
   }
 })

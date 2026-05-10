@@ -1,5 +1,13 @@
 import * as graphcoreRepository from '../../data/graphcoreRepository'
-import type { AssetApi, RealtimeApi, WorkspaceSnapshotApi, WorldGraphApi } from '../../application/ports'
+import type {
+  AssetApi,
+  GenerationApi,
+  OutputApi,
+  RealtimeApi,
+  WorkspaceSnapshotApi,
+  WorldGraphApi,
+  WorldPromptApi,
+} from '../../application/ports'
 
 export const graphcoreAssetApi: AssetApi = {
   signProjectAssetUrls: graphcoreRepository.signProjectAssetUrls,
@@ -50,9 +58,73 @@ export const graphcoreWorldGraphApi: WorldGraphApi = {
   parkWorldThread: graphcoreRepository.parkWorldThread,
 }
 
+export const graphcoreWorldPromptApi: WorldPromptApi = {
+  createWorldPromptSession: graphcoreRepository.createWorldPromptSession,
+  startWorldPromptTurn: graphcoreRepository.startWorldPromptTurn,
+  startWorldSeedInference: graphcoreRepository.startWorldSeedInference,
+  continueWorldSeedGeneration: graphcoreRepository.continueWorldSeedGeneration,
+  getWorldGenerationStatus: graphcoreRepository.getWorldGenerationStatus,
+  cancelWorldGenerationJob: graphcoreRepository.cancelWorldGenerationJob,
+  cancelWorldPromptTurn: graphcoreRepository.cancelWorldPromptTurn,
+  refreshWorldPromptSuggestions: graphcoreRepository.refreshWorldPromptSuggestions,
+  dismissWorldPromptSuggestion: graphcoreRepository.dismissWorldPromptSuggestion,
+  approveWorldPromptOp: graphcoreRepository.approveWorldPromptOp,
+  rejectWorldPromptOp: graphcoreRepository.rejectWorldPromptOp,
+  applyWorldPromptPreview: graphcoreRepository.applyWorldPromptPreview,
+}
+
+export const graphcoreOutputApi: OutputApi = {
+  planOutputWorkflow: graphcoreRepository.planOutputWorkflow,
+  startOutputWorkflow: graphcoreRepository.startOutputWorkflow,
+  startOutputWorkflowRun: graphcoreRepository.startOutputWorkflowRun,
+  getOutputWorkflowStatus: graphcoreRepository.getOutputWorkflowStatus,
+  cancelOutputWorkflowRun: graphcoreRepository.cancelOutputWorkflowRun,
+  updateOutputWorkflowNode: graphcoreRepository.updateOutputWorkflowNode,
+  upgradeOutputWorkflowPreset: graphcoreRepository.upgradeOutputWorkflowPreset,
+  startOutputRequest: graphcoreRepository.startOutputRequest,
+  getOutputRequestStatus: graphcoreRepository.getOutputRequestStatus,
+  cancelOutputRequest: graphcoreRepository.cancelOutputRequest,
+  deleteOutputRequest: graphcoreRepository.deleteOutputRequest,
+  loadOutputInbox: graphcoreRepository.loadOutputInbox,
+  loadOutputWorkflowGraph: graphcoreRepository.loadOutputWorkflowGraph,
+  getOutputArtifact: graphcoreRepository.getOutputArtifact,
+}
+
+export const graphcoreGenerationApi: GenerationApi = {
+  planWorldBuild: graphcoreRepository.planWorldBuild,
+  startWorldBuild: graphcoreRepository.startWorldBuild,
+  pollWorldBuild: graphcoreRepository.pollWorldBuild,
+  authorCinematicScript: graphcoreRepository.authorCinematicScript,
+  repairCinematicScript: graphcoreRepository.repairCinematicScript,
+  deleteWorldBuildPlaceholder: graphcoreRepository.deleteWorldBuildPlaceholder,
+  startCinematicRun: graphcoreRepository.startCinematicRun,
+  pollCinematicRun: graphcoreRepository.pollCinematicRun,
+  cancelCinematicRun: graphcoreRepository.cancelCinematicRun,
+  startMeshGeneration: graphcoreRepository.startMeshGeneration,
+  pollMeshGeneration: graphcoreRepository.pollMeshGeneration,
+  deleteGeneratedMesh: graphcoreRepository.deleteGeneratedMesh,
+  startWorldEntityIconBatch: graphcoreRepository.startWorldEntityIconBatch,
+  getWorldEntityIconBatchStatus: graphcoreRepository.getWorldEntityIconBatchStatus,
+  generateWorldBrandAtlasImage: graphcoreRepository.generateWorldBrandAtlasImage,
+  startVisualGenerationJob: graphcoreRepository.startVisualGenerationJob,
+  getVisualGenerationStatus: graphcoreRepository.getVisualGenerationStatus,
+  cancelVisualGenerationJob: graphcoreRepository.cancelVisualGenerationJob,
+  startAppCodeGeneration: graphcoreRepository.startAppCodeGeneration,
+  getAppGenerationStatus: graphcoreRepository.getAppGenerationStatus,
+  cancelAppGenerationJob: graphcoreRepository.cancelAppGenerationJob,
+  getAppPreviewSession: graphcoreRepository.getAppPreviewSession,
+  persistDefinitionPreviewImageBinding: graphcoreRepository.persistDefinitionPreviewImageBinding,
+  loadDefinitionDetails: graphcoreRepository.loadDefinitionDetails,
+  loadEnvironmentBlueprintDetails: graphcoreRepository.loadEnvironmentBlueprintDetails,
+  loadGenerationJobDetails: graphcoreRepository.loadGenerationJobDetails,
+}
+
 export const graphcoreWorkspaceApis = {
   asset: graphcoreAssetApi,
+  generation: graphcoreGenerationApi,
+  output: graphcoreOutputApi,
   realtime: graphcoreRealtimeApi,
   snapshot: graphcoreWorkspaceSnapshotApi,
   worldGraph: graphcoreWorldGraphApi,
+  worldPrompt: graphcoreWorldPromptApi,
 }

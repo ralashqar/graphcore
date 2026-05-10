@@ -11,6 +11,7 @@ import { readWorldSequenceMetadata } from '../../../domain/worldSequence'
 import type { WorldThread } from '../../../domain/worldThread'
 import type { WorldWikiGap, WorldWikiModel, WorldWikiSection } from '../../../domain/worldWiki'
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
+import type { OutputLibraryModel } from './outputLibraryPresentation'
 import { iconForWikiSection, labelForWikiSection } from './wikiSectionLabels'
 
 export type WorldWikiDetailModalInput = {
@@ -126,6 +127,7 @@ type WorldWikiSectionViewProps = {
   inspectorNodeKey: string | null
   isPromptSubmitting: boolean
   normalizedWikiSearchQuery: string
+  outputLibraryModel?: OutputLibraryModel
   projectContext: ProjectContext | null | undefined
   resultByKey: ReadonlyMap<string, WorldResult>
   section: WorldWikiSection
@@ -158,6 +160,7 @@ export function WorldWikiSectionView({
   inspectorNodeKey,
   isPromptSubmitting,
   normalizedWikiSearchQuery,
+  outputLibraryModel,
   projectContext,
   resultByKey,
   section,
@@ -441,13 +444,25 @@ export function WorldWikiSectionView({
     .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiThreadMatchesSearch(key, searchInput))
   const cappedResultKeys = Array.from(new Set(section.resultKeys)).slice(0, 6)
     .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiResultMatchesSearch(key, searchInput))
-  const targetCellCount = cappedEntityKeys.length + cappedThreadKeys.length + cappedResultKeys.length
+  const cappedOutputArtifacts = section.kind === 'outputs'
+    ? (outputLibraryModel?.artifacts ?? [])
+        .filter((artifact) => !wikiSearchActive || sectionMatchesSearch || wikiTextMatches(normalizedWikiSearchQuery, [
+          artifact.name,
+          artifact.kind,
+          artifact.requestTitle,
+          artifact.promptExcerpt,
+        ]))
+        .slice(0, 6)
+    : []
+  const targetCellCount = cappedEntityKeys.length + cappedThreadKeys.length + cappedResultKeys.length + cappedOutputArtifacts.length
   const visibleCellCount = Math.min(wikiSectionVisibleCounts[section.kind] ?? 0, targetCellCount)
   const visibleEntityKeys = cappedEntityKeys.slice(0, visibleCellCount)
   const remainingAfterEntities = Math.max(0, visibleCellCount - visibleEntityKeys.length)
   const visibleThreadKeys = cappedThreadKeys.slice(0, remainingAfterEntities)
   const remainingAfterThreads = Math.max(0, remainingAfterEntities - visibleThreadKeys.length)
   const visibleResultKeys = cappedResultKeys.slice(0, remainingAfterThreads)
+  const remainingAfterResults = Math.max(0, remainingAfterThreads - visibleResultKeys.length)
+  const visibleOutputArtifacts = cappedOutputArtifacts.slice(0, remainingAfterResults)
   const hasDeferredSectionCells = visibleCellCount < targetCellCount
   const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
   const isCastSection = section.kind === 'cast'
@@ -557,6 +572,35 @@ export function WorldWikiSectionView({
               </button>
             )
           })}
+        </div>
+      ) : null}
+      {visibleOutputArtifacts.length > 0 ? (
+        <div className="world-wiki-output-grid">
+          {visibleOutputArtifacts.map((artifact) => (
+            <a
+              key={artifact.id}
+              className="world-wiki-output-card world-wiki-cell-reveal"
+              href={artifact.url ?? undefined}
+              onClick={(event) => {
+                if (artifact.url) return
+                event.preventDefault()
+                onOpenWikiDetailModal({
+                  title: artifact.name,
+                  eyebrow: artifact.kind.replace(/_/g, ' '),
+                  body: artifact.promptExcerpt || artifact.requestTitle || 'Output artifact',
+                  icon: 'result',
+                  imageUrl: artifact.thumbnailUrl,
+                  meta: [artifact.status],
+                })
+              }}
+              rel="noreferrer"
+              target={artifact.url ? '_blank' : undefined}
+            >
+              {artifact.thumbnailUrl ? <img src={artifact.thumbnailUrl} alt="" /> : <span className="world-wiki-output-file"><EntityIcon id={artifact.type === 'video' ? 'cinematic' : 'content'} /></span>}
+              <strong>{artifact.name}</strong>
+              <small>{artifact.requestTitle ?? artifact.kind.replace(/_/g, ' ')}</small>
+            </a>
+          ))}
         </div>
       ) : null}
       {hasDeferredSectionCells ? (

@@ -1,7 +1,7 @@
 import '@xyflow/react/dist/style.css'
 
 import type { AuthChangeEvent, Provider, Session } from '@supabase/supabase-js'
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ComponentType } from 'react'
 import { authService } from './application/services/authService'
 import { billingService } from './application/services/billingService'
 import { patchApplyService } from './application/services/patchApplyService'
@@ -108,7 +108,7 @@ import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { BillingPage } from './features/billing/BillingPage'
 import { useEditorStore } from './state/editorStore'
 import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
-import type { AuthMode, GameSummary, LibrarySection, LoadedState, PatchSessionView, WorkspaceTab, WorldWorkspaceMode } from './shared/workspace'
+import type { AuthMode, GameSummary, LibrarySection, LoadedState, PatchSessionView, WorkspaceTab, WorldWikiSubView, WorldWorkspaceMode } from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
 import { EntityIcon, type EntityIconId } from './shared/entityIcons'
 import {
@@ -126,8 +126,37 @@ const ContentWorkspace = lazy(() =>
 const AssetsWorkspace = lazy(() =>
   import('./features/itemAssetWorkspace').then((module) => ({ default: module.AssetsWorkspace })),
 )
-const SpecializedDefinitionWorkspace = lazy(() =>
-  import('./features/content/SpecializedDefinitionWorkspace').then((module) => ({ default: module.SpecializedDefinitionWorkspace })),
+function lazyWithRecoverableImport<TComponent extends ComponentType<any>>(
+  importModule: () => Promise<{ default: TComponent }>,
+  cacheKey: string,
+) {
+  return lazy(async (): Promise<{ default: TComponent }> => {
+    try {
+      const module = await importModule()
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.removeItem(cacheKey)
+      }
+      return module
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const isRecoverableImportMiss =
+        message.includes('Failed to fetch dynamically imported module')
+        || message.includes('Importing a module script failed')
+        || message.includes('Loading chunk')
+      if (typeof window !== 'undefined' && isRecoverableImportMiss && window.sessionStorage.getItem(cacheKey) !== '1') {
+        window.sessionStorage.setItem(cacheKey, '1')
+        window.location.reload()
+        return new Promise<{ default: TComponent }>(() => undefined)
+      }
+      throw error
+    }
+  })
+}
+
+const SpecializedDefinitionWorkspace = lazyWithRecoverableImport(
+  () =>
+    import('./features/content/SpecializedDefinitionWorkspace').then((module) => ({ default: module.SpecializedDefinitionWorkspace })),
+  'graphcore:lazy-import-reload:SpecializedDefinitionWorkspace',
 )
 const ActivityWorkspace = lazy(() =>
   import('./features/prompts/ActivityWorkspace').then((module) => ({ default: module.ActivityWorkspace })),
@@ -1133,8 +1162,23 @@ function worldWikiOverviewCompletenessScore(snapshot: ProjectSnapshot) {
   return overviewValues.reduce<number>((score, value) => score + (trimOptionalString(value) ? 1 : 0), 0)
 }
 
+function hasGeneratedWorldOverviewMetadata(snapshot: ProjectSnapshot) {
+  return worldWikiOverviewCompletenessScore(snapshot) > 0
+}
+
+function reconcileSparseWorldHydrationSnapshot(current: ProjectSnapshot | null | undefined, incoming: ProjectSnapshot) {
+  if (!current) return incoming
+  if (current.project.id !== incoming.project.id || current.draft.id !== incoming.draft.id) return incoming
+  if (incoming.worldEntities.length > 0 || current.worldEntities.length === 0) return incoming
+  if (!hasGeneratedWorldOverviewMetadata(current) && !hasGeneratedWorldOverviewMetadata(incoming)) return incoming
+  return mergePersistedWorldGraphSnapshot(incoming, current)
+}
+
 function shouldRestoreUnsavedSnapshot(cached: ProjectSnapshot, incoming: ProjectSnapshot) {
   if (cached.project.id !== incoming.project.id || cached.draft.id !== incoming.draft.id) {
+    return false
+  }
+  if (incoming.worldEntities.length > 0 && cached.worldEntities.length === 0) {
     return false
   }
 
@@ -1283,6 +1327,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('graph')
   const [activeInitialSeedSessionKey, setActiveInitialSeedSessionKey] = useState<string | null>(null)
   const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('wiki')
+  const [worldWikiSubView, setWorldWikiSubView] = useState<WorldWikiSubView>('wiki')
   const [activeLibrarySection, setActiveLibrarySection] = useState<LibrarySection>('characters')
   const [selectedAssetKey, setSelectedAssetKey] = useState<string | null>(null)
   const [selectedArchetypeKey, setSelectedArchetypeKey] = useState<string | null>(null)
@@ -1713,15 +1758,31 @@ export default function App() {
     void (async () => {
       const startedAt = performance.now()
       try {
-        const loaded = await workspaceService.load({
+        let loaded = await workspaceService.load({
           projectId: snapshot.project.id,
           draftId,
         }, { profile: targetProfile, hydrateAssetUrls: targetProfile === 'world' })
+        let forcedUncachedWorldReload = false
+        if (
+          targetProfile === 'world'
+          && loaded.source === 'supabase'
+          && loaded.snapshot.worldEntities.length === 0
+          && hasGeneratedWorldOverviewMetadata(loaded.snapshot)
+        ) {
+          loaded = await workspaceService.load({
+            projectId: snapshot.project.id,
+            draftId,
+          }, { profile: 'world', hydrateAssetUrls: true, skipCache: true })
+          forcedUncachedWorldReload = true
+        }
         if (cancelled || loaded.source !== 'supabase') return
         const current = snapshotRef.current
         if (!isSameProjectDraft(current, loaded.snapshot)) return
+        const loadedSnapshot = targetProfile === 'world'
+          ? reconcileSparseWorldHydrationSnapshot(current, loaded.snapshot)
+          : loaded.snapshot
         const nextSnapshot = current
-          ? mergeOutputSliceIntoSnapshot(loaded.snapshot, {
+          ? mergeOutputSliceIntoSnapshot(loadedSnapshot, {
               assets: current.assets,
               requests: current.outputRequests,
               workflows: current.outputWorkflows,
@@ -1730,16 +1791,25 @@ export default function App() {
               runs: current.outputWorkflowRuns,
               artifacts: current.outputArtifacts,
             })
-          : loaded.snapshot
+          : loadedSnapshot
         commitPersistedSnapshot(nextSnapshot)
         setLoadedState({ source: loaded.source, reason: loaded.reason, profile: loaded.profile })
+        if (forcedUncachedWorldReload && loadedSnapshot.worldEntities.length > 0) {
+          try {
+            const delta = await loadDraftDelta(loadedSnapshot.draft.id, null)
+            await saveCachedProjectSnapshot(loadedSnapshot, delta.currentRevision)
+          } catch (cacheError) {
+            console.warn('[GraphCore] failed to repair sparse world snapshot cache.', cacheError)
+          }
+        }
         if (import.meta.env.DEV) {
           console.info('[GraphCore][boot] lazy world surface loaded.', {
             profile: loaded.profile,
             draftId,
             ms: Math.round(performance.now() - startedAt),
-            worldEntities: loaded.snapshot.worldEntities.length,
-            assets: loaded.snapshot.assets.length,
+            forcedUncachedWorldReload,
+            worldEntities: loadedSnapshot.worldEntities.length,
+            assets: loadedSnapshot.assets.length,
           })
         }
       } catch (loadError) {
@@ -2629,6 +2699,13 @@ export default function App() {
     setSelectedEdgeKey(null)
   }, [activeTab, cinematicGraphs, selectedCinematicGraph, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey])
 
+  useEffect(() => {
+    if (activeTab !== 'graph' || worldViewMode !== 'wiki' || worldWikiSubView !== 'outputs') return
+    void loadOutputInbox().catch((loadError) => {
+      console.warn('[GraphCore] output inbox failed to load for wiki outputs.', loadError)
+    })
+  }, [activeTab, snapshot?.draft.id, worldViewMode, worldWikiSubView])
+
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
       const parsedOperations = schemaCatalog.patchOperationSchema.array().safeParse(patch.operations)
@@ -2728,6 +2805,15 @@ export default function App() {
     setSelectedGraphKey(graphKey)
   }
 
+  function openOutputsLibrary() {
+    setActiveTab('graph')
+    setWorldViewMode('wiki')
+    setWorldWikiSubView('outputs')
+    void loadOutputInbox().catch((loadError) => {
+      console.warn('[GraphCore] output inbox failed to load for wiki outputs.', loadError)
+    })
+  }
+
   function openWorldNodeFromRecord(worldEntityKey: string) {
     setActiveTab('graph')
     setWorldViewMode('graph')
@@ -2737,6 +2823,7 @@ export default function App() {
 
   function handleSetWorldViewMode(mode: WorldWorkspaceMode) {
     setWorldViewMode(mode)
+    if (mode === 'wiki') setWorldWikiSubView('wiki')
     setActiveTab('graph')
   }
 
@@ -4347,7 +4434,7 @@ export default function App() {
       snapshotRef.current = nextSnapshot
       setSnapshot(nextSnapshot)
       setBundle(compileBundle(nextSnapshot))
-      setActiveTab('outputs')
+      openOutputsLibrary()
       return
     }
     const result = await workspaceService.startWorldPromptTurn(syncedSnapshot, {
@@ -7089,6 +7176,7 @@ export default function App() {
           onOpenAuth={() => setAuthOpen(true)}
           onOpenBilling={() => navigateToPath(BILLING_ROUTE_PATH)}
           onOpenNewGame={handleOpenNewGame}
+          onOpenOutputsLibrary={openOutputsLibrary}
           onResetProjectWorld={handleRequestResetProjectWorld}
           onSelectGame={handleSelectGame}
           onSetActiveTab={setActiveTab}
@@ -7099,6 +7187,7 @@ export default function App() {
           sourceLabel={loadedState?.source === 'supabase' ? 'Live workspace' : 'Demo snapshot'}
           tabs={workspaceTabs}
           worldViewMode={worldViewMode}
+          worldWikiSubView={worldWikiSubView}
           workspaceName={snapshot.workspace.name}
         />
 
@@ -7136,7 +7225,12 @@ export default function App() {
                 worldPromptGenerationJobs={snapshot.worldPromptGenerationJobs}
                 worldPromptGenerationJobSteps={snapshot.worldPromptGenerationJobSteps}
                 worldPromptSuggestions={snapshot.worldPromptSuggestions}
+                outputRequests={snapshot.outputRequests}
+                outputWorkflowRuns={snapshot.outputWorkflowRuns}
+                outputWorkflowNodes={snapshot.outputWorkflowNodes}
+                outputArtifacts={snapshot.outputArtifacts}
                 worldViewMode={worldViewMode}
+                worldWikiSubView={worldWikiSubView}
                 projectContext={snapshot.projectContext}
                 showProjectOnboarding={shouldShowWorldOnboarding}
                 projectOnboardingSaving={projectOnboardingSaving}
@@ -7149,6 +7243,7 @@ export default function App() {
                 onSelectWorldEntity={setSelectedWorldEntityKey}
                 onSelectWorldView={setSelectedWorldViewKey}
                 onWorldViewModeChange={setWorldViewMode}
+                onWorldWikiSubViewChange={setWorldWikiSubView}
                 onCreateWorldEntity={createWorldEntity}
                 onUpdateWorldEntity={updateWorldEntity}
                 onDeleteWorldEntity={deleteWorldEntity}
@@ -7188,6 +7283,12 @@ export default function App() {
                 onApplyWorldPromptPreview={applyWorldPromptPreview}
                 onCancelWorldPromptTurn={cancelWorldPromptTurn}
                 onDismissWorldPromptSuggestion={dismissWorldPromptSuggestion}
+                onStartOutputRequest={startOutputRequest}
+                onGetOutputRequestStatus={getOutputRequestStatus}
+                onCancelOutputRequest={cancelOutputRequest}
+                onRequestDeleteOutputRequest={requestDeleteOutputRequest}
+                onOpenOutputStudio={() => setActiveTab('outputs')}
+                canRunOutputs={loadedState?.source === 'supabase'}
                 onResolveWorldThread={resolveWorldThread}
                 onParkWorldThread={parkWorldThread}
                 onSetWorldEntityCanonLock={setWorldEntityCanonLock}
