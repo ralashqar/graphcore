@@ -1704,6 +1704,14 @@ export function WorldGraphPage({
     outputWorkflowNodes,
     outputWorkflowRuns,
   }), [assets, outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns])
+  const shouldRunLiveWikiHeaderRecovery = useMemo(() => {
+    const worldWiki = readLooseRecord(projectDraftMetadata.worldWiki)
+    const title = trimOptionalString(worldWiki.title)
+    const logline = trimOptionalString(worldWiki.logline)
+    const conceptAssetKey = trimOptionalString(worldWiki.worldConceptAssetKey)
+    if (!title || !logline) return true
+    return Boolean(conceptAssetKey && !assetByKey.has(conceptAssetKey))
+  }, [assetByKey, projectDraftMetadata])
   const effectiveProjectDraftMetadata = liveProjectDraftMetadata ?? projectDraftMetadata
   useEffect(() => {
     if (worldViewMode !== 'wiki' || !projectDraftId) return
@@ -1714,6 +1722,7 @@ export function WorldGraphPage({
       setLiveProjectDraftMetadata(null)
       setLiveWorldConceptImageUrl(null)
     }
+    if (!shouldRunLiveWikiHeaderRecovery) return undefined
 
     const loadLiveWikiHeader = async () => {
       let metadata: Record<string, unknown>
@@ -1773,7 +1782,7 @@ export function WorldGraphPage({
     return () => {
       cancelled = true
     }
-  }, [onLoadProjectDraftMetadata, onSignProjectAssetUrls, projectDraftId, worldViewMode])
+  }, [onLoadProjectDraftMetadata, onSignProjectAssetUrls, projectDraftId, shouldRunLiveWikiHeaderRecovery, worldViewMode])
   const wikiModel = useMemo(() => deriveWorldWiki({
     snapshot: {
       project: {
