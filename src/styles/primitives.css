@@ -1,0 +1,150 @@
+/* Shared GraphCore UI primitives.
+   These selectors intentionally target current feature class names so the
+   codebase can converge without a risky JSX rename pass. */
+
+:root {
+  --gc-control-radius: 12px;
+  --gc-control-border: 1px solid rgba(148, 163, 184, 0.18);
+  --gc-control-bg: rgba(15, 23, 42, 0.74);
+  --gc-control-color: var(--text);
+  --gc-control-hover-transform: translateY(-1px);
+  --gc-control-active-transform: translateY(1px);
+  --gc-control-disabled-opacity: 0.55;
+  --gc-panel-radius: 18px;
+  --gc-panel-border: 1px solid rgba(148, 163, 184, 0.12);
+  --gc-panel-bg: rgba(15, 23, 42, 0.56);
+  --gc-field-radius: 14px;
+  --gc-field-border: 1px solid rgba(148, 163, 184, 0.16);
+  --gc-field-bg: rgba(2, 6, 23, 0.42);
+  --gc-field-focus-border: rgba(57, 216, 255, 0.48);
+  --gc-field-focus-ring: 0 0 0 3px rgba(57, 216, 255, 0.11);
+}
+
+:where(
+  .outputs-primary-action,
+  .outputs-secondary-action,
+  .outputs-node-action,
+  .outputs-artifact-action-button,
+  .world-context-strip-action,
+  .world-wiki-gap-button,
+  .world-feed-composer-actions button,
+  .world-feed-session-actions button,
+  .world-feed-rail-head button,
+  .world-feed-context-head button,
+  .world-feed-context-action,
+  .world-feed-card-actions button,
+  .world-feed-detail-actions button
+) {
+  border-radius: var(--gc-control-radius);
+  color: var(--gc-control-color);
+  cursor: pointer;
+  font-weight: 800;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+:where(
+  .outputs-primary-action,
+  .outputs-secondary-action,
+  .outputs-node-action,
+  .outputs-artifact-action-button,
+  .world-context-strip-action,
+  .world-wiki-gap-button,
+  .world-feed-composer-actions button,
+  .world-feed-session-actions button,
+  .world-feed-rail-head button,
+  .world-feed-context-head button,
+  .world-feed-context-action,
+  .world-feed-card-actions button,
+  .world-feed-detail-actions button
+):hover:not(:disabled) {
+  transform: var(--gc-control-hover-transform);
+}
+
+:where(
+  .outputs-primary-action,
+  .outputs-secondary-action,
+  .outputs-node-action,
+  .outputs-artifact-action-button,
+  .world-context-strip-action,
+  .world-wiki-gap-button,
+  .world-feed-composer-actions button,
+  .world-feed-session-actions button,
+  .world-feed-rail-head button,
+  .world-feed-context-head button,
+  .world-feed-context-action,
+  .world-feed-card-actions button,
+  .world-feed-detail-actions button
+):active:not(:disabled) {
+  transform: var(--gc-control-active-transform);
+}
+
+:where(
+  .outputs-primary-action,
+  .outputs-secondary-action,
+  .outputs-node-action,
+  .outputs-artifact-action-button,
+  .world-context-strip-action,
+  .world-wiki-gap-button,
+  .world-feed-composer-actions button,
+  .world-feed-session-actions button,
+  .world-feed-rail-head button,
+  .world-feed-context-head button,
+  .world-feed-context-action,
+  .world-feed-card-actions button,
+  .world-feed-detail-actions button
+):disabled {
+  cursor: not-allowed;
+  opacity: var(--gc-control-disabled-opacity);
+}
+
+:where(
+  .outputs-request-composer textarea,
+  .outputs-composer textarea,
+  .outputs-composer-options select,
+  .outputs-comic-controls select,
+  .outputs-comic-controls input,
+  .world-feed-composer textarea,
+  .world-wiki-overview-search input
+) {
+  border: var(--gc-field-border);
+  border-radius: var(--gc-field-radius);
+  background: var(--gc-field-bg);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+:where(
+  .outputs-request-composer textarea,
+  .outputs-composer textarea,
+  .outputs-composer-options select,
+  .outputs-comic-controls select,
+  .outputs-comic-controls input,
+  .world-feed-composer textarea,
+  .world-wiki-overview-search input
+):focus {
+  border-color: var(--gc-field-focus-border);
+  box-shadow: var(--gc-field-focus-ring);
+}
+
+:where(
+  .outputs-panel,
+  .outputs-node-card,
+  .outputs-artifact-card,
+  .world-feed-project-card,
+  .world-feed-composer,
+  .world-feed-context-rail section,
+  .world-feed-card,
+  .world-wiki-section,
+  .world-wiki-entity-card,
+  .world-wiki-thread-card,
+  .world-wiki-output-card
+) {
+  border: var(--gc-panel-border);
+  border-radius: var(--gc-panel-radius);
+  background: var(--gc-panel-bg);
+}

@@ -1,0 +1,309 @@
+.world-wiki-section-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.world-wiki-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.world-wiki-card-grid.is-cast {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.world-wiki-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.world-wiki-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.world-wiki-style-grid.has-atlas-image {
+  grid-template-columns: minmax(0, 1.45fr) minmax(240px, 0.75fr);
+  align-items: start;
+}
+
+.world-wiki-style-grid:not(.has-atlas-image) .world-wiki-style-side-column {
+  display: contents;
+}
+
+.world-wiki-style-card {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  display: grid;
+  gap: 9px;
+  text-align: left;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(3, 7, 18, 0.34);
+  color: rgba(226, 232, 240, 0.92);
+}
+
+button.world-wiki-style-card {
+  cursor: pointer;
+}
+
+button.world-wiki-style-card:hover {
+  border-color: rgba(57, 216, 255, 0.28);
+  color: rgba(240, 253, 250, 0.96);
+}
+
+.world-wiki-style-card.is-wide {
+  grid-column: 1 / -1;
+}
+
+.world-wiki-style-card > strong {
+  color: rgba(248, 250, 252, 0.94);
+  line-height: 1.45;
+}
+
+.world-wiki-style-card.is-atlas {
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+}
+
+.world-wiki-style-card.is-atlas.has-image {
+  grid-template-columns: minmax(0, 1fr);
+  align-self: start;
+  padding: 0;
+  overflow: hidden;
+  background: rgba(2, 6, 23, 0.42);
+}
+
+.world-wiki-style-card.is-atlas img,
+.world-wiki-style-card-icon {
+  width: 84px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+  color: rgba(153, 246, 228, 0.88);
+  object-fit: cover;
+}
+
+.world-wiki-style-card.is-atlas.has-image img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 13px;
+  background: rgba(2, 6, 23, 0.72);
+  object-fit: contain;
+}
+
+.world-wiki-style-card.is-atlas em,
+.world-wiki-color-row em {
+  color: rgba(148, 163, 184, 0.86);
+  font-style: normal;
+  font-size: 0.72rem;
+}
+
+.world-wiki-style-card.is-atlas span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.world-wiki-style-side-column {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.world-wiki-color-list {
+  display: grid;
+  gap: 8px;
+}
+
+.world-wiki-style-actions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.world-wiki-style-error {
+  color: rgba(252, 165, 165, 0.92);
+  font-size: 0.78rem;
+}
+
+.world-wiki-color-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.world-wiki-color-row i {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(2, 6, 23, 0.22);
+}
+
+.world-wiki-color-row span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.world-wiki-color-row strong {
+  color: rgba(248, 250, 252, 0.9);
+  text-transform: capitalize;
+}
+
+@media (max-width: 860px) {
+  .world-wiki-style-grid.has-atlas-image {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.world-wiki-entity-card,
+.world-wiki-thread-card,
+.world-wiki-output-card {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.018)),
+    rgba(7, 11, 18, 0.72);
+  color: rgba(237, 244, 251, 0.94);
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-wiki-entity-card {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 82px;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.world-wiki-entity-card.is-large {
+  grid-template-columns: 96px minmax(0, 1fr);
+  min-height: 116px;
+}
+
+.world-wiki-entity-card img,
+.world-wiki-entity-icon {
+  width: 100%;
+  height: 100%;
+  min-height: 64px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  background:
+    linear-gradient(135deg, rgba(57, 216, 255, 0.1), rgba(99, 102, 241, 0.1)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.world-wiki-entity-icon {
+  display: grid;
+  place-items: center;
+  color: rgba(153, 246, 228, 0.86);
+}
+
+.world-wiki-entity-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.world-wiki-entity-card > span {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.world-wiki-entity-card strong,
+.world-wiki-thread-card strong,
+.world-wiki-output-card strong {
+  color: rgba(248, 250, 252, 0.94);
+  line-height: 1.2;
+}
+
+.world-wiki-entity-card em {
+  color: rgba(57, 216, 255, 0.9);
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.world-wiki-entity-card small,
+.world-wiki-thread-card small,
+.world-wiki-output-card small {
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  -webkit-line-clamp: 3;
+}
+
+.world-wiki-entity-card:hover,
+.world-wiki-entity-card.is-active,
+.world-wiki-thread-card:hover,
+.world-wiki-thread-card.is-active,
+.world-wiki-output-card:hover {
+  border-color: rgba(57, 216, 255, 0.28);
+  background:
+    linear-gradient(180deg, rgba(139, 60, 255, 0.1), rgba(255, 255, 255, 0.02)),
+    rgba(7, 11, 18, 0.82);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
+}
+
+.world-wiki-thread-list {
+  display: grid;
+  gap: 8px;
+}
+
+.world-wiki-thread-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.world-wiki-thread-priority {
+  width: fit-content;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(57, 216, 255, 0.11);
+  color: rgba(153, 246, 228, 0.94);
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.world-wiki-output-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.world-wiki-output-card {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.world-wiki-output-card img {
+  aspect-ratio: 16 / 10;
+  border-radius: 6px;
+}
+

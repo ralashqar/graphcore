@@ -1,0 +1,476 @@
+.world-wiki-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 34;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.52);
+  backdrop-filter: blur(8px);
+}
+
+.world-wiki-modal {
+  width: min(700px, 100%);
+  max-height: min(720px, calc(100dvh - 140px));
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    radial-gradient(circle at top right, rgba(57, 216, 255, 0.09), transparent 34%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(7, 11, 18, 0.98)),
+    #0b1119;
+  color: rgba(237, 244, 251, 0.94);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.46);
+}
+
+.world-wiki-image-splash {
+  position: relative;
+  width: min(1180px, calc(100vw - 64px));
+  height: min(860px, calc(100dvh - 64px));
+  max-height: none;
+  overflow: hidden;
+  padding: 0;
+  place-items: center;
+  border-radius: 18px;
+  background: rgba(2, 6, 23, 0.9);
+}
+
+.world-wiki-image-splash-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.035) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.035) 75%),
+    #020617;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  background-size: 20px 20px;
+}
+
+.world-wiki-image-splash-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
+}
+
+.world-wiki-modal .world-popup-head {
+  margin-bottom: 0;
+}
+
+.world-wiki-modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.world-wiki-modal-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(57, 216, 255, 0.16);
+  background: rgba(57, 216, 255, 0.09);
+  color: rgba(153, 246, 228, 0.94);
+}
+
+.world-wiki-modal-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.world-wiki-modal .world-popup-head h3 {
+  margin: 3px 0 0;
+  color: rgba(248, 250, 252, 0.96);
+  letter-spacing: 0;
+}
+
+.world-wiki-modal .world-popup-close {
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(248, 250, 252, 0.92);
+}
+
+.world-wiki-modal .world-popup-close:hover {
+  background: rgba(57, 216, 255, 0.13);
+  color: rgba(240, 253, 250, 0.96);
+}
+
+.world-wiki-modal-image {
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.world-wiki-modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.world-wiki-modal-meta span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(57, 216, 255, 0.14);
+  background: rgba(57, 216, 255, 0.1);
+  color: rgba(153, 246, 228, 0.94);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.world-wiki-modal-body {
+  white-space: pre-wrap;
+  color: rgba(203, 213, 225, 0.88);
+  line-height: 1.65;
+}
+
+.world-wiki-prompt-dock {
+  position: absolute;
+  left: 50%;
+  right: auto;
+  bottom: 24px;
+  z-index: 32;
+  width: min(720px, calc(100% - 48px));
+  transform: translateX(-50%);
+}
+
+.world-wiki-prompt-dock.is-expanded {
+  width: min(720px, calc(100% - 48px));
+}
+
+.world-wiki-prompt-compact,
+.compact-prompt-composer {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(7, 11, 18, 0.96)),
+    #0b1119;
+  color: rgba(237, 244, 251, 0.94);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.32);
+}
+
+.compact-prompt-composer.is-busy {
+  border-color: rgba(57, 216, 255, 0.18);
+}
+
+.world-wiki-prompt-compact textarea,
+.compact-prompt-composer textarea {
+  min-height: 38px;
+  max-height: 110px;
+  padding: 10px 8px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: rgba(237, 244, 251, 0.94);
+  outline: none;
+}
+
+.world-wiki-prompt-compact textarea::placeholder,
+.compact-prompt-composer textarea::placeholder {
+  color: rgba(148, 163, 184, 0.74);
+}
+
+.world-wiki-prompt-expand,
+.compact-prompt-expand {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(203, 213, 225, 0.88);
+  cursor: pointer;
+}
+
+.world-wiki-prompt-expand:hover,
+.compact-prompt-expand:hover:not(:disabled) {
+  background: rgba(57, 216, 255, 0.12);
+  color: rgba(153, 246, 228, 0.96);
+}
+
+.compact-prompt-expand:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.compact-prompt-thinking {
+  min-width: 0;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 8px;
+  color: rgba(203, 213, 225, 0.9);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.compact-prompt-thinking span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-wiki-prompt-compact .world-prompt-send-button,
+.compact-prompt-send-button {
+  position: static;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-color: rgba(57, 216, 255, 0.32);
+  border-radius: 999px;
+  background: rgba(139, 60, 255, 0.92);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(139, 60, 255, 0.22);
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, opacity 140ms ease;
+}
+
+.world-wiki-prompt-compact .world-prompt-send-button:hover:not(:disabled),
+.compact-prompt-send-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(153, 246, 228, 0.72);
+  background: rgba(34, 119, 255, 0.96);
+}
+
+.compact-prompt-send-button:disabled {
+  cursor: default;
+  opacity: 0.52;
+  box-shadow: none;
+}
+
+.world-wiki-prompt-compact .world-prompt-send-button.is-stop,
+.compact-prompt-send-button.is-stop {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(220, 38, 38, 0.9);
+  box-shadow: 0 10px 24px rgba(220, 38, 38, 0.24);
+}
+
+.compact-prompt-send-button.is-stop:hover:not(:disabled) {
+  border-color: rgba(252, 165, 165, 0.72);
+  background: rgba(239, 68, 68, 0.96);
+}
+
+.compact-prompt-send-button svg,
+.compact-prompt-send-button .entity-icon-image {
+  width: 17px;
+  height: 17px;
+}
+
+.world-wiki-prompt-panel {
+  position: relative;
+  height: min(680px, calc(100dvh - 170px));
+  padding: 10px;
+  border-radius: 24px;
+  border: 1px solid rgba(226, 232, 240, 0.16);
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(7, 11, 18, 0.98)),
+    #0b1119;
+  box-shadow: 0 24px 80px rgba(2, 6, 23, 0.34);
+}
+
+.world-wiki-prompt-panel .world-prompt-chat-shell {
+  height: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(7, 11, 18, 0.96)),
+    #0b1119;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.world-wiki-prompt-panel .world-prompt-transcript-shell,
+.world-wiki-prompt-panel .world-prompt-composer-pinned,
+.world-wiki-prompt-panel .world-prompt-planning-state {
+  background-color: rgba(2, 6, 23, 0.34);
+}
+
+@media (max-width: 1180px) {
+  .world-wiki-surface {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    overflow-y: auto;
+    background:
+      linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(7, 11, 18, 0.98)),
+      #0b1119;
+  }
+
+  .world-wiki-index {
+    position: static;
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    max-height: none;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    background: rgba(7, 11, 18, 0.9);
+  }
+
+  .world-wiki-index-list,
+  .world-wiki-gap-list {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .world-wiki-document {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding: 18px;
+    border-radius: 16px;
+  }
+
+  .world-wiki-overview,
+  .world-wiki-section-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.world-overlay-card {
+  position: absolute;
+  top: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  width: min(720px, calc(100% - 48px));
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(9, 13, 20, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.world-prompt-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 36;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 12, 0.54);
+  backdrop-filter: blur(10px);
+}
+
+.world-prompt-modal {
+  position: relative;
+  top: auto;
+  left: auto;
+  transform: none;
+  width: min(560px, calc(100% - 40px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+}
+
+.world-prompt-log-modal-backdrop {
+  z-index: 46;
+}
+
+.world-prompt-log-modal {
+  width: min(620px, calc(100% - 32px));
+  padding: 18px;
+  border-radius: 18px;
+  border-color: rgba(139, 92, 246, 0.28);
+  background:
+    radial-gradient(circle at top left, rgba(139, 92, 246, 0.18), transparent 38%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(3, 7, 18, 0.98));
+}
+
+.world-prompt-log-modal .world-popup-head {
+  margin-bottom: 14px;
+}
+
+.world-prompt-log-modal h3 {
+  margin: 3px 0 0;
+  color: rgba(248, 250, 252, 0.98);
+  font-size: 1rem;
+}
+
+.world-prompt-log-modal .world-popup-close svg {
+  transform: rotate(45deg);
+}
+
+.world-prompt-log-modal-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.world-prompt-log-modal-meta span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  background: rgba(139, 92, 246, 0.1);
+  color: rgba(221, 214, 254, 0.86);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.world-prompt-log-modal-body {
+  max-height: min(58vh, 520px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(3, 7, 18, 0.6);
+  color: rgba(226, 232, 240, 0.86);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.world-edge-popup {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100% - 44px));
+  padding: 16px;
+}
+
+.world-popup-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.world-popup-close {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.world-popup-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+

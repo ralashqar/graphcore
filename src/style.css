@@ -1,4 +1,5 @@
-﻿@import './styles/base.css';
+@import './styles/base.css';
+@import './styles/primitives.css';
 @import './styles/features/world-builder/shell.css';
 @import './styles/features/content/definitions.css';
 @import './styles/features/world-builder/prompt.css';
@@ -11,4 +12,3 @@
 @import './styles/features/landing/landing.css';
 @import './styles/legacy/dialogs-timeline-billing.css';
 @import './styles/features/outputs/outputs.css';
-

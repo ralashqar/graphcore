@@ -1,0 +1,152 @@
+.world-wiki-overview {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.86fr) minmax(260px, 1fr);
+  gap: 18px;
+  align-items: stretch;
+  scroll-margin-top: 18px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(20, 28, 42, 0.88), rgba(10, 15, 23, 0.86)),
+    rgba(15, 21, 32, 0.82);
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.18);
+}
+
+.world-wiki-overview-media {
+  min-height: 220px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(135deg, rgba(57, 216, 255, 0.08), rgba(99, 102, 241, 0.08)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.world-wiki-overview-media img,
+.world-wiki-entity-card img,
+.world-wiki-output-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.world-wiki-overview-placeholder {
+  height: 100%;
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  color: rgba(148, 163, 184, 0.76);
+}
+
+.world-wiki-overview-placeholder svg {
+  width: 42px;
+  height: 42px;
+}
+
+.world-wiki-overview-copy {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.world-wiki-overview-copy .eyebrow,
+.world-wiki-section .eyebrow {
+  color: rgba(148, 163, 184, 0.82);
+}
+
+.world-wiki-overview-copy h2,
+.world-wiki-section h3 {
+  margin: 0;
+  color: rgba(248, 250, 252, 0.96);
+  letter-spacing: 0;
+}
+
+.world-wiki-overview-copy h2 {
+  font-size: clamp(1.7rem, 2.4vw, 2.6rem);
+  line-height: 1.05;
+}
+
+.world-wiki-summary-button {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(203, 213, 225, 0.82);
+  text-align: left;
+  line-height: 1.55;
+  cursor: pointer;
+}
+
+.world-wiki-summary-button:hover {
+  color: rgba(153, 246, 228, 0.96);
+}
+
+.world-wiki-summary-button.is-overview {
+  font-size: 0.96rem;
+}
+
+.world-wiki-summary-clamp,
+.world-wiki-entity-card small,
+.world-wiki-thread-card small,
+.world-wiki-output-card small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+.world-wiki-summary-clamp {
+  -webkit-line-clamp: 3;
+}
+
+.world-wiki-logline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(237, 244, 251, 0.94);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.world-wiki-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.world-wiki-overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.world-wiki-section-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.world-wiki-section {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  scroll-margin-top: 18px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  background:
+    linear-gradient(180deg, rgba(20, 28, 42, 0.74), rgba(10, 15, 23, 0.8)),
+    rgba(15, 21, 32, 0.72);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14);
+}
+
+.world-wiki-section-cast,
+.world-wiki-section-timeline,
+.world-wiki-section-style,
+.world-wiki-section-outputs {
+  grid-column: 1 / -1;
+}
+
