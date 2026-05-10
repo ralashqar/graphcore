@@ -1,0 +1,375 @@
+﻿/* Definition authoring and definition-world bridge styles.
+   Source: src/style.css lines 1978-2348 before the stylesheet split.
+   Keep this file in cascade order via src/style.css imports. */
+
+.definition-authoring-shell {
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  gap: 18px;
+  min-height: 0;
+  height: 100%;
+  align-items: stretch;
+}
+
+.definition-authoring-shell.is-rail-empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.definition-authoring-rail {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background:
+    radial-gradient(circle at top left, rgba(167, 139, 250, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(9, 13, 20, 0.96), rgba(7, 11, 18, 0.94));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  min-height: 0;
+  max-height: 100%;
+  overflow: auto;
+}
+
+.definition-authoring-stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    radial-gradient(circle at top right, rgba(167, 139, 250, 0.08), transparent 24%),
+    radial-gradient(circle at bottom left, rgba(56, 189, 248, 0.06), transparent 24%),
+    linear-gradient(180deg, rgba(8, 12, 18, 0.985), rgba(5, 8, 14, 0.97));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 28px 80px rgba(0, 0, 0, 0.34);
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.definition-authoring-rail-head,
+.definition-authoring-copy,
+.definition-authoring-prompt-card,
+.definition-authoring-stage-copy,
+.definition-focus-hero-copy,
+.definition-focus-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.definition-authoring-copy h2,
+.definition-authoring-stage-copy h3,
+.definition-focus-compact-head h3 {
+  margin: 0;
+}
+
+.definition-authoring-copy p,
+.definition-authoring-dossier-copy p,
+.definition-authoring-dossier-subtitle {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.74);
+  line-height: 1.55;
+}
+
+.definition-authoring-focus-chip {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.definition-authoring-focus-chip span,
+.definition-authoring-stat span,
+.definition-collection-card-copy span,
+.definition-collection-card-copy small,
+.definition-authoring-mini-item small {
+  color: var(--muted);
+}
+
+.definition-authoring-prompt-card,
+.definition-authoring-collection-pane,
+.definition-authoring-focus-pane,
+.definition-authoring-focus-meta {
+  padding: 16px;
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.definition-authoring-prompt-head,
+.definition-authoring-side-head,
+.definition-authoring-collection-summary,
+.definition-authoring-stage-head,
+.definition-focus-compact-head,
+.definition-focus-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.definition-authoring-prompt-input {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.definition-authoring-suggestion-grid,
+.definition-authoring-mini-list,
+.definition-authoring-dossier-stats,
+.definition-focus-meta-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.definition-authoring-suggestion {
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.definition-authoring-suggestion:hover,
+.definition-authoring-mini-item:hover,
+.definition-collection-card:hover {
+  border-color: rgba(167, 139, 250, 0.32);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.definition-authoring-mini-item,
+.definition-collection-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.definition-authoring-mini-item {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.definition-authoring-mini-item.is-active,
+.definition-collection-card.is-active,
+.ghost-button.compact.is-selected {
+  border-color: rgba(167, 139, 250, 0.34);
+  background: rgba(167, 139, 250, 0.12);
+  color: var(--text);
+}
+
+.definition-authoring-stage-controls,
+.definition-focus-meta-actions {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: nowrap;
+}
+
+.definition-authoring-stage-controls .world-shell-search {
+  min-width: 180px;
+  flex: 1 1 260px;
+}
+
+.definition-authoring-stage-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.definition-authoring-collection-pane,
+.definition-authoring-focus-pane {
+  min-height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.definition-authoring-collection-list,
+.definition-collection-card-copy {
+  display: grid;
+  gap: 12px;
+}
+
+.definition-authoring-collection-list {
+  min-height: 0;
+  max-height: 100%;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.definition-authoring-focus-pane {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  align-items: start;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.definition-authoring-focus-pane > .empty-surface {
+  place-content: start;
+  justify-items: start;
+  min-height: 0;
+  text-align: left;
+}
+
+.definition-authoring-focus-pane > .empty-surface .empty-surface-icon {
+  margin: 0 0 4px;
+}
+
+.definition-collection-card-copy {
+  gap: 4px;
+}
+
+.definition-collection-status.is-pending {
+  color: #c4b5fd;
+}
+
+.definition-collection-status.is-danger {
+  color: #fda4af;
+}
+
+.definition-focus-hero {
+  display: grid;
+  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  gap: 18px;
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025));
+}
+
+.definition-focus-media-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.definition-focus-media-button {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  min-height: 340px;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border-radius: 22px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top left, rgba(167, 139, 250, 0.12), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(57, 216, 255, 0.08), transparent 26%),
+    rgba(15, 23, 42, 0.72);
+}
+
+.definition-focus-media-button .media-thumb {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+}
+
+.definition-focus-media-button .media-thumb.large {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.definition-focus-media-button .media-thumb img,
+.definition-focus-media-button .media-thumb video {
+  object-fit: contain;
+}
+
+.definition-focus-media-expand {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(7, 11, 18, 0.76);
+  color: rgba(237, 244, 251, 0.92);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  z-index: 2;
+}
+
+.definition-focus-media-expand:hover {
+  border-color: rgba(57, 216, 255, 0.3);
+  background: rgba(12, 18, 27, 0.92);
+}
+
+.definition-focus-media-expand svg {
+  width: 16px;
+  height: 16px;
+}
+
+.definition-focus-hero-topline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.definition-focus-head-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.definition-focus-action-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.definition-focus-compact-head {
+  margin-bottom: 4px;
+}
+
+.definition-authoring-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.definition-focus-meta-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.definition-focus-meta-head h4,
+.definition-focus-meta-copy p {
+  margin: 0;
+}
+
+.definition-focus-meta-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.definition-focus-meta-actions {
+  justify-content: flex-start;
+}
+

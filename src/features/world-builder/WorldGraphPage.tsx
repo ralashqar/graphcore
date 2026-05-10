@@ -159,7 +159,11 @@ import { useWorldPromptPanelState } from './hooks/useWorldPromptPanelState'
 import { WorldFeedPanel } from './feed/WorldFeedPanel'
 import { WorldPromptChatPanel } from './prompt/WorldPromptPanels'
 import { WorldWikiPanel, WorldWikiSubViewToggle } from './wiki/WorldWikiPanel'
-import { iconForWikiSection, labelForWikiSection } from './wiki/wikiSectionLabels'
+import {
+  WorldWikiSectionView,
+  countWorldWikiSearchMatches,
+  type WorldWikiDetailModalInput,
+} from './wiki/WorldWikiSections'
 
 export { WorldPromptActivityPanel, WorldPromptThreadsPanel } from './prompt/WorldPromptPanels'
 
@@ -368,15 +372,7 @@ function describeIconBatchProgress(job: WorldEntityIconGenerationJob | null) {
   return job.errorMessage || `Icon generation ${job.status}.`
 }
 
-type WikiDetailModalState = {
-  title: string
-  eyebrow: string
-  body: string
-  icon?: EntityIconId
-  imageUrl?: string | null
-  meta?: string[]
-  variant?: 'detail' | 'image'
-} | null
+type WikiDetailModalState = WorldWikiDetailModalInput | null
 
 type EntityComposerState = {
   mode: 'global' | 'related'
@@ -1920,15 +1916,13 @@ export function WorldGraphPage({
   const wikiSearchActive = normalizedWikiSearchQuery.length > 0
   const wikiSearchMatchCount = useMemo(() => {
     if (!wikiSearchActive) return null
-    return wikiModel.sections
-      .filter((section) => section.kind !== 'overview')
-      .reduce((count, section) => {
-        if (wikiSectionMatchesSearch(section)) return count + 1
-        const entityMatches = section.entityKeys.filter((key) => wikiEntityMatchesSearch(key)).length
-        const threadMatches = section.threadKeys.filter((key) => wikiThreadMatchesSearch(key)).length
-        const resultMatches = section.resultKeys.filter((key) => wikiResultMatchesSearch(key)).length
-        return count + entityMatches + threadMatches + resultMatches
-      }, 0)
+    return countWorldWikiSearchMatches({
+      entityByKey,
+      normalizedWikiSearchQuery,
+      resultByKey,
+      threadByKey,
+      wikiModel,
+    })
   }, [entityByKey, normalizedWikiSearchQuery, resultByKey, threadByKey, wikiModel.entityProfiles, wikiModel.sections, wikiSearchActive])
   const wikiSectionRevealSignature = useMemo(() => (
     wikiModel.sections
@@ -5004,21 +4998,7 @@ export function WorldGraphPage({
     return () => observer.disconnect()
   }, [viewMode, wikiModel.sections])
 
-  function buildWikiDetailBody(parts: Array<string | null | undefined>) {
-    const seen = new Set<string>()
-    return parts
-      .map((part) => part?.trim() ?? '')
-      .filter(Boolean)
-      .filter((part) => {
-        const key = part.toLowerCase()
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-      .join('\n\n')
-  }
-
-  function openWikiDetailModal(input: Exclude<WikiDetailModalState, null>) {
+  function openWikiDetailModal(input: WorldWikiDetailModalInput) {
     setWikiDetailModal({
       ...input,
       body: input.body.trim() || 'No full description has been written yet.',
@@ -5230,309 +5210,6 @@ export function WorldGraphPage({
 
     window.addEventListener('mousemove', handlePointerMove)
     window.addEventListener('mouseup', handlePointerUp)
-  }
-
-  function wikiTextMatches(parts: Array<unknown>) {
-    if (!wikiSearchActive) return true
-    const haystack = parts
-      .map((part) => {
-        if (typeof part === 'string') return part
-        if (Array.isArray(part)) return part.filter((entry) => typeof entry === 'string').join(' ')
-        return ''
-      })
-      .join(' ')
-      .toLocaleLowerCase()
-    return haystack.includes(normalizedWikiSearchQuery)
-  }
-
-  function wikiSectionMatchesSearch(section: WorldWikiSection) {
-    return wikiTextMatches([
-      section.title,
-      section.summary,
-      labelForWikiSection(section.kind),
-    ])
-  }
-
-  function wikiEntityMatchesSearch(entityKey: string) {
-    const entity = entityByKey.get(entityKey) ?? null
-    if (!entity) return false
-    const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
-    return wikiTextMatches([
-      entity.name,
-      entity.nodeType,
-      labelForWorldEntity(entity.nodeType),
-      entity.summary,
-      entity.context,
-      profile?.roleLabel,
-      profile?.shortSummary,
-      entity.tags,
-    ])
-  }
-
-  function wikiThreadMatchesSearch(threadKey: string) {
-    const thread = threadByKey.get(threadKey) ?? null
-    if (!thread) return false
-    return wikiTextMatches([
-      thread.title,
-      thread.summary,
-      thread.status,
-      thread.priority,
-    ])
-  }
-
-  function wikiResultMatchesSearch(resultKey: string) {
-    const result = resultByKey.get(resultKey) ?? null
-    if (!result) return false
-    return wikiTextMatches([
-      result.title,
-      result.summary,
-      result.resultType,
-      result.status,
-    ])
-  }
-
-  function renderWikiEntityCard(entityKey: string, variant: 'large' | 'compact' = 'compact') {
-    const entity = entityByKey.get(entityKey) ?? null
-    if (!entity) return null
-    const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
-    const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
-    const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
-    const summary = profile?.shortSummary || entity.summary || entity.context || 'No wiki summary yet.'
-    const detailBody = buildWikiDetailBody([profile?.shortSummary, entity.summary, entity.context])
-    return (
-      <button
-        key={entity.key}
-        className={`world-wiki-entity-card world-wiki-cell-reveal is-${entity.nodeType} is-${variant}${active ? ' is-active' : ''}`}
-        onClick={() => {
-          selectWorldNode(entity.key)
-          setActiveInspectorTab('overview')
-          openWikiDetailModal({
-            title: entity.name,
-            eyebrow: profile?.roleLabel || labelForWorldEntity(entity.nodeType),
-            body: detailBody,
-            icon: iconForWorldEntity(entity.nodeType),
-            imageUrl,
-            meta: [
-              labelForWorldEntity(entity.nodeType),
-              profile?.relationshipKeys.length ? `${profile.relationshipKeys.length} link${profile.relationshipKeys.length === 1 ? '' : 's'}` : null,
-              profile?.threadKeys.length ? `${profile.threadKeys.length} thread${profile.threadKeys.length === 1 ? '' : 's'}` : null,
-            ].filter((value): value is string => Boolean(value)),
-          })
-        }}
-        type="button"
-      >
-        {imageUrl ? <img src={imageUrl} alt="" /> : <span className="world-wiki-entity-icon"><EntityIcon id={iconForWorldEntity(entity.nodeType)} /></span>}
-        <span>
-          <strong>{entity.name}</strong>
-          <em>{profile?.roleLabel || labelForWorldEntity(entity.nodeType)}</em>
-          <small>{summary}</small>
-        </span>
-      </button>
-    )
-  }
-
-  function renderWikiTimelineCard(entityKey: string, fallbackOrdinal: number) {
-    const entity = entityByKey.get(entityKey) ?? null
-    if (!entity) return null
-    const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
-    const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
-    const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
-    const ordinal = sequence?.ordinal ?? null
-    const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
-    const summary = sequence?.synopsis || profile?.shortSummary || entity.summary || entity.context || 'No story beat summary yet.'
-    const outcome = sequence?.outcome || ''
-    const detailBody = buildWikiDetailBody([
-      sequence?.synopsis,
-      sequence?.dramaticQuestion ? `Dramatic question: ${sequence.dramaticQuestion}` : null,
-      outcome ? `Outcome: ${outcome}` : null,
-      entity.context,
-    ])
-    return (
-      <button
-        key={entity.key}
-        className={`world-wiki-timeline-card is-${entity.nodeType}${active ? ' is-active' : ''}`}
-        onClick={() => {
-          selectWorldNode(entity.key)
-          setActiveInspectorTab('overview')
-          openWikiDetailModal({
-            title: entity.name,
-            eyebrow: sequence?.unitKind || labelForWorldEntity(entity.nodeType),
-            body: detailBody,
-            icon: iconForWorldEntity(entity.nodeType),
-            imageUrl,
-            meta: [
-              ordinal !== null ? `Step ${ordinal}` : null,
-              sequence?.actLabel || null,
-              sequence?.storyFunction ? sequence.storyFunction.replace(/_/g, ' ') : null,
-              sequence?.scriptExpansionReady ? 'Script ready' : null,
-            ].filter((value): value is string => Boolean(value)),
-          })
-        }}
-        type="button"
-      >
-        <span className="world-wiki-timeline-ordinal">{ordinal ?? fallbackOrdinal}</span>
-        <span className={imageUrl ? 'world-wiki-timeline-body has-image' : 'world-wiki-timeline-body'}>
-          {imageUrl ? <img className="world-wiki-timeline-image" src={imageUrl} alt="" /> : null}
-          <span className="world-wiki-timeline-copy">
-            <span className="world-wiki-timeline-kicker">
-              {[sequence?.actLabel, sequence?.unitKind || labelForWorldEntity(entity.nodeType)].filter(Boolean).join(' / ')}
-            </span>
-            <strong>{entity.name}</strong>
-            <small>{summary}</small>
-            {outcome ? (
-              <span className="world-wiki-timeline-outcome">
-                <em>Outcome</em>
-                <span>{outcome}</span>
-              </span>
-            ) : null}
-          </span>
-        </span>
-      </button>
-    )
-  }
-
-  function renderWikiStyleSection(section: WorldWikiSection) {
-    const styleGaps = wikiModel.gaps.filter((entry) => entry.sectionKind === 'style')
-    const colorEntries = Object.entries(wikiModel.overview.colorScheme)
-    const hasAtlas = Boolean(wikiModel.overview.brandAtlasPrompt.trim() || wikiBrandAtlasImageUrl)
-    const atlasBody = wikiModel.overview.brandAtlasPrompt.trim() || 'No brand atlas prompt has been established yet.'
-    const styleSummary = wikiModel.overview.artStyleDescription || section.summary || 'Not established yet'
-    const styleMeta = [
-      wikiModel.overview.visualMotifs.length ? `${wikiModel.overview.visualMotifs.length} motifs` : null,
-      colorEntries.length ? `${colorEntries.length} colors` : null,
-      hasAtlas ? 'Atlas ready' : null,
-    ].filter((value): value is string => Boolean(value))
-    return (
-      <section
-        id={`world-wiki-section-${section.kind}`}
-        key={section.kind}
-        className={`world-wiki-section world-wiki-section-${section.kind} ${wikiStyleExpanded ? 'is-expanded' : 'is-collapsed'}`}
-      >
-        <div className="world-wiki-style-summary-row">
-          <button
-            className="world-wiki-style-summary"
-            onClick={() => setWikiStyleExpanded((value) => !value)}
-            type="button"
-            aria-expanded={wikiStyleExpanded}
-          >
-            <span className="world-wiki-index-icon"><EntityIcon id={iconForWikiSection(section.kind)} /></span>
-            <span className="world-wiki-style-summary-copy">
-              <span className="eyebrow">{labelForWikiSection(section.kind)}</span>
-              <strong>{section.title}</strong>
-              <small>{styleSummary}</small>
-            </span>
-            {styleMeta.length > 0 ? <span className="world-wiki-style-summary-meta">{styleMeta.slice(0, 2).join(' / ')}</span> : null}
-            <span className="world-wiki-style-summary-toggle" aria-hidden="true">{wikiStyleExpanded ? '-' : '+'}</span>
-          </button>
-          {!wikiStyleExpanded && styleGaps.length > 0 ? (
-            <button className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(styleGaps[0])} type="button">
-              {styleGaps[0].label}
-            </button>
-          ) : null}
-        </div>
-        {wikiStyleExpanded ? (
-          <>
-            {styleGaps.length > 0 ? (
-              <div className="world-wiki-section-actions world-wiki-style-gap-actions">
-                {styleGaps.slice(0, 3).map((gap) => (
-                  <button key={gap.key} className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
-                    {gap.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <div className={wikiBrandAtlasImageUrl ? 'world-wiki-style-grid has-atlas-image' : 'world-wiki-style-grid'}>
-              <button
-                className="world-wiki-style-card is-wide"
-                onClick={() => openWikiDetailModal({
-                  title: section.title,
-                  eyebrow: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App art direction' : 'Art style',
-                  body: wikiModel.overview.artStyleDescription || section.summary,
-                  icon: 'design',
-                  meta: [
-                    wikiModel.overview.genre || null,
-                    wikiModel.overview.toneTags.length ? wikiModel.overview.toneTags.slice(0, 3).join(', ') : null,
-                  ].filter((value): value is string => Boolean(value)),
-                })}
-                type="button"
-              >
-                <span className="eyebrow">Art Style</span>
-                <strong>{wikiModel.overview.artStyleDescription || 'Not established yet'}</strong>
-              </button>
-              <button
-                className={[
-                  hasAtlas ? 'world-wiki-style-card is-atlas' : 'world-wiki-style-card is-atlas is-empty',
-                  wikiBrandAtlasImageUrl ? 'has-image' : '',
-                ].filter(Boolean).join(' ')}
-                onClick={() => {
-                  if (wikiBrandAtlasImageUrl) {
-                    openBrandAtlasImageSplash(wikiBrandAtlasImageUrl)
-                    return
-                  }
-                  openWikiDetailModal({
-                    title: projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Brand Atlas' : 'Brand Atlas',
-                    eyebrow: 'Visual image prompt',
-                    body: atlasBody,
-                    icon: 'asset',
-                    meta: wikiModel.overview.brandAtlasPrompt ? ['Prompt ready'] : ['Needs prompt'],
-                  })
-                }}
-                type="button"
-                aria-label={wikiBrandAtlasImageUrl ? 'Open brand atlas image' : 'Open brand atlas prompt'}
-              >
-                {wikiBrandAtlasImageUrl ? <img src={wikiBrandAtlasImageUrl} alt="" /> : <span className="world-wiki-style-card-icon"><EntityIcon id="asset" /></span>}
-                {wikiBrandAtlasImageUrl ? null : (
-                  <span>
-                    <em>Brand Atlas</em>
-                    <strong>{wikiBrandAtlasPending ? 'Image generating' : wikiModel.overview.brandAtlasPrompt ? 'Prompt ready' : 'No atlas prompt yet'}</strong>
-                  </span>
-                )}
-              </button>
-              <div className="world-wiki-style-side-column">
-                <div className="world-wiki-style-card">
-                  <span className="eyebrow">Visual Motifs</span>
-                  {wikiModel.overview.visualMotifs.length > 0 ? (
-                    <div className="world-wiki-chip-row">
-                      {wikiModel.overview.visualMotifs.map((motif) => <span key={motif} className="chip">{motif}</span>)}
-                    </div>
-                  ) : <strong>Not established yet</strong>}
-                </div>
-                <div className="world-wiki-style-card">
-                  <span className="eyebrow">{projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Colors' : 'Palette Notes'}</span>
-                  {colorEntries.length > 0 ? (
-                    <div className="world-wiki-color-list">
-                      {colorEntries.slice(0, 8).map(([name, value]) => (
-                        <span key={name} className="world-wiki-color-row">
-                          <i style={{ background: value.split(/\s+/)[0] }} />
-                          <span><strong>{name}</strong><em>{value}</em></span>
-                        </span>
-                      ))}
-                    </div>
-                  ) : <strong>Not established yet</strong>}
-                </div>
-              </div>
-            </div>
-            <div className="world-wiki-style-actions">
-              <button
-                className="ghost-button compact"
-                disabled={brandAtlasGenerating || wikiBrandAtlasPending || isPromptSubmitting}
-                onClick={() => void handleGenerateBrandAtlasImage()}
-                type="button"
-              >
-                {brandAtlasGenerating || wikiBrandAtlasPending
-                  ? 'Generating atlas...'
-                  : wikiModel.overview.brandAtlasPrompt
-                    ? wikiBrandAtlasImageUrl
-                      ? 'Regenerate atlas image'
-                      : 'Generate atlas image'
-                    : 'Draft atlas prompt'}
-              </button>
-              {brandAtlasError ? <span className="world-wiki-style-error">{brandAtlasError}</span> : null}
-            </div>
-          </>
-        ) : null}
-      </section>
-    )
   }
 
   function renderInteractivePrototypeModal() {
@@ -6122,145 +5799,39 @@ export function WorldGraphPage({
   }
 
   function renderWikiSection(section: WorldWikiSection) {
-    if (section.kind === 'style') {
-      const isStyleHiddenBySearch = wikiSearchActive && !wikiSectionMatchesSearch(section)
-      return (
-        <div key={section.kind} className={isStyleHiddenBySearch ? 'world-wiki-search-collapse is-search-hidden' : 'world-wiki-search-collapse'}>
-          {renderWikiStyleSection(section)}
-        </div>
-      )
-    }
-    const sectionMatchesSearch = wikiSectionMatchesSearch(section)
-    const cappedEntityKeys = Array.from(new Set(section.entityKeys)).slice(0, section.kind === 'cast' ? 8 : 6)
-      .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiEntityMatchesSearch(key))
-  const cappedThreadKeys = Array.from(new Set(section.threadKeys)).slice(0, 6)
-    .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiThreadMatchesSearch(key))
-  const cappedResultKeys = Array.from(new Set(section.resultKeys)).slice(0, 6)
-    .filter((key) => !wikiSearchActive || sectionMatchesSearch || wikiResultMatchesSearch(key))
-  const targetCellCount = cappedEntityKeys.length + cappedThreadKeys.length + cappedResultKeys.length
-  const visibleCellCount = Math.min(wikiSectionVisibleCounts[section.kind] ?? 0, targetCellCount)
-  const visibleEntityKeys = cappedEntityKeys.slice(0, visibleCellCount)
-  const remainingAfterEntities = Math.max(0, visibleCellCount - visibleEntityKeys.length)
-  const visibleThreadKeys = cappedThreadKeys.slice(0, remainingAfterEntities)
-  const remainingAfterThreads = Math.max(0, remainingAfterEntities - visibleThreadKeys.length)
-  const visibleResultKeys = cappedResultKeys.slice(0, remainingAfterThreads)
-  const hasDeferredSectionCells = visibleCellCount < targetCellCount
-  const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
-  const isCastSection = section.kind === 'cast'
-  const isSearchHidden = wikiSearchActive && !sectionMatchesSearch && targetCellCount === 0
-  return (
-    <section
-      id={`world-wiki-section-${section.kind}`}
-      key={section.kind}
-      className={`world-wiki-section world-wiki-section-${section.kind}${isSearchHidden ? ' is-search-hidden' : ''}`}
-    >
-      <div className="world-wiki-section-head">
-          <div className={isCastSection ? 'world-wiki-section-title-row' : undefined}>
-            {isCastSection ? <EntityIcon id={iconForWikiSection(section.kind)} /> : <span className="eyebrow">{labelForWikiSection(section.kind)}</span>}
-            <h3>{isCastSection ? 'Characters' : section.title}</h3>
-          </div>
-          {gap ? (
-            <button className="ghost-button compact" disabled={isPromptSubmitting} onClick={() => void handleRunWikiGap(gap)} type="button">
-              {gap.label}
-            </button>
-          ) : null}
-        </div>
-        {!isCastSection ? (
-          <button
-            className="world-wiki-summary-button"
-            onClick={() => openWikiDetailModal({
-              title: section.title,
-              eyebrow: labelForWikiSection(section.kind),
-              body: section.summary,
-              icon: iconForWikiSection(section.kind),
-            })}
-            type="button"
-          >
-            <span className="world-wiki-summary-clamp">{section.summary}</span>
-          </button>
-        ) : null}
-        {visibleEntityKeys.length > 0 ? (
-          <div className={section.kind === 'timeline' ? 'world-wiki-timeline-list' : section.kind === 'cast' ? 'world-wiki-card-grid is-cast' : 'world-wiki-card-grid'}>
-            {visibleEntityKeys.map((key, index) => (
-              section.kind === 'timeline'
-                ? renderWikiTimelineCard(key, index + 1)
-                : renderWikiEntityCard(key, section.kind === 'cast' ? 'large' : 'compact')
-            ))}
-          </div>
-        ) : null}
-        {visibleThreadKeys.length > 0 ? (
-          <div className="world-wiki-thread-list">
-            {visibleThreadKeys.map((key) => {
-              const thread = threadByKey.get(key) ?? null
-              if (!thread) return null
-              const active = selectedPromptThreadKey === thread.key
-              const summary = thread.summary || 'No arc summary yet.'
-              return (
-                <button
-                  key={thread.key}
-                  className={active ? 'world-wiki-thread-card world-wiki-cell-reveal is-active' : 'world-wiki-thread-card world-wiki-cell-reveal'}
-                  onClick={() => {
-                    setSelectedPromptThreadKey(thread.key)
-                    openWikiDetailModal({
-                      title: thread.title,
-                      eyebrow: `${thread.priority} story arc`,
-                      body: summary,
-                      icon: 'thread',
-                      meta: [
-                        thread.status,
-                        thread.linkedEntityKeys.length ? `${thread.linkedEntityKeys.length} linked node${thread.linkedEntityKeys.length === 1 ? '' : 's'}` : null,
-                      ].filter((value): value is string => Boolean(value)),
-                    })
-                  }}
-                  type="button"
-                >
-                  <span className="world-wiki-thread-priority">{thread.priority}</span>
-                  <strong>{thread.title}</strong>
-                  <small>{summary}</small>
-                </button>
-              )
-            })}
-          </div>
-        ) : null}
-        {visibleResultKeys.length > 0 ? (
-          <div className="world-wiki-output-grid">
-            {visibleResultKeys.map((key) => {
-              const result = resultByKey.get(key) ?? null
-              if (!result) return null
-              const imageUrl = imageUrlByResultKey.get(result.key) ?? null
-              const summary = result.summary || result.resultType
-              return (
-                <button
-                  key={result.key}
-                  className="world-wiki-output-card world-wiki-cell-reveal"
-                  onClick={() => {
-                    selectWorldNode(result.key)
-                    openWikiDetailModal({
-                      title: result.title,
-                      eyebrow: labelForWorldResult(result.resultType),
-                      body: summary,
-                      icon: 'result',
-                      imageUrl,
-                      meta: [result.status],
-                    })
-                  }}
-                  type="button"
-                >
-                  {imageUrl ? <img src={imageUrl} alt="" /> : null}
-                  <strong>{result.title}</strong>
-                  <small>{summary}</small>
-                </button>
-              )
-            })}
-          </div>
-        ) : null}
-        {hasDeferredSectionCells ? (
-          <div className="world-wiki-section-loader" aria-live="polite">
-            <span className="world-loading-spinner" aria-hidden="true" />
-            <small>Loading {section.title.toLowerCase()}...</small>
-          </div>
-        ) : null}
-      </section>
+    return (
+      <WorldWikiSectionView
+        key={section.kind}
+        brandAtlasError={brandAtlasError}
+        brandAtlasGenerating={brandAtlasGenerating}
+        entityByKey={entityByKey}
+        imageUrlByEntityKey={imageUrlByEntityKey}
+        imageUrlByResultKey={imageUrlByResultKey}
+        inspectorNodeKey={inspectorNodeKey}
+        isPromptSubmitting={isPromptSubmitting}
+        normalizedWikiSearchQuery={normalizedWikiSearchQuery}
+        projectContext={projectContext}
+        resultByKey={resultByKey}
+        section={section}
+        selectedPromptThreadKey={selectedPromptThreadKey}
+        selectedWorldNodeKey={selectedWorldNodeKey}
+        threadByKey={threadByKey}
+        wikiBrandAtlasImageUrl={wikiBrandAtlasImageUrl}
+        wikiBrandAtlasPending={wikiBrandAtlasPending}
+        wikiHasAppSections={wikiHasAppSections}
+        wikiModel={wikiModel}
+        wikiSearchActive={wikiSearchActive}
+        wikiSectionVisibleCounts={wikiSectionVisibleCounts}
+        wikiStyleExpanded={wikiStyleExpanded}
+        onGenerateBrandAtlasImage={() => void handleGenerateBrandAtlasImage()}
+        onOpenBrandAtlasImageSplash={openBrandAtlasImageSplash}
+        onOpenWikiDetailModal={openWikiDetailModal}
+        onRunWikiGap={(gap) => void handleRunWikiGap(gap)}
+        onSelectWorldNode={selectWorldNode}
+        onSetActiveInspectorTab={setActiveInspectorTab}
+        onSetSelectedPromptThreadKey={setSelectedPromptThreadKey}
+        onSetWikiStyleExpanded={setWikiStyleExpanded}
+      />
     )
   }
 
