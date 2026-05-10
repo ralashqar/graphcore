@@ -3,7 +3,9 @@ import test from 'node:test'
 
 import {
   buildOpenAiUsageLine,
+  DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD,
   estimateFalMediaCost,
+  estimateMuapiMediaCost,
   estimateOpenAiTextCost,
   estimateOutputWorkflowUsage,
   readAiTokenUsage,
@@ -88,6 +90,19 @@ test('prices Seedance 2 video estimates per generated second', () => {
   assert.equal(cost.priceSnapshot.provider, 'fal')
   assert.equal(cost.priceSnapshot.model, 'bytedance/seedance-2.0/fast/reference-to-video')
   assert.equal(cost.actualCostUsd, 8 * 0.2419)
+  assert.equal(cost.priceSnapshot.billingUnit, 'generated_second')
+})
+
+test('prices MUAPI Seedance 2 with conservative per-second fallback', () => {
+  const cost = estimateMuapiMediaCost({
+    model: 'seedance-2-vip-omni-reference',
+    durationSeconds: 12,
+  })
+
+  assert.equal(cost.priceSnapshot.provider, 'muapi')
+  assert.equal(cost.priceSnapshot.model, 'seedance-2-vip-omni-reference')
+  assert.equal(cost.priceSnapshot.billingUnit, 'generated_second')
+  assert.equal(cost.actualCostUsd, 12 * DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD)
 })
 
 test('estimates output workflow text image and video nodes', () => {

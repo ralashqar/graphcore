@@ -637,6 +637,286 @@ export const cinematicSequenceSchema = z.object({
   takes: z.array(cinematicTakeSpecSchema).default([]),
 })
 
+export const cinematicV2PipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration'])
+export const cinematicV2SourceInputTypeSchema = z.enum(['prompt', 'script', 'storyBeat', 'shotList'])
+export const cinematicV2ShotPurposeSchema = z.enum([
+  'establishing',
+  'character_intro',
+  'dialogue',
+  'reaction',
+  'action',
+  'impact',
+  'insert',
+  'transition',
+  'closing',
+])
+export const cinematicV2BeatTypeSchema = z.enum(['action', 'dialogue', 'audio', 'emotion', 'camera', 'transition', 'custom'])
+export const cinematicV2TaskStatusSchema = z.enum(['planned', 'queued', 'running', 'complete', 'failed', 'skipped'])
+
+export const cinematicV2ScriptBeatSchema = z.object({
+  id: z.string(),
+  type: cinematicV2BeatTypeSchema.default('custom'),
+  text: z.string().default(''),
+  speakerRefId: z.string().nullable().default(null),
+  characterRefIds: z.array(z.string()).default([]),
+  propRefIds: z.array(z.string()).default([]),
+  emotionalIntent: z.string().default(''),
+  estimatedDurationSeconds: z.number().positive().max(15).nullable().default(null),
+})
+
+export const cinematicV2ParsedScriptSchema = z.object({
+  title: z.string().default('Cinematic Scene'),
+  summary: z.string().default(''),
+  sourceInputType: cinematicV2SourceInputTypeSchema.default('prompt'),
+  characterRefIds: z.array(z.string()).default([]),
+  locationRefId: z.string().nullable().default(null),
+  propRefIds: z.array(z.string()).default([]),
+  beats: z.array(cinematicV2ScriptBeatSchema).min(1),
+  targetDurationSeconds: z.number().positive().max(60).nullable().default(null),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+export const cinematicV2CharacterSceneStateSchema = z.object({
+  characterRefId: z.string(),
+  startingPosition: z.string().default(''),
+  emotionalState: z.string().default(''),
+  physicalState: z.string().default(''),
+  outfitState: z.string().default(''),
+  injuries: z.array(z.string()).default([]),
+  carriedPropRefIds: z.array(z.string()).default([]),
+  continuityNotes: z.array(z.string()).default([]),
+})
+
+export const cinematicV2SceneStateSchema = z.object({
+  sceneId: z.string().default('scene_1'),
+  title: z.string().default('Scene 1'),
+  summary: z.string().default(''),
+  locationRefId: z.string().nullable().default(null),
+  characterRefIds: z.array(z.string()).default([]),
+  propRefIds: z.array(z.string()).default([]),
+  timeOfDay: z.string().default(''),
+  weather: z.string().default(''),
+  atmosphere: z.string().default(''),
+  lighting: z.object({
+    direction: z.string().default(''),
+    quality: z.string().default(''),
+    colorTemperature: z.string().default(''),
+    contrast: z.string().default(''),
+  }).default({ direction: '', quality: '', colorTemperature: '', contrast: '' }),
+  mood: z.string().default(''),
+  visualContinuity: z.object({
+    palette: z.array(z.string()).default([]),
+    lensLanguage: z.string().default(''),
+    cameraMovementStyle: z.string().default(''),
+    grainOrTexture: z.string().optional(),
+  }).default({ palette: [], lensLanguage: '', cameraMovementStyle: '' }),
+  characterStates: z.array(cinematicV2CharacterSceneStateSchema).default([]),
+  locationState: z.object({
+    description: z.string().default(''),
+    continuityNotes: z.array(z.string()).default([]),
+  }).default({ description: '', continuityNotes: [] }),
+})
+
+export const cinematicV2CameraPlanSchema = z.object({
+  id: z.string(),
+  purpose: cinematicV2ShotPurposeSchema.default('establishing'),
+  position: z.string().default(''),
+  lens: z.string().default(''),
+  movement: z.string().default(''),
+  screenDirectionRule: z.string().default(''),
+})
+
+export const cinematicV2SceneLayoutPlanSchema = z.object({
+  sceneId: z.string().default('scene_1'),
+  summary: z.string().default(''),
+  spatialMapDescription: z.string().default(''),
+  characterPositions: z.array(z.object({
+    characterRefId: z.string(),
+    zone: z.string().default(''),
+    facing: z.string().default(''),
+    movementDirection: z.string().optional(),
+  })).default([]),
+  landmarks: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    position: z.string().default(''),
+    continuityRole: z.string().default(''),
+  })).default([]),
+  cameraPlan: z.array(cinematicV2CameraPlanSchema).default([]),
+  generatedLayoutImageAssetKey: z.string().nullable().default(null),
+})
+
+export const cinematicV2DialogueLineSchema = z.object({
+  id: z.string(),
+  speakerRefId: z.string(),
+  text: z.string().default(''),
+  emotion: z.string().default(''),
+  startSeconds: z.number().nonnegative().nullable().default(null),
+  endSeconds: z.number().nonnegative().nullable().default(null),
+})
+
+export const cinematicV2ShotSchema = z.object({
+  id: z.string(),
+  sceneId: z.string().default('scene_1'),
+  index: z.number().int().positive(),
+  title: z.string(),
+  purpose: cinematicV2ShotPurposeSchema.default('action'),
+  editorialDurationSeconds: z.number().positive().max(8).default(2),
+  providerDurationSeconds: z.number().int().min(4).max(15).default(4),
+  description: z.string().default(''),
+  action: z.string().default(''),
+  dialogue: z.array(cinematicV2DialogueLineSchema).default([]),
+  speakerRefIds: z.array(z.string()).default([]),
+  visibleCharacterRefIds: z.array(z.string()).default([]),
+  locationRefId: z.string().nullable().default(null),
+  propRefIds: z.array(z.string()).default([]),
+  continuityInputs: z.array(z.string()).default([]),
+  camera: z.object({
+    framing: z.string().default(''),
+    angle: z.string().default(''),
+    lens: z.string().default(''),
+    movement: z.string().default(''),
+    screenDirectionRule: z.string().default(''),
+  }).default({ framing: '', angle: '', lens: '', movement: '', screenDirectionRule: '' }),
+  requiresLipSync: z.boolean().default(false),
+  status: cinematicV2TaskStatusSchema.default('planned'),
+})
+
+export const cinematicV2ShotPlanSchema = z.object({
+  sceneId: z.string().default('scene_1'),
+  totalEditorialDurationSeconds: z.number().positive().max(90),
+  shots: z.array(cinematicV2ShotSchema).min(1).max(20),
+  audioPlan: z.object({
+    ambience: z.string().default(''),
+    music: z.string().default(''),
+    sfx: z.array(z.string()).default([]),
+    dialogueTrackCount: z.number().int().nonnegative().default(0),
+    placeholderOnly: z.boolean().default(true),
+  }).default({ ambience: '', music: '', sfx: [], dialogueTrackCount: 0, placeholderOnly: true }),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+export const cinematicV2StoryboardLayoutSchema = z.object({
+  rows: z.number().int().positive(),
+  columns: z.number().int().positive(),
+  panelCount: z.number().int().positive(),
+})
+
+export const cinematicV2StoryboardSheetSchema = z.object({
+  id: z.string(),
+  sceneId: z.string().default('scene_1'),
+  assetKey: z.string().nullable().default(null),
+  storagePath: z.string().nullable().default(null),
+  rows: z.number().int().positive(),
+  columns: z.number().int().positive(),
+  shotIds: z.array(z.string()).default([]),
+  generationPrompt: z.string().default(''),
+  model: z.string().default(''),
+})
+
+export const cinematicV2PanelAssetSchema = z.object({
+  id: z.string(),
+  shotId: z.string(),
+  assetKey: z.string().nullable().default(null),
+  storagePath: z.string().nullable().default(null),
+  sourceSheetAssetKey: z.string().nullable().default(null),
+  row: z.number().int().nonnegative(),
+  column: z.number().int().nonnegative(),
+})
+
+export const cinematicV2ShotKeyframeSchema = z.object({
+  id: z.string(),
+  shotId: z.string(),
+  type: z.enum(['storyboard_panel', 'refined_start', 'refined_end', 'intermediate', 'carryover']).default('refined_start'),
+  assetKey: z.string().nullable().default(null),
+  storagePath: z.string().nullable().default(null),
+  prompt: z.string().default(''),
+  sourceAssetKeys: z.array(z.string()).default([]),
+  qualityScore: z.number().min(0).max(1).nullable().default(null),
+})
+
+export const cinematicV2VideoTaskSchema = z.object({
+  id: z.string(),
+  shotId: z.string(),
+  provider: z.string().default('seedance'),
+  inputKeyframeAssetKeys: z.array(z.string()).default([]),
+  prompt: z.string().default(''),
+  durationSeconds: z.number().positive().max(15),
+  aspectRatio: z.string().default('16:9'),
+  status: cinematicV2TaskStatusSchema.default('planned'),
+  outputVideoAssetKey: z.string().nullable().default(null),
+  error: z.string().nullable().default(null),
+})
+
+export const cinematicV2TimelineSchema = z.object({
+  id: z.string(),
+  sceneId: z.string().default('scene_1'),
+  durationSeconds: z.number().nonnegative(),
+  videoClips: z.array(z.object({
+    shotId: z.string(),
+    videoAssetKey: z.string().nullable().default(null),
+    startTime: z.number().nonnegative(),
+    endTime: z.number().nonnegative(),
+    trimIn: z.number().nonnegative().default(0),
+    trimOut: z.number().nonnegative().default(0),
+  })).default([]),
+  audioClips: z.array(z.object({
+    type: z.enum(['dialogue', 'ambience', 'music', 'sfx']),
+    label: z.string().default(''),
+    startTime: z.number().nonnegative(),
+    endTime: z.number().nonnegative(),
+    volumeDb: z.number().nullable().default(null),
+    placeholder: z.boolean().default(true),
+  })).default([]),
+})
+
+export type CinematicV2ParsedScript = z.infer<typeof cinematicV2ParsedScriptSchema>
+export type CinematicV2SceneState = z.infer<typeof cinematicV2SceneStateSchema>
+export type CinematicV2SceneLayoutPlan = z.infer<typeof cinematicV2SceneLayoutPlanSchema>
+export type CinematicV2Shot = z.infer<typeof cinematicV2ShotSchema>
+export type CinematicV2ShotPlan = z.infer<typeof cinematicV2ShotPlanSchema>
+export type CinematicV2StoryboardLayout = z.infer<typeof cinematicV2StoryboardLayoutSchema>
+
+export function buildCinematicV2StoryboardLayout(shotCount: number): CinematicV2StoryboardLayout {
+  const panelCount = Math.max(1, Math.min(9, Math.ceil(shotCount)))
+  if (panelCount <= 1) return { rows: 1, columns: 1, panelCount }
+  if (panelCount <= 2) return { rows: 1, columns: 2, panelCount }
+  if (panelCount <= 4) return { rows: 2, columns: 2, panelCount }
+  if (panelCount <= 6) return { rows: 2, columns: 3, panelCount }
+  return { rows: 3, columns: 3, panelCount }
+}
+
+export function providerSafeCinematicV2DurationSeconds(editorialDurationSeconds: number) {
+  if (!Number.isFinite(editorialDurationSeconds)) return 4
+  return Math.max(4, Math.min(15, Math.ceil(editorialDurationSeconds)))
+}
+
+export function validateCinematicV2ShotPlanReferences(input: {
+  shotPlan: CinematicV2ShotPlan
+  referenceIds: readonly string[]
+}) {
+  const allowed = new Set(input.referenceIds)
+  const diagnostics: string[] = []
+  for (const shot of input.shotPlan.shots) {
+    const refs = [
+      ...shot.visibleCharacterRefIds,
+      ...shot.speakerRefIds,
+      ...shot.propRefIds,
+      ...(shot.locationRefId ? [shot.locationRefId] : []),
+    ]
+    refs.forEach((refId) => {
+      if (refId && !allowed.has(refId)) diagnostics.push(`Shot ${shot.id} references unknown cinematic ref "${refId}".`)
+    })
+    if (!shot.camera.framing && !shot.camera.angle && !shot.camera.movement) {
+      diagnostics.push(`Shot ${shot.id} is missing a primary camera intent.`)
+    }
+    if (shot.providerDurationSeconds < 4) {
+      diagnostics.push(`Shot ${shot.id} has provider duration below 4 seconds.`)
+    }
+  }
+  return diagnostics
+}
+
 export const assetRefNodeConfigSchema = z.object({
   entityRefId: z.string().nullable().default(null),
   definitionKey: z.string().nullable().default(null),

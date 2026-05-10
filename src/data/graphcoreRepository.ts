@@ -7706,9 +7706,12 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   generateAudio?: boolean
   cinematicPresetFamily?: string
   cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
+  cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
   debugCinematicStoryboardStyleSafeMode?: boolean
   cinematicStoryboardStyleOverride?: string
   debugSkipVideoGeneration?: boolean
+  cinematicVideoApproved?: boolean
+  cinematicVideoProductionEstimate?: Record<string, unknown> | null
 }) {
   const selectedEntityKeys = request?.selectedEntityKeys ?? []
   const selectedSequenceUnitKeys = request?.selectedSequenceUnitKeys ?? []
@@ -7740,9 +7743,12 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     generateAudio: request?.generateAudio,
     cinematicPresetFamily: request?.cinematicPresetFamily,
     cinematicReferenceMode: request?.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+    cinematicPipelineVersion: request?.cinematicPipelineVersion,
     debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
+    cinematicVideoApproved: request?.cinematicVideoApproved === true,
+    cinematicVideoProductionEstimate: request?.cinematicVideoProductionEstimate ?? null,
   }
 }
 
@@ -7772,6 +7778,7 @@ export async function planOutputWorkflow(
     generateAudio: request?.generateAudio,
     cinematicPresetFamily: request?.cinematicPresetFamily,
     cinematicReferenceMode: request?.cinematicReferenceMode,
+    cinematicPipelineVersion: request?.cinematicPipelineVersion,
     debugCinematicStoryboardStyleSafeMode: request?.debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride: request?.cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration,
@@ -7819,12 +7826,14 @@ export async function startOutputWorkflowRun(
   request: {
     workflowId: string
     prompt?: string
-    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
     input?: Record<string, unknown>
     metadata?: Record<string, unknown>
+    cinematicVideoApproved?: boolean
+    cinematicVideoProductionEstimate?: Record<string, unknown> | null
   },
 ): Promise<OutputWorkflowRunStatusResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before running an output workflow.')
@@ -8148,6 +8157,7 @@ export async function startOutputRequest(
     generateAudio?: boolean
     cinematicPresetFamily?: 'story_movie_tv' | 'ugc_creator' | 'ugc_direct_response_ad' | 'ugc_faceless_format'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
+    cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -8175,6 +8185,7 @@ export async function startOutputRequest(
     generateAudio: request.generateAudio,
     cinematicPresetFamily: request.cinematicPresetFamily,
     cinematicReferenceMode: request.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+    cinematicPipelineVersion: request.cinematicPipelineVersion,
     debugCinematicStoryboardStyleSafeMode: request.debugCinematicStoryboardStyleSafeMode ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
     cinematicStoryboardStyleOverride: request.cinematicStoryboardStyleOverride ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
     debugSkipVideoGeneration: request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,

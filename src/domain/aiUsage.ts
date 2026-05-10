@@ -110,6 +110,7 @@ type ImagePrice = {
 
 const DEFAULT_CREDITS_PER_USD = 100
 const DEFAULT_OPENAI_TEXT_MODEL = 'gpt-5.4'
+export const DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD = 0.30
 
 export const OPENAI_TEXT_PRICE_SNAPSHOT: Record<string, TextPrice> = {
   'gpt-5.4': { inputPer1M: 1.25, outputPer1M: 10, cachedInputPer1M: 0.125, source: 'openai_pricing_snapshot_gpt5_family_fallback' },
@@ -134,7 +135,7 @@ export const FAL_MEDIA_PRICE_SNAPSHOT: Record<string, ImagePrice> = {
 }
 
 export const MUAPI_MEDIA_PRICE_SNAPSHOT: Record<string, ImagePrice> = {
-  'seedance-2-vip-omni-reference': { unitUsd: 0, source: 'muapi_pricing_not_configured' },
+  'seedance-2-vip-omni-reference': { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_seedance_2_conservative_per_second_snapshot' },
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -147,6 +148,12 @@ function readNumber(value: unknown): number {
 
 function readRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
+}
+
+function pricingUnitsForMedia(input: { model: string; units?: number; durationSeconds?: number }) {
+  const units = Math.max(1, input.units ?? 1)
+  const durationSeconds = Math.max(0, input.durationSeconds ?? 0)
+  return /seedance/i.test(input.model) && durationSeconds > 0 ? durationSeconds : units
 }
 
 function creditsForUsd(usd: number, creditsPerUsd = DEFAULT_CREDITS_PER_USD): number {
@@ -217,7 +224,7 @@ export function estimateFalMediaCost(input: {
   creditsPerUsd?: number
 }): AiUsageCost {
   const price = FAL_MEDIA_PRICE_SNAPSHOT[input.model] ?? { unitUsd: 0.08, source: 'fal_pricing_fallback' }
-  const units = Math.max(1, input.units ?? 1)
+  const units = pricingUnitsForMedia(input)
   const actualCostUsd = units * price.unitUsd
   return aiUsageCostSchema.parse({
     estimatedCostUsd: actualCostUsd,
@@ -229,6 +236,8 @@ export function estimateFalMediaCost(input: {
       provider: 'fal',
       model: input.model,
       unitUsd: price.unitUsd,
+      billingUnits: units,
+      billingUnit: /seedance/i.test(input.model) ? 'generated_second' : 'unit',
       width: input.width ?? null,
       height: input.height ?? null,
       durationSeconds: input.durationSeconds ?? null,
@@ -244,8 +253,8 @@ export function estimateMuapiMediaCost(input: {
   durationSeconds?: number
   creditsPerUsd?: number
 }): AiUsageCost {
-  const price = MUAPI_MEDIA_PRICE_SNAPSHOT[input.model] ?? { unitUsd: 0, source: 'muapi_pricing_not_configured' }
-  const units = Math.max(1, input.units ?? 1)
+  const price = MUAPI_MEDIA_PRICE_SNAPSHOT[input.model] ?? { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_video_conservative_per_second_fallback' }
+  const units = pricingUnitsForMedia(input)
   const actualCostUsd = units * price.unitUsd
   return aiUsageCostSchema.parse({
     estimatedCostUsd: actualCostUsd,
@@ -257,6 +266,8 @@ export function estimateMuapiMediaCost(input: {
       provider: 'muapi',
       model: input.model,
       unitUsd: price.unitUsd,
+      billingUnits: units,
+      billingUnit: /seedance/i.test(input.model) ? 'generated_second' : 'unit',
       width: input.width ?? null,
       height: input.height ?? null,
       durationSeconds: input.durationSeconds ?? null,

@@ -1,9 +1,17 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
-import { aiUsageLineSchema, aiUsageSummarySchema, formatAiUsd, summarizeAiUsageLines } from '../../domain/aiUsage'
+import {
+  estimateFalMediaCost,
+  estimateMuapiMediaCost,
+  aiUsageLineSchema,
+  aiUsageSummarySchema,
+  formatAiUsd,
+  summarizeAiUsageLines,
+} from '../../domain/aiUsage'
+import { buildCinematicV2TimelineProjection, type CinematicTimelineProjection } from '../../domain/cinematicTimelineProjection'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import {
   buildOutputGuidanceBundleForNode,
@@ -23,6 +31,7 @@ import {
   type OutputArtifact,
 } from '../../domain/outputWorkflow'
 import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
+import { CinematicTimelinePlayer } from '../cinematics/CinematicTimelinePlayer'
 import { useOutputWorkspaceState } from './useOutputWorkspaceState'
 
 type OutputsWorkspaceProps = {
@@ -35,7 +44,7 @@ type OutputsWorkspaceProps = {
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
-    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image'
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
@@ -54,7 +63,7 @@ type OutputsWorkspaceProps = {
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
-    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
   }) => Promise<OutputWorkflowPlanResponse>
@@ -62,7 +71,7 @@ type OutputsWorkspaceProps = {
   onStartOutputWorkflowRun: (request: {
     workflowId: string
     prompt: string
-    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown'
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
@@ -120,6 +129,23 @@ function readFirstStepRecord(run: OutputWorkflowRun | null | undefined, keys: st
   return null
 }
 
+function readAllStepRecords(run: OutputWorkflowRun | null | undefined, keys: string[]) {
+  const records: Record<string, unknown>[] = []
+  for (const step of run?.steps ?? []) {
+    const outputs = readRecord(step.outputs)
+    for (const key of keys) {
+      const value = outputs[key]
+      if (Array.isArray(value)) {
+        records.push(...value.map(readRecord).filter((entry) => Object.keys(entry).length > 0))
+        continue
+      }
+      const record = readNonEmptyRecord(value)
+      if (record) records.push(record)
+    }
+  }
+  return records
+}
+
 function formatScriptSeconds(value: unknown) {
   const seconds = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(seconds)) return '0s'
@@ -141,15 +167,42 @@ function buildCinematicScriptViewData(
     ?? readFirstStepRecord(run, ['cinematicScriptDoc', 'executionScriptDoc', 'scriptDoc'])
   const compiledCinematicSequence = readNonEmptyRecord(workflowMetadata.compiledCinematicSequence)
     ?? readFirstStepRecord(run, ['compiledCinematicSequence'])
+  const cinematicV2ParsedScript = readNonEmptyRecord(workflowMetadata.cinematicV2ParsedScript)
+    ?? readFirstStepRecord(run, ['parsedScript', 'parsed_script'])
+  const cinematicV2SceneState = readNonEmptyRecord(workflowMetadata.cinematicV2SceneState)
+    ?? readFirstStepRecord(run, ['sceneState', 'scene_state'])
+  const cinematicV2LayoutPlan = readNonEmptyRecord(workflowMetadata.cinematicV2LayoutPlan)
+    ?? readFirstStepRecord(run, ['layoutPlan', 'layout_plan'])
+  const cinematicV2ShotPlan = readNonEmptyRecord(workflowMetadata.cinematicV2ShotPlan)
+    ?? readFirstStepRecord(run, ['shotPlan', 'shot_plan'])
+  const cinematicV2Panels = readAllStepRecords(run, ['panels']).filter((panel) => readTrimmedString(panel.role) === 'cinematic_v2_storyboard_panel' || readTrimmedString(panel.shotId))
+  const cinematicV2Images = readAllStepRecords(run, ['image']).filter((image) => readTrimmedString(image.role).startsWith('cinematic_v2_'))
+  const cinematicV2Videos = readAllStepRecords(run, ['video']).filter((video) => readTrimmedString(video.role).startsWith('cinematic_v2_'))
+  const cinematicV2Timeline = readFirstStepRecord(run, ['timeline'])
   const preset = readTrimmedString(workflow?.preset)
-  const isCinematic = preset.includes('cinematic') || preset.includes('ugc') || Boolean(directorScriptDoc || executionScriptDoc || compiledCinematicSequence)
+  const isV2 = readTrimmedString(workflowMetadata.cinematicPipelineVersion) === 'v2_shot_orchestration'
+    || Boolean(cinematicV2ParsedScript || cinematicV2SceneState || cinematicV2LayoutPlan || cinematicV2ShotPlan)
+  const isCinematic = preset.includes('cinematic') || preset.includes('ugc') || Boolean(directorScriptDoc || executionScriptDoc || compiledCinematicSequence || isV2)
   return {
     isCinematic,
+    isV2,
     directorScriptDoc,
     executionScriptDoc,
     compiledCinematicSequence,
-    title: readTrimmedString(directorScriptDoc?.title) || readTrimmedString(executionScriptDoc?.title) || 'Cinematic Script',
-    logline: readTrimmedString(directorScriptDoc?.logline) || readTrimmedString(executionScriptDoc?.logline),
+    cinematicV2: {
+      parsedScript: cinematicV2ParsedScript,
+      sceneState: cinematicV2SceneState,
+      layoutPlan: cinematicV2LayoutPlan,
+      shotPlan: cinematicV2ShotPlan,
+      panels: cinematicV2Panels,
+      keyframes: cinematicV2Images.filter((image) => readTrimmedString(image.role) === 'cinematic_v2_shot_keyframe'),
+      storyboardSheets: cinematicV2Images.filter((image) => readTrimmedString(image.role) === 'cinematic_v2_storyboard_sheet'),
+      videos: cinematicV2Videos.filter((video) => readTrimmedString(video.role) === 'cinematic_v2_shot_video'),
+      finalVideos: cinematicV2Videos.filter((video) => readTrimmedString(video.role) === 'cinematic_v2_final_timeline'),
+      timeline: cinematicV2Timeline,
+    },
+    title: readTrimmedString(cinematicV2ParsedScript?.title) || readTrimmedString(cinematicV2SceneState?.title) || readTrimmedString(directorScriptDoc?.title) || readTrimmedString(executionScriptDoc?.title) || 'Cinematic Script',
+    logline: readTrimmedString(cinematicV2ParsedScript?.summary) || readTrimmedString(cinematicV2SceneState?.summary) || readTrimmedString(directorScriptDoc?.logline) || readTrimmedString(executionScriptDoc?.logline),
     tone: readTrimmedString(directorScriptDoc?.tone) || readTrimmedString(executionScriptDoc?.tone),
     continuityLock: readTrimmedString(directorScriptDoc?.continuityLock) || readTrimmedString(executionScriptDoc?.continuityNotes),
     entityRefs: cinematicArray(directorScriptDoc?.entityRefs).length > 0
@@ -165,9 +218,337 @@ function buildCinematicScriptViewData(
   }
 }
 
-function CinematicScriptPanel({ data }: { data: ReturnType<typeof buildCinematicScriptViewData> }) {
+function buildSafeCinematicV2TimelineProjection(data: ReturnType<typeof buildCinematicScriptViewData>): CinematicTimelineProjection | null {
+  if (!data.cinematicV2.shotPlan) return null
+  try {
+    return buildCinematicV2TimelineProjection({
+      shotPlan: data.cinematicV2.shotPlan,
+      timeline: data.cinematicV2.timeline,
+      panels: data.cinematicV2.panels,
+      keyframes: data.cinematicV2.keyframes,
+      videos: data.cinematicV2.videos,
+      storyboardSheets: data.cinematicV2.storyboardSheets,
+    })
+  } catch {
+    return null
+  }
+}
+
+type CinematicV2ProductionEstimate = {
+  clipCount: number
+  generatedSeconds: number
+  estimatedCostUsd: number
+  provider: string
+  model: string
+  pricePerSecondUsd: number
+}
+
+function isCinematicV2ProductionNodeConfig(config: Record<string, unknown>, nodeType?: string) {
+  const purpose = readTrimmedString(config.purpose)
+  const role = readTrimmedString(config.role)
+  return readTrimmedString(config.cinematicPipelineVersion) === 'v2_shot_orchestration'
+    && (
+      purpose === 'cinematic_v2_shot_video'
+      || role === 'cinematic_v2_shot_video'
+      || purpose === 'cinematic_v2_timeline_assemble'
+      || role === 'cinematic_v2_final_timeline'
+      || (nodeType === 'output_artifact' && purpose === 'cinematic_video_artifact')
+    )
+}
+
+function buildCinematicV2ProductionEstimate(
+  data: ReturnType<typeof buildCinematicScriptViewData>,
+  nodes: OutputWorkflowNode[],
+): CinematicV2ProductionEstimate | null {
+  const shotPlan = readRecord(data.cinematicV2.shotPlan)
+  const shots = cinematicArray(shotPlan.shots)
+  const shotVideoNodes = nodes.filter((node) => {
+    const config = readRecord(node.config)
+    return node.nodeType === 'video_generation' && isCinematicV2ProductionNodeConfig(config, node.nodeType)
+  })
+  const clipCount = Math.max(shots.length, shotVideoNodes.length)
+  if (clipCount === 0) return null
+
+  const shotSeconds = shots.reduce((sum, shot) => {
+    const providerSeconds = readNumber(shot.providerDurationSeconds)
+    const editorialSeconds = readNumber(shot.editorialDurationSeconds)
+    return sum + Math.max(0, providerSeconds ?? editorialSeconds ?? 0)
+  }, 0)
+  const nodeSeconds = shotVideoNodes.reduce((sum, node) => {
+    const config = readRecord(node.config)
+    return sum + Math.max(0, readNumber(config.durationSeconds) ?? 0)
+  }, 0)
+  const generatedSeconds = shotSeconds > 0 ? shotSeconds : nodeSeconds
+  if (generatedSeconds <= 0) return null
+
+  const firstVideoConfig = readRecord(shotVideoNodes[0]?.config)
+  const provider = readTrimmedString(firstVideoConfig.videoProvider)
+    || readTrimmedString(firstVideoConfig.provider)
+    || aiGenerationSettings.outputWorkflow.videoProviderDefault
+  const model = readTrimmedString(firstVideoConfig.model)
+    || (provider === 'fal'
+      ? aiGenerationSettings.outputWorkflow.videoFalModel
+      : aiGenerationSettings.outputWorkflow.videoMuapiModel)
+  const cost = provider === 'fal'
+    ? estimateFalMediaCost({ model, durationSeconds: generatedSeconds, units: generatedSeconds })
+    : estimateMuapiMediaCost({ model, durationSeconds: generatedSeconds, units: generatedSeconds })
+  const unitUsd = typeof cost.priceSnapshot.unitUsd === 'number'
+    ? cost.priceSnapshot.unitUsd
+    : generatedSeconds > 0
+      ? cost.estimatedCostUsd / generatedSeconds
+      : 0
+
+  return {
+    clipCount,
+    generatedSeconds,
+    estimatedCostUsd: cost.estimatedCostUsd,
+    provider,
+    model,
+    pricePerSecondUsd: unitUsd,
+  }
+}
+
+function CinematicV2TimelineModal({
+  assets,
+  onClose,
+  projection,
+  title,
+}: {
+  assets: ProjectSnapshot['assets']
+  onClose: () => void
+  projection: CinematicTimelineProjection
+  title: string
+}) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
+    <div aria-label="Cinematic timeline preview" aria-modal="true" className="outputs-cinematic-timeline-modal" role="dialog">
+      <button aria-label="Close cinematic timeline" className="outputs-cinematic-timeline-backdrop" onClick={onClose} type="button" />
+      <div className="outputs-cinematic-timeline-panel">
+        <div className="outputs-cinematic-timeline-header">
+          <div>
+            <p className="outputs-eyebrow">Cinematic Timeline</p>
+            <h3>{title}</h3>
+          </div>
+          <button className="outputs-node-action" onClick={onClose} type="button">Close</button>
+        </div>
+        <CinematicTimelinePlayer
+          assets={assets}
+          projection={projection}
+          subtitle="V2 shot orchestration preview"
+          title={title}
+        />
+      </div>
+    </div>
+  )
+}
+
+function CinematicV2ProductionPanel({
+  assets,
+  canRunOutputs,
+  data,
+  estimate,
+  isApprovingVideo,
+  isVideoApproved,
+  onApproveVideoProduction,
+}: {
+  assets: ProjectSnapshot['assets']
+  canRunOutputs: boolean
+  data: ReturnType<typeof buildCinematicScriptViewData>
+  estimate: CinematicV2ProductionEstimate | null
+  isApprovingVideo: boolean
+  isVideoApproved: boolean
+  onApproveVideoProduction: () => void
+}) {
+  const [timelineOpen, setTimelineOpen] = useState(false)
+  const parsedScript = readRecord(data.cinematicV2.parsedScript)
+  const sceneState = readRecord(data.cinematicV2.sceneState)
+  const layoutPlan = readRecord(data.cinematicV2.layoutPlan)
+  const shotPlan = readRecord(data.cinematicV2.shotPlan)
+  const shots = cinematicArray(shotPlan.shots)
+  const timeline = readRecord(data.cinematicV2.timeline)
+  const timelineProjection = useMemo(() => buildSafeCinematicV2TimelineProjection(data), [data])
+  const panelsByShotId = new Map(data.cinematicV2.panels.map((panel) => [readTrimmedString(panel.shotId), panel]))
+  const keyframesByShotId = new Map(data.cinematicV2.keyframes.map((image) => [readTrimmedString(image.shotId), image]))
+  const videosByShotId = new Map(data.cinematicV2.videos.map((video) => [readTrimmedString(video.shotId), video]))
+  const keyframesReady = shots.length > 0 && data.cinematicV2.keyframes.length > 0
+  const finalVideoReady = data.cinematicV2.finalVideos.length > 0
+  const approvalStatus = finalVideoReady
+    ? 'Final video ready'
+    : data.cinematicV2.videos.length > 0
+      ? 'Generating video'
+      : isVideoApproved
+        ? 'Approved'
+        : keyframesReady
+          ? 'Animatic ready'
+          : 'Building animatic'
+  const estimateLabel = estimate
+    ? `${estimate.clipCount} clips · ${formatScriptSeconds(estimate.generatedSeconds)} generated · ~${formatAiUsd(estimate.estimatedCostUsd)}`
+    : 'Production estimate pending'
+
+  return (
+    <div className="outputs-script-panel outputs-cinematic-v2-panel">
+      <div className="outputs-script-header">
+        <small>Cinematics V2 · Animatic approval</small>
+        <strong>{data.title}</strong>
+        {data.logline ? <p>{data.logline}</p> : null}
+        <div className="outputs-script-meta">
+          {shots.length > 0 ? <span>{shots.length} shots</span> : null}
+          {readNumber(shotPlan.totalEditorialDurationSeconds) ? <span>{formatScriptSeconds(shotPlan.totalEditorialDurationSeconds)} editorial</span> : null}
+          {data.cinematicV2.storyboardSheets.length > 0 ? <span>Storyboard ready</span> : <span>Storyboard pending</span>}
+          <span>{approvalStatus}</span>
+          <button className="outputs-node-action" disabled={!timelineProjection} onClick={() => setTimelineOpen(true)} type="button">Open Timeline</button>
+        </div>
+        <div className="outputs-cinematic-v2-approval">
+          <div>
+            <span>Final video production</span>
+            <strong>{estimateLabel}</strong>
+            {estimate ? <small>{estimate.provider.toUpperCase()} · {estimate.model} · {formatAiUsd(estimate.pricePerSecondUsd)}/s</small> : null}
+          </div>
+          <button
+            className="outputs-primary-action"
+            disabled={!canRunOutputs || !keyframesReady || finalVideoReady || isApprovingVideo}
+            onClick={onApproveVideoProduction}
+            type="button"
+          >
+            {isApprovingVideo ? 'Starting...' : finalVideoReady ? 'Video Ready' : 'Approve & Generate Video'}
+          </button>
+        </div>
+      </div>
+
+      <div className="outputs-cinematic-v2-grid">
+        <section className="outputs-script-section">
+          <strong>Scene State</strong>
+          {readTrimmedString(sceneState.mood) ? <p><b>Mood:</b> {readTrimmedString(sceneState.mood)}</p> : null}
+          {readTrimmedString(sceneState.atmosphere) ? <p><b>Atmosphere:</b> {readTrimmedString(sceneState.atmosphere)}</p> : null}
+          {readTrimmedString(readRecord(sceneState.lighting).direction) ? <p><b>Lighting:</b> {[readTrimmedString(readRecord(sceneState.lighting).direction), readTrimmedString(readRecord(sceneState.lighting).quality), readTrimmedString(readRecord(sceneState.lighting).colorTemperature)].filter(Boolean).join(' · ')}</p> : null}
+          {readStringArray(readRecord(sceneState.visualContinuity).palette).length > 0 ? (
+            <div className="outputs-script-chips">{readStringArray(readRecord(sceneState.visualContinuity).palette).map((entry) => <span key={entry}>{entry}</span>)}</div>
+          ) : null}
+        </section>
+
+        <section className="outputs-script-section">
+          <strong>Layout / Blocking</strong>
+          {readTrimmedString(layoutPlan.summary) ? <p>{readTrimmedString(layoutPlan.summary)}</p> : null}
+          {readTrimmedString(layoutPlan.spatialMapDescription) ? <p><b>Spatial map:</b> {readTrimmedString(layoutPlan.spatialMapDescription)}</p> : null}
+          {cinematicArray(layoutPlan.cameraPlan).length > 0 ? (
+            <div className="outputs-script-chips">
+              {cinematicArray(layoutPlan.cameraPlan).slice(0, 4).map((camera, index) => (
+                <span key={`${readTrimmedString(camera.id) || index}`}>{readTrimmedString(camera.purpose) || `Camera ${index + 1}`}</span>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      </div>
+
+      {cinematicArray(parsedScript.beats).length > 0 ? (
+        <section className="outputs-script-section">
+          <strong>Parsed Beats</strong>
+          <div className="outputs-script-chips">
+            {cinematicArray(parsedScript.beats).slice(0, 9).map((beat, index) => (
+              <span key={`${readTrimmedString(beat.id) || index}`}>{readTrimmedString(beat.type) || 'beat'} · {readTrimmedString(beat.text).slice(0, 72)}</span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="outputs-script-section">
+        <strong>Production Shots</strong>
+        {shots.length === 0 ? <p className="outputs-muted">Shot planning has not completed yet.</p> : null}
+        <div className="outputs-cinematic-v2-shot-grid">
+          {shots.map((shot, index) => {
+            const shotId = readTrimmedString(shot.id)
+            const panel = panelsByShotId.get(shotId)
+            const keyframe = keyframesByShotId.get(shotId)
+            const video = videosByShotId.get(shotId)
+            return (
+              <article className="outputs-script-shot outputs-cinematic-v2-shot" key={shotId || index}>
+                <div className="outputs-script-shot-head">
+                  <b>{readTrimmedString(shot.title) || `Shot ${index + 1}`}</b>
+                  <span>{readTrimmedString(shot.purpose) || 'shot'} · {formatScriptSeconds(shot.editorialDurationSeconds)} / {formatScriptSeconds(shot.providerDurationSeconds)}</span>
+                </div>
+                <p>{readTrimmedString(shot.description) || readTrimmedString(shot.action)}</p>
+                <p><b>Camera:</b> {[readTrimmedString(readRecord(shot.camera).framing), readTrimmedString(readRecord(shot.camera).movement), readTrimmedString(readRecord(shot.camera).screenDirectionRule)].filter(Boolean).join(' · ')}</p>
+                <div className="outputs-script-meta">
+                  {panel ? <span>Panel</span> : <span>Panel pending</span>}
+                  {keyframe ? <span>Keyframe</span> : <span>Keyframe pending</span>}
+                  {video ? <span>Video</span> : <span>Video pending</span>}
+                  {shot.requiresLipSync === true ? <span>Lip sync later</span> : null}
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      </section>
+
+      {Object.keys(timeline).length > 0 ? (
+        <section className="outputs-script-section">
+          <div className="outputs-cinematic-v2-section-head">
+            <strong>Timeline</strong>
+            <button className="outputs-node-action" disabled={!timelineProjection} onClick={() => setTimelineOpen(true)} type="button">Cinematic</button>
+          </div>
+          <div className="outputs-cinematic-v2-timeline">
+            {cinematicArray(timeline.videoClips).map((clip, index) => (
+              <span key={`${readTrimmedString(clip.shotId) || index}`} style={{ flexGrow: Math.max(1, Number(clip.endTime ?? 0) - Number(clip.startTime ?? 0)) }}>
+                {readTrimmedString(clip.shotId) || `Shot ${index + 1}`}
+              </span>
+            ))}
+          </div>
+          {cinematicArray(timeline.audioClips).length > 0 ? <p className="outputs-muted">Placeholder audio plan stored for ambience/music; dialogue audio and lip sync are deferred.</p> : null}
+        </section>
+      ) : null}
+      {timelineOpen && timelineProjection ? (
+        <CinematicV2TimelineModal
+          assets={assets}
+          onClose={() => setTimelineOpen(false)}
+          projection={timelineProjection}
+          title={data.title}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function CinematicScriptPanel({
+  assets,
+  canRunOutputs,
+  data,
+  estimate,
+  isApprovingVideo,
+  isVideoApproved,
+  onApproveVideoProduction,
+}: {
+  assets: ProjectSnapshot['assets']
+  canRunOutputs: boolean
+  data: ReturnType<typeof buildCinematicScriptViewData>
+  estimate: CinematicV2ProductionEstimate | null
+  isApprovingVideo: boolean
+  isVideoApproved: boolean
+  onApproveVideoProduction: () => void
+}) {
   if (!data.isCinematic) {
     return <p className="outputs-muted">This workflow is not a cinematic output.</p>
+  }
+  if (data.isV2) {
+    return (
+      <CinematicV2ProductionPanel
+        assets={assets}
+        canRunOutputs={canRunOutputs}
+        data={data}
+        estimate={estimate}
+        isApprovingVideo={isApprovingVideo}
+        isVideoApproved={isVideoApproved}
+        onApproveVideoProduction={onApproveVideoProduction}
+      />
+    )
   }
   if (!data.directorScriptDoc && !data.executionScriptDoc && !data.compiledCinematicSequence) {
     return <p className="outputs-muted">The cinematic script has not been authored yet. Run the script node or refresh after compile.</p>
@@ -618,6 +999,7 @@ export function OutputsWorkspace({
   onUpgradeOutputWorkflowPreset,
   onRefreshLiveSnapshot,
 }: OutputsWorkspaceProps) {
+  const [approvingVideoProduction, setApprovingVideoProduction] = useState(false)
   const {
     activeRunId,
     busy,
@@ -798,6 +1180,12 @@ export function OutputsWorkspace({
     () => buildCinematicScriptViewData(activeWorkflow, displayRun),
     [activeWorkflow, displayRun],
   )
+  const cinematicV2ProductionEstimate = useMemo(
+    () => buildCinematicV2ProductionEstimate(cinematicScriptViewData, activeNodes),
+    [activeNodes, cinematicScriptViewData],
+  )
+  const cinematicVideoApproved = readRecord(displayRun?.input).cinematicVideoApproved === true
+    || readRecord(displayRun?.metadata).cinematicVideoApproved === true
   const workflowStages = useMemo(() => buildWorkflowStages({
     nodes: activeNodes,
     levels: workflowExecutionPlan?.levels ?? [],
@@ -1020,7 +1408,7 @@ export function OutputsWorkspace({
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeRun.workflowId,
         prompt: activeRun.prompt || prompt,
-        targetFormat: activeRun.targetFormat as 'pdf' | 'epub' | 'docx' | 'markdown',
+        targetFormat: activeRun.targetFormat as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
         selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
         selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
         input: previousInput,
@@ -1085,12 +1473,14 @@ export function OutputsWorkspace({
             defaultDownstreamTarget,
           ].filter(Boolean)))
         : [node.key]
-    const debugForceVideoGeneration = node.nodeType === 'video_generation'
+    const isCinematicV2ProductionVideo = node.nodeType === 'video_generation'
+      && isCinematicV2ProductionNodeConfig(config, node.nodeType)
+    const debugForceVideoGeneration = node.nodeType === 'video_generation' && !isCinematicV2ProductionVideo
     markTargetedNodes([node.key], effectiveRunScope)
     setError(null)
     try {
       const workflowMetadata = readRecord(activeWorkflow.metadata)
-      const previousInput = activeRun ? readRecord(activeRun.input) : {
+      const previousInput: Record<string, unknown> = activeRun ? readRecord(activeRun.input) : {
         sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
         sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
         pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
@@ -1101,10 +1491,10 @@ export function OutputsWorkspace({
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeWorkflow.id,
         prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
-        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
-        selectedEntityKeys: readStringArray(runInput.sourceEntityKeys),
-        selectedSequenceUnitKeys: readStringArray(runInput.sourceSequenceUnitKeys),
-        pageCount: readNumber(runInput.pageCount) ?? undefined,
+        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
+        selectedEntityKeys: readStringArray(runInput['sourceEntityKeys']),
+        selectedSequenceUnitKeys: readStringArray(runInput['sourceSequenceUnitKeys']),
+        pageCount: readNumber(runInput['pageCount']) ?? undefined,
         input: runInput,
         metadata: {
           sourceRunId: activeRun?.id ?? null,
@@ -1145,12 +1535,15 @@ export function OutputsWorkspace({
       return
     }
     const nodeKeys = uniqueNodes.map((node) => node.key)
-    const debugForceVideoGeneration = uniqueNodes.some((node) => node.nodeType === 'video_generation')
+    const debugForceVideoGeneration = uniqueNodes.some((node) => (
+      node.nodeType === 'video_generation'
+      && !isCinematicV2ProductionNodeConfig(readRecord(node.config), node.nodeType)
+    ))
     markTargetedNodes(nodeKeys, runScope)
     setError(null)
     try {
       const workflowMetadata = readRecord(activeWorkflow.metadata)
-      const previousInput = activeRun ? readRecord(activeRun.input) : {
+      const previousInput: Record<string, unknown> = activeRun ? readRecord(activeRun.input) : {
         sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
         sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
         pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
@@ -1161,10 +1554,10 @@ export function OutputsWorkspace({
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeWorkflow.id,
         prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
-        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
-        selectedEntityKeys: readStringArray(runInput.sourceEntityKeys),
-        selectedSequenceUnitKeys: readStringArray(runInput.sourceSequenceUnitKeys),
-        pageCount: readNumber(runInput.pageCount) ?? undefined,
+        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
+        selectedEntityKeys: readStringArray(runInput['sourceEntityKeys']),
+        selectedSequenceUnitKeys: readStringArray(runInput['sourceSequenceUnitKeys']),
+        pageCount: readNumber(runInput['pageCount']) ?? undefined,
         input: runInput,
         metadata: {
           sourceRunId: activeRun?.id ?? null,
@@ -1187,6 +1580,83 @@ export function OutputsWorkspace({
       setError(targetError instanceof Error ? targetError.message : 'Could not rerun the selected output nodes.')
     } finally {
       unmarkTargetedNodes(nodeKeys)
+    }
+  }
+
+  async function approveCinematicV2VideoProduction() {
+    if (!activeWorkflow) {
+      setError('Select a cinematic workflow before approving video production.')
+      return
+    }
+    const workflowMetadata = readRecord(activeWorkflow.metadata)
+    const videoNodes = activeNodes.filter((node) => (
+      node.nodeType === 'video_generation'
+      && isCinematicV2ProductionNodeConfig(readRecord(node.config), node.nodeType)
+    ))
+    const timelineNode = activeNodes.find((node) => (
+      readTrimmedString(readRecord(node.config).purpose) === 'cinematic_v2_timeline_assemble'
+    ))
+    const artifactNode = activeNodes.find((node) => (
+      node.nodeType === 'output_artifact'
+      && readTrimmedString(readRecord(node.config).purpose) === 'cinematic_video_artifact'
+    ))
+    if (videoNodes.length === 0) {
+      setError('Run the animatic until shot video nodes are available, then approve final video production.')
+      return
+    }
+
+    const targetNodeKeys = videoNodes.map((node) => node.key)
+    const forceNodeKeys = Array.from(new Set([
+      ...targetNodeKeys,
+      timelineNode?.key ?? '',
+      artifactNode?.key ?? '',
+    ].filter(Boolean)))
+    markTargetedNodes(forceNodeKeys, 'node_and_downstream')
+    setApprovingVideoProduction(true)
+    setError(null)
+    try {
+      const previousInput = activeRun ? readRecord(activeRun.input) : {
+        sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
+        sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
+        pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
+      }
+      const runInput: Record<string, unknown> = {
+        ...previousInput,
+        debugSkipVideoGeneration: false,
+        cinematicVideoApproved: true,
+        cinematicVideoProductionEstimate: cinematicV2ProductionEstimate,
+      }
+      const runResponse = await onStartOutputWorkflowRun({
+        workflowId: activeWorkflow.id,
+        prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
+        targetFormat: 'video',
+        selectedEntityKeys: readStringArray(runInput['sourceEntityKeys']),
+        selectedSequenceUnitKeys: readStringArray(runInput['sourceSequenceUnitKeys']),
+        pageCount: readNumber(runInput['pageCount']) ?? undefined,
+        input: runInput,
+        metadata: {
+          sourceRunId: activeRun?.id ?? null,
+          runMode: 'cinematic_v2_video_production',
+          runScope: 'node_and_downstream',
+          targetNodeKeys,
+          forceNodeKeys,
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: false,
+          debugSkipVideoGeneration: false,
+          cinematicVideoApproved: true,
+          cinematicVideoProductionEstimate: cinematicV2ProductionEstimate,
+        },
+      })
+      setActiveRunId(runResponse.run.id)
+      rememberLiveRun(runResponse.run)
+      setInspectorMode('script')
+      await pollRun(runResponse.run.id)
+      await onRefreshLiveSnapshot()
+    } catch (approvalError) {
+      setError(approvalError instanceof Error ? approvalError.message : 'Could not approve cinematic video production.')
+    } finally {
+      setApprovingVideoProduction(false)
+      unmarkTargetedNodes(forceNodeKeys)
     }
   }
 
@@ -1224,7 +1694,7 @@ export function OutputsWorkspace({
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeWorkflow.id,
         prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
-        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown',
+        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
         selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
         selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
         input: previousInput,
@@ -2078,7 +2548,15 @@ export function OutputsWorkspace({
                   ) : null}
                   {inspectorMode === 'script' ? (
                     <div className="outputs-output-preview">
-                      <CinematicScriptPanel data={cinematicScriptViewData} />
+                      <CinematicScriptPanel
+                        assets={snapshot.assets}
+                        canRunOutputs={canRunOutputs}
+                        data={cinematicScriptViewData}
+                        estimate={cinematicV2ProductionEstimate}
+                        isApprovingVideo={approvingVideoProduction}
+                        isVideoApproved={cinematicVideoApproved}
+                        onApproveVideoProduction={approveCinematicV2VideoProduction}
+                      />
                     </div>
                   ) : null}
                   {inspectorMode === 'guidance' && selectedGuidance ? (

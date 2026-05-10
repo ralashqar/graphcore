@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildCinematicShotTimingMap,
+  buildCinematicV2StoryboardLayout,
   buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
@@ -14,9 +15,15 @@ import {
   deriveCinematicScriptFromSequence,
   materializeCinematicGraphSettings,
   parseTakeStoryboardPanelScriptText,
+  providerSafeCinematicV2DurationSeconds,
+  validateCinematicV2ShotPlanReferences,
+  cinematicV2SceneLayoutPlanSchema,
+  cinematicV2SceneStateSchema,
+  cinematicV2ShotPlanSchema,
 } from './cinematics.ts'
 import {
   buildCinematicTimelineProjection,
+  buildCinematicV2TimelineProjection,
   findTimelineShotAtSeconds,
   findTimelineTakeAtSeconds,
 } from './cinematicTimelineProjection.ts'
@@ -28,6 +35,184 @@ import {
   worldBuildPlanResponseSchema,
   worldBuildStartRequestSchema,
 } from './worldBuild.ts'
+
+test('Cinematics V2 schemas validate scene state, layout, short shots, and storyboard grids', () => {
+  const sceneState = cinematicV2SceneStateSchema.parse({
+    sceneId: 'scene_1',
+    title: 'Arena Faceoff',
+    locationRefId: 'arena',
+    characterRefIds: ['kharzag', 'brakk'],
+    lighting: {
+      direction: 'low sunset through the east gate',
+      quality: 'hard rim light',
+      colorTemperature: 'warm highlights and cool shadows',
+      contrast: 'high',
+    },
+    visualContinuity: {
+      palette: ['burnt orange', 'dark iron'],
+      lensLanguage: 'wide masters and tense closeups',
+      cameraMovementStyle: 'controlled push-ins before fast impact shots',
+    },
+  })
+  assert.equal(sceneState.locationRefId, 'arena')
+
+  const layout = cinematicV2SceneLayoutPlanSchema.parse({
+    sceneId: 'scene_1',
+    summary: 'Kharzag starts screen-left, Brakk screen-right.',
+    spatialMapDescription: 'Oval arena with east gate backlight.',
+    characterPositions: [
+      { characterRefId: 'kharzag', zone: 'west', facing: 'east', movementDirection: 'left-to-right' },
+      { characterRefId: 'brakk', zone: 'east', facing: 'west', movementDirection: 'right-to-left' },
+    ],
+    cameraPlan: [
+      { id: 'cam_a', purpose: 'establishing', position: 'northwest high angle', lens: '28mm', movement: 'slow push', screenDirectionRule: 'Kharzag remains screen-left.' },
+    ],
+  })
+  assert.equal(layout.cameraPlan[0].purpose, 'establishing')
+
+  const shotPlan = cinematicV2ShotPlanSchema.parse({
+    sceneId: 'scene_1',
+    totalEditorialDurationSeconds: 7.5,
+    shots: [
+      {
+        id: 'shot_1',
+        index: 1,
+        title: 'Arena Establishing',
+        purpose: 'establishing',
+        editorialDurationSeconds: 2.5,
+        providerDurationSeconds: providerSafeCinematicV2DurationSeconds(2.5),
+        visibleCharacterRefIds: ['kharzag', 'brakk'],
+        locationRefId: 'arena',
+        camera: { framing: 'wide', angle: 'high', lens: '28mm', movement: 'push', screenDirectionRule: 'left/right locked' },
+      },
+      {
+        id: 'shot_2',
+        index: 2,
+        title: 'Kharzag Threatens',
+        purpose: 'dialogue',
+        editorialDurationSeconds: 3,
+        providerDurationSeconds: providerSafeCinematicV2DurationSeconds(3),
+        visibleCharacterRefIds: ['kharzag'],
+        speakerRefIds: ['kharzag'],
+        locationRefId: 'arena',
+        dialogue: [{ id: 'line_1', speakerRefId: 'kharzag', text: 'You should have stayed buried.' }],
+        camera: { framing: 'medium closeup', angle: 'low', lens: '50mm', movement: 'subtle push', screenDirectionRule: 'looks screen-right' },
+        requiresLipSync: true,
+      },
+      {
+        id: 'shot_3',
+        index: 3,
+        title: 'Impact Clash',
+        purpose: 'impact',
+        editorialDurationSeconds: 2,
+        providerDurationSeconds: providerSafeCinematicV2DurationSeconds(2),
+        visibleCharacterRefIds: ['kharzag', 'brakk'],
+        locationRefId: 'arena',
+        camera: { framing: 'tight impact', angle: 'low', lens: '35mm', movement: 'short lateral track', screenDirectionRule: 'attack left-to-right' },
+      },
+    ],
+  })
+
+  assert.deepEqual(buildCinematicV2StoryboardLayout(3), { rows: 2, columns: 2, panelCount: 3 })
+  assert.deepEqual(buildCinematicV2StoryboardLayout(9), { rows: 3, columns: 3, panelCount: 9 })
+  assert.equal(providerSafeCinematicV2DurationSeconds(1.2), 4)
+  assert.equal(providerSafeCinematicV2DurationSeconds(16), 15)
+  assert.deepEqual(validateCinematicV2ShotPlanReferences({
+    shotPlan,
+    referenceIds: ['kharzag', 'brakk', 'arena'],
+  }), [])
+  assert.ok(validateCinematicV2ShotPlanReferences({
+    shotPlan,
+    referenceIds: ['kharzag'],
+  }).some((diagnostic) => diagnostic.includes('unknown cinematic ref')))
+})
+
+test('Cinematics V2 timeline projection maps editorial clips, active shots, and media fallbacks', () => {
+  const shotPlan = {
+    sceneId: 'scene_1',
+    totalEditorialDurationSeconds: 5.5,
+    shots: [
+      {
+        id: 'shot_1',
+        index: 1,
+        title: 'Wide Reveal',
+        purpose: 'establishing',
+        editorialDurationSeconds: 2.5,
+        providerDurationSeconds: 4,
+        description: 'The arena opens under sunset.',
+        visibleCharacterRefIds: ['kharzag', 'brakk'],
+        locationRefId: 'arena',
+        camera: { framing: 'wide', angle: 'high', lens: '28mm', movement: 'push', screenDirectionRule: 'locked' },
+      },
+      {
+        id: 'shot_2',
+        index: 2,
+        title: 'Threat',
+        purpose: 'dialogue',
+        editorialDurationSeconds: 3,
+        providerDurationSeconds: 4,
+        action: 'Kharzag threatens Brakk.',
+        visibleCharacterRefIds: ['kharzag'],
+        speakerRefIds: ['kharzag'],
+        locationRefId: 'arena',
+        dialogue: [{ id: 'line_1', speakerRefId: 'kharzag', text: 'You should have stayed buried.', startSeconds: 0.5, endSeconds: 2.5 }],
+        camera: { framing: 'closeup', angle: 'low', lens: '50mm', movement: 'subtle push', screenDirectionRule: 'looks right' },
+      },
+    ],
+  }
+  const projection = buildCinematicV2TimelineProjection({
+    shotPlan,
+    timeline: {
+      id: 'timeline_1',
+      sceneId: 'scene_1',
+      durationSeconds: 5.5,
+      videoClips: [
+        { shotId: 'shot_1', videoAssetKey: 'video_shot_1', startTime: 0, endTime: 2.5, trimIn: 0, trimOut: 1.5 },
+        { shotId: 'shot_2', videoAssetKey: null, startTime: 2.5, endTime: 5.5, trimIn: 0, trimOut: 1 },
+      ],
+      audioClips: [{ type: 'ambience', label: 'Arena bed', startTime: 0, endTime: 5.5, placeholder: true }],
+    },
+    panels: [{ id: 'panel_2', shotId: 'shot_2', assetKey: 'panel_shot_2', role: 'cinematic_v2_storyboard_panel' }],
+    keyframes: [{ id: 'keyframe_2', shotId: 'shot_2', assetKey: 'keyframe_shot_2', role: 'cinematic_v2_shot_keyframe' }],
+    videos: [{ id: 'video_1', shotId: 'shot_1', assetKey: 'video_shot_1', role: 'cinematic_v2_shot_video' }],
+    storyboardSheets: [{ id: 'sheet_1', assetKey: 'storyboard_sheet', role: 'cinematic_v2_storyboard_sheet' }],
+  })
+
+  assert.equal(projection.totalDurationSeconds, 5.5)
+  assert.equal(projection.shots[0]?.startSeconds, 0)
+  assert.equal(projection.shots[0]?.endSeconds, 2.5)
+  assert.equal(projection.shots[0]?.previewAssetKey, 'video_shot_1')
+  assert.equal(projection.shots[0]?.previewKind, 'video')
+  assert.equal(projection.shots[1]?.previewAssetKey, 'keyframe_shot_2')
+  assert.equal(projection.shots[1]?.previewKind, 'image')
+  assert.equal(findTimelineShotAtSeconds(projection, 3)?.id, 'shot_2')
+  assert.equal(projection.dialogueCues[0]?.startSeconds, 3)
+  assert.equal(projection.audioCues[0]?.label, 'ambience')
+})
+
+test('Cinematics V2 timeline projection keeps valid shot clips when media is missing', () => {
+  const projection = buildCinematicV2TimelineProjection({
+    shotPlan: {
+      sceneId: 'scene_1',
+      totalEditorialDurationSeconds: 2,
+      shots: [{
+        id: 'shot_1',
+        index: 1,
+        title: 'Planned Shot',
+        purpose: 'reaction',
+        editorialDurationSeconds: 2,
+        providerDurationSeconds: 4,
+        description: 'A silent reaction shot.',
+        camera: { framing: 'medium', angle: 'eye level', lens: '50mm', movement: 'static', screenDirectionRule: 'neutral' },
+      }],
+    },
+  })
+
+  assert.equal(projection.shots.length, 1)
+  assert.equal(projection.shots[0]?.previewAssetKey, null)
+  assert.equal(projection.shots[0]?.previewKind, 'placeholder')
+  assert.equal(findTimelineShotAtSeconds(projection, 0.5)?.id, 'shot_1')
+})
 
 test('legacy UGC shots derive directing and reference packages', () => {
   const script = cinematicScriptDocSchema.parse({

@@ -1,5 +1,7 @@
 import {
   compileCinematicSequence,
+  cinematicV2ShotPlanSchema,
+  cinematicV2TimelineSchema,
   type AudioBeat,
   type CinematicSequence,
   type DialogueBeat,
@@ -31,6 +33,7 @@ export type CinematicTimelineShotClip = {
   approvedForTake: boolean
   previewAssetKeys: string[]
   previewAssetKey: string | null
+  previewKind?: 'image' | 'video' | 'placeholder'
   activeRefIds: string[]
   subtitleCues: CinematicTimelineCue[]
   audioCues: CinematicTimelineCue[]
@@ -47,6 +50,7 @@ export type CinematicTimelineTakeClip = {
   approvedForVideo: boolean
   previewAssetKeys: string[]
   previewAssetKey: string | null
+  previewKind?: 'image' | 'video' | 'placeholder'
 }
 
 export type CinematicTimelineProjection = {
@@ -60,6 +64,41 @@ export type CinematicTimelineProjection = {
 
 function uniqueStrings(values: Array<string | null | undefined>) {
   return values.filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index)
+}
+
+function looseRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function looseArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(looseRecord).filter((entry) => Object.keys(entry).length > 0) : []
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  const number = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function mediaAssetKey(value: Record<string, unknown>) {
+  return readString(value.assetKey)
+    || readString(value.asset_key)
+    || readString(value.outputVideoAssetKey)
+    || readString(value.output_video_asset_key)
+    || readString(value.videoAssetKey)
+    || readString(value.video_asset_key)
+}
+
+function mediaShotId(value: Record<string, unknown>) {
+  return readString(value.shotId) || readString(value.shot_id)
+}
+
+function firstMediaForShot(records: Record<string, unknown>[], shotId: string) {
+  return records.find((record) => mediaShotId(record) === shotId) ?? null
 }
 
 function clampCueWindow(startSeconds: number | null | undefined, endSeconds: number | null | undefined, durationSeconds: number) {
@@ -233,6 +272,140 @@ export function buildCinematicTimelineProjection(sequenceInput: CinematicSequenc
     totalDurationSeconds: takes[takes.length - 1]?.endSeconds ?? shots[shots.length - 1]?.endSeconds ?? 0,
     shots,
     takes,
+    dialogueCues: dialogueCues.sort((left, right) => left.startSeconds - right.startSeconds),
+    audioCues: audioCues.sort((left, right) => left.startSeconds - right.startSeconds),
+  }
+}
+
+export function buildCinematicV2TimelineProjection(input: {
+  shotPlan: unknown
+  timeline?: unknown
+  panels?: unknown[]
+  keyframes?: unknown[]
+  videos?: unknown[]
+  storyboardSheets?: unknown[]
+}): CinematicTimelineProjection {
+  const shotPlan = cinematicV2ShotPlanSchema.parse(input.shotPlan)
+  const parsedTimeline = cinematicV2TimelineSchema.safeParse(input.timeline)
+  const timeline = parsedTimeline.success ? parsedTimeline.data : null
+  const panels = looseArray(input.panels)
+  const keyframes = looseArray(input.keyframes)
+  const videos = looseArray(input.videos)
+  const storyboardSheets = looseArray(input.storyboardSheets)
+  const storyboardAssetKeys = uniqueStrings(storyboardSheets.map(mediaAssetKey))
+  const videoClipByShotId = new Map((timeline?.videoClips ?? []).map((clip) => [clip.shotId, clip] as const))
+
+  const dialogueCues: CinematicTimelineCue[] = []
+  let cursorSeconds = 0
+  const shots: CinematicTimelineShotClip[] = shotPlan.shots.map((shot, shotIndex) => {
+    const clip = videoClipByShotId.get(shot.id)
+    const startSeconds = typeof clip?.startTime === 'number' ? clip.startTime : cursorSeconds
+    const endSeconds = typeof clip?.endTime === 'number' ? clip.endTime : startSeconds + shot.editorialDurationSeconds
+    cursorSeconds = endSeconds
+    const durationSeconds = Math.max(0.1, endSeconds - startSeconds)
+    const video = firstMediaForShot(videos, shot.id)
+    const keyframe = firstMediaForShot(keyframes, shot.id)
+    const panel = firstMediaForShot(panels, shot.id)
+    const previewAssetKeys = uniqueStrings([
+      readString(clip?.videoAssetKey),
+      video ? mediaAssetKey(video) : '',
+      keyframe ? mediaAssetKey(keyframe) : '',
+      panel ? mediaAssetKey(panel) : '',
+      ...storyboardAssetKeys,
+    ])
+    const previewKind: CinematicTimelineShotClip['previewKind'] = (readString(clip?.videoAssetKey) || (video && mediaAssetKey(video)))
+      ? 'video'
+      : previewAssetKeys.length > 0
+        ? 'image'
+        : 'placeholder'
+    const subtitleCues: CinematicTimelineCue[] = shot.dialogue.map((line, lineIndex) => {
+      const relativeStart = readNumber(line.startSeconds) ?? 0
+      const relativeEnd = readNumber(line.endSeconds) ?? durationSeconds
+      return {
+        id: line.id || `${shot.id}-dialogue-${lineIndex + 1}`,
+        shotId: shot.id,
+        type: 'dialogue' as const,
+        startSeconds: startSeconds + Math.max(0, Math.min(durationSeconds, relativeStart)),
+        endSeconds: startSeconds + Math.max(0, Math.min(durationSeconds, Math.max(relativeStart, relativeEnd))),
+        label: line.speakerRefId || 'Dialogue',
+        text: line.text,
+      }
+    }).filter((cue) => cue.text.trim().length > 0)
+    dialogueCues.push(...subtitleCues)
+    return {
+      id: shot.id,
+      shotIndex,
+      takeId: 'v2_scene_1',
+      takeIndex: 0,
+      title: shot.title,
+      subtitle: shot.purpose,
+      hookRole: null,
+      shotType: shot.purpose,
+      beat: shot.action || shot.description,
+      startSeconds,
+      endSeconds,
+      durationSeconds,
+      approvedForTake: true,
+      previewAssetKeys,
+      previewAssetKey: previewAssetKeys[0] ?? null,
+      previewKind,
+      activeRefIds: uniqueStrings([
+        ...shot.visibleCharacterRefIds,
+        ...shot.speakerRefIds,
+        shot.locationRefId,
+        ...shot.propRefIds,
+      ]),
+      subtitleCues,
+      audioCues: [],
+    }
+  })
+
+  const totalDurationSeconds = timeline?.durationSeconds ?? shots[shots.length - 1]?.endSeconds ?? shotPlan.totalEditorialDurationSeconds
+  const audioCues: CinematicTimelineCue[] = (timeline?.audioClips ?? []).map((clip, index) => ({
+    id: `v2-audio-${index + 1}`,
+    shotId: 'v2_scene_1',
+    type: 'audio' as const,
+    startSeconds: clip.startTime,
+    endSeconds: clip.endTime,
+    label: clip.type,
+    text: clip.label || `${clip.type} placeholder`,
+  }))
+  const takePreviewAssetKeys = uniqueStrings([
+    shots.find((shot) => shot.previewKind === 'video')?.previewAssetKey,
+    shots.find((shot) => shot.previewKind === 'image')?.previewAssetKey,
+  ])
+
+  return {
+    sequence: compileCinematicSequence({
+      title: shotPlan.sceneId || 'Cinematics V2 Timeline',
+      logline: '',
+      tone: '',
+      continuityNotes: '',
+      statusPayoffType: 'custom',
+      narrativeArcTemplate: 'custom',
+      references: [],
+      scenes: [],
+      compositeRefs: [],
+      relationships: [],
+      storyboard: null,
+      shots: [],
+      takes: [],
+    }),
+    totalDurationSeconds,
+    shots,
+    takes: [{
+      id: 'v2_scene_1',
+      takeIndex: 0,
+      title: 'Scene Timeline',
+      startSeconds: 0,
+      endSeconds: totalDurationSeconds,
+      durationSeconds: totalDurationSeconds,
+      shotIds: shots.map((shot) => shot.id),
+      approvedForVideo: true,
+      previewAssetKeys: takePreviewAssetKeys,
+      previewAssetKey: takePreviewAssetKeys[0] ?? null,
+      previewKind: shots.some((shot) => shot.previewKind === 'video') ? 'video' : takePreviewAssetKeys.length > 0 ? 'image' : 'placeholder',
+    }],
     dialogueCues: dialogueCues.sort((left, right) => left.startSeconds - right.startSeconds),
     audioCues: audioCues.sort((left, right) => left.startSeconds - right.startSeconds),
   }

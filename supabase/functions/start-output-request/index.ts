@@ -281,6 +281,8 @@ Deno.serve(async (request) => {
     const effectivePageCount = comicOutput ? payload.pageCount ?? 8 : null
     const debugSkipVideoGeneration = payload.debugSkipVideoGeneration ?? true
     const cinematicReferenceMode = payload.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
+    const cinematicPipelineVersion = payload.cinematicPipelineVersion
+      ?? (planner.outputKind === 'cinematic_episode' || planner.outputKind === 'cinematic_trailer' ? 'v2_shot_orchestration' : 'v1_take_blocks')
     const debugCinematicStoryboardStyleSafeMode = payload.debugCinematicStoryboardStyleSafeMode
       ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
     const cinematicStoryboardStyleOverride = debugCinematicStoryboardStyleSafeMode
@@ -318,6 +320,7 @@ Deno.serve(async (request) => {
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
               cinematicReferenceMode,
+              cinematicPipelineVersion,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
@@ -367,6 +370,7 @@ Deno.serve(async (request) => {
       generateAudio: payload.generateAudio,
       cinematicPresetFamily: payload.cinematicPresetFamily,
       cinematicReferenceMode,
+      cinematicPipelineVersion,
       debugCinematicStoryboardStyleSafeMode,
       cinematicStoryboardStyleOverride,
       debugSkipVideoGeneration,
@@ -411,6 +415,7 @@ Deno.serve(async (request) => {
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
               cinematicReferenceMode,
+              cinematicPipelineVersion,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
@@ -484,6 +489,7 @@ Deno.serve(async (request) => {
           generateAudio: payload.generateAudio ?? true,
           cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
           cinematicReferenceMode,
+          cinematicPipelineVersion,
           debugCinematicStoryboardStyleSafeMode,
           cinematicStoryboardStyleOverride,
           debugSkipVideoGeneration,
@@ -524,6 +530,7 @@ Deno.serve(async (request) => {
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
               cinematicReferenceMode,
+              cinematicPipelineVersion,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
@@ -597,6 +604,7 @@ Deno.serve(async (request) => {
               generateAudio: payload.generateAudio ?? null,
               cinematicPresetFamily: payload.cinematicPresetFamily ?? null,
               cinematicReferenceMode,
+              cinematicPipelineVersion,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,

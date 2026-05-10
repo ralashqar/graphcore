@@ -303,6 +303,7 @@ test('cinematic prompt binding does not infer sequence units from shared names',
     targetFormat: 'video',
     selectedEntityKeys: promptPlan.selectedEntityKeys,
     selectedSequenceUnitKeys: promptPlan.selectedSequenceUnitKeys,
+    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot: localSnapshot,
   }, 'cinematic_episode')
 
@@ -318,6 +319,7 @@ test('cinematic prompt binding does not infer sequence units from shared names',
     prompt: 'Create a cinematic where Eva-9 sings in Skybridge Garden',
     targetFormat: 'video',
     selectedEntityKeys: ['eva-9', 'chapter-skybridge-garden', 'skybridge-garden'],
+    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot: localSnapshot,
   }, 'cinematic_episode')
   assert.deepEqual(explicitEntityPlan.sourceEntityKeys.sort(), ['eva-9', 'skybridge-garden'])
@@ -411,6 +413,50 @@ test('prompt-first entity binding is typo-tolerant and does not fall back to unr
   assert.equal((contextNode?.config as Record<string, unknown> | undefined)?.strictSourceEntityFilter, true)
 })
 
+test('story cinematic requests build V2 shot orchestration graph by default while UGC stays V1', () => {
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1 with a shot-by-shot storyboard.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    snapshot,
+  }, 'cinematic_episode')
+
+  assert.equal(plan.preset, 'cinematic_episode_from_sequence')
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_script_parse').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 1)
+  assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
+  assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout'))
+  assert.ok(plan.diagnostics.some((line) => line.includes('Cinematics V2')))
+  assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+
+  const fanout = plan.nodes.find((node) => node.key === 'cinematic_v2_dynamic_shot_fanout')
+  assert.equal(fanout?.config.generateAudio, false)
+  assert.equal(fanout?.config.cinematicPipelineVersion, 'v2_shot_orchestration')
+  assert.equal(fanout?.config.debugSkipVideoGeneration, true)
+  assert.ok(plan.diagnostics.some((line) => line.includes('Preview animatic mode')))
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(workerSource, /cinematicVideoApprovedEnabled/)
+  assert.match(workerSource, /cinematic_video_approval_required/)
+  assert.match(workerSource, /isCinematicV2ProductionNode\(asRecord\(node\.config\), node\) && !cinematicVideoApprovedEnabled\(run\)/)
+
+  const ugcPlan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a vertical UGC cinematic from Chapter 1.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    snapshot,
+  }, 'ugc_episode')
+  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 1)
+  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 0)
+})
+
 test('cinematic output preset creates script-first dynamic take fanout placeholder', () => {
   const plan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -420,6 +466,7 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
     selectedSequenceUnitKeys: ['chapter-1'],
     videoBlockCount: 3,
     durationPerBlockSeconds: 8,
+    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot,
   }, 'cinematic_episode')
 
@@ -529,6 +576,7 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
     targetFormat: 'video',
     selectedSequenceUnitKeys: ['chapter-1'],
     debugSkipVideoGeneration: false,
+    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot,
   }, 'cinematic_episode')
   const costEnabledFanout = costEnabledPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
@@ -542,6 +590,7 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
     selectedSequenceUnitKeys: ['chapter-1'],
     debugCinematicStoryboardStyleSafeMode: false,
     cinematicStoryboardStyleOverride: 'charcoal animatic boards',
+    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot,
   }, 'cinematic_episode')
   const safeModeDisabledFanout = safeModeDisabledPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
@@ -556,6 +605,7 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
     targetFormat: 'video',
     selectedSequenceUnitKeys: ['chapter-1'],
     cinematicReferenceMode: 'keyframes',
+    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot,
   }, 'cinematic_episode')
   const keyframeModeFanout = keyframeModePlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
