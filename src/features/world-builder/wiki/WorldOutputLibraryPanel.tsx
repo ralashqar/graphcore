@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-import { EntityIcon } from '../../../shared/entityIcons'
+import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
 import type { OutputArtifactFilter, OutputLibraryArtifactCard, OutputLibraryModel, OutputLibraryRequestRow } from './outputLibraryPresentation'
 
 type OutputPresetKey = 'image' | 'story' | 'comic' | 'ebook' | 'reference' | 'video'
@@ -102,6 +102,31 @@ function OutputArtifactThumb({ artifact }: { artifact: OutputLibraryArtifactCard
   )
 }
 
+function outputRequestFallbackIcon(row: OutputLibraryRequestRow): EntityIconId {
+  if (row.primaryArtifact?.type === 'video') return 'cinematic'
+  if (row.primaryArtifact?.type === 'documents') return 'content'
+  if (row.primaryArtifact?.type === 'images') return 'asset'
+  if (row.outputKind === 'concept_art_image' || row.outputKind === 'poster_image') return 'asset'
+  if (row.outputKind === 'cinematic_episode' || row.outputKind === 'cinematic_trailer' || row.outputKind === 'ugc_episode') return 'cinematic'
+  if (row.outputKind === 'comic_issue_from_sequence') return 'result'
+  return 'content'
+}
+
+function OutputRequestThumb({ row }: { row: OutputLibraryRequestRow }) {
+  const artifact = row.primaryArtifact
+  const thumbnailUrl = artifact?.thumbnailUrl
+  return (
+    <span className={`world-output-row-thumb is-${row.groupKey}`} aria-hidden="true">
+      {thumbnailUrl && artifact?.type === 'images' ? <img src={thumbnailUrl} alt="" loading="lazy" /> : null}
+      {thumbnailUrl && artifact?.type === 'video' ? <video src={thumbnailUrl} muted playsInline preload="metadata" /> : null}
+      {!thumbnailUrl || (artifact?.type !== 'images' && artifact?.type !== 'video')
+        ? <EntityIcon id={outputRequestFallbackIcon(row)} />
+        : null}
+      <span className={`world-output-status-dot is-${row.groupKey}`} />
+    </span>
+  )
+}
+
 function OutputRequestRow({
   busyRequestId,
   row,
@@ -147,7 +172,7 @@ function OutputRequestRow({
   return (
     <article className={`world-output-row is-${row.groupKey}`}>
       <div className="world-output-row-main">
-        <span className={`world-output-status-dot is-${row.groupKey}`} aria-hidden="true" />
+        <OutputRequestThumb row={row} />
         <div>
           <span className="eyebrow">{row.outputKindLabel}</span>
           <strong>{row.title}</strong>

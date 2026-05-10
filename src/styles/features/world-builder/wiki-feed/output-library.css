@@ -313,6 +313,7 @@
 .world-output-row-main {
   min-width: 0;
   flex: 1;
+  align-items: flex-start;
   gap: 11px;
 }
 
@@ -332,6 +333,36 @@
   max-width: 76ch;
   font-size: 0.9rem;
   line-height: 1.45;
+}
+
+.world-output-row-thumb {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(124, 92, 255, 0.18), transparent 55%),
+    rgba(8, 13, 25, 0.76);
+  color: rgba(125, 244, 223, 0.88);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025);
+}
+
+.world-output-row-thumb img,
+.world-output-row-thumb video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.world-output-row-thumb svg {
+  width: 20px;
+  height: 20px;
 }
 
 .world-output-row-meta {
@@ -362,6 +393,15 @@
   margin-top: 5px;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.7);
+}
+
+.world-output-row-thumb .world-output-status-dot {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  margin: 0;
+  border: 2px solid rgba(8, 13, 25, 0.92);
+  box-shadow: 0 0 12px currentColor;
 }
 
 .world-output-status-dot.is-generating {

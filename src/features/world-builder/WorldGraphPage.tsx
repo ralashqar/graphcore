@@ -4905,15 +4905,11 @@ export function WorldGraphPage({
       const rootRect = root.getBoundingClientRect()
       const anchorY = rootRect.top + Math.min(180, root.clientHeight * 0.3)
       const visibleSections = sectionKinds
-        .map((kind) => ({
-          kind,
-          element: document.getElementById(`world-wiki-section-${kind}`),
-        }))
-        .filter((entry): entry is { kind: WorldWikiSection['kind']; element: HTMLElement } => (
-          Boolean(entry.element)
-          && !entry.element.classList.contains('is-search-hidden')
-          && entry.element.offsetParent !== null
-        ))
+        .flatMap((kind) => {
+          const element = document.getElementById(`world-wiki-section-${kind}`)
+          if (!element || element.classList.contains('is-search-hidden') || element.offsetParent === null) return []
+          return [{ kind, element }]
+        })
       if (visibleSections.length === 0) return
 
       const isNearBottom = root.scrollTop + root.clientHeight >= root.scrollHeight - 8
