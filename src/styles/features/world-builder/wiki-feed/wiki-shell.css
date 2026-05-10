@@ -55,6 +55,72 @@
   font-size: 1rem;
 }
 
+.world-wiki-create-entry {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(139, 92, 246, 0.28);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(34, 211, 238, 0.08)),
+    rgba(255, 255, 255, 0.04);
+  color: rgba(248, 250, 252, 0.94);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.world-wiki-create-entry:hover {
+  border-color: rgba(167, 139, 250, 0.48);
+  background:
+    linear-gradient(135deg, rgba(124, 58, 237, 0.26), rgba(34, 211, 238, 0.12)),
+    rgba(255, 255, 255, 0.055);
+  transform: translateY(-1px);
+}
+
+.world-wiki-create-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: rgba(124, 58, 237, 0.22);
+  color: #c4b5fd;
+}
+
+.world-wiki-create-icon svg,
+.world-wiki-create-icon .entity-icon-image {
+  width: 17px;
+  height: 17px;
+}
+
+.world-wiki-create-entry span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.world-wiki-create-entry strong,
+.world-wiki-create-entry small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-wiki-create-entry strong {
+  font-size: 0.86rem;
+  line-height: 1.2;
+}
+
+.world-wiki-create-entry small {
+  color: rgba(203, 213, 225, 0.72);
+  font-size: 0.69rem;
+}
+
 .world-wiki-mode-toggle {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

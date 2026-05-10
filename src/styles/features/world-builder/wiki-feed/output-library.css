@@ -44,12 +44,36 @@
   gap: 10px;
 }
 
+.world-output-rail {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.world-output-rail-head {
+  display: grid;
+  gap: 5px;
+  padding: 0 6px;
+}
+
+.world-output-rail-head strong {
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 1.02rem;
+  line-height: 1.15;
+}
+
+.world-output-rail-head small {
+  color: rgba(203, 213, 225, 0.68);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
 .world-output-create-copy h2 {
   margin: 0;
-  max-width: 10ch;
+  max-width: min(34ch, 100%);
   color: rgba(248, 250, 252, 0.98);
-  font-size: clamp(2.35rem, 5vw, 5.2rem);
-  line-height: 0.94;
+  font-size: clamp(1.65rem, 2.45vw, 2.8rem);
+  line-height: 1;
   letter-spacing: 0;
 }
 
@@ -69,6 +93,36 @@
   border-radius: 14px;
   background: rgba(2, 6, 23, 0.42);
   box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.08);
+}
+
+.world-output-create-form.is-rail {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.world-output-create-form.is-rail .world-output-preset-row {
+  gap: 6px;
+}
+
+.world-output-create-form.is-rail .world-output-preset-row button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.72rem;
+}
+
+.world-output-create-form.is-rail .world-output-prompt-input textarea {
+  min-height: 160px;
+  resize: vertical;
+}
+
+.world-output-create-form.is-rail .world-output-submit-row {
+  align-items: stretch;
+}
+
+.world-output-create-form.is-rail .world-output-submit-row button {
+  flex: 1 1 auto;
 }
 
 .world-output-preset-row,
@@ -441,7 +495,7 @@
   }
 
   .world-output-create-copy h2 {
-    max-width: 14ch;
+    max-width: min(34ch, 100%);
   }
 
   .world-output-summary-strip {

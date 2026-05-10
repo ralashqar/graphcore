@@ -511,7 +511,7 @@ export function WorldFeedPanel({
         <aside className="world-feed-prompt-rail" aria-label="Create world updates">
           {renderWikiSubViewToggle()}
           <div className="world-feed-project-card">
-            <span className="eyebrow">Create Feed</span>
+            <span className="eyebrow">Create</span>
             <strong>{wikiTitle}</strong>
             <small>{activePromptTurn ? 'World update running' : 'World active'}</small>
           </div>
@@ -590,8 +590,8 @@ export function WorldFeedPanel({
           <header className="world-feed-header">
             <div>
               <span className="eyebrow">Live Canon</span>
-              <h2>World Feed</h2>
-              <p>Updates, discoveries, relationships, and generation work appear here as the world changes.</p>
+              <h2>Create</h2>
+              <p>Prompt changes and watch canon updates land here as the world evolves.</p>
             </div>
             <div className="world-feed-filter-row" role="tablist" aria-label="World feed filters">
               {WORLD_FEED_FILTERS.map((filter) => (

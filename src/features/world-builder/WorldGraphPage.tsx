@@ -151,7 +151,6 @@ import {
 } from '../world/worldPresentation'
 import type { GraphWorkspaceProps } from '../graph/types'
 import { ProjectWorldOnboarding } from '../onboarding/ProjectWorldOnboarding'
-import { CompactPromptComposer } from '../prompts/CompactPromptComposer'
 import type { SignProjectAssetUrlsInput, SignedProjectAssetUrl } from '../../application/ports'
 import { WORLD_NODE_SOURCE_HANDLE, WORLD_NODE_TARGET_HANDLE, edgeTypes, nodeTypes, type WorldFlowEdgeData } from './graph/WorldGraphFlow'
 import { resolveWorldNodeCenterCollision, worldFlowNodeIntersectsViewport, worldNodeCollisionPadding, worldNodeDimensions, worldNodePointerHitRadius, worldNodeVisualModeFor } from './graph/worldGraphGeometry'
@@ -159,7 +158,7 @@ import { useWorldAssetUrls } from './hooks/useWorldAssetUrls'
 import { useWorldPromptPanelState } from './hooks/useWorldPromptPanelState'
 import { WorldFeedPanel } from './feed/WorldFeedPanel'
 import { WorldPromptChatPanel } from './prompt/WorldPromptPanels'
-import { WorldOutputLibraryPanel } from './wiki/WorldOutputLibraryPanel'
+import { WorldOutputCreateRail, WorldOutputLibraryPanel, useWorldOutputLibraryController } from './wiki/WorldOutputLibraryPanel'
 import { buildOutputLibraryModel } from './wiki/outputLibraryPresentation'
 import { WorldWikiPanel, WorldWikiSubViewToggle } from './wiki/WorldWikiPanel'
 import {
@@ -1007,7 +1006,6 @@ export function WorldGraphPage({
   const [entityOverviewDraft, setEntityOverviewDraft] = useState<EntityOverviewDraftState | null>(null)
   const [showPinnedNodes] = useState(true)
   const [fallbackPinnedNodeKeys, setFallbackPinnedNodeKeys] = useState<string[]>([])
-  const [wikiPromptExpanded, setWikiPromptExpanded] = useState(false)
   const [wikiStyleExpanded, setWikiStyleExpanded] = useState(false)
   const [wikiSubView, setWikiSubView] = useState<WorldWikiSubView>(worldWikiSubView)
   const [wikiSearchQuery, setWikiSearchQuery] = useState('')
@@ -1704,6 +1702,15 @@ export function WorldGraphPage({
     outputWorkflowNodes,
     outputWorkflowRuns,
   }), [assets, outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns])
+  const outputLibraryController = useWorldOutputLibraryController({
+    canRunOutputs,
+    model: outputLibraryModel,
+    onCancelOutputRequest,
+    onDeleteOutputRequest: onRequestDeleteOutputRequest,
+    onOpenOutputStudio,
+    onRefreshOutputRequest: onGetOutputRequestStatus,
+    onStartOutputRequest,
+  })
   const shouldRunLiveWikiHeaderRecovery = useMemo(() => {
     const worldWiki = readLooseRecord(projectDraftMetadata.worldWiki)
     const title = trimOptionalString(worldWiki.title)
@@ -4414,6 +4421,7 @@ export function WorldGraphPage({
   }
 
   async function handleRunWikiGap(gap: WorldWikiGap) {
+    openWorldCreateView({ focusComposer: false })
     await handleSubmitWorldPrompt(gap.prompt, null, {
       selectedRootEntityKey: gap.entityKey,
       selectedViewKey: selectedView.key,
@@ -4886,27 +4894,57 @@ export function WorldGraphPage({
   }
 
   useEffect(() => {
-    if (viewMode !== 'wiki') return
+    if (viewMode !== 'wiki' || wikiSubView !== 'wiki') return undefined
     const sectionKinds = wikiModel.sections.map((section) => section.kind)
-    const sections = sectionKinds
-      .map((kind) => document.getElementById(`world-wiki-section-${kind}`))
-      .filter((section): section is HTMLElement => Boolean(section))
-    if (sections.length === 0) return
-    const observer = new IntersectionObserver((entries) => {
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0]
-      if (!visible?.target.id) return
-      const kind = visible.target.id.replace(/^world-wiki-section-/, '') as WorldWikiSection['kind']
-      if (sectionKinds.includes(kind)) setActiveWikiSectionKind(kind)
-    }, {
-      root: document.querySelector('.world-wiki-document'),
-      rootMargin: '-18% 0px -62% 0px',
-      threshold: [0.12, 0.3, 0.58],
-    })
-    sections.forEach((section) => observer.observe(section))
-    return () => observer.disconnect()
-  }, [viewMode, wikiModel.sections])
+    const root = wikiDocumentRef.current
+    if (!root || sectionKinds.length === 0) return undefined
+
+    let frameId: number | null = null
+    const updateActiveSection = () => {
+      frameId = null
+      const rootRect = root.getBoundingClientRect()
+      const anchorY = rootRect.top + Math.min(180, root.clientHeight * 0.3)
+      const visibleSections = sectionKinds
+        .map((kind) => ({
+          kind,
+          element: document.getElementById(`world-wiki-section-${kind}`),
+        }))
+        .filter((entry): entry is { kind: WorldWikiSection['kind']; element: HTMLElement } => (
+          Boolean(entry.element)
+          && !entry.element.classList.contains('is-search-hidden')
+          && entry.element.offsetParent !== null
+        ))
+      if (visibleSections.length === 0) return
+
+      const isNearBottom = root.scrollTop + root.clientHeight >= root.scrollHeight - 8
+      if (isNearBottom) {
+        setActiveWikiSectionKind(visibleSections[visibleSections.length - 1].kind)
+        return
+      }
+
+      let nextKind = visibleSections[0].kind
+      for (const { kind, element } of visibleSections) {
+        const rect = element.getBoundingClientRect()
+        if (rect.top <= anchorY && rect.bottom > rootRect.top + 24) {
+          nextKind = kind
+        }
+      }
+      setActiveWikiSectionKind(nextKind)
+    }
+    const scheduleUpdate = () => {
+      if (frameId !== null) return
+      frameId = window.requestAnimationFrame(updateActiveSection)
+    }
+
+    scheduleUpdate()
+    root.addEventListener('scroll', scheduleUpdate, { passive: true })
+    window.addEventListener('resize', scheduleUpdate)
+    return () => {
+      root.removeEventListener('scroll', scheduleUpdate)
+      window.removeEventListener('resize', scheduleUpdate)
+      if (frameId !== null) window.cancelAnimationFrame(frameId)
+    }
+  }, [viewMode, wikiSectionRevealSignature, wikiSubView])
 
   function openWikiDetailModal(input: WorldWikiDetailModalInput) {
     setWikiDetailModal({
@@ -5244,7 +5282,7 @@ export function WorldGraphPage({
         'Game Readiness Ledger:',
         promptPayload,
       ].join('\n'))
-      setWikiPromptExpanded(true)
+      openWorldCreateView()
     }
 
     return (
@@ -5694,13 +5732,32 @@ export function WorldGraphPage({
     )
   }
 
-  function handleSelectWikiSubView(nextSubView: WorldWikiSubView) {
+  function handleSelectWikiSubView(nextSubView: WorldWikiSubView, options: { focusComposer?: boolean } = {}) {
     if (wikiSubView === nextSubView) return
     if (wikiSubView === 'wiki' && wikiDocumentRef.current) {
       savedWikiScrollTopRef.current = wikiDocumentRef.current.scrollTop
     }
     setWikiSubView(nextSubView)
     onWorldWikiSubViewChange(nextSubView)
+    if (nextSubView === 'feed' && options.focusComposer !== false) {
+      focusWorldFeedComposer()
+    }
+  }
+
+  function focusWorldFeedComposer() {
+    window.requestAnimationFrame(() => {
+      const composer = document.getElementById('world-feed-composer-input') as HTMLTextAreaElement | null
+      composer?.focus()
+    })
+  }
+
+  function openWorldCreateView(options: { focusComposer?: boolean } = {}) {
+    const shouldFocus = options.focusComposer ?? true
+    if (wikiSubView !== 'feed') {
+      handleSelectWikiSubView('feed', { focusComposer: shouldFocus })
+    } else if (shouldFocus) {
+      focusWorldFeedComposer()
+    }
   }
 
   function renderWikiSubViewToggle() {
@@ -5713,12 +5770,24 @@ export function WorldGraphPage({
     return (
       <WorldOutputLibraryPanel
         canRunOutputs={canRunOutputs}
+        controller={outputLibraryController}
         model={outputLibraryModel}
         onCancelOutputRequest={onCancelOutputRequest}
         onDeleteOutputRequest={onRequestDeleteOutputRequest}
         onOpenOutputStudio={onOpenOutputStudio}
         onRefreshOutputRequest={onGetOutputRequestStatus}
         onStartOutputRequest={onStartOutputRequest}
+        showCreateBar={false}
+      />
+    )
+  }
+
+  function renderOutputLibraryRail() {
+    return (
+      <WorldOutputCreateRail
+        canRunOutputs={canRunOutputs}
+        controller={outputLibraryController}
+        onOpenOutputStudio={onOpenOutputStudio}
       />
     )
   }
@@ -6283,6 +6352,7 @@ export function WorldGraphPage({
                   renderInteractivePrototypeModal={renderInteractivePrototypeModal}
                   renderNarrativeRpgPlayablePanel={renderNarrativeRpgPlayablePanel}
                   renderOutputLibraryPanel={renderOutputLibraryPanel}
+                  renderOutputLibraryRail={renderOutputLibraryRail}
                   renderWikiSection={renderWikiSection}
                 />
               )
@@ -6314,83 +6384,6 @@ export function WorldGraphPage({
             )}
           </div>
         </div>
-
-        {isWikiMode && wikiSubView === 'wiki' ? (
-          <div className={wikiPromptExpanded ? 'world-wiki-prompt-dock is-expanded' : 'world-wiki-prompt-dock'} onClick={(event) => event.stopPropagation()}>
-            {wikiPromptExpanded ? (
-              <div className="world-wiki-prompt-panel">
-                <WorldPromptChatPanel
-                  activePromptPreview={activePromptPreview}
-                  activePromptTurn={activePromptTurn}
-                  busy={isPromptBusy}
-                  cancelBusy={isPromptCancelling}
-                  promptText={worldPromptText}
-                  promptError={worldPromptError}
-                  projectContext={projectContext}
-                  entityByKey={entityByKey}
-                  selectedEntity={selectedEntity}
-                  selectedSession={selectedPromptSession}
-                  selectedSessionKey={selectedPromptSessionKey}
-                  selectedThreadKey={selectedPromptThread?.key ?? null}
-                  selectedView={selectedView}
-                  sessionEvents={sessionEvents}
-                  sessionMessages={sessionMessages}
-                  sessionSuggestions={activeSessionSuggestions}
-                  sessionTurns={sessionTurns}
-                  sessionGenerationJobs={sessionGenerationJobs}
-                  sessionGenerationJobSteps={sessionGenerationJobSteps}
-                  sessionSuggestionCountBySessionId={activeSuggestionCountBySessionId}
-                  turnLensByTurnId={turnLensByTurnId}
-                  activeTurnLensId={activeTurnLens?.turnId ?? null}
-                  worldPromptTurns={worldPromptTurns}
-                  worldThreads={activeWorldThreads}
-                  worldPromptSessions={worldPromptSessions}
-                  onApplyPreview={(turnId) => void _onApplyWorldPromptPreview({ turnId })}
-                  onApproveOp={(turnId, opId) => void _onApproveWorldPromptOp({ turnId, opId })}
-                  onCancelTurn={handleCancelPromptTurn}
-                  onChangePromptText={setWorldPromptText}
-                  onDismissSuggestion={(suggestionId) => void onDismissWorldPromptSuggestion({ suggestionId })}
-                  onRejectOp={(turnId, opId) => void _onRejectWorldPromptOp({ turnId, opId })}
-                  onRunSuggestion={handleRunPromptSuggestion}
-                  onContinueWithoutSuggestion={() => setWorldPromptError(null)}
-                  onOpenHistory={() => setHistoryOpen(true)}
-                  onCloseHistory={() => setHistoryOpen(false)}
-                  onSelectSession={setSelectedPromptSessionKey}
-                  onStartNewSession={handleStartNewPromptSession}
-                  onSubmit={handleSubmitWorldPrompt}
-                  onSelectGraphNode={selectWorldNode}
-                  onSelectGraphEdge={selectWorldEdge}
-                  onOpenTurnLens={openTurnLens}
-                  onCloseTurnLens={clearTurnLens}
-                  historyOpen={historyOpen}
-                  variant="grow"
-                  headerActionEnd={(
-                    <button className="world-prompt-icon-button is-close" onClick={() => setWikiPromptExpanded(false)} type="button" aria-label="Collapse prompt">
-                      <EntityIcon id="plus" />
-                    </button>
-                  )}
-                />
-              </div>
-            ) : (
-              <CompactPromptComposer
-                ariaLabel="Prompt this world"
-                busy={isPromptBusy}
-                busyLabel={busyMessage ?? (isPromptCancelling ? 'Cancelling world prompt turn...' : 'Thinking through world changes...')}
-                cancelBusy={isPromptCancelling}
-                disabled={isPromptBusy}
-                expandIcon="content"
-                expandLabel="Expand prompt"
-                placeholder="Ask or add to this world..."
-                submitDisabled={!worldPromptText.trim()}
-                value={worldPromptText}
-                onCancel={activePromptTurn ? () => void handleCancelPromptTurn(activePromptTurn.id) : undefined}
-                onChange={setWorldPromptText}
-                onExpand={() => setWikiPromptExpanded(true)}
-                onSubmit={() => void handleSubmitWorldPrompt()}
-              />
-            )}
-          </div>
-        ) : null}
 
         {worldFeedGraphPreviewEntryId ? (
           <div

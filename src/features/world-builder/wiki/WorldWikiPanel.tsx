@@ -36,7 +36,7 @@ export function WorldWikiSubViewToggle({
         type="button"
       >
         <EntityIcon id="activity" />
-        <span>Feed</span>
+        <span>Create</span>
       </button>
       <button
         aria-selected={wikiSubView === 'outputs'}
@@ -88,6 +88,7 @@ type WorldWikiPanelProps = {
   renderInteractivePrototypeModal: () => ReactNode
   renderNarrativeRpgPlayablePanel: () => ReactNode
   renderOutputLibraryPanel: () => ReactNode
+  renderOutputLibraryRail: () => ReactNode
   renderWikiSection: (section: WorldWikiSection) => ReactNode
 }
 
@@ -127,16 +128,24 @@ export function WorldWikiPanel({
   renderInteractivePrototypeModal,
   renderNarrativeRpgPlayablePanel,
   renderOutputLibraryPanel,
+  renderOutputLibraryRail,
   renderWikiSection,
 }: WorldWikiPanelProps) {
   return (
     <div className="world-alt-surface world-wiki-surface">
       <aside className="world-wiki-index" aria-label="Wiki sections">
         <WorldWikiSubViewToggle wikiSubView={wikiSubView} onSelectWikiSubView={onSelectWikiSubView} />
-        <div className="world-wiki-index-head">
-          <span className="eyebrow">Wiki</span>
-          <strong>{wikiModel.title}</strong>
-        </div>
+        {wikiSubView === 'outputs' ? renderOutputLibraryRail() : (
+          <>
+        <button className="world-wiki-create-entry" onClick={() => onSelectWikiSubView('feed')} type="button">
+          <span className="world-wiki-create-icon">
+            <EntityIcon id={isPromptSubmitting ? 'activity' : 'plus'} />
+          </span>
+          <span>
+            <strong>{isPromptSubmitting ? 'View progress' : 'Create'}</strong>
+            <small>{isPromptSubmitting ? 'Follow the active world update' : 'Prompt canon changes'}</small>
+          </span>
+        </button>
         <div className="world-wiki-index-list">
           {wikiModel.sections.map((section) => {
             const count = section.entityKeys.length + section.threadKeys.length + section.resultKeys.length
@@ -193,6 +202,8 @@ export function WorldWikiPanel({
             ))}
           </div>
         ) : null}
+          </>
+        )}
       </aside>
       <div
         aria-label="Resize wiki navigation"

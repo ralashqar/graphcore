@@ -29,6 +29,31 @@
   line-height: 1.2;
 }
 
+.world-wiki-create-entry {
+  grid-template-columns: 30px minmax(0, 1fr);
+  min-height: 44px;
+  padding: 8px;
+  border: 0;
+  border-radius: 10px;
+  background:
+    linear-gradient(90deg, rgba(112, 91, 255, 0.22), rgba(34, 211, 238, 0.07) 76%, transparent);
+  box-shadow: none;
+}
+
+.world-wiki-create-entry:hover {
+  border: 0;
+  background:
+    linear-gradient(90deg, rgba(112, 91, 255, 0.3), rgba(34, 211, 238, 0.1) 76%, transparent);
+  transform: none;
+}
+
+.world-wiki-create-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(112, 91, 255, 0.16);
+}
+
 .world-wiki-index-list,
 .world-wiki-gap-list {
   gap: 4px;

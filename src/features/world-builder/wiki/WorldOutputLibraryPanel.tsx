@@ -5,7 +5,7 @@ import type { OutputArtifactFilter, OutputLibraryArtifactCard, OutputLibraryMode
 
 type OutputPresetKey = 'image' | 'story' | 'comic' | 'ebook' | 'reference' | 'video'
 
-type WorldOutputLibraryPanelProps = {
+type WorldOutputLibraryBaseProps = {
   canRunOutputs: boolean
   model: OutputLibraryModel
   onCancelOutputRequest: (requestId: string) => Promise<unknown> | unknown
@@ -18,6 +18,36 @@ type WorldOutputLibraryPanelProps = {
     pageCount?: number
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
   }) => Promise<unknown> | unknown
+}
+
+type WorldOutputLibraryPanelProps = WorldOutputLibraryBaseProps & {
+  controller?: WorldOutputLibraryController
+  showCreateBar?: boolean
+}
+
+type WorldOutputCreateRailProps = {
+  canRunOutputs: boolean
+  controller: WorldOutputLibraryController
+  onOpenOutputStudio: (requestId?: string | null) => void
+}
+
+export type WorldOutputLibraryController = {
+  artifactFilter: OutputArtifactFilter
+  busy: boolean
+  busyRequestId: string | null
+  downloadingArtifactKey: string | null
+  error: string | null
+  prompt: string
+  selectedPreset: OutputPresetKey
+  selectedPresetConfig: typeof outputPresets[number]
+  visibleArtifacts: OutputLibraryArtifactCard[]
+  handleDownloadArtifact: (artifact: OutputLibraryArtifactCard) => Promise<void>
+  setArtifactFilter: (filter: OutputArtifactFilter) => void
+  setBusyRequestId: (requestId: string | null) => void
+  setError: (message: string | null) => void
+  setPrompt: (prompt: string) => void
+  setSelectedPreset: (preset: OutputPresetKey) => void
+  submitOutputRequest: () => Promise<void>
 }
 
 const outputPresets: Array<{ key: OutputPresetKey; label: string; promptHint: string; targetFormat?: 'pdf' | 'markdown' | 'image' | 'video'; pageCount?: number }> = [
@@ -177,15 +207,10 @@ function OutputArtifactCard({
   )
 }
 
-export function WorldOutputLibraryPanel({
-  canRunOutputs,
+export function useWorldOutputLibraryController({
   model,
-  onCancelOutputRequest,
-  onDeleteOutputRequest,
-  onOpenOutputStudio,
-  onRefreshOutputRequest,
   onStartOutputRequest,
-}: WorldOutputLibraryPanelProps) {
+}: WorldOutputLibraryBaseProps): WorldOutputLibraryController {
   const [selectedPreset, setSelectedPreset] = useState<OutputPresetKey>('image')
   const [prompt, setPrompt] = useState('')
   const [artifactFilter, setArtifactFilter] = useState<OutputArtifactFilter>('all')
@@ -235,8 +260,101 @@ export function WorldOutputLibraryPanel({
     }
   }
 
+  return {
+    artifactFilter,
+    busy,
+    busyRequestId,
+    downloadingArtifactKey,
+    error,
+    prompt,
+    selectedPreset,
+    selectedPresetConfig,
+    visibleArtifacts,
+    handleDownloadArtifact,
+    setArtifactFilter,
+    setBusyRequestId,
+    setError,
+    setPrompt,
+    setSelectedPreset,
+    submitOutputRequest,
+  }
+}
+
+export function WorldOutputCreateRail({
+  canRunOutputs,
+  controller,
+  onOpenOutputStudio,
+}: WorldOutputCreateRailProps) {
+  return (
+    <div className="world-output-rail">
+      <div className="world-output-rail-head">
+        <span className="eyebrow">Outputs</span>
+        <strong>Make deliverables</strong>
+        <small>Generate images, stories, comics, docs, and videos from this world.</small>
+      </div>
+      <div className="world-output-create-form is-rail">
+        <div className="world-output-preset-row" role="tablist" aria-label="Output type">
+          {outputPresets.map((preset) => (
+            <button
+              key={preset.key}
+              aria-selected={controller.selectedPreset === preset.key}
+              className={controller.selectedPreset === preset.key ? 'is-active' : ''}
+              onClick={() => controller.setSelectedPreset(preset.key)}
+              role="tab"
+              type="button"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <label className="world-output-prompt-input">
+          <span>Output request</span>
+          <textarea
+            aria-label="Prompt an output from this world"
+            onChange={(event) => controller.setPrompt(event.target.value)}
+            placeholder={controller.selectedPresetConfig.promptHint}
+            rows={5}
+            value={controller.prompt}
+          />
+        </label>
+        <div className="world-output-submit-row">
+          <button disabled={!canRunOutputs || controller.busy} onClick={() => void controller.submitOutputRequest()} type="button">
+            {controller.busy ? 'Creating...' : `Generate ${controller.selectedPresetConfig.label}`}
+          </button>
+          <button onClick={() => onOpenOutputStudio(null)} type="button">Studio</button>
+          {!canRunOutputs ? <span>Live Supabase draft required.</span> : null}
+        </div>
+        {controller.error ? <p className="world-output-error">{controller.error}</p> : null}
+      </div>
+    </div>
+  )
+}
+
+export function WorldOutputLibraryPanel({
+  canRunOutputs,
+  controller,
+  model,
+  onCancelOutputRequest,
+  onDeleteOutputRequest,
+  onOpenOutputStudio,
+  onRefreshOutputRequest,
+  onStartOutputRequest,
+  showCreateBar = true,
+}: WorldOutputLibraryPanelProps) {
+  const internalController = useWorldOutputLibraryController({
+    canRunOutputs,
+    model,
+    onCancelOutputRequest,
+    onDeleteOutputRequest,
+    onOpenOutputStudio,
+    onRefreshOutputRequest,
+    onStartOutputRequest,
+  })
+  const outputController = controller ?? internalController
+
   return (
     <div className="world-output-library">
+      {showCreateBar ? (
       <section className="world-output-create-bar">
         <div className="world-output-create-copy">
           <span className="eyebrow">Outputs</span>
@@ -248,9 +366,9 @@ export function WorldOutputLibraryPanel({
             {outputPresets.map((preset) => (
               <button
                 key={preset.key}
-                aria-selected={selectedPreset === preset.key}
-                className={selectedPreset === preset.key ? 'is-active' : ''}
-                onClick={() => setSelectedPreset(preset.key)}
+                aria-selected={outputController.selectedPreset === preset.key}
+                className={outputController.selectedPreset === preset.key ? 'is-active' : ''}
+                onClick={() => outputController.setSelectedPreset(preset.key)}
                 role="tab"
                 type="button"
               >
@@ -262,22 +380,23 @@ export function WorldOutputLibraryPanel({
             <span>Output request</span>
             <textarea
               aria-label="Prompt an output from this world"
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder={selectedPresetConfig.promptHint}
+              onChange={(event) => outputController.setPrompt(event.target.value)}
+              placeholder={outputController.selectedPresetConfig.promptHint}
               rows={3}
-              value={prompt}
+              value={outputController.prompt}
             />
           </label>
           <div className="world-output-submit-row">
-            <button disabled={!canRunOutputs || busy} onClick={submitOutputRequest} type="button">
-              {busy ? 'Creating output...' : `Generate ${selectedPresetConfig.label}`}
+            <button disabled={!canRunOutputs || outputController.busy} onClick={() => void outputController.submitOutputRequest()} type="button">
+              {outputController.busy ? 'Creating output...' : `Generate ${outputController.selectedPresetConfig.label}`}
             </button>
             <button onClick={() => onOpenOutputStudio(null)} type="button">Open Studio</button>
             {!canRunOutputs ? <span>Live Supabase draft required.</span> : null}
           </div>
-          {error ? <p className="world-output-error">{error}</p> : null}
+          {outputController.error ? <p className="world-output-error">{outputController.error}</p> : null}
         </div>
       </section>
+      ) : null}
 
       <section className="world-output-summary-strip" aria-label="Output summary">
         <span><strong>{model.counts.generating}</strong><small>Generating</small></span>
@@ -310,14 +429,14 @@ export function WorldOutputLibraryPanel({
                 {group.rows.map((row) => (
                   <OutputRequestRow
                     key={row.id}
-                    busyRequestId={busyRequestId}
+                    busyRequestId={outputController.busyRequestId}
                     row={row}
                     onCancelOutputRequest={onCancelOutputRequest}
                     onDeleteOutputRequest={onDeleteOutputRequest}
                     onOpenOutputStudio={onOpenOutputStudio}
                     onRefreshOutputRequest={onRefreshOutputRequest}
-                    setBusyRequestId={setBusyRequestId}
-                    setError={setError}
+                    setBusyRequestId={outputController.setBusyRequestId}
+                    setError={outputController.setError}
                   />
                 ))}
               </section>
@@ -336,9 +455,9 @@ export function WorldOutputLibraryPanel({
             {(['all', 'images', 'documents', 'video', 'other'] as const).map((filter) => (
               <button
                 key={filter}
-                aria-selected={artifactFilter === filter}
-                className={artifactFilter === filter ? 'is-active' : ''}
-                onClick={() => setArtifactFilter(filter)}
+                aria-selected={outputController.artifactFilter === filter}
+                className={outputController.artifactFilter === filter ? 'is-active' : ''}
+                onClick={() => outputController.setArtifactFilter(filter)}
                 role="tab"
                 type="button"
               >
@@ -347,19 +466,19 @@ export function WorldOutputLibraryPanel({
             ))}
           </div>
         </div>
-        {visibleArtifacts.length === 0 ? (
+        {outputController.visibleArtifacts.length === 0 ? (
           <div className="world-output-empty is-compact">
             <strong>No artifacts in this filter</strong>
             <p>Completed PDFs, images, videos, and packages will appear here.</p>
           </div>
         ) : (
           <div className="world-output-artifact-gallery">
-            {visibleArtifacts.map((artifact) => (
+            {outputController.visibleArtifacts.map((artifact) => (
               <OutputArtifactCard
                 key={artifact.id}
                 artifact={artifact}
-                downloadingArtifactKey={downloadingArtifactKey}
-                onDownload={(entry) => void handleDownloadArtifact(entry)}
+                downloadingArtifactKey={outputController.downloadingArtifactKey}
+                onDownload={(entry) => void outputController.handleDownloadArtifact(entry)}
               />
             ))}
           </div>
