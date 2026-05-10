@@ -12,6 +12,7 @@ import {
   outputRequestStatusResponseSchema,
   planOutputPrompt,
   planOutputRequestWorkflow,
+  resolveCinematicStorySourceScope,
 } from '../../../src/domain/outputWorkflow.ts'
 import { z } from 'zod'
 import {
@@ -71,6 +72,10 @@ function isImageOutputKind(outputKind: string) {
   return outputKind === 'concept_art_image' || outputKind === 'poster_image'
 }
 
+function isCinematicOutputKind(outputKind: string) {
+  return outputKind === 'cinematic_episode' || outputKind === 'cinematic_trailer' || outputKind === 'ugc_episode'
+}
+
 function buildEntityScopeCatalog(snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot']) {
   return snapshot.worldEntities
     .filter((entity) => entity.nodeType !== 'sequence_unit')
@@ -107,6 +112,105 @@ async function resolveOutputRequestWorldScope(input: {
   planner: z.infer<typeof outputPromptPlannerResultSchema>
   snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot']
 }) {
+  if (isCinematicOutputKind(input.planner.outputKind) && input.planner.intent === 'output_generation') {
+    const sourceResolution = resolveCinematicStorySourceScope({
+      prompt: input.prompt,
+      worldEntities: input.snapshot.worldEntities,
+      selectedSequenceUnitKeys: input.planner.selectedSequenceUnitKeys,
+    })
+    const sequences = buildSequenceScopeCatalog(input.snapshot)
+    const validEntityKeys = new Set(buildEntityScopeCatalog(input.snapshot).map((entity) => entity.key))
+    const validSequenceKeys = new Set(sequences.map((sequence) => sequence.key))
+    const selectedEntityKeys = input.planner.selectedEntityKeys.filter((key) => validEntityKeys.has(key))
+    let selectedSequenceUnitKeys = sourceResolution.selectedSequenceUnitKeys
+      .filter((key) => validSequenceKeys.has(key))
+      .slice(0, 3)
+    let resolverMode = 'cinematic_source'
+    let resolverConfidence = sourceResolution.confidence
+    let resolverRationale = sourceResolution.rationale
+    let resolverError = ''
+    if (selectedSequenceUnitKeys.length === 0 && sourceResolution.confidence < 0.9 && sequences.length > 0) {
+      const model = outputRequestPlannerModel()
+      try {
+        const response = await runOpenAiResponses({
+          model,
+          instructions: [
+            'You are GraphCore\'s cinematic story-source resolver.',
+            'Infer from the user prompt whether this cinematic should adapt an existing sequence unit or be an independent new moment.',
+            'Select a sequence unit when the prompt semantically asks for existing story material, including ordinal references like "first chapter", "opening scene", "finale", or phrases like "adapt", "from", "based on", "for this scene", or "where the uprising happens".',
+            'Do not select a sequence unit merely because it mentions the same character or location as the prompt.',
+            'If the user asks for a freeform moment with characters/locations, leave selectedSequenceUnitKeys empty.',
+            'If multiple sequence units fit, choose the smallest most specific unit. If none clearly fit, return an empty selection with a concise rationale.',
+            'Use only keys from the supplied sequence catalog. Return JSON only.',
+          ].join('\n'),
+          input: JSON.stringify({
+            prompt: input.prompt,
+            outputKind: input.planner.outputKind,
+            project: input.snapshot.project,
+            worldWiki: input.snapshot.worldWiki,
+            sequenceCatalog: sequences,
+          }),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'graphcore_cinematic_source_resolution',
+              strict: true,
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['selectedEntityKeys', 'selectedSequenceUnitKeys', 'confidence', 'rationale'],
+                properties: {
+                  selectedEntityKeys: { type: 'array', items: { type: 'string' } },
+                  selectedSequenceUnitKeys: { type: 'array', items: { type: 'string' } },
+                  confidence: { type: 'number', minimum: 0, maximum: 1 },
+                  rationale: { type: 'string' },
+                },
+              },
+            },
+          },
+          maxOutputTokens: 700,
+          metadata: {
+            graphcore_task: 'cinematic_source_resolver',
+            graphcore_output_kind: input.planner.outputKind,
+          },
+          timeoutMs: 45_000,
+        })
+        if (!response.response.ok) throw new Error(`OpenAI cinematic source resolver failed with HTTP ${response.response.status}.`)
+        const parsed = outputScopeResolverSchema.parse(JSON.parse(response.outputText))
+        selectedSequenceUnitKeys = parsed.selectedSequenceUnitKeys
+          .filter((key) => validSequenceKeys.has(key))
+          .slice(0, 1)
+        resolverMode = 'cinematic_source_llm'
+        resolverConfidence = parsed.confidence
+        resolverRationale = parsed.rationale || sourceResolution.rationale
+      } catch (error) {
+        resolverError = error instanceof Error ? error.message : String(error)
+      }
+    }
+    const planner = outputPromptPlannerResultSchema.parse({
+      ...input.planner,
+      selectedEntityKeys,
+      selectedSequenceUnitKeys,
+      worldScope: selectedEntityKeys.length > 0 || selectedSequenceUnitKeys.length > 0 ? 'prompt_bound_scope' : 'full_world',
+      plannerNotes: [
+        input.planner.plannerNotes,
+        resolverRationale ? `Cinematic source routing: ${resolverRationale}` : '',
+      ].filter(Boolean).join('\n'),
+    })
+    return {
+      planner,
+      scopeResolver: {
+        mode: resolverMode,
+        sourceMode: sourceResolution.sourceMode,
+        confidence: resolverConfidence,
+        rationale: resolverRationale,
+        ...(resolverError ? { error: resolverError } : {}),
+        selectedEntityKeys: planner.selectedEntityKeys,
+        selectedSequenceUnitKeys: planner.selectedSequenceUnitKeys,
+      },
+    }
+  }
+
   if (!isImageOutputKind(input.planner.outputKind) || input.planner.intent !== 'output_generation') {
     return {
       planner: input.planner,

@@ -22,7 +22,6 @@ export function useOutputWorkspaceState(snapshot: ProjectSnapshot) {
   const [comicPageCount, setComicPageCount] = useState(8)
   const [requestImageQuality, setRequestImageQuality] = useState<OutputImageQualityChoice>('preset')
   const [requestImageOutputFormat, setRequestImageOutputFormat] = useState<OutputImageFormatChoice>('preset')
-  const [requestPrompt, setRequestPrompt] = useState('Make a poster image from this world using the main characters and strongest location.')
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(snapshot.outputRequests[0]?.id ?? null)
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -82,7 +81,6 @@ export function useOutputWorkspaceState(snapshot: ProjectSnapshot) {
     rememberLiveRun,
     requestImageOutputFormat,
     requestImageQuality,
-    requestPrompt,
     selectedComicSequenceKey,
     selectedNodeKey,
     selectedRequestId,
@@ -101,7 +99,6 @@ export function useOutputWorkspaceState(snapshot: ProjectSnapshot) {
     setRefreshingGraph,
     setRequestImageOutputFormat,
     setRequestImageQuality,
-    setRequestPrompt,
     setSelectedComicSequenceKey,
     setSelectedNodeKey,
     setSelectedRequestId,

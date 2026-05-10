@@ -39,6 +39,7 @@ import {
   buildCinematicV2StoryboardLayout,
   cinematicScriptDocSchema,
   cinematicV2ParsedScriptSchema,
+  cinematicV2ReferencePlanSchema,
   cinematicV2SceneLayoutPlanSchema,
   cinematicV2SceneStateSchema,
   cinematicV2ShotSchema,
@@ -674,12 +675,12 @@ async function setStepStatus(
   },
 ) {
   const now = new Date().toISOString()
-  const response = await client
+  const writeStep = async (nodeId: string | null) => client
     .from('output_workflow_run_steps')
     .upsert({
       run_id: input.runId,
       workflow_id: input.node.workflowId,
-      node_id: input.node.id,
+      node_id: nodeId,
       draft_id: input.draftId,
       node_key: input.node.key,
       node_type: input.node.nodeType,
@@ -697,6 +698,17 @@ async function setStepStatus(
       started_at: input.status === 'queued' ? null : now,
       completed_at: ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(input.status) ? now : null,
     }, { onConflict: 'run_id,node_key' })
+  let response = await writeStep(input.node.id)
+  if (response.error && response.error.code === '23503' && response.error.message.includes('output_workflow_run_steps_node_id_fkey')) {
+    const currentNode = await client
+      .from('output_workflow_nodes')
+      .select('id')
+      .eq('workflow_id', input.node.workflowId)
+      .eq('key', input.node.key)
+      .maybeSingle()
+    if (currentNode.error) throw new Error(currentNode.error.message)
+    response = await writeStep(typeof currentNode.data?.id === 'string' ? currentNode.data.id : null)
+  }
   if (response.error) throw new Error(response.error.message)
 }
 
@@ -959,6 +971,12 @@ function chooseComicContextEntityKeys(input: {
   return [...keys].slice(0, 24)
 }
 
+function shouldInferContextEntitiesFromSequence(preset: string) {
+  return preset === 'comic_issue_from_sequence'
+    || preset === 'cinematic_episode_from_sequence'
+    || preset === 'cinematic_trailer'
+}
+
 function extractWorldContext(run: OutputWorkflowRun, node: OutputWorkflowNode) {
   const input = asRecord(run.input)
   const entities = Array.isArray(input.worldEntities) ? input.worldEntities.map(asRecord) : []
@@ -969,7 +987,7 @@ function extractWorldContext(run: OutputWorkflowRun, node: OutputWorkflowNode) {
   const configuredSourceEntityKeys = Array.isArray(config.sourceEntityKeys) ? config.sourceEntityKeys.filter((entry): entry is string => typeof entry === 'string') : []
   const sourceSequenceUnitKeys = Array.isArray(config.sourceSequenceUnitKeys) ? config.sourceSequenceUnitKeys.filter((entry): entry is string => typeof entry === 'string') : []
   const strictSourceEntityFilter = config.strictSourceEntityFilter === true
-  const sourceEntityKeys = run.preset === 'comic_issue_from_sequence'
+  const sourceEntityKeys = shouldInferContextEntitiesFromSequence(run.preset)
     ? chooseComicContextEntityKeys({
       existingSourceEntityKeys: configuredSourceEntityKeys,
       sourceSequenceUnitKeys,
@@ -2530,6 +2548,182 @@ function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<s
 
 export function buildDeterministicCinematicAssetPack(context: Record<string, unknown>) {
   return buildDeterministicComicAssetPack(context)
+}
+
+function cinematicAssetPackEntities(assetPack: Record<string, unknown>) {
+  return Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+}
+
+function cinematicAssetPackEntityKeys(assetPack: Record<string, unknown>) {
+  return cinematicAssetPackEntities(assetPack).map((entity) => readText(entity.key)).filter(Boolean)
+}
+
+function referencePlanKeys(plan: Record<string, unknown>) {
+  return [...new Set([
+    ...readStringArray(plan.primaryCastRefIds),
+    ...readStringArray(plan.supportingCastRefIds),
+    ...readStringArray(plan.locationRefIds),
+    ...readStringArray(plan.propRefIds),
+    ...readStringArray(plan.conceptRefIds),
+    ...readStringArray(plan.continuityAnchorRefIds),
+  ].filter(Boolean))]
+}
+
+function cloneCinematicAssetPackEntity(entity: Record<string, unknown>, maxAssetKeys = 2) {
+  return {
+    ...entity,
+    assetKeys: sortReferenceValues(readStringArray(entity.assetKeys)).slice(0, Math.max(1, maxAssetKeys)),
+  }
+}
+
+function filterCinematicAssetPack(assetPack: Record<string, unknown>, keys: string[], limit = 16, maxAssetKeysPerEntity = 2) {
+  const keySet = new Set(keys.filter(Boolean))
+  const entities = cinematicAssetPackEntities(assetPack)
+    .filter((entity) => keySet.has(readText(entity.key)))
+    .slice(0, Math.max(1, limit))
+    .map((entity) => cloneCinematicAssetPackEntity(entity, maxAssetKeysPerEntity))
+  const selectedKeys = new Set(entities.map((entity) => readText(entity.key)).filter(Boolean))
+  return {
+    ...assetPack,
+    entities,
+    selectedEntityKeys: [...selectedKeys],
+    missingReferenceEntityKeys: readStringArray(assetPack.missingReferenceEntityKeys)
+      .filter((key) => selectedKeys.has(key)),
+  }
+}
+
+function buildFallbackCinematicV2ReferencePlan(assetPack: Record<string, unknown>, maxReferenceCount = 16) {
+  const entities = cinematicAssetPackEntities(assetPack)
+  const byType = (types: string[]) => entities
+    .filter((entity) => types.includes(readText(entity.type) || readText(entity.role)))
+    .map((entity) => readText(entity.key))
+    .filter(Boolean)
+  const primaryCastRefIds = byType(['actor', 'character', 'group']).slice(0, 5)
+  const locationRefIds = byType(['place', 'environment', 'location', 'location_spot']).slice(0, 3)
+  const propRefIds = byType(['object', 'item', 'inventory_item', 'prop']).slice(0, 4)
+  const conceptRefIds = byType(['concept']).slice(0, 3)
+  const selected = [...new Set([...primaryCastRefIds, ...locationRefIds, ...propRefIds, ...conceptRefIds])]
+    .slice(0, Math.max(1, maxReferenceCount))
+  return cinematicV2ReferencePlanSchema.parse({
+    primaryCastRefIds: selected.filter((key) => primaryCastRefIds.includes(key)),
+    supportingCastRefIds: [],
+    locationRefIds: selected.filter((key) => locationRefIds.includes(key)),
+    propRefIds: selected.filter((key) => propRefIds.includes(key)),
+    conceptRefIds: selected.filter((key) => conceptRefIds.includes(key)),
+    continuityAnchorRefIds: selected.filter((key) => !primaryCastRefIds.includes(key) && !locationRefIds.includes(key) && !propRefIds.includes(key) && !conceptRefIds.includes(key)),
+    rejectedRefs: cinematicAssetPackEntityKeys(assetPack)
+      .filter((key) => !selected.includes(key))
+      .map((refId) => ({ refId, reason: 'Not selected by deterministic cinematic reference fallback.' })),
+    rationale: 'Deterministic fallback selected the most likely cast, location, prop, and concept references from the sequence-scoped asset pack.',
+    confidence: selected.length > 0 ? 0.55 : 0.2,
+  })
+}
+
+function sanitizeCinematicV2ReferencePlan(plan: Record<string, unknown>, assetPack: Record<string, unknown>, maxReferenceCount = 16) {
+  const allowed = new Set(cinematicAssetPackEntityKeys(assetPack))
+  const takeValid = (values: string[]) => values.filter((key, index) => key && allowed.has(key) && values.indexOf(key) === index)
+  const raw = cinematicV2ReferencePlanSchema.parse(plan)
+  const ordered = [
+    ...takeValid(raw.primaryCastRefIds),
+    ...takeValid(raw.supportingCastRefIds),
+    ...takeValid(raw.locationRefIds),
+    ...takeValid(raw.propRefIds),
+    ...takeValid(raw.conceptRefIds),
+    ...takeValid(raw.continuityAnchorRefIds),
+  ]
+  const capped = new Set([...new Set(ordered)].slice(0, Math.max(1, maxReferenceCount)))
+  const invalidRejected = referencePlanKeys(raw)
+    .filter((key) => !allowed.has(key))
+    .map((refId) => ({ refId, reason: 'Rejected because it is not in the sequence-scoped cinematic asset pack.' }))
+  const unselectedRejected = cinematicAssetPackEntityKeys(assetPack)
+    .filter((key) => !capped.has(key))
+    .map((refId) => ({ refId, reason: 'Not needed for this cinematic-level reference plan.' }))
+  const sanitized = cinematicV2ReferencePlanSchema.parse({
+    ...raw,
+    primaryCastRefIds: takeValid(raw.primaryCastRefIds).filter((key) => capped.has(key)),
+    supportingCastRefIds: takeValid(raw.supportingCastRefIds).filter((key) => capped.has(key)),
+    locationRefIds: takeValid(raw.locationRefIds).filter((key) => capped.has(key)),
+    propRefIds: takeValid(raw.propRefIds).filter((key) => capped.has(key)),
+    conceptRefIds: takeValid(raw.conceptRefIds).filter((key) => capped.has(key)),
+    continuityAnchorRefIds: takeValid(raw.continuityAnchorRefIds).filter((key) => capped.has(key)),
+    rejectedRefs: [...raw.rejectedRefs, ...invalidRejected, ...unselectedRejected]
+      .filter((entry, index, entries) => entries.findIndex((candidate) => candidate.refId === entry.refId) === index),
+  })
+  if (referencePlanKeys(sanitized).length > 0) return sanitized
+  return buildFallbackCinematicV2ReferencePlan(assetPack, maxReferenceCount)
+}
+
+function entityMentionedInShotText(entity: Record<string, unknown>, shotText: string) {
+  const candidates = [
+    readText(entity.key),
+    readText(entity.name),
+    ...readStringArray(entity.aliases),
+  ]
+  return candidates
+    .map((candidate) => normalizeComicReferenceText(candidate).replace(/_/g, ' '))
+    .filter((candidate) => candidate.length > 2)
+    .some((candidate) => shotText.includes(candidate))
+}
+
+export function buildCinematicV2ShotAssetPack(input: {
+  assetPack: Record<string, unknown>
+  referencePlan?: Record<string, unknown> | null
+  shot: Record<string, unknown>
+  maxEntityCount?: number
+  maxAssetKeysPerEntity?: number
+}) {
+  const shot = cinematicV2ShotSchema.parse(input.shot)
+  const parsedReferencePlan = cinematicV2ReferencePlanSchema.safeParse(input.referencePlan ?? {})
+  const referencePlan = parsedReferencePlan.success && referencePlanKeys(parsedReferencePlan.data).length > 0
+    ? parsedReferencePlan.data
+    : buildFallbackCinematicV2ReferencePlan(input.assetPack)
+  const plannedKeys = new Set(referencePlanKeys(referencePlan))
+  const byKey = new Map(cinematicAssetPackEntities(input.assetPack).map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
+  const shotText = normalizeComicReferenceText([
+    shot.title,
+    shot.description,
+    shot.action,
+    shot.continuityInputs.join(' '),
+    shot.camera.framing,
+    shot.camera.angle,
+    shot.camera.movement,
+    shot.camera.screenDirectionRule,
+    ...shot.dialogue.map((line) => `${line.speakerRefId} ${line.text} ${line.emotion}`),
+  ].filter(Boolean).join(' ')).replace(/_/g, ' ')
+  const priorityKeys = [
+    ...shot.speakerRefIds,
+    ...shot.visibleCharacterRefIds,
+    ...(shot.locationRefId ? [shot.locationRefId] : []),
+    ...shot.propRefIds,
+  ].filter((key) => plannedKeys.has(key) && byKey.has(key))
+  const continuityKeys = referencePlan.continuityAnchorRefIds
+    .filter((key) => plannedKeys.has(key) && byKey.has(key))
+    .filter((key) => entityMentionedInShotText(byKey.get(key) ?? {}, shotText))
+  const textMentionedKeys = [...plannedKeys]
+    .filter((key) => byKey.has(key))
+    .filter((key) => entityMentionedInShotText(byKey.get(key) ?? {}, shotText))
+  const fallbackKeys = [
+    ...referencePlan.primaryCastRefIds,
+    ...referencePlan.locationRefIds,
+    ...referencePlan.propRefIds,
+    ...referencePlan.conceptRefIds,
+  ].filter((key) => plannedKeys.has(key) && byKey.has(key))
+  const directKeys = [...new Set([
+    ...priorityKeys,
+    ...continuityKeys,
+    ...textMentionedKeys,
+  ])]
+  const selectedKeys = (directKeys.length > 0 ? directKeys : fallbackKeys)
+    .slice(0, Math.max(1, input.maxEntityCount ?? 6))
+  const shotAssetPack = filterCinematicAssetPack(input.assetPack, selectedKeys, input.maxEntityCount ?? 6, input.maxAssetKeysPerEntity ?? 2)
+  return {
+    ...shotAssetPack,
+    shotId: shot.id,
+    shotIndex: shot.index,
+    shotReferenceKeys: selectedKeys,
+    referencePlan,
+    text: JSON.stringify(shotAssetPack, null, 2),
+  }
 }
 
 function cinematicContextBrief(context: Record<string, unknown>) {
@@ -5311,11 +5505,6 @@ async function materializeDynamicCinematicTakeFanout(input: {
     const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
     if (deleteEdges.error) throw new Error(deleteEdges.error.message)
   }
-  if (existingDynamicNodes.length > 0) {
-    const deleteNodes = await input.client.from('output_workflow_nodes').delete().eq('workflow_id', input.workflow.id).in('key', existingDynamicNodes.map((row) => row.key))
-    if (deleteNodes.error) throw new Error(deleteNodes.error.message)
-  }
-
   const nodeRows: Record<string, unknown>[] = []
   const edgeRows: Record<string, unknown>[] = []
   takePlan.forEach((take, index) => {
@@ -5387,6 +5576,12 @@ async function materializeDynamicCinematicTakeFanout(input: {
   if (insertNodes.error) throw new Error(insertNodes.error.message)
   const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
   if (insertEdges.error) throw new Error(insertEdges.error.message)
+  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
+  const obsoleteDynamicNodeKeys = existingDynamicNodes.map((row) => row.key).filter((key) => !nextDynamicNodeKeys.has(key))
+  if (obsoleteDynamicNodeKeys.length > 0) {
+    const deleteNodes = await input.client.from('output_workflow_nodes').delete().eq('workflow_id', input.workflow.id).in('key', obsoleteDynamicNodeKeys)
+    if (deleteNodes.error) throw new Error(deleteNodes.error.message)
+  }
   const updateWorkflow = await input.client.from('output_workflows').update({
     metadata: {
       ...input.workflow.metadata,
@@ -5417,11 +5612,15 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
   const sceneState = cinematicV2SceneStateSchema.parse(input.compileOutputs.sceneState ?? input.compileOutputs.scene_state)
   const layoutPlan = cinematicV2SceneLayoutPlanSchema.parse(input.compileOutputs.layoutPlan ?? input.compileOutputs.layout_plan)
   const parsedScript = cinematicV2ParsedScriptSchema.parse(input.compileOutputs.parsedScript ?? input.compileOutputs.parsed_script)
+  const referencePlan = cinematicV2ReferencePlanSchema.safeParse(input.compileOutputs.cinematicReferencePlan ?? input.compileOutputs.cinematic_reference_plan).success
+    ? cinematicV2ReferencePlanSchema.parse(input.compileOutputs.cinematicReferencePlan ?? input.compileOutputs.cinematic_reference_plan)
+    : null
   const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue({
     shotPlan,
     sceneState,
     layoutPlan,
     parsedScript,
+    referencePlan,
   })
   const aspectRatio = readText(input.config.aspectRatio) || '16:9'
   const resolution = readText(input.config.resolution) || '720p'
@@ -5451,6 +5650,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
     && existingDynamicNodes.some((row) => row.key === 'cinematic_v2_timeline_assemble')
     && existingDynamicNodes.some((row) => row.key === 'cinematic_v2_storyboard_sheet')
+    && shotPlan.shots.every((shot) => existingDynamicNodes.some((row) => row.key === `cinematic_v2_shot_${String(shot.index).padStart(3, '0')}_asset_pack`))
     && shotPlan.shots.every((shot) => existingDynamicNodes.some((row) => row.key === `cinematic_v2_shot_${String(shot.index).padStart(3, '0')}_video`))
   if (existingSameHash) return { expanded: false, compileHash, shotCount: shotPlan.shots.length }
 
@@ -5466,11 +5666,6 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
     if (deleteEdges.error) throw new Error(deleteEdges.error.message)
   }
-  if (existingDynamicNodes.length > 0) {
-    const deleteNodes = await input.client.from('output_workflow_nodes').delete().eq('workflow_id', input.workflow.id).in('key', existingDynamicNodes.map((row) => row.key))
-    if (deleteNodes.error) throw new Error(deleteNodes.error.message)
-  }
-
   const nodeRows: Record<string, unknown>[] = []
   const edgeRows: Record<string, unknown>[] = []
   const v2Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicNodeRow({
@@ -5485,6 +5680,10 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     generatedByNodeKey,
     ...args,
   })
+  const existingNodeKeys = new Set(((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[]).map((row) => row.key))
+  const assetPackSourceNodeKey = existingNodeKeys.has('cinematic_v2_reference_select')
+    ? 'cinematic_v2_reference_select'
+    : 'cinematic_entities'
 
   nodeRows.push(
     v2Node({ key: 'cinematic_v2_storyboard_prompt', nodeType: 'utility_transform', label: 'V2 Storyboard Sheet Prompt', x: 1760, y: 80, config: { purpose: 'cinematic_v2_storyboard_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', aspectRatio, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_storyboard_prompt', maxConcurrency: 1 } } }),
@@ -5512,31 +5711,35 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     const keyframeKey = `${baseKey}_keyframe`
     const videoPromptKey = `${baseKey}_video_prompt`
     const videoKey = `${baseKey}_video`
+    const shotAssetPackKey = `${baseKey}_asset_pack`
     const shotMeta = { shotId: shot.id, shotIndex: shot.index }
     nodeRows.push(
+      v2Node({ key: shotAssetPackKey, nodeType: 'utility_transform', label: `Shot ${shot.index} References`, x: 2460, y, config: { purpose: 'cinematic_v2_shot_asset_pack', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, maxEntityCount: 6, maxAssetKeysPerEntity: 2, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_shot_asset_packs', maxConcurrency: 12 } } }),
       v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Prompt`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: keyframeKey, nodeType: 'image_generation', label: `Shot ${shot.index} Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 8, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'keyframe', 'image_prompt', 'entity_reference'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_keyframes', maxConcurrency: 4 } } }),
+      v2Node({ key: keyframeKey, nodeType: 'image_generation', label: `Shot ${shot.index} Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 6, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'keyframe', 'image_prompt', 'entity_reference'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_keyframes', maxConcurrency: 4 } } }),
       v2Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Video Prompt`, x: 3160, y, config: { purpose: 'cinematic_v2_video_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_video_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: videoKey, nodeType: 'video_generation', label: `Shot ${shot.index} Video`, x: 3440, y, config: { purpose: 'cinematic_v2_shot_video', role: 'cinematic_v2_shot_video', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'keyframes', debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'video_prompt', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v2_videos', maxConcurrency: Math.min(shotPlan.shots.length, 3) } } }),
+      v2Node({ key: videoKey, nodeType: 'video_generation', label: `Shot ${shot.index} Video`, x: 3440, y, config: { purpose: 'cinematic_v2_shot_video', role: 'cinematic_v2_shot_video', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'keyframes', assetPackReferenceLimit: 5, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'video_prompt', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v2_videos', maxConcurrency: Math.min(shotPlan.shots.length, 3) } } }),
     )
     edgeRows.push(
+      v2Edge({ key: `${assetPackSourceNodeKey}__${shotAssetPackKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: shotAssetPackKey, targetPort: 'asset_pack', metadata: shotMeta }),
+      v2Edge({ key: `shot_plan__${shotAssetPackKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: shotAssetPackKey, targetPort: 'shot_plan', metadata: shotMeta }),
       v2Edge({ key: `panel_extract__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_panel_extract', sourcePort: 'panels', targetNodeKey: keyframePromptKey, targetPort: 'panels', metadata: shotMeta }),
       v2Edge({ key: `shot_plan__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: keyframePromptKey, targetPort: 'shot_plan', metadata: shotMeta }),
       v2Edge({ key: `scene_state__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_scene_compile', sourcePort: 'text', targetNodeKey: keyframePromptKey, targetPort: 'scene_state', metadata: shotMeta }),
       v2Edge({ key: `layout_plan__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_layout_plan', sourcePort: 'text', targetNodeKey: keyframePromptKey, targetPort: 'layout_plan', metadata: shotMeta }),
-      v2Edge({ key: `cinematic_entities__${keyframePromptKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: keyframePromptKey, targetPort: 'asset_pack', metadata: shotMeta }),
+      v2Edge({ key: `${shotAssetPackKey}__${keyframePromptKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: keyframePromptKey, targetPort: 'asset_pack', metadata: shotMeta }),
       v2Edge({ key: `${keyframePromptKey}__${keyframeKey}_prompt`, sourceNodeKey: keyframePromptKey, sourcePort: 'text', targetNodeKey: keyframeKey, targetPort: 'prompt', metadata: shotMeta }),
       v2Edge({ key: `${keyframePromptKey}__${keyframeKey}_panel`, sourceNodeKey: keyframePromptKey, sourcePort: 'image', targetNodeKey: keyframeKey, targetPort: 'references', metadata: shotMeta }),
-      v2Edge({ key: `cinematic_entities__${keyframeKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: keyframeKey, targetPort: 'references', metadata: shotMeta }),
+      v2Edge({ key: `${shotAssetPackKey}__${keyframeKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: keyframeKey, targetPort: 'references', metadata: shotMeta }),
       v2Edge({ key: `skill_context__${keyframeKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: keyframeKey, targetPort: 'guidance', metadata: shotMeta }),
       v2Edge({ key: `${keyframeKey}__${videoPromptKey}_image`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references', metadata: shotMeta }),
       v2Edge({ key: `shot_plan__${videoPromptKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'shot_plan', metadata: shotMeta }),
       v2Edge({ key: `scene_state__${videoPromptKey}`, sourceNodeKey: 'cinematic_v2_scene_compile', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'scene_state', metadata: shotMeta }),
       v2Edge({ key: `layout_plan__${videoPromptKey}`, sourceNodeKey: 'cinematic_v2_layout_plan', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'layout_plan', metadata: shotMeta }),
-      v2Edge({ key: `cinematic_entities__${videoPromptKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack', metadata: shotMeta }),
+      v2Edge({ key: `${shotAssetPackKey}__${videoPromptKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack', metadata: shotMeta }),
       v2Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt', metadata: shotMeta }),
       v2Edge({ key: `${keyframeKey}__${videoKey}_reference`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', metadata: shotMeta }),
-      v2Edge({ key: `cinematic_entities__${videoKey}`, sourceNodeKey: 'cinematic_entities', sourcePort: 'asset_pack', targetNodeKey: videoKey, targetPort: 'references', metadata: shotMeta }),
+      v2Edge({ key: `${shotAssetPackKey}__${videoKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: videoKey, targetPort: 'references', metadata: shotMeta }),
       v2Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v2_timeline_assemble', targetPort: 'videos', metadata: shotMeta }),
     )
   })
@@ -5554,6 +5757,12 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
   if (insertNodes.error) throw new Error(insertNodes.error.message)
   const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
   if (insertEdges.error) throw new Error(insertEdges.error.message)
+  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
+  const obsoleteDynamicNodeKeys = existingDynamicNodes.map((row) => row.key).filter((key) => !nextDynamicNodeKeys.has(key))
+  if (obsoleteDynamicNodeKeys.length > 0) {
+    const deleteNodes = await input.client.from('output_workflow_nodes').delete().eq('workflow_id', input.workflow.id).in('key', obsoleteDynamicNodeKeys)
+    if (deleteNodes.error) throw new Error(deleteNodes.error.message)
+  }
   const updateWorkflow = await input.client.from('output_workflows').update({
     metadata: {
       ...input.workflow.metadata,
@@ -7934,6 +8143,47 @@ async function executeNode(input: {
           model: 'deterministic-cinematic-asset-pack-v1',
         }
       }
+      if (purpose === 'cinematic_v2_reference_select') {
+        const config = asRecord(input.node.config)
+        const maxReferenceCount = Math.max(1, Math.min(16, Number(config.maxReferenceCount ?? 16) || 16))
+        const sourceAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const fallbackPlan = buildFallbackCinematicV2ReferencePlan(sourceAssetPack, maxReferenceCount)
+        const result = await runCinematicV2StructuredNode({
+          nodeKey: input.node.key,
+          schemaName: 'output_workflow_cinematic_v2_reference_select',
+          schema: cinematicV2ReferencePlanSchema,
+          instructions: 'You are a cinematic reference selector. Return strict JSON only. Choose only supplied reference keys needed for a V2 cinematic scene.',
+          prompt: [
+            'Choose the cinematic-level reference plan from the already sequence-scoped asset pack.',
+            'Do not add or invent world entities. Do not select every available reference by default.',
+            'Select primary cast, supporting cast, locations, props, concepts, and continuity anchors that are genuinely needed for the storyboard and shot plan.',
+            'Reject refs that are unrelated to this prompt/sequence and explain briefly.',
+            `User brief:\n${input.run.prompt}`,
+            guidanceMarkdown(guidance),
+            compactForPrompt({
+              world: asRecord(context.wiki ?? context.worldWiki),
+              sequenceUnits: Array.isArray(context.sequenceUnits) ? context.sequenceUnits.map(asRecord).slice(0, 4) : [],
+              sourceAssetPack,
+            }, 9000),
+          ].filter(Boolean).join('\n\n'),
+          fallback: fallbackPlan,
+          maxOutputTokens: 2800,
+        })
+        const cinematicReferencePlan = sanitizeCinematicV2ReferencePlan(asRecord(result.value), sourceAssetPack, maxReferenceCount)
+        const assetPack = filterCinematicAssetPack(sourceAssetPack, referencePlanKeys(cinematicReferencePlan), maxReferenceCount, 2)
+        const outputs = {
+          cinematicReferencePlan,
+          cinematic_reference_plan: cinematicReferencePlan,
+          assetPack,
+          asset_pack: assetPack,
+          sourceAssetPackEntityCount: cinematicAssetPackEntityKeys(sourceAssetPack).length,
+          selectedEntityCount: cinematicAssetPackEntityKeys(assetPack).length,
+          text: JSON.stringify({ cinematicReferencePlan, assetPack }, null, 2),
+          guidance,
+          usage: asRecord(result.response).usage,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
+      }
       if (purpose === 'cinematic_v2_script_parse') {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const fallback = buildFallbackCinematicV2ParsedScript({ context, assetPack, prompt: input.run.prompt })
@@ -8003,7 +8253,9 @@ async function executeNode(input: {
           instructions: 'You are a cinematic blocking and continuity planner. Return strict JSON only. Plan spatial continuity before storyboards or videos.',
           prompt: [
             'Plan scene geography, character positions, landmarks, camera positions, eyelines, lighting direction, and screen-direction rules.',
-            'Keep it practical for short AI video shots. This is a JSON layout plan, not final art.',
+            'Keep it practical for short cinematic AI video shots. This is a JSON blocking plan, not final art.',
+            'Do not use game or app language such as playable, level, sandbox, UI, or mechanics unless the user explicitly requested a game/app cinematic.',
+            'Keep the camera plan compact and production-useful; prefer the fewest camera setups needed for the planned shots.',
             `User brief:\n${input.run.prompt}`,
             guidanceMarkdown(guidance),
             compactForPrompt({ parsedScript, sceneState, assetPack }, 9000),
@@ -8036,6 +8288,7 @@ async function executeNode(input: {
           prompt: [
             `Plan at most ${maxShotCount} shots. Each shot should have one purpose, one camera intent, explicit visible/speaker reference keys, and short editorial timing.`,
             'Dialogue closeups should be 2-4 editorial seconds. Reactions can be 1-2 seconds. Action/impact shots should be 1-3 seconds. Provider durations must be 4-15 seconds; final assembly trims to editorial timing.',
+            'Fill visibleCharacterRefIds, speakerRefIds, locationRefId, and propRefIds only with keys from the supplied cinematic reference plan/asset pack. Do not invent refs and do not pull in unrelated sequence entities.',
             'Use layout rules for screen direction, eyelines, and lighting continuity. Mark requiresLipSync only for visible mouth dialogue; V2 MVP stores placeholder audio only.',
             `User brief:\n${input.run.prompt}`,
             guidanceMarkdown(guidance),
@@ -8053,7 +8306,7 @@ async function executeNode(input: {
         })
         const referenceDiagnostics = validateCinematicV2ShotPlanReferences({
           shotPlan: normalizedShotPlan,
-          referenceIds: cinematicV2ReferenceIds(assetPack, context),
+          referenceIds: cinematicV2ReferenceIds(assetPack, {}),
         })
         const outputs = {
           shotPlan: {
@@ -9184,8 +9437,10 @@ async function executeNode(input: {
       const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
       const upstreamImages = orderCinematicVideoReferenceImages(readUpstreamImages(input.upstream), cinematicReferenceMode)
       const directImageUrls = (await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))).filter(Boolean)
-      const assetPackImageUrls = await collectAssetPackReferenceUrls(input.client, input.run, assetPack, 9)
-      const referenceImageUrls = [...new Set([...directImageUrls, ...assetPackImageUrls])].slice(0, 9)
+      const assetPackReferenceLimit = Math.max(1, Math.min(9, Number(config.assetPackReferenceLimit ?? 9) || 9))
+      const totalReferenceImageLimit = Math.max(1, Math.min(9, directImageUrls.length + assetPackReferenceLimit))
+      const assetPackImageUrls = await collectAssetPackReferenceUrls(input.client, input.run, assetPack, assetPackReferenceLimit)
+      const referenceImageUrls = [...new Set([...directImageUrls, ...assetPackImageUrls])].slice(0, totalReferenceImageLimit)
       const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
       const referenceVideoUrls = (await Promise.all(upstreamVideos.map((video) => imageReferenceToFalUrl(input.client, video))))
         .filter(Boolean)
@@ -9473,6 +9728,7 @@ async function executeNode(input: {
           sceneState: readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state']),
           layoutPlan: readFirstUpstreamRecord(input.upstream, ['layoutPlan', 'layout_plan']),
           shotPlan: readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']),
+          cinematicReferencePlan: readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan']),
           compileHash: readText(config.compileHash),
         }
         const result = await materializeDynamicCinematicV2ShotFanout({
@@ -9534,6 +9790,34 @@ async function executeNode(input: {
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-storyboard-prompt-v1' }
+      }
+      if (purpose === 'cinematic_v2_shot_asset_pack') {
+        const config = asRecord(input.node.config)
+        const shotId = readText(config.shotId)
+        const shotIndex = Number(config.shotIndex ?? 0) || 0
+        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const referencePlan = readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan'])
+        const shot = shotPlan.shots.find((entry) => entry.id === shotId)
+          ?? shotPlan.shots.find((entry) => entry.index === shotIndex)
+          ?? shotPlan.shots[0]
+        const shotAssetPack = buildCinematicV2ShotAssetPack({
+          assetPack,
+          referencePlan,
+          shot,
+          maxEntityCount: Math.max(1, Math.min(8, Number(config.maxEntityCount ?? 6) || 6)),
+          maxAssetKeysPerEntity: Math.max(1, Math.min(3, Number(config.maxAssetKeysPerEntity ?? 2) || 2)),
+        })
+        const outputs = {
+          assetPack: shotAssetPack,
+          asset_pack: shotAssetPack,
+          shot,
+          shotReferenceKeys: readStringArray(shotAssetPack.shotReferenceKeys),
+          selectedEntityCount: cinematicAssetPackEntityKeys(shotAssetPack).length,
+          deterministic: true,
+          text: JSON.stringify(shotAssetPack, null, 2),
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-shot-asset-pack-v1' }
       }
       if (purpose === 'cinematic_v2_panel_extract') {
         const config = asRecord(input.node.config)
@@ -10823,13 +11107,22 @@ export async function processFlyOutputWorkflowRuns(input: {
     if (schedulerResult.status === 'failed') {
       throw new Error('Output workflow failed while executing required nodes.')
     }
-    const fanoutOutputs = asRecord(schedulerResult.outputsByNodeKey.cinematic_dynamic_take_fanout)
+    const fanoutOutputs = asRecord(
+      schedulerResult.outputsByNodeKey.cinematic_dynamic_take_fanout
+      ?? schedulerResult.outputsByNodeKey.cinematic_v2_dynamic_shot_fanout,
+    )
     const dynamicGraphExpanded = fanoutOutputs.dynamicGraphExpanded === true || fanoutOutputs.graphExpanded === true
-    if (dynamicGraphExpanded && !schedulerResult.skipped.includes('cinematic_dynamic_take_fanout')) {
+    const dynamicFanoutNodeKey = schedulerResult.outputsByNodeKey.cinematic_v2_dynamic_shot_fanout
+      ? 'cinematic_v2_dynamic_shot_fanout'
+      : 'cinematic_dynamic_take_fanout'
+    if (dynamicGraphExpanded && !schedulerResult.skipped.includes(dynamicFanoutNodeKey)) {
       await heartbeat(input.client, runId, input.workerId, {
         runtime: 'fly_output_workflow_worker',
-        stage: 'dynamic_cinematic_take_fanout_materialized',
+        stage: dynamicFanoutNodeKey === 'cinematic_v2_dynamic_shot_fanout'
+          ? 'dynamic_cinematic_v2_shot_fanout_materialized'
+          : 'dynamic_cinematic_take_fanout_materialized',
         dynamicTakeCount: Number(fanoutOutputs.dynamicTakeCount ?? 0) || null,
+        dynamicShotCount: Number(fanoutOutputs.dynamicShotCount ?? 0) || null,
         compileHash: readText(fanoutOutputs.compileHash) || null,
       })
       bundle = await loadOutputWorkflowRunBundle(input.client, runId)

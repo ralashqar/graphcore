@@ -26,6 +26,10 @@ function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
 }
 
+function isRunStepNodeForeignKeyError(error: { code?: string; message?: string } | null | undefined) {
+  return error?.code === '23503' && String(error.message ?? '').includes('output_workflow_run_steps_node_id_fkey')
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -107,31 +111,46 @@ Deno.serve(async (request) => {
     const executionPlan = buildOutputWorkflowExecutionPlan(executionNodes, selectedSubgraph.edges)
     const nodeOrder = new Map(executionPlan.orderedNodeKeys.map((key, index) => [key, index]))
     const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
-    const stepResponse = await client
+    const buildStepRows = (nodeIdsByKey?: Map<string, string>) => executionNodes
+      .slice()
+      .sort((left, right) => (nodeOrder.get(left.key) ?? 999) - (nodeOrder.get(right.key) ?? 999))
+      .map((node, index) => ({
+        run_id: runRow.id,
+        workflow_id: payload.workflowId,
+        node_id: nodeIdsByKey ? nodeIdsByKey.get(node.key) ?? null : node.id,
+        draft_id: payload.draftId,
+        node_key: node.key,
+        node_type: node.nodeType,
+        status: 'queued',
+        order_index: index,
+        label: node.label,
+        metadata: {
+          executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
+          resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
+          groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
+          skillKeys: getOutputWorkflowNodeGuidanceConfig(node).skillKeys,
+          guidanceMode: getOutputWorkflowNodeGuidanceConfig(node).guidanceMode,
+          runScope: runScope ?? (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow'),
+        },
+      }))
+    let stepResponse = await client
       .from('output_workflow_run_steps')
-      .insert(executionNodes
-        .slice()
-        .sort((left, right) => (nodeOrder.get(left.key) ?? 999) - (nodeOrder.get(right.key) ?? 999))
-        .map((node, index) => ({
-          run_id: runRow.id,
-          workflow_id: payload.workflowId,
-          node_id: node.id,
-          draft_id: payload.draftId,
-          node_key: node.key,
-          node_type: node.nodeType,
-          status: 'queued',
-          order_index: index,
-          label: node.label,
-          metadata: {
-            executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
-            resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
-            groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
-            skillKeys: getOutputWorkflowNodeGuidanceConfig(node).skillKeys,
-            guidanceMode: getOutputWorkflowNodeGuidanceConfig(node).guidanceMode,
-            runScope: runScope ?? (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow'),
-          },
-        })))
+      .insert(buildStepRows())
       .select(outputWorkflowRunStepSelect)
+    if (isRunStepNodeForeignKeyError(stepResponse.error)) {
+      const currentNodes = await client
+        .from('output_workflow_nodes')
+        .select('id,key')
+        .eq('workflow_id', payload.workflowId)
+      if (currentNodes.error) throw new Error(currentNodes.error.message)
+      const nodeIdsByKey = new Map((currentNodes.data ?? [])
+        .map((row) => [String(row.key ?? ''), String(row.id ?? '')] as const)
+        .filter(([key, id]) => key.length > 0 && id.length > 0))
+      stepResponse = await client
+        .from('output_workflow_run_steps')
+        .insert(buildStepRows(nodeIdsByKey))
+        .select(outputWorkflowRunStepSelect)
+    }
     if (stepResponse.error) throw new Error(stepResponse.error.message)
 
     const artifactsResponse = await client

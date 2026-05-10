@@ -1392,6 +1392,13 @@ export function planOutputPrompt(input: {
   const cinematicKind = classification.outputKind === 'cinematic_episode'
     || classification.outputKind === 'cinematic_trailer'
     || classification.outputKind === 'ugc_episode'
+  const cinematicSourceScope = cinematicKind
+    ? resolveCinematicStorySourceScope({
+      prompt: input.prompt,
+      worldEntities: input.snapshot.worldEntities,
+      selectedSequenceUnitKeys: input.selectedSequenceUnitKeys,
+    })
+    : null
   const documentReference = referenceKinds.includes(classification.outputKind)
   const textOnlyReference = promptIncludesAny(input.prompt.toLowerCase(), ['text only', 'no images', 'without images', 'plain reference', 'simple reference'])
   const designedReference = documentReference && !textOnlyReference
@@ -1403,7 +1410,7 @@ export function planOutputPrompt(input: {
   const selectedSequenceUnitKeys = documentReference
     ? (input.selectedSequenceUnitKeys?.length ? input.selectedSequenceUnitKeys : sortedSequenceUnits(input.snapshot.worldEntities).map((entity) => entity.key).slice(0, STORY_BIBLE_SEQUENCE_LIMIT))
     : cinematicKind
-      ? [...new Set(input.selectedSequenceUnitKeys ?? [])]
+      ? cinematicSourceScope?.selectedSequenceUnitKeys ?? []
     : boundScope.selectedSequenceUnitKeys
   const sections = documentReference ? storyBibleSectionsForKind(classification.outputKind) : []
   return outputPromptPlannerResultSchema.parse({
@@ -1418,7 +1425,12 @@ export function planOutputPrompt(input: {
     sections,
     visualReferencePolicy: imageKind || cinematicKind ? 'use_prompt_bound_entity_refs' : 'none',
     requiresConfirmation: classification.intent === 'ambiguous' || classification.confidence < 0.55,
-    plannerNotes: classification.notes,
+    plannerNotes: [
+      classification.notes,
+      cinematicSourceScope && cinematicSourceScope.sourceMode !== 'none'
+        ? `Cinematic source resolver: ${cinematicSourceScope.rationale}`
+        : '',
+    ].filter(Boolean).join('\n'),
   })
 }
 
@@ -1475,6 +1487,41 @@ function promptMentionsName(promptText: string, promptTokens: Set<string>, nameO
     promptTokens.has(nameToken)
     || [...promptTokens].some((promptToken) => promptToken.length >= 4 && tokenEditDistanceAtMostOne(promptToken, nameToken))
   ))
+}
+
+export type CinematicStorySourceResolution = {
+  selectedSequenceUnitKeys: string[]
+  sourceMode: 'none' | 'explicit_sequence'
+  confidence: number
+  rationale: string
+}
+
+export function resolveCinematicStorySourceScope(input: {
+  prompt: string
+  worldEntities: z.infer<typeof worldEntitySchema>[]
+  selectedSequenceUnitKeys?: string[]
+}): CinematicStorySourceResolution {
+  const sequenceUnits = sortedSequenceUnits(input.worldEntities)
+  const validSequenceKeys = new Set(sequenceUnits.map((entity) => entity.key))
+  const explicitSequenceKeys = [...new Set(input.selectedSequenceUnitKeys ?? [])]
+    .filter((key) => validSequenceKeys.has(key))
+  if (explicitSequenceKeys.length > 0) {
+    return {
+      selectedSequenceUnitKeys: explicitSequenceKeys.slice(0, 3),
+      sourceMode: 'explicit_sequence',
+      confidence: 1,
+      rationale: 'The request supplied explicit selected sequence unit keys.',
+    }
+  }
+
+  return {
+    selectedSequenceUnitKeys: [],
+    sourceMode: 'none',
+    confidence: sequenceUnits.length > 0 ? 0.4 : 0.95,
+    rationale: sequenceUnits.length > 0
+      ? 'No explicit sequence was supplied; prompt-mode cinematic source selection is deferred to the LLM resolver.'
+      : 'No sequence units are available to select.',
+  }
 }
 
 export function bindOutputPromptWorldScope(input: {
@@ -2356,6 +2403,31 @@ function chooseCinematicEntityKeys(input: {
   worldRelationships: z.infer<typeof worldRelationshipSchema>[]
 }) {
   const entityByKey = new Map(input.worldEntities.map((entity) => [entity.key, entity]))
+  const selectedVisualKeys = input.selectedEntityKeys
+    .filter((key) => isCinematicVisualEntity(entityByKey.get(key)))
+  if (input.selectedSequenceUnitKey) {
+    if (selectedVisualKeys.length > 0) return selectedVisualKeys.slice(0, 12)
+    const sequenceText = input.sequenceUnit ? normalizeComicReferenceText(sequenceSearchText(input.sequenceUnit)) : ''
+    const referenceStrings = input.sequenceUnit
+      ? collectSequenceReferenceStrings(input.sequenceUnit.customProperties)
+      : new Set<string>()
+    const inferredKeys = new Set<string>()
+    for (const entity of input.worldEntities) {
+      if (!isCinematicVisualEntity(entity)) continue
+      if (entityMentionedBySequence(entity, sequenceText, referenceStrings)) inferredKeys.add(entity.key)
+    }
+    for (const relationship of input.worldRelationships) {
+      if (relationship.sourceEntityKey === input.selectedSequenceUnitKey) {
+        const target = entityByKey.get(relationship.targetEntityKey)
+        if (isCinematicVisualEntity(target)) inferredKeys.add(relationship.targetEntityKey)
+      }
+      if (relationship.targetEntityKey === input.selectedSequenceUnitKey) {
+        const source = entityByKey.get(relationship.sourceEntityKey)
+        if (isCinematicVisualEntity(source)) inferredKeys.add(relationship.sourceEntityKey)
+      }
+    }
+    return [...inferredKeys].slice(0, 12)
+  }
   const keys = chooseComicEntityKeys(input)
     .filter((key) => isCinematicVisualEntity(entityByKey.get(key)))
     .slice(0, 16)
@@ -2426,6 +2498,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
         sourceSequenceUnitKeys,
         includeWiki: true,
         includeVisualReferences: true,
+        strictSourceEntityFilter: sourceSequenceUnitKeys.length > 0,
         execution: { resourceClass: 'utility' },
       },
     }),
@@ -2469,10 +2542,25 @@ export function buildCinematicV2ShotOrchestrationPlan(
       },
     }),
     nodeBase({
+      key: 'cinematic_v2_reference_select',
+      nodeType: 'text_llm',
+      label: 'V2 Reference Plan',
+      x: 680,
+      y: 120,
+      inputs: { prompt: 'Select the cinematic-level reference plan for this V2 scene.' },
+      config: {
+        purpose: 'cinematic_v2_reference_select',
+        cinematicPipelineVersion: 'v2_shot_orchestration' satisfies CinematicPipelineVersion,
+        maxReferenceCount: 16,
+        guidanceMode: 'append',
+        execution: { resourceClass: 'llm', groupKey: 'cinematic_v2_planning', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
       key: 'cinematic_v2_script_parse',
       nodeType: 'text_llm',
       label: 'Parse Script',
-      x: 680,
+      x: 1000,
       y: 120,
       inputs: { prompt: 'Parse the user prompt or script into cinematic beats.' },
       config: {
@@ -2486,7 +2574,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
       key: 'cinematic_v2_scene_compile',
       nodeType: 'text_llm',
       label: 'Compile Scene State',
-      x: 1000,
+      x: 1320,
       y: 120,
       config: {
         purpose: 'cinematic_v2_scene_compile',
@@ -2498,7 +2586,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
       key: 'cinematic_v2_layout_plan',
       nodeType: 'text_llm',
       label: 'Plan Blocking',
-      x: 1320,
+      x: 1640,
       y: 120,
       config: {
         purpose: 'cinematic_v2_layout_plan',
@@ -2510,7 +2598,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
       key: 'cinematic_v2_shot_plan',
       nodeType: 'text_llm',
       label: 'Plan Shots',
-      x: 1640,
+      x: 1960,
       y: 120,
       config: {
         purpose: 'cinematic_v2_shot_plan',
@@ -2526,7 +2614,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
       key: 'cinematic_v2_dynamic_shot_fanout',
       nodeType: 'utility_transform',
       label: 'Materialize Shot Pipeline',
-      x: 1960,
+      x: 2280,
       y: 120,
       config: {
         purpose: 'cinematic_v2_dynamic_shot_fanout',
@@ -2548,23 +2636,26 @@ export function buildCinematicV2ShotOrchestrationPlan(
   const edges = [
     edgeBase('world_context', 'context', 'cinematic_entities', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_entities', 'guidance'),
+    edgeBase('world_context', 'context', 'cinematic_v2_reference_select', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_v2_reference_select', 'guidance'),
+    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v2_reference_select', 'asset_pack'),
     edgeBase('world_context', 'context', 'cinematic_v2_script_parse', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_script_parse', 'guidance'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v2_script_parse', 'asset_pack'),
+    edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_script_parse', 'asset_pack'),
     edgeBase('world_context', 'context', 'cinematic_v2_scene_compile', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_scene_compile', 'guidance'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v2_scene_compile', 'asset_pack'),
+    edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_scene_compile', 'asset_pack'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_scene_compile', 'script_parse'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_layout_plan', 'guidance'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v2_layout_plan', 'asset_pack'),
+    edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_layout_plan', 'asset_pack'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_layout_plan', 'script_parse'),
     edgeBase('cinematic_v2_scene_compile', 'text', 'cinematic_v2_layout_plan', 'scene_state'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_shot_plan', 'guidance'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v2_shot_plan', 'asset_pack'),
+    edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_shot_plan', 'asset_pack'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_shot_plan', 'script_parse'),
     edgeBase('cinematic_v2_scene_compile', 'text', 'cinematic_v2_shot_plan', 'scene_state'),
     edgeBase('cinematic_v2_layout_plan', 'text', 'cinematic_v2_shot_plan', 'layout_plan'),
-    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v2_dynamic_shot_fanout', 'asset_pack'),
+    edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_dynamic_shot_fanout', 'asset_pack'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_dynamic_shot_fanout', 'script_parse'),
     edgeBase('cinematic_v2_scene_compile', 'text', 'cinematic_v2_dynamic_shot_fanout', 'scene_state'),
     edgeBase('cinematic_v2_layout_plan', 'text', 'cinematic_v2_dynamic_shot_fanout', 'layout_plan'),

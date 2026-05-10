@@ -746,6 +746,21 @@ export const cinematicV2SceneLayoutPlanSchema = z.object({
   generatedLayoutImageAssetKey: z.string().nullable().default(null),
 })
 
+export const cinematicV2ReferencePlanSchema = z.object({
+  primaryCastRefIds: z.array(z.string()).default([]),
+  supportingCastRefIds: z.array(z.string()).default([]),
+  locationRefIds: z.array(z.string()).default([]),
+  propRefIds: z.array(z.string()).default([]),
+  conceptRefIds: z.array(z.string()).default([]),
+  continuityAnchorRefIds: z.array(z.string()).default([]),
+  rejectedRefs: z.array(z.object({
+    refId: z.string(),
+    reason: z.string().default(''),
+  })).default([]),
+  rationale: z.string().default(''),
+  confidence: z.number().min(0).max(1).default(0.75),
+})
+
 export const cinematicV2DialogueLineSchema = z.object({
   id: z.string(),
   speakerRefId: z.string(),
@@ -873,6 +888,7 @@ export const cinematicV2TimelineSchema = z.object({
 export type CinematicV2ParsedScript = z.infer<typeof cinematicV2ParsedScriptSchema>
 export type CinematicV2SceneState = z.infer<typeof cinematicV2SceneStateSchema>
 export type CinematicV2SceneLayoutPlan = z.infer<typeof cinematicV2SceneLayoutPlanSchema>
+export type CinematicV2ReferencePlan = z.infer<typeof cinematicV2ReferencePlanSchema>
 export type CinematicV2Shot = z.infer<typeof cinematicV2ShotSchema>
 export type CinematicV2ShotPlan = z.infer<typeof cinematicV2ShotPlanSchema>
 export type CinematicV2StoryboardLayout = z.infer<typeof cinematicV2StoryboardLayoutSchema>

@@ -6098,7 +6098,6 @@ export default function App() {
         await resetProjectWorld()
       } else if (pendingDeleteTarget.resourceType === 'output_request') {
         await deleteOutputRequest(pendingDeleteTarget.key)
-        await refreshLiveSnapshot()
       } else {
         await performDeleteAsset(pendingDeleteTarget.key)
       }

@@ -1993,6 +1993,17 @@ const WORLD_PROMPT_GENERATION_JOB_SELECT =
   'id, draft_id, session_id, turn_id, kind, status, attempt_count, heartbeat_at, started_at, completed_at, token_usage, counts, error_message, metadata, latest_applied_op_cursor, created_at, updated_at'
 const WORLD_PROMPT_GENERATION_JOB_STEP_SELECT =
   'id, job_id, draft_id, session_id, turn_id, step_key, phase, status, attempt_count, order_index, heartbeat_at, started_at, completed_at, token_usage, counts, error_message, metadata, latest_applied_op_cursor, created_at, updated_at'
+
+function shouldHydrateOutputRunSteps(status: string) {
+  return status === 'queued' || status === 'running'
+}
+
+function selectOutputRunIdsForStepHydration(runRows: OutputWorkflowRunRow[], maxCompletedRuns = 4) {
+  return [...new Set([
+    ...runRows.filter((run) => shouldHydrateOutputRunSteps(run.status)).map((run) => run.id),
+    ...runRows.filter((run) => !shouldHydrateOutputRunSteps(run.status)).slice(0, maxCompletedRuns).map((run) => run.id),
+  ])]
+}
 const WORLD_PROMPT_SUGGESTION_SELECT =
   'id, draft_id, session_id, turn_id, thread_key, label, prompt, kind, style, source, summary, estimated_node_count, estimated_edge_count, will_queue_images, will_queue_cinematics, state, rank, used_turn_id, dismissed_at, metadata, created_at, updated_at'
 const WORLD_THREAD_SELECT =
@@ -3741,14 +3752,17 @@ export async function loadProjectSnapshot(
             .in('status', includeFull ? ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'] : ['queued', 'running'])
             .order('order_index', { ascending: true })
         ).data as CinematicRunJobRow[] | null ?? []
+  const outputWorkflowStepRunIds = outputWorkflowSchemaMissing
+    ? []
+    : selectOutputRunIdsForStepHydration(outputWorkflowRuns, 6)
   const outputWorkflowRunSteps =
-    outputWorkflowSchemaMissing || outputWorkflowRuns.length === 0
+    outputWorkflowSchemaMissing || outputWorkflowStepRunIds.length === 0
       ? []
       : (
           await supabase
             .from('output_workflow_run_steps')
             .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
-            .in('run_id', outputWorkflowRuns.map((run) => run.id))
+            .in('run_id', outputWorkflowStepRunIds)
             .order('order_index', { ascending: true })
         ).data as OutputWorkflowRunStepRow[] | null ?? []
 
@@ -7990,11 +8004,13 @@ export async function loadOutputInbox(input: {
   if (runResponse.error) throw new Error(runResponse.error.message)
   if (artifactResponse.error) throw new Error(artifactResponse.error.message)
 
-  const stepsResponse = latestRunIds.length > 0
+  const runRows = (runResponse.data ?? []) as OutputWorkflowRunRow[]
+  const stepRunIds = selectOutputRunIdsForStepHydration(runRows, 4)
+  const stepsResponse = stepRunIds.length > 0
     ? await supabase
         .from('output_workflow_run_steps')
         .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
-        .in('run_id', latestRunIds)
+        .in('run_id', stepRunIds)
         .order('order_index', { ascending: true })
     : emptyPostgrestResponse()
   if (stepsResponse.error) throw new Error(stepsResponse.error.message)
@@ -8008,7 +8024,7 @@ export async function loadOutputInbox(input: {
   }
   const stepsByRunId = new Map<string, OutputWorkflowRunStep[]>()
   for (const step of steps) stepsByRunId.set(step.runId, [...(stepsByRunId.get(step.runId) ?? []), step])
-  const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((run) => (
+  const runs = runRows.map((run) => (
     mapOutputWorkflowRunRow(run, stepsByRunId.get(run.id) ?? [], artifactsByRunId.get(run.id) ?? [])
   ))
   const assets = await loadHydratedOutputAssets(input.projectId, { runs, steps, artifacts })

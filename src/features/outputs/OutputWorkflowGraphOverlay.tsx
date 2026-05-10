@@ -133,6 +133,16 @@ function resolveEdgeValueType(edge: OutputWorkflowEdge, sourceNode: OutputWorkfl
   return sourcePort?.valueType ?? 'text'
 }
 
+function appendUniquePort(
+  portsByNodeKey: Map<string, Array<{ id: string; valueType: string }>>,
+  nodeKey: string,
+  port: { id: string; valueType: string },
+) {
+  const ports = portsByNodeKey.get(nodeKey) ?? []
+  if (ports.some((entry) => entry.id === port.id)) return
+  portsByNodeKey.set(nodeKey, [...ports, port])
+}
+
 function providerStatus(step: OutputWorkflowRunStep | null | undefined) {
   const metadata = readRecord(step?.metadata)
   return readTrimmedString(metadata.providerStatus) || readTrimmedString(step?.status)
@@ -485,9 +495,16 @@ export function OutputWorkflowGraphOverlay({
   const selectedOutgoingEdges = selectedNode
     ? safeEdges.filter((edge) => edge.sourceNodeKey === selectedNode.key)
     : []
+  const hasAvailableNodeOutput = (node: OutputWorkflowNode | undefined) => {
+    if (!node) return false
+    if (hasCachedNodeOutput(node)) return true
+    const step = stepsByNodeKey.get(node.key)
+    if (Object.keys(readRecord(step?.outputs)).length > 0) return true
+    return Boolean(artifactImageByNodeKeyMap.get(node.key))
+  }
   const missingCachedInputKeysForNode = (node: OutputWorkflowNode) => safeEdges
     .filter((edge) => edge.targetNodeKey === node.key)
-    .filter((edge) => readRecord(edge.metadata).optional !== true && !hasCachedNodeOutput(nodeByKey.get(edge.sourceNodeKey)))
+    .filter((edge) => readRecord(edge.metadata).optional !== true && !hasAvailableNodeOutput(nodeByKey.get(edge.sourceNodeKey)))
     .map((edge) => edge.sourceNodeKey)
   const selectedMissingCachedInputs = selectedNode ? missingCachedInputKeysForNode(selectedNode) : []
   const selectedDirtyCachedInputs = selectedIncomingEdges
@@ -580,14 +597,8 @@ export function OutputWorkflowGraphOverlay({
     for (const edge of visibleEdges) {
       const sourceNode = sourceByKey.get(edge.sourceNodeKey)
       const valueType = resolveEdgeValueType(edge, sourceNode)
-      outputPortsByNodeKey.set(edge.sourceNodeKey, [
-        ...(outputPortsByNodeKey.get(edge.sourceNodeKey) ?? []),
-        { id: edge.sourcePort, valueType },
-      ])
-      inputPortsByNodeKey.set(edge.targetNodeKey, [
-        ...(inputPortsByNodeKey.get(edge.targetNodeKey) ?? []),
-        { id: edge.targetPort, valueType },
-      ])
+      appendUniquePort(outputPortsByNodeKey, edge.sourceNodeKey, { id: edge.sourcePort, valueType })
+      appendUniquePort(inputPortsByNodeKey, edge.targetNodeKey, { id: edge.targetPort, valueType })
     }
     setFlowNodes((current) => {
       const localPositionByKey = new Map(current.map((node) => [node.id, node.position]))

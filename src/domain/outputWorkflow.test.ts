@@ -20,6 +20,7 @@ import {
   planOutputPrompt,
   planOutputRequestWorkflow,
   planOutputWorkflow,
+  resolveCinematicStorySourceScope,
   runOutputWorkflowReadyQueue,
   selectOutputWorkflowRunSubgraph,
   topologicallySortOutputWorkflow,
@@ -332,6 +333,42 @@ test('cinematic prompt binding does not infer sequence units from shared names',
   assert.deepEqual(explicitSequencePlan.selectedSequenceUnitKeys, ['chapter-skybridge-garden'])
 })
 
+test('cinematic story-source resolver defers prompt-mode source binding to backend LLM', () => {
+  const firstChapterPlan = planOutputPrompt({
+    prompt: 'Create a cinematic for first chapter',
+    snapshot,
+  })
+  assert.equal(firstChapterPlan.outputKind, 'cinematic_episode')
+  assert.deepEqual(firstChapterPlan.selectedSequenceUnitKeys, [])
+
+  const firstPartPlan = planOutputPrompt({
+    prompt: 'Create a cinematic for the first part of the first chapter',
+    snapshot,
+  })
+  assert.deepEqual(firstPartPlan.selectedSequenceUnitKeys, [])
+
+  const namedSourcePlan = planOutputPrompt({
+    prompt: 'Create a cinematic from Opening Ash',
+    snapshot,
+  })
+  assert.deepEqual(namedSourcePlan.selectedSequenceUnitKeys, [])
+
+  const independentPromptPlan = planOutputPrompt({
+    prompt: 'Create a cinematic where Mara performs in The Archive',
+    snapshot,
+  })
+  assert.deepEqual(independentPromptPlan.selectedEntityKeys.sort(), ['archive', 'hero'])
+  assert.deepEqual(independentPromptPlan.selectedSequenceUnitKeys, [])
+
+  const explicitResolution = resolveCinematicStorySourceScope({
+    prompt: 'Create a cinematic where Mara performs in The Archive',
+    worldEntities: snapshot.worldEntities,
+    selectedSequenceUnitKeys: ['chapter-2'],
+  })
+  assert.equal(explicitResolution.sourceMode, 'explicit_sequence')
+  assert.deepEqual(explicitResolution.selectedSequenceUnitKeys, ['chapter-2'])
+})
+
 test('cinematic asset packs prefer entity reference sheets over stale world icons', async () => {
   const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
   const { buildDeterministicCinematicAssetPack } = await import(sharedModulePath) as {
@@ -424,13 +461,18 @@ test('story cinematic requests build V2 shot orchestration graph by default whil
   }, 'cinematic_episode')
 
   assert.equal(plan.preset, 'cinematic_episode_from_sequence')
+  assert.deepEqual(plan.sourceEntityKeys.sort(), ['archive', 'hero'])
+  assert.ok(plan.sourceEntityKeys.length < snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').length + 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_script_parse').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_reference_select').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 1)
   assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
   assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_reference_select' && edge.targetNodeKey === 'cinematic_v2_shot_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_reference_select' && edge.targetNodeKey === 'cinematic_v2_dynamic_shot_fanout'))
   assert.ok(plan.diagnostics.some((line) => line.includes('Cinematics V2')))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 
@@ -444,6 +486,10 @@ test('story cinematic requests build V2 shot orchestration graph by default whil
   assert.match(workerSource, /cinematicVideoApprovedEnabled/)
   assert.match(workerSource, /cinematic_video_approval_required/)
   assert.match(workerSource, /isCinematicV2ProductionNode\(asRecord\(node\.config\), node\) && !cinematicVideoApprovedEnabled\(run\)/)
+  assert.match(workerSource, /cinematic_v2_shot_asset_pack/)
+  assert.match(workerSource, /buildCinematicV2ShotAssetPack/)
+  assert.match(workerSource, /\$\{shotAssetPackKey\}__\$\{keyframeKey\}/)
+  assert.match(workerSource, /\$\{shotAssetPackKey\}__\$\{videoKey\}/)
 
   const ugcPlan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -455,6 +501,68 @@ test('story cinematic requests build V2 shot orchestration graph by default whil
   }, 'ugc_episode')
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 1)
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 0)
+})
+
+test('cinematic V2 shot asset packs narrow references to visible shot refs', async () => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  const { buildCinematicV2ShotAssetPack } = await import(sharedModulePath) as {
+    buildCinematicV2ShotAssetPack: (input: {
+      assetPack: Record<string, unknown>
+      referencePlan: Record<string, unknown>
+      shot: Record<string, unknown>
+      maxEntityCount?: number
+      maxAssetKeysPerEntity?: number
+    }) => { entities: Array<Record<string, unknown>>, shotReferenceKeys: string[] }
+  }
+
+  const shotPack = buildCinematicV2ShotAssetPack({
+    assetPack: {
+      entities: [
+        { key: 'ilya', name: 'Ilya Sorin', type: 'actor', assetKeys: ['ilya-sheet', 'ilya-icon'] },
+        { key: 'anya', name: 'Anya Sorin', type: 'actor', assetKeys: ['anya-sheet'] },
+        { key: 'checkpoint', name: 'Compliance Checkpoint', type: 'place', assetKeys: ['checkpoint-sheet'] },
+        { key: 'aster', name: 'Aster Hologram', type: 'concept', assetKeys: ['aster-sheet'] },
+      ],
+      missingReferenceEntityKeys: [],
+    },
+    referencePlan: {
+      primaryCastRefIds: ['ilya', 'anya'],
+      supportingCastRefIds: [],
+      locationRefIds: ['checkpoint'],
+      propRefIds: [],
+      conceptRefIds: [],
+      continuityAnchorRefIds: ['aster'],
+      rejectedRefs: [],
+      rationale: 'Test',
+      confidence: 0.9,
+    },
+    shot: {
+      id: 'shot_1',
+      sceneId: 'scene_1',
+      index: 1,
+      title: 'Ilya at the checkpoint',
+      purpose: 'reaction',
+      editorialDurationSeconds: 2,
+      providerDurationSeconds: 4,
+      description: 'Ilya freezes at the compliance checkpoint.',
+      action: 'Ilya looks across the checkpoint barrier.',
+      dialogue: [],
+      speakerRefIds: [],
+      visibleCharacterRefIds: ['ilya'],
+      locationRefId: 'checkpoint',
+      propRefIds: [],
+      continuityInputs: [],
+      camera: { framing: 'medium close', angle: 'eye level', lens: '50mm', movement: 'locked', screenDirectionRule: 'Ilya looks screen-right.' },
+      requiresLipSync: false,
+      status: 'planned',
+    },
+    maxEntityCount: 6,
+  })
+
+  const keys = shotPack.entities.map((entity) => String(entity.key))
+  assert.deepEqual(keys, ['ilya', 'checkpoint'])
+  assert.ok(!keys.includes('anya'))
+  assert.ok(!keys.includes('aster'))
 })
 
 test('cinematic output preset creates script-first dynamic take fanout placeholder', () => {

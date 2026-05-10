@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 
 import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
@@ -32,7 +32,12 @@ import {
 } from '../../domain/outputWorkflow'
 import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
 import { CinematicTimelinePlayer } from '../cinematics/CinematicTimelinePlayer'
-import { useOutputWorkspaceState } from './useOutputWorkspaceState'
+import { deriveSequenceOutputStatuses, type SequenceOutputStatus } from './outputSequenceStatus'
+import {
+  useOutputWorkspaceState,
+  type OutputImageFormatChoice,
+  type OutputImageQualityChoice,
+} from './useOutputWorkspaceState'
 
 type OutputsWorkspaceProps = {
   snapshot: ProjectSnapshot
@@ -48,6 +53,7 @@ type OutputsWorkspaceProps = {
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
+    cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -96,6 +102,115 @@ type OutputsWorkspaceProps = {
 function formatStatus(value: string) {
   return value.replace(/_/g, ' ')
 }
+
+function sequenceStateLabel(status: SequenceOutputStatus['cinematicState'] | SequenceOutputStatus['comicState']) {
+  if (status === 'none') return 'No output'
+  if (status === 'in_progress') return 'In progress'
+  if (status === 'animatic_ready') return 'Animatic ready'
+  if (status === 'video_ready') return 'Video ready'
+  if (status === 'comic_ready') return 'Comic ready'
+  return 'Failed'
+}
+
+function sequenceOrdinalLabel(sequence: ProjectSnapshot['worldEntities'][number], fallbackIndex: number) {
+  const sequenceData = readRecord(sequence.customProperties?.sequence)
+  const ordinal = readNumber(sequenceData.ordinal)
+  return ordinal ? `Chapter ${ordinal}` : `Unit ${fallbackIndex + 1}`
+}
+
+const DEFAULT_OUTPUT_REQUEST_PROMPT = 'Make a poster image from this world using the main characters and strongest location.'
+
+type OutputPromptComposerProps = {
+  busy: boolean
+  canRunOutputs: boolean
+  error: string | null
+  requestImageQuality: OutputImageQualityChoice
+  requestImageOutputFormat: OutputImageFormatChoice
+  onImageQualityChange: (value: OutputImageQualityChoice) => void
+  onImageOutputFormatChange: (value: OutputImageFormatChoice) => void
+  onSubmit: (prompt: string) => void
+}
+
+const OutputPromptComposer = memo(function OutputPromptComposer({
+  busy,
+  canRunOutputs,
+  error,
+  requestImageQuality,
+  requestImageOutputFormat,
+  onImageQualityChange,
+  onImageOutputFormatChange,
+  onSubmit,
+}: OutputPromptComposerProps) {
+  const [draftPrompt, setDraftPrompt] = useState(DEFAULT_OUTPUT_REQUEST_PROMPT)
+
+  return (
+    <>
+      <label className="outputs-input-block">
+        <span>Output request</span>
+        <textarea
+          value={draftPrompt}
+          onChange={(event) => setDraftPrompt(event.target.value)}
+          rows={5}
+          aria-label="Prompt an output from this world"
+          placeholder="Make a poster of Ilya and Anya at the checkpoint..."
+        />
+        <small>Independent cinematic prompts bind named characters and locations only. Chapter or scene wording binds story-source units.</small>
+      </label>
+      <div className="outputs-example-strip" aria-label="Example output prompts">
+        {[
+          'Poster image of two characters at the checkpoint',
+          'Create a cinematic where Mara performs in The Archive',
+          'Create a cinematic for first chapter',
+        ].map((example) => (
+          <button key={example} type="button" onClick={() => setDraftPrompt(example)}>
+            {example}
+          </button>
+        ))}
+      </div>
+      <div className="outputs-composer-options">
+        <label>
+          <span>Image quality</span>
+          <select
+            aria-label="Image generation quality"
+            value={requestImageQuality}
+            onChange={(event) => onImageQualityChange(event.target.value as OutputImageQualityChoice)}
+          >
+            <option value="preset">Preset default</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label>
+          <span>Image format</span>
+          <select
+            aria-label="Image generation output format"
+            value={requestImageOutputFormat}
+            onChange={(event) => onImageOutputFormatChange(event.target.value as OutputImageFormatChoice)}
+          >
+            <option value="preset">Preset default</option>
+            <option value="webp">WebP</option>
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG</option>
+          </select>
+        </label>
+        <small>Preset default uses low for character concept art, medium for posters/comics/covers, and WebP output.</small>
+      </div>
+      <div className="outputs-composer-submit-row">
+        <button
+          className="outputs-primary-action"
+          disabled={!canRunOutputs || busy}
+          onClick={() => onSubmit(draftPrompt)}
+          type="button"
+        >
+          {busy ? 'Creating output...' : 'Generate output'}
+        </button>
+        {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
+        {error ? <p className="outputs-error">{error}</p> : null}
+      </div>
+    </>
+  )
+})
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -1000,6 +1115,7 @@ export function OutputsWorkspace({
   onRefreshLiveSnapshot,
 }: OutputsWorkspaceProps) {
   const [approvingVideoProduction, setApprovingVideoProduction] = useState(false)
+  const [creationMode, setCreationMode] = useState<'prompt' | 'story_unit'>('prompt')
   const {
     activeRunId,
     busy,
@@ -1018,7 +1134,6 @@ export function OutputsWorkspace({
     rememberLiveRun,
     requestImageOutputFormat,
     requestImageQuality,
-    requestPrompt,
     selectedComicSequenceKey,
     selectedNodeKey,
     selectedRequestId,
@@ -1037,7 +1152,6 @@ export function OutputsWorkspace({
     setRefreshingGraph,
     setRequestImageOutputFormat,
     setRequestImageQuality,
-    setRequestPrompt,
     setSelectedComicSequenceKey,
     setSelectedNodeKey,
     setSelectedRequestId,
@@ -1167,6 +1281,12 @@ export function OutputsWorkspace({
       return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     })
   }, [displayRun?.artifacts, snapshot.outputArtifacts])
+  const sequenceOutputStatuses = useMemo(() => deriveSequenceOutputStatuses({
+    sequenceUnits,
+    outputRequests,
+    outputRuns: recentOutputRuns,
+    outputArtifacts: artifacts,
+  }), [artifacts, outputRequests, recentOutputRuns, sequenceUnits])
   const activeRunStatusLabel = activeRun ? formatStatus(displayRun?.status ?? activeRun.status) : 'Idle'
   const runningNodeCount = runStepCounts.get('running') ?? 0
   const failedNodeCount = (runStepCounts.get('failed') ?? 0) + (runStepCounts.get('blocked') ?? 0)
@@ -1218,8 +1338,8 @@ export function OutputsWorkspace({
     setSelectedComicSequenceKey(sequenceUnits[0]?.key ?? '')
   }, [selectedComicSequenceKey, sequenceUnits])
 
-  async function createPromptOutputRequest() {
-    const cleanPrompt = requestPrompt.trim()
+  async function createPromptOutputRequest(promptText: string) {
+    const cleanPrompt = promptText.trim()
     if (!cleanPrompt) {
       setError('Describe the output you want to make from this world.')
       return
@@ -1250,6 +1370,55 @@ export function OutputsWorkspace({
     } finally {
       setBusy(false)
     }
+  }
+
+  async function createSequenceOutputRequest(sequenceKey: string, outputKind: 'cinematic' | 'comic') {
+    const sequence = sequenceUnits.find((entity) => entity.key === sequenceKey)
+    if (!sequence) {
+      setError('Select a story unit before generating from it.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const cinematic = outputKind === 'cinematic'
+      const response = await onStartOutputRequest({
+        prompt: cinematic
+          ? `Create a cinematic animatic from ${sequence.name}.`
+          : `Create a comic issue from ${sequence.name}.`,
+        sourceSurface: 'outputs_story_unit',
+        selectedSequenceUnitKeys: [sequence.key],
+        pageCount: cinematic ? undefined : comicPageCount,
+        targetFormat: cinematic ? 'video' : 'pdf',
+        imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
+        imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
+        cinematicReferenceMode: cinematic ? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault : undefined,
+        cinematicPipelineVersion: cinematic ? 'v2_shot_orchestration' : undefined,
+        debugCinematicStoryboardStyleSafeMode: cinematic ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault : undefined,
+        cinematicStoryboardStyleOverride: cinematic ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt : undefined,
+        debugSkipVideoGeneration: cinematic ? true : undefined,
+      })
+      setSelectedRequestId(response.request.id)
+      if (response.run) {
+        setActiveRunId(response.run.id)
+        rememberLiveRun(response.run)
+      }
+      setBusy(false)
+      if (response.request.latestRunId) await pollRequest(response.request.id)
+      await onRefreshLiveSnapshot()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Story-unit output request failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function openSequenceOutput(status: SequenceOutputStatus) {
+    const request = status.latestRequest
+    if (!request) return
+    setSelectedRequestId(request.id)
+    setInspectorMode('output')
+    if (request.latestRunId) setActiveRunId(request.latestRunId)
   }
 
   async function pollRequest(requestId: string) {
@@ -1371,6 +1540,30 @@ export function OutputsWorkspace({
   function openOutputGraph() {
     setGraphOpen(true)
     void refreshOutputGraph()
+  }
+
+  async function openOutputGraphForRequest(request: OutputRequest | null | undefined) {
+    if (!request?.workflowId) return
+    setSelectedRequestId(request.id)
+    if (request.latestRunId) setActiveRunId(request.latestRunId)
+    setSelectedNodeKey(null)
+    setGraphOpen(true)
+    setRefreshingGraph(true)
+    setError(null)
+    try {
+      if (request.latestRunId) {
+        const status = await onGetOutputRequestStatus(request.id)
+        if (status.run) {
+          setActiveRunId(status.run.id)
+          rememberLiveRun(status.run)
+        }
+      }
+      await onLoadOutputWorkflowGraph(request.workflowId, request.latestRunId ?? null)
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : 'Could not open output workflow graph.')
+    } finally {
+      setRefreshingGraph(false)
+    }
   }
 
   function markTargetedNodes(nodeKeys: string[], runScope: OutputWorkflowRunScope) {
@@ -1784,74 +1977,68 @@ export function OutputsWorkspace({
             <section className="outputs-panel outputs-request-composer">
               <div className="outputs-panel-heading">
                 <div>
-                  <p className="outputs-eyebrow">Prompt-first output</p>
-                  <h3>What do you want to make from this world?</h3>
+                  <p className="outputs-eyebrow">Output creation</p>
+                  <h3>{creationMode === 'story_unit' ? 'Create from a story unit' : 'What do you want to make from this world?'}</h3>
                 </div>
                 <span>{outputRequests.length} requests</span>
               </div>
-              <label className="outputs-input-block">
-                <span>Output request</span>
-                <textarea
-                  value={requestPrompt}
-                  onChange={(event) => setRequestPrompt(event.target.value)}
-                  rows={5}
-                  aria-label="Prompt an output from this world"
-                  placeholder="Make a poster of Ilya and Anya at the checkpoint..."
-                />
-                <small>Routes to approved output workflows, binds world entities, then runs the generated workflow.</small>
-              </label>
-              <div className="outputs-example-strip" aria-label="Example output prompts">
-                {[
-                  'Poster image of two characters at the checkpoint',
-                  'Short story about a missing artifact',
-                  'Comic issue from Chapter 1',
-                ].map((example) => (
-                  <button key={example} type="button" onClick={() => setRequestPrompt(example)}>
-                    {example}
-                  </button>
-                ))}
-              </div>
-              <div className="outputs-composer-options">
-                <label>
-                  <span>Image quality</span>
-                  <select
-                    aria-label="Image generation quality"
-                    value={requestImageQuality}
-                    onChange={(event) => setRequestImageQuality(event.target.value as typeof requestImageQuality)}
-                  >
-                    <option value="preset">Preset default</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Image format</span>
-                  <select
-                    aria-label="Image generation output format"
-                    value={requestImageOutputFormat}
-                    onChange={(event) => setRequestImageOutputFormat(event.target.value as typeof requestImageOutputFormat)}
-                  >
-                    <option value="preset">Preset default</option>
-                    <option value="webp">WebP</option>
-                    <option value="png">PNG</option>
-                    <option value="jpeg">JPEG</option>
-                  </select>
-                </label>
-                <small>Preset default uses low for character concept art, medium for posters/comics/covers, and WebP output.</small>
-              </div>
-              <div className="outputs-composer-submit-row">
-                <button
-                  className="outputs-primary-action"
-                  disabled={!canRunOutputs || busy}
-                  onClick={createPromptOutputRequest}
-                  type="button"
-                >
-                  {busy ? 'Creating output...' : 'Generate output'}
+              <div className="outputs-creation-switch" role="tablist" aria-label="Output creation mode">
+                <button className={creationMode === 'prompt' ? 'is-active' : ''} type="button" onClick={() => setCreationMode('prompt')}>
+                  Freeform prompt
                 </button>
-                {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
-                {error ? <p className="outputs-error">{error}</p> : null}
+                <button className={creationMode === 'story_unit' ? 'is-active' : ''} type="button" onClick={() => setCreationMode('story_unit')}>
+                  From Story Unit
+                </button>
               </div>
+              {creationMode === 'prompt' ? (
+                <OutputPromptComposer
+                  busy={busy}
+                  canRunOutputs={canRunOutputs}
+                  error={error}
+                  requestImageQuality={requestImageQuality}
+                  requestImageOutputFormat={requestImageOutputFormat}
+                  onImageQualityChange={setRequestImageQuality}
+                  onImageOutputFormatChange={setRequestImageOutputFormat}
+                  onSubmit={(promptText) => void createPromptOutputRequest(promptText)}
+                />
+              ) : (
+                <div className="outputs-story-unit-browser">
+                  {sequenceUnits.length === 0 ? (
+                    <p className="outputs-muted">No story units are available in this world yet.</p>
+                  ) : sequenceUnits.map((sequence, index) => {
+                    const status = sequenceOutputStatuses.get(sequence.key) ?? null
+                    return (
+                      <article className="outputs-story-unit-card" key={sequence.key}>
+                        <div className="outputs-story-unit-main">
+                          <span>{sequenceOrdinalLabel(sequence, index)}</span>
+                          <strong>{sequence.name}</strong>
+                          <p>{sequence.summary || sequence.context || 'No story summary yet.'}</p>
+                          <div className="outputs-story-unit-statuses">
+                            <span className={`is-${status?.cinematicState ?? 'none'}`}>{sequenceStateLabel(status?.cinematicState ?? 'none')}</span>
+                            <span className={`is-${status?.comicState ?? 'none'}`}>{sequenceStateLabel(status?.comicState ?? 'none')}</span>
+                          </div>
+                        </div>
+                        <div className="outputs-story-unit-actions">
+                          <button type="button" disabled={!canRunOutputs || busy} onClick={() => createSequenceOutputRequest(sequence.key, 'cinematic')}>
+                            Generate Animatic
+                          </button>
+                          <button type="button" disabled={!canRunOutputs || busy} onClick={() => createSequenceOutputRequest(sequence.key, 'comic')}>
+                            Generate Comic
+                          </button>
+                          <button type="button" disabled={!status?.latestRequest} onClick={() => status && openSequenceOutput(status)}>
+                            Open Output
+                          </button>
+                          <button type="button" disabled={!status?.latestRequest?.workflowId || refreshingGraph} onClick={() => void openOutputGraphForRequest(status?.latestRequest)}>
+                            {refreshingGraph ? 'Opening...' : 'Open Graph'}
+                          </button>
+                        </div>
+                      </article>
+                    )
+                  })}
+                  {!canRunOutputs ? <p className="outputs-error">Output workflows require a live Supabase-backed draft.</p> : null}
+                  {error ? <p className="outputs-error">{error}</p> : null}
+                </div>
+              )}
             </section>
             <aside className="outputs-top-results">
               <section className="outputs-panel outputs-artifacts">
@@ -2082,6 +2269,25 @@ export function OutputsWorkspace({
                       const isSelected = selectedOutputRequest?.id === request.id
                       const progressPercent = progressSteps.length > 0 ? Math.round((completedCount / progressSteps.length) * 100) : 0
                       const plannedSections = plannedSectionTitles(request)
+                      const requestCinematicData = buildCinematicScriptViewData(requestWorkflow, requestRun)
+                      const requestIsV2Animatic = requestCinematicData.isV2
+                      const requestAnimaticReady = requestIsV2Animatic && (
+                        requestCinematicData.cinematicV2.keyframes.length > 0
+                        || requestCinematicData.cinematicV2.panels.length > 0
+                        || requestCinematicData.cinematicV2.storyboardSheets.length > 0
+                        || Object.keys(readRecord(requestCinematicData.cinematicV2.timeline)).length > 0
+                      )
+                      const requestSideStatus = activeStep
+                        ? activeStep.label
+                        : failedCount > 0
+                          ? `${failedCount} nodes need attention`
+                          : requestPrimaryArtifact
+                            ? requestPrimaryArtifact.name
+                            : requestAnimaticReady
+                              ? 'Animatic ready'
+                              : requestIsV2Animatic
+                                ? 'Generating animatic'
+                                : 'Waiting for artifact'
                       return (
                         <article className={`outputs-request-row ${isSelected ? 'is-selected' : ''} is-${statusClass(rowStatus)}`} key={request.id}>
                           <button
@@ -2135,7 +2341,7 @@ export function OutputsWorkspace({
                               <span>{progressSteps.length > 0 ? `${completedCount}/${progressSteps.length} nodes` : formatStatus(request.status)}</span>
                               <i style={{ ['--progress' as string]: `${progressPercent}%` }} />
                             </div>
-                            {activeStep ? <small>{activeStep.label}</small> : failedCount > 0 ? <small>{failedCount} nodes need attention</small> : <small>{requestPrimaryArtifact ? requestPrimaryArtifact.name : 'Waiting for artifact'}</small>}
+                            <small>{requestSideStatus}</small>
                             <div className="outputs-request-actions">
                               {requestPrimaryArtifact && primaryUrl && primaryActionLabels ? <a className="outputs-secondary-action outputs-compact-action" href={primaryUrl} target="_blank" rel="noreferrer">{primaryActionLabels.open}</a> : null}
                               {requestPrimaryArtifact && primaryUrl && primaryActionLabels ? (
@@ -2169,17 +2375,14 @@ export function OutputsWorkspace({
                               >
                                 {busyRequestId === request.id ? 'Refreshing...' : 'Details'}
                               </button>
-                              {requestWorkflow ? (
+                              {request.workflowId ? (
                                 <button
                                   className="outputs-secondary-action outputs-compact-action"
+                                  disabled={refreshingGraph}
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedRequestId(request.id)
-                                    if (request.latestRunId) setActiveRunId(request.latestRunId)
-                                    openOutputGraph()
-                                  }}
+                                  onClick={() => void openOutputGraphForRequest(request)}
                                 >
-                                  Graph
+                                  {refreshingGraph && selectedRequestId === request.id ? 'Opening...' : 'Graph'}
                                 </button>
                               ) : null}
                               {!requestRun || isTerminalOutputWorkflowRunStatus(requestRun.status) ? null : (
