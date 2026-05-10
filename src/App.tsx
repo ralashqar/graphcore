@@ -1,7 +1,7 @@
 import '@xyflow/react/dist/style.css'
 
 import type { AuthChangeEvent, Provider, Session } from '@supabase/supabase-js'
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ComponentType } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { authService } from './application/services/authService'
 import { billingService } from './application/services/billingService'
 import { patchApplyService } from './application/services/patchApplyService'
@@ -106,9 +106,21 @@ import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from '
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { BillingPage } from './features/billing/BillingPage'
+import { SpecializedDefinitionWorkspace } from './features/content/SpecializedDefinitionWorkspace'
 import { useEditorStore } from './state/editorStore'
 import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
-import type { AuthMode, GameSummary, LibrarySection, LoadedState, PatchSessionView, WorkspaceTab, WorldWikiSubView, WorldWorkspaceMode } from './shared/workspace'
+import type {
+  AuthMode,
+  GameSummary,
+  LibrarySection,
+  LoadedState,
+  PatchSessionView,
+  WorkspaceHydrationState,
+  WorkspaceSurfaceProfile,
+  WorkspaceTab,
+  WorldWikiSubView,
+  WorldWorkspaceMode,
+} from './shared/workspace'
 import { workspaceTabs } from './shared/workspace'
 import { EntityIcon, type EntityIconId } from './shared/entityIcons'
 import {
@@ -116,6 +128,7 @@ import {
   resetProjectWorld as persistResetProjectWorld,
   saveCachedProjectSnapshot,
 } from './data/graphcoreRepository'
+import type { SignProjectAssetUrlsInput } from './application/ports'
 
 const WorldGraphPage = lazy(() =>
   import('./features/worldGraphPage').then((module) => ({ default: module.WorldGraphPage })),
@@ -125,38 +138,6 @@ const ContentWorkspace = lazy(() =>
 )
 const AssetsWorkspace = lazy(() =>
   import('./features/itemAssetWorkspace').then((module) => ({ default: module.AssetsWorkspace })),
-)
-function lazyWithRecoverableImport<TComponent extends ComponentType<any>>(
-  importModule: () => Promise<{ default: TComponent }>,
-  cacheKey: string,
-) {
-  return lazy(async (): Promise<{ default: TComponent }> => {
-    try {
-      const module = await importModule()
-      if (typeof window !== 'undefined') {
-        window.sessionStorage.removeItem(cacheKey)
-      }
-      return module
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const isRecoverableImportMiss =
-        message.includes('Failed to fetch dynamically imported module')
-        || message.includes('Importing a module script failed')
-        || message.includes('Loading chunk')
-      if (typeof window !== 'undefined' && isRecoverableImportMiss && window.sessionStorage.getItem(cacheKey) !== '1') {
-        window.sessionStorage.setItem(cacheKey, '1')
-        window.location.reload()
-        return new Promise<{ default: TComponent }>(() => undefined)
-      }
-      throw error
-    }
-  })
-}
-
-const SpecializedDefinitionWorkspace = lazyWithRecoverableImport(
-  () =>
-    import('./features/content/SpecializedDefinitionWorkspace').then((module) => ({ default: module.SpecializedDefinitionWorkspace })),
-  'graphcore:lazy-import-reload:SpecializedDefinitionWorkspace',
 )
 const ActivityWorkspace = lazy(() =>
   import('./features/prompts/ActivityWorkspace').then((module) => ({ default: module.ActivityWorkspace })),
@@ -1174,6 +1155,49 @@ function reconcileSparseWorldHydrationSnapshot(current: ProjectSnapshot | null |
   return mergePersistedWorldGraphSnapshot(incoming, current)
 }
 
+function preserveHydratedSlicesForShellSnapshot(current: ProjectSnapshot | null | undefined, incoming: ProjectSnapshot) {
+  if (!current) return incoming
+  if (current.project.id !== incoming.project.id || current.draft.id !== incoming.draft.id) return incoming
+  return normalizeSnapshot({
+    ...incoming,
+    definitions: current.definitions,
+    archetypes: current.archetypes,
+    graphs: current.graphs,
+    assemblyGraphs: current.assemblyGraphs,
+    environmentBlueprints: current.environmentBlueprints,
+    assets: current.assets,
+    worldEntities: current.worldEntities,
+    worldRelationships: current.worldRelationships,
+    worldViews: current.worldViews,
+    worldOperators: current.worldOperators,
+    worldResults: current.worldResults,
+    worldGraphConnections: current.worldGraphConnections,
+    worldThreads: current.worldThreads,
+    worldPromptSessions: current.worldPromptSessions,
+    worldPromptTurns: current.worldPromptTurns,
+    worldPromptMessages: current.worldPromptMessages,
+    worldPromptEvents: current.worldPromptEvents,
+    worldPromptGenerationJobs: current.worldPromptGenerationJobs,
+    worldPromptGenerationJobSteps: current.worldPromptGenerationJobSteps,
+    worldPromptSuggestions: current.worldPromptSuggestions,
+    worldBuildBatches: current.worldBuildBatches,
+    meshGenerationJobs: current.meshGenerationJobs,
+    cinematicRuns: current.cinematicRuns,
+    outputRequests: current.outputRequests,
+    outputWorkflows: current.outputWorkflows,
+    outputWorkflowNodes: current.outputWorkflowNodes,
+    outputWorkflowEdges: current.outputWorkflowEdges,
+    outputWorkflowRuns: current.outputWorkflowRuns,
+    outputArtifacts: current.outputArtifacts,
+    patchSets: current.patchSets,
+    releases: current.releases,
+  })
+}
+
+function surfaceHydrationKey(projectId: string, draftId: string, profile: WorkspaceSurfaceProfile) {
+  return `${projectId}:${draftId}:${profile}`
+}
+
 function shouldRestoreUnsavedSnapshot(cached: ProjectSnapshot, incoming: ProjectSnapshot) {
   if (cached.project.id !== incoming.project.id || cached.draft.id !== incoming.draft.id) {
     return false
@@ -1388,6 +1412,7 @@ export default function App() {
   const sessionRef = useRef<Session | null>(null)
   const loadedStateRef = useRef<LoadedState | null>(null)
   const snapshotRef = useRef<ProjectSnapshot | null>(null)
+  const authenticatedUserIdRef = useRef<string | null>(null)
   const pendingWorldEntityCommitsRef = useRef(new Map<string, Promise<ProjectSnapshot>>())
   const worldGraphSyncPromiseRef = useRef<Promise<ProjectSnapshot> | null>(null)
   const worldBuildPollInFlightRef = useRef(false)
@@ -1398,10 +1423,12 @@ export default function App() {
   const cinematicRunRealtimeSignalAtRef = useRef(new Map<string, number>())
   const meshGenerationPollFailureCountsRef = useRef(new Map<string, number>())
   const workspaceHydrationRequestIdRef = useRef(0)
+  const surfaceHydrationRequestIdRef = useRef(0)
+  const surfaceHydrationLatestRequestIdsRef = useRef(new Map<string, number>())
+  const surfaceHydrationInFlightRef = useRef(new Map<string, Promise<unknown>>())
+  const surfaceHydrationLoadedKeysRef = useRef(new Set<string>())
   const desiredGameSelectionRef = useRef<{ projectId: string; draftId: string } | null>(null)
-  const lazyWorldLoadedDraftIdsRef = useRef(new Set<string>())
-  const wikiHeaderLiveReloadedDraftIdsRef = useRef(new Set<string>())
-  const lazyOutputInboxLoadedDraftIdsRef = useRef(new Set<string>())
+  const [workspaceHydrationState, setWorkspaceHydrationState] = useState<WorkspaceHydrationState>({})
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1440,6 +1467,7 @@ export default function App() {
 
   useEffect(() => {
     sessionRef.current = session
+    authenticatedUserIdRef.current = session?.user.id ?? null
   }, [session])
 
   useEffect(() => {
@@ -1517,12 +1545,15 @@ export default function App() {
     if (normalizedCachedUnsavedSnapshot && !shouldRestoreCachedUnsavedSnapshot) {
       clearUnsavedSnapshot(normalizedIncomingSnapshot.draft.id)
     }
-    const snapshotToHydrate = normalizedCachedUnsavedSnapshot && shouldRestoreCachedUnsavedSnapshot
+    let snapshotToHydrate = normalizedCachedUnsavedSnapshot && shouldRestoreCachedUnsavedSnapshot
       ? normalizeSnapshot(reconcileStaleGeneratedSnapshot(
           normalizedCachedUnsavedSnapshot,
           normalizedIncomingSnapshot,
         ))
       : normalizedIncomingSnapshot
+    if (state.profile === 'shell') {
+      snapshotToHydrate = preserveHydratedSlicesForShellSnapshot(currentHydratedSnapshot, snapshotToHydrate)
+    }
     const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
     if (
       desiredSelection
@@ -1547,6 +1578,10 @@ export default function App() {
       worldBuildPollFailureCountRef.current = 0
       meshGenerationPollFailureCountsRef.current.clear()
       cinematicRunRealtimeSignalAtRef.current.clear()
+      surfaceHydrationInFlightRef.current.clear()
+      surfaceHydrationLatestRequestIdsRef.current.clear()
+      surfaceHydrationLoadedKeysRef.current.clear()
+      setWorkspaceHydrationState({})
       announcedWorldBuildBatchIdsRef.current = new Set()
       reconciledWorldBuildBatchIdsRef.current = new Set()
       announcedCinematicRunIdsRef.current = new Set()
@@ -1689,6 +1724,8 @@ export default function App() {
       try {
         const currentSession = await authService.getCurrentSession()
         if (!active) return
+        sessionRef.current = currentSession
+        authenticatedUserIdRef.current = currentSession?.user.id ?? null
         setSession(currentSession)
         if (appRoute === 'billing') {
           if (currentSession) {
@@ -1746,25 +1783,32 @@ export default function App() {
     if (activeTab !== 'graph' && activeTab !== 'library' && activeTab !== 'global' && activeTab !== 'outputs') return
     const draftId = snapshot.draft.id
     const targetProfile = activeTab === 'library' ? 'content' : 'world'
-    const surfaceKey = `${draftId}:${targetProfile}`
+    const surfaceKey = surfaceHydrationKey(snapshot.project.id, draftId, targetProfile)
     const currentProfile = loadedState.profile ?? null
     const targetAlreadyHydrated = targetProfile === 'content'
       ? currentProfile === 'content' || currentProfile === 'full'
       : currentProfile === 'world' || currentProfile === 'full'
-    if (lazyWorldLoadedDraftIdsRef.current.has(surfaceKey) && targetAlreadyHydrated) return
-    lazyWorldLoadedDraftIdsRef.current.add(surfaceKey)
+    if (surfaceHydrationInFlightRef.current.has(surfaceKey)) return
+    if (surfaceHydrationLoadedKeysRef.current.has(surfaceKey) && targetAlreadyHydrated) return
 
-    let cancelled = false
-    void (async () => {
+    const requestId = beginSurfaceHydration(surfaceKey)
+    let loadPromise: Promise<void>
+    loadPromise = (async () => {
       const startedAt = performance.now()
       try {
+        const bypassWorldCache = targetProfile === 'world' && activeTab === 'graph' && worldViewMode === 'wiki'
         let loaded = await workspaceService.load({
           projectId: snapshot.project.id,
           draftId,
-        }, { profile: targetProfile, hydrateAssetUrls: targetProfile === 'world' })
+        }, {
+          profile: targetProfile,
+          hydrateAssetUrls: targetProfile === 'world',
+          skipCache: bypassWorldCache,
+        })
         let forcedUncachedWorldReload = false
         if (
           targetProfile === 'world'
+          && !bypassWorldCache
           && loaded.source === 'supabase'
           && loaded.snapshot.worldEntities.length === 0
           && hasGeneratedWorldOverviewMetadata(loaded.snapshot)
@@ -1775,7 +1819,7 @@ export default function App() {
           }, { profile: 'world', hydrateAssetUrls: true, skipCache: true })
           forcedUncachedWorldReload = true
         }
-        if (cancelled || loaded.source !== 'supabase') return
+        if (loaded.source !== 'supabase' || !isCurrentSurfaceHydration(surfaceKey, requestId)) return
         const current = snapshotRef.current
         if (!isSameProjectDraft(current, loaded.snapshot)) return
         const loadedSnapshot = targetProfile === 'world'
@@ -1794,7 +1838,8 @@ export default function App() {
           : loadedSnapshot
         commitPersistedSnapshot(nextSnapshot)
         setLoadedState({ source: loaded.source, reason: loaded.reason, profile: loaded.profile })
-        if (forcedUncachedWorldReload && loadedSnapshot.worldEntities.length > 0) {
+        finishSurfaceHydration(surfaceKey, requestId, 'ready')
+        if ((bypassWorldCache || forcedUncachedWorldReload) && loadedSnapshot.worldEntities.length > 0) {
           try {
             const delta = await loadDraftDelta(loadedSnapshot.draft.id, null)
             await saveCachedProjectSnapshot(loadedSnapshot, delta.currentRevision)
@@ -1807,77 +1852,24 @@ export default function App() {
             profile: loaded.profile,
             draftId,
             ms: Math.round(performance.now() - startedAt),
+            bypassWorldCache,
             forcedUncachedWorldReload,
             worldEntities: loadedSnapshot.worldEntities.length,
             assets: loadedSnapshot.assets.length,
           })
         }
       } catch (loadError) {
-        lazyWorldLoadedDraftIdsRef.current.delete(surfaceKey)
+        surfaceHydrationLoadedKeysRef.current.delete(surfaceKey)
+        finishSurfaceHydration(surfaceKey, requestId, 'error', loadError)
         console.error('[GraphCore] lazy world surface load failed.', loadError)
+      } finally {
+        if (isCurrentSurfaceHydration(surfaceKey, requestId)) {
+          surfaceHydrationInFlightRef.current.delete(surfaceKey)
+        }
       }
     })()
-    return () => {
-      cancelled = true
-    }
-  }, [activeTab, appRoute, loadedState?.profile, loadedState?.source, snapshot?.draft.id, snapshot?.project.id])
-
-  useEffect(() => {
-    if (appRoute !== 'app') return
-    if (loadedState?.source !== 'supabase' || !snapshot) return
-    if (activeTab !== 'graph' || worldViewMode !== 'wiki') return
-
-    const draftId = snapshot.draft.id
-    if (wikiHeaderLiveReloadedDraftIdsRef.current.has(draftId)) return
-    wikiHeaderLiveReloadedDraftIdsRef.current.add(draftId)
-
-    let cancelled = false
-    void (async () => {
-      try {
-        const reloaded = await workspaceService.load({
-          projectId: snapshot.project.id,
-          draftId,
-        }, { profile: 'world', hydrateAssetUrls: true, skipCache: true })
-        if (cancelled || reloaded.source !== 'supabase') return
-        const current = snapshotRef.current
-        if (!current || current.project.id !== reloaded.snapshot.project.id || current.draft.id !== reloaded.snapshot.draft.id) {
-          return
-        }
-        const hydratedSnapshot = mergeOutputSliceIntoSnapshot(reloaded.snapshot, {
-          requests: current.outputRequests,
-          workflows: current.outputWorkflows,
-          nodes: current.outputWorkflowNodes,
-          edges: current.outputWorkflowEdges,
-          runs: current.outputWorkflowRuns,
-          artifacts: current.outputArtifacts,
-        })
-        commitPersistedSnapshot(hydratedSnapshot)
-        try {
-          const delta = await loadDraftDelta(reloaded.snapshot.draft.id, null)
-          await saveCachedProjectSnapshot(reloaded.snapshot, delta.currentRevision)
-        } catch (cacheError) {
-          console.warn('[GraphCore] wiki live header cache refresh failed.', cacheError)
-        }
-        if (import.meta.env.DEV) {
-          const worldWiki = readMetadataRecord(reloaded.snapshot.draft.metadata.worldWiki)
-          console.info('[GraphCore][wiki] live header snapshot reloaded from Supabase.', {
-            draftId,
-            title: trimOptionalString(worldWiki.title),
-            hasLogline: Boolean(trimOptionalString(worldWiki.logline)),
-            worldConceptAssetKey: trimOptionalString(worldWiki.worldConceptAssetKey),
-            assets: reloaded.snapshot.assets.length,
-          })
-        }
-      } catch (loadError) {
-        wikiHeaderLiveReloadedDraftIdsRef.current.delete(draftId)
-        console.error('[GraphCore] wiki live header reload failed.', loadError)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [activeTab, appRoute, loadedState?.source, snapshot?.draft.id, snapshot?.project.id, worldViewMode])
+    surfaceHydrationInFlightRef.current.set(surfaceKey, loadPromise)
+  }, [activeTab, appRoute, loadedState?.profile, loadedState?.source, snapshot?.draft.id, snapshot?.project.id, worldViewMode])
 
   const refreshBillingState = useCallback(async () => {
     if (!sessionRef.current) {
@@ -1911,15 +1903,25 @@ export default function App() {
     const unsubscribe = authService.subscribeToAuthChanges(async (event: AuthChangeEvent, nextSession) => {
       if (cancelled) return
       const previousSession = sessionRef.current
-      setSession(nextSession)
+      const previousUserId = authenticatedUserIdRef.current ?? previousSession?.user.id ?? null
+      const nextUserId = nextSession?.user.id ?? null
+      const isSameUserSignIn = event === 'SIGNED_IN' && previousUserId !== null && previousUserId === nextUserId
+      sessionRef.current = nextSession
+      authenticatedUserIdRef.current = nextUserId
 
       if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+        setSession(nextSession)
         return
       }
 
-      if (event === 'SIGNED_IN' && previousSession?.user.id && previousSession.user.id === nextSession?.user.id) {
+      if (isSameUserSignIn) {
+        if (import.meta.env.DEV) {
+          console.info('[GraphCore][auth] ignored same-user SIGNED_IN event.')
+        }
         return
       }
+
+      setSession(nextSession)
 
       try {
         const state = await workspaceService.ensureLiveWorkspace()
@@ -2706,6 +2708,29 @@ export default function App() {
     })
   }, [activeTab, snapshot?.draft.id, worldViewMode, worldWikiSubView])
 
+  useEffect(() => {
+    if (loadedState?.source !== 'supabase' || !snapshot) return
+    const outputSurfaceVisible = activeTab === 'outputs' || (activeTab === 'graph' && worldViewMode === 'wiki' && worldWikiSubView === 'outputs')
+    if (!outputSurfaceVisible) return
+    let timeout: number | null = null
+    const subscription = workspaceService.subscribeOutputSignals({
+      draftId: snapshot.draft.id,
+      onSignal: () => {
+        if (timeout !== null) window.clearTimeout(timeout)
+        timeout = window.setTimeout(() => {
+          timeout = null
+          void loadOutputInbox({ force: true }).catch((loadError) => {
+            console.warn('[GraphCore] realtime output inbox refresh failed.', loadError)
+          })
+        }, 250)
+      },
+    })
+    return () => {
+      if (timeout !== null) window.clearTimeout(timeout)
+      void subscription.unsubscribe()
+    }
+  }, [activeTab, loadedState?.source, snapshot?.draft.id, worldViewMode, worldWikiSubView])
+
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
       const parsedOperations = schemaCatalog.patchOperationSchema.array().safeParse(patch.operations)
@@ -2850,6 +2875,83 @@ export default function App() {
     setSnapshot(normalizedSnapshot)
     setHasLocalSnapshotChanges(false)
     setBundle(compileBundle(normalizedSnapshot))
+  }
+
+  function setSurfaceHydrationState(
+    key: string,
+    patch: Partial<WorkspaceHydrationState[string]>,
+  ) {
+    setWorkspaceHydrationState((current) => {
+      const previous = current[key] ?? {
+        status: 'idle' as const,
+        requestId: 0,
+        updatedAt: null,
+        error: null,
+      }
+      return {
+        ...current,
+        [key]: {
+          ...previous,
+          ...patch,
+        },
+      }
+    })
+  }
+
+  function beginSurfaceHydration(key: string, status: WorkspaceHydrationState[string]['status'] = 'refreshing') {
+    const requestId = ++surfaceHydrationRequestIdRef.current
+    surfaceHydrationLatestRequestIdsRef.current.set(key, requestId)
+    setSurfaceHydrationState(key, {
+      status,
+      requestId,
+      updatedAt: Date.now(),
+      error: null,
+    })
+    return requestId
+  }
+
+  function isCurrentSurfaceHydration(key: string, requestId: number) {
+    return surfaceHydrationLatestRequestIdsRef.current.get(key) === requestId
+  }
+
+  function finishSurfaceHydration(
+    key: string,
+    requestId: number,
+    status: WorkspaceHydrationState[string]['status'],
+    error: unknown = null,
+  ) {
+    if (!isCurrentSurfaceHydration(key, requestId)) return
+    setSurfaceHydrationState(key, {
+      status,
+      requestId,
+      updatedAt: Date.now(),
+      error: error ? error instanceof Error ? error.message : String(error) : null,
+    })
+    if (status === 'ready' || status === 'cache_ready') {
+      surfaceHydrationLoadedKeysRef.current.add(key)
+    }
+  }
+
+  function invalidateSurfaceHydration(projectId: string, draftId: string, profile: WorkspaceSurfaceProfile) {
+    const key = surfaceHydrationKey(projectId, draftId, profile)
+    surfaceHydrationLoadedKeysRef.current.delete(key)
+    surfaceHydrationLatestRequestIdsRef.current.delete(key)
+    setWorkspaceHydrationState((current) => {
+      if (!current[key]) return current
+      return {
+        ...current,
+        [key]: {
+          ...current[key],
+          status: 'idle',
+          error: null,
+        },
+      }
+    })
+  }
+
+  async function invalidateOutputSurface(projectId: string, draftId: string) {
+    invalidateSurfaceHydration(projectId, draftId, 'outputs')
+    await workspaceService.clearOutputInboxCache(projectId, draftId)
   }
 
   function isSameProjectDraft(left: ProjectSnapshot | null | undefined, right: ProjectSnapshot | null | undefined) {
@@ -4936,6 +5038,7 @@ export default function App() {
         ...result.edges,
       ],
     })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
     return result
   }
 
@@ -4955,6 +5058,7 @@ export default function App() {
         ...current.outputWorkflowRuns.filter((run) => run.id !== result.run.id),
       ],
     })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
     return result
   }
 
@@ -4977,21 +5081,40 @@ export default function App() {
     return result
   }
 
-  async function loadOutputInbox() {
+  async function loadOutputInbox(options?: { force?: boolean; cursor?: string | null }) {
     const current = snapshotRef.current ?? snapshot
     if (!current || loadedState?.source !== 'supabase') return
     const draftId = current.draft.id
-    if (lazyOutputInboxLoadedDraftIdsRef.current.has(draftId)) return
-    lazyOutputInboxLoadedDraftIdsRef.current.add(draftId)
+    const surfaceKey = surfaceHydrationKey(current.project.id, draftId, 'outputs')
+    const inFlight = surfaceHydrationInFlightRef.current.get(surfaceKey) as Promise<void> | undefined
+    if (inFlight && !options?.force) return inFlight
+    const requestId = beginSurfaceHydration(surfaceKey)
     const startedAt = performance.now()
-    try {
+    let loadPromise: Promise<void>
+    loadPromise = (async () => {
+      try {
+        if (!options?.cursor && !options?.force) {
+          const cached = await workspaceService.loadCachedOutputInbox(current.project.id, draftId)
+          const latestForCache = snapshotRef.current ?? current
+          if (cached && isSameProjectDraft(latestForCache, current) && isCurrentSurfaceHydration(surfaceKey, requestId)) {
+            commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latestForCache, {
+              requests: cached.inbox.requests,
+              workflows: cached.inbox.workflows,
+              runs: cached.inbox.runs,
+              artifacts: cached.inbox.artifacts,
+              assets: cached.inbox.assets,
+            }))
+            finishSurfaceHydration(surfaceKey, requestId, 'cache_ready')
+          }
+        }
       const result = await workspaceService.loadOutputInbox({
         projectId: current.project.id,
         draftId,
         limit: 30,
+        cursor: options?.cursor ?? null,
       })
       const latest = snapshotRef.current ?? current
-      if (!isSameProjectDraft(latest, current)) return
+      if (!isSameProjectDraft(latest, current) || !isCurrentSurfaceHydration(surfaceKey, requestId)) return
       commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
         requests: result.requests,
         workflows: result.workflows,
@@ -4999,6 +5122,8 @@ export default function App() {
         artifacts: result.artifacts,
         assets: result.assets,
       }))
+      await workspaceService.saveCachedOutputInbox(current.project.id, draftId, result)
+      finishSurfaceHydration(surfaceKey, requestId, 'ready')
       if (import.meta.env.DEV) {
         console.info('[GraphCore][boot] output inbox loaded.', {
           draftId,
@@ -5006,12 +5131,21 @@ export default function App() {
           requests: result.requests.length,
           artifacts: result.artifacts.length,
           signedAssets: result.assets.length,
+          hasMore: result.page.hasMore,
         })
       }
     } catch (loadError) {
-      lazyOutputInboxLoadedDraftIdsRef.current.delete(draftId)
+      surfaceHydrationLoadedKeysRef.current.delete(surfaceKey)
+      finishSurfaceHydration(surfaceKey, requestId, 'error', loadError)
       throw loadError
-    }
+      } finally {
+        if (isCurrentSurfaceHydration(surfaceKey, requestId)) {
+          surfaceHydrationInFlightRef.current.delete(surfaceKey)
+        }
+      }
+    })()
+    surfaceHydrationInFlightRef.current.set(surfaceKey, loadPromise)
+    return loadPromise
   }
 
   async function loadOutputWorkflowGraph(workflowId: string, runId?: string | null) {
@@ -5058,6 +5192,7 @@ export default function App() {
             ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id),
           ],
         })
+        void invalidateOutputSurface(current.project.id, current.draft.id)
       }
     }
     return result
@@ -5094,6 +5229,9 @@ export default function App() {
         ? [...result.artifacts, ...current.outputArtifacts.filter((artifact) => !result.artifacts.some((entry) => entry.id === artifact.id))]
         : current.outputArtifacts,
     })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+      .then(() => loadOutputInbox({ force: true }))
+      .catch((loadError) => console.warn('[GraphCore] output inbox refresh after start failed.', loadError))
     return result
   }
 
@@ -5141,6 +5279,9 @@ export default function App() {
           ? [result.run, ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id)]
           : current.outputWorkflowRuns,
       })
+      void invalidateOutputSurface(current.project.id, current.draft.id)
+        .then(() => loadOutputInbox({ force: true }))
+        .catch((loadError) => console.warn('[GraphCore] output inbox refresh after cancel failed.', loadError))
     }
     return result
   }
@@ -5171,6 +5312,9 @@ export default function App() {
             ))
             : current.outputArtifacts,
         })
+        void invalidateOutputSurface(current.project.id, current.draft.id)
+          .then(() => loadOutputInbox({ force: true }))
+          .catch((loadError) => console.warn('[GraphCore] output inbox refresh after delete failed.', loadError))
       }
       return result
     }
@@ -7156,11 +7300,32 @@ export default function App() {
     )
   }
 
+  const activeHydrationProfile: WorkspaceSurfaceProfile =
+    activeTab === 'library'
+      ? 'content'
+      : activeTab === 'outputs' || (activeTab === 'graph' && worldViewMode === 'wiki' && worldWikiSubView === 'outputs')
+        ? 'outputs'
+        : activeTab === 'graph' || activeTab === 'global'
+          ? 'world'
+          : 'shell'
+  const activeHydrationKey = snapshot
+    ? surfaceHydrationKey(snapshot.project.id, snapshot.draft.id, activeHydrationProfile)
+    : null
+  const activeHydrationStatus = activeHydrationKey
+    ? workspaceHydrationState[activeHydrationKey]?.status ?? 'idle'
+    : 'idle'
+  const handleSignProjectAssetUrlEntries = useCallback((input: SignProjectAssetUrlsInput) => (
+    workspaceService.signProjectAssetUrlEntries(input)
+  ), [])
+  const handleLoadProjectDraftMetadata = useCallback((draftId: string) => (
+    workspaceService.loadProjectDraftMetadata(draftId)
+  ), [])
+
   if (loading) return <main className="app-shell loading-shell"><p>Booting GraphCore workspace...</p></main>
   if (error || !snapshot || !bundle) return <main className="app-shell loading-shell"><p>{error ?? 'GraphCore could not load a project snapshot.'}</p></main>
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-hydration-status={activeHydrationStatus}>
       <div className={activeTab === 'library' ? 'workspace-frame is-library-workspace' : 'workspace-frame'}>
         <WorkspaceTopbar
           activeTab={activeTab}
@@ -7269,8 +7434,8 @@ export default function App() {
                 onGetAppGenerationStatus={getAppGenerationStatus}
                 onCancelAppGenerationJob={cancelAppGenerationJob}
                 onGetAppPreviewSession={getAppPreviewSession}
-                onSignProjectAssetUrls={(input) => workspaceService.signProjectAssetUrlEntries(input)}
-                onLoadProjectDraftMetadata={(draftId) => workspaceService.loadProjectDraftMetadata(draftId)}
+                onSignProjectAssetUrls={handleSignProjectAssetUrlEntries}
+                onLoadProjectDraftMetadata={handleLoadProjectDraftMetadata}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
                 onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
                 onStartWorldSeedInference={startWorldSeedInference}

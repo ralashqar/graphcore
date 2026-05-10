@@ -971,6 +971,7 @@ export function WorldGraphPage({
   const [appPreviewSession, setAppPreviewSession] = useState<AppPreviewSessionResponse | null>(null)
   const [liveProjectDraftMetadata, setLiveProjectDraftMetadata] = useState<Record<string, unknown> | null>(null)
   const [liveWorldConceptImageUrl, setLiveWorldConceptImageUrl] = useState<string | null>(null)
+  const liveWikiHeaderDraftIdRef = useRef<string | null>(null)
   const [appGenerationBusy, setAppGenerationBusy] = useState(false)
   const [appGenerationError, setAppGenerationError] = useState<string | null>(null)
   const [selectedAppCodePath, setSelectedAppCodePath] = useState<string | null>(null)
@@ -1708,7 +1709,11 @@ export function WorldGraphPage({
     if (worldViewMode !== 'wiki' || !projectDraftId) return
 
     let cancelled = false
-    setLiveWorldConceptImageUrl(null)
+    if (liveWikiHeaderDraftIdRef.current !== projectDraftId) {
+      liveWikiHeaderDraftIdRef.current = projectDraftId
+      setLiveProjectDraftMetadata(null)
+      setLiveWorldConceptImageUrl(null)
+    }
 
     const loadLiveWikiHeader = async () => {
       let metadata: Record<string, unknown>
@@ -1813,9 +1818,7 @@ export function WorldGraphPage({
       ].join(':'))
       .join('|')
   ), [wikiModel.sections])
-  useEffect(() => {
-    if (worldViewMode !== 'wiki' || wikiSubView !== 'wiki') return undefined
-    const sectionTargets = wikiModel.sections.reduce<Record<string, number>>((targets, section) => {
+  const wikiSectionRevealTargets = useMemo(() => wikiModel.sections.reduce<Record<string, number>>((targets, section) => {
       if (section.kind === 'style') return targets
       const entityTarget = Math.min(Array.from(new Set(section.entityKeys)).length, section.kind === 'cast' ? 8 : 6)
       const threadTarget = Math.min(Array.from(new Set(section.threadKeys)).length, 6)
@@ -1823,12 +1826,25 @@ export function WorldGraphPage({
       const total = entityTarget + threadTarget + resultTarget
       if (total > 0) targets[section.kind] = total
       return targets
-    }, {})
-    setWikiSectionVisibleCounts(Object.fromEntries(Object.keys(sectionTargets).map((key) => [key, 0])))
+    }, {}), [wikiSectionRevealSignature])
+  useEffect(() => {
+    if (worldViewMode !== 'wiki' || wikiSubView !== 'wiki') return undefined
+    const sectionTargets = wikiSectionRevealTargets
+    setWikiSectionVisibleCounts((current) => {
+      const next: Record<string, number> = {}
+      for (const [key, total] of Object.entries(sectionTargets)) {
+        next[key] = Math.min(current[key] ?? 0, total)
+      }
+      return next
+    })
     const firstBatchId = window.setTimeout(() => {
-      setWikiSectionVisibleCounts(Object.fromEntries(
-        Object.entries(sectionTargets).map(([key, total]) => [key, Math.min(total, 4)]),
-      ))
+      setWikiSectionVisibleCounts((current) => {
+        const next: Record<string, number> = {}
+        for (const [key, total] of Object.entries(sectionTargets)) {
+          next[key] = Math.max(Math.min(current[key] ?? 0, total), Math.min(total, 4))
+        }
+        return next
+      })
     }, WIKI_SECTION_REVEAL_DELAY_MS)
     const fullBatchId = window.setTimeout(() => {
       setWikiSectionVisibleCounts(sectionTargets)
@@ -1837,7 +1853,7 @@ export function WorldGraphPage({
       window.clearTimeout(firstBatchId)
       window.clearTimeout(fullBatchId)
     }
-  }, [wikiModel.sections, wikiSectionRevealSignature, wikiSubView, worldViewMode])
+  }, [wikiSectionRevealTargets, wikiSubView, worldViewMode])
   const wikiHasAppSections = useMemo(
     () => wikiModel.sections.some((section) => section.kind === 'app' || section.kind.startsWith('app_')),
     [wikiModel.sections],

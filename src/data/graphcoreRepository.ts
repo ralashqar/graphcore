@@ -514,9 +514,34 @@ export type GraphCoreClientCacheSnapshot = {
   projectId: string
   draftId: string
   cacheSchemaVersion: GraphCoreCacheSchemaVersion
+  profile?: 'world'
   lastRevision: DraftRevision
   cachedAt: string
+  rowCounts?: Record<string, number>
   snapshot: ProjectSnapshot
+}
+
+export type OutputInboxSlice = {
+  requests: OutputRequest[]
+  workflows: OutputWorkflow[]
+  runs: OutputWorkflowRun[]
+  artifacts: OutputArtifact[]
+  assets: AssetDefinition[]
+  page: {
+    limit: number
+    hasMore: boolean
+    nextCursor: string | null
+  }
+}
+
+export type GraphCoreClientOutputInboxCache = {
+  projectId: string
+  draftId: string
+  cacheSchemaVersion: GraphCoreCacheSchemaVersion
+  profile: 'outputs'
+  cachedAt: string
+  rowCounts?: Record<string, number>
+  inbox: OutputInboxSlice
 }
 
 const DEFAULT_SNAPSHOT_LOAD_PROFILE: SnapshotLoadProfile = 'world'
@@ -572,6 +597,10 @@ function postgrestStatus(response: { status?: number }) {
 
 function cacheKeyForProjectDraft(projectId: string, draftId: string) {
   return `graphcore:project:${projectId}:draft:${draftId}:cache:v1`
+}
+
+function cacheKeyForOutputInbox(projectId: string, draftId: string) {
+  return `graphcore:project:${projectId}:draft:${draftId}:outputs:v1`
 }
 
 function openGraphCoreCacheDb(): Promise<IDBDatabase | null> {
@@ -4415,8 +4444,16 @@ export async function saveCachedProjectSnapshot(snapshot: ProjectSnapshot, revis
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     cacheSchemaVersion: GRAPHCORE_CACHE_SCHEMA_VERSION,
+    profile: 'world',
     lastRevision: revision,
     cachedAt: new Date().toISOString(),
+    rowCounts: {
+      assets: cacheSnapshot.assets.length,
+      worldEntities: cacheSnapshot.worldEntities.length,
+      worldRelationships: cacheSnapshot.worldRelationships.length,
+      outputRequests: cacheSnapshot.outputRequests.length,
+      outputArtifacts: cacheSnapshot.outputArtifacts.length,
+    },
     snapshot: cacheSnapshot,
   }
   await withCacheStore<IDBValidKey>('readwrite', (store) => store.put(entry))
@@ -4424,6 +4461,56 @@ export async function saveCachedProjectSnapshot(snapshot: ProjectSnapshot, revis
 
 export async function clearProjectCache(projectId: string, draftId: string) {
   const cacheKey = cacheKeyForProjectDraft(projectId, draftId)
+  await withCacheStore<undefined>('readwrite', (store) => store.delete(cacheKey))
+}
+
+export async function loadCachedOutputInbox(projectId: string, draftId: string): Promise<GraphCoreClientOutputInboxCache | null> {
+  const cacheKey = cacheKeyForOutputInbox(projectId, draftId)
+  const cached = await withCacheStore<GraphCoreClientOutputInboxCache & { cacheKey: string }>('readonly', (store) => store.get(cacheKey))
+  if (!cached) return null
+  if (
+    cached.projectId !== projectId
+    || cached.draftId !== draftId
+    || cached.cacheSchemaVersion !== GRAPHCORE_CACHE_SCHEMA_VERSION
+    || cached.profile !== 'outputs'
+    || !cached.inbox
+  ) {
+    return null
+  }
+  return {
+    projectId,
+    draftId,
+    cacheSchemaVersion: GRAPHCORE_CACHE_SCHEMA_VERSION,
+    profile: 'outputs',
+    cachedAt: cached.cachedAt,
+    rowCounts: cached.rowCounts,
+    inbox: cached.inbox,
+  }
+}
+
+export async function saveCachedOutputInbox(projectId: string, draftId: string, inbox: OutputInboxSlice) {
+  const cacheKey = cacheKeyForOutputInbox(projectId, draftId)
+  const entry: GraphCoreClientOutputInboxCache & { cacheKey: string } = {
+    cacheKey,
+    projectId,
+    draftId,
+    cacheSchemaVersion: GRAPHCORE_CACHE_SCHEMA_VERSION,
+    profile: 'outputs',
+    cachedAt: new Date().toISOString(),
+    rowCounts: {
+      requests: inbox.requests.length,
+      workflows: inbox.workflows.length,
+      runs: inbox.runs.length,
+      artifacts: inbox.artifacts.length,
+      assets: inbox.assets.length,
+    },
+    inbox,
+  }
+  await withCacheStore<IDBValidKey>('readwrite', (store) => store.put(entry))
+}
+
+export async function clearOutputInboxCache(projectId: string, draftId: string) {
+  const cacheKey = cacheKeyForOutputInbox(projectId, draftId)
   await withCacheStore<undefined>('readwrite', (store) => store.delete(cacheKey))
 }
 
@@ -7794,6 +7881,11 @@ export type OutputInboxLoadResult = {
   runs: OutputWorkflowRun[]
   artifacts: OutputArtifact[]
   assets: AssetDefinition[]
+  page: {
+    limit: number
+    hasMore: boolean
+    nextCursor: string | null
+  }
 }
 
 export type OutputWorkflowGraphLoadResult = {
@@ -7842,17 +7934,25 @@ export async function loadOutputInbox(input: {
   projectId: string
   draftId: string
   limit?: number
+  cursor?: string | null
 }): Promise<OutputInboxLoadResult> {
   const limit = Math.max(1, Math.min(100, input.limit ?? 30))
-  const requestResponse = await supabase
+  let requestQuery = supabase
     .from('output_requests')
     .select(OUTPUT_REQUEST_SELECT)
     .eq('draft_id', input.draftId)
     .order('created_at', { ascending: false })
-    .limit(limit)
+    .limit(limit + 1)
+  if (input.cursor) {
+    requestQuery = requestQuery.lt('created_at', input.cursor)
+  }
+  const requestResponse = await requestQuery
   if (requestResponse.error) throw new Error(requestResponse.error.message)
 
-  const requests = ((requestResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
+  const requestRows = ((requestResponse.data ?? []) as OutputRequestRow[])
+  const hasMore = requestRows.length > limit
+  const requests = requestRows.slice(0, limit).map(mapOutputRequestRow)
+  const nextCursor = hasMore ? requests[requests.length - 1]?.createdAt ?? null : null
   const workflowIds = Array.from(new Set(requests.map((request) => request.workflowId).filter((id): id is string => Boolean(id))))
   const latestRunIds = Array.from(new Set(requests.map((request) => request.latestRunId).filter((id): id is string => Boolean(id))))
 
@@ -7915,6 +8015,11 @@ export async function loadOutputInbox(input: {
     runs: hydratedRuns,
     artifacts: hydratedArtifacts,
     assets,
+    page: {
+      limit,
+      hasMore,
+      nextCursor,
+    },
   }
 }
 
@@ -8473,6 +8578,37 @@ export function subscribeCinematicRunSignals(input: {
     unsubscribe: async () => {
       await Promise.all(channels.map((channel) => supabase.removeChannel(channel)))
     },
+  }
+}
+
+export function subscribeOutputSignals(input: {
+  draftId: string
+  onSignal: () => void
+}) {
+  const channel = supabase
+    .channel(`graphcore-output-inbox-${input.draftId}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_requests',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_workflow_runs',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_artifacts',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+
+  void channel.subscribe()
+  return {
+    unsubscribe: () => supabase.removeChannel(channel),
   }
 }
 

@@ -823,7 +823,7 @@ export function OutputsWorkspace({
     return () => {
       cancelled = true
     }
-  }, [onLoadOutputInbox, snapshot.draft.id])
+  }, [snapshot.draft.id])
 
   useEffect(() => {
     if (selectedComicSequenceKey && sequenceUnits.some((entity) => entity.key === selectedComicSequenceKey)) return

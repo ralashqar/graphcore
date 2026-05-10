@@ -7,8 +7,21 @@ import type { EntityIconId } from './entityIcons'
 export type LoadedState = {
   source: 'supabase' | 'demo'
   reason?: string
-  profile?: 'shell' | 'world' | 'content' | 'jobs' | 'full'
+  profile?: WorkspaceSurfaceProfile | 'jobs'
 }
+
+export type WorkspaceSurfaceProfile = 'shell' | 'world' | 'content' | 'outputs' | 'full'
+
+export type WorkspaceHydrationStatus = 'idle' | 'cache_ready' | 'refreshing' | 'ready' | 'error'
+
+export type WorkspaceHydrationSurfaceState = {
+  status: WorkspaceHydrationStatus
+  requestId: number
+  updatedAt: number | null
+  error: string | null
+}
+
+export type WorkspaceHydrationState = Record<string, WorkspaceHydrationSurfaceState>
 
 export type GameSummary = {
   projectId: string
