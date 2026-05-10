@@ -197,19 +197,20 @@ export type WorldPromptTranscriptEntry =
   | { id: string; createdAt: string; kind: 'clarification_answer'; label: string; detail?: string }
   | { id: string; createdAt: string; kind: 'continuation_without_suggestion'; label: string; detail?: string }
 
-export type WorldFeedFilter = 'all' | 'entities' | 'relationships' | 'wiki' | 'media' | 'suggestions'
+export type WorldFeedFilter = 'all' | 'additions' | 'changes' | 'relationships' | 'media' | 'suggestions'
 
 export const WORLD_FEED_FILTERS: Array<{ key: WorldFeedFilter; label: string }> = [
   { key: 'all', label: 'All' },
-  { key: 'entities', label: 'Entities' },
+  { key: 'additions', label: 'Additions' },
+  { key: 'changes', label: 'Changes' },
   { key: 'relationships', label: 'Relationships' },
-  { key: 'wiki', label: 'Wiki' },
-  { key: 'media', label: 'Media/Jobs' },
+  { key: 'media', label: 'Media' },
   { key: 'suggestions', label: 'Suggestions' },
 ]
 
 export type WorldFeedEntryKind =
   | 'active_turn'
+  | 'turn_update'
   | 'prompt'
   | 'assistant_note'
   | 'turn_summary'
@@ -236,6 +237,7 @@ export type WorldFeedEntry = {
   createdAt: string
   kind: WorldFeedEntryKind
   filter: WorldFeedFilter
+  relatedFilters?: WorldFeedFilter[]
   title: string
   detail: string
   compactDetail?: string
@@ -257,6 +259,8 @@ export type WorldFeedEntry = {
   changedFields?: string[]
   fullDetail?: string
   turnId?: string
+  parentTurnId?: string
+  sortOrder?: number
   turnLens?: WorldPromptTurnLens
   resultKey?: string
   suggestions?: WorldPromptSuggestion[]
@@ -2083,17 +2087,18 @@ export function buildWorldPromptTranscriptEntries(input: {
 function worldFeedFilterForTranscriptEntry(entry: WorldPromptTranscriptEntry): WorldFeedFilter | null {
   switch (entry.kind) {
     case 'entity_created':
+      return 'additions'
     case 'entity_updated':
     case 'entity_replaced':
     case 'entity_canon_updated':
-      return 'entities'
+      return 'changes'
     case 'relationship_created':
     case 'relationship_updated':
     case 'sequence_rewired':
     case 'relationship_rewired':
       return 'relationships'
     case 'entity_merged':
-      return 'entities'
+      return 'changes'
     case 'derived_result_created':
     case 'queue_started':
     case 'planner_progress':
@@ -2114,7 +2119,7 @@ function worldFeedFilterForTranscriptEntry(entry: WorldPromptTranscriptEntry): W
     case 'op_status':
     case 'preview_available':
     case 'approval_required':
-      return 'wiki'
+      return 'changes'
     default:
       return null
   }
@@ -2258,7 +2263,300 @@ function withCompactWorldFeedDetail(entry: WorldFeedEntry): WorldFeedEntry {
   }
 }
 
-function buildWorldFeedEntryFromTranscriptEntry(input: {
+function readFeedSummaryMetadata(turn: WorldPromptTurn): Record<string, unknown> {
+  const value = turn.metadata?.feedSummary
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readFeedSummaryString(record: Record<string, unknown>, key: string) {
+  const value = record[key]
+  return typeof value === 'string' ? stripInternalPlannerDiagnostics(value).replace(/\s+/g, ' ').trim() : ''
+}
+
+function uniqueWorldFeedKeys(keys: Array<string | null | undefined>) {
+  return Array.from(new Set(keys.filter((key): key is string => Boolean(key && key.trim()))))
+}
+
+function latestWorldFeedEventTime(events: WorldPromptEvent[], fallback: string) {
+  return events.reduce((latest, event) => (
+    new Date(event.createdAt).getTime() > new Date(latest).getTime() ? event.createdAt : latest
+  ), fallback)
+}
+
+function describeWorldFeedCounts(input: {
+  addedCount: number
+  changedCount: number
+  relationshipCount: number
+  mediaCount: number
+  wikiCount: number
+}) {
+  return [
+    input.addedCount > 0 ? `${input.addedCount} new` : null,
+    input.changedCount > 0 ? `${input.changedCount} changed` : null,
+    input.relationshipCount > 0 ? `${input.relationshipCount} link${input.relationshipCount === 1 ? '' : 's'}` : null,
+    input.mediaCount > 0 ? `${input.mediaCount} media` : null,
+    input.wikiCount > 0 ? `${input.wikiCount} wiki` : null,
+  ].filter(Boolean).join(' / ')
+}
+
+function primaryWorldFeedFilter(input: {
+  addedCount: number
+  changedCount: number
+  relationshipCount: number
+  mediaCount: number
+}): WorldFeedFilter {
+  if (input.addedCount > 0) return 'additions'
+  if (input.relationshipCount > 0) return 'relationships'
+  if (input.changedCount > 0) return 'changes'
+  if (input.mediaCount > 0) return 'media'
+  return 'changes'
+}
+
+function relatedWorldFeedFilters(input: {
+  addedCount: number
+  changedCount: number
+  relationshipCount: number
+  mediaCount: number
+  suggestionCount: number
+}) {
+  const filters: WorldFeedFilter[] = []
+  if (input.addedCount > 0) filters.push('additions')
+  if (input.changedCount > 0) filters.push('changes')
+  if (input.relationshipCount > 0) filters.push('relationships')
+  if (input.mediaCount > 0) filters.push('media')
+  if (input.suggestionCount > 0) filters.push('suggestions')
+  return filters
+}
+
+function buildTurnFeedSummary(input: {
+  turn: WorldPromptTurn
+  events: WorldPromptEvent[]
+  lens?: WorldPromptTurnLens
+  entityByKey: Map<string, WorldEntity>
+  relationshipByKey: Map<string, WorldRelationship>
+  active?: boolean
+}): { parent: WorldFeedEntry; children: WorldFeedEntry[] } | null {
+  const parsedEvents = input.events
+    .map((event) => {
+      const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+      return parsed.success ? { event, payload: parsed.data } : null
+    })
+    .filter((entry): entry is { event: WorldPromptEvent; payload: ReturnType<typeof worldPromptEventPayloadSchema.parse> } => Boolean(entry))
+
+  const lens = input.lens
+  const createOpEntityKeys: string[] = []
+  const changedOpEntityKeys: string[] = []
+  let sawAppliedOpWithPlannerOp = false
+  for (const { event, payload } of parsedEvents) {
+    if (event.eventType !== 'op_applied') continue
+    const appliedEntityKeys = (payload.applied?.worldEntities ?? []).map((entity) => entity.key)
+    if (!payload.op) {
+      createOpEntityKeys.push(...appliedEntityKeys)
+      continue
+    }
+    sawAppliedOpWithPlannerOp = true
+    if (payload.op.op === 'upsert_entity' && (!payload.op.payload.targetEntityKey || payload.op.metadata?.projectedCreate === true)) {
+      createOpEntityKeys.push(...appliedEntityKeys)
+    } else {
+      changedOpEntityKeys.push(...appliedEntityKeys)
+    }
+  }
+  const addedEntityKeys = uniqueWorldFeedKeys(
+    createOpEntityKeys.length > 0 || sawAppliedOpWithPlannerOp
+      ? createOpEntityKeys
+      : lens
+        ? lens.entityKeys.filter((key) => lens.entityChangeKinds[key] === 'added')
+        : [],
+  )
+  const changedEntityKeys = uniqueWorldFeedKeys([
+    ...changedOpEntityKeys,
+    ...(lens
+      ? lens.entityKeys.filter((key) => lens.entityChangeKinds[key] && lens.entityChangeKinds[key] !== 'added' && lens.entityChangeKinds[key] !== 'touched')
+      : []),
+  ].filter((key) => !addedEntityKeys.includes(key)))
+  const mediaLabels: string[] = []
+  const wikiLabels: string[] = []
+  const assistantNotes: string[] = []
+  const completionNotes: string[] = []
+  const suggestions: WorldPromptSuggestion[] = []
+  const auditTouchedEntityKeys: string[] = []
+  const auditRelationshipKeys: string[] = []
+
+  for (const { event, payload } of parsedEvents) {
+    if (event.eventType === 'assistant_note' && payload.note) {
+      assistantNotes.push(stripInternalPlannerDiagnostics(payload.note))
+    }
+    if (event.eventType === 'turn_completed' && payload.note) {
+      completionNotes.push(stripInternalPlannerDiagnostics(payload.note))
+    }
+    if (event.eventType === 'queue_started') {
+      mediaLabels.push(payload.queue?.type === 'cinematic_generation' ? 'Cinematic queued' : 'Image queued')
+    }
+    if (event.eventType === 'op_applied') {
+      if (payload.op?.op === 'update_world_wiki_metadata') {
+        wikiLabels.push(payload.op.payload.target === 'view' ? 'Wiki page updated' : 'Overview updated')
+      }
+      const audit = payload.audit && typeof payload.audit === 'object' ? payload.audit as Record<string, unknown> : {}
+      const sequenceAudit = payload.sequencePatchAudit && typeof payload.sequencePatchAudit === 'object' ? payload.sequencePatchAudit as Record<string, unknown> : {}
+      for (const key of [
+        ...(Array.isArray(audit.touchedEntityKeys) ? audit.touchedEntityKeys : []),
+        ...(typeof audit.targetEntityKey === 'string' ? [audit.targetEntityKey] : []),
+        ...(Array.isArray(sequenceAudit.touchedEntityKeys) ? sequenceAudit.touchedEntityKeys : []),
+      ]) {
+        if (typeof key === 'string') auditTouchedEntityKeys.push(key)
+      }
+      for (const key of [
+        ...(Array.isArray(audit.touchedRelationshipKeys) ? audit.touchedRelationshipKeys : []),
+        ...(Array.isArray(audit.createdRelationshipKeys) ? audit.createdRelationshipKeys : []),
+        ...(Array.isArray(sequenceAudit.createdRelationshipKeys) ? sequenceAudit.createdRelationshipKeys : []),
+        ...(Array.isArray(sequenceAudit.archivedRelationshipKeys) ? sequenceAudit.archivedRelationshipKeys : []),
+      ]) {
+        if (typeof key === 'string') auditRelationshipKeys.push(key)
+      }
+      for (const result of payload.applied?.worldResults ?? []) {
+        mediaLabels.push(result.title || 'Output created')
+      }
+    }
+    if (payload.suggestions.length > 0) {
+      suggestions.push(...payload.suggestions)
+    }
+  }
+  const touchedEntityKeys = uniqueWorldFeedKeys([
+    ...addedEntityKeys,
+    ...changedEntityKeys,
+    ...(lens?.entityKeys ?? []),
+    ...auditTouchedEntityKeys,
+  ])
+  const relationshipKeys = uniqueWorldFeedKeys([...(lens?.relationshipKeys ?? []), ...auditRelationshipKeys])
+
+  const feedSummary = readFeedSummaryMetadata(input.turn)
+  const metadataTitle = readFeedSummaryString(feedSummary, 'title')
+  const metadataSummary = readFeedSummaryString(feedSummary, 'summary')
+  const metadataProminentEntityKey = readFeedSummaryString(feedSummary, 'prominentEntityKey')
+  const addedEntities = addedEntityKeys.map((key) => input.entityByKey.get(key)).filter((entity): entity is WorldEntity => Boolean(entity))
+  const changedEntities = changedEntityKeys.map((key) => input.entityByKey.get(key)).filter((entity): entity is WorldEntity => Boolean(entity))
+  const counts = {
+    addedCount: addedEntityKeys.length,
+    changedCount: changedEntityKeys.length,
+    relationshipCount: relationshipKeys.length,
+    mediaCount: mediaLabels.length,
+    wikiCount: wikiLabels.length,
+    suggestionCount: suggestions.length,
+  }
+  const countSummary = describeWorldFeedCounts(counts)
+  const summaryText = metadataSummary
+    || stripInternalPlannerDiagnostics(input.turn.assistantSummary)
+    || completionNotes.find(Boolean)
+    || assistantNotes.find(Boolean)
+    || (countSummary ? `Applied ${countSummary}.` : input.turn.prompt)
+  const title = metadataTitle
+    || (input.active
+      ? 'Applying world changes'
+      : addedEntities.length === 1 && counts.changedCount === 0 && counts.relationshipCount <= 1
+        ? `New ${labelForWorldEntity(addedEntities[0].nodeType)}: ${addedEntities[0].name}`
+        : counts.addedCount > 0
+          ? 'New canon added'
+          : counts.relationshipCount > 0
+            ? 'Relationships updated'
+            : counts.mediaCount > 0
+              ? 'Media updated'
+              : counts.wikiCount > 0
+                ? 'Wiki updated'
+                : 'Canon updated')
+  const prominentEntityKey = metadataProminentEntityKey
+    || addedEntityKeys[0]
+    || changedEntityKeys[0]
+    || lens?.rootEntityKey
+    || null
+  const relatedFilters = relatedWorldFeedFilters(counts)
+  const filter = primaryWorldFeedFilter(counts)
+  const createdAt = input.active ? input.turn.createdAt : latestWorldFeedEventTime(input.events, input.turn.updatedAt || input.turn.createdAt)
+  const connectedEntityKeys = uniqueWorldFeedKeys([
+    ...(prominentEntityKey ? [prominentEntityKey] : []),
+    ...touchedEntityKeys,
+  ])
+  const thumbnailEntityKeys = addedEntityKeys.length > 0
+    ? addedEntityKeys.slice(0, 4)
+    : connectedEntityKeys.slice(0, 4)
+  const changedFields = [
+    countSummary || null,
+    input.active ? input.turn.status : null,
+  ].filter((value): value is string => Boolean(value))
+  const fullDetail = [
+    summaryText,
+    input.turn.prompt ? `Prompt: ${input.turn.prompt}` : '',
+    addedEntities.length > 0 ? `New entities: ${addedEntities.map((entity) => entity.name).join(', ')}` : '',
+    changedEntities.length > 0 ? `Changed entities: ${changedEntities.map((entity) => entity.name).join(', ')}` : '',
+    relationshipKeys.length > 0 ? `Relationships: ${relationshipKeys.map((key) => {
+      const relationship = input.relationshipByKey.get(key)
+      if (!relationship) return key
+      const source = input.entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
+      const target = input.entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
+      return `${source} ${relationship.verb.replace(/_/g, ' ')} ${target}`
+    }).join('; ')}` : '',
+    wikiLabels.length > 0 ? `Wiki: ${wikiLabels.join(', ')}` : '',
+    mediaLabels.length > 0 ? `Media: ${mediaLabels.join(', ')}` : '',
+  ].filter(Boolean).join('\n\n')
+
+  const parent = withCompactWorldFeedDetail({
+    id: input.active ? `active-turn:${input.turn.id}` : `turn:${input.turn.id}`,
+    createdAt,
+    kind: input.active ? 'active_turn' : 'turn_update',
+    filter,
+    relatedFilters,
+    title,
+    detail: summaryText,
+    fullDetail,
+    badge: input.active ? (input.turn.status === 'queued' ? 'Queued' : 'Running') : 'World Update',
+    tone: input.active ? 'working' : 'success',
+    thumbnailEntityKeys,
+    connectedEntityKeys,
+    changedFields,
+    audit: {
+      prompt: input.turn.prompt,
+      assistantSummary: summaryText,
+      addedEntityKeys,
+      changedEntityKeys,
+      relationshipKeys,
+      wikiLabels,
+      mediaLabels,
+      suggestionCount: suggestions.length,
+    },
+    turnId: input.turn.id,
+    sortOrder: 0,
+    turnLens: lens,
+    suggestions: suggestions.slice(0, 3),
+  } satisfies WorldFeedEntry)
+
+  const children = addedEntities.map((entity, index) => withCompactWorldFeedDetail({
+    id: `turn:${input.turn.id}:entity:${entity.key}`,
+    createdAt,
+    kind: 'entity_created',
+    filter: 'additions',
+    relatedFilters: ['additions'],
+    title: entity.name,
+    detail: entity.summary || entity.context || labelForWorldEntity(entity.nodeType),
+    fullDetail: entity.context || entity.summary || labelForWorldEntity(entity.nodeType),
+    badge: 'New Entity',
+    tone: 'success',
+    entityKey: entity.key,
+    entityNodeType: entity.nodeType,
+    thumbnailEntityKeys: [entity.key],
+    connectedEntityKeys: [entity.key],
+    parentTurnId: input.turn.id,
+    turnId: input.turn.id,
+    sortOrder: index + 1,
+    turnLens: lens,
+  } satisfies WorldFeedEntry))
+
+  if (!input.active && parent.detail.trim().length === 0 && children.length === 0 && relatedFilters.length === 0) {
+    return null
+  }
+
+  return { parent, children }
+}
+
+export function buildWorldFeedEntryFromTranscriptEntry(input: {
   entry: WorldPromptTranscriptEntry
   relationshipByKey: Map<string, WorldRelationship>
 }): WorldFeedEntry | null {
@@ -2609,47 +2907,90 @@ export function buildWorldFeedViewModel(input: {
   now?: Date
 }): WorldFeedViewModel {
   const relationshipByKey = new Map((input.relationships ?? []).map((relationship) => [relationship.key, relationship]))
-  const transcriptEntries = buildWorldPromptTranscriptEntries({
-    events: input.events,
-    messages: input.messages,
-    entityByKey: input.entityByKey,
-    turns: input.turns,
-  })
-  const entries = transcriptEntries
-    .map((entry) => buildWorldFeedEntryFromTranscriptEntry({ entry, relationshipByKey }))
-    .filter((entry): entry is WorldFeedEntry => Boolean(entry))
-    .map((entry) => withCompactWorldFeedDetail(entry))
+  const turnLensByTurnId = buildWorldPromptTurnLenses({ events: input.events, turns: input.turns })
+  const eventsByTurnId = new Map<string, WorldPromptEvent[]>()
+  for (const event of input.events) {
+    const list = eventsByTurnId.get(event.turnId) ?? []
+    list.push(event)
+    eventsByTurnId.set(event.turnId, list)
+  }
 
-  const activeTurnEntry = input.activeTurn && ['queued', 'streaming'].includes(input.activeTurn.status)
-    ? withCompactWorldFeedDetail({
-        id: `active-turn:${input.activeTurn.id}`,
-        createdAt: input.activeTurn.createdAt,
-        kind: 'active_turn',
-        filter: 'all',
-        title: 'Generating world update',
-        detail: input.activeTurn.prompt,
-        fullDetail: input.activeTurn.prompt,
-        badge: input.activeTurn.status === 'queued' ? 'Queued' : 'Running',
-        tone: 'working',
-        turnId: input.activeTurn.id,
-      } satisfies WorldFeedEntry)
-    : null
+  const suggestionEntries = (input.suggestions ?? []).slice(0, 12).map((suggestion, index) => withCompactWorldFeedDetail({
+    id: `suggestion:${suggestion.id}`,
+    createdAt: (() => {
+      const value = (suggestion as unknown as { createdAt?: unknown }).createdAt
+      return typeof value === 'string' ? value : input.now?.toISOString() ?? new Date().toISOString()
+    })(),
+    kind: 'suggestion',
+    filter: 'suggestions',
+    relatedFilters: ['suggestions'],
+    title: suggestion.label || suggestion.summary || 'Suggested next move',
+    detail: suggestion.summary || suggestion.prompt,
+    fullDetail: suggestion.prompt || suggestion.summary,
+    badge: 'Suggestion',
+    tone: 'normal',
+    suggestions: [suggestion],
+    sortOrder: index,
+  } satisfies WorldFeedEntry))
+
+  const turnEntries: WorldFeedEntry[] = []
+  let activeTurnEntry: WorldFeedEntry | null = null
+  for (const turn of input.turns ?? []) {
+    const isActive = Boolean(input.activeTurn && input.activeTurn.id === turn.id && ['queued', 'streaming'].includes(input.activeTurn.status))
+    const result = buildTurnFeedSummary({
+      turn: isActive && input.activeTurn ? input.activeTurn : turn,
+      events: eventsByTurnId.get(turn.id) ?? [],
+      lens: turnLensByTurnId.get(turn.id),
+      entityByKey: input.entityByKey,
+      relationshipByKey,
+      active: isActive,
+    })
+    if (!result) continue
+    if (isActive) {
+      activeTurnEntry = result.parent
+      turnEntries.push(result.parent)
+    } else {
+      turnEntries.push(result.parent, ...result.children)
+    }
+  }
+
+  if (input.activeTurn && ['queued', 'streaming'].includes(input.activeTurn.status) && !activeTurnEntry) {
+    const result = buildTurnFeedSummary({
+      turn: input.activeTurn,
+      events: eventsByTurnId.get(input.activeTurn.id) ?? [],
+      lens: turnLensByTurnId.get(input.activeTurn.id),
+      entityByKey: input.entityByKey,
+      relationshipByKey,
+      active: true,
+    })
+    if (result) {
+      activeTurnEntry = result.parent
+      turnEntries.push(result.parent)
+    }
+  }
 
   const sortedEntries = [
-    ...(activeTurnEntry ? [activeTurnEntry] : []),
-    ...entries,
-  ].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime() || right.id.localeCompare(left.id))
+    ...turnEntries,
+    ...suggestionEntries,
+  ].sort((left, right) => {
+    const timeDelta = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    if (timeDelta !== 0) return timeDelta
+    if (left.turnId && right.turnId && left.turnId === right.turnId) {
+      return (left.sortOrder ?? 0) - (right.sortOrder ?? 0)
+    }
+    return right.id.localeCompare(left.id)
+  })
 
   const countsByFilter = WORLD_FEED_FILTERS.reduce<Record<WorldFeedFilter, number>>((counts, filter) => {
     counts[filter.key] = filter.key === 'all'
       ? sortedEntries.length
-      : sortedEntries.filter((entry) => entry.filter === filter.key).length
+      : sortedEntries.filter((entry) => entry.filter === filter.key || entry.relatedFilters?.includes(filter.key)).length
     return counts
   }, {
     all: 0,
-    entities: 0,
+    additions: 0,
+    changes: 0,
     relationships: 0,
-    wiki: 0,
     media: 0,
     suggestions: 0,
   })

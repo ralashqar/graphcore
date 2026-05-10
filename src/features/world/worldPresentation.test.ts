@@ -1231,7 +1231,7 @@ test('buildWorldPromptTranscriptEntries renders update rows for refined entities
   assert.ok(entries.some((entry) => entry.kind === 'relationship_updated' && entry.label === 'Updated link between Hero and world.group.order' && !entry.detail))
 })
 
-test('buildWorldFeedViewModel derives entity and relationship update cards from prompt events', () => {
+test('buildWorldFeedViewModel derives one turn card plus new entity child rows', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
   const order = createWorldPresentationTestEntity('world.group.order', 'Order', 'group')
   const relationship: WorldRelationship = {
@@ -1286,57 +1286,46 @@ test('buildWorldFeedViewModel derives entity and relationship update cards from 
     now: new Date('2026-04-22T10:02:00.000Z'),
   })
 
-  const entityEntry = feed.entries.find((entry) => entry.kind === 'entity_created')
-  assert.equal(entityEntry?.filter, 'entities')
-  assert.equal(entityEntry?.entityKey, hero.key)
-  assert.equal(entityEntry?.title, 'Added Hero')
+  const turnEntry = feed.entries.find((entry) => entry.kind === 'turn_update')
+  assert.equal(turnEntry?.filter, 'additions')
+  assert.deepEqual(turnEntry?.relatedFilters, ['additions', 'relationships'])
+  assert.equal(turnEntry?.title, 'New Character: Hero')
+  assert.deepEqual(turnEntry?.thumbnailEntityKeys, [hero.key])
+  assert.deepEqual(turnEntry?.audit?.relationshipKeys, [relationship.key])
 
-  const relationshipEntry = feed.entries.find((entry) => entry.kind === 'relationship_created')
-  assert.equal(relationshipEntry?.filter, 'relationships')
-  assert.equal(relationshipEntry?.relationshipKey, relationship.key)
-  assert.equal(relationshipEntry?.sourceLabel, 'Hero')
-  assert.equal(relationshipEntry?.targetLabel, 'Order')
-  assert.equal(relationshipEntry?.relationshipVerb, 'protected_by')
-  assert.deepEqual(relationshipEntry?.thumbnailEntityKeys, [hero.key, order.key])
-  assert.deepEqual(relationshipEntry?.connectedEntityKeys, [hero.key, order.key])
-  assert.equal(relationshipEntry?.compactDetail, 'The order shields the heir in secret.')
-  assert.deepEqual(relationshipEntry?.changedFields, ['protected by'])
-  assert.equal(feed.countsByFilter.entities, 1)
+  const entityEntry = feed.entries.find((entry) => entry.kind === 'entity_created' && entry.parentTurnId === turn.id)
+  assert.equal(entityEntry?.filter, 'additions')
+  assert.equal(entityEntry?.entityKey, hero.key)
+  assert.equal(entityEntry?.title, 'Hero')
+
+  assert.equal(feed.entries.some((entry) => entry.kind === 'relationship_created'), false)
+  assert.equal(feed.countsByFilter.additions, 2)
   assert.equal(feed.countsByFilter.relationships, 1)
   assert.equal(feed.groups[0]?.label, 'Just now')
 })
 
-test('buildWorldFeedViewModel keeps long AI responses compact while preserving full detail', () => {
+test('buildWorldFeedViewModel keeps long turn summaries compact while preserving full detail', () => {
   const longResponse = [
     'Expanded Anya’s first address scene into a screenplay-style canon pass with crowd beats and Ilya’s silent reactions.',
     'The scene now tracks the pressure of public accountability, the risk of revenge, and the exact emotional handoff from survival to civic leadership.',
     'Additional connective tissue clarifies why the crowd listens and what Anya refuses to become.',
   ].join(' ')
-  const turn = makeTurn({ id: 't-long-ai', prompt: 'Expand Anya address.' })
+  const turn = makeTurn({ id: 't-long-ai', prompt: 'Expand Anya address.', assistantSummary: longResponse })
   const feed = buildWorldFeedViewModel({
     turns: [turn],
-    messages: [{
-      id: 'm-ai',
-      sessionId: 's1',
-      turnId: turn.id,
-      draftId: 'd1',
-      role: 'assistant',
-      content: longResponse,
-      metadata: {},
-      createdAt: '2026-04-22T10:01:00.000Z',
-    }],
+    messages: [],
     events: [],
     entityByKey: new Map(),
     now: new Date('2026-04-22T10:02:00.000Z'),
   })
 
-  const aiEntry = feed.entries.find((entry) => entry.kind === 'assistant_note')
-  assert.equal(aiEntry?.fullDetail, longResponse)
-  assert.ok((aiEntry?.compactDetail?.length ?? 0) <= 173)
-  assert.match(aiEntry?.compactDetail ?? '', /\.\.\.$/)
+  const turnEntry = feed.entries.find((entry) => entry.kind === 'turn_update')
+  assert.match(turnEntry?.fullDetail ?? '', /^Expanded Anya/)
+  assert.ok((turnEntry?.compactDetail?.length ?? 0) <= 148)
+  assert.match(turnEntry?.compactDetail ?? '', /\.\.\.$/)
 })
 
-test('buildWorldFeedViewModel derives canon transaction and patch audit cards', () => {
+test('buildWorldFeedViewModel folds structural relationship patches into one relationship turn card', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
   const protocol = createWorldPresentationTestEntity('world.concept.protocol', 'Protocol', 'concept')
   const turn = makeTurn({ id: 't-transaction', prompt: 'Rewire the stewardship link.' })
@@ -1390,17 +1379,15 @@ test('buildWorldFeedViewModel derives canon transaction and patch audit cards', 
     now: new Date('2026-04-22T10:02:00.000Z'),
   })
 
-  const transactionEntry = feed.entries.find((entry) => entry.kind === 'canon_transaction')
-  assert.equal(transactionEntry?.title, 'Canon intent classified')
-  assert.equal(transactionEntry?.transaction?.risk, 'high')
-
-  const rewireEntry = feed.entries.find((entry) => entry.kind === 'relationship_rewired')
-  assert.equal(rewireEntry?.filter, 'relationships')
-  assert.deepEqual(rewireEntry?.thumbnailEntityKeys, [hero.key, protocol.key])
-  assert.deepEqual(rewireEntry?.changedFields, ['1 links rewired'])
+  const turnEntry = feed.entries.find((entry) => entry.kind === 'turn_update')
+  assert.equal(turnEntry?.filter, 'relationships')
+  assert.deepEqual(turnEntry?.thumbnailEntityKeys, [hero.key, protocol.key])
+  assert.deepEqual(turnEntry?.audit?.relationshipKeys, ['rel-1'])
+  assert.equal(feed.entries.some((entry) => entry.kind === 'canon_transaction'), false)
+  assert.equal(feed.entries.some((entry) => entry.kind === 'relationship_rewired'), false)
 })
 
-test('buildWorldFeedViewModel derives node evolution and canon fact update cards', () => {
+test('buildWorldFeedViewModel folds node evolution and canon fact updates into one change card', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
   const updatedHero = {
     ...hero,
@@ -1486,18 +1473,15 @@ test('buildWorldFeedViewModel derives node evolution and canon fact update cards
     now: new Date('2026-04-22T10:02:00.000Z'),
   })
 
-  const decisionEntry = feed.entries.find((entry) => entry.kind === 'node_evolution')
-  assert.equal(decisionEntry?.filter, 'wiki')
-  assert.equal(decisionEntry?.title, 'Node evolution decided')
-  assert.deepEqual(decisionEntry?.connectedEntityKeys, [hero.key])
-
-  const canonEntry = feed.entries.find((entry) => entry.kind === 'entity_canon_updated')
-  assert.equal(canonEntry?.filter, 'entities')
-  assert.equal(canonEntry?.title, 'Hero current state updated')
-  assert.deepEqual(canonEntry?.changedFields, ['1 facts added', 'current state changed'])
+  const turnEntry = feed.entries.find((entry) => entry.kind === 'turn_update')
+  assert.equal(turnEntry?.filter, 'changes')
+  assert.deepEqual(turnEntry?.connectedEntityKeys, [hero.key])
+  assert.deepEqual(turnEntry?.audit?.changedEntityKeys, [hero.key])
+  assert.equal(feed.entries.some((entry) => entry.kind === 'node_evolution'), false)
+  assert.equal(feed.entries.some((entry) => entry.kind === 'entity_canon_updated'), false)
 })
 
-test('buildWorldFeedViewModel includes active running turn and turn summary counts', () => {
+test('buildWorldFeedViewModel includes active running turn and completed turn cards', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
   const activeTurn = makeTurn({
     id: 't-running',
@@ -1534,10 +1518,10 @@ test('buildWorldFeedViewModel includes active running turn and turn summary coun
 
   assert.equal(feed.activeTurnEntry?.kind, 'active_turn')
   assert.equal(feed.entries[0]?.id, `active-turn:${activeTurn.id}`)
-  const summary = feed.entries.find((entry) => entry.kind === 'turn_summary')
-  assert.equal(summary?.detail, '1 entities / 0 links / 0 outputs')
-  assert.equal(summary?.compactDetail, summary?.detail)
+  const summary = feed.entries.find((entry) => entry.kind === 'turn_update')
+  assert.equal(summary?.detail, 'Applied 1 new.')
   assert.equal(summary?.turnId, completedTurn.id)
+  assert.equal(feed.entries.some((entry) => entry.kind === 'turn_summary'), false)
 })
 
 test('buildWorldPromptTranscriptEntries renders derived results as output rows', () => {

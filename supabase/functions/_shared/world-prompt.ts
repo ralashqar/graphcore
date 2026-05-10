@@ -16443,6 +16443,18 @@ async function executeIncrementalWorldPromptTurn(input: {
       projectContext: completedSeedProjectContext,
     })
   }
+  const feedSummary = {
+    summary: assistantSummary,
+    primaryChangeKind: touchedEntityKeys.size > 0
+      ? 'change'
+      : touchedRelationshipKeys.size > 0
+        ? 'relationship'
+        : allGeneratedOps.some((op) => op.op === 'queue_image_generation' || op.op === 'queue_cinematic_generation')
+          ? 'media'
+          : 'wiki',
+    prominentEntityKey: Array.from(touchedEntityKeys)[0] ?? null,
+    changedEntityKeys: Array.from(touchedEntityKeys),
+  }
   turn = await updateTurn(input.client, turn.id, {
     status: 'completed',
     approval_state: 'not_required',
@@ -16478,6 +16490,7 @@ async function executeIncrementalWorldPromptTurn(input: {
       incrementalPlan: manifest,
       completedWorkItemIds: completedWorkItems.map((item) => item.id),
       failedWorkItems: failedWorkItems.map((entry) => ({ id: entry.item.id, label: entry.item.label, reason: entry.reason })),
+      feedSummary,
     },
   })
   const nextSessionMemoryState = buildSessionMemoryState({
@@ -17508,6 +17521,20 @@ export async function startWorldPromptTurn(input: {
         projectContext: completedSeedProjectContext,
       })
     }
+    const feedSummary = {
+      summary: assistantSummary,
+      primaryChangeKind: touchedEntityKeys.size > 0
+        ? 'change'
+        : touchedRelationshipKeys.size > 0
+          ? 'relationship'
+          : autoRunnableOps.some((op) => op.op === 'queue_image_generation' || op.op === 'queue_cinematic_generation')
+            ? 'media'
+            : execution.mode === 'advisory'
+              ? 'suggestion'
+              : 'wiki',
+      prominentEntityKey: Array.from(touchedEntityKeys)[0] ?? null,
+      changedEntityKeys: Array.from(touchedEntityKeys),
+    }
     turn = await updateTurn(input.client, turn.id, {
       status: 'completed',
       approval_state: 'not_required',
@@ -17549,6 +17576,7 @@ export async function startWorldPromptTurn(input: {
         suggestionIds: persistedSuggestions.map((suggestion) => suggestion.id),
         threadDiagnostics,
         tokenUsage: tokenUsageRecorder.summary() ?? undefined,
+        feedSummary,
       },
     })
     const nextSessionMemoryState = buildSessionMemoryState({
