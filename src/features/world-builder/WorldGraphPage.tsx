@@ -14,7 +14,6 @@ import {
 import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 
 import { resolveAssetSourceUrl } from '../../domain/assets'
-import { cacheSignedAssetResponse, getCachedAssetObjectUrl, getCachedSignedAssetUrl, setCachedSignedAssetUrl } from '../../domain/assetUrlCache'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../../domain/graphcore'
 import type { ProjectContext } from '../../domain/projectContext'
@@ -152,9 +151,10 @@ import {
 import type { GraphWorkspaceProps } from '../graph/types'
 import { ProjectWorldOnboarding } from '../onboarding/ProjectWorldOnboarding'
 import { CompactPromptComposer } from '../prompts/CompactPromptComposer'
-import { supabase } from '../../utils/supabase'
+import type { SignProjectAssetUrlsInput, SignedProjectAssetUrl } from '../../application/ports'
 import { WORLD_NODE_SOURCE_HANDLE, WORLD_NODE_TARGET_HANDLE, edgeTypes, nodeTypes, type WorldFlowEdgeData } from './graph/WorldGraphFlow'
 import { resolveWorldNodeCenterCollision, worldFlowNodeIntersectsViewport, worldNodeCollisionPadding, worldNodeDimensions, worldNodePointerHitRadius, worldNodeVisualModeFor } from './graph/worldGraphGeometry'
+import { useWorldAssetUrls } from './hooks/useWorldAssetUrls'
 import { useWorldPromptPanelState } from './hooks/useWorldPromptPanelState'
 import { WorldFeedPanel } from './feed/WorldFeedPanel'
 import { WorldPromptChatPanel } from './prompt/WorldPromptPanels'
@@ -171,29 +171,10 @@ const LegacyGraphWorkspace = lazy(() =>
   import('../graphWorkspace').then((module) => ({ default: module.GraphWorkspace })),
 )
 
-type SignedAssetUrlResponse = {
-  urls?: Array<{
-    assetKey?: string
-    signedUrl?: string
-  }>
-}
-
-const worldGraphSignedAssetUrlCache = new Map<string, { storagePath: string; url: string }>()
 const WORLD_FEED_INITIAL_RENDER_LIMIT = 80
 const WORLD_FEED_RENDER_INCREMENT = 60
 const WIKI_SECTION_REVEAL_DELAY_MS = 120
 const WIKI_SECTION_REVEAL_STEP_MS = 90
-
-function isWorldGraphSignableAsset(asset: AssetDefinition | null | undefined) {
-  if (!asset) return false
-  if (asset.kind !== 'image' && asset.kind !== 'video' && asset.kind !== 'mesh') return false
-  if (resolveAssetSourceUrl(asset)) return false
-  if (isPendingVisualAsset(asset)) return false
-  const storagePath = asset.storagePath?.trim() ?? ''
-  if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) return false
-  const storageBucket = typeof asset.metadata.storageBucket === 'string' ? asset.metadata.storageBucket.trim() : ''
-  return Boolean(storageBucket) || storagePath.startsWith('generated/')
-}
 
 function isPendingVisualAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
@@ -294,6 +275,8 @@ type WorldGraphPageProps = {
   onGetAppGenerationStatus?: (jobId: string) => Promise<AppGenerationStatusResponse> | AppGenerationStatusResponse
   onCancelAppGenerationJob?: (jobId: string) => Promise<AppGenerationCancelResponse> | AppGenerationCancelResponse
   onGetAppPreviewSession?: (jobId: string) => Promise<AppPreviewSessionResponse> | AppPreviewSessionResponse
+  onSignProjectAssetUrls: (input: SignProjectAssetUrlsInput) => Promise<SignedProjectAssetUrl[]> | SignedProjectAssetUrl[]
+  onLoadProjectDraftMetadata: (draftId: string) => Promise<Record<string, unknown>> | Record<string, unknown>
   onRefreshLiveSnapshot: () => Promise<void> | void
   onCompleteProjectOnboarding: (values: { projectContext: ProjectContext; projectName: string }) => Promise<void> | void
   onStartWorldSeedInference: (input: {
@@ -702,12 +685,6 @@ function appScreenMockupAssetKey(entity: WorldEntity): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function readEntityReferenceSheetAssetKey(entity: WorldEntity | null | undefined) {
-  const metadata = readLooseRecord(entity?.metadata)
-  const value = metadata.referenceSheetAssetKey
-  return typeof value === 'string' ? value.trim() : ''
-}
-
 function appEntityHasVisualSpec(entity: WorldEntity): boolean {
   const app = readAppCustomProperties(entity)
   const metadata = readLooseRecord(entity.metadata)
@@ -879,6 +856,8 @@ export function WorldGraphPage({
   onGetAppGenerationStatus,
   onCancelAppGenerationJob,
   onGetAppPreviewSession,
+  onSignProjectAssetUrls,
+  onLoadProjectDraftMetadata,
   onRefreshLiveSnapshot,
   onCompleteProjectOnboarding: _onCompleteProjectOnboarding,
   onStartWorldSeedInference,
@@ -974,7 +953,6 @@ export function WorldGraphPage({
   const [showInteractivePrototype, setShowInteractivePrototype] = useState(false)
   const [interactivePrototypeState, setInteractivePrototypeState] = useState<InteractiveRuntimeState | null>(null)
   const [interactivePrototypeLog, setInteractivePrototypeLog] = useState<string[]>([])
-  const [signedAssetUrlsByKey, setSignedAssetUrlsByKey] = useState<Map<string, string>>(() => new Map())
   const [hoveredWorldNodeKey, setHoveredWorldNodeKey] = useState<string | null>(null)
   const [hoverRevealTargetNodeKey, setHoverRevealTargetNodeKey] = useState<string | null>(null)
   const [hoverRevealVisible, setHoverRevealVisible] = useState(false)
@@ -1668,155 +1646,19 @@ export function WorldGraphPage({
   const usageByEntityKey = useMemo(() => (
     new Map(worldEntities.map((entity) => [entity.key, getWorldEntityUsage(entity, snapshotGraphs)]))
   ), [snapshotGraphs, worldEntities])
-  useEffect(() => {
-    let cancelled = false
-    const desiredAssetKeys = new Set<string>()
-
-    for (const entity of worldEntities) {
-      const linkedDefinition = entity.linkedDefinitionKey ? definitionByKey.get(entity.linkedDefinitionKey) ?? null : null
-      const previewAssetKey = entity.thumbnailAssetKey ?? linkedDefinition?.iconAssetKey ?? null
-      if (previewAssetKey) desiredAssetKeys.add(previewAssetKey)
-      const referenceSheetAssetKey = readEntityReferenceSheetAssetKey(entity)
-      if (referenceSheetAssetKey) desiredAssetKeys.add(referenceSheetAssetKey)
-    }
-
-    for (const result of worldResults) {
-      if (result.previewAssetKey) desiredAssetKeys.add(result.previewAssetKey)
-    }
-
-    const candidateAssets = Array.from(desiredAssetKeys)
-      .map((assetKey) => assetByKey.get(assetKey) ?? null)
-      .filter((asset): asset is AssetDefinition => isWorldGraphSignableAsset(asset))
-
-    const cachedUrls = new Map<string, string>()
-    const candidates = candidateAssets.filter((asset) => {
-      if (signedAssetUrlsByKey.has(asset.key)) return false
-      const cached = worldGraphSignedAssetUrlCache.get(asset.key)
-      if (cached?.storagePath === asset.storagePath) {
-        cachedUrls.set(asset.key, cached.url)
-        return false
-      }
-      return true
-    })
-
-    if (cachedUrls.size > 0) {
-      setSignedAssetUrlsByKey((current) => {
-        const next = new Map(current)
-        for (const [assetKey, signedUrl] of cachedUrls) {
-          next.set(assetKey, signedUrl)
-        }
-        return next
-      })
-    }
-
-    if (candidates.length === 0) return undefined
-
-    const signAssets = async () => {
-      const objectCacheUrls = new Map<string, string>()
-      const assetsNeedingSignedUrls: AssetDefinition[] = []
-      for (const asset of candidates) {
-        const cachedObjectUrl = await getCachedAssetObjectUrl(asset)
-        if (cancelled) return
-        if (cachedObjectUrl) {
-          worldGraphSignedAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: cachedObjectUrl })
-          objectCacheUrls.set(asset.key, cachedObjectUrl)
-        } else {
-          const persistentCachedUrl = getCachedSignedAssetUrl(asset)
-          if (persistentCachedUrl) {
-            const resolvedUrl = await cacheSignedAssetResponse(asset, persistentCachedUrl)
-            if (cancelled) return
-            worldGraphSignedAssetUrlCache.set(asset.key, { storagePath: asset.storagePath, url: resolvedUrl })
-            objectCacheUrls.set(asset.key, resolvedUrl)
-          } else {
-            assetsNeedingSignedUrls.push(asset)
-          }
-        }
-      }
-
-      if (objectCacheUrls.size > 0) {
-        setSignedAssetUrlsByKey((current) => {
-          const next = new Map(current)
-          for (const [assetKey, signedUrl] of objectCacheUrls) {
-            next.set(assetKey, signedUrl)
-          }
-          return next
-        })
-      }
-
-      if (assetsNeedingSignedUrls.length === 0) return
-
-      const byProjectId = new Map<string, AssetDefinition[]>()
-      for (const asset of assetsNeedingSignedUrls) {
-        const groupKey = asset.projectId?.trim() || '__unscoped__'
-        byProjectId.set(groupKey, [...(byProjectId.get(groupKey) ?? []), asset])
-      }
-
-      const nextUrls = new Map<string, string>()
-
-      for (const [projectId, group] of byProjectId) {
-        const response = await supabase.functions.invoke<SignedAssetUrlResponse>('sign-project-asset-urls', {
-          body: {
-            ...(projectId !== '__unscoped__' ? { projectId } : {}),
-            assetKeys: group.map((asset) => asset.key),
-          },
-        })
-
-        if (cancelled) return
-
-        if (response.error) {
-          console.warn('[GraphCore] world graph asset signing failed.', {
-            projectId: projectId === '__unscoped__' ? null : projectId,
-            assetKeys: group.map((asset) => asset.key),
-            message: response.error.message,
-          })
-          continue
-        }
-
-        for (const entry of response.data?.urls ?? []) {
-          const assetKey = entry.assetKey?.trim()
-          const signedUrl = entry.signedUrl?.trim()
-          const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
-          if (!assetKey || !signedUrl || !asset) continue
-          setCachedSignedAssetUrl(asset, signedUrl)
-          const resolvedUrl = await cacheSignedAssetResponse(asset, signedUrl)
-          if (cancelled) return
-          worldGraphSignedAssetUrlCache.set(assetKey, { storagePath: asset.storagePath, url: resolvedUrl })
-          nextUrls.set(assetKey, resolvedUrl)
-        }
-      }
-
-      if (cancelled || nextUrls.size === 0) return
-
-      setSignedAssetUrlsByKey((current) => {
-        const next = new Map(current)
-        for (const [assetKey, signedUrl] of nextUrls) {
-          next.set(assetKey, signedUrl)
-        }
-        return next
-      })
-    }
-
-    void signAssets()
-
-    return () => {
-      cancelled = true
-    }
-  }, [assetByKey, definitionByKey, signedAssetUrlsByKey, worldEntities, worldResults])
-  const imageUrlByEntityKey = useMemo(() => {
-    return new Map(worldEntities.map((entity) => {
-      const linkedDefinition = entity.linkedDefinitionKey ? definitionByKey.get(entity.linkedDefinitionKey) ?? null : null
-      const previewAssetKey = entity.thumbnailAssetKey ?? linkedDefinition?.iconAssetKey ?? null
-      const asset = previewAssetKey ? assetByKey.get(previewAssetKey) ?? null : null
-      return [entity.key, resolveAssetSourceUrl(asset) ?? (previewAssetKey ? signedAssetUrlsByKey.get(previewAssetKey) ?? null : null)]
-    }))
-  }, [assetByKey, definitionByKey, signedAssetUrlsByKey, worldEntities])
-  const referenceSheetUrlByEntityKey = useMemo(() => {
-    return new Map(worldEntities.map((entity) => {
-      const assetKey = readEntityReferenceSheetAssetKey(entity)
-      const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
-      return [entity.key, resolveAssetSourceUrl(asset) ?? (assetKey ? signedAssetUrlsByKey.get(assetKey) ?? null : null)]
-    }))
-  }, [assetByKey, signedAssetUrlsByKey, worldEntities])
+  const {
+    imageUrlByEntityKey,
+    imageUrlByResultKey,
+    referenceSheetUrlByEntityKey,
+    setSignedAssetUrl,
+    signedAssetUrlsByKey,
+  } = useWorldAssetUrls({
+    assetByKey,
+    definitionByKey,
+    worldEntities,
+    worldResults,
+    onSignProjectAssetUrls,
+  })
   const effectiveProjectDraftMetadata = liveProjectDraftMetadata ?? projectDraftMetadata
   useEffect(() => {
     if (worldViewMode !== 'wiki' || !projectDraftId) return
@@ -1825,20 +1667,18 @@ export function WorldGraphPage({
     setLiveWorldConceptImageUrl(null)
 
     const loadLiveWikiHeader = async () => {
-      const draftResponse = await supabase
-        .from('project_drafts')
-        .select('metadata')
-        .eq('id', projectDraftId)
-        .maybeSingle()
-
-      if (cancelled) return
-
-      if (draftResponse.error) {
-        console.warn('[GraphCore][wiki] direct draft metadata reload failed.', draftResponse.error.message)
+      let metadata: Record<string, unknown>
+      try {
+        metadata = await onLoadProjectDraftMetadata(projectDraftId)
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[GraphCore][wiki] direct draft metadata reload failed.', error instanceof Error ? error.message : String(error))
+        }
         return
       }
 
-      const metadata = readLooseRecord(draftResponse.data?.metadata)
+      if (cancelled) return
+
       const worldWiki = readLooseRecord(metadata.worldWiki)
       setLiveProjectDraftMetadata(metadata)
 
@@ -1854,13 +1694,17 @@ export function WorldGraphPage({
         return
       }
 
-      const signedResponse = await supabase.functions.invoke<SignedAssetUrlResponse>('sign-project-asset-urls', {
-        body: { assetKeys: [assetKey] },
-      })
+      let signedEntries: SignedProjectAssetUrl[] = []
+      let signingError: string | null = null
+      try {
+        signedEntries = await onSignProjectAssetUrls({ assetKeys: [assetKey] })
+      } catch (error) {
+        signingError = error instanceof Error ? error.message : String(error)
+      }
 
       if (cancelled) return
 
-      const signedUrl = signedResponse.data?.urls?.find((entry) => entry.assetKey?.trim() === assetKey)?.signedUrl?.trim() ?? ''
+      const signedUrl = signedEntries.find((entry) => entry.assetKey?.trim() === assetKey)?.signedUrl?.trim() ?? ''
       if (signedUrl) setLiveWorldConceptImageUrl(signedUrl)
 
       if (import.meta.env.DEV) {
@@ -1870,7 +1714,7 @@ export function WorldGraphPage({
           hasLogline: Boolean(trimOptionalString(worldWiki.logline)),
           worldConceptAssetKey: assetKey,
           hasSignedConceptUrl: Boolean(signedUrl),
-          signingError: signedResponse.error?.message ?? null,
+          signingError,
         })
       }
     }
@@ -1880,16 +1724,7 @@ export function WorldGraphPage({
     return () => {
       cancelled = true
     }
-  }, [projectDraftId, worldViewMode])
-  const imageUrlByResultKey = useMemo(() => {
-    return new Map(worldResults.map((result) => {
-      const asset = result.previewAssetKey ? assetByKey.get(result.previewAssetKey) ?? null : null
-      return [
-        result.key,
-        resolveAssetSourceUrl(asset) ?? (result.previewAssetKey ? signedAssetUrlsByKey.get(result.previewAssetKey) ?? null : null),
-      ]
-    }))
-  }, [assetByKey, signedAssetUrlsByKey, worldResults])
+  }, [onLoadProjectDraftMetadata, onSignProjectAssetUrls, projectDraftId, worldViewMode])
   const wikiModel = useMemo(() => deriveWorldWiki({
     snapshot: {
       project: {
@@ -4544,11 +4379,7 @@ export function WorldGraphPage({
     try {
       const result = await onGenerateWorldBrandAtlasImage(prompt)
       if (result.signedUrl) {
-        setSignedAssetUrlsByKey((current) => {
-          const next = new Map(current)
-          next.set(result.brandAtlasAssetKey, result.signedUrl ?? '')
-          return next
-        })
+        setSignedAssetUrl(result.brandAtlasAssetKey, result.signedUrl)
       } else if (result.status === 'queued') {
         setBrandAtlasJobId(result.visualJobId ?? null)
         setBrandAtlasGenerating(false)

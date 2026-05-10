@@ -482,7 +482,7 @@ async function readFunctionsErrorPayload<TPayload>(error: FunctionsHttpError | E
   }
 }
 
-type SnapshotLoadResult = {
+export type SnapshotLoadResult = {
   snapshot: ProjectSnapshot
   source: 'supabase' | 'demo'
   reason?: string
@@ -491,7 +491,7 @@ type SnapshotLoadResult = {
 
 export type SnapshotLoadProfile = 'shell' | 'world' | 'content' | 'jobs' | 'full'
 
-type SnapshotLoadOptions = {
+export type SnapshotLoadOptions = {
   profile?: SnapshotLoadProfile
   promptHistoryLimit?: number
   skipCache?: boolean
@@ -2633,6 +2633,8 @@ type SignProjectAssetUrlsResponse = {
   }>
 }
 
+export type SignedProjectAssetUrlEntry = SignProjectAssetUrlsResponse['urls'][number]
+
 const PROJECT_ASSET_SIGNING_BATCH_SIZE = 100
 
 const storageAssetUrlCache = new Map<string, { storagePath: string; url: string; expiresAt: number | null }>()
@@ -2960,6 +2962,38 @@ export async function signProjectAssetUrls(projectId: string, assetKeys: string[
 
   const assets = ((response.data ?? []) as AssetRow[]).map(mapAssetRow)
   return hydrateStorageAssetUrls(projectId, assets)
+}
+
+export async function signProjectAssetUrlEntries(input: SignProjectAssetUrlsRequest) {
+  const cleanKeys = Array.from(new Set(input.assetKeys.map((key) => key.trim()).filter(Boolean)))
+  if (cleanKeys.length === 0) return []
+
+  const response = await supabase.functions.invoke<SignProjectAssetUrlsResponse>('sign-project-asset-urls', {
+    body: {
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      assetKeys: cleanKeys,
+    },
+  })
+
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+
+  return response.data?.urls ?? []
+}
+
+export async function loadProjectDraftMetadata(draftId: string) {
+  const draftResponse = await supabase
+    .from('project_drafts')
+    .select('metadata')
+    .eq('id', draftId)
+    .maybeSingle()
+
+  if (draftResponse.error) {
+    throw new Error(draftResponse.error.message)
+  }
+
+  return readRepositoryRecord(draftResponse.data?.metadata)
 }
 
 function prettifyChoiceKey(value: string) {
@@ -8398,7 +8432,48 @@ export function subscribeWorldPromptEvents(input: {
     })
 
   void channel.subscribe()
-  return channel
+  return {
+    unsubscribe: () => supabase.removeChannel(channel),
+  }
+}
+
+export function subscribeCinematicRunSignals(input: {
+  runIds: string[]
+  onSignal: (runId: string) => void
+}) {
+  const channels = Array.from(new Set(input.runIds.map((runId) => runId.trim()).filter(Boolean))).flatMap((runId) => {
+    const runChannel = supabase
+      .channel(`graphcore-cinematic-run-${runId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'cinematic_runs',
+        filter: `id=eq.${runId}`,
+      }, () => {
+        input.onSignal(runId)
+      })
+      .subscribe()
+
+    const jobChannel = supabase
+      .channel(`graphcore-cinematic-run-jobs-${runId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'cinematic_run_jobs',
+        filter: `run_id=eq.${runId}`,
+      }, () => {
+        input.onSignal(runId)
+      })
+      .subscribe()
+
+    return [runChannel, jobChannel]
+  })
+
+  return {
+    unsubscribe: async () => {
+      await Promise.all(channels.map((channel) => supabase.removeChannel(channel)))
+    },
+  }
 }
 
 export async function compileSnapshot(snapshot: ProjectSnapshot) {

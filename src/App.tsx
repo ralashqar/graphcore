@@ -116,7 +116,6 @@ import {
   resetProjectWorld as persistResetProjectWorld,
   saveCachedProjectSnapshot,
 } from './data/graphcoreRepository'
-import { supabase } from './utils/supabase'
 
 const WorldGraphPage = lazy(() =>
   import('./features/worldGraphPage').then((module) => ({ default: module.WorldGraphPage })),
@@ -2161,7 +2160,7 @@ export default function App() {
   useEffect(() => {
     if (loadedState?.source !== 'supabase' || !snapshot?.draft.id) return
 
-    const channel = workspaceService.subscribeWorldPromptEvents({
+    const subscription = workspaceService.subscribeWorldPromptEvents({
       draftId: snapshot.draft.id,
       onSession: (session) => {
         if (desiredGameSelectionRef.current) return
@@ -2246,7 +2245,7 @@ export default function App() {
     })
 
     return () => {
-      void supabase.removeChannel(channel)
+      void subscription.unsubscribe()
     }
   }, [loadedState?.source, snapshot?.draft.id])
 
@@ -2598,32 +2597,9 @@ export default function App() {
       refreshTimeouts.set(runId, timeout)
     }
 
-    const channels = activeRuns.flatMap((run) => {
-      const runChannel = supabase
-        .channel(`graphcore-cinematic-run-${run.id}`)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'cinematic_runs',
-          filter: `id=eq.${run.id}`,
-        }, () => {
-          noteRealtimeSignal(run.id)
-        })
-        .subscribe()
-
-      const jobChannel = supabase
-        .channel(`graphcore-cinematic-run-jobs-${run.id}`)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'cinematic_run_jobs',
-          filter: `run_id=eq.${run.id}`,
-        }, () => {
-          noteRealtimeSignal(run.id)
-        })
-        .subscribe()
-
-      return [runChannel, jobChannel]
+    const subscription = workspaceService.subscribeCinematicRunSignals({
+      runIds: activeRuns.map((run) => run.id),
+      onSignal: noteRealtimeSignal,
     })
 
     const interval = window.setInterval(() => {
@@ -2641,9 +2617,7 @@ export default function App() {
       cancelled = true
       window.clearInterval(interval)
       refreshTimeouts.forEach((timeout) => window.clearTimeout(timeout))
-      channels.forEach((channel) => {
-        void supabase.removeChannel(channel)
-      })
+      void subscription.unsubscribe()
     }
   }, [activeCinematicRunIdSignature, loadedState?.source, snapshot?.draft.id])
 
@@ -7200,6 +7174,8 @@ export default function App() {
                 onGetAppGenerationStatus={getAppGenerationStatus}
                 onCancelAppGenerationJob={cancelAppGenerationJob}
                 onGetAppPreviewSession={getAppPreviewSession}
+                onSignProjectAssetUrls={(input) => workspaceService.signProjectAssetUrlEntries(input)}
+                onLoadProjectDraftMetadata={(draftId) => workspaceService.loadProjectDraftMetadata(draftId)}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
                 onCompleteProjectOnboarding={handleCompleteProjectOnboarding}
                 onStartWorldSeedInference={startWorldSeedInference}
