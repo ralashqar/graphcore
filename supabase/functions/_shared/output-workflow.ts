@@ -718,6 +718,7 @@ function readText(value: unknown) {
 }
 
 function buildOutputStepAiUsage(input: {
+  run: OutputWorkflowRun
   node: OutputWorkflowNode
   result?: {
     outputs: Record<string, unknown>
@@ -806,8 +807,8 @@ function buildOutputStepAiUsage(input: {
       metadata: {
         workflowId: input.run.workflowId,
         runId: input.run.id,
-        providerMode: readText(asRecord(input.result.metadata).providerMode),
-        providerStatus: readText(asRecord(input.result.metadata).providerStatus),
+        providerMode: readText(asRecord(outputs.video).providerMode),
+        providerStatus: readText(asRecord(outputs.video).providerStatus) || 'COMPLETED',
       },
     })
     return { line, summary: summarizeAiUsageLines([line]) }
@@ -838,9 +839,68 @@ function cachedOutputRunId(node: OutputWorkflowNode) {
   return readText(asRecord(asRecord(node.metadata).execution).lastRunId)
 }
 
+const cachedUpstreamMediaFields = [
+  'image',
+  'coverImage',
+  'primaryReferenceImage',
+  'keyframe',
+  'video',
+  'videos',
+  'videoReferences',
+  'referenceVideos',
+  'assetPack',
+  'asset_pack',
+  'prompt',
+  'providerPrompt',
+  'text',
+  'markdown',
+  'parsedScript',
+  'sceneState',
+  'layoutPlan',
+  'shotPlan',
+  'cinematicReferencePlan',
+  'panels',
+  'images',
+]
+
+function compactOutputWorkflowUpstreamForNodeCache(upstream: Record<string, Record<string, unknown>>) {
+  const normalized = Object.fromEntries(
+    Object.entries(upstream)
+      .map(([key, outputs]) => [key, asRecord(outputs)] as const)
+      .filter(([, outputs]) => hasStoredOutputs(outputs)),
+  )
+  if (jsonByteLength(normalized) <= 900_000) return normalized
+
+  return Object.fromEntries(Object.entries(normalized).map(([key, outputs]) => {
+    if (jsonByteLength(outputs) <= 120_000) return [key, outputs] as const
+    const mediaSafe = Object.fromEntries(
+      cachedUpstreamMediaFields
+        .filter((field) => Object.prototype.hasOwnProperty.call(outputs, field))
+        .map((field) => [field, outputs[field]] as const),
+    )
+    return [
+      key,
+      hasStoredOutputs(mediaSafe)
+        ? mediaSafe
+        : compactRecordForStatus(outputs, 40_000),
+    ] as const
+  }))
+}
+
+function readCachedInputUpstream(node: OutputWorkflowNode) {
+  const execution = asRecord(asRecord(node.metadata).execution)
+  const cached = asRecord(execution.cachedInputUpstream ?? execution.cachedUpstream)
+  return Object.fromEntries(
+    Object.entries(cached)
+      .map(([key, outputs]) => [key, asRecord(outputs)] as const)
+      .filter(([, outputs]) => hasStoredOutputs(outputs)),
+  )
+}
+
 function collectCachedExternalUpstream(input: {
   node: OutputWorkflowNode
   nodesByKey: Map<string, OutputWorkflowNode>
+  stepsByNodeKey?: Map<string, OutputWorkflowRunStep>
   executionNodeKeys: Set<string>
   edges: OutputWorkflowEdge[]
 }) {
@@ -849,10 +909,27 @@ function collectCachedExternalUpstream(input: {
   const staleReusedNodeKeys: string[] = []
   const missingNodeKeys: string[] = []
   const sourceRunIds: string[] = []
+  const cachedInputUpstream = readCachedInputUpstream(input.node)
   for (const edge of input.edges) {
     if (edge.targetNodeKey !== input.node.key || input.executionNodeKeys.has(edge.sourceNodeKey)) continue
     const sourceNode = input.nodesByKey.get(edge.sourceNodeKey)
     if (!sourceNode || !hasStoredOutputs(sourceNode.outputs)) {
+      const cachedStepOutputs = asRecord(input.stepsByNodeKey?.get(edge.sourceNodeKey)?.outputs)
+      if (hasStoredOutputs(cachedStepOutputs)) {
+        outputs[edge.sourceNodeKey] = cachedStepOutputs
+        reusedNodeKeys.push(edge.sourceNodeKey)
+        staleReusedNodeKeys.push(edge.sourceNodeKey)
+        const sourceRunId = readText(input.stepsByNodeKey?.get(edge.sourceNodeKey)?.runId)
+        if (sourceRunId) sourceRunIds.push(sourceRunId)
+        continue
+      }
+      const cachedSourceOutputs = asRecord(cachedInputUpstream[edge.sourceNodeKey])
+      if (hasStoredOutputs(cachedSourceOutputs)) {
+        outputs[edge.sourceNodeKey] = cachedSourceOutputs
+        reusedNodeKeys.push(edge.sourceNodeKey)
+        staleReusedNodeKeys.push(edge.sourceNodeKey)
+        continue
+      }
       if (!isOptionalOutputWorkflowEdge(edge)) missingNodeKeys.push(edge.sourceNodeKey)
       continue
     }
@@ -5125,19 +5202,28 @@ function buildCinematicV2VideoPrompt(input: {
   const sceneState = cinematicV2SceneStateSchema.parse(input.sceneState)
   const entities = compactCinematicEntityAnchors(input.assetPack, 6)
   const dialogue = shot.dialogue.map((line) => `${line.speakerRefId}: "${line.text}" (${line.emotion})`).join(' ')
+  const entityLocks = entities
+    .map((entity) => {
+      const record = asRecord(entity)
+      const name = readText(record.name)
+      const visualDescription = readText(record.visualDescription)
+      return [name, visualDescription].filter(Boolean).join(': ')
+    })
+    .filter(Boolean)
+    .slice(0, 4)
   return [
-    `SEEDANCE VIDEO PROMPT: generate one ${shot.providerDurationSeconds}-second cinematic clip at ${input.aspectRatio}, ${input.resolution}.`,
-    `Start from @Image1, the refined keyframe for shot ${shot.index}: ${shot.title}. Treat it as the opening frame and identity lock.`,
-    `Primary action over the clip: ${shot.action || shot.description}.`,
-    `Motion direction and blocking: ${shot.camera.screenDirectionRule || readText(input.layoutPlan.summary) || 'preserve the established scene geography and screen direction.'}`,
-    `Camera behavior: ${shot.camera.framing}, ${shot.camera.angle}, ${shot.camera.lens}; ${shot.camera.movement}.`,
-    `End state: complete the action naturally without changing location, costume, face, prop design, or scene geography.`,
-    dialogue ? `Visible dialogue note: ${dialogue}. Keep mouth motion subtle and stable; final lip sync is not required in this MVP.` : '',
+    `Create a ${shot.providerDurationSeconds}-second cinematic shot at ${input.aspectRatio}, ${input.resolution}.`,
+    `Use @Image1 as the exact opening composition, character identity, wardrobe, lighting, and environment reference for shot ${shot.index}: ${shot.title}.`,
+    `Action: ${shot.action || shot.description}.`,
+    `Blocking: ${shot.camera.screenDirectionRule || readText(input.layoutPlan.summary) || 'preserve the established scene geography and screen direction.'}`,
+    `Camera: ${shot.camera.framing}, ${shot.camera.angle}, ${shot.camera.lens}; ${shot.camera.movement}.`,
+    `End state: let the action complete naturally while preserving the same location, face, costume, prop design, and scene geography.`,
+    dialogue ? `Visible dialogue: ${dialogue}. Keep mouth motion subtle and stable; final lip sync is not required.` : '',
     `Lighting and grade: ${sceneState.lighting.direction}; ${sceneState.lighting.quality}; ${sceneState.lighting.colorTemperature}; ${sceneState.lighting.contrast}.`,
-    `Continuity locks: ${[...shot.continuityInputs, sceneState.visualContinuity.cameraMovementStyle].filter(Boolean).join('; ')}.`,
-    entities.length > 0 ? `Reference identity locks, do not narrate these onscreen:\n${compactForPrompt({ entities }, 1600)}` : '',
-    input.prompt ? `User brief context: ${input.prompt}` : '',
-    'Negative constraints: no captions, no subtitles, no UI, no watermarks, no storyboard borders, no maps, no arrows, no labels, no visible reference-sheet artifacts, no sudden redesigns, no teleporting, no scene cuts inside this shot.',
+    `Continuity: ${[...shot.continuityInputs, sceneState.visualContinuity.cameraMovementStyle].filter(Boolean).join('; ')}.`,
+    entityLocks.length > 0 ? `Identity references: ${entityLocks.join(' | ')}` : '',
+    input.prompt ? `Brief context: ${input.prompt}` : '',
+    'Avoid: captions, subtitles, UI, watermarks, storyboard borders, maps, arrows, labels, reference-sheet artifacts, sudden redesigns, teleporting, extra cuts, montage edits, camera-angle changes inside the shot.',
   ].filter(Boolean).join('\n\n')
 }
 
@@ -9490,12 +9576,18 @@ async function executeNode(input: {
       }
       const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
       const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
-      const upstreamImages = orderCinematicVideoReferenceImages(readUpstreamImages(input.upstream), cinematicReferenceMode)
+      const upstreamImages = orderCinematicVideoReferenceImages(
+        readUpstreamImages(input.upstream, ['image', 'coverImage', 'primaryReferenceImage', 'keyframe']),
+        cinematicReferenceMode,
+      )
       const directImageUrls = (await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))).filter(Boolean)
       const assetPackReferenceLimit = Math.max(1, Math.min(9, Number(config.assetPackReferenceLimit ?? 9) || 9))
       const totalReferenceImageLimit = Math.max(1, Math.min(9, directImageUrls.length + assetPackReferenceLimit))
       const assetPackImageUrls = await collectAssetPackReferenceUrls(input.client, input.run, assetPack, assetPackReferenceLimit)
       const referenceImageUrls = [...new Set([...directImageUrls, ...assetPackImageUrls])].slice(0, totalReferenceImageLimit)
+      if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageUrls.length === 0) {
+        throw new Error('Cinematics V2 video generation requires an enhanced keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
+      }
       const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
       const referenceVideoUrls = (await Promise.all(upstreamVideos.map((video) => imageReferenceToFalUrl(input.client, video))))
         .filter(Boolean)
@@ -9505,31 +9597,30 @@ async function executeNode(input: {
       if (totalReferences > 12) {
         throw new Error('Seedance 2 Omni Reference supports at most 12 total reference files.')
       }
+      const supportingReferenceText = (count: number) => count > 1
+        ? ` @Image2 through @Image${count} are supporting entity, location, or prop references.`
+        : ''
       const buildProviderPrompt = (imageUrls: string[], referencePolicy: string) => [
         prompt,
-        'Provider requirements:',
-        '- Generate one finished Seedance 2 Omni Reference video clip only.',
-        `- Duration must be ${durationSeconds} seconds. Aspect ratio: ${aspectRatio}. Resolution: ${resolution}.`,
         imageUrls.length > 0
           ? (cinematicReferenceMode === 'keyframes'
-            ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1-@Image3 are clean keyframes when present, then individual entity, location, or prop reference assets.`
+            ? `Reference order: @Image1 is the enhanced shot keyframe and must drive the opening frame.${supportingReferenceText(imageUrls.length)}`
             : cinematicReferenceMode === 'shot_reference_sheet'
-              ? `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the cinematic direction sheet timing/camera/spatial continuity board, then individual entity, location, or prop reference assets.`
-              : `- Reference images are ordered as @Image1 through @Image${imageUrls.length}; @Image1 is the storyboard beat-sheet timing/continuity board, then individual entity, location, or prop reference assets.`)
+              ? `Reference order: @Image1 is the cinematic direction sheet timing/camera/spatial continuity board.${supportingReferenceText(imageUrls.length)}`
+              : `Reference order: @Image1 is the storyboard beat-sheet timing/continuity board.${supportingReferenceText(imageUrls.length)}`)
           : '- No image references are attached; use the written continuity anchors in the prompt.',
         referenceVideoUrls.length > 0 ? `- Reference videos are ordered as @Video1 through @Video${referenceVideoUrls.length}.` : '',
         cinematicReferenceMode === 'keyframes'
-          ? '- Beat sheets are planning-only and are not attached in keyframe mode.'
+          ? '- Do not copy reference-sheet layout, panel borders, or storyboard artifacts into the video.'
           : cinematicReferenceMode === 'shot_reference_sheet'
             ? '- A cinematic direction sheet is attached as the primary visual reference; follow its shot strip, camera layout, floor-map spatial logic, and hero frame while avoiding labels, map diagrams, arrows, UI, or sheet artifacts in the video.'
             : '- A beat sheet is attached as the primary visual reference; follow its panel order while avoiding caption-band, border, gutter, UI, or grid artifacts in the video.',
-        referencePolicy !== (cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs') ? `- Reference fallback mode: ${referencePolicy}. Preserve character continuity from written entity descriptions instead of rejected identity images.` : '',
-        '- Keep one dominant action path and one coherent camera direction for the clip.',
-        imageUrls.length > 0 ? '- Preserve identity, wardrobe, environment, product, and prop continuity from references.' : '- Preserve identity, wardrobe, environment, product, and prop continuity from written descriptions.',
-        '- Do not include GraphCore, workflow, node, schema, or internal ID wording in visible text.',
+        referencePolicy !== (cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs') ? `Reference fallback mode: ${referencePolicy}. Preserve character continuity from written entity descriptions instead of rejected identity images.` : '',
+        `Technical target: one continuous ${durationSeconds}-second clip, ${aspectRatio}, ${resolution}.`,
+        imageUrls.length > 0 ? 'Preserve identity, wardrobe, environment, and prop continuity from the references.' : 'Preserve identity, wardrobe, environment, and prop continuity from written descriptions.',
       ].filter(Boolean).join('\n')
       const primaryReferenceOnlyUrls = cinematicReferenceMode === 'keyframes'
-        ? directImageUrls.slice(0, 3)
+        ? directImageUrls.slice(0, 1)
         : directImageUrls.slice(0, 1)
       const referenceAttempts = [
         { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs', imageUrls: referenceImageUrls },
@@ -10859,10 +10950,12 @@ export async function processFlyOutputWorkflowRuns(input: {
     const executionPlan = buildOutputWorkflowExecutionPlan(executionNodes, executionEdges)
     const nodeByKey = new Map(executionNodes.map((node) => [node.key, node]))
     const workflowNodeByKey = new Map(bundle.nodes.map((node) => [node.key, node]))
+    const stepByNodeKey = new Map(bundle.run.steps.map((step) => [step.nodeKey, step]))
     const executionNodeKeys = new Set(executionNodes.map((node) => node.key))
     const cachedExternalUpstreamByNodeKey = new Map(executionNodes.map((node) => [node.key, collectCachedExternalUpstream({
       node,
       nodesByKey: workflowNodeByKey,
+      stepsByNodeKey: stepByNodeKey,
       executionNodeKeys,
       edges: bundle.edges,
     })] as const))
@@ -10871,7 +10964,6 @@ export async function processFlyOutputWorkflowRuns(input: {
     if (missingCachedInputs.length > 0) {
       throw new Error(`Required upstream cached output is missing: ${missingCachedInputs.join(', ')}. Run upstream to this node first.`)
     }
-    const stepByNodeKey = new Map(bundle.run.steps.map((step) => [step.nodeKey, step]))
     const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
     const nodeResults = new Map<string, {
       inputHash: string
@@ -10940,15 +11032,18 @@ export async function processFlyOutputWorkflowRuns(input: {
               output_hash: priorStep.outputHash,
               metadata: {
                 ...node.metadata,
-                execution: {
-                  ...asRecord(asRecord(node.metadata).execution),
-                  level: executionLevelByNodeKey.get(node.key) ?? 0,
-                  resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
-                  lastRunId: runId,
-                  recoveredFromRunStep: true,
-                },
+              execution: {
+                ...asRecord(asRecord(node.metadata).execution),
+                level: executionLevelByNodeKey.get(node.key) ?? 0,
+                resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
+                lastRunId: runId,
+                recoveredFromRunStep: true,
+                cachedInputUpstream: compactOutputWorkflowUpstreamForNodeCache(effectiveUpstream),
+                cachedInputNodeKeys: Object.keys(effectiveUpstream),
+                cachedInputAt: new Date().toISOString(),
               },
-            })
+            },
+          })
             .eq('id', node.id)
           if (updateNodeResponse.error) throw new Error(updateNodeResponse.error.message)
           nodeResults.set(node.key, {
@@ -11058,6 +11153,9 @@ export async function processFlyOutputWorkflowRuns(input: {
                 level: executionLevelByNodeKey.get(node.key) ?? 0,
                 resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
                 lastRunId: runId,
+                cachedInputUpstream: compactOutputWorkflowUpstreamForNodeCache(effectiveUpstream),
+                cachedInputNodeKeys: Object.keys(effectiveUpstream),
+                cachedInputAt: new Date().toISOString(),
               },
               guidance: guidanceMetadata,
             },
@@ -11093,7 +11191,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       onNodeComplete: async ({ node, orderIndex, skipped }) => {
         const result = nodeResults.get(node.key)
         const guidanceMetadata = guidanceStepMetadata(result?.outputs.guidance)
-        const aiUsage = buildOutputStepAiUsage({ node, result, skipped })
+        const aiUsage = buildOutputStepAiUsage({ run: bundle.run, node, result, skipped })
         await setStepStatus(input.client, {
           runId,
           node,

@@ -319,7 +319,7 @@ export function CinematicTimelinePlayer({
             </div>
             {currentSubtitle ? (
               <div className="timeline-preview-subtitle">
-                <span>{currentSubtitle.label}</span>
+                <span>{currentSubtitle.type === 'caption' ? 'Caption' : currentSubtitle.label}</span>
                 <strong>{currentSubtitle.text}</strong>
               </div>
             ) : null}
@@ -479,7 +479,7 @@ export function CinematicTimelinePlayer({
 
               <div className="timeline-track-shell">
                 <div className="timeline-track-label">
-                  <span className="eyebrow">Dialogue</span>
+                  <span className="eyebrow">Dialogue / Captions</span>
                   <strong>{projection.dialogueCues.length}</strong>
                 </div>
                 <div
@@ -492,7 +492,7 @@ export function CinematicTimelinePlayer({
                 >
                   {projection.dialogueCues.map((cue) => (
                     <div
-                      className="timeline-cue timeline-cue-dialogue"
+                      className={`timeline-cue ${cue.type === 'caption' ? 'timeline-cue-caption' : 'timeline-cue-dialogue'}`}
                       key={cue.id}
                       style={{
                         left: cue.startSeconds * pixelsPerSecond,
@@ -550,7 +550,7 @@ export function CinematicTimelinePlayer({
                 <div className="inline-note">{activeShot.beat}</div>
                 <div className="outputs-script-meta">
                   <span>{activeShot.previewKind === 'video' ? 'Video ready' : activeShot.previewAssetKey ? 'Still ready' : 'Media pending'}</span>
-                  <span>{activeShot.subtitleCues.length} dialogue cues</span>
+                  <span>{activeShot.subtitleCues.length} dialogue/caption cues</span>
                   <span>{activeShot.activeRefIds.length} refs</span>
                 </div>
               </>

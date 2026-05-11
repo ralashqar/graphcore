@@ -17,6 +17,7 @@ import {
   buildOutputGuidanceBundleForNode,
   buildOutputWorkflowExecutionPlan,
   isTerminalOutputWorkflowRunStatus,
+  type OutputWorkflow,
   type OutputWorkflowNode,
   type OutputWorkflowNodeUpdateResponse,
   type OutputWorkflowPlanResponse,
@@ -349,6 +350,20 @@ function buildSafeCinematicV2TimelineProjection(data: ReturnType<typeof buildCin
   }
 }
 
+function buildCinematicV2TimelineModalData(
+  workflow: OutputWorkflow | null | undefined,
+  run: OutputWorkflowRun | null | undefined,
+): { title: string; projection: CinematicTimelineProjection } | null {
+  const data = buildCinematicScriptViewData(workflow ?? null, run ?? null)
+  if (!data.isV2) return null
+  const projection = buildSafeCinematicV2TimelineProjection(data)
+  if (!projection) return null
+  return {
+    title: data.title || workflow?.name || 'Cinematic Timeline',
+    projection,
+  }
+}
+
 type CinematicV2ProductionEstimate = {
   clipCount: number
   generatedSeconds: number
@@ -467,23 +482,22 @@ function CinematicV2TimelineModal({
 }
 
 function CinematicV2ProductionPanel({
-  assets,
   canRunOutputs,
   data,
   estimate,
   isApprovingVideo,
   isVideoApproved,
   onApproveVideoProduction,
+  onOpenTimeline,
 }: {
-  assets: ProjectSnapshot['assets']
   canRunOutputs: boolean
   data: ReturnType<typeof buildCinematicScriptViewData>
   estimate: CinematicV2ProductionEstimate | null
   isApprovingVideo: boolean
   isVideoApproved: boolean
   onApproveVideoProduction: () => void
+  onOpenTimeline: () => void
 }) {
-  const [timelineOpen, setTimelineOpen] = useState(false)
   const parsedScript = readRecord(data.cinematicV2.parsedScript)
   const sceneState = readRecord(data.cinematicV2.sceneState)
   const layoutPlan = readRecord(data.cinematicV2.layoutPlan)
@@ -520,7 +534,7 @@ function CinematicV2ProductionPanel({
           {readNumber(shotPlan.totalEditorialDurationSeconds) ? <span>{formatScriptSeconds(shotPlan.totalEditorialDurationSeconds)} editorial</span> : null}
           {data.cinematicV2.storyboardSheets.length > 0 ? <span>Storyboard ready</span> : <span>Storyboard pending</span>}
           <span>{approvalStatus}</span>
-          <button className="outputs-node-action" disabled={!timelineProjection} onClick={() => setTimelineOpen(true)} type="button">Open Timeline</button>
+          <button className="outputs-node-action" disabled={!timelineProjection} onClick={onOpenTimeline} type="button">Open Timeline</button>
         </div>
         <div className="outputs-cinematic-v2-approval">
           <div>
@@ -608,7 +622,7 @@ function CinematicV2ProductionPanel({
         <section className="outputs-script-section">
           <div className="outputs-cinematic-v2-section-head">
             <strong>Timeline</strong>
-            <button className="outputs-node-action" disabled={!timelineProjection} onClick={() => setTimelineOpen(true)} type="button">Cinematic</button>
+            <button className="outputs-node-action" disabled={!timelineProjection} onClick={onOpenTimeline} type="button">Cinematic</button>
           </div>
           <div className="outputs-cinematic-v2-timeline">
             {cinematicArray(timeline.videoClips).map((clip, index) => (
@@ -620,34 +634,26 @@ function CinematicV2ProductionPanel({
           {cinematicArray(timeline.audioClips).length > 0 ? <p className="outputs-muted">Placeholder audio plan stored for ambience/music; dialogue audio and lip sync are deferred.</p> : null}
         </section>
       ) : null}
-      {timelineOpen && timelineProjection ? (
-        <CinematicV2TimelineModal
-          assets={assets}
-          onClose={() => setTimelineOpen(false)}
-          projection={timelineProjection}
-          title={data.title}
-        />
-      ) : null}
     </div>
   )
 }
 
 function CinematicScriptPanel({
-  assets,
   canRunOutputs,
   data,
   estimate,
   isApprovingVideo,
   isVideoApproved,
   onApproveVideoProduction,
+  onOpenTimeline,
 }: {
-  assets: ProjectSnapshot['assets']
   canRunOutputs: boolean
   data: ReturnType<typeof buildCinematicScriptViewData>
   estimate: CinematicV2ProductionEstimate | null
   isApprovingVideo: boolean
   isVideoApproved: boolean
   onApproveVideoProduction: () => void
+  onOpenTimeline: () => void
 }) {
   if (!data.isCinematic) {
     return <p className="outputs-muted">This workflow is not a cinematic output.</p>
@@ -655,13 +661,13 @@ function CinematicScriptPanel({
   if (data.isV2) {
     return (
       <CinematicV2ProductionPanel
-        assets={assets}
         canRunOutputs={canRunOutputs}
         data={data}
         estimate={estimate}
         isApprovingVideo={isApprovingVideo}
         isVideoApproved={isVideoApproved}
         onApproveVideoProduction={onApproveVideoProduction}
+        onOpenTimeline={onOpenTimeline}
       />
     )
   }
@@ -1116,6 +1122,11 @@ export function OutputsWorkspace({
 }: OutputsWorkspaceProps) {
   const [approvingVideoProduction, setApprovingVideoProduction] = useState(false)
   const [creationMode, setCreationMode] = useState<'prompt' | 'story_unit'>('prompt')
+  const [cinematicTimelineModal, setCinematicTimelineModal] = useState<{
+    title: string
+    projection: CinematicTimelineProjection
+  } | null>(null)
+  const [timelineOpeningRequestId, setTimelineOpeningRequestId] = useState<string | null>(null)
   const {
     activeRunId,
     busy,
@@ -1303,6 +1314,10 @@ export function OutputsWorkspace({
   const cinematicV2ProductionEstimate = useMemo(
     () => buildCinematicV2ProductionEstimate(cinematicScriptViewData, activeNodes),
     [activeNodes, cinematicScriptViewData],
+  )
+  const activeCinematicTimelineModalData = useMemo(
+    () => buildCinematicV2TimelineModalData(activeWorkflow, displayRun),
+    [activeWorkflow, displayRun],
   )
   const cinematicVideoApproved = readRecord(displayRun?.input).cinematicVideoApproved === true
     || readRecord(displayRun?.metadata).cinematicVideoApproved === true
@@ -1564,6 +1579,50 @@ export function OutputsWorkspace({
     } finally {
       setRefreshingGraph(false)
     }
+  }
+
+  async function openCinematicTimelineForRequest(request: OutputRequest | null | undefined) {
+    if (!request?.workflowId) return
+    setSelectedRequestId(request.id)
+    if (request.latestRunId) setActiveRunId(request.latestRunId)
+    setTimelineOpeningRequestId(request.id)
+    setError(null)
+    try {
+      let workflow = workflows.find((entry) => entry.id === request.workflowId) ?? null
+      let run = request.latestRunId
+        ? recentOutputRuns.find((entry) => entry.id === request.latestRunId) ?? null
+        : null
+      let modalData = buildCinematicV2TimelineModalData(workflow, run)
+      if (!modalData) {
+        const status = await onGetOutputRequestStatus(request.id)
+        if (status.run) {
+          run = status.run
+          setActiveRunId(status.run.id)
+          rememberLiveRun(status.run)
+        }
+        if (!workflow) {
+          await onLoadOutputWorkflowGraph(request.workflowId, run?.id ?? request.latestRunId ?? null)
+          workflow = workflows.find((entry) => entry.id === request.workflowId) ?? null
+        }
+        modalData = buildCinematicV2TimelineModalData(workflow, run)
+      }
+      if (!modalData) {
+        throw new Error('Timeline pending. Run or refresh this cinematic until the V2 shot plan is available.')
+      }
+      setCinematicTimelineModal(modalData)
+    } catch (timelineError) {
+      setError(timelineError instanceof Error ? timelineError.message : 'Could not open cinematic timeline.')
+    } finally {
+      setTimelineOpeningRequestId(null)
+    }
+  }
+
+  function openCinematicTimelineForActiveWorkflow() {
+    if (!activeCinematicTimelineModalData) {
+      setError('Timeline pending. Run or refresh this cinematic until the V2 shot plan is available.')
+      return
+    }
+    setCinematicTimelineModal(activeCinematicTimelineModalData)
   }
 
   function markTargetedNodes(nodeKeys: string[], runScope: OutputWorkflowRunScope) {
@@ -1967,8 +2026,10 @@ export function OutputsWorkspace({
           nodes={activeNodes}
           worldEntities={snapshot.worldEntities as unknown as Array<Record<string, unknown>>}
           worldRelationships={snapshot.worldRelationships as unknown as Array<Record<string, unknown>>}
+          canOpenTimeline={Boolean(activeCinematicTimelineModalData)}
           onCancelRun={cancelActiveRun}
           onClose={() => setGraphOpen(false)}
+          onOpenTimeline={openCinematicTimelineForActiveWorkflow}
           onRefreshGraph={() => void refreshOutputGraph()}
           onRunNode={(node, runScope) => void runSelectedNodeOnly(node, runScope)}
           onRunNodes={(nodes, runScope) => void runSelectedNodesOnly(nodes, runScope)}
@@ -1987,6 +2048,14 @@ export function OutputsWorkspace({
           targetedRunScope={targetedRunScope}
           workflow={activeWorkflow}
           worldWiki={readRecord(snapshot.draft.metadata).worldWiki}
+        />
+      ) : null}
+      {cinematicTimelineModal ? (
+        <CinematicV2TimelineModal
+          assets={snapshot.assets}
+          onClose={() => setCinematicTimelineModal(null)}
+          projection={cinematicTimelineModal.projection}
+          title={cinematicTimelineModal.title}
         />
       ) : null}
       <header className="outputs-hero">
@@ -2308,6 +2377,9 @@ export function OutputsWorkspace({
                       const plannedSections = plannedSectionTitles(request)
                       const requestCinematicData = buildCinematicScriptViewData(requestWorkflow, requestRun)
                       const requestIsV2Animatic = requestCinematicData.isV2
+                      const requestTimelineProjection = requestIsV2Animatic
+                        ? buildSafeCinematicV2TimelineProjection(requestCinematicData)
+                        : null
                       const requestAnimaticReady = requestIsV2Animatic && (
                         requestCinematicData.cinematicV2.keyframes.length > 0
                         || requestCinematicData.cinematicV2.panels.length > 0
@@ -2420,6 +2492,16 @@ export function OutputsWorkspace({
                                   onClick={() => void openOutputGraphForRequest(request)}
                                 >
                                   {refreshingGraph && selectedRequestId === request.id ? 'Opening...' : 'Graph'}
+                                </button>
+                              ) : null}
+                              {requestIsV2Animatic ? (
+                                <button
+                                  className="outputs-secondary-action outputs-compact-action"
+                                  disabled={timelineOpeningRequestId === request.id}
+                                  type="button"
+                                  onClick={() => void openCinematicTimelineForRequest(request)}
+                                >
+                                  {timelineOpeningRequestId === request.id ? 'Opening...' : requestTimelineProjection ? 'Timeline' : 'Load timeline'}
                                 </button>
                               ) : null}
                               {!requestRun || isTerminalOutputWorkflowRunStatus(requestRun.status) ? null : (
@@ -2789,13 +2871,13 @@ export function OutputsWorkspace({
                   {inspectorMode === 'script' ? (
                     <div className="outputs-output-preview">
                       <CinematicScriptPanel
-                        assets={snapshot.assets}
                         canRunOutputs={canRunOutputs}
                         data={cinematicScriptViewData}
                         estimate={cinematicV2ProductionEstimate}
                         isApprovingVideo={approvingVideoProduction}
                         isVideoApproved={cinematicVideoApproved}
                         onApproveVideoProduction={approveCinematicV2VideoProduction}
+                        onOpenTimeline={openCinematicTimelineForActiveWorkflow}
                       />
                     </div>
                   ) : null}

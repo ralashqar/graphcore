@@ -10,7 +10,7 @@ import {
 export type CinematicTimelineCue = {
   id: string
   shotId: string
-  type: 'dialogue' | 'audio'
+  type: 'dialogue' | 'caption' | 'audio'
   startSeconds: number
   endSeconds: number
   label: string
@@ -318,19 +318,33 @@ export function buildCinematicV2TimelineProjection(input: {
       : previewAssetKeys.length > 0
         ? 'image'
         : 'placeholder'
-    const subtitleCues: CinematicTimelineCue[] = shot.dialogue.map((line, lineIndex) => {
+    const dialogueSubtitleCues: CinematicTimelineCue[] = shot.dialogue.map((line, lineIndex) => {
       const relativeStart = readNumber(line.startSeconds) ?? 0
       const relativeEnd = readNumber(line.endSeconds) ?? durationSeconds
+      const cueStart = startSeconds + Math.max(0, Math.min(durationSeconds, relativeStart))
+      const cueEnd = startSeconds + Math.max(0.1, Math.min(durationSeconds, Math.max(relativeStart + 0.1, relativeEnd)))
       return {
         id: line.id || `${shot.id}-dialogue-${lineIndex + 1}`,
         shotId: shot.id,
         type: 'dialogue' as const,
-        startSeconds: startSeconds + Math.max(0, Math.min(durationSeconds, relativeStart)),
-        endSeconds: startSeconds + Math.max(0, Math.min(durationSeconds, Math.max(relativeStart, relativeEnd))),
+        startSeconds: cueStart,
+        endSeconds: Math.min(endSeconds, Math.max(cueStart + 0.1, cueEnd)),
         label: line.speakerRefId || 'Dialogue',
         text: line.text,
       }
     }).filter((cue) => cue.text.trim().length > 0)
+    const fallbackCaptionText = readString(shot.action) || readString(shot.description) || readString(shot.title)
+    const subtitleCues: CinematicTimelineCue[] = dialogueSubtitleCues.length > 0 || !fallbackCaptionText
+      ? dialogueSubtitleCues
+      : [{
+          id: `${shot.id}-caption`,
+          shotId: shot.id,
+          type: 'caption' as const,
+          startSeconds,
+          endSeconds,
+          label: shot.purpose || 'Shot',
+          text: fallbackCaptionText,
+        }]
     dialogueCues.push(...subtitleCues)
     return {
       id: shot.id,

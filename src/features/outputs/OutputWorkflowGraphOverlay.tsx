@@ -84,8 +84,10 @@ type OutputWorkflowGraphOverlayProps = {
   targetedRunScope: OutputWorkflowRunScope | null
   runErrorMessage?: string | null
   refreshingGraph?: boolean
+  canOpenTimeline?: boolean
   worldWiki: unknown
   onClose: () => void
+  onOpenTimeline?: () => void
   onSelectNode: (nodeKey: string) => void
   onRunNode: (node: OutputWorkflowNode, runScope?: OutputWorkflowRunScope) => void
   onRunNodes: (nodes: OutputWorkflowNode[], runScope?: OutputWorkflowRunScope) => void
@@ -111,6 +113,21 @@ function readTrimmedString(value: unknown) {
 
 function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
+}
+
+function isCinematicV2TimelineNode(node: OutputWorkflowNode | null | undefined) {
+  if (!node) return false
+  const config = readRecord(node.config)
+  const metadata = readRecord(node.metadata)
+  const purpose = readTrimmedString(config.purpose)
+  const role = readTrimmedString(config.role) || readTrimmedString(metadata.role)
+  const key = node.key.toLowerCase()
+  const purposeOrRole = `${purpose} ${role}`.toLowerCase()
+  return purposeOrRole.includes('cinematic_v2_timeline_assemble')
+    || purposeOrRole.includes('cinematic_v2_shot_keyframe')
+    || purposeOrRole.includes('cinematic_v2_shot_video')
+    || key.includes('cinematic_v2_timeline_assemble')
+    || (key.includes('cinematic_v2_shot_') && (key.endsWith('_keyframe') || key.endsWith('_video')))
 }
 
 function formatStatus(value: string) {
@@ -414,8 +431,10 @@ export function OutputWorkflowGraphOverlay({
   targetedRunScope,
   runErrorMessage,
   refreshingGraph = false,
+  canOpenTimeline = false,
   worldWiki,
   onClose,
+  onOpenTimeline,
   onSelectNode,
   onRunNode,
   onRunNodes,
@@ -535,6 +554,7 @@ export function OutputWorkflowGraphOverlay({
   const selectedStepRunMode = readTrimmedString(readRecord(selectedStep?.metadata).runScope) || readTrimmedString(readRecord(activeRun?.metadata).runScope)
   const selectedNodeIsTargeted = selectedNode ? targetedNodeKeySet.has(selectedNode.key) : false
   const selectedRunScopeLabel = targetedRunScope ? formatStatus(targetedRunScope) : ''
+  const selectedNodeCanOpenTimeline = canOpenTimeline && Boolean(onOpenTimeline) && isCinematicV2TimelineNode(selectedNode)
   const selectedExecution = selectedNode ? getOutputWorkflowNodeExecutionMetadata(selectedNode) : null
   const readyImageBatchNodes = selectedNode?.nodeType === 'image_generation'
     ? safeNodes.filter((node) => {
@@ -809,6 +829,9 @@ export function OutputWorkflowGraphOverlay({
           <button disabled={refreshingGraph} onClick={onRefreshGraph} type="button">
             {refreshingGraph ? 'Refreshing...' : 'Refresh'}
           </button>
+          {canOpenTimeline && onOpenTimeline ? (
+            <button onClick={onOpenTimeline} type="button">Timeline</button>
+          ) : null}
           <button onClick={() => flowInstance?.fitView({ padding: 0.18, duration: 240 })} type="button">Fit</button>
           <button onClick={() => void applyAutoLayout(false)} type="button">Auto layout</button>
           <button disabled={!layoutDirty || savingLayout} onClick={() => void saveLayout()} type="button">
@@ -880,6 +903,9 @@ export function OutputWorkflowGraphOverlay({
                   {selectedCacheLabel}
                 </p>
                 <div className="outputs-graph-run-actions">
+                  {selectedNodeCanOpenTimeline && onOpenTimeline ? (
+                    <button onClick={onOpenTimeline} type="button">Open Timeline</button>
+                  ) : null}
                   <button
                     disabled={!canRunOutputs || selectedNodeIsTargeted || selectedMissingCachedInputs.length > 0}
                     onClick={() => onRunNode(selectedNode, 'node_only')}

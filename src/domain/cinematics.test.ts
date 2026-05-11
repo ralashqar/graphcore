@@ -186,7 +186,9 @@ test('Cinematics V2 timeline projection maps editorial clips, active shots, and 
   assert.equal(projection.shots[1]?.previewAssetKey, 'keyframe_shot_2')
   assert.equal(projection.shots[1]?.previewKind, 'image')
   assert.equal(findTimelineShotAtSeconds(projection, 3)?.id, 'shot_2')
-  assert.equal(projection.dialogueCues[0]?.startSeconds, 3)
+  assert.equal(projection.shots[0]?.subtitleCues[0]?.type, 'caption')
+  assert.equal(projection.shots[0]?.subtitleCues[0]?.text, 'The arena opens under sunset.')
+  assert.equal(projection.dialogueCues.find((cue) => cue.type === 'dialogue')?.startSeconds, 3)
   assert.equal(projection.audioCues[0]?.label, 'ambience')
 })
 
