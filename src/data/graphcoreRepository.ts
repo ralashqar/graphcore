@@ -198,6 +198,16 @@ import {
   type CinematicRunStatusResponse,
   type CinematicRunStartRequest,
 } from '../domain/cinematics'
+import {
+  cinematicDirectorNotePreviewRequestSchema,
+  cinematicDirectorNotePreviewResponseSchema,
+  cinematicDirectorPatchApplyRequestSchema,
+  cinematicDirectorPatchApplyResponseSchema,
+  type CinematicDirectorNotePreviewRequest,
+  type CinematicDirectorNotePreviewResponse,
+  type CinematicDirectorPatchApplyRequest,
+  type CinematicDirectorPatchApplyResponse,
+} from '../domain/cinematicDirectorNotes'
 import { gameSpecSchema } from '../domain/gameSpec'
 import { projectContextSchema, type ProjectContext } from '../domain/projectContext'
 import {
@@ -7876,6 +7886,75 @@ export async function startOutputWorkflowRun(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = outputWorkflowRunStatusResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function previewOutputCinematicDirectorNote(
+  snapshot: ProjectSnapshot,
+  request: Omit<CinematicDirectorNotePreviewRequest, 'projectId' | 'draftId'>,
+): Promise<CinematicDirectorNotePreviewResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before directing a cinematic timeline.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Cinematic director notes require a live Supabase-backed draft.')
+  }
+  const requestRecord = request as Record<string, unknown>
+  const runId = typeof requestRecord.runId === 'string' ? requestRecord.runId : null
+  const workflowId = typeof requestRecord.workflowId === 'string' && requestRecord.workflowId.trim()
+    ? requestRecord.workflowId.trim()
+    : runId
+      ? snapshot.outputWorkflowRuns.find((run) => run.id === runId)?.workflowId
+      : undefined
+  const payload = cinematicDirectorNotePreviewRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+    workflowId,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'preview-output-cinematic-director-note',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return cinematicDirectorNotePreviewResponseSchema.parse(response.data)
+}
+
+export async function applyOutputCinematicDirectorPatch(
+  snapshot: ProjectSnapshot,
+  request: Omit<CinematicDirectorPatchApplyRequest, 'projectId' | 'draftId'>,
+): Promise<CinematicDirectorPatchApplyResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before applying cinematic director notes.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Cinematic director notes require a live Supabase-backed draft.')
+  }
+  const requestRecord = request as Record<string, unknown>
+  if (!requestRecord.preview || typeof requestRecord.preview !== 'object') {
+    throw new Error('Preview the director note before applying it.')
+  }
+  const runId = typeof requestRecord.runId === 'string' ? requestRecord.runId : null
+  const workflowId = typeof requestRecord.workflowId === 'string' && requestRecord.workflowId.trim()
+    ? requestRecord.workflowId.trim()
+    : runId
+      ? snapshot.outputWorkflowRuns.find((run) => run.id === runId)?.workflowId
+      : undefined
+  const payload = cinematicDirectorPatchApplyRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+    workflowId,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'apply-output-cinematic-director-patch',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = cinematicDirectorPatchApplyResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

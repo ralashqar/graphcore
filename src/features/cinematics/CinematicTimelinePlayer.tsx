@@ -6,6 +6,11 @@ import {
   findTimelineTakeAtSeconds,
   type CinematicTimelineProjection,
 } from '../../domain/cinematicTimelineProjection.ts'
+import type {
+  CinematicDirectorNotePreviewResponse,
+  CinematicDirectorNoteScope,
+  CinematicDirectorPatchPreview,
+} from '../../domain/cinematicDirectorNotes.ts'
 import type { AssetDefinition } from '../../domain/graphcore.ts'
 import { EntityIcon } from '../../shared/entityIcons.tsx'
 
@@ -15,6 +20,13 @@ type CinematicTimelinePlayerProps = {
   title?: string
   subtitle?: string
   emptyMessage?: string
+  directorNotes?: {
+    onPreview: (request: { note: string; scope: CinematicDirectorNoteScope }) => Promise<CinematicDirectorNotePreviewResponse>
+    onApply: (preview: CinematicDirectorPatchPreview) => Promise<void>
+    canUndoLast?: boolean
+    undoLabel?: string
+    onUndoLast?: () => Promise<void>
+  }
 }
 
 type ResolvedTimelineMedia = {
@@ -70,6 +82,7 @@ function timelineTrackWidth(projection: CinematicTimelineProjection | null, pixe
 
 export function CinematicTimelinePlayer({
   assets,
+  directorNotes,
   projection,
   title = 'Cinematic Timeline',
   subtitle = 'Read-only production preview',
@@ -86,6 +99,13 @@ export function CinematicTimelinePlayer({
   const playheadSecondsRef = useRef(0)
   const pixelsPerSecondRef = useRef(BASE_PIXELS_PER_SECOND)
   const scrubStateRef = useRef<{ isDragging: boolean } | null>(null)
+  const [directorScopeMode, setDirectorScopeMode] = useState<'shot' | 'shot_range' | 'scene'>('shot')
+  const [directorSelectedShotIds, setDirectorSelectedShotIds] = useState<string[]>([])
+  const [directorNoteText, setDirectorNoteText] = useState('')
+  const [directorPreview, setDirectorPreview] = useState<CinematicDirectorPatchPreview | null>(null)
+  const [directorBusy, setDirectorBusy] = useState(false)
+  const [directorError, setDirectorError] = useState<string | null>(null)
+  const directorPreviewRef = useRef<CinematicDirectorPatchPreview | null>(null)
 
   const activeShot = projection ? findTimelineShotAtSeconds(projection, playheadSeconds) : null
   const activeTake = projection ? findTimelineTakeAtSeconds(projection, playheadSeconds) : null
@@ -98,6 +118,92 @@ export function CinematicTimelinePlayer({
   const timelineWidth = timelineTrackWidth(projection, pixelsPerSecond)
   const zoomPercent = Math.round((pixelsPerSecond / BASE_PIXELS_PER_SECOND) * 100)
   const activeRefs = useMemo(() => activeShot?.activeRefIds ?? [], [activeShot])
+  const directorScopeSummary = directorScopeMode === 'scene'
+    ? 'Whole scene'
+    : directorScopeMode === 'shot_range'
+      ? `${directorSelectedShotIds.length || 1} selected shots`
+      : activeShot?.title ?? 'Active shot'
+
+  const selectShotForDirection = useCallback((shotId: string) => {
+    setDirectorPreview(null)
+    directorPreviewRef.current = null
+    if (directorScopeMode === 'scene') return
+    if (directorScopeMode === 'shot_range') {
+      setDirectorSelectedShotIds((current) => current.includes(shotId)
+        ? current.filter((id) => id !== shotId)
+        : [...current, shotId])
+      return
+    }
+    setDirectorSelectedShotIds([shotId])
+  }, [directorScopeMode])
+
+  const buildDirectorScope = useCallback((): CinematicDirectorNoteScope | null => {
+    if (!projection) return null
+    if (directorScopeMode === 'scene') return { type: 'scene' }
+    const fallbackShotId = activeShot?.id ?? projection.shots[0]?.id
+    if (directorScopeMode === 'shot_range') {
+      const selectedIds = directorSelectedShotIds.length > 0 ? directorSelectedShotIds : fallbackShotId ? [fallbackShotId] : []
+      return selectedIds.length > 0 ? { type: 'shot_range', shotIds: selectedIds } : null
+    }
+    const shotId = directorSelectedShotIds[0] ?? fallbackShotId
+    return shotId ? { type: 'shot', shotId } : null
+  }, [activeShot?.id, directorScopeMode, directorSelectedShotIds, projection])
+
+  const previewDirectorNote = useCallback(async () => {
+    if (!directorNotes) return
+    const note = directorNoteText.trim()
+    const scope = buildDirectorScope()
+    if (!note || !scope) return
+    setDirectorBusy(true)
+    setDirectorError(null)
+    setDirectorPreview(null)
+    directorPreviewRef.current = null
+    try {
+      const response = await directorNotes.onPreview({ note, scope })
+      setDirectorPreview(response.preview)
+      directorPreviewRef.current = response.preview
+    } catch (error) {
+      setDirectorError(error instanceof Error ? error.message : 'Could not preview director note.')
+    } finally {
+      setDirectorBusy(false)
+    }
+  }, [buildDirectorScope, directorNoteText, directorNotes])
+
+  const applyDirectorPreview = useCallback(async () => {
+    if (!directorNotes) return
+    const preview = directorPreview ?? directorPreviewRef.current
+    if (!preview) {
+      setDirectorError('Preview the director note before applying it.')
+      return
+    }
+    setDirectorBusy(true)
+    setDirectorError(null)
+    try {
+      await directorNotes.onApply(preview)
+      setDirectorNoteText('')
+      setDirectorPreview(null)
+      directorPreviewRef.current = null
+    } catch (error) {
+      setDirectorError(error instanceof Error ? error.message : 'Could not apply director note.')
+    } finally {
+      setDirectorBusy(false)
+    }
+  }, [directorNotes, directorPreview])
+
+  const undoLastDirectorNote = useCallback(async () => {
+    if (!directorNotes?.onUndoLast) return
+    setDirectorBusy(true)
+    setDirectorError(null)
+    try {
+      await directorNotes.onUndoLast()
+      setDirectorNoteText('')
+      setDirectorPreview(null)
+    } catch (error) {
+      setDirectorError(error instanceof Error ? error.message : 'Could not undo the last director edit.')
+    } finally {
+      setDirectorBusy(false)
+    }
+  }, [directorNotes])
 
   const setClampedPlayhead = useCallback((nextSeconds: number) => {
     const totalDurationSeconds = projection?.totalDurationSeconds ?? 0
@@ -176,6 +282,11 @@ export function CinematicTimelinePlayer({
     }
     setPlayheadSeconds((current) => Math.min(current, projection.totalDurationSeconds))
   }, [projection])
+
+  useEffect(() => {
+    if (!activeShot || directorScopeMode !== 'shot') return
+    setDirectorSelectedShotIds((current) => current[0] === activeShot.id ? current : [activeShot.id])
+  }, [activeShot, directorScopeMode])
 
   useEffect(() => {
     if (!projection) return
@@ -419,11 +530,19 @@ export function CinematicTimelinePlayer({
                 >
                   {projection.shots.map((shot) => {
                     const preview = resolveTimelineMedia(assets, shot.previewAssetKeys, shot.previewKind)
+                    const isSelectedForDirection = directorSelectedShotIds.includes(shot.id)
                     return (
                       <button
-                        className={shot.id === activeShot?.id ? 'timeline-shot-block is-active' : 'timeline-shot-block'}
+                        className={[
+                          'timeline-shot-block',
+                          shot.id === activeShot?.id ? 'is-active' : '',
+                          isSelectedForDirection ? 'is-director-selected' : '',
+                        ].filter(Boolean).join(' ')}
                         key={shot.id}
-                        onClick={() => setClampedPlayhead(shot.startSeconds)}
+                        onClick={() => {
+                          setClampedPlayhead(shot.startSeconds)
+                          selectShotForDirection(shot.id)
+                        }}
                         onMouseDown={(event) => event.stopPropagation()}
                         style={{
                           left: shot.startSeconds * pixelsPerSecond,
@@ -572,6 +691,85 @@ export function CinematicTimelinePlayer({
               )) : <div className="inline-note">Scrub to a shot with linked characters, locations, or props.</div>}
             </div>
           </div>
+
+          {directorNotes ? (
+            <div className="timeline-sidebar-section timeline-director-panel">
+              <span className="eyebrow">Direct</span>
+              <h3>Director Notes</h3>
+              <div className="timeline-director-scope-row" role="group" aria-label="Director note scope">
+                {(['shot', 'shot_range', 'scene'] as const).map((scopeMode) => (
+                  <button
+                    className={directorScopeMode === scopeMode ? 'timeline-director-scope is-active' : 'timeline-director-scope'}
+                    key={scopeMode}
+                    onClick={() => {
+                      setDirectorScopeMode(scopeMode)
+                      setDirectorPreview(null)
+                      directorPreviewRef.current = null
+                      if (scopeMode === 'scene') setDirectorSelectedShotIds([])
+                      if (scopeMode === 'shot' && activeShot) setDirectorSelectedShotIds([activeShot.id])
+                    }}
+                    type="button"
+                  >
+                    {scopeMode === 'shot' ? 'Shot' : scopeMode === 'shot_range' ? 'Range' : 'Scene'}
+                  </button>
+                ))}
+              </div>
+              <div className="inline-note">{directorScopeSummary}</div>
+              <textarea
+                className="timeline-director-note-input"
+                maxLength={4000}
+                onChange={(event) => {
+                  setDirectorNoteText(event.target.value)
+                  setDirectorPreview(null)
+                  directorPreviewRef.current = null
+                }}
+                placeholder="Make this lower angle, slower, more tense..."
+                rows={4}
+                value={directorNoteText}
+              />
+              {directorError ? <div className="outputs-error compact">{directorError}</div> : null}
+              <button
+                className="primary-button compact timeline-director-preview-button"
+                disabled={directorBusy || directorNoteText.trim().length === 0}
+                onClick={() => void previewDirectorNote()}
+                type="button"
+              >
+                {directorBusy && !directorPreview ? 'Previewing...' : 'Preview Changes'}
+              </button>
+              {directorPreview ? (
+                <div className={`timeline-director-preview is-${directorPreview.riskLevel}`}>
+                  <strong>{directorPreview.summary || directorPreview.regenerationPlan.summary}</strong>
+                  <span>{directorPreview.regenerationPlan.summary}</span>
+                  <div className="outputs-script-meta">
+                    <span>{directorPreview.operations.length} edits</span>
+                    <span>{directorPreview.regenerationPlan.affectedShotIds.length} shots</span>
+                    <span>{directorPreview.regenerationPlan.dirtyNodeKeys.length} dirty nodes</span>
+                  </div>
+                  {directorPreview.diagnostics.length > 0 ? (
+                    <div className="inline-note">{directorPreview.diagnostics.slice(0, 2).join(' ')}</div>
+                  ) : null}
+                  <button
+                    className="primary-button compact"
+                    disabled={directorBusy || directorPreview.status === 'requires_scene_replan'}
+                    onClick={() => void applyDirectorPreview()}
+                    type="button"
+                  >
+                    {directorBusy ? 'Applying...' : 'Apply & Regenerate Animatic'}
+                  </button>
+                </div>
+              ) : null}
+              {directorNotes.canUndoLast && directorNotes.onUndoLast ? (
+                <button
+                  className="ghost-button compact timeline-director-undo-button"
+                  disabled={directorBusy}
+                  onClick={() => void undoLastDirectorNote()}
+                  type="button"
+                >
+                  {directorBusy ? 'Working...' : directorNotes.undoLabel ?? 'Undo Last Director Edit'}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </aside>
       </div>
     </div>

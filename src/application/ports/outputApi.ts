@@ -14,11 +14,19 @@ import type {
   OutputInboxLoadResult,
   OutputWorkflowGraphLoadResult,
 } from '../../data/graphcoreRepository'
+import type {
+  CinematicDirectorNotePreviewRequest,
+  CinematicDirectorNotePreviewResponse,
+  CinematicDirectorPatchApplyRequest,
+  CinematicDirectorPatchApplyResponse,
+} from '../../domain/cinematicDirectorNotes'
 
 export type OutputApi = {
   planOutputWorkflow(snapshot: ProjectSnapshot, request: Omit<OutputWorkflowPlanRequest, 'snapshot'>): Promise<OutputWorkflowPlanResponse>
   startOutputWorkflow(snapshot: ProjectSnapshot, plan: OutputWorkflowPlanResponse['plan']): Promise<OutputWorkflowStartResponse>
   startOutputWorkflowRun(snapshot: ProjectSnapshot, request: Record<string, unknown>): Promise<OutputWorkflowRunStatusResponse>
+  previewOutputCinematicDirectorNote(snapshot: ProjectSnapshot, request: Omit<CinematicDirectorNotePreviewRequest, 'projectId' | 'draftId'>): Promise<CinematicDirectorNotePreviewResponse>
+  applyOutputCinematicDirectorPatch(snapshot: ProjectSnapshot, request: Omit<CinematicDirectorPatchApplyRequest, 'projectId' | 'draftId'>): Promise<CinematicDirectorPatchApplyResponse>
   getOutputWorkflowStatus(runId: string): Promise<OutputWorkflowRunStatusResponse>
   cancelOutputWorkflowRun(runId: string): Promise<OutputWorkflowCancelResponse>
   startOutputRequest(snapshot: ProjectSnapshot, request: Record<string, unknown>): Promise<OutputRequestStatusResponse>

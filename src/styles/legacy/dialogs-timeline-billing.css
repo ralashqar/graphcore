@@ -433,6 +433,11 @@
   box-shadow: 0 0 0 1px rgba(57, 216, 255, 0.18);
 }
 
+.timeline-shot-block.is-director-selected {
+  border-color: rgba(167, 139, 250, 0.72);
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.32), inset 0 0 0 1px rgba(167, 139, 250, 0.18);
+}
+
 .timeline-shot-thumb {
   position: absolute;
   inset: 0;
@@ -560,6 +565,83 @@
 
 .timeline-sidebar-section h3 {
   margin: 0;
+}
+
+.timeline-director-panel {
+  border-radius: 16px;
+  border: 1px solid rgba(167, 139, 250, 0.16);
+  background: rgba(13, 18, 31, 0.7);
+}
+
+.timeline-director-scope-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.timeline-director-scope {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.timeline-director-scope.is-active {
+  border-color: rgba(167, 139, 250, 0.48);
+  background: rgba(109, 40, 217, 0.28);
+  color: var(--text);
+}
+
+.timeline-director-note-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 86px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(3, 8, 14, 0.72);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.timeline-director-note-input:focus {
+  outline: none;
+  border-color: rgba(57, 216, 255, 0.42);
+  box-shadow: 0 0 0 1px rgba(57, 216, 255, 0.18);
+}
+
+.timeline-director-preview-button {
+  justify-self: start;
+}
+
+.timeline-director-preview {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(57, 216, 255, 0.16);
+  background: rgba(57, 216, 255, 0.08);
+}
+
+.timeline-director-preview.is-medium {
+  border-color: rgba(251, 191, 36, 0.24);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.timeline-director-preview.is-high {
+  border-color: rgba(244, 63, 94, 0.28);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+.timeline-director-preview > span {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .timeline-sidebar-actions {

@@ -77,6 +77,8 @@ export const graphcoreOutputApi: OutputApi = {
   planOutputWorkflow: graphcoreRepository.planOutputWorkflow,
   startOutputWorkflow: graphcoreRepository.startOutputWorkflow,
   startOutputWorkflowRun: graphcoreRepository.startOutputWorkflowRun,
+  previewOutputCinematicDirectorNote: graphcoreRepository.previewOutputCinematicDirectorNote,
+  applyOutputCinematicDirectorPatch: graphcoreRepository.applyOutputCinematicDirectorPatch,
   getOutputWorkflowStatus: graphcoreRepository.getOutputWorkflowStatus,
   cancelOutputWorkflowRun: graphcoreRepository.cancelOutputWorkflowRun,
   updateOutputWorkflowNode: graphcoreRepository.updateOutputWorkflowNode,

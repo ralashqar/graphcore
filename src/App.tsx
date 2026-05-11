@@ -5062,6 +5062,40 @@ export default function App() {
     return result
   }
 
+  async function previewOutputCinematicDirectorNote(request: Parameters<typeof workspaceService.previewOutputCinematicDirectorNote>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before directing a cinematic timeline.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Cinematic director notes require a live Supabase-backed draft.')
+    }
+    return workspaceService.previewOutputCinematicDirectorNote(snapshot, request)
+  }
+
+  async function applyOutputCinematicDirectorPatch(request: Parameters<typeof workspaceService.applyOutputCinematicDirectorPatch>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before applying cinematic director notes.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Cinematic director notes require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.applyOutputCinematicDirectorPatch(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputWorkflows: [
+        result.workflow as never,
+        ...current.outputWorkflows.filter((workflow) => workflow.id !== request.workflowId),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => node.workflowId !== request.workflowId),
+        ...result.nodes as never[],
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function getOutputWorkflowStatus(runId: string) {
     const result = await workspaceService.getOutputWorkflowStatus(runId)
     const current = snapshotRef.current
@@ -7501,6 +7535,8 @@ export default function App() {
                   onLoadOutputInbox={loadOutputInbox}
                   onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
                   onPlanOutputWorkflow={planOutputWorkflow}
+                  onPreviewCinematicDirectorNote={previewOutputCinematicDirectorNote}
+                  onApplyCinematicDirectorPatch={applyOutputCinematicDirectorPatch}
                   onRefreshLiveSnapshot={refreshLiveSnapshot}
                   onRequestDeleteOutputRequest={requestDeleteOutputRequest}
                   onStartOutputRequest={startOutputRequest}

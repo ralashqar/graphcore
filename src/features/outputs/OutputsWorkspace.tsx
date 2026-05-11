@@ -12,6 +12,13 @@ import {
   summarizeAiUsageLines,
 } from '../../domain/aiUsage'
 import { buildCinematicV2TimelineProjection, type CinematicTimelineProjection } from '../../domain/cinematicTimelineProjection'
+import type {
+  CinematicDirectorNotePreviewResponse,
+  CinematicDirectorNoteScope,
+  CinematicDirectorPatchApplyResponse,
+  CinematicDirectorPatchPreview,
+} from '../../domain/cinematicDirectorNotes'
+import { cinematicDirectorPatchPreviewSchema } from '../../domain/cinematicDirectorNotes'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import {
   buildOutputGuidanceBundleForNode,
@@ -85,6 +92,18 @@ type OutputsWorkspaceProps = {
     input?: Record<string, unknown>
     metadata?: Record<string, unknown>
   }) => Promise<OutputWorkflowRunStatusResponse>
+  onPreviewCinematicDirectorNote: (request: {
+    workflowId: string
+    runId?: string | null
+    note: string
+    scope: CinematicDirectorNoteScope
+  }) => Promise<CinematicDirectorNotePreviewResponse>
+  onApplyCinematicDirectorPatch: (request: {
+    workflowId: string
+    runId?: string | null
+    preview: CinematicDirectorPatchPreview
+    startRegeneration: boolean
+  }) => Promise<CinematicDirectorPatchApplyResponse>
   onGetOutputWorkflowStatus: (runId: string) => Promise<OutputWorkflowRunStatusResponse>
   onCancelOutputWorkflowRun: (runId: string) => Promise<unknown>
   onUpdateOutputWorkflowNode: (request: {
@@ -353,14 +372,20 @@ function buildSafeCinematicV2TimelineProjection(data: ReturnType<typeof buildCin
 function buildCinematicV2TimelineModalData(
   workflow: OutputWorkflow | null | undefined,
   run: OutputWorkflowRun | null | undefined,
-): { title: string; projection: CinematicTimelineProjection } | null {
+): { title: string; projection: CinematicTimelineProjection; workflowId: string; runId: string | null; canUndoLastDirectorEdit: boolean } | null {
   const data = buildCinematicScriptViewData(workflow ?? null, run ?? null)
-  if (!data.isV2) return null
+  if (!data.isV2 || !workflow) return null
   const projection = buildSafeCinematicV2TimelineProjection(data)
   if (!projection) return null
+  const workflowId = readTrimmedString(workflow.id) || readTrimmedString(run?.workflowId)
+  if (!workflowId) return null
+  const edits = readRecord(workflow.metadata).cinematicV2DirectorEdits
   return {
     title: data.title || workflow?.name || 'Cinematic Timeline',
     projection,
+    workflowId,
+    runId: run?.id ?? null,
+    canUndoLastDirectorEdit: Array.isArray(edits) && edits.length > 0,
   }
 }
 
@@ -440,14 +465,26 @@ function buildCinematicV2ProductionEstimate(
 
 function CinematicV2TimelineModal({
   assets,
+  onApplyDirectorPatch,
   onClose,
+  onPreviewDirectorNote,
+  onUndoLastDirectorEdit,
   projection,
+  runId,
   title,
+  workflowId,
+  canUndoLastDirectorEdit,
 }: {
   assets: ProjectSnapshot['assets']
+  onApplyDirectorPatch: (request: { workflowId: string; runId?: string | null; preview: CinematicDirectorPatchPreview; startRegeneration: boolean }) => Promise<void>
   onClose: () => void
+  onPreviewDirectorNote: (request: { workflowId: string; runId?: string | null; note: string; scope: CinematicDirectorNoteScope }) => Promise<CinematicDirectorNotePreviewResponse>
+  onUndoLastDirectorEdit: (request: { workflowId: string; runId?: string | null }) => Promise<void>
   projection: CinematicTimelineProjection
+  runId?: string | null
   title: string
+  workflowId: string
+  canUndoLastDirectorEdit: boolean
 }) {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -472,6 +509,12 @@ function CinematicV2TimelineModal({
         </div>
         <CinematicTimelinePlayer
           assets={assets}
+          directorNotes={{
+            canUndoLast: canUndoLastDirectorEdit,
+            onApply: (preview) => onApplyDirectorPatch({ workflowId, runId, preview, startRegeneration: true }),
+            onPreview: ({ note, scope }) => onPreviewDirectorNote({ workflowId, runId, note, scope }),
+            onUndoLast: () => onUndoLastDirectorEdit({ workflowId, runId }),
+          }}
           projection={projection}
           subtitle="V2 shot orchestration preview"
           title={title}
@@ -1114,6 +1157,8 @@ export function OutputsWorkspace({
   onLoadOutputWorkflowGraph,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
+  onPreviewCinematicDirectorNote,
+  onApplyCinematicDirectorPatch,
   onGetOutputWorkflowStatus,
   onCancelOutputWorkflowRun,
   onUpdateOutputWorkflowNode,
@@ -1125,6 +1170,9 @@ export function OutputsWorkspace({
   const [cinematicTimelineModal, setCinematicTimelineModal] = useState<{
     title: string
     projection: CinematicTimelineProjection
+    workflowId: string
+    runId: string | null
+    canUndoLastDirectorEdit: boolean
   } | null>(null)
   const [timelineOpeningRequestId, setTimelineOpeningRequestId] = useState<string | null>(null)
   const {
@@ -1625,6 +1673,121 @@ export function OutputsWorkspace({
     setCinematicTimelineModal(activeCinematicTimelineModalData)
   }
 
+  function resolveTimelineWorkflowId(workflowId?: string | null, runId?: string | null) {
+    const directWorkflowId = readTrimmedString(workflowId)
+    if (directWorkflowId) return directWorkflowId
+    const runWorkflowId = runId
+      ? readTrimmedString(recentOutputRuns.find((run) => run.id === runId)?.workflowId)
+      : ''
+    if (runWorkflowId) return runWorkflowId
+    return readTrimmedString(activeWorkflow?.id)
+  }
+
+  async function previewCinematicDirectorNoteFromTimeline(request: {
+    workflowId: string
+    runId?: string | null
+    note: string
+    scope: CinematicDirectorNoteScope
+  }) {
+    const workflowId = resolveTimelineWorkflowId(request.workflowId, request.runId)
+    if (!workflowId) throw new Error('Timeline is missing its workflow id. Reopen the timeline from the output row and try again.')
+    return onPreviewCinematicDirectorNote({
+      ...request,
+      workflowId,
+    })
+  }
+
+  async function applyCinematicDirectorPatchAndRegenerate(request: {
+    workflowId: string
+    runId?: string | null
+    preview: CinematicDirectorPatchPreview
+    startRegeneration: boolean
+  }) {
+    setBusy(true)
+    setError(null)
+    try {
+      const resolvedWorkflowId = resolveTimelineWorkflowId(request.workflowId, request.runId)
+      if (!resolvedWorkflowId) throw new Error('Timeline is missing its workflow id. Reopen the timeline from the output row and try again.')
+      const normalizedRequest = { ...request, workflowId: resolvedWorkflowId }
+      const result = await onApplyCinematicDirectorPatch(normalizedRequest)
+      const patchedWorkflow = result.workflow as unknown as OutputWorkflow
+      const refreshedModalData = buildCinematicV2TimelineModalData(patchedWorkflow, activeRun)
+      if (refreshedModalData) setCinematicTimelineModal(refreshedModalData)
+      const runRequest = result.regenerationRunRequest && typeof result.regenerationRunRequest === 'object'
+        ? result.regenerationRunRequest as Record<string, unknown>
+        : null
+      if (normalizedRequest.startRegeneration && runRequest) {
+        const priorRun = request.runId
+          ? recentOutputRuns.find((run) => run.id === request.runId) ?? null
+          : activeRun
+        const priorInput = readRecord(priorRun?.input)
+        const runResponse = await onStartOutputWorkflowRun({
+          workflowId: normalizedRequest.workflowId,
+          prompt: readTrimmedString(priorRun?.prompt) || request.preview.userNote,
+          targetFormat: 'video',
+          selectedEntityKeys: Array.isArray(priorInput.sourceEntityKeys) ? priorInput.sourceEntityKeys.map(String) : [],
+          selectedSequenceUnitKeys: Array.isArray(priorInput.sourceSequenceUnitKeys) ? priorInput.sourceSequenceUnitKeys.map(String) : [],
+          input: {
+            ...priorInput,
+            debugSkipVideoGeneration: true,
+            cinematicVideoApproved: false,
+          },
+          metadata: runRequest,
+        })
+        setActiveRunId(runResponse.run.id)
+        rememberLiveRun(runResponse.run)
+        void pollRun(runResponse.run.id)
+          .then(() => onRefreshLiveSnapshot())
+          .catch((pollError) => {
+            setError(pollError instanceof Error ? pollError.message : 'Director-note rerun failed.')
+          })
+      }
+      await onRefreshLiveSnapshot()
+      await onLoadOutputWorkflowGraph(normalizedRequest.workflowId, request.runId ?? null)
+    } catch (applyError) {
+      setError(applyError instanceof Error ? applyError.message : 'Could not apply director notes.')
+      throw applyError
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function undoLastCinematicDirectorEdit(request: {
+    workflowId: string
+    runId?: string | null
+  }) {
+    const workflow = workflows.find((entry) => entry.id === request.workflowId) ?? activeWorkflow
+    const metadata = readRecord(workflow?.metadata)
+    const edits = Array.isArray(metadata.cinematicV2DirectorEdits)
+      ? metadata.cinematicV2DirectorEdits.map(readRecord).filter((entry) => Object.keys(entry).length > 0)
+      : []
+    const lastEdit = edits[edits.length - 1]
+    const inversePatch = Array.isArray(lastEdit?.inversePatch) ? lastEdit.inversePatch : []
+    const scope = readRecord(lastEdit?.scope)
+    const regenerationPlan = readRecord(lastEdit?.regenerationPlan)
+    if (!lastEdit || inversePatch.length === 0 || !scope.type || Object.keys(regenerationPlan).length === 0) {
+      throw new Error('No reversible director edit is available for this cinematic.')
+    }
+    const preview = cinematicDirectorPatchPreviewSchema.parse({
+      id: `undo_${readTrimmedString(lastEdit.versionId) || Date.now()}`,
+      status: 'preview',
+      userNote: `Undo director edit: ${readTrimmedString(lastEdit.userNote) || 'previous change'}`,
+      scope,
+      summary: `Undo last director edit${readTrimmedString(lastEdit.userNote) ? `: ${readTrimmedString(lastEdit.userNote)}` : ''}.`,
+      riskLevel: readTrimmedString(regenerationPlan.riskLevel) || 'medium',
+      operations: inversePatch,
+      regenerationPlan,
+      inverseOperations: Array.isArray(lastEdit.patch) ? lastEdit.patch : [],
+      diagnostics: [],
+    })
+    await applyCinematicDirectorPatchAndRegenerate({
+      workflowId: request.workflowId,
+      runId: request.runId ?? null,
+      preview,
+      startRegeneration: true,
+    })
+  }
+
   function markTargetedNodes(nodeKeys: string[], runScope: OutputWorkflowRunScope) {
     const cleanKeys = nodeKeys.map((key) => key.trim()).filter(Boolean)
     if (cleanKeys.length === 0) return
@@ -2053,9 +2216,15 @@ export function OutputsWorkspace({
       {cinematicTimelineModal ? (
         <CinematicV2TimelineModal
           assets={snapshot.assets}
+          onApplyDirectorPatch={applyCinematicDirectorPatchAndRegenerate}
           onClose={() => setCinematicTimelineModal(null)}
+          onPreviewDirectorNote={previewCinematicDirectorNoteFromTimeline}
+          onUndoLastDirectorEdit={undoLastCinematicDirectorEdit}
           projection={cinematicTimelineModal.projection}
+          runId={cinematicTimelineModal.runId}
           title={cinematicTimelineModal.title}
+          workflowId={cinematicTimelineModal.workflowId}
+          canUndoLastDirectorEdit={cinematicTimelineModal.canUndoLastDirectorEdit}
         />
       ) : null}
       <header className="outputs-hero">
