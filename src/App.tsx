@@ -7272,6 +7272,13 @@ export default function App() {
     }
   }
 
+  const handleSignProjectAssetUrlEntries = useCallback((input: SignProjectAssetUrlsInput) => (
+    workspaceService.signProjectAssetUrlEntries(input)
+  ), [])
+  const handleLoadProjectDraftMetadata = useCallback((draftId: string) => (
+    workspaceService.loadProjectDraftMetadata(draftId)
+  ), [])
+
   if (appRoute !== 'app') {
     if (appRoute === 'billing') {
       return (
@@ -7313,12 +7320,6 @@ export default function App() {
   const activeHydrationStatus = activeHydrationKey
     ? workspaceHydrationState[activeHydrationKey]?.status ?? 'idle'
     : 'idle'
-  const handleSignProjectAssetUrlEntries = useCallback((input: SignProjectAssetUrlsInput) => (
-    workspaceService.signProjectAssetUrlEntries(input)
-  ), [])
-  const handleLoadProjectDraftMetadata = useCallback((draftId: string) => (
-    workspaceService.loadProjectDraftMetadata(draftId)
-  ), [])
 
   if (loading) return <main className="app-shell loading-shell"><p>Booting GraphCore workspace...</p></main>
   if (error || !snapshot || !bundle) return <main className="app-shell loading-shell"><p>{error ?? 'GraphCore could not load a project snapshot.'}</p></main>

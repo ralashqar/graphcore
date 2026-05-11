@@ -504,7 +504,15 @@ export function OutputWorkflowGraphOverlay({
   }
   const missingCachedInputKeysForNode = (node: OutputWorkflowNode) => safeEdges
     .filter((edge) => edge.targetNodeKey === node.key)
-    .filter((edge) => readRecord(edge.metadata).optional !== true && !hasAvailableNodeOutput(nodeByKey.get(edge.sourceNodeKey)))
+    .filter((edge) => {
+      const metadata = readRecord(edge.metadata)
+      const optionalV2VideoAssetPack = edge.sourceNodeKey.startsWith('cinematic_v2_shot_')
+        && edge.sourceNodeKey.endsWith('_asset_pack')
+        && edge.targetNodeKey.startsWith('cinematic_v2_shot_')
+        && edge.targetNodeKey.endsWith('_video')
+        && edge.targetPort === 'references'
+      return metadata.optional !== true && !optionalV2VideoAssetPack && !hasAvailableNodeOutput(nodeByKey.get(edge.sourceNodeKey))
+    })
     .map((edge) => edge.sourceNodeKey)
   const selectedMissingCachedInputs = selectedNode ? missingCachedInputKeysForNode(selectedNode) : []
   const selectedDirtyCachedInputs = selectedIncomingEdges

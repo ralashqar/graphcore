@@ -1669,6 +1669,7 @@ export function OutputsWorkspace({
     const isCinematicV2ProductionVideo = node.nodeType === 'video_generation'
       && isCinematicV2ProductionNodeConfig(config, node.nodeType)
     const debugForceVideoGeneration = node.nodeType === 'video_generation' && !isCinematicV2ProductionVideo
+    const approveCinematicV2VideoNode = isCinematicV2ProductionVideo
     markTargetedNodes([node.key], effectiveRunScope)
     setError(null)
     try {
@@ -1680,11 +1681,19 @@ export function OutputsWorkspace({
       }
       const runInput = debugForceVideoGeneration
         ? { ...previousInput, debugSkipVideoGeneration: false }
-        : previousInput
+        : approveCinematicV2VideoNode
+          ? {
+              ...previousInput,
+              debugSkipVideoGeneration: false,
+              cinematicVideoApproved: true,
+              cinematicVideoApprovalScope: 'manual_node_run',
+              cinematicVideoProductionEstimate: cinematicV2ProductionEstimate,
+            }
+          : previousInput
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeWorkflow.id,
         prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
-        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
+        targetFormat: (approveCinematicV2VideoNode ? 'video' : activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
         selectedEntityKeys: readStringArray(runInput['sourceEntityKeys']),
         selectedSequenceUnitKeys: readStringArray(runInput['sourceSequenceUnitKeys']),
         pageCount: readNumber(runInput['pageCount']) ?? undefined,
@@ -1698,6 +1707,14 @@ export function OutputsWorkspace({
           reuseExistingUpstreamOutputs: true,
           allowStaleUpstreamOutputs: effectiveRunScope === 'node_only',
           debugForceVideoGeneration,
+          ...(approveCinematicV2VideoNode
+            ? {
+                debugSkipVideoGeneration: false,
+                cinematicVideoApproved: true,
+                cinematicVideoApprovalScope: 'manual_node_run',
+                cinematicVideoProductionEstimate: cinematicV2ProductionEstimate,
+              }
+            : {}),
         },
       })
       setActiveRunId(runResponse.run.id)
@@ -1732,6 +1749,10 @@ export function OutputsWorkspace({
       node.nodeType === 'video_generation'
       && !isCinematicV2ProductionNodeConfig(readRecord(node.config), node.nodeType)
     ))
+    const approveCinematicV2VideoNodes = uniqueNodes.some((node) => (
+      node.nodeType === 'video_generation'
+      && isCinematicV2ProductionNodeConfig(readRecord(node.config), node.nodeType)
+    ))
     markTargetedNodes(nodeKeys, runScope)
     setError(null)
     try {
@@ -1743,11 +1764,19 @@ export function OutputsWorkspace({
       }
       const runInput = debugForceVideoGeneration
         ? { ...previousInput, debugSkipVideoGeneration: false }
-        : previousInput
+        : approveCinematicV2VideoNodes
+          ? {
+              ...previousInput,
+              debugSkipVideoGeneration: false,
+              cinematicVideoApproved: true,
+              cinematicVideoApprovalScope: 'manual_node_batch_run',
+              cinematicVideoProductionEstimate: cinematicV2ProductionEstimate,
+            }
+          : previousInput
       const runResponse = await onStartOutputWorkflowRun({
         workflowId: activeWorkflow.id,
         prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
-        targetFormat: (activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
+        targetFormat: (approveCinematicV2VideoNodes ? 'video' : activeRun?.targetFormat || readTrimmedString(workflowMetadata.targetFormat) || 'pdf') as 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video',
         selectedEntityKeys: readStringArray(runInput['sourceEntityKeys']),
         selectedSequenceUnitKeys: readStringArray(runInput['sourceSequenceUnitKeys']),
         pageCount: readNumber(runInput['pageCount']) ?? undefined,
@@ -1761,6 +1790,14 @@ export function OutputsWorkspace({
           reuseExistingUpstreamOutputs: true,
           allowStaleUpstreamOutputs: runScope === 'node_only',
           debugForceVideoGeneration,
+          ...(approveCinematicV2VideoNodes
+            ? {
+                debugSkipVideoGeneration: false,
+                cinematicVideoApproved: true,
+                cinematicVideoApprovalScope: 'manual_node_batch_run',
+                cinematicVideoProductionEstimate: cinematicV2ProductionEstimate,
+              }
+            : {}),
         },
       })
       setActiveRunId(runResponse.run.id)

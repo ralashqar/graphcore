@@ -819,9 +819,19 @@ function hasStoredOutputs(value: unknown) {
   return Object.keys(asRecord(value)).length > 0
 }
 
-function isOptionalOutputWorkflowEdge(edge: Pick<OutputWorkflowEdge, 'metadata'> | Partial<Pick<OutputWorkflowEdge, 'metadata'>>) {
+function isOptionalOutputWorkflowEdge(
+  edge: Pick<OutputWorkflowEdge, 'metadata'> | Partial<Pick<OutputWorkflowEdge, 'metadata' | 'sourceNodeKey' | 'targetNodeKey' | 'targetPort'>>,
+) {
   const metadata = asRecord(edge.metadata)
-  return metadata.optional === true || metadata.optionalDependency === true
+  if (metadata.optional === true || metadata.optionalDependency === true) return true
+  const sourceNodeKey = readText(edge.sourceNodeKey)
+  const targetNodeKey = readText(edge.targetNodeKey)
+  const targetPort = readText(edge.targetPort)
+  return sourceNodeKey.startsWith('cinematic_v2_shot_')
+    && sourceNodeKey.endsWith('_asset_pack')
+    && targetNodeKey.startsWith('cinematic_v2_shot_')
+    && targetNodeKey.endsWith('_video')
+    && targetPort === 'references'
 }
 
 function cachedOutputRunId(node: OutputWorkflowNode) {
@@ -1132,7 +1142,7 @@ function cinematicImageReferencePriority(image: Record<string, unknown>, cinemat
   if (role === 'cinematic_beat_sheet' || role === 'cinematic_direction_sheet') {
     return cinematicReferenceMode === 'keyframes' ? 99 : 0
   }
-  if (role === 'cinematic_keyframe') {
+  if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') {
     const keyframeIndex = Number(image.keyframeIndex ?? asRecord(image.metadata).keyframeIndex ?? 0) || 0
     return cinematicReferenceMode === 'keyframes' ? keyframeIndex : keyframeIndex + 1
   }
@@ -5727,8 +5737,8 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     const shotMeta = { shotId: shot.id, shotIndex: shot.index }
     nodeRows.push(
       v2Node({ key: shotAssetPackKey, nodeType: 'utility_transform', label: `Shot ${shot.index} References`, x: 2460, y, config: { purpose: 'cinematic_v2_shot_asset_pack', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, maxEntityCount: 6, maxAssetKeysPerEntity: 2, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_shot_asset_packs', maxConcurrency: 12 } } }),
-      v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Selection`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: keyframeKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Panel Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe_passthrough', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_panel_keyframes', maxConcurrency: 12 } } }),
+      v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Enhancement Prompt`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
+      v2Node({ key: keyframeKey, nodeType: 'image_generation', label: `Shot ${shot.index} Enhanced Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 6, imageSize: { width: 1536, height: 864 }, aspectRatio, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_shot_keyframes', maxConcurrency: Math.min(shotPlan.shots.length, 3) } } }),
       v2Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Video Prompt`, x: 3160, y, config: { purpose: 'cinematic_v2_video_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_video_prompts', maxConcurrency: 6 } } }),
       v2Node({ key: videoKey, nodeType: 'video_generation', label: `Shot ${shot.index} Video`, x: 3440, y, config: { purpose: 'cinematic_v2_shot_video', role: 'cinematic_v2_shot_video', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'keyframes', assetPackReferenceLimit: 5, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'video_prompt', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v2_videos', maxConcurrency: Math.min(shotPlan.shots.length, 3) } } }),
     )
@@ -5751,7 +5761,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
       v2Edge({ key: `${shotAssetPackKey}__${videoPromptKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack', metadata: shotMeta }),
       v2Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt', metadata: shotMeta }),
       v2Edge({ key: `${keyframeKey}__${videoKey}_reference`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', metadata: shotMeta }),
-      v2Edge({ key: `${shotAssetPackKey}__${videoKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: videoKey, targetPort: 'references', metadata: shotMeta }),
+      v2Edge({ key: `${shotAssetPackKey}__${videoKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: videoKey, targetPort: 'references', metadata: { ...shotMeta, optional: true, optionalDependency: true } }),
       v2Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v2_timeline_assemble', targetPort: 'videos', metadata: shotMeta }),
     )
   })
@@ -9131,7 +9141,13 @@ async function executeNode(input: {
         || input.run.prompt
       if (!prompt) throw new Error('Image generation node is missing a prompt.')
       const priorStepOutputs = asRecord(input.priorStep?.outputs)
-      if (hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(asRecord(priorStepOutputs.image))) {
+      const priorImageOutput = asRecord(priorStepOutputs.image)
+      const priorIsCinematicV2PanelPassthrough = role === 'cinematic_v2_shot_keyframe' && (
+        readText(input.priorStep?.provider) === 'graphcore'
+        || readText(priorImageOutput.generatedBy) === 'deterministic_panel_passthrough'
+        || readText(priorImageOutput.keyframeMode) === 'storyboard_panel_crop'
+      )
+      if (!priorIsCinematicV2PanelPassthrough && hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(priorImageOutput)) {
         return {
           inputHash: input.priorStep.inputHash || input.inputHash,
           outputHash: input.priorStep.outputHash,
@@ -9313,6 +9329,8 @@ async function executeNode(input: {
                 : 'Planning-only cinematic beat sheet generated from the compiled take timeline.')
               : role === 'cinematic_keyframe'
                 ? 'Clean cinematic keyframe generated as a Seedance visual reference.'
+              : role === 'cinematic_v2_shot_keyframe'
+                ? 'Enhanced Cinematics V2 shot keyframe generated from the cropped storyboard panel and shot-scoped references.'
             : role === 'comic_page'
               ? 'Comic page image generated from comic script and direct entity reference sheets.'
               : 'Generated image output from the workflow.',
@@ -9359,8 +9377,14 @@ async function executeNode(input: {
         || input.run.prompt
       if (!prompt) throw new Error('Video generation node is missing a prompt.')
       const priorStepOutputs = asRecord(input.priorStep?.outputs)
+      const priorVideoOutput = asRecord(priorStepOutputs.video)
       const cinematicV2ApprovalMissing = isCinematicV2ProductionNode(config, input.node) && !cinematicVideoApprovedEnabled(input.run)
-      if (!cinematicV2ApprovalMissing && hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(asRecord(priorStepOutputs.video))) {
+      const priorVideoWasSkipped = priorVideoOutput.skipped === true
+        || priorStepOutputs.approvalRequired === true
+        || priorStepOutputs.debugSkipVideoGeneration === true
+        || readText(priorStepOutputs.skippedReason).length > 0
+        || readText(priorVideoOutput.skippedReason).length > 0
+      if (!cinematicV2ApprovalMissing && !priorVideoWasSkipped && hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(priorVideoOutput)) {
         return {
           inputHash: input.priorStep.inputHash || input.inputHash,
           outputHash: input.priorStep.outputHash,
