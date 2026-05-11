@@ -1,6 +1,20 @@
 import { z } from 'npm:zod@4'
 
 export type Modality = 'text' | 'image' | 'video' | 'audio'
+export type GenerationTask =
+  | 'world_planner'
+  | 'world_repair'
+  | 'prompt_patch'
+  | 'world_build'
+  | 'world_graph_extract'
+  | 'output_chapter_prose'
+  | 'output_comic_script'
+  | 'output_comic_planning'
+  | 'output_cover_prompt'
+  | 'output_image_job'
+  | 'prompt_suggestions'
+
+export type CostPolicy = 'free_first_safe' | 'balanced' | 'quality_first' | 'explicit_model'
 
 export interface AiModel {
   id: string // e.g., 'openai/gpt-4o', 'groq/llama-3.1-8b-instant', 'auto'
@@ -8,6 +22,11 @@ export interface AiModel {
   provider: string
   modality: Modality
   costCategory?: 'free' | 'cheap' | 'expensive'
+  supportsStrictObjectOutput?: boolean
+  supportsStreaming?: boolean
+  supportsDurableImageJobs?: boolean
+  supportsReferenceImages?: boolean
+  task?: GenerationTask
 }
 
 export interface AiProvider {
@@ -15,6 +34,40 @@ export interface AiProvider {
   name: string
   supportedModalities: Modality[]
   getAvailableModels(): AiModel[]
+  getCapabilities?(): ProviderCapability[]
+}
+
+export interface ProviderCapability {
+  provider: string
+  modality: Modality
+  defaultModelId: string
+  modelIds: string[]
+  costCategory?: 'free' | 'cheap' | 'expensive'
+  supportsStrictObjectOutput?: boolean
+  supportsStreaming?: boolean
+  supportsDurableImageJobs?: boolean
+  supportsReferenceImages?: boolean
+}
+
+export interface ResolvedGenerationAttempt {
+  providerId: string
+  modelId: string
+  task: GenerationTask
+  modality: Modality
+  costPolicy: CostPolicy
+  policyReason: string
+  attemptIndex: number
+  fallbackReason?: string | null
+}
+
+export interface GenerationMetadata {
+  provider: string
+  model: string
+  task: GenerationTask
+  usage?: any
+  attempts: ResolvedGenerationAttempt[]
+  finishReason?: string | null
+  providerRequestId?: string | null
 }
 
 // ----------------------------------------------------------------------------
@@ -30,6 +83,8 @@ export interface CoreMessage {
 
 export interface StandardTextRequest {
   modelPreference?: string // The ID of the model from the registry, or 'auto'
+  task?: GenerationTask
+  costPolicy?: CostPolicy
   system?: string
   messages: CoreMessage[]
   temperature?: number
@@ -43,9 +98,9 @@ export interface StreamHooks {
 }
 
 export interface AiTextProvider extends AiProvider {
-  generateText(req: StandardTextRequest): Promise<{ text: string; usage?: any }>
-  streamText(req: StandardTextRequest, hooks: StreamHooks): Promise<{ text: string, usage?: any }>
-  generateObject<T>(req: StandardTextRequest & { schema: z.ZodType<T> | Record<string, unknown>, schemaName?: string }): Promise<{ object: T; usage?: any }>
+  generateText(req: StandardTextRequest): Promise<{ text: string; usage?: any; finishReason?: string | null; providerRequestId?: string | null }>
+  streamText(req: StandardTextRequest, hooks: StreamHooks): Promise<{ text: string, usage?: any; finishReason?: string | null; providerRequestId?: string | null }>
+  generateObject<T>(req: StandardTextRequest & { schema: z.ZodType<T> | Record<string, unknown>, schemaName?: string }): Promise<{ object: T; usage?: any; finishReason?: string | null; providerRequestId?: string | null }>
 }
 
 // ----------------------------------------------------------------------------
@@ -53,6 +108,8 @@ export interface AiTextProvider extends AiProvider {
 // ----------------------------------------------------------------------------
 export interface StandardImageRequest {
   modelPreference?: string
+  task?: GenerationTask
+  costPolicy?: CostPolicy
   action: 'generate' | 'edit'
   prompt: string
   aspectRatio?: '1:1' | '16:9' | '2:3' | '9:16'
@@ -63,15 +120,65 @@ export interface StandardImageRequest {
 
 export interface StandardImageResponse {
   images: Array<{
-    url: string
+    url?: string
     base64?: string
     width?: number
     height?: number
   }>
+  provider?: string
+  model?: string
+  usage?: any
+  attempts?: ResolvedGenerationAttempt[]
+  finishReason?: string | null
+  providerRequestId?: string | null
+}
+
+export interface DurableImageJobRequest {
+  modelPreference?: string
+  task?: GenerationTask
+  costPolicy?: CostPolicy
+  priorProviderRequestId?: string | null
+  priorMetadata?: Record<string, unknown> | null
+  prompt: string
+  imageSize: unknown
+  quality: string
+  outputFormat: string
+  referenceImageUrls?: string[]
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: DurableImageJobProgress) => Promise<void> | void
+}
+
+export interface DurableImageJobProgress {
+  provider: string
+  model: string
+  providerRequestId: string
+  providerStatus: string
+  providerMode: string
+  lastProviderPollAt: string
+  metadata?: Record<string, unknown>
+}
+
+export interface DurableImageJobResponse {
+  provider: string
+  model: string
+  providerRequestId: string
+  providerMode: string
+  providerStatus: string
+  imageUrl: string
+  width: number | null
+  height: number | null
+  mimeType: string
+  fileName?: string | null
+  fileSize?: number | null
+  resultBody?: Record<string, unknown>
+  statusUrl?: string | null
+  responseUrl?: string | null
+  attempts: ResolvedGenerationAttempt[]
 }
 
 export interface AiImageProvider extends AiProvider {
   generateImage(req: StandardImageRequest): Promise<StandardImageResponse>
+  runImageJob?(req: DurableImageJobRequest): Promise<DurableImageJobResponse>
 }
 
 // ----------------------------------------------------------------------------
@@ -115,6 +222,24 @@ class ProviderRegistry {
       models.push(...(modality ? all.filter(m => m.modality === modality) : all))
     }
     return models
+  }
+
+  getCapabilities(modality?: Modality): ProviderCapability[] {
+    const capabilities: ProviderCapability[] = []
+    for (const provider of this.providers.values()) {
+      const providerCapabilities = provider.getCapabilities?.() ?? provider.supportedModalities.map((supportedModality) => {
+        const models = provider.getAvailableModels().filter((model) => model.modality === supportedModality)
+        return {
+          provider: provider.id,
+          modality: supportedModality,
+          defaultModelId: models[0]?.id ?? provider.id,
+          modelIds: models.map((model) => model.id),
+          costCategory: models[0]?.costCategory,
+        } satisfies ProviderCapability
+      })
+      capabilities.push(...(modality ? providerCapabilities.filter((capability) => capability.modality === modality) : providerCapabilities))
+    }
+    return capabilities
   }
 }
 

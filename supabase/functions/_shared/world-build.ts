@@ -93,6 +93,7 @@ export async function runStructuredWorldBuildModel<TPayload>({
 
   try {
     const response = await TextGateway.generateObject({
+      task: 'world_build',
       modelPreference: model,
       system: systemText,
       messages: [{ role: 'user', content: JSON.stringify(promptContext, null, 2) }],

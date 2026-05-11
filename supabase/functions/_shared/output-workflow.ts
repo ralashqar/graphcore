@@ -31,7 +31,7 @@ import {
 } from '../../../src/domain/outputWorkflow.ts'
 import { buildEbookDocumentMetadata } from '../../../src/domain/ebookDocument.ts'
 import { hashOutputGuidanceBundle, outputGuidanceBundleSchema, type OutputGuidanceBundle } from '../../../src/domain/outputSkills.ts'
-import { TextGateway } from './ai-core/gateways.ts'
+import { ImageGateway, TextGateway } from './ai-core/gateways.ts'
 import { z } from 'npm:zod@4'
 import {
   cancelOpenAiResponse,
@@ -43,7 +43,6 @@ import {
 const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'rich-comic-adaptation-v10'
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
-const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
 
 export type OutputDocumentRenderer = (input: {
   markdown: string
@@ -895,85 +894,10 @@ function sleep(ms: number) {
 }
 
 function outputWorkflowImageModel(configModel?: unknown) {
-  const configured = readText(configModel) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_MODEL')?.trim() || 'openai/gpt-image-2'
-  return configured === 'gpt-image-2' ? 'openai/gpt-image-2' : configured
-}
-
-function outputWorkflowFalTimeoutMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_TIMEOUT_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 1_200_000
-}
-
-function outputWorkflowFalPollIntervalMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 3_000
-}
-
-function buildFalHeaders(apiKey: string) {
-  return new Headers({
-    Authorization: `Key ${apiKey}`,
-    'Content-Type': 'application/json',
-  })
-}
-
-async function fetchFalJson(url: string, init: RequestInit) {
-  const response = await fetch(url, init)
-  const rawText = await response.text().catch(() => '')
-  let body: Record<string, unknown> = {}
-  if (rawText.trim()) {
-    try {
-      body = JSON.parse(rawText) as Record<string, unknown>
-    } catch {
-      body = {}
-    }
-  }
-  return { response, body, rawText }
-}
-
-function falErrorMessage(body: Record<string, unknown>, fallback: string) {
-  if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim()
-  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
-  if (typeof body.message === 'string' && body.message.trim()) return body.message.trim()
-  if (body.detail !== undefined) {
-    try {
-      return JSON.stringify(body.detail)
-    } catch {
-      // Fall through to the generic fallback below.
-    }
-  }
-  if (body.error !== undefined) {
-    try {
-      return JSON.stringify(body.error)
-    } catch {
-      // Fall through to the generic fallback below.
-    }
-  }
-  return fallback
-}
-
-function normalizeFalResultBody(body: Record<string, unknown>) {
-  return body && typeof body.response === 'object' && body.response !== null
-    ? body.response as Record<string, unknown>
-    : body
-}
-
-function extractFalImageRecord(value: unknown): Record<string, unknown> | null {
-  const record = asRecord(value)
-  const images = Array.isArray(record.images) ? record.images : []
-  for (const image of images) {
-    if (typeof image === 'string' && /^https?:\/\//i.test(image)) return { url: image }
-    const imageRecord = asRecord(image)
-    const url = readText(imageRecord.url)
-    if (url) return imageRecord
-  }
-  for (const key of ['image', 'output', 'response', 'data', 'result']) {
-    const nested = extractFalImageRecord(record[key])
-    if (nested) return nested
-  }
-  const directUrl = readText(record.url) || readText(record.output_url)
-  return directUrl ? { url: directUrl } : null
+  const configured = readText(configModel) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_MODEL')?.trim() || 'fal/openai/gpt-image-2'
+  if (configured === 'gpt-image-2' || configured === 'openai/gpt-image-2') return 'fal/openai/gpt-image-2'
+  if (configured === 'gpt-image-2/edit' || configured === 'openai/gpt-image-2/edit') return 'fal/openai/gpt-image-2/edit'
+  return configured
 }
 
 function normalizeImageSize(value: unknown) {
@@ -989,106 +913,6 @@ function normalizeImageSize(value: unknown) {
   }
   const text = readText(value)
   return text || { width: 1792, height: 2688 }
-}
-
-async function submitFalImageRequest(input: {
-  apiKey: string
-  model: string
-  prompt: string
-  imageSize: unknown
-  quality: string
-  outputFormat: string
-  referenceImageUrls?: string[]
-}) {
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    image_size: normalizeImageSize(input.imageSize),
-    quality: input.quality,
-    num_images: 1,
-    output_format: input.outputFormat,
-    sync_mode: false,
-  }
-  if (input.referenceImageUrls && input.referenceImageUrls.length > 0) {
-    body.image_urls = input.referenceImageUrls
-  }
-  return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
-    method: 'POST',
-    headers: buildFalHeaders(input.apiKey),
-    body: JSON.stringify(body),
-  })
-}
-
-async function getFalStatus(input: {
-  apiKey: string
-  model: string
-  requestId: string
-  statusUrl?: string | null
-}) {
-  const candidates = [
-    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`,
-    input.statusUrl,
-  ].filter((url, index, urls): url is string => (
-    typeof url === 'string' && url.trim().length > 0 && urls.indexOf(url) === index
-  ))
-
-  let lastResult: Awaited<ReturnType<typeof fetchFalJson>> | null = null
-  for (const candidate of candidates) {
-    const url = new URL(candidate)
-    url.searchParams.set('logs', '1')
-    const result = await fetchFalJson(url.toString(), {
-      method: 'GET',
-      headers: buildFalHeaders(input.apiKey),
-    })
-    lastResult = result
-    if (result.response.ok) return result
-    if (result.response.status !== 404 && result.response.status !== 405) return result
-  }
-  const url = new URL(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`)
-  url.searchParams.set('logs', '1')
-  return lastResult ?? fetchFalJson(url.toString(), {
-    method: 'GET',
-    headers: buildFalHeaders(input.apiKey),
-  })
-}
-
-async function getFalResult(input: {
-  apiKey: string
-  model: string
-  requestId: string
-  responseUrl?: string | null
-}) {
-  const candidates = [
-    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`,
-    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}`,
-    input.responseUrl,
-  ].filter((url, index, urls): url is string => (
-    typeof url === 'string' && url.trim().length > 0 && urls.indexOf(url) === index
-  ))
-
-  let lastResult: Awaited<ReturnType<typeof fetchFalJson>> | null = null
-  for (const url of candidates) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = await fetchFalJson(url, {
-        method: 'GET',
-        headers: buildFalHeaders(input.apiKey),
-      })
-      lastResult = result
-      if (result.response.ok) return result
-      const transient = [500, 502, 503, 504].includes(result.response.status)
-      if (!transient) break
-      await sleep(1000 * (attempt + 1))
-    }
-    if (
-      lastResult
-      && lastResult.response.status !== 404
-      && lastResult.response.status !== 405
-      && ![500, 502, 503, 504].includes(lastResult.response.status)
-    ) return lastResult
-  }
-  return lastResult ?? fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`, {
-    method: 'GET',
-    headers: buildFalHeaders(input.apiKey),
-  })
 }
 
 class WorkflowCancelledError extends Error {
@@ -2067,6 +1891,7 @@ async function generateChapterMarkdown(input: {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await TextGateway.generateText({
+        task: 'output_chapter_prose',
         modelPreference: model,
         system: [
           'You are a professional longform book writer.',
@@ -2083,8 +1908,9 @@ async function generateChapterMarkdown(input: {
       if (!markdown) throw new Error('AI provider returned an empty chapter draft.')
       return {
         markdown,
-        model,
-        providerRequestId: null,
+        model: response.model,
+        provider: response.provider,
+        providerRequestId: response.providerRequestId,
         usage: response.usage,
         attempts: attempt,
         timeoutMs,
@@ -2272,7 +2098,7 @@ function bytesToDataUrl(bytes: Uint8Array, mimeType: string) {
 
 async function downloadRemoteBytes(url: string) {
   const response = await fetch(url)
-  if (!response.ok) throw new Error(`Generated Fal image could not be downloaded (${response.status}).`)
+  if (!response.ok) throw new Error(`Generated image could not be downloaded (${response.status}).`)
   return new Uint8Array(await response.arrayBuffer())
 }
 
@@ -2320,128 +2146,6 @@ async function downloadProjectAssetBytes(client: DatabaseClient, storagePath: st
   const response = await client.storage.from('project-assets').download(storagePath)
   if (response.error || !response.data) throw new Error(response.error?.message ?? `Project asset ${storagePath} could not be downloaded.`)
   return new Uint8Array(await response.data.arrayBuffer())
-}
-
-async function waitForOutputFalImage(input: {
-  priorStep?: OutputWorkflowRunStep | null
-  apiKey: string
-  model: string
-  prompt: string
-  imageSize: unknown
-  quality: string
-  outputFormat: string
-  referenceImageUrls?: string[]
-  shouldCancel?: () => Promise<boolean>
-  onProgress?: (progress: {
-    providerRequestId: string
-    providerStatus: string
-    providerMode: string
-    lastProviderPollAt: string
-    statusUrl?: string | null
-    responseUrl?: string | null
-  }) => Promise<void>
-}) {
-  const priorMetadata = asRecord(input.priorStep?.metadata)
-  let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.falRequestId)
-  let statusUrl: string | null = readText(priorMetadata.falStatusUrl) || null
-  let responseUrl: string | null = readText(priorMetadata.falResponseUrl) || null
-
-  if (!requestId) {
-    const submit = await submitFalImageRequest({
-      apiKey: input.apiKey,
-      model: input.model,
-      prompt: input.prompt,
-      imageSize: input.imageSize,
-      quality: input.quality,
-      outputFormat: input.outputFormat,
-      referenceImageUrls: input.referenceImageUrls,
-    })
-    if (!submit.response.ok) {
-      throw new Error(falErrorMessage(submit.body, `Fal image submission failed with HTTP ${submit.response.status}.`))
-    }
-    requestId = readText(submit.body.request_id)
-    statusUrl = readText(submit.body.status_url) || null
-    responseUrl = readText(submit.body.response_url) || null
-    if (!requestId) throw new Error('Fal did not return a request id for the output image generation node.')
-  }
-
-  await input.onProgress?.({
-    providerRequestId: requestId,
-    providerStatus: 'IN_QUEUE',
-    providerMode: 'fal_queue',
-    lastProviderPollAt: new Date().toISOString(),
-    statusUrl,
-    responseUrl,
-  })
-
-  const timeoutMs = outputWorkflowFalTimeoutMs()
-  const pollIntervalMs = outputWorkflowFalPollIntervalMs()
-  const startedAt = Date.now()
-
-  while (Date.now() - startedAt < timeoutMs) {
-    if (await input.shouldCancel?.()) {
-      throw new WorkflowCancelledError()
-    }
-    const status = await getFalStatus({
-      apiKey: input.apiKey,
-      model: input.model,
-      requestId,
-      statusUrl,
-    })
-    const providerStatus = readText(status.body.status) || 'UNKNOWN'
-    await input.onProgress?.({
-      providerRequestId: requestId,
-      providerStatus,
-      providerMode: 'fal_queue',
-      lastProviderPollAt: new Date().toISOString(),
-      statusUrl,
-      responseUrl,
-    })
-
-    if (providerStatus === 'COMPLETED' || providerStatus === 'UNKNOWN') {
-      const result = await getFalResult({
-        apiKey: input.apiKey,
-        model: input.model,
-        requestId,
-        responseUrl,
-      })
-      if (!result.response.ok) {
-        if (
-          providerStatus === 'UNKNOWN'
-          && [404, 405, 409, 425].includes(result.response.status)
-        ) {
-          await sleep(pollIntervalMs)
-          continue
-        }
-        throw new Error(falErrorMessage(result.body, `Fal image result failed with HTTP ${result.response.status}.`))
-      }
-      const resultBody = normalizeFalResultBody(result.body)
-      const image = extractFalImageRecord(resultBody) ?? extractFalImageRecord(result.body)
-      const imageUrl = readText(image?.url)
-      if (!imageUrl) throw new Error('Fal completed the output image request but did not return an image URL.')
-      return {
-        requestId,
-        statusUrl,
-        responseUrl,
-        imageUrl,
-        width: Number(image?.width ?? 0) || null,
-        height: Number(image?.height ?? 0) || null,
-        mimeType: readText(image?.content_type) || `image/${input.outputFormat}`,
-        fileName: readText(image?.file_name),
-        fileSize: Number(image?.file_size ?? 0) || null,
-        resultBody,
-      }
-    }
-
-    const errorMessage = falErrorMessage(status.body, '')
-    if (errorMessage && providerStatus !== 'IN_PROGRESS' && providerStatus !== 'IN_QUEUE') {
-      throw new Error(errorMessage)
-    }
-
-    await sleep(pollIntervalMs)
-  }
-
-  throw new Error(`Fal image request timed out before completion after ${timeoutMs}ms.`)
 }
 
 async function registerImageArtifact(input: {
@@ -2965,6 +2669,7 @@ async function executeNode(input: {
         const fallbackPack = buildDeterministicComicAssetPack(context)
         const model = outputWorkflowTextModel()
         const response = await TextGateway.generateObject({
+          task: 'output_comic_planning',
           modelPreference: model,
           system: 'You select visual comic references from canonical world context and return compact JSON only.',
           messages: [{ role: 'user', content: buildComicEntitySelectorInstruction({ context, prompt, guidance }) }],
@@ -3009,9 +2714,9 @@ async function executeNode(input: {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
-          provider: 'openai',
-          model: model,
-          providerRequestId: null,
+          provider: response.provider,
+          model: response.model,
+          providerRequestId: response.providerRequestId,
         }
       }
       if (purpose === 'comic_script') {
@@ -3022,6 +2727,7 @@ async function executeNode(input: {
         const pagePlan = readFirstUpstreamRecord(input.upstream, ['pagePlan', 'page_plan'])
         const model = outputWorkflowComicTextModel()
         const response = await TextGateway.generateObject({
+          task: 'output_comic_script',
           modelPreference: model,
           system: 'You are a professional comic writer and comics editor converting an approved scene treatment and page plan into final page/panel script JSON only. Never return outline placeholders.',
           messages: [{ role: 'user', content: buildComicScriptInstruction({ context, assetPack, sceneScript, pagePlan, prompt, guidance, pageCount }) }],
@@ -3036,6 +2742,7 @@ async function executeNode(input: {
         const firstPassDiagnostics = diagnostics
         if (diagnostics.length > 0) {
           repairResponse = await TextGateway.generateObject({
+            task: 'output_comic_script',
             modelPreference: model,
             system: 'You are a senior comic script doctor. Repair invalid comic JSON into a complete production script JSON object only.',
             messages: [{ role: 'user', content: buildComicScriptRepairInstruction({
@@ -3076,9 +2783,9 @@ async function executeNode(input: {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: null,
+          provider: (repairResponse ?? response).provider,
+          model: (repairResponse ?? response).model,
+          providerRequestId: (repairResponse ?? response).providerRequestId,
         }
       }
       if (purpose === 'comic_scene_script') {
@@ -3087,6 +2794,7 @@ async function executeNode(input: {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const model = outputWorkflowComicTextModel()
         const response = await TextGateway.generateObject({
+          task: 'output_comic_planning',
           modelPreference: model,
           system: 'You are a senior comic adaptation writer. Return a rich structured dramatic scene script as JSON only, not final panel JSON.',
           messages: [{ role: 'user', content: buildComicSceneScriptInstruction({ context, assetPack, prompt, guidance, pageCount }) }],
@@ -3110,9 +2818,9 @@ async function executeNode(input: {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: null,
+          provider: response.provider,
+          model: response.model,
+          providerRequestId: response.providerRequestId,
         }
       }
       if (purpose === 'comic_page_plan') {
@@ -3122,6 +2830,7 @@ async function executeNode(input: {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const model = outputWorkflowComicTextModel()
         const response = await TextGateway.generateObject({
+          task: 'output_comic_planning',
           modelPreference: model,
           system: 'You are a senior comic editor planning page rhythm and compression. Return page-plan JSON only, not final panels.',
           messages: [{ role: 'user', content: buildComicPagePlanInstruction({ context, sceneScript, assetPack, prompt, guidance, pageCount }) }],
@@ -3150,15 +2859,16 @@ async function executeNode(input: {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: null,
+          provider: response.provider,
+          model: response.model,
+          providerRequestId: response.providerRequestId,
         }
       }
       if (purpose === 'comic_atlas_prompt') {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const model = outputWorkflowTextModel()
         const response = await TextGateway.generateText({
+          task: 'output_comic_planning',
           modelPreference: model,
           system: 'You are a comic art director writing GPT Image 2 prompts. Return one prompt only.',
           messages: [{ role: 'user', content: buildComicAtlasPromptInstruction({ context, assetPack, prompt, guidance }) }],
@@ -3171,9 +2881,9 @@ async function executeNode(input: {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: null,
+          provider: response.provider,
+          model: response.model,
+          providerRequestId: response.providerRequestId,
         }
       }
       if (purpose === 'comic_page_prompt') {
@@ -3206,6 +2916,7 @@ async function executeNode(input: {
       if (purpose === 'ebook_cover_prompt') {
         const model = outputWorkflowTextModel()
         const response = await TextGateway.generateText({
+          task: 'output_cover_prompt',
           modelPreference: model,
           system: [
             'You are a senior publishing art director writing prompts for GPT Image 2.',
@@ -3232,9 +2943,9 @@ async function executeNode(input: {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
           outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: null,
+          provider: response.provider,
+          model: response.model,
+          providerRequestId: response.providerRequestId,
         }
       }
       if (purpose === 'chapter_section_plan') {
@@ -3428,8 +3139,6 @@ async function executeNode(input: {
           providerRequestId: input.priorStep.providerRequestId,
         }
       }
-      const falApiKey = Deno.env.get('FAL_KEY')
-      if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
       const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
       const referenceLimit = role === 'comic_page' ? 1 : role === 'comic_atlas' ? 8 : 3
@@ -3438,7 +3147,9 @@ async function executeNode(input: {
         ...(await collectAssetPackReferenceUrls(input.client, input.run, assetPack, referenceLimit)),
       ].filter(Boolean).slice(0, referenceLimit)
       const baseModel = outputWorkflowImageModel(config.model)
-      const referenceModel = readText(config.referenceModel) || (baseModel.endsWith('/edit') ? baseModel : `${baseModel}/edit`)
+      const referenceModel = readText(config.referenceModel)
+        ? outputWorkflowImageModel(config.referenceModel)
+        : (baseModel.endsWith('/edit') ? baseModel : `${baseModel}/edit`)
       const model = referenceImageUrls.length > 0
         ? referenceModel
         : baseModel
@@ -3456,10 +3167,11 @@ async function executeNode(input: {
         '- Do not include GraphCore, workflow, node, schema, or internal ID wording in visible text.',
       ].filter(Boolean).join('\n')
 
-      const falResult = await waitForOutputFalImage({
-        priorStep: input.priorStep,
-        apiKey: falApiKey,
-        model,
+      const imageResult = await ImageGateway.runImageJob({
+        task: 'output_image_job',
+        modelPreference: model,
+        priorProviderRequestId: input.priorStep?.providerRequestId ?? null,
+        priorMetadata: asRecord(input.priorStep?.metadata),
         prompt: providerPrompt,
         imageSize,
         quality,
@@ -3468,16 +3180,14 @@ async function executeNode(input: {
         shouldCancel: input.shouldCancel,
         onProgress: async (progress) => {
           await input.onProgress?.({
-            provider: 'fal',
-            model,
+            provider: progress.provider,
+            model: progress.model,
             providerRequestId: progress.providerRequestId,
             metadata: {
+              ...asRecord(progress.metadata),
               providerMode: progress.providerMode,
               providerStatus: progress.providerStatus,
               lastProviderPollAt: progress.lastProviderPollAt,
-              falRequestId: progress.providerRequestId,
-              falStatusUrl: progress.statusUrl ?? null,
-              falResponseUrl: progress.responseUrl ?? null,
               imageSize: normalizeImageSize(imageSize),
               quality,
               outputFormat,
@@ -3486,23 +3196,23 @@ async function executeNode(input: {
           })
         },
       })
-      const imageBytes = await downloadRemoteBytes(falResult.imageUrl)
+      const imageBytes = await downloadRemoteBytes(imageResult.imageUrl)
       const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
       const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${outputFormat}`
-      const mimeType = falResult.mimeType || `image/${outputFormat}`
+      const mimeType = imageResult.mimeType || `image/${outputFormat}`
       await uploadBytes(input.client, storagePath, imageBytes, mimeType)
       const imageOutput = {
         assetKey,
         storagePath,
         mimeType,
-        width: falResult.width,
-        height: falResult.height,
+        width: imageResult.width,
+        height: imageResult.height,
         prompt,
         providerPrompt,
         role,
-        provider: 'fal',
-        model,
-        providerRequestId: falResult.requestId,
+        provider: imageResult.provider,
+        model: imageResult.model,
+        providerRequestId: imageResult.providerRequestId,
         referenceImageCount: referenceImageUrls.length,
         sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
         sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
@@ -3515,17 +3225,18 @@ async function executeNode(input: {
         nodeId: input.node.id,
         nodeKey: input.node.key,
         preset: input.run.preset,
-        provider: 'fal',
-        model,
+        provider: imageResult.provider,
+        model: imageResult.model,
         baseModel,
         referenceModel,
-        providerRequestId: falResult.requestId,
-        providerMode: 'fal_queue',
-        providerStatus: 'COMPLETED',
-        falRequestId: falResult.requestId,
-        falStatusUrl: falResult.statusUrl,
-        falResponseUrl: falResult.responseUrl,
-        falImageUrl: falResult.imageUrl,
+        providerRequestId: imageResult.providerRequestId,
+        providerMode: imageResult.providerMode,
+        providerStatus: imageResult.providerStatus,
+        providerAttempts: imageResult.attempts,
+        falRequestId: imageResult.provider === 'fal' ? imageResult.providerRequestId : null,
+        falStatusUrl: imageResult.statusUrl,
+        falResponseUrl: imageResult.responseUrl,
+        falImageUrl: imageResult.imageUrl,
         prompt,
         providerPrompt,
         role,
@@ -3536,8 +3247,8 @@ async function executeNode(input: {
         quality,
         outputFormat,
         byteSize: imageBytes.byteLength,
-        width: falResult.width,
-        height: falResult.height,
+        width: imageResult.width,
+        height: imageResult.height,
         storageBucket: 'project-assets',
         storagePath,
         sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
@@ -3570,8 +3281,8 @@ async function executeNode(input: {
         assetKey,
         storagePath,
         mimeType,
-        width: falResult.width,
-        height: falResult.height,
+        width: imageResult.width,
+        height: imageResult.height,
         prompt,
         providerPrompt,
         pageNumber: Number(config.pageNumber ?? 0) || null,
@@ -3583,9 +3294,9 @@ async function executeNode(input: {
         inputHash: input.inputHash,
         outputHash: hashOutputWorkflowValue(outputs),
         outputs,
-        provider: 'fal',
-        model,
-        providerRequestId: falResult.requestId,
+        provider: imageResult.provider,
+        model: imageResult.model,
+        providerRequestId: imageResult.providerRequestId,
       }
     }
     case 'utility_transform': {

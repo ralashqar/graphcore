@@ -71,6 +71,7 @@ async function generateWithOpenAi(input: {
 }) {
   try {
     const response = await TextGateway.generateObject({
+      task: 'world_graph_extract',
       modelPreference: input.model,
       system: input.instructions,
       messages: [{ role: 'user', content: input.prompt }],

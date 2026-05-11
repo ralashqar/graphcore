@@ -166,7 +166,8 @@ async function runPromptPass({
 }): Promise<PromptPassSuccess | PromptPassFailure> {
   let parsedResponse;
   try {
-    parsedResponse = await TextGateway.generateObject({
+    const response = await TextGateway.generateObject({
+      task: 'prompt_patch',
       modelPreference: payload.model,
       system: systemText,
       messages: [
@@ -175,6 +176,7 @@ async function runPromptPass({
       maxTokens: maxOutputTokens,
       schema: modelResponseSchema
     })
+    parsedResponse = response.object
   } catch (error) {
     console.error(`[prompt-patch] ${passLabel} generation failed`, {
       model: payload.model,

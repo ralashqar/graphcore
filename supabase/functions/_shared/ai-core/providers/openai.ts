@@ -1,5 +1,5 @@
-import { AiTextProvider, AiImageProvider, StandardTextRequest, StandardImageRequest, StandardImageResponse, StreamHooks, CoreMessage as GatewayMessage, AiModel } from '../registry.ts'
-import { generateText, streamText, generateObject, jsonSchema, CoreMessage, experimental_generateImage as generateImage } from 'npm:ai@6'
+import { AiTextProvider, AiImageProvider, StandardTextRequest, StandardImageRequest, StandardImageResponse, StreamHooks, CoreMessage as GatewayMessage, AiModel, ProviderCapability } from '../registry.ts'
+import { generateText, streamText, generateObject, jsonSchema, ModelMessage, experimental_generateImage as generateImage } from 'npm:ai@6'
 import { createOpenAI } from 'npm:@ai-sdk/openai@3'
 import { z } from 'npm:zod@4'
 
@@ -14,7 +14,28 @@ export class OpenAiProvider implements AiTextProvider, AiImageProvider {
       { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai', modality: 'text', costCategory: 'cheap' },
       { id: 'openai/o1-mini', name: 'o1 Mini', provider: 'openai', modality: 'text', costCategory: 'expensive' },
       { id: 'openai/dall-e-3', name: 'DALL-E 3', provider: 'openai', modality: 'image', costCategory: 'expensive' },
-      { id: 'auto', name: 'Auto (Best/Cheapest)', provider: 'auto', modality: 'text', costCategory: 'cheap' }
+    ]
+  }
+
+  getCapabilities(): ProviderCapability[] {
+    return [
+      {
+        provider: this.id,
+        modality: 'text',
+        defaultModelId: 'openai/gpt-4o-mini',
+        modelIds: this.getAvailableModels().filter((model) => model.modality === 'text').map((model) => model.id),
+        costCategory: 'cheap',
+        supportsStrictObjectOutput: true,
+        supportsStreaming: true,
+      },
+      {
+        provider: this.id,
+        modality: 'image',
+        defaultModelId: 'openai/dall-e-3',
+        modelIds: this.getAvailableModels().filter((model) => model.modality === 'image').map((model) => model.id),
+        costCategory: 'expensive',
+        supportsReferenceImages: false,
+      },
     ]
   }
 
@@ -24,13 +45,13 @@ export class OpenAiProvider implements AiTextProvider, AiImageProvider {
     })
   }
 
-  private mapMessages(system?: string, genericMessages: GatewayMessage[] = []): CoreMessage[] {
-    const msgs: CoreMessage[] = []
+  private mapMessages(system?: string, genericMessages: GatewayMessage[] = []): ModelMessage[] {
+    const msgs: ModelMessage[] = []
     if (system) msgs.push({ role: 'system', content: system })
     
     for (const msg of genericMessages) {
       if (msg.role === 'system' || msg.role === 'user' || msg.role === 'assistant' || msg.role === 'tool') {
-        msgs.push(msg as CoreMessage)
+        msgs.push(msg as ModelMessage)
       }
     }
     return msgs
@@ -41,15 +62,23 @@ export class OpenAiProvider implements AiTextProvider, AiImageProvider {
     return modelPref.split('/')[1] || 'gpt-4o-mini'
   }
 
+  private schemaFor<T>(schema: z.ZodType<T> | Record<string, unknown>, schemaName?: string) {
+    void schemaName
+    const isJsonSchema = schema && typeof schema === 'object' && !('_def' in schema)
+    return isJsonSchema
+      ? jsonSchema<T>(schema as any)
+      : schema as z.ZodType<T>
+  }
+
   async generateText(req: StandardTextRequest) {
     const openai = this.getClient()
     const result = await generateText({
       model: openai(this.resolveModelName(req.modelPreference)),
       messages: this.mapMessages(req.system, req.messages),
       temperature: req.temperature ?? 0.7,
-      maxTokens: req.maxTokens
+      maxOutputTokens: req.maxTokens
     })
-    return { text: result.text, usage: result.usage }
+    return { text: result.text, usage: result.usage, finishReason: result.finishReason ?? null, providerRequestId: (result as any).response?.id ?? null }
   }
 
   async streamText(req: StandardTextRequest, hooks: StreamHooks) {
@@ -58,7 +87,7 @@ export class OpenAiProvider implements AiTextProvider, AiImageProvider {
       model: openai(this.resolveModelName(req.modelPreference)),
       messages: this.mapMessages(req.system, req.messages),
       temperature: req.temperature ?? 0.7,
-      maxTokens: req.maxTokens
+      maxOutputTokens: req.maxTokens
     })
 
     let fullText = ''
@@ -73,24 +102,19 @@ export class OpenAiProvider implements AiTextProvider, AiImageProvider {
       await hooks.onFinish(fullText)
     }
     const usage = await result.usage
-    return { text: fullText, usage }
+    return { text: fullText, usage, finishReason: await result.finishReason, providerRequestId: (await result.response as any)?.id ?? null }
   }
 
   async generateObject<T>(req: StandardTextRequest & { schema: z.ZodType<T> | Record<string, unknown>, schemaName?: string }) {
     const openai = this.getClient()
     
-    const isJsonSchema = req.schema && typeof req.schema === 'object' && !('_def' in req.schema)
-    const finalSchema = isJsonSchema 
-      ? jsonSchema<T>(req.schemaName || 'response', req.schema as any)
-      : (req.schema as z.ZodType<T>)
-
     const result = await generateObject({
       model: openai(this.resolveModelName(req.modelPreference)),
       messages: this.mapMessages(req.system, req.messages),
-      schema: finalSchema,
+      schema: this.schemaFor(req.schema, req.schemaName),
       temperature: req.temperature ?? 0.7,
     })
-    return { object: result.object as T, usage: result.usage }
+    return { object: result.object as T, usage: result.usage, finishReason: result.finishReason ?? null, providerRequestId: (result as any).response?.id ?? null }
   }
 
   async generateImage(req: StandardImageRequest): Promise<StandardImageResponse> {

@@ -6441,6 +6441,7 @@ async function completeStreamedStorySequenceOp(input: {
   let completionData
   try {
     const response = await TextGateway.generateObject({
+      task: 'world_repair',
       modelPreference: input.model,
       system: [
         'You are GraphCore\'s streamed Story sequence repair agent.',
@@ -6583,6 +6584,7 @@ async function completeStorySequenceOps(input: {
   let completionData
   try {
     const response = await TextGateway.generateObject({
+      task: 'world_repair',
       modelPreference: input.model,
       system: [
         'You are GraphCore\'s focused Story sequence completion agent.',
@@ -8521,6 +8523,7 @@ async function generatePromptPlan(input: {
       let parsedJson: Record<string, unknown>
       try {
         const response = await TextGateway.generateObject({
+          task: attempt === 0 ? 'world_planner' : 'world_repair',
           modelPreference: input.payload.model,
           system: attemptInstructions,
           messages: [{ role: 'user', content: prompt }],
@@ -10768,6 +10771,7 @@ async function inferInitialSeedContext(input: {
   let parsedJson: Record<string, unknown>
   try {
     const response = await TextGateway.generateObject({
+      task: 'world_planner',
       modelPreference: input.model,
       system: [
         'Infer the GraphCore project type and subtype from the user prompt and optional source context.',
@@ -11665,6 +11669,7 @@ async function repairMalformedStreamRecordWithLlm(input: {
   let parsedJson: Record<string, unknown>
   try {
     const response = await TextGateway.generateObject({
+      task: 'world_repair',
       modelPreference: repairModel,
       system: [
         'Repair exactly one malformed streamed GraphCore generation record.',
@@ -12642,6 +12647,7 @@ async function runWorldPromptGenerationJob(input: {
       streamRecordBuffer = ''
       let streamEventCount = 0
       const response = await TextGateway.streamText({
+        task: 'world_planner',
         modelPreference: model,
         system: pass.instructions,
         messages: [{
@@ -13910,6 +13916,7 @@ async function generateIncrementalManifest(input: {
   let parsedJson: Record<string, unknown>
   try {
     const response = await TextGateway.generateObject({
+      task: 'world_planner',
       modelPreference: input.payload.model,
       system: instructions,
       messages: [{ role: 'user', content: prompt }],
@@ -14030,6 +14037,7 @@ async function generateIncrementalWorkItemPlan(input: {
   let parsedJson: Record<string, unknown>
   try {
     const response = await TextGateway.generateObject({
+      task: input.repairFeedback ? 'world_repair' : 'world_planner',
       modelPreference: input.payload.model,
       system: instructions,
       messages: [{ role: 'user', content: prompt }],
