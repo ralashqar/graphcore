@@ -44,6 +44,7 @@ import {
   cinematicV2SceneStateSchema,
   cinematicV2ShotSchema,
   cinematicV2ShotPlanSchema,
+  cinematicV2StoryboardLayoutSchema,
   cinematicV2TimelineSchema,
   providerSafeCinematicV2DurationSeconds,
   validateCinematicV2ShotPlanReferences,
@@ -1057,6 +1058,18 @@ function readFirstUpstreamText(upstream: Record<string, Record<string, unknown>>
     }
   }
   return ''
+}
+
+function readVideoPromptFromUpstream(upstream: Record<string, Record<string, unknown>>) {
+  const preferredKeys = Object.keys(upstream).filter((key) => key === 'video_prompt' || key.endsWith('_video_prompt') || key.includes('video_prompt'))
+  for (const key of preferredKeys) {
+    const outputs = upstream[key]
+    for (const field of ['providerPrompt', 'prompt', 'text']) {
+      const value = readText(outputs?.[field])
+      if (value) return value
+    }
+  }
+  return readFirstUpstreamText(upstream, ['providerPrompt', 'prompt', 'text'])
 }
 
 function readFirstUpstreamArray(upstream: Record<string, Record<string, unknown>>, fields: string[]) {
@@ -5103,19 +5116,18 @@ function buildCinematicV2VideoPrompt(input: {
   const entities = compactCinematicEntityAnchors(input.assetPack, 6)
   const dialogue = shot.dialogue.map((line) => `${line.speakerRefId}: "${line.text}" (${line.emotion})`).join(' ')
   return [
-    `Generate one ${shot.providerDurationSeconds}-second Seedance 2 Omni Reference cinematic video clip at ${input.aspectRatio}, ${input.resolution}.`,
-    'Use the provided refined keyframe as the strict opening visual reference.',
-    `Shot: ${shot.title}.`,
-    `Purpose: ${shot.purpose}.`,
-    `Action: ${shot.action || shot.description}.`,
-    dialogue ? `Visible dialogue timing note: ${dialogue}. This MVP does not require final lip sync; keep speaking motion restrained and stable.` : '',
-    `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.lens}; ${shot.camera.movement}.`,
-    `Continuity: ${shot.continuityInputs.join('; ')} ${sceneState.visualContinuity.cameraMovementStyle}.`,
-    `Lighting/color: ${sceneState.lighting.direction}; ${sceneState.lighting.quality}; ${sceneState.lighting.colorTemperature}; ${sceneState.lighting.contrast}.`,
-    `Screen direction: ${shot.camera.screenDirectionRule || 'preserve the established scene layout.'}`,
-    entities.length > 0 ? `Canonical identity locks:\n${compactForPrompt({ entities }, 1800)}` : '',
-    input.prompt ? `User brief: ${input.prompt}` : '',
-    'Preserve exact identity, costume, prop shape, location geometry, lighting direction, and color grade. Keep motion grounded and physically believable. No text, UI, captions, watermark, storyboard borders, maps, arrows, or labels.',
+    `SEEDANCE VIDEO PROMPT: generate one ${shot.providerDurationSeconds}-second cinematic clip at ${input.aspectRatio}, ${input.resolution}.`,
+    `Start from @Image1, the refined keyframe for shot ${shot.index}: ${shot.title}. Treat it as the opening frame and identity lock.`,
+    `Primary action over the clip: ${shot.action || shot.description}.`,
+    `Motion direction and blocking: ${shot.camera.screenDirectionRule || readText(input.layoutPlan.summary) || 'preserve the established scene geography and screen direction.'}`,
+    `Camera behavior: ${shot.camera.framing}, ${shot.camera.angle}, ${shot.camera.lens}; ${shot.camera.movement}.`,
+    `End state: complete the action naturally without changing location, costume, face, prop design, or scene geography.`,
+    dialogue ? `Visible dialogue note: ${dialogue}. Keep mouth motion subtle and stable; final lip sync is not required in this MVP.` : '',
+    `Lighting and grade: ${sceneState.lighting.direction}; ${sceneState.lighting.quality}; ${sceneState.lighting.colorTemperature}; ${sceneState.lighting.contrast}.`,
+    `Continuity locks: ${[...shot.continuityInputs, sceneState.visualContinuity.cameraMovementStyle].filter(Boolean).join('; ')}.`,
+    entities.length > 0 ? `Reference identity locks, do not narrate these onscreen:\n${compactForPrompt({ entities }, 1600)}` : '',
+    input.prompt ? `User brief context: ${input.prompt}` : '',
+    'Negative constraints: no captions, no subtitles, no UI, no watermarks, no storyboard borders, no maps, no arrows, no labels, no visible reference-sheet artifacts, no sudden redesigns, no teleporting, no scene cuts inside this shot.',
   ].filter(Boolean).join('\n\n')
 }
 
@@ -5715,8 +5727,8 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     const shotMeta = { shotId: shot.id, shotIndex: shot.index }
     nodeRows.push(
       v2Node({ key: shotAssetPackKey, nodeType: 'utility_transform', label: `Shot ${shot.index} References`, x: 2460, y, config: { purpose: 'cinematic_v2_shot_asset_pack', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, maxEntityCount: 6, maxAssetKeysPerEntity: 2, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_shot_asset_packs', maxConcurrency: 12 } } }),
-      v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Prompt`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: keyframeKey, nodeType: 'image_generation', label: `Shot ${shot.index} Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 6, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'keyframe', 'image_prompt', 'entity_reference'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_keyframes', maxConcurrency: 4 } } }),
+      v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Selection`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
+      v2Node({ key: keyframeKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Panel Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe_passthrough', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_panel_keyframes', maxConcurrency: 12 } } }),
       v2Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Video Prompt`, x: 3160, y, config: { purpose: 'cinematic_v2_video_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_video_prompts', maxConcurrency: 6 } } }),
       v2Node({ key: videoKey, nodeType: 'video_generation', label: `Shot ${shot.index} Video`, x: 3440, y, config: { purpose: 'cinematic_v2_shot_video', role: 'cinematic_v2_shot_video', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'keyframes', assetPackReferenceLimit: 5, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'video_prompt', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v2_videos', maxConcurrency: Math.min(shotPlan.shots.length, 3) } } }),
     )
@@ -7359,6 +7371,25 @@ async function runFfmpeg(args: string[]) {
   const output = await command.output()
   const stderr = new TextDecoder().decode(output.stderr)
   return { ok: output.success, code: output.code, stderr }
+}
+
+async function probeImageSize(path: string) {
+  try {
+    const command = new Deno.Command('ffprobe', {
+      args: ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'json', path],
+      stdout: 'piped',
+      stderr: 'piped',
+    })
+    const output = await command.output()
+    if (!output.success) return null
+    const payload = JSON.parse(new TextDecoder().decode(output.stdout)) as { streams?: Array<{ width?: number; height?: number }> }
+    const stream = payload.streams?.[0]
+    const width = Number(stream?.width ?? 0)
+    const height = Number(stream?.height ?? 0)
+    return width > 0 && height > 0 ? { width, height } : null
+  } catch {
+    return null
+  }
 }
 
 async function stitchVideoBytes(input: {
@@ -9323,7 +9354,7 @@ async function executeNode(input: {
     case 'video_generation': {
       const config = asRecord(input.node.config)
       const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
-      const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+      const prompt = readVideoPromptFromUpstream(input.upstream)
         || readText(input.node.inputs.prompt)
         || input.run.prompt
       if (!prompt) throw new Error('Video generation node is missing a prompt.')
@@ -9824,32 +9855,51 @@ async function executeNode(input: {
         const sheetImage = readFirstUpstreamImage(input.upstream, ['image'])
         const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
         if (!sheetImage) throw new Error('Cinematics V2 panel extraction requires a storyboard sheet image.')
-        const layout = buildCinematicV2StoryboardLayout(shotPlan.shots.length)
+        const configuredLayout = cinematicV2StoryboardLayoutSchema.safeParse(config.storyboardLayout)
+        const imageLayout = cinematicV2StoryboardLayoutSchema.safeParse(sheetImage.storyboardLayout ?? asRecord(sheetImage.metadata).storyboardLayout)
+        const layout = configuredLayout.success
+          ? configuredLayout.data
+          : imageLayout.success
+            ? imageLayout.data
+            : buildCinematicV2StoryboardLayout(shotPlan.shots.length)
+        const shotsToExtract = shotPlan.shots.slice(0, layout.panelCount)
         const sheetStoragePath = readText(sheetImage.storagePath) || readText(sheetImage.storage_path)
         const sheetBytes = sheetStoragePath
           ? await downloadProjectAssetBytes(input.client, sheetStoragePath)
           : await downloadRemoteBytes(readText(sheetImage.url))
         const sourceMimeType = readText(sheetImage.mimeType) || readText(sheetImage.mime_type) || 'image/webp'
-        const width = Number(sheetImage.width ?? 0) || Number(asRecord(config.imageSize).width ?? 0) || 1536
-        const height = Number(sheetImage.height ?? 0) || Number(asRecord(config.imageSize).height ?? 0) || 864
-        const panelWidth = Math.max(1, Math.floor(width / layout.columns))
-        const panelHeight = Math.max(1, Math.floor(height / layout.rows))
         const tempDir = await Deno.makeTempDir({ prefix: 'graphcore-cinematic-panels-' })
         const panels: Record<string, unknown>[] = []
         try {
           const sourcePath = `${tempDir}/storyboard.${sourceMimeType.includes('png') ? 'png' : sourceMimeType.includes('jpeg') || sourceMimeType.includes('jpg') ? 'jpg' : 'webp'}`
           await Deno.writeFile(sourcePath, sheetBytes)
-          for (const [index, shot] of shotPlan.shots.entries()) {
+          const probedSize = await probeImageSize(sourcePath)
+          const width = probedSize?.width
+            || Number(sheetImage.width ?? 0)
+            || Number(asRecord(config.imageSize).width ?? 0)
+            || 1536
+          const height = probedSize?.height
+            || Number(sheetImage.height ?? 0)
+            || Number(asRecord(config.imageSize).height ?? 0)
+            || 864
+          for (const [index, shot] of shotsToExtract.entries()) {
             const row = Math.floor(index / layout.columns)
             const column = index % layout.columns
-            const cropX = column * panelWidth
-            const cropY = row * panelHeight
+            const cropX = Math.floor((width * column) / layout.columns)
+            const cropY = Math.floor((height * row) / layout.rows)
+            const nextX = Math.floor((width * (column + 1)) / layout.columns)
+            const nextY = Math.floor((height * (row + 1)) / layout.rows)
+            const panelWidth = Math.max(1, Math.min(width - cropX, nextX - cropX))
+            const panelHeight = Math.max(1, Math.min(height - cropY, nextY - cropY))
             const outputPath = `${tempDir}/panel-${String(index + 1).padStart(3, '0')}.webp`
             const crop = await runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${panelWidth}:${panelHeight}:${cropX}:${cropY}`, outputPath])
-            const panelBytes = crop.ok ? await Deno.readFile(outputPath) : sheetBytes
+            if (!crop.ok) {
+              throw new Error(`Cinematics V2 panel crop failed for shot ${shot.index}: ${crop.stderr.slice(0, 1200)}`)
+            }
+            const panelBytes = await Deno.readFile(outputPath)
             const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.cinematic-v2-panel-${slugify(shot.id)}`
             const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/cinematic-v2-panels/${slugify(shot.id)}.webp`
-            const mimeType = crop.ok ? 'image/webp' : sourceMimeType
+            const mimeType = 'image/webp'
             await uploadBytes(input.client, storagePath, panelBytes, mimeType)
             const metadata = {
               generatedBy: 'output_workflow',
@@ -9868,7 +9918,7 @@ async function executeNode(input: {
               row,
               column,
               crop: { x: cropX, y: cropY, width: panelWidth, height: panelHeight },
-              cropMode: crop.ok ? 'ffmpeg_crop' : 'source_sheet_fallback',
+              cropMode: 'ffmpeg_crop',
               storageBucket: 'project-assets',
               storagePath,
             }
@@ -9951,6 +10001,38 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-keyframe-prompt-v1' }
       }
+      if (purpose === 'cinematic_v2_shot_keyframe_passthrough') {
+        const config = asRecord(input.node.config)
+        const shotId = readText(config.shotId)
+        const shotIndex = Number(config.shotIndex ?? 0) || 0
+        const shotPlan = cinematicV2ShotPlanSchema.safeParse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
+        const selectedImage = readFirstUpstreamImage(input.upstream, ['image'])
+        if (!selectedImage) throw new Error('Cinematics V2 panel keyframe requires a cropped storyboard panel image.')
+        const shot = shotPlan.success
+          ? shotPlan.data.shots.find((entry) => entry.id === shotId) ?? shotPlan.data.shots.find((entry) => entry.index === shotIndex) ?? null
+          : null
+        const image = {
+          ...selectedImage,
+          role: 'cinematic_v2_shot_keyframe',
+          sourceRole: readText(selectedImage.role) || readText(asRecord(selectedImage.metadata).role) || 'cinematic_v2_storyboard_panel',
+          sourcePanelAssetKey: readText(selectedImage.assetKey),
+          sourcePanelStoragePath: readText(selectedImage.storagePath) || readText(selectedImage.storage_path),
+          shotId: readText(selectedImage.shotId) || shot?.id || shotId || null,
+          shotIndex: Number(selectedImage.shotIndex ?? 0) || shot?.index || shotIndex || null,
+          generatedBy: 'deterministic_panel_passthrough',
+          keyframeMode: 'storyboard_panel_crop',
+          planningOnly: true,
+          planning_only: true,
+        }
+        const outputs = {
+          image,
+          keyframe: image,
+          shot,
+          deterministic: true,
+          text: `Selected cropped storyboard panel as the shot ${image.shotIndex ?? ''} animatic keyframe.`.trim(),
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-panel-keyframe-v1' }
+      }
       if (purpose === 'cinematic_v2_video_prompt') {
         const config = asRecord(input.node.config)
         const shotId = readText(config.shotId)
@@ -9978,7 +10060,7 @@ async function executeNode(input: {
           sceneState,
           layoutPlan,
           assetPack,
-          image: upstreamImages[0] ?? null,
+          primaryReferenceImage: upstreamImages[0] ?? null,
           referenceImageCount: upstreamImages.length,
           durationSeconds: shot.providerDurationSeconds,
           guidance,
