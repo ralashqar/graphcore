@@ -162,8 +162,8 @@
 
 .timeline-preview-shell {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 8px;
+  padding: 10px;
 }
 
 .timeline-preview-stage {
@@ -182,8 +182,10 @@
   width: 100%;
   height: 100%;
   min-height: 0;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
   display: block;
+  background: #020617;
 }
 
 .timeline-preview-placeholder {
@@ -238,40 +240,86 @@
 
 .timeline-transport {
   display: grid;
-  gap: 10px;
+  grid-template-columns: max-content max-content max-content minmax(180px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(3, 8, 14, 0.54);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .timeline-transport-copy {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.timeline-transport-copy .eyebrow {
+  display: none;
+}
+
+.timeline-transport-copy span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.timeline-transport-copy span:nth-of-type(2) {
+  display: none;
 }
 
 .timeline-transport-actions {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.timeline-transport-actions .compact,
+.timeline-zoom-controls .compact {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 0.72rem;
 }
 
 .timeline-zoom-row {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.timeline-zoom-row > .eyebrow {
+  display: none;
 }
 
 .timeline-zoom-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.timeline-zoom-controls span {
+  display: none;
+}
+
+.timeline-zoom-controls strong {
+  min-width: 42px;
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .timeline-zoom-range {
-  width: min(220px, 100%);
+  width: 120px;
 }
 
 .timeline-range {
   width: 100%;
+  min-width: 0;
 }
 
 .timeline-layout {
@@ -814,6 +862,24 @@
 }
 
 @media (max-width: 900px) {
+  .timeline-transport {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-transport-copy,
+  .timeline-transport-actions,
+  .timeline-zoom-controls {
+    flex-wrap: wrap;
+  }
+
+  .timeline-zoom-row {
+    display: grid;
+  }
+
+  .timeline-zoom-range {
+    width: min(180px, 100%);
+  }
+
   .app-code-workspace {
     grid-template-columns: minmax(0, 1fr);
   }

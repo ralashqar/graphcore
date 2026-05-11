@@ -659,7 +659,7 @@
 }
 
 .outputs-cinematic-timeline-panel .timeline-preview-stage {
-  height: clamp(260px, 36dvh, 460px);
+  height: clamp(340px, 50dvh, 620px);
 }
 
 .outputs-cinematic-timeline-panel .timeline-sidebar {
