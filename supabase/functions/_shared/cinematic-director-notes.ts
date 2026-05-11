@@ -24,6 +24,7 @@ import {
   mapOutputWorkflowRow,
   outputWorkflowEdgeSelect,
   outputWorkflowNodeSelect,
+  outputWorkflowNodeStatusSelect,
   outputWorkflowSelect,
   loadOutputWorkflowRunBundle,
 } from './output-workflow.ts'
@@ -255,7 +256,7 @@ export async function applyCinematicDirectorPatchToWorkflow(input: {
   }))
 
   const refreshedNodesResponse = await (input.client.from('output_workflow_nodes') as any)
-    .select(outputWorkflowNodeSelect)
+    .select(outputWorkflowNodeStatusSelect)
     .eq('workflow_id', input.context.workflow.id)
     .order('created_at', { ascending: true })
   if (refreshedNodesResponse.error) throw new Error(refreshedNodesResponse.error.message)

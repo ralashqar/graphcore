@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import {
+  cinematicV2PerformanceBeatSchema,
   cinematicV2SceneLayoutPlanSchema,
   cinematicV2SceneStateSchema,
   cinematicV2ShotPlanSchema,
@@ -49,6 +50,7 @@ const shotPatchSchema = z.object({
   action: z.string().max(1600).optional(),
   visibleCharacterRefIds: z.array(z.string()).max(12).optional(),
   speakerRefIds: z.array(z.string()).max(12).optional(),
+  performanceBeats: z.array(cinematicV2PerformanceBeatSchema).max(12).optional(),
   locationRefId: z.string().nullable().optional(),
   propRefIds: z.array(z.string()).max(12).optional(),
   continuityInputs: z.array(z.string()).max(16).optional(),
@@ -318,7 +320,7 @@ function inverseForShotPatch(shot: Record<string, unknown>, patch: Record<string
       inverse.camera = Object.fromEntries(Object.keys(cameraPatch).map((field) => [field, priorCamera[field] ?? '']))
     } else if (key === 'locationRefId') {
       inverse.locationRefId = typeof shot.locationRefId === 'string' ? shot.locationRefId : null
-    } else if (['visibleCharacterRefIds', 'speakerRefIds', 'propRefIds', 'continuityInputs'].includes(key)) {
+    } else if (['visibleCharacterRefIds', 'speakerRefIds', 'propRefIds', 'continuityInputs', 'performanceBeats'].includes(key)) {
       inverse[key] = Array.isArray(shot[key]) ? [...shot[key] as unknown[]] : []
     } else if (key === 'requiresLipSync') {
       inverse.requiresLipSync = Boolean(shot.requiresLipSync)
@@ -459,12 +461,33 @@ export function buildFallbackCinematicDirectorPatch(input: {
       const duration = lowerNote.includes('hold') || lowerNote.includes('longer') || lowerNote.includes('slower')
         ? Math.min(8, Math.max(shot.editorialDurationSeconds + 1, shot.editorialDurationSeconds * 1.25))
         : null
+      const shouldPatchPerformance = lowerNote.includes('intimidat')
+        || lowerNote.includes('tense')
+        || lowerNote.includes('hopeful')
+        || lowerNote.includes('confident')
+        || lowerNote.includes('nervous')
+        || lowerNote.includes('softer')
+      const performanceBeats = shouldPatchPerformance
+        ? (shot.visibleCharacterRefIds.length > 0 ? shot.visibleCharacterRefIds : [shot.speakerRefIds[0]].filter(Boolean)).map((characterRefId, index) => ({
+          characterRefId,
+          valence: lowerNote.includes('hopeful') || lowerNote.includes('softer') || lowerNote.includes('confident') ? 0.45 : -0.35,
+          arousal: lowerNote.includes('tense') || lowerNote.includes('intimidat') || lowerNote.includes('nervous') ? 0.78 : 0.48,
+          confidence: lowerNote.includes('confident') ? 0.78 : lowerNote.includes('nervous') ? 0.22 : 0.5,
+          dominance: lowerNote.includes('intimidat') && index === 0 ? 0.82 : 0.45,
+          bodyLanguage: lowerNote.includes('nervous') ? 'tight posture, guarded shoulders' : lowerNote.includes('confident') ? 'open posture, steadier stance' : input.note,
+          facialExpression: lowerNote.includes('tense') ? 'focused tension held in the eyes and mouth' : input.note,
+          gaze: lowerNote.includes('intimidat') ? 'direct, controlled stare' : 'motivated by the shot eyeline',
+          gesture: 'small readable gesture shaped by the director note',
+          voiceEnergy: shot.dialogue.length > 0 ? input.note : undefined,
+        }))
+        : null
       operations.push({
         op: 'update_shot',
         shotId,
         set: {
           ...(Object.keys(camera).length > 0 ? { camera } : {}),
           ...(duration ? { editorialDurationSeconds: duration } : {}),
+          ...(performanceBeats ? { performanceBeats } : {}),
           description: `${shot.description || shot.title} Director note: ${input.note}`,
           action: shot.action ? `${shot.action} ${input.note}` : input.note,
         },

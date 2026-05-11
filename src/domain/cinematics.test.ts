@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildCinematicShotTimingMap,
+  buildCinematicV2StoryboardGroupPlan,
   buildCinematicV2StoryboardLayout,
   buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromPresetFamily,
@@ -17,6 +18,7 @@ import {
   parseTakeStoryboardPanelScriptText,
   providerSafeCinematicV2DurationSeconds,
   validateCinematicV2ShotPlanReferences,
+  cinematicV2ScreenplayDraftSchema,
   cinematicV2SceneLayoutPlanSchema,
   cinematicV2SceneStateSchema,
   cinematicV2ShotPlanSchema,
@@ -37,6 +39,21 @@ import {
 } from './worldBuild.ts'
 
 test('Cinematics V2 schemas validate scene state, layout, short shots, and storyboard grids', () => {
+  const screenplay = cinematicV2ScreenplayDraftSchema.parse({
+    title: 'Arena Faceoff',
+    screenplayMarkdown: 'Kharzag enters the arena.\n\nBrakk waits in silence.\n\nKharzag says, "You should have stayed buried."',
+    sceneObjective: 'Turn a duel premise into a tense confrontation.',
+    emotionalArc: 'ritual tension -> threat -> impact',
+    suggestedDurationSeconds: 28,
+    sourceRefIds: ['kharzag', 'brakk', 'arena'],
+    visualMotifs: ['dust haze', 'low sunset rim light'],
+  })
+  assert.equal(screenplay.suggestedDurationSeconds, 28)
+  assert.equal(cinematicV2ScreenplayDraftSchema.parse({
+    title: 'Raw Screenplay',
+    screenplayMarkdown: 'EXT. ARENA - SUNSET\n\nKharzag steps into the light.',
+  }).title, 'Raw Screenplay')
+
   const sceneState = cinematicV2SceneStateSchema.parse({
     sceneId: 'scene_1',
     title: 'Arena Faceoff',
@@ -82,6 +99,17 @@ test('Cinematics V2 schemas validate scene state, layout, short shots, and story
         editorialDurationSeconds: 2.5,
         providerDurationSeconds: providerSafeCinematicV2DurationSeconds(2.5),
         visibleCharacterRefIds: ['kharzag', 'brakk'],
+        performanceBeats: [{
+          characterRefId: 'kharzag',
+          valence: -0.35,
+          arousal: 0.78,
+          confidence: 0.62,
+          dominance: 0.58,
+          bodyLanguage: 'shoulders forward, grip tight',
+          facialExpression: 'controlled anger',
+          gaze: 'locked on Brakk',
+          gesture: 'slow cleaver lift',
+        }],
         locationRefId: 'arena',
         camera: { framing: 'wide', angle: 'high', lens: '28mm', movement: 'push', screenDirectionRule: 'left/right locked' },
       },
@@ -111,10 +139,43 @@ test('Cinematics V2 schemas validate scene state, layout, short shots, and story
         camera: { framing: 'tight impact', angle: 'low', lens: '35mm', movement: 'short lateral track', screenDirectionRule: 'attack left-to-right' },
       },
     ],
+    performanceArc: [{
+      characterRefId: 'kharzag',
+      startState: 'angry restraint',
+      endState: 'violent commitment',
+      arc: 'arousal rises while valence stays low',
+    }],
   })
 
+  assert.equal(shotPlan.shots[0].performanceBeats[0].arousal, 0.78)
+  assert.throws(() => cinematicV2ShotPlanSchema.parse({
+    ...shotPlan,
+    shots: [{
+      ...shotPlan.shots[0],
+      performanceBeats: [{ ...shotPlan.shots[0].performanceBeats[0], arousal: 1.5 }],
+    }],
+  }))
+  assert.deepEqual(buildCinematicV2StoryboardLayout(2), { rows: 2, columns: 2, panelCount: 2 })
   assert.deepEqual(buildCinematicV2StoryboardLayout(3), { rows: 2, columns: 2, panelCount: 3 })
+  assert.deepEqual(buildCinematicV2StoryboardLayout(5), { rows: 3, columns: 3, panelCount: 5 })
   assert.deepEqual(buildCinematicV2StoryboardLayout(9), { rows: 3, columns: 3, panelCount: 9 })
+  assert.deepEqual(buildCinematicV2StoryboardLayout(12), { rows: 3, columns: 3, panelCount: 9 })
+  const groupedStoryboard = buildCinematicV2StoryboardGroupPlan({
+    ...shotPlan,
+    shots: Array.from({ length: 23 }, (_, index) => ({
+      ...shotPlan.shots[0],
+      id: `shot_${index + 1}`,
+      index: index + 1,
+      title: `Shot ${index + 1}`,
+    })),
+    totalEditorialDurationSeconds: 92,
+  })
+  assert.equal(groupedStoryboard.groups.length, 3)
+  assert.ok(groupedStoryboard.groups.every((group) => group.panelCount <= 9))
+  assert.deepEqual(
+    groupedStoryboard.groups.map((group) => `${group.rows}x${group.columns}`),
+    ['3x3', '3x3', '3x3'],
+  )
   assert.equal(providerSafeCinematicV2DurationSeconds(1.2), 4)
   assert.equal(providerSafeCinematicV2DurationSeconds(16), 15)
   assert.deepEqual(validateCinematicV2ShotPlanReferences({
@@ -141,6 +202,17 @@ test('Cinematics V2 timeline projection maps editorial clips, active shots, and 
         providerDurationSeconds: 4,
         description: 'The arena opens under sunset.',
         visibleCharacterRefIds: ['kharzag', 'brakk'],
+        performanceBeats: [{
+          characterRefId: 'kharzag',
+          valence: -0.2,
+          arousal: 0.6,
+          confidence: 0.5,
+          dominance: 0.5,
+          bodyLanguage: 'measured stance',
+          facialExpression: 'watchful',
+          gaze: 'toward Brakk',
+          gesture: 'still grip',
+        }],
         locationRefId: 'arena',
         camera: { framing: 'wide', angle: 'high', lens: '28mm', movement: 'push', screenDirectionRule: 'locked' },
       },
@@ -183,6 +255,7 @@ test('Cinematics V2 timeline projection maps editorial clips, active shots, and 
   assert.equal(projection.shots[0]?.endSeconds, 2.5)
   assert.equal(projection.shots[0]?.previewAssetKey, 'video_shot_1')
   assert.equal(projection.shots[0]?.previewKind, 'video')
+  assert.equal(projection.shots[0]?.performanceBeats[0]?.facialExpression, 'watchful')
   assert.equal(projection.shots[1]?.previewAssetKey, 'keyframe_shot_2')
   assert.equal(projection.shots[1]?.previewKind, 'image')
   assert.equal(findTimelineShotAtSeconds(projection, 3)?.id, 'shot_2')
@@ -1286,7 +1359,7 @@ test('story storyboard board prompt uses simple panel beats and omits heavy styl
     entitySummaries: ['Kharzag: orc warrior.', 'Brakk: tauren bull-man.'],
   })
 
-  assert.match(prompt, /3x3|2x3|2x2|1x2/i)
+  assert.match(prompt, /3x3|2x2/i)
   assert.match(prompt, /PANEL 1: Kharzag and Brakk clash swords\./i)
   assert.match(prompt, /Brakk: tauren bull-man\./i)
   assert.doesNotMatch(prompt, /grayscale wash/i)

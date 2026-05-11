@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets.ts'
 import {
@@ -47,6 +47,16 @@ function formatTimecode(seconds: number) {
   const remainderSeconds = wholeSeconds % 60
   const frames = Math.floor((total - wholeSeconds) * 10)
   return `${String(minutes).padStart(2, '0')}:${String(remainderSeconds).padStart(2, '0')}.${frames}`
+}
+
+function formatPerformanceNumber(value: number) {
+  return Number.isFinite(value) ? value.toFixed(2).replace(/\.?0+$/, '') : '0'
+}
+
+function performanceToneLabel(valence: number, arousal: number) {
+  const valenceLabel = valence < -0.25 ? 'low valence' : valence > 0.25 ? 'high valence' : 'neutral valence'
+  const arousalLabel = arousal > 0.66 ? 'high arousal' : arousal < 0.33 ? 'low arousal' : 'medium arousal'
+  return `${valenceLabel}, ${arousalLabel}`
 }
 
 function isEditableTarget(target: EventTarget | null) {
@@ -118,6 +128,13 @@ export function CinematicTimelinePlayer({
   const timelineWidth = timelineTrackWidth(projection, pixelsPerSecond)
   const zoomPercent = Math.round((pixelsPerSecond / BASE_PIXELS_PER_SECOND) * 100)
   const activeRefs = useMemo(() => activeShot?.activeRefIds ?? [], [activeShot])
+  const performanceArcPoints = useMemo(() => (projection?.shots ?? []).map((shot) => {
+    const beats = shot.performanceBeats
+    const averageValence = beats.length > 0 ? beats.reduce((sum, beat) => sum + beat.valence, 0) / beats.length : 0
+    const averageArousal = beats.length > 0 ? beats.reduce((sum, beat) => sum + beat.arousal, 0) / beats.length : 0
+    const averageConfidence = beats.length > 0 ? beats.reduce((sum, beat) => sum + beat.confidence, 0) / beats.length : 0
+    return { shot, averageValence, averageArousal, averageConfidence }
+  }), [projection?.shots])
   const directorScopeSummary = directorScopeMode === 'scene'
     ? 'Whole scene'
     : directorScopeMode === 'shot_range'
@@ -169,9 +186,9 @@ export function CinematicTimelinePlayer({
     }
   }, [buildDirectorScope, directorNoteText, directorNotes])
 
-  const applyDirectorPreview = useCallback(async () => {
+  const applyDirectorPreview = useCallback(async (explicitPreview?: CinematicDirectorPatchPreview | null) => {
     if (!directorNotes) return
-    const preview = directorPreview ?? directorPreviewRef.current
+    const preview = explicitPreview ?? directorPreview ?? directorPreviewRef.current
     if (!preview) {
       setDirectorError('Preview the director note before applying it.')
       return
@@ -515,6 +532,28 @@ export function CinematicTimelinePlayer({
                 ))}
               </div>
 
+              {performanceArcPoints.some((point) => point.shot.performanceBeats.length > 0) ? (
+                <div className="timeline-performance-arc" aria-label="Performance emotion arc">
+                  {performanceArcPoints.map(({ shot, averageValence, averageArousal, averageConfidence }) => (
+                    <button
+                      className={shot.id === activeShot?.id ? 'timeline-performance-arc-segment is-active' : 'timeline-performance-arc-segment'}
+                      key={`performance-${shot.id}`}
+                      onClick={() => setClampedPlayhead(shot.startSeconds)}
+                      style={{
+                        left: shot.startSeconds * pixelsPerSecond,
+                        width: Math.max(24, shot.durationSeconds * pixelsPerSecond),
+                        '--arc-valence': String(Math.round(((averageValence + 1) / 2) * 100)),
+                        '--arc-arousal': String(Math.round(averageArousal * 100)),
+                      } as CSSProperties}
+                      title={`${shot.title}: valence ${formatPerformanceNumber(averageValence)}, arousal ${formatPerformanceNumber(averageArousal)}, confidence ${formatPerformanceNumber(averageConfidence)}`}
+                      type="button"
+                    >
+                      <span style={{ height: `${Math.max(12, Math.round(10 + averageArousal * 24))}px` }} />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
               <div className="timeline-track-shell">
                 <div className="timeline-track-label">
                   <span className="eyebrow">Shots</span>
@@ -676,6 +715,33 @@ export function CinematicTimelinePlayer({
             ) : null}
           </div>
 
+          {activeShot && activeShot.performanceBeats.length > 0 ? (
+            <div className="timeline-sidebar-section">
+              <span className="eyebrow">Performance</span>
+              <div className="timeline-performance-list">
+                {activeShot.performanceBeats.map((beat) => (
+                  <div className="timeline-performance-card" key={beat.characterRefId}>
+                    <div className="timeline-performance-card-header">
+                      <strong>{beat.characterRefId}</strong>
+                      <span>{performanceToneLabel(beat.valence, beat.arousal)}</span>
+                    </div>
+                    <div className="timeline-performance-meter-row" aria-label={`Performance values for ${beat.characterRefId}`}>
+                      <span>V {formatPerformanceNumber(beat.valence)}</span>
+                      <span>A {formatPerformanceNumber(beat.arousal)}</span>
+                      <span>C {formatPerformanceNumber(beat.confidence)}</span>
+                      <span>D {formatPerformanceNumber(beat.dominance)}</span>
+                    </div>
+                    {[beat.facialExpression, beat.bodyLanguage, beat.gaze, beat.gesture, beat.voiceEnergy].filter(Boolean).length > 0 ? (
+                      <p>
+                        {[beat.facialExpression, beat.bodyLanguage, beat.gaze, beat.gesture, beat.voiceEnergy].filter(Boolean).join(' · ')}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="timeline-sidebar-section">
             <span className="eyebrow">Active References</span>
             <h3>{activeRefs.length}</h3>
@@ -751,7 +817,7 @@ export function CinematicTimelinePlayer({
                   <button
                     className="primary-button compact"
                     disabled={directorBusy || directorPreview.status === 'requires_scene_replan'}
-                    onClick={() => void applyDirectorPreview()}
+                    onClick={() => void applyDirectorPreview(directorPreview)}
                     type="button"
                   >
                     {directorBusy ? 'Applying...' : 'Apply & Regenerate Animatic'}

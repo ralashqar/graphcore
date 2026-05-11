@@ -45,6 +45,10 @@ export function errorResponse(error: unknown, fallbackMessage: string) {
     return json({ error: error.message }, { status: error.status })
   }
 
+  if (error instanceof Error && error.name === 'ZodError') {
+    return json({ error: error.message }, { status: 400 })
+  }
+
   return json(
     {
       error: error instanceof Error ? error.message : fallbackMessage,

@@ -20,6 +20,7 @@ Deno.serve(async (request) => {
     const bundle = await loadOutputWorkflowRunBundle(client, payload.runId, {
       includeNodeOutputs: false,
       includeRunPayload: false,
+      includeStepOutputs: false,
     })
     const artifacts = await hydrateOutputArtifactSignedUrls(client, bundle.run.artifacts)
     const run = {

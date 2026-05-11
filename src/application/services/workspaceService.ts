@@ -89,6 +89,7 @@ export const workspaceService = {
   continueWorldSeedGeneration: graphcoreWorkspaceAdapter.continueWorldSeedGeneration,
   startWorldPromptTurn: graphcoreWorkspaceAdapter.startWorldPromptTurn,
   subscribeOutputSignals: graphcoreWorkspaceAdapter.subscribeOutputSignals,
+  subscribeOutputWorkflowGraphSignals: graphcoreWorkspaceAdapter.subscribeOutputWorkflowGraphSignals,
   subscribeWorldPromptEvents: graphcoreWorkspaceAdapter.subscribeWorldPromptEvents,
   subscribeCinematicRunSignals: graphcoreWorkspaceAdapter.subscribeCinematicRunSignals,
   syncWorldGraphFromDefinitions: graphcoreWorkspaceAdapter.syncWorldGraphFromDefinitions,

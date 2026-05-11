@@ -303,6 +303,17 @@ function hasCachedNodeOutput(node: OutputWorkflowNode | undefined) {
   return Object.keys(readRecord(node?.outputs)).length > 0
 }
 
+function readNodeOutputPreview(node: OutputWorkflowNode | undefined) {
+  const preview = readRecord(readRecord(node?.metadata).outputPreview)
+  const text = readTrimmedString(preview.text) || readTrimmedString(preview.preview)
+  if (text) return text
+  const assetKeys = readStringArray(preview.assetKeys)
+  if (assetKeys.length > 0) return `Generated assets: ${assetKeys.join(', ')}`
+  const outputBytes = Number(preview.outputBytes)
+  if (Number.isFinite(outputBytes) && outputBytes > 0) return `Output cached (${Math.round(outputBytes / 1024)} KB). Select the node to hydrate full output.`
+  return ''
+}
+
 function localRunButtonLabel(input: {
   label: string
   scope: OutputWorkflowRunScope
@@ -478,11 +489,13 @@ export function OutputWorkflowGraphOverlay({
     ? readOutputPreview({ ...selectedCachedOutputSource, errorMessage: null, provider: null, model: null })
     : ''
   const selectedOutputPreview = selectedStep
-    ? readOutputPreview(selectedStep) || selectedCachedOutputPreview
-    : selectedCachedOutputPreview
+    ? readOutputPreview(selectedStep) || selectedCachedOutputPreview || readNodeOutputPreview(selectedNode ?? undefined)
+    : selectedCachedOutputPreview || readNodeOutputPreview(selectedNode ?? undefined)
   const selectedArtifactImage = selectedNode ? artifactImageByNodeKeyMap.get(selectedNode.key) ?? null : null
+  const selectedPreviewAssetKey = readStringArray(readRecord(readRecord(selectedNode?.metadata).outputPreview).assetKeys)[0]
   const selectedImageAssetKey = imageOutputAssetKey(selectedStep)
     || imageOutputAssetKey(selectedCachedOutputSource)
+    || selectedPreviewAssetKey
     || selectedArtifactImage?.assetKey
   const selectedImageAsset = selectedImageAssetKey
     ? safeAssets.find((asset) => asset.key === selectedImageAssetKey) ?? null
@@ -517,6 +530,7 @@ export function OutputWorkflowGraphOverlay({
   const hasAvailableNodeOutput = (node: OutputWorkflowNode | undefined) => {
     if (!node) return false
     if (hasCachedNodeOutput(node)) return true
+    if (readNodeOutputPreview(node)) return true
     const step = stepsByNodeKey.get(node.key)
     if (Object.keys(readRecord(step?.outputs)).length > 0) return true
     return Boolean(artifactImageByNodeKeyMap.get(node.key))
@@ -536,7 +550,7 @@ export function OutputWorkflowGraphOverlay({
   const selectedMissingCachedInputs = selectedNode ? missingCachedInputKeysForNode(selectedNode) : []
   const selectedDirtyCachedInputs = selectedIncomingEdges
     .map((edge) => nodeByKey.get(edge.sourceNodeKey))
-    .filter((node): node is OutputWorkflowNode => Boolean(node?.dirty && hasCachedNodeOutput(node)))
+    .filter((node): node is OutputWorkflowNode => Boolean(node?.dirty && hasAvailableNodeOutput(node)))
     .map((node) => node.key)
   const selectedCacheLabel = selectedIncomingEdges.length === 0
     ? 'No upstream cache required'
@@ -639,7 +653,8 @@ export function OutputWorkflowGraphOverlay({
             ? 'completed'
             : outputWorkflowStepStatusKey(step)
         const artifactImage = artifactImageByNodeKeyMap.get(node.key) ?? null
-        const imageAssetKey = imageOutputAssetKey(step) || imageOutputAssetKey(cachedOutputSource) || artifactImage?.assetKey
+        const previewAssetKey = readStringArray(readRecord(readRecord(node.metadata).outputPreview).assetKeys)[0]
+        const imageAssetKey = imageOutputAssetKey(step) || imageOutputAssetKey(cachedOutputSource) || previewAssetKey || artifactImage?.assetKey
         const imageUrl = imageAssetKey
           ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) || artifactImageUrlByAssetKey.get(imageAssetKey) || artifactImage?.url || null
           : artifactImage?.url ?? null
@@ -647,6 +662,7 @@ export function OutputWorkflowGraphOverlay({
         const dimensions = graphNodeDimensions(node, imageSize)
         const outputPreview = readOutputPreview(step)
           || readOutputPreview({ ...cachedOutputSource, errorMessage: null, provider: null, model: null })
+          || readNodeOutputPreview(node)
         const hasOutput = Boolean(imageUrl || outputPreview || step?.errorMessage)
         return {
           id: node.key,

@@ -672,7 +672,7 @@ export const cinematicV2ParsedScriptSchema = z.object({
   locationRefId: z.string().nullable().default(null),
   propRefIds: z.array(z.string()).default([]),
   beats: z.array(cinematicV2ScriptBeatSchema).min(1),
-  targetDurationSeconds: z.number().positive().max(60).nullable().default(null),
+  targetDurationSeconds: z.number().positive().max(180).nullable().default(null),
   diagnostics: z.array(z.string()).default([]),
 })
 
@@ -761,6 +761,17 @@ export const cinematicV2ReferencePlanSchema = z.object({
   confidence: z.number().min(0).max(1).default(0.75),
 })
 
+export const cinematicV2ScreenplayDraftSchema = z.object({
+  title: z.string().default('Cinematic Scene'),
+  screenplayMarkdown: z.string().min(1),
+  sceneObjective: z.string().default(''),
+  emotionalArc: z.string().default(''),
+  suggestedDurationSeconds: z.number().positive().max(180).nullable().default(null),
+  sourceRefIds: z.array(z.string()).default([]),
+  visualMotifs: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
+
 export const cinematicV2DialogueLineSchema = z.object({
   id: z.string(),
   speakerRefId: z.string(),
@@ -768,6 +779,19 @@ export const cinematicV2DialogueLineSchema = z.object({
   emotion: z.string().default(''),
   startSeconds: z.number().nonnegative().nullable().default(null),
   endSeconds: z.number().nonnegative().nullable().default(null),
+})
+
+export const cinematicV2PerformanceBeatSchema = z.object({
+  characterRefId: z.string(),
+  valence: z.number().min(-1).max(1).default(0),
+  arousal: z.number().min(0).max(1).default(0.5),
+  confidence: z.number().min(0).max(1).default(0.5),
+  dominance: z.number().min(0).max(1).default(0.5),
+  bodyLanguage: z.string().default(''),
+  facialExpression: z.string().default(''),
+  gaze: z.string().default(''),
+  gesture: z.string().default(''),
+  voiceEnergy: z.string().optional(),
 })
 
 export const cinematicV2ShotSchema = z.object({
@@ -783,6 +807,7 @@ export const cinematicV2ShotSchema = z.object({
   dialogue: z.array(cinematicV2DialogueLineSchema).default([]),
   speakerRefIds: z.array(z.string()).default([]),
   visibleCharacterRefIds: z.array(z.string()).default([]),
+  performanceBeats: z.array(cinematicV2PerformanceBeatSchema).default([]),
   locationRefId: z.string().nullable().default(null),
   propRefIds: z.array(z.string()).default([]),
   continuityInputs: z.array(z.string()).default([]),
@@ -799,8 +824,14 @@ export const cinematicV2ShotSchema = z.object({
 
 export const cinematicV2ShotPlanSchema = z.object({
   sceneId: z.string().default('scene_1'),
-  totalEditorialDurationSeconds: z.number().positive().max(90),
-  shots: z.array(cinematicV2ShotSchema).min(1).max(20),
+  totalEditorialDurationSeconds: z.number().positive().max(180),
+  shots: z.array(cinematicV2ShotSchema).min(1).max(36),
+  performanceArc: z.array(z.object({
+    characterRefId: z.string(),
+    startState: z.string().default(''),
+    endState: z.string().default(''),
+    arc: z.string().default(''),
+  })).default([]),
   audioPlan: z.object({
     ambience: z.string().default(''),
     music: z.string().default(''),
@@ -817,9 +848,27 @@ export const cinematicV2StoryboardLayoutSchema = z.object({
   panelCount: z.number().int().positive(),
 })
 
+export const cinematicV2StoryboardGroupSchema = z.object({
+  id: z.string(),
+  index: z.number().int().positive(),
+  shotIds: z.array(z.string()).min(1).max(9),
+  summary: z.string().default(''),
+  rows: z.number().int().positive(),
+  columns: z.number().int().positive(),
+  panelCount: z.number().int().positive().max(9),
+  continuityNotes: z.array(z.string()).default([]),
+})
+
+export const cinematicV2StoryboardGroupPlanSchema = z.object({
+  groups: z.array(cinematicV2StoryboardGroupSchema).min(1).max(8),
+  maxPanelsPerSheet: z.number().int().positive().max(9).default(9),
+  diagnostics: z.array(z.string()).default([]),
+})
+
 export const cinematicV2StoryboardSheetSchema = z.object({
   id: z.string(),
   sceneId: z.string().default('scene_1'),
+  storyboardGroupId: z.string().nullable().default(null),
   assetKey: z.string().nullable().default(null),
   storagePath: z.string().nullable().default(null),
   rows: z.number().int().positive(),
@@ -832,11 +881,20 @@ export const cinematicV2StoryboardSheetSchema = z.object({
 export const cinematicV2PanelAssetSchema = z.object({
   id: z.string(),
   shotId: z.string(),
+  shotIndex: z.number().int().positive().nullable().default(null),
+  storyboardGroupId: z.string().nullable().default(null),
+  panelIndexInGroup: z.number().int().nonnegative().nullable().default(null),
   assetKey: z.string().nullable().default(null),
   storagePath: z.string().nullable().default(null),
   sourceSheetAssetKey: z.string().nullable().default(null),
   row: z.number().int().nonnegative(),
   column: z.number().int().nonnegative(),
+  cropRect: z.object({
+    x: z.number().int().nonnegative(),
+    y: z.number().int().nonnegative(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+  }).nullable().default(null),
 })
 
 export const cinematicV2ShotKeyframeSchema = z.object({
@@ -848,6 +906,23 @@ export const cinematicV2ShotKeyframeSchema = z.object({
   prompt: z.string().default(''),
   sourceAssetKeys: z.array(z.string()).default([]),
   qualityScore: z.number().min(0).max(1).nullable().default(null),
+})
+
+export const cinematicV2KeyframeQaSchema = z.object({
+  shotId: z.string(),
+  shotIndex: z.number().int().positive(),
+  status: z.enum(['passed', 'needs_review', 'missing_media']).default('needs_review'),
+  expectedEntityRefIds: z.array(z.string()).default([]),
+  expectedEntityCount: z.number().int().nonnegative().default(0),
+  issueCategories: z.array(z.enum([
+    'missing_keyframe',
+    'wrong_character_count',
+    'missing_signature_detail',
+    'duplicate_subject_risk',
+    'storyboard_artifact_risk',
+    'prompt_adherence_risk',
+  ])).default([]),
+  notes: z.array(z.string()).default([]),
 })
 
 export const cinematicV2VideoTaskSchema = z.object({
@@ -889,17 +964,49 @@ export type CinematicV2ParsedScript = z.infer<typeof cinematicV2ParsedScriptSche
 export type CinematicV2SceneState = z.infer<typeof cinematicV2SceneStateSchema>
 export type CinematicV2SceneLayoutPlan = z.infer<typeof cinematicV2SceneLayoutPlanSchema>
 export type CinematicV2ReferencePlan = z.infer<typeof cinematicV2ReferencePlanSchema>
+export type CinematicV2ScreenplayDraft = z.infer<typeof cinematicV2ScreenplayDraftSchema>
+export type CinematicV2PerformanceBeat = z.infer<typeof cinematicV2PerformanceBeatSchema>
 export type CinematicV2Shot = z.infer<typeof cinematicV2ShotSchema>
 export type CinematicV2ShotPlan = z.infer<typeof cinematicV2ShotPlanSchema>
 export type CinematicV2StoryboardLayout = z.infer<typeof cinematicV2StoryboardLayoutSchema>
+export type CinematicV2StoryboardGroupPlan = z.infer<typeof cinematicV2StoryboardGroupPlanSchema>
+export type CinematicV2KeyframeQa = z.infer<typeof cinematicV2KeyframeQaSchema>
 
 export function buildCinematicV2StoryboardLayout(shotCount: number): CinematicV2StoryboardLayout {
   const panelCount = Math.max(1, Math.min(9, Math.ceil(shotCount)))
   if (panelCount <= 1) return { rows: 1, columns: 1, panelCount }
-  if (panelCount <= 2) return { rows: 1, columns: 2, panelCount }
   if (panelCount <= 4) return { rows: 2, columns: 2, panelCount }
-  if (panelCount <= 6) return { rows: 2, columns: 3, panelCount }
   return { rows: 3, columns: 3, panelCount }
+}
+
+export function deriveCinematicV2MaxShotCount(durationSeconds: number | null | undefined) {
+  const duration = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) ? durationSeconds : 64
+  return Math.max(4, Math.min(36, Math.ceil(duration / 4)))
+}
+
+export function buildCinematicV2StoryboardGroupPlan(shotPlan: CinematicV2ShotPlan, maxPanelsPerSheet = 9): CinematicV2StoryboardGroupPlan {
+  const maxPanels = Math.max(1, Math.min(9, Math.floor(maxPanelsPerSheet) || 9))
+  const groups: z.infer<typeof cinematicV2StoryboardGroupSchema>[] = []
+  for (let index = 0; index < shotPlan.shots.length; index += maxPanels) {
+    const shots = shotPlan.shots.slice(index, index + maxPanels)
+    const layout = buildCinematicV2StoryboardLayout(shots.length)
+    const groupIndex = groups.length + 1
+    groups.push({
+      id: `cinematic_v2_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
+      index: groupIndex,
+      shotIds: shots.map((shot) => shot.id),
+      summary: shots.map((shot) => shot.title).filter(Boolean).join(' / '),
+      rows: layout.rows,
+      columns: layout.columns,
+      panelCount: layout.panelCount,
+      continuityNotes: [],
+    })
+  }
+  return cinematicV2StoryboardGroupPlanSchema.parse({
+    groups,
+    maxPanelsPerSheet: maxPanels,
+    diagnostics: shotPlan.shots.length > maxPanels ? [`Split ${shotPlan.shots.length} shots into ${groups.length} storyboard sheets.`] : [],
+  })
 }
 
 export function providerSafeCinematicV2DurationSeconds(editorialDurationSeconds: number) {
@@ -2254,9 +2361,7 @@ function buildTakeRepresentativeStillPrompt(input: {
 
 export function buildSimpleStoryboardGridLabel(panelCount: number) {
   if (panelCount <= 1) return '1x1'
-  if (panelCount <= 2) return '1x2'
   if (panelCount <= 4) return '2x2'
-  if (panelCount <= 6) return '2x3'
   if (panelCount <= 9) return '3x3'
   if (panelCount <= 12) return '3x4'
   return '4x4'

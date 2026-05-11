@@ -1,4 +1,4 @@
-import { requireUserClient } from '../_shared/auth.ts'
+import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
   isTerminalOutputWorkflowRunStatus,
@@ -29,6 +29,7 @@ Deno.serve(async (request) => {
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client } = await requireUserClient(request, 'get-output-request-status')
+    const admin = createAdminClient('get-output-request-status')
     const payload = outputRequestStatusRequestSchema.parse(await request.json())
 
     const requestResponse = await client
@@ -46,10 +47,10 @@ Deno.serve(async (request) => {
     let artifacts = []
     if (outputRequest.workflowId) {
       const [workflowResponse, nodeResponse, edgeResponse, artifactResponse] = await Promise.all([
-        client.from('output_workflows').select(outputWorkflowSelect).eq('id', outputRequest.workflowId).single(),
-        client.from('output_workflow_nodes').select(outputWorkflowNodeStatusSelect).eq('workflow_id', outputRequest.workflowId).order('created_at', { ascending: true }),
-        client.from('output_workflow_edges').select(outputWorkflowEdgeSelect).eq('workflow_id', outputRequest.workflowId).order('created_at', { ascending: true }),
-        client.from('output_artifacts').select(outputArtifactSelect).eq('workflow_id', outputRequest.workflowId).order('created_at', { ascending: false }),
+        admin.from('output_workflows').select(outputWorkflowSelect).eq('id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).single(),
+        admin.from('output_workflow_nodes').select(outputWorkflowNodeStatusSelect).eq('workflow_id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).order('created_at', { ascending: true }),
+        admin.from('output_workflow_edges').select(outputWorkflowEdgeSelect).eq('workflow_id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).order('created_at', { ascending: true }),
+        admin.from('output_artifacts').select(outputArtifactSelect).eq('workflow_id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).order('created_at', { ascending: false }),
       ])
       if (!workflowResponse.error && workflowResponse.data) workflow = mapOutputWorkflowRow(workflowResponse.data)
       if (nodeResponse.error) throw new Error(nodeResponse.error.message)
@@ -57,15 +58,16 @@ Deno.serve(async (request) => {
       if (artifactResponse.error) throw new Error(artifactResponse.error.message)
       nodes = compactOutputWorkflowNodesForStatus((nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow))
       edges = (edgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow)
-      artifacts = await hydrateOutputArtifactSignedUrls(client, (artifactResponse.data ?? []).map(mapOutputArtifactRow))
+      artifacts = await hydrateOutputArtifactSignedUrls(admin, (artifactResponse.data ?? []).map(mapOutputArtifactRow))
     }
     if (outputRequest.latestRunId) {
-      const bundle = await loadOutputWorkflowRunBundle(client, outputRequest.latestRunId, {
+      const bundle = await loadOutputWorkflowRunBundle(admin, outputRequest.latestRunId, {
         includeNodeOutputs: false,
         includeRunPayload: false,
+        includeStepOutputs: false,
       })
       run = compactOutputWorkflowRunForStatus(bundle.run)
-      artifacts = bundle.run.artifacts.length > 0 ? bundle.run.artifacts : artifacts
+      artifacts = bundle.run.artifacts.length > 0 ? await hydrateOutputArtifactSignedUrls(admin, bundle.run.artifacts) : artifacts
       if (isTerminalOutputWorkflowRunStatus(bundle.run.status) && outputRequest.status !== bundle.run.status) {
         const updateResponse = await client
           .from('output_requests')

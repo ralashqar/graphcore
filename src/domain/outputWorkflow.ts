@@ -8,7 +8,7 @@ import {
   resolveOutputSkillsForNode,
 } from './outputSkills.ts'
 import { projectContextSchema } from './projectContext.ts'
-import { buildCinematicV2StoryboardLayout } from './cinematics.ts'
+import { buildCinematicV2StoryboardLayout, deriveCinematicV2MaxShotCount } from './cinematics.ts'
 import {
   worldEntitySchema,
   worldRelationshipSchema,
@@ -37,6 +37,7 @@ export const outputWorkflowNodeTypeSchema = z.enum([
 export const outputWorkflowRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputImageGenerationQualitySchema = z.enum(['low', 'medium', 'high'])
 export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'webp'])
+export const cinematicV2AnimaticModeSchema = z.enum(['fast_panels', 'quality_keyframes'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -355,6 +356,7 @@ export const outputWorkflowPlanRequestSchema = z.object({
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
   cinematicPipelineVersion: z.enum(['v1_take_blocks', 'v2_shot_orchestration']).optional(),
+  cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -396,6 +398,7 @@ export const outputRequestStartRequestSchema = z.object({
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
   cinematicPipelineVersion: z.enum(['v1_take_blocks', 'v2_shot_orchestration']).optional(),
+  cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -528,6 +531,33 @@ export const outputWorkflowRunStatusResponseSchema = z.object({
   ok: z.literal(true),
   run: outputWorkflowRunSchema,
   terminal: z.boolean().default(false),
+})
+
+export const outputWorkflowGraphRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  workflowId: z.string().min(1),
+  runId: z.string().min(1).nullable().optional(),
+  selectedNodeKey: z.string().min(1).nullable().optional(),
+  includeSelectedNodeOutput: z.boolean().default(false),
+})
+
+export const outputWorkflowSelectedNodeOutputSchema = z.object({
+  nodeKey: z.string(),
+  outputs: looseRecordSchema.default({}),
+  truncated: z.boolean().default(false),
+})
+
+export const outputWorkflowGraphResponseSchema = z.object({
+  ok: z.literal(true),
+  workflow: outputWorkflowSchema.nullable().default(null),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+  run: outputWorkflowRunSchema.nullable().default(null),
+  artifacts: z.array(outputArtifactSchema).default([]),
+  assets: z.array(looseRecordSchema).default([]),
+  graphRevision: z.string().default(''),
+  selectedNodeOutput: outputWorkflowSelectedNodeOutputSchema.nullable().default(null),
 })
 
 export const outputWorkflowCancelResponseSchema = z.object({
@@ -1176,6 +1206,7 @@ type CinematicResolution = NonNullable<z.infer<typeof outputWorkflowPlanRequestS
 type CinematicPresetFamily = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['cinematicPresetFamily']>
 type CinematicReferenceMode = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['cinematicReferenceMode']>
 type CinematicPipelineVersion = NonNullable<z.infer<typeof outputWorkflowPlanRequestSchema>['cinematicPipelineVersion']>
+type CinematicV2AnimaticMode = z.infer<typeof cinematicV2AnimaticModeSchema>
 
 type OutputImageGenerationQuality = z.infer<typeof outputImageGenerationQualitySchema>
 type OutputImageGenerationOutputFormat = z.infer<typeof outputImageGenerationOutputFormatSchema>
@@ -2474,6 +2505,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
   const resolution: CinematicResolution = request.videoResolution ?? '720p'
   const generateAudio = false
   const cinematicReferenceMode: CinematicReferenceMode = request.cinematicReferenceMode ?? 'keyframes_and_storyboard'
+  const cinematicV2AnimaticMode: CinematicV2AnimaticMode = request.cinematicV2AnimaticMode ?? 'fast_panels'
   const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault
   const videoProvider = resolveDefaultVideoProvider()
   const videoModel = resolveDefaultVideoModel(videoProvider, resolution)
@@ -2484,7 +2516,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
     : sequenceTitle
       ? `${title} - ${sequenceTitle} Cinematic V2`
       : `${title} Cinematic V2`
-  const maxShotCount = 9
+  const maxShotCount = deriveCinematicV2MaxShotCount(null)
   const storyboardLayout = buildCinematicV2StoryboardLayout(maxShotCount)
   const nodes = [
     nodeBase({
@@ -2510,10 +2542,14 @@ export function buildCinematicV2ShotOrchestrationPlan(
       y: 300,
       config: {
         skillKeys: [
+          'cinematic_screenwriting_craft',
           'cinematic_sequence_structure',
+          'cinematic_directorial_language',
           'cinematic_shot_direction',
           'cinematic_beat_sheet_planning',
+          'storyboard_panel_accuracy',
           'cinematic_keyframe_prompting',
+          'cinematic_keyframe_reference_repair',
           'seedance_reference_video_prompting',
           'entity_reference_fidelity',
           'character_reference_continuity',
@@ -2557,12 +2593,27 @@ export function buildCinematicV2ShotOrchestrationPlan(
       },
     }),
     nodeBase({
+      key: 'cinematic_v2_screenplay_author',
+      nodeType: 'text_llm',
+      label: 'Author Screenplay',
+      x: 1000,
+      y: 120,
+      inputs: { prompt: 'Author the creative screenplay treatment for this V2 cinematic.' },
+      config: {
+        purpose: 'cinematic_v2_screenplay_author',
+        cinematicPipelineVersion: 'v2_shot_orchestration' satisfies CinematicPipelineVersion,
+        skillKeys: ['cinematic_screenwriting_craft', 'cinematic_sequence_structure', 'provider_prompt_hygiene'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'llm', groupKey: 'cinematic_v2_planning', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
       key: 'cinematic_v2_script_parse',
       nodeType: 'text_llm',
       label: 'Parse Script',
-      x: 1000,
+      x: 1320,
       y: 120,
-      inputs: { prompt: 'Parse the user prompt or script into cinematic beats.' },
+      inputs: { prompt: 'Parse the authored screenplay into cinematic beats.' },
       config: {
         purpose: 'cinematic_v2_script_parse',
         cinematicPipelineVersion: 'v2_shot_orchestration' satisfies CinematicPipelineVersion,
@@ -2574,7 +2625,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
       key: 'cinematic_v2_scene_compile',
       nodeType: 'text_llm',
       label: 'Compile Scene State',
-      x: 1320,
+      x: 1640,
       y: 120,
       config: {
         purpose: 'cinematic_v2_scene_compile',
@@ -2586,7 +2637,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
       key: 'cinematic_v2_layout_plan',
       nodeType: 'text_llm',
       label: 'Plan Blocking',
-      x: 1640,
+      x: 1960,
       y: 120,
       config: {
         purpose: 'cinematic_v2_layout_plan',
@@ -2598,7 +2649,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
       key: 'cinematic_v2_shot_plan',
       nodeType: 'text_llm',
       label: 'Plan Shots',
-      x: 1960,
+      x: 2280,
       y: 120,
       config: {
         purpose: 'cinematic_v2_shot_plan',
@@ -2611,10 +2662,23 @@ export function buildCinematicV2ShotOrchestrationPlan(
       },
     }),
     nodeBase({
+      key: 'cinematic_v2_storyboard_group_plan',
+      nodeType: 'utility_transform',
+      label: 'Storyboard Groups',
+      x: 2600,
+      y: 120,
+      config: {
+        purpose: 'cinematic_v2_storyboard_group_plan',
+        cinematicPipelineVersion: 'v2_shot_orchestration' satisfies CinematicPipelineVersion,
+        maxPanelsPerSheet: 9,
+        execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_storyboard_group_plan', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
       key: 'cinematic_v2_dynamic_shot_fanout',
       nodeType: 'utility_transform',
       label: 'Materialize Shot Pipeline',
-      x: 2280,
+      x: 2920,
       y: 120,
       config: {
         purpose: 'cinematic_v2_dynamic_shot_fanout',
@@ -2625,6 +2689,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
         resolution,
         generateAudio,
         cinematicReferenceMode,
+        cinematicV2AnimaticMode,
         videoProvider,
         videoModel,
         debugSkipVideoGeneration,
@@ -2639,33 +2704,43 @@ export function buildCinematicV2ShotOrchestrationPlan(
     edgeBase('world_context', 'context', 'cinematic_v2_reference_select', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_reference_select', 'guidance'),
     edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v2_reference_select', 'asset_pack'),
+    edgeBase('world_context', 'context', 'cinematic_v2_screenplay_author', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_v2_screenplay_author', 'guidance'),
+    edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_screenplay_author', 'asset_pack'),
     edgeBase('world_context', 'context', 'cinematic_v2_script_parse', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_script_parse', 'guidance'),
     edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_script_parse', 'asset_pack'),
+    edgeBase('cinematic_v2_screenplay_author', 'text', 'cinematic_v2_script_parse', 'screenplay'),
     edgeBase('world_context', 'context', 'cinematic_v2_scene_compile', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_scene_compile', 'guidance'),
     edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_scene_compile', 'asset_pack'),
+    edgeBase('cinematic_v2_screenplay_author', 'text', 'cinematic_v2_scene_compile', 'screenplay'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_scene_compile', 'script_parse'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_layout_plan', 'guidance'),
     edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_layout_plan', 'asset_pack'),
+    edgeBase('cinematic_v2_screenplay_author', 'text', 'cinematic_v2_layout_plan', 'screenplay'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_layout_plan', 'script_parse'),
     edgeBase('cinematic_v2_scene_compile', 'text', 'cinematic_v2_layout_plan', 'scene_state'),
     edgeBase('skill_context', 'guidance', 'cinematic_v2_shot_plan', 'guidance'),
     edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_shot_plan', 'asset_pack'),
+    edgeBase('cinematic_v2_screenplay_author', 'text', 'cinematic_v2_shot_plan', 'screenplay'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_shot_plan', 'script_parse'),
     edgeBase('cinematic_v2_scene_compile', 'text', 'cinematic_v2_shot_plan', 'scene_state'),
     edgeBase('cinematic_v2_layout_plan', 'text', 'cinematic_v2_shot_plan', 'layout_plan'),
+    edgeBase('cinematic_v2_shot_plan', 'text', 'cinematic_v2_storyboard_group_plan', 'shot_plan'),
     edgeBase('cinematic_v2_reference_select', 'asset_pack', 'cinematic_v2_dynamic_shot_fanout', 'asset_pack'),
+    edgeBase('cinematic_v2_screenplay_author', 'text', 'cinematic_v2_dynamic_shot_fanout', 'screenplay'),
     edgeBase('cinematic_v2_script_parse', 'text', 'cinematic_v2_dynamic_shot_fanout', 'script_parse'),
     edgeBase('cinematic_v2_scene_compile', 'text', 'cinematic_v2_dynamic_shot_fanout', 'scene_state'),
     edgeBase('cinematic_v2_layout_plan', 'text', 'cinematic_v2_dynamic_shot_fanout', 'layout_plan'),
     edgeBase('cinematic_v2_shot_plan', 'text', 'cinematic_v2_dynamic_shot_fanout', 'shot_plan'),
+    edgeBase('cinematic_v2_storyboard_group_plan', 'text', 'cinematic_v2_dynamic_shot_fanout', 'storyboard_group_plan'),
   ]
   const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
   return outputWorkflowPlanResponseSchema.shape.plan.parse({
     preset,
     name,
-    description: 'Generate a V2 directed cinematic animatic with scene state, blocking, shot planning, storyboard panels, refined keyframes, and approval-gated final video production.',
+    description: 'Generate a V2 directed cinematic animatic with scene state, blocking, shot planning, storyboard panels, fast panel keyframes, optional refined keyframes, and approval-gated final video production.',
     prompt,
     targetFormat: 'video',
     sourceEntityKeys: selectedEntityKeys,
@@ -2675,7 +2750,11 @@ export function buildCinematicV2ShotOrchestrationPlan(
     diagnostics: [
       ...graphValidation.diagnostics,
       'Cinematics V2 is enabled: story prompts use shot orchestration instead of single take-block prompting.',
+      'Creative screenplay authoring is enabled: raw prompts are first adapted into a screenplay/treatment before structured parsing and shot planning.',
       'V2 MVP stores placeholder audio plan metadata only; dialogue audio and lip sync are deferred.',
+      cinematicV2AnimaticMode === 'fast_panels'
+        ? 'Fast animatic mode is enabled: cropped storyboard panels become timeline keyframes by default; enhanced keyframes can be generated later.'
+        : 'Quality animatic mode is enabled: per-shot keyframes are enhanced from cropped panels and shot-scoped references.',
       `Storyboard target: up to ${storyboardLayout.panelCount} shot panels per scene sheet.`,
       debugSkipVideoGeneration
         ? 'Preview animatic mode is enabled: per-shot video_generation nodes are gated until Approve & Generate Video.'
@@ -3157,6 +3236,8 @@ export type OutputWorkflowPlanRequest = z.infer<typeof outputWorkflowPlanRequest
 export type OutputWorkflowPlanResponse = z.infer<typeof outputWorkflowPlanResponseSchema>
 export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResponseSchema>
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
+export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphRequestSchema>
+export type OutputWorkflowGraphResponse = z.infer<typeof outputWorkflowGraphResponseSchema>
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>
 export type OutputRequestStatusResponse = z.infer<typeof outputRequestStatusResponseSchema>
 export type OutputRequestDeleteResponse = z.infer<typeof outputRequestDeleteResponseSchema>

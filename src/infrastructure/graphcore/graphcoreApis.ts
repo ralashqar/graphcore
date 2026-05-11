@@ -89,6 +89,7 @@ export const graphcoreOutputApi: OutputApi = {
   deleteOutputRequest: graphcoreRepository.deleteOutputRequest,
   loadOutputInbox: graphcoreRepository.loadOutputInbox,
   loadOutputWorkflowGraph: graphcoreRepository.loadOutputWorkflowGraph,
+  subscribeOutputWorkflowGraphSignals: graphcoreRepository.subscribeOutputWorkflowGraphSignals,
   getOutputArtifact: graphcoreRepository.getOutputArtifact,
 }
 

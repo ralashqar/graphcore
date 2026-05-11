@@ -13,6 +13,8 @@ import {
   getOutputWorkflowNodeExecutionMetadata,
   markDirtyOutputWorkflowNodes,
   outputWorkflowArtifactKindSchema,
+  outputWorkflowGraphRequestSchema,
+  outputWorkflowGraphResponseSchema,
   outputRequestDeleteResponseSchema,
   outputRequestStartRequestSchema,
   outputWorkflowNodeRegistry,
@@ -126,6 +128,36 @@ test('output request delete response preserves compatibility while exposing clea
   assert.equal(withCounts.deletedCounts.outputRequests, 1)
   assert.equal(withCounts.deletedCounts.outputWorkflowRuns, 2)
   assert.equal(withCounts.deletedCounts.projectAssets, 2)
+})
+
+test('output workflow graph loader schemas support compact graph refresh and selected-node hydration', () => {
+  const request = outputWorkflowGraphRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    workflowId: 'workflow-1',
+    runId: null,
+    selectedNodeKey: 'screenplay_author',
+    includeSelectedNodeOutput: true,
+  })
+  assert.equal(request.includeSelectedNodeOutput, true)
+  assert.equal(request.selectedNodeKey, 'screenplay_author')
+
+  const response = outputWorkflowGraphResponseSchema.parse({
+    ok: true,
+    workflow: null,
+    nodes: [],
+    edges: [],
+    run: null,
+    artifacts: [],
+    assets: [],
+    graphRevision: hashOutputWorkflowValue({ workflow: 'workflow-1', updatedAt: now }),
+    selectedNodeOutput: {
+      nodeKey: 'screenplay_author',
+      outputs: { screenplayMarkdown: 'INT. SERVICE TUNNEL - NIGHT' },
+      truncated: false,
+    },
+  })
+  assert.equal(response.selectedNodeOutput?.outputs.screenplayMarkdown, 'INT. SERVICE TUNNEL - NIGHT')
 })
 
 const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
@@ -464,30 +496,52 @@ test('story cinematic requests build V2 shot orchestration graph by default whil
   assert.deepEqual(plan.sourceEntityKeys.sort(), ['archive', 'hero'])
   assert.ok(plan.sourceEntityKeys.length < snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').length + 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_script_parse').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_screenplay_author').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_reference_select').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_storyboard_group_plan').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 1)
   assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
   assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_screenplay_author' && edge.targetNodeKey === 'cinematic_v2_script_parse'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_screenplay_author' && edge.targetNodeKey === 'cinematic_v2_shot_plan'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_reference_select' && edge.targetNodeKey === 'cinematic_v2_shot_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_shot_plan' && edge.targetNodeKey === 'cinematic_v2_storyboard_group_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_storyboard_group_plan' && edge.targetNodeKey === 'cinematic_v2_dynamic_shot_fanout'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_reference_select' && edge.targetNodeKey === 'cinematic_v2_dynamic_shot_fanout'))
   assert.ok(plan.diagnostics.some((line) => line.includes('Cinematics V2')))
+  assert.ok(plan.diagnostics.some((line) => line.includes('Creative screenplay authoring')))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 
   const fanout = plan.nodes.find((node) => node.key === 'cinematic_v2_dynamic_shot_fanout')
   assert.equal(fanout?.config.generateAudio, false)
   assert.equal(fanout?.config.cinematicPipelineVersion, 'v2_shot_orchestration')
+  assert.equal(fanout?.config.cinematicV2AnimaticMode, 'fast_panels')
   assert.equal(fanout?.config.debugSkipVideoGeneration, true)
   assert.ok(plan.diagnostics.some((line) => line.includes('Preview animatic mode')))
+  assert.ok(plan.diagnostics.some((line) => line.includes('Fast animatic mode')))
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   assert.match(workerSource, /cinematicVideoApprovedEnabled/)
   assert.match(workerSource, /cinematic_video_approval_required/)
   assert.match(workerSource, /isCinematicV2ProductionNode\(asRecord\(node\.config\), node\) && !cinematicVideoApprovedEnabled\(run\)/)
   assert.match(workerSource, /cinematic_v2_shot_asset_pack/)
+  assert.match(workerSource, /cinematic_v2_screenplay_author/)
+  assert.match(workerSource, /Return plain Markdown screenplay/)
+  assert.match(workerSource, /cinematic_v2_keyframe_qa/)
+  assert.match(workerSource, /cinematic_v2_shot_keyframe_passthrough/)
+  assert.match(workerSource, /quality_keyframes/)
+  assert.match(workerSource, /cinematic_v2_storyboard_group_plan/)
+  assert.match(workerSource, /storyboardGroupPlan\.groups\.forEach/)
+  assert.match(workerSource, /fixed \$\{layout\.rows\}x\$\{layout\.columns\} rectangular grid/)
+  assert.match(workerSource, /Cells \$\{layout\.panelCount \+ 1\}-\$\{gridCellCount\} are intentional empty placeholders/)
   assert.match(workerSource, /buildCinematicV2ShotAssetPack/)
+  assert.match(workerSource, /Use it for composition and blocking only, not as identity truth/)
+  assert.match(workerSource, /Required visible characters/)
+  assert.match(workerSource, /performanceBeats/)
+  assert.match(workerSource, /Acting\/performance direction/)
   assert.match(workerSource, /\$\{shotAssetPackKey\}__\$\{keyframeKey\}/)
   assert.match(workerSource, /\$\{shotAssetPackKey\}__\$\{videoKey\}/)
 

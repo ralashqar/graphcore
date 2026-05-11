@@ -191,6 +191,12 @@ verify_jwt = false
 [functions.cancel-output-request]
 verify_jwt = false
 
+[functions.preview-output-cinematic-director-note]
+verify_jwt = false
+
+[functions.apply-output-cinematic-director-patch]
+verify_jwt = false
+
 [functions.start-world-seed-inference]
 verify_jwt = false
 

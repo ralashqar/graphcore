@@ -69,6 +69,7 @@ Deno.serve(async (request) => {
       'Do not edit image or video prompts directly. Mutate shot plan, scene state, layout plan, timing, or regeneration markers.',
       'Do not add, delete, split, or reorder shots in this version. If the note requires that, return status requires_scene_replan and no destructive operations.',
       'Prefer shot-level updates for shot scopes. Use scene_state/layout updates only when the note changes global lighting, weather, location, spatial geography, or continuity.',
+      'When the note is about acting, expression, intensity, warmth, fear, intimidation, confidence, vulnerability, or performance, patch shot.performanceBeats rather than raw prompt text. Use valence -1..1 and arousal/confidence/dominance 0..1 with concrete bodyLanguage, facialExpression, gaze, gesture, and voiceEnergy.',
       '',
       `Scope: ${JSON.stringify(payload.scope)}`,
       `Director note: ${payload.note}`,

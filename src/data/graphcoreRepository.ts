@@ -8,6 +8,7 @@ import { normalizeCinematicGraphProjection } from '../domain/cinematicGraphProje
 import { createGameSpecFromArchetype } from '../domain/gameArchetypes'
 import {
   type AssemblyNodeDefinition,
+  assetDefinitionSchema,
   buildDefaultDefinitionComponents,
   projectSnapshotSchema,
   type ArchetypeDefinition,
@@ -140,6 +141,8 @@ import {
   outputRequestStatusResponseSchema,
   outputWorkflowCancelResponseSchema,
   outputWorkflowEdgeSchema,
+  outputWorkflowGraphRequestSchema,
+  outputWorkflowGraphResponseSchema,
   outputWorkflowNodeSchema,
   outputWorkflowNodeUpdateRequestSchema,
   outputWorkflowNodeUpdateResponseSchema,
@@ -1985,8 +1988,8 @@ const OUTPUT_WORKFLOW_EDGE_SELECT =
   'id, workflow_id, key, source_node_key, source_port, target_node_key, target_port, metadata, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_SELECT =
   'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
-const OUTPUT_WORKFLOW_RUN_STEP_SELECT =
-  'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
+const OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT =
+  'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_ARTIFACT_SELECT =
   'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const OUTPUT_REQUEST_SELECT =
@@ -3771,7 +3774,7 @@ export async function loadProjectSnapshot(
       : (
           await supabase
             .from('output_workflow_run_steps')
-            .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
+            .select(OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT)
             .in('run_id', outputWorkflowStepRunIds)
             .order('order_index', { ascending: true })
         ).data as OutputWorkflowRunStepRow[] | null ?? []
@@ -7731,6 +7734,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   cinematicPresetFamily?: string
   cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
   cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
+  cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
   debugCinematicStoryboardStyleSafeMode?: boolean
   cinematicStoryboardStyleOverride?: string
   debugSkipVideoGeneration?: boolean
@@ -7768,6 +7772,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     cinematicPresetFamily: request?.cinematicPresetFamily,
     cinematicReferenceMode: request?.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
     cinematicPipelineVersion: request?.cinematicPipelineVersion,
+    cinematicV2AnimaticMode: request?.cinematicV2AnimaticMode ?? 'fast_panels',
     debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
@@ -7803,6 +7808,7 @@ export async function planOutputWorkflow(
     cinematicPresetFamily: request?.cinematicPresetFamily,
     cinematicReferenceMode: request?.cinematicReferenceMode,
     cinematicPipelineVersion: request?.cinematicPipelineVersion,
+    cinematicV2AnimaticMode: request?.cinematicV2AnimaticMode,
     debugCinematicStoryboardStyleSafeMode: request?.debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride: request?.cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration,
@@ -7997,6 +8003,7 @@ export type OutputWorkflowGraphLoadResult = {
   run: OutputWorkflowRun | null
   artifacts: OutputArtifact[]
   assets: AssetDefinition[]
+  graphRevision: string
 }
 
 function collectAssetKeysForOutputScope(input: {
@@ -8088,13 +8095,17 @@ export async function loadOutputInbox(input: {
   const stepsResponse = stepRunIds.length > 0
     ? await supabase
         .from('output_workflow_run_steps')
-        .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
+        .select(OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT)
         .in('run_id', stepRunIds)
         .order('order_index', { ascending: true })
     : emptyPostgrestResponse()
-  if (stepsResponse.error) throw new Error(stepsResponse.error.message)
+  if (stepsResponse.error) {
+    console.warn('[GraphCore] output inbox step status hydration failed; continuing with request summaries.', stepsResponse.error)
+  }
 
-  const steps = ((stepsResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
+  const steps = stepsResponse.error
+    ? []
+    : ((stepsResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
   const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
   const artifactsByRunId = new Map<string, OutputArtifact[]>()
   for (const artifact of artifacts) {
@@ -8132,87 +8143,48 @@ export async function loadOutputWorkflowGraph(input: {
   draftId: string
   workflowId: string
   runId?: string | null
+  selectedNodeKey?: string | null
+  includeSelectedNodeOutput?: boolean
 }): Promise<OutputWorkflowGraphLoadResult> {
-  const [workflowResponse, nodeResponse, edgeResponse, artifactResponse] = await Promise.all([
-    supabase
-      .from('output_workflows')
-      .select(OUTPUT_WORKFLOW_SELECT)
-      .eq('id', input.workflowId)
-      .maybeSingle(),
-    supabase
-      .from('output_workflow_nodes')
-      .select(OUTPUT_WORKFLOW_NODE_SELECT)
-      .eq('workflow_id', input.workflowId)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('output_workflow_edges')
-      .select(OUTPUT_WORKFLOW_EDGE_SELECT)
-      .eq('workflow_id', input.workflowId)
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('output_artifacts')
-      .select(OUTPUT_ARTIFACT_SELECT)
-      .eq('workflow_id', input.workflowId)
-      .order('created_at', { ascending: false }),
-  ])
-  if (workflowResponse.error) throw new Error(workflowResponse.error.message)
-  if (nodeResponse.error) throw new Error(nodeResponse.error.message)
-  if (edgeResponse.error) throw new Error(edgeResponse.error.message)
-  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-
-  let runRow: OutputWorkflowRunRow | null = null
-  if (input.runId) {
-    const runResponse = await supabase
-      .from('output_workflow_runs')
-      .select(OUTPUT_WORKFLOW_RUN_SELECT)
-      .eq('id', input.runId)
-      .maybeSingle()
-    if (runResponse.error) throw new Error(runResponse.error.message)
-    runRow = runResponse.data as OutputWorkflowRunRow | null
-  } else {
-    const runResponse = await supabase
-      .from('output_workflow_runs')
-      .select(OUTPUT_WORKFLOW_RUN_SELECT)
-      .eq('workflow_id', input.workflowId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-    if (runResponse.error) throw new Error(runResponse.error.message)
-    runRow = ((runResponse.data ?? []) as OutputWorkflowRunRow[])[0] ?? null
-  }
-
-  const stepResponse = runRow
-    ? await supabase
-        .from('output_workflow_run_steps')
-        .select(OUTPUT_WORKFLOW_RUN_STEP_SELECT)
-        .eq('run_id', runRow.id)
-        .order('order_index', { ascending: true })
-    : emptyPostgrestResponse()
-  if (stepResponse.error) throw new Error(stepResponse.error.message)
-
-  const nodes = ((nodeResponse.data ?? []) as OutputWorkflowNodeRow[]).map(mapOutputWorkflowNodeRow)
-  const edges = ((edgeResponse.data ?? []) as OutputWorkflowEdgeRow[]).map(mapOutputWorkflowEdgeRow)
-  const steps = ((stepResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
-  const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
-  const runArtifacts = runRow ? artifacts.filter((artifact) => artifact.runId === runRow.id) : []
-  const run = runRow ? mapOutputWorkflowRunRow(runRow, steps, runArtifacts) : null
-  const assets = await loadHydratedOutputAssets(input.projectId, {
-    nodes,
-    steps,
-    runs: run ? [run] : [],
-    artifacts,
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading an output workflow graph.')
+  const payload = outputWorkflowGraphRequestSchema.parse({
+    projectId: input.projectId,
+    draftId: input.draftId,
+    workflowId: input.workflowId,
+    runId: input.runId ?? null,
+    selectedNodeKey: input.selectedNodeKey ?? null,
+    includeSelectedNodeOutput: input.includeSelectedNodeOutput === true,
   })
-  const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
-  const hydratedRun = run
-    ? { ...run, artifacts: hydrateOutputArtifactsFromAssets(run.artifacts, assets) }
-    : null
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-output-workflow-graph',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowGraphResponseSchema.parse(response.data)
+  const selectedNodeOutput = parsed.selectedNodeOutput
+  const nodes = selectedNodeOutput
+    ? parsed.nodes.map((node) => node.key === selectedNodeOutput.nodeKey
+      ? { ...node, outputs: selectedNodeOutput.outputs }
+      : node)
+    : parsed.nodes
+  const assets = parsed.assets.flatMap((asset) => {
+    const parsedAsset = assetDefinitionSchema.safeParse(asset)
+    if (parsedAsset.success) return [parsedAsset.data]
+    console.warn('[GraphCore] ignored invalid output workflow graph asset payload.', parsedAsset.error.flatten())
+    return []
+  })
 
   return {
-    workflow: workflowResponse.data ? mapOutputWorkflowRow(workflowResponse.data as OutputWorkflowRow) : null,
+    workflow: parsed.workflow,
     nodes,
-    edges,
-    run: hydratedRun,
-    artifacts: hydratedArtifacts,
+    edges: parsed.edges,
+    run: parsed.run,
+    artifacts: parsed.artifacts,
     assets,
+    graphRevision: parsed.graphRevision,
   }
 }
 
@@ -8253,6 +8225,7 @@ export async function startOutputRequest(
     cinematicPresetFamily?: 'story_movie_tv' | 'ugc_creator' | 'ugc_direct_response_ad' | 'ugc_faceless_format'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
     cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
+    cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -8281,6 +8254,7 @@ export async function startOutputRequest(
     cinematicPresetFamily: request.cinematicPresetFamily,
     cinematicReferenceMode: request.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
     cinematicPipelineVersion: request.cinematicPipelineVersion,
+    cinematicV2AnimaticMode: request.cinematicV2AnimaticMode ?? 'fast_panels',
     debugCinematicStoryboardStyleSafeMode: request.debugCinematicStoryboardStyleSafeMode ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
     cinematicStoryboardStyleOverride: request.cinematicStoryboardStyleOverride ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
     debugSkipVideoGeneration: request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
@@ -8711,6 +8685,55 @@ export function subscribeOutputSignals(input: {
       table: 'output_artifacts',
       filter: `draft_id=eq.${input.draftId}`,
     }, () => input.onSignal())
+
+  void channel.subscribe()
+  return {
+    unsubscribe: () => supabase.removeChannel(channel),
+  }
+}
+
+export function subscribeOutputWorkflowGraphSignals(input: {
+  draftId: string
+  workflowId: string
+  runId?: string | null
+  onSignal: () => void
+}) {
+  const channel = supabase
+    .channel(`graphcore-output-graph-${input.workflowId}-${input.runId ?? 'latest'}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_workflow_nodes',
+      filter: `workflow_id=eq.${input.workflowId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_workflow_edges',
+      filter: `workflow_id=eq.${input.workflowId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_artifacts',
+      filter: `workflow_id=eq.${input.workflowId}`,
+    }, () => input.onSignal())
+
+  if (input.runId) {
+    channel.on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_workflow_run_steps',
+      filter: `run_id=eq.${input.runId}`,
+    }, () => input.onSignal())
+  } else {
+    channel.on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_workflow_runs',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+  }
 
   void channel.subscribe()
   return {

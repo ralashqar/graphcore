@@ -1427,6 +1427,7 @@ export default function App() {
   const surfaceHydrationLatestRequestIdsRef = useRef(new Map<string, number>())
   const surfaceHydrationInFlightRef = useRef(new Map<string, Promise<unknown>>())
   const surfaceHydrationLoadedKeysRef = useRef(new Set<string>())
+  const outputGraphLoadRequestIdRef = useRef(0)
   const desiredGameSelectionRef = useRef<{ projectId: string; draftId: string } | null>(null)
   const [workspaceHydrationState, setWorkspaceHydrationState] = useState<WorkspaceHydrationState>({})
 
@@ -5182,17 +5183,22 @@ export default function App() {
     return loadPromise
   }
 
-  async function loadOutputWorkflowGraph(workflowId: string, runId?: string | null) {
+  async function loadOutputWorkflowGraph(workflowId: string, runId?: string | null, selectedNodeKey?: string | null) {
     const current = snapshotRef.current ?? snapshot
     if (!current || loadedState?.source !== 'supabase') return
+    const requestId = outputGraphLoadRequestIdRef.current + 1
+    outputGraphLoadRequestIdRef.current = requestId
     const startedAt = performance.now()
     const result = await workspaceService.loadOutputWorkflowGraph({
       projectId: current.project.id,
       draftId: current.draft.id,
       workflowId,
       runId,
+      selectedNodeKey: selectedNodeKey ?? null,
+      includeSelectedNodeOutput: Boolean(selectedNodeKey),
     })
     const latest = snapshotRef.current ?? current
+    if (requestId !== outputGraphLoadRequestIdRef.current) return
     if (!isSameProjectDraft(latest, current)) return
     commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
       workflows: result.workflow ? [result.workflow] : [],
@@ -5210,6 +5216,7 @@ export default function App() {
         nodes: result.nodes.length,
         artifacts: result.artifacts.length,
         signedAssets: result.assets.length,
+        graphRevision: result.graphRevision,
       })
     }
   }
@@ -7534,6 +7541,7 @@ export default function App() {
                   onGetOutputWorkflowStatus={getOutputWorkflowStatus}
                   onLoadOutputInbox={loadOutputInbox}
                   onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
+                  onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
                   onPlanOutputWorkflow={planOutputWorkflow}
                   onPreviewCinematicDirectorNote={previewOutputCinematicDirectorNote}
                   onApplyCinematicDirectorPatch={applyOutputCinematicDirectorPatch}

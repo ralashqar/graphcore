@@ -35,6 +35,12 @@ export type OutputApi = {
   deleteOutputRequest(requestId: string): Promise<OutputRequestDeleteResponse>
   loadOutputInbox(input: Record<string, unknown>): Promise<OutputInboxLoadResult>
   loadOutputWorkflowGraph(input: Record<string, unknown>): Promise<OutputWorkflowGraphLoadResult>
+  subscribeOutputWorkflowGraphSignals(input: {
+    draftId: string
+    workflowId: string
+    runId?: string | null
+    onSignal: () => void
+  }): { unsubscribe(): Promise<unknown> | void }
   updateOutputWorkflowNode(snapshot: ProjectSnapshot, request: {
     workflowId: string
     nodeKey: string

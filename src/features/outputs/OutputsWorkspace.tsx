@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 
 import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
@@ -62,6 +62,7 @@ type OutputsWorkspaceProps = {
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
     cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
+    cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -70,7 +71,13 @@ type OutputsWorkspaceProps = {
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
   onRequestDeleteOutputRequest: (requestId: string) => void
   onLoadOutputInbox: () => Promise<void>
-  onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null) => Promise<void>
+  onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null, selectedNodeKey?: string | null) => Promise<void>
+  onSubscribeOutputWorkflowGraphSignals: (input: {
+    draftId: string
+    workflowId: string
+    runId?: string | null
+    onSignal: () => void
+  }) => { unsubscribe(): Promise<unknown> | void }
   onPlanOutputWorkflow: (request: {
     prompt: string
     preset?: 'ebook_from_world' | 'story_bible_from_world' | 'comic_issue_from_sequence'
@@ -281,6 +288,46 @@ function readAllStepRecords(run: OutputWorkflowRun | null | undefined, keys: str
   return records
 }
 
+function readArtifactMediaRecords(run: OutputWorkflowRun | null | undefined, roles: string[]) {
+  const roleSet = new Set(roles)
+  const records: Record<string, unknown>[] = []
+  for (const artifact of run?.artifacts ?? []) {
+    const metadata = readRecord(artifact.metadata)
+    const role = readTrimmedString(metadata.role)
+    if (!roleSet.has(role)) continue
+    records.push({
+      id: artifact.id,
+      artifactKey: artifact.key,
+      assetKey: artifact.assetKey,
+      mimeType: artifact.mimeType,
+      role,
+      shotId: readTrimmedString(metadata.shotId),
+      shotIndex: metadata.shotIndex,
+      storyboardGroupId: readTrimmedString(metadata.storyboardGroupId),
+      panelIndexInGroup: metadata.panelIndexInGroup,
+      sourceSheetAssetKey: readTrimmedString(metadata.sourceSheetAssetKey),
+      storagePath: readTrimmedString(metadata.storagePath),
+      cropRect: metadata.cropRect ?? metadata.crop,
+      metadata,
+    })
+  }
+  return records
+}
+
+function mergeMediaRecords(primary: Record<string, unknown>[], fallback: Record<string, unknown>[]) {
+  const seen = new Set<string>()
+  const merged: Record<string, unknown>[] = []
+  for (const record of [...primary, ...fallback]) {
+    const key = readTrimmedString(record.assetKey)
+      || readTrimmedString(record.artifactKey)
+      || `${readTrimmedString(record.role)}:${readTrimmedString(record.shotId)}:${readTrimmedString(record.id)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(record)
+  }
+  return merged
+}
+
 function formatScriptSeconds(value: unknown) {
   const seconds = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(seconds)) return '0s'
@@ -310,9 +357,22 @@ function buildCinematicScriptViewData(
     ?? readFirstStepRecord(run, ['layoutPlan', 'layout_plan'])
   const cinematicV2ShotPlan = readNonEmptyRecord(workflowMetadata.cinematicV2ShotPlan)
     ?? readFirstStepRecord(run, ['shotPlan', 'shot_plan'])
-  const cinematicV2Panels = readAllStepRecords(run, ['panels']).filter((panel) => readTrimmedString(panel.role) === 'cinematic_v2_storyboard_panel' || readTrimmedString(panel.shotId))
-  const cinematicV2Images = readAllStepRecords(run, ['image']).filter((image) => readTrimmedString(image.role).startsWith('cinematic_v2_'))
-  const cinematicV2Videos = readAllStepRecords(run, ['video']).filter((video) => readTrimmedString(video.role).startsWith('cinematic_v2_'))
+  const cinematicV2StoryboardGroupPlan = readNonEmptyRecord(workflowMetadata.cinematicV2StoryboardGroupPlan)
+    ?? readFirstStepRecord(run, ['storyboardGroupPlan', 'storyboard_group_plan'])
+  const cinematicV2Panels = mergeMediaRecords(
+    readArtifactMediaRecords(run, ['cinematic_v2_storyboard_panel']),
+    readAllStepRecords(run, ['panels']).filter((panel) => readTrimmedString(panel.role) === 'cinematic_v2_storyboard_panel' || readTrimmedString(panel.shotId)),
+  )
+  const cinematicV2ArtifactImages = readArtifactMediaRecords(run, ['cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe'])
+  const cinematicV2Images = mergeMediaRecords(
+    cinematicV2ArtifactImages,
+    readAllStepRecords(run, ['image']).filter((image) => readTrimmedString(image.role).startsWith('cinematic_v2_')),
+  )
+  const cinematicV2ArtifactVideos = readArtifactMediaRecords(run, ['cinematic_v2_shot_video', 'cinematic_v2_final_timeline'])
+  const cinematicV2Videos = mergeMediaRecords(
+    cinematicV2ArtifactVideos,
+    readAllStepRecords(run, ['video']).filter((video) => readTrimmedString(video.role).startsWith('cinematic_v2_')),
+  )
   const cinematicV2Timeline = readFirstStepRecord(run, ['timeline'])
   const preset = readTrimmedString(workflow?.preset)
   const isV2 = readTrimmedString(workflowMetadata.cinematicPipelineVersion) === 'v2_shot_orchestration'
@@ -329,6 +389,7 @@ function buildCinematicScriptViewData(
       sceneState: cinematicV2SceneState,
       layoutPlan: cinematicV2LayoutPlan,
       shotPlan: cinematicV2ShotPlan,
+      storyboardGroupPlan: cinematicV2StoryboardGroupPlan,
       panels: cinematicV2Panels,
       keyframes: cinematicV2Images.filter((image) => readTrimmedString(image.role) === 'cinematic_v2_shot_keyframe'),
       storyboardSheets: cinematicV2Images.filter((image) => readTrimmedString(image.role) === 'cinematic_v2_storyboard_sheet'),
@@ -511,7 +572,12 @@ function CinematicV2TimelineModal({
           assets={assets}
           directorNotes={{
             canUndoLast: canUndoLastDirectorEdit,
-            onApply: (preview) => onApplyDirectorPatch({ workflowId, runId, preview, startRegeneration: true }),
+            onApply: (preview) => {
+              if (!preview || typeof preview !== 'object') {
+                return Promise.reject(new Error('Preview the director note before applying it.'))
+              }
+              return onApplyDirectorPatch({ workflowId, runId, preview, startRegeneration: true })
+            },
             onPreview: ({ note, scope }) => onPreviewDirectorNote({ workflowId, runId, note, scope }),
             onUndoLast: () => onUndoLastDirectorEdit({ workflowId, runId }),
           }}
@@ -529,29 +595,42 @@ function CinematicV2ProductionPanel({
   data,
   estimate,
   isApprovingVideo,
+  isUpgradingQuality,
   isVideoApproved,
   onApproveVideoProduction,
+  onGenerateQualityKeyframes,
   onOpenTimeline,
 }: {
   canRunOutputs: boolean
   data: ReturnType<typeof buildCinematicScriptViewData>
   estimate: CinematicV2ProductionEstimate | null
   isApprovingVideo: boolean
+  isUpgradingQuality: boolean
   isVideoApproved: boolean
   onApproveVideoProduction: () => void
+  onGenerateQualityKeyframes: () => void
   onOpenTimeline: () => void
 }) {
   const parsedScript = readRecord(data.cinematicV2.parsedScript)
   const sceneState = readRecord(data.cinematicV2.sceneState)
   const layoutPlan = readRecord(data.cinematicV2.layoutPlan)
   const shotPlan = readRecord(data.cinematicV2.shotPlan)
+  const storyboardGroupPlan = readRecord(data.cinematicV2.storyboardGroupPlan)
   const shots = cinematicArray(shotPlan.shots)
+  const storyboardGroups = cinematicArray(storyboardGroupPlan.groups)
+  const shotPlanDiagnostics = readStringArray(shotPlan.diagnostics)
+  const fallbackUsed = shotPlanDiagnostics.some((diagnostic) => diagnostic.toLowerCase().includes('fallback'))
   const timeline = readRecord(data.cinematicV2.timeline)
   const timelineProjection = useMemo(() => buildSafeCinematicV2TimelineProjection(data), [data])
   const panelsByShotId = new Map(data.cinematicV2.panels.map((panel) => [readTrimmedString(panel.shotId), panel]))
   const keyframesByShotId = new Map(data.cinematicV2.keyframes.map((image) => [readTrimmedString(image.shotId), image]))
   const videosByShotId = new Map(data.cinematicV2.videos.map((video) => [readTrimmedString(video.shotId), video]))
+  const qualityKeyframeCount = data.cinematicV2.keyframes.filter((image) => (
+    readTrimmedString(image.keyframeMode) !== 'storyboard_panel_crop'
+    && readTrimmedString(image.generatedBy) !== 'deterministic_panel_passthrough'
+  )).length
   const keyframesReady = shots.length > 0 && data.cinematicV2.keyframes.length > 0
+  const qualityKeyframesReady = shots.length > 0 && qualityKeyframeCount >= shots.length
   const finalVideoReady = data.cinematicV2.finalVideos.length > 0
   const approvalStatus = finalVideoReady
     ? 'Final video ready'
@@ -574,17 +653,31 @@ function CinematicV2ProductionPanel({
         {data.logline ? <p>{data.logline}</p> : null}
         <div className="outputs-script-meta">
           {shots.length > 0 ? <span>{shots.length} shots</span> : null}
+          {storyboardGroups.length > 0 ? <span>{storyboardGroups.length} storyboard sheets</span> : null}
           {readNumber(shotPlan.totalEditorialDurationSeconds) ? <span>{formatScriptSeconds(shotPlan.totalEditorialDurationSeconds)} editorial</span> : null}
           {data.cinematicV2.storyboardSheets.length > 0 ? <span>Storyboard ready</span> : <span>Storyboard pending</span>}
           <span>{approvalStatus}</span>
           <button className="outputs-node-action" disabled={!timelineProjection} onClick={onOpenTimeline} type="button">Open Timeline</button>
         </div>
+        {fallbackUsed ? (
+          <div className="inline-note is-warning">
+            Directed shot planner fell back to a deterministic plan. Regenerate the directed plan before final production.
+          </div>
+        ) : null}
         <div className="outputs-cinematic-v2-approval">
           <div>
             <span>Final video production</span>
             <strong>{estimateLabel}</strong>
             {estimate ? <small>{estimate.provider.toUpperCase()} · {estimate.model} · {formatAiUsd(estimate.pricePerSecondUsd)}/s</small> : null}
           </div>
+          <button
+            className="outputs-node-action"
+            disabled={!canRunOutputs || !keyframesReady || qualityKeyframesReady || isUpgradingQuality || isApprovingVideo}
+            onClick={onGenerateQualityKeyframes}
+            type="button"
+          >
+            {isUpgradingQuality ? 'Enhancing...' : qualityKeyframesReady ? 'Quality Keyframes Ready' : 'Generate Quality Keyframes'}
+          </button>
           <button
             className="outputs-primary-action"
             disabled={!canRunOutputs || !keyframesReady || finalVideoReady || isApprovingVideo}
@@ -686,16 +779,20 @@ function CinematicScriptPanel({
   data,
   estimate,
   isApprovingVideo,
+  isUpgradingQuality,
   isVideoApproved,
   onApproveVideoProduction,
+  onGenerateQualityKeyframes,
   onOpenTimeline,
 }: {
   canRunOutputs: boolean
   data: ReturnType<typeof buildCinematicScriptViewData>
   estimate: CinematicV2ProductionEstimate | null
   isApprovingVideo: boolean
+  isUpgradingQuality: boolean
   isVideoApproved: boolean
   onApproveVideoProduction: () => void
+  onGenerateQualityKeyframes: () => void
   onOpenTimeline: () => void
 }) {
   if (!data.isCinematic) {
@@ -708,8 +805,10 @@ function CinematicScriptPanel({
         data={data}
         estimate={estimate}
         isApprovingVideo={isApprovingVideo}
+        isUpgradingQuality={isUpgradingQuality}
         isVideoApproved={isVideoApproved}
         onApproveVideoProduction={onApproveVideoProduction}
+        onGenerateQualityKeyframes={onGenerateQualityKeyframes}
         onOpenTimeline={onOpenTimeline}
       />
     )
@@ -966,6 +1065,17 @@ function readOutputPreview(step: Pick<OutputWorkflowRunStep, 'outputs' | 'errorM
   return JSON.stringify(outputs, null, 2)
 }
 
+function readNodeOutputPreview(node: Pick<OutputWorkflowNode, 'metadata' | 'outputs'> | null | undefined) {
+  const metadataPreview = readRecord(readRecord(node?.metadata).outputPreview)
+  const previewText = readTrimmedString(metadataPreview.text) || readTrimmedString(metadataPreview.preview)
+  if (previewText) return previewText
+  const assetKeys = readStringArray(metadataPreview.assetKeys)
+  if (assetKeys.length > 0) return `Generated assets: ${assetKeys.join(', ')}`
+  const outputBytes = Number(metadataPreview.outputBytes)
+  if (Number.isFinite(outputBytes) && outputBytes > 0) return `Output cached (${Math.round(outputBytes / 1024)} KB). Select the node to hydrate full output.`
+  return readOutputPreview({ outputs: readRecord(node?.outputs), errorMessage: null, provider: null, model: null })
+}
+
 function truncatePreview(value: string, maxLength = 14000) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n\n[Output truncated in preview]` : value
 }
@@ -1155,6 +1265,7 @@ export function OutputsWorkspace({
   onRequestDeleteOutputRequest,
   onLoadOutputInbox,
   onLoadOutputWorkflowGraph,
+  onSubscribeOutputWorkflowGraphSignals,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
   onPreviewCinematicDirectorNote,
@@ -1166,6 +1277,7 @@ export function OutputsWorkspace({
   onRefreshLiveSnapshot,
 }: OutputsWorkspaceProps) {
   const [approvingVideoProduction, setApprovingVideoProduction] = useState(false)
+  const [upgradingAnimaticQuality, setUpgradingAnimaticQuality] = useState(false)
   const [creationMode, setCreationMode] = useState<'prompt' | 'story_unit'>('prompt')
   const [cinematicTimelineModal, setCinematicTimelineModal] = useState<{
     title: string
@@ -1224,6 +1336,14 @@ export function OutputsWorkspace({
     upgradeMode,
     usageBreakdownOpen,
   } = useOutputWorkspaceState(snapshot)
+  const graphRefreshSeqRef = useRef(0)
+  const graphRefreshTimerRef = useRef<number | null>(null)
+  const graphRetryTimerRef = useRef<number | null>(null)
+  const graphWatchdogTimerRef = useRef<number | null>(null)
+  const graphBackoffMsRef = useRef(0)
+  const graphLastRefreshAtRef = useRef(0)
+  const [graphSyncDelayed, setGraphSyncDelayed] = useState(false)
+  const [graphSyncDelayedMessage, setGraphSyncDelayedMessage] = useState<string | null>(null)
 
   const sequenceUnits = useMemo(
     () => snapshot.worldEntities.filter((entity) => entity.nodeType === 'sequence_unit'),
@@ -1309,14 +1429,17 @@ export function OutputsWorkspace({
   )
   const assetByKey = useMemo(() => new Map(snapshot.assets.map((asset) => [asset.key, asset])), [snapshot.assets])
   const selectedStep = selectedNode ? stepsByNodeKey.get(selectedNode.key) ?? null : null
-  const selectedOutputPreview = truncatePreview(readOutputPreview(selectedStep))
+  const selectedOutputPreview = truncatePreview(readOutputPreview(selectedStep) || readNodeOutputPreview(selectedNode))
   const selectedOutputImageUrl = useMemo(() => {
     const outputs = readRecord(selectedStep?.outputs)
     const image = readRecord(outputs.image)
-    const assetKey = readTrimmedString(image.assetKey) || readTrimmedString(outputs.assetKey)
+    const preview = readRecord(readRecord(selectedNode?.metadata).outputPreview)
+    const assetKey = readTrimmedString(image.assetKey)
+      || readTrimmedString(outputs.assetKey)
+      || readStringArray(preview.assetKeys)[0]
     const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
     return resolveAssetSourceUrl(asset) || null
-  }, [assetByKey, selectedStep?.outputs])
+  }, [assetByKey, selectedNode?.metadata, selectedStep?.outputs])
   const runStepCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const step of displayRun?.steps ?? []) {
@@ -1397,6 +1520,40 @@ export function OutputsWorkspace({
   }, [snapshot.draft.id])
 
   useEffect(() => {
+    if (!graphOpen || !activeWorkflow) return undefined
+    const subscription = onSubscribeOutputWorkflowGraphSignals({
+      draftId: snapshot.draft.id,
+      workflowId: activeWorkflow.id,
+      runId: activeRun?.id ?? null,
+      onSignal: () => scheduleOutputGraphRefresh(500),
+    })
+    graphLastRefreshAtRef.current = Date.now()
+    const pollActive = () => {
+      if (activeRun && !isTerminalOutputWorkflowRunStatus(activeRun.status)) {
+        const elapsed = Date.now() - graphLastRefreshAtRef.current
+        if (elapsed >= 1200) scheduleOutputGraphRefresh(0)
+      }
+      graphWatchdogTimerRef.current = window.setTimeout(pollActive, 1500)
+    }
+    graphWatchdogTimerRef.current = window.setTimeout(pollActive, 1500)
+    void refreshOutputGraph({ quiet: true })
+    return () => {
+      void subscription.unsubscribe()
+      if (graphRefreshTimerRef.current !== null) window.clearTimeout(graphRefreshTimerRef.current)
+      if (graphRetryTimerRef.current !== null) window.clearTimeout(graphRetryTimerRef.current)
+      if (graphWatchdogTimerRef.current !== null) window.clearTimeout(graphWatchdogTimerRef.current)
+      graphRefreshTimerRef.current = null
+      graphRetryTimerRef.current = null
+      graphWatchdogTimerRef.current = null
+    }
+  }, [activeRun?.id, activeRun?.status, activeWorkflow?.id, graphOpen, snapshot.draft.id])
+
+  useEffect(() => {
+    if (!graphOpen || !activeWorkflow || !selectedNodeKey) return
+    scheduleOutputGraphRefresh(0)
+  }, [activeWorkflow?.id, graphOpen, selectedNodeKey])
+
+  useEffect(() => {
     if (selectedComicSequenceKey && sequenceUnits.some((entity) => entity.key === selectedComicSequenceKey)) return
     setSelectedComicSequenceKey(sequenceUnits[0]?.key ?? '')
   }, [selectedComicSequenceKey, sequenceUnits])
@@ -1416,6 +1573,7 @@ export function OutputsWorkspace({
         imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
         imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
         cinematicReferenceMode: aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+        cinematicV2AnimaticMode: 'fast_panels',
         debugCinematicStoryboardStyleSafeMode: aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
         cinematicStoryboardStyleOverride: aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
         debugSkipVideoGeneration: aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
@@ -1457,6 +1615,7 @@ export function OutputsWorkspace({
         imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
         cinematicReferenceMode: cinematic ? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault : undefined,
         cinematicPipelineVersion: cinematic ? 'v2_shot_orchestration' : undefined,
+        cinematicV2AnimaticMode: cinematic ? 'fast_panels' : undefined,
         debugCinematicStoryboardStyleSafeMode: cinematic ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault : undefined,
         cinematicStoryboardStyleOverride: cinematic ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt : undefined,
         debugSkipVideoGeneration: cinematic ? true : undefined,
@@ -1581,28 +1740,67 @@ export function OutputsWorkspace({
     }
   }
 
-  async function refreshOutputGraph() {
-    if (refreshingGraph) return
-    if (!activeWorkflow) return
-    setRefreshingGraph(true)
-    setError(null)
+  async function refreshOutputGraph(options: {
+    manual?: boolean
+    quiet?: boolean
+    selectedNodeKey?: string | null
+    workflowId?: string
+    runId?: string | null
+  } = {}) {
+    const workflowId = options.workflowId ?? activeWorkflow?.id
+    if (!workflowId) return
+    const sequence = graphRefreshSeqRef.current + 1
+    graphRefreshSeqRef.current = sequence
+    const selectedKey = options.selectedNodeKey ?? selectedNodeKey ?? null
+    if (!options.quiet) setRefreshingGraph(true)
+    if (options.manual) setError(null)
+    const graphRunId = options.runId ?? activeRun?.id ?? null
     try {
-      if (activeRun) {
-        const status = await onGetOutputWorkflowStatus(activeRun.id)
-        setActiveRunId(status.run.id)
-        rememberLiveRun(status.run)
-      }
-      await onLoadOutputWorkflowGraph(activeWorkflow.id, activeRun?.id ?? null)
+      await onLoadOutputWorkflowGraph(workflowId, graphRunId, selectedKey)
+      if (sequence !== graphRefreshSeqRef.current) return
+      graphLastRefreshAtRef.current = Date.now()
+      graphBackoffMsRef.current = 0
+      setGraphSyncDelayed(false)
+      setGraphSyncDelayedMessage(null)
     } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : 'Could not refresh output workflow graph.')
+      if (sequence !== graphRefreshSeqRef.current) return
+      const message = refreshError instanceof Error ? refreshError.message : 'Could not refresh output workflow graph.'
+      console.warn('[GraphCore] output workflow graph sync delayed.', {
+        workflowId,
+        runId: graphRunId,
+        selectedNodeKey: selectedKey,
+        message,
+      })
+      if (options.manual || !options.quiet) setError(message)
+      setGraphSyncDelayed(true)
+      setGraphSyncDelayedMessage(message)
+      const nextBackoff = graphBackoffMsRef.current > 0
+        ? Math.min(10000, graphBackoffMsRef.current * 2)
+        : 1500
+      graphBackoffMsRef.current = nextBackoff
+      if (graphRetryTimerRef.current !== null) window.clearTimeout(graphRetryTimerRef.current)
+      const jitter = Math.round(Math.random() * 350)
+      graphRetryTimerRef.current = window.setTimeout(() => {
+        graphRetryTimerRef.current = null
+        void refreshOutputGraph({ quiet: true, workflowId, runId: graphRunId, selectedNodeKey: selectedKey })
+      }, nextBackoff + jitter)
     } finally {
-      setRefreshingGraph(false)
+      if (!options.quiet && sequence === graphRefreshSeqRef.current) setRefreshingGraph(false)
     }
+  }
+
+  function scheduleOutputGraphRefresh(delayMs = 500) {
+    if (!graphOpen || !activeWorkflow) return
+    if (graphRefreshTimerRef.current !== null) window.clearTimeout(graphRefreshTimerRef.current)
+    graphRefreshTimerRef.current = window.setTimeout(() => {
+      graphRefreshTimerRef.current = null
+      void refreshOutputGraph({ quiet: true })
+    }, delayMs)
   }
 
   function openOutputGraph() {
     setGraphOpen(true)
-    void refreshOutputGraph()
+    void refreshOutputGraph({ manual: true })
   }
 
   async function openOutputGraphForRequest(request: OutputRequest | null | undefined) {
@@ -1614,19 +1812,17 @@ export function OutputsWorkspace({
     setRefreshingGraph(true)
     setError(null)
     try {
-      if (request.latestRunId) {
-        const status = await onGetOutputRequestStatus(request.id)
-        if (status.run) {
-          setActiveRunId(status.run.id)
-          rememberLiveRun(status.run)
-        }
-      }
       await onLoadOutputWorkflowGraph(request.workflowId, request.latestRunId ?? null)
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : 'Could not open output workflow graph.')
     } finally {
       setRefreshingGraph(false)
     }
+  }
+
+  async function refreshOpenGraphAfterRun(workflowId: string, runId: string) {
+    if (!graphOpen) return
+    await onLoadOutputWorkflowGraph(workflowId, runId, selectedNodeKey ?? null)
   }
 
   async function openCinematicTimelineForRequest(request: OutputRequest | null | undefined) {
@@ -1945,6 +2141,7 @@ export function OutputsWorkspace({
       setInspectorMode('output')
       await pollRun(runResponse.run.id)
       await onRefreshLiveSnapshot()
+      await refreshOpenGraphAfterRun(activeWorkflow.id, runResponse.run.id)
     } catch (targetError) {
       setError(targetError instanceof Error ? targetError.message : 'Could not rerun the selected output node.')
     } finally {
@@ -2028,6 +2225,7 @@ export function OutputsWorkspace({
       setInspectorMode('output')
       await pollRun(runResponse.run.id)
       await onRefreshLiveSnapshot()
+      await refreshOpenGraphAfterRun(activeWorkflow.id, runResponse.run.id)
     } catch (targetError) {
       setError(targetError instanceof Error ? targetError.message : 'Could not rerun the selected output nodes.')
     } finally {
@@ -2104,10 +2302,72 @@ export function OutputsWorkspace({
       setInspectorMode('script')
       await pollRun(runResponse.run.id)
       await onRefreshLiveSnapshot()
+      await refreshOpenGraphAfterRun(activeWorkflow.id, runResponse.run.id)
     } catch (approvalError) {
       setError(approvalError instanceof Error ? approvalError.message : 'Could not approve cinematic video production.')
     } finally {
       setApprovingVideoProduction(false)
+      unmarkTargetedNodes(forceNodeKeys)
+    }
+  }
+
+  async function generateCinematicV2QualityKeyframes() {
+    if (!activeWorkflow) {
+      setError('Select a cinematic workflow before generating quality keyframes.')
+      return
+    }
+    const fanoutNode = activeNodes.find((node) => readTrimmedString(readRecord(node.config).purpose) === 'cinematic_v2_dynamic_shot_fanout')
+    if (!fanoutNode) {
+      setError('Run the fast animatic until the V2 fanout node is available, then generate quality keyframes.')
+      return
+    }
+    const workflowMetadata = readRecord(activeWorkflow.metadata)
+    const forceNodeKeys = [fanoutNode.key]
+    markTargetedNodes(forceNodeKeys, 'node_and_downstream')
+    setUpgradingAnimaticQuality(true)
+    setError(null)
+    try {
+      const previousInput = activeRun ? readRecord(activeRun.input) : {
+        sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
+        sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
+        pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
+      }
+      const runInput: Record<string, unknown> = {
+        ...previousInput,
+        cinematicV2AnimaticMode: 'quality_keyframes',
+        debugSkipVideoGeneration: true,
+        cinematicVideoApproved: false,
+      }
+      const runResponse = await onStartOutputWorkflowRun({
+        workflowId: activeWorkflow.id,
+        prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
+        targetFormat: 'video',
+        selectedEntityKeys: readStringArray(runInput['sourceEntityKeys']),
+        selectedSequenceUnitKeys: readStringArray(runInput['sourceSequenceUnitKeys']),
+        pageCount: readNumber(runInput['pageCount']) ?? undefined,
+        input: runInput,
+        metadata: {
+          sourceRunId: activeRun?.id ?? null,
+          runMode: 'cinematic_v2_quality_keyframes',
+          runScope: 'full_workflow',
+          forceNodeKeys,
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: false,
+          cinematicV2AnimaticMode: 'quality_keyframes',
+          debugSkipVideoGeneration: true,
+          cinematicVideoApproved: false,
+        },
+      })
+      setActiveRunId(runResponse.run.id)
+      rememberLiveRun(runResponse.run)
+      setInspectorMode('script')
+      await pollRun(runResponse.run.id)
+      await onRefreshLiveSnapshot()
+      await refreshOpenGraphAfterRun(activeWorkflow.id, runResponse.run.id)
+    } catch (qualityError) {
+      setError(qualityError instanceof Error ? qualityError.message : 'Could not generate quality cinematic keyframes.')
+    } finally {
+      setUpgradingAnimaticQuality(false)
       unmarkTargetedNodes(forceNodeKeys)
     }
   }
@@ -2193,7 +2453,7 @@ export function OutputsWorkspace({
           onCancelRun={cancelActiveRun}
           onClose={() => setGraphOpen(false)}
           onOpenTimeline={openCinematicTimelineForActiveWorkflow}
-          onRefreshGraph={() => void refreshOutputGraph()}
+          onRefreshGraph={() => void refreshOutputGraph({ manual: true })}
           onRunNode={(node, runScope) => void runSelectedNodeOnly(node, runScope)}
           onRunNodes={(nodes, runScope) => void runSelectedNodesOnly(nodes, runScope)}
           onSaveNode={onUpdateOutputWorkflowNode}
@@ -2203,7 +2463,9 @@ export function OutputsWorkspace({
           }}
           readNodeSkillKeys={readNodeSkillKeys}
           readOutputPreview={readOutputPreview}
-          runErrorMessage={error}
+          runErrorMessage={graphSyncDelayed
+            ? [error, `Graph sync delayed. Showing the last loaded graph while retrying.${graphSyncDelayedMessage ? ` Last error: ${graphSyncDelayedMessage}` : ''}`].filter(Boolean).join('\n')
+            : error}
           refreshingGraph={refreshingGraph}
           selectedNodeKey={selectedNode?.key ?? selectedNodeKey}
           targetedNodeKey={targetedNodeKey}
@@ -3044,8 +3306,10 @@ export function OutputsWorkspace({
                         data={cinematicScriptViewData}
                         estimate={cinematicV2ProductionEstimate}
                         isApprovingVideo={approvingVideoProduction}
+                        isUpgradingQuality={upgradingAnimaticQuality}
                         isVideoApproved={cinematicVideoApproved}
                         onApproveVideoProduction={approveCinematicV2VideoProduction}
+                        onGenerateQualityKeyframes={generateCinematicV2QualityKeyframes}
                         onOpenTimeline={openCinematicTimelineForActiveWorkflow}
                       />
                     </div>

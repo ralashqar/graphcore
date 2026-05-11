@@ -45,6 +45,17 @@ function shotPlan() {
         description: 'A wide view of the checkpoint.',
         action: 'Workers move through rain.',
         visibleCharacterRefIds: ['ilya'],
+        performanceBeats: [{
+          characterRefId: 'ilya',
+          valence: -0.1,
+          arousal: 0.45,
+          confidence: 0.35,
+          dominance: 0.3,
+          bodyLanguage: 'guarded walk',
+          facialExpression: 'watchful',
+          gaze: 'forward through rain',
+          gesture: 'hands close to body',
+        }],
         speakerRefIds: [],
         locationRefId: 'checkpoint',
         propRefIds: [],
@@ -70,6 +81,17 @@ function shotPlan() {
         description: 'Ilya notices Anya through the glass.',
         action: 'Ilya stops in the worker line.',
         visibleCharacterRefIds: ['ilya'],
+        performanceBeats: [{
+          characterRefId: 'ilya',
+          valence: -0.25,
+          arousal: 0.62,
+          confidence: 0.28,
+          dominance: 0.25,
+          bodyLanguage: 'body locks still',
+          facialExpression: 'shock held in the eyes',
+          gaze: 'screen-right through glass',
+          gesture: 'fingers tighten',
+        }],
         speakerRefIds: [],
         locationRefId: 'checkpoint',
         propRefIds: [],
@@ -172,6 +194,37 @@ test('applying a director patch updates shot graph data and returns inverse undo
   assert.equal(applied.inverseOperations[0].shotId, 'shot_2')
   assert.equal(applied.inverseOperations[0].set.editorialDurationSeconds, 2)
   assert.equal(applied.inverseOperations[0].set.camera.angle, 'eye level')
+})
+
+test('director patch can update performance beats and undo restores them', () => {
+  const applied = applyCinematicDirectorPatch({
+    shotPlan: shotPlan(),
+    operations: [
+      {
+        op: 'update_shot',
+        shotId: 'shot_2',
+        set: {
+          performanceBeats: [{
+            characterRefId: 'ilya',
+            valence: -0.55,
+            arousal: 0.9,
+            confidence: 0.18,
+            dominance: 0.2,
+            bodyLanguage: 'shoulders raised, breath caught',
+            facialExpression: 'frightened recognition',
+            gaze: 'fixed through the glass',
+            gesture: 'hand lifts but stops short',
+          }],
+        },
+        rationale: 'Make the reaction more intense.',
+      },
+    ],
+  })
+
+  const shot = applied.shotPlan.shots.find((entry) => entry.id === 'shot_2')
+  assert.equal(shot.performanceBeats[0].arousal, 0.9)
+  assert.equal(applied.inverseOperations[0].op, 'update_shot')
+  assert.equal(applied.inverseOperations[0].set.performanceBeats[0].arousal, 0.62)
 })
 
 test('director patch preview recommends scene replan for structural notes', () => {

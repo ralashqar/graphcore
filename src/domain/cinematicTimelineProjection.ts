@@ -4,6 +4,7 @@ import {
   cinematicV2TimelineSchema,
   type AudioBeat,
   type CinematicSequence,
+  type CinematicV2PerformanceBeat,
   type DialogueBeat,
 } from './cinematics.ts'
 
@@ -35,6 +36,7 @@ export type CinematicTimelineShotClip = {
   previewAssetKey: string | null
   previewKind?: 'image' | 'video' | 'placeholder'
   activeRefIds: string[]
+  performanceBeats: CinematicV2PerformanceBeat[]
   subtitleCues: CinematicTimelineCue[]
   audioCues: CinematicTimelineCue[]
 }
@@ -241,6 +243,7 @@ export function buildCinematicTimelineProjection(sequenceInput: CinematicSequenc
         ...shot.compositeRefIds,
         ...shot.storyboardRefIds,
       ]),
+      performanceBeats: [],
       subtitleCues,
       audioCues: shotAudioCues,
     } satisfies CinematicTimelineShotClip
@@ -369,6 +372,7 @@ export function buildCinematicV2TimelineProjection(input: {
         shot.locationRefId,
         ...shot.propRefIds,
       ]),
+      performanceBeats: shot.performanceBeats,
       subtitleCues,
       audioCues: [],
     }
