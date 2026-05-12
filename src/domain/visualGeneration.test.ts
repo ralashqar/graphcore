@@ -146,13 +146,17 @@ test('entity icon endpoint and Fly worker use the generic visual job pipeline', 
   assert.match(visualWorker, /world_concept_image/)
 })
 
-test('initial streamed seed queues world concept image after wiki metadata and before icon batch boundary', () => {
+test('initial streamed seed queues world concept image and per-entity reference sheets', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/world-prompt.ts'), 'utf8')
 
   assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,180}await maybeQueueInitialSeedWorldConceptImage\('world_wiki_metadata'\)/)
-  assert.match(source, /op\.op === 'upsert_entity' && op\.payload\.entity\.nodeType === 'sequence_unit'[\s\S]{0,180}await maybeQueueInitialSeedIconBatch\('first_sequence_unit'\)/)
+  assert.match(source, /op\.op === 'upsert_entity'[\s\S]{0,320}await maybeQueueInitialSeedEntityReferenceSheet\(entity,\s*'streamed_upsert_entity'\)/)
+  assert.doesNotMatch(source, /op\.op === 'upsert_entity' && op\.payload\.entity\.nodeType === 'sequence_unit'[\s\S]{0,240}maybeQueueInitialSeedIconBatch/)
   assert.match(source, /kind:\s*'wiki_visual'/)
   assert.match(source, /role:\s*'world_concept_image'/)
+  assert.match(source, /kind:\s*'entity_reference_sheet'/)
+  assert.match(source, /queuedBy:\s*'initial_seed_entity_reference_sheet'/)
+  assert.match(source, /target_keys:\s*\{\s*entityKey:\s*candidate\.key/)
   assert.match(source, /quality:\s*'low'/)
   assert.match(source, /outputFormat:\s*'webp'/)
   assert.match(source, /imageSize:\s*\{\s*width:\s*1536,\s*height:\s*864\s*\}/)

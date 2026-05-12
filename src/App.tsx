@@ -100,7 +100,7 @@ import { normalizeNode } from './domain/nodeLibrary'
 import { classifyOutputPrompt } from './domain/outputWorkflow'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
-import type { VisualGenerationJob } from './domain/visualGeneration'
+import type { VisualGenerationJob, VisualGenerationKind } from './domain/visualGeneration'
 import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
 import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
@@ -737,6 +737,22 @@ function hasPendingInitialSeedGeneration(snapshot: ProjectSnapshot): boolean {
     (isPendingInitialSeedGenerationTurn(turn) && turn.status !== 'failed')
     || isOpenInitialSeedFlowTurn(turn)
   ))
+}
+
+function hasStartedInitialSeedSkeletonGeneration(snapshot: ProjectSnapshot): boolean {
+  if (snapshot.worldPromptGenerationJobs.some((job) => (
+    job.kind === 'initial_seed_stream'
+    && ['queued', 'running', 'completed', 'completed_with_errors'].includes(job.status)
+  ))) {
+    return true
+  }
+  return snapshot.worldPromptTurns.some((turn) => {
+    const directMode = typeof turn.metadata?.initialSeedMode === 'string' ? turn.metadata.initialSeedMode : null
+    const parsed = worldPromptInitialSeedContextSchema.safeParse(turn.metadata?.initialSeedContext)
+    const contextMode = parsed.success ? parsed.data.mode : null
+    return (directMode === 'generate_skeleton' || contextMode === 'generate_skeleton')
+      && turn.status !== 'awaiting_user_input'
+  })
 }
 
 function mergeWorldPromptEventsIntoSnapshot(snapshot: ProjectSnapshot, events: WorldPromptEvent[]) {
@@ -1386,6 +1402,7 @@ export default function App() {
   const [activeInitialSeedSessionKey, setActiveInitialSeedSessionKey] = useState<string | null>(null)
   const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('wiki')
   const [worldWikiSubView, setWorldWikiSubView] = useState<WorldWikiSubView>('wiki')
+  const [visualGenerationJobs, setVisualGenerationJobs] = useState<VisualGenerationJob[]>([])
   const [activeLibrarySection, setActiveLibrarySection] = useState<LibrarySection>('characters')
   const [selectedAssetKey, setSelectedAssetKey] = useState<string | null>(null)
   const [selectedArchetypeKey, setSelectedArchetypeKey] = useState<string | null>(null)
@@ -2087,11 +2104,14 @@ export default function App() {
     && !!snapshot
     && !!activeInitialSeedSessionKey
     && !isInitialSeedSessionFinished(snapshot, activeInitialSeedSessionKey)
+  const initialSeedSkeletonStarted = loadedState?.source === 'supabase'
+    && !!snapshot
+    && hasStartedInitialSeedSkeletonGeneration(snapshot)
   const shouldShowWorldOnboarding = activeTab === 'graph' && (
     activeGameIsEmpty
     || initialSeedGenerationPending
     || activeInitialSeedSessionOpen
-  )
+  ) && !initialSeedSkeletonStarted
 
   useEffect(() => {
     if (loading) return
@@ -2107,6 +2127,27 @@ export default function App() {
     if (!isInitialSeedSessionFinished(snapshot, activeInitialSeedSessionKey)) return
     setActiveInitialSeedSessionKey(null)
   }, [activeInitialSeedSessionKey, snapshot])
+
+  useEffect(() => {
+    setVisualGenerationJobs([])
+  }, [snapshot?.draft.id])
+
+  useEffect(() => {
+    if (loadedState?.source !== 'supabase' || !snapshot) return undefined
+    let cancelled = false
+    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet']
+    workspaceService.listActiveVisualGenerationJobs(snapshot, activeVisualJobKinds)
+      .then((jobs) => {
+        if (cancelled) return
+        setVisualGenerationJobs((current) => mergeResourcesById(current, jobs))
+      })
+      .catch((error) => {
+        console.warn('Failed to load active visual generation jobs.', error)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [loadedState?.source, snapshot?.draft.id, snapshot?.project.id])
 
   useEffect(() => {
     if (!snapshot || loadedState?.source !== 'supabase') return
@@ -2349,6 +2390,18 @@ export default function App() {
         snapshotRef.current = nextSnapshot
         setSnapshot(nextSnapshot)
         setBundle(compileBundle(nextSnapshot))
+      },
+      onVisualGenerationJob: (job) => {
+        if (desiredGameSelectionRef.current) return
+        const current = snapshotRef.current
+        if (!current) return
+        if (current.draft.id !== job.draftId) return
+        setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [job]))
+        if (['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status)) {
+          void refreshLiveSnapshot().catch((error) => {
+            console.warn('[GraphCore] failed to refresh live snapshot after visual generation realtime update.', error)
+          })
+        }
       },
     })
 
@@ -4727,6 +4780,9 @@ export default function App() {
       throw error
     }
     setActiveInitialSeedSessionKey(result.session.key)
+    setActiveTab('graph')
+    setWorldViewMode('wiki')
+    setWorldWikiSubView('wiki')
     let nextSnapshot = mergeWorldPromptStateIntoSnapshot(syncedSnapshot, {
       sessions: [result.session],
       turns: [result.turn],
@@ -4900,6 +4956,7 @@ export default function App() {
 
   async function getVisualGenerationStatus(jobId: string) {
     const status = await workspaceService.getVisualGenerationStatus(jobId)
+    setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [status.job]))
     if (status.terminal) {
       await applyCompletedWorldConceptVisualJob(status.job)
     }
@@ -4913,7 +4970,9 @@ export default function App() {
     if (loadedState?.source !== 'supabase') {
       throw new Error('Visual generation requires a live Supabase-backed draft.')
     }
-    return workspaceService.startVisualGenerationJob(snapshot, request)
+    const result = await workspaceService.startVisualGenerationJob(snapshot, request)
+    setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [result.job]))
+    return result
   }
 
   async function generateWorldConceptImageFromGlobal() {
@@ -4986,6 +5045,7 @@ export default function App() {
         queuedBy: 'global_workspace',
       },
     })
+    setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [result.job]))
     const pendingAsset: ProjectSnapshot['assets'][number] = {
       id: createLocalEntityId('asset-world-concept'),
       projectId: current.project.id,
@@ -7555,6 +7615,7 @@ export default function App() {
                 worldPromptGenerationJobs={snapshot.worldPromptGenerationJobs}
                 worldPromptGenerationJobSteps={snapshot.worldPromptGenerationJobSteps}
                 worldPromptSuggestions={snapshot.worldPromptSuggestions}
+                visualGenerationJobs={visualGenerationJobs}
                 outputRequests={snapshot.outputRequests}
                 outputWorkflowRuns={snapshot.outputWorkflowRuns}
                 outputWorkflowNodes={snapshot.outputWorkflowNodes}

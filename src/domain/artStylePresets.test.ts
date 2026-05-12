@@ -48,6 +48,20 @@ test('story onboarding exposes live-action cinematic as a first-class story styl
   assert.equal(presets[0]?.id, 'live_action_cinematic')
 })
 
+test('story onboarding exposes family feature CG for animated stories', () => {
+  const presets = getOnboardingArtStylePresets({
+    projectType: 'story',
+    projectSubtype: 'animated_story',
+  })
+  const familyFeaturePreset = getArtStylePreset('family_feature_cg')
+  const directives = getArtStylePresetPromptDirectives('family_feature_cg').join(' ')
+
+  assert.ok(presets.some((preset) => preset.id === 'family_feature_cg'))
+  assert.equal(familyFeaturePreset.group, 'Stylized 3D')
+  assert.match(directives, /family-feature CG animation/i)
+  assert.match(directives, /avoid naming or imitating a specific animation studio/i)
+})
+
 test('custom onboarding style stays last after story style ranking', () => {
   const presets = getOnboardingArtStylePresets({
     projectType: 'story',

@@ -782,6 +782,17 @@
   -webkit-line-clamp: 1;
 }
 
+.world-wiki-section-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.world-wiki-section,
+.world-wiki-section-cast,
+.world-wiki-section-style,
+.world-wiki-section-timeline {
+  grid-column: 1 / -1;
+}
+
 .world-wiki-style-summary-row {
   display: flex;
   align-items: center;

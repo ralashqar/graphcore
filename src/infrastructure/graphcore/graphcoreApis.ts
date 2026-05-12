@@ -111,6 +111,7 @@ export const graphcoreGenerationApi: GenerationApi = {
   getWorldEntityIconBatchStatus: graphcoreRepository.getWorldEntityIconBatchStatus,
   generateWorldBrandAtlasImage: graphcoreRepository.generateWorldBrandAtlasImage,
   startVisualGenerationJob: graphcoreRepository.startVisualGenerationJob,
+  listActiveVisualGenerationJobs: graphcoreRepository.listActiveVisualGenerationJobs,
   getVisualGenerationStatus: graphcoreRepository.getVisualGenerationStatus,
   cancelVisualGenerationJob: graphcoreRepository.cancelVisualGenerationJob,
   startAppCodeGeneration: graphcoreRepository.startAppCodeGeneration,

@@ -82,6 +82,26 @@
   transform: translateY(-1px);
 }
 
+.world-wiki-create-entry.is-generating,
+.world-wiki-create-entry.is-generating:hover {
+  border-color: rgba(45, 212, 191, 0.34);
+  background:
+    linear-gradient(135deg, rgba(20, 184, 166, 0.16), rgba(14, 165, 233, 0.1)),
+    rgba(255, 255, 255, 0.04);
+  cursor: default;
+  transform: none;
+}
+
+.world-wiki-create-entry.is-generating .world-wiki-create-icon {
+  background: rgba(20, 184, 166, 0.18);
+  color: rgba(153, 246, 228, 0.96);
+}
+
+.world-wiki-create-entry.is-generating .world-wiki-create-icon svg,
+.world-wiki-create-entry.is-generating .world-wiki-create-icon .entity-icon-image {
+  animation: worldWikiNavSpin 1s linear infinite;
+}
+
 .world-wiki-create-icon {
   display: grid;
   place-items: center;
@@ -241,6 +261,33 @@
   background: rgba(251, 191, 36, 0.1);
 }
 
+.world-wiki-index-row.is-generation-active {
+  border-color: rgba(45, 212, 191, 0.32);
+  background: rgba(20, 184, 166, 0.09);
+}
+
+.world-wiki-index-row.is-generation-active .world-wiki-index-icon {
+  color: rgba(153, 246, 228, 0.98);
+  background: rgba(20, 184, 166, 0.14);
+}
+
+.world-wiki-index-row.is-generation-pending {
+  opacity: 0.72;
+}
+
+.world-wiki-index-row.is-generation-done .world-wiki-index-icon {
+  color: rgba(187, 247, 208, 0.92);
+}
+
+.world-wiki-nav-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(148, 163, 184, 0.24);
+  border-top-color: rgba(125, 211, 252, 0.95);
+  animation: worldWikiNavSpin 860ms linear infinite;
+}
+
 .world-wiki-gap-button {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -316,6 +363,20 @@
     linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(7, 11, 18, 0.96)),
     #0b1119;
   color: rgba(237, 244, 251, 0.94);
+}
+
+@keyframes worldWikiNavSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-wiki-create-entry.is-generating .world-wiki-create-icon svg,
+  .world-wiki-create-entry.is-generating .world-wiki-create-icon .entity-icon-image,
+  .world-wiki-nav-spinner {
+    animation: none;
+  }
 }
 
 .world-wiki-subview-toggle {

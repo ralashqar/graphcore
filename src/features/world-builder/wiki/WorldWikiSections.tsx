@@ -129,6 +129,7 @@ type WorldWikiSectionViewProps = {
   normalizedWikiSearchQuery: string
   outputLibraryModel?: OutputLibraryModel
   projectContext: ProjectContext | null | undefined
+  referenceArtStateByEntityKey: ReadonlyMap<string, 'queued' | 'generating'>
   resultByKey: ReadonlyMap<string, WorldResult>
   section: WorldWikiSection
   selectedPromptThreadKey: string | null
@@ -139,7 +140,6 @@ type WorldWikiSectionViewProps = {
   wikiHasAppSections: boolean
   wikiModel: WorldWikiModel
   wikiSearchActive: boolean
-  wikiSectionVisibleCounts: Record<string, number>
   wikiStyleExpanded: boolean
   onGenerateBrandAtlasImage: () => void
   onOpenBrandAtlasImageSplash: (imageUrl: string | null | undefined) => void
@@ -162,6 +162,7 @@ export function WorldWikiSectionView({
   normalizedWikiSearchQuery,
   outputLibraryModel,
   projectContext,
+  referenceArtStateByEntityKey,
   resultByKey,
   section,
   selectedPromptThreadKey,
@@ -172,7 +173,6 @@ export function WorldWikiSectionView({
   wikiHasAppSections,
   wikiModel,
   wikiSearchActive,
-  wikiSectionVisibleCounts,
   wikiStyleExpanded,
   onGenerateBrandAtlasImage,
   onOpenBrandAtlasImageSplash,
@@ -195,6 +195,7 @@ export function WorldWikiSectionView({
     const entity = entityByKey.get(entityKey) ?? null
     if (!entity) return null
     const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
+    const referenceArtState = referenceArtStateByEntityKey.get(entity.key) ?? null
     const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
     const summary = profile?.shortSummary || entity.summary || entity.context || 'No wiki summary yet.'
@@ -221,7 +222,16 @@ export function WorldWikiSectionView({
         }}
         type="button"
       >
-        {imageUrl ? <img src={imageUrl} alt="" /> : <span className="world-wiki-entity-icon"><EntityIcon id={iconForWorldEntity(entity.nodeType)} /></span>}
+        {imageUrl ? (
+          <img src={imageUrl} alt="" />
+        ) : referenceArtState ? (
+          <span className={`world-wiki-reference-art-state is-${referenceArtState}`}>
+            <span aria-hidden="true" />
+            <em>{referenceArtState === 'generating' ? 'Making sheet' : 'Sheet queued'}</em>
+          </span>
+        ) : (
+          <span className="world-wiki-entity-icon"><EntityIcon id={iconForWorldEntity(entity.nodeType)} /></span>
+        )}
         <span>
           <strong>{entity.name}</strong>
           <em>{profile?.roleLabel || labelForWorldEntity(entity.nodeType)}</em>
@@ -239,6 +249,7 @@ export function WorldWikiSectionView({
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
     const ordinal = sequence?.ordinal ?? null
     const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
+    const referenceArtState = referenceArtStateByEntityKey.get(entity.key) ?? null
     const summary = sequence?.synopsis || profile?.shortSummary || entity.summary || entity.context || 'No story beat summary yet.'
     const outcome = sequence?.outcome || ''
     const detailBody = buildWikiDetailBody([
@@ -272,7 +283,12 @@ export function WorldWikiSectionView({
       >
         <span className="world-wiki-timeline-ordinal">{ordinal ?? fallbackOrdinal}</span>
         <span className={imageUrl ? 'world-wiki-timeline-body has-image' : 'world-wiki-timeline-body'}>
-          {imageUrl ? <img className="world-wiki-timeline-image" src={imageUrl} alt="" /> : null}
+          {imageUrl ? <img className="world-wiki-timeline-image" src={imageUrl} alt="" /> : referenceArtState ? (
+            <span className={`world-wiki-timeline-image world-wiki-reference-art-state is-${referenceArtState}`}>
+              <span aria-hidden="true" />
+              <em>{referenceArtState === 'generating' ? 'Making sheet' : 'Sheet queued'}</em>
+            </span>
+          ) : null}
           <span className="world-wiki-timeline-copy">
             <span className="world-wiki-timeline-kicker">
               {[sequence?.actLabel, sequence?.unitKind || labelForWorldEntity(entity.nodeType)].filter(Boolean).join(' / ')}
@@ -455,7 +471,7 @@ export function WorldWikiSectionView({
         .slice(0, 6)
     : []
   const targetCellCount = cappedEntityKeys.length + cappedThreadKeys.length + cappedResultKeys.length + cappedOutputArtifacts.length
-  const visibleCellCount = Math.min(wikiSectionVisibleCounts[section.kind] ?? 0, targetCellCount)
+  const visibleCellCount = targetCellCount
   const visibleEntityKeys = cappedEntityKeys.slice(0, visibleCellCount)
   const remainingAfterEntities = Math.max(0, visibleCellCount - visibleEntityKeys.length)
   const visibleThreadKeys = cappedThreadKeys.slice(0, remainingAfterEntities)
@@ -463,7 +479,6 @@ export function WorldWikiSectionView({
   const visibleResultKeys = cappedResultKeys.slice(0, remainingAfterThreads)
   const remainingAfterResults = Math.max(0, remainingAfterThreads - visibleResultKeys.length)
   const visibleOutputArtifacts = cappedOutputArtifacts.slice(0, remainingAfterResults)
-  const hasDeferredSectionCells = visibleCellCount < targetCellCount
   const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
   const isCastSection = section.kind === 'cast'
   const isSearchHidden = wikiSearchActive && !sectionMatchesSearch && targetCellCount === 0
@@ -601,12 +616,6 @@ export function WorldWikiSectionView({
               <small>{artifact.requestTitle ?? artifact.kind.replace(/_/g, ' ')}</small>
             </a>
           ))}
-        </div>
-      ) : null}
-      {hasDeferredSectionCells ? (
-        <div className="world-wiki-section-loader" aria-live="polite">
-          <span className="world-loading-spinner" aria-hidden="true" />
-          <small>Loading {section.title.toLowerCase()}...</small>
         </div>
       ) : null}
     </section>

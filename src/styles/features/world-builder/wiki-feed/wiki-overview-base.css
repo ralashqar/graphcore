@@ -13,6 +13,58 @@
   box-shadow: 0 18px 52px rgba(0, 0, 0, 0.18);
 }
 
+.world-wiki-forming-banner {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 96px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background:
+    linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(20, 184, 166, 0.08)),
+    rgba(2, 6, 23, 0.34);
+}
+
+.world-wiki-forming-banner strong {
+  display: block;
+  color: rgba(248, 250, 252, 0.96);
+  font-size: 1.08rem;
+}
+
+.world-wiki-forming-banner small {
+  color: rgba(186, 230, 253, 0.82);
+  line-height: 1.4;
+}
+
+.world-wiki-forming-brain-stage {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+}
+
+.world-wiki-forming-brain-stage::before {
+  content: '';
+  position: absolute;
+  inset: 9px;
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.18);
+  filter: blur(12px);
+  animation: worldWikiBrainGlow 1.5s ease-in-out infinite;
+}
+
+.world-wiki-forming-brain {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  opacity: 0.82;
+  animation: worldWikiBrainThink 1.28s ease-in-out infinite;
+}
+
 .world-wiki-overview-media {
   min-height: 220px;
   border-radius: 8px;
@@ -38,6 +90,20 @@
   display: grid;
   place-items: center;
   color: rgba(148, 163, 184, 0.76);
+}
+
+.world-wiki-overview-media.is-pending .world-wiki-overview-placeholder {
+  gap: 8px;
+}
+
+.world-wiki-overview-media.is-pending .world-wiki-overview-placeholder::after {
+  content: '';
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 2px solid rgba(148, 163, 184, 0.25);
+  border-top-color: rgba(125, 211, 252, 0.95);
+  animation: worldWikiSpin 860ms linear infinite;
 }
 
 .world-wiki-overview-placeholder svg {
@@ -124,11 +190,12 @@
 
 .world-wiki-section-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
 .world-wiki-section {
+  grid-column: 1 / -1;
   min-width: 0;
   display: grid;
   gap: 12px;
@@ -141,6 +208,48 @@
     linear-gradient(180deg, rgba(20, 28, 42, 0.74), rgba(10, 15, 23, 0.8)),
     rgba(15, 21, 32, 0.72);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14);
+}
+
+@keyframes worldWikiSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes worldWikiBrainThink {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(-2deg) scale(1);
+  }
+
+  45% {
+    transform: translate3d(2px, -1px, 0) rotate(1deg) scale(1.04);
+  }
+
+  68% {
+    transform: translate3d(-1px, -1px, 0) rotate(-1deg) scale(1.024);
+  }
+}
+
+@keyframes worldWikiBrainGlow {
+  0%,
+  100% {
+    transform: scale(0.92);
+    opacity: 0.62;
+  }
+
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-wiki-forming-brain,
+  .world-wiki-forming-brain-stage::before,
+  .world-wiki-overview-media.is-pending .world-wiki-overview-placeholder::after {
+    animation: none;
+  }
 }
 
 .world-wiki-section-cast,

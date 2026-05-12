@@ -202,7 +202,8 @@ button.world-wiki-style-card:hover {
 }
 
 .world-wiki-entity-card img,
-.world-wiki-entity-icon {
+.world-wiki-entity-icon,
+.world-wiki-reference-art-state {
   width: 100%;
   height: 100%;
   min-height: 64px;
@@ -213,15 +214,81 @@ button.world-wiki-style-card:hover {
     rgba(255, 255, 255, 0.04);
 }
 
-.world-wiki-entity-icon {
+.world-wiki-entity-icon,
+.world-wiki-reference-art-state {
   display: grid;
   place-items: center;
   color: rgba(153, 246, 228, 0.86);
 }
 
+.world-wiki-reference-art-state {
+  position: relative;
+  overflow: hidden;
+  gap: 6px;
+  padding: 8px;
+  text-align: center;
+  color: rgba(186, 230, 253, 0.9);
+}
+
+.world-wiki-reference-art-state::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  animation: worldWikiReferenceSheetSweep 1.4s ease-in-out infinite;
+}
+
+.world-wiki-reference-art-state > span {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 2px solid rgba(148, 163, 184, 0.24);
+  border-top-color: rgba(125, 211, 252, 0.95);
+  animation: worldWikiReferenceSheetSpin 860ms linear infinite;
+}
+
+.world-wiki-reference-art-state.is-queued > span {
+  animation: none;
+  border-color: rgba(125, 211, 252, 0.36);
+}
+
+.world-wiki-reference-art-state em {
+  color: rgba(186, 230, 253, 0.86);
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .world-wiki-entity-icon svg {
   width: 24px;
   height: 24px;
+}
+
+@keyframes worldWikiReferenceSheetSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes worldWikiReferenceSheetSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  55%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-wiki-reference-art-state::before,
+  .world-wiki-reference-art-state > span {
+    animation: none;
+  }
 }
 
 .world-wiki-entity-card > span {
@@ -305,5 +372,10 @@ button.world-wiki-style-card:hover {
 .world-wiki-output-card img {
   aspect-ratio: 16 / 10;
   border-radius: 6px;
+}
+
+.world-wiki-timeline-card {
+  animation: world-feed-card-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity, transform;
 }
 

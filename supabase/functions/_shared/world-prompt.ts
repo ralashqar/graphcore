@@ -131,6 +131,10 @@ import {
   preparePlannerThreadMutations,
 } from '../../../src/domain/worldPromptThreads.ts'
 import {
+  buildInitialSeedEntityReferenceSheetCandidates,
+  type InitialSeedReferenceSheetJobLike,
+} from '../../../src/domain/initialSeedReferenceSheets.ts'
+import {
   getWorldViewSemanticMetadata,
   reconcileAutoManagedWorldViews,
   type AutoManagedWorldViewOptions,
@@ -160,6 +164,8 @@ import {
 import {
   mergeWorldEntityVisualDescriptionMetadata as mergeSharedWorldEntityVisualDescriptionMetadata,
   normalizeWorldEntityVisualDescription as normalizeSharedWorldEntityVisualDescription,
+  readWorldEntityVisualDescription,
+  readWorldEntityVisualIdentity,
   readWorldEntityVisualTraits,
 } from '../../../src/domain/worldEntityVisuals.ts'
 import {
@@ -8152,6 +8158,123 @@ async function enqueueInitialSeedWorldConceptImage(input: {
   }
 }
 
+function activeReferenceSheetJobLike(row: Record<string, unknown>): InitialSeedReferenceSheetJobLike {
+  return {
+    kind: asCompactString(row.kind),
+    status: asCompactString(row.status),
+    targetKeys: isRecord(row.target_keys) ? row.target_keys : {},
+    input: isRecord(row.input) ? row.input : {},
+  }
+}
+
+async function loadActiveEntityReferenceSheetJobs(input: {
+  client: SupabaseClient
+  draftId: string
+}) {
+  const response = await input.client
+    .from('visual_generation_jobs')
+    .select('id, kind, status, target_keys, input')
+    .eq('draft_id', input.draftId)
+    .in('kind', ['entity_reference_sheet', 'character_sheet'])
+    .in('status', ['queued', 'running'])
+  if (response.error) throw new Error(response.error.message)
+  return (response.data ?? []).map((row: Record<string, unknown>) => ({
+    id: asCompactString(row.id),
+    ...activeReferenceSheetJobLike(row),
+  }))
+}
+
+function buildInitialSeedReferenceSheetInput(input: {
+  entity: WorldEntity
+  snapshot: WorldPromptSnapshot
+  projectContext: ProjectContext
+}) {
+  const wiki = readProjectWorldWikiPresentation(input.snapshot)
+  const visualIdentity = readWorldEntityVisualIdentity(input.entity)
+  return {
+    entityKey: input.entity.key,
+    entityName: input.entity.name,
+    entityNodeType: input.entity.nodeType,
+    linkedDefinitionKey: input.entity.linkedDefinitionKey ?? null,
+    model: 'openai/gpt-image-2',
+    quality: 'medium',
+    summary: input.entity.summary,
+    context: input.entity.context,
+    visualDescription: readWorldEntityVisualDescription(input.entity),
+    visualTraits: visualIdentity.traits,
+    visualTraitMap: visualIdentity.traitMap,
+    projectArtStyle: wiki.artStyleDescription || input.projectContext.artStyleDescription || '',
+    projectTone: [wiki.genre, ...wiki.toneTags].filter(Boolean).join(', '),
+  }
+}
+
+async function enqueueInitialSeedEntityReferenceSheet(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  job: WorldPromptGenerationJob
+  projectContext: ProjectContext
+  entity: WorldEntity
+  trigger: string
+}) {
+  const activeJobs = await loadActiveEntityReferenceSheetJobs({
+    client: input.client,
+    draftId: input.snapshot.draft.id,
+  })
+  const candidates = buildInitialSeedEntityReferenceSheetCandidates({
+    entities: [input.entity],
+    activeJobs,
+  })
+  const candidate = candidates[0] ?? null
+  if (!candidate) {
+    return {
+      jobId: null,
+      skipped: true,
+    }
+  }
+
+  const jobInput = buildInitialSeedReferenceSheetInput({
+    entity: input.entity,
+    snapshot: input.snapshot,
+    projectContext: input.projectContext,
+  })
+  const insertResponse = await input.client
+    .from('visual_generation_jobs')
+    .insert({
+      project_id: input.snapshot.project.id,
+      draft_id: input.snapshot.draft.id,
+      requested_by: null,
+      status: 'queued',
+      kind: 'entity_reference_sheet',
+      provider: 'fal',
+      model: 'openai/gpt-image-2',
+      target_keys: {
+        entityKey: candidate.key,
+        entityName: candidate.name,
+        entityNodeType: candidate.nodeType,
+        linkedDefinitionKey: candidate.linkedDefinitionKey ?? null,
+      },
+      input: jobInput,
+      metadata: {
+        runtime: 'fly',
+        queuedBy: 'initial_seed_entity_reference_sheet',
+        generationJobId: input.job.id,
+        generationTurnId: input.job.turnId,
+        trigger: input.trigger,
+        entityKey: candidate.key,
+      },
+    })
+    .select('id')
+    .single()
+  if (insertResponse.error || !insertResponse.data) {
+    throw new Error(insertResponse.error?.message ?? 'Failed to queue entity reference sheet.')
+  }
+
+  return {
+    jobId: String(insertResponse.data.id),
+    skipped: false,
+  }
+}
+
 async function insertPromptMessage(input: {
   client: SupabaseClient
   sessionId: string
@@ -13507,6 +13630,15 @@ async function runWorldPromptGenerationJob(input: {
   let autoIconBatchQueued = isRecord(job.metadata?.autoIconGeneration)
     && typeof job.metadata.autoIconGeneration.jobId === 'string'
     && job.metadata.autoIconGeneration.jobId.trim().length > 0
+  const autoReferenceSheetJobsByEntityKey = new Map<string, string>(
+    Object.entries(isRecord(job.metadata?.autoReferenceSheetGeneration)
+      ? asRecord(job.metadata.autoReferenceSheetGeneration.jobIdsByEntityKey)
+      : {})
+      .flatMap(([entityKey, jobId]) => {
+        const cleanJobId = typeof jobId === 'string' ? jobId.trim() : ''
+        return entityKey && cleanJobId ? [[entityKey, cleanJobId] as const] : []
+      }),
+  )
 
   const repairMetadata = () => ({
     malformedRecordCount,
@@ -13703,6 +13835,70 @@ async function runWorldPromptGenerationJob(input: {
     }
   }
 
+  const maybeQueueInitialSeedEntityReferenceSheet = async (entity: WorldEntity, trigger: string) => {
+    if (autoReferenceSheetJobsByEntityKey.has(entity.key)) return
+    try {
+      const referenceSheet = await enqueueInitialSeedEntityReferenceSheet({
+        client: input.client,
+        snapshot: mutableSnapshot,
+        job,
+        projectContext,
+        entity,
+        trigger,
+      })
+      if (!referenceSheet.jobId) return
+      autoReferenceSheetJobsByEntityKey.set(entity.key, referenceSheet.jobId)
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoReferenceSheetGeneration: {
+            jobIdsByEntityKey: Object.fromEntries(autoReferenceSheetJobsByEntityKey.entries()),
+            entityKeys: [...autoReferenceSheetJobsByEntityKey.keys()],
+            queuedCount: autoReferenceSheetJobsByEntityKey.size,
+            lastQueuedEntityKey: entity.key,
+            lastQueuedJobId: referenceSheet.jobId,
+            trigger,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+      await writeEvent('planner_status', {
+        plannerStatus: 'planning',
+        plannerProgress: {
+          phase: 'generating_entity',
+          message: `Queued reference sheet for ${entity.name}.`,
+          sequence: counts.ops + counts.notes + 1,
+        },
+        turn: { id: turn.id },
+        job,
+      })
+    } catch (error) {
+      console.warn('[GraphCore] initial seed reference sheet enqueue failed', {
+        jobId: job.id,
+        turnId: turn.id,
+        entityKey: entity.key,
+        trigger,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoReferenceSheetGeneration: {
+            jobIdsByEntityKey: Object.fromEntries(autoReferenceSheetJobsByEntityKey.entries()),
+            entityKeys: [...autoReferenceSheetJobsByEntityKey.keys()],
+            queuedCount: autoReferenceSheetJobsByEntityKey.size,
+            lastFailedEntityKey: entity.key,
+            lastErrorMessage: error instanceof Error ? error.message : String(error),
+            trigger,
+            failedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+    }
+  }
+
   const handleEnvelope = async (envelope: WorldPromptStreamGraphOpEnvelope) => {
     await ensureJobIsActive()
     if (envelope.kind === 'note') {
@@ -13746,7 +13942,6 @@ async function runWorldPromptGenerationJob(input: {
     }
 
     if (op.op === 'upsert_entity' && op.payload.entity.nodeType === 'sequence_unit') {
-      await maybeQueueInitialSeedIconBatch('first_sequence_unit')
       const repaired = await completeStreamedStorySequenceOp({
         model,
         prompt,
@@ -13835,6 +14030,9 @@ async function runWorldPromptGenerationJob(input: {
     }
     for (const entity of result.applied.worldEntities ?? []) {
       touchedEntityKeys.add(entity.key)
+      if (op.op === 'upsert_entity' && entity.key === op.payload.entity.key) {
+        await maybeQueueInitialSeedEntityReferenceSheet(entity, 'streamed_upsert_entity')
+      }
     }
     for (const relationship of result.applied.worldRelationships ?? []) {
       touchedRelationshipKeys.add(relationship.key)

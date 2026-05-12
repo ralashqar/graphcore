@@ -8,6 +8,7 @@ import type {
   WorldPromptTurn,
 } from '../../domain/worldPrompt'
 import type { WorldThread } from '../../domain/worldThread'
+import type { VisualGenerationJob } from '../../domain/visualGeneration'
 
 export type RealtimeSubscription = {
   unsubscribe(): Promise<unknown> | void
@@ -23,6 +24,7 @@ export type WorldPromptRealtimeInput = {
   onGenerationJobStep?: (step: WorldPromptGenerationJobStep) => void
   onSuggestion?: (suggestion: WorldPromptSuggestionRecord) => void
   onThread?: (thread: WorldThread) => void
+  onVisualGenerationJob?: (job: VisualGenerationJob) => void
 }
 
 export type CinematicRunRealtimeInput = {

@@ -81,8 +81,12 @@ import {
   type WorldEntityIconGenerationStartResponse,
   type WorldEntityIconGenerationStatusResponse,
 } from '../../domain/worldEntityIconGeneration'
+import {
+  readEntityReferenceSheetAssetKey,
+  visualGenerationJobTargetsEntityReferenceSheet,
+} from '../../domain/initialSeedReferenceSheets'
 import type { WorldBrandAtlasImageResponse } from '../../domain/worldBrandAtlasImage'
-import type { VisualGenerationStartRequest, VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../../domain/visualGeneration'
+import type { VisualGenerationJob, VisualGenerationStartRequest, VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../../domain/visualGeneration'
 import {
   buildApprovedAppDesignBundle,
   evaluateAppPreviewReadiness,
@@ -175,8 +179,17 @@ const LegacyGraphWorkspace = lazy(() =>
 
 const WORLD_FEED_INITIAL_RENDER_LIMIT = 80
 const WORLD_FEED_RENDER_INCREMENT = 60
-const WIKI_SECTION_REVEAL_DELAY_MS = 120
-const WIKI_SECTION_REVEAL_STEP_MS = 90
+
+type LiveWikiGenerationSectionState = 'pending' | 'active' | 'done'
+
+type LiveWikiGenerationState = {
+  active: boolean
+  message: string
+  phase: string
+  sectionStates: Partial<Record<WorldWikiSection['kind'], LiveWikiGenerationSectionState>>
+}
+
+type EntityReferenceArtState = 'queued' | 'generating'
 
 function isPendingVisualAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
@@ -195,6 +208,46 @@ function isPendingWorldBrandAtlasAsset(asset: AssetDefinition | null | undefined
 
 function trimOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function phaseToWikiSectionKind(phase: string): WorldWikiSection['kind'] {
+  if (phase === 'finalizing_world' || phase === 'reading_context') return 'overview'
+  if (phase === 'generating_sequence_unit') return 'timeline'
+  if (phase === 'mapping_relationships' || phase === 'applying_changes') return 'threads'
+  return 'cast'
+}
+
+function buildLiveWikiGenerationSectionStates(input: {
+  activePhase: string
+  sections: WorldWikiSection[]
+  worldEntities: WorldEntity[]
+  worldRelationships: WorldRelationship[]
+}) {
+  const activeKind = phaseToWikiSectionKind(input.activePhase)
+  const states: Partial<Record<WorldWikiSection['kind'], LiveWikiGenerationSectionState>> = {}
+  for (const section of input.sections) {
+    const count = section.entityKeys.length + section.threadKeys.length + section.resultKeys.length
+    if (section.kind === 'overview') {
+      states[section.kind] = activeKind === 'overview' ? 'active' : 'done'
+      continue
+    }
+    if (section.kind === 'threads') {
+      states[section.kind] = activeKind === 'threads'
+        ? 'active'
+        : input.worldRelationships.length > 0
+          ? 'done'
+          : 'pending'
+      continue
+    }
+    states[section.kind] = activeKind === section.kind
+      ? 'active'
+      : count > 0
+        ? 'done'
+        : 'pending'
+  }
+  if (!states[activeKind]) states[activeKind] = 'active'
+  if (input.worldEntities.length === 0 && activeKind !== 'overview') states.cast = states.cast ?? 'pending'
+  return states
 }
 
 function readWorldBrandAtlasVisualJobId(asset: AssetDefinition | null | undefined) {
@@ -230,6 +283,7 @@ type WorldGraphPageProps = {
   worldPromptGenerationJobs: WorldPromptGenerationJob[]
   worldPromptGenerationJobSteps: WorldPromptGenerationJobStep[]
   worldPromptSuggestions: WorldPromptSuggestionRecord[]
+  visualGenerationJobs: VisualGenerationJob[]
   outputRequests: OutputRequest[]
   outputWorkflowRuns: OutputWorkflowRun[]
   outputWorkflowNodes: OutputWorkflowNode[]
@@ -838,6 +892,7 @@ export function WorldGraphPage({
   worldPromptGenerationJobs,
   worldPromptGenerationJobSteps,
   worldPromptSuggestions,
+  visualGenerationJobs,
   outputRequests,
   outputWorkflowRuns,
   outputWorkflowNodes,
@@ -978,6 +1033,16 @@ export function WorldGraphPage({
   const [appScreenAnalysisJobs, setAppScreenAnalysisJobs] = useState<VisualGenerationStatusResponse['job'][]>([])
   const [entityReferenceSheetJobs, setEntityReferenceSheetJobs] = useState<VisualGenerationStatusResponse['job'][]>([])
   const [entityReferenceSheetError, setEntityReferenceSheetError] = useState<string | null>(null)
+  const combinedEntityReferenceSheetJobs = useMemo(() => {
+    const byId = new Map<string, VisualGenerationStatusResponse['job']>()
+    for (const job of visualGenerationJobs) {
+      if (job.kind === 'entity_reference_sheet' || job.kind === 'character_sheet') {
+        byId.set(job.id, job)
+      }
+    }
+    for (const job of entityReferenceSheetJobs) byId.set(job.id, job)
+    return [...byId.values()]
+  }, [entityReferenceSheetJobs, visualGenerationJobs])
   const [appScreenArtBusy, setAppScreenArtBusy] = useState(false)
   const [appScreenArtError, setAppScreenArtError] = useState<string | null>(null)
   const [showAppStaticPrototype, setShowAppStaticPrototype] = useState(false)
@@ -1016,7 +1081,6 @@ export function WorldGraphPage({
   const [worldFeedGraphPreviewSelectedNodeKey, setWorldFeedGraphPreviewSelectedNodeKey] = useState<string | null>(null)
   const [newWorldFeedEntryIds, setNewWorldFeedEntryIds] = useState<Set<string>>(() => new Set())
   const [worldFeedVisibleEntryLimit, setWorldFeedVisibleEntryLimit] = useState(WORLD_FEED_INITIAL_RENDER_LIMIT)
-  const [wikiSectionVisibleCounts, setWikiSectionVisibleCounts] = useState<Record<string, number>>({})
   const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
   const {
     selectedPromptSessionKey,
@@ -1695,6 +1759,12 @@ export function WorldGraphPage({
     worldResults,
     onSignProjectAssetUrls,
   })
+  const wikiImageUrlByEntityKey = useMemo(() => (
+    new Map(worldEntities.map((entity) => [
+      entity.key,
+      referenceSheetUrlByEntityKey.get(entity.key) ?? imageUrlByEntityKey.get(entity.key) ?? null,
+    ]))
+  ), [imageUrlByEntityKey, referenceSheetUrlByEntityKey, worldEntities])
   const outputLibraryModel = useMemo(() => buildOutputLibraryModel({
     assets,
     outputArtifacts,
@@ -1812,6 +1882,49 @@ export function WorldGraphPage({
     },
     view: selectedView,
   }), [effectiveProjectDraftMetadata, projectDraftId, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
+  const liveWikiGenerationState = useMemo<LiveWikiGenerationState>(() => {
+    const active = Boolean(
+      activeInitialSeedGenerationJob && ['queued', 'running'].includes(activeInitialSeedGenerationJob.status),
+    )
+    const latestProgress = [...onboardingSessionEvents, ...sessionEvents]
+      .sort((left, right) => left.sequence - right.sequence || new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+      .reverse()
+      .map((event) => {
+        const parsed = worldPromptEventPayloadSchema.safeParse(event.payload)
+        return parsed.success ? parsed.data.plannerProgress ?? null : null
+      })
+      .find((progress) => progress?.message)
+    const phase = latestProgress?.phase ?? (activeInitialSeedGenerationJob?.status === 'queued' ? 'reading_context' : 'generating_entity')
+    return {
+      active,
+      message: latestProgress?.message ?? (active ? 'Generating the first world skeleton.' : ''),
+      phase,
+      sectionStates: active
+        ? buildLiveWikiGenerationSectionStates({
+            activePhase: phase,
+            sections: wikiModel.sections,
+            worldEntities,
+            worldRelationships,
+          })
+        : {},
+    }
+  }, [activeInitialSeedGenerationJob, onboardingSessionEvents, sessionEvents, wikiModel.sections, worldEntities, worldRelationships])
+  const referenceArtStateByEntityKey = useMemo(() => {
+    const next = new Map<string, EntityReferenceArtState>()
+    for (const entity of worldEntities) {
+      const hasReferenceImage = Boolean(referenceSheetUrlByEntityKey.get(entity.key) || readEntityReferenceSheetAssetKey(entity))
+      if (hasReferenceImage) continue
+      const hasActiveReferenceJob = combinedEntityReferenceSheetJobs.some((job) => (
+        visualGenerationJobTargetsEntityReferenceSheet(job, entity.key)
+      ))
+      if (hasActiveReferenceJob) {
+        next.set(entity.key, 'generating')
+      } else if (liveWikiGenerationState.active && entity.status !== 'archived') {
+        next.set(entity.key, 'queued')
+      }
+    }
+    return next
+  }, [combinedEntityReferenceSheetJobs, liveWikiGenerationState.active, referenceSheetUrlByEntityKey, worldEntities])
   const deferredWikiSearchQuery = useDeferredValue(wikiSearchQuery)
   const normalizedWikiSearchQuery = deferredWikiSearchQuery.trim().toLocaleLowerCase()
   const wikiSearchActive = normalizedWikiSearchQuery.length > 0
@@ -1825,52 +1938,6 @@ export function WorldGraphPage({
       wikiModel,
     })
   }, [entityByKey, normalizedWikiSearchQuery, resultByKey, threadByKey, wikiModel.entityProfiles, wikiModel.sections, wikiSearchActive])
-  const wikiSectionRevealSignature = useMemo(() => (
-    wikiModel.sections
-      .map((section) => [
-        section.kind,
-        Array.from(new Set(section.entityKeys)).join(','),
-        Array.from(new Set(section.threadKeys)).join(','),
-        Array.from(new Set(section.resultKeys)).join(','),
-      ].join(':'))
-      .join('|')
-  ), [wikiModel.sections])
-  const wikiSectionRevealTargets = useMemo(() => wikiModel.sections.reduce<Record<string, number>>((targets, section) => {
-      if (section.kind === 'style') return targets
-      const entityTarget = Math.min(Array.from(new Set(section.entityKeys)).length, section.kind === 'cast' ? 8 : 6)
-      const threadTarget = Math.min(Array.from(new Set(section.threadKeys)).length, 6)
-      const resultTarget = Math.min(Array.from(new Set(section.resultKeys)).length, 6)
-      const total = entityTarget + threadTarget + resultTarget
-      if (total > 0) targets[section.kind] = total
-      return targets
-    }, {}), [wikiSectionRevealSignature])
-  useEffect(() => {
-    if (worldViewMode !== 'wiki' || wikiSubView !== 'wiki') return undefined
-    const sectionTargets = wikiSectionRevealTargets
-    setWikiSectionVisibleCounts((current) => {
-      const next: Record<string, number> = {}
-      for (const [key, total] of Object.entries(sectionTargets)) {
-        next[key] = Math.min(current[key] ?? 0, total)
-      }
-      return next
-    })
-    const firstBatchId = window.setTimeout(() => {
-      setWikiSectionVisibleCounts((current) => {
-        const next: Record<string, number> = {}
-        for (const [key, total] of Object.entries(sectionTargets)) {
-          next[key] = Math.max(Math.min(current[key] ?? 0, total), Math.min(total, 4))
-        }
-        return next
-      })
-    }, WIKI_SECTION_REVEAL_DELAY_MS)
-    const fullBatchId = window.setTimeout(() => {
-      setWikiSectionVisibleCounts(sectionTargets)
-    }, WIKI_SECTION_REVEAL_DELAY_MS + WIKI_SECTION_REVEAL_STEP_MS)
-    return () => {
-      window.clearTimeout(firstBatchId)
-      window.clearTimeout(fullBatchId)
-    }
-  }, [wikiSectionRevealTargets, wikiSubView, worldViewMode])
   const wikiHasAppSections = useMemo(
     () => wikiModel.sections.some((section) => section.kind === 'app' || section.kind.startsWith('app_')),
     [wikiModel.sections],
@@ -2226,7 +2293,7 @@ export function WorldGraphPage({
     }
   }, [appScreenAnalysisJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
   useEffect(() => {
-    const runningJobs = entityReferenceSheetJobs.filter((job) => ['queued', 'running'].includes(job.status))
+    const runningJobs = combinedEntityReferenceSheetJobs.filter((job) => ['queued', 'running'].includes(job.status))
     if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
     let disposed = false
     let refreshedTerminal = false
@@ -2255,7 +2322,7 @@ export function WorldGraphPage({
       disposed = true
       window.clearInterval(intervalId)
     }
-  }, [entityReferenceSheetJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
+  }, [combinedEntityReferenceSheetJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
   const iconGenerationCandidates = useMemo(() => (
     buildWorldEntityIconCandidates({
       entities: worldEntities,
@@ -4941,7 +5008,7 @@ export function WorldGraphPage({
       window.removeEventListener('resize', scheduleUpdate)
       if (frameId !== null) window.cancelAnimationFrame(frameId)
     }
-  }, [viewMode, wikiSectionRevealSignature, wikiSubView])
+  }, [viewMode, wikiModel.sections, wikiSubView])
 
   function openWikiDetailModal(input: WorldWikiDetailModalInput) {
     setWikiDetailModal({
@@ -5796,7 +5863,7 @@ export function WorldGraphPage({
         brandAtlasError={brandAtlasError}
         brandAtlasGenerating={brandAtlasGenerating}
         entityByKey={entityByKey}
-        imageUrlByEntityKey={imageUrlByEntityKey}
+        imageUrlByEntityKey={wikiImageUrlByEntityKey}
         imageUrlByResultKey={imageUrlByResultKey}
         inspectorNodeKey={inspectorNodeKey}
         isPromptSubmitting={isPromptSubmitting}
@@ -5813,8 +5880,8 @@ export function WorldGraphPage({
         wikiHasAppSections={wikiHasAppSections}
         wikiModel={wikiModel}
         wikiSearchActive={wikiSearchActive}
-        wikiSectionVisibleCounts={wikiSectionVisibleCounts}
         wikiStyleExpanded={wikiStyleExpanded}
+        referenceArtStateByEntityKey={referenceArtStateByEntityKey}
         onGenerateBrandAtlasImage={() => void handleGenerateBrandAtlasImage()}
         onOpenBrandAtlasImageSplash={openBrandAtlasImageSplash}
         onOpenWikiDetailModal={openWikiDetailModal}
@@ -6321,9 +6388,11 @@ export function WorldGraphPage({
                   iconBatchRunning={iconBatchRunning}
                   iconGenerationCandidates={iconGenerationCandidates}
                   isPromptSubmitting={isPromptSubmitting}
+                  liveGenerationState={liveWikiGenerationState}
                   wikiDocumentRef={wikiDocumentRef}
                   wikiModel={wikiModel}
                   wikiOverviewActionGaps={wikiOverviewActionGaps}
+                  wikiBrandAtlasImageUrl={wikiBrandAtlasImageUrl}
                   wikiOverviewGraphicImageStyle={wikiOverviewGraphicImageStyle}
                   wikiOverviewGraphicMediaStyle={wikiOverviewGraphicMediaStyle}
                   wikiOverviewGraphicPending={wikiOverviewGraphicPending}

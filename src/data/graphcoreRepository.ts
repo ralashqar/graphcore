@@ -110,11 +110,14 @@ import {
 } from '../domain/worldBrandAtlasImage'
 import {
   visualGenerationCancelResponseSchema,
+  visualGenerationJobSchema,
   visualGenerationStartRequestSchema,
   visualGenerationStartResponseSchema,
   visualGenerationStatusRequestSchema,
   visualGenerationStatusResponseSchema,
   type VisualGenerationCancelResponse,
+  type VisualGenerationKind,
+  type VisualGenerationJob,
   type VisualGenerationStartRequest,
   type VisualGenerationStartResponse,
   type VisualGenerationStatusResponse,
@@ -7742,6 +7745,49 @@ export async function startVisualGenerationJob(snapshot: ProjectSnapshot, reques
   return visualGenerationStartResponseSchema.parse(response.data)
 }
 
+function mapVisualGenerationJobRow(row: Record<string, unknown>) {
+  return visualGenerationJobSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    requestedBy: row.requested_by,
+    status: row.status,
+    kind: row.kind,
+    provider: row.provider,
+    model: row.model,
+    targetKeys: row.target_keys ?? {},
+    input: row.input ?? {},
+    outputs: row.outputs ?? {},
+    errorMessage: row.error_message,
+    workerId: row.worker_id,
+    heartbeatAt: row.heartbeat_at,
+    attemptCount: row.attempt_count ?? 0,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+export async function listActiveVisualGenerationJobs(
+  snapshot: ProjectSnapshot,
+  kinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet'],
+): Promise<VisualGenerationJob[]> {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading visual generation jobs.')
+  if (!hasLiveSnapshotIds(snapshot)) return []
+
+  const response = await supabase
+    .from('visual_generation_jobs')
+    .select('id, project_id, draft_id, requested_by, status, kind, provider, model, target_keys, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, created_at, updated_at')
+    .eq('project_id', snapshot.project.id)
+    .eq('draft_id', snapshot.draft.id)
+    .in('kind', kinds)
+    .in('status', ['queued', 'running'])
+    .order('created_at', { ascending: false })
+
+  if (response.error) throw new Error(response.error.message)
+  return (response.data ?? []).map((row) => mapVisualGenerationJobRow(row as Record<string, unknown>))
+}
+
 export async function getVisualGenerationStatus(jobId: string): Promise<VisualGenerationStatusResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading visual generation status.')
   const payload = visualGenerationStatusRequestSchema.parse({ jobId })
@@ -8719,6 +8765,7 @@ export function subscribeWorldPromptEvents(input: {
   onGenerationJobStep?: (step: WorldPromptGenerationJobStep) => void
   onSuggestion?: (suggestion: WorldPromptSuggestionRecord) => void
   onThread?: (thread: WorldThread) => void
+  onVisualGenerationJob?: (job: VisualGenerationJob) => void
 }) {
   const channel = supabase
     .channel(`graphcore-world-prompt-${input.draftId}`)
@@ -8796,6 +8843,15 @@ export function subscribeWorldPromptEvents(input: {
     }, (payload) => {
       if (!payload.new || typeof payload.new !== 'object') return
       input.onThread?.(mapWorldThreadRow(payload.new as WorldThreadRow))
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'visual_generation_jobs',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => {
+      if (!payload.new || typeof payload.new !== 'object') return
+      input.onVisualGenerationJob?.(mapVisualGenerationJobRow(payload.new as Record<string, unknown>))
     })
 
   void channel.subscribe()

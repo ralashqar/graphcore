@@ -14,6 +14,8 @@ import type {
 } from '../../domain/meshGeneration'
 import type {
   VisualGenerationCancelResponse,
+  VisualGenerationJob,
+  VisualGenerationKind,
   VisualGenerationStartRequest,
   VisualGenerationStartResponse,
   VisualGenerationStatusResponse,
@@ -51,6 +53,7 @@ export type GenerationApi = {
   getWorldEntityIconBatchStatus(jobId: string): Promise<WorldEntityIconGenerationStatusResponse>
   generateWorldBrandAtlasImage(snapshot: ProjectSnapshot, prompt?: string): Promise<WorldBrandAtlasImageResponse>
   startVisualGenerationJob(snapshot: ProjectSnapshot, request: Omit<Partial<VisualGenerationStartRequest>, 'projectId' | 'draftId'> & Pick<VisualGenerationStartRequest, 'kind'>): Promise<VisualGenerationStartResponse>
+  listActiveVisualGenerationJobs(snapshot: ProjectSnapshot, kinds?: VisualGenerationKind[]): Promise<VisualGenerationJob[]>
   getVisualGenerationStatus(jobId: string): Promise<VisualGenerationStatusResponse>
   cancelVisualGenerationJob(jobId: string): Promise<VisualGenerationCancelResponse>
   startAppCodeGeneration(snapshot: ProjectSnapshot): Promise<AppGenerationStartResponse>

@@ -46,6 +46,7 @@ export const workspaceService = {
   generateWorldExpansion: graphcoreWorkspaceAdapter.generateWorldExpansion,
   listWorldThreads: graphcoreWorkspaceAdapter.listWorldThreads,
   listWorldPromptSessions: graphcoreWorkspaceAdapter.listWorldPromptSessions,
+  listActiveVisualGenerationJobs: graphcoreWorkspaceAdapter.listActiveVisualGenerationJobs,
   loadCachedOutputInbox: graphcoreWorkspaceAdapter.loadCachedOutputInbox,
   loadCachedProjectSnapshot: graphcoreWorkspaceAdapter.loadCachedProjectSnapshot,
   loadDraftDelta: graphcoreWorkspaceAdapter.loadDraftDelta,
