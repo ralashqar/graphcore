@@ -117,14 +117,14 @@ export const ART_STYLE_PRESETS: readonly ArtStylePresetDefinition[] = [
   },
   {
     id: 'family_feature_cg',
-    label: 'Family Feature CG',
-    promptLabel: 'warm stylized family-feature CG animation, appealing character design, expressive faces, tactile materials, cinematic storybook lighting',
+    label: 'Animated Feature CG',
+    promptLabel: 'warm stylized animated feature CG, appealing character design, expressive faces, tactile materials, cinematic storybook lighting',
     group: 'Stylized 3D',
-    description: 'High-appeal stylized CG for heartfelt animated story worlds, family adventure casts, and emotionally readable creature or mascot characters.',
+    description: 'High-appeal theatrical CG for heartfelt animated story worlds: expressive creature casts, stylized families, magical towns, underwater adventures, tactile materials, and emotionally readable comedy-drama acting.',
     modality: 'cg',
     sensitivity: 'low',
-    bestFor: 'animated story worlds, family adventure casts, expressive mascots, heartfelt creature stories',
-    captureMedium: 'stylized animated feature-quality CG render',
+    bestFor: 'animated story worlds, family adventure casts, expressive mascots, heartfelt creature stories, colorful feature-style worlds',
+    captureMedium: 'stylized animated feature CG render',
     cameraProfile: 'clear story-first staging with appealing silhouettes, readable expressions, and warm character proximity',
     lightingProfile: 'soft cinematic key light, colorful bounce, warm rim separation, and emotionally legible scene lighting',
     textureProfile: 'tactile simplified materials, soft cloth and fur detail where useful, polished but not photoreal surfaces',
@@ -646,7 +646,7 @@ const ART_STYLE_PRESET_ONBOARDING_METADATA: Partial<Record<ArtStylePresetId, Art
   family_feature_cg: {
     allowedProjectTypes: ['story', 'game', 'brand'],
     recommendedProjectSubtypes: ['animated_story', 'short_film', 'mascot_ip', 'narrative_adventure'],
-    thumbnailUrl: buildArtStyleThumbnailUrl('family cg', ['#24465f', '#f08a5d', '#f9d976']),
+    thumbnailUrl: buildArtStyleThumbnailUrl('feature cg', ['#24465f', '#f08a5d', '#f9d976']),
   },
   anime_cg: {
     allowedProjectTypes: ['story', 'game'],

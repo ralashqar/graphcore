@@ -124,6 +124,12 @@ Deno.serve(async (request) => {
 
     const { client, user } = await requireUserClient(request, 'start-visual-generation-job')
     const payload = visualGenerationStartRequestSchema.parse(await request.json())
+    if (payload.kind === 'world_entity_icon_grid') {
+      throw new HttpError(
+        410,
+        'Legacy world entity icon-grid generation is disabled. Use entity_reference_sheet jobs for entity art.',
+      )
+    }
     const normalizedInput = normalizeVisualGenerationInput(payload)
 
     const insertResponse = await client

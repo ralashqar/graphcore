@@ -249,8 +249,9 @@ button.world-wiki-style-card:hover {
 }
 
 .world-wiki-reference-art-state.is-queued > span {
-  animation: none;
-  border-color: rgba(125, 211, 252, 0.36);
+  animation: worldWikiReferenceSheetSpin 860ms linear infinite;
+  border-color: rgba(148, 163, 184, 0.24);
+  border-top-color: rgba(125, 211, 252, 0.95);
 }
 
 .world-wiki-reference-art-state em {
@@ -343,6 +344,13 @@ button.world-wiki-style-card:hover {
   gap: 5px;
   padding: 12px;
   border-radius: 8px;
+}
+
+.world-wiki-thread-card .world-wiki-entry-text,
+.world-wiki-output-card .world-wiki-entry-text {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
 }
 
 .world-wiki-thread-priority {

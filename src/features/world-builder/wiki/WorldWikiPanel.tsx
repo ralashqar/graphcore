@@ -1,7 +1,6 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react'
 
 import type { WorldEntity, WorldRelationship } from '../../../domain/worldGraph'
-import type { WorldEntityIconGenerationJob } from '../../../domain/worldEntityIconGeneration'
 import type { WorldWikiGap, WorldWikiModel, WorldWikiSection } from '../../../domain/worldWiki'
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
 import type { WorldWikiSubView } from '../../../shared/workspace'
@@ -54,19 +53,19 @@ export function WorldWikiSubViewToggle({
 
 type WorldWikiPanelProps = {
   activeWikiSectionKind: WorldWikiSection['kind']
-  iconBatchError: string | null
-  iconBatchJob: WorldEntityIconGenerationJob | null
-  iconBatchRunning: boolean
-  iconGenerationCandidates: readonly unknown[]
   isPromptSubmitting: boolean
   liveGenerationState?: {
     active: boolean
     message: string
     phase: string
+    title: string
     sectionStates: Partial<Record<WorldWikiSection['kind'], 'pending' | 'active' | 'done'>>
   }
   wikiDocumentRef: RefObject<HTMLDivElement | null>
   wikiModel: WorldWikiModel
+  wikiOverviewDisplayTitle: string
+  wikiOverviewDisplayLogline: string
+  wikiOverviewShowMetadata: boolean
   wikiOverviewActionGaps: Array<{ gap: WorldWikiGap; label: string }>
   wikiBrandAtlasImageUrl: string | null
   wikiOverviewGraphicImageStyle?: CSSProperties
@@ -77,14 +76,16 @@ type WorldWikiPanelProps = {
   wikiOverviewLabel: string
   wikiOverviewSectionStyle?: CSSProperties
   wikiOverviewTags: string[]
+  wikiVisualGenerationStatus?: {
+    message: string
+    detail?: string
+  } | null
   wikiSearchActive: boolean
   wikiSearchMatchCount: number | null
   wikiSearchQuery: string
   wikiSubView: WorldWikiSubView
   worldEntities: readonly WorldEntity[]
   worldRelationships: readonly WorldRelationship[]
-  describeIconBatchProgress: (job: WorldEntityIconGenerationJob | null) => string
-  onGenerateMissingEntityIcons: () => void
   onGrowWorkbenchResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onResetGrowWorkbenchWidth: () => void
   onRunWikiGap: (gap: WorldWikiGap) => void
@@ -181,14 +182,13 @@ function orderWikiSectionsForLiveDocument(sections: WorldWikiSection[]) {
 
 export function WorldWikiPanel({
   activeWikiSectionKind,
-  iconBatchError,
-  iconBatchJob,
-  iconBatchRunning,
-  iconGenerationCandidates,
   isPromptSubmitting,
   liveGenerationState,
   wikiDocumentRef,
   wikiModel,
+  wikiOverviewDisplayTitle,
+  wikiOverviewDisplayLogline,
+  wikiOverviewShowMetadata,
   wikiOverviewActionGaps,
   wikiBrandAtlasImageUrl,
   wikiOverviewGraphicImageStyle,
@@ -199,14 +199,13 @@ export function WorldWikiPanel({
   wikiOverviewLabel,
   wikiOverviewSectionStyle,
   wikiOverviewTags,
+  wikiVisualGenerationStatus,
   wikiSearchActive,
   wikiSearchMatchCount,
   wikiSearchQuery,
   wikiSubView,
   worldEntities,
   worldRelationships,
-  describeIconBatchProgress,
-  onGenerateMissingEntityIcons,
   onGrowWorkbenchResizeStart,
   onResetGrowWorkbenchWidth,
   onRunWikiGap,
@@ -228,6 +227,7 @@ export function WorldWikiPanel({
       brandAtlasImageUrl: wikiBrandAtlasImageUrl,
     })),
   )
+  const visibleWikiGaps = liveGenerationActive ? [] : wikiModel.gaps.slice(0, 5)
   return (
     <div className={`world-alt-surface world-wiki-surface${liveGenerationActive ? ' is-live-generating' : ''}`}>
       <aside className="world-wiki-index" aria-label="Wiki sections">
@@ -280,31 +280,10 @@ export function WorldWikiPanel({
             )
           })}
         </div>
-        {wikiModel.gaps.length > 0 || iconGenerationCandidates.length > 0 || iconBatchJob || iconBatchError ? (
+        {visibleWikiGaps.length > 0 ? (
           <div className="world-wiki-gap-list">
             <span className="eyebrow">Gaps</span>
-            {iconGenerationCandidates.length > 0 || iconBatchRunning ? (
-              <button
-                className={`world-wiki-gap-button world-wiki-icon-batch-button${iconBatchRunning ? ' is-running' : ''}`}
-                disabled={iconBatchRunning || iconGenerationCandidates.length === 0}
-                onClick={onGenerateMissingEntityIcons}
-                type="button"
-              >
-                <EntityIcon id="asset" />
-                <span>
-                  {iconBatchRunning
-                    ? describeIconBatchProgress(iconBatchJob)
-                    : `Generate missing icons (${iconGenerationCandidates.length})`}
-                </span>
-              </button>
-            ) : null}
-            {iconBatchJob && !iconBatchRunning ? (
-              <div className={`world-wiki-icon-batch-status is-${iconBatchJob.status}`}>
-                {describeIconBatchProgress(iconBatchJob)}
-              </div>
-            ) : null}
-            {iconBatchError ? <div className="world-wiki-icon-batch-status is-failed">{iconBatchError}</div> : null}
-            {wikiModel.gaps.slice(0, 5).map((gap) => (
+            {visibleWikiGaps.map((gap) => (
               <button key={gap.key} className="world-wiki-gap-button" disabled={isPromptSubmitting} onClick={() => onRunWikiGap(gap)} type="button">
                 <EntityIcon id="plus" />
                 <span>{gap.label}</span>
@@ -332,32 +311,52 @@ export function WorldWikiPanel({
             </div>
             <div>
               <span className="eyebrow">World assembly</span>
-              <strong>Your world is forming</strong>
+              <strong>{liveGenerationState?.title || 'Your world is forming'}</strong>
               <small>{liveGenerationState?.message || 'Streaming canon, references, and the wiki hero into place.'}</small>
             </div>
+            <span className="world-wiki-forming-spinner" aria-hidden="true" />
+          </div>
+        ) : null}
+        {wikiVisualGenerationStatus ? (
+          <div className="world-wiki-visual-generation-strip" role="status" aria-live="polite">
+            <span className="world-wiki-visual-generation-spinner" aria-hidden="true" />
+            <span className="world-wiki-visual-generation-copy">
+              <strong>{wikiVisualGenerationStatus.message}</strong>
+              {wikiVisualGenerationStatus.detail ? <small>{wikiVisualGenerationStatus.detail}</small> : null}
+            </span>
           </div>
         ) : null}
         <section id="world-wiki-section-overview" className="world-wiki-overview" style={wikiOverviewSectionStyle}>
           <div className="world-wiki-overview-copy">
             <span className="eyebrow">{wikiOverviewLabel}</span>
-            <h2>{wikiModel.title}</h2>
-            <div className="world-wiki-logline">
-              {wikiModel.overview.logline || 'No logline yet.'}
-              {!wikiModel.overview.logline ? (
-                <button
-                  className="world-context-strip-action"
-                  disabled={isPromptSubmitting}
-                  onClick={() => {
-                    const gap = wikiModel.gaps.find((entry) => entry.kind === 'world_logline') ?? null
-                    if (gap) onRunWikiGap(gap)
-                  }}
-                  type="button"
-                >
-                  Generate
-                </button>
-              ) : null}
-            </div>
-            {wikiOverviewActionGaps.length > 0 ? (
+            <h2
+              key={liveGenerationActive ? `live-title:${wikiOverviewDisplayTitle}` : 'stable-title'}
+              className={liveGenerationActive && wikiOverviewDisplayTitle ? 'is-live-generated' : undefined}
+            >
+              {wikiOverviewDisplayTitle}
+            </h2>
+            {wikiOverviewShowMetadata && (wikiOverviewDisplayLogline || !liveGenerationActive) ? (
+              <div
+                key={liveGenerationActive ? `live-logline:${wikiOverviewDisplayLogline}` : 'stable-logline'}
+                className={liveGenerationActive && wikiOverviewDisplayLogline ? 'world-wiki-logline is-live-generated' : 'world-wiki-logline'}
+              >
+                {wikiOverviewDisplayLogline || 'No logline yet.'}
+                {!liveGenerationActive && !wikiOverviewDisplayLogline ? (
+                  <button
+                    className="world-context-strip-action"
+                    disabled={isPromptSubmitting}
+                    onClick={() => {
+                      const gap = wikiModel.gaps.find((entry) => entry.kind === 'world_logline') ?? null
+                      if (gap) onRunWikiGap(gap)
+                    }}
+                    type="button"
+                  >
+                    Generate
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {wikiOverviewShowMetadata && !liveGenerationActive && wikiOverviewActionGaps.length > 0 ? (
               <div className="world-wiki-overview-actions">
                 {wikiOverviewActionGaps.map(({ gap, label }) => (
                   <button key={gap.kind} className="world-context-strip-action" disabled={isPromptSubmitting} onClick={() => onRunWikiGap(gap)} type="button">
@@ -390,7 +389,7 @@ export function WorldWikiPanel({
                   </button>
                 ) : null}
               </label>
-              {wikiOverviewTags.length > 0 ? (
+              {wikiOverviewShowMetadata && wikiOverviewTags.length > 0 ? (
                 <div className="world-wiki-overview-tags" aria-label="World tone tags">
                   {wikiOverviewTags.map((tag) => <span key={tag} className="chip">{tag}</span>)}
                 </div>

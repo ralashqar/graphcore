@@ -466,25 +466,11 @@ async function getValidatedSession(signInMessage: string) {
     return session
   }
 
-  console.error('[GraphCore] Supabase session validation failed before edge invoke.', {
+  console.warn('[GraphCore] Supabase session user check failed before live request; continuing with cached session token.', {
     message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
   })
 
-  const refreshed = await supabase.auth.refreshSession()
-  if (refreshed.error) {
-    throw refreshed.error
-  }
-
-  if (!refreshed.data.session) {
-    throw new Error(signInMessage)
-  }
-
-  const refreshedUserCheck = await supabase.auth.getUser(refreshed.data.session.access_token)
-  if (refreshedUserCheck.error || !refreshedUserCheck.data.user) {
-    throw new Error('Your Supabase session is invalid. Sign out and sign in again.')
-  }
-
-  return refreshed.data.session
+  return session
 }
 
 async function readFunctionsErrorPayload<TPayload>(error: FunctionsHttpError | Error) {
@@ -3330,6 +3316,21 @@ export async function loadProjectSnapshot(
               cachedDraftId: nextSnapshot.draft.id,
             })
             throw new Error('Cached snapshot identity mismatch.')
+          }
+          const cachedWorldEntityCount = nextSnapshot.worldEntities.filter((entity) => entity.status !== 'archived').length
+          const cachedHasWorldGenerationHistory = nextSnapshot.worldPromptEvents.length > 0
+            || nextSnapshot.worldPromptGenerationJobs.length > 0
+            || nextSnapshot.worldThreads.length > 0
+          if (cachedWorldEntityCount === 0 && cachedHasWorldGenerationHistory) {
+            await clearProjectCache(project.id, draft.id)
+            console.warn('[GraphCore] discarded cached world snapshot with generation history but no entities.', {
+              projectId: project.id,
+              draftId: draft.id,
+              worldPromptEvents: nextSnapshot.worldPromptEvents.length,
+              worldPromptGenerationJobs: nextSnapshot.worldPromptGenerationJobs.length,
+              worldThreads: nextSnapshot.worldThreads.length,
+            })
+            throw new Error('Cached world snapshot was empty despite generation history.')
           }
           const hydratedSnapshot = hydrateSnapshotOutputArtifactUrls({
             ...nextSnapshot,

@@ -15,6 +15,7 @@ type ReferenceSheetEntityLike = Pick<
 
 const ACTIVE_REFERENCE_SHEET_JOB_STATUSES = new Set(['queued', 'running'])
 const REFERENCE_SHEET_JOB_KINDS = new Set(['entity_reference_sheet', 'character_sheet'])
+const GRID_ONLY_ENTITY_NODE_TYPES = new Set(['concept', 'sequence_unit'])
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -54,6 +55,7 @@ export function canQueueInitialSeedEntityReferenceSheet(input: {
 }) {
   const entity = input.entity
   if (entity.status === 'archived') return false
+  if (GRID_ONLY_ENTITY_NODE_TYPES.has(entity.nodeType)) return false
   if (!readString(entity.name)) return false
   if (readEntityReferenceSheetAssetKey(entity)) return false
   if (input.activeJobs.some((job) => visualGenerationJobTargetsEntityReferenceSheet(job, entity.key))) return false

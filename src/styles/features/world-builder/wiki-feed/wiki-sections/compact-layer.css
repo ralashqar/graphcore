@@ -763,12 +763,18 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .world-wiki-section-title-row svg {
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
   color: rgba(169, 140, 255, 0.88);
+}
+
+.world-wiki-section-title-row h3 {
+  color: rgba(223, 214, 255, 0.92);
 }
 
 .world-wiki-section .world-wiki-summary-button:not(.is-overview) {

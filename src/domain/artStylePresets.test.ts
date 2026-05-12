@@ -58,7 +58,7 @@ test('story onboarding exposes family feature CG for animated stories', () => {
 
   assert.ok(presets.some((preset) => preset.id === 'family_feature_cg'))
   assert.equal(familyFeaturePreset.group, 'Stylized 3D')
-  assert.match(directives, /family-feature CG animation/i)
+  assert.match(directives, /animated feature CG/i)
   assert.match(directives, /avoid naming or imitating a specific animation studio/i)
 })
 

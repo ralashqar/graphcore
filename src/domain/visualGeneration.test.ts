@@ -11,7 +11,7 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, '../..')
 
-test('visual generation schemas accept generic icon, brand atlas, and wiki visual jobs', () => {
+test('visual generation schemas parse legacy persisted icon jobs, brand atlas, and wiki visual jobs', () => {
   const createdAt = new Date().toISOString()
   const iconJob = visualGenerationJobSchema.parse({
     id: 'job-icon',
@@ -131,32 +131,49 @@ test('brand atlas endpoint enqueues generic visual jobs instead of calling image
   assert.doesNotMatch(source, /waitUntil/)
 })
 
-test('entity icon endpoint and Fly worker use the generic visual job pipeline', () => {
+test('manual entity icon-grid starts are disabled but the Fly worker supports restricted lore sequence grids', () => {
   const iconEndpoint = readFileSync(resolve(repoRoot, 'supabase/functions/start-world-entity-icon-batch/index.ts'), 'utf8')
+  const startEndpoint = readFileSync(resolve(repoRoot, 'supabase/functions/start-visual-generation-job/index.ts'), 'utf8')
   const worker = readFileSync(resolve(repoRoot, 'workers/world-generation/main.ts'), 'utf8')
   const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
 
-  assert.match(iconEndpoint, /visual_generation_jobs/)
-  assert.match(iconEndpoint, /kind:\s*'world_entity_icon_grid'/)
+  assert.match(iconEndpoint, /Legacy world entity icon-grid generation is disabled/)
+  assert.doesNotMatch(iconEndpoint, /visual_generation_jobs/)
+  assert.doesNotMatch(iconEndpoint, /kind:\s*'world_entity_icon_grid'/)
+  assert.match(startEndpoint, /payload\.kind === 'world_entity_icon_grid'/)
+  assert.match(startEndpoint, /Legacy world entity icon-grid generation is disabled/)
   assert.match(worker, /processFlyVisualGenerationJobs/)
   assert.match(visualWorker, /world_entity_icon_grid/)
+  assert.match(visualWorker, /await processEntityIconGridJob\(input\.client,\s*job,\s*input\.workerId\)/)
+  assert.match(visualWorker, /only allowed for lore\/concept and story sequence entries/)
+  assert.doesNotMatch(visualWorker, /legacy_icon_grid_disabled/)
   assert.match(visualWorker, /brand_atlas/)
   assert.match(visualWorker, /processWikiVisualJob/)
   assert.match(visualWorker, /job\.kind === 'wiki_visual'/)
   assert.match(visualWorker, /world_concept_image/)
 })
 
-test('initial streamed seed queues world concept image and per-entity reference sheets', () => {
+test('initial streamed seed queues world concept image, per-entity reference sheets, and final lore sequence grid', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/world-prompt.ts'), 'utf8')
 
   assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,180}await maybeQueueInitialSeedWorldConceptImage\('world_wiki_metadata'\)/)
+  assert.match(source, /function hasInitialSeedReferenceArtDirection/)
+  assert.match(source, /skippedReason:\s*'missing_world_wiki_art_style_description'/)
+  assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,260}await maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities\('world_wiki_metadata'\)/)
   assert.match(source, /op\.op === 'upsert_entity'[\s\S]{0,320}await maybeQueueInitialSeedEntityReferenceSheet\(entity,\s*'streamed_upsert_entity'\)/)
   assert.doesNotMatch(source, /op\.op === 'upsert_entity' && op\.payload\.entity\.nodeType === 'sequence_unit'[\s\S]{0,240}maybeQueueInitialSeedIconBatch/)
+  assert.doesNotMatch(source, /initial_seed_sequence_boundary/)
+  assert.doesNotMatch(source, /world_entity_icon_generation_jobs/)
   assert.match(source, /kind:\s*'wiki_visual'/)
   assert.match(source, /role:\s*'world_concept_image'/)
   assert.match(source, /kind:\s*'entity_reference_sheet'/)
   assert.match(source, /queuedBy:\s*'initial_seed_entity_reference_sheet'/)
+  assert.match(source, /maybeQueueInitialSeedLoreSequenceGrid\('initial_seed_complete'\)/)
+  assert.match(source, /kind:\s*'world_entity_icon_grid'/)
+  assert.match(source, /queuedBy:\s*'initial_seed_lore_sequence_grid'/)
+  assert.match(source, /nodeTypes:\s*\['concept', 'sequence_unit'\]/)
   assert.match(source, /target_keys:\s*\{\s*entityKey:\s*candidate\.key/)
+  assert.match(source, /maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities\('initial_seed_complete'\)/)
   assert.match(source, /quality:\s*'low'/)
   assert.match(source, /outputFormat:\s*'webp'/)
   assert.match(source, /imageSize:\s*\{\s*width:\s*1536,\s*height:\s*864\s*\}/)
@@ -187,6 +204,18 @@ test('Fly wiki visual worker hard-forces low quality wide world concept images',
   assert.match(visualWorker, /const imageSize = worldConceptImageSize/)
 })
 
+test('wiki hero banner only renders world concept image assets, not entity reference sheets', () => {
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+
+  assert.match(appSource, /function isWorldConceptImageAsset/)
+  assert.match(appSource, /generatedBy\) === 'world_concept_image'/)
+  assert.match(appSource, /jobKind\) === 'wiki_visual'/)
+  assert.match(worldGraphSource, /function isWorldConceptImageAsset/)
+  assert.match(worldGraphSource, /const wikiOverviewImageUrl = liveWorldConceptImageUrl \?\? wikiWorldConceptImageUrl/)
+  assert.doesNotMatch(worldGraphSource, /wikiOverviewImageUrl = liveWorldConceptImageUrl \?\? wikiWorldConceptImageUrl \?\? wikiHeroEntityImageUrl/)
+})
+
 test('Fly visual worker bounds Fal image downloads so completed jobs cannot hang forever', () => {
   const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
 
@@ -199,6 +228,8 @@ test('Fly visual worker bounds Fal image downloads so completed jobs cannot hang
 test('entity reference sheet jobs route through Fly visual worker with medium webp output', () => {
   const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
   const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const worldPromptSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/world-prompt.ts'), 'utf8')
 
   assert.match(visualWorker, /processEntityReferenceSheetJob/)
   assert.match(visualWorker, /job\.kind === 'entity_reference_sheet' \|\| job\.kind === 'character_sheet'/)
@@ -212,15 +243,16 @@ test('entity reference sheet jobs route through Fly visual worker with medium we
   assert.match(visualWorker, /icon_asset_key: assetKey/)
   assert.match(visualWorker, /upsertDefinitionPreviewImageBinding/)
   assert.doesNotMatch(appSource, /referenceAssetKeys:\s*\[entity\.thumbnailAssetKey,\s*definition\.iconAssetKey\]/)
-})
-
-test('entity icon grid generation uses low quality and larger custom size for 3x3 plus grids', () => {
-  const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
-  const legacyWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/entity-icon-worker.ts'), 'utf8')
-
-  for (const source of [visualWorker, legacyWorker]) {
-    assert.match(source, /cellCount\s*>=\s*9\s*\?\s*\{\s*width:\s*2048,\s*height:\s*2048\s*\}\s*:\s*'square_hd'/)
-    assert.match(source, /quality:[\s\S]*\?\?\s*'low'/)
-    assert.match(source, /image_size:\s*input\.imageSize\s*\?\?\s*'square_hd'/)
-  }
+  assert.match(worldGraphSource, /autoQueuedReferenceSheetEntityKeysRef/)
+  assert.match(worldGraphSource, /void handleGenerateEntityReferenceSheet\(entity\)/)
+  assert.match(worldGraphSource, /getArtStylePresetPromptDirectives/)
+  assert.match(appSource, /async function applyCompletedEntityReferenceSheetVisualJob/)
+  assert.match(appSource, /referenceSheetAssetKey:\s*assetKey/)
+  assert.match(appSource, /thumbnailAssetKey:\s*assetKey/)
+  assert.match(appSource, /applyCompletedVisualGenerationJobLocally\(job\)/)
+  assert.match(appSource, /isMissingLiveDraftSessionError/)
+  assert.match(appSource, /const cachedJob = visualGenerationJobs\.find\(\(job\) => job\.id === jobId\)/)
+  assert.match(worldGraphSource, /visualStatusErrorIsMissingLiveDraft/)
+  assert.doesNotMatch(worldGraphSource, /skipped live snapshot refresh after entity reference sheet status update/)
+  assert.match(worldPromptSource, /getArtStylePresetPromptDirectives\(input\.projectContext\.artStylePreset\)/)
 })

@@ -106,12 +106,12 @@ export function buildIconGenerationPrompt(input: {
     return `${index + 1}. Row ${row}, column ${col}: ${description}`
   })
   return [
-    `Create one square ${input.gridRows}x${input.gridCols} grid of isolated icon images.`,
+    `Create one square ${input.gridRows}x${input.gridCols} grid of isolated wiki card images for lore/concept and story-sequence entries only.`,
     `Style: ${input.artStyleName}. ${input.artStyleDescription}`,
-    'Each grid cell must contain exactly one isolated square icon subject. Keep every cell visually separated, centered, and consistently framed.',
+    'Each grid cell must contain exactly one isolated square subject, symbolic lore image, or story beat vignette. Keep every cell visually separated, centered, and consistently framed.',
     'No text, labels, UI, watermarks, speech bubbles, captions, or merged cells.',
     'Use the exact row-major order below, from top-left to bottom-right:',
     ...cells,
-    `If there are fewer than ${input.gridRows * input.gridCols} entities, leave the remaining cells as subtle empty dark placeholders without text.`,
+    `If there are fewer than ${input.gridRows * input.gridCols} entries, leave the remaining cells as subtle empty dark placeholders without text.`,
   ].join('\n')
 }

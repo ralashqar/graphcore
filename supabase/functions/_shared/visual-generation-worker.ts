@@ -583,6 +583,10 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
   if (candidates.length === 0) {
     throw new Error('World entity icon grid job has no valid candidates.')
   }
+  const invalidCandidates = candidates.filter((candidate) => candidate.nodeType !== 'concept' && candidate.nodeType !== 'sequence_unit')
+  if (invalidCandidates.length > 0) {
+    throw new Error('World entity icon grid jobs are only allowed for lore/concept and story sequence entries.')
+  }
 
   const gridRows = readPositiveInt(job.input.gridRows, 4)
   const gridCols = readPositiveInt(job.input.gridCols, 4)

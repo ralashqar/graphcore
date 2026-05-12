@@ -47,6 +47,18 @@ test('skips archived entities and entities with existing reference sheets', () =
   }), false)
 })
 
+test('skips lore concepts and sequence units because they use final grid imagery', () => {
+  assert.equal(canQueueInitialSeedEntityReferenceSheet({
+    entity: entity({ key: 'concept_1', nodeType: 'concept' }),
+    activeJobs: [],
+  }), false)
+
+  assert.equal(canQueueInitialSeedEntityReferenceSheet({
+    entity: entity({ key: 'sequence_1', nodeType: 'sequence_unit' }),
+    activeJobs: [],
+  }), false)
+})
+
 test('skips entities already targeted by active reference sheet jobs', () => {
   assert.equal(canQueueInitialSeedEntityReferenceSheet({
     entity: entity({ key: 'actor_1' }),

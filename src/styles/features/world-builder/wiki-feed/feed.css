@@ -373,6 +373,38 @@
   will-change: opacity, transform;
 }
 
+.world-wiki-cell-reveal.is-live-entry-new .world-wiki-entry-text > * {
+  opacity: 0;
+  transform: translate3d(0, 6px, 0);
+  animation: world-wiki-entry-text-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.world-wiki-cell-reveal.is-live-entry-new .world-wiki-entry-text > :nth-child(1) {
+  animation-delay: 90ms;
+}
+
+.world-wiki-cell-reveal.is-live-entry-new .world-wiki-entry-text > :nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.world-wiki-cell-reveal.is-live-entry-new .world-wiki-entry-text > :nth-child(3) {
+  animation-delay: 210ms;
+}
+
+.world-wiki-cell-reveal.is-live-entry-new .world-wiki-entry-text > :nth-child(n + 4) {
+  animation-delay: 270ms;
+}
+
+.world-wiki-live-text-word {
+  display: inline-block;
+  opacity: 0;
+  transform: translate3d(0, 0.42em, 0) scale(0.985);
+  filter: blur(3px);
+  animation: world-wiki-live-word-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(160ms + (var(--world-wiki-word-index, 0) * 72ms));
+  will-change: opacity, transform, filter;
+}
+
 .world-wiki-card-grid > .world-wiki-cell-reveal:nth-child(2),
 .world-wiki-output-grid > .world-wiki-cell-reveal:nth-child(2),
 .world-wiki-thread-list > .world-wiki-cell-reveal:nth-child(2),
@@ -494,6 +526,45 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes world-wiki-entry-text-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+    filter: blur(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+}
+
+@keyframes world-wiki-live-word-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.42em, 0) scale(0.985);
+    filter: blur(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-wiki-cell-reveal,
+  .world-wiki-cell-reveal.is-live-entry-new .world-wiki-entry-text > *,
+  .world-wiki-live-text-word {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    filter: none;
   }
 }
 

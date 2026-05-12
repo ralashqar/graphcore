@@ -2,6 +2,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent
 
 import { workspaceService } from '../../application/services/workspaceService'
 import {
+  getOnboardingArtStylePresets,
+  type ArtStylePresetDefinition,
+} from '../../domain/artStylePresets'
+import {
   buildPromptSourceContext,
   extractOnboardingSourceFromFile,
 } from '../../domain/onboardingSource'
@@ -439,6 +443,53 @@ function getStoryArtStyleAtlasStyle(presetId: string) {
     backgroundPosition: `${column * 50}% ${row * 50}%`,
     backgroundRepeat: 'no-repeat',
   }
+}
+
+function artStylePresetToOption(preset: ArtStylePresetDefinition, recommended: boolean): WorldPromptArtStyleOption {
+  return {
+    id: preset.id,
+    label: preset.label,
+    description: preset.description,
+    group: preset.group,
+    thumbnailUrl: preset.thumbnailUrl ?? null,
+    recommended,
+  }
+}
+
+function shouldForceAnimatedFeatureCgOption(seedInference: WorldPromptSeedInferenceResponse | null) {
+  if (!seedInference) return false
+  if (seedInference.inference.projectType !== 'story') return false
+  const inferenceText = [
+    seedInference.inference.projectSubtype,
+    seedInference.inference.artStylePreset,
+    seedInference.inference.artStyleDescription,
+    seedInference.inference.rationale,
+  ].join(' ').toLowerCase()
+  return seedInference.inference.projectSubtype === 'animated_story'
+    || /\bpixar\b|animated story|animated feature|feature animation|family feature|family cg|monsters inc|incredibles|encanto|finding nemo|hoppers/.test(inferenceText)
+}
+
+function buildDisplayArtStyleOptions(seedInference: WorldPromptSeedInferenceResponse | null): WorldPromptArtStyleOption[] {
+  if (!seedInference) return []
+  const options = seedInference.artStyleOptions
+  if (!shouldForceAnimatedFeatureCgOption(seedInference) || options.some((option) => option.id === 'family_feature_cg')) {
+    return options
+  }
+
+  const familyFeaturePreset = getOnboardingArtStylePresets({
+    projectType: seedInference.inference.projectType,
+    projectSubtype: seedInference.inference.projectSubtype,
+  }).find((preset) => preset.id === 'family_feature_cg')
+  if (!familyFeaturePreset) return options
+
+  const nextOption = artStylePresetToOption(familyFeaturePreset, true)
+  return [
+    nextOption,
+    ...options.map((option) => ({
+      ...option,
+      recommended: option.recommended && option.id === seedInference.inference.artStylePreset,
+    })),
+  ]
 }
 
 function cleanSeedLogText(text: string) {
@@ -994,9 +1045,10 @@ export function ProjectWorldOnboarding({
     })
     .filter((row): row is { id: string; text: string } => Boolean(row.text?.trim()))
   const visibleLogRows = dedupeLogRows(seedEventRows).map((row) => row.text).slice(-8)
-  const selectedStyle = seedInference?.artStyleOptions.find((option) => option.id === selectedArtStyleId)
-    ?? seedInference?.artStyleOptions.find((option) => option.recommended)
-    ?? seedInference?.artStyleOptions[0]
+  const displayArtStyleOptions = useMemo(() => buildDisplayArtStyleOptions(seedInference), [seedInference])
+  const selectedStyle = displayArtStyleOptions.find((option) => option.id === selectedArtStyleId)
+    ?? displayArtStyleOptions.find((option) => option.recommended)
+    ?? displayArtStyleOptions[0]
     ?? null
   const generationSourceLabel = effectiveSourceContext.kind === 'file'
     ? effectiveSourceContext.fileName || effectiveSourceContext.title || 'Uploaded file'
@@ -1415,7 +1467,7 @@ export function ProjectWorldOnboarding({
                 <p>{generationSeedInference.inference.rationale}</p>
               </div>
               <div className="world-onboarding-seed-style-grid">
-                {generationSeedInference.artStyleOptions.map((option: WorldPromptArtStyleOption) => {
+                {displayArtStyleOptions.map((option: WorldPromptArtStyleOption) => {
                   const atlasStyle = generationSeedInference.inference.projectType === 'story'
                     ? getStoryArtStyleAtlasStyle(option.id)
                     : null
@@ -1616,7 +1668,7 @@ export function ProjectWorldOnboarding({
               <small>{Math.round(legacySeedInference.inference.confidence * 100)}% confidence · {legacySeedInference.skeletonProfile.label}</small>
             </div>
             <div className="world-onboarding-style-grid">
-              {legacySeedInference.artStyleOptions.map((option: WorldPromptArtStyleOption) => (
+              {displayArtStyleOptions.map((option: WorldPromptArtStyleOption) => (
                 <button
                   key={option.id}
                   className={`world-onboarding-style-option${(selectedStyle?.id ?? selectedArtStyleId) === option.id ? ' is-selected' : ''}`}

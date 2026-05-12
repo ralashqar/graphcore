@@ -1,6 +1,5 @@
 import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
 import { processFlyAppGenerationJobs } from '../../supabase/functions/_shared/app-generation-worker.ts'
-import { processFlyWorldEntityIconJobs } from '../../supabase/functions/_shared/entity-icon-worker.ts'
 import { processFlyOutputWorkflowRuns } from '../../supabase/functions/_shared/output-workflow.ts'
 import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
@@ -142,29 +141,6 @@ console.log('[world-generation-worker] started', {
   runtime: 'fly',
 })
 
-async function runIconWorkerLoop() {
-  while (!shuttingDown) {
-    try {
-      await waitForDatabaseCircuit('icon')
-      const iconResult = await processFlyWorldEntityIconJobs({
-        client,
-        workerId,
-      })
-      if (iconResult.processed) {
-        console.log('[world-generation-worker] processed entity icon job', {
-          workerId,
-          jobId: iconResult.job?.id ?? null,
-          status: iconResult.job?.status ?? null,
-        })
-        continue
-      }
-      await sleep(pollIntervalMs)
-    } catch (error) {
-      await handleWorkerLoopError('icon', error)
-    }
-  }
-}
-
 async function runVisualWorkerLoop() {
   while (!shuttingDown) {
     try {
@@ -276,7 +252,6 @@ async function runOutputWorkflowWorkerLoop() {
 }
 
 await Promise.all([
-  runIconWorkerLoop(),
   runVisualWorkerLoop(),
   runGenerationWorkerLoop(),
   runAppGenerationWorkerLoop(),

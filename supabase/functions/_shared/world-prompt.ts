@@ -89,7 +89,9 @@ import {
   type WorldPromptTurn,
 } from '../../../src/domain/worldPrompt.ts'
 import {
+  ART_STYLE_PRESETS,
   getArtStylePreset,
+  getArtStylePresetPromptDirectives,
   getOnboardingArtStylePresets,
 } from '../../../src/domain/artStylePresets.ts'
 import { getWorldSeedSkeletonProfile } from '../../../src/domain/worldSeedProfiles.ts'
@@ -140,10 +142,6 @@ import {
   type AutoManagedWorldViewOptions,
 } from '../../../src/domain/worldViewDerivation.ts'
 import {
-  resolveIconGridSize,
-  type IconGenerationCandidate,
-} from './entity-icon-generation.ts'
-import {
   appendRefinementHistory,
   hasTruncationArtifact,
   mergeCanonicalContext,
@@ -191,6 +189,10 @@ import {
   type WorldBuildPlanResponse,
   type WorldBuildStatusResponse,
 } from '../../../src/domain/worldBuild.ts'
+import {
+  resolveIconGridSize,
+  type IconGenerationCandidate,
+} from './entity-icon-generation.ts'
 import { runOpenAiResponses, runOpenAiResponsesStream } from './openai.ts'
 import { normalizeStrictJsonSchema, type JsonSchema } from './structured-output.ts'
 
@@ -7852,135 +7854,6 @@ async function syncLinkedDefinitionVisualPrompt(input: {
   if (insertResponse.error) throw new Error(insertResponse.error.message)
 }
 
-const INITIAL_SEED_AUTO_ICON_PRIORITY: Partial<Record<WorldEntity['nodeType'], number>> = {
-  actor: 0,
-  place: 1,
-  group: 2,
-  object: 3,
-  concept: 4,
-  sequence_unit: 5,
-}
-
-function canAutoGenerateIconForNodeType(nodeType: WorldEntity['nodeType']) {
-  return Object.prototype.hasOwnProperty.call(INITIAL_SEED_AUTO_ICON_PRIORITY, nodeType)
-}
-
-async function loadDefinitionIconAssetKeys(input: {
-  client: SupabaseClient
-  draftId: string
-}) {
-  const response = await input.client
-    .from('project_definitions')
-    .select('key, icon_asset_key')
-    .eq('draft_id', input.draftId)
-  if (response.error) throw new Error(response.error.message)
-  return new Map((response.data ?? []).map((definition: { key: string; icon_asset_key: string | null }) => [
-    definition.key,
-    definition.icon_asset_key,
-  ]))
-}
-
-async function enqueueInitialSeedEntityIconBatch(input: {
-  client: SupabaseClient
-  snapshot: WorldPromptSnapshot
-  job: WorldPromptGenerationJob
-  projectContext: ProjectContext
-  trigger: string
-}) {
-  const activeJobResponse = await input.client
-    .from('world_entity_icon_generation_jobs')
-    .select('id, status, metadata')
-    .eq('draft_id', input.snapshot.draft.id)
-    .in('status', ['queued', 'running'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (activeJobResponse.error) throw new Error(activeJobResponse.error.message)
-  if (activeJobResponse.data?.id) {
-    return {
-      jobId: String(activeJobResponse.data.id),
-      candidates: [] as IconGenerationCandidate[],
-      skippedCount: 0,
-      reused: true,
-    }
-  }
-
-  const definitionIconByKey = await loadDefinitionIconAssetKeys({
-    client: input.client,
-    draftId: input.snapshot.draft.id,
-  })
-  const allCandidates = input.snapshot.worldEntities
-    .filter((entity) => entity.status !== 'archived')
-    .filter((entity) => canAutoGenerateIconForNodeType(entity.nodeType))
-    .filter((entity) => {
-      const linkedDefinitionIcon = entity.linkedDefinitionKey
-        ? definitionIconByKey.get(entity.linkedDefinitionKey) ?? null
-        : null
-      return !entity.thumbnailAssetKey && !linkedDefinitionIcon
-    })
-    .sort((left, right) => {
-      const leftPriority = INITIAL_SEED_AUTO_ICON_PRIORITY[left.nodeType] ?? 99
-      const rightPriority = INITIAL_SEED_AUTO_ICON_PRIORITY[right.nodeType] ?? 99
-      return leftPriority - rightPriority || left.name.localeCompare(right.name)
-    })
-
-  const candidates: IconGenerationCandidate[] = allCandidates.slice(0, 16).map((entity, index) => ({
-    entityKey: entity.key,
-    linkedDefinitionKey: entity.linkedDefinitionKey,
-    name: entity.name,
-    nodeType: entity.nodeType,
-    summary: entity.summary || entity.context || '',
-    visualPrompt: fallbackVisualDescriptionFromEntity(entity as unknown as Record<string, unknown>),
-    orderIndex: index,
-  }))
-  if (candidates.length === 0) {
-    return {
-      jobId: null,
-      candidates,
-      skippedCount: 0,
-      reused: false,
-    }
-  }
-
-  const grid = resolveIconGridSize(candidates.length)
-  const insertResponse = await input.client
-    .from('world_entity_icon_generation_jobs')
-    .insert({
-      project_id: input.snapshot.project.id,
-      draft_id: input.snapshot.draft.id,
-      status: 'queued',
-      provider: 'fal',
-      model: 'openai/gpt-image-2',
-      grid_rows: grid.rows,
-      grid_cols: grid.cols,
-      entity_keys: candidates.map((candidate) => candidate.entityKey),
-      requested_by: null,
-      metadata: {
-        candidates,
-        skippedCount: Math.max(0, allCandidates.length - candidates.length),
-        artStyle: {
-          artStyleName: input.projectContext.artStylePreset || 'cohesive project art style',
-          artStyleDescription: input.projectContext.artStyleDescription || 'cohesive, polished, high-quality worldbuilding icon art',
-        },
-        runtime: 'fly',
-        trigger: input.trigger,
-        generationJobId: input.job.id,
-        generationTurnId: input.job.turnId,
-        queuedBy: 'initial_seed_sequence_boundary',
-        queuedAt: new Date().toISOString(),
-      },
-    })
-    .select('id')
-    .single()
-  if (insertResponse.error) throw new Error(insertResponse.error.message)
-  return {
-    jobId: String(insertResponse.data.id),
-    candidates,
-    skippedCount: Math.max(0, allCandidates.length - candidates.length),
-    reused: false,
-  }
-}
-
 function buildInitialSeedWorldConceptPrompt(wiki: Record<string, unknown>, projectContext: ProjectContext) {
   const title = asCompactString(wiki.title)
   const logline = asCompactString(wiki.logline)
@@ -8191,6 +8064,12 @@ function buildInitialSeedReferenceSheetInput(input: {
 }) {
   const wiki = readProjectWorldWikiPresentation(input.snapshot)
   const visualIdentity = readWorldEntityVisualIdentity(input.entity)
+  const presetDirectives = getArtStylePresetPromptDirectives(input.projectContext.artStylePreset)
+  const projectArtStyle = [
+    ...presetDirectives,
+    wiki.artStyleDescription ? `Project-specific art direction: ${wiki.artStyleDescription}.` : null,
+    input.projectContext.artStyleDescription ? `Selected onboarding art direction: ${input.projectContext.artStyleDescription}.` : null,
+  ].filter((entry): entry is string => Boolean(entry)).join(' ')
   return {
     entityKey: input.entity.key,
     entityName: input.entity.name,
@@ -8203,9 +8082,14 @@ function buildInitialSeedReferenceSheetInput(input: {
     visualDescription: readWorldEntityVisualDescription(input.entity),
     visualTraits: visualIdentity.traits,
     visualTraitMap: visualIdentity.traitMap,
-    projectArtStyle: wiki.artStyleDescription || input.projectContext.artStyleDescription || '',
+    projectArtStyle,
     projectTone: [wiki.genre, ...wiki.toneTags].filter(Boolean).join(', '),
   }
+}
+
+function hasInitialSeedReferenceArtDirection(snapshot: WorldPromptSnapshot) {
+  const wiki = readProjectWorldWikiPresentation(snapshot)
+  return Boolean(wiki.artStyleDescription.trim())
 }
 
 async function enqueueInitialSeedEntityReferenceSheet(input: {
@@ -8216,6 +8100,14 @@ async function enqueueInitialSeedEntityReferenceSheet(input: {
   entity: WorldEntity
   trigger: string
 }) {
+  if (!hasInitialSeedReferenceArtDirection(input.snapshot)) {
+    return {
+      jobId: null,
+      skipped: true,
+      skippedReason: 'missing_world_wiki_art_style_description',
+    }
+  }
+
   const activeJobs = await loadActiveEntityReferenceSheetJobs({
     client: input.client,
     draftId: input.snapshot.draft.id,
@@ -8272,6 +8164,126 @@ async function enqueueInitialSeedEntityReferenceSheet(input: {
   return {
     jobId: String(insertResponse.data.id),
     skipped: false,
+  }
+}
+
+const INITIAL_SEED_GRID_IMAGE_NODE_TYPES = new Set(['concept', 'sequence_unit'])
+
+function buildInitialSeedGridArtStyle(input: {
+  projectContext: ProjectContext
+  snapshot: WorldPromptSnapshot
+}) {
+  const wiki = readProjectWorldWikiPresentation(input.snapshot)
+  return {
+    artStyleName: getArtStylePreset(input.projectContext.artStylePreset).label,
+    artStyleDescription: [
+      ...getArtStylePresetPromptDirectives(input.projectContext.artStylePreset),
+      wiki.artStyleDescription ? `Project-specific art direction: ${wiki.artStyleDescription}.` : null,
+      input.projectContext.artStyleDescription ? `Selected onboarding art direction: ${input.projectContext.artStyleDescription}.` : null,
+    ].filter((entry): entry is string => Boolean(entry)).join(' '),
+  }
+}
+
+function buildInitialSeedGridIconCandidates(snapshot: WorldPromptSnapshot): IconGenerationCandidate[] {
+  return snapshot.worldEntities
+    .filter((entity) => entity.status !== 'archived')
+    .filter((entity) => INITIAL_SEED_GRID_IMAGE_NODE_TYPES.has(entity.nodeType))
+    .filter((entity) => !entity.thumbnailAssetKey)
+    .filter((entity) => asCompactString(entity.name))
+    .slice(0, 16)
+    .map((entity, index) => ({
+      entityKey: entity.key,
+      linkedDefinitionKey: entity.linkedDefinitionKey ?? null,
+      name: entity.name,
+      nodeType: entity.nodeType,
+      summary: entity.summary || entity.context,
+      visualPrompt: readWorldEntityVisualDescription(entity) || entity.summary || entity.context,
+      orderIndex: index,
+    }))
+}
+
+async function enqueueInitialSeedGridImagesForLoreAndSequences(input: {
+  client: SupabaseClient
+  snapshot: WorldPromptSnapshot
+  job: WorldPromptGenerationJob
+  projectContext: ProjectContext
+  trigger: string
+}) {
+  const candidates = buildInitialSeedGridIconCandidates(input.snapshot)
+  if (candidates.length === 0) {
+    return {
+      jobId: null,
+      skipped: true,
+      candidateCount: 0,
+    }
+  }
+
+  const activeJobResponse = await input.client
+    .from('visual_generation_jobs')
+    .select('id')
+    .eq('draft_id', input.snapshot.draft.id)
+    .eq('kind', 'world_entity_icon_grid')
+    .in('status', ['queued', 'running'])
+    .contains('target_keys', { purpose: 'initial_seed_lore_sequence_grid' })
+    .limit(1)
+    .maybeSingle()
+  if (activeJobResponse.error) throw new Error(activeJobResponse.error.message)
+  if (activeJobResponse.data?.id) {
+    return {
+      jobId: String(activeJobResponse.data.id),
+      skipped: false,
+      candidateCount: candidates.length,
+      reused: true,
+    }
+  }
+
+  const grid = resolveIconGridSize(candidates.length)
+  const artStyle = buildInitialSeedGridArtStyle({
+    projectContext: input.projectContext,
+    snapshot: input.snapshot,
+  })
+  const insertResponse = await input.client
+    .from('visual_generation_jobs')
+    .insert({
+      project_id: input.snapshot.project.id,
+      draft_id: input.snapshot.draft.id,
+      requested_by: null,
+      status: 'queued',
+      kind: 'world_entity_icon_grid',
+      provider: 'fal',
+      model: 'openai/gpt-image-2',
+      target_keys: {
+        purpose: 'initial_seed_lore_sequence_grid',
+        entityKeys: candidates.map((candidate) => candidate.entityKey),
+        nodeTypes: ['concept', 'sequence_unit'],
+      },
+      input: {
+        candidates,
+        gridRows: grid.rows,
+        gridCols: grid.cols,
+        artStyle,
+      },
+      metadata: {
+        runtime: 'fly',
+        queuedBy: 'initial_seed_lore_sequence_grid',
+        generationJobId: input.job.id,
+        generationTurnId: input.job.turnId,
+        trigger: input.trigger,
+        entityKeys: candidates.map((candidate) => candidate.entityKey),
+        nodeTypes: ['concept', 'sequence_unit'],
+      },
+    })
+    .select('id')
+    .single()
+  if (insertResponse.error || !insertResponse.data) {
+    throw new Error(insertResponse.error?.message ?? 'Failed to queue lore/sequence grid image.')
+  }
+
+  return {
+    jobId: String(insertResponse.data.id),
+    skipped: false,
+    candidateCount: candidates.length,
+    reused: false,
   }
 }
 
@@ -11822,7 +11834,27 @@ const seedInferenceOutputSchema = worldPromptProjectContextInferenceSchema.exten
   recommendedArtStylePresetIds: z.array(z.string()).default([]),
 })
 
-function buildSeedInferenceStyleOptions(inference: z.infer<typeof worldPromptProjectContextInferenceSchema>) {
+function normalizeSeedInferenceArtStylePresetId(input: {
+  presetId: string | null | undefined
+  allowedPresetIds: Set<string>
+  inference: z.infer<typeof worldPromptProjectContextInferenceSchema>
+  sourceText?: string | null
+}) {
+  const raw = (input.presetId ?? '').trim()
+  const lower = [
+    raw,
+    input.inference.artStyleDescription,
+    input.inference.rationale,
+    input.sourceText ?? '',
+  ].join(' ').toLowerCase()
+  if (/\bpixar\b|animated feature|feature animation|family feature|family cg|monsters inc|incredibles|encanto|finding nemo|hoppers/.test(lower)) {
+    return input.allowedPresetIds.has('family_feature_cg') ? 'family_feature_cg' : null
+  }
+  if (raw && input.allowedPresetIds.has(raw)) return raw
+  return null
+}
+
+function buildSeedInferenceStyleOptions(inference: z.infer<typeof worldPromptProjectContextInferenceSchema>, sourceText?: string | null) {
   const onboardingPresets = getOnboardingArtStylePresets({
     projectType: inference.projectType,
     projectSubtype: inference.projectSubtype,
@@ -11831,14 +11863,32 @@ function buildSeedInferenceStyleOptions(inference: z.infer<typeof worldPromptPro
   const recommendedIds = new Set([
     inference.artStylePreset,
     ...((inference as z.infer<typeof seedInferenceOutputSchema>).recommendedArtStylePresetIds ?? []),
-  ].filter((id): id is string => Boolean(id) && allowedPresetIds.has(id)))
+  ].flatMap((id) => {
+    const normalized = normalizeSeedInferenceArtStylePresetId({
+      presetId: id,
+      allowedPresetIds,
+      inference,
+      sourceText,
+    })
+    return normalized ? [normalized] : []
+  }))
+  if (
+    inference.projectType === 'story'
+    && inference.projectSubtype === 'animated_story'
+    && allowedPresetIds.has('family_feature_cg')
+    && !recommendedIds.has('anime_cg')
+    && !recommendedIds.has('toon_illustration')
+  ) {
+    recommendedIds.add('family_feature_cg')
+  }
+  const hasExplicitRecommendation = recommendedIds.size > 0
   return onboardingPresets.map((preset, index) => ({
     id: preset.id,
     label: preset.label,
     description: preset.description,
     group: preset.group,
     thumbnailUrl: preset.thumbnailUrl ?? null,
-    recommended: recommendedIds.has(preset.id) || index === 0,
+    recommended: recommendedIds.has(preset.id) || (!hasExplicitRecommendation && index === 0),
   }))
 }
 
@@ -11849,6 +11899,7 @@ async function inferInitialSeedContext(input: {
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) {
   const validPairs = 'story: feature_film, tv_streaming_series, short_film, shortform_series, animated_story; game: action_rpg, narrative_adventure, narrative_rpg_mobile, strategy_builder, survival_craft, shooter_combat, social_sim, open_world_sandbox, platformer_metroidvania, horror_mystery; brand: campaign_world, product_storytelling, mascot_ip, brand_education_explainer; ugc: creator_organic, direct_response_ad, faceless_explainer_demo, serialized_social_drama; app: ai_utility_wrapper, mascot_daily_ritual, content_generator.'
+  const validArtStylePresetIds = ART_STYLE_PRESETS.map((preset) => preset.id).join(', ')
   const schema = normalizeStrictJsonSchema(z.toJSONSchema(seedInferenceOutputSchema))
   const response = await runOpenAiResponses({
     model: input.model,
@@ -11861,6 +11912,8 @@ async function inferInitialSeedContext(input: {
       'Infer the GraphCore project type and subtype from the user prompt and optional source context.',
       'Return JSON only. Do not ask the user to classify the project.',
       `Valid project type/subtype pairs: ${validPairs}`,
+      `Valid artStylePreset IDs: ${validArtStylePresetIds}.`,
+      'For Pixar-like, theatrical animated feature, family CG adventure, creature comedy, colorful super-family, magical-town, or stylized underwater animated movie prompts, use artStylePreset "family_feature_cg" and projectSubtype "animated_story" when the project is a story world.',
       'Set confidence from 0 to 1. Use a short visible rationale suitable for the user interface, not private reasoning.',
       'Recommend an artStylePreset and up to three recommendedArtStylePresetIds that match the inferred project.',
     ].join('\n'),
@@ -13627,9 +13680,9 @@ async function runWorldPromptGenerationJob(input: {
   let autoWorldConceptImageQueued = isRecord(job.metadata?.autoWorldConceptGeneration)
     && typeof job.metadata.autoWorldConceptGeneration.jobId === 'string'
     && job.metadata.autoWorldConceptGeneration.jobId.trim().length > 0
-  let autoIconBatchQueued = isRecord(job.metadata?.autoIconGeneration)
-    && typeof job.metadata.autoIconGeneration.jobId === 'string'
-    && job.metadata.autoIconGeneration.jobId.trim().length > 0
+  let autoLoreSequenceGridQueued = isRecord(job.metadata?.autoLoreSequenceGridGeneration)
+    && typeof job.metadata.autoLoreSequenceGridGeneration.jobId === 'string'
+    && job.metadata.autoLoreSequenceGridGeneration.jobId.trim().length > 0
   const autoReferenceSheetJobsByEntityKey = new Map<string, string>(
     Object.entries(isRecord(job.metadata?.autoReferenceSheetGeneration)
       ? asRecord(job.metadata.autoReferenceSheetGeneration.jobIdsByEntityKey)
@@ -13712,65 +13765,6 @@ async function runWorldPromptGenerationJob(input: {
       }
     }
     await throwIfTurnCancelled(input.client, turn.id)
-  }
-
-  const maybeQueueInitialSeedIconBatch = async (trigger: string) => {
-    if (autoIconBatchQueued) return
-    autoIconBatchQueued = true
-    try {
-      const iconBatch = await enqueueInitialSeedEntityIconBatch({
-        client: input.client,
-        snapshot: mutableSnapshot,
-        job,
-        projectContext,
-        trigger,
-      })
-      job = await updateGenerationJob(input.client, job.id, {
-        metadata: {
-          ...(job.metadata ?? {}),
-          autoIconGeneration: {
-            jobId: iconBatch.jobId,
-            candidateCount: iconBatch.candidates.length,
-            skippedCount: iconBatch.skippedCount,
-            reusedActiveJob: iconBatch.reused,
-            trigger,
-            queuedAt: new Date().toISOString(),
-          },
-        },
-        heartbeat_at: new Date().toISOString(),
-      })
-      if (iconBatch.jobId) {
-        await writeEvent('planner_status', {
-          plannerStatus: 'planning',
-          plannerProgress: {
-            phase: 'generating_entity',
-            message: `Queued icon generation for ${iconBatch.candidates.length || 'existing'} world entities.`,
-            sequence: counts.ops + counts.notes + 1,
-          },
-          turn: { id: turn.id },
-          job,
-        })
-      }
-    } catch (error) {
-      console.warn('[GraphCore] initial seed icon batch enqueue failed', {
-        jobId: job.id,
-        turnId: turn.id,
-        trigger,
-        message: error instanceof Error ? error.message : String(error),
-      })
-      job = await updateGenerationJob(input.client, job.id, {
-        metadata: {
-          ...(job.metadata ?? {}),
-          autoIconGeneration: {
-            failed: true,
-            trigger,
-            errorMessage: error instanceof Error ? error.message : String(error),
-            failedAt: new Date().toISOString(),
-          },
-        },
-        heartbeat_at: new Date().toISOString(),
-      })
-    }
   }
 
   const maybeQueueInitialSeedWorldConceptImage = async (trigger: string) => {
@@ -13899,6 +13893,74 @@ async function runWorldPromptGenerationJob(input: {
     }
   }
 
+  const maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities = async (trigger: string) => {
+    if (!hasInitialSeedReferenceArtDirection(mutableSnapshot)) return
+    for (const entity of mutableSnapshot.worldEntities) {
+      await maybeQueueInitialSeedEntityReferenceSheet(entity, trigger)
+    }
+  }
+
+  const maybeQueueInitialSeedLoreSequenceGrid = async (trigger: string) => {
+    if (autoLoreSequenceGridQueued) return
+    autoLoreSequenceGridQueued = true
+    try {
+      const gridImage = await enqueueInitialSeedGridImagesForLoreAndSequences({
+        client: input.client,
+        snapshot: mutableSnapshot,
+        job,
+        projectContext,
+        trigger,
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoLoreSequenceGridGeneration: {
+            jobId: gridImage.jobId,
+            candidateCount: gridImage.candidateCount,
+            skipped: gridImage.skipped,
+            reusedActiveJob: Boolean(gridImage.reused),
+            trigger,
+            queuedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+      if (gridImage.jobId) {
+        await writeEvent('planner_status', {
+          plannerStatus: 'planning',
+          plannerProgress: {
+            phase: 'finalizing_world',
+            message: gridImage.reused
+              ? 'Found the queued lore and story-flow grid image.'
+              : `Queued one grid image for ${gridImage.candidateCount} lore and story-flow entries.`,
+            sequence: counts.ops + counts.notes + 1,
+          },
+          turn: { id: turn.id },
+          job,
+        })
+      }
+    } catch (error) {
+      console.warn('[GraphCore] initial seed lore/sequence grid enqueue failed', {
+        jobId: job.id,
+        turnId: turn.id,
+        trigger,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      job = await updateGenerationJob(input.client, job.id, {
+        metadata: {
+          ...(job.metadata ?? {}),
+          autoLoreSequenceGridGeneration: {
+            failed: true,
+            trigger,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            failedAt: new Date().toISOString(),
+          },
+        },
+        heartbeat_at: new Date().toISOString(),
+      })
+    }
+  }
+
   const handleEnvelope = async (envelope: WorldPromptStreamGraphOpEnvelope) => {
     await ensureJobIsActive()
     if (envelope.kind === 'note') {
@@ -14019,6 +14081,10 @@ async function runWorldPromptGenerationJob(input: {
     } else if (op.op === 'update_world_wiki_metadata') {
       counts.wikiUpdates += 1
       await maybeQueueInitialSeedWorldConceptImage('world_wiki_metadata')
+      await maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities('world_wiki_metadata')
+    }
+    if (op.op === 'upsert_entity' && counts.wikiUpdates > 0) {
+      await maybeQueueInitialSeedWorldConceptImage('first_entity_after_world_wiki_metadata')
     }
 
     if (Array.isArray(result.definitions)) {
@@ -14397,6 +14463,12 @@ async function runWorldPromptGenerationJob(input: {
         applied: { worldViews: mutableSnapshot.worldViews },
         turn: { id: turn.id },
       })
+    }
+
+    if (counts.ops > 0) {
+      await maybeQueueInitialSeedWorldConceptImage('initial_seed_step_recovery')
+      await maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities('initial_seed_complete')
+      await maybeQueueInitialSeedLoreSequenceGrid('initial_seed_complete')
     }
 
     const tokenUsage = usageRecorder.summary()
@@ -14824,7 +14896,7 @@ export async function startWorldSeedInference(input: {
       usageRecorder: tokenUsageRecorder,
     })
     const inference = worldPromptProjectContextInferenceSchema.parse(rawInference)
-    const artStyleOptions = buildSeedInferenceStyleOptions(rawInference)
+    const artStyleOptions = buildSeedInferenceStyleOptions(rawInference, payload.prompt)
     const skeletonProfile = getWorldSeedSkeletonProfile(inference.projectSubtype)
     const note = `I inferred ${inference.projectType.replace(/_/g, ' ')} / ${inference.projectSubtype.replace(/_/g, ' ')}. Choose an art style and I will build the initial skeleton.`
     turn = await updateTurn(input.client, turn.id, {

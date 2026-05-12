@@ -259,6 +259,30 @@ function readMetadataRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function isWorldConceptImageAsset(asset: ProjectSnapshot['assets'][number] | null | undefined) {
+  if (!asset) return false
+  const metadata = readMetadataRecord(asset.metadata)
+  return trimOptionalString(metadata.generatedBy) === 'world_concept_image'
+    || trimOptionalString(metadata.role) === 'world_concept_image'
+    || trimOptionalString(metadata.jobKind) === 'wiki_visual'
+    || asset.key.startsWith('world_concept_')
+    || asset.storagePath.includes('/wiki-concept-images/')
+}
+
+function isTerminalVisualGenerationJobStatus(status: VisualGenerationJob['status']) {
+  return status === 'completed'
+    || status === 'completed_with_errors'
+    || status === 'failed'
+    || status === 'cancelled'
+}
+
+function isMissingLiveDraftSessionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  const normalized = message.toLocaleLowerCase()
+  return normalized.includes('sign in and load a live graphcore draft')
+    || normalized.includes('auth session missing')
+}
+
 function slugifyWorldValue(value: string) {
   return value
     .toLowerCase()
@@ -1608,6 +1632,17 @@ export default function App() {
     if (state.profile === 'shell') {
       snapshotToHydrate = preserveHydratedSlicesForShellSnapshot(currentHydratedSnapshot, snapshotToHydrate)
     }
+    if (currentHydratedSnapshot && isSuspiciouslyEmptyWorldReload(currentHydratedSnapshot, snapshotToHydrate)) {
+      console.warn('[GraphCore] ignored suspicious empty world snapshot during workspace hydration.', {
+        projectId: currentHydratedSnapshot.project.id,
+        draftId: currentHydratedSnapshot.draft.id,
+        currentWorldEntities: currentHydratedSnapshot.worldEntities.length,
+        incomingWorldEntities: snapshotToHydrate.worldEntities.length,
+        currentWorldRelationships: currentHydratedSnapshot.worldRelationships.length,
+        incomingWorldRelationships: snapshotToHydrate.worldRelationships.length,
+      })
+      return
+    }
     const restoredUnsavedSnapshot = snapshotToHydrate !== state.snapshot
     if (
       desiredSelection
@@ -1737,6 +1772,15 @@ export default function App() {
       try {
         const cached = await workspaceService.loadCachedProjectSnapshot(refreshSelection.projectId, refreshSelection.draftId)
         if (cached && requestId === workspaceHydrationRequestIdRef.current) {
+          const current = snapshotRef.current
+          if (current && isSuspiciouslyEmptyWorldReload(current, cached.snapshot)) {
+            console.warn('[GraphCore] skipped suspicious sparse cached workspace hydration.', {
+              projectId: current.project.id,
+              draftId: current.draft.id,
+              currentWorldEntities: current.worldEntities.length,
+              cachedWorldEntities: cached.snapshot.worldEntities.length,
+            })
+          } else {
           hydrateLoadedProject({
             snapshot: cached.snapshot,
             source: 'supabase',
@@ -1746,6 +1790,7 @@ export default function App() {
             allowProjectChange: options?.allowProjectChange || Boolean(desiredGameSelectionRef.current),
             requestId,
           })
+          }
         }
       } catch (cacheError) {
         console.warn('[GraphCore] cached workspace hydration failed.', cacheError)
@@ -2042,7 +2087,8 @@ export default function App() {
   const worldConceptAsset = useMemo(() => {
     const assetKey = trimOptionalString(worldWikiMetadata.worldConceptAssetKey)
     if (!assetKey) return null
-    return snapshot?.assets.find((asset) => asset.key === assetKey) ?? null
+    const asset = snapshot?.assets.find((asset) => asset.key === assetKey) ?? null
+    return isWorldConceptImageAsset(asset) ? asset : null
   }, [snapshot?.assets, worldWikiMetadata.worldConceptAssetKey])
   const worldConceptDirectImageUrl = useMemo(() => (
     worldConceptAsset && !isPendingGeneratedAsset(worldConceptAsset)
@@ -2104,6 +2150,10 @@ export default function App() {
     && !!snapshot
     && !!activeInitialSeedSessionKey
     && !isInitialSeedSessionFinished(snapshot, activeInitialSeedSessionKey)
+  const liveInitialSeedGenerationActiveRef = useRef(false)
+  useEffect(() => {
+    liveInitialSeedGenerationActiveRef.current = initialSeedGenerationPending || activeInitialSeedSessionOpen
+  }, [activeInitialSeedSessionOpen, initialSeedGenerationPending])
   const initialSeedSkeletonStarted = loadedState?.source === 'supabase'
     && !!snapshot
     && hasStartedInitialSeedSkeletonGeneration(snapshot)
@@ -2135,7 +2185,7 @@ export default function App() {
   useEffect(() => {
     if (loadedState?.source !== 'supabase' || !snapshot) return undefined
     let cancelled = false
-    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet']
+    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet', 'world_entity_icon_grid']
     workspaceService.listActiveVisualGenerationJobs(snapshot, activeVisualJobKinds)
       .then((jobs) => {
         if (cancelled) return
@@ -2148,6 +2198,32 @@ export default function App() {
       cancelled = true
     }
   }, [loadedState?.source, snapshot?.draft.id, snapshot?.project.id])
+
+  useEffect(() => {
+    if (loadedState?.source !== 'supabase' || !snapshot) return undefined
+    if (!initialSeedGenerationPending && !activeInitialSeedSessionOpen) return undefined
+    let cancelled = false
+    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet', 'world_entity_icon_grid']
+    const refreshActiveVisualJobs = async () => {
+      const current = snapshotRef.current ?? snapshot
+      if (!current || current.draft.id !== snapshot.draft.id) return
+      try {
+        const jobs = await workspaceService.listActiveVisualGenerationJobs(current, activeVisualJobKinds)
+        if (cancelled) return
+        setVisualGenerationJobs((existingJobs) => mergeResourcesById(existingJobs, jobs))
+      } catch (error) {
+        if (!cancelled) console.warn('Failed to poll active initial-seed visual generation jobs.', error)
+      }
+    }
+    void refreshActiveVisualJobs()
+    const intervalId = window.setInterval(() => {
+      void refreshActiveVisualJobs()
+    }, 3500)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [activeInitialSeedSessionOpen, initialSeedGenerationPending, loadedState?.source, snapshot?.draft.id])
 
   useEffect(() => {
     if (!snapshot || loadedState?.source !== 'supabase') return
@@ -2397,9 +2473,13 @@ export default function App() {
         if (!current) return
         if (current.draft.id !== job.draftId) return
         setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [job]))
-        if (['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status)) {
-          void refreshLiveSnapshot().catch((error) => {
-            console.warn('[GraphCore] failed to refresh live snapshot after visual generation realtime update.', error)
+        if (isTerminalVisualGenerationJobStatus(job.status)) {
+          void (async () => {
+            const appliedLocally = await applyCompletedVisualGenerationJobLocally(job)
+            if (appliedLocally) return
+            await refreshLiveSnapshot()
+          })().catch((error) => {
+            console.warn('[GraphCore] failed to apply visual generation realtime update.', error)
           })
         }
       },
@@ -3074,6 +3154,16 @@ export default function App() {
     )
   }
 
+  function isSuspiciouslyEmptyWorldReload(current: ProjectSnapshot, reloaded: ProjectSnapshot) {
+    if (!isSameProjectDraft(current, reloaded)) return false
+    const currentEntityCount = current.worldEntities.filter((entity) => entity.status !== 'archived').length
+    const reloadedEntityCount = reloaded.worldEntities.filter((entity) => entity.status !== 'archived').length
+    if (currentEntityCount < 2 || reloadedEntityCount > 0) return false
+    return current.worldPromptEvents.length > 0
+      || current.worldPromptGenerationJobs.some((job) => ['queued', 'running'].includes(job.status))
+      || current.worldThreads.length > 0
+  }
+
   function mergeOutputSliceIntoSnapshot(
     current: ProjectSnapshot,
     slice: {
@@ -3120,6 +3210,7 @@ export default function App() {
 
   async function prepareLiveWorldGraphSnapshot(baseSnapshot: ProjectSnapshot) {
     if (loadedState?.source !== 'supabase') return baseSnapshot
+    if (liveInitialSeedGenerationActiveRef.current) return baseSnapshot
     if (!hasMissingWorldGraphBackfill(baseSnapshot)) return baseSnapshot
     return workspaceService.syncWorldGraphFromDefinitions(baseSnapshot)
   }
@@ -3134,6 +3225,7 @@ export default function App() {
 
   async function syncWorldGraphBackfillIfNeeded(baseSnapshot: ProjectSnapshot) {
     if (loadedState?.source !== 'supabase') return baseSnapshot
+    if (liveInitialSeedGenerationActiveRef.current) return baseSnapshot
     if (!hasMissingWorldGraphBackfill(baseSnapshot)) return baseSnapshot
 
     if (!worldGraphSyncPromiseRef.current) {
@@ -3155,6 +3247,7 @@ export default function App() {
 
   useEffect(() => {
     if (!snapshot || loadedState?.source !== 'supabase') return
+    if (liveInitialSeedGenerationActiveRef.current) return
     if (!hasMissingWorldGraphBackfill(snapshot)) return
 
     void syncWorldGraphBackfillIfNeeded(snapshot).catch((error) => {
@@ -4831,16 +4924,6 @@ export default function App() {
     return result
   }
 
-  async function startWorldEntityIconBatch() {
-    if (!snapshot) {
-      throw new Error('Load a live GraphCore draft before generating world entity icons.')
-    }
-    if (loadedState?.source !== 'supabase') {
-      throw new Error('World entity icon generation requires a live Supabase-backed draft.')
-    }
-    return workspaceService.startWorldEntityIconBatch(snapshot)
-  }
-
   async function generateWorldBrandAtlasImage(prompt?: string) {
     const current = snapshotRef.current ?? snapshot
     if (!current) {
@@ -4897,23 +4980,124 @@ export default function App() {
     return result
   }
 
-  async function getWorldEntityIconBatchStatus(jobId: string) {
-    return workspaceService.getWorldEntityIconBatchStatus(jobId)
+  async function applyCompletedEntityReferenceSheetVisualJob(job: VisualGenerationJob) {
+    if (job.kind !== 'entity_reference_sheet' && job.kind !== 'character_sheet') return false
+    if (job.status !== 'completed' && job.status !== 'completed_with_errors') return false
+
+    const outputAsset = job.outputs.assets.find((asset) => asset.role === 'entity_reference_sheet') ?? job.outputs.assets[0] ?? null
+    const assetKey = trimOptionalString(outputAsset?.assetKey)
+      || trimOptionalString(job.outputs.assetKey)
+      || trimOptionalString(job.targetKeys.assetKey)
+      || trimOptionalString(job.input.assetKey)
+    const entityKey = trimOptionalString(outputAsset?.targetKey)
+      || trimOptionalString(job.outputs.entityKey)
+      || trimOptionalString(job.targetKeys.entityKey)
+      || trimOptionalString(job.input.entityKey)
+      || trimOptionalString(job.metadata.entityKey)
+    if (!assetKey || !entityKey) return false
+
+    const current = snapshotRef.current ?? snapshot
+    if (!current || current.project.id !== job.projectId || current.draft.id !== job.draftId) return false
+    const entity = current.worldEntities.find((candidate) => candidate.key === entityKey)
+    if (!entity) return false
+
+    let completedAsset = current.assets.find((asset) => asset.key === assetKey) ?? null
+    if (!completedAsset || isPendingGeneratedAsset(completedAsset) || !resolveAssetSourceUrl(completedAsset)) {
+      try {
+        const signedAssets = await workspaceService.signProjectAssetUrls(current.project.id, [assetKey])
+        completedAsset = signedAssets.find((asset) => asset.key === assetKey) ?? completedAsset
+      } catch (error) {
+        console.warn('[GraphCore] failed to sign completed entity reference sheet from visual job status.', error)
+      }
+    }
+
+    if (!completedAsset && outputAsset?.storagePath) {
+      const sourceUrl = trimOptionalString(job.metadata.falImageUrl)
+        || trimOptionalString(job.outputs.imageUrl)
+      completedAsset = {
+        id: `visual-job-${job.id}-${assetKey}`,
+        projectId: current.project.id,
+        key: assetKey,
+        name: `${entity.name || 'Entity'} Reference Sheet`,
+        kind: 'image',
+        mimeType: 'image/webp',
+        storagePath: outputAsset.storagePath,
+        metadata: {
+          generatedBy: 'entity_reference_sheet',
+          jobKind: job.kind,
+          visualJobId: job.id,
+          storageBucket: 'project-assets',
+          ...(sourceUrl ? { sourceUrl, previewUrl: sourceUrl } : {}),
+          generation: {
+            state: 'completed',
+            jobId: job.id,
+            placeholder: false,
+            source: 'visual_generation',
+          },
+        },
+        llmHints: {},
+      }
+    }
+
+    const entityMetadata = readMetadataRecord(entity.metadata)
+    const currentReferenceSheets = Array.isArray(entityMetadata.referenceSheetAssetKeys)
+      ? entityMetadata.referenceSheetAssetKeys.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : []
+    const updatedEntity: WorldEntity = {
+      ...entity,
+      thumbnailAssetKey: assetKey,
+      metadata: {
+        ...entityMetadata,
+        referenceSheetAssetKey: assetKey,
+        referenceSheetAssetKeys: [...new Set([assetKey, ...currentReferenceSheets])].slice(0, 8),
+        referenceSheetVisualJobId: job.id,
+      },
+      updatedAt: new Date().toISOString(),
+    }
+
+    const linkedDefinitionKey = trimOptionalString(entity.linkedDefinitionKey)
+      || trimOptionalString(job.targetKeys.linkedDefinitionKey)
+      || trimOptionalString(job.input.linkedDefinitionKey)
+    const updatedDefinitions = linkedDefinitionKey
+      ? current.definitions.map((definition) => {
+        if (definition.key !== linkedDefinitionKey) return definition
+        return {
+          ...definition,
+          iconAssetKey: assetKey,
+          metadata: {
+            ...readMetadataRecord(definition.metadata),
+            referenceSheetAssetKey: assetKey,
+            referenceSheetVisualJobId: job.id,
+          },
+        }
+      })
+      : current.definitions
+
+    const nextSnapshot = normalizeSnapshot({
+      ...current,
+      definitions: updatedDefinitions,
+      worldEntities: mergeResourcesByKey(current.worldEntities, [updatedEntity]),
+      assets: completedAsset
+        ? mergeResourcesByKey(current.assets, [completedAsset])
+        : current.assets.filter((asset) => asset.key !== assetKey || !isPendingGeneratedAsset(asset)),
+    })
+    commitPersistedSnapshot(nextSnapshot)
+    return true
   }
 
   async function applyCompletedWorldConceptVisualJob(job: VisualGenerationJob) {
     const role = trimOptionalString(job.targetKeys.role) || trimOptionalString(job.input.role)
-    if (job.kind !== 'wiki_visual' || role !== 'world_concept_image') return
-    if (job.status !== 'completed' && job.status !== 'completed_with_errors') return
+    if (job.kind !== 'wiki_visual' || role !== 'world_concept_image') return false
+    if (job.status !== 'completed' && job.status !== 'completed_with_errors') return false
 
     const outputAsset = job.outputs.assets.find((asset) => asset.role === 'world_concept_image') ?? job.outputs.assets[0] ?? null
     const assetKey = trimOptionalString(outputAsset?.assetKey)
       || trimOptionalString(job.targetKeys.assetKey)
       || trimOptionalString(job.input.assetKey)
-    if (!assetKey) return
+    if (!assetKey) return false
 
     const current = snapshotRef.current ?? snapshot
-    if (!current || current.project.id !== job.projectId || current.draft.id !== job.draftId) return
+    if (!current || current.project.id !== job.projectId || current.draft.id !== job.draftId) return false
 
     let completedAsset = current.assets.find((asset) => asset.key === assetKey) ?? null
     if (!completedAsset || isPendingGeneratedAsset(completedAsset) || !resolveAssetSourceUrl(completedAsset)) {
@@ -4952,13 +5136,30 @@ export default function App() {
         : current.assets.filter((asset) => asset.key !== assetKey || !isPendingGeneratedAsset(asset)),
     })
     commitPersistedSnapshot(nextSnapshot)
+    return true
+  }
+
+  async function applyCompletedVisualGenerationJobLocally(job: VisualGenerationJob) {
+    return await applyCompletedEntityReferenceSheetVisualJob(job)
+      || await applyCompletedWorldConceptVisualJob(job)
   }
 
   async function getVisualGenerationStatus(jobId: string) {
-    const status = await workspaceService.getVisualGenerationStatus(jobId)
+    let status
+    try {
+      status = await workspaceService.getVisualGenerationStatus(jobId)
+    } catch (error) {
+      const cachedJob = visualGenerationJobs.find((job) => job.id === jobId) ?? null
+      if (!cachedJob || !isMissingLiveDraftSessionError(error)) throw error
+      return {
+        ok: true as const,
+        job: cachedJob,
+        terminal: isTerminalVisualGenerationJobStatus(cachedJob.status),
+      }
+    }
     setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [status.job]))
     if (status.terminal) {
-      await applyCompletedWorldConceptVisualJob(status.job)
+      await applyCompletedVisualGenerationJobLocally(status.job)
     }
     return status
   }
@@ -5576,6 +5777,17 @@ export default function App() {
     }
     const latest = snapshotRef.current
     if (!latest || !isSameProjectDraft(latest, reloaded.snapshot)) return
+    if (isSuspiciouslyEmptyWorldReload(latest, reloaded.snapshot)) {
+      console.warn('[GraphCore] ignored suspicious empty world snapshot during live refresh.', {
+        projectId: latest.project.id,
+        draftId: latest.draft.id,
+        currentWorldEntities: latest.worldEntities.length,
+        reloadedWorldEntities: reloaded.snapshot.worldEntities.length,
+        currentWorldRelationships: latest.worldRelationships.length,
+        reloadedWorldRelationships: reloaded.snapshot.worldRelationships.length,
+      })
+      throw new Error('Live refresh returned an empty world snapshot while the current Wiki is populated.')
+    }
     commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(reloaded.snapshot, {
       assets: latest.assets,
       requests: latest.outputRequests,
@@ -7651,8 +7863,6 @@ export default function App() {
                 onUpdateWorldView={updateWorldView}
                 onGenerateStarterWorld={generateStarterWorld}
                 onGenerateWorldExpansion={generateWorldExpansion}
-                onStartWorldEntityIconBatch={startWorldEntityIconBatch}
-                onGetWorldEntityIconBatchStatus={getWorldEntityIconBatchStatus}
                 onGenerateWorldBrandAtlasImage={generateWorldBrandAtlasImage}
                 onStartVisualGenerationJob={startVisualGenerationJob}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}

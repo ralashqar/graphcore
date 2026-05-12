@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react'
+import type { CSSProperties, Dispatch, SetStateAction } from 'react'
 
 import type { ProjectContext } from '../../../domain/projectContext'
 import type { WorldEntity, WorldResult } from '../../../domain/worldGraph'
@@ -118,6 +118,47 @@ function buildWikiDetailBody(parts: Array<string | null | undefined>) {
     .join('\n\n')
 }
 
+type LiveWikiTextElement = 'strong' | 'em' | 'small' | 'span'
+
+function LiveWikiRevealText({
+  as,
+  className,
+  live,
+  text,
+}: {
+  as: LiveWikiTextElement
+  className?: string
+  live: boolean
+  text: string
+}) {
+  const Component = as
+  if (!live) return <Component className={className}>{text}</Component>
+
+  let wordIndex = 0
+  return (
+    <Component className={className ? `${className} world-wiki-live-text` : 'world-wiki-live-text'} aria-label={text}>
+      {text.split(/(\s+)/).map((part, index) => {
+        if (!part) return null
+        if (/^\s+$/.test(part)) return part
+        const style = {
+          '--world-wiki-word-index': wordIndex,
+        } as CSSProperties
+        wordIndex += 1
+        return (
+          <span
+            key={`${index}:${part}`}
+            aria-hidden="true"
+            className="world-wiki-live-text-word"
+            style={style}
+          >
+            {part}
+          </span>
+        )
+      })}
+    </Component>
+  )
+}
+
 type WorldWikiSectionViewProps = {
   brandAtlasError: string | null
   brandAtlasGenerating: boolean
@@ -127,6 +168,7 @@ type WorldWikiSectionViewProps = {
   inspectorNodeKey: string | null
   isPromptSubmitting: boolean
   normalizedWikiSearchQuery: string
+  liveRevealEntryKeys: ReadonlySet<string>
   outputLibraryModel?: OutputLibraryModel
   projectContext: ProjectContext | null | undefined
   referenceArtStateByEntityKey: ReadonlyMap<string, 'queued' | 'generating'>
@@ -160,6 +202,7 @@ export function WorldWikiSectionView({
   inspectorNodeKey,
   isPromptSubmitting,
   normalizedWikiSearchQuery,
+  liveRevealEntryKeys,
   outputLibraryModel,
   projectContext,
   referenceArtStateByEntityKey,
@@ -190,6 +233,13 @@ export function WorldWikiSectionView({
     threadByKey,
     wikiModel,
   }
+  const liveEntryProps = (kind: 'entity' | 'thread' | 'result', key: string) => {
+    const entryKey = `${kind}:${key}`
+    return {
+      className: liveRevealEntryKeys.has(entryKey) ? ' is-live-entry-new' : '',
+      dataEntryKey: entryKey,
+    }
+  }
 
   function renderEntityCard(entityKey: string, variant: 'large' | 'compact' = 'compact') {
     const entity = entityByKey.get(entityKey) ?? null
@@ -200,10 +250,13 @@ export function WorldWikiSectionView({
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
     const summary = profile?.shortSummary || entity.summary || entity.context || 'No wiki summary yet.'
     const detailBody = buildWikiDetailBody([profile?.shortSummary, entity.summary, entity.context])
+    const reveal = liveEntryProps('entity', entity.key)
+    const isLiveReveal = liveRevealEntryKeys.has(reveal.dataEntryKey)
     return (
       <button
         key={entity.key}
-        className={`world-wiki-entity-card world-wiki-cell-reveal is-${entity.nodeType} is-${variant}${active ? ' is-active' : ''}`}
+        className={`world-wiki-entity-card world-wiki-cell-reveal is-${entity.nodeType} is-${variant}${active ? ' is-active' : ''}${reveal.className}`}
+        data-wiki-entry-key={reveal.dataEntryKey}
         onClick={() => {
           onSelectWorldNode(entity.key)
           onSetActiveInspectorTab('overview')
@@ -232,10 +285,10 @@ export function WorldWikiSectionView({
         ) : (
           <span className="world-wiki-entity-icon"><EntityIcon id={iconForWorldEntity(entity.nodeType)} /></span>
         )}
-        <span>
-          <strong>{entity.name}</strong>
-          <em>{profile?.roleLabel || labelForWorldEntity(entity.nodeType)}</em>
-          <small>{summary}</small>
+        <span className="world-wiki-entry-text">
+          <LiveWikiRevealText as="strong" live={isLiveReveal} text={entity.name} />
+          <LiveWikiRevealText as="em" live={isLiveReveal} text={profile?.roleLabel || labelForWorldEntity(entity.nodeType)} />
+          <LiveWikiRevealText as="small" live={isLiveReveal} text={summary} />
         </span>
       </button>
     )
@@ -252,6 +305,8 @@ export function WorldWikiSectionView({
     const referenceArtState = referenceArtStateByEntityKey.get(entity.key) ?? null
     const summary = sequence?.synopsis || profile?.shortSummary || entity.summary || entity.context || 'No story beat summary yet.'
     const outcome = sequence?.outcome || ''
+    const reveal = liveEntryProps('entity', entity.key)
+    const isLiveReveal = liveRevealEntryKeys.has(reveal.dataEntryKey)
     const detailBody = buildWikiDetailBody([
       sequence?.synopsis,
       sequence?.dramaticQuestion ? `Dramatic question: ${sequence.dramaticQuestion}` : null,
@@ -261,7 +316,8 @@ export function WorldWikiSectionView({
     return (
       <button
         key={entity.key}
-        className={`world-wiki-timeline-card is-${entity.nodeType}${active ? ' is-active' : ''}`}
+        className={`world-wiki-timeline-card world-wiki-cell-reveal is-${entity.nodeType}${active ? ' is-active' : ''}${reveal.className}`}
+        data-wiki-entry-key={reveal.dataEntryKey}
         onClick={() => {
           onSelectWorldNode(entity.key)
           onSetActiveInspectorTab('overview')
@@ -289,16 +345,19 @@ export function WorldWikiSectionView({
               <em>{referenceArtState === 'generating' ? 'Making sheet' : 'Sheet queued'}</em>
             </span>
           ) : null}
-          <span className="world-wiki-timeline-copy">
-            <span className="world-wiki-timeline-kicker">
-              {[sequence?.actLabel, sequence?.unitKind || labelForWorldEntity(entity.nodeType)].filter(Boolean).join(' / ')}
-            </span>
-            <strong>{entity.name}</strong>
-            <small>{summary}</small>
+          <span className="world-wiki-timeline-copy world-wiki-entry-text">
+            <LiveWikiRevealText
+              as="span"
+              className="world-wiki-timeline-kicker"
+              live={isLiveReveal}
+              text={[sequence?.actLabel, sequence?.unitKind || labelForWorldEntity(entity.nodeType)].filter(Boolean).join(' / ')}
+            />
+            <LiveWikiRevealText as="strong" live={isLiveReveal} text={entity.name} />
+            <LiveWikiRevealText as="small" live={isLiveReveal} text={summary} />
             {outcome ? (
               <span className="world-wiki-timeline-outcome">
-                <em>Outcome</em>
-                <span>{outcome}</span>
+                <LiveWikiRevealText as="em" live={isLiveReveal} text="Outcome" />
+                <LiveWikiRevealText as="span" live={isLiveReveal} text={outcome} />
               </span>
             ) : null}
           </span>
@@ -482,6 +541,7 @@ export function WorldWikiSectionView({
   const gap = wikiModel.gaps.find((entry) => entry.sectionKind === section.kind) ?? null
   const isCastSection = section.kind === 'cast'
   const isSearchHidden = wikiSearchActive && !sectionMatchesSearch && targetCellCount === 0
+  const hasEntryCells = targetCellCount > 0
 
   return (
     <section
@@ -490,8 +550,8 @@ export function WorldWikiSectionView({
       className={`world-wiki-section world-wiki-section-${section.kind}${isSearchHidden ? ' is-search-hidden' : ''}`}
     >
       <div className="world-wiki-section-head">
-        <div className={isCastSection ? 'world-wiki-section-title-row' : undefined}>
-          {isCastSection ? <EntityIcon id={iconForWikiSection(section.kind)} /> : <span className="eyebrow">{labelForWikiSection(section.kind)}</span>}
+        <div className="world-wiki-section-title-row">
+          <EntityIcon id={iconForWikiSection(section.kind)} />
           <h3>{isCastSection ? 'Characters' : section.title}</h3>
         </div>
         {gap ? (
@@ -500,7 +560,7 @@ export function WorldWikiSectionView({
           </button>
         ) : null}
       </div>
-      {!isCastSection ? (
+      {!hasEntryCells ? (
         <button
           className="world-wiki-summary-button"
           onClick={() => onOpenWikiDetailModal({
@@ -530,10 +590,13 @@ export function WorldWikiSectionView({
             if (!thread) return null
             const active = selectedPromptThreadKey === thread.key
             const summary = thread.summary || 'No arc summary yet.'
+            const reveal = liveEntryProps('thread', thread.key)
+            const isLiveReveal = liveRevealEntryKeys.has(reveal.dataEntryKey)
             return (
               <button
                 key={thread.key}
-                className={active ? 'world-wiki-thread-card world-wiki-cell-reveal is-active' : 'world-wiki-thread-card world-wiki-cell-reveal'}
+                className={`world-wiki-thread-card world-wiki-cell-reveal${active ? ' is-active' : ''}${reveal.className}`}
+                data-wiki-entry-key={reveal.dataEntryKey}
                 onClick={() => {
                   onSetSelectedPromptThreadKey(thread.key)
                   onOpenWikiDetailModal({
@@ -550,8 +613,10 @@ export function WorldWikiSectionView({
                 type="button"
               >
                 <span className="world-wiki-thread-priority">{thread.priority}</span>
-                <strong>{thread.title}</strong>
-                <small>{summary}</small>
+                <span className="world-wiki-entry-text">
+                  <LiveWikiRevealText as="strong" live={isLiveReveal} text={thread.title} />
+                  <LiveWikiRevealText as="small" live={isLiveReveal} text={summary} />
+                </span>
               </button>
             )
           })}
@@ -564,10 +629,13 @@ export function WorldWikiSectionView({
             if (!result) return null
             const imageUrl = imageUrlByResultKey.get(result.key) ?? null
             const summary = result.summary || result.resultType
+            const reveal = liveEntryProps('result', result.key)
+            const isLiveReveal = liveRevealEntryKeys.has(reveal.dataEntryKey)
             return (
               <button
                 key={result.key}
-                className="world-wiki-output-card world-wiki-cell-reveal"
+                className={`world-wiki-output-card world-wiki-cell-reveal${reveal.className}`}
+                data-wiki-entry-key={reveal.dataEntryKey}
                 onClick={() => {
                   onSelectWorldNode(result.key)
                   onOpenWikiDetailModal({
@@ -582,8 +650,10 @@ export function WorldWikiSectionView({
                 type="button"
               >
                 {imageUrl ? <img src={imageUrl} alt="" /> : null}
-                <strong>{result.title}</strong>
-                <small>{summary}</small>
+                <span className="world-wiki-entry-text">
+                  <LiveWikiRevealText as="strong" live={isLiveReveal} text={result.title} />
+                  <LiveWikiRevealText as="small" live={isLiveReveal} text={summary} />
+                </span>
               </button>
             )
           })}
