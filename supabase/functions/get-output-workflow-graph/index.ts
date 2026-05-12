@@ -61,7 +61,7 @@ function addPreviewAssetKeys(value: unknown, assetKeys: Set<string>) {
   if (assetKey) assetKeys.add(assetKey)
 }
 
-function assetRowToDefinition(row: Record<string, unknown>, signedUrl: string | null) {
+function assetRowToDefinition(row: Record<string, unknown>, signedUrl: string | null, signedUrlExpiresAt: string | null) {
   const metadata = asRecord(row.metadata)
   return {
     id: readText(row.id),
@@ -71,7 +71,7 @@ function assetRowToDefinition(row: Record<string, unknown>, signedUrl: string | 
     kind: readText(row.kind) || 'image',
     mimeType: readText(row.mime_type),
     storagePath: readText(row.storage_path),
-    metadata: signedUrl ? { ...metadata, signedUrl, sourceUrl: signedUrl, previewUrl: signedUrl } : metadata,
+    metadata: signedUrl ? { ...metadata, signedUrl, sourceUrl: signedUrl, previewUrl: signedUrl, signedUrlExpiresAt } : metadata,
     llmHints: asRecord(row.llm_hints),
   }
 }
@@ -89,12 +89,14 @@ async function loadSignedAssets(client: DatabaseClient, projectId: string, asset
   return Promise.all(rows.map(async (row) => {
     const storagePath = readText(row.storage_path)
     let signedUrl: string | null = null
+    let signedUrlExpiresAt: string | null = null
     if (storagePath) {
       const signed = await client.storage.from('project-assets').createSignedUrl(storagePath, 60 * 60)
       const data = asRecord(signed.data)
       signedUrl = signed.error ? null : readText(data.signedUrl) || readText(data.signedURL) || null
+      signedUrlExpiresAt = signedUrl ? new Date(Date.now() + 55 * 60 * 1000).toISOString() : null
     }
-    return assetRowToDefinition(row, signedUrl)
+    return assetRowToDefinition(row, signedUrl, signedUrlExpiresAt)
   }))
 }
 
@@ -266,6 +268,29 @@ Deno.serve(async (request) => {
       : { data: [], error: null }
     if (stepResponse.error) throw new Error(stepResponse.error.message)
 
+    const revision = graphRevision({
+      workflow: workflowResponse.data as Record<string, unknown>,
+      nodes: (nodeResponse.data ?? []) as Record<string, unknown>[],
+      edges: (edgeResponse.data ?? []) as Record<string, unknown>[],
+      steps: (stepResponse.data ?? []) as Record<string, unknown>[],
+      artifacts: (artifactResponse.data ?? []) as Record<string, unknown>[],
+    })
+
+    if (!payload.includeSelectedNodeOutput && readText(payload.knownGraphRevision) && readText(payload.knownGraphRevision) === revision) {
+      return json(outputWorkflowGraphResponseSchema.parse({
+        ok: true,
+        unchanged: true,
+        workflow: null,
+        nodes: [],
+        edges: [],
+        run: null,
+        artifacts: [],
+        assets: [],
+        graphRevision: revision,
+        selectedNodeOutput: null,
+      }))
+    }
+
     const selectedNodeKey = readText(payload.selectedNodeKey)
     let selectedNodeOutput = null
     if (payload.includeSelectedNodeOutput && selectedNodeKey) {
@@ -316,13 +341,7 @@ Deno.serve(async (request) => {
       run,
       artifacts: hydratedArtifacts,
       assets,
-      graphRevision: graphRevision({
-        workflow: workflowResponse.data as Record<string, unknown>,
-        nodes: (nodeResponse.data ?? []) as Record<string, unknown>[],
-        edges: (edgeResponse.data ?? []) as Record<string, unknown>[],
-        steps: (stepResponse.data ?? []) as Record<string, unknown>[],
-        artifacts: (artifactResponse.data ?? []) as Record<string, unknown>[],
-      }),
+      graphRevision: revision,
       selectedNodeOutput,
     }))
   } catch (error) {

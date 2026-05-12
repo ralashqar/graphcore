@@ -62,8 +62,15 @@ Deno.serve(async (request) => {
     ])
     if (nodeResponse.error) throw new Error(nodeResponse.error.message)
     if (edgeResponse.error) throw new Error(edgeResponse.error.message)
-    const nodes = (nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow)
-    const edges = (edgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow)
+    const allNodes = (nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow)
+    const nodes = allNodes.filter((node) => {
+      const metadata = node.metadata && typeof node.metadata === 'object' ? node.metadata as Record<string, unknown> : {}
+      return !(metadata.dynamicCinematicGenerated === true && metadata.dynamicCinematicStale === true)
+    })
+    const nodeKeySet = new Set(nodes.map((node) => node.key))
+    const edges = (edgeResponse.data ?? [])
+      .map(mapOutputWorkflowEdgeRow)
+      .filter((edge) => nodeKeySet.has(edge.sourceNodeKey) && nodeKeySet.has(edge.targetNodeKey))
     const validation = validateOutputWorkflowGraph({ nodes, edges })
     if (!validation.ok) throw new HttpError(400, validation.diagnostics.join(' '))
 

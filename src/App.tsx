@@ -145,6 +145,35 @@ const ActivityWorkspace = lazy(() =>
 const PromptDock = lazy(() =>
   import('./features/prompts/PromptDock').then((module) => ({ default: module.PromptDock })),
 )
+
+const LIVE_SUPABASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const BACKEND_HEALTH_BACKOFF_MS = [1500, 3000, 6000, 10000]
+
+function isLiveSupabaseId(value: string | null | undefined) {
+  return typeof value === 'string' && LIVE_SUPABASE_ID_PATTERN.test(value)
+}
+
+function describeBackendError(error: unknown) {
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
+function isBackendHealthError(error: unknown) {
+  const message = describeBackendError(error).toLowerCase()
+  return [
+    'pgrst002',
+    'schema cache',
+    '503',
+    '521',
+    '522',
+    '544',
+    'statement timeout',
+    'connection timeout',
+    'failed to create login role',
+    'failed to send a request',
+    'failed to fetch',
+  ].some((pattern) => message.includes(pattern))
+}
 const WorldBuildPlanModal = lazy(() =>
   import('./features/prompts/WorldBuildPlanModal').then((module) => ({ default: module.WorldBuildPlanModal })),
 )
@@ -1432,6 +1461,8 @@ export default function App() {
   const surfaceHydrationLatestRequestIdsRef = useRef(new Map<string, number>())
   const surfaceHydrationInFlightRef = useRef(new Map<string, Promise<unknown>>())
   const surfaceHydrationLoadedKeysRef = useRef(new Set<string>())
+  const backendHealthBackoffRef = useRef(new Map<string, { failureCount: number; retryAfter: number; lastError: string }>())
+  const draftMetadataLoadInFlightRef = useRef(new Map<string, Promise<Record<string, unknown>>>())
   const outputGraphLoadRequestIdRef = useRef(0)
   const desiredGameSelectionRef = useRef<{ projectId: string; draftId: string } | null>(null)
   const [workspaceHydrationState, setWorkspaceHydrationState] = useState<WorkspaceHydrationState>({})
@@ -1673,7 +1704,7 @@ export default function App() {
   }
 
   async function refreshWorkspaceState(
-    loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string; profile?: LoadedState['profile'] }>,
+    loader?: () => Promise<{ snapshot: ProjectSnapshot; source: 'supabase' | 'demo'; reason?: string; profile?: LoadedState['profile']; games?: GameSummary[] }>,
     options?: { ignoreUnsavedCache?: boolean; resetSelection?: boolean; allowProjectChange?: boolean },
   ) {
     const requestId = ++workspaceHydrationRequestIdRef.current
@@ -1685,7 +1716,6 @@ export default function App() {
       )
     const shouldHydrateCacheFirst =
       Boolean(refreshSelection?.projectId && refreshSelection?.draftId)
-      && !loader
     if (shouldHydrateCacheFirst && refreshSelection?.projectId && refreshSelection.draftId) {
       try {
         const cached = await workspaceService.loadCachedProjectSnapshot(refreshSelection.projectId, refreshSelection.draftId)
@@ -1708,7 +1738,7 @@ export default function App() {
     if (requestId !== workspaceHydrationRequestIdRef.current) {
       return state
     }
-    const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
+    const nextGames = state.source === 'supabase' ? state.games ?? await workspaceService.listGames() : []
     if (requestId !== workspaceHydrationRequestIdRef.current) {
       return state
     }
@@ -1766,7 +1796,7 @@ export default function App() {
         }
         const state = await workspaceService.ensureLiveWorkspace()
         if (!active) return
-        const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
+        const nextGames = state.source === 'supabase' ? state.games ?? await workspaceService.listGames() : []
         if (!active) return
         setGames(nextGames)
         setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
@@ -1932,7 +1962,7 @@ export default function App() {
       try {
         const state = await workspaceService.ensureLiveWorkspace()
         if (cancelled) return
-        const nextGames = state.source === 'supabase' ? await workspaceService.listGames() : []
+        const nextGames = state.source === 'supabase' ? state.games ?? await workspaceService.listGames() : []
         if (cancelled) return
         setGames(nextGames)
         setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
@@ -2725,10 +2755,10 @@ export default function App() {
         if (timeout !== null) window.clearTimeout(timeout)
         timeout = window.setTimeout(() => {
           timeout = null
-          void loadOutputInbox({ force: true }).catch((loadError) => {
+          void loadOutputInbox().catch((loadError) => {
             console.warn('[GraphCore] realtime output inbox refresh failed.', loadError)
           })
-        }, 250)
+        }, 900)
       },
     })
     return () => {
@@ -2938,10 +2968,32 @@ export default function App() {
     }
   }
 
+  function canAttemptBackendHydration(key: string) {
+    const backoff = backendHealthBackoffRef.current.get(key)
+    return !backoff || Date.now() >= backoff.retryAfter
+  }
+
+  function noteBackendHydrationSuccess(key: string) {
+    backendHealthBackoffRef.current.delete(key)
+  }
+
+  function noteBackendHydrationFailure(key: string, error: unknown) {
+    if (!isBackendHealthError(error)) return
+    const previous = backendHealthBackoffRef.current.get(key)
+    const failureCount = (previous?.failureCount ?? 0) + 1
+    const backoffMs = BACKEND_HEALTH_BACKOFF_MS[Math.min(failureCount - 1, BACKEND_HEALTH_BACKOFF_MS.length - 1)]
+    backendHealthBackoffRef.current.set(key, {
+      failureCount,
+      retryAfter: Date.now() + backoffMs,
+      lastError: describeBackendError(error),
+    })
+  }
+
   function invalidateSurfaceHydration(projectId: string, draftId: string, profile: WorkspaceSurfaceProfile) {
     const key = surfaceHydrationKey(projectId, draftId, profile)
     surfaceHydrationLoadedKeysRef.current.delete(key)
     surfaceHydrationLatestRequestIdsRef.current.delete(key)
+    backendHealthBackoffRef.current.delete(key)
     setWorkspaceHydrationState((current) => {
       if (!current[key]) return current
       return {
@@ -5126,6 +5178,17 @@ export default function App() {
     if (!current || loadedState?.source !== 'supabase') return
     const draftId = current.draft.id
     const surfaceKey = surfaceHydrationKey(current.project.id, draftId, 'outputs')
+    if (!options?.cursor && !canAttemptBackendHydration(surfaceKey)) {
+      if (import.meta.env.DEV) {
+        const backoff = backendHealthBackoffRef.current.get(surfaceKey)
+        console.warn('[GraphCore] output inbox refresh skipped while backend health backoff is active.', {
+          draftId,
+          retryInMs: backoff ? Math.max(0, backoff.retryAfter - Date.now()) : 0,
+          lastError: backoff?.lastError ?? null,
+        })
+      }
+      return
+    }
     const inFlight = surfaceHydrationInFlightRef.current.get(surfaceKey) as Promise<void> | undefined
     if (inFlight && !options?.force) return inFlight
     const requestId = beginSurfaceHydration(surfaceKey)
@@ -5152,6 +5215,13 @@ export default function App() {
         draftId,
         limit: 30,
         cursor: options?.cursor ?? null,
+        force: options?.force === true,
+        knownAssetKeys: current.assets
+          .filter((asset) => {
+            const metadata = asset.metadata && typeof asset.metadata === 'object' ? asset.metadata as Record<string, unknown> : {}
+            return typeof metadata.signedUrl === 'string' || typeof metadata.sourceUrl === 'string' || typeof metadata.previewUrl === 'string'
+          })
+          .map((asset) => asset.key),
       })
       const latest = snapshotRef.current ?? current
       if (!isSameProjectDraft(latest, current) || !isCurrentSurfaceHydration(surfaceKey, requestId)) return
@@ -5163,6 +5233,7 @@ export default function App() {
         assets: result.assets,
       }))
       await workspaceService.saveCachedOutputInbox(current.project.id, draftId, result)
+      noteBackendHydrationSuccess(surfaceKey)
       finishSurfaceHydration(surfaceKey, requestId, 'ready')
       if (import.meta.env.DEV) {
         console.info('[GraphCore][boot] output inbox loaded.', {
@@ -5175,7 +5246,10 @@ export default function App() {
         })
       }
     } catch (loadError) {
-      surfaceHydrationLoadedKeysRef.current.delete(surfaceKey)
+      noteBackendHydrationFailure(surfaceKey, loadError)
+      if (!isBackendHealthError(loadError)) {
+        surfaceHydrationLoadedKeysRef.current.delete(surfaceKey)
+      }
       finishSurfaceHydration(surfaceKey, requestId, 'error', loadError)
       throw loadError
       } finally {
@@ -5205,6 +5279,16 @@ export default function App() {
     const latest = snapshotRef.current ?? current
     if (requestId !== outputGraphLoadRequestIdRef.current) return
     if (!isSameProjectDraft(latest, current)) return
+    if (result.unchanged) {
+      if (import.meta.env.DEV) {
+        console.info('[GraphCore][boot] output workflow graph unchanged.', {
+          workflowId,
+          runId,
+          graphRevision: result.graphRevision,
+        })
+      }
+      return
+    }
     commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
       workflows: result.workflow ? [result.workflow] : [],
       nodes: result.nodes,
@@ -6855,7 +6939,7 @@ export default function App() {
         () => workspaceService.setActiveGame(nextGame.projectId, nextGame.draftId, {
           profile: 'world',
           hydrateAssetUrls: true,
-          skipCache: true,
+          skipCache: false,
         }),
         { resetSelection: true, allowProjectChange: true },
       )
@@ -7321,9 +7405,44 @@ export default function App() {
   const handleSignProjectAssetUrlEntries = useCallback((input: SignProjectAssetUrlsInput) => (
     workspaceService.signProjectAssetUrlEntries(input)
   ), [])
-  const handleLoadProjectDraftMetadata = useCallback((draftId: string) => (
-    workspaceService.loadProjectDraftMetadata(draftId)
-  ), [])
+  const handleLoadProjectDraftMetadata = useCallback((draftId: string) => {
+    const current = snapshotRef.current
+    const fallbackMetadata = current?.draft.id === draftId && current.draft.metadata && typeof current.draft.metadata === 'object'
+      ? current.draft.metadata
+      : {}
+    if (loadedStateRef.current?.source !== 'supabase' || !isLiveSupabaseId(draftId)) {
+      return fallbackMetadata
+    }
+    const metadataBackoffKey = `draft_metadata:${draftId}`
+    if (!canAttemptBackendHydration(metadataBackoffKey)) {
+      if (import.meta.env.DEV) {
+        const backoff = backendHealthBackoffRef.current.get(metadataBackoffKey)
+        console.warn('[GraphCore][wiki] direct draft metadata reload skipped while backend health backoff is active.', {
+          draftId,
+          retryInMs: backoff ? Math.max(0, backoff.retryAfter - Date.now()) : 0,
+          lastError: backoff?.lastError ?? null,
+        })
+      }
+      return fallbackMetadata
+    }
+    const existing = draftMetadataLoadInFlightRef.current.get(draftId)
+    if (existing) return existing
+    const promise = workspaceService.loadProjectDraftMetadata(draftId)
+      .then((metadata) => {
+        noteBackendHydrationSuccess(metadataBackoffKey)
+        return metadata
+      })
+      .catch((error) => {
+        noteBackendHydrationFailure(metadataBackoffKey, error)
+        if (isBackendHealthError(error)) return fallbackMetadata
+        throw error
+      })
+      .finally(() => {
+        draftMetadataLoadInFlightRef.current.delete(draftId)
+      })
+    draftMetadataLoadInFlightRef.current.set(draftId, promise)
+    return promise
+  }, [])
 
   if (appRoute !== 'app') {
     if (appRoute === 'billing') {

@@ -203,6 +203,27 @@ async function loadDraftWorkflows(
   )
 }
 
+async function loadWorkflowsByIds(
+  admin: SupabaseAdminClient,
+  projectId: string,
+  draftId: string,
+  workflowIds: string[],
+) {
+  if (workflowIds.length === 0) return []
+  const rows: OutputWorkflowRow[] = []
+  for (const workflowBatch of chunk(workflowIds, 100)) {
+    rows.push(...await selectRows<OutputWorkflowRow>(
+      admin
+        .from('output_workflows')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('draft_id', draftId)
+        .in('id', workflowBatch),
+    ))
+  }
+  return rows
+}
+
 async function loadRunsForWorkflows(
   admin: SupabaseAdminClient,
   projectId: string,
@@ -373,10 +394,12 @@ export async function cleanupOutputRequests(input: {
   projectId: string
   draftId: string
   requestIds?: string[]
+  workflowIds?: string[]
   includeAllDraftWorkflows?: boolean
   includeAllDraftArtifacts?: boolean
   allowActiveRuns?: boolean
   cancelActiveRuns?: boolean
+  dryRun?: boolean
 }): Promise<OutputCleanupResult> {
   const counts = emptyCounts()
   const requests = await loadOutputRequests(input.admin, input.projectId, input.draftId, input.requestIds)
@@ -387,9 +410,16 @@ export async function cleanupOutputRequests(input: {
   const draftWorkflows = input.includeAllDraftWorkflows
     ? await loadDraftWorkflows(input.admin, input.projectId, input.draftId)
     : []
+  const explicitWorkflows = input.workflowIds
+    ? await loadWorkflowsByIds(input.admin, input.projectId, input.draftId, unique(input.workflowIds))
+    : []
+  if (input.workflowIds && explicitWorkflows.length !== unique(input.workflowIds).length) {
+    throw new Error('One or more output workflows could not be found for cleanup.')
+  }
   const workflowIds = unique([
     ...requests.map((row) => row.workflow_id),
     ...draftWorkflows.map((row) => row.id),
+    ...explicitWorkflows.map((row) => row.id),
   ])
   const requestRunIds = requests.map((row) => row.latest_run_id)
   const runs = mergeRuns([
@@ -427,6 +457,20 @@ export async function cleanupOutputRequests(input: {
   counts.outputWorkflowNodes = await countRows(input.admin, 'output_workflow_nodes', 'workflow_id', workflowIds, undefined, input.draftId)
   counts.outputWorkflowEdges = await countRows(input.admin, 'output_workflow_edges', 'workflow_id', workflowIds, undefined, input.draftId)
   counts.outputArtifacts = artifacts.length
+  counts.storageObjects = outputOwnedAssets
+    .map((asset) => asset.storage_path)
+    .filter(isStorageManagedPath).length
+  counts.projectAssets = outputOwnedAssets.length
+
+  if (input.dryRun) {
+    return {
+      counts,
+      requestIds: requests.map((row) => row.id),
+      workflowIds,
+      runIds,
+      assetKeys: outputOwnedAssets.map((asset) => asset.key),
+    }
+  }
 
   counts.storageObjects = await removeStorageObjects(input.admin, outputOwnedAssets)
   counts.projectAssets = await deleteRowsByIds(
@@ -442,13 +486,6 @@ export async function cleanupOutputRequests(input: {
     input.projectId,
     input.draftId,
   )
-  counts.outputRequests = await deleteRowsByIds(
-    input.admin,
-    'output_requests',
-    requests.map((row) => row.id),
-    input.projectId,
-    input.draftId,
-  )
   counts.outputWorkflowRuns = await deleteRowsByIds(
     input.admin,
     'output_workflow_runs',
@@ -460,6 +497,13 @@ export async function cleanupOutputRequests(input: {
     input.admin,
     'output_workflows',
     workflowIds,
+    input.projectId,
+    input.draftId,
+  )
+  counts.outputRequests = await deleteRowsByIds(
+    input.admin,
+    'output_requests',
+    requests.map((row) => row.id),
     input.projectId,
     input.draftId,
   )

@@ -87,6 +87,7 @@ export const graphcoreOutputApi: OutputApi = {
   getOutputRequestStatus: graphcoreRepository.getOutputRequestStatus,
   cancelOutputRequest: graphcoreRepository.cancelOutputRequest,
   deleteOutputRequest: graphcoreRepository.deleteOutputRequest,
+  repairOutputWorkflowState: graphcoreRepository.repairOutputWorkflowState,
   loadOutputInbox: graphcoreRepository.loadOutputInbox,
   loadOutputWorkflowGraph: graphcoreRepository.loadOutputWorkflowGraph,
   subscribeOutputWorkflowGraphSignals: graphcoreRepository.subscribeOutputWorkflowGraphSignals,

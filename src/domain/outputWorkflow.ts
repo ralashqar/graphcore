@@ -480,6 +480,55 @@ export const outputRequestStatusResponseSchema = z.object({
   terminal: z.boolean().default(false),
 })
 
+export const outputRequestStatusProjectionSchema = z.object({
+  requestId: z.string(),
+  projectId: z.string(),
+  draftId: z.string(),
+  workflowId: z.string().nullable().default(null),
+  latestRunId: z.string().nullable().default(null),
+  status: outputRequestStatusSchema.or(outputWorkflowRunStatusSchema),
+  outputKind: outputRequestKindSchema.default('unknown'),
+  title: z.string().default('Untitled output'),
+  progress: looseRecordSchema.default({}),
+  activeNodeKey: z.string().nullable().default(null),
+  activeNodeLabel: z.string().nullable().default(null),
+  latestError: z.string().nullable().default(null),
+  artifactKeys: z.array(z.string()).default([]),
+  previewAssetKeys: z.array(z.string()).default([]),
+  graphRevision: z.string().default(''),
+  timelineRevision: z.string().default(''),
+  terminal: z.boolean().default(false),
+  metadata: looseRecordSchema.default({}),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const outputFeedRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  limit: z.number().int().positive().max(100).default(30),
+  cursor: z.string().nullable().optional(),
+  knownFeedRevision: z.string().nullable().optional(),
+  knownAssetKeys: z.array(z.string()).default([]),
+})
+
+export const outputFeedResponseSchema = z.object({
+  ok: z.literal(true),
+  unchanged: z.boolean().default(false),
+  feedRevision: z.string().default(''),
+  requests: z.array(outputRequestSchema).default([]),
+  workflows: z.array(outputWorkflowSchema).default([]),
+  runs: z.array(outputWorkflowRunSchema).default([]),
+  artifacts: z.array(outputArtifactSchema).default([]),
+  assets: z.array(looseRecordSchema).default([]),
+  projections: z.array(outputRequestStatusProjectionSchema).default([]),
+  page: z.object({
+    limit: z.number().int().positive(),
+    hasMore: z.boolean().default(false),
+    nextCursor: z.string().nullable().default(null),
+  }),
+})
+
 export const outputRequestDeleteResponseSchema = z.object({
   ok: z.literal(true),
   requestId: z.string(),
@@ -511,6 +560,50 @@ export const outputRequestDeleteResponseSchema = z.object({
   }),
 })
 
+const outputCleanupCountsSchema = z.object({
+  outputRequests: z.number().int().nonnegative().default(0),
+  outputWorkflows: z.number().int().nonnegative().default(0),
+  outputWorkflowRuns: z.number().int().nonnegative().default(0),
+  outputWorkflowRunSteps: z.number().int().nonnegative().default(0),
+  outputWorkflowNodes: z.number().int().nonnegative().default(0),
+  outputWorkflowEdges: z.number().int().nonnegative().default(0),
+  outputArtifacts: z.number().int().nonnegative().default(0),
+  projectAssets: z.number().int().nonnegative().default(0),
+  storageObjects: z.number().int().nonnegative().default(0),
+})
+
+export const outputWorkflowRepairRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  mode: z.enum(['preview', 'apply']).default('preview'),
+  requestId: z.string().min(1).optional(),
+  workflowId: z.string().min(1).optional(),
+  cancelStaleRuns: z.boolean().default(false),
+  staleRunAgeMinutes: z.number().int().positive().max(10080).default(30),
+}).refine((value) => value.requestId || value.workflowId, {
+  message: 'Provide requestId or workflowId to repair output workflow state.',
+})
+
+export const outputWorkflowRepairResponseSchema = z.object({
+  ok: z.literal(true),
+  mode: z.enum(['preview', 'apply']),
+  applied: z.boolean().default(false),
+  projectId: z.string(),
+  draftId: z.string(),
+  requestId: z.string().nullable().default(null),
+  workflowId: z.string().nullable().default(null),
+  findings: z.object({
+    stuckCleanupRequestIds: z.array(z.string()).default([]),
+    staleRunIds: z.array(z.string()).default([]),
+    orphanWorkflowIds: z.array(z.string()).default([]),
+    activeRunIds: z.array(z.string()).default([]),
+    cleanupCounts: outputCleanupCountsSchema,
+    diagnostics: z.array(z.string()).default([]),
+  }),
+  deletedCounts: outputCleanupCountsSchema.nullable().default(null),
+  cancelledRunIds: z.array(z.string()).default([]),
+})
+
 export const outputWorkflowRunStartRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -540,6 +633,7 @@ export const outputWorkflowGraphRequestSchema = z.object({
   runId: z.string().min(1).nullable().optional(),
   selectedNodeKey: z.string().min(1).nullable().optional(),
   includeSelectedNodeOutput: z.boolean().default(false),
+  knownGraphRevision: z.string().nullable().optional(),
 })
 
 export const outputWorkflowSelectedNodeOutputSchema = z.object({
@@ -550,6 +644,7 @@ export const outputWorkflowSelectedNodeOutputSchema = z.object({
 
 export const outputWorkflowGraphResponseSchema = z.object({
   ok: z.literal(true),
+  unchanged: z.boolean().default(false),
   workflow: outputWorkflowSchema.nullable().default(null),
   nodes: z.array(outputWorkflowNodeSchema).default([]),
   edges: z.array(outputWorkflowEdgeSchema).default([]),
@@ -3251,7 +3346,11 @@ export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphReque
 export type OutputWorkflowGraphResponse = z.infer<typeof outputWorkflowGraphResponseSchema>
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>
 export type OutputRequestStatusResponse = z.infer<typeof outputRequestStatusResponseSchema>
+export type OutputFeedResponse = z.infer<typeof outputFeedResponseSchema>
+export type OutputRequestStatusProjection = z.infer<typeof outputRequestStatusProjectionSchema>
 export type OutputRequestDeleteResponse = z.infer<typeof outputRequestDeleteResponseSchema>
+export type OutputWorkflowRepairRequest = z.infer<typeof outputWorkflowRepairRequestSchema>
+export type OutputWorkflowRepairResponse = z.infer<typeof outputWorkflowRepairResponseSchema>
 export type OutputWorkflowNodeUpdateRequest = z.infer<typeof outputWorkflowNodeUpdateRequestSchema>
 export type OutputWorkflowNodeUpdateResponse = z.infer<typeof outputWorkflowNodeUpdateResponseSchema>
 export type OutputWorkflowUpgradeResponse = z.infer<typeof outputWorkflowUpgradeResponseSchema>

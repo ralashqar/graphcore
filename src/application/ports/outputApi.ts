@@ -6,6 +6,8 @@ import type {
   OutputWorkflowNodeUpdateResponse,
   OutputWorkflowPlanRequest,
   OutputWorkflowPlanResponse,
+  OutputWorkflowRepairRequest,
+  OutputWorkflowRepairResponse,
   OutputWorkflowRunStatusResponse,
   OutputWorkflowStartResponse,
   OutputWorkflowUpgradeResponse,
@@ -33,6 +35,7 @@ export type OutputApi = {
   getOutputRequestStatus(requestId: string): Promise<OutputRequestStatusResponse>
   cancelOutputRequest(requestId: string): Promise<OutputRequestStatusResponse>
   deleteOutputRequest(requestId: string): Promise<OutputRequestDeleteResponse>
+  repairOutputWorkflowState(snapshot: ProjectSnapshot, request: Omit<OutputWorkflowRepairRequest, 'projectId' | 'draftId'>): Promise<OutputWorkflowRepairResponse>
   loadOutputInbox(input: Record<string, unknown>): Promise<OutputInboxLoadResult>
   loadOutputWorkflowGraph(input: Record<string, unknown>): Promise<OutputWorkflowGraphLoadResult>
   subscribeOutputWorkflowGraphSignals(input: {

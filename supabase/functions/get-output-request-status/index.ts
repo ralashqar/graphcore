@@ -6,20 +6,17 @@ import {
   outputRequestStatusResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
 import {
-  compactOutputWorkflowNodesForStatus,
-  compactOutputWorkflowRunForStatus,
   hydrateOutputArtifactSignedUrls,
   mapOutputArtifactRow,
   mapOutputRequestRow,
-  mapOutputWorkflowEdgeRow,
-  mapOutputWorkflowNodeRow,
+  mapOutputRequestStatusProjectionRow,
+  mapOutputWorkflowRunRow,
   mapOutputWorkflowRow,
   outputArtifactSelect,
   outputRequestSelect,
-  outputWorkflowEdgeSelect,
-  outputWorkflowNodeStatusSelect,
+  outputRequestStatusProjectionSelect,
+  outputWorkflowRunStatusSelect,
   outputWorkflowSelect,
-  loadOutputWorkflowRunBundle,
 } from '../_shared/output-workflow.ts'
 
 Deno.serve(async (request) => {
@@ -40,40 +37,45 @@ Deno.serve(async (request) => {
     if (requestResponse.error || !requestResponse.data) throw new HttpError(404, 'Output request not found.')
     let outputRequest = mapOutputRequestRow(requestResponse.data)
 
+    await admin.rpc('refresh_output_request_status_projection', { p_request_id: outputRequest.id })
+    const projectionResponse = await admin
+      .from('output_request_status_projections')
+      .select(outputRequestStatusProjectionSelect)
+      .eq('request_id', outputRequest.id)
+      .maybeSingle()
+    if (projectionResponse.error) throw new Error(projectionResponse.error.message)
+    const projection = projectionResponse.data ? mapOutputRequestStatusProjectionRow(projectionResponse.data as never) : null
+
     let workflow = null
-    let nodes = []
-    let edges = []
     let run = null
     let artifacts = []
     if (outputRequest.workflowId) {
-      const [workflowResponse, nodeResponse, edgeResponse, artifactResponse] = await Promise.all([
+      const artifactKeys = projection?.artifactKeys ?? []
+      const [workflowResponse, artifactResponse] = await Promise.all([
         admin.from('output_workflows').select(outputWorkflowSelect).eq('id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).single(),
-        admin.from('output_workflow_nodes').select(outputWorkflowNodeStatusSelect).eq('workflow_id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).order('created_at', { ascending: true }),
-        admin.from('output_workflow_edges').select(outputWorkflowEdgeSelect).eq('workflow_id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).order('created_at', { ascending: true }),
-        admin.from('output_artifacts').select(outputArtifactSelect).eq('workflow_id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).order('created_at', { ascending: false }),
+        artifactKeys.length > 0
+          ? admin.from('output_artifacts').select(outputArtifactSelect).eq('draft_id', outputRequest.draftId).in('key', artifactKeys).order('created_at', { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
       ])
       if (!workflowResponse.error && workflowResponse.data) workflow = mapOutputWorkflowRow(workflowResponse.data)
-      if (nodeResponse.error) throw new Error(nodeResponse.error.message)
-      if (edgeResponse.error) throw new Error(edgeResponse.error.message)
       if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-      nodes = compactOutputWorkflowNodesForStatus((nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow))
-      edges = (edgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow)
       artifacts = await hydrateOutputArtifactSignedUrls(admin, (artifactResponse.data ?? []).map(mapOutputArtifactRow))
     }
     if (outputRequest.latestRunId) {
-      const bundle = await loadOutputWorkflowRunBundle(admin, outputRequest.latestRunId, {
-        includeNodeOutputs: false,
-        includeRunPayload: false,
-        includeStepOutputs: false,
-      })
-      run = compactOutputWorkflowRunForStatus(bundle.run)
-      artifacts = bundle.run.artifacts.length > 0 ? await hydrateOutputArtifactSignedUrls(admin, bundle.run.artifacts) : artifacts
-      if (isTerminalOutputWorkflowRunStatus(bundle.run.status) && outputRequest.status !== bundle.run.status) {
+      const runResponse = await admin
+        .from('output_workflow_runs')
+        .select(outputWorkflowRunStatusSelect)
+        .eq('id', outputRequest.latestRunId)
+        .eq('draft_id', outputRequest.draftId)
+        .maybeSingle()
+      if (runResponse.error) throw new Error(runResponse.error.message)
+      if (runResponse.data) run = mapOutputWorkflowRunRow(runResponse.data as never, [], artifacts)
+      if (run && isTerminalOutputWorkflowRunStatus(run.status) && outputRequest.status !== run.status) {
         const updateResponse = await client
           .from('output_requests')
           .update({
-            status: bundle.run.status,
-            error_message: bundle.run.errorMessage,
+            status: run.status,
+            error_message: run.errorMessage,
           })
           .eq('id', outputRequest.id)
           .select(outputRequestSelect)
@@ -85,11 +87,11 @@ Deno.serve(async (request) => {
       ok: true,
       request: outputRequest,
       workflow,
-      nodes,
-      edges,
+      nodes: [],
+      edges: [],
       run,
       artifacts,
-      terminal: run ? isTerminalOutputWorkflowRunStatus(run.status) : false,
+      terminal: projection?.terminal ?? (run ? isTerminalOutputWorkflowRunStatus(run.status) : false),
     }))
   } catch (error) {
     return errorResponse(error, 'Failed to load output request.')

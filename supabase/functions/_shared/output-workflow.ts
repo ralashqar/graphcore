@@ -10,6 +10,7 @@ import {
   outputArtifactSchema,
   outputArtifactResponseSchema,
   outputRequestSchema,
+  outputRequestStatusProjectionSchema,
   outputWorkflowCancelResponseSchema,
   outputWorkflowEdgeSchema,
   outputWorkflowPlanRequestSchema,
@@ -27,6 +28,7 @@ import {
   validateOutputWorkflowGraph,
   type OutputArtifact,
   type OutputRequest,
+  type OutputRequestStatusProjection,
   type OutputWorkflow,
   type OutputWorkflowEdge,
   type OutputWorkflowNode,
@@ -158,6 +160,7 @@ export const outputWorkflowRunStepSelect = 'id, run_id, workflow_id, node_id, no
 export const outputWorkflowRunStepStatusSelect = 'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 export const outputArtifactSelect = 'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 export const outputRequestSelect = 'id, project_id, draft_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
+export const outputRequestStatusProjectionSelect = 'request_id, project_id, draft_id, workflow_id, latest_run_id, status, output_kind, title, progress, active_node_key, active_node_label, latest_error, artifact_keys, preview_asset_keys, graph_revision, timeline_revision, terminal, metadata, created_at, updated_at'
 
 type OutputWorkflowRow = {
   id: string
@@ -295,6 +298,29 @@ type OutputRequestRow = {
   updated_at: string
 }
 
+type OutputRequestStatusProjectionRow = {
+  request_id: string
+  project_id: string
+  draft_id: string
+  workflow_id: string | null
+  latest_run_id: string | null
+  status: string
+  output_kind: string
+  title: string
+  progress: Record<string, unknown> | null
+  active_node_key: string | null
+  active_node_label: string | null
+  latest_error: string | null
+  artifact_keys: string[] | null
+  preview_asset_keys: string[] | null
+  graph_revision: string | null
+  timeline_revision: string | null
+  terminal: boolean | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -363,6 +389,31 @@ export function mapOutputRequestRow(row: OutputRequestRow): OutputRequest {
     targetFormat: row.target_format ?? 'pdf',
     plannerNotes: row.planner_notes ?? '',
     errorMessage: row.error_message,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+export function mapOutputRequestStatusProjectionRow(row: OutputRequestStatusProjectionRow): OutputRequestStatusProjection {
+  return outputRequestStatusProjectionSchema.parse({
+    requestId: row.request_id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    workflowId: row.workflow_id,
+    latestRunId: row.latest_run_id,
+    status: row.status,
+    outputKind: row.output_kind ?? 'unknown',
+    title: row.title ?? 'Untitled output',
+    progress: row.progress ?? {},
+    activeNodeKey: row.active_node_key,
+    activeNodeLabel: row.active_node_label,
+    latestError: row.latest_error,
+    artifactKeys: row.artifact_keys ?? [],
+    previewAssetKeys: row.preview_asset_keys ?? [],
+    graphRevision: row.graph_revision ?? '',
+    timelineRevision: row.timeline_revision ?? '',
+    terminal: row.terminal ?? false,
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1099,6 +1150,10 @@ function buildOutputWorkflowNodeExecutionCacheMetadata(input: {
 
 function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter(Boolean) : []
+}
+
+function uniqueStrings(values: Array<string | null | undefined>) {
+  return [...new Set(values.map((value) => readText(value)).filter(Boolean))]
 }
 
 function worldEntityVisualSource(entity: Record<string, unknown>) {
@@ -5958,6 +6013,15 @@ function preserveExistingDynamicNodeOutput(input: {
   }
 }
 
+function isStaleDynamicCinematicNode(node: { metadata?: unknown } | null | undefined) {
+  const metadata = asRecord(node?.metadata)
+  return metadata.dynamicCinematicGenerated === true && metadata.dynamicCinematicStale === true
+}
+
+function isDynamicCinematicFanoutNodeKey(key: string) {
+  return key === 'cinematic_v2_dynamic_shot_fanout' || key === 'cinematic_dynamic_take_fanout'
+}
+
 function dynamicEdgeRow(input: {
   workflow: OutputWorkflow
   key: string
@@ -6227,8 +6291,9 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     .select(outputWorkflowNodeSelect)
     .eq('workflow_id', input.workflow.id)
   if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
-  const existingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
+  const allExistingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
     .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
+  const existingDynamicNodes = allExistingDynamicNodes.filter((row) => !isStaleDynamicCinematicNode(row))
   const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row]))
   const existingSameHash = existingDynamicNodes.length > 0
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
@@ -11674,7 +11739,13 @@ export async function processFlyOutputWorkflowRuns(input: {
 
   try {
     for (let dynamicPass = 0; dynamicPass < 4; dynamicPass += 1) {
-    const validation = validateOutputWorkflowGraph({ nodes: bundle.nodes, edges: bundle.edges })
+    const activeWorkflowNodes = bundle.nodes.filter((node) => !isStaleDynamicCinematicNode(node))
+    const activeWorkflowNodeKeys = new Set(activeWorkflowNodes.map((node) => node.key))
+    const activeWorkflowEdges = bundle.edges.filter((edge) => (
+      activeWorkflowNodeKeys.has(edge.sourceNodeKey)
+      && activeWorkflowNodeKeys.has(edge.targetNodeKey)
+    ))
+    const validation = validateOutputWorkflowGraph({ nodes: activeWorkflowNodes, edges: activeWorkflowEdges })
     if (!validation.ok) {
       throw new Error(validation.diagnostics.join(' '))
     }
@@ -11690,11 +11761,20 @@ export async function processFlyOutputWorkflowRuns(input: {
     const reuseExistingUpstreamOutputs = runMetadata.reuseExistingUpstreamOutputs === true
     const allowStaleUpstreamOutputs = runMetadata.allowStaleUpstreamOutputs === true
     const runScope = readText(runMetadata.runScope) || (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow')
+    const continueDynamicFanoutDependents = runScope === 'node_and_downstream'
+      && targetNodeKeys.some(isDynamicCinematicFanoutNodeKey)
+      && activeWorkflowNodes.some((node) => {
+        const metadata = asRecord(node.metadata)
+        return metadata.dynamicCinematicGenerated === true
+          && targetNodeKeys.includes(readText(metadata.generatedByNodeKey))
+      })
     const selectedSubgraph = selectOutputWorkflowRunSubgraph({
-      nodes: bundle.nodes,
-      edges: bundle.edges,
-      targetNodeKeys,
-      runScope: runScope === 'node_only' || runScope === 'node_and_downstream' || runScope === 'artifact_rebake'
+      nodes: activeWorkflowNodes,
+      edges: activeWorkflowEdges,
+      targetNodeKeys: continueDynamicFanoutDependents ? ['artifact'] : targetNodeKeys,
+      runScope: continueDynamicFanoutDependents
+        ? 'upstream_to_node'
+        : runScope === 'node_only' || runScope === 'node_and_downstream' || runScope === 'artifact_rebake'
         ? runScope
         : 'upstream_to_node',
     })
@@ -11717,7 +11797,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       : selectedSubgraph.edges
     const executionPlan = buildOutputWorkflowExecutionPlan(executionNodes, executionEdges)
     const nodeByKey = new Map(executionNodes.map((node) => [node.key, node]))
-    const workflowNodeByKey = new Map(bundle.nodes.map((node) => [node.key, node]))
+    const workflowNodeByKey = new Map(activeWorkflowNodes.map((node) => [node.key, node]))
     const stepByNodeKey = new Map(bundle.run.steps.map((step) => [step.nodeKey, step]))
     const sourceRunIdForCache = readText(runMetadata.sourceRunId)
     if (sourceRunIdForCache && sourceRunIdForCache !== runId) {
@@ -11740,7 +11820,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       nodesByKey: workflowNodeByKey,
       stepsByNodeKey: stepByNodeKey,
       executionNodeKeys,
-      edges: bundle.edges,
+      edges: activeWorkflowEdges,
     })] as const))
     const missingCachedInputs = [...cachedExternalUpstreamByNodeKey.entries()]
       .flatMap(([nodeKey, cached]) => cached.missingNodeKeys.map((sourceKey) => `${nodeKey} <- ${sourceKey}`))
@@ -12172,10 +12252,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       : schedulerResult.outputsByNodeKey.cinematic_dynamic_take_fanout
         ? 'cinematic_dynamic_take_fanout'
         : ''
-    const dynamicFanoutRan = Boolean(dynamicFanoutNodeKey)
-      && schedulerResult.completed.includes(dynamicFanoutNodeKey)
-      && !schedulerResult.skipped.includes(dynamicFanoutNodeKey)
-    if ((dynamicGraphExpanded || dynamicFanoutRan) && dynamicFanoutNodeKey) {
+    if (dynamicGraphExpanded && dynamicFanoutNodeKey) {
       await heartbeat(input.client, runId, input.workerId, {
         runtime: 'fly_output_workflow_worker',
         stage: dynamicFanoutNodeKey === 'cinematic_v2_dynamic_shot_fanout'

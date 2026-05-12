@@ -41,13 +41,60 @@ Deno.serve(async (request) => {
     }
 
     const admin = createAdminClient('delete-output-request')
-    const cleanup = await cleanupOutputRequests({
-      admin,
-      projectId: outputRequest.projectId,
-      draftId: outputRequest.draftId,
-      requestIds: [outputRequest.id],
-      allowActiveRuns: false,
-    })
+    const cleanupStartedAt = new Date().toISOString()
+    const cleanupMetadata = typeof outputRequest.metadata.cleanup === 'object' && outputRequest.metadata.cleanup !== null
+      ? outputRequest.metadata.cleanup as Record<string, unknown>
+      : {}
+    const cleanupAttemptCount = Number(cleanupMetadata.attemptCount ?? 0) || 0
+    await admin
+      .from('output_requests')
+      .update({
+        metadata: {
+          ...outputRequest.metadata,
+          cleanup: {
+            ...cleanupMetadata,
+            state: 'deleting',
+            startedAt: typeof cleanupMetadata.startedAt === 'string' ? cleanupMetadata.startedAt : cleanupStartedAt,
+            lastAttemptAt: cleanupStartedAt,
+            attemptCount: cleanupAttemptCount + 1,
+            lastError: null,
+          },
+        },
+      })
+      .eq('id', outputRequest.id)
+      .eq('project_id', outputRequest.projectId)
+      .eq('draft_id', outputRequest.draftId)
+
+    let cleanup
+    try {
+      cleanup = await cleanupOutputRequests({
+        admin,
+        projectId: outputRequest.projectId,
+        draftId: outputRequest.draftId,
+        requestIds: [outputRequest.id],
+        allowActiveRuns: false,
+      })
+    } catch (cleanupError) {
+      await admin
+        .from('output_requests')
+        .update({
+          metadata: {
+            ...outputRequest.metadata,
+            cleanup: {
+              ...cleanupMetadata,
+              state: 'delete_failed',
+              startedAt: typeof cleanupMetadata.startedAt === 'string' ? cleanupMetadata.startedAt : cleanupStartedAt,
+              lastAttemptAt: new Date().toISOString(),
+              attemptCount: cleanupAttemptCount + 1,
+              lastError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+            },
+          },
+        })
+        .eq('id', outputRequest.id)
+        .eq('project_id', outputRequest.projectId)
+        .eq('draft_id', outputRequest.draftId)
+      throw cleanupError
+    }
 
     return json(outputRequestDeleteResponseSchema.parse({
       ok: true,

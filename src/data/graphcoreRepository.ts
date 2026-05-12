@@ -134,6 +134,7 @@ import {
 import {
   outputArtifactResponseSchema,
   outputArtifactSchema,
+  outputFeedResponseSchema,
   outputRequestDeleteResponseSchema,
   outputRequestSchema,
   outputRequestStartRequestSchema,
@@ -148,6 +149,8 @@ import {
   outputWorkflowNodeUpdateResponseSchema,
   outputWorkflowPlanRequestSchema,
   outputWorkflowPlanResponseSchema,
+  outputWorkflowRepairRequestSchema,
+  outputWorkflowRepairResponseSchema,
   outputWorkflowRunStepSchema,
   outputWorkflowRunStartRequestSchema,
   outputWorkflowRunStatusRequestSchema,
@@ -159,6 +162,7 @@ import {
   outputWorkflowUpgradeRequestSchema,
   outputWorkflowUpgradeResponseSchema,
   type OutputArtifact,
+  type OutputFeedResponse,
   type OutputRequest,
   type OutputRequestDeleteResponse,
   type OutputRequestStatusResponse,
@@ -169,6 +173,8 @@ import {
   type OutputWorkflowNodeUpdateResponse,
   type OutputWorkflowPlanRequest,
   type OutputWorkflowPlanResponse,
+  type OutputWorkflowRepairRequest,
+  type OutputWorkflowRepairResponse,
   type OutputWorkflowRun,
   type OutputWorkflowRunStep,
   type OutputWorkflowRunStatusResponse,
@@ -500,6 +506,7 @@ export type SnapshotLoadResult = {
   source: 'supabase' | 'demo'
   reason?: string
   profile?: SnapshotLoadProfile
+  games?: GameSummary[]
 }
 
 export type SnapshotLoadProfile = 'shell' | 'world' | 'content' | 'jobs' | 'full'
@@ -566,6 +573,24 @@ const CINEMATIC_RUN_ACTIVE_STATUSES = ['queued', 'running'] as const
 const GRAPHCORE_CACHE_DB_NAME = 'graphcore-client-cache'
 const GRAPHCORE_CACHE_DB_VERSION = 1
 const GRAPHCORE_CACHE_STORE = 'snapshots'
+const SESSION_LIST_GAMES_TTL_MS = 60_000
+const SESSION_DRAFT_METADATA_TTL_MS = 30_000
+const SESSION_OUTPUT_FEED_ACTIVE_TTL_MS = 10_000
+const SESSION_OUTPUT_FEED_INACTIVE_TTL_MS = 60_000
+const SESSION_GRAPH_REVISION_TTL_MS = 10_000
+
+const listGamesSessionCache = new Map<string, { expiresAt: number; games: GameSummary[] }>()
+const draftMetadataSessionCache = new Map<string, { expiresAt: number; metadata: Record<string, unknown> }>()
+const outputFeedSessionCache = new Map<string, { expiresAt: number; revision: string; result: OutputInboxLoadResult }>()
+const outputGraphRevisionSessionCache = new Map<string, { expiresAt: number; revision: string }>()
+const selectedGraphNodeOutputSessionCache = new Map<string, { expiresAt: number; result: OutputWorkflowGraphLoadResult }>()
+const activeWorkspaceStateSessionCache = new Map<string, { projectId: string; draftId: string }>()
+type PrimaryWorkspaceMembership = {
+  workspace: { id: string; name: string; slug: string }
+  role: ProjectSnapshot['workspace']['role']
+}
+
+const primaryWorkspaceSessionCache = new Map<string, { expiresAt: number; membership: PrimaryWorkspaceMembership }>()
 
 function isEgressDebugEnabled() {
   return typeof import.meta !== 'undefined'
@@ -985,7 +1010,10 @@ function localPatchDiagnostics(fallbackReason: string | null) {
   ]
 }
 
-async function getPrimaryWorkspace(session: Session) {
+async function getPrimaryWorkspace(session: Session): Promise<PrimaryWorkspaceMembership | null> {
+  const cached = primaryWorkspaceSessionCache.get(session.user.id)
+  if (cached && cached.expiresAt > Date.now()) return cached.membership
+
   const workspaceResponse = await supabase
     .from('workspace_memberships')
     .select('role, workspace:workspaces!inner(id, name, slug)')
@@ -1002,10 +1030,15 @@ async function getPrimaryWorkspace(session: Session) {
   const workspace = Array.isArray(row.workspace) ? row.workspace[0] : row.workspace
   if (!workspace) return null
 
-  return {
+  const membership = {
     workspace,
     role: row.role,
   }
+  primaryWorkspaceSessionCache.set(session.user.id, {
+    membership,
+    expiresAt: Date.now() + SESSION_LIST_GAMES_TTL_MS,
+  })
+  return membership
 }
 
 function isMissingUserWorkspaceStateTableError(message: string | undefined) {
@@ -1051,6 +1084,12 @@ function setLocalActiveGameSelection(workspaceId: string, projectId: string, dra
 }
 
 async function setActiveWorkspaceGameState(workspaceId: string, projectId: string, draftId: string) {
+  const cachedActive = activeWorkspaceStateSessionCache.get(workspaceId)
+  if (cachedActive?.projectId === projectId && cachedActive.draftId === draftId) {
+    setLocalActiveGameSelection(workspaceId, projectId, draftId)
+    return
+  }
+
   const {
     data: { session },
   } = await supabase.auth.getSession()
@@ -1080,6 +1119,7 @@ async function setActiveWorkspaceGameState(workspaceId: string, projectId: strin
   }
 
   setLocalActiveGameSelection(workspaceId, projectId, draftId)
+  activeWorkspaceStateSessionCache.set(workspaceId, { projectId, draftId })
 }
 
 function extractBootstrapStatus(metadata: Record<string, unknown> | null | undefined) {
@@ -1137,6 +1177,25 @@ function pickPreferredDraft(drafts: DraftSummaryRow[]) {
   })[0] ?? null
 }
 
+function buildGameSummaries(projects: ProjectSummaryRow[], draftsByProjectId: Map<string, DraftSummaryRow[]>): GameSummary[] {
+  return projects
+    .map((project) => {
+      const draft = pickPreferredDraft(draftsByProjectId.get(project.id) ?? [])
+      if (!draft) return null
+      return {
+        projectId: project.id,
+        projectName: project.name,
+        projectSlug: project.slug,
+        draftId: draft.id,
+        draftName: draft.name,
+        updatedAt: draft.updated_at,
+        bootstrapStatus: extractBootstrapStatus(draft.metadata),
+        hasGameSpec: draftHasGameSpec(draft.metadata),
+      } satisfies GameSummary
+    })
+    .filter((entry): entry is GameSummary => entry !== null)
+}
+
 async function resolveActiveGameSelection(session: Session, workspaceId: string) {
   const [{ projects, draftsByProjectId }, activeStateResponse] = await Promise.all([
     listWorkspaceProjectsAndDrafts(workspaceId),
@@ -1158,6 +1217,12 @@ async function resolveActiveGameSelection(session: Session, workspaceId: string)
       )
     : (activeStateResponse.data as ActiveWorkspaceStateRow | null)
   const localActiveState = getLocalActiveGameSelection(workspaceId)
+  if (activeState?.active_project_id && activeState.active_draft_id) {
+    activeWorkspaceStateSessionCache.set(workspaceId, {
+      projectId: activeState.active_project_id,
+      draftId: activeState.active_draft_id,
+    })
+  }
 
   const activeProjectId = activeState?.active_project_id ?? localActiveState?.projectId ?? null
   const activeDraftId = activeState?.active_draft_id ?? localActiveState?.draftId ?? null
@@ -1174,6 +1239,7 @@ async function resolveActiveGameSelection(session: Session, workspaceId: string)
       draft: activeDraft,
       projects,
       draftsByProjectId,
+      games: buildGameSummaries(projects, draftsByProjectId),
     }
   }
 
@@ -1189,6 +1255,7 @@ async function resolveActiveGameSelection(session: Session, workspaceId: string)
     draft: fallbackDraft,
     projects,
     draftsByProjectId,
+    games: buildGameSummaries(projects, draftsByProjectId),
   }
 }
 
@@ -2834,23 +2901,6 @@ function collectOutputAssetReferences(value: unknown, knownAssetKeys: Set<string
   }
 }
 
-function collectOutputAssetKeys(value: unknown, assetKeys: Set<string>, depth = 0) {
-  if (!value || depth > 8) return
-  if (Array.isArray(value)) {
-    for (const entry of value) collectOutputAssetKeys(entry, assetKeys, depth + 1)
-    return
-  }
-  if (typeof value !== 'object') return
-
-  const record = value as Record<string, unknown>
-  const assetKey = readRepositoryString(record.assetKey) || readRepositoryString(record.asset_key)
-  if (assetKey) assetKeys.add(assetKey)
-
-  for (const entry of Object.values(record)) {
-    if (entry && typeof entry === 'object') collectOutputAssetKeys(entry, assetKeys, depth + 1)
-  }
-}
-
 function findMissingAssetReferences(snapshot: ProjectSnapshot) {
   const assetKeys = new Set(snapshot.assets.map((asset) => asset.key))
   const missing = new Set<string>()
@@ -3103,6 +3153,18 @@ export async function signProjectAssetUrlEntries(input: SignProjectAssetUrlsRequ
 }
 
 export async function loadProjectDraftMetadata(draftId: string) {
+  if (!isUuidLike(draftId)) {
+    if (import.meta.env.DEV) {
+      console.info('[GraphCore] skipped live draft metadata reload for non-live draft id.', { draftId })
+    }
+    return {}
+  }
+
+  const cached = draftMetadataSessionCache.get(draftId)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.metadata
+  }
+
   const draftResponse = await supabase
     .from('project_drafts')
     .select('metadata')
@@ -3113,7 +3175,12 @@ export async function loadProjectDraftMetadata(draftId: string) {
     throw new Error(draftResponse.error.message)
   }
 
-  return readRepositoryRecord(draftResponse.data?.metadata)
+  const metadata = readRepositoryRecord(draftResponse.data?.metadata)
+  draftMetadataSessionCache.set(draftId, {
+    metadata,
+    expiresAt: Date.now() + SESSION_DRAFT_METADATA_TTL_MS,
+  })
+  return metadata
 }
 
 function prettifyChoiceKey(value: string) {
@@ -3201,6 +3268,10 @@ export async function loadProjectSnapshot(
   const workspace = workspaceMembership.workspace
 
   const resolvedSelection = await resolveActiveGameSelection(session, workspace.id)
+  listGamesSessionCache.set(session.user.id, {
+    games: resolvedSelection.games,
+    expiresAt: Date.now() + SESSION_LIST_GAMES_TTL_MS,
+  })
   const project =
     selection?.projectId
       ? resolvedSelection.projects.find((entry) => entry.id === selection.projectId) ?? null
@@ -3277,6 +3348,7 @@ export async function loadProjectSnapshot(
             snapshot: hydratedSnapshot,
             source: 'supabase',
             profile,
+            games: resolvedSelection.games,
           }
         }
       } catch (cacheError) {
@@ -4313,6 +4385,7 @@ export async function loadProjectSnapshot(
     snapshot,
     source: 'supabase',
     profile,
+    games: resolvedSelection.games,
   }
 }
 
@@ -4440,6 +4513,7 @@ async function createGameDirect(session: Session, workspaceId: string, options?:
 
   await seedBaselineArchetypesDirect(draftId, session.user.id)
   await setActiveWorkspaceGameState(workspaceId, projectId, draftId)
+  listGamesSessionCache.delete(session.user.id)
 
   return { projectId, draftId }
 }
@@ -4451,27 +4525,20 @@ export async function listGames(): Promise<GameSummary[]> {
 
   if (!session) return []
 
+  const cacheKey = session.user.id
+  const cached = listGamesSessionCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.games
+  }
+
   const workspaceMembership = await getPrimaryWorkspace(session)
   if (!workspaceMembership) return []
 
   const { projects, draftsByProjectId } = await listWorkspaceProjectsAndDrafts(workspaceMembership.workspace.id)
 
-  return projects
-    .map((project) => {
-      const draft = pickPreferredDraft(draftsByProjectId.get(project.id) ?? [])
-      if (!draft) return null
-      return {
-        projectId: project.id,
-        projectName: project.name,
-        projectSlug: project.slug,
-        draftId: draft.id,
-        draftName: draft.name,
-        updatedAt: draft.updated_at,
-        bootstrapStatus: extractBootstrapStatus(draft.metadata),
-        hasGameSpec: draftHasGameSpec(draft.metadata),
-      } satisfies GameSummary
-    })
-    .filter((entry): entry is GameSummary => entry !== null)
+  const games = buildGameSummaries(projects, draftsByProjectId)
+  listGamesSessionCache.set(cacheKey, { games, expiresAt: Date.now() + SESSION_LIST_GAMES_TTL_MS })
+  return games
 }
 
 export async function setActiveGame(projectId: string, draftId: string, options?: SnapshotLoadOptions): Promise<SnapshotLoadResult> {
@@ -4556,6 +4623,7 @@ export async function saveCachedProjectSnapshot(snapshot: ProjectSnapshot, revis
 export async function clearProjectCache(projectId: string, draftId: string) {
   const cacheKey = cacheKeyForProjectDraft(projectId, draftId)
   await withCacheStore<undefined>('readwrite', (store) => store.delete(cacheKey))
+  draftMetadataSessionCache.delete(draftId)
 }
 
 export async function loadCachedOutputInbox(projectId: string, draftId: string): Promise<GraphCoreClientOutputInboxCache | null> {
@@ -4607,6 +4675,16 @@ export async function saveCachedOutputInbox(projectId: string, draftId: string, 
 export async function clearOutputInboxCache(projectId: string, draftId: string) {
   const cacheKey = cacheKeyForOutputInbox(projectId, draftId)
   await withCacheStore<undefined>('readwrite', (store) => store.delete(cacheKey))
+  const prefix = `${projectId}:${draftId}:`
+  for (const key of outputFeedSessionCache.keys()) {
+    if (key.startsWith(prefix)) outputFeedSessionCache.delete(key)
+  }
+  for (const key of outputGraphRevisionSessionCache.keys()) {
+    if (key.startsWith(prefix)) outputGraphRevisionSessionCache.delete(key)
+  }
+  for (const key of selectedGraphNodeOutputSessionCache.keys()) {
+    if (key.startsWith(prefix)) selectedGraphNodeOutputSessionCache.delete(key)
+  }
 }
 
 function parseStringArrayMap(value: unknown): Record<string, string[]> {
@@ -8052,11 +8130,14 @@ export async function getOutputWorkflowStatus(runId: string): Promise<OutputWork
 }
 
 export type OutputInboxLoadResult = {
+  unchanged?: boolean
+  feedRevision: string
   requests: OutputRequest[]
   workflows: OutputWorkflow[]
   runs: OutputWorkflowRun[]
   artifacts: OutputArtifact[]
   assets: AssetDefinition[]
+  projections?: OutputFeedResponse['projections']
   page: {
     limit: number
     hasMore: boolean
@@ -8065,6 +8146,7 @@ export type OutputInboxLoadResult = {
 }
 
 export type OutputWorkflowGraphLoadResult = {
+  unchanged?: boolean
   workflow: OutputWorkflow | null
   nodes: OutputWorkflowNode[]
   edges: OutputWorkflowEdge[]
@@ -8074,136 +8156,88 @@ export type OutputWorkflowGraphLoadResult = {
   graphRevision: string
 }
 
-function collectAssetKeysForOutputScope(input: {
-  nodes?: OutputWorkflowNode[]
-  runs?: OutputWorkflowRun[]
-  steps?: OutputWorkflowRunStep[]
-  artifacts?: OutputArtifact[]
-}) {
-  const assetKeys = new Set<string>()
-  for (const artifact of input.artifacts ?? []) {
-    if (artifact.assetKey) assetKeys.add(artifact.assetKey)
-    collectOutputAssetKeys(artifact.metadata, assetKeys)
-  }
-  for (const node of input.nodes ?? []) collectOutputAssetKeys(node.outputs, assetKeys)
-  for (const run of input.runs ?? []) {
-    collectOutputAssetKeys(run.outputs, assetKeys)
-    for (const step of run.steps) collectOutputAssetKeys(step.outputs, assetKeys)
-    for (const artifact of run.artifacts) {
-      if (artifact.assetKey) assetKeys.add(artifact.assetKey)
-      collectOutputAssetKeys(artifact.metadata, assetKeys)
-    }
-  }
-  for (const step of input.steps ?? []) collectOutputAssetKeys(step.outputs, assetKeys)
-  return [...assetKeys]
-}
-
-async function loadHydratedOutputAssets(projectId: string, input: {
-  nodes?: OutputWorkflowNode[]
-  runs?: OutputWorkflowRun[]
-  steps?: OutputWorkflowRunStep[]
-  artifacts?: OutputArtifact[]
-}) {
-  return signProjectAssetUrls(projectId, collectAssetKeysForOutputScope(input))
-}
-
 export async function loadOutputInbox(input: {
   projectId: string
   draftId: string
   limit?: number
   cursor?: string | null
+  force?: boolean
+  knownAssetKeys?: string[]
 }): Promise<OutputInboxLoadResult> {
   const limit = Math.max(1, Math.min(100, input.limit ?? 30))
-  let requestQuery = supabase
-    .from('output_requests')
-    .select(OUTPUT_REQUEST_SELECT)
-    .eq('draft_id', input.draftId)
-    .order('created_at', { ascending: false })
-    .limit(limit + 1)
-  if (input.cursor) {
-    requestQuery = requestQuery.lt('created_at', input.cursor)
+  const cacheKey = `${input.projectId}:${input.draftId}:${input.cursor ?? 'first'}:${limit}`
+  const cached = outputFeedSessionCache.get(cacheKey)
+  const now = Date.now()
+  if (!input.force && cached && cached.expiresAt > now) {
+    return cached.result
   }
-  const requestResponse = await requestQuery
-  if (requestResponse.error) throw new Error(requestResponse.error.message)
-
-  const requestRows = ((requestResponse.data ?? []) as OutputRequestRow[])
-  const hasMore = requestRows.length > limit
-  const requests = requestRows.slice(0, limit).map(mapOutputRequestRow)
-  const nextCursor = hasMore ? requests[requests.length - 1]?.createdAt ?? null : null
-  const workflowIds = Array.from(new Set(requests.map((request) => request.workflowId).filter((id): id is string => Boolean(id))))
-  const latestRunIds = Array.from(new Set(requests.map((request) => request.latestRunId).filter((id): id is string => Boolean(id))))
-
-  const [workflowResponse, runResponse, artifactResponse] = await Promise.all([
-    workflowIds.length > 0
-      ? supabase
-          .from('output_workflows')
-          .select(OUTPUT_WORKFLOW_SELECT)
-          .in('id', workflowIds)
-      : Promise.resolve(emptyPostgrestResponse()),
-    latestRunIds.length > 0
-      ? supabase
-          .from('output_workflow_runs')
-          .select(OUTPUT_WORKFLOW_RUN_SELECT)
-          .in('id', latestRunIds)
-      : Promise.resolve(emptyPostgrestResponse()),
-    workflowIds.length > 0
-      ? supabase
-          .from('output_artifacts')
-          .select(OUTPUT_ARTIFACT_SELECT)
-          .in('workflow_id', workflowIds)
-          .order('created_at', { ascending: false })
-      : Promise.resolve(emptyPostgrestResponse()),
-  ])
-  if (workflowResponse.error) throw new Error(workflowResponse.error.message)
-  if (runResponse.error) throw new Error(runResponse.error.message)
-  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-
-  const runRows = (runResponse.data ?? []) as OutputWorkflowRunRow[]
-  const stepRunIds = selectOutputRunIdsForStepHydration(runRows, 4)
-  const stepsResponse = stepRunIds.length > 0
-    ? await supabase
-        .from('output_workflow_run_steps')
-        .select(OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT)
-        .in('run_id', stepRunIds)
-        .order('order_index', { ascending: true })
-    : emptyPostgrestResponse()
-  if (stepsResponse.error) {
-    console.warn('[GraphCore] output inbox step status hydration failed; continuing with request summaries.', stepsResponse.error)
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading output requests.')
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'get-output-feed',
+    {
+      projectId: input.projectId,
+      draftId: input.draftId,
+      limit,
+      cursor: input.cursor ?? null,
+      knownFeedRevision: cached?.revision ?? null,
+      knownAssetKeys: cached ? input.knownAssetKeys ?? [] : [],
+    },
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
   }
-
-  const steps = stepsResponse.error
-    ? []
-    : ((stepsResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
-  const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
+  const parsed = outputFeedResponseSchema.parse(response.data)
+  const ttl = typeof document !== 'undefined' && document.hidden ? SESSION_OUTPUT_FEED_INACTIVE_TTL_MS : SESSION_OUTPUT_FEED_ACTIVE_TTL_MS
+  if (parsed.unchanged && cached) {
+    const result = {
+      ...cached.result,
+      unchanged: true,
+      feedRevision: parsed.feedRevision || cached.revision,
+    }
+    outputFeedSessionCache.set(cacheKey, {
+      revision: result.feedRevision,
+      result,
+      expiresAt: Date.now() + ttl,
+    })
+    return result
+  }
+  const freshAssets = parsed.assets.flatMap((asset) => {
+    const parsedAsset = assetDefinitionSchema.safeParse(asset)
+    if (parsedAsset.success) return [parsedAsset.data]
+    console.warn('[GraphCore] ignored invalid output feed asset payload.', parsedAsset.error.flatten())
+    return []
+  })
+  const freshAssetKeys = new Set(freshAssets.map((asset) => asset.key))
+  const reusableCachedAssets = cached?.result.assets.filter((asset) => !freshAssetKeys.has(asset.key)) ?? []
+  const assets = [...freshAssets, ...reusableCachedAssets]
+  const artifacts = hydrateOutputArtifactsFromAssets(parsed.artifacts, assets)
   const artifactsByRunId = new Map<string, OutputArtifact[]>()
   for (const artifact of artifacts) {
     if (!artifact.runId) continue
     artifactsByRunId.set(artifact.runId, [...(artifactsByRunId.get(artifact.runId) ?? []), artifact])
   }
-  const stepsByRunId = new Map<string, OutputWorkflowRunStep[]>()
-  for (const step of steps) stepsByRunId.set(step.runId, [...(stepsByRunId.get(step.runId) ?? []), step])
-  const runs = runRows.map((run) => (
-    mapOutputWorkflowRunRow(run, stepsByRunId.get(run.id) ?? [], artifactsByRunId.get(run.id) ?? [])
-  ))
-  const assets = await loadHydratedOutputAssets(input.projectId, { runs, steps, artifacts })
-  const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
-  const hydratedRuns = runs.map((run) => ({
+  const runs = parsed.runs.map((run) => ({
     ...run,
-    artifacts: hydrateOutputArtifactsFromAssets(run.artifacts, assets),
+    artifacts: hydrateOutputArtifactsFromAssets(artifactsByRunId.get(run.id) ?? run.artifacts, assets),
   }))
-
-  return {
-    requests,
-    workflows: ((workflowResponse.data ?? []) as OutputWorkflowRow[]).map(mapOutputWorkflowRow),
-    runs: hydratedRuns,
-    artifacts: hydratedArtifacts,
+  const result: OutputInboxLoadResult = {
+    unchanged: parsed.unchanged,
+    feedRevision: parsed.feedRevision,
+    requests: parsed.requests,
+    workflows: parsed.workflows,
+    runs,
+    artifacts,
     assets,
-    page: {
-      limit,
-      hasMore,
-      nextCursor,
-    },
+    projections: parsed.projections,
+    page: parsed.page,
   }
+  outputFeedSessionCache.set(cacheKey, {
+    revision: result.feedRevision,
+    result,
+    expiresAt: Date.now() + ttl,
+  })
+  return result
 }
 
 export async function loadOutputWorkflowGraph(input: {
@@ -8213,7 +8247,30 @@ export async function loadOutputWorkflowGraph(input: {
   runId?: string | null
   selectedNodeKey?: string | null
   includeSelectedNodeOutput?: boolean
+  knownGraphRevision?: string | null
 }): Promise<OutputWorkflowGraphLoadResult> {
+  const graphCacheKey = `${input.projectId}:${input.draftId}:${input.workflowId}:${input.runId ?? 'latest'}`
+  const cachedRevision = outputGraphRevisionSessionCache.get(graphCacheKey)
+  const selectedNodeRequested = Boolean(input.selectedNodeKey && input.includeSelectedNodeOutput === true)
+  const selectedCacheKey = selectedNodeRequested
+    ? `${graphCacheKey}:${input.selectedNodeKey}:${cachedRevision?.revision ?? input.knownGraphRevision ?? 'unknown'}`
+    : null
+  const cachedSelectedOutput = selectedCacheKey ? selectedGraphNodeOutputSessionCache.get(selectedCacheKey) : null
+  if (cachedSelectedOutput && cachedSelectedOutput.expiresAt > Date.now()) {
+    return cachedSelectedOutput.result
+  }
+  if (!selectedNodeRequested && cachedRevision && cachedRevision.expiresAt > Date.now()) {
+    return {
+      unchanged: true,
+      workflow: null,
+      nodes: [],
+      edges: [],
+      run: null,
+      artifacts: [],
+      assets: [],
+      graphRevision: cachedRevision.revision,
+    }
+  }
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading an output workflow graph.')
   const payload = outputWorkflowGraphRequestSchema.parse({
     projectId: input.projectId,
@@ -8222,6 +8279,7 @@ export async function loadOutputWorkflowGraph(input: {
     runId: input.runId ?? null,
     selectedNodeKey: input.selectedNodeKey ?? null,
     includeSelectedNodeOutput: input.includeSelectedNodeOutput === true,
+    knownGraphRevision: input.knownGraphRevision ?? cachedRevision?.revision ?? null,
   })
   const response = await invokeAuthedFunctionWithSessionRecovery(
     'get-output-workflow-graph',
@@ -8232,6 +8290,22 @@ export async function loadOutputWorkflowGraph(input: {
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = outputWorkflowGraphResponseSchema.parse(response.data)
+  if (parsed.unchanged) {
+    outputGraphRevisionSessionCache.set(graphCacheKey, {
+      revision: parsed.graphRevision,
+      expiresAt: Date.now() + SESSION_GRAPH_REVISION_TTL_MS,
+    })
+    return {
+      unchanged: true,
+      workflow: null,
+      nodes: [],
+      edges: [],
+      run: null,
+      artifacts: [],
+      assets: [],
+      graphRevision: parsed.graphRevision,
+    }
+  }
   const selectedNodeOutput = parsed.selectedNodeOutput
   const nodes = selectedNodeOutput
     ? parsed.nodes.map((node) => node.key === selectedNodeOutput.nodeKey
@@ -8245,7 +8319,8 @@ export async function loadOutputWorkflowGraph(input: {
     return []
   })
 
-  return {
+  const result = {
+    unchanged: parsed.unchanged,
     workflow: parsed.workflow,
     nodes,
     edges: parsed.edges,
@@ -8254,6 +8329,17 @@ export async function loadOutputWorkflowGraph(input: {
     assets,
     graphRevision: parsed.graphRevision,
   }
+  outputGraphRevisionSessionCache.set(graphCacheKey, {
+    revision: result.graphRevision,
+    expiresAt: Date.now() + SESSION_GRAPH_REVISION_TTL_MS,
+  })
+  if (selectedCacheKey && input.selectedNodeKey) {
+    selectedGraphNodeOutputSessionCache.set(`${graphCacheKey}:${input.selectedNodeKey}:${result.graphRevision}`, {
+      result,
+      expiresAt: Date.now() + SESSION_GRAPH_REVISION_TTL_MS,
+    })
+  }
+  return result
 }
 
 export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWorkflowCancelResponse> {
@@ -8389,6 +8475,34 @@ export async function deleteOutputRequest(requestId: string): Promise<OutputRequ
   }
   const parsed = outputRequestDeleteResponseSchema.parse(response.data)
   await clearProjectCache(parsed.projectId, parsed.draftId)
+  return parsed
+}
+
+export async function repairOutputWorkflowState(
+  snapshot: ProjectSnapshot,
+  request: Omit<OutputWorkflowRepairRequest, 'projectId' | 'draftId'>,
+): Promise<OutputWorkflowRepairResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before repairing output workflow state.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Output workflow repair requires a live Supabase-backed draft.')
+  }
+  const payload = outputWorkflowRepairRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'repair-output-workflow-state',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = outputWorkflowRepairResponseSchema.parse(response.data)
+  if (parsed.applied) {
+    await clearProjectCache(parsed.projectId, parsed.draftId)
+  }
   return parsed
 }
 
@@ -8744,13 +8858,7 @@ export function subscribeOutputSignals(input: {
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
-      table: 'output_workflow_runs',
-      filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'output_artifacts',
+      table: 'output_request_status_projections',
       filter: `draft_id=eq.${input.draftId}`,
     }, () => input.onSignal())
 

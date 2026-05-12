@@ -15,6 +15,10 @@ import {
   outputWorkflowArtifactKindSchema,
   outputWorkflowGraphRequestSchema,
   outputWorkflowGraphResponseSchema,
+  outputFeedResponseSchema,
+  outputRequestStatusProjectionSchema,
+  outputWorkflowRepairRequestSchema,
+  outputWorkflowRepairResponseSchema,
   outputRequestDeleteResponseSchema,
   outputRequestStartRequestSchema,
   outputWorkflowNodeRegistry,
@@ -138,9 +142,11 @@ test('output workflow graph loader schemas support compact graph refresh and sel
     runId: null,
     selectedNodeKey: 'screenplay_author',
     includeSelectedNodeOutput: true,
+    knownGraphRevision: 'graph-rev',
   })
   assert.equal(request.includeSelectedNodeOutput, true)
   assert.equal(request.selectedNodeKey, 'screenplay_author')
+  assert.equal(request.knownGraphRevision, 'graph-rev')
 
   const response = outputWorkflowGraphResponseSchema.parse({
     ok: true,
@@ -158,6 +164,90 @@ test('output workflow graph loader schemas support compact graph refresh and sel
     },
   })
   assert.equal(response.selectedNodeOutput?.outputs.screenplayMarkdown, 'INT. SERVICE TUNNEL - NIGHT')
+
+  const unchanged = outputWorkflowGraphResponseSchema.parse({
+    ok: true,
+    unchanged: true,
+    graphRevision: 'graph-rev',
+  })
+  assert.equal(unchanged.unchanged, true)
+  assert.equal(unchanged.nodes.length, 0)
+})
+
+test('output feed schemas support projection-backed inbox loading without run-step payloads', () => {
+  const projection = outputRequestStatusProjectionSchema.parse({
+    requestId: 'request-1',
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    workflowId: 'workflow-1',
+    latestRunId: 'run-1',
+    status: 'running',
+    outputKind: 'cinematic_episode',
+    title: 'Opening cinematic',
+    progress: {
+      totalSteps: 12,
+      steps: { queued: 4, running: 1, completed: 7 },
+    },
+    activeNodeKey: 'cinematic_v2_storyboard_group_001_sheet',
+    activeNodeLabel: 'Storyboard Sheet 1',
+    latestError: null,
+    artifactKeys: ['artifact-1'],
+    previewAssetKeys: ['asset-1'],
+    graphRevision: 'graph-rev',
+    timelineRevision: 'timeline-rev',
+    terminal: false,
+    metadata: { projectionVersion: 1 },
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  assert.equal(projection.progress.totalSteps, 12)
+  assert.equal(projection.previewAssetKeys[0], 'asset-1')
+
+  const feed = outputFeedResponseSchema.parse({
+    ok: true,
+    requests: [],
+    workflows: [],
+    runs: [],
+    artifacts: [],
+    assets: [],
+    projections: [projection],
+    page: {
+      limit: 30,
+      hasMore: false,
+      nextCursor: null,
+    },
+  })
+
+  assert.equal(feed.projections.length, 1)
+  assert.equal(feed.page.hasMore, false)
+  assert.equal(feed.unchanged, false)
+
+  const unchangedFeed = outputFeedResponseSchema.parse({
+    ok: true,
+    unchanged: true,
+    feedRevision: 'feed-rev',
+    page: {
+      limit: 30,
+      hasMore: false,
+      nextCursor: null,
+    },
+  })
+  assert.equal(unchangedFeed.feedRevision, 'feed-rev')
+  assert.equal(unchangedFeed.requests.length, 0)
+
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-feed/index.ts'), 'utf8')
+  assert.match(source, /output_request_status_projections/)
+  assert.match(source, /knownFeedRevision/)
+  assert.doesNotMatch(source, /output_workflow_run_steps/)
+
+  const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
+  const loadOutputInboxSource = repositorySource.slice(
+    repositorySource.indexOf('export async function loadOutputInbox'),
+    repositorySource.indexOf('export async function loadOutputWorkflowGraph'),
+  )
+  assert.match(loadOutputInboxSource, /get-output-feed/)
+  assert.doesNotMatch(loadOutputInboxSource, /output_workflow_run_steps/)
 })
 
 test('output workflow status endpoint uses run-only loader instead of graph bundle', () => {
@@ -175,6 +265,101 @@ test('output workflow status endpoint uses run-only loader instead of graph bund
     ),
     /output_workflow_nodes|output_workflow_edges/,
   )
+})
+
+test('output workflow repair schemas support preview and apply without broad cleanup', () => {
+  const preview = outputWorkflowRepairRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    requestId: 'request-1',
+  })
+  assert.equal(preview.mode, 'preview')
+  assert.equal(preview.cancelStaleRuns, false)
+
+  const apply = outputWorkflowRepairRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    workflowId: 'workflow-1',
+    mode: 'apply',
+    cancelStaleRuns: true,
+  })
+  assert.equal(apply.mode, 'apply')
+  assert.equal(apply.cancelStaleRuns, true)
+
+  assert.throws(() => outputWorkflowRepairRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+  }))
+
+  const response = outputWorkflowRepairResponseSchema.parse({
+    ok: true,
+    mode: 'preview',
+    applied: false,
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    requestId: 'request-1',
+    workflowId: 'workflow-1',
+    findings: {
+      stuckCleanupRequestIds: ['request-1'],
+      staleRunIds: [],
+      orphanWorkflowIds: [],
+      activeRunIds: [],
+      cleanupCounts: {
+        outputRequests: 1,
+        outputWorkflows: 1,
+        outputWorkflowRuns: 0,
+        outputWorkflowRunSteps: 0,
+        outputWorkflowNodes: 2,
+        outputWorkflowEdges: 1,
+        outputArtifacts: 0,
+        projectAssets: 0,
+        storageObjects: 0,
+      },
+      diagnostics: ['request is deleting'],
+    },
+  })
+  assert.equal(response.findings.stuckCleanupRequestIds[0], 'request-1')
+})
+
+test('output repair function previews by default and reuses shared cleanup helper', () => {
+  const repairFunctionSource = readFileSync(resolve(repoRoot, 'supabase/functions/repair-output-workflow-state/index.ts'), 'utf8')
+  assert.match(repairFunctionSource, /maybeHandleOptions/)
+  assert.match(repairFunctionSource, /outputWorkflowRepairRequestSchema/)
+  assert.match(repairFunctionSource, /dryRun: true/)
+  assert.match(repairFunctionSource, /cleanupOutputRequests/)
+  assert.match(repairFunctionSource, /mode === 'apply'/)
+
+  const cleanupSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-cleanup.ts'), 'utf8')
+  assert.match(cleanupSource, /workflowIds\?: string\[\]/)
+  assert.match(cleanupSource, /dryRun\?: boolean/)
+  assert.match(cleanupSource, /if \(input\.dryRun\)/)
+})
+
+test('worker database circuit breaker pauses all worker loops on Supabase health errors', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'workers/world-generation/main.ts'), 'utf8')
+  assert.match(workerSource, /dbCircuitBackoffMs/)
+  assert.match(workerSource, /isTransientDatabaseError/)
+  assert.match(workerSource, /pgrst002/)
+  assert.match(workerSource, /schema cache/)
+  assert.match(workerSource, /waitForDatabaseCircuit\('icon'\)/)
+  assert.match(workerSource, /waitForDatabaseCircuit\('visual'\)/)
+  assert.match(workerSource, /waitForDatabaseCircuit\('generation'\)/)
+  assert.match(workerSource, /waitForDatabaseCircuit\('app_generation'\)/)
+  assert.match(workerSource, /waitForDatabaseCircuit\('output_workflow'\)/)
+  assert.match(workerSource, /Supabase database circuit opened/)
+})
+
+test('frontend skips live draft metadata reloads for demo draft ids and backs off output inbox health failures', () => {
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  assert.match(appSource, /LIVE_SUPABASE_ID_PATTERN/)
+  assert.match(appSource, /!isLiveSupabaseId\(draftId\)/)
+  assert.match(appSource, /current\?\.draft\.id === draftId/)
+  assert.match(appSource, /backendHealthBackoffRef/)
+  assert.match(appSource, /draftMetadataLoadInFlightRef/)
+  assert.match(appSource, /draft_metadata:\$\{draftId\}/)
+  assert.match(appSource, /direct draft metadata reload skipped while backend health backoff is active/)
+  assert.match(appSource, /noteBackendHydrationFailure/)
+  assert.match(appSource, /output inbox refresh skipped while backend health backoff is active/)
 })
 
 test('timeline shot quality keyframe materialization can regenerate missing upstream planning nodes', () => {
@@ -2296,6 +2481,24 @@ test('dynamic cinematic fanout marks obsolete nodes stale instead of deleting ac
   assert.doesNotMatch(source, /obsoleteDynamicNodeKeys[\s\S]{0,240}?\.delete\(\)\.eq\('workflow_id'/)
 })
 
+test('dynamic cinematic execution ignores stale materialized nodes when settling fanout', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const startRunSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-workflow-run/index.ts'), 'utf8')
+
+  assert.match(workerSource, /function isStaleDynamicCinematicNode/)
+  assert.match(workerSource, /function isDynamicCinematicFanoutNodeKey/)
+  assert.match(workerSource, /existingDynamicNodes = allExistingDynamicNodes\.filter\(\(row\) => !isStaleDynamicCinematicNode\(row\)\)/)
+  assert.match(workerSource, /activeWorkflowNodes = bundle\.nodes\.filter\(\(node\) => !isStaleDynamicCinematicNode\(node\)\)/)
+  assert.match(workerSource, /activeWorkflowEdges = bundle\.edges\.filter/)
+  assert.match(workerSource, /nodes: activeWorkflowNodes/)
+  assert.match(workerSource, /edges: activeWorkflowEdges/)
+  assert.match(workerSource, /continueDynamicFanoutDependents/)
+  assert.match(workerSource, /targetNodeKeys: continueDynamicFanoutDependents \? \['artifact'\] : targetNodeKeys/)
+  assert.match(workerSource, /runScope: continueDynamicFanoutDependents[\s\S]*'upstream_to_node'/)
+  assert.doesNotMatch(workerSource, /dynamicFanoutRan/)
+  assert.match(startRunSource, /dynamicCinematicStale/)
+})
+
 test('selected-shot cinematic materialization preserves existing non-target dynamic outputs', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
 
@@ -2305,6 +2508,8 @@ test('selected-shot cinematic materialization preserves existing non-target dyna
   assert.match(source, /outputWorkflowNodeSelect/)
   assert.match(source, /upsert\(nodeRows\.map\(preserveNodeRow\)/)
   assert.match(source, /selectedShotKeyframeNode/)
+  assert.match(source, /function uniqueStrings/)
+  assert.match(source, /function resolveCinematicV2QualityShotIds[\s\S]*uniqueStrings/)
 })
 
 test('graph loader returns cache status diagnostics without bulk node outputs', () => {
@@ -2315,6 +2520,8 @@ test('graph loader returns cache status diagnostics without bulk node outputs', 
   assert.match(source, /staleUpstreamKeys/)
   assert.match(source, /cacheStatus/)
   assert.match(source, /outputWorkflowNodeStatusSelect/)
+  assert.match(source, /knownGraphRevision/)
+  assert.match(source, /unchanged/)
   assert.doesNotMatch(source, /select\(outputWorkflowNodeSelect\)\.eq\('workflow_id', payload\.workflowId\)\.eq\('draft_id'/)
 })
 

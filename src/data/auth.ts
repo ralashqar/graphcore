@@ -1,7 +1,12 @@
 import type { AuthChangeEvent, Provider, Session } from '@supabase/supabase-js'
 
 import { appRedirectUrl } from '../shared/appRoutes'
-import { completeSupabaseAuthRedirectFromUrl, supabase } from '../utils/supabase'
+import {
+  clearLocalSupabaseSession,
+  completeSupabaseAuthRedirectFromUrl,
+  isSupabaseAuthNetworkError,
+  supabase,
+} from '../utils/supabase'
 
 let authRedirectHandled = false
 
@@ -18,12 +23,30 @@ async function completeAuthRedirectOnce() {
 export async function getCurrentSession() {
   await completeAuthRedirectOnce()
 
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.getSession()
+  let session: Session | null = null
+  let error: Error | null = null
+
+  try {
+    const result = await supabase.auth.getSession()
+    session = result.data.session
+    error = result.error
+  } catch (sessionError) {
+    if (!isSupabaseAuthNetworkError(sessionError)) {
+      throw sessionError
+    }
+
+    console.warn('[GraphCore] Supabase auth session refresh failed during bootstrap; clearing local session.', sessionError)
+    await clearLocalSupabaseSession()
+    return null
+  }
 
   if (error) {
+    if (isSupabaseAuthNetworkError(error)) {
+      console.warn('[GraphCore] Supabase auth session refresh failed during bootstrap; clearing local session.', error)
+      await clearLocalSupabaseSession()
+      return null
+    }
+
     throw error
   }
 
@@ -124,9 +147,33 @@ export async function signInWithGoogle() {
 }
 
 export async function signOut() {
-  const { error } = await supabase.auth.signOut()
+  let result: Awaited<ReturnType<typeof supabase.auth.signOut>>
+
+  try {
+    result = await supabase.auth.signOut()
+  } catch (signOutError) {
+    if (!isSupabaseAuthNetworkError(signOutError)) {
+      throw signOutError
+    }
+
+    console.warn('[GraphCore] Supabase sign out failed over the network; clearing local session.', signOutError)
+    await clearLocalSupabaseSession()
+    return
+  }
+
+  const { error } = result
 
   if (error) {
+    if (isSupabaseAuthNetworkError(error)) {
+      console.warn('[GraphCore] Supabase sign out failed over the network; clearing local session.', error)
+      await clearLocalSupabaseSession()
+      return
+    }
+
     throw error
   }
+}
+
+export async function signOutLocally() {
+  await clearLocalSupabaseSession()
 }

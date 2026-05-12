@@ -1,6 +1,16 @@
 import { createClient } from '@supabase/supabase-js'
 import { supabasePublishableKey, supabaseUrl } from '../config/supabaseConfig'
 
+function supabaseProjectRef() {
+  try {
+    return new URL(supabaseUrl).hostname.split('.')[0] || 'local'
+  } catch {
+    return 'local'
+  }
+}
+
+export const supabaseAuthStoragePrefix = `sb-${supabaseProjectRef()}-auth-token`
+
 export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
   auth: {
     persistSession: true,
@@ -9,6 +19,45 @@ export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
     flowType: 'pkce',
   },
 })
+
+export function isSupabaseAuthNetworkError(error: unknown) {
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : {}
+  const message = [
+    typeof record.message === 'string' ? record.message : '',
+    typeof record.name === 'string' ? record.name : '',
+    error instanceof Error ? error.message : '',
+  ].join(' ').toLowerCase()
+
+  return message.includes('failed to fetch')
+    || message.includes('networkerror')
+    || message.includes('network request failed')
+    || message.includes('load failed')
+    || message.includes('authretryablefetcherror')
+}
+
+export function clearLocalSupabaseAuthState() {
+  if (typeof window === 'undefined') return
+
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    const keysToRemove: string[] = []
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index)
+      if (key && key.startsWith(supabaseAuthStoragePrefix)) {
+        keysToRemove.push(key)
+      }
+    }
+    for (const key of keysToRemove) storage.removeItem(key)
+  }
+}
+
+export async function clearLocalSupabaseSession() {
+  clearLocalSupabaseAuthState()
+  try {
+    await supabase.auth.signOut({ scope: 'local' })
+  } catch {
+    clearLocalSupabaseAuthState()
+  }
+}
 
 function hasAuthRedirectParams(url: URL, hashParams: URLSearchParams) {
   return url.searchParams.has('code')

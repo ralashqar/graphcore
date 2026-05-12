@@ -5,7 +5,7 @@ primary_region = "lhr"
   dockerfile = "workers/world-generation/Dockerfile"
 
 [env]
-  GRAPHCORE_WORKER_POLL_INTERVAL_MS = "2500"
+  GRAPHCORE_WORKER_POLL_INTERVAL_MS = "10000"
   OPENAI_REQUEST_TIMEOUT_MS = "900000"
   WORLD_PROMPT_FLY_STREAM_TIMEOUT_MS = "900000"
   WORLD_PROMPT_GENERATION_RUNTIME = "fly"
