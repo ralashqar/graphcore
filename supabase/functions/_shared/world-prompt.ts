@@ -7880,6 +7880,51 @@ function buildInitialSeedWorldConceptPrompt(wiki: Record<string, unknown>, proje
   ].filter(Boolean).join('\n')
 }
 
+async function resolveVisualGenerationImageProvider(client: SupabaseClient, projectId: string, draftId: string) {
+  const provider = asCompactString(Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER')).toLowerCase()
+  if (provider === 'fal') return 'fal'
+  if (provider === 'both' || provider === 'balanced' || provider === 'load_balance' || provider === 'load-balanced' || provider === 'hybrid') {
+    const response = await client
+      .from('visual_generation_jobs')
+      .select('provider, status, updated_at')
+      .eq('project_id', projectId)
+      .eq('draft_id', draftId)
+      .in('provider', ['openai', 'fal'])
+      .in('status', ['queued', 'running', 'failed'])
+      .order('updated_at', { ascending: false })
+      .limit(80)
+    if (response.error) {
+      console.warn('[GraphCore] mixed visual provider selector fell back to OpenAI.', {
+        projectId,
+        draftId,
+        message: response.error.message,
+      })
+      return 'openai'
+    }
+    const scores = { openai: 0, fal: 0 }
+    const recentFailureCutoff = Date.now() - 10 * 60_000
+    for (const row of response.data ?? []) {
+      const selectedProvider = row.provider === 'fal' ? 'fal' : row.provider === 'openai' ? 'openai' : null
+      if (!selectedProvider) continue
+      if (row.status === 'queued' || row.status === 'running') scores[selectedProvider] += 1
+      if (row.status === 'failed' && Date.parse(String(row.updated_at ?? '')) > recentFailureCutoff) scores[selectedProvider] += 3
+    }
+    if (scores.openai === scores.fal) return 'openai'
+    return scores.openai < scores.fal ? 'openai' : 'fal'
+  }
+  return 'openai'
+}
+
+function resolveVisualGenerationImageModel(provider: string, model = 'openai/gpt-image-2') {
+  const trimmed = asCompactString(model)
+  if (provider === 'openai') {
+    if (!trimmed || trimmed === 'openai/gpt-image-2' || trimmed === 'openai/gpt-image-2/edit') return 'gpt-image-2'
+    return trimmed.startsWith('openai/') ? trimmed.slice('openai/'.length) : trimmed
+  }
+  if (!trimmed || trimmed === 'gpt-image-2') return 'openai/gpt-image-2'
+  return trimmed
+}
+
 async function enqueueInitialSeedWorldConceptImage(input: {
   client: SupabaseClient
   snapshot: WorldPromptSnapshot
@@ -7889,17 +7934,6 @@ async function enqueueInitialSeedWorldConceptImage(input: {
 }) {
   const currentMetadata = asRecord(input.snapshot.draft.metadata)
   const currentWiki = asRecord(currentMetadata.worldWiki)
-  const existingAssetKey = asCompactString(currentWiki.worldConceptAssetKey)
-  if (existingAssetKey) {
-    return {
-      jobId: asCompactString(currentWiki.worldConceptVisualJobId) || null,
-      assetKey: existingAssetKey,
-      prompt: asCompactString(currentWiki.worldConceptPrompt),
-      reused: true,
-      skippedReason: 'existing_asset',
-    }
-  }
-
   const activeJobResponse = await input.client
     .from('visual_generation_jobs')
     .select('id, target_keys, input')
@@ -7931,6 +7965,8 @@ async function enqueueInitialSeedWorldConceptImage(input: {
   const assetKey = `world_concept_${slugifyStreamKey(title) || 'world'}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
   const storagePath = `generated/wiki-concept-images/${input.snapshot.draft.id}/${assetKey}.webp`
   const now = new Date().toISOString()
+  const visualProvider = await resolveVisualGenerationImageProvider(input.client, input.snapshot.project.id, input.snapshot.draft.id)
+  const visualModel = resolveVisualGenerationImageModel(visualProvider)
 
   const jobResponse = await input.client
     .from('visual_generation_jobs')
@@ -7940,8 +7976,8 @@ async function enqueueInitialSeedWorldConceptImage(input: {
       requested_by: null,
       status: 'queued',
       kind: 'wiki_visual',
-      provider: 'fal',
-      model: 'openai/gpt-image-2',
+      provider: visualProvider,
+      model: visualModel,
       target_keys: {
         assetKey,
         role: 'world_concept_image',
@@ -7959,6 +7995,8 @@ async function enqueueInitialSeedWorldConceptImage(input: {
       },
       metadata: {
         runtime: 'fly',
+        provider: visualProvider,
+        model: visualModel,
         queuedBy: 'initial_seed_world_wiki_metadata',
         generationJobId: input.job.id,
         generationTurnId: input.job.turnId,
@@ -7984,8 +8022,8 @@ async function enqueueInitialSeedWorldConceptImage(input: {
         generatedBy: 'world_concept_image',
         visualJobId,
         jobKind: 'wiki_visual',
-        provider: 'fal',
-        model: 'openai/gpt-image-2',
+        provider: visualProvider,
+        model: visualModel,
         storageBucket: 'project-assets',
         storagePath,
         prompt,
@@ -8129,6 +8167,8 @@ async function enqueueInitialSeedEntityReferenceSheet(input: {
     snapshot: input.snapshot,
     projectContext: input.projectContext,
   })
+  const visualProvider = await resolveVisualGenerationImageProvider(input.client, input.snapshot.project.id, input.snapshot.draft.id)
+  const visualModel = resolveVisualGenerationImageModel(visualProvider)
   const insertResponse = await input.client
     .from('visual_generation_jobs')
     .insert({
@@ -8137,17 +8177,22 @@ async function enqueueInitialSeedEntityReferenceSheet(input: {
       requested_by: null,
       status: 'queued',
       kind: 'entity_reference_sheet',
-      provider: 'fal',
-      model: 'openai/gpt-image-2',
+      provider: visualProvider,
+      model: visualModel,
       target_keys: {
         entityKey: candidate.key,
         entityName: candidate.name,
         entityNodeType: candidate.nodeType,
         linkedDefinitionKey: candidate.linkedDefinitionKey ?? null,
       },
-      input: jobInput,
+      input: {
+        ...jobInput,
+        model: visualModel,
+      },
       metadata: {
         runtime: 'fly',
+        provider: visualProvider,
+        model: visualModel,
         queuedBy: 'initial_seed_entity_reference_sheet',
         generationJobId: input.job.id,
         generationTurnId: input.job.turnId,
@@ -8242,6 +8287,8 @@ async function enqueueInitialSeedGridImagesForLoreAndSequences(input: {
     projectContext: input.projectContext,
     snapshot: input.snapshot,
   })
+  const visualProvider = await resolveVisualGenerationImageProvider(input.client, input.snapshot.project.id, input.snapshot.draft.id)
+  const visualModel = resolveVisualGenerationImageModel(visualProvider)
   const insertResponse = await input.client
     .from('visual_generation_jobs')
     .insert({
@@ -8250,8 +8297,8 @@ async function enqueueInitialSeedGridImagesForLoreAndSequences(input: {
       requested_by: null,
       status: 'queued',
       kind: 'world_entity_icon_grid',
-      provider: 'fal',
-      model: 'openai/gpt-image-2',
+      provider: visualProvider,
+      model: visualModel,
       target_keys: {
         purpose: 'initial_seed_lore_sequence_grid',
         entityKeys: candidates.map((candidate) => candidate.entityKey),
@@ -8265,6 +8312,8 @@ async function enqueueInitialSeedGridImagesForLoreAndSequences(input: {
       },
       metadata: {
         runtime: 'fly',
+        provider: visualProvider,
+        model: visualModel,
         queuedBy: 'initial_seed_lore_sequence_grid',
         generationJobId: input.job.id,
         generationTurnId: input.job.turnId,

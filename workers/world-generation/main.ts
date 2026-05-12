@@ -12,6 +12,10 @@ const workerSecret = Deno.env.get('GRAPHCORE_WORKER_SECRET') ?? null
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 const pollIntervalMs = Math.max(5_000, Number(Deno.env.get('GRAPHCORE_WORKER_POLL_INTERVAL_MS') ?? 10_000))
 const idleLogIntervalMs = Math.max(30_000, Number(Deno.env.get('GRAPHCORE_WORKER_IDLE_LOG_INTERVAL_MS') ?? 120_000))
+const visualWorkerConcurrency = readPositiveInt(
+  Deno.env.get('VISUAL_GENERATION_WORKER_CONCURRENCY') ?? Deno.env.get('VISUAL_GENERATION_OPENAI_CONCURRENCY'),
+  8,
+)
 const dbCircuitBackoffMs = [10_000, 30_000, 120_000, 300_000, 900_000]
 const dbCircuitProbeLogIntervalMs = Math.max(
   30_000,
@@ -30,6 +34,12 @@ let dbCircuitFailureCount = 0
 let dbCircuitOpenUntil = 0
 let dbCircuitLastLogAt = 0
 let dbCircuitLastReason = ''
+
+function readPositiveInt(value: string | null | undefined, fallback: number) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.max(1, Math.floor(parsed))
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -138,20 +148,23 @@ Deno.addSignalListener('SIGINT', () => requestShutdown('SIGINT'))
 console.log('[world-generation-worker] started', {
   workerId,
   pollIntervalMs,
+  visualWorkerConcurrency,
   runtime: 'fly',
 })
 
-async function runVisualWorkerLoop() {
+async function runVisualWorkerLoop(laneIndex: number) {
+  const visualWorkerId = `${workerId}:visual:${laneIndex + 1}`
   while (!shuttingDown) {
     try {
       await waitForDatabaseCircuit('visual')
       const visualResult = await processFlyVisualGenerationJobs({
         client,
-        workerId,
+        workerId: visualWorkerId,
       })
       if (visualResult.processed) {
         console.log('[world-generation-worker] processed visual generation job', {
-          workerId,
+          workerId: visualWorkerId,
+          laneIndex,
           jobId: visualResult.job?.id ?? null,
           status: visualResult.job?.status ?? null,
           kind: visualResult.job?.kind ?? null,
@@ -252,7 +265,7 @@ async function runOutputWorkflowWorkerLoop() {
 }
 
 await Promise.all([
-  runVisualWorkerLoop(),
+  ...Array.from({ length: visualWorkerConcurrency }, (_, index) => runVisualWorkerLoop(index)),
   runGenerationWorkerLoop(),
   runAppGenerationWorkerLoop(),
   runOutputWorkflowWorkerLoop(),

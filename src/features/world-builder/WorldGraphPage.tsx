@@ -165,6 +165,7 @@ import {
   countWorldWikiSearchMatches,
   type WorldWikiDetailModalInput,
 } from './wiki/WorldWikiSections'
+import { createPollGroup } from '../../data/requestCoordinator'
 
 export { WorldPromptActivityPanel, WorldPromptThreadsPanel } from './prompt/WorldPromptPanels'
 
@@ -184,6 +185,9 @@ type LiveWikiGenerationState = {
   overviewTitle: string
   overviewLogline: string
   showOverviewMetadata: boolean
+  overviewMetadataBelongsToActiveSeed: boolean
+  overviewWorldConceptAssetKey: string
+  overviewToneTags: string[]
   phase: string
   sectionStates: Partial<Record<WorldWikiSection['kind'], LiveWikiGenerationSectionState>>
 }
@@ -553,6 +557,7 @@ type WorldGraphPageProps = {
   onGenerateStarterWorld: (prompt: string) => Promise<void> | void
   onGenerateWorldExpansion: (entityKey: string) => Promise<void> | void
   onGenerateWorldBrandAtlasImage: (prompt?: string) => Promise<WorldBrandAtlasImageResponse> | WorldBrandAtlasImageResponse
+  onGenerateWorldConceptImage?: () => Promise<VisualGenerationStartResponse> | VisualGenerationStartResponse
   onStartVisualGenerationJob?: (request: Omit<Partial<VisualGenerationStartRequest>, 'projectId' | 'draftId'> & Pick<VisualGenerationStartRequest, 'kind'>) => Promise<VisualGenerationStartResponse> | VisualGenerationStartResponse
   onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse> | VisualGenerationStatusResponse
   onStartAppCodeGeneration?: () => Promise<AppGenerationStartResponse> | AppGenerationStartResponse
@@ -1123,6 +1128,7 @@ export function WorldGraphPage({
   onGenerateStarterWorld: _onGenerateStarterWorld,
   onGenerateWorldExpansion,
   onGenerateWorldBrandAtlasImage,
+  onGenerateWorldConceptImage,
   onStartVisualGenerationJob,
   onGetVisualGenerationStatus,
   onStartAppCodeGeneration,
@@ -1169,6 +1175,7 @@ export function WorldGraphPage({
   const wikiEntryRevealTimeoutsRef = useRef<Map<string, number>>(new Map())
   const seenWikiEntryKeysRef = useRef<Set<string>>(new Set())
   const autoQueuedReferenceSheetEntityKeysRef = useRef<Set<string>>(new Set())
+  const autoQueuedWorldConceptImageKeysRef = useRef<Set<string>>(new Set())
   const entityReferenceSheetStatusFailureCountsRef = useRef<Map<string, number>>(new Map())
   const renderSceneNodesRef = useRef<Record<string, RenderSceneNodeState>>({})
   const continuousSceneRef = useRef<DerivedWorldScene | null>(null)
@@ -1245,6 +1252,9 @@ export function WorldGraphPage({
   const activeEntityReferenceSheetJobs = useMemo(() => (
     combinedEntityReferenceSheetJobs.filter((job) => ['queued', 'running'].includes(job.status))
   ), [combinedEntityReferenceSheetJobs])
+  const activeEntityReferenceSheetJobKey = useMemo(() => (
+    activeEntityReferenceSheetJobs.map((job) => `${job.id}:${job.status}`).sort().join('|')
+  ), [activeEntityReferenceSheetJobs])
   const activeLoreSequenceGridJobs = useMemo(() => (
     visualGenerationJobs.filter((job) => job.kind === 'world_entity_icon_grid' && ['queued', 'running'].includes(job.status))
   ), [visualGenerationJobs])
@@ -1965,6 +1975,7 @@ export function WorldGraphPage({
     const logline = trimOptionalString(worldWiki.logline)
     const conceptAssetKey = trimOptionalString(worldWiki.worldConceptAssetKey)
     if (!title || !logline) return true
+    if (!conceptAssetKey) return true
     const conceptAsset = conceptAssetKey ? assetByKey.get(conceptAssetKey) ?? null : null
     return Boolean(conceptAssetKey && (!conceptAsset || !isWorldConceptImageAsset(conceptAsset)))
   }, [assetByKey, projectDraftMetadata])
@@ -2100,6 +2111,13 @@ export function WorldGraphPage({
       || Boolean(activeSeedTurnId && worldWikiUpdatedByTurnId && activeSeedTurnId === worldWikiUpdatedByTurnId)
     const generatedOverviewTitle = metadataBelongsToActiveSeed ? trimOptionalString(liveWorldWikiMetadata.title) : ''
     const generatedOverviewLogline = metadataBelongsToActiveSeed ? trimOptionalString(liveWorldWikiMetadata.logline) : ''
+    const generatedOverviewWorldConceptAssetKey = metadataBelongsToActiveSeed ? trimOptionalString(liveWorldWikiMetadata.worldConceptAssetKey) : ''
+    const generatedOverviewToneTags = metadataBelongsToActiveSeed && Array.isArray(liveWorldWikiMetadata.toneTags)
+      ? liveWorldWikiMetadata.toneTags.flatMap((tag) => {
+        const cleanTag = trimOptionalString(tag)
+        return cleanTag ? [cleanTag] : []
+      })
+      : []
     const hasGeneratedOverviewMetadata = Boolean(
       generatedOverviewTitle
       || generatedOverviewLogline
@@ -2119,6 +2137,9 @@ export function WorldGraphPage({
       overviewTitle: active ? generatedOverviewTitle : generatedOverviewTitle || wikiModel.title,
       overviewLogline: active ? generatedOverviewLogline : generatedOverviewLogline || wikiModel.overview.logline,
       showOverviewMetadata: active ? hasGeneratedOverviewMetadata : true,
+      overviewMetadataBelongsToActiveSeed: metadataBelongsToActiveSeed,
+      overviewWorldConceptAssetKey: generatedOverviewWorldConceptAssetKey,
+      overviewToneTags: generatedOverviewToneTags,
       message: latestProgress?.message ?? (active ? `${title}.` : ''),
       phase,
       sectionStates: active
@@ -2419,7 +2440,72 @@ export function WorldGraphPage({
   const wikiWorldConceptPending = isPendingVisualAsset(wikiWorldConceptAsset)
     || Boolean(activeWorldConceptVisualJob)
     || (Boolean(activeWorldConceptJobId) && !wikiWorldConceptImageUrl)
-  const wikiOverviewImageUrl = liveWorldConceptImageUrl ?? wikiWorldConceptImageUrl
+  useEffect(() => {
+    if (worldViewMode !== 'wiki') return
+    if (!onGenerateWorldConceptImage) return
+    const activeConceptImageReady = liveWikiGenerationState.active
+      ? Boolean(
+        liveWikiGenerationState.overviewWorldConceptAssetKey
+        && wikiWorldConceptAsset?.key === liveWikiGenerationState.overviewWorldConceptAssetKey
+        && wikiWorldConceptImageUrl,
+      )
+      : Boolean(wikiWorldConceptImageUrl)
+    if (activeConceptImageReady || (!liveWikiGenerationState.active && wikiWorldConceptPending) || activeWorldConceptJobId) return
+    if (liveWikiGenerationState.active && !liveWikiGenerationState.showOverviewMetadata) return
+    if (liveWikiGenerationState.active && !liveWikiGenerationState.overviewMetadataBelongsToActiveSeed) return
+    const liveWorldWikiMetadata = readLooseRecord(effectiveProjectDraftMetadata.worldWiki)
+    const title = liveWikiGenerationState.active ? liveWikiGenerationState.overviewTitle.trim() : wikiModel.title.trim()
+    const logline = liveWikiGenerationState.active ? liveWikiGenerationState.overviewLogline.trim() : wikiModel.overview.logline.trim()
+    const artStyleDescription = liveWikiGenerationState.active
+      ? trimOptionalString(liveWorldWikiMetadata.artStyleDescription)
+      : wikiModel.overview.artStyleDescription.trim()
+    const prompt = liveWikiGenerationState.active
+      ? trimOptionalString(liveWorldWikiMetadata.worldConceptPrompt)
+      : wikiModel.overview.worldConceptPrompt.trim()
+    if (!prompt && (!title || !logline || !artStyleDescription)) return
+    const queueKey = [
+      projectDraftId,
+      title,
+      logline,
+      artStyleDescription,
+      prompt,
+    ].join('|')
+    if (autoQueuedWorldConceptImageKeysRef.current.has(queueKey)) return
+    autoQueuedWorldConceptImageKeysRef.current.add(queueKey)
+    void Promise.resolve(onGenerateWorldConceptImage()).catch((error) => {
+      autoQueuedWorldConceptImageKeysRef.current.delete(queueKey)
+      if (!visualStatusErrorIsMissingLiveDraft(error)) {
+        console.warn('[GraphCore] failed to auto-start world concept image generation from Wiki.', error)
+      }
+    })
+  }, [
+    activeWorldConceptJobId,
+    effectiveProjectDraftMetadata.worldWiki,
+    liveWikiGenerationState.active,
+    liveWikiGenerationState.overviewLogline,
+    liveWikiGenerationState.overviewMetadataBelongsToActiveSeed,
+    liveWikiGenerationState.overviewTitle,
+    liveWikiGenerationState.overviewWorldConceptAssetKey,
+    liveWikiGenerationState.showOverviewMetadata,
+    onGenerateWorldConceptImage,
+    projectDraftId,
+    wikiModel.overview.artStyleDescription,
+    wikiModel.overview.logline,
+    wikiModel.overview.worldConceptPrompt,
+    wikiModel.title,
+    wikiWorldConceptImageUrl,
+    wikiWorldConceptPending,
+    wikiWorldConceptAsset?.key,
+    worldViewMode,
+  ])
+  const wikiOverviewImageUrl = liveWikiGenerationState.active
+    ? (
+      liveWikiGenerationState.overviewWorldConceptAssetKey
+      && wikiWorldConceptAsset?.key === liveWikiGenerationState.overviewWorldConceptAssetKey
+        ? liveWorldConceptImageUrl ?? wikiWorldConceptImageUrl
+        : null
+    )
+    : liveWorldConceptImageUrl ?? wikiWorldConceptImageUrl
   const wikiOverviewLabel = projectContext?.projectType === 'app' || wikiHasAppSections ? 'App Overview' : isExplicitGameProject ? 'Game Overview' : 'World Overview'
   const wikiOverviewActionGaps = useMemo(() => {
     const actionKinds: Array<[WorldWikiGap['kind'], string]> = [
@@ -2435,13 +2521,17 @@ export function WorldGraphPage({
   }, [wikiModel.gaps])
   const wikiOverviewTags = useMemo(() => {
     const seen = new Set<string>()
-    return wikiModel.overview.toneTags.filter((tag) => {
+    const sourceTags = liveWikiGenerationState.active
+      ? liveWikiGenerationState.overviewToneTags
+      : wikiModel.overview.toneTags
+    if (liveWikiGenerationState.active && !liveWikiGenerationState.showOverviewMetadata) return []
+    return sourceTags.filter((tag) => {
       const key = tag.trim().toLowerCase()
       if (!key || seen.has(key)) return false
       seen.add(key)
       return true
     }).slice(0, 8)
-  }, [wikiModel.overview.toneTags])
+  }, [liveWikiGenerationState.active, liveWikiGenerationState.overviewToneTags, liveWikiGenerationState.showOverviewMetadata, wikiModel.overview.toneTags])
   const wikiBrandAtlasAsset = useMemo(() => {
     const assetKey = wikiModel.overview.brandAtlasAssetKey.trim()
     if (!assetKey) return null
@@ -2579,10 +2669,7 @@ export function WorldGraphPage({
         if (activeWorldConceptJobId && typeof onGetVisualGenerationStatus === 'function') {
           const status = await onGetVisualGenerationStatus(activeWorldConceptJobId)
           if (disposed) return
-          if (status.terminal && !refreshed) {
-            refreshed = true
-            await onRefreshLiveSnapshot()
-          }
+          if (status.terminal) refreshed = true
           return
         }
         if (!refreshed) {
@@ -2609,8 +2696,12 @@ export function WorldGraphPage({
     if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
     let disposed = false
     let refreshedTerminal = false
-    const poll = async () => {
-      const nextJobs = await Promise.all(runningJobs.map(async (job) => {
+    const pollGroup = createPollGroup({
+      key: 'app-screen-art',
+      intervalMs: 3500,
+      maxPerTick: 4,
+      getItems: () => runningJobs,
+      pollItem: async (job) => {
         try {
           const status = await onGetVisualGenerationStatus(job.id)
           return status.job
@@ -2618,21 +2709,20 @@ export function WorldGraphPage({
           console.warn('[GraphCore] failed to refresh app screen art job status.', { jobId: job.id, error })
           return job
         }
-      }))
-      if (disposed) return
-      setAppScreenArtJobs((current) => current.map((job) => nextJobs.find((nextJob) => nextJob.id === job.id) ?? job))
-      if (!refreshedTerminal && nextJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) {
-        refreshedTerminal = true
-        await onRefreshLiveSnapshot()
-      }
-    }
-    void poll()
-    const intervalId = window.setInterval(() => {
-      void poll()
-    }, 3500)
+      },
+      onResults: async (nextJobs) => {
+        if (disposed) return
+        setAppScreenArtJobs((current) => current.map((job) => nextJobs.find((nextJob) => nextJob.id === job.id) ?? job))
+        if (!refreshedTerminal && nextJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) {
+          refreshedTerminal = true
+          await onRefreshLiveSnapshot()
+        }
+      },
+    })
+    pollGroup.start()
     return () => {
       disposed = true
-      window.clearInterval(intervalId)
+      pollGroup.stop()
     }
   }, [appScreenArtJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
   useEffect(() => {
@@ -2640,8 +2730,12 @@ export function WorldGraphPage({
     if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
     let disposed = false
     let refreshedTerminal = false
-    const poll = async () => {
-      const nextJobs = await Promise.all(runningJobs.map(async (job) => {
+    const pollGroup = createPollGroup({
+      key: 'app-screen-analysis',
+      intervalMs: 3500,
+      maxPerTick: 4,
+      getItems: () => runningJobs,
+      pollItem: async (job) => {
         try {
           const status = await onGetVisualGenerationStatus(job.id)
           return status.job
@@ -2649,29 +2743,32 @@ export function WorldGraphPage({
           console.warn('[GraphCore] failed to refresh app screen analysis status.', error)
           return job
         }
-      }))
-      if (disposed) return
-      setAppScreenAnalysisJobs((current) => current.map((job) => nextJobs.find((nextJob) => nextJob.id === job.id) ?? job))
-      if (!refreshedTerminal && nextJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) {
-        refreshedTerminal = true
-        await onRefreshLiveSnapshot()
-      }
-    }
-    void poll()
-    const intervalId = window.setInterval(() => {
-      void poll()
-    }, 3500)
+      },
+      onResults: async (nextJobs) => {
+        if (disposed) return
+        setAppScreenAnalysisJobs((current) => current.map((job) => nextJobs.find((nextJob) => nextJob.id === job.id) ?? job))
+        if (!refreshedTerminal && nextJobs.some((job) => ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status))) {
+          refreshedTerminal = true
+          await onRefreshLiveSnapshot()
+        }
+      },
+    })
+    pollGroup.start()
     return () => {
       disposed = true
-      window.clearInterval(intervalId)
+      pollGroup.stop()
     }
   }, [appScreenAnalysisJobs, onGetVisualGenerationStatus, onRefreshLiveSnapshot])
   useEffect(() => {
-    const runningJobs = combinedEntityReferenceSheetJobs.filter((job) => ['queued', 'running'].includes(job.status))
+    const runningJobs = activeEntityReferenceSheetJobs
     if (runningJobs.length === 0 || typeof onGetVisualGenerationStatus !== 'function') return
     let disposed = false
-    const poll = async () => {
-      const nextJobs = await Promise.all(runningJobs.map(async (job) => {
+    const pollGroup = createPollGroup({
+      key: 'entity-reference-sheets',
+      intervalMs: 3500,
+      maxPerTick: 4,
+      getItems: () => runningJobs,
+      pollItem: async (job) => {
         try {
           const status = await onGetVisualGenerationStatus(job.id)
           entityReferenceSheetStatusFailureCountsRef.current.delete(job.id)
@@ -2692,19 +2789,18 @@ export function WorldGraphPage({
           }
           return job
         }
-      }))
-      if (disposed) return
-      setEntityReferenceSheetJobs((current) => mergeVisualGenerationJobStatuses(current, nextJobs))
-    }
-    void poll()
-    const intervalId = window.setInterval(() => {
-      void poll()
-    }, 3500)
+      },
+      onResults: (nextJobs) => {
+        if (disposed) return
+        setEntityReferenceSheetJobs((current) => mergeVisualGenerationJobStatuses(current, nextJobs))
+      },
+    })
+    pollGroup.start()
     return () => {
       disposed = true
-      window.clearInterval(intervalId)
+      pollGroup.stop()
     }
-  }, [combinedEntityReferenceSheetJobs, onGetVisualGenerationStatus])
+  }, [activeEntityReferenceSheetJobKey, onGetVisualGenerationStatus])
   const effectiveFilters = selectedView.filters
   const viewSeedEntityKeys = useMemo(
     () => getWorldViewSeedEntityKeys(selectedView, { worldEntities, worldThreads }),

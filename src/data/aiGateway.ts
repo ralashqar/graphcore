@@ -8,6 +8,7 @@ import type {
 } from '../domain/ai'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
 import { supabase } from '../utils/supabase'
+import { runLimitedRequest, stableRequestKey } from './requestCoordinator'
 
 function getInvokeErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) {
@@ -67,11 +68,15 @@ async function getRequiredSession(signInMessage: string) {
 }
 
 async function invokeAuthedFunction<TResponse>(functionName: string, body: Record<string, unknown>, session: Session) {
-  return supabase.functions.invoke<TResponse>(functionName, {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body,
+  return runLimitedRequest({
+    className: 'edge-function',
+    resourceKey: `${functionName}:${stableRequestKey(body)}`,
+    fn: () => supabase.functions.invoke<TResponse>(functionName, {
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body,
+    }),
   })
 }
 

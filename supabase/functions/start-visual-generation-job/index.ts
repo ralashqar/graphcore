@@ -18,6 +18,69 @@ function readString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeVisualGenerationProvider(value: unknown) {
+  const provider = readString(value).toLowerCase()
+  if (provider === 'openai' || provider === 'openai_direct' || provider === 'direct_openai') return 'openai'
+  if (provider === 'graphcore') return 'graphcore'
+  return 'fal'
+}
+
+function readVisualGenerationProviderMode(value: unknown) {
+  const provider = readString(value).toLowerCase()
+  if (provider === 'fal') return 'fal'
+  if (provider === 'both' || provider === 'balanced' || provider === 'load_balance' || provider === 'load-balanced' || provider === 'hybrid') return 'both'
+  return 'openai'
+}
+
+async function chooseBalancedImageProvider(client: AuthedClient, projectId: string, draftId: string) {
+  const response = await client
+    .from('visual_generation_jobs')
+    .select('provider, status, updated_at')
+    .eq('project_id', projectId)
+    .eq('draft_id', draftId)
+    .in('provider', ['openai', 'fal'])
+    .in('status', ['queued', 'running', 'failed'])
+    .order('updated_at', { ascending: false })
+    .limit(80)
+
+  if (response.error) {
+    console.warn('[GraphCore] mixed visual provider selector fell back to OpenAI.', {
+      projectId,
+      draftId,
+      message: response.error.message,
+    })
+    return 'openai'
+  }
+
+  const scores = {
+    openai: 0,
+    fal: 0,
+  }
+  const recentFailureCutoff = Date.now() - 10 * 60_000
+  for (const row of response.data ?? []) {
+    const provider = row.provider === 'fal' ? 'fal' : row.provider === 'openai' ? 'openai' : null
+    if (!provider) continue
+    if (row.status === 'queued' || row.status === 'running') scores[provider] += 1
+    if (row.status === 'failed' && Date.parse(String(row.updated_at ?? '')) > recentFailureCutoff) scores[provider] += 3
+  }
+
+  if (scores.openai === scores.fal) {
+    return 'openai'
+  }
+  return scores.openai < scores.fal ? 'openai' : 'fal'
+}
+
+function normalizeVisualGenerationModel(provider: string, model: unknown) {
+  const trimmed = readString(model)
+  if (provider === 'openai') {
+    if (!trimmed || trimmed === 'openai/gpt-image-2' || trimmed === 'openai/gpt-image-2/edit') return 'gpt-image-2'
+    if (trimmed.startsWith('openai/')) return trimmed.slice('openai/'.length)
+    return trimmed
+  }
+  if (!trimmed || trimmed === 'gpt-image-2') return 'openai/gpt-image-2'
+  return trimmed
+}
+
 function isWorldConceptImageJob(input: {
   kind: string
   targetKeys: Record<string, unknown>
@@ -52,6 +115,8 @@ async function persistPendingWorldConceptImage(input: {
   storagePath: string
   imagePrompt: string
   sourcePrompt: string
+  provider: string
+  model: string
 }) {
   const draftResponse = await input.client
     .from('project_drafts')
@@ -75,8 +140,8 @@ async function persistPendingWorldConceptImage(input: {
         generatedBy: 'world_concept_image',
         visualJobId: input.jobId,
         jobKind: 'wiki_visual',
-        provider: 'fal',
-        model: 'openai/gpt-image-2',
+        provider: input.provider,
+        model: input.model,
         storageBucket: 'project-assets',
         storagePath: input.storagePath,
         prompt: input.imagePrompt,
@@ -123,7 +188,8 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
 
     const { client, user } = await requireUserClient(request, 'start-visual-generation-job')
-    const payload = visualGenerationStartRequestSchema.parse(await request.json())
+    const rawPayload = asRecord(await request.json())
+    const payload = visualGenerationStartRequestSchema.parse(rawPayload)
     if (payload.kind === 'world_entity_icon_grid') {
       throw new HttpError(
         410,
@@ -131,6 +197,16 @@ Deno.serve(async (request) => {
       )
     }
     const normalizedInput = normalizeVisualGenerationInput(payload)
+    const explicitProvider = readString(rawPayload.provider)
+    const providerMode = readVisualGenerationProviderMode(explicitProvider || Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER'))
+    const normalizedProvider = payload.kind === 'app_screen_analysis'
+      ? normalizeVisualGenerationProvider(explicitProvider || 'graphcore')
+      : explicitProvider
+        ? normalizeVisualGenerationProvider(explicitProvider)
+        : providerMode === 'both'
+          ? await chooseBalancedImageProvider(client, payload.projectId, payload.draftId)
+          : providerMode
+    const normalizedModel = normalizeVisualGenerationModel(normalizedProvider, rawPayload.model ?? payload.model)
 
     const insertResponse = await client
       .from('visual_generation_jobs')
@@ -140,11 +216,17 @@ Deno.serve(async (request) => {
         requested_by: user.id,
         status: 'queued',
         kind: payload.kind,
-        provider: payload.provider,
-        model: payload.model,
+        provider: normalizedProvider,
+        model: normalizedModel,
         target_keys: payload.targetKeys,
         input: normalizedInput,
-        metadata: payload.metadata,
+        metadata: {
+          ...payload.metadata,
+          provider: normalizedProvider,
+          model: normalizedModel,
+          providerSelectionMode: explicitProvider ? 'request' : providerMode,
+          providerDefaultSource: explicitProvider ? 'request' : 'environment_or_default',
+        },
       })
       .select(visualJobSelect)
       .single()
@@ -168,6 +250,8 @@ Deno.serve(async (request) => {
         storagePath,
         imagePrompt,
         sourcePrompt: readString(normalizedInput.sourcePrompt),
+        provider: normalizedProvider,
+        model: normalizedModel,
       })
     }
 

@@ -100,7 +100,7 @@ import { normalizeNode } from './domain/nodeLibrary'
 import { classifyOutputPrompt } from './domain/outputWorkflow'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
-import type { VisualGenerationJob, VisualGenerationKind } from './domain/visualGeneration'
+import type { VisualGenerationJob, VisualGenerationKind, VisualGenerationStatusResponse } from './domain/visualGeneration'
 import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
 import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
 import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
@@ -1501,6 +1501,7 @@ export default function App() {
   const surfaceHydrationRequestIdRef = useRef(0)
   const surfaceHydrationLatestRequestIdsRef = useRef(new Map<string, number>())
   const surfaceHydrationInFlightRef = useRef(new Map<string, Promise<unknown>>())
+  const visualGenerationStatusInFlightRef = useRef(new Map<string, Promise<VisualGenerationStatusResponse>>())
   const surfaceHydrationLoadedKeysRef = useRef(new Set<string>())
   const backendHealthBackoffRef = useRef(new Map<string, { failureCount: number; retryAfter: number; lastError: string }>())
   const draftMetadataLoadInFlightRef = useRef(new Map<string, Promise<Record<string, unknown>>>())
@@ -5145,23 +5146,35 @@ export default function App() {
   }
 
   async function getVisualGenerationStatus(jobId: string) {
-    let status
-    try {
-      status = await workspaceService.getVisualGenerationStatus(jobId)
-    } catch (error) {
-      const cachedJob = visualGenerationJobs.find((job) => job.id === jobId) ?? null
-      if (!cachedJob || !isMissingLiveDraftSessionError(error)) throw error
-      return {
-        ok: true as const,
-        job: cachedJob,
-        terminal: isTerminalVisualGenerationJobStatus(cachedJob.status),
+    const existing = visualGenerationStatusInFlightRef.current.get(jobId)
+    if (existing) return existing
+
+    const request = (async () => {
+      let status
+      try {
+        status = await workspaceService.getVisualGenerationStatus(jobId)
+      } catch (error) {
+        const cachedJob = visualGenerationJobs.find((job) => job.id === jobId) ?? null
+        if (!cachedJob || !isMissingLiveDraftSessionError(error)) throw error
+        return {
+          ok: true as const,
+          job: cachedJob,
+          terminal: isTerminalVisualGenerationJobStatus(cachedJob.status),
+        }
       }
+      setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [status.job]))
+      if (status.terminal) {
+        await applyCompletedVisualGenerationJobLocally(status.job)
+      }
+      return status
+    })()
+
+    visualGenerationStatusInFlightRef.current.set(jobId, request)
+    try {
+      return await request
+    } finally {
+      visualGenerationStatusInFlightRef.current.delete(jobId)
     }
-    setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [status.job]))
-    if (status.terminal) {
-      await applyCompletedVisualGenerationJobLocally(status.job)
-    }
-    return status
   }
 
   async function startVisualGenerationJob(request: Parameters<typeof workspaceService.startVisualGenerationJob>[1]) {
@@ -5213,7 +5226,6 @@ export default function App() {
     const storagePath = `generated/wiki-concept-images/${current.draft.id}/${assetKey}.webp`
     const result = await workspaceService.startVisualGenerationJob(current, {
       kind: 'wiki_visual',
-      provider: 'fal',
       model: 'openai/gpt-image-2',
       targetKeys: {
         assetKey,
@@ -5259,8 +5271,8 @@ export default function App() {
         generatedBy: 'world_concept_image',
         visualJobId: result.job.id,
         jobKind: 'wiki_visual',
-        provider: 'fal',
-        model: 'openai/gpt-image-2',
+        provider: result.job.provider,
+        model: result.job.model,
         role: 'world_concept_image',
         prompt: imagePrompt,
         sourcePrompt: sourcePrompt || imagePrompt,
@@ -7864,6 +7876,7 @@ export default function App() {
                 onGenerateStarterWorld={generateStarterWorld}
                 onGenerateWorldExpansion={generateWorldExpansion}
                 onGenerateWorldBrandAtlasImage={generateWorldBrandAtlasImage}
+                onGenerateWorldConceptImage={generateWorldConceptImageFromGlobal}
                 onStartVisualGenerationJob={startVisualGenerationJob}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}
                 onStartAppCodeGeneration={startAppCodeGeneration}

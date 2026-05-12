@@ -259,6 +259,12 @@ import type { GameSummary } from '../shared/workspace'
 import { supabase } from '../utils/supabase'
 import { supabasePublishableKey, supabaseUrl } from '../config/supabaseConfig'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
+import {
+  logRateLimitedRequestWarning,
+  runCoalescedRequest,
+  runLimitedRequest,
+  stableRequestKey,
+} from './requestCoordinator'
 
 function isUuidLike(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -289,6 +295,10 @@ function titleCase(value: string) {
 
 function isMissingAbilityEnumError(message: string | undefined) {
   return typeof message === 'string' && message.includes('invalid input value for enum definition_kind: "ability"')
+}
+
+function isDuplicateKeyError(error: { message?: string | null; code?: string | null } | null | undefined) {
+  return error?.code === '23505' || Boolean(error?.message?.includes('duplicate key value violates unique constraint'))
 }
 
 function isMissingDefinitionKindEnumError(message: string | undefined, kind: string) {
@@ -336,6 +346,11 @@ function bootstrapSeedFromSession(session: Session) {
     projectName: `${titleCase(cleanedSeed)} Project`,
   }
 }
+
+let validatedSessionAccessToken: string | null = null
+let validatedSessionCheckedUntil = 0
+let validatedSessionCheckPromise: Promise<Session> | null = null
+let lastSessionUserCheckWarningAt = 0
 
 function shouldBootstrapLiveProject(reason?: string) {
   return [
@@ -448,6 +463,16 @@ function readGenerationQueueMetadata(resultContext: unknown) {
 }
 
 async function getValidatedSession(signInMessage: string) {
+  return runCoalescedRequest({
+    key: 'auth:validated-session',
+    className: 'auth',
+    ttlMs: 500,
+    retryPolicy: { attempts: 1 },
+    fn: () => getValidatedSessionInner(signInMessage),
+  })
+}
+
+async function getValidatedSessionInner(signInMessage: string) {
   const {
     data: { session },
     error,
@@ -461,16 +486,51 @@ async function getValidatedSession(signInMessage: string) {
     throw new Error(signInMessage)
   }
 
-  const initialUserCheck = await supabase.auth.getUser(session.access_token)
-  if (!initialUserCheck.error && initialUserCheck.data.user) {
+  const now = Date.now()
+  const tokenExpiresAt = typeof session.expires_at === 'number'
+    ? session.expires_at * 1000
+    : now + 60_000
+  if (
+    validatedSessionAccessToken === session.access_token
+    && validatedSessionCheckedUntil > now
+    && tokenExpiresAt > now + 5_000
+  ) {
     return session
   }
 
-  console.warn('[GraphCore] Supabase session user check failed before live request; continuing with cached session token.', {
-    message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
-  })
+  if (validatedSessionCheckPromise) {
+    return validatedSessionCheckPromise
+  }
 
-  return session
+  validatedSessionCheckPromise = (async () => {
+    const initialUserCheck = await supabase.auth.getUser(session.access_token).catch((userCheckError: unknown) => ({
+      data: { user: null },
+      error: userCheckError instanceof Error ? userCheckError : new Error(String(userCheckError)),
+    }))
+    const checkTtlMs = initialUserCheck.error ? 30_000 : 120_000
+    validatedSessionAccessToken = session.access_token
+    validatedSessionCheckedUntil = Math.min(tokenExpiresAt - 5_000, Date.now() + checkTtlMs)
+
+    if (!initialUserCheck.error && initialUserCheck.data.user) {
+      return session
+    }
+
+    const warningNow = Date.now()
+    if (warningNow - lastSessionUserCheckWarningAt > 30_000) {
+      lastSessionUserCheckWarningAt = warningNow
+      console.warn('[GraphCore] Supabase session user check failed before live request; continuing with cached session token.', {
+        message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
+      })
+    }
+
+    return session
+  })()
+
+  try {
+    return await validatedSessionCheckPromise
+  } finally {
+    validatedSessionCheckPromise = null
+  }
 }
 
 async function readFunctionsErrorPayload<TPayload>(error: FunctionsHttpError | Error) {
@@ -908,6 +968,25 @@ async function createLinkedDefinitionForWorldEntity(
     .select('id, key')
     .single()
 
+  if (definitionInsert.error && isDuplicateKeyError(definitionInsert.error)) {
+    const existingResponse = await supabase
+      .from('project_definitions')
+      .select('id, key, kind, name, summary, status, icon_asset_key, archetype_key, tags, schema_version, metadata, llm_hints, asset_refs, definition_data')
+      .eq('draft_id', snapshot.draft.id)
+      .eq('key', nextDefinitionKey)
+      .maybeSingle()
+    if (existingResponse.error) {
+      throw new Error(existingResponse.error.message)
+    }
+    const existing = existingResponse.data ? mapDefinitionDeltaRow(existingResponse.data as DefinitionRow, null) : null
+    if (existing) {
+      return {
+        linkedDefinitionKey: existing.key,
+        linkedDefinition: existing,
+      }
+    }
+  }
+
   if (definitionInsert.error) {
     throw new Error(definitionInsert.error.message)
   }
@@ -1248,6 +1327,31 @@ async function resolveActiveGameSelection(session: Session, workspaceId: string)
   }
 }
 
+function isReadLikeEdgeFunction(functionName: string) {
+  return (
+    functionName.startsWith('get-')
+    || functionName.startsWith('list-')
+    || functionName.startsWith('poll-')
+    || functionName.includes('status')
+    || functionName === 'sign-project-asset-urls'
+  )
+}
+
+function edgeFunctionClassName(functionName: string) {
+  if (functionName === 'get-visual-generation-status') return 'visual-status'
+  if (functionName === 'sign-project-asset-urls') return 'asset-signing'
+  return isReadLikeEdgeFunction(functionName) ? 'edge-function' : 'mutation'
+}
+
+function edgeFunctionResourceKey(functionName: string, body: Record<string, unknown>) {
+  const draftId = typeof body.draftId === 'string' ? body.draftId : undefined
+  const projectId = typeof body.projectId === 'string' ? body.projectId : undefined
+  const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
+  const entityKey = typeof body.entityKey === 'string' ? body.entityKey : undefined
+  const target = jobId ?? entityKey ?? draftId ?? projectId
+  return target ? `${functionName}:${target}` : `${functionName}:${stableRequestKey(body)}`
+}
+
 async function invokeAuthedFunction<TResponse>(
   functionName: string,
   body: Record<string, unknown>,
@@ -1255,12 +1359,16 @@ async function invokeAuthedFunction<TResponse>(
 ) {
   const functionsClient = supabase.functions
   functionsClient.setAuth(session.access_token)
-  return functionsClient.invoke<TResponse>(functionName, {
-    headers: {
-      apikey: supabasePublishableKey,
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body,
+  return runLimitedRequest({
+    className: edgeFunctionClassName(functionName),
+    resourceKey: isReadLikeEdgeFunction(functionName) ? undefined : edgeFunctionResourceKey(functionName, body),
+    fn: () => functionsClient.invoke<TResponse>(functionName, {
+      headers: {
+        apikey: supabasePublishableKey,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body,
+    }),
   })
 }
 
@@ -1365,8 +1473,8 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
     || ('context' in response.error && (response.error as FunctionsHttpError & { context?: unknown }).context instanceof Response
       && ((response.error as FunctionsHttpError & { context?: Response }).context?.status ?? 0) >= 500)
 
-  if (isTransientNetworkFailure && functionName === 'poll-world-build') {
-    await new Promise((resolve) => window.setTimeout(resolve, 1200))
+  if (isTransientNetworkFailure && isReadLikeEdgeFunction(functionName)) {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 1200 + Math.round(Math.random() * 500)))
     response = await invokeAuthedFunction<TResponse>(functionName, body, session)
     if (!response.error) {
       return response
@@ -2745,8 +2853,98 @@ type SignProjectAssetUrlsResponse = {
 export type SignedProjectAssetUrlEntry = SignProjectAssetUrlsResponse['urls'][number]
 
 const PROJECT_ASSET_SIGNING_BATCH_SIZE = 100
+const PROJECT_ASSET_SIGNING_BATCH_WINDOW_MS = 75
 
 const storageAssetUrlCache = new Map<string, { storagePath: string; url: string; expiresAt: number | null }>()
+
+type PendingAssetSigningRequest = {
+  keys: string[]
+  resolve: (entries: SignedProjectAssetUrlEntry[]) => void
+  reject: (error: unknown) => void
+}
+
+type PendingAssetSigningProjectQueue = {
+  keys: Set<string>
+  requests: PendingAssetSigningRequest[]
+  timer: ReturnType<typeof globalThis.setTimeout> | null
+}
+
+const pendingAssetSigningByProject = new Map<string, PendingAssetSigningProjectQueue>()
+
+function getAssetSigningProjectQueue(projectId: string) {
+  let queue = pendingAssetSigningByProject.get(projectId)
+  if (!queue) {
+    queue = {
+      keys: new Set<string>(),
+      requests: [],
+      timer: null,
+    }
+    pendingAssetSigningByProject.set(projectId, queue)
+  }
+  return queue
+}
+
+async function flushAssetSigningProjectQueue(projectId: string, queue: PendingAssetSigningProjectQueue) {
+  pendingAssetSigningByProject.delete(projectId)
+  if (queue.timer !== null) {
+    globalThis.clearTimeout(queue.timer)
+    queue.timer = null
+  }
+
+  const keys = Array.from(queue.keys)
+  const entriesByKey = new Map<string, SignedProjectAssetUrlEntry>()
+
+  try {
+    const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading generated assets.')
+    for (let index = 0; index < keys.length; index += PROJECT_ASSET_SIGNING_BATCH_SIZE) {
+      const batchKeys = keys.slice(index, index + PROJECT_ASSET_SIGNING_BATCH_SIZE)
+      const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
+        'sign-project-asset-urls',
+        {
+          projectId,
+          assetKeys: batchKeys,
+        } satisfies SignProjectAssetUrlsRequest,
+        session,
+      )
+      if (response.error) {
+        throw new Error(await readFunctionsErrorMessage(response.error))
+      }
+      for (const entry of response.data?.urls ?? []) {
+        if (typeof entry.assetKey === 'string' && typeof entry.signedUrl === 'string' && entry.signedUrl.trim()) {
+          entriesByKey.set(entry.assetKey, entry)
+        }
+      }
+    }
+
+    for (const request of queue.requests) {
+      request.resolve(request.keys.map((key) => entriesByKey.get(key)).filter((entry): entry is SignedProjectAssetUrlEntry => Boolean(entry)))
+    }
+  } catch (error) {
+    logRateLimitedRequestWarning('asset-signing:flush', '[GraphCore] project asset signing queue failed.', {
+      projectId,
+      keyCount: keys.length,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    for (const request of queue.requests) {
+      request.reject(error)
+    }
+  }
+}
+
+async function signProjectAssetUrlsQueued(projectId: string, assetKeys: string[]) {
+  const cleanKeys = Array.from(new Set(assetKeys.map((key) => key.trim()).filter(Boolean)))
+  if (cleanKeys.length === 0) return []
+
+  return new Promise<SignedProjectAssetUrlEntry[]>((resolve, reject) => {
+    const queue = getAssetSigningProjectQueue(projectId)
+    for (const key of cleanKeys) queue.keys.add(key)
+    queue.requests.push({ keys: cleanKeys, resolve, reject })
+    if (queue.timer !== null) return
+    queue.timer = globalThis.setTimeout(() => {
+      void flushAssetSigningProjectQueue(projectId, queue)
+    }, PROJECT_ASSET_SIGNING_BATCH_WINDOW_MS)
+  })
+}
 
 function isPrivateStorageBackedAsset(asset: AssetDefinition) {
   const storagePath = asset.storagePath?.trim() ?? ''
@@ -3035,35 +3233,24 @@ async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId
 
   if (uncachedCandidates.length > 0) {
     try {
-      const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading generated meshes.')
       for (let index = 0; index < uncachedCandidates.length; index += PROJECT_ASSET_SIGNING_BATCH_SIZE) {
         const batch = uncachedCandidates.slice(index, index + PROJECT_ASSET_SIGNING_BATCH_SIZE)
-        const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
-          'sign-project-asset-urls',
-          {
-            projectId,
-            assetKeys: batch.map((asset) => asset.key),
-          } satisfies SignProjectAssetUrlsRequest,
-          session,
-        )
-        if (!response.error && response.data?.urls) {
-          for (const entry of response.data.urls) {
-            if (typeof entry.assetKey === 'string' && typeof entry.signedUrl === 'string' && entry.signedUrl.trim()) {
-              const asset = batch.find((candidate) => candidate.key === entry.assetKey)
-                ?? uncachedCandidates.find((candidate) => candidate.key === entry.assetKey)
-                ?? null
-              if (asset) setCachedSignedAssetUrl(asset, entry.signedUrl)
-              signedUrls.set(entry.assetKey, asset ? await cacheSignedAssetResponse(asset, entry.signedUrl) : entry.signedUrl)
-            }
+        const entries = await signProjectAssetUrlsQueued(projectId, batch.map((asset) => asset.key))
+        if (entries.length > 0) {
+          for (const entry of entries) {
+            const asset = batch.find((candidate) => candidate.key === entry.assetKey)
+              ?? uncachedCandidates.find((candidate) => candidate.key === entry.assetKey)
+              ?? null
+            if (asset) setCachedSignedAssetUrl(asset, entry.signedUrl)
+            signedUrls.set(entry.assetKey, asset ? await cacheSignedAssetResponse(asset, entry.signedUrl) : entry.signedUrl)
           }
           continue
         }
 
-        console.warn('[GraphCore] project asset signing batch failed during hydration.', {
+        logRateLimitedRequestWarning(`asset-signing:missing:${projectId}`, '[GraphCore] project asset signing batch returned no URLs during hydration.', {
           projectId,
           batchSize: batch.length,
           batchStart: index,
-          error: response.error ? await readFunctionsErrorMessage(response.error) : 'No signed URLs returned.',
         })
         for (const asset of batch) {
           const cached = getCachedSignedAssetUrl(asset)
@@ -3073,7 +3260,10 @@ async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId
         }
       }
     } catch (error) {
-      console.error('[GraphCore] project asset signing failed during hydration.', error)
+      logRateLimitedRequestWarning('asset-signing:hydrate', '[GraphCore] project asset signing failed during hydration.', {
+        projectId,
+        message: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
@@ -3085,7 +3275,7 @@ async function hydrateStorageAssetUrls<TAsset extends AssetDefinition>(projectId
       continue
     }
 
-    console.warn('[GraphCore] storage-backed asset was not signed during hydration.', {
+    logRateLimitedRequestWarning(`asset-signing:unsigned:${asset.key}`, '[GraphCore] storage-backed asset was not signed during hydration.', {
       assetKey: asset.key,
       projectId,
       storagePath: asset.storagePath,
@@ -3126,13 +3316,16 @@ export async function signProjectAssetUrls(projectId: string, assetKeys: string[
 export async function signProjectAssetUrlEntries(input: SignProjectAssetUrlsRequest) {
   const cleanKeys = Array.from(new Set(input.assetKeys.map((key) => key.trim()).filter(Boolean)))
   if (cleanKeys.length === 0) return []
+  if (input.projectId) {
+    return signProjectAssetUrlsQueued(input.projectId, cleanKeys)
+  }
 
-  const response = await supabase.functions.invoke<SignProjectAssetUrlsResponse>('sign-project-asset-urls', {
-    body: {
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-      assetKeys: cleanKeys,
-    },
-  })
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading generated assets.')
+  const response = await invokeAuthedFunctionWithSessionRecovery<SignProjectAssetUrlsResponse>(
+    'sign-project-asset-urls',
+    { assetKeys: cleanKeys },
+    session,
+  )
 
   if (response.error) {
     throw new Error(await readFunctionsErrorMessage(response.error))
@@ -4701,28 +4894,35 @@ function parseStringArrayMap(value: unknown): Record<string, string[]> {
 }
 
 export async function loadDraftDelta(draftId: string, sinceRevision: DraftRevision | null): Promise<DraftDeltaResponse> {
-  await getValidatedSession('Sign in and load a live GraphCore draft before loading draft changes.')
-  const response = await supabase.rpc('get_draft_delta', {
-    target_draft_id: draftId,
-    since_revision: sinceRevision,
-    cache_schema_version: GRAPHCORE_CACHE_SCHEMA_VERSION,
+  return runCoalescedRequest({
+    key: `draft-delta:${draftId}:${sinceRevision ?? 'snapshot'}`,
+    className: 'snapshot-refresh',
+    retryPolicy: { attempts: 2 },
+    fn: async () => {
+      await getValidatedSession('Sign in and load a live GraphCore draft before loading draft changes.')
+      const response = await supabase.rpc('get_draft_delta', {
+        target_draft_id: draftId,
+        since_revision: sinceRevision,
+        cache_schema_version: GRAPHCORE_CACHE_SCHEMA_VERSION,
+      })
+      if (response.error) {
+        throw new Error(response.error.message)
+      }
+      const raw = response.data && typeof response.data === 'object'
+        ? response.data as Record<string, unknown>
+        : {}
+      const compactRows = raw.compactRows && typeof raw.compactRows === 'object'
+        ? raw.compactRows as Record<string, unknown[]>
+        : {}
+      return {
+        currentRevision: typeof raw.currentRevision === 'number' ? raw.currentRevision : Number(raw.currentRevision ?? 0),
+        requiresSnapshot: raw.requiresSnapshot === true,
+        changedKeysByTable: parseStringArrayMap(raw.changedKeysByTable),
+        deletedKeysByTable: parseStringArrayMap(raw.deletedKeysByTable),
+        compactRows,
+      }
+    },
   })
-  if (response.error) {
-    throw new Error(response.error.message)
-  }
-  const raw = response.data && typeof response.data === 'object'
-    ? response.data as Record<string, unknown>
-    : {}
-  const compactRows = raw.compactRows && typeof raw.compactRows === 'object'
-    ? raw.compactRows as Record<string, unknown[]>
-    : {}
-  return {
-    currentRevision: typeof raw.currentRevision === 'number' ? raw.currentRevision : Number(raw.currentRevision ?? 0),
-    requiresSnapshot: raw.requiresSnapshot === true,
-    changedKeysByTable: parseStringArrayMap(raw.changedKeysByTable),
-    deletedKeysByTable: parseStringArrayMap(raw.deletedKeysByTable),
-    compactRows,
-  }
 }
 
 function upsertEntriesByKey<T extends { key: string }>(current: T[], incoming: T[]) {
@@ -7730,11 +7930,15 @@ export async function startVisualGenerationJob(snapshot: ProjectSnapshot, reques
   if (!hasLiveSnapshotIds(snapshot)) {
     throw new Error('Sign in and load a live GraphCore draft before starting visual generation.')
   }
-  const payload = visualGenerationStartRequestSchema.parse({
+  const parsedPayload = visualGenerationStartRequestSchema.parse({
     ...request,
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
   })
+  const payload: Record<string, unknown> = { ...parsedPayload }
+  if (!Object.prototype.hasOwnProperty.call(request, 'provider')) {
+    delete payload.provider
+  }
   const response = await invokeAuthedFunctionWithSessionRecovery(
     'start-visual-generation-job',
     payload,
@@ -7773,34 +7977,51 @@ export async function listActiveVisualGenerationJobs(
   snapshot: ProjectSnapshot,
   kinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet'],
 ): Promise<VisualGenerationJob[]> {
-  await getValidatedSession('Sign in and load a live GraphCore draft before loading visual generation jobs.')
   if (!hasLiveSnapshotIds(snapshot)) return []
 
-  const response = await supabase
-    .from('visual_generation_jobs')
-    .select('id, project_id, draft_id, requested_by, status, kind, provider, model, target_keys, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, created_at, updated_at')
-    .eq('project_id', snapshot.project.id)
-    .eq('draft_id', snapshot.draft.id)
-    .in('kind', kinds)
-    .in('status', ['queued', 'running'])
-    .order('created_at', { ascending: false })
+  const cleanKinds = Array.from(new Set(kinds)).sort()
+  return runCoalescedRequest({
+    key: `visual-active:${snapshot.project.id}:${snapshot.draft.id}:${cleanKinds.join(',')}`,
+    className: 'visual-status',
+    ttlMs: 750,
+    retryPolicy: { attempts: 2 },
+    fn: async () => {
+      await getValidatedSession('Sign in and load a live GraphCore draft before loading visual generation jobs.')
+      const response = await supabase
+        .from('visual_generation_jobs')
+        .select('id, project_id, draft_id, requested_by, status, kind, provider, model, target_keys, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, created_at, updated_at')
+        .eq('project_id', snapshot.project.id)
+        .eq('draft_id', snapshot.draft.id)
+        .in('kind', cleanKinds)
+        .in('status', ['queued', 'running'])
+        .order('created_at', { ascending: false })
 
-  if (response.error) throw new Error(response.error.message)
-  return (response.data ?? []).map((row) => mapVisualGenerationJobRow(row as Record<string, unknown>))
+      if (response.error) throw new Error(response.error.message)
+      return (response.data ?? []).map((row) => mapVisualGenerationJobRow(row as Record<string, unknown>))
+    },
+  })
 }
 
 export async function getVisualGenerationStatus(jobId: string): Promise<VisualGenerationStatusResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading visual generation status.')
-  const payload = visualGenerationStatusRequestSchema.parse({ jobId })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'get-visual-generation-status',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  return visualGenerationStatusResponseSchema.parse(response.data)
+  return runCoalescedRequest({
+    key: `visual-status:${jobId}`,
+    className: 'edge-function',
+    ttlMs: 500,
+    retryPolicy: { attempts: 2 },
+    fn: async () => {
+      const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading visual generation status.')
+      const payload = visualGenerationStatusRequestSchema.parse({ jobId })
+      const response = await invokeAuthedFunctionWithSessionRecovery(
+        'get-visual-generation-status',
+        payload,
+        session,
+      )
+      if (response.error) {
+        throw new Error(await readFunctionsErrorMessage(response.error))
+      }
+      return visualGenerationStatusResponseSchema.parse(response.data)
+    },
+  })
 }
 
 export async function cancelVisualGenerationJob(jobId: string): Promise<VisualGenerationCancelResponse> {
@@ -8981,16 +9202,15 @@ export async function compileSnapshot(snapshot: ProjectSnapshot) {
 
   if (session && isLiveSnapshot(snapshot)) {
     const releaseVersion = `draft-${snapshot.draft.version}-${Date.now()}`
-    const response = await supabase.functions.invoke('publish-release', {
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: {
+    const response = await invokeAuthedFunctionWithSessionRecovery<{ bundle?: unknown }>(
+      'publish-release',
+      {
         snapshot,
         label: `${snapshot.project.name} draft preview`,
         version: releaseVersion,
       },
-    })
+      session,
+    )
 
     if (!response.error && response.data?.bundle) {
       return response.data.bundle

@@ -220,12 +220,15 @@ export function WorldWikiPanel({
   renderWikiSection,
 }: WorldWikiPanelProps) {
   const liveGenerationActive = Boolean(liveGenerationState?.active)
+  const liveOverviewReady = !liveGenerationActive || wikiOverviewShowMetadata
   const populatedWikiSections = orderWikiSectionsForLiveDocument(
-    wikiModel.sections.filter((section) => isWikiSectionPopulated({
-      section,
-      model: wikiModel,
-      brandAtlasImageUrl: wikiBrandAtlasImageUrl,
-    })),
+    liveOverviewReady
+      ? wikiModel.sections.filter((section) => isWikiSectionPopulated({
+        section,
+        model: wikiModel,
+        brandAtlasImageUrl: wikiBrandAtlasImageUrl,
+      }))
+      : [],
   )
   const visibleWikiGaps = liveGenerationActive ? [] : wikiModel.gaps.slice(0, 5)
   return (
@@ -366,7 +369,7 @@ export function WorldWikiPanel({
               </div>
             ) : null}
           </div>
-          <div className="world-wiki-overview-bottom-row">
+          {liveOverviewReady ? <div className="world-wiki-overview-bottom-row">
             <div className="world-wiki-overview-stats" aria-label="World wiki counts">
               <span><strong>{worldEntities.length}</strong><small>Entities</small></span>
               <span><strong>{worldRelationships.length}</strong><small>Links</small></span>
@@ -395,7 +398,7 @@ export function WorldWikiPanel({
                 </div>
               ) : null}
             </div>
-          </div>
+          </div> : null}
           <div
             className={`world-wiki-overview-media ${wikiOverviewGraphicUrl ? 'has-image' : 'has-icon'}${wikiOverviewGraphicPending ? ' is-pending' : ''}`}
             style={wikiOverviewGraphicMediaStyle}
@@ -410,8 +413,8 @@ export function WorldWikiPanel({
             )}
           </div>
         </section>
-        {renderNarrativeRpgPlayablePanel()}
-        {renderAppPreviewPipelinePanel()}
+        {liveOverviewReady ? renderNarrativeRpgPlayablePanel() : null}
+        {liveOverviewReady ? renderAppPreviewPipelinePanel() : null}
         {renderInteractivePrototypeModal()}
         {wikiSearchActive && wikiSearchMatchCount === 0 ? (
           <div className="world-wiki-search-empty">

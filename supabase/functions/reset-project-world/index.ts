@@ -60,19 +60,26 @@ async function deleteGeneratedWorldAssets(
   projectId: string,
   draftId: string,
 ) {
-  const worldIconPrefix = `generated/world-icons/${draftId}/`
-  const legacyWorldIconPrefix = `generate/world-icons/${draftId}/`
+  const generatedWorldAssetPrefixes = [
+    `generated/world-icons/${draftId}/`,
+    `generate/world-icons/${draftId}/`,
+    `generated/wiki-concept-images/${draftId}/`,
+    `generated/entity-reference-sheets/${draftId}/`,
+    `generated/wiki-brand-atlas/${draftId}/`,
+  ]
   const assetResponse = await admin
     .from('project_assets')
     .select('id, key, storage_path, metadata')
     .eq('project_id', projectId)
-    .or(`storage_path.like.${worldIconPrefix}%,storage_path.like.${legacyWorldIconPrefix}%`)
 
   if (assetResponse.error) {
     throw new Error(assetResponse.error.message)
   }
 
-  const assets = (assetResponse.data ?? []) as ProjectAssetRow[]
+  const assets = ((assetResponse.data ?? []) as ProjectAssetRow[]).filter((asset) => {
+    const storagePath = typeof asset.storage_path === 'string' ? asset.storage_path.trim() : ''
+    return generatedWorldAssetPrefixes.some((prefix) => storagePath.startsWith(prefix))
+  })
   if (assets.length === 0) {
     return { projectAssets: 0, storageObjects: 0 }
   }

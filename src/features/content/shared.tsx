@@ -4,7 +4,7 @@ import { isSupportedMeshPath, resolveAssetPreviewUrl, resolveAssetSourceUrl, typ
 import { cacheSignedAssetResponse, getCachedAssetObjectUrl, getCachedSignedAssetUrl, setCachedSignedAssetUrl } from '../../domain/assetUrlCache.ts'
 import { getResolvedDefinition3dBinding } from '../../domain/render3d.ts'
 import { EntityIcon, type EntityIconId } from '../../shared/entityIcons.tsx'
-import { supabase } from '../../utils/supabase.ts'
+import { signProjectAssetUrlEntries } from '../../data/graphcoreRepository.ts'
 
 import type {
   ArchetypeDefinition,
@@ -15,13 +15,6 @@ import type {
 } from '../../domain/graphcore.ts'
 
 const sessionStorageAssetUrlCache = new Map<string, { storagePath: string; url: string }>()
-
-type SignProjectAssetUrlsResponse = {
-  urls?: Array<{
-    assetKey?: string
-    signedUrl?: string
-  }>
-}
 
 function isSessionResolvableStorageAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
@@ -67,14 +60,13 @@ export function useResolvedAssetUrl(asset: AssetDefinition | null | undefined) {
         return
       }
 
-      const signedResponse = await supabase.functions.invoke<SignProjectAssetUrlsResponse>('sign-project-asset-urls', {
-        body: {
+      try {
+        const signedEntries = await signProjectAssetUrlEntries({
           ...(asset.projectId ? { projectId: asset.projectId } : {}),
           assetKeys: [asset.key],
-        },
-      })
-      if (!cancelled && !signedResponse.error) {
-        const signedUrl = signedResponse.data?.urls?.find((entry) => entry.assetKey === asset.key)?.signedUrl?.trim()
+        })
+        if (cancelled) return
+        const signedUrl = signedEntries.find((entry) => entry.assetKey === asset.key)?.signedUrl?.trim()
         if (signedUrl) {
           setCachedSignedAssetUrl(asset, signedUrl)
           const resolvedUrl = await cacheSignedAssetResponse(asset, signedUrl)
@@ -83,6 +75,14 @@ export function useResolvedAssetUrl(asset: AssetDefinition | null | undefined) {
           setSessionUrl(resolvedUrl)
           return
         }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[GraphCore] session asset signing failed.', {
+            assetKey: asset.key,
+            projectId: asset.projectId,
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
 
       if (!cancelled) {
@@ -90,7 +90,7 @@ export function useResolvedAssetUrl(asset: AssetDefinition | null | undefined) {
           assetKey: asset.key,
           projectId: asset.projectId ?? null,
           storagePath: asset.storagePath,
-          message: signedResponse.error?.message ?? 'no signed URL returned',
+          message: 'no signed URL returned',
         })
       }
     }

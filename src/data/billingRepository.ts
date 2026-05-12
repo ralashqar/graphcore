@@ -1,5 +1,6 @@
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
 import { supabase } from '../utils/supabase'
+import { runLimitedRequest } from './requestCoordinator'
 import type {
   CheckoutSessionResult,
   CreditBalance,
@@ -178,15 +179,19 @@ export async function createCheckoutSession(
   successUrl?: string,
   cancelUrl?: string,
 ): Promise<CheckoutSessionResult> {
-  const response = await supabase.functions.invoke<CheckoutSessionResult>('stripe-create-checkout-session', {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: {
-      packageId,
-      successUrl: successUrl ?? `${window.location.origin}/billing?success=true`,
-      cancelUrl: cancelUrl ?? `${window.location.origin}/billing?canceled=true`,
-    },
+  const response = await runLimitedRequest({
+    className: 'mutation',
+    resourceKey: `stripe-create-checkout-session:${session.user.id}:${packageId}`,
+    fn: () => supabase.functions.invoke<CheckoutSessionResult>('stripe-create-checkout-session', {
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: {
+        packageId,
+        successUrl: successUrl ?? `${window.location.origin}/billing?success=true`,
+        cancelUrl: cancelUrl ?? `${window.location.origin}/billing?canceled=true`,
+      },
+    }),
   })
 
   if (response.error || !response.data) {
@@ -205,15 +210,19 @@ export async function createSubscriptionCheckout(
   successUrl?: string,
   cancelUrl?: string,
 ): Promise<SubscriptionCheckoutResult> {
-  const response = await supabase.functions.invoke<SubscriptionCheckoutResult>('stripe-create-subscription', {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: {
-      plan,
-      successUrl: successUrl ?? `${window.location.origin}/billing?success=true`,
-      cancelUrl: cancelUrl ?? `${window.location.origin}/billing?canceled=true`,
-    },
+  const response = await runLimitedRequest({
+    className: 'mutation',
+    resourceKey: `stripe-create-subscription:${session.user.id}:${plan}`,
+    fn: () => supabase.functions.invoke<SubscriptionCheckoutResult>('stripe-create-subscription', {
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: {
+        plan,
+        successUrl: successUrl ?? `${window.location.origin}/billing?success=true`,
+        cancelUrl: cancelUrl ?? `${window.location.origin}/billing?canceled=true`,
+      },
+    }),
   })
 
   if (response.error || !response.data) {

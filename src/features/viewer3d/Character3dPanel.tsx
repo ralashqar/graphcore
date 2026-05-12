@@ -16,6 +16,7 @@ import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
 import type { AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1 } from '../../domain/graphcore'
 import { supabase } from '../../utils/supabase'
+import { runCoalescedRequest } from '../../data/requestCoordinator'
 import { MediaThumb, findAssetByKey } from '../content/shared'
 import { ThreeSceneViewport } from './ThreeSceneViewport'
 
@@ -249,12 +250,18 @@ export function Definition3dPanel({
           })
         }
 
-        void supabase.functions.invoke('ai-fal', {
-          body: {
-            action: 'result',
-            model,
-            requestId,
-          },
+        void runCoalescedRequest({
+          key: `ai-fal-result:${model}:${requestId}`,
+          className: 'edge-function',
+          ttlMs: 5000,
+          retryPolicy: { attempts: 2 },
+          fn: () => supabase.functions.invoke('ai-fal', {
+            body: {
+              action: 'result',
+              model,
+              requestId,
+            },
+          }),
         }).then(({ data: resultData, error: resultError }) => {
           if (cancelled) return
           if (resultError) {

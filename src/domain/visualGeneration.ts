@@ -22,6 +22,12 @@ export const visualGenerationKindSchema = z.enum([
   'app_screen_analysis',
 ])
 
+export const visualGenerationProviderSchema = z.enum([
+  'fal',
+  'openai',
+  'graphcore',
+])
+
 export const visualGenerationAssetOutputSchema = z.object({
   assetKey: z.string().min(1),
   storagePath: z.string().default(''),
@@ -41,7 +47,7 @@ export const visualGenerationJobSchema = z.object({
   requestedBy: z.string().nullable().default(null),
   status: visualGenerationStatusSchema,
   kind: visualGenerationKindSchema,
-  provider: z.string().default('fal'),
+  provider: visualGenerationProviderSchema.default('openai'),
   model: z.string().default('openai/gpt-image-2'),
   targetKeys: looseRecordSchema.default({}),
   input: looseRecordSchema.default({}),
@@ -59,7 +65,7 @@ export const visualGenerationStartRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
   kind: visualGenerationKindSchema,
-  provider: z.string().default('fal'),
+  provider: visualGenerationProviderSchema.default('openai'),
   model: z.string().default('openai/gpt-image-2'),
   targetKeys: looseRecordSchema.default({}),
   input: looseRecordSchema.default({}),
@@ -89,6 +95,7 @@ export const visualGenerationCancelResponseSchema = z.object({
 
 export type VisualGenerationStatus = z.infer<typeof visualGenerationStatusSchema>
 export type VisualGenerationKind = z.infer<typeof visualGenerationKindSchema>
+export type VisualGenerationProvider = z.infer<typeof visualGenerationProviderSchema>
 export type VisualGenerationJob = z.infer<typeof visualGenerationJobSchema>
 export type VisualGenerationStartRequest = z.infer<typeof visualGenerationStartRequestSchema>
 export type VisualGenerationStartResponse = z.infer<typeof visualGenerationStartResponseSchema>

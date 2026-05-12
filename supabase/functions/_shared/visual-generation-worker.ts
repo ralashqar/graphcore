@@ -15,6 +15,8 @@ import {
   readWorldEntityVisualTraitMap,
   readWorldEntityVisualTraits,
 } from '../../../src/domain/worldEntityVisuals.ts'
+import { runTrackedOpenAiImages, type AiUsageContext } from './ai-provider-gateway.ts'
+import type { OpenAiImagesRequest } from './openai.ts'
 
 type DatabaseClient = {
   from: (table: string) => any
@@ -59,6 +61,21 @@ type FalImageResult = {
   resultBody: Record<string, unknown>
 }
 
+type VisualImageProvider = 'fal' | 'openai'
+
+type GeneratedVisualImageResult = {
+  provider: VisualImageProvider
+  model: string
+  imageBytes: Uint8Array
+  imageUrl: string | null
+  requestId: string | null
+  responseId: string | null
+  statusUrl: string | null
+  responseUrl: string | null
+  resultBody: Record<string, unknown>
+  usageLine?: unknown
+}
+
 const visualJobSelect = 'id, project_id, draft_id, requested_by, status, kind, provider, model, target_keys, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, created_at, updated_at'
 const falQueueBaseUrl = 'https://queue.fal.run'
 const worldConceptImageSize = { width: 1536, height: 864 } as const
@@ -67,6 +84,7 @@ const worldConceptOutputFormat = 'webp'
 const worldConceptMimeType = 'image/webp'
 const imageDownloadTimeoutMs = Number(Deno.env.get('VISUAL_GENERATION_IMAGE_DOWNLOAD_TIMEOUT_MS') ?? 30_000)
 const imageDownloadAttempts = Number(Deno.env.get('VISUAL_GENERATION_IMAGE_DOWNLOAD_ATTEMPTS') ?? 3)
+const openAiClaimConcurrency = readPositiveInt(Deno.env.get('VISUAL_GENERATION_OPENAI_CONCURRENCY'), 8)
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -89,6 +107,52 @@ function normalizeFalImageModel(model: string | null | undefined) {
   const trimmed = typeof model === 'string' ? model.trim() : ''
   if (!trimmed || trimmed === 'gpt-image-2') return 'openai/gpt-image-2'
   return trimmed
+}
+
+function normalizeVisualImageProvider(value: unknown): VisualImageProvider {
+  const normalized = readString(value).toLowerCase()
+  if (!normalized || normalized === 'both' || normalized === 'balanced' || normalized === 'load_balance' || normalized === 'load-balanced' || normalized === 'hybrid') return 'openai'
+  if (normalized === 'openai' || normalized === 'openai_direct' || normalized === 'direct_openai') return 'openai'
+  return 'fal'
+}
+
+function resolveVisualImageProvider(job: VisualJob): VisualImageProvider {
+  return normalizeVisualImageProvider(readString(job.provider) || Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER') || 'openai')
+}
+
+function normalizeOpenAiImageModel(model: string | null | undefined) {
+  const trimmed = typeof model === 'string' ? model.trim() : ''
+  if (!trimmed || trimmed === 'openai/gpt-image-2' || trimmed === 'openai/gpt-image-2/edit') return 'gpt-image-2'
+  if (trimmed.startsWith('openai/')) return trimmed.slice('openai/'.length)
+  return trimmed
+}
+
+function readOpenAiImageSize(imageSize: unknown): string | undefined {
+  if (typeof imageSize === 'string' && imageSize.trim()) return imageSize.trim()
+  const record = asRecord(imageSize)
+  const width = typeof record.width === 'number' ? record.width : Number(record.width)
+  const height = typeof record.height === 'number' ? record.height : Number(record.height)
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    return `${Math.round(width)}x${Math.round(height)}`
+  }
+  return undefined
+}
+
+function readOpenAiQuality(value: unknown): OpenAiImagesRequest['quality'] | undefined {
+  const quality = readString(value)
+  return quality === 'low' || quality === 'medium' || quality === 'high' || quality === 'auto' ? quality : undefined
+}
+
+function readOpenAiOutputFormat(value: unknown): OpenAiImagesRequest['outputFormat'] | undefined {
+  const outputFormat = readString(value).toLowerCase()
+  if (outputFormat === 'jpg') return 'jpeg'
+  return outputFormat === 'png' || outputFormat === 'jpeg' || outputFormat === 'webp' ? outputFormat : undefined
+}
+
+function decodeBase64ToUint8Array(base64: string) {
+  const normalized = base64.includes(',') ? base64.slice(base64.indexOf(',') + 1) : base64
+  const binary = atob(normalized)
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 
 function buildFalHeaders(apiKey: string) {
@@ -234,7 +298,7 @@ function mapVisualJobRow(row: Record<string, unknown>): VisualJob {
     requestedBy: typeof row.requested_by === 'string' ? row.requested_by : null,
     status: String(row.status) as VisualJobStatus,
     kind: String(row.kind) as VisualJobKind,
-    provider: readString(row.provider) || 'fal',
+    provider: readString(row.provider) || 'openai',
     model: readString(row.model) || 'openai/gpt-image-2',
     targetKeys: asRecord(row.target_keys),
     input: asRecord(row.input),
@@ -457,6 +521,227 @@ async function waitForFalImage(input: {
   throw new Error('Fal image request timed out before completion.')
 }
 
+function extractOpenAiImageOutput(body: Record<string, unknown>) {
+  const data = Array.isArray(body.data) ? body.data : []
+  for (const item of data) {
+    const record = asRecord(item)
+    const b64Json = readString(record.b64_json)
+    if (b64Json) return { b64Json, url: '' }
+    const url = readString(record.url)
+    if (url) return { b64Json: '', url }
+  }
+  const directB64 = readString(body.b64_json)
+  if (directB64) return { b64Json: directB64, url: '' }
+  const directUrl = readString(body.url)
+  if (directUrl) return { b64Json: '', url: directUrl }
+  return { b64Json: '', url: '' }
+}
+
+function getOpenAiImageErrorMessage(body: Record<string, unknown>, fallback: string) {
+  const error = asRecord(body.error)
+  const errorMessage = readString(error.message)
+  if (errorMessage) return errorMessage
+  const message = readString(body.message)
+  if (message) return message
+  return fallback
+}
+
+function retryAfterDelayMs(response: Response) {
+  const retryAfter = response.headers.get('retry-after') ?? response.headers.get('Retry-After')
+  if (!retryAfter) return 0
+  const seconds = Number(retryAfter)
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(60_000, seconds * 1000)
+  const dateMs = Date.parse(retryAfter)
+  return Number.isFinite(dateMs) ? Math.min(60_000, Math.max(0, dateMs - Date.now())) : 0
+}
+
+async function waitForOpenAiImage(input: {
+  client: DatabaseClient
+  job: VisualJob
+  workerId: string
+  model: string
+  prompt: string
+  phasePrefix: string
+  imageSize?: unknown
+  quality?: string
+  outputFormat?: string
+}): Promise<GeneratedVisualImageResult> {
+  const size = readOpenAiImageSize(input.imageSize)
+  const quality = readOpenAiQuality(input.quality)
+  const outputFormat = readOpenAiOutputFormat(input.outputFormat)
+  const timeoutMs = readPositiveInt(Deno.env.get('VISUAL_GENERATION_OPENAI_TIMEOUT_MS'), 120_000)
+  const maxAttempts = readPositiveInt(Deno.env.get('VISUAL_GENERATION_OPENAI_ATTEMPTS'), 3)
+  const context: AiUsageContext = {
+    userId: input.job.requestedBy,
+    projectId: input.job.projectId,
+    draftId: input.job.draftId,
+    surface: 'visual-generation-worker',
+    visualGenerationJobId: input.job.id,
+    idempotencyKey: `visual-generation:${input.job.id}:openai:${input.job.attemptCount}`,
+    metadata: {
+      kind: input.job.kind,
+      targetKeys: input.job.targetKeys,
+    },
+  }
+
+  let lastMessage = ''
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await heartbeat(input.client, input.job.id, input.workerId, {
+      phase: `${input.phasePrefix}_submitting_openai_image`,
+      provider: 'openai',
+      model: input.model,
+      openAiAttempt: attempt,
+      openAiMaxAttempts: maxAttempts,
+      promptChars: input.prompt.length,
+      imageSize: size ?? null,
+      quality: quality ?? null,
+      outputFormat: outputFormat ?? null,
+      timeoutMs,
+    })
+
+    const result = await runTrackedOpenAiImages({
+      client: input.client,
+      payload: {
+        action: 'generate',
+        model: input.model,
+        prompt: input.prompt,
+        size,
+        quality,
+        outputFormat,
+        n: 1,
+        user: input.job.requestedBy ?? undefined,
+        timeoutMs,
+      },
+      context,
+    })
+    const requestId = result.response.headers.get('x-request-id')
+    const responseId = typeof result.body.id === 'string' ? result.body.id : null
+
+    await heartbeat(input.client, input.job.id, input.workerId, {
+      phase: `${input.phasePrefix}_openai_image_response`,
+      provider: 'openai',
+      model: input.model,
+      openAiAttempt: attempt,
+      openAiRequestId: requestId,
+      openAiResponseId: responseId,
+      openAiStatus: result.response.status,
+    })
+
+    if (result.response.ok) {
+      const { b64Json, url } = extractOpenAiImageOutput(result.body)
+      if (!b64Json && !url) {
+        console.error('[visual-generation-job] OpenAI image completed without image output.', {
+          jobId: input.job.id,
+          workerId: input.workerId,
+          kind: input.job.kind,
+          model: input.model,
+          requestId,
+          responseId,
+          body: result.body,
+        })
+        throw new Error('OpenAI completed the visual generation request but did not return an image.')
+      }
+      const imageBytes = b64Json ? decodeBase64ToUint8Array(b64Json) : await downloadImageBytes(url)
+      await heartbeat(input.client, input.job.id, input.workerId, {
+        phase: `${input.phasePrefix}_openai_image_ready`,
+        provider: 'openai',
+        model: input.model,
+        openAiRequestId: requestId,
+        openAiResponseId: responseId,
+        openAiImageUrl: url || null,
+        imageBytes: imageBytes.byteLength,
+      })
+      return {
+        provider: 'openai',
+        model: input.model,
+        imageBytes,
+        imageUrl: url || null,
+        requestId,
+        responseId,
+        statusUrl: null,
+        responseUrl: null,
+        resultBody: result.body,
+        usageLine: result.usageLine,
+      }
+    }
+
+    lastMessage = getOpenAiImageErrorMessage(result.body, `OpenAI image request failed with HTTP ${result.response.status}.`)
+    const retryable = result.response.status === 429 || result.response.status >= 500
+    if (!retryable || attempt >= maxAttempts) break
+    const delayMs = retryAfterDelayMs(result.response) || Math.min(30_000, 1_500 * (2 ** (attempt - 1)))
+    await heartbeat(input.client, input.job.id, input.workerId, {
+      phase: `${input.phasePrefix}_openai_image_backoff`,
+      provider: 'openai',
+      model: input.model,
+      openAiAttempt: attempt,
+      openAiRetryAfterMs: delayMs,
+      openAiLastError: lastMessage,
+    })
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+
+  throw new Error(lastMessage || 'OpenAI image request failed.')
+}
+
+async function generateVisualImage(input: {
+  client: DatabaseClient
+  job: VisualJob
+  workerId: string
+  prompt: string
+  phasePrefix: string
+  imageSize?: unknown
+  quality?: string
+  outputFormat?: string
+  referenceImageUrls?: string[]
+  model?: string
+}): Promise<GeneratedVisualImageResult> {
+  const provider = resolveVisualImageProvider(input.job)
+  if (provider === 'openai') {
+    const configuredModel = input.model || readString(Deno.env.get('VISUAL_GENERATION_OPENAI_MODEL')) || input.job.model
+    const model = normalizeOpenAiImageModel(configuredModel)
+    return waitForOpenAiImage({
+      client: input.client,
+      job: input.job,
+      workerId: input.workerId,
+      model,
+      prompt: input.prompt,
+      phasePrefix: input.phasePrefix,
+      imageSize: input.imageSize,
+      quality: input.quality,
+      outputFormat: input.outputFormat,
+    })
+  }
+
+  const falApiKey = Deno.env.get('FAL_KEY')
+  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
+  const model = normalizeFalImageModel(input.model || Deno.env.get('VISUAL_GENERATION_FAL_MODEL') || input.job.model)
+  const falResult = await waitForFalImage({
+    client: input.client,
+    job: input.job,
+    workerId: input.workerId,
+    apiKey: falApiKey,
+    model,
+    prompt: input.prompt,
+    phasePrefix: input.phasePrefix,
+    imageSize: input.imageSize,
+    quality: input.quality,
+    outputFormat: input.outputFormat,
+    referenceImageUrls: input.referenceImageUrls,
+  })
+  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  return {
+    provider: 'fal',
+    model,
+    imageBytes,
+    imageUrl: falResult.imageUrl,
+    requestId: falResult.requestId,
+    responseId: null,
+    statusUrl: falResult.statusUrl,
+    responseUrl: falResult.responseUrl,
+    resultBody: falResult.resultBody,
+  }
+}
+
 async function downloadImageBytes(imageUrl: string) {
   let lastError: unknown = null
   const attempts = Number.isInteger(imageDownloadAttempts) && imageDownloadAttempts > 0 ? imageDownloadAttempts : 3
@@ -467,7 +752,7 @@ async function downloadImageBytes(imageUrl: string) {
     const timeout = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const download = await fetch(imageUrl, { signal: controller.signal })
-      if (!download.ok) throw new Error(`Generated Fal image could not be downloaded (${download.status}).`)
+      if (!download.ok) throw new Error(`Generated image could not be downloaded (${download.status}).`)
       return new Uint8Array(await download.arrayBuffer())
     } catch (error) {
       lastError = error
@@ -479,7 +764,7 @@ async function downloadImageBytes(imageUrl: string) {
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError ?? 'Unknown download error')
-  throw new Error(`Generated Fal image could not be downloaded after ${attempts} attempts. ${message}`)
+  throw new Error(`Generated image could not be downloaded after ${attempts} attempts. ${message}`)
 }
 
 async function uploadBytes(client: DatabaseClient, path: string, bytes: Uint8Array, contentType: string) {
@@ -551,19 +836,22 @@ function buildGeneratedAssetMetadata(input: {
   model: string
   prompt: string
   storagePath: string
-  falResult: FalImageResult
+  imageResult: GeneratedVisualImageResult
   extra?: Record<string, unknown>
 }) {
   return {
     generatedBy: input.generatedBy,
     visualJobId: input.job.id,
     jobKind: input.job.kind,
-    provider: 'fal',
+    provider: input.imageResult.provider,
     model: input.model,
-    falRequestId: input.falResult.requestId,
-    falStatusUrl: input.falResult.statusUrl,
-    falResponseUrl: input.falResult.responseUrl,
-    falImageUrl: input.falResult.imageUrl,
+    falRequestId: input.imageResult.provider === 'fal' ? input.imageResult.requestId : undefined,
+    falStatusUrl: input.imageResult.provider === 'fal' ? input.imageResult.statusUrl : undefined,
+    falResponseUrl: input.imageResult.provider === 'fal' ? input.imageResult.responseUrl : undefined,
+    falImageUrl: input.imageResult.provider === 'fal' ? input.imageResult.imageUrl : undefined,
+    openAiRequestId: input.imageResult.provider === 'openai' ? input.imageResult.requestId : undefined,
+    openAiResponseId: input.imageResult.provider === 'openai' ? input.imageResult.responseId : undefined,
+    openAiImageUrl: input.imageResult.provider === 'openai' ? input.imageResult.imageUrl : undefined,
     storageBucket: 'project-assets',
     storagePath: input.storagePath,
     prompt: input.prompt,
@@ -599,23 +887,19 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
     artStyleDescription: readString(artStyle.artStyleDescription) || 'cohesive, polished, high-quality worldbuilding icon art',
   })
 
-  const falApiKey = Deno.env.get('FAL_KEY')
-  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
-  const model = normalizeFalImageModel(Deno.env.get('VISUAL_GENERATION_FAL_MODEL') ?? job.model)
   const imageSettings = resolveEntityIconGridImageSettings({ gridRows, gridCols })
-  const falResult = await waitForFalImage({
+  const imageResult = await generateVisualImage({
     client,
     job,
     workerId,
-    apiKey: falApiKey,
-    model,
     prompt,
     phasePrefix: 'entity_icon_grid',
     imageSize: imageSettings.imageSize,
     quality: imageSettings.quality,
   })
+  const model = imageResult.model
 
-  const gridBytes = await downloadImageBytes(falResult.imageUrl)
+  const gridBytes = imageResult.imageBytes
   await heartbeat(client, job.id, workerId, { phase: 'entity_icon_grid_cropping_image', imageBytes: gridBytes.byteLength })
 
   const sharpModule = await import('npm:sharp@0.33.5')
@@ -655,7 +939,7 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
       model,
       prompt,
       storagePath: gridPath,
-      falResult,
+      imageResult,
       extra: {
         gridRows,
         gridCols,
@@ -703,7 +987,7 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
         model,
         prompt,
         storagePath,
-        falResult,
+        imageResult,
         extra: {
           sourceGridAssetKey: gridAssetKey,
           entityKey: candidate.entityKey,
@@ -745,12 +1029,15 @@ async function processEntityIconGridJob(client: DatabaseClient, job: VisualJob, 
 
   await completeJob(client, job.id, workerId, { assets: outputs, createdAssetKeys, sourceGridAssetKey: gridAssetKey }, {
     phase: 'completed',
-    provider: 'fal',
+    provider: imageResult.provider,
     model,
-    falRequestId: falResult.requestId,
-    falStatusUrl: falResult.statusUrl,
-    falResponseUrl: falResult.responseUrl,
-    falImageUrl: falResult.imageUrl,
+    falRequestId: imageResult.provider === 'fal' ? imageResult.requestId : undefined,
+    falStatusUrl: imageResult.provider === 'fal' ? imageResult.statusUrl : undefined,
+    falResponseUrl: imageResult.provider === 'fal' ? imageResult.responseUrl : undefined,
+    falImageUrl: imageResult.provider === 'fal' ? imageResult.imageUrl : undefined,
+    openAiRequestId: imageResult.provider === 'openai' ? imageResult.requestId : undefined,
+    openAiResponseId: imageResult.provider === 'openai' ? imageResult.responseId : undefined,
+    openAiImageUrl: imageResult.provider === 'openai' ? imageResult.imageUrl : undefined,
     completedCount: Object.keys(createdAssetKeys).length,
     imageSize: { width, height },
     requestedImageSize: imageSettings.imageSize,
@@ -770,20 +1057,16 @@ async function processBrandAtlasJob(client: DatabaseClient, job: VisualJob, work
     throw new Error('Brand atlas visual job is missing an asset key or storage path.')
   }
 
-  const falApiKey = Deno.env.get('FAL_KEY')
-  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
-  const model = normalizeFalImageModel(Deno.env.get('VISUAL_GENERATION_FAL_MODEL') ?? job.model)
-  const falResult = await waitForFalImage({
+  const imageResult = await generateVisualImage({
     client,
     job,
     workerId,
-    apiKey: falApiKey,
-    model,
     prompt,
     phasePrefix: 'brand_atlas',
   })
+  const model = imageResult.model
 
-  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  const imageBytes = imageResult.imageBytes
   await heartbeat(client, job.id, workerId, { phase: 'brand_atlas_uploading_asset', imageBytes: imageBytes.byteLength })
   await uploadBytes(client, storagePath, imageBytes, 'image/png')
 
@@ -801,7 +1084,7 @@ async function processBrandAtlasJob(client: DatabaseClient, job: VisualJob, work
       model,
       prompt,
       storagePath,
-      falResult,
+      imageResult,
       extra: {
         sourcePrompt,
       },
@@ -841,12 +1124,15 @@ async function processBrandAtlasJob(client: DatabaseClient, job: VisualJob, work
   }
   await completeJob(client, job.id, workerId, outputs, {
     phase: 'completed',
-    provider: 'fal',
+    provider: imageResult.provider,
     model,
-    falRequestId: falResult.requestId,
-    falStatusUrl: falResult.statusUrl,
-    falResponseUrl: falResult.responseUrl,
-    falImageUrl: falResult.imageUrl,
+    falRequestId: imageResult.provider === 'fal' ? imageResult.requestId : undefined,
+    falStatusUrl: imageResult.provider === 'fal' ? imageResult.statusUrl : undefined,
+    falResponseUrl: imageResult.provider === 'fal' ? imageResult.responseUrl : undefined,
+    falImageUrl: imageResult.provider === 'fal' ? imageResult.imageUrl : undefined,
+    openAiRequestId: imageResult.provider === 'openai' ? imageResult.requestId : undefined,
+    openAiResponseId: imageResult.provider === 'openai' ? imageResult.responseId : undefined,
+    openAiImageUrl: imageResult.provider === 'openai' ? imageResult.imageUrl : undefined,
     assetKey,
   })
 
@@ -873,25 +1159,20 @@ async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, work
   const quality = worldConceptImageQuality
   const imageSize = worldConceptImageSize
 
-  const falApiKey = Deno.env.get('FAL_KEY')
-  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
-  const model = normalizeFalImageModel(Deno.env.get('VISUAL_GENERATION_FAL_MODEL') ?? job.model)
-  const falResult = await waitForFalImage({
+  const imageResult = await generateVisualImage({
     client,
     job,
     workerId,
-    apiKey: falApiKey,
-    model,
     prompt,
     phasePrefix: 'wiki_visual',
     imageSize,
     quality,
     outputFormat,
   })
+  const model = imageResult.model
 
-  await heartbeat(client, job.id, workerId, { phase: 'wiki_visual_downloading_asset', falImageUrl: falResult.imageUrl })
-  const imageBytes = await downloadImageBytes(falResult.imageUrl)
-  await heartbeat(client, job.id, workerId, { phase: 'wiki_visual_uploading_asset', imageBytes: imageBytes.byteLength })
+  await heartbeat(client, job.id, workerId, { phase: 'wiki_visual_uploading_asset', imageBytes: imageResult.imageBytes.byteLength })
+  const imageBytes = imageResult.imageBytes
   await uploadBytes(client, storagePath, imageBytes, mimeType)
 
   const sourcePrompt = readString(job.input.sourcePrompt)
@@ -908,7 +1189,7 @@ async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, work
       model,
       prompt,
       storagePath,
-      falResult,
+      imageResult,
       extra: {
         sourcePrompt,
         role,
@@ -953,12 +1234,15 @@ async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, work
   }
   await completeJob(client, job.id, workerId, outputs, {
     phase: 'completed',
-    provider: 'fal',
+    provider: imageResult.provider,
     model,
-    falRequestId: falResult.requestId,
-    falStatusUrl: falResult.statusUrl,
-    falResponseUrl: falResult.responseUrl,
-    falImageUrl: falResult.imageUrl,
+    falRequestId: imageResult.provider === 'fal' ? imageResult.requestId : undefined,
+    falStatusUrl: imageResult.provider === 'fal' ? imageResult.statusUrl : undefined,
+    falResponseUrl: imageResult.provider === 'fal' ? imageResult.responseUrl : undefined,
+    falImageUrl: imageResult.provider === 'fal' ? imageResult.imageUrl : undefined,
+    openAiRequestId: imageResult.provider === 'openai' ? imageResult.requestId : undefined,
+    openAiResponseId: imageResult.provider === 'openai' ? imageResult.responseId : undefined,
+    openAiImageUrl: imageResult.provider === 'openai' ? imageResult.imageUrl : undefined,
     assetKey,
     role,
     quality,
@@ -1123,23 +1407,19 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     referenceAssetNotes,
   })
 
-  const falApiKey = Deno.env.get('FAL_KEY')
-  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
   const explicitModel = readString(job.input.model) || readString(job.targetKeys.model)
   const configuredModel = readString(Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL'))
-  const baseModel = normalizeFalImageModel(explicitModel || configuredModel || 'openai/gpt-image-2')
-  const model = baseModel === 'openai/gpt-image-2/edit' ? 'openai/gpt-image-2' : baseModel
+  const requestedModel = explicitModel || configuredModel || job.model || 'openai/gpt-image-2'
   const quality = readString(job.input.quality) || Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY') || 'medium'
   const outputFormat = readString(job.input.outputFormat) || Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_OUTPUT_FORMAT') || 'webp'
   const imageSize = asRecord(job.input.imageSize)
   const resolvedImageSize = Object.keys(imageSize).length > 0 ? imageSize : resolveEntityReferenceSheetImageSize(sheetKind)
 
-  const falResult = await waitForFalImage({
+  const imageResult = await generateVisualImage({
     client,
     job,
     workerId,
-    apiKey: falApiKey,
-    model,
+    model: requestedModel,
     prompt,
     phasePrefix: 'entity_reference_sheet',
     imageSize: resolvedImageSize,
@@ -1147,8 +1427,9 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     outputFormat,
     referenceImageUrls,
   })
+  const model = imageResult.model
 
-  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  const imageBytes = imageResult.imageBytes
   const extension = outputFormat === 'webp' ? 'webp' : outputFormat === 'jpeg' || outputFormat === 'jpg' ? 'jpg' : 'png'
   const mimeType = extension === 'webp' ? 'image/webp' : extension === 'jpg' ? 'image/jpeg' : 'image/png'
   const assetKey = readString(job.input.assetKey)
@@ -1172,7 +1453,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
       model,
       prompt,
       storagePath,
-      falResult,
+      imageResult,
       extra: {
         entityKey,
         entityName: entity.name,
@@ -1258,12 +1539,15 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     sheetKind,
   }, {
     phase: 'completed',
-    provider: 'fal',
+    provider: imageResult.provider,
     model,
-    falRequestId: falResult.requestId,
-    falStatusUrl: falResult.statusUrl,
-    falResponseUrl: falResult.responseUrl,
-    falImageUrl: falResult.imageUrl,
+    falRequestId: imageResult.provider === 'fal' ? imageResult.requestId : undefined,
+    falStatusUrl: imageResult.provider === 'fal' ? imageResult.statusUrl : undefined,
+    falResponseUrl: imageResult.provider === 'fal' ? imageResult.responseUrl : undefined,
+    falImageUrl: imageResult.provider === 'fal' ? imageResult.imageUrl : undefined,
+    openAiRequestId: imageResult.provider === 'openai' ? imageResult.requestId : undefined,
+    openAiResponseId: imageResult.provider === 'openai' ? imageResult.responseId : undefined,
+    openAiImageUrl: imageResult.provider === 'openai' ? imageResult.imageUrl : undefined,
     assetKey,
     entityKey,
     sheetKind,
@@ -1290,20 +1574,16 @@ async function processAppScreenMockupJob(client: DatabaseClient, job: VisualJob,
   const storagePath = readString(job.input.storagePath)
     || `generated/app-screen-mockups/${job.draftId}/${job.id}/${slugify(screenName)}.png`
 
-  const falApiKey = Deno.env.get('FAL_KEY')
-  if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
-  const model = normalizeFalImageModel(Deno.env.get('VISUAL_GENERATION_FAL_MODEL') ?? job.model)
-  const falResult = await waitForFalImage({
+  const imageResult = await generateVisualImage({
     client,
     job,
     workerId,
-    apiKey: falApiKey,
-    model,
     prompt,
     phasePrefix: 'app_screen_mockup',
   })
+  const model = imageResult.model
 
-  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  const imageBytes = imageResult.imageBytes
   await heartbeat(client, job.id, workerId, { phase: 'app_screen_mockup_uploading_asset', imageBytes: imageBytes.byteLength, screenKey })
   await uploadBytes(client, storagePath, imageBytes, 'image/png')
 
@@ -1320,7 +1600,7 @@ async function processAppScreenMockupJob(client: DatabaseClient, job: VisualJob,
       model,
       prompt,
       storagePath,
-      falResult,
+      imageResult,
       extra: {
         targetKind: 'app_screen_mockup',
         targetKey: screenKey,
@@ -1384,12 +1664,15 @@ async function processAppScreenMockupJob(client: DatabaseClient, job: VisualJob,
   }
   await completeJob(client, job.id, workerId, outputs, {
     phase: 'completed',
-    provider: 'fal',
+    provider: imageResult.provider,
     model,
-    falRequestId: falResult.requestId,
-    falStatusUrl: falResult.statusUrl,
-    falResponseUrl: falResult.responseUrl,
-    falImageUrl: falResult.imageUrl,
+    falRequestId: imageResult.provider === 'fal' ? imageResult.requestId : undefined,
+    falStatusUrl: imageResult.provider === 'fal' ? imageResult.statusUrl : undefined,
+    falResponseUrl: imageResult.provider === 'fal' ? imageResult.responseUrl : undefined,
+    falImageUrl: imageResult.provider === 'fal' ? imageResult.imageUrl : undefined,
+    openAiRequestId: imageResult.provider === 'openai' ? imageResult.requestId : undefined,
+    openAiResponseId: imageResult.provider === 'openai' ? imageResult.responseId : undefined,
+    openAiImageUrl: imageResult.provider === 'openai' ? imageResult.imageUrl : undefined,
     assetKey,
     screenKey,
     screenMockupKey: mockupKey,
@@ -1648,6 +1931,7 @@ export async function processFlyVisualGenerationJobs(input: {
 }) {
   const claim = await input.client.rpc('claim_visual_generation_job', {
     worker_id: input.workerId,
+    openai_running_limit: openAiClaimConcurrency,
   })
   if (claim.error) throw new Error(claim.error.message)
   if (!claim.data) {
@@ -1686,10 +1970,17 @@ export async function processFlyVisualGenerationJobs(input: {
       jobId,
       workerId: input.workerId,
       kind: job?.kind ?? null,
+      provider: job?.provider ?? null,
+      model: job?.model ?? null,
       message,
     })
     try {
-      await failJob(input.client, jobId, input.workerId, message, { phase: 'failed' })
+      await failJob(input.client, jobId, input.workerId, message, {
+        phase: 'failed',
+        provider: job?.provider ?? null,
+        model: job?.model ?? null,
+        failureMessage: message,
+      })
     } catch (failureError) {
       console.error('[visual-generation-job] failed to persist job failure.', {
         jobId,

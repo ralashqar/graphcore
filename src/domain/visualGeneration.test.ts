@@ -76,7 +76,7 @@ test('visual generation start request supports app mockup and analysis kinds', (
     input: { prompt: 'premium mobile home screen' },
   })
 
-  assert.equal(request.provider, 'fal')
+  assert.equal(request.provider, 'openai')
   assert.equal(request.model, 'openai/gpt-image-2')
   assert.equal(request.kind, 'app_screen_mockup')
 
@@ -123,6 +123,52 @@ test('visual generation schemas accept entity reference sheet jobs and legacy ch
   assert.equal(legacy.kind, 'character_sheet')
 })
 
+test('visual generation schemas support OpenAI direct provider mode', () => {
+  const request = visualGenerationStartRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    kind: 'wiki_visual',
+    provider: 'openai',
+    model: 'gpt-image-2',
+    targetKeys: { role: 'world_concept_image', assetKey: 'world_concept_project' },
+    input: { imagePrompt: 'single cinematic world concept scene' },
+  })
+
+  assert.equal(request.provider, 'openai')
+  assert.equal(request.model, 'gpt-image-2')
+})
+
+test('visual generation start endpoint preserves backend provider defaults when the client omits provider', () => {
+  const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
+  const startEndpoint = readFileSync(resolve(repoRoot, 'supabase/functions/start-visual-generation-job/index.ts'), 'utf8')
+
+  assert.match(repositorySource, /delete payload\.provider/)
+  assert.match(startEndpoint, /VISUAL_GENERATION_IMAGE_PROVIDER/)
+  assert.match(startEndpoint, /providerMode === 'both'/)
+  assert.match(startEndpoint, /chooseBalancedImageProvider/)
+  assert.match(startEndpoint, /normalizeVisualGenerationModel/)
+  assert.match(startEndpoint, /providerDefaultSource/)
+})
+
+test('Fly visual worker can render queued visual jobs through OpenAI direct or Fal', () => {
+  const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
+  const claimMigration = readFileSync(resolve(repoRoot, 'supabase/migrations/20260512120000_visual_generation_provider_claim_caps.sql'), 'utf8')
+
+  assert.match(visualWorker, /runTrackedOpenAiImages/)
+  assert.match(visualWorker, /function normalizeOpenAiImageModel/)
+  assert.match(visualWorker, /function generateVisualImage/)
+  assert.match(visualWorker, /provider === 'openai'/)
+  assert.match(visualWorker, /extractOpenAiImageOutput/)
+  assert.match(visualWorker, /b64_json/)
+  assert.match(visualWorker, /VISUAL_GENERATION_OPENAI_TIMEOUT_MS/)
+  assert.match(visualWorker, /VISUAL_GENERATION_OPENAI_ATTEMPTS/)
+  assert.match(visualWorker, /VISUAL_GENERATION_OPENAI_CONCURRENCY/)
+  assert.match(visualWorker, /openai_running_limit/)
+  assert.match(claimMigration, /openai_running_limit integer default 8/)
+  assert.match(claimMigration, /provider = 'openai'/)
+  assert.match(claimMigration, /capacity\.active_openai_jobs < openai_limit/)
+})
+
 test('brand atlas endpoint enqueues generic visual jobs instead of calling image provider directly', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/start-world-brand-atlas-image/index.ts'), 'utf8')
   assert.match(source, /visual_generation_jobs/)
@@ -143,6 +189,8 @@ test('manual entity icon-grid starts are disabled but the Fly worker supports re
   assert.match(startEndpoint, /payload\.kind === 'world_entity_icon_grid'/)
   assert.match(startEndpoint, /Legacy world entity icon-grid generation is disabled/)
   assert.match(worker, /processFlyVisualGenerationJobs/)
+  assert.match(worker, /VISUAL_GENERATION_WORKER_CONCURRENCY/)
+  assert.match(worker, /Array\.from\(\{\s*length:\s*visualWorkerConcurrency\s*\}/)
   assert.match(visualWorker, /world_entity_icon_grid/)
   assert.match(visualWorker, /await processEntityIconGridJob\(input\.client,\s*job,\s*input\.workerId\)/)
   assert.match(visualWorker, /only allowed for lore\/concept and story sequence entries/)
@@ -157,6 +205,7 @@ test('initial streamed seed queues world concept image, per-entity reference she
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/world-prompt.ts'), 'utf8')
 
   assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,180}await maybeQueueInitialSeedWorldConceptImage\('world_wiki_metadata'\)/)
+  assert.doesNotMatch(source, /skippedReason:\s*'existing_asset'/)
   assert.match(source, /function hasInitialSeedReferenceArtDirection/)
   assert.match(source, /skippedReason:\s*'missing_world_wiki_art_style_description'/)
   assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,260}await maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities\('world_wiki_metadata'\)/)
@@ -207,12 +256,18 @@ test('Fly wiki visual worker hard-forces low quality wide world concept images',
 test('wiki hero banner only renders world concept image assets, not entity reference sheets', () => {
   const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
   const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const wikiPanelSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/wiki/WorldWikiPanel.tsx'), 'utf8')
 
   assert.match(appSource, /function isWorldConceptImageAsset/)
   assert.match(appSource, /generatedBy\) === 'world_concept_image'/)
   assert.match(appSource, /jobKind\) === 'wiki_visual'/)
   assert.match(worldGraphSource, /function isWorldConceptImageAsset/)
-  assert.match(worldGraphSource, /const wikiOverviewImageUrl = liveWorldConceptImageUrl \?\? wikiWorldConceptImageUrl/)
+  assert.match(worldGraphSource, /const wikiOverviewImageUrl = liveWikiGenerationState\.active/)
+  assert.match(worldGraphSource, /overviewWorldConceptAssetKey/)
+  assert.match(worldGraphSource, /wikiWorldConceptAsset\?\.key === liveWikiGenerationState\.overviewWorldConceptAssetKey/)
+  assert.match(wikiPanelSource, /const liveOverviewReady = !liveGenerationActive \|\| wikiOverviewShowMetadata/)
+  assert.match(worldGraphSource, /onGenerateWorldConceptImage/)
+  assert.match(worldGraphSource, /failed to auto-start world concept image generation from Wiki/)
   assert.doesNotMatch(worldGraphSource, /wikiOverviewImageUrl = liveWorldConceptImageUrl \?\? wikiWorldConceptImageUrl \?\? wikiHeroEntityImageUrl/)
 })
 
@@ -222,7 +277,7 @@ test('Fly visual worker bounds Fal image downloads so completed jobs cannot hang
   assert.match(visualWorker, /VISUAL_GENERATION_IMAGE_DOWNLOAD_TIMEOUT_MS/)
   assert.match(visualWorker, /VISUAL_GENERATION_IMAGE_DOWNLOAD_ATTEMPTS/)
   assert.match(visualWorker, /fetch\(imageUrl,\s*\{\s*signal:\s*controller\.signal\s*\}\)/)
-  assert.match(visualWorker, /wiki_visual_downloading_asset/)
+  assert.match(visualWorker, /Generated image could not be downloaded after/)
 })
 
 test('entity reference sheet jobs route through Fly visual worker with medium webp output', () => {
@@ -234,8 +289,8 @@ test('entity reference sheet jobs route through Fly visual worker with medium we
   assert.match(visualWorker, /processEntityReferenceSheetJob/)
   assert.match(visualWorker, /job\.kind === 'entity_reference_sheet' \|\| job\.kind === 'character_sheet'/)
   assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL/)
-  assert.match(visualWorker, /explicitModel \|\| configuredModel \|\| 'openai\/gpt-image-2'/)
-  assert.match(visualWorker, /baseModel === 'openai\/gpt-image-2\/edit' \? 'openai\/gpt-image-2' : baseModel/)
+  assert.match(visualWorker, /requestedModel = explicitModel \|\| configuredModel \|\| job\.model \|\| 'openai\/gpt-image-2'/)
+  assert.match(visualWorker, /model: requestedModel/)
   assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_QUALITY'\) \|\| 'medium'/)
   assert.match(visualWorker, /VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_OUTPUT_FORMAT'\) \|\| 'webp'/)
   assert.match(visualWorker, /referenceSheetAssetKey/)

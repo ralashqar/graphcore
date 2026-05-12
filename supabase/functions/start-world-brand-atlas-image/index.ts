@@ -26,6 +26,45 @@ function readString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+async function resolveVisualGenerationImageProvider(client: Awaited<ReturnType<typeof requireUserClient>>['client'], projectId: string, draftId: string) {
+  const provider = readString(Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER')).toLowerCase()
+  if (provider === 'fal') return 'fal'
+  if (provider === 'both' || provider === 'balanced' || provider === 'load_balance' || provider === 'load-balanced' || provider === 'hybrid') {
+    const response = await client
+      .from('visual_generation_jobs')
+      .select('provider, status, updated_at')
+      .eq('project_id', projectId)
+      .eq('draft_id', draftId)
+      .in('provider', ['openai', 'fal'])
+      .in('status', ['queued', 'running', 'failed'])
+      .order('updated_at', { ascending: false })
+      .limit(80)
+    if (response.error) {
+      console.warn('[GraphCore] mixed visual provider selector fell back to OpenAI.', {
+        projectId,
+        draftId,
+        message: response.error.message,
+      })
+      return 'openai'
+    }
+    const scores = { openai: 0, fal: 0 }
+    const recentFailureCutoff = Date.now() - 10 * 60_000
+    for (const row of response.data ?? []) {
+      const selectedProvider = row.provider === 'fal' ? 'fal' : row.provider === 'openai' ? 'openai' : null
+      if (!selectedProvider) continue
+      if (row.status === 'queued' || row.status === 'running') scores[selectedProvider] += 1
+      if (row.status === 'failed' && Date.parse(String(row.updated_at ?? '')) > recentFailureCutoff) scores[selectedProvider] += 3
+    }
+    if (scores.openai === scores.fal) return 'openai'
+    return scores.openai < scores.fal ? 'openai' : 'fal'
+  }
+  return 'openai'
+}
+
+function resolveVisualGenerationImageModel(provider: string) {
+  return provider === 'openai' ? 'gpt-image-2' : 'openai/gpt-image-2'
+}
+
 function slugify(value: string) {
   return value
     .toLowerCase()
@@ -98,6 +137,8 @@ Deno.serve(async (request) => {
     const assetKey = `brand_atlas_${slugify(wiki.title || 'project')}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
     const storagePath = `generated/wiki-brand-atlas/${payload.draftId}/${assetKey}.png`
     const now = new Date().toISOString()
+    const visualProvider = await resolveVisualGenerationImageProvider(client, payload.projectId, payload.draftId)
+    const visualModel = resolveVisualGenerationImageModel(visualProvider)
 
     const activeJobsResponse = await client
       .from('visual_generation_jobs')
@@ -149,8 +190,8 @@ Deno.serve(async (request) => {
         requested_by: user.id,
         status: 'queued',
         kind: 'brand_atlas',
-        provider: 'fal',
-        model: 'openai/gpt-image-2',
+        provider: visualProvider,
+        model: visualModel,
         target_keys: {
           assetKey,
           wikiField: 'brandAtlasAssetKey',
@@ -170,6 +211,8 @@ Deno.serve(async (request) => {
         },
         metadata: {
           runtime: 'fly',
+          provider: visualProvider,
+          model: visualModel,
           queuedBy: 'start-world-brand-atlas-image',
         },
       })
@@ -190,8 +233,8 @@ Deno.serve(async (request) => {
           generatedBy: 'world_brand_atlas',
           visualJobId: jobResponse.data.id,
           jobKind: 'brand_atlas',
-          provider: 'fal',
-          model: 'openai/gpt-image-2',
+          provider: visualProvider,
+          model: visualModel,
           storageBucket: 'project-assets',
           storagePath,
           prompt: imagePrompt,
