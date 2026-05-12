@@ -711,6 +711,40 @@ export async function loadOutputWorkflowRunBundle(
   }
 }
 
+export async function loadOutputWorkflowRunStatus(
+  client: DatabaseClient,
+  runId: string,
+) {
+  const runResponse = await client
+    .from('output_workflow_runs')
+    .select(outputWorkflowRunStatusSelect)
+    .eq('id', runId)
+    .single()
+  if (runResponse.error || !runResponse.data) throw new Error(runResponse.error?.message ?? 'Output workflow run not found.')
+  const runRow = runResponse.data as OutputWorkflowRunRow
+
+  const [stepResponse, artifactResponse] = await Promise.all([
+    client
+      .from('output_workflow_run_steps')
+      .select(outputWorkflowRunStepStatusSelect)
+      .eq('run_id', runRow.id)
+      .order('order_index', { ascending: true }),
+    client
+      .from('output_artifacts')
+      .select(outputArtifactSelect)
+      .eq('run_id', runRow.id)
+      .order('created_at', { ascending: true }),
+  ])
+  if (stepResponse.error) throw new Error(stepResponse.error.message)
+  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
+
+  return mapOutputWorkflowRunRow(
+    runRow,
+    ((stepResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow),
+    ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow),
+  )
+}
+
 async function heartbeat(client: DatabaseClient, runId: string, workerId: string, metadataPatch: Record<string, unknown>) {
   const response = await client.rpc('heartbeat_output_workflow_run', {
     run_id: runId,
@@ -1008,6 +1042,58 @@ function collectCachedExternalUpstream(input: {
     staleReusedNodeKeys: [...new Set(staleReusedNodeKeys)],
     missingNodeKeys: [...new Set(missingNodeKeys)],
     sourceRunIds: [...new Set(sourceRunIds)],
+  }
+}
+
+function outputWorkflowCacheStatus(input: {
+  missingNodeKeys?: string[]
+  staleReusedNodeKeys?: string[]
+}) {
+  const missingNodeKeys = [...new Set(input.missingNodeKeys ?? [])]
+  const staleReusedNodeKeys = [...new Set(input.staleReusedNodeKeys ?? [])]
+  if (missingNodeKeys.length > 0) return 'missing_upstream'
+  if (staleReusedNodeKeys.length > 0) return 'stale_upstream'
+  return 'ready'
+}
+
+function buildOutputWorkflowNodeExecutionCacheMetadata(input: {
+  node: OutputWorkflowNode
+  runId: string
+  level: number
+  resourceClass: string
+  inputHash: string
+  outputHash: string
+  effectiveUpstream: Record<string, Record<string, unknown>>
+  reusedNodeKeys?: string[]
+  staleReusedNodeKeys?: string[]
+  missingNodeKeys?: string[]
+  sourceRunIds?: string[]
+  recoveredFromRunStep?: boolean
+  skippedReason?: string
+}) {
+  const staleUpstreamKeys = [...new Set(input.staleReusedNodeKeys ?? [])]
+  const missingRequiredUpstreamKeys = [...new Set(input.missingNodeKeys ?? [])]
+  return {
+    ...asRecord(asRecord(input.node.metadata).execution),
+    level: input.level,
+    resourceClass: input.resourceClass,
+    lastRunId: input.runId,
+    inputHash: input.inputHash,
+    outputHash: input.outputHash,
+    recoveredFromRunStep: input.recoveredFromRunStep === true ? true : undefined,
+    skippedReason: input.skippedReason || undefined,
+    cachedInputUpstream: compactOutputWorkflowUpstreamForNodeCache(input.effectiveUpstream),
+    cachedInputNodeKeys: Object.keys(input.effectiveUpstream),
+    cachedInputAt: new Date().toISOString(),
+    reusedNodeKeys: [...new Set(input.reusedNodeKeys ?? [])],
+    staleReusedNodeKeys: staleUpstreamKeys,
+    staleUpstreamKeys,
+    missingRequiredUpstreamKeys,
+    sourceRunIds: [...new Set(input.sourceRunIds ?? [])],
+    cacheStatus: outputWorkflowCacheStatus({
+      missingNodeKeys: missingRequiredUpstreamKeys,
+      staleReusedNodeKeys: staleUpstreamKeys,
+    }),
   }
 }
 
@@ -3945,6 +4031,16 @@ function resolveCinematicV2AnimaticMode(config: Record<string, unknown>, run?: O
   return raw === 'quality_keyframes' ? 'quality_keyframes' : 'fast_panels'
 }
 
+function resolveCinematicV2QualityShotIds(config: Record<string, unknown>, run?: OutputWorkflowRun | null) {
+  const runInput = asRecord(run?.input)
+  const runMetadata = asRecord(run?.metadata)
+  return uniqueStrings([
+    ...readStringArray(runInput.cinematicV2QualityShotIds),
+    ...readStringArray(runMetadata.cinematicV2QualityShotIds),
+    ...readStringArray(config.cinematicV2QualityShotIds),
+  ])
+}
+
 function formatCinematicEntityAnchorLines(entities: ReturnType<typeof compactCinematicEntityAnchors>) {
   return entities.map((entity) => {
     const parts = [
@@ -5837,6 +5933,31 @@ function dynamicNodeRow(input: {
   }
 }
 
+function preserveExistingDynamicNodeOutput(input: {
+  nextRow: Record<string, unknown>
+  existingNode: OutputWorkflowNodeRow | null | undefined
+  preserve: boolean
+  compileHash: string
+}) {
+  if (!input.preserve || !input.existingNode) return input.nextRow
+  const existingMetadata = asRecord(input.existingNode.metadata)
+  return {
+    ...input.nextRow,
+    outputs: asRecord(input.existingNode.outputs),
+    dirty: input.existingNode.dirty === true,
+    input_hash: readText(input.existingNode.input_hash),
+    output_hash: readText(input.existingNode.output_hash),
+    metadata: {
+      ...asRecord(input.nextRow.metadata),
+      execution: asRecord(existingMetadata.execution),
+      outputPreview: asRecord(existingMetadata.outputPreview),
+      preservedDuringSelectedShotMaterialization: true,
+      preservedFromDynamicCompileHash: readText(existingMetadata.dynamicCompileHash),
+      dynamicCompileHash: input.compileHash,
+    },
+  }
+}
+
 function dynamicEdgeRow(input: {
   workflow: OutputWorkflow
   key: string
@@ -5893,7 +6014,7 @@ async function materializeDynamicCinematicTakeFanout(input: {
 
   const existingNodeResponse = await input.client
     .from('output_workflow_nodes')
-    .select(outputWorkflowNodeStatusSelect)
+    .select(outputWorkflowNodeSelect)
     .eq('workflow_id', input.workflow.id)
   if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
   const existingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
@@ -5948,13 +6069,13 @@ async function materializeDynamicCinematicTakeFanout(input: {
     const videoKey = `take_${suffix}_video`
     nodeRows.push(
       dynamicNodeRow({ workflow: input.workflow, key: beatSheetPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} ${useDirectionSheet ? 'Direction Sheet' : 'Beat Sheet'} Prompt`, x: 1760, y, compileHash, config: { purpose: 'cinematic_beat_sheet_prompt', takeId, takeIndex: index, aspectRatio, presetFamily, planningOnly: true, cinematicReferenceMode, referenceSheetKind: useDirectionSheet ? 'shot_reference_sheet' : 'storyboard_sheet', debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, execution: { resourceClass: 'utility', groupKey: 'cinematic_beat_sheet_prompts', maxConcurrency: 6 } } }),
-      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} ${useDirectionSheet ? 'Direction Sheet' : 'Beat Sheet'}`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: useDirectionSheet ? 'cinematic_direction_sheet' : 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: useDirectionSheet ? 'from_direction_sheet_layout' : 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, cinematicReferenceMode, referenceSheetKind: useDirectionSheet ? 'shot_reference_sheet' : 'storyboard_sheet', debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, skillKeys: [useDirectionSheet ? 'cinematic_direction_sheet_planning' : 'cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: useDirectionSheet ? ['direction_sheet', 'shot_reference_sheet', 'camera_layout', 'floor_map', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'] : ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 3 } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: beatSheetKey, nodeType: 'image_generation', label: `Take ${takeNumber} ${useDirectionSheet ? 'Direction Sheet' : 'Beat Sheet'}`, x: 2040, y, compileHash, config: { purpose: 'cinematic_beat_sheet', role: useDirectionSheet ? 'cinematic_direction_sheet' : 'cinematic_beat_sheet', takeId, takeIndex: index, planningOnly: true, planning_only: true, usedAsVideoReference: useStoryboardReference, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSizePolicy: useDirectionSheet ? 'from_direction_sheet_layout' : 'from_beat_sheet_prompt_layout', panelAspectRatio: aspectRatio, cinematicReferenceMode, referenceSheetKind: useDirectionSheet ? 'shot_reference_sheet' : 'storyboard_sheet', debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, skillKeys: [useDirectionSheet ? 'cinematic_direction_sheet_planning' : 'cinematic_beat_sheet_planning', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: useDirectionSheet ? ['direction_sheet', 'shot_reference_sheet', 'camera_layout', 'floor_map', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'] : ['beat_sheet', 'storyboard', 'planning_only', 'video_reference', 'image_prompt', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_beat_sheets', maxConcurrency: 8 } } }),
       ...(useKeyframes ? [
         dynamicNodeRow({ workflow: input.workflow, key: keyframePromptPackKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Keyframe Prompts`, x: 2320, y, compileHash, config: { purpose: 'cinematic_keyframe_prompt_pack', takeId, takeIndex: index, aspectRatio, presetFamily, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, execution: { resourceClass: 'utility', groupKey: 'cinematic_keyframe_prompt_packs', maxConcurrency: 6 } } }),
-        ...keyframeKeys.map((keyframeKey, keyframeIndex) => dynamicNodeRow({ workflow: input.workflow, key: keyframeKey, nodeType: 'image_generation', label: `Take ${takeNumber} Keyframe ${keyframeIndex + 1}`, x: 2600 + keyframeIndex * 40, y: y + keyframeIndex * 44, compileHash, config: { purpose: 'cinematic_keyframe', role: 'cinematic_keyframe', takeId, takeIndex: index, keyframeIndex, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_keyframes', maxConcurrency: 3 } } })),
+        ...keyframeKeys.map((keyframeKey, keyframeIndex) => dynamicNodeRow({ workflow: input.workflow, key: keyframeKey, nodeType: 'image_generation', label: `Take ${takeNumber} Keyframe ${keyframeIndex + 1}`, x: 2600 + keyframeIndex * 40, y: y + keyframeIndex * 44, compileHash, config: { purpose: 'cinematic_keyframe', role: 'cinematic_keyframe', takeId, takeIndex: index, keyframeIndex, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'low', outputFormat: 'webp', maxReferenceImages: 16, imageSize: keyframeImageSize, aspectRatio, skillKeys: ['cinematic_keyframe_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_keyframes', maxConcurrency: 8 } } })),
       ] : []),
       dynamicNodeRow({ workflow: input.workflow, key: videoPromptKey, nodeType: 'utility_transform', label: `Take ${takeNumber} Video Prompt`, x: 2880, y, compileHash, config: { purpose: 'cinematic_video_prompt', takeId, takeIndex: index, durationSeconds, aspectRatio, resolution, generateAudio, presetFamily, cinematicReferenceMode, debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode, cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt, debugSkipVideoGeneration, execution: { resourceClass: 'utility', groupKey: 'cinematic_video_prompts', maxConcurrency: 6 } } }),
-      dynamicNodeRow({ workflow: input.workflow, key: videoKey, nodeType: 'video_generation', label: `Take ${takeNumber} Video`, x: 3160, y, compileHash, config: { purpose: 'cinematic_block_video', role: 'cinematic_block', takeId, takeIndex: index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds, aspectRatio, resolution, generateAudio, cinematicReferenceMode, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'seedance_reference_legend_contract', 'seedance_timeline_call_sheet', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'], autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(takePlan.length, 3) } } }),
+      dynamicNodeRow({ workflow: input.workflow, key: videoKey, nodeType: 'video_generation', label: `Take ${takeNumber} Video`, x: 3160, y, compileHash, config: { purpose: 'cinematic_block_video', role: 'cinematic_block', takeId, takeIndex: index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds, aspectRatio, resolution, generateAudio, cinematicReferenceMode, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'seedance_reference_legend_contract', 'seedance_timeline_call_sheet', 'cinematic_shot_direction', 'shortform_hook_retention', 'brand_ugc_proof_structure', 'provider_prompt_hygiene'], autoSkillTags: ['video_prompt', 'seedance', 'cinematic', 'ugc', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: Math.min(takePlan.length, 8) } } }),
     )
     const takeMeta = { takeId, takeIndex: index }
     edgeRows.push(
@@ -6004,10 +6125,25 @@ async function materializeDynamicCinematicTakeFanout(input: {
   const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
   if (insertEdges.error) throw new Error(insertEdges.error.message)
   const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodeKeys = existingDynamicNodes.map((row) => row.key).filter((key) => !nextDynamicNodeKeys.has(key))
-  if (obsoleteDynamicNodeKeys.length > 0) {
-    const deleteNodes = await input.client.from('output_workflow_nodes').delete().eq('workflow_id', input.workflow.id).in('key', obsoleteDynamicNodeKeys)
-    if (deleteNodes.error) throw new Error(deleteNodes.error.message)
+  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
+  if (obsoleteDynamicNodes.length > 0) {
+    const staleAt = new Date().toISOString()
+    for (const obsoleteNode of obsoleteDynamicNodes) {
+      const markStale = await input.client
+        .from('output_workflow_nodes')
+        .update({
+          dirty: true,
+          metadata: {
+            ...asRecord(obsoleteNode.metadata),
+            dynamicCinematicStale: true,
+            staleAt,
+            staleReason: 'dynamic_fanout_rematerialized',
+            replacedByDynamicCompileHash: compileHash,
+          },
+        })
+        .eq('id', obsoleteNode.id)
+      if (markStale.error) throw new Error(markStale.error.message)
+    }
   }
   const dynamicUpdatedAt = new Date().toISOString()
   const updateWorkflow = await input.client.from('output_workflows').update({
@@ -6058,6 +6194,16 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
   const resolution = readText(input.config.resolution) || '720p'
   const cinematicV2AnimaticMode = resolveCinematicV2AnimaticMode(input.config, input.run)
   const useQualityKeyframes = cinematicV2AnimaticMode === 'quality_keyframes'
+  const cinematicV2QualityShotIds = resolveCinematicV2QualityShotIds(input.config, input.run)
+  const cinematicV2QualityShotIdSet = new Set(cinematicV2QualityShotIds)
+  const selectedShotMaterialization = readText(asRecord(input.run.metadata).materializationMode) === 'selected_shots'
+    || readText(input.run.input.materializationMode) === 'selected_shots'
+  const shotUsesQualityKeyframe = (shot: z.infer<typeof cinematicV2ShotSchema>) => (
+    useQualityKeyframes
+    || cinematicV2QualityShotIdSet.has(shot.id)
+    || cinematicV2QualityShotIdSet.has(String(shot.index))
+    || cinematicV2QualityShotIdSet.has(String(shot.index).padStart(3, '0'))
+  )
   const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue({
     shotPlan,
     storyboardGroupPlan,
@@ -6067,6 +6213,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     screenplayDraft,
     referencePlan,
     cinematicV2AnimaticMode,
+    cinematicV2QualityShotIds: cinematicV2QualityShotIds.slice().sort(),
   })
   const debugSkipVideoGeneration = input.config.debugSkipVideoGeneration === true
   const videoProvider = resolveOutputVideoProvider(input.config)
@@ -6077,11 +6224,12 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
 
   const existingNodeResponse = await input.client
     .from('output_workflow_nodes')
-    .select(outputWorkflowNodeStatusSelect)
+    .select(outputWorkflowNodeSelect)
     .eq('workflow_id', input.workflow.id)
   if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
   const existingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
     .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
+  const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row]))
   const existingSameHash = existingDynamicNodes.length > 0
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
@@ -6091,7 +6239,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     && shotPlan.shots.every((shot) => {
       const keyframeNode = existingDynamicNodes.find((row) => row.key === `cinematic_v2_shot_${String(shot.index).padStart(3, '0')}_keyframe`)
       const keyframePurpose = readText(asRecord(keyframeNode?.config).purpose)
-      return useQualityKeyframes
+      return shotUsesQualityKeyframe(shot)
         ? keyframePurpose === 'cinematic_v2_shot_keyframe'
         : keyframePurpose === 'cinematic_v2_shot_keyframe_passthrough'
     })
@@ -6113,6 +6261,30 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
   }
   const nodeRows: Record<string, unknown>[] = []
   const edgeRows: Record<string, unknown>[] = []
+  const preserveNodeRow = (row: Record<string, unknown>) => {
+    const key = readText(row.key)
+    const existingNode = existingDynamicNodeByKey.get(key)
+    const nextPurpose = readText(asRecord(row.config).purpose)
+    const existingPurpose = readText(asRecord(existingNode?.config).purpose)
+    const selectedShotKeyframeNode = shotPlan.shots.some((shot, index) => {
+      if (!shotUsesQualityKeyframe(shot)) return false
+      const suffix = String(shot.index || index + 1).padStart(3, '0')
+      const baseKey = `cinematic_v2_shot_${suffix}`
+      return key === `${baseKey}_keyframe_prompt`
+        || key === `${baseKey}_keyframe`
+        || key === `${baseKey}_keyframe_qa`
+    })
+    return preserveExistingDynamicNodeOutput({
+      nextRow: row,
+      existingNode,
+      compileHash,
+      preserve: selectedShotMaterialization
+        && !selectedShotKeyframeNode
+        && Boolean(existingNode)
+        && readText(existingNode?.node_type) === readText(row.node_type)
+        && existingPurpose === nextPurpose,
+    })
+  }
   const v2Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicNodeRow({
     workflow: input.workflow,
     compileHash,
@@ -6143,7 +6315,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     const extractKey = `${group.id}_panel_extract`
     nodeRows.push(
       v2Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard Group ${group.index} Prompt`, x: 1760, y, config: { purpose: 'cinematic_v2_storyboard_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', aspectRatio, storyboardGroup: group, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_storyboard_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard Group ${group.index} Sheet`, x: 2040, y, config: { purpose: 'cinematic_v2_storyboard_sheet', role: 'cinematic_v2_storyboard_sheet', cinematicPipelineVersion: 'v2_shot_orchestration', storyboardGroup: group, storyboardGroupId: group.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: false, used_as_video_reference: false, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_storyboard_sheets', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 3) } } }),
+      v2Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard Group ${group.index} Sheet`, x: 2040, y, config: { purpose: 'cinematic_v2_storyboard_sheet', role: 'cinematic_v2_storyboard_sheet', cinematicPipelineVersion: 'v2_shot_orchestration', storyboardGroup: group, storyboardGroupId: group.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: false, used_as_video_reference: false, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_storyboard_sheets', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 8) } } }),
       v2Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Group ${group.index} Panels`, x: 2320, y, config: { purpose: 'cinematic_v2_panel_extract', cinematicPipelineVersion: 'v2_shot_orchestration', storyboardGroup: group, storyboardGroupId: group.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_panel_extract', maxConcurrency: 6 } } }),
     )
     edgeRows.push(
@@ -6173,24 +6345,26 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     const storyboardGroup = storyboardGroupByShotId.get(shot.id)
     const panelExtractKey = storyboardGroup ? `${storyboardGroup.id}_panel_extract` : 'cinematic_v2_panel_extract'
     const shotMeta = { shotId: shot.id, shotIndex: shot.index, storyboardGroupId: storyboardGroup?.id ?? null }
+    const shotQualityKeyframe = shotUsesQualityKeyframe(shot)
+    const shotAnimaticMode = shotQualityKeyframe ? 'quality_keyframes' : cinematicV2AnimaticMode
     nodeRows.push(
       v2Node({ key: shotAssetPackKey, nodeType: 'utility_transform', label: `Shot ${shot.index} References`, x: 2460, y, config: { purpose: 'cinematic_v2_shot_asset_pack', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, maxEntityCount: 6, maxAssetKeysPerEntity: 2, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_shot_asset_packs', maxConcurrency: 12 } } }),
-      ...(useQualityKeyframes
+      ...(shotQualityKeyframe
         ? [
-          v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Enhancement Prompt`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode, shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
-          v2Node({ key: keyframeKey, nodeType: 'image_generation', label: `Shot ${shot.index} Enhanced Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode, shotId: shot.id, shotIndex: shot.index, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 6, imageSize: { width: 1536, height: 864 }, aspectRatio, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_keyframe_prompting', 'cinematic_keyframe_reference_repair', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity', 'reference_repair'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_shot_keyframes', maxConcurrency: Math.min(shotPlan.shots.length, 3) } } }),
+          v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Enhancement Prompt`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode: shotAnimaticMode, shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
+          v2Node({ key: keyframeKey, nodeType: 'image_generation', label: `Shot ${shot.index} Enhanced Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode: shotAnimaticMode, shotId: shot.id, shotIndex: shot.index, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 6, imageSize: { width: 1536, height: 864 }, aspectRatio, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_keyframe_prompting', 'cinematic_keyframe_reference_repair', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity', 'reference_repair'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_shot_keyframes', maxConcurrency: Math.min(shotPlan.shots.length, 8) } } }),
         ]
         : [
           v2Node({ key: keyframeKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Panel Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe_passthrough', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode, shotId: shot.id, shotIndex: shot.index, aspectRatio, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_panel_keyframes', maxConcurrency: 12 } } }),
         ]),
       v2Node({ key: keyframeQaKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe QA`, x: 3020, y, config: { purpose: 'cinematic_v2_keyframe_qa', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, advisoryOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_qa', maxConcurrency: 12 } } }),
       v2Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Video Prompt`, x: 3160, y, config: { purpose: 'cinematic_v2_video_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_video_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: videoKey, nodeType: 'video_generation', label: `Shot ${shot.index} Video`, x: 3440, y, config: { purpose: 'cinematic_v2_shot_video', role: 'cinematic_v2_shot_video', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'keyframes', assetPackReferenceLimit: 5, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'video_prompt', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v2_videos', maxConcurrency: Math.min(shotPlan.shots.length, 3) } } }),
+      v2Node({ key: videoKey, nodeType: 'video_generation', label: `Shot ${shot.index} Video`, x: 3440, y, config: { purpose: 'cinematic_v2_shot_video', role: 'cinematic_v2_shot_video', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'keyframes', assetPackReferenceLimit: 5, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'video_prompt', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v2_videos', maxConcurrency: Math.min(shotPlan.shots.length, 8) } } }),
     )
     edgeRows.push(
       v2Edge({ key: `${assetPackSourceNodeKey}__${shotAssetPackKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: shotAssetPackKey, targetPort: 'asset_pack', metadata: shotMeta }),
       v2Edge({ key: `shot_plan__${shotAssetPackKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: shotAssetPackKey, targetPort: 'shot_plan', metadata: shotMeta }),
-      ...(useQualityKeyframes
+      ...(shotQualityKeyframe
         ? [
           v2Edge({ key: `${panelExtractKey}__${keyframePromptKey}`, sourceNodeKey: panelExtractKey, sourcePort: 'panels', targetNodeKey: keyframePromptKey, targetPort: 'panels', metadata: shotMeta }),
           v2Edge({ key: `shot_plan__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: keyframePromptKey, targetPort: 'shot_plan', metadata: shotMeta }),
@@ -6231,15 +6405,30 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     v2Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v2_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
   )
 
-  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
+  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows.map(preserveNodeRow), { onConflict: 'workflow_id,key' })
   if (insertNodes.error) throw new Error(insertNodes.error.message)
   const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
   if (insertEdges.error) throw new Error(insertEdges.error.message)
   const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodeKeys = existingDynamicNodes.map((row) => row.key).filter((key) => !nextDynamicNodeKeys.has(key))
-  if (obsoleteDynamicNodeKeys.length > 0) {
-    const deleteNodes = await input.client.from('output_workflow_nodes').delete().eq('workflow_id', input.workflow.id).in('key', obsoleteDynamicNodeKeys)
-    if (deleteNodes.error) throw new Error(deleteNodes.error.message)
+  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
+  if (obsoleteDynamicNodes.length > 0) {
+    const staleAt = new Date().toISOString()
+    for (const obsoleteNode of obsoleteDynamicNodes) {
+      const markStale = await input.client
+        .from('output_workflow_nodes')
+        .update({
+          dirty: true,
+          metadata: {
+            ...asRecord(obsoleteNode.metadata),
+            dynamicCinematicStale: true,
+            staleAt,
+            staleReason: 'dynamic_fanout_rematerialized',
+            replacedByDynamicCompileHash: compileHash,
+          },
+        })
+        .eq('id', obsoleteNode.id)
+      if (markStale.error) throw new Error(markStale.error.message)
+    }
   }
   const dynamicUpdatedAt = new Date().toISOString()
   const updateWorkflow = await input.client.from('output_workflows').update({
@@ -6252,6 +6441,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
       cinematicV2LayoutPlan: layoutPlan,
       cinematicV2ShotPlan: shotPlan,
       cinematicV2StoryboardGroupPlan: storyboardGroupPlan,
+      cinematicV2QualityShotIds,
       dynamicShotCount: shotPlan.shots.length,
       storyboardSheetCount: storyboardGroupPlan.groups.length,
       totalDurationSeconds: shotPlan.totalEditorialDurationSeconds,
@@ -11529,6 +11719,21 @@ export async function processFlyOutputWorkflowRuns(input: {
     const nodeByKey = new Map(executionNodes.map((node) => [node.key, node]))
     const workflowNodeByKey = new Map(bundle.nodes.map((node) => [node.key, node]))
     const stepByNodeKey = new Map(bundle.run.steps.map((step) => [step.nodeKey, step]))
+    const sourceRunIdForCache = readText(runMetadata.sourceRunId)
+    if (sourceRunIdForCache && sourceRunIdForCache !== runId) {
+      const sourceStepResponse = await input.client
+        .from('output_workflow_run_steps')
+        .select(outputWorkflowRunStepSelect)
+        .eq('run_id', sourceRunIdForCache)
+        .eq('workflow_id', bundle.workflow.id)
+        .order('order_index', { ascending: true })
+      if (sourceStepResponse.error) throw new Error(sourceStepResponse.error.message)
+      for (const row of (sourceStepResponse.data ?? []) as OutputWorkflowRunStepRow[]) {
+        const sourceStep = mapOutputWorkflowRunStepRow(row)
+        const existingStep = stepByNodeKey.get(sourceStep.nodeKey)
+        if (!existingStep || !hasStoredOutputs(existingStep.outputs)) stepByNodeKey.set(sourceStep.nodeKey, sourceStep)
+      }
+    }
     const executionNodeKeys = new Set(executionNodes.map((node) => node.key))
     const cachedExternalUpstreamByNodeKey = new Map(executionNodes.map((node) => [node.key, collectCachedExternalUpstream({
       node,
@@ -11610,23 +11815,26 @@ export async function processFlyOutputWorkflowRuns(input: {
               output_hash: priorStep.outputHash,
               metadata: {
                 ...node.metadata,
-              execution: {
-                ...asRecord(asRecord(node.metadata).execution),
-                level: executionLevelByNodeKey.get(node.key) ?? 0,
-                resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
-                lastRunId: runId,
-                recoveredFromRunStep: true,
-                cachedInputUpstream: compactOutputWorkflowUpstreamForNodeCache(effectiveUpstream),
-                cachedInputNodeKeys: Object.keys(effectiveUpstream),
-                cachedInputAt: new Date().toISOString(),
+                execution: buildOutputWorkflowNodeExecutionCacheMetadata({
+                  node,
+                  runId,
+                  level: executionLevelByNodeKey.get(node.key) ?? 0,
+                  resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
+                  inputHash: recoveredInputHash,
+                  outputHash: priorStep.outputHash,
+                  effectiveUpstream,
+                  reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
+                  staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
+                  sourceRunIds: cachedExternalUpstream.sourceRunIds,
+                  recoveredFromRunStep: true,
+                }),
+                outputPreview: buildOutputWorkflowNodeOutputPreview({
+                  node: { ...node, outputHash: priorStep.outputHash },
+                  outputs: recoveredOutputs,
+                  provider: priorStep.provider,
+                  model: priorStep.model,
+                }),
               },
-              outputPreview: buildOutputWorkflowNodeOutputPreview({
-                node: { ...node, outputHash: priorStep.outputHash },
-                outputs: recoveredOutputs,
-                provider: priorStep.provider,
-                model: priorStep.model,
-              }),
-            },
           })
             .eq('id', node.id)
           if (updateNodeResponse.error) throw new Error(updateNodeResponse.error.message)
@@ -11646,14 +11854,48 @@ export async function processFlyOutputWorkflowRuns(input: {
           return { status: 'skipped', outputs: recoveredOutputs }
         }
         if (canHashSkip || canReuseExistingOutput) {
+          const skippedInputHash = canHashSkip ? inputHash : node.inputHash || inputHash
+          const skippedReason = canHashSkip ? 'input_hash_unchanged' : 'existing_output_reused_for_targeted_rebake'
+          const updateNodeResponse = await input.client
+            .from('output_workflow_nodes')
+            .update({
+              outputs: node.outputs,
+              dirty: false,
+              input_hash: skippedInputHash,
+              output_hash: node.outputHash,
+              metadata: {
+                ...node.metadata,
+                execution: buildOutputWorkflowNodeExecutionCacheMetadata({
+                  node,
+                  runId,
+                  level: executionLevelByNodeKey.get(node.key) ?? 0,
+                  resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
+                  inputHash: skippedInputHash,
+                  outputHash: node.outputHash,
+                  effectiveUpstream,
+                  reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
+                  staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
+                  sourceRunIds: cachedExternalUpstream.sourceRunIds,
+                  skippedReason,
+                }),
+                outputPreview: buildOutputWorkflowNodeOutputPreview({
+                  node,
+                  outputs: node.outputs,
+                  provider: 'graphcore',
+                  model: 'cached-node-output',
+                }),
+              },
+            })
+            .eq('id', node.id)
+          if (updateNodeResponse.error) throw new Error(updateNodeResponse.error.message)
           nodeResults.set(node.key, {
-            inputHash: canHashSkip ? inputHash : node.inputHash || inputHash,
+            inputHash: skippedInputHash,
             outputHash: node.outputHash,
             outputs: node.outputs,
             provider: 'graphcore',
             model: 'cached-node-output',
             skipped: true,
-            skippedReason: canHashSkip ? 'input_hash_unchanged' : 'existing_output_reused_for_targeted_rebake',
+            skippedReason,
             reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
             staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
             sourceRunIds: cachedExternalUpstream.sourceRunIds,
@@ -11732,15 +11974,18 @@ export async function processFlyOutputWorkflowRuns(input: {
             output_hash: result.outputHash,
             metadata: {
               ...node.metadata,
-              execution: {
-                ...asRecord(asRecord(node.metadata).execution),
+              execution: buildOutputWorkflowNodeExecutionCacheMetadata({
+                node,
+                runId,
                 level: executionLevelByNodeKey.get(node.key) ?? 0,
                 resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
-                lastRunId: runId,
-                cachedInputUpstream: compactOutputWorkflowUpstreamForNodeCache(effectiveUpstream),
-                cachedInputNodeKeys: Object.keys(effectiveUpstream),
-                cachedInputAt: new Date().toISOString(),
-              },
+                inputHash: result.inputHash,
+                outputHash: result.outputHash,
+                effectiveUpstream,
+                reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
+                staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
+                sourceRunIds: cachedExternalUpstream.sourceRunIds,
+              }),
               guidance: guidanceMetadata,
               outputPreview: buildOutputWorkflowNodeOutputPreview({
                 node: { ...node, outputHash: result.outputHash },

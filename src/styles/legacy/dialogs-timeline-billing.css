@@ -204,6 +204,83 @@
   height: 28px;
 }
 
+.timeline-preview-reference-rail {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  z-index: 2;
+  display: grid;
+  gap: 6px;
+  transform: translateY(-50%);
+  padding: 6px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(3, 8, 14, 0.66);
+  backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.timeline-preview-reference-icon {
+  width: 128px;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  padding: 2px 8px 2px 2px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.timeline-preview-reference-thumb {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.timeline-preview-reference-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.timeline-preview-reference-thumb .entity-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.76;
+}
+
+.timeline-preview-reference-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.7rem;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-preview-reference-icon.is-count {
+  width: 34px;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .timeline-preview-overlay {
   position: absolute;
   inset: 0;
@@ -617,6 +694,22 @@
   color: var(--muted);
   line-height: 1.4;
   font-size: 0.82rem;
+}
+
+.timeline-quality-keyframe-panel {
+  display: grid;
+  justify-items: start;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid rgba(57, 216, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(57, 216, 255, 0.06);
+}
+
+.timeline-quality-keyframe-panel span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .timeline-performance-arc {

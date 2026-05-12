@@ -12,6 +12,7 @@ import {
   summarizeAiUsageLines,
 } from '../../domain/aiUsage'
 import { buildCinematicV2TimelineProjection, type CinematicTimelineProjection } from '../../domain/cinematicTimelineProjection'
+import type { CinematicTimelineShotClip } from '../../domain/cinematicTimelineProjection'
 import type {
   CinematicDirectorNotePreviewResponse,
   CinematicDirectorNoteScope,
@@ -25,6 +26,7 @@ import {
   buildOutputWorkflowExecutionPlan,
   isTerminalOutputWorkflowRunStatus,
   type OutputWorkflow,
+  type OutputWorkflowEdge,
   type OutputWorkflowNode,
   type OutputWorkflowNodeUpdateResponse,
   type OutputWorkflowPlanResponse,
@@ -51,6 +53,11 @@ type OutputsWorkspaceProps = {
   snapshot: ProjectSnapshot
   canRunOutputs: boolean
   cinematicsPanel: ReactNode
+  openIntent?: {
+    requestId: string | null
+    target?: 'details' | 'graph' | 'timeline'
+    nonce: number
+  } | null
   onStartOutputRequest: (request: {
     prompt: string
     sourceSurface?: string
@@ -526,8 +533,10 @@ function buildCinematicV2ProductionEstimate(
 
 function CinematicV2TimelineModal({
   assets,
+  enhancingShotId,
   onApplyDirectorPatch,
   onClose,
+  onGenerateQualityKeyframe,
   onPreviewDirectorNote,
   onUndoLastDirectorEdit,
   projection,
@@ -537,8 +546,10 @@ function CinematicV2TimelineModal({
   canUndoLastDirectorEdit,
 }: {
   assets: ProjectSnapshot['assets']
+  enhancingShotId?: string | null
   onApplyDirectorPatch: (request: { workflowId: string; runId?: string | null; preview: CinematicDirectorPatchPreview; startRegeneration: boolean }) => Promise<void>
   onClose: () => void
+  onGenerateQualityKeyframe?: (request: { workflowId: string; runId?: string | null; shot: CinematicTimelineShotClip }) => Promise<void>
   onPreviewDirectorNote: (request: { workflowId: string; runId?: string | null; note: string; scope: CinematicDirectorNoteScope }) => Promise<CinematicDirectorNotePreviewResponse>
   onUndoLastDirectorEdit: (request: { workflowId: string; runId?: string | null }) => Promise<void>
   projection: CinematicTimelineProjection
@@ -581,6 +592,10 @@ function CinematicV2TimelineModal({
             onPreview: ({ note, scope }) => onPreviewDirectorNote({ workflowId, runId, note, scope }),
             onUndoLast: () => onUndoLastDirectorEdit({ workflowId, runId }),
           }}
+          qualityKeyframes={onGenerateQualityKeyframe ? {
+            busyShotId: enhancingShotId,
+            onGenerateShot: (shot) => onGenerateQualityKeyframe({ workflowId, runId, shot }),
+          } : undefined}
           projection={projection}
           subtitle="V2 shot orchestration preview"
           title={title}
@@ -1076,6 +1091,53 @@ function readNodeOutputPreview(node: Pick<OutputWorkflowNode, 'metadata' | 'outp
   return readOutputPreview({ outputs: readRecord(node?.outputs), errorMessage: null, provider: null, model: null })
 }
 
+function outputNodeHasReusableCache(node: OutputWorkflowNode | undefined, step: OutputWorkflowRunStep | undefined) {
+  if (!node) return false
+  if (Object.keys(readRecord(node.outputs)).length > 0) return true
+  if (readTrimmedString(node.outputHash)) return true
+  if (readNodeOutputPreview(node)) return true
+  if (step && (Object.keys(readRecord(step.outputs)).length > 0 || readTrimmedString(step.outputHash))) return true
+  return false
+}
+
+function outputEdgeIsOptionalForCache(edge: OutputWorkflowEdge) {
+  const metadata = readRecord(edge.metadata)
+  if (metadata.optional === true || metadata.optionalDependency === true) return true
+  return edge.sourceNodeKey.startsWith('cinematic_v2_shot_')
+    && edge.sourceNodeKey.endsWith('_asset_pack')
+    && edge.targetNodeKey.startsWith('cinematic_v2_shot_')
+    && edge.targetNodeKey.endsWith('_video')
+    && edge.targetPort === 'references'
+}
+
+function buildTargetedRunCachePreflight(input: {
+  node: OutputWorkflowNode
+  edges: OutputWorkflowEdge[]
+  nodeByKey: Map<string, OutputWorkflowNode>
+  stepsByNodeKey: Map<string, OutputWorkflowRunStep>
+}) {
+  const incomingEdges = input.edges.filter((edge) => edge.targetNodeKey === input.node.key && !outputEdgeIsOptionalForCache(edge))
+  const missingRequiredUpstreamKeys = incomingEdges
+    .map((edge) => edge.sourceNodeKey)
+    .filter((sourceKey) => !outputNodeHasReusableCache(input.nodeByKey.get(sourceKey), input.stepsByNodeKey.get(sourceKey)))
+  const staleUpstreamKeys = incomingEdges
+    .map((edge) => edge.sourceNodeKey)
+    .filter((sourceKey) => {
+      const sourceNode = input.nodeByKey.get(sourceKey)
+      return Boolean(sourceNode?.dirty && outputNodeHasReusableCache(sourceNode, input.stepsByNodeKey.get(sourceKey)))
+    })
+  return {
+    cacheStatus: missingRequiredUpstreamKeys.length > 0
+      ? 'missing_upstream'
+      : staleUpstreamKeys.length > 0
+        ? 'stale_upstream'
+        : 'ready',
+    missingRequiredUpstreamKeys,
+    staleUpstreamKeys,
+    requiredUpstreamKeys: incomingEdges.map((edge) => edge.sourceNodeKey),
+  }
+}
+
 function truncatePreview(value: string, maxLength = 14000) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n\n[Output truncated in preview]` : value
 }
@@ -1258,6 +1320,7 @@ export function OutputsWorkspace({
   snapshot,
   canRunOutputs,
   cinematicsPanel,
+  openIntent,
   onPlanOutputWorkflow,
   onStartOutputRequest,
   onGetOutputRequestStatus,
@@ -1278,6 +1341,7 @@ export function OutputsWorkspace({
 }: OutputsWorkspaceProps) {
   const [approvingVideoProduction, setApprovingVideoProduction] = useState(false)
   const [upgradingAnimaticQuality, setUpgradingAnimaticQuality] = useState(false)
+  const [enhancingTimelineShotId, setEnhancingTimelineShotId] = useState<string | null>(null)
   const [creationMode, setCreationMode] = useState<'prompt' | 'story_unit'>('prompt')
   const [cinematicTimelineModal, setCinematicTimelineModal] = useState<{
     title: string
@@ -1738,6 +1802,7 @@ export function OutputsWorkspace({
       status = await onGetOutputWorkflowStatus(runId)
       rememberLiveRun(status.run)
     }
+    return status
   }
 
   async function refreshOutputGraph(options: {
@@ -1868,6 +1933,22 @@ export function OutputsWorkspace({
     }
     setCinematicTimelineModal(activeCinematicTimelineModalData)
   }
+
+  useEffect(() => {
+    if (!openIntent) return
+    const request = openIntent.requestId
+      ? outputRequests.find((entry) => entry.id === openIntent.requestId) ?? null
+      : outputRequests[0] ?? null
+    if (!request) return
+    setSelectedRequestId(request.id)
+    setActiveRunId(request.latestRunId ?? null)
+    if (request.workflowId) setSelectedNodeKey(null)
+    if (openIntent.target === 'graph') {
+      void openOutputGraphForRequest(request)
+    } else if (openIntent.target === 'timeline') {
+      void openCinematicTimelineForRequest(request)
+    }
+  }, [openIntent?.nonce])
 
   function resolveTimelineWorkflowId(workflowId?: string | null, runId?: string | null) {
     const directWorkflowId = readTrimmedString(workflowId)
@@ -2058,7 +2139,16 @@ export function OutputsWorkspace({
     const documentRefresh = node.nodeType === 'document_render'
     const comicAtlasRerun = purpose === 'comic_atlas_prompt' || purpose === 'comic_style_atlas'
     const comicPageRerun = purpose === 'comic_page_prompt' || purpose === 'comic_page'
-    const effectiveRunScope: OutputWorkflowRunScope = pdfRebake ? 'artifact_rebake' : documentRefresh && runScope === 'node_only' ? 'artifact_rebake' : runScope
+    const requestedRunScope: OutputWorkflowRunScope = pdfRebake ? 'artifact_rebake' : documentRefresh && runScope === 'node_only' ? 'artifact_rebake' : runScope
+    const cachePreflight = buildTargetedRunCachePreflight({
+      node,
+      edges: activeEdges,
+      nodeByKey,
+      stepsByNodeKey,
+    })
+    const autoRepairUpstream = requestedRunScope === 'node_only'
+      && (cachePreflight.missingRequiredUpstreamKeys.length > 0 || cachePreflight.staleUpstreamKeys.length > 0)
+    const effectiveRunScope: OutputWorkflowRunScope = autoRepairUpstream ? 'upstream_to_node' : requestedRunScope
     const defaultDownstreamTarget = comicAtlasRerun
       ? 'comic_atlas_image'
       : purpose === 'ebook_cover_image' || purpose === 'ebook_cover_prompt' || comicPageRerun
@@ -2119,6 +2209,10 @@ export function OutputsWorkspace({
         metadata: {
           sourceRunId: activeRun?.id ?? null,
           runMode: effectiveRunScope === 'artifact_rebake' ? 'pdf_rebake_from_existing_outputs' : 'targeted_node_preview',
+          requestedRunScope,
+          effectiveRunScope,
+          autoRepairUpstream,
+          cachePreflight,
           runScope: effectiveRunScope,
           targetNodeKeys,
           forceNodeKeys,
@@ -2172,7 +2266,19 @@ export function OutputsWorkspace({
       node.nodeType === 'video_generation'
       && isCinematicV2ProductionNodeConfig(readRecord(node.config), node.nodeType)
     ))
-    markTargetedNodes(nodeKeys, runScope)
+    const cachePreflights = uniqueNodes.map((node) => ({
+      nodeKey: node.key,
+      ...buildTargetedRunCachePreflight({
+        node,
+        edges: activeEdges,
+        nodeByKey,
+        stepsByNodeKey,
+      }),
+    }))
+    const autoRepairUpstream = runScope === 'node_only'
+      && cachePreflights.some((entry) => entry.missingRequiredUpstreamKeys.length > 0 || entry.staleUpstreamKeys.length > 0)
+    const effectiveRunScope: OutputWorkflowRunScope = autoRepairUpstream ? 'upstream_to_node' : runScope
+    markTargetedNodes(nodeKeys, effectiveRunScope)
     setError(null)
     try {
       const workflowMetadata = readRecord(activeWorkflow.metadata)
@@ -2203,11 +2309,15 @@ export function OutputsWorkspace({
         metadata: {
           sourceRunId: activeRun?.id ?? null,
           runMode: 'targeted_node_batch_preview',
-          runScope,
+          requestedRunScope: runScope,
+          effectiveRunScope,
+          autoRepairUpstream,
+          cachePreflight: cachePreflights,
+          runScope: effectiveRunScope,
           targetNodeKeys: nodeKeys,
           forceNodeKeys: nodeKeys,
           reuseExistingUpstreamOutputs: true,
-          allowStaleUpstreamOutputs: runScope === 'node_only',
+          allowStaleUpstreamOutputs: effectiveRunScope === 'node_only',
           debugForceVideoGeneration,
           ...(approveCinematicV2VideoNodes
             ? {
@@ -2372,6 +2482,129 @@ export function OutputsWorkspace({
     }
   }
 
+  function cinematicV2QualityShotIdsForWorkflow(workflowId: string, nextShotId: string) {
+    void workflowId
+    return [nextShotId]
+  }
+
+  function cinematicV2ShotKeyPrefix(shot: CinematicTimelineShotClip) {
+    const idMatch = /(?:^|_)(\d+)$/.exec(shot.id)
+    const shotNumber = idMatch ? Number(idMatch[1]) : shot.shotIndex + 1
+    return `cinematic_v2_shot_${String(shotNumber).padStart(3, '0')}`
+  }
+
+  async function generateTimelineShotQualityKeyframe(request: {
+    workflowId: string
+    runId?: string | null
+    shot: CinematicTimelineShotClip
+  }) {
+    const workflow = workflows.find((entry) => entry.id === request.workflowId) ?? activeWorkflow
+    if (!workflow || workflow.id !== request.workflowId) {
+      setError('Load the cinematic workflow graph before generating a shot keyframe.')
+      return
+    }
+    const workflowNodes = snapshot.outputWorkflowNodes.filter((node) => node.workflowId === workflow.id)
+    const fanoutNodeKey = workflowNodes.find((node) => readTrimmedString(readRecord(node.config).purpose) === 'cinematic_v2_dynamic_shot_fanout')?.key
+      ?? 'cinematic_v2_dynamic_shot_fanout'
+    const shotKeyPrefix = cinematicV2ShotKeyPrefix(request.shot)
+    const targetNodeKeys = [`${shotKeyPrefix}_keyframe`, `${shotKeyPrefix}_keyframe_qa`]
+    const forceNodeKeys = [
+      `${shotKeyPrefix}_asset_pack`,
+      `${shotKeyPrefix}_keyframe_prompt`,
+      `${shotKeyPrefix}_keyframe`,
+      `${shotKeyPrefix}_keyframe_qa`,
+    ]
+    const allTargetedKeys = [fanoutNodeKey, ...forceNodeKeys]
+    const workflowLatestRun = recentOutputRuns.find((run) => run.workflowId === workflow.id) ?? null
+    const activeWorkflowRun = activeRun?.workflowId === workflow.id ? activeRun : null
+    const sourceRun = request.runId
+      ? recentOutputRuns.find((run) => run.id === request.runId) ?? activeWorkflowRun ?? workflowLatestRun
+      : activeWorkflowRun ?? workflowLatestRun
+    const workflowMetadata = readRecord(workflow.metadata)
+    const previousInput: Record<string, unknown> = sourceRun ? readRecord(sourceRun.input) : {
+      sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
+      sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
+      pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
+    }
+    const cinematicV2QualityShotIds = cinematicV2QualityShotIdsForWorkflow(workflow.id, request.shot.id)
+    const runInput: Record<string, unknown> = {
+      ...previousInput,
+      cinematicV2AnimaticMode: 'fast_panels',
+      cinematicV2QualityShotIds,
+      debugSkipVideoGeneration: true,
+      cinematicVideoApproved: false,
+    }
+
+    markTargetedNodes(allTargetedKeys, 'upstream_to_node')
+    setEnhancingTimelineShotId(request.shot.id)
+    setError(null)
+    try {
+      const materializeRun = await onStartOutputWorkflowRun({
+        workflowId: workflow.id,
+        prompt: sourceRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
+        targetFormat: 'video',
+        selectedEntityKeys: readStringArray(runInput.sourceEntityKeys),
+        selectedSequenceUnitKeys: readStringArray(runInput.sourceSequenceUnitKeys),
+        pageCount: readNumber(runInput.pageCount) ?? undefined,
+        input: runInput,
+        metadata: {
+          sourceRunId: sourceRun?.id ?? null,
+          runMode: 'cinematic_v2_materialize_shot_quality_keyframe',
+          materializationMode: 'selected_shots',
+          runScope: 'upstream_to_node',
+          targetNodeKeys: [fanoutNodeKey],
+          forceNodeKeys: [fanoutNodeKey],
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: false,
+          cinematicV2QualityShotIds,
+          debugSkipVideoGeneration: true,
+          cinematicVideoApproved: false,
+        },
+      })
+      setActiveRunId(materializeRun.run.id)
+      rememberLiveRun(materializeRun.run)
+      await pollRun(materializeRun.run.id)
+      await onRefreshLiveSnapshot()
+      await refreshOpenGraphAfterRun(workflow.id, materializeRun.run.id)
+
+      const keyframeRun = await onStartOutputWorkflowRun({
+        workflowId: workflow.id,
+        prompt: sourceRun?.prompt || readTrimmedString(workflowMetadata.prompt) || prompt,
+        targetFormat: 'video',
+        selectedEntityKeys: readStringArray(runInput.sourceEntityKeys),
+        selectedSequenceUnitKeys: readStringArray(runInput.sourceSequenceUnitKeys),
+        pageCount: readNumber(runInput.pageCount) ?? undefined,
+        input: runInput,
+        metadata: {
+          sourceRunId: sourceRun?.id ?? null,
+          materializedRunId: materializeRun.run.id,
+          runMode: 'cinematic_v2_shot_quality_keyframe',
+          materializationMode: 'selected_shots',
+          runScope: 'node_only',
+          targetNodeKeys: [`${shotKeyPrefix}_keyframe_prompt`, ...targetNodeKeys],
+          forceNodeKeys,
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: true,
+          cinematicV2QualityShotIds,
+          debugSkipVideoGeneration: true,
+          cinematicVideoApproved: false,
+        },
+      })
+      setActiveRunId(keyframeRun.run.id)
+      rememberLiveRun(keyframeRun.run)
+      const completedStatus = await pollRun(keyframeRun.run.id)
+      await onRefreshLiveSnapshot()
+      await refreshOpenGraphAfterRun(workflow.id, keyframeRun.run.id)
+      const refreshedModalData = buildCinematicV2TimelineModalData(workflow, completedStatus.run)
+      if (refreshedModalData) setCinematicTimelineModal(refreshedModalData)
+    } catch (qualityError) {
+      setError(qualityError instanceof Error ? qualityError.message : 'Could not generate the shot keyframe.')
+    } finally {
+      setEnhancingTimelineShotId(null)
+      unmarkTargetedNodes(allTargetedKeys)
+    }
+  }
+
   async function downloadArtifact(assetUrl: string, artifactName: string, extension: string, mimeType: string, artifactKey: string) {
     setDownloadingArtifactKey(artifactKey)
     setError(null)
@@ -2478,8 +2711,10 @@ export function OutputsWorkspace({
       {cinematicTimelineModal ? (
         <CinematicV2TimelineModal
           assets={snapshot.assets}
+          enhancingShotId={enhancingTimelineShotId}
           onApplyDirectorPatch={applyCinematicDirectorPatchAndRegenerate}
           onClose={() => setCinematicTimelineModal(null)}
+          onGenerateQualityKeyframe={canRunOutputs ? generateTimelineShotQualityKeyframe : undefined}
           onPreviewDirectorNote={previewCinematicDirectorNoteFromTimeline}
           onUndoLastDirectorEdit={undoLastCinematicDirectorEdit}
           projection={cinematicTimelineModal.projection}
@@ -3272,10 +3507,10 @@ export function OutputsWorkspace({
                   </div>
                   <div className="outputs-inspector-actions">
                     <button className="outputs-node-action" disabled={!canRunOutputs || !activeRun || targetedNodeKey === selectedNode.key} onClick={() => void runSelectedNodeOnly(selectedNode, 'node_only')} type="button">
-                      {targetedNodeKey === selectedNode.key && targetedRunScope === 'node_only' ? 'Starting...' : 'Run node only'}
+                      {targetedNodeKey === selectedNode.key && targetedRunScope === 'node_only' ? 'Starting...' : 'Run cached node only'}
                     </button>
                     <button className="outputs-node-action" disabled={!canRunOutputs || !activeRun || targetedNodeKey === selectedNode.key} onClick={() => void runSelectedNodeOnly(selectedNode, 'upstream_to_node')} type="button">
-                      Run up to node
+                      Run with upstream
                     </button>
                     <button className="outputs-node-action" disabled={!canRunOutputs || !activeRun || targetedNodeKey === selectedNode.key} onClick={() => void runSelectedNodeOnly(selectedNode, 'node_and_downstream')} type="button">
                       Node + dependents

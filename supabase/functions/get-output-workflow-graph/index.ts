@@ -22,6 +22,7 @@ import {
   hashOutputWorkflowValue,
   outputWorkflowGraphResponseSchema,
   outputWorkflowGraphRequestSchema,
+  outputWorkflowNodeSchema,
 } from '../../../src/domain/outputWorkflow.ts'
 
 type DatabaseClient = ReturnType<typeof createAdminClient>
@@ -128,6 +129,79 @@ function graphRevision(input: {
   })
 }
 
+function hasGraphNodeOutput(node: Record<string, unknown> | null | undefined, step?: Record<string, unknown> | null) {
+  if (!node) return false
+  if (readText(node.outputHash) || readText(node.output_hash)) return true
+  const preview = asRecord(asRecord(node.metadata).outputPreview)
+  if (Object.keys(preview).length > 0) return true
+  if (step && (readText(step.outputHash) || readText(step.output_hash))) return true
+  return false
+}
+
+function graphEdgeIsOptional(edge: Record<string, unknown>) {
+  const metadata = asRecord(edge.metadata)
+  if (metadata.optional === true || metadata.optionalDependency === true) return true
+  const sourceNodeKey = readText(edge.sourceNodeKey ?? edge.source_node_key)
+  const targetNodeKey = readText(edge.targetNodeKey ?? edge.target_node_key)
+  const targetPort = readText(edge.targetPort ?? edge.target_port)
+  return sourceNodeKey.startsWith('cinematic_v2_shot_')
+    && sourceNodeKey.endsWith('_asset_pack')
+    && targetNodeKey.startsWith('cinematic_v2_shot_')
+    && targetNodeKey.endsWith('_video')
+    && targetPort === 'references'
+}
+
+function buildGraphNodesWithCacheStatus(input: {
+  nodes: Record<string, unknown>[]
+  edges: Record<string, unknown>[]
+  steps: Record<string, unknown>[]
+}) {
+  const nodeByKey = new Map(input.nodes.map((node) => [readText(node.key), node]))
+  const stepByNodeKey = new Map(input.steps.map((step) => [readText(step.nodeKey ?? step.node_key), step]))
+  return input.nodes.map((node) => {
+    const key = readText(node.key)
+    const step = stepByNodeKey.get(key) ?? null
+    const stepStatus = readText(step?.status)
+    const incomingEdges = input.edges.filter((edge) => readText(edge.targetNodeKey ?? edge.target_node_key) === key && !graphEdgeIsOptional(edge))
+    const missingRequiredUpstreamKeys = incomingEdges
+      .map((edge) => readText(edge.sourceNodeKey ?? edge.source_node_key))
+      .filter((sourceKey) => !hasGraphNodeOutput(nodeByKey.get(sourceKey), stepByNodeKey.get(sourceKey)))
+    const staleUpstreamKeys = incomingEdges
+      .map((edge) => readText(edge.sourceNodeKey ?? edge.source_node_key))
+      .filter((sourceKey) => {
+        const source = nodeByKey.get(sourceKey)
+        return Boolean(source && source.dirty === true && hasGraphNodeOutput(source, stepByNodeKey.get(sourceKey)))
+      })
+    const nodeHasOutput = hasGraphNodeOutput(node, step)
+    const metadata = asRecord(node.metadata)
+    const execution = asRecord(metadata.execution)
+    const cacheStatus = ['queued', 'running'].includes(stepStatus)
+      ? 'running'
+      : missingRequiredUpstreamKeys.length > 0
+        ? 'missing_upstream'
+        : staleUpstreamKeys.length > 0 || metadata.dynamicCinematicStale === true
+          ? 'stale_upstream'
+          : !nodeHasOutput && incomingEdges.length > 0
+            ? 'output_missing'
+            : 'ready'
+    return {
+      ...node,
+      metadata: {
+        ...metadata,
+        cacheStatus,
+        missingRequiredUpstreamKeys,
+        staleUpstreamKeys,
+        execution: {
+          ...execution,
+          cacheStatus,
+          missingRequiredUpstreamKeys,
+          staleUpstreamKeys,
+        },
+      },
+    }
+  })
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -219,8 +293,12 @@ Deno.serve(async (request) => {
     const steps = ((stepResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputWorkflowRunStepRow(row as never))
     const runArtifacts = runRow ? hydratedArtifacts.filter((artifact) => artifact.runId === readText(runRow?.id)) : []
     const run = runRow ? compactOutputWorkflowRunForStatus(mapOutputWorkflowRunRow(runRow as never, steps, runArtifacts)) : null
-    const nodes = ((nodeResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputWorkflowNodeRow(row as never))
     const edges = ((edgeResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputWorkflowEdgeRow(row as never))
+    const nodes = buildGraphNodesWithCacheStatus({
+      nodes: ((nodeResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputWorkflowNodeRow(row as never) as unknown as Record<string, unknown>),
+      edges: edges as unknown as Record<string, unknown>[],
+      steps: steps as unknown as Record<string, unknown>[],
+    }).map((row) => outputWorkflowNodeSchema.parse(row))
 
     const assetKeys = new Set<string>()
     for (const artifact of hydratedArtifacts) {

@@ -559,7 +559,7 @@ export function OutputWorkflowGraphOverlay({
       : selectedDirtyCachedInputs.length > 0
         ? `Upstream dirty but reusable: ${selectedDirtyCachedInputs.join(', ')}`
         : 'Ready from cache'
-  const selectedDefaultRunScope = selectedNode && selectedMissingCachedInputs.length > 0
+  const selectedDefaultRunScope = selectedNode && (selectedMissingCachedInputs.length > 0 || selectedDirtyCachedInputs.length > 0)
     ? 'upstream_to_node'
     : selectedNode
       ? defaultRunScopeForNode(selectedNode)
@@ -903,7 +903,7 @@ export function OutputWorkflowGraphOverlay({
                   {selectedNodeIsTargeted
                     ? 'Starting...'
                     : selectedDefaultRunScope === 'upstream_to_node'
-                      ? 'Run Up To Node'
+                      ? 'Run With Upstream'
                       : selectedNodeRunLabel(selectedNode)}
                 </button>
               </div>
@@ -922,13 +922,22 @@ export function OutputWorkflowGraphOverlay({
                   {selectedNodeCanOpenTimeline && onOpenTimeline ? (
                     <button onClick={onOpenTimeline} type="button">Open Timeline</button>
                   ) : null}
+                  {selectedMissingCachedInputs.length > 0 ? (
+                    <button
+                      disabled={!canRunOutputs || selectedNodeIsTargeted}
+                      onClick={() => onRunNode(selectedNode, 'upstream_to_node')}
+                      type="button"
+                    >
+                      Repair Cached Inputs
+                    </button>
+                  ) : null}
                   <button
                     disabled={!canRunOutputs || selectedNodeIsTargeted || selectedMissingCachedInputs.length > 0}
                     onClick={() => onRunNode(selectedNode, 'node_only')}
                     type="button"
                   >
                     {localRunButtonLabel({
-                      label: 'Run Node Only',
+                      label: 'Run cached node only',
                       scope: 'node_only',
                       targetedNode: selectedNodeIsTargeted,
                       targetedScope: targetedRunScope,

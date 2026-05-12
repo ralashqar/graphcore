@@ -658,45 +658,6 @@ export function CinematicTimelineSurface({
 
             <div className="timeline-track-shell">
               <div className="timeline-track-label">
-                <span className="eyebrow">Takes</span>
-                <strong>{projection.takes.length}</strong>
-              </div>
-              <div
-                className="timeline-track timeline-track-takes"
-                onMouseDown={(event) => {
-                  if (event.target !== event.currentTarget) return
-                  event.preventDefault()
-                  startScrub(event.clientX)
-                }}
-              >
-                {projection.takes.map((take) => {
-                  const blockers = takeBlockers({ projection, take })
-                  return (
-                    <button
-                      className={take.id === activeTake?.id ? 'timeline-take-block is-active' : 'timeline-take-block'}
-                      key={take.id}
-                      onClick={() => {
-                        setSelectedTakeId(take.id)
-                        setClampedPlayhead(take.startSeconds)
-                      }}
-                      onMouseDown={(event) => event.stopPropagation()}
-                      style={{
-                        left: take.startSeconds * pixelsPerSecond,
-                        width: Math.max(120, take.durationSeconds * pixelsPerSecond),
-                      }}
-                      type="button"
-                    >
-                      <strong>{take.title}</strong>
-                      <span>{take.durationSeconds}s · {take.shotIds.length} shots</span>
-                      <span>{take.approvedForVideo ? 'Approved for video' : blockers[0]?.message ?? 'Needs review'}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="timeline-track-shell">
-              <div className="timeline-track-label">
                 <span className="eyebrow">Subtitles</span>
                 <strong>{projection.dialogueCues.length}</strong>
               </div>
@@ -724,34 +685,6 @@ export function CinematicTimelineSurface({
               </div>
             </div>
 
-            <div className="timeline-track-shell">
-              <div className="timeline-track-label">
-                <span className="eyebrow">Audio</span>
-                <strong>{projection.audioCues.length}</strong>
-              </div>
-              <div
-                className="timeline-track timeline-track-cues"
-                onMouseDown={(event) => {
-                  if (event.target !== event.currentTarget) return
-                  event.preventDefault()
-                  startScrub(event.clientX)
-                }}
-              >
-                {projection.audioCues.map((cue) => (
-                  <div
-                    className="timeline-cue timeline-cue-audio"
-                    key={cue.id}
-                    style={{
-                      left: cue.startSeconds * pixelsPerSecond,
-                      width: Math.max(48, (cue.endSeconds - cue.startSeconds) * pixelsPerSecond),
-                    }}
-                  >
-                    <span>{cue.label}</span>
-                    <strong>{cue.text}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
             </div>
           </div>
         </div>

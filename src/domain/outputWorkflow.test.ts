@@ -160,6 +160,52 @@ test('output workflow graph loader schemas support compact graph refresh and sel
   assert.equal(response.selectedNodeOutput?.outputs.screenplayMarkdown, 'INT. SERVICE TUNNEL - NIGHT')
 })
 
+test('output workflow status endpoint uses run-only loader instead of graph bundle', () => {
+  const statusFunctionSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-status/index.ts'), 'utf8')
+  assert.match(statusFunctionSource, /loadOutputWorkflowRunStatus/)
+  assert.doesNotMatch(statusFunctionSource, /loadOutputWorkflowRunBundle/)
+
+  const sharedSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(sharedSource, /export async function loadOutputWorkflowRunStatus/)
+  assert.match(sharedSource, /outputWorkflowRunStepStatusSelect/)
+  assert.doesNotMatch(
+    sharedSource.slice(
+      sharedSource.indexOf('export async function loadOutputWorkflowRunStatus'),
+      sharedSource.indexOf('async function heartbeat'),
+    ),
+    /output_workflow_nodes|output_workflow_edges/,
+  )
+})
+
+test('timeline shot quality keyframe materialization can regenerate missing upstream planning nodes', () => {
+  const outputsWorkspaceSource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputsWorkspace.tsx'), 'utf8')
+  const materializeStart = outputsWorkspaceSource.indexOf("runMode: 'cinematic_v2_materialize_shot_quality_keyframe'")
+  assert.notEqual(materializeStart, -1)
+  const materializeBlock = outputsWorkspaceSource.slice(materializeStart, outputsWorkspaceSource.indexOf('cinematicV2QualityShotIds,', materializeStart))
+  assert.match(materializeBlock, /runScope: 'upstream_to_node'/)
+  assert.doesNotMatch(materializeBlock, /runScope: 'node_only'/)
+  assert.match(materializeBlock, /forceNodeKeys: \[fanoutNodeKey\]/)
+  assert.match(materializeBlock, /materializationMode: 'selected_shots'/)
+
+  const keyframeStart = outputsWorkspaceSource.indexOf("runMode: 'cinematic_v2_shot_quality_keyframe'")
+  assert.notEqual(keyframeStart, -1)
+  const keyframeBlock = outputsWorkspaceSource.slice(keyframeStart, outputsWorkspaceSource.indexOf('cinematicV2QualityShotIds,', keyframeStart))
+  assert.match(keyframeBlock, /runScope: 'node_only'/)
+  assert.ok(keyframeBlock.includes('targetNodeKeys: [`${shotKeyPrefix}_keyframe_prompt`, ...targetNodeKeys]'))
+  assert.match(keyframeBlock, /allowStaleUpstreamOutputs: true/)
+  const keyframeRunStart = outputsWorkspaceSource.lastIndexOf('const keyframeRun = await', keyframeStart)
+  assert.notEqual(keyframeRunStart, -1)
+  const keyframeRunBlock = outputsWorkspaceSource.slice(keyframeRunStart, outputsWorkspaceSource.indexOf('const completedStatus = await pollRun', keyframeStart))
+  assert.match(keyframeRunBlock, /sourceRunId: sourceRun\?\.id \?\? null/)
+  assert.match(keyframeRunBlock, /materializedRunId: materializeRun\.run\.id/)
+
+  const qualityIdsStart = outputsWorkspaceSource.indexOf('function cinematicV2QualityShotIdsForWorkflow')
+  assert.notEqual(qualityIdsStart, -1)
+  const qualityIdsBlock = outputsWorkspaceSource.slice(qualityIdsStart, outputsWorkspaceSource.indexOf('function cinematicV2ShotKeyPrefix', qualityIdsStart))
+  assert.match(qualityIdsBlock, /return \[nextShotId\]/)
+  assert.doesNotMatch(qualityIdsBlock, /snapshot\.outputWorkflowNodes|cinematicV2QualityShotIds\)/)
+})
+
 const snapshot = outputWorkflowPlanRequestSchema.shape.snapshot.parse({
   project: { id: 'project-1', name: 'Ash Archive', summary: 'A manuscript world.' },
   draft: { id: 'draft-1', name: 'Draft', metadata: {} },
@@ -533,6 +579,9 @@ test('story cinematic requests build V2 shot orchestration graph by default whil
   assert.match(workerSource, /cinematic_v2_keyframe_qa/)
   assert.match(workerSource, /cinematic_v2_shot_keyframe_passthrough/)
   assert.match(workerSource, /quality_keyframes/)
+  assert.match(workerSource, /resolveCinematicV2QualityShotIds/)
+  assert.match(workerSource, /cinematicV2QualityShotIds/)
+  assert.match(workerSource, /shotUsesQualityKeyframe/)
   assert.match(workerSource, /cinematic_v2_storyboard_group_plan/)
   assert.match(workerSource, /storyboardGroupPlan\.groups\.forEach/)
   assert.match(workerSource, /fixed \$\{layout\.rows\}x\$\{layout\.columns\} rectangular grid/)
@@ -1896,7 +1945,14 @@ test('ebook preset fans full chapter prose nodes out before chapter assembly', (
   assert.equal(defaultOutputWorkflowConcurrency.global, 8)
   assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.llm, 8)
   assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.image, 8)
+  assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.video, 8)
+  assert.equal(defaultOutputWorkflowConcurrency.resourceClasses.utility, 8)
   assert.equal(chapterNode ? getOutputWorkflowNodeExecutionMetadata(chapterNode).maxConcurrency : undefined, 8)
+  assert.equal(getOutputWorkflowNodeExecutionMetadata({
+    nodeType: 'image_generation',
+    config: { execution: { resourceClass: 'image', groupKey: 'cinematic_v2_shot_keyframes', maxConcurrency: 3 } },
+    metadata: {},
+  }).maxConcurrency, 8)
   assert.deepEqual(executionPlan.dependencyKeysByNodeKey.chapter_assembly.sort(), ['chapter_001_prose', 'chapter_002_prose'])
   assert.deepEqual(executionPlan.dependencyKeysByNodeKey.chapter_001_prose.sort(), [
     'chapter_plan',
@@ -2092,6 +2148,33 @@ test('ready queue runs independent nodes concurrently within global cap', async 
   assert.equal(maxRunning, 2)
 })
 
+test('ready queue can run eight independent video nodes in parallel by default', async () => {
+  const nodes = Array.from({ length: 8 }, (_, index) => ({
+    key: `video_${index + 1}`,
+    nodeType: 'video_generation' as const,
+    config: { execution: { resourceClass: 'video', groupKey: 'cinematic_videos', maxConcurrency: 8 } },
+    metadata: {},
+  }))
+  let running = 0
+  let maxRunning = 0
+
+  const result = await runOutputWorkflowReadyQueue({
+    nodes,
+    edges: [],
+    executeNode: async ({ node }) => {
+      running += 1
+      maxRunning = Math.max(maxRunning, running)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      running -= 1
+      return { outputs: { nodeKey: node.key } }
+    },
+  })
+
+  assert.equal(result.status, 'completed')
+  assert.equal(maxRunning, 8)
+  assert.equal(result.completed.length, 8)
+})
+
 test('ready queue respects resource class caps', async () => {
   const nodes = [
     { key: 'a', nodeType: 'text_llm' as const, config: {}, metadata: {} },
@@ -2189,4 +2272,61 @@ test('ready queue treats running node cancellation as cancelled and cancels pend
 
   assert.equal(result.status, 'cancelled')
   assert.deepEqual(cancelled, ['running', 'dependent'])
+})
+
+test('worker persists cache status metadata for fresh skipped and recovered nodes', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /buildOutputWorkflowNodeExecutionCacheMetadata/)
+  assert.match(source, /cachedInputUpstream/)
+  assert.match(source, /cachedInputNodeKeys/)
+  assert.match(source, /cacheStatus/)
+  assert.match(source, /recoveredFromRunStep: true/)
+  assert.match(source, /skippedReason/)
+  assert.match(source, /outputPreview: buildOutputWorkflowNodeOutputPreview/)
+  assert.match(source, /sourceRunIdForCache/)
+  assert.match(source, /outputWorkflowRunStepSelect/)
+})
+
+test('dynamic cinematic fanout marks obsolete nodes stale instead of deleting active graph nodes', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const obsoleteSections = source.match(/obsoleteDynamicNodes[\s\S]{0,900}?dynamicCinematicStale[\s\S]{0,400}?replacedByDynamicCompileHash/g) ?? []
+
+  assert.equal(obsoleteSections.length >= 2, true)
+  assert.doesNotMatch(source, /obsoleteDynamicNodeKeys[\s\S]{0,240}?\.delete\(\)\.eq\('workflow_id'/)
+})
+
+test('selected-shot cinematic materialization preserves existing non-target dynamic outputs', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /preserveExistingDynamicNodeOutput/)
+  assert.match(source, /selectedShotMaterialization/)
+  assert.match(source, /preservedDuringSelectedShotMaterialization/)
+  assert.match(source, /outputWorkflowNodeSelect/)
+  assert.match(source, /upsert\(nodeRows\.map\(preserveNodeRow\)/)
+  assert.match(source, /selectedShotKeyframeNode/)
+})
+
+test('graph loader returns cache status diagnostics without bulk node outputs', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-graph/index.ts'), 'utf8')
+
+  assert.match(source, /buildGraphNodesWithCacheStatus/)
+  assert.match(source, /missingRequiredUpstreamKeys/)
+  assert.match(source, /staleUpstreamKeys/)
+  assert.match(source, /cacheStatus/)
+  assert.match(source, /outputWorkflowNodeStatusSelect/)
+  assert.doesNotMatch(source, /select\(outputWorkflowNodeSelect\)\.eq\('workflow_id', payload\.workflowId\)\.eq\('draft_id'/)
+})
+
+test('outputs graph UI defaults to repairable upstream runs when cache is not ready', () => {
+  const overlaySource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputWorkflowGraphOverlay.tsx'), 'utf8')
+  const workspaceSource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputsWorkspace.tsx'), 'utf8')
+
+  assert.match(overlaySource, /Repair Cached Inputs/)
+  assert.match(overlaySource, /Run cached node only/)
+  assert.match(overlaySource, /selectedDirtyCachedInputs\.length > 0/)
+  assert.match(workspaceSource, /buildTargetedRunCachePreflight/)
+  assert.match(workspaceSource, /autoRepairUpstream/)
+  assert.match(workspaceSource, /requestedRunScope/)
+  assert.match(workspaceSource, /effectiveRunScope/)
 })

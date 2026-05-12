@@ -21,8 +21,8 @@ function request(overrides: Partial<OutputRequest>): OutputRequest {
     intent: 'output_generation',
     outputKind: overrides.outputKind ?? 'story_bible_from_world',
     status: overrides.status ?? 'completed',
-    selectedEntityKeys: [],
-    selectedSequenceUnitKeys: [],
+    selectedEntityKeys: overrides.selectedEntityKeys ?? [],
+    selectedSequenceUnitKeys: overrides.selectedSequenceUnitKeys ?? [],
     pageCount: null,
     targetFormat: 'pdf',
     plannerNotes: '',
@@ -46,7 +46,7 @@ function run(overrides: Partial<OutputWorkflowRun>): OutputWorkflowRun {
     targetFormat: 'pdf',
     worldSnapshotFingerprint: '',
     input: {},
-    outputs: {},
+    outputs: overrides.outputs ?? {},
     errorMessage: null,
     workerId: null,
     heartbeatAt: null,
@@ -94,7 +94,7 @@ function step(overrides: Partial<OutputWorkflowRunStep>): OutputWorkflowRunStep 
     label: overrides.label ?? 'Step',
     inputHash: '',
     outputHash: '',
-    outputs: {},
+    outputs: overrides.outputs ?? {},
     provider: null,
     model: null,
     providerRequestId: null,
@@ -113,6 +113,7 @@ test('buildOutputLibraryModel chooses document artifacts before images', () => {
     outputRequests: [request({})],
     outputWorkflowRuns: [run({})],
     outputWorkflowNodes: [],
+    worldEntities: [],
     outputArtifacts: [
       artifact({ id: 'image', key: 'image', kind: 'image', mimeType: 'image/webp', name: 'Cover' }),
       artifact({ id: 'pdf', key: 'pdf', kind: 'pdf', mimeType: 'application/pdf', name: 'Final PDF' }),
@@ -142,6 +143,7 @@ test('buildOutputLibraryModel groups running and failed requests separately', ()
       run({ id: 'failed-run', status: 'failed' }),
     ],
     outputWorkflowNodes: [],
+    worldEntities: [],
     outputArtifacts: [],
   })
 
@@ -167,6 +169,7 @@ test('buildOutputLibraryModel resolves gallery URLs from assets and artifact met
     outputRequests: [request({})],
     outputWorkflowRuns: [run({})],
     outputWorkflowNodes: [],
+    worldEntities: [],
     outputArtifacts: [
       artifact({ id: 'image', key: 'image', kind: 'image', mimeType: 'image/webp', assetKey: 'asset-image' }),
       artifact({ id: 'html', key: 'html', kind: 'html', mimeType: 'text/html', metadata: { previewUrl: 'https://cdn.example.com/page.html' } }),
@@ -175,4 +178,65 @@ test('buildOutputLibraryModel resolves gallery URLs from assets and artifact met
 
   assert.equal(model.artifacts.find((entry) => entry.key === 'image')?.thumbnailUrl, 'https://cdn.example.com/image.webp')
   assert.equal(model.artifacts.find((entry) => entry.key === 'html')?.url, 'https://cdn.example.com/page.html')
+})
+
+test('buildOutputLibraryModel exposes wiki row entity refs and cinematic actions', () => {
+  const assets: AssetDefinition[] = [{
+    id: 'asset-ilya',
+    key: 'asset-ilya',
+    name: 'Ilya icon',
+    kind: 'image',
+    storagePath: '',
+    mimeType: 'image/webp',
+    metadata: { sourceUrl: 'https://cdn.example.com/ilya.webp' },
+    llmHints: {},
+  }]
+  const model = buildOutputLibraryModel({
+    assets,
+    outputRequests: [request({
+      outputKind: 'cinematic_episode',
+      selectedEntityKeys: ['ilya_sorin'],
+    })],
+    outputWorkflowRuns: [run({
+      steps: [
+        step({
+          nodeKey: 'cinematic_v2_scene_compile',
+          status: 'completed',
+          outputs: {
+            sceneState: {
+              characterRefIds: ['nara_quill'],
+              locationRefId: 'underrail_warrens',
+            },
+          },
+        }),
+      ],
+    })],
+    outputWorkflowNodes: [],
+    worldEntities: [
+      {
+        key: 'ilya_sorin',
+        name: 'Ilya Sorin',
+        nodeType: 'actor',
+        thumbnailAssetKey: 'asset-ilya',
+      },
+      {
+        key: 'nara_quill',
+        name: 'Nara Quill',
+        nodeType: 'actor',
+        thumbnailAssetKey: null,
+      },
+      {
+        key: 'underrail_warrens',
+        name: 'Underrail Warrens',
+        nodeType: 'place',
+        thumbnailAssetKey: null,
+      },
+    ] as never,
+    outputArtifacts: [],
+  })
+
+  assert.deepEqual(model.rows[0]?.entityRefs.map((ref) => ref.label), ['Ilya Sorin', 'Nara Quill', 'Underrail Warrens'])
+  assert.equal(model.rows[0]?.entityRefs[0]?.imageUrl, 'https://cdn.example.com/ilya.webp')
+  assert.equal(model.rows[0]?.canOpenGraph, true)
+  assert.equal(model.rows[0]?.canOpenTimeline, true)
 })

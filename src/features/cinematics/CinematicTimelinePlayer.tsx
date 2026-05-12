@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { resolveAssetPreviewUrl, resolveAssetSourceUrl } from '../../domain/assets.ts'
 import {
   findTimelineShotAtSeconds,
   findTimelineTakeAtSeconds,
   type CinematicTimelineProjection,
+  type CinematicTimelineShotClip,
 } from '../../domain/cinematicTimelineProjection.ts'
 import type {
   CinematicDirectorNotePreviewResponse,
@@ -27,6 +28,10 @@ type CinematicTimelinePlayerProps = {
     undoLabel?: string
     onUndoLast?: () => Promise<void>
   }
+  qualityKeyframes?: {
+    busyShotId?: string | null
+    onGenerateShot: (shot: CinematicTimelineShotClip) => Promise<void> | void
+  }
 }
 
 type ResolvedTimelineMedia = {
@@ -35,10 +40,18 @@ type ResolvedTimelineMedia = {
   url: string
 }
 
+type TimelineReferencePreview = {
+  id: string
+  label: string
+  asset: AssetDefinition | null
+  url: string | null
+}
+
 const BASE_PIXELS_PER_SECOND = 84
 const MIN_PIXELS_PER_SECOND = 36
 const MAX_PIXELS_PER_SECOND = 196
 const ZOOM_STEP_PIXELS = 18
+const MAX_PREVIEW_REFERENCE_ICONS = 8
 
 function formatTimecode(seconds: number) {
   const total = Math.max(0, seconds)
@@ -86,6 +99,68 @@ function resolveTimelineMedia(assets: AssetDefinition[], assetKeys: string[], pr
   return null
 }
 
+function readMetadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readMetadataStringArray(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key]
+  return Array.isArray(value) ? value.map((entry) => String(entry).trim()).filter(Boolean) : []
+}
+
+function humanizeReferenceId(refId: string) {
+  return refId
+    .replace(/^entity_reference_sheet_/, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function assetMatchesReferenceId(asset: AssetDefinition, refId: string) {
+  const metadata = asset.metadata && typeof asset.metadata === 'object' && !Array.isArray(asset.metadata)
+    ? asset.metadata as Record<string, unknown>
+    : {}
+  const directMetadataMatches = [
+    'entityKey',
+    'worldEntityKey',
+    'sourceEntityKey',
+    'sourceRefId',
+    'refId',
+    'referenceId',
+    'characterRefId',
+    'locationRefId',
+    'propRefId',
+  ].some((key) => readMetadataString(metadata, key) === refId)
+  if (directMetadataMatches) return true
+  const arrayMetadataMatches = [
+    'entityKeys',
+    'worldEntityKeys',
+    'sourceEntityKeys',
+    'sourceRefIds',
+    'refIds',
+    'referenceIds',
+  ].some((key) => readMetadataStringArray(metadata, key).includes(refId))
+  if (arrayMetadataMatches) return true
+  return asset.key === refId
+    || asset.key.endsWith(`_${refId}`)
+    || asset.key.includes(`_${refId}_`)
+}
+
+function resolveReferencePreview(assets: AssetDefinition[], refId: string): TimelineReferencePreview {
+  const candidates = assets
+    .filter((asset) => asset.kind === 'image' && assetMatchesReferenceId(asset, refId))
+    .map((asset) => ({ asset, url: resolveAssetPreviewUrl(asset) || resolveAssetSourceUrl(asset) }))
+    .filter((entry): entry is { asset: AssetDefinition; url: string } => Boolean(entry.url))
+  const referenceSheet = candidates.find((entry) => entry.asset.key.startsWith('entity_reference_sheet_'))
+  const chosen = referenceSheet ?? candidates[0] ?? null
+  return {
+    id: refId,
+    label: chosen?.asset.name || humanizeReferenceId(refId),
+    asset: chosen?.asset ?? null,
+    url: chosen?.url ?? null,
+  }
+}
+
 function timelineTrackWidth(projection: CinematicTimelineProjection | null, pixelsPerSecond: number) {
   return Math.max(960, (projection?.totalDurationSeconds ?? 0) * pixelsPerSecond)
 }
@@ -93,6 +168,7 @@ function timelineTrackWidth(projection: CinematicTimelineProjection | null, pixe
 export function CinematicTimelinePlayer({
   assets,
   directorNotes,
+  qualityKeyframes,
   projection,
   title = 'Cinematic Timeline',
   subtitle = 'Read-only production preview',
@@ -125,16 +201,24 @@ export function CinematicTimelinePlayer({
     activeShot?.previewAssetKeys ?? activeTake?.previewAssetKeys ?? [],
     activeShot?.previewKind ?? activeTake?.previewKind,
   )
+  const currentMediaMetadata = currentMedia?.asset.metadata && typeof currentMedia.asset.metadata === 'object' && !Array.isArray(currentMedia.asset.metadata)
+    ? currentMedia.asset.metadata as Record<string, unknown>
+    : {}
+  const currentMediaRole = typeof currentMediaMetadata.role === 'string' ? currentMediaMetadata.role : ''
+  const currentMediaGeneratedBy = typeof currentMediaMetadata.generatedBy === 'string' ? currentMediaMetadata.generatedBy : ''
+  const currentMediaKeyframeMode = typeof currentMediaMetadata.keyframeMode === 'string' ? currentMediaMetadata.keyframeMode : ''
+  const activeShotHasEnhancedKeyframe = currentMediaRole === 'cinematic_v2_shot_keyframe'
+    && currentMediaGeneratedBy !== 'deterministic_panel_passthrough'
+    && currentMediaKeyframeMode !== 'storyboard_panel_crop'
+    && currentMedia?.kind === 'image'
+  const qualityKeyframeBusy = Boolean(activeShot && qualityKeyframes?.busyShotId === activeShot.id)
   const timelineWidth = timelineTrackWidth(projection, pixelsPerSecond)
   const zoomPercent = Math.round((pixelsPerSecond / BASE_PIXELS_PER_SECOND) * 100)
   const activeRefs = useMemo(() => activeShot?.activeRefIds ?? [], [activeShot])
-  const performanceArcPoints = useMemo(() => (projection?.shots ?? []).map((shot) => {
-    const beats = shot.performanceBeats
-    const averageValence = beats.length > 0 ? beats.reduce((sum, beat) => sum + beat.valence, 0) / beats.length : 0
-    const averageArousal = beats.length > 0 ? beats.reduce((sum, beat) => sum + beat.arousal, 0) / beats.length : 0
-    const averageConfidence = beats.length > 0 ? beats.reduce((sum, beat) => sum + beat.confidence, 0) / beats.length : 0
-    return { shot, averageValence, averageArousal, averageConfidence }
-  }), [projection?.shots])
+  const activeReferencePreviews = useMemo(
+    () => activeRefs.map((refId) => resolveReferencePreview(assets, refId)),
+    [activeRefs, assets],
+  )
   const directorScopeSummary = directorScopeMode === 'scene'
     ? 'Whole scene'
     : directorScopeMode === 'shot_range'
@@ -435,6 +519,32 @@ export function CinematicTimelinePlayer({
               <span>{activeShot?.beat ?? 'Panels, keyframes, and videos will appear here as the workflow completes.'}</span>
             </div>
           )}
+          {activeReferencePreviews.length > 0 ? (
+            <div className="timeline-preview-reference-rail" aria-label="Active shot references" role="list">
+              {activeReferencePreviews.slice(0, MAX_PREVIEW_REFERENCE_ICONS).map((reference) => (
+                <div
+                  className={reference.url ? 'timeline-preview-reference-icon has-image' : 'timeline-preview-reference-icon'}
+                  key={reference.id}
+                  role="listitem"
+                  title={reference.label}
+                >
+                  <span className="timeline-preview-reference-thumb">
+                    {reference.url ? <img alt="" src={reference.url} /> : <EntityIcon id="asset" />}
+                  </span>
+                  <span className="timeline-preview-reference-label">{reference.label}</span>
+                </div>
+              ))}
+              {activeReferencePreviews.length > MAX_PREVIEW_REFERENCE_ICONS ? (
+                <div
+                  className="timeline-preview-reference-icon is-count"
+                  role="listitem"
+                  title={`${activeReferencePreviews.length - MAX_PREVIEW_REFERENCE_ICONS} more references`}
+                >
+                  +{activeReferencePreviews.length - MAX_PREVIEW_REFERENCE_ICONS}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="timeline-preview-overlay">
             <div className="timeline-preview-meta">
               <span className="eyebrow">{subtitle}</span>
@@ -532,28 +642,6 @@ export function CinematicTimelinePlayer({
                 ))}
               </div>
 
-              {performanceArcPoints.some((point) => point.shot.performanceBeats.length > 0) ? (
-                <div className="timeline-performance-arc" aria-label="Performance emotion arc">
-                  {performanceArcPoints.map(({ shot, averageValence, averageArousal, averageConfidence }) => (
-                    <button
-                      className={shot.id === activeShot?.id ? 'timeline-performance-arc-segment is-active' : 'timeline-performance-arc-segment'}
-                      key={`performance-${shot.id}`}
-                      onClick={() => setClampedPlayhead(shot.startSeconds)}
-                      style={{
-                        left: shot.startSeconds * pixelsPerSecond,
-                        width: Math.max(24, shot.durationSeconds * pixelsPerSecond),
-                        '--arc-valence': String(Math.round(((averageValence + 1) / 2) * 100)),
-                        '--arc-arousal': String(Math.round(averageArousal * 100)),
-                      } as CSSProperties}
-                      title={`${shot.title}: valence ${formatPerformanceNumber(averageValence)}, arousal ${formatPerformanceNumber(averageArousal)}, confidence ${formatPerformanceNumber(averageConfidence)}`}
-                      type="button"
-                    >
-                      <span style={{ height: `${Math.max(12, Math.round(10 + averageArousal * 24))}px` }} />
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-
               <div className="timeline-track-shell">
                 <div className="timeline-track-label">
                   <span className="eyebrow">Shots</span>
@@ -604,39 +692,6 @@ export function CinematicTimelinePlayer({
 
               <div className="timeline-track-shell">
                 <div className="timeline-track-label">
-                  <span className="eyebrow">Scene</span>
-                  <strong>{projection.takes.length}</strong>
-                </div>
-                <div
-                  className="timeline-track timeline-track-takes"
-                  onMouseDown={(event) => {
-                    if (event.target !== event.currentTarget) return
-                    event.preventDefault()
-                    startScrub(event.clientX)
-                  }}
-                >
-                  {projection.takes.map((take) => (
-                    <button
-                      className={take.id === activeTake?.id ? 'timeline-take-block is-active' : 'timeline-take-block'}
-                      key={take.id}
-                      onClick={() => setClampedPlayhead(take.startSeconds)}
-                      onMouseDown={(event) => event.stopPropagation()}
-                      style={{
-                        left: take.startSeconds * pixelsPerSecond,
-                        width: Math.max(120, take.durationSeconds * pixelsPerSecond),
-                      }}
-                      type="button"
-                    >
-                      <strong>{take.title}</strong>
-                      <span>{take.durationSeconds.toFixed(1)}s · {take.shotIds.length} shots</span>
-                      <span>Read-only timing preview</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="timeline-track-shell">
-                <div className="timeline-track-label">
                   <span className="eyebrow">Dialogue / Captions</span>
                   <strong>{projection.dialogueCues.length}</strong>
                 </div>
@@ -664,34 +719,6 @@ export function CinematicTimelinePlayer({
                 </div>
               </div>
 
-              <div className="timeline-track-shell">
-                <div className="timeline-track-label">
-                  <span className="eyebrow">Audio Plan</span>
-                  <strong>{projection.audioCues.length}</strong>
-                </div>
-                <div
-                  className="timeline-track timeline-track-cues"
-                  onMouseDown={(event) => {
-                    if (event.target !== event.currentTarget) return
-                    event.preventDefault()
-                    startScrub(event.clientX)
-                  }}
-                >
-                  {projection.audioCues.map((cue) => (
-                    <div
-                      className="timeline-cue timeline-cue-audio"
-                      key={cue.id}
-                      style={{
-                        left: cue.startSeconds * pixelsPerSecond,
-                        width: Math.max(48, (cue.endSeconds - cue.startSeconds) * pixelsPerSecond),
-                      }}
-                    >
-                      <span>{cue.label}</span>
-                      <strong>{cue.text}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -711,6 +738,23 @@ export function CinematicTimelinePlayer({
                   <span>{activeShot.subtitleCues.length} dialogue/caption cues</span>
                   <span>{activeShot.activeRefIds.length} refs</span>
                 </div>
+                {qualityKeyframes ? (
+                  <div className="timeline-quality-keyframe-panel">
+                    <button
+                      className="primary-button compact"
+                      disabled={qualityKeyframeBusy}
+                      onClick={() => void qualityKeyframes.onGenerateShot(activeShot)}
+                      type="button"
+                    >
+                      {qualityKeyframeBusy ? 'Enhancing...' : activeShotHasEnhancedKeyframe ? 'Regenerate High-Res Keyframe' : 'Generate High-Res Keyframe'}
+                    </button>
+                    <span>
+                      {activeShotHasEnhancedKeyframe
+                        ? 'This shot is using an enhanced keyframe.'
+                        : 'Uses this shot panel plus shot-scoped references and keyframe repair guidance.'}
+                    </span>
+                  </div>
+                ) : null}
               </>
             ) : null}
           </div>

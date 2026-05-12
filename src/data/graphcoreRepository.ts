@@ -2733,6 +2733,73 @@ function stripTransientAssetUrlsForCache(snapshot: ProjectSnapshot): ProjectSnap
   }
 }
 
+function isBrowserObjectUrl(value: unknown) {
+  return typeof value === 'string' && value.trim().startsWith('blob:')
+}
+
+function stripTransientOutputArtifactUrlsForCache(artifact: OutputArtifact): OutputArtifact {
+  const metadata = { ...artifact.metadata }
+  let changed = false
+
+  // Artifacts linked to durable project assets should be rehydrated from the
+  // asset key. Persisting signed URLs or browser object URLs makes the Outputs
+  // cache stale after refresh.
+  if (artifact.assetKey) {
+    if ('sourceUrl' in metadata) {
+      delete metadata.sourceUrl
+      changed = true
+    }
+    if ('previewUrl' in metadata) {
+      delete metadata.previewUrl
+      changed = true
+    }
+  } else {
+    if (isBrowserObjectUrl(metadata.sourceUrl)) {
+      delete metadata.sourceUrl
+      changed = true
+    }
+    if (isBrowserObjectUrl(metadata.previewUrl)) {
+      delete metadata.previewUrl
+      changed = true
+    }
+  }
+
+  return changed ? { ...artifact, metadata } : artifact
+}
+
+function stripTransientOutputAssetUrlsForCache(asset: AssetDefinition): AssetDefinition {
+  const metadata = { ...asset.metadata }
+  let changed = false
+  const stripAllHydratedUrls = isPrivateStorageBackedAsset(asset)
+
+  if (stripAllHydratedUrls || isBrowserObjectUrl(metadata.sourceUrl)) {
+    if ('sourceUrl' in metadata) {
+      delete metadata.sourceUrl
+      changed = true
+    }
+  }
+  if (stripAllHydratedUrls || isBrowserObjectUrl(metadata.previewUrl)) {
+    if ('previewUrl' in metadata) {
+      delete metadata.previewUrl
+      changed = true
+    }
+  }
+
+  return changed ? { ...asset, metadata } : asset
+}
+
+function stripTransientOutputInboxUrlsForCache(inbox: OutputInboxSlice): OutputInboxSlice {
+  return {
+    ...inbox,
+    artifacts: inbox.artifacts.map(stripTransientOutputArtifactUrlsForCache),
+    assets: inbox.assets.map(stripTransientOutputAssetUrlsForCache),
+    runs: inbox.runs.map((run) => ({
+      ...run,
+      artifacts: run.artifacts.map(stripTransientOutputArtifactUrlsForCache),
+    })),
+  }
+}
+
 function readRepositoryRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -4511,12 +4578,13 @@ export async function loadCachedOutputInbox(projectId: string, draftId: string):
     profile: 'outputs',
     cachedAt: cached.cachedAt,
     rowCounts: cached.rowCounts,
-    inbox: cached.inbox,
+    inbox: stripTransientOutputInboxUrlsForCache(cached.inbox),
   }
 }
 
 export async function saveCachedOutputInbox(projectId: string, draftId: string, inbox: OutputInboxSlice) {
   const cacheKey = cacheKeyForOutputInbox(projectId, draftId)
+  const cacheInbox = stripTransientOutputInboxUrlsForCache(inbox)
   const entry: GraphCoreClientOutputInboxCache & { cacheKey: string } = {
     cacheKey,
     projectId,
@@ -4525,13 +4593,13 @@ export async function saveCachedOutputInbox(projectId: string, draftId: string, 
     profile: 'outputs',
     cachedAt: new Date().toISOString(),
     rowCounts: {
-      requests: inbox.requests.length,
-      workflows: inbox.workflows.length,
-      runs: inbox.runs.length,
-      artifacts: inbox.artifacts.length,
-      assets: inbox.assets.length,
+      requests: cacheInbox.requests.length,
+      workflows: cacheInbox.workflows.length,
+      runs: cacheInbox.runs.length,
+      artifacts: cacheInbox.artifacts.length,
+      assets: cacheInbox.assets.length,
     },
-    inbox,
+    inbox: cacheInbox,
   }
   await withCacheStore<IDBValidKey>('readwrite', (store) => store.put(entry))
 }

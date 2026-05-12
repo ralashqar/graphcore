@@ -836,6 +836,15 @@ function readNodeConfigRecord(value: unknown) {
     : {}
 }
 
+const outputWorkflowEightWideMediaGroups = new Set([
+  'cinematic_beat_sheets',
+  'cinematic_keyframes',
+  'cinematic_videos',
+  'cinematic_v2_storyboard_sheets',
+  'cinematic_v2_shot_keyframes',
+  'cinematic_v2_videos',
+])
+
 export function getOutputWorkflowNodeExecutionMetadata(
   node: Pick<OutputWorkflowNode, 'nodeType' | 'config' | 'metadata'>,
 ) {
@@ -858,7 +867,9 @@ export function getOutputWorkflowNodeExecutionMetadata(
   )
   const maxConcurrency = resourceClass === 'image' && parsed.groupKey === 'comic_pages'
     ? Math.max(parsed.maxConcurrency ?? defaultOutputWorkflowConcurrency.resourceClasses.image, defaultOutputWorkflowConcurrency.resourceClasses.image)
-    : parsed.maxConcurrency
+    : parsed.groupKey && outputWorkflowEightWideMediaGroups.has(parsed.groupKey)
+      ? Math.max(parsed.maxConcurrency ?? defaultOutputWorkflowConcurrency.global, defaultOutputWorkflowConcurrency.global)
+      : parsed.maxConcurrency
   return { ...parsed, resourceClass, maxConcurrency }
 }
 
@@ -904,9 +915,9 @@ export const defaultOutputWorkflowConcurrency = {
   resourceClasses: {
     llm: 8,
     image: 8,
-    video: 1,
+    video: 8,
     document: 4,
-    utility: 4,
+    utility: 8,
   },
 } as const
 

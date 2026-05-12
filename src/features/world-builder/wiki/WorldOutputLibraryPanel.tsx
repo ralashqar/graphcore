@@ -1,7 +1,14 @@
 import { useMemo, useState } from 'react'
 
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
-import type { OutputArtifactFilter, OutputLibraryArtifactCard, OutputLibraryModel, OutputLibraryRequestRow } from './outputLibraryPresentation'
+import type {
+  OutputArtifactFilter,
+  OutputLibraryArtifactCard,
+  OutputLibraryEntityRef,
+  OutputLibraryModel,
+  OutputLibraryOpenTarget,
+  OutputLibraryRequestRow,
+} from './outputLibraryPresentation'
 
 type OutputPresetKey = 'image' | 'story' | 'comic' | 'ebook' | 'reference' | 'video'
 
@@ -10,7 +17,7 @@ type WorldOutputLibraryBaseProps = {
   model: OutputLibraryModel
   onCancelOutputRequest: (requestId: string) => Promise<unknown> | unknown
   onDeleteOutputRequest: (requestId: string) => void
-  onOpenOutputStudio: (requestId?: string | null) => void
+  onOpenOutputStudio: (requestId?: string | null, target?: OutputLibraryOpenTarget) => void
   onRefreshOutputRequest: (requestId: string) => Promise<unknown> | unknown
   onStartOutputRequest: (request: {
     prompt: string
@@ -28,7 +35,7 @@ type WorldOutputLibraryPanelProps = WorldOutputLibraryBaseProps & {
 type WorldOutputCreateRailProps = {
   canRunOutputs: boolean
   controller: WorldOutputLibraryController
-  onOpenOutputStudio: (requestId?: string | null) => void
+  onOpenOutputStudio: (requestId?: string | null, target?: OutputLibraryOpenTarget) => void
 }
 
 export type WorldOutputLibraryController = {
@@ -127,6 +134,30 @@ function OutputRequestThumb({ row }: { row: OutputLibraryRequestRow }) {
   )
 }
 
+function OutputRequestEntityRefs({ refs }: { refs: OutputLibraryEntityRef[] }) {
+  const visibleRefs = refs.slice(0, 8)
+  if (visibleRefs.length === 0) {
+    return (
+      <div className="world-output-row-refs is-empty" aria-label="Entity references">
+        <span>No entity refs</span>
+      </div>
+    )
+  }
+  return (
+    <div className="world-output-row-refs" aria-label="Entity references">
+      {visibleRefs.map((ref) => (
+        <span className="world-output-row-ref" key={ref.key} title={`${ref.label}${ref.role ? ` · ${ref.role}` : ''}`}>
+          <span className="world-output-row-ref-icon" aria-hidden="true">
+            {ref.imageUrl ? <img src={ref.imageUrl} alt="" loading="lazy" /> : <EntityIcon id={ref.icon} />}
+          </span>
+          <small>{ref.label}</small>
+        </span>
+      ))}
+      {refs.length > visibleRefs.length ? <span className="world-output-row-ref is-more">+{refs.length - visibleRefs.length}</span> : null}
+    </div>
+  )
+}
+
 function OutputRequestRow({
   busyRequestId,
   row,
@@ -141,7 +172,7 @@ function OutputRequestRow({
   row: OutputLibraryRequestRow
   onCancelOutputRequest: (requestId: string) => Promise<unknown> | unknown
   onDeleteOutputRequest: (requestId: string) => void
-  onOpenOutputStudio: (requestId?: string | null) => void
+  onOpenOutputStudio: (requestId?: string | null, target?: OutputLibraryOpenTarget) => void
   onRefreshOutputRequest: (requestId: string) => Promise<unknown> | unknown
   setBusyRequestId: (requestId: string | null) => void
   setError: (message: string | null) => void
@@ -176,7 +207,7 @@ function OutputRequestRow({
         <div>
           <span className="eyebrow">{row.outputKindLabel}</span>
           <strong>{row.title}</strong>
-          <p>{row.promptExcerpt || 'No prompt recorded.'}</p>
+          <OutputRequestEntityRefs refs={row.entityRefs} />
           <div className="world-output-row-meta">
             <span>{row.statusLabel}</span>
             <span>{row.currentStepLabel}</span>
@@ -191,9 +222,11 @@ function OutputRequestRow({
         </span>
         <div className="world-output-actions">
           {row.primaryArtifact?.url ? <a href={row.primaryArtifact.url} target="_blank" rel="noreferrer">{row.primaryArtifact.openLabel}</a> : null}
+          {row.canOpenGraph ? <button onClick={() => onOpenOutputStudio(row.id, 'graph')} type="button">Graph</button> : null}
+          {row.canOpenTimeline ? <button onClick={() => onOpenOutputStudio(row.id, 'timeline')} type="button">Timeline</button> : null}
           <button disabled={busy} onClick={refresh} type="button">{busy ? 'Refreshing' : 'Refresh'}</button>
           {row.canCancel ? <button disabled={busy} onClick={cancel} type="button">Cancel</button> : null}
-          <button onClick={() => onOpenOutputStudio(row.id)} type="button">Studio</button>
+          <button onClick={() => onOpenOutputStudio(row.id, 'details')} type="button">Studio</button>
           {row.canRemove ? <button disabled={busy} onClick={() => onDeleteOutputRequest(row.id)} type="button">Remove</button> : null}
         </div>
       </div>

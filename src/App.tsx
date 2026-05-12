@@ -1349,6 +1349,11 @@ export default function App() {
   const [bundle, setBundle] = useState<GameSystemBundle | null>(null)
   const [patchPreview, setPatchPreview] = useState<(PromptPatchResponse & { id: string; prompt: string; status: string }) | null>(null)
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('graph')
+  const [pendingOutputOpenIntent, setPendingOutputOpenIntent] = useState<{
+    requestId: string | null
+    target: 'details' | 'graph' | 'timeline'
+    nonce: number
+  } | null>(null)
   const [activeInitialSeedSessionKey, setActiveInitialSeedSessionKey] = useState<string | null>(null)
   const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('wiki')
   const [worldWikiSubView, setWorldWikiSubView] = useState<WorldWikiSubView>('wiki')
@@ -7493,7 +7498,14 @@ export default function App() {
                 onGetOutputRequestStatus={getOutputRequestStatus}
                 onCancelOutputRequest={cancelOutputRequest}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
-                onOpenOutputStudio={() => setActiveTab('outputs')}
+                onOpenOutputStudio={(requestId, target = 'details') => {
+                  setPendingOutputOpenIntent({
+                    requestId: requestId ?? null,
+                    target,
+                    nonce: Date.now(),
+                  })
+                  setActiveTab('outputs')
+                }}
                 canRunOutputs={loadedState?.source === 'supabase'}
                 onResolveWorldThread={resolveWorldThread}
                 onParkWorldThread={parkWorldThread}
@@ -7534,20 +7546,21 @@ export default function App() {
             {activeTab === 'outputs' ? (
               <OutputsWorkspace
                 canRunOutputs={loadedState?.source === 'supabase'}
-                  snapshot={snapshot}
-                  onCancelOutputRequest={cancelOutputRequest}
-                  onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
-                  onGetOutputRequestStatus={getOutputRequestStatus}
-                  onGetOutputWorkflowStatus={getOutputWorkflowStatus}
-                  onLoadOutputInbox={loadOutputInbox}
-                  onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
-                  onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
-                  onPlanOutputWorkflow={planOutputWorkflow}
-                  onPreviewCinematicDirectorNote={previewOutputCinematicDirectorNote}
-                  onApplyCinematicDirectorPatch={applyOutputCinematicDirectorPatch}
-                  onRefreshLiveSnapshot={refreshLiveSnapshot}
-                  onRequestDeleteOutputRequest={requestDeleteOutputRequest}
-                  onStartOutputRequest={startOutputRequest}
+                openIntent={pendingOutputOpenIntent}
+                snapshot={snapshot}
+                onCancelOutputRequest={cancelOutputRequest}
+                onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
+                onGetOutputRequestStatus={getOutputRequestStatus}
+                onGetOutputWorkflowStatus={getOutputWorkflowStatus}
+                onLoadOutputInbox={loadOutputInbox}
+                onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
+                onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
+                onPlanOutputWorkflow={planOutputWorkflow}
+                onPreviewCinematicDirectorNote={previewOutputCinematicDirectorNote}
+                onApplyCinematicDirectorPatch={applyOutputCinematicDirectorPatch}
+                onRefreshLiveSnapshot={refreshLiveSnapshot}
+                onRequestDeleteOutputRequest={requestDeleteOutputRequest}
+                onStartOutputRequest={startOutputRequest}
                 onStartOutputWorkflow={startOutputWorkflow}
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
                 onUpdateOutputWorkflowNode={updateOutputWorkflowNode}

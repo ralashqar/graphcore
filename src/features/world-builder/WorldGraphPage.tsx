@@ -159,7 +159,7 @@ import { useWorldPromptPanelState } from './hooks/useWorldPromptPanelState'
 import { WorldFeedPanel } from './feed/WorldFeedPanel'
 import { WorldPromptChatPanel } from './prompt/WorldPromptPanels'
 import { WorldOutputCreateRail, WorldOutputLibraryPanel, useWorldOutputLibraryController } from './wiki/WorldOutputLibraryPanel'
-import { buildOutputLibraryModel } from './wiki/outputLibraryPresentation'
+import { buildOutputLibraryModel, type OutputLibraryOpenTarget } from './wiki/outputLibraryPresentation'
 import { WorldWikiPanel, WorldWikiSubViewToggle } from './wiki/WorldWikiPanel'
 import {
   WorldWikiSectionView,
@@ -335,7 +335,7 @@ type WorldGraphPageProps = {
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onRequestDeleteOutputRequest: (requestId: string) => void
-  onOpenOutputStudio: (requestId?: string | null) => void
+  onOpenOutputStudio: (requestId?: string | null, target?: OutputLibraryOpenTarget) => void
   canRunOutputs: boolean
   onResolveWorldThread: (input: { threadKey: string }) => Promise<void> | void
   onParkWorldThread: (input: { threadKey: string }) => Promise<void> | void
@@ -1701,7 +1701,8 @@ export function WorldGraphPage({
     outputRequests,
     outputWorkflowNodes,
     outputWorkflowRuns,
-  }), [assets, outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns])
+    worldEntities,
+  }), [assets, outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns, worldEntities])
   const outputLibraryController = useWorldOutputLibraryController({
     canRunOutputs,
     model: outputLibraryModel,

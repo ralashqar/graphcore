@@ -4,7 +4,7 @@ import {
   compactOutputWorkflowRunForStatus,
   hydrateOutputArtifactSignedUrls,
   isTerminalOutputWorkflowRunStatus,
-  loadOutputWorkflowRunBundle,
+  loadOutputWorkflowRunStatus,
   outputWorkflowRunStatusResponseSchema,
 } from '../_shared/output-workflow.ts'
 import { outputWorkflowRunStatusRequestSchema } from '../../../src/domain/outputWorkflow.ts'
@@ -17,14 +17,10 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client } = await requireUserClient(request, 'get-output-workflow-status')
     const payload = outputWorkflowRunStatusRequestSchema.parse(await request.json())
-    const bundle = await loadOutputWorkflowRunBundle(client, payload.runId, {
-      includeNodeOutputs: false,
-      includeRunPayload: false,
-      includeStepOutputs: false,
-    })
-    const artifacts = await hydrateOutputArtifactSignedUrls(client, bundle.run.artifacts)
+    const statusRun = await loadOutputWorkflowRunStatus(client, payload.runId)
+    const artifacts = await hydrateOutputArtifactSignedUrls(client, statusRun.artifacts)
     const run = {
-      ...compactOutputWorkflowRunForStatus(bundle.run),
+      ...compactOutputWorkflowRunForStatus(statusRun),
       artifacts,
     }
     return json(outputWorkflowRunStatusResponseSchema.parse({
