@@ -112,7 +112,7 @@ export function BillingPage({
       <div className="billing-hero">
         <div className="billing-hero-copy">
           <span className="section-label">Billing</span>
-          <h1>Keep GraphCore generating.</h1>
+          <h1>Keep SynArc generating.</h1>
           <p className="subtle-line">
             Track credits, buy more when you need a burst, or move onto a monthly plan for steady generation.
           </p>

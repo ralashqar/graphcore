@@ -72,7 +72,7 @@ export function WorkspaceTopbar({
   worldWikiSubView = 'wiki',
   workspaceName,
 }: WorkspaceTopbarProps) {
-  const userInitial = (currentUserEmail ?? 'G').trim().charAt(0).toUpperCase() || 'G'
+  const userInitial = (currentUserEmail ?? 'S').trim().charAt(0).toUpperCase() || 'S'
   const displayCredits = creditBalance ?? 0
   const navItems = TOPBAR_NAV_ITEMS.filter((item) => (
     item.kind !== 'world' || item.mode !== 'code' || projectType === 'app'
@@ -80,7 +80,10 @@ export function WorkspaceTopbar({
   return (
     <header className="topbar">
       <div className="brand-cluster">
-        <div className="brand-mark">G</div>
+        <div className="brand-mark" aria-hidden="true">
+          <img src="/brand/synarc-logo.png" alt="" />
+        </div>
+        <div className="brand-line">SynArc</div>
         {games.length > 0 ? (
           <label className="topbar-project-select">
             <span className="sr-only">Project</span>
@@ -92,9 +95,7 @@ export function WorkspaceTopbar({
               ))}
             </select>
           </label>
-        ) : (
-          <div className="brand-line">GraphCore</div>
-        )}
+        ) : null}
         <span className="topbar-draft-label">{draftName}</span>
       </div>
       {hideNavigation ? <div className="topbar-center" aria-hidden="true" /> : (

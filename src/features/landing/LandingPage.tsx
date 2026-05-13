@@ -742,12 +742,12 @@ export function LandingPage({
   return (
     <main className="landing-shell" ref={rootRef}>
       <header className="landing-nav-shell">
-        <nav className="landing-nav" aria-label="GraphCore landing navigation">
+        <nav className="landing-nav" aria-label="SynArc landing navigation">
           <button className="landing-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} type="button">
             <span className="landing-brand-mark" aria-hidden="true">
-              <span />
+              <img src="/brand/synarc-logo.png" alt="" />
             </span>
-            <span>GraphCore</span>
+            <span>SynArc</span>
           </button>
 
           <div className="landing-nav-links">
@@ -1005,7 +1005,7 @@ export function LandingPage({
           <span>@StoryArchivist - 2.3M followers</span>
         </article>
 
-        <div className="landing-metrics" aria-label="GraphCore usage metrics">
+        <div className="landing-metrics" aria-label="SynArc usage metrics">
           {metrics.map((metric) => (
             <div className="landing-metric" key={metric.label}>
               <strong>{metric.value}</strong>

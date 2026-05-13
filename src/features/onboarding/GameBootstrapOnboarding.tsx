@@ -44,7 +44,7 @@ export function GameBootstrapOnboarding({
           <div>
             <span className="eyebrow">First-Run Onboarding</span>
             <h2>Build the first playable data layer</h2>
-            <p className="subtle-line">Pick the overall game archetype, describe the concept, and GraphCore will infer systems, starter content, and graphs automatically.</p>
+            <p className="subtle-line">Pick the overall game archetype, describe the concept, and SynArc will infer systems, starter content, and graphs automatically.</p>
           </div>
           {canClose ? <button aria-label="Close onboarding" className="ghost-button compact bootstrap-close-button" onClick={onClose} type="button">X</button> : null}
         </div>
@@ -87,7 +87,7 @@ export function GameBootstrapOnboarding({
               <div className="bootstrap-copy-block bootstrap-copy-centered">
                 <span className="section-label">Game Concept</span>
                 <h3>Describe what this game is about</h3>
-                <p className="subtle-line">Write a short pitch. GraphCore will infer starter items, characters, abilities, locations, markets, and graphs from it.</p>
+                <p className="subtle-line">Write a short pitch. SynArc will infer starter items, characters, abilities, locations, markets, and graphs from it.</p>
               </div>
               <label className="field-block bootstrap-field">
                 <span>What is the game about?</span>

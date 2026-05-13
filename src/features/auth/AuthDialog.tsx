@@ -88,7 +88,7 @@ export function AuthDialog({
         <div className="surface-head">
           <div>
             <span className="eyebrow">Supabase Auth</span>
-            <h2>{authMode === 'sign_in' ? 'Sign in to GraphCore' : authMode === 'sign_up' ? 'Create your account' : 'Send a magic link'}</h2>
+            <h2>{authMode === 'sign_in' ? 'Sign in to SynArc' : authMode === 'sign_up' ? 'Create your account' : 'Send a magic link'}</h2>
             <p className="subtle-line">
               {authMode === 'magic_link'
                 ? 'Use email-only login when you want the fastest path into the live workspace.'

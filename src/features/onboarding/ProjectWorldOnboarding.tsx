@@ -1723,7 +1723,7 @@ export function ProjectWorldOnboarding({
         <p>One source of truth. Infinite possibilities.</p>
       </aside>
 
-      <section className="world-onboarding-output-section" aria-label="Connected GraphCore outputs">
+      <section className="world-onboarding-output-section" aria-label="Connected SynArc outputs">
         <div className="world-onboarding-output-flow" aria-hidden="true">
           <svg viewBox="0 0 1200 260" preserveAspectRatio="none">
             <defs>

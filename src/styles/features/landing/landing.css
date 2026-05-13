@@ -102,12 +102,10 @@
   height: 42px;
   display: grid;
   place-items: center;
-  border-radius: 50%;
+  overflow: hidden;
+  border-radius: 12px;
   border: 1px solid rgba(139, 60, 255, 0.62);
-  background:
-    radial-gradient(circle at 70% 30%, rgba(57, 216, 255, 0.82), transparent 12%),
-    radial-gradient(circle at 28% 70%, rgba(139, 60, 255, 0.85), transparent 16%),
-    rgba(6, 13, 24, 0.76);
+  background: rgba(6, 13, 24, 0.76);
   box-shadow:
     0 0 26px rgba(139, 60, 255, 0.4),
     inset 0 0 22px rgba(34, 119, 255, 0.2);
@@ -116,24 +114,14 @@
 .landing-brand-mark::before,
 .landing-brand-mark::after,
 .landing-brand-mark span {
-  content: '';
-  position: absolute;
-  width: 72%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(57, 216, 255, 0.95), transparent);
-  transform-origin: center;
+  display: none;
 }
 
-.landing-brand-mark::before {
-  transform: rotate(28deg);
-}
-
-.landing-brand-mark::after {
-  transform: rotate(142deg);
-}
-
-.landing-brand-mark span {
-  transform: rotate(88deg);
+.landing-brand-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .landing-nav-links {

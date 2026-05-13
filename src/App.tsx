@@ -7815,7 +7815,7 @@ export default function App() {
   if (appRoute !== 'app') {
     if (appRoute === 'billing') {
       return (
-        <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing GraphCore...</p></main>}>
+        <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing SynArc...</p></main>}>
         <BillingPage
           session={session}
           creditBalance={creditBalance}
@@ -7829,7 +7829,7 @@ export default function App() {
   }
 
     return (
-      <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing GraphCore...</p></main>}>
+      <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing SynArc...</p></main>}>
         <LandingPage
           isSignedIn={Boolean(session)}
           onEnterApp={() => handleEnterApp()}
@@ -7854,8 +7854,8 @@ export default function App() {
     ? workspaceHydrationState[activeHydrationKey]?.status ?? 'idle'
     : 'idle'
 
-  if (loading) return <main className="app-shell loading-shell"><p>Booting GraphCore workspace...</p></main>
-  if (error || !snapshot || !bundle) return <main className="app-shell loading-shell"><p>{error ?? 'GraphCore could not load a project snapshot.'}</p></main>
+  if (loading) return <main className="app-shell loading-shell"><p>Booting SynArc workspace...</p></main>
+  if (error || !snapshot || !bundle) return <main className="app-shell loading-shell"><p>{error ?? 'SynArc could not load a project snapshot.'}</p></main>
 
   return (
     <main className="app-shell" data-hydration-status={activeHydrationStatus}>
