@@ -70,6 +70,7 @@ import {
 import {
   deriveWorldSequence,
   readWorldSequenceMetadata,
+  validateWorldSequenceUnitCompleteness,
 } from '../../domain/worldSequence'
 import {
   deriveWorldWiki,
@@ -81,7 +82,16 @@ import {
   visualGenerationJobTargetsEntityReferenceSheet,
 } from '../../domain/initialSeedReferenceSheets'
 import type { WorldBrandAtlasImageResponse } from '../../domain/worldBrandAtlasImage'
-import type { VisualGenerationJob, VisualGenerationStartRequest, VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../../domain/visualGeneration'
+import type {
+  EntityReferenceGuidanceImageUploadRequest,
+  EntityReferenceGuidanceImageUploadResponse,
+  EntityVisualProfileRefinementRequest,
+  EntityVisualProfileRefinementResponse,
+  VisualGenerationJob,
+  VisualGenerationStartRequest,
+  VisualGenerationStartResponse,
+  VisualGenerationStatusResponse,
+} from '../../domain/visualGeneration'
 import {
   buildApprovedAppDesignBundle,
   evaluateAppPreviewReadiness,
@@ -563,6 +573,12 @@ type WorldGraphPageProps = {
   onGenerateWorldConceptImage?: () => Promise<VisualGenerationStartResponse> | VisualGenerationStartResponse
   onStartVisualGenerationJob?: (request: Omit<Partial<VisualGenerationStartRequest>, 'projectId' | 'draftId'> & Pick<VisualGenerationStartRequest, 'kind'>) => Promise<VisualGenerationStartResponse> | VisualGenerationStartResponse
   onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse> | VisualGenerationStatusResponse
+  onUploadEntityReferenceGuidanceImage?: (
+    request: Omit<EntityReferenceGuidanceImageUploadRequest, 'projectId' | 'draftId'>
+  ) => Promise<EntityReferenceGuidanceImageUploadResponse> | EntityReferenceGuidanceImageUploadResponse
+  onRefineWorldEntityVisualProfile?: (
+    request: Omit<EntityVisualProfileRefinementRequest, 'projectId' | 'draftId'>
+  ) => Promise<(EntityVisualProfileRefinementResponse & { entity: WorldEntity })> | (EntityVisualProfileRefinementResponse & { entity: WorldEntity })
   onStartAppCodeGeneration?: () => Promise<AppGenerationStartResponse> | AppGenerationStartResponse
   onGetAppGenerationStatus?: (jobId: string) => Promise<AppGenerationStatusResponse> | AppGenerationStatusResponse
   onCancelAppGenerationJob?: (jobId: string) => Promise<AppGenerationCancelResponse> | AppGenerationCancelResponse
@@ -636,7 +652,25 @@ type ActiveWikiEntityPageState = {
   sectionKind: WorldWikiSection['kind']
   entityKey: string
 } | null
-type WikiEntityHeroImageOrientation = 'landscape' | 'portrait' | 'square'
+type WikiEntityHeroImageMeasurement = {
+  width: number
+  height: number
+  aspectRatio: number
+  orientation: 'landscape' | 'portrait' | 'square'
+}
+type EntityReferenceSheetRegenerationState = {
+  entityKey: string
+  guidance: string
+  file: File | null
+  busy: boolean
+  phase: EntityReferenceSheetRegenerationPhase | null
+  error: string | null
+}
+type EntityReferenceSheetRegenerationPhase =
+  | 'uploading_reference_image'
+  | 'refining_visual_profile'
+  | 'queueing_image_generation'
+  | 'generating_image'
 
 type EntityComposerState = {
   mode: 'global' | 'related'
@@ -1205,6 +1239,8 @@ export function WorldGraphPage({
   onGenerateWorldConceptImage,
   onStartVisualGenerationJob,
   onGetVisualGenerationStatus,
+  onUploadEntityReferenceGuidanceImage,
+  onRefineWorldEntityVisualProfile,
   onStartAppCodeGeneration,
   onGetAppGenerationStatus,
   onCancelAppGenerationJob,
@@ -1369,10 +1405,26 @@ export function WorldGraphPage({
   const [worldFeedGraphPreviewEntryId, setWorldFeedGraphPreviewEntryId] = useState<string | null>(null)
   const [worldFeedGraphPreviewFocusKey, setWorldFeedGraphPreviewFocusKey] = useState<string | null>(null)
   const [worldFeedGraphPreviewSelectedNodeKey, setWorldFeedGraphPreviewSelectedNodeKey] = useState<string | null>(null)
+  const [wikiEntityGraphModalEntityKey, setWikiEntityGraphModalEntityKey] = useState<string | null>(null)
+  const [wikiEntityGraphModalSelectedRelationshipKey, setWikiEntityGraphModalSelectedRelationshipKey] = useState<string | null>(null)
   const [newWorldFeedEntryIds, setNewWorldFeedEntryIds] = useState<Set<string>>(() => new Set())
   const [worldFeedVisibleEntryLimit, setWorldFeedVisibleEntryLimit] = useState(WORLD_FEED_INITIAL_RENDER_LIMIT)
   const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
-  const [wikiEntityHeroImageOrientationByUrl, setWikiEntityHeroImageOrientationByUrl] = useState<Record<string, WikiEntityHeroImageOrientation>>({})
+  const [wikiEntityHeroImageMeasurementByUrl, setWikiEntityHeroImageMeasurementByUrl] = useState<Record<string, WikiEntityHeroImageMeasurement>>({})
+  const [entityReferenceSheetRegeneration, setEntityReferenceSheetRegeneration] = useState<EntityReferenceSheetRegenerationState | null>(null)
+  const [referenceSheetRegenerationBusyEntityKey, setReferenceSheetRegenerationBusyEntityKey] = useState<string | null>(null)
+  const [referenceSheetRegenerationPhase, setReferenceSheetRegenerationPhase] = useState<{
+    entityKey: string
+    phase: EntityReferenceSheetRegenerationPhase
+  } | null>(null)
+  useEffect(() => {
+    setReferenceSheetRegenerationPhase((current) => {
+      if (!current) return current
+      if (referenceSheetRegenerationBusyEntityKey === current.entityKey) return current
+      const hasActiveJob = activeEntityReferenceSheetJobs.some((job) => visualGenerationJobTargetEntityKey(job) === current.entityKey)
+      return hasActiveJob ? current : null
+    })
+  }, [activeEntityReferenceSheetJobKey, activeEntityReferenceSheetJobs, referenceSheetRegenerationBusyEntityKey])
   const {
     selectedPromptSessionKey,
     setSelectedPromptSessionKey,
@@ -1410,6 +1462,7 @@ export function WorldGraphPage({
   const handledAutoLensTurnIdRef = useRef<string | null>(null)
   const seenWorldFeedEntryIdsRef = useRef<Set<string>>(new Set())
   const hydratedWorldFeedEntryIdsRef = useRef(false)
+  const wikiEntityGraphModalFlowRef = useRef<ReactFlowInstance<Node<WorldNodeData>, Edge<WorldFlowEdgeData>> | null>(null)
   useEffect(() => {
     if (!wikiDetailModal) return undefined
     function handleKeyDown(event: KeyboardEvent) {
@@ -3305,7 +3358,14 @@ export function WorldGraphPage({
     }
 
     const records = [...nodeKeys]
-      .map((key) => nodeRecords.get(key) ?? null)
+      .map((key) => {
+        const record = nodeRecords.get(key) ?? null
+        if (!record || record.kind !== 'entity') return record
+        return {
+          ...record,
+          imageUrl: wikiImageUrlByEntityKey.get(record.entity.key) ?? record.imageUrl,
+        }
+      })
       .filter((record): record is WorldGraphNodeRecord => Boolean(record))
       .slice(0, 32)
     if (records.length === 0) return null
@@ -3438,6 +3498,113 @@ export function WorldGraphPage({
     worldRelationships,
   ])
 
+  const wikiEntityGraphModalModel = useMemo(() => {
+    const rootEntity = wikiEntityGraphModalEntityKey ? entityByKey.get(wikiEntityGraphModalEntityKey) ?? null : null
+    if (!rootEntity) return null
+    const directRelationships = worldRelationships
+      .filter((relationship) => relationship.sourceEntityKey === rootEntity.key || relationship.targetEntityKey === rootEntity.key)
+      .filter((relationship) => entityByKey.has(relationship.sourceEntityKey) && entityByKey.has(relationship.targetEntityKey))
+    const nodeKeys = new Set<string>([rootEntity.key])
+    for (const relationship of directRelationships) {
+      nodeKeys.add(relationship.sourceEntityKey)
+      nodeKeys.add(relationship.targetEntityKey)
+    }
+    const records = [...nodeKeys]
+      .map((key) => nodeRecords.get(key) ?? null)
+      .filter((record): record is WorldGraphNodeRecord => Boolean(record))
+    const recordKeys = records.map((record) => record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key)
+    const recordKeySet = new Set(recordKeys)
+    const siblingKeys = recordKeys.filter((key) => key !== rootEntity.key)
+    const siblingCount = Math.max(1, siblingKeys.length)
+    const selectedRelationship = wikiEntityGraphModalSelectedRelationshipKey
+      ? directRelationships.find((relationship) => relationship.key === wikiEntityGraphModalSelectedRelationshipKey) ?? null
+      : null
+    const previewNodes: Node<WorldNodeData>[] = records.map((record) => {
+      const key = record.kind === 'entity' ? record.entity.key : record.kind === 'operator' ? record.operator.key : record.result.key
+      const isRoot = key === rootEntity.key
+      const siblingIndex = siblingKeys.indexOf(key)
+      const angle = siblingCount <= 1 ? 0 : ((Math.PI * 2) / siblingCount) * Math.max(0, siblingIndex)
+      const radius = records.length <= 2 ? 210 : WORLD_FEED_GRAPH_PREVIEW_NODE_RADIUS
+      const isSelectedEndpoint = selectedRelationship
+        ? selectedRelationship.sourceEntityKey === key || selectedRelationship.targetEntityKey === key
+        : false
+      return {
+        id: key,
+        type: 'worldNode',
+        position: isRoot
+          ? { x: 0, y: 0 }
+          : {
+              x: Math.cos(angle) * radius,
+              y: Math.sin(angle) * radius,
+            },
+        selected: isRoot || isSelectedEndpoint,
+        zIndex: isRoot ? 24 : isSelectedEndpoint ? 22 : 12,
+        draggable: false,
+        data: {
+          record,
+          relationCount: worldRelationships.filter((relationship) => relationship.sourceEntityKey === key || relationship.targetEntityKey === key).length,
+          usageCount: record.kind === 'entity' ? usageByEntityKey.get(record.entity.key)?.length ?? 0 : 0,
+          dimmed: Boolean(selectedRelationship && !isRoot && !isSelectedEndpoint),
+          pinned: false,
+          storyLinked: false,
+          displayTier: isRoot ? 'focus' : 'near',
+          visualMode: isRoot ? 'card' : 'nearIcon',
+          transitionState: 'stable',
+          animateIn: false,
+          animateSceneEnter: false,
+          highlighted: isRoot || isSelectedEndpoint,
+          showMiniLabel: true,
+          branchLabel: null,
+          visibilityReason: {
+            kind: isRoot ? 'focus_root' : 'direct_neighbor',
+            label: isRoot ? 'Selected wiki entity' : 'Direct relationship neighbor',
+            detail: rootEntity.name,
+          },
+        },
+      } satisfies Node<WorldNodeData>
+    })
+    const previewEdges: Edge<WorldFlowEdgeData>[] = directRelationships
+      .filter((relationship) => recordKeySet.has(relationship.sourceEntityKey) && recordKeySet.has(relationship.targetEntityKey))
+      .map((relationship) => {
+        const selected = relationship.key === selectedRelationship?.key
+        return {
+          id: relationship.key,
+          type: 'worldEdge',
+          source: relationship.sourceEntityKey,
+          target: relationship.targetEntityKey,
+          sourceHandle: WORLD_NODE_SOURCE_HANDLE,
+          targetHandle: WORLD_NODE_TARGET_HANDLE,
+          selected,
+          zIndex: 0,
+          interactionWidth: 30,
+          data: {
+            kind: 'relationship',
+            onSelect: (edgeKey) => setWikiEntityGraphModalSelectedRelationshipKey(edgeKey),
+          },
+          style: {
+            stroke: selected ? 'rgba(251, 191, 36, 0.95)' : 'rgba(94, 234, 212, 0.72)',
+            strokeWidth: selected ? 3 : 1.8,
+            opacity: selected ? 1 : 0.82,
+          },
+        } satisfies Edge<WorldFlowEdgeData>
+      })
+    return {
+      rootEntity,
+      relationships: directRelationships,
+      selectedRelationship,
+      nodes: previewNodes,
+      edges: previewEdges,
+    }
+  }, [
+    entityByKey,
+    nodeRecords,
+    usageByEntityKey,
+    wikiImageUrlByEntityKey,
+    wikiEntityGraphModalEntityKey,
+    wikiEntityGraphModalSelectedRelationshipKey,
+    worldRelationships,
+  ])
+
   useEffect(() => {
     if (!worldFeedGraphPreviewEntryId) return
     if (worldFeedGraphPreviewEntry) return
@@ -3445,6 +3612,13 @@ export function WorldGraphPage({
     setWorldFeedGraphPreviewFocusKey(null)
     setWorldFeedGraphPreviewSelectedNodeKey(null)
   }, [worldFeedGraphPreviewEntry, worldFeedGraphPreviewEntryId])
+
+  useEffect(() => {
+    if (!wikiEntityGraphModalEntityKey) return
+    if (entityByKey.has(wikiEntityGraphModalEntityKey)) return
+    setWikiEntityGraphModalEntityKey(null)
+    setWikiEntityGraphModalSelectedRelationshipKey(null)
+  }, [entityByKey, wikiEntityGraphModalEntityKey])
 
   useEffect(() => {
     if (!worldFeedGraphPreviewModel) return undefined
@@ -3461,6 +3635,16 @@ export function WorldGraphPage({
     }, 80)
     return () => window.clearTimeout(timeoutId)
   }, [worldFeedGraphPreviewEntryId, worldFeedGraphPreviewModel?.focusKey])
+
+  useEffect(() => {
+    if (!wikiEntityGraphModalModel) return undefined
+    const timeoutId = window.setTimeout(() => {
+      const instance = wikiEntityGraphModalFlowRef.current
+      if (!instance) return
+      void instance.fitView({ padding: 0.24, duration: 180, maxZoom: 0.98 })
+    }, 80)
+    return () => window.clearTimeout(timeoutId)
+  }, [wikiEntityGraphModalEntityKey, wikiEntityGraphModalModel?.nodes.length])
 
   const activeCardNodeKey = inspectorNodeKey ?? selectedWorldNodeKey
   const visibleRelationships = useMemo(
@@ -5148,14 +5332,75 @@ export function WorldGraphPage({
     }
   }
 
-  async function handleGenerateEntityReferenceSheet(entity: WorldEntity) {
+  function openEntityReferenceSheetRegenerationModal(entity: WorldEntity) {
+    setEntityReferenceSheetError(null)
+    setEntityReferenceSheetRegeneration({
+      entityKey: entity.key,
+      guidance: '',
+      file: null,
+      busy: false,
+      phase: null,
+      error: null,
+    })
+  }
+
+  function closeEntityReferenceSheetRegenerationModal() {
+    setEntityReferenceSheetRegeneration(null)
+  }
+
+  function labelForEntityReferenceSheetRegenerationPhase(phase: EntityReferenceSheetRegenerationPhase | null | undefined) {
+    switch (phase) {
+      case 'uploading_reference_image':
+        return 'Uploading reference image'
+      case 'refining_visual_profile':
+        return 'Regenerating visual description'
+      case 'queueing_image_generation':
+        return 'Starting image generation'
+      case 'generating_image':
+        return 'Generating image with changes'
+      default:
+        return 'Preparing reference sheet'
+    }
+  }
+
+  function isRegeneratedEntityReferenceSheetJob(job: VisualGenerationJob | null | undefined) {
+    if (!job) return false
+    const metadata = readLooseRecord(job.metadata)
+    const input = readLooseRecord(job.input)
+    return trimOptionalString(metadata.requestedFrom) === 'wiki_entity_reference_sheet_regenerate'
+      || trimOptionalString(metadata.regenerationGuidance) !== ''
+      || trimOptionalString(input.regenerationGuidance) !== ''
+      || trimOptionalString(metadata.referenceImageAssetKey) !== ''
+      || trimOptionalString(input.referenceImageAssetKey) !== ''
+  }
+
+  async function fileToBase64(file: File) {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+    }
+    return btoa(binary)
+  }
+
+  async function handleGenerateEntityReferenceSheet(entity: WorldEntity, options: {
+    requestedFrom?: string
+    guidance?: string
+    referenceImageAssetKey?: string | null
+  } = {}) {
     if (shouldUseGridArtForWorldEntity(entity)) {
       setEntityReferenceSheetError('Lore/concept and story sequence entries use the end-of-generation grid art path instead of reference sheets.')
-      return
+      return false
     }
     if (!onStartVisualGenerationJob) {
       setEntityReferenceSheetError('Visual generation is unavailable for this workspace.')
-      return
+      return false
+    }
+    const existingActiveJob = activeEntityReferenceSheetJobs.find((job) => visualGenerationJobTargetEntityKey(job) === entity.key)
+    if (existingActiveJob) {
+      setEntityReferenceSheetJobs((current) => mergeVisualGenerationJobStatuses(current, [existingActiveJob]))
+      return true
     }
     setEntityReferenceSheetError(null)
     try {
@@ -5187,11 +5432,15 @@ export function WorldGraphPage({
           visualTraitMap: visualIdentity.traitMap,
           projectArtStyle,
           projectTone: [wikiModel.overview.genre, ...wikiModel.overview.toneTags].filter(Boolean).join(', '),
+          regenerationGuidance: options.guidance ?? '',
+          referenceImageAssetKey: options.referenceImageAssetKey ?? null,
         },
         metadata: {
           source: 'world_graph_entity_inspector',
-          requestedFrom: 'generate_entity_reference_sheet',
+          requestedFrom: options.requestedFrom ?? 'generate_entity_reference_sheet',
           entityKey: entity.key,
+          regenerationGuidance: options.guidance ?? '',
+          referenceImageAssetKey: options.referenceImageAssetKey ?? null,
         },
       })
       setEntityReferenceSheetJobs((current) => {
@@ -5199,12 +5448,82 @@ export function WorldGraphPage({
         next.set(result.job.id, result.job)
         return [...next.values()]
       })
+      return true
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not start entity reference sheet generation.'
       setEntityReferenceSheetError(message)
       if (!visualStatusErrorIsMissingLiveDraft(error)) {
         console.error('[GraphCore] entity reference sheet generation failed to start.', error)
       }
+      return false
+    }
+  }
+
+  async function handleConfirmEntityReferenceSheetRegeneration() {
+    const modal = entityReferenceSheetRegeneration
+    if (!modal || modal.busy) return
+    const entity = entityByKey.get(modal.entityKey)
+    if (!entity) {
+      setEntityReferenceSheetRegeneration((current) => current ? { ...current, error: 'This entity no longer exists.' } : current)
+      return
+    }
+    if (shouldUseGridArtForWorldEntity(entity)) {
+      setEntityReferenceSheetRegeneration((current) => current ? { ...current, error: 'Lore/concept and story sequence entries use grid art rather than reference sheets.' } : current)
+      return
+    }
+    const guidance = modal.guidance.trim()
+    const file = modal.file
+    const initialPhase: EntityReferenceSheetRegenerationPhase = file ? 'uploading_reference_image' : guidance ? 'refining_visual_profile' : 'queueing_image_generation'
+    setEntityReferenceSheetRegeneration(null)
+    setEntityReferenceSheetError(null)
+    setReferenceSheetRegenerationBusyEntityKey(entity.key)
+    setReferenceSheetRegenerationPhase({ entityKey: entity.key, phase: initialPhase })
+    try {
+      let referenceImageAssetKey: string | null = null
+      if (file) {
+        if (!onUploadEntityReferenceGuidanceImage) {
+          throw new Error('Reference image uploads are unavailable for this workspace.')
+        }
+        const uploaded = await onUploadEntityReferenceGuidanceImage({
+          entityKey: entity.key,
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          dataBase64: await fileToBase64(file),
+        })
+        referenceImageAssetKey = uploaded.assetKey
+      }
+
+      let entityForGeneration = entity
+      if (guidance || referenceImageAssetKey) {
+        if (!onRefineWorldEntityVisualProfile) {
+          throw new Error('Visual profile refinement is unavailable for this workspace.')
+        }
+        setReferenceSheetRegenerationPhase({ entityKey: entity.key, phase: 'refining_visual_profile' })
+        const refined = await onRefineWorldEntityVisualProfile({
+          entityKey: entity.key,
+          guidance,
+          referenceImageAssetKey,
+        })
+        entityForGeneration = refined.entity
+      }
+
+      setReferenceSheetRegenerationPhase({ entityKey: entity.key, phase: 'queueing_image_generation' })
+      const queued = await handleGenerateEntityReferenceSheet(entityForGeneration, {
+        requestedFrom: 'wiki_entity_reference_sheet_regenerate',
+        guidance,
+        referenceImageAssetKey,
+      })
+      if (!queued) {
+        throw new Error(entityReferenceSheetError || 'Could not start image generation.')
+      }
+      setReferenceSheetRegenerationPhase({ entityKey: entity.key, phase: 'generating_image' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not regenerate the reference sheet.'
+      setReferenceSheetRegenerationPhase(null)
+      setEntityReferenceSheetError(message)
+      console.error('[GraphCore] entity reference sheet regeneration failed.', error)
+    } finally {
+      setReferenceSheetRegenerationBusyEntityKey(null)
     }
   }
 
@@ -6511,6 +6830,16 @@ export function WorldGraphPage({
     writeWikiEntityPageRoute(null, 'replace')
   }
 
+  function openWikiEntityGraphModal(entityKey: string) {
+    setWikiEntityGraphModalEntityKey(entityKey)
+    setWikiEntityGraphModalSelectedRelationshipKey(null)
+  }
+
+  function closeWikiEntityGraphModal() {
+    setWikiEntityGraphModalEntityKey(null)
+    setWikiEntityGraphModalSelectedRelationshipKey(null)
+  }
+
   function renderWikiEntityPage() {
     const entity = activeWikiEntity
     const section = activeWikiEntitySection
@@ -6547,7 +6876,6 @@ export function WorldGraphPage({
       .filter(([, value]) => value)
       .slice(0, 6)
     const largeImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? wikiImageUrlByEntityKey.get(entity.key) ?? null
-    const largeImageOrientation = largeImageUrl ? wikiEntityHeroImageOrientationByUrl[largeImageUrl] ?? null : null
     const relationshipRows = worldRelationships
       .filter((relationship) => relationship.sourceEntityKey === entity.key || relationship.targetEntityKey === entity.key)
       .map((relationship) => {
@@ -6568,6 +6896,262 @@ export function WorldGraphPage({
     const linkedOutputs = outputLibraryModel.rows
       .filter((row) => row.entityRefs.some((ref) => ref.key === entity.key))
       .slice(0, 6)
+    if (entity.nodeType === 'sequence_unit') {
+      const sequence = readWorldSequenceMetadata(entity)
+      const sequenceCompleteness = validateWorldSequenceUnitCompleteness(entity)
+      const sequenceConsequences = sequence.consequences ?? []
+      const sequenceArcDeltas = sequence.characterArcDeltas ?? []
+      const sequenceOpenLoops = sequence.openLoops ?? []
+      const sequenceResolvedLoops = sequence.resolvedLoops ?? []
+      const sequenceRelationships = derivedSequence.relationships.filter((relationship) => (
+        relationship.sourceUnitKey === entity.key || relationship.targetUnitKey === entity.key
+      ))
+      const previousSequenceUnits = sequenceRelationships
+        .filter((relationship) => relationship.targetUnitKey === entity.key)
+        .map((relationship) => ({
+          relationship,
+          unit: derivedSequence.units.find((unit) => unit.entity.key === relationship.sourceUnitKey) ?? null,
+        }))
+        .filter((entry): entry is { relationship: typeof sequenceRelationships[number]; unit: typeof derivedSequence.units[number] } => Boolean(entry.unit))
+      const nextSequenceUnits = sequenceRelationships
+        .filter((relationship) => relationship.sourceUnitKey === entity.key)
+        .map((relationship) => ({
+          relationship,
+          unit: derivedSequence.units.find((unit) => unit.entity.key === relationship.targetUnitKey) ?? null,
+        }))
+        .filter((entry): entry is { relationship: typeof sequenceRelationships[number]; unit: typeof derivedSequence.units[number] } => Boolean(entry.unit))
+      const linkedSequenceGroups = [
+        ['Cast', relationshipRows.filter((entry) => entry.connectedEntity?.nodeType === 'actor')] as const,
+        ['Places', relationshipRows.filter((entry) => entry.connectedEntity?.nodeType === 'place')] as const,
+        ['Factions', relationshipRows.filter((entry) => entry.connectedEntity?.nodeType === 'group')] as const,
+        ['Items', relationshipRows.filter((entry) => entry.connectedEntity?.nodeType === 'object')] as const,
+        ['Events', relationshipRows.filter((entry) => entry.connectedEntity?.nodeType === 'event')] as const,
+        ['Lore', relationshipRows.filter((entry) => entry.connectedEntity?.nodeType === 'concept')] as const,
+      ].filter(([, entries]) => entries.length > 0)
+      const povEntity = sequence.povCharacterKey ? entityByKey.get(sequence.povCharacterKey) ?? null : null
+      const sequenceStats = [
+        sequence.unitKind ? sequence.unitKind.replace(/_/g, ' ') : 'chapter',
+        sequence.sequenceKey ? `Sequence ${sequence.sequenceKey}` : 'Main sequence',
+        typeof sequence.ordinal === 'number' ? `Step ${sequence.ordinal}` : 'No ordinal',
+        sequence.actLabel || null,
+        sequence.storyFunction ? sequence.storyFunction.replace(/_/g, ' ') : null,
+        sequence.scriptExpansionReady ? 'Script expansion ready' : 'Needs script expansion hook',
+      ].filter((value): value is string => Boolean(value))
+
+      return (
+        <section className="world-wiki-entity-page world-wiki-sequence-page" data-world-wiki-entity-page={entity.key}>
+          <div className="world-wiki-sequence-hero">
+            <div className="world-wiki-sequence-title">
+              <span className="eyebrow">Authored chapter</span>
+              <h2>{entity.name}</h2>
+              <p>{sequence.synopsis || entity.summary || entity.context || 'No sequence synopsis has been written yet.'}</p>
+              <button className="world-wiki-entity-graph-button" onClick={() => openWikiEntityGraphModal(entity.key)} type="button">
+                <EntityIcon id="graph" />
+                Graph view
+              </button>
+              <div className="world-wiki-sequence-chip-row">
+                {sequenceStats.map((stat) => <span key={stat}>{stat}</span>)}
+              </div>
+            </div>
+            <aside className="world-wiki-sequence-status-panel">
+              <span className={sequenceCompleteness.complete ? 'world-wiki-sequence-readiness is-ready' : 'world-wiki-sequence-readiness is-missing'}>
+                {sequenceCompleteness.complete ? 'Script-ready shape' : `${sequenceCompleteness.missingFields.length} fields missing`}
+              </span>
+              <dl>
+                <div>
+                  <dt>POV</dt>
+                  <dd>{povEntity?.name || sequence.povCharacterName || 'Not assigned'}</dd>
+                </div>
+                <div>
+                  <dt>Question</dt>
+                  <dd>{sequence.dramaticQuestion || 'Not recorded'}</dd>
+                </div>
+                <div>
+                  <dt>Outcome</dt>
+                  <dd>{sequence.outcome || 'Not recorded'}</dd>
+                </div>
+              </dl>
+              {!sequenceCompleteness.complete ? (
+                <p>Missing {sequenceCompleteness.missingFields.map((field) => field.replace(/_/g, ' ')).join(', ')}.</p>
+              ) : null}
+            </aside>
+          </div>
+
+          <div className="world-wiki-sequence-layout">
+            <div className="world-wiki-sequence-main">
+              <section className="world-wiki-entity-panel world-wiki-sequence-brief">
+                <div className="world-wiki-entity-panel-head">
+                  <EntityIcon id="content" />
+                  <h3>Chapter brief</h3>
+                </div>
+                <div className="world-wiki-sequence-brief-grid">
+                  <article>
+                    <span>Synopsis</span>
+                    <p>{sequence.synopsis || entity.summary || 'Not recorded.'}</p>
+                  </article>
+                  <article>
+                    <span>Dramatic question</span>
+                    <p>{sequence.dramaticQuestion || 'Not recorded.'}</p>
+                  </article>
+                  <article className="is-outcome">
+                    <span>Outcome</span>
+                    <p>{sequence.outcome || 'Not recorded.'}</p>
+                  </article>
+                  {sequence.povNotes ? (
+                    <article>
+                      <span>POV notes</span>
+                      <p>{sequence.povNotes}</p>
+                    </article>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="world-wiki-entity-panel world-wiki-sequence-consequences">
+                <div className="world-wiki-entity-panel-head">
+                  <EntityIcon id="activity" />
+                  <h3>Cause and effect</h3>
+                </div>
+                {sequenceConsequences.length > 0 ? (
+                  <div className="world-wiki-sequence-consequence-list">
+                    {sequenceConsequences.map((consequence, index) => (
+                      <article key={`${consequence.cause}:${consequence.effect}:${index}`}>
+                        <span>{consequence.consequenceType.replace(/_/g, ' ')}</span>
+                        <strong>{consequence.cause || 'Cause not recorded.'}</strong>
+                        <em aria-hidden="true">-&gt;</em>
+                        <p>{consequence.effect || 'Effect not recorded.'}</p>
+                        {consequence.affectedEntityKeys.length > 0 ? (
+                          <small>Affects {consequence.affectedEntityKeys.map((key) => entityByKey.get(key)?.name ?? key).join(', ')}</small>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="inline-note is-warning">No cause/effect consequence recorded yet.</div>
+                )}
+              </section>
+
+              <section className="world-wiki-entity-panel world-wiki-sequence-arcs">
+                <div className="world-wiki-entity-panel-head">
+                  <EntityIcon id="character" />
+                  <h3>Character movement</h3>
+                </div>
+                {sequenceArcDeltas.length > 0 ? (
+                  <div className="world-wiki-sequence-arc-list">
+                    {sequenceArcDeltas.map((delta, index) => (
+                      <article key={`${delta.actorKey}:${index}`}>
+                        <strong>{entityByKey.get(delta.actorKey)?.name ?? (delta.actorKey || 'Unassigned character')}</strong>
+                        <div>
+                          <span>Before</span>
+                          <p>{delta.before || 'Not recorded.'}</p>
+                        </div>
+                        <div>
+                          <span>Pressure</span>
+                          <p>{delta.pressure || 'Not recorded.'}</p>
+                        </div>
+                        <div>
+                          <span>Choice</span>
+                          <p>{delta.choice || 'Not recorded.'}</p>
+                        </div>
+                        <div>
+                          <span>After</span>
+                          <p>{delta.after || 'Not recorded.'}</p>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="inline-note is-warning">No character arc delta recorded yet.</div>
+                )}
+              </section>
+            </div>
+
+            <aside className="world-wiki-sequence-side">
+              <section className="world-wiki-entity-panel">
+                <div className="world-wiki-entity-panel-head">
+                  <EntityIcon id="thread" />
+                  <h3>Sequence links</h3>
+                </div>
+                {previousSequenceUnits.length > 0 || nextSequenceUnits.length > 0 ? (
+                  <div className="world-wiki-sequence-link-list">
+                    {previousSequenceUnits.map(({ relationship, unit }) => (
+                      <button key={relationship.key} onClick={() => openWikiEntityPageByKey(unit.entity.key)} type="button">
+                        <span>Previous / {relationship.kind.replace(/_/g, ' ')}</span>
+                        <strong>{unit.entity.name}</strong>
+                      </button>
+                    ))}
+                    {nextSequenceUnits.map(({ relationship, unit }) => (
+                      <button key={relationship.key} onClick={() => openWikiEntityPageByKey(unit.entity.key)} type="button">
+                        <span>Next / {relationship.kind.replace(/_/g, ' ')}</span>
+                        <strong>{unit.entity.name}</strong>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="inline-note is-warning">No previous/next chapter link recorded yet.</div>
+                )}
+              </section>
+
+              <section className="world-wiki-entity-panel">
+                <div className="world-wiki-entity-panel-head">
+                  <EntityIcon id="graph" />
+                  <h3>Story ingredients</h3>
+                </div>
+                {linkedSequenceGroups.length > 0 ? (
+                  <div className="world-wiki-sequence-ingredient-groups">
+                    {linkedSequenceGroups.map(([label, entries]) => (
+                      <div key={label}>
+                        <span>{label}</span>
+                        {entries.map(({ relationship, connectedEntity }) => connectedEntity ? (
+                          <button key={relationship.key} onClick={() => openWikiEntityPageByKey(connectedEntity.key)} type="button">
+                            <strong>{connectedEntity.name}</strong>
+                            <em>{relationship.verb.replace(/_/g, ' ')}</em>
+                          </button>
+                        ) : null)}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="inline-note">No linked cast, places, items, events, or lore recorded yet.</div>
+                )}
+              </section>
+
+              <section className="world-wiki-entity-panel">
+                <div className="world-wiki-entity-panel-head">
+                  <EntityIcon id="thread" />
+                  <h3>Loops</h3>
+                </div>
+                {sequenceOpenLoops.length > 0 || sequenceResolvedLoops.length > 0 ? (
+                  <div className="world-wiki-sequence-loop-list">
+                    {sequenceOpenLoops.map((loop, index) => <span key={`open:${index}:${loop}`}>Open: {loop}</span>)}
+                    {sequenceResolvedLoops.map((loop, index) => <span key={`resolved:${index}:${loop}`}>Resolved: {loop}</span>)}
+                  </div>
+                ) : (
+                  <div className="inline-note">No open or resolved loops recorded.</div>
+                )}
+              </section>
+
+              {linkedOutputs.length > 0 ? (
+                <section className="world-wiki-entity-panel">
+                  <div className="world-wiki-entity-panel-head">
+                    <EntityIcon id="result" />
+                    <h3>Output backlinks</h3>
+                  </div>
+                  {linkedOutputs.map((row) => (
+                    <button key={row.id} className="world-wiki-entity-backlink" onClick={() => onOpenOutputStudio(row.id, row.canOpenTimeline ? 'timeline' : 'details')} type="button">
+                      <span><EntityIcon id="result" /></span>
+                      <span>
+                        <strong>{row.title}</strong>
+                        <em>{row.outputKindLabel} / {row.statusLabel}</em>
+                      </span>
+                    </button>
+                  ))}
+                </section>
+              ) : null}
+            </aside>
+          </div>
+        </section>
+      )
+    }
     const fieldCards = [
       entity.context.trim() ? { label: 'Context', value: entity.context.trim() } : null,
       visualDescription ? { label: 'Visual Description', value: visualDescription } : null,
@@ -6575,6 +7159,23 @@ export function WorldGraphPage({
         ? { label: 'Voice', value: voiceDescription }
         : null,
     ].filter((entry): entry is { label: string; value: string } => Boolean(entry))
+    const referenceSheetJob = activeEntityReferenceSheetJobs.find((job) => visualGenerationJobTargetEntityKey(job) === entity.key) ?? null
+    const referenceSheetBusy = Boolean(referenceSheetJob || referenceSheetRegenerationBusyEntityKey === entity.key)
+    const localReferenceSheetPhase = referenceSheetRegenerationPhase?.entityKey === entity.key ? referenceSheetRegenerationPhase.phase : null
+    const referenceSheetStatusLabel = localReferenceSheetPhase
+      ? labelForEntityReferenceSheetRegenerationPhase(localReferenceSheetPhase)
+      : referenceSheetJob
+        ? isRegeneratedEntityReferenceSheetJob(referenceSheetJob)
+          ? 'Generating image with changes'
+          : 'Generating reference sheet'
+        : null
+    const referenceSheetButtonLabel = referenceSheetBusy
+      ? referenceSheetStatusLabel ?? 'Generating reference sheet'
+      : largeImageUrl
+        ? 'Regenerate reference sheet'
+        : 'Generate reference sheet'
+    const canRegenerateReferenceSheet = !shouldUseGridArtForWorldEntity(entity)
+    const largeImageMeasurement = largeImageUrl ? wikiEntityHeroImageMeasurementByUrl[largeImageUrl] ?? null : null
 
     return (
       <section className="world-wiki-entity-page" data-world-wiki-entity-page={entity.key}>
@@ -6584,6 +7185,10 @@ export function WorldGraphPage({
               <span className="eyebrow">{section.title}</span>
               <h2>{entity.name}</h2>
               <p>{profile?.shortSummary || entity.summary || entity.context || 'No story summary has been written yet.'}</p>
+              <button className="world-wiki-entity-graph-button" onClick={() => openWikiEntityGraphModal(entity.key)} type="button">
+                <EntityIcon id="graph" />
+                Graph view
+              </button>
               {entity.tags.length > 0 ? (
                 <div className="world-wiki-entity-tags">
                   {entity.tags.slice(0, 8).map((tag) => <span key={tag}>{tag}</span>)}
@@ -6640,25 +7245,39 @@ export function WorldGraphPage({
                   <img
                     className={[
                       'world-wiki-entity-hero-image',
-                      largeImageOrientation ? `is-${largeImageOrientation}` : 'is-measuring',
+                      largeImageMeasurement ? `is-${largeImageMeasurement.orientation}` : 'is-measuring',
                     ].join(' ')}
                     src={largeImageUrl}
                     alt=""
                     onLoad={(event) => {
                       const image = event.currentTarget
-                      const nextOrientation: WikiEntityHeroImageOrientation =
-                        image.naturalWidth > image.naturalHeight
-                          ? 'landscape'
-                          : image.naturalHeight > image.naturalWidth
-                            ? 'portrait'
-                            : 'square'
-                      setWikiEntityHeroImageOrientationByUrl((current) => (
-                        current[largeImageUrl] === nextOrientation
+                      const width = Math.max(1, image.naturalWidth)
+                      const height = Math.max(1, image.naturalHeight)
+                      const orientation: WikiEntityHeroImageMeasurement['orientation'] = width > height ? 'landscape' : height > width ? 'portrait' : 'square'
+                      const nextMeasurement = {
+                        width,
+                        height,
+                        aspectRatio: Math.max(0.25, Math.min(4, width / height)),
+                        orientation,
+                      }
+                      setWikiEntityHeroImageMeasurementByUrl((current) => {
+                        const currentMeasurement = current[largeImageUrl]
+                        return currentMeasurement
+                          && currentMeasurement.width === nextMeasurement.width
+                          && currentMeasurement.height === nextMeasurement.height
+                          && currentMeasurement.aspectRatio === nextMeasurement.aspectRatio
+                          && currentMeasurement.orientation === nextMeasurement.orientation
                           ? current
-                          : { ...current, [largeImageUrl]: nextOrientation }
-                      ))
+                          : { ...current, [largeImageUrl]: nextMeasurement }
+                      })
                     }}
                   />
+                  {referenceSheetBusy ? (
+                    <div className="world-wiki-entity-art-loading" aria-live="polite">
+                      <span className="loading-spinner" aria-hidden="true" />
+                      <strong>{referenceSheetStatusLabel ?? 'Regenerating reference sheet'}</strong>
+                    </div>
+                  ) : null}
                   <button
                     className="world-wiki-entity-art-expand"
                     onClick={() => openWikiDetailModal({
@@ -6675,9 +7294,35 @@ export function WorldGraphPage({
                   </button>
                 </>
               ) : (
-                <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                referenceSheetBusy ? (
+                  <div className="world-wiki-entity-art-loading is-placeholder" aria-live="polite">
+                    <span className="loading-spinner" aria-hidden="true" />
+                    <strong>{referenceSheetStatusLabel ?? 'Generating reference sheet'}</strong>
+                  </div>
+                ) : (
+                  <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                )
               )}
             </div>
+            {canRegenerateReferenceSheet ? (
+              <button
+                className="world-wiki-reference-regenerate-button"
+                disabled={referenceSheetBusy || !onStartVisualGenerationJob}
+                onClick={() => openEntityReferenceSheetRegenerationModal(entity)}
+                type="button"
+              >
+                {referenceSheetBusy ? <span className="loading-spinner" aria-hidden="true" /> : <EntityIcon id="asset" />}
+                {referenceSheetButtonLabel}
+              </button>
+            ) : null}
+            {referenceSheetBusy && referenceSheetStatusLabel ? (
+              <p className="world-wiki-reference-regeneration-status" aria-live="polite">
+                {referenceSheetStatusLabel}
+              </p>
+            ) : null}
+            {!referenceSheetBusy && entityReferenceSheetError ? (
+              <p className="inline-note is-error">{entityReferenceSheetError}</p>
+            ) : null}
 
             <section className="world-wiki-entity-panel is-relationships">
               <div className="world-wiki-entity-panel-head">
@@ -7497,6 +8142,204 @@ export function WorldGraphPage({
                     <span>This update did not include linked world nodes.</span>
                   </div>
                 )}
+              </div>
+            </article>
+          </div>
+        ) : null}
+
+        {wikiEntityGraphModalEntityKey ? (
+          <div
+            className="world-feed-graph-preview-backdrop"
+            onClick={closeWikiEntityGraphModal}
+            role="presentation"
+          >
+            <article
+              className="world-feed-graph-preview is-entity-neighborhood"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="world-wiki-entity-graph-title"
+            >
+              <div className="world-popup-head">
+                <div>
+                  <span className="eyebrow">Direct neighborhood</span>
+                  <h3 id="world-wiki-entity-graph-title">{wikiEntityGraphModalModel?.rootEntity.name ?? 'Entity graph'}</h3>
+                </div>
+                <button
+                  className="world-popup-close"
+                  onClick={closeWikiEntityGraphModal}
+                  type="button"
+                  aria-label="Close entity graph view"
+                >
+                  x
+                </button>
+              </div>
+              <div className="world-feed-graph-preview-canvas">
+                {wikiEntityGraphModalModel ? (
+                  <>
+                    <div className="world-feed-graph-preview-flow">
+                      <ReactFlow
+                        nodeTypes={nodeTypes}
+                        edgeTypes={edgeTypes}
+                        nodes={wikiEntityGraphModalModel.nodes}
+                        edges={wikiEntityGraphModalModel.edges}
+                        nodeOrigin={WORLD_GRAPH_NODE_ORIGIN}
+                        onInit={(instance) => {
+                          wikiEntityGraphModalFlowRef.current = instance
+                          void instance.fitView({ padding: 0.24, duration: 180, maxZoom: 0.98 })
+                        }}
+                        onEdgeClick={(event, edge) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setWikiEntityGraphModalSelectedRelationshipKey(edge.id)
+                        }}
+                        onPaneClick={() => setWikiEntityGraphModalSelectedRelationshipKey(null)}
+                        nodesDraggable={false}
+                        nodesConnectable={false}
+                        elementsSelectable
+                        panOnScroll={false}
+                        panOnDrag
+                        zoomOnScroll
+                        zoomOnPinch
+                        zoomOnDoubleClick
+                        minZoom={0.18}
+                        maxZoom={1.6}
+                        onlyRenderVisibleElements={false}
+                        elevateEdgesOnSelect={false}
+                      >
+                        <Background />
+                      </ReactFlow>
+                    </div>
+                    <aside className="world-feed-graph-preview-inspector world-wiki-relationship-inspector" aria-label="Selected relationship">
+                      {wikiEntityGraphModalModel.selectedRelationship ? (() => {
+                        const relationship = wikiEntityGraphModalModel.selectedRelationship
+                        const source = entityByKey.get(relationship.sourceEntityKey)
+                        const target = entityByKey.get(relationship.targetEntityKey)
+                        return (
+                          <>
+                            <span className="eyebrow">Selected relationship</span>
+                            <strong>{relationship.verb.replace(/_/g, ' ') || 'Relationship'}</strong>
+                            <em>{source?.name ?? relationship.sourceEntityKey}{' -> '}{target?.name ?? relationship.targetEntityKey}</em>
+                            <p>{relationship.notes.trim() || 'No relationship notes recorded yet.'}</p>
+                            <dl>
+                              <div>
+                                <dt>State</dt>
+                                <dd>{relationship.state}</dd>
+                              </div>
+                              <div>
+                                <dt>Direction</dt>
+                                <dd>{relationship.direction}</dd>
+                              </div>
+                              {relationship.strength !== null ? (
+                                <div>
+                                  <dt>Strength</dt>
+                                  <dd>{Math.round(relationship.strength * 100)}%</dd>
+                                </div>
+                              ) : null}
+                              {relationship.confidence !== null ? (
+                                <div>
+                                  <dt>Confidence</dt>
+                                  <dd>{Math.round(relationship.confidence * 100)}%</dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                          </>
+                        )
+                      })() : (
+                        <>
+                          <span className="eyebrow">Selected relationship</span>
+                          <strong>No edge selected</strong>
+                          <p>Click a relationship edge or edge label to highlight it and inspect its details.</p>
+                          <em>{wikiEntityGraphModalModel.relationships.length} direct relationship{wikiEntityGraphModalModel.relationships.length === 1 ? '' : 's'} available.</em>
+                        </>
+                      )}
+                    </aside>
+                  </>
+                ) : (
+                  <div className="world-feed-graph-preview-empty">
+                    <EntityIcon id="graph" />
+                    <strong>No direct graph scope</strong>
+                    <span>This entity does not have direct relationship neighbors yet.</span>
+                  </div>
+                )}
+              </div>
+            </article>
+          </div>
+        ) : null}
+
+        {entityReferenceSheetRegeneration ? (
+          <div className="world-wiki-modal-backdrop" onClick={closeEntityReferenceSheetRegenerationModal} role="presentation">
+            <article
+              className="world-wiki-modal world-wiki-reference-regeneration-modal"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="world-wiki-reference-regeneration-title"
+            >
+              <div className="world-popup-head">
+                <div className="world-wiki-modal-title-row">
+                  <span className="world-wiki-modal-icon" aria-hidden="true">
+                    <EntityIcon id="asset" />
+                  </span>
+                  <div>
+                    <span className="eyebrow">Visual design</span>
+                    <h3 id="world-wiki-reference-regeneration-title">Update reference sheet</h3>
+                  </div>
+                </div>
+                <button
+                  className="world-popup-close"
+                  onClick={closeEntityReferenceSheetRegenerationModal}
+                  type="button"
+                  aria-label="Close reference sheet regeneration"
+                >
+                  x
+                </button>
+              </div>
+              <label className="field-block">
+                <span>Describe the design changes</span>
+                <textarea
+                  rows={4}
+                  placeholder="Example: make this a blue parrot with bigger eyes and softer, rounded CG features."
+                  value={entityReferenceSheetRegeneration.guidance}
+                  onChange={(event) => setEntityReferenceSheetRegeneration((current) => current ? { ...current, guidance: event.target.value } : current)}
+                />
+              </label>
+              <label className="world-wiki-reference-upload">
+                <span>
+                  <strong>Add a reference image</strong>
+                  <small>{entityReferenceSheetRegeneration.file?.name ?? 'Optional. PNG, JPEG, WebP, or AVIF under 8 MB.'}</small>
+                </span>
+                <span className="world-wiki-reference-upload-action">
+                  {entityReferenceSheetRegeneration.file ? 'Change image' : 'Choose image'}
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/avif"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0] ?? null
+                    setEntityReferenceSheetRegeneration((current) => current ? { ...current, file } : current)
+                  }}
+                />
+              </label>
+              {entityReferenceSheetRegeneration.error ? (
+                <div className="inline-note is-warning">{entityReferenceSheetRegeneration.error}</div>
+              ) : null}
+              <div className="world-wiki-reference-regeneration-actions">
+                <button
+                  className="ghost-button compact"
+                  onClick={closeEntityReferenceSheetRegenerationModal}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="primary-button compact"
+                  onClick={() => void handleConfirmEntityReferenceSheetRegeneration()}
+                  type="button"
+                >
+                  <EntityIcon id="asset" />
+                  Start update
+                </button>
               </div>
             </article>
           </div>

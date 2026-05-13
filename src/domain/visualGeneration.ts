@@ -93,6 +93,38 @@ export const visualGenerationCancelResponseSchema = z.object({
   cancelled: z.boolean().default(false),
 })
 
+export const entityReferenceGuidanceImageUploadRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  entityKey: z.string().min(1),
+  fileName: z.string().min(1).max(180),
+  mimeType: z.string().min(1),
+  dataBase64: z.string().min(1),
+})
+
+export const entityReferenceGuidanceImageUploadResponseSchema = z.object({
+  ok: z.literal(true),
+  assetKey: z.string().min(1),
+  storagePath: z.string().min(1),
+  mimeType: z.string().min(1),
+})
+
+export const entityVisualProfileRefinementRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  entityKey: z.string().min(1),
+  guidance: z.string().max(1200).default(''),
+  referenceImageAssetKey: z.string().nullable().default(null),
+})
+
+export const entityVisualProfileRefinementResponseSchema = z.object({
+  ok: z.literal(true),
+  entity: z.unknown(),
+  visualDescription: z.string().default(''),
+  visualTraits: z.array(z.string()).default([]),
+  referenceImageAssetKey: z.string().nullable().default(null),
+})
+
 export type VisualGenerationStatus = z.infer<typeof visualGenerationStatusSchema>
 export type VisualGenerationKind = z.infer<typeof visualGenerationKindSchema>
 export type VisualGenerationProvider = z.infer<typeof visualGenerationProviderSchema>
@@ -101,3 +133,7 @@ export type VisualGenerationStartRequest = z.infer<typeof visualGenerationStartR
 export type VisualGenerationStartResponse = z.infer<typeof visualGenerationStartResponseSchema>
 export type VisualGenerationStatusResponse = z.infer<typeof visualGenerationStatusResponseSchema>
 export type VisualGenerationCancelResponse = z.infer<typeof visualGenerationCancelResponseSchema>
+export type EntityReferenceGuidanceImageUploadRequest = z.infer<typeof entityReferenceGuidanceImageUploadRequestSchema>
+export type EntityReferenceGuidanceImageUploadResponse = z.infer<typeof entityReferenceGuidanceImageUploadResponseSchema>
+export type EntityVisualProfileRefinementRequest = z.infer<typeof entityVisualProfileRefinementRequestSchema>
+export type EntityVisualProfileRefinementResponse = z.infer<typeof entityVisualProfileRefinementResponseSchema>

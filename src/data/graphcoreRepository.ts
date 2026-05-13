@@ -30,6 +30,7 @@ import {
   worldGraphSnapshotSchema,
   resetProjectWorldRequestSchema,
   resetProjectWorldResponseSchema,
+  worldEntitySchema,
   worldGraphSeedRequestSchema,
   worldRelationshipCreateInputSchema,
   worldRelationshipUpdateInputSchema,
@@ -115,6 +116,14 @@ import {
   visualGenerationStartResponseSchema,
   visualGenerationStatusRequestSchema,
   visualGenerationStatusResponseSchema,
+  entityReferenceGuidanceImageUploadRequestSchema,
+  entityReferenceGuidanceImageUploadResponseSchema,
+  entityVisualProfileRefinementRequestSchema,
+  entityVisualProfileRefinementResponseSchema,
+  type EntityReferenceGuidanceImageUploadRequest,
+  type EntityReferenceGuidanceImageUploadResponse,
+  type EntityVisualProfileRefinementRequest,
+  type EntityVisualProfileRefinementResponse,
   type VisualGenerationCancelResponse,
   type VisualGenerationKind,
   type VisualGenerationJob,
@@ -7949,6 +7958,58 @@ export async function startVisualGenerationJob(snapshot: ProjectSnapshot, reques
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return visualGenerationStartResponseSchema.parse(response.data)
+}
+
+export async function uploadEntityReferenceGuidanceImage(
+  snapshot: ProjectSnapshot,
+  request: Omit<EntityReferenceGuidanceImageUploadRequest, 'projectId' | 'draftId'>,
+): Promise<EntityReferenceGuidanceImageUploadResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before uploading reference guidance imagery.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before uploading reference guidance imagery.')
+  }
+  const payload = entityReferenceGuidanceImageUploadRequestSchema.parse({
+    ...request,
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'upload-entity-ref-guidance',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return entityReferenceGuidanceImageUploadResponseSchema.parse(response.data)
+}
+
+export async function refineWorldEntityVisualProfile(
+  snapshot: ProjectSnapshot,
+  request: Omit<EntityVisualProfileRefinementRequest, 'projectId' | 'draftId'>,
+): Promise<EntityVisualProfileRefinementResponse & { entity: WorldEntity }> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before refining entity visual metadata.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before refining entity visual metadata.')
+  }
+  const payload = entityVisualProfileRefinementRequestSchema.parse({
+    ...request,
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'refine-entity-visual-profile',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = entityVisualProfileRefinementResponseSchema.parse(response.data)
+  return {
+    ...parsed,
+    entity: worldEntitySchema.parse(parsed.entity),
+  }
 }
 
 function mapVisualGenerationJobRow(row: Record<string, unknown>) {

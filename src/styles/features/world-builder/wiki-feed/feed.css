@@ -1710,6 +1710,42 @@
   line-height: 1.45;
 }
 
+.world-feed-graph-preview.is-entity-neighborhood {
+  width: min(1180px, calc(100vw - 48px));
+}
+
+.world-wiki-relationship-inspector dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.world-wiki-relationship-inspector dl div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 9px;
+  padding: 8px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.world-wiki-relationship-inspector dt {
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 0.66rem;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.world-wiki-relationship-inspector dd {
+  margin: 0;
+  color: rgba(248, 250, 252, 0.92);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
 .world-feed-graph-preview-empty {
   height: 100%;
   display: grid;

@@ -673,6 +673,35 @@
   line-height: 1.65;
 }
 
+.world-wiki-entity-graph-button {
+  justify-self: start;
+  display: inline-grid;
+  grid-template-columns: 16px auto;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  min-height: 34px;
+  border: 1px solid rgba(94, 234, 212, 0.18);
+  border-radius: 10px;
+  padding: 7px 11px;
+  background: rgba(20, 184, 166, 0.08);
+  color: rgba(204, 251, 241, 0.92);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.world-wiki-entity-graph-button:hover {
+  border-color: rgba(94, 234, 212, 0.36);
+  background: rgba(20, 184, 166, 0.14);
+}
+
+.world-wiki-entity-graph-button svg,
+.world-wiki-entity-graph-button .entity-icon-image {
+  width: 16px;
+  height: 16px;
+}
+
 .world-wiki-entity-meta-row,
 .world-wiki-entity-tags,
 .world-wiki-entity-chip-row {
@@ -732,29 +761,15 @@
 }
 
 .world-wiki-entity-hero-art > img.world-wiki-entity-hero-image {
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   object-position: center;
   display: block;
   justify-self: center;
   align-self: center;
-  max-width: none;
-  max-height: none;
-}
-
-.world-wiki-entity-hero-art > img.world-wiki-entity-hero-image.is-measuring,
-.world-wiki-entity-hero-art > img.world-wiki-entity-hero-image.is-square {
-  width: 100%;
-  height: 100%;
-}
-
-.world-wiki-entity-hero-art > img.world-wiki-entity-hero-image.is-landscape {
-  width: 100%;
-  height: auto;
-}
-
-.world-wiki-entity-hero-art > img.world-wiki-entity-hero-image.is-portrait {
-  width: auto;
-  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .world-wiki-entity-hero-art > svg,
@@ -790,6 +805,76 @@
 .world-wiki-entity-art-expand .entity-icon-image {
   width: 16px;
   height: 16px;
+}
+
+.world-wiki-entity-art-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  background: rgba(2, 6, 23, 0.42);
+  color: rgba(248, 250, 252, 0.92);
+  text-align: center;
+  backdrop-filter: blur(3px);
+}
+
+.world-wiki-entity-art-loading.is-placeholder {
+  position: static;
+  min-height: 220px;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.world-wiki-entity-art-loading strong {
+  font-size: 0.78rem;
+  font-weight: 860;
+}
+
+.world-wiki-reference-regenerate-button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.62);
+  color: rgba(237, 244, 251, 0.92);
+  font-size: 0.8rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.world-wiki-reference-regenerate-button:hover:not(:disabled) {
+  border-color: rgba(57, 216, 255, 0.32);
+  background: rgba(15, 23, 42, 0.82);
+}
+
+.world-wiki-reference-regenerate-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+
+.world-wiki-reference-regenerate-button svg,
+.world-wiki-reference-regenerate-button .entity-icon-image,
+.world-wiki-reference-regenerate-button .loading-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.world-wiki-reference-regeneration-status {
+  margin: -4px 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 0.76rem;
+  font-weight: 760;
+  line-height: 1.25;
 }
 
 .world-wiki-entity-panel {
@@ -960,6 +1045,274 @@
   border-radius: 9px;
 }
 
+.world-wiki-sequence-page {
+  gap: 20px;
+}
+
+.world-wiki-sequence-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 36%);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.world-wiki-sequence-title,
+.world-wiki-sequence-status-panel {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.13), transparent 34%),
+    rgba(15, 23, 42, 0.52);
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.2);
+}
+
+.world-wiki-sequence-title {
+  display: grid;
+  align-content: end;
+  gap: 12px;
+  min-height: 280px;
+  padding: clamp(22px, 4vw, 42px);
+}
+
+.world-wiki-sequence-title h2 {
+  max-width: 18ch;
+  margin: 0;
+  color: rgba(248, 250, 252, 0.98);
+  font-size: clamp(1.7rem, 2.4vw, 2.6rem);
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+
+.world-wiki-sequence-title p {
+  max-width: 760px;
+  margin: 0;
+  color: rgba(203, 213, 225, 0.88);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.world-wiki-sequence-chip-row,
+.world-wiki-sequence-loop-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.world-wiki-sequence-chip-row span,
+.world-wiki-sequence-loop-list span,
+.world-wiki-sequence-readiness {
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: rgba(226, 232, 240, 0.86);
+  background: rgba(15, 23, 42, 0.66);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.world-wiki-sequence-readiness {
+  justify-self: start;
+}
+
+.world-wiki-sequence-readiness.is-ready {
+  border-color: rgba(45, 212, 191, 0.24);
+  color: rgba(153, 246, 228, 0.94);
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.world-wiki-sequence-readiness.is-missing {
+  border-color: rgba(251, 191, 36, 0.24);
+  color: rgba(253, 230, 138, 0.95);
+  background: rgba(217, 119, 6, 0.1);
+}
+
+.world-wiki-sequence-status-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 22px;
+}
+
+.world-wiki-sequence-status-panel dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.world-wiki-sequence-status-panel dl div {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.world-wiki-sequence-status-panel dt,
+.world-wiki-sequence-brief-grid span,
+.world-wiki-sequence-consequence-list span,
+.world-wiki-sequence-arc-list span,
+.world-wiki-sequence-ingredient-groups > div > span,
+.world-wiki-sequence-link-list span {
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.world-wiki-sequence-status-panel dd {
+  margin: 0;
+  color: rgba(248, 250, 252, 0.94);
+  line-height: 1.45;
+}
+
+.world-wiki-sequence-status-panel p {
+  margin: 0;
+  color: rgba(253, 230, 138, 0.88);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.world-wiki-sequence-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 32%);
+  gap: 18px;
+  align-items: start;
+}
+
+.world-wiki-sequence-main,
+.world-wiki-sequence-side {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.world-wiki-sequence-brief-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.world-wiki-sequence-brief-grid article,
+.world-wiki-sequence-consequence-list article,
+.world-wiki-sequence-arc-list article {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.26);
+}
+
+.world-wiki-sequence-brief-grid article {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.world-wiki-sequence-brief-grid article.is-outcome {
+  grid-column: 1 / -1;
+  border-color: rgba(45, 212, 191, 0.16);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.world-wiki-sequence-brief-grid p,
+.world-wiki-sequence-consequence-list p,
+.world-wiki-sequence-arc-list p {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.9);
+  line-height: 1.58;
+}
+
+.world-wiki-sequence-consequence-list,
+.world-wiki-sequence-arc-list,
+.world-wiki-sequence-link-list,
+.world-wiki-sequence-ingredient-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.world-wiki-sequence-consequence-list article {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.55fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 13px;
+}
+
+.world-wiki-sequence-consequence-list article > span,
+.world-wiki-sequence-consequence-list small {
+  grid-column: 1 / -1;
+}
+
+.world-wiki-sequence-consequence-list strong {
+  color: rgba(248, 250, 252, 0.94);
+  line-height: 1.45;
+}
+
+.world-wiki-sequence-consequence-list em {
+  color: rgba(45, 212, 191, 0.9);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.world-wiki-sequence-consequence-list small {
+  color: rgba(148, 163, 184, 0.82);
+  line-height: 1.4;
+}
+
+.world-wiki-sequence-arc-list article {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 13px;
+}
+
+.world-wiki-sequence-arc-list article > strong {
+  grid-column: 1 / -1;
+  color: rgba(248, 250, 252, 0.96);
+}
+
+.world-wiki-sequence-arc-list div {
+  display: grid;
+  gap: 5px;
+}
+
+.world-wiki-sequence-link-list button,
+.world-wiki-sequence-ingredient-groups button {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 11px;
+  padding: 11px 12px;
+  background: rgba(2, 6, 23, 0.28);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-wiki-sequence-link-list button:hover,
+.world-wiki-sequence-ingredient-groups button:hover {
+  border-color: rgba(56, 189, 248, 0.24);
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.world-wiki-sequence-link-list strong,
+.world-wiki-sequence-ingredient-groups strong {
+  display: block;
+  margin-top: 4px;
+  color: rgba(248, 250, 252, 0.95);
+}
+
+.world-wiki-sequence-ingredient-groups > div {
+  display: grid;
+  gap: 7px;
+}
+
+.world-wiki-sequence-ingredient-groups em {
+  display: block;
+  margin-top: 2px;
+  color: rgba(148, 163, 184, 0.8);
+  font-style: normal;
+}
+
 .world-wiki-entity-empty {
   padding: 14px;
   border-radius: 12px;
@@ -988,6 +1341,21 @@
     min-height: 320px;
     aspect-ratio: 4 / 3;
     order: -1;
+  }
+
+  .world-wiki-sequence-hero,
+  .world-wiki-sequence-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .world-wiki-sequence-brief-grid,
+  .world-wiki-sequence-arc-list article,
+  .world-wiki-sequence-consequence-list article {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .world-wiki-sequence-title {
+    min-height: 220px;
   }
 }
 

@@ -578,6 +578,35 @@ function retryAfterDelayMs(response: Response) {
   return Number.isFinite(dateMs) ? Math.min(60_000, Math.max(0, dateMs - Date.now())) : 0
 }
 
+function uint8ArrayToBase64(bytes: Uint8Array) {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function inferImageMimeType(url: string, contentType: string | null) {
+  const normalized = (contentType ?? '').split(';')[0].trim().toLowerCase()
+  if (normalized.startsWith('image/')) return normalized
+  if (/\.png(?:\?|$)/i.test(url)) return 'image/png'
+  if (/\.webp(?:\?|$)/i.test(url)) return 'image/webp'
+  if (/\.avif(?:\?|$)/i.test(url)) return 'image/avif'
+  return 'image/jpeg'
+}
+
+async function downloadOpenAiReferenceImage(url: string, index: number) {
+  const bytes = await downloadImageBytes(url)
+  const mimeType = inferImageMimeType(url, null)
+  const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : mimeType === 'image/avif' ? 'avif' : 'jpg'
+  return {
+    data: uint8ArrayToBase64(bytes),
+    filename: `reference-${index + 1}.${extension}`,
+    mimeType,
+  }
+}
+
 async function waitForOpenAiImage(input: {
   client: DatabaseClient
   job: VisualJob
@@ -588,6 +617,7 @@ async function waitForOpenAiImage(input: {
   imageSize?: unknown
   quality?: string
   outputFormat?: string
+  referenceImageUrls?: string[]
 }): Promise<GeneratedVisualImageResult> {
   const size = readOpenAiImageSize(input.imageSize)
   const quality = readOpenAiQuality(input.quality)
@@ -609,6 +639,9 @@ async function waitForOpenAiImage(input: {
 
   let lastMessage = ''
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const referenceImages = input.referenceImageUrls && input.referenceImageUrls.length > 0
+      ? await Promise.all(input.referenceImageUrls.slice(0, 4).map((url, index) => downloadOpenAiReferenceImage(url, index)))
+      : []
     await heartbeat(input.client, input.job.id, input.workerId, {
       phase: `${input.phasePrefix}_submitting_openai_image`,
       provider: 'openai',
@@ -619,19 +652,21 @@ async function waitForOpenAiImage(input: {
       imageSize: size ?? null,
       quality: quality ?? null,
       outputFormat: outputFormat ?? null,
+      referenceImageCount: input.referenceImageUrls?.length ?? 0,
       timeoutMs,
     })
 
     const result = await runTrackedOpenAiImages({
       client: input.client,
       payload: {
-        action: 'generate',
+        action: referenceImages.length > 0 ? 'edit' : 'generate',
         model: input.model,
         prompt: input.prompt,
         size,
         quality,
         outputFormat,
         n: 1,
+        images: referenceImages,
         user: input.job.requestedBy ?? undefined,
         timeoutMs,
       },
@@ -732,12 +767,16 @@ async function generateVisualImage(input: {
       imageSize: input.imageSize,
       quality: input.quality,
       outputFormat: input.outputFormat,
+      referenceImageUrls: input.referenceImageUrls,
     })
   }
 
   const falApiKey = Deno.env.get('FAL_KEY')
   if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly visual generation worker.')
-  const model = normalizeFalImageModel(input.model || Deno.env.get('VISUAL_GENERATION_FAL_MODEL') || input.job.model)
+  const normalizedFalModel = normalizeFalImageModel(input.model || Deno.env.get('VISUAL_GENERATION_FAL_MODEL') || input.job.model)
+  const model = input.referenceImageUrls && input.referenceImageUrls.length > 0 && normalizedFalModel === 'openai/gpt-image-2'
+    ? 'openai/gpt-image-2/edit'
+    : normalizedFalModel
   const falResult = await waitForFalImage({
     client: input.client,
     job: input.job,
@@ -1416,10 +1455,18 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   const visualTraits = readWorldEntityVisualTraits(entity)
   const visualTraitMap = readWorldEntityVisualTraitMap(entity) as Record<string, string>
   const sheetKind = resolveEntityReferenceSheetKind(entity.nodeType, readString(job.input.sheetKind) || readString(job.targetKeys.sheetKind))
-  const referenceAssets: Record<string, unknown>[] = []
-  const referenceImageUrls: string[] = []
-  const referenceAssetNotes: string[] = []
-  const prompt = resolveEntityReferenceSheetPrompt({
+  const referenceImageAssetKeys = [
+    readString(job.input.referenceImageAssetKey),
+    readString(job.metadata.referenceImageAssetKey),
+    ...readStringArray(job.input.referenceImageAssetKeys),
+  ].filter(Boolean)
+  const referenceAssets = await loadProjectAssetRows(client, job.projectId, referenceImageAssetKeys)
+  const referenceImageUrls = await createProjectAssetSignedUrls(client, referenceAssets)
+  const referenceAssetNotes = referenceAssets.length > 0
+    ? referenceAssets.map((asset) => `${readString(asset.name) || readString(asset.key) || 'reference image'} should guide stable visual identity, not override the project art style.`)
+    : []
+  const regenerationGuidance = readString(job.input.regenerationGuidance) || readString(job.metadata.regenerationGuidance)
+  const basePrompt = resolveEntityReferenceSheetPrompt({
     sheetKind,
     entity,
     projectArtStyle,
@@ -1430,6 +1477,9 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     visualTraitMap,
     referenceAssetNotes,
   })
+  const prompt = regenerationGuidance
+    ? `${basePrompt} Regeneration guidance from the user: ${regenerationGuidance}. Apply this as a constrained identity update while preserving canon, the refined visual description, and the project art style.`
+    : basePrompt
 
   const explicitModel = readString(job.input.model) || readString(job.targetKeys.model)
   const configuredModel = readString(Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL'))
@@ -1488,6 +1538,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
         visualTraits,
         visualTraitMap,
         referenceAssetKeys: referenceAssets.map((asset) => readString(asset.key)).filter(Boolean),
+        regenerationGuidance,
         imageSize: resolvedImageSize,
         quality,
         outputFormat,
@@ -1579,6 +1630,8 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     requestedQuality: quality,
     outputFormat,
     referenceImageCount: referenceImageUrls.length,
+    referenceImageAssetKeys: referenceAssets.map((asset) => readString(asset.key)).filter(Boolean),
+    regenerationGuidance,
   })
 
   return { assetKey, entityKey, sheetKind }

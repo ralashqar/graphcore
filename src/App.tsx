@@ -3934,6 +3934,29 @@ export default function App() {
     })
   }
 
+  async function uploadEntityReferenceGuidanceImage(input: Parameters<typeof workspaceService.uploadEntityReferenceGuidanceImage>[1]) {
+    if (!snapshot) throw new Error('Load a project before uploading reference guidance imagery.')
+    const syncedSnapshot = loadedState?.source === 'supabase'
+      ? await syncWorldGraphBackfillIfNeeded(snapshot)
+      : snapshot
+    return workspaceService.uploadEntityReferenceGuidanceImage(syncedSnapshot, input)
+  }
+
+  async function refineWorldEntityVisualProfile(input: Parameters<typeof workspaceService.refineWorldEntityVisualProfile>[1]) {
+    if (!snapshot) throw new Error('Load a project before refining entity visual metadata.')
+    const syncedSnapshot = loadedState?.source === 'supabase'
+      ? await syncWorldGraphBackfillIfNeeded(snapshot)
+      : snapshot
+    const result = await workspaceService.refineWorldEntityVisualProfile(syncedSnapshot, input)
+    commitPersistedSnapshot({
+      ...syncedSnapshot,
+      worldEntities: syncedSnapshot.worldEntities.map((entity) => (
+        entity.key === result.entity.key ? result.entity : entity
+      )),
+    })
+    return result
+  }
+
   async function deleteWorldEntity(entityKey: string) {
     if (!snapshot) return
     if (loadedState?.source === 'supabase') {
@@ -5023,7 +5046,22 @@ export default function App() {
     if (!entity) return false
 
     let completedAsset = current.assets.find((asset) => asset.key === assetKey) ?? null
-    if (!completedAsset || isPendingGeneratedAsset(completedAsset) || !resolveAssetSourceUrl(completedAsset)) {
+    const outputStoragePath = trimOptionalString(outputAsset?.storagePath)
+    const completedAssetMetadata = readMetadataRecord(completedAsset?.metadata)
+    const completedAssetGeneration = readMetadataRecord(completedAssetMetadata.generation)
+    const completedAssetJobId = trimOptionalString(completedAssetMetadata.visualJobId)
+      || trimOptionalString(completedAssetGeneration.jobId)
+    const completedAssetStoragePath = trimOptionalString(completedAsset?.storagePath)
+      || trimOptionalString(completedAssetMetadata.storagePath)
+      || trimOptionalString(completedAssetGeneration.storagePath)
+    const completedAssetLooksStale = Boolean(
+      completedAsset
+      && (
+        (outputStoragePath && completedAssetStoragePath && completedAssetStoragePath !== outputStoragePath)
+        || (completedAssetJobId && completedAssetJobId !== job.id)
+      ),
+    )
+    if (!completedAsset || completedAssetLooksStale || isPendingGeneratedAsset(completedAsset) || !resolveAssetSourceUrl(completedAsset)) {
       try {
         const signedAssets = await workspaceService.signProjectAssetUrls(current.project.id, [assetKey])
         completedAsset = signedAssets.find((asset) => asset.key === assetKey) ?? completedAsset
@@ -5032,7 +5070,18 @@ export default function App() {
       }
     }
 
-    if (!completedAsset && outputAsset?.storagePath) {
+    const resolvedCompletedAssetMetadata = readMetadataRecord(completedAsset?.metadata)
+    const resolvedCompletedAssetGeneration = readMetadataRecord(resolvedCompletedAssetMetadata.generation)
+    const resolvedCompletedAssetStoragePath = trimOptionalString(completedAsset?.storagePath)
+      || trimOptionalString(resolvedCompletedAssetMetadata.storagePath)
+      || trimOptionalString(resolvedCompletedAssetGeneration.storagePath)
+    const resolvedCompletedAssetLooksStale = Boolean(
+      completedAsset
+      && outputStoragePath
+      && resolvedCompletedAssetStoragePath
+      && resolvedCompletedAssetStoragePath !== outputStoragePath,
+    )
+    if ((!completedAsset || resolvedCompletedAssetLooksStale) && outputStoragePath) {
       const sourceUrl = trimOptionalString(job.metadata.falImageUrl)
         || trimOptionalString(job.outputs.imageUrl)
       completedAsset = {
@@ -5042,12 +5091,13 @@ export default function App() {
         name: `${entity.name || 'Entity'} Reference Sheet`,
         kind: 'image',
         mimeType: 'image/webp',
-        storagePath: outputAsset.storagePath,
+        storagePath: outputStoragePath,
         metadata: {
           generatedBy: 'entity_reference_sheet',
           jobKind: job.kind,
           visualJobId: job.id,
           storageBucket: 'project-assets',
+          storagePath: outputStoragePath,
           ...(sourceUrl ? { sourceUrl, previewUrl: sourceUrl } : {}),
           generation: {
             state: 'completed',
@@ -5121,7 +5171,22 @@ export default function App() {
     if (!current || current.project.id !== job.projectId || current.draft.id !== job.draftId) return false
 
     let completedAsset = current.assets.find((asset) => asset.key === assetKey) ?? null
-    if (!completedAsset || isPendingGeneratedAsset(completedAsset) || !resolveAssetSourceUrl(completedAsset)) {
+    const outputStoragePath = trimOptionalString(outputAsset?.storagePath)
+    const completedAssetMetadata = readMetadataRecord(completedAsset?.metadata)
+    const completedAssetGeneration = readMetadataRecord(completedAssetMetadata.generation)
+    const completedAssetJobId = trimOptionalString(completedAssetMetadata.visualJobId)
+      || trimOptionalString(completedAssetGeneration.jobId)
+    const completedAssetStoragePath = trimOptionalString(completedAsset?.storagePath)
+      || trimOptionalString(completedAssetMetadata.storagePath)
+      || trimOptionalString(completedAssetGeneration.storagePath)
+    const completedAssetLooksStale = Boolean(
+      completedAsset
+      && (
+        (outputStoragePath && completedAssetStoragePath && completedAssetStoragePath !== outputStoragePath)
+        || (completedAssetJobId && completedAssetJobId !== job.id)
+      ),
+    )
+    if (!completedAsset || completedAssetLooksStale || isPendingGeneratedAsset(completedAsset) || !resolveAssetSourceUrl(completedAsset)) {
       try {
         const signedAssets = await workspaceService.signProjectAssetUrls(current.project.id, [assetKey])
         completedAsset = signedAssets.find((asset) => asset.key === assetKey) ?? completedAsset
@@ -7898,6 +7963,8 @@ export default function App() {
                 onGenerateWorldConceptImage={generateWorldConceptImageFromGlobal}
                 onStartVisualGenerationJob={startVisualGenerationJob}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}
+                onUploadEntityReferenceGuidanceImage={uploadEntityReferenceGuidanceImage}
+                onRefineWorldEntityVisualProfile={refineWorldEntityVisualProfile}
                 onStartAppCodeGeneration={startAppCodeGeneration}
                 onGetAppGenerationStatus={getAppGenerationStatus}
                 onCancelAppGenerationJob={cancelAppGenerationJob}

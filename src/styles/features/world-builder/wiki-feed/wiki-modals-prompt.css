@@ -136,6 +136,97 @@
   line-height: 1.65;
 }
 
+.world-wiki-reference-regeneration-modal {
+  width: min(620px, 100%);
+}
+
+.world-wiki-reference-upload {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.world-wiki-reference-upload:hover {
+  border-color: rgba(57, 216, 255, 0.32);
+  background: rgba(15, 23, 42, 0.54);
+}
+
+.world-wiki-reference-upload:active {
+  transform: translateY(1px);
+}
+
+.world-wiki-reference-upload span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.world-wiki-reference-upload strong {
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 0.82rem;
+}
+
+.world-wiki-reference-upload small {
+  min-width: 0;
+  color: rgba(148, 163, 184, 0.84);
+  font-size: 0.72rem;
+  font-weight: 760;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-wiki-reference-upload input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.world-wiki-reference-upload-action {
+  min-height: 34px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.74);
+  color: rgba(237, 244, 251, 0.92);
+  font-size: 0.76rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.world-wiki-reference-regeneration-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.world-wiki-reference-regeneration-actions .primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.world-wiki-reference-regeneration-actions .loading-spinner {
+  width: 14px;
+  height: 14px;
+}
+
 .world-wiki-prompt-dock {
   position: absolute;
   left: 50%;
