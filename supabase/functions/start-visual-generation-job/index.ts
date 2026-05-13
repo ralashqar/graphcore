@@ -167,7 +167,7 @@ async function persistPendingWorldConceptImage(input: {
         ...currentMetadata,
         worldWiki: {
           ...currentWiki,
-          worldConceptPrompt: readString(currentWiki.worldConceptPrompt) || input.sourcePrompt || input.imagePrompt,
+          worldConceptPrompt: input.sourcePrompt || input.imagePrompt || readString(currentWiki.worldConceptPrompt),
           worldConceptAssetKey: input.assetKey,
           worldConceptVisualJobId: input.jobId,
         },

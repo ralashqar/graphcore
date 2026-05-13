@@ -245,6 +245,7 @@ test('generic visual generation start normalizes and persists pending world conc
   assert.match(source, /persistPendingWorldConceptImage/)
   assert.match(source, /input\.kind === 'wiki_visual' && role === 'world_concept_image'/)
   assert.match(source, /generatedBy:\s*'world_concept_image'/)
+  assert.match(source, /worldConceptPrompt:\s*input\.sourcePrompt \|\| input\.imagePrompt \|\| readString\(currentWiki\.worldConceptPrompt\)/)
   assert.match(source, /worldConceptAssetKey:\s*input\.assetKey/)
   assert.match(source, /worldConceptVisualJobId:\s*input\.jobId/)
 })
@@ -257,6 +258,19 @@ test('Fly wiki visual worker hard-forces low quality wide world concept images',
   assert.match(visualWorker, /const outputFormat = worldConceptOutputFormat/)
   assert.match(visualWorker, /const quality = worldConceptImageQuality/)
   assert.match(visualWorker, /const imageSize = worldConceptImageSize/)
+  assert.match(visualWorker, /worldConceptPrompt:\s*sourcePrompt \|\| prompt \|\| readString\(currentWiki\.worldConceptPrompt\)/)
+})
+
+test('wiki hero concept generation rebuilds prompts from current wiki state instead of stale stored prompts', () => {
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  const seedSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/world-prompt.ts'), 'utf8')
+
+  assert.match(appSource, /const imagePrompt = buildWorldConceptImagePrompt\(/)
+  assert.doesNotMatch(appSource, /const sourcePrompt = trimOptionalString\(wiki\.worldConceptPrompt\)/)
+  assert.match(appSource, /sourcePrompt:\s*imagePrompt/)
+  assert.match(appSource, /worldConceptPrompt:\s*imagePrompt/)
+  assert.match(seedSource, /const prompt = buildInitialSeedWorldConceptPrompt\(currentWiki, input\.projectContext\)/)
+  assert.doesNotMatch(seedSource, /const prompt = asCompactString\(currentWiki\.worldConceptPrompt\) \|\| buildInitialSeedWorldConceptPrompt/)
 })
 
 test('wiki hero banner only renders world concept image assets, not entity reference sheets', () => {

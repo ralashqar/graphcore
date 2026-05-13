@@ -332,6 +332,12 @@
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 
+  .world-wiki-document-shell {
+    height: auto;
+    max-height: none;
+    border-radius: 16px;
+  }
+
   .world-wiki-document {
     height: auto;
     max-height: none;

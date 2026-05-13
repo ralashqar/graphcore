@@ -36,6 +36,38 @@
   border-radius: 18px 0 0 18px;
 }
 
+.world-feed-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 2px;
+}
+
+.world-feed-prompt-status {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.world-feed-prompt-head .world-prompt-head-actions {
+  flex: 0 0 auto;
+}
+
+.world-feed-prompt-head .world-prompt-icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.world-feed-prompt-head .world-prompt-token-popover {
+  left: 0;
+  right: auto;
+}
+
 .world-feed-context-rail {
   border-left: 1px solid rgba(148, 163, 184, 0.1);
 }
@@ -81,7 +113,7 @@
   resize: vertical;
   border: 0;
   border-radius: 10px;
-  padding: 12px;
+  padding: 12px 58px 12px 12px;
   background: rgba(2, 6, 23, 0.72);
   color: rgba(248, 250, 252, 0.94);
   font: inherit;
@@ -92,6 +124,17 @@
 
 .world-feed-composer textarea:focus {
   outline-color: rgba(124, 92, 255, 0.65);
+}
+
+.world-feed-composer .world-prompt-send-button {
+  right: 10px;
+  bottom: 10px;
+}
+
+.world-feed-composer .button-spinner,
+.world-wiki-docked-composer .button-spinner {
+  width: 15px;
+  height: 15px;
 }
 
 .world-feed-composer-actions,
@@ -106,6 +149,12 @@
 
 .world-feed-composer-actions span {
   min-width: 0;
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.world-feed-composer .world-inline-prompt-meta {
   color: rgba(148, 163, 184, 0.86);
   font-size: 0.72rem;
   font-weight: 800;
@@ -146,6 +195,13 @@
 .world-feed-session-list {
   display: grid;
   gap: 8px;
+}
+
+.world-feed-suggestion-list {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.028);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.08);
 }
 
 .world-feed-suggestion-list > button,

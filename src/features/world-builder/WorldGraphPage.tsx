@@ -6864,6 +6864,11 @@ export function WorldGraphPage({
                   selectedPromptSession={selectedPromptSession}
                   selectedPromptSessionKey={selectedPromptSessionKey}
                   selectedWorldFeedEntry={selectedWorldFeedEntry}
+                  sessionEvents={sessionEvents}
+                  sessionGenerationJobs={sessionGenerationJobs}
+                  sessionGenerationJobSteps={sessionGenerationJobSteps}
+                  sessionMessages={sessionMessages}
+                  sessionTurns={sessionTurns}
                   worldEntities={worldEntities}
                   worldFeedFilter={worldFeedFilter}
                   worldFeedGroups={worldFeedGroups}
@@ -6875,7 +6880,6 @@ export function WorldGraphPage({
                   worldPromptText={worldPromptText}
                   worldRelationships={worldRelationships}
                   worldResults={worldResults}
-                  wikiTitle={wikiModel.title}
                   onCancelPromptTurn={handleCancelPromptTurn}
                   onFeedScroll={handleWorldFeedScroll}
                   onGrowWorkbenchResizeStart={handleGrowWorkbenchResizeStart}
@@ -6903,7 +6907,9 @@ export function WorldGraphPage({
               ) : (
                 <WorldWikiPanel
                   activeWikiSectionKind={activeWikiSectionKind}
+                  activePromptTurn={activePromptTurn}
                   isPromptSubmitting={isPromptSubmitting}
+                  isPromptCancelling={isPromptCancelling}
                   liveGenerationState={liveWikiGenerationState}
                   wikiDocumentRef={wikiDocumentRef}
                   wikiModel={wikiModel}
@@ -6920,6 +6926,9 @@ export function WorldGraphPage({
                   wikiOverviewLabel={wikiOverviewLabel}
                   wikiOverviewSectionStyle={wikiOverviewSectionStyle}
                   wikiOverviewTags={wikiOverviewTags}
+                  wikiPromptError={worldPromptError}
+                  wikiPromptModelLabel={selectedPromptSession?.model ?? 'gpt-5.4-mini'}
+                  wikiPromptText={worldPromptText}
                   wikiVisualGenerationStatus={wikiVisualGenerationStatus}
                   wikiSearchActive={wikiSearchActive}
                   wikiSearchMatchCount={wikiSearchMatchCount}
@@ -6927,12 +6936,31 @@ export function WorldGraphPage({
                   wikiSubView={wikiSubView}
                   worldEntities={worldEntities}
                   worldRelationships={worldRelationships}
+                  onCancelPromptTurn={handleCancelPromptTurn}
                   onGrowWorkbenchResizeStart={handleGrowWorkbenchResizeStart}
                   onResetGrowWorkbenchWidth={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
                   onRunWikiGap={(gap) => void handleRunWikiGap(gap)}
                   onScrollToWikiSection={handleScrollToWikiSection}
                   onSelectWikiSubView={handleSelectWikiSubView}
+                  onSetWikiPromptText={setWorldPromptText}
                   onSetWikiSearchQuery={setWikiSearchQuery}
+                  onSubmitWikiPrompt={async () => {
+                    if (!worldPromptText.trim()) return
+                    handleSelectWikiSubView('feed', { focusComposer: false })
+                    await handleSubmitWorldPrompt(undefined, null, {
+                      selectedViewKey: selectedView.key,
+                      sourceContext: {
+                        kind: 'prompt',
+                        title: 'Wiki prompt',
+                        fileName: null,
+                        mimeType: null,
+                        url: null,
+                        extractedText: '',
+                        charCount: 0,
+                        truncated: false,
+                      },
+                    })
+                  }}
                   renderAppPreviewPipelinePanel={renderAppPreviewPipelinePanel}
                   renderInteractivePrototypeModal={renderInteractivePrototypeModal}
                   renderNarrativeRpgPlayablePanel={renderNarrativeRpgPlayablePanel}

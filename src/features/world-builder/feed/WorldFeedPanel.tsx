@@ -1,16 +1,27 @@
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react'
+import { useMemo, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react'
 
 import type { WorldEntity, WorldRelationship, WorldResult } from '../../../domain/worldGraph'
-import type { WorldPromptSession, WorldPromptSuggestion, WorldPromptSuggestionRecord, WorldPromptTurn } from '../../../domain/worldPrompt'
+import type {
+  WorldPromptEvent,
+  WorldPromptGenerationJob,
+  WorldPromptGenerationJobStep,
+  WorldPromptMessage,
+  WorldPromptSession,
+  WorldPromptSuggestion,
+  WorldPromptSuggestionRecord,
+  WorldPromptTurn,
+} from '../../../domain/worldPrompt'
 import type { WorldThread } from '../../../domain/worldThread'
 import { iconForWorldEntity, labelForWorldEntity } from '../../../domain/worldGraphHelpers'
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
 import {
   WORLD_FEED_FILTERS,
+  buildWorldPromptSessionTokenMeter,
   type WorldFeedEntry,
   type WorldFeedFilter,
   type WorldPromptTurnLens,
 } from '../../world/worldPresentation'
+import { WorldInlinePromptComposer } from '../prompt/WorldInlinePromptComposer'
 type WorldFeedGroup = {
   id: string
   label: string
@@ -43,6 +54,11 @@ type WorldFeedPanelProps = {
   selectedPromptSession: WorldPromptSession | null
   selectedPromptSessionKey: string | null
   selectedWorldFeedEntry: WorldFeedEntry | null
+  sessionEvents: WorldPromptEvent[]
+  sessionGenerationJobs: WorldPromptGenerationJob[]
+  sessionGenerationJobSteps: WorldPromptGenerationJobStep[]
+  sessionMessages: WorldPromptMessage[]
+  sessionTurns: WorldPromptTurn[]
   worldEntities: WorldEntity[]
   worldFeedFilter: WorldFeedFilter
   worldFeedGroups: WorldFeedGroup[]
@@ -54,7 +70,6 @@ type WorldFeedPanelProps = {
   worldPromptText: string
   worldRelationships: WorldRelationship[]
   worldResults: WorldResult[]
-  wikiTitle: string
   onCancelPromptTurn: (turnId: string) => Promise<void> | void
   onFeedScroll: () => void
   onGrowWorkbenchResizeStart: (event: React.MouseEvent<HTMLDivElement>) => void
@@ -98,6 +113,11 @@ export function WorldFeedPanel({
   selectedPromptSession,
   selectedPromptSessionKey,
   selectedWorldFeedEntry,
+  sessionEvents,
+  sessionGenerationJobs,
+  sessionGenerationJobSteps,
+  sessionMessages,
+  sessionTurns,
   worldEntities,
   worldFeedFilter,
   worldFeedGroups,
@@ -109,7 +129,6 @@ export function WorldFeedPanel({
   worldPromptText,
   worldRelationships,
   worldResults,
-  wikiTitle,
   onCancelPromptTurn,
   onFeedScroll,
   onGrowWorkbenchResizeStart,
@@ -134,11 +153,19 @@ export function WorldFeedPanel({
   renderWikiSubViewToggle,
   setSelectedWorldFeedEntryId,
 }: WorldFeedPanelProps) {
-  function handleWorldFeedComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== 'Enter' || event.shiftKey) return
-    event.preventDefault()
-    void onSubmitWorldPrompt()
-  }
+  const [tokenDetailsOpen, setTokenDetailsOpen] = useState(false)
+  const tokenMeter = useMemo(
+    () => buildWorldPromptSessionTokenMeter({
+      turns: sessionTurns,
+      messages: sessionMessages,
+      events: sessionEvents,
+      generationJobs: sessionGenerationJobs,
+      generationJobSteps: sessionGenerationJobSteps,
+      model: selectedPromptSession?.model ?? activePromptTurn?.model ?? sessionTurns.at(-1)?.model ?? null,
+    }),
+    [activePromptTurn?.model, selectedPromptSession?.model, sessionEvents, sessionGenerationJobSteps, sessionGenerationJobs, sessionMessages, sessionTurns],
+  )
+  const sessionTurnCountLabel = `${sessionTurns.length} turn${sessionTurns.length === 1 ? '' : 's'}`
 
   function renderWorldFeedThumb(entity: WorldEntity | null, fallbackIcon: EntityIconId = 'content') {
     const imageUrl = entity ? imageUrlByEntityKey.get(entity.key) ?? null : null
@@ -505,38 +532,42 @@ export function WorldFeedPanel({
   }
 
   function renderWorldFeedPanel() {
-    const submitDisabled = !worldPromptText.trim() || isPromptBusy
     return (
       <div className="world-feed-surface">
-        <aside className="world-feed-prompt-rail" aria-label="Create world updates">
+        <aside className="world-feed-prompt-rail" aria-label="Feed world updates">
           {renderWikiSubViewToggle()}
-          <div className="world-feed-project-card">
-            <span className="eyebrow">Create</span>
-            <strong>{wikiTitle}</strong>
-            <small>{activePromptTurn ? 'World update running' : 'World active'}</small>
-          </div>
-          <div className="world-feed-composer">
-            <label htmlFor="world-feed-composer-input">Prompt this world</label>
-            <textarea
-              id="world-feed-composer-input"
-              disabled={isPromptBusy}
-              onChange={(event) => onSetWorldPromptText(event.target.value)}
-              onKeyDown={handleWorldFeedComposerKeyDown}
-              placeholder="Add a faction, resolve a tension, deepen a character, or change the canon..."
-              value={worldPromptText}
-            />
-            {worldPromptError ? <div className="world-feed-error">{worldPromptError}</div> : null}
-            <div className="world-feed-composer-actions">
-              <span>{selectedPromptSession?.model ?? 'gpt-5.4-mini'}</span>
-              {activePromptTurn ? (
-                <button disabled={isPromptCancelling} onClick={() => void onCancelPromptTurn(activePromptTurn.id)} type="button">
-                  {isPromptCancelling ? 'Cancelling...' : 'Cancel'}
+          <div className="world-feed-prompt-head">
+            <div className="world-feed-prompt-status">
+              <span>{sessionTurnCountLabel}</span>
+              <span className="world-prompt-token-shell">
+                <button
+                  className="world-prompt-token-meter"
+                  onClick={() => setTokenDetailsOpen((open) => !open)}
+                  title={tokenMeter.title}
+                  type="button"
+                >
+                  {tokenMeter.label} tokens
                 </button>
-              ) : (
-                <button disabled={submitDisabled} onClick={() => void onSubmitWorldPrompt()} type="button">
-                  Generate
-                </button>
-              )}
+                {tokenDetailsOpen ? (
+                  <span className="world-prompt-token-popover">
+                    <strong>{tokenMeter.estimated ? 'Estimated usage' : 'Provider usage'}</strong>
+                    <span>Session {tokenMeter.usedTokens.toLocaleString()} / {tokenMeter.tokenLimit.toLocaleString()}</span>
+                    <span>Current turn {tokenMeter.currentTurnTokens.toLocaleString()}</span>
+                    <span>Last step {tokenMeter.lastStepTokens.toLocaleString()}</span>
+                    {tokenMeter.rows.slice(0, 6).map((row, index) => (
+                      <span key={`${row.label}-${index}`}>{row.label}: {row.inputTokens.toLocaleString()} in / {row.outputTokens.toLocaleString()} out</span>
+                    ))}
+                  </span>
+                ) : null}
+              </span>
+            </div>
+            <div className="world-prompt-head-actions">
+              <button className="world-prompt-icon-button" onClick={() => onSetHistoryOpen(true)} type="button" aria-label="Open history">
+                <EntityIcon id="activity" />
+              </button>
+              <button className="world-prompt-icon-button" onClick={() => void onStartNewPromptSession()} type="button" aria-label="Start new chat">
+                <EntityIcon id="plus" />
+              </button>
             </div>
           </div>
           <div className="world-feed-suggestion-list">
@@ -552,10 +583,22 @@ export function WorldFeedPanel({
             ))}
             {activeSessionSuggestions.length === 0 ? <small>No active suggestions yet.</small> : null}
           </div>
-          <div className="world-feed-session-actions">
-            <button onClick={() => onSetHistoryOpen(true)} type="button">Recent sessions</button>
-            <button onClick={() => void onStartNewPromptSession()} type="button">New session</button>
-          </div>
+          <WorldInlinePromptComposer
+            activeTurnId={activePromptTurn?.id ?? null}
+            busy={isPromptBusy}
+            cancelBusy={isPromptCancelling}
+            className="world-feed-composer"
+            error={worldPromptError}
+            id="world-feed-composer-input"
+            label="Prompt this world"
+            modelLabel={selectedPromptSession?.model ?? 'gpt-5.4-mini'}
+            onCancelTurn={onCancelPromptTurn}
+            onChange={onSetWorldPromptText}
+            onSubmit={onSubmitWorldPrompt}
+            placeholder="Add a faction, resolve a tension, deepen a character, or change the canon..."
+            rows={5}
+            value={worldPromptText}
+          />
           {historyOpen ? (
             <div className="world-feed-session-list">
               <div className="world-feed-rail-head">
@@ -580,7 +623,7 @@ export function WorldFeedPanel({
           ) : null}
         </aside>
         <div
-          aria-label="Resize create feed rail"
+          aria-label="Resize feed rail"
           className="world-grow-resizer world-wiki-resizer world-feed-resizer"
           onDoubleClick={onResetGrowWorkbenchWidth}
           onMouseDown={onGrowWorkbenchResizeStart}
@@ -590,7 +633,7 @@ export function WorldFeedPanel({
           <header className="world-feed-header">
             <div>
               <span className="eyebrow">Live Canon</span>
-              <h2>Create</h2>
+              <h2>Feed</h2>
               <p>Prompt changes and watch canon updates land here as the world evolves.</p>
             </div>
             <div className="world-feed-filter-row" role="tablist" aria-label="World feed filters">

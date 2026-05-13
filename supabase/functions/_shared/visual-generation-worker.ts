@@ -1214,7 +1214,7 @@ async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, work
         ...currentMetadata,
         worldWiki: {
           ...currentWiki,
-          worldConceptPrompt: readString(currentWiki.worldConceptPrompt) || sourcePrompt || prompt,
+          worldConceptPrompt: sourcePrompt || prompt || readString(currentWiki.worldConceptPrompt),
           worldConceptAssetKey: assetKey,
           worldConceptVisualJobId: null,
         },

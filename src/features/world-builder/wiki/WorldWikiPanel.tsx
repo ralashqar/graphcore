@@ -1,9 +1,11 @@
-import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react'
+import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
 
 import type { WorldEntity, WorldRelationship } from '../../../domain/worldGraph'
+import type { WorldPromptTurn } from '../../../domain/worldPrompt'
 import type { WorldWikiGap, WorldWikiModel, WorldWikiSection } from '../../../domain/worldWiki'
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
 import type { WorldWikiSubView } from '../../../shared/workspace'
+import { WorldInlinePromptComposer } from '../prompt/WorldInlinePromptComposer'
 import { iconForWikiSection } from './wikiSectionLabels'
 
 type WorldWikiSubViewToggleProps = {
@@ -35,7 +37,7 @@ export function WorldWikiSubViewToggle({
         type="button"
       >
         <EntityIcon id="activity" />
-        <span>Create</span>
+        <span>Feed</span>
       </button>
       <button
         aria-selected={wikiSubView === 'outputs'}
@@ -53,7 +55,9 @@ export function WorldWikiSubViewToggle({
 
 type WorldWikiPanelProps = {
   activeWikiSectionKind: WorldWikiSection['kind']
+  activePromptTurn: WorldPromptTurn | null
   isPromptSubmitting: boolean
+  isPromptCancelling: boolean
   liveGenerationState?: {
     active: boolean
     message: string
@@ -76,6 +80,9 @@ type WorldWikiPanelProps = {
   wikiOverviewLabel: string
   wikiOverviewSectionStyle?: CSSProperties
   wikiOverviewTags: string[]
+  wikiPromptError: string | null
+  wikiPromptModelLabel: string
+  wikiPromptText: string
   wikiVisualGenerationStatus?: {
     message: string
     detail?: string
@@ -87,11 +94,14 @@ type WorldWikiPanelProps = {
   worldEntities: readonly WorldEntity[]
   worldRelationships: readonly WorldRelationship[]
   onGrowWorkbenchResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
+  onCancelPromptTurn: (turnId: string) => Promise<void> | void
   onResetGrowWorkbenchWidth: () => void
   onRunWikiGap: (gap: WorldWikiGap) => void
   onScrollToWikiSection: (sectionKind: WorldWikiSection['kind']) => void
   onSelectWikiSubView: (subView: WorldWikiSubView) => void
   onSetWikiSearchQuery: (query: string) => void
+  onSetWikiPromptText: (value: string) => void
+  onSubmitWikiPrompt: () => Promise<void> | void
   renderAppPreviewPipelinePanel: () => ReactNode
   renderInteractivePrototypeModal: () => ReactNode
   renderNarrativeRpgPlayablePanel: () => ReactNode
@@ -129,6 +139,123 @@ const ENTITY_FIRST_WIKI_SECTION_KINDS: ReadonlySet<WorldWikiSection['kind']> = n
   'app_towers',
   'app_code_files',
 ])
+
+const LIVE_OVERVIEW_TITLE_PHRASES = [
+  'Your world is forming live...',
+  'Thinking through the world...',
+  'Finding the first characters...',
+  'Building the wiki...',
+  'Sketching the story spine...',
+] as const
+
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches)
+    updatePreference()
+    mediaQuery.addEventListener?.('change', updatePreference)
+    return () => mediaQuery.removeEventListener?.('change', updatePreference)
+  }, [])
+
+  return prefersReducedMotion
+}
+
+function useCyclingLiveOverviewTitle(active: boolean) {
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const [phraseIndex, setPhraseIndex] = useState(0)
+  const [phase, setPhase] = useState<'typing' | 'holding' | 'deleting'>('typing')
+  const [visibleLength, setVisibleLength] = useState(0)
+  const currentPhrase = LIVE_OVERVIEW_TITLE_PHRASES[phraseIndex % LIVE_OVERVIEW_TITLE_PHRASES.length]
+
+  useEffect(() => {
+    if (!active) {
+      setPhraseIndex(0)
+      setPhase('typing')
+      setVisibleLength(0)
+      return
+    }
+    if (prefersReducedMotion) {
+      setVisibleLength(currentPhrase.length)
+      return
+    }
+
+    const delayMs = phase === 'typing' ? 46 : phase === 'holding' ? 1350 : 24
+    const timer = window.setTimeout(() => {
+      if (phase === 'typing') {
+        if (visibleLength < currentPhrase.length) {
+          setVisibleLength((length) => Math.min(length + 1, currentPhrase.length))
+          return
+        }
+        setPhase('holding')
+        return
+      }
+
+      if (phase === 'holding') {
+        setPhase('deleting')
+        return
+      }
+
+      if (visibleLength > 0) {
+        setVisibleLength((length) => Math.max(length - 1, 0))
+        return
+      }
+
+      setPhraseIndex((index) => (index + 1) % LIVE_OVERVIEW_TITLE_PHRASES.length)
+      setPhase('typing')
+    }, delayMs)
+
+    return () => window.clearTimeout(timer)
+  }, [active, currentPhrase, phase, prefersReducedMotion, visibleLength])
+
+  return {
+    displayText: active ? currentPhrase.slice(0, visibleLength) : '',
+    fullText: currentPhrase,
+  }
+}
+
+function useTypewriterText(text: string, active: boolean, speedMs: number, startDelayMs = 0, inactiveDisplayText = text) {
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const [displayText, setDisplayText] = useState(active ? '' : inactiveDisplayText)
+  const [complete, setComplete] = useState(!active)
+
+  useEffect(() => {
+    if (!active || !text || prefersReducedMotion) {
+      setDisplayText(active || prefersReducedMotion ? text : inactiveDisplayText)
+      setComplete(true)
+      return
+    }
+
+    let cancelled = false
+    let typedLength = 0
+    let timer: number | null = null
+
+    setDisplayText('')
+    setComplete(false)
+
+    const typeNextCharacter = () => {
+      if (cancelled) return
+      typedLength += 1
+      setDisplayText(text.slice(0, typedLength))
+      if (typedLength >= text.length) {
+        setComplete(true)
+        return
+      }
+      timer = window.setTimeout(typeNextCharacter, speedMs)
+    }
+
+    timer = window.setTimeout(typeNextCharacter, startDelayMs)
+
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [active, inactiveDisplayText, prefersReducedMotion, speedMs, startDelayMs, text])
+
+  return { complete, displayText }
+}
 
 function countWikiSectionItems(section: WorldWikiSection) {
   return section.entityKeys.length + section.threadKeys.length + section.resultKeys.length
@@ -182,7 +309,9 @@ function orderWikiSectionsForLiveDocument(sections: WorldWikiSection[]) {
 
 export function WorldWikiPanel({
   activeWikiSectionKind,
+  activePromptTurn,
   isPromptSubmitting,
+  isPromptCancelling,
   liveGenerationState,
   wikiDocumentRef,
   wikiModel,
@@ -199,6 +328,9 @@ export function WorldWikiPanel({
   wikiOverviewLabel,
   wikiOverviewSectionStyle,
   wikiOverviewTags,
+  wikiPromptError,
+  wikiPromptModelLabel,
+  wikiPromptText,
   wikiVisualGenerationStatus,
   wikiSearchActive,
   wikiSearchMatchCount,
@@ -206,12 +338,15 @@ export function WorldWikiPanel({
   wikiSubView,
   worldEntities,
   worldRelationships,
+  onCancelPromptTurn,
   onGrowWorkbenchResizeStart,
   onResetGrowWorkbenchWidth,
   onRunWikiGap,
   onScrollToWikiSection,
   onSelectWikiSubView,
   onSetWikiSearchQuery,
+  onSetWikiPromptText,
+  onSubmitWikiPrompt,
   renderAppPreviewPipelinePanel,
   renderInteractivePrototypeModal,
   renderNarrativeRpgPlayablePanel,
@@ -221,6 +356,39 @@ export function WorldWikiPanel({
 }: WorldWikiPanelProps) {
   const liveGenerationActive = Boolean(liveGenerationState?.active)
   const liveOverviewReady = !liveGenerationActive || wikiOverviewShowMetadata
+  const liveOverviewTitleReady = liveGenerationActive && wikiOverviewDisplayTitle.trim().length > 0
+  const liveOverviewLoglineReady = liveGenerationActive && wikiOverviewDisplayLogline.trim().length > 0
+  const cyclingOverviewTitle = useCyclingLiveOverviewTitle(liveGenerationActive && !liveOverviewTitleReady)
+  const typedOverviewTitle = useTypewriterText(wikiOverviewDisplayTitle, liveOverviewTitleReady, 38)
+  const titleTypingComplete = !liveGenerationActive || !liveOverviewTitleReady || (
+    typedOverviewTitle.complete && typedOverviewTitle.displayText === wikiOverviewDisplayTitle
+  )
+  const shouldTypeOverviewLogline = liveOverviewLoglineReady && titleTypingComplete
+  const typedOverviewLogline = useTypewriterText(
+    wikiOverviewDisplayLogline,
+    shouldTypeOverviewLogline,
+    22,
+    180,
+    liveGenerationActive ? '' : wikiOverviewDisplayLogline,
+  )
+  const overviewTitleText = liveGenerationActive
+    ? liveOverviewTitleReady
+      ? typedOverviewTitle.displayText
+      : cyclingOverviewTitle.displayText
+    : wikiOverviewDisplayTitle
+  const overviewTitleAriaLabel = liveGenerationActive
+    ? liveOverviewTitleReady
+      ? wikiOverviewDisplayTitle
+      : cyclingOverviewTitle.fullText
+    : wikiOverviewDisplayTitle
+  const showOverviewTitleCaret = liveGenerationActive && (!liveOverviewTitleReady || !typedOverviewTitle.complete)
+  const showOverviewLogline = liveGenerationActive
+    ? shouldTypeOverviewLogline
+    : wikiOverviewShowMetadata && (wikiOverviewDisplayLogline || !liveGenerationActive)
+  const overviewLoglineText = liveGenerationActive
+    ? typedOverviewLogline.displayText
+    : wikiOverviewDisplayLogline || 'No logline yet.'
+  const showOverviewLoglineCaret = liveGenerationActive && shouldTypeOverviewLogline && !typedOverviewLogline.complete
   const populatedWikiSections = orderWikiSectionsForLiveDocument(
     liveOverviewReady
       ? wikiModel.sections.filter((section) => isWikiSectionPopulated({
@@ -234,23 +402,10 @@ export function WorldWikiPanel({
   return (
     <div className={`world-alt-surface world-wiki-surface${liveGenerationActive ? ' is-live-generating' : ''}`}>
       <aside className="world-wiki-index" aria-label="Wiki sections">
-        <WorldWikiSubViewToggle wikiSubView={wikiSubView} onSelectWikiSubView={onSelectWikiSubView} />
+        <div className="world-wiki-index-scroll">
+          <WorldWikiSubViewToggle wikiSubView={wikiSubView} onSelectWikiSubView={onSelectWikiSubView} />
         {wikiSubView === 'outputs' ? renderOutputLibraryRail() : (
           <>
-        <button
-          className={`world-wiki-create-entry${liveGenerationActive ? ' is-generating' : ''}`}
-          disabled={liveGenerationActive}
-          onClick={() => onSelectWikiSubView('feed')}
-          type="button"
-        >
-          <span className="world-wiki-create-icon">
-            <EntityIcon id={liveGenerationActive || isPromptSubmitting ? 'activity' : 'plus'} />
-          </span>
-          <span>
-            <strong>{liveGenerationActive ? 'Generating' : isPromptSubmitting ? 'View progress' : 'Create'}</strong>
-            <small>{liveGenerationActive ? liveGenerationState?.message || 'Your world is forming' : isPromptSubmitting ? 'Follow the active world update' : 'Prompt canon changes'}</small>
-          </span>
-        </button>
         <div className="world-wiki-index-list">
           {populatedWikiSections.map((section) => {
             const count = section.kind === 'style' ? 1 : countWikiSectionItems(section)
@@ -283,19 +438,27 @@ export function WorldWikiPanel({
             )
           })}
         </div>
-        {visibleWikiGaps.length > 0 ? (
-          <div className="world-wiki-gap-list">
-            <span className="eyebrow">Gaps</span>
-            {visibleWikiGaps.map((gap) => (
-              <button key={gap.key} className="world-wiki-gap-button" disabled={isPromptSubmitting} onClick={() => onRunWikiGap(gap)} type="button">
-                <EntityIcon id="plus" />
-                <span>{gap.label}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
           </>
         )}
+        </div>
+        {wikiSubView === 'wiki' ? (
+          <WorldInlinePromptComposer
+            activeTurnId={activePromptTurn?.id ?? null}
+            busy={isPromptSubmitting}
+            cancelBusy={isPromptCancelling}
+            className="world-wiki-docked-composer"
+            error={wikiPromptError}
+            id="world-wiki-composer-input"
+            label="Prompt this world"
+            modelLabel={wikiPromptModelLabel}
+            onCancelTurn={onCancelPromptTurn}
+            onChange={onSetWikiPromptText}
+            onSubmit={onSubmitWikiPrompt}
+            placeholder="Add a character, deepen a relationship, change a place, or extend the story..."
+            rows={3}
+            value={wikiPromptText}
+          />
+        ) : null}
       </aside>
       <div
         aria-label="Resize wiki navigation"
@@ -304,6 +467,7 @@ export function WorldWikiPanel({
         onMouseDown={onGrowWorkbenchResizeStart}
         role="separator"
       />
+      <div className="world-wiki-document-shell">
       <div className="world-wiki-document" ref={wikiDocumentRef}>
         {wikiSubView === 'outputs' ? renderOutputLibraryPanel() : (
           <>
@@ -333,17 +497,28 @@ export function WorldWikiPanel({
           <div className="world-wiki-overview-copy">
             <span className="eyebrow">{wikiOverviewLabel}</span>
             <h2
-              key={liveGenerationActive ? `live-title:${wikiOverviewDisplayTitle}` : 'stable-title'}
-              className={liveGenerationActive && wikiOverviewDisplayTitle ? 'is-live-generated' : undefined}
+              key={liveGenerationActive ? liveOverviewTitleReady ? `live-title:${wikiOverviewDisplayTitle}` : 'live-title-placeholder' : 'stable-title'}
+              aria-label={overviewTitleAriaLabel || undefined}
+              className={[
+                liveGenerationActive ? 'world-wiki-typewriter-title' : '',
+                liveGenerationActive && liveOverviewTitleReady ? 'is-live-generated' : '',
+                liveGenerationActive && !liveOverviewTitleReady ? 'is-placeholder' : '',
+              ].filter(Boolean).join(' ') || undefined}
             >
-              {wikiOverviewDisplayTitle}
+              {overviewTitleText}
+              {showOverviewTitleCaret ? <span className="world-wiki-typewriter-caret" aria-hidden="true" /> : null}
             </h2>
-            {wikiOverviewShowMetadata && (wikiOverviewDisplayLogline || !liveGenerationActive) ? (
+            {showOverviewLogline ? (
               <div
                 key={liveGenerationActive ? `live-logline:${wikiOverviewDisplayLogline}` : 'stable-logline'}
-                className={liveGenerationActive && wikiOverviewDisplayLogline ? 'world-wiki-logline is-live-generated' : 'world-wiki-logline'}
+                className={[
+                  'world-wiki-logline',
+                  liveGenerationActive && wikiOverviewDisplayLogline ? 'is-live-generated' : '',
+                  liveGenerationActive ? 'is-typing' : '',
+                ].filter(Boolean).join(' ')}
               >
-                {wikiOverviewDisplayLogline || 'No logline yet.'}
+                <span>{overviewLoglineText}</span>
+                {showOverviewLoglineCaret ? <span className="world-wiki-typewriter-caret" aria-hidden="true" /> : null}
                 {!liveGenerationActive && !wikiOverviewDisplayLogline ? (
                   <button
                     className="world-context-strip-action"
@@ -426,11 +601,28 @@ export function WorldWikiPanel({
         <div className="world-wiki-section-grid">
           {populatedWikiSections.map(renderWikiSection)}
         </div>
-        <div className="world-wiki-diagnostics">
-          {wikiModel.diagnostics.map((diagnostic) => <span key={diagnostic}>{diagnostic}</span>)}
-        </div>
+        {visibleWikiGaps.length > 0 ? (
+          <section className="world-wiki-section world-wiki-suggested-actions" id="world-wiki-section-suggested-actions">
+            <div className="world-wiki-section-title-row">
+              <EntityIcon id="activity" />
+              <div>
+                <span className="eyebrow">Next moves</span>
+                <h3>Suggested actions</h3>
+              </div>
+            </div>
+            <div className="world-wiki-suggested-action-grid">
+              {visibleWikiGaps.map((gap) => (
+                <button key={gap.key} className="world-wiki-suggested-action-button" disabled={isPromptSubmitting} onClick={() => onRunWikiGap(gap)} type="button">
+                  <EntityIcon id="plus" />
+                  <span>{gap.label}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
           </>
         )}
+      </div>
       </div>
     </div>
   )

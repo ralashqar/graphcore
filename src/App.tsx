@@ -5226,8 +5226,7 @@ export default function App() {
       throw new Error('A world concept image is already generating.')
     }
 
-    const sourcePrompt = trimOptionalString(wiki.worldConceptPrompt)
-    const imagePrompt = sourcePrompt || buildWorldConceptImagePrompt({
+    const imagePrompt = buildWorldConceptImagePrompt({
       wiki,
       projectName: current.project.name,
       projectDescription: current.project.summary,
@@ -5257,7 +5256,7 @@ export default function App() {
         storagePath,
         role: 'world_concept_image',
         imagePrompt,
-        sourcePrompt: sourcePrompt || imagePrompt,
+        sourcePrompt: imagePrompt,
         quality: 'low',
         outputFormat: 'webp',
         mimeType: 'image/webp',
@@ -5295,7 +5294,7 @@ export default function App() {
         model: result.job.model,
         role: 'world_concept_image',
         prompt: imagePrompt,
-        sourcePrompt: sourcePrompt || imagePrompt,
+        sourcePrompt: imagePrompt,
         storageBucket: 'project-assets',
         storagePath,
         generation: {
@@ -5311,7 +5310,7 @@ export default function App() {
       ...current.draft.metadata,
       worldWiki: {
         ...wiki,
-        worldConceptPrompt: sourcePrompt || imagePrompt,
+        worldConceptPrompt: imagePrompt,
         worldConceptAssetKey: assetKey,
         worldConceptVisualJobId: result.job.id,
       },

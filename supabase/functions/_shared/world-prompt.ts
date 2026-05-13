@@ -7962,7 +7962,7 @@ async function enqueueInitialSeedWorldConceptImage(input: {
     }
   }
 
-  const prompt = asCompactString(currentWiki.worldConceptPrompt) || buildInitialSeedWorldConceptPrompt(currentWiki, input.projectContext)
+  const prompt = buildInitialSeedWorldConceptPrompt(currentWiki, input.projectContext)
   const title = asCompactString(currentWiki.title) || input.snapshot.project.name || 'world'
   const assetKey = `world_concept_${slugifyStreamKey(title) || 'world'}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
   const storagePath = `generated/wiki-concept-images/${input.snapshot.draft.id}/${assetKey}.webp`
