@@ -2378,7 +2378,7 @@ function shouldIncludeWorldFeedChangeField(key: string, value: unknown) {
 }
 
 function shouldIncludeWorldFeedUpdateChangeField(key: string, value: unknown) {
-  if (['name', 'context'].includes(key)) return false
+  if (['name', 'summary', 'context'].includes(key)) return false
   return shouldIncludeWorldFeedChangeField(key, value)
 }
 
@@ -2483,18 +2483,6 @@ function buildTurnFeedSummary(input: {
       if (payload.op.op === 'update_entity') {
         for (const [key, value] of Object.entries(payload.op.payload.changes)) {
           if (!shouldIncludeWorldFeedUpdateChangeField(key, value)) continue
-          if (key === 'summary') {
-            const canonAdded = fullWorldFeedChangeValue(value)
-            if (canonAdded) {
-              addWorldFeedEntityChange(
-                entityChangeDetailsByKey,
-                payload.op.payload.targetEntityKey,
-                'Canon added',
-                `Canon added: ${canonAdded}`,
-              )
-            }
-            continue
-          }
           const label = formatWorldFeedFieldLabel(key)
           const valuePreview = compactWorldFeedChangeValue(value)
           addWorldFeedEntityChange(
@@ -2506,12 +2494,6 @@ function buildTurnFeedSummary(input: {
         }
       } else if (payload.op.op === 'update_entity_canon') {
         const targetEntityKey = payload.op.payload.targetEntityKey
-        if (payload.op.payload.summaryPatch) {
-          const canonAdded = fullWorldFeedChangeValue(payload.op.payload.summaryPatch)
-          if (canonAdded) {
-            addWorldFeedEntityChange(entityChangeDetailsByKey, targetEntityKey, 'Canon added', `Canon added: ${canonAdded}`)
-          }
-        }
         const currentStateKeys = Object.keys(payload.op.payload.currentStatePatch)
         for (const key of currentStateKeys) {
           const label = `State: ${formatWorldFeedFieldLabel(key)}`
@@ -2537,15 +2519,6 @@ function buildTurnFeedSummary(input: {
       } else if (payload.op.op === 'upsert_entity') {
         const targetEntityKey = payload.op.payload.targetEntityKey ?? appliedEntityKeys[0]
         const entityInput = payload.op.payload.entity
-        if (shouldIncludeWorldFeedChangeField('summary', entityInput.summary)) {
-          const canonAdded = fullWorldFeedChangeValue(entityInput.summary)
-          addWorldFeedEntityChange(
-            entityChangeDetailsByKey,
-            targetEntityKey,
-            'Canon added',
-            canonAdded ? `Canon added: ${canonAdded}` : 'Canon added',
-          )
-        }
         for (const key of ['tags', 'status'] as const) {
           const value = entityInput[key]
           if (!shouldIncludeWorldFeedChangeField(key, value)) continue

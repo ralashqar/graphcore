@@ -6929,6 +6929,57 @@ export function WorldGraphPage({
         ['Lore', relationshipRows.filter((entry) => entry.connectedEntity?.nodeType === 'concept')] as const,
       ].filter(([, entries]) => entries.length > 0)
       const povEntity = sequence.povCharacterKey ? entityByKey.get(sequence.povCharacterKey) ?? null : null
+      const sequenceReferenceByKey = new Map<string, { entity: WorldEntity; label: string; detail: string }>()
+      const addSequenceReference = (refEntity: WorldEntity | null, label: string, detail = '') => {
+        if (!refEntity || refEntity.key === entity.key) return
+        const existing = sequenceReferenceByKey.get(refEntity.key)
+        if (!existing) {
+          sequenceReferenceByKey.set(refEntity.key, { entity: refEntity, label, detail })
+          return
+        }
+        const labels = new Set(existing.label.split(' / ').filter(Boolean))
+        labels.add(label)
+        sequenceReferenceByKey.set(refEntity.key, {
+          entity: refEntity,
+          label: [...labels].join(' / '),
+          detail: existing.detail || detail,
+        })
+      }
+      addSequenceReference(povEntity, 'POV character', sequence.povNotes)
+      sequenceConsequences.forEach((consequence) => {
+        consequence.affectedEntityKeys.forEach((key) => {
+          addSequenceReference(entityByKey.get(key) ?? null, `Affected ${consequence.consequenceType.replace(/_/g, ' ')}`, consequence.effect)
+        })
+      })
+      sequenceArcDeltas.forEach((delta) => {
+        addSequenceReference(entityByKey.get(delta.actorKey) ?? null, 'Character arc', delta.after || delta.choice || delta.pressure)
+      })
+      relationshipRows.forEach(({ relationship, connectedEntity }) => {
+        addSequenceReference(connectedEntity, relationship.verb.replace(/_/g, ' '), relationship.notes)
+      })
+      const sequenceReferences = [...sequenceReferenceByKey.values()]
+        .sort((left, right) => left.entity.nodeType.localeCompare(right.entity.nodeType) || left.entity.name.localeCompare(right.entity.name))
+      const renderSequenceEntityReference = (
+        refEntity: WorldEntity,
+        label: string,
+        detail = '',
+        key = refEntity.key,
+      ) => {
+        const refImageUrl = wikiImageUrlByEntityKey.get(refEntity.key) ?? null
+        const fallbackDetail = detail || refEntity.summary || refEntity.context || labelForWorldEntity(refEntity.nodeType)
+        return (
+          <button key={key} className="world-wiki-sequence-entity-ref" onClick={() => openWikiEntityPageByKey(refEntity.key)} type="button">
+            <span className="world-wiki-sequence-entity-ref-thumb">
+              {refImageUrl ? <img src={refImageUrl} alt="" /> : <EntityIcon id={iconForWorldEntity(refEntity.nodeType)} />}
+            </span>
+            <span>
+              <strong>{refEntity.name}</strong>
+              <em>{label}</em>
+              {fallbackDetail ? <small>{fallbackDetail}</small> : null}
+            </span>
+          </button>
+        )
+      }
       const sequenceStats = [
         sequence.unitKind ? sequence.unitKind.replace(/_/g, ' ') : 'chapter',
         sequence.sequenceKey ? `Sequence ${sequence.sequenceKey}` : 'Main sequence',
@@ -6960,7 +7011,11 @@ export function WorldGraphPage({
               <dl>
                 <div>
                   <dt>POV</dt>
-                  <dd>{povEntity?.name || sequence.povCharacterName || 'Not assigned'}</dd>
+                  <dd>
+                    {povEntity
+                      ? renderSequenceEntityReference(povEntity, 'POV character', sequence.povNotes)
+                      : sequence.povCharacterName || 'Not assigned'}
+                  </dd>
                 </div>
                 <div>
                   <dt>Question</dt>
@@ -7020,7 +7075,19 @@ export function WorldGraphPage({
                         <em aria-hidden="true">-&gt;</em>
                         <p>{consequence.effect || 'Effect not recorded.'}</p>
                         {consequence.affectedEntityKeys.length > 0 ? (
-                          <small>Affects {consequence.affectedEntityKeys.map((key) => entityByKey.get(key)?.name ?? key).join(', ')}</small>
+                          <div className="world-wiki-sequence-inline-refs">
+                            {consequence.affectedEntityKeys.map((key) => {
+                              const affectedEntity = entityByKey.get(key) ?? null
+                              return affectedEntity
+                                ? renderSequenceEntityReference(
+                                  affectedEntity,
+                                  `Affected ${consequence.consequenceType.replace(/_/g, ' ')}`,
+                                  consequence.effect,
+                                  `${consequence.cause}:${key}`,
+                                )
+                                : <small key={key}>Affects {key}</small>
+                            })}
+                          </div>
                         ) : null}
                       </article>
                     ))}
@@ -7039,7 +7106,14 @@ export function WorldGraphPage({
                   <div className="world-wiki-sequence-arc-list">
                     {sequenceArcDeltas.map((delta, index) => (
                       <article key={`${delta.actorKey}:${index}`}>
-                        <strong>{entityByKey.get(delta.actorKey)?.name ?? (delta.actorKey || 'Unassigned character')}</strong>
+                        {entityByKey.get(delta.actorKey)
+                          ? renderSequenceEntityReference(
+                            entityByKey.get(delta.actorKey) ?? null!,
+                            'Character arc',
+                            delta.after || delta.choice || delta.pressure,
+                            `${delta.actorKey}:${index}`,
+                          )
+                          : <strong>{delta.actorKey || 'Unassigned character'}</strong>}
                         <div>
                           <span>Before</span>
                           <p>{delta.before || 'Not recorded.'}</p>
@@ -7066,6 +7140,22 @@ export function WorldGraphPage({
             </div>
 
             <aside className="world-wiki-sequence-side">
+              <section className="world-wiki-entity-panel">
+                <div className="world-wiki-entity-panel-head">
+                  <EntityIcon id="character" />
+                  <h3>Referenced entities</h3>
+                </div>
+                {sequenceReferences.length > 0 ? (
+                  <div className="world-wiki-sequence-reference-list">
+                    {sequenceReferences.map(({ entity: refEntity, label, detail }) => (
+                      renderSequenceEntityReference(refEntity, label, detail)
+                    ))}
+                  </div>
+                ) : (
+                  <div className="inline-note">No linked character, place, item, or event references recorded yet.</div>
+                )}
+              </section>
+
               <section className="world-wiki-entity-panel">
                 <div className="world-wiki-entity-panel-head">
                   <EntityIcon id="thread" />
@@ -7103,8 +7193,15 @@ export function WorldGraphPage({
                         <span>{label}</span>
                         {entries.map(({ relationship, connectedEntity }) => connectedEntity ? (
                           <button key={relationship.key} onClick={() => openWikiEntityPageByKey(connectedEntity.key)} type="button">
-                            <strong>{connectedEntity.name}</strong>
-                            <em>{relationship.verb.replace(/_/g, ' ')}</em>
+                            <span className="world-wiki-sequence-entity-ref-thumb">
+                              {wikiImageUrlByEntityKey.get(connectedEntity.key)
+                                ? <img src={wikiImageUrlByEntityKey.get(connectedEntity.key) ?? ''} alt="" />
+                                : <EntityIcon id={iconForWorldEntity(connectedEntity.nodeType)} />}
+                            </span>
+                            <span>
+                              <strong>{connectedEntity.name}</strong>
+                              <em>{relationship.verb.replace(/_/g, ' ')}</em>
+                            </span>
                           </button>
                         ) : null)}
                       </div>
@@ -7185,15 +7282,17 @@ export function WorldGraphPage({
               <span className="eyebrow">{section.title}</span>
               <h2>{entity.name}</h2>
               <p>{profile?.shortSummary || entity.summary || entity.context || 'No story summary has been written yet.'}</p>
-              <button className="world-wiki-entity-graph-button" onClick={() => openWikiEntityGraphModal(entity.key)} type="button">
-                <EntityIcon id="graph" />
-                Graph view
-              </button>
-              {entity.tags.length > 0 ? (
-                <div className="world-wiki-entity-tags">
-                  {entity.tags.slice(0, 8).map((tag) => <span key={tag}>{tag}</span>)}
-                </div>
-              ) : null}
+              <div className="world-wiki-entity-action-row">
+                <button className="world-wiki-entity-graph-button" onClick={() => openWikiEntityGraphModal(entity.key)} type="button">
+                  <EntityIcon id="graph" />
+                  Graph view
+                </button>
+                {entity.tags.length > 0 ? (
+                  <div className="world-wiki-entity-tags">
+                    {entity.tags.slice(0, 8).map((tag) => <span key={tag}>{tag}</span>)}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <section className="world-wiki-entity-panel is-fields">

@@ -1628,7 +1628,7 @@ test('buildWorldFeedViewModel treats initial seed upserts as created even withou
   assert.equal(feed.entries.some((entry) => entry.kind === 'entity_updated' && entry.entityKey === grove.key), false)
 })
 
-test('buildWorldFeedViewModel surfaces concrete changed fields for updated entity rows', () => {
+test('buildWorldFeedViewModel omits summary-only changes from updated entity details', () => {
   const turn = makeTurn({ id: 't-update-highlight', prompt: 'Refine Mira.' })
   const mira = {
     ...createWorldPresentationTestEntity('world.actor.mira', 'Mira', 'actor'),
@@ -1680,14 +1680,12 @@ test('buildWorldFeedViewModel surfaces concrete changed fields for updated entit
   })
 
   const updated = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.entityKey === mira.key)
-  assert.deepEqual(updated?.changedFields, ['Canon added'])
-  assert.equal(updated?.detail, 'Canon added: Mira now hides the city charter.')
-  assert.deepEqual(updated?.audit?.changeDetails, [
-    'Canon added: Mira now hides the city charter.',
-  ])
+  assert.equal(updated?.changedFields, undefined)
+  assert.equal(updated?.audit?.changeDetails, undefined)
+  assert.equal(updated?.detail, mira.context)
 })
 
-test('buildWorldFeedViewModel keeps upsert update highlights focused on canon additions', () => {
+test('buildWorldFeedViewModel skips upsert summary noise for updated entity rows', () => {
   const turn = makeTurn({ id: 't-sequence-canon', prompt: 'Refine chapter seven.' })
   const chapter = {
     ...createWorldPresentationTestEntity('world.sequence.chapter_7', 'Chapter 7: The Roar and the River', 'sequence_unit'),
@@ -1751,10 +1749,9 @@ test('buildWorldFeedViewModel keeps upsert update highlights focused on canon ad
   })
 
   const updated = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.entityKey === chapter.key)
-  assert.deepEqual(updated?.changedFields, ['Canon added'])
-  assert.deepEqual(updated?.audit?.changeDetails, [
-    'Canon added: In Thunderroot Caverns, the allies must act before the waterworks fail.',
-  ])
+  assert.equal(updated?.changedFields, undefined)
+  assert.equal(updated?.audit?.changeDetails, undefined)
+  assert.equal(updated?.detail, chapter.context)
 })
 
 test('buildWorldFeedViewModel skips name and summary noise for changed entity details', () => {
@@ -1810,13 +1807,12 @@ test('buildWorldFeedViewModel skips name and summary noise for changed entity de
   })
 
   const updated = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.entityKey === chapter.key)
-  assert.deepEqual(updated?.changedFields, ['Canon added'])
-  assert.deepEqual(updated?.audit?.changeDetails, [
-    'Canon added: In Thunderroot Caverns, the allies must turn private fears into action.',
-  ])
+  assert.equal(updated?.changedFields, undefined)
+  assert.equal(updated?.audit?.changeDetails, undefined)
+  assert.equal(updated?.detail, chapter.context)
 })
 
-test('buildWorldFeedViewModel does not truncate canon-added update details', () => {
+test('buildWorldFeedViewModel does not truncate real canon fact addition details', () => {
   const turn = makeTurn({ id: 't-long-canon-added', prompt: 'Make the chapter more specific.' })
   const longCanon = [
     'In Thunderroot Caverns, the allies discover the old waterworks were not broken by age but by a protective choice made years earlier.',
@@ -1840,7 +1836,7 @@ test('buildWorldFeedViewModel does not truncate canon-added update details', () 
       payload: {
         op: {
           id: 'op-long-canon-added',
-          op: 'upsert_entity',
+          op: 'update_entity_canon',
           confidence: 0.9,
           applyMode: 'auto',
           dependencyOpIds: [],
@@ -1849,20 +1845,14 @@ test('buildWorldFeedViewModel does not truncate canon-added update details', () 
           metadata: {},
           payload: {
             targetEntityKey: chapter.key,
-            entity: {
-              name: chapter.name,
-              summary: chapter.summary,
-              context: chapter.context,
-              nodeType: chapter.nodeType,
-              aliases: [],
-              tags: [],
-              status: 'active',
-              thumbnailAssetKey: null,
-              linkedDefinitionKey: null,
-              source: 'ai',
-              customProperties: {},
-              metadata: {},
-              ensureLinkedDefinition: true,
+            summaryPatch: chapter.summary,
+            contextPatch: '',
+            currentStatePatch: {},
+            factAdditions: [{ factId: 'fact-long-canon', kind: 'note', text: longCanon }],
+            supersedeFactIds: [],
+            auditSummary: {
+              title: 'Canon added',
+              summary: longCanon,
             },
           },
         },
