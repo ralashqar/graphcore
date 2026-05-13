@@ -2485,31 +2485,26 @@ export function WorldGraphPage({
     || activeWorldConceptVisualJob?.id
     || null
   ), [activeWorldConceptVisualJob?.id, wikiModel.overview.worldConceptVisualJobId, wikiWorldConceptAsset])
+  const hasDurableWorldConceptBinding = Boolean(
+    trimOptionalString(wikiModel.overview.worldConceptAssetKey)
+      || trimOptionalString(wikiModel.overview.worldConceptVisualJobId)
+      || activeWorldConceptVisualJob,
+  )
   const wikiWorldConceptPending = isPendingVisualAsset(wikiWorldConceptAsset)
     || Boolean(activeWorldConceptVisualJob)
     || (Boolean(activeWorldConceptJobId) && !wikiWorldConceptImageUrl)
   useEffect(() => {
     if (worldViewMode !== 'wiki') return
     if (!onGenerateWorldConceptImage) return
-    const activeConceptImageReady = liveWikiGenerationState.active
-      ? Boolean(
-        liveWikiGenerationState.overviewWorldConceptAssetKey
-        && wikiWorldConceptAsset?.key === liveWikiGenerationState.overviewWorldConceptAssetKey
-        && wikiWorldConceptImageUrl,
-      )
-      : Boolean(wikiWorldConceptImageUrl)
-    if (activeConceptImageReady || (!liveWikiGenerationState.active && wikiWorldConceptPending) || activeWorldConceptJobId) return
-    if (liveWikiGenerationState.active && !liveWikiGenerationState.showOverviewMetadata) return
-    if (liveWikiGenerationState.active && !liveWikiGenerationState.overviewMetadataBelongsToActiveSeed) return
+    if (!liveWikiGenerationState.active) return
+    if (!liveWikiGenerationState.showOverviewMetadata) return
+    if (!liveWikiGenerationState.overviewMetadataBelongsToActiveSeed) return
+    if (hasDurableWorldConceptBinding || wikiWorldConceptPending || activeWorldConceptJobId) return
     const liveWorldWikiMetadata = readLooseRecord(effectiveProjectDraftMetadata.worldWiki)
-    const title = liveWikiGenerationState.active ? liveWikiGenerationState.overviewTitle.trim() : wikiModel.title.trim()
-    const logline = liveWikiGenerationState.active ? liveWikiGenerationState.overviewLogline.trim() : wikiModel.overview.logline.trim()
-    const artStyleDescription = liveWikiGenerationState.active
-      ? trimOptionalString(liveWorldWikiMetadata.artStyleDescription)
-      : wikiModel.overview.artStyleDescription.trim()
-    const prompt = liveWikiGenerationState.active
-      ? trimOptionalString(liveWorldWikiMetadata.worldConceptPrompt)
-      : wikiModel.overview.worldConceptPrompt.trim()
+    const title = liveWikiGenerationState.overviewTitle.trim()
+    const logline = liveWikiGenerationState.overviewLogline.trim()
+    const artStyleDescription = trimOptionalString(liveWorldWikiMetadata.artStyleDescription)
+    const prompt = trimOptionalString(liveWorldWikiMetadata.worldConceptPrompt)
     if (!prompt && (!title || !logline || !artStyleDescription)) return
     const queueKey = [
       projectDraftId,
@@ -2529,21 +2524,15 @@ export function WorldGraphPage({
   }, [
     activeWorldConceptJobId,
     effectiveProjectDraftMetadata.worldWiki,
+    hasDurableWorldConceptBinding,
     liveWikiGenerationState.active,
     liveWikiGenerationState.overviewLogline,
     liveWikiGenerationState.overviewMetadataBelongsToActiveSeed,
     liveWikiGenerationState.overviewTitle,
-    liveWikiGenerationState.overviewWorldConceptAssetKey,
     liveWikiGenerationState.showOverviewMetadata,
     onGenerateWorldConceptImage,
     projectDraftId,
-    wikiModel.overview.artStyleDescription,
-    wikiModel.overview.logline,
-    wikiModel.overview.worldConceptPrompt,
-    wikiModel.title,
-    wikiWorldConceptImageUrl,
     wikiWorldConceptPending,
-    wikiWorldConceptAsset?.key,
     worldViewMode,
   ])
   const wikiOverviewImageUrl = liveWikiGenerationState.active
@@ -5463,18 +5452,19 @@ export function WorldGraphPage({
 
   function handleScrollToWikiSection(sectionKind: WorldWikiSection['kind']) {
     setActiveWikiSectionKind(sectionKind)
+    const targetId = sectionKind === 'gaps' ? 'world-wiki-section-gaps' : `world-wiki-section-${sectionKind}`
     if (wikiSubView !== 'wiki') {
       setWikiSubView('wiki')
       onWorldWikiSubViewChange('wiki')
       window.requestAnimationFrame(() => {
-        document.getElementById(`world-wiki-section-${sectionKind}`)?.scrollIntoView({
+        document.getElementById(targetId)?.scrollIntoView({
           behavior: 'smooth',
           block: 'start',
         })
       })
       return
     }
-    document.getElementById(`world-wiki-section-${sectionKind}`)?.scrollIntoView({
+    document.getElementById(targetId)?.scrollIntoView({
       behavior: 'smooth',
       block: 'start',
     })
@@ -5482,19 +5472,18 @@ export function WorldGraphPage({
 
   useEffect(() => {
     if (viewMode !== 'wiki' || wikiSubView !== 'wiki') return undefined
-    const sectionKinds = wikiModel.sections.map((section) => section.kind)
     const root = wikiDocumentRef.current
-    if (!root || sectionKinds.length === 0) return undefined
+    if (!root) return undefined
 
     let frameId: number | null = null
     const updateActiveSection = () => {
       frameId = null
       const rootRect = root.getBoundingClientRect()
       const anchorY = rootRect.top + Math.min(180, root.clientHeight * 0.3)
-      const visibleSections = sectionKinds
-        .flatMap((kind) => {
-          const element = document.getElementById(`world-wiki-section-${kind}`)
-          if (!element || element.classList.contains('is-search-hidden') || element.offsetParent === null) return []
+      const visibleSections = Array.from(root.querySelectorAll<HTMLElement>('[data-world-wiki-section-kind]'))
+        .flatMap((element) => {
+          const kind = element.dataset.worldWikiSectionKind?.trim() as WorldWikiSection['kind'] | undefined
+          if (!kind || element.classList.contains('is-search-hidden') || element.closest('.is-search-hidden') || element.offsetParent === null) return []
           return [{ kind, element }]
         })
       if (visibleSections.length === 0) return
@@ -5527,7 +5516,7 @@ export function WorldGraphPage({
       window.removeEventListener('resize', scheduleUpdate)
       if (frameId !== null) window.cancelAnimationFrame(frameId)
     }
-  }, [viewMode, wikiModel.sections, wikiSubView])
+  }, [viewMode, wikiModel.sections, wikiModel.gaps.length, wikiSubView])
 
   function openWikiDetailModal(input: WorldWikiDetailModalInput) {
     setWikiDetailModal({

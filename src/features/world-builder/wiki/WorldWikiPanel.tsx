@@ -437,6 +437,25 @@ export function WorldWikiPanel({
               </button>
             )
           })}
+          {visibleWikiGaps.length > 0 ? (
+            <button
+              key="gaps"
+              className={[
+                'world-wiki-index-row',
+                'is-gap',
+                activeWikiSectionKind === 'gaps' ? 'is-active' : '',
+              ].filter(Boolean).join(' ')}
+              onClick={() => onScrollToWikiSection('gaps')}
+              type="button"
+            >
+              <span className="world-wiki-index-icon"><EntityIcon id={iconForWikiSection('gaps')} /></span>
+              <span className="world-wiki-index-copy">
+                <strong>Suggested actions</strong>
+                <small>{visibleWikiGaps.length} action{visibleWikiGaps.length === 1 ? '' : 's'}</small>
+              </span>
+              <em>{visibleWikiGaps.length}</em>
+            </button>
+          ) : null}
         </div>
           </>
         )}
@@ -493,7 +512,7 @@ export function WorldWikiPanel({
             </span>
           </div>
         ) : null}
-        <section id="world-wiki-section-overview" className="world-wiki-overview" style={wikiOverviewSectionStyle}>
+        <section id="world-wiki-section-overview" data-world-wiki-section-kind="overview" className="world-wiki-overview" style={wikiOverviewSectionStyle}>
           <div className="world-wiki-overview-copy">
             <span className="eyebrow">{wikiOverviewLabel}</span>
             <h2
@@ -602,7 +621,7 @@ export function WorldWikiPanel({
           {populatedWikiSections.map(renderWikiSection)}
         </div>
         {visibleWikiGaps.length > 0 ? (
-          <section className="world-wiki-section world-wiki-suggested-actions" id="world-wiki-section-suggested-actions">
+          <section className="world-wiki-section world-wiki-suggested-actions" id="world-wiki-section-gaps" data-world-wiki-section-kind="gaps">
             <div className="world-wiki-section-title-row">
               <EntityIcon id="activity" />
               <div>

@@ -20,8 +20,18 @@ type ProjectAssetRow = {
   metadata: Record<string, unknown> | null
 }
 
+type VisualGenerationJobRow = {
+  id: string
+  target_keys: Record<string, unknown> | null
+  input: Record<string, unknown> | null
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 async function verifyDraftAccess(client: Awaited<ReturnType<typeof requireUserClient>>['client'], projectId: string, draftId: string) {
@@ -153,6 +163,42 @@ async function clearResetWorldWikiMetadata(
   }
 }
 
+async function cancelActiveWorldConceptVisualJobs(
+  admin: ReturnType<typeof createAdminClient>,
+  projectId: string,
+  draftId: string,
+) {
+  const jobsResponse = await admin
+    .from('visual_generation_jobs')
+    .select('id, target_keys, input')
+    .eq('project_id', projectId)
+    .eq('draft_id', draftId)
+    .eq('kind', 'wiki_visual')
+    .in('status', ['queued', 'running'])
+
+  if (jobsResponse.error) {
+    throw new Error(jobsResponse.error.message)
+  }
+
+  const worldConceptJobs = ((jobsResponse.data ?? []) as VisualGenerationJobRow[]).filter((job) => {
+    const targetKeys = asRecord(job.target_keys)
+    const input = asRecord(job.input)
+    const role = readString(targetKeys.role) || readString(input.role)
+    return role === 'world_concept_image'
+  })
+
+  let cancelled = 0
+  for (const job of worldConceptJobs) {
+    const cancelResponse = await admin.rpc('cancel_visual_generation_job', { job_id: job.id })
+    if (cancelResponse.error) {
+      throw new Error(cancelResponse.error.message)
+    }
+    if (cancelResponse.data) cancelled += 1
+  }
+
+  return { visualGenerationJobs: cancelled }
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -167,6 +213,7 @@ Deno.serve(async (request) => {
     await verifyDraftAccess(client, payload.projectId, payload.draftId)
 
     const admin = createAdminClient('reset-project-world')
+    const cancelledVisualJobs = await cancelActiveWorldConceptVisualJobs(admin, payload.projectId, payload.draftId)
     const deletedOutputs = await cleanupOutputRequests({
       admin,
       projectId: payload.projectId,
@@ -194,6 +241,7 @@ Deno.serve(async (request) => {
       deleted: {
         ...(rpcResponse.data ?? {}),
         ...deletedGeneratedAssets,
+        ...cancelledVisualJobs,
         outputRequests: deletedOutputs.counts.outputRequests,
         outputWorkflows: deletedOutputs.counts.outputWorkflows,
         outputWorkflowRuns: deletedOutputs.counts.outputWorkflowRuns,

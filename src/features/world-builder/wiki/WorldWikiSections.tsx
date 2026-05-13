@@ -384,6 +384,7 @@ export function WorldWikiSectionView({
       <div key={section.kind} className={isStyleHiddenBySearch ? 'world-wiki-search-collapse is-search-hidden' : 'world-wiki-search-collapse'}>
         <section
           id={`world-wiki-section-${section.kind}`}
+          data-world-wiki-section-kind={section.kind}
           className={`world-wiki-section world-wiki-section-${section.kind} ${wikiStyleExpanded ? 'is-expanded' : 'is-collapsed'}`}
         >
           <div className="world-wiki-style-summary-row">
@@ -549,6 +550,7 @@ export function WorldWikiSectionView({
     <section
       id={`world-wiki-section-${section.kind}`}
       key={section.kind}
+      data-world-wiki-section-kind={section.kind}
       className={`world-wiki-section world-wiki-section-${section.kind}${isSearchHidden ? ' is-search-hidden' : ''}`}
     >
       <div className="world-wiki-section-head">

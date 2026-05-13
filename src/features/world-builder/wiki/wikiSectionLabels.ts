@@ -64,6 +64,8 @@ export function iconForWikiSection(kind: WorldWikiSection['kind']): EntityIconId
       return 'item'
     case 'outputs':
       return 'cinematic'
+    case 'gaps':
+      return 'activity'
     default:
       return 'content'
   }
@@ -116,6 +118,8 @@ export function labelForWikiSection(kind: WorldWikiSection['kind']) {
       return 'Progression Tokens & Rules'
     case 'game_rules':
       return 'Rules / Validation'
+    case 'gaps':
+      return 'Suggested Actions'
     default:
       return kind.replace(/_/g, ' ')
   }

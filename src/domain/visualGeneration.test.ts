@@ -292,6 +292,18 @@ test('wiki hero banner only renders world concept image assets, not entity refer
   assert.doesNotMatch(worldGraphSource, /wikiOverviewImageUrl = liveWorldConceptImageUrl \?\? wikiWorldConceptImageUrl \?\? wikiHeroEntityImageUrl/)
 })
 
+test('wiki hero auto generation is first-run only and uses durable concept bindings', () => {
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+
+  assert.match(worldGraphSource, /const hasDurableWorldConceptBinding = Boolean\(/)
+  assert.match(worldGraphSource, /trimOptionalString\(wikiModel\.overview\.worldConceptAssetKey\)/)
+  assert.match(worldGraphSource, /trimOptionalString\(wikiModel\.overview\.worldConceptVisualJobId\)/)
+  assert.match(worldGraphSource, /if \(!liveWikiGenerationState\.active\) return/)
+  assert.match(worldGraphSource, /if \(!liveWikiGenerationState\.overviewMetadataBelongsToActiveSeed\) return/)
+  assert.match(worldGraphSource, /if \(hasDurableWorldConceptBinding \|\| wikiWorldConceptPending \|\| activeWorldConceptJobId\) return/)
+  assert.doesNotMatch(worldGraphSource, /const activeConceptImageReady =/)
+})
+
 test('project world reset clears stale wiki hero metadata and generated world visuals', () => {
   const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
   const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
@@ -302,9 +314,28 @@ test('project world reset clears stale wiki hero metadata and generated world vi
   assert.match(resetFunction, /function clearResetWorldWikiMetadata/)
   assert.match(resetFunction, /const \{ worldWiki: _worldWiki, \.\.\.metadataWithoutWorldWiki \} = currentMetadata/)
   assert.match(resetFunction, /await clearResetWorldWikiMetadata\(admin, payload\.draftId\)/)
+  assert.match(resetFunction, /async function cancelActiveWorldConceptVisualJobs/)
+  assert.match(resetFunction, /\.eq\('kind', 'wiki_visual'\)/)
+  assert.match(resetFunction, /role === 'world_concept_image'/)
+  assert.match(resetFunction, /admin\.rpc\('cancel_visual_generation_job'/)
+  assert.match(resetFunction, /await cancelActiveWorldConceptVisualJobs\(admin, payload\.projectId, payload\.draftId\)/)
   assert.match(appSource, /const \{ worldWiki: _resetWorldWiki, \.\.\.metadataWithoutWorldWiki \} = current\.draft\.metadata \?\? \{\}/)
   assert.match(appSource, /generatedBy !== 'world_concept_image'/)
   assert.match(appSource, /!storagePath\.startsWith\('generated\/wiki-concept-images\/'\)/)
+})
+
+test('visual worker and RPCs skip stale side effects after world concept job cancellation', () => {
+  const visualWorker = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/visual-generation-worker.ts'), 'utf8')
+  const migration = readFileSync(resolve(repoRoot, 'supabase/migrations/20260513120000_harden_visual_job_cancellation.sql'), 'utf8')
+
+  assert.match(visualWorker, /class VisualJobCancelledError extends Error/)
+  assert.match(visualWorker, /async function ensureVisualJobStillRunning/)
+  assert.match(visualWorker, /await ensureVisualJobStillRunning\(client, job\.id, 'wiki_visual_uploading_asset'\)/)
+  assert.match(visualWorker, /error instanceof VisualJobCancelledError/)
+  assert.match(visualWorker, /skipped cancelled job side effects/)
+  assert.match(migration, /create or replace function public\.complete_visual_generation_job/)
+  assert.match(migration, /and job\.status = 'running'/)
+  assert.match(migration, /create or replace function public\.fail_visual_generation_job/)
 })
 
 test('Fly visual worker bounds Fal image downloads so completed jobs cannot hang forever', () => {

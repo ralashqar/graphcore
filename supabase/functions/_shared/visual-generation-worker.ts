@@ -53,6 +53,13 @@ type VisualJob = {
   updatedAt: string
 }
 
+class VisualJobCancelledError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'VisualJobCancelledError'
+  }
+}
+
 type FalImageResult = {
   requestId: string
   statusUrl: string | null
@@ -325,6 +332,22 @@ async function loadVisualJob(client: DatabaseClient, jobId: string) {
   }
 
   return mapVisualJobRow(response.data)
+}
+
+async function ensureVisualJobStillRunning(client: DatabaseClient, jobId: string, phase: string) {
+  const response = await client
+    .from('visual_generation_jobs')
+    .select('status')
+    .eq('id', jobId)
+    .single()
+
+  if (response.error || !response.data) {
+    throw new Error(response.error?.message ?? `Visual generation job ${jobId} was not found.`)
+  }
+
+  const status = readString((response.data as Record<string, unknown>).status)
+  if (status === 'running') return
+  throw new VisualJobCancelledError(`Visual generation job ${jobId} is ${status || 'not running'} before ${phase}; skipping stale side effects.`)
 }
 
 async function heartbeat(client: DatabaseClient, jobId: string, workerId: string, metadataPatch: Record<string, unknown>) {
@@ -1171,6 +1194,7 @@ async function processWikiVisualJob(client: DatabaseClient, job: VisualJob, work
   })
   const model = imageResult.model
 
+  await ensureVisualJobStillRunning(client, job.id, 'wiki_visual_uploading_asset')
   await heartbeat(client, job.id, workerId, { phase: 'wiki_visual_uploading_asset', imageBytes: imageResult.imageBytes.byteLength })
   const imageBytes = imageResult.imageBytes
   await uploadBytes(client, storagePath, imageBytes, mimeType)
@@ -1965,6 +1989,23 @@ export async function processFlyVisualGenerationJobs(input: {
       },
     }
   } catch (error) {
+    if (error instanceof VisualJobCancelledError) {
+      console.info('[visual-generation-job] skipped cancelled job side effects.', {
+        jobId,
+        workerId: input.workerId,
+        kind: job?.kind ?? null,
+        message: error.message,
+      })
+      return {
+        processed: true,
+        job: job
+          ? {
+              ...job,
+              status: 'cancelled' as const,
+            }
+          : null,
+      }
+    }
     const message = error instanceof Error ? error.message : String(error)
     console.error('[visual-generation-job] failed job.', {
       jobId,
