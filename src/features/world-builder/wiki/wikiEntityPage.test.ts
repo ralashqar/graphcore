@@ -49,6 +49,9 @@ test('world graph entity page resolves relationships, output backlinks, and full
   assert.match(worldGraphSource, /onOpenOutputStudio\(row\.id, row\.canOpenTimeline \? 'timeline' : 'details'\)/)
   assert.match(worldGraphSource, /<span>Canon Added<\/span>/)
   assert.match(worldGraphSource, /<EntityIcon id="expand" \/>/)
+  assert.match(worldGraphSource, /type WikiEntityHeroImageOrientation = 'landscape' \| 'portrait' \| 'square'/)
+  assert.match(worldGraphSource, /setWikiEntityHeroImageOrientationByUrl/)
+  assert.match(worldGraphSource, /`is-\$\{largeImageOrientation\}`/)
   assert.doesNotMatch(
     worldGraphSource.slice(worldGraphSource.indexOf('const fieldCards = ['), worldGraphSource.indexOf('].filter((entry): entry is { label: string; value: string }')),
     /label: 'Summary'/,
@@ -80,10 +83,11 @@ test('wiki entity page styles include page, relationship, and backlink surfaces'
   assert.match(shellCss, /\.world-wiki-entity-page-body\s*\{/)
   assert.match(shellCss, /grid-template-columns: minmax\(0, 1fr\) minmax\(420px, 48%\)/)
   assert.match(shellCss, /\.world-wiki-entity-main-column,\s*\n\.world-wiki-entity-side-column/)
+  assert.match(shellCss, /\.world-wiki-entity-page-copy h2\s*\{[\s\S]*font-size: clamp\(1\.7rem, 2\.4vw, 2\.6rem\)/)
   assert.match(shellCss, /\.world-wiki-entity-hero-art\s*\{/)
-  assert.match(shellCss, /object-fit: cover/)
-  assert.match(shellCss, /min-width: 100%/)
-  assert.match(shellCss, /min-height: 100%/)
+  assert.match(shellCss, /\.world-wiki-entity-hero-image\.is-landscape\s*\{[\s\S]*width: 100%[\s\S]*height: auto/)
+  assert.match(shellCss, /\.world-wiki-entity-hero-image\.is-portrait\s*\{[\s\S]*width: auto[\s\S]*height: 100%/)
+  assert.match(shellCss, /\.world-wiki-entity-hero-image\.is-square\s*\{[\s\S]*width: 100%[\s\S]*height: 100%/)
   assert.match(shellCss, /\.world-wiki-entity-art-expand\s*\{[\s\S]*width: 38px/)
   assert.match(shellCss, /\.world-wiki-entity-relationship-row/)
   assert.match(shellCss, /\.world-wiki-entity-backlink/)

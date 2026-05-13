@@ -636,6 +636,7 @@ type ActiveWikiEntityPageState = {
   sectionKind: WorldWikiSection['kind']
   entityKey: string
 } | null
+type WikiEntityHeroImageOrientation = 'landscape' | 'portrait' | 'square'
 
 type EntityComposerState = {
   mode: 'global' | 'related'
@@ -1371,6 +1372,7 @@ export function WorldGraphPage({
   const [newWorldFeedEntryIds, setNewWorldFeedEntryIds] = useState<Set<string>>(() => new Set())
   const [worldFeedVisibleEntryLimit, setWorldFeedVisibleEntryLimit] = useState(WORLD_FEED_INITIAL_RENDER_LIMIT)
   const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
+  const [wikiEntityHeroImageOrientationByUrl, setWikiEntityHeroImageOrientationByUrl] = useState<Record<string, WikiEntityHeroImageOrientation>>({})
   const {
     selectedPromptSessionKey,
     setSelectedPromptSessionKey,
@@ -6545,6 +6547,7 @@ export function WorldGraphPage({
       .filter(([, value]) => value)
       .slice(0, 6)
     const largeImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? wikiImageUrlByEntityKey.get(entity.key) ?? null
+    const largeImageOrientation = largeImageUrl ? wikiEntityHeroImageOrientationByUrl[largeImageUrl] ?? null : null
     const relationshipRows = worldRelationships
       .filter((relationship) => relationship.sourceEntityKey === entity.key || relationship.targetEntityKey === entity.key)
       .map((relationship) => {
@@ -6634,7 +6637,28 @@ export function WorldGraphPage({
             <div className={largeImageUrl ? 'world-wiki-entity-hero-art has-image' : 'world-wiki-entity-hero-art'}>
               {largeImageUrl ? (
                 <>
-                  <img src={largeImageUrl} alt="" />
+                  <img
+                    className={[
+                      'world-wiki-entity-hero-image',
+                      largeImageOrientation ? `is-${largeImageOrientation}` : 'is-measuring',
+                    ].join(' ')}
+                    src={largeImageUrl}
+                    alt=""
+                    onLoad={(event) => {
+                      const image = event.currentTarget
+                      const nextOrientation: WikiEntityHeroImageOrientation =
+                        image.naturalWidth > image.naturalHeight
+                          ? 'landscape'
+                          : image.naturalHeight > image.naturalWidth
+                            ? 'portrait'
+                            : 'square'
+                      setWikiEntityHeroImageOrientationByUrl((current) => (
+                        current[largeImageUrl] === nextOrientation
+                          ? current
+                          : { ...current, [largeImageUrl]: nextOrientation }
+                      ))
+                    }}
+                  />
                   <button
                     className="world-wiki-entity-art-expand"
                     onClick={() => openWikiDetailModal({
