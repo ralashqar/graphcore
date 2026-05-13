@@ -280,7 +280,6 @@ export function WorldWikiSectionView({
         ) : referenceArtState ? (
           <span className={`world-wiki-reference-art-state is-${referenceArtState}`}>
             <span aria-hidden="true" />
-            <em>{referenceArtState === 'generating' ? 'Making sheet' : 'Sheet queued'}</em>
           </span>
         ) : (
           <span className="world-wiki-entity-icon"><EntityIcon id={iconForWorldEntity(entity.nodeType)} /></span>
@@ -342,7 +341,6 @@ export function WorldWikiSectionView({
           {imageUrl ? <img className="world-wiki-timeline-image" src={imageUrl} alt="" /> : referenceArtState ? (
             <span className={`world-wiki-timeline-image world-wiki-reference-art-state is-${referenceArtState}`}>
               <span aria-hidden="true" />
-              <em>{referenceArtState === 'generating' ? 'Making sheet' : 'Sheet queued'}</em>
             </span>
           ) : null}
           <span className="world-wiki-timeline-copy world-wiki-entry-text">

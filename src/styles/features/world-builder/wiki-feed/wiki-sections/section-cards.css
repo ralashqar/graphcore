@@ -224,8 +224,7 @@ button.world-wiki-style-card:hover {
 .world-wiki-reference-art-state {
   position: relative;
   overflow: hidden;
-  gap: 6px;
-  padding: 8px;
+  padding: 0;
   text-align: center;
   color: rgba(186, 230, 253, 0.9);
 }
@@ -252,15 +251,6 @@ button.world-wiki-style-card:hover {
   animation: worldWikiReferenceSheetSpin 860ms linear infinite;
   border-color: rgba(148, 163, 184, 0.24);
   border-top-color: rgba(125, 211, 252, 0.95);
-}
-
-.world-wiki-reference-art-state em {
-  color: rgba(186, 230, 253, 0.86);
-  font-size: 0.62rem;
-  font-style: normal;
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .world-wiki-entity-icon svg {
