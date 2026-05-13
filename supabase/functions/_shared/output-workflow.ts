@@ -62,6 +62,8 @@ import {
   readWorldEntityVisualDescription,
   readWorldEntityVisualTraitMap,
   readWorldEntityVisualTraits,
+  readWorldEntityVoiceDescription,
+  readWorldEntityVoiceIdentity,
 } from '../../../src/domain/worldEntityVisuals.ts'
 import { recordAiUsageEvent } from './ai-provider-gateway.ts'
 import {
@@ -1178,6 +1180,14 @@ function readOutputEntityVisualTraitMap(entity: Record<string, unknown>) {
   return readWorldEntityVisualTraitMap(worldEntityVisualSource(entity))
 }
 
+function readOutputEntityVoiceIdentity(entity: Record<string, unknown>) {
+  return readWorldEntityVoiceIdentity(worldEntityVisualSource(entity))
+}
+
+function readOutputEntityVoiceDescription(entity: Record<string, unknown>) {
+  return readWorldEntityVoiceDescription(worldEntityVisualSource(entity))
+}
+
 function readEntitySequence(entity: Record<string, unknown>) {
   const customProperties = asRecord(entity.customProperties ?? entity.custom_properties)
   return asRecord(customProperties.sequence)
@@ -2287,6 +2297,8 @@ function buildEbookCoverPromptInstruction(input: {
     visualDescription: readOutputEntityVisualDescription(entity),
     visualTraits: readOutputEntityVisualTraits(entity),
     visualTraitMap: readOutputEntityVisualTraitMap(entity),
+    voice: readOutputEntityVoiceIdentity(entity),
+    voiceDescription: readOutputEntityVoiceDescription(entity),
   })).filter((entry) => entry.name || entry.summary || entry.visualDescription)
 
   return [
@@ -2447,6 +2459,8 @@ function buildBibleSectionInstruction(input: {
         visualDescription: readOutputEntityVisualDescription(entity),
         visualTraits: readOutputEntityVisualTraits(entity),
         visualTraitMap: readOutputEntityVisualTraitMap(entity),
+        voice: readOutputEntityVoiceIdentity(entity),
+        voiceDescription: readOutputEntityVoiceDescription(entity),
         imageAssetKeys: entityAssetKeys(entity, assets),
         customProperties: entity.customProperties,
       })),
@@ -2719,6 +2733,8 @@ function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
     visualDescription: readOutputEntityVisualDescription(entity),
     visualTraits: readOutputEntityVisualTraits(entity),
     visualTraitMap: readOutputEntityVisualTraitMap(entity),
+    voice: readOutputEntityVoiceIdentity(entity),
+    voiceDescription: readOutputEntityVoiceDescription(entity),
     assetKeys: entityAssetKeys(entity, assets),
   })).filter((entity) => entity.key || entity.name)
   return {
@@ -3058,6 +3074,8 @@ function cinematicContextBrief(context: Record<string, unknown>) {
       visualDescription: readOutputEntityVisualDescription(entity),
       visualTraits: readOutputEntityVisualTraits(entity),
       visualTraitMap: readOutputEntityVisualTraitMap(entity),
+      voice: readOutputEntityVoiceIdentity(entity),
+      voiceDescription: readOutputEntityVoiceDescription(entity),
     })),
     relationships: relationships.slice(0, 32),
   }

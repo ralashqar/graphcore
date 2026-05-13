@@ -217,7 +217,9 @@ button.world-wiki-style-card:hover {
 .world-wiki-entity-icon,
 .world-wiki-reference-art-state {
   display: grid;
+  place-content: center;
   place-items: center;
+  align-self: stretch;
   color: rgba(153, 246, 228, 0.86);
 }
 
@@ -282,7 +284,7 @@ button.world-wiki-style-card:hover {
   }
 }
 
-.world-wiki-entity-card > span {
+.world-wiki-entity-card > .world-wiki-entry-text {
   min-width: 0;
   display: grid;
   align-content: start;

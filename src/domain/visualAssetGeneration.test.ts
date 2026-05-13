@@ -35,7 +35,11 @@ test('character reference sheet prompt uses simplified stable turnaround section
   assert.match(prompt, /front, 3\/4 front, side profile, and back/i)
   assert.match(prompt, /HEAD AND IDENTITY DETAILS/i)
   assert.match(prompt, /FEATURE CALLOUTS/i)
-  assert.match(prompt, /cinematic chest-up or shoulder-up profile close-up/i)
+  assert.match(prompt, /top-right (?:512x512 pixel square|512x512 cell)/i)
+  assert.match(prompt, /x=1536\.\.2048 and y=0\.\.512 is a locked wiki-icon export cell/i)
+  assert.match(prompt, /Do not place any title, label, border, swatch, callout, arrow, gutter, white margin/i)
+  assert.match(prompt, /no text, labels, borders, callout arrows/i)
+  assert.match(prompt, /cinematic chest-up or shoulder-up profile close-up panel in the reserved top-right 512x512 square/i)
   assert.match(prompt, /Do not include expression grids/i)
   assert.match(prompt, /hand gesture sheets/i)
   assert.match(prompt, /Project art style:/i)
@@ -55,10 +59,11 @@ test('location reference sheet prompt requests square multi-view sheet with map 
 
   assert.match(prompt, /2048x2048 square/i)
   assert.match(prompt, /cinematic establishing view/i)
+  assert.match(prompt, /x=1536\.\.2048 and y=0\.\.512 is a locked wiki-icon export cell/i)
   assert.match(prompt, /entrance\/threshold view/i)
   assert.match(prompt, /top-down or isometric map view/i)
   assert.match(prompt, /key feature highlights/i)
-  assert.match(prompt, /cinematic profile-like hero panel/i)
+  assert.match(prompt, /cinematic profile-like hero panel in the reserved top-right 512x512 square/i)
 })
 
 test('group reference sheet prompt focuses on faction visual identity system', () => {
@@ -71,7 +76,7 @@ test('group reference sheet prompt focuses on faction visual identity system', (
   assert.match(prompt, /emblem or sigil/i)
   assert.match(prompt, /uniform or dress-code/i)
   assert.match(prompt, /representative member silhouettes/i)
-  assert.match(prompt, /cinematic close-up\/profile panel/i)
+  assert.match(prompt, /cinematic close-up\/profile panel in the reserved top-right 512x512 square/i)
   assert.match(prompt, /not every individual member/i)
 })
 
@@ -86,7 +91,7 @@ test('item reference sheet prompt includes rotation, material, in-use, and close
   assert.match(prompt, /scale reference/i)
   assert.match(prompt, /material callouts/i)
   assert.match(prompt, /in-hand or in-use view/i)
-  assert.match(prompt, /cinematic close-up\/profile panel/i)
+  assert.match(prompt, /cinematic close-up\/profile panel in the reserved top-right 512x512 square/i)
 })
 
 test('character design-sheet prompts replace showcase t-pose sheets', () => {

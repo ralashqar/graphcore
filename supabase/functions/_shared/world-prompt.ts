@@ -161,6 +161,7 @@ import {
 } from '../../../src/domain/worldSequence.ts'
 import {
   mergeWorldEntityVisualDescriptionMetadata as mergeSharedWorldEntityVisualDescriptionMetadata,
+  mergeWorldEntityVoiceMetadata as mergeSharedWorldEntityVoiceMetadata,
   normalizeWorldEntityVisualDescription as normalizeSharedWorldEntityVisualDescription,
   readWorldEntityVisualDescription,
   readWorldEntityVisualIdentity,
@@ -7882,6 +7883,7 @@ function buildInitialSeedWorldConceptPrompt(wiki: Record<string, unknown>, proje
 
 async function resolveVisualGenerationImageProvider(client: SupabaseClient, projectId: string, draftId: string) {
   const provider = asCompactString(Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER')).toLowerCase()
+  if (provider === 'openai' || provider === 'openai_direct' || provider === 'direct_openai') return 'openai'
   if (provider === 'fal') return 'fal'
   if (provider === 'both' || provider === 'balanced' || provider === 'load_balance' || provider === 'load-balanced' || provider === 'hybrid') {
     const response = await client
@@ -7894,12 +7896,12 @@ async function resolveVisualGenerationImageProvider(client: SupabaseClient, proj
       .order('updated_at', { ascending: false })
       .limit(80)
     if (response.error) {
-      console.warn('[GraphCore] mixed visual provider selector fell back to OpenAI.', {
+      console.warn('[GraphCore] mixed visual provider selector fell back to Fal.', {
         projectId,
         draftId,
         message: response.error.message,
       })
-      return 'openai'
+      return 'fal'
     }
     const scores = { openai: 0, fal: 0 }
     const recentFailureCutoff = Date.now() - 10 * 60_000
@@ -7909,10 +7911,10 @@ async function resolveVisualGenerationImageProvider(client: SupabaseClient, proj
       if (row.status === 'queued' || row.status === 'running') scores[selectedProvider] += 1
       if (row.status === 'failed' && Date.parse(String(row.updated_at ?? '')) > recentFailureCutoff) scores[selectedProvider] += 3
     }
-    if (scores.openai === scores.fal) return 'openai'
+    if (scores.openai === scores.fal) return 'fal'
     return scores.openai < scores.fal ? 'openai' : 'fal'
   }
-  return 'openai'
+  return 'fal'
 }
 
 function resolveVisualGenerationImageModel(provider: string, model = 'openai/gpt-image-2') {
@@ -8776,6 +8778,7 @@ function plannerModeInstructions(input: {
         'This is a direct build turn. Prioritize the smallest complete first wave that makes the prompt land cleanly in the graph.',
         'For new entities, default to concise summaries and only include long-form context when the prompt explicitly asks for backstory, motives, secrets, or nuanced social/political pressure.',
         'For every new or substantially updated entity, include entity.metadata.visual.description, entity.metadata.visual.traits, and entity.metadata.visualDescription. Visual description must be a neutral default identity, not a dynamic scene state.',
+        'For every new or substantially updated actor/persona, include entity.metadata.voice with description, accent, qualities, register, pace, pitch, and consistencyNotes for dialogue and cinematic consistency.',
         'Neutral visual identity should describe stable silhouette, face/hair/clothing/materials/palette/recognizable marks. Traits should be compact labels such as age, height, build, gender presentation, hair, eyes, complexion, outfit silhouette, palette, species/type, and permanent distinguishing marks.',
         'Do not put temporary states in entity visual identity: fighting pose, bloodied, injured, crying, screaming, mid-action, scene lighting, camera angle, current weather, or event-specific damage. Permanent scars, prosthetics, ritual tattoos, habitual uniform, signature items, and species features are allowed.',
         'Keep assistantSummary to 1 short sentence.',
@@ -8910,6 +8913,7 @@ async function generatePromptPlan(input: {
     'Favor additive graph growth.',
     ...promptStrategy.plannerGuidance,
     'Every upsert_entity must include entity.metadata.visual.description, entity.metadata.visual.traits, and legacy entity.metadata.visualDescription composed as "<neutral description> Traits: X, Y, Z".',
+    'Every actor/persona upsert_entity must include entity.metadata.voice with description, accent, qualities, register, pace, pitch, and consistencyNotes. This is stable spoken identity for dialogue and cinematics; avoid celebrity names or real actor impersonation.',
     'For actors/personas, visual traits should cover age, height, build, gender presentation, hair, eyes, complexion, clothing silhouette, palette, species/type, and permanent distinguishing marks when known. For places/objects/screens/concepts, use relevant traits such as scale, materials, palette, interface style, silhouette, landmark features, or product visual language.',
     'Use neutral default visual identity for actor/place/object/persona/app/product entities. Do not put temporary states such as bloodied, fighting, injured, crying, screaming, mid-action, scene lighting, camera angle, weather, or event-specific damage into identity descriptions. Use event or sequence_unit visuals for dynamic scene imagery instead.',
     'Do not include lore exposition, product/project names, schema labels, node-type labels, IDs, or GraphCore wording in visualDescription.',
@@ -10320,23 +10324,17 @@ async function applyPromptOp(input: {
         ...(target.metadata ?? {}),
         ...(changes.metadata ?? {}),
       }
-      const incomingVisualDescription = readVisualDescriptionCandidate({
-        metadata: changes.metadata ?? {},
-        customProperties: changes.customProperties ?? {},
-      })
-      const incomingVisualTraits = readVisualTraitsCandidate({
-        metadata: changes.metadata ?? {},
-        customProperties: changes.customProperties ?? {},
-      })
-      const incomingVisualTraitMap = readVisualTraitMapCandidate({
-        metadata: changes.metadata ?? {},
-        customProperties: changes.customProperties ?? {},
-      })
+      const changesRecord = changes as unknown as Record<string, unknown>
+      const incomingVisualDescription = readVisualDescriptionCandidate(changesRecord)
+      const incomingVisualTraits = readVisualTraitsCandidate(changesRecord)
+      const incomingVisualTraitMap = readVisualTraitMapCandidate(changesRecord)
+      const incomingVoice = readVoiceCandidate(changesRecord)
       nextMetadata = mergeVisualDescriptionMetadata(nextMetadata, incomingVisualDescription || nextMetadata.visualDescription, {
         traits: [...readWorldEntityVisualTraits(target), ...incomingVisualTraits],
         traitMap: incomingVisualTraitMap,
         source: incomingVisualDescription ? 'planner' : undefined,
       })
+      nextMetadata = mergeVoiceMetadata(nextMetadata, incomingVoice)
     nextMetadata = appendRefinementHistory({
       metadata: nextMetadata,
       field: 'summary',
@@ -12102,21 +12100,22 @@ function buildStreamedInitialSeedInstructions() {
   return [
     'You generate initial world graph records from the user prompt.',
     'Generate a complete initial world skeleton as streamed JSON records. Do not wrap in Markdown. Do not return one giant JSON object.',
-    'Every entity must include visualDescription plus visualTraits or visual.traits. For non-event identity entities, visualDescription must be neutral default identity: silhouette, face/hair/clothing/materials/palette/recognizable marks, not a temporary scene state.',
+    'Every entity must include visualDescription plus visualTraits or visual.traits. For actor/character entities, visualTraits must contain 6-10 concrete stable identity traits and must never be empty. For non-event identity entities, visualDescription must be neutral default identity: silhouette, face/hair/clothing/materials/palette/recognizable marks, not a temporary scene state.',
     'Use the compatibility format for entity visualDescription when possible: "<neutral visual description> Traits: X, Y, Z". Also include visualTraits as an array. The backend stores this as metadata.visual.description and metadata.visual.traits.',
+    'Every actor/character entity must include voice as an object with description, accent, qualities, register, pace, pitch, and consistencyNotes. The voice field is a stable spoken-performance identity for dialogue and cinematics; describe accent/dialect clearly but respectfully and avoid celebrity names or real actor impersonation.',
     'Do not put temporary states in actor/place/object/persona/app identity visuals: fighting pose, bloodied, injured, crying, screaming, mid-action, scene lighting, camera angle, current weather, or event-specific damage. Permanent scars, prosthetics, ritual tattoos, habitual uniform, signature items, and species features are allowed.',
     'For sequence_unit and event records, visualDescription may describe the visible scene or moment for that beat, but it must not rewrite stable actor/object/place appearance.',
     'Each record must be one complete JSON object matching one of:',
     '{"kind":"note","message":"short operational note"}',
     '{"kind":"wiki","id":"wiki_foundation","title":"generated content title","logline":"one sentence","synopsis":"compact paragraph","genre":"genre label","narrationPov":"third person limited, rotating by chapter","themes":["theme"],"toneTags":["tone"],"coreConflict":"central conflict","visualMotifs":["motif"],"artStyleDescription":"specific visual direction beyond the broad preset","brandAtlasPrompt":"visual-only prompt for one cohesive brand/world atlas image","colorScheme":{"primary":"#hex role","secondary":"#hex role","tertiary":"#hex role"}}',
-    '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","visualDescription":"silver-haired archivist in an ash-black coat with a violet lantern. Traits: late 20s, average height, lean build, silver bob, grey eyes, ash-black archivist coat, violet lantern","visualTraits":["late 20s","average height","lean build","silver bob","grey eyes","ash-black archivist coat","violet lantern"],"tags":["main cast"]}',
+    '{"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"one sentence","context":"short canon use","visualDescription":"silver-haired archivist in an ash-black coat with a violet lantern. Traits: late 20s, average height, lean build, silver bob, grey eyes, ash-black archivist coat, violet lantern","visualTraits":["late 20s","average height","lean build","silver bob","grey eyes","ash-black archivist coat","violet lantern"],"voice":{"description":"warm low alto with careful diction and a dry edge when cornered","accent":"soft northern city accent","qualities":["controlled","wry","protective"],"register":"intimate but firm","pace":"measured, quickens under pressure","pitch":"low alto","consistencyNotes":"Keep the same dry restraint even in fear."},"tags":["main cast"]}',
     '{"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"one sentence","context":"short canon use","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","povCharacterKey":"mara_veyr","povCharacterName":"Mara Veyr","povNotes":"Close limited to Mara in this beat.","synopsis":"one compact paragraph","dramaticQuestion":"question","storyFunction":"setup","outcome":"one sentence","consequences":[{"cause":"cause","effect":"effect","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"before","pressure":"pressure","choice":"choice","after":"after"}],"openLoops":["loop"],"resolvedLoops":[]}',
     '{"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"short relationship note"}',
     '{"kind":"summary","assistantSummary":"concise summary of what was created"}',
     '{"kind":"skip","reason":"only if a requested record cannot be represented safely"}',
     '{"kind":"op","op":{PromptToWorldOp}} is supported for compatibility, but prefer compact wiki, entity, sequence_unit, and relationship records; the system will convert them to graph ops.',
     'Emit minified one-line JSON records. Never put literal line breaks inside JSON string values; escape them as \\n or keep text as one compact paragraph.',
-    'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","visualDescription":"silver-haired memory mage in an ash-black archivist coat with a violet lantern. Traits: late 20s, average height, lean build, silver bob, grey eyes, ash-black coat, violet lantern","visualTraits":["late 20s","average height","lean build","silver bob","grey eyes","ash-black coat","violet lantern"],"tags":["main cast"]}',
+    'Example entity line: {"kind":"entity","id":"mara_veyr","nodeType":"actor","name":"Mara Veyr","summary":"A memory mage pulled into the empire conflict.","context":"Main cast protagonist with a clear want, flaw, and pressure.","visualDescription":"silver-haired memory mage in an ash-black archivist coat with a violet lantern. Traits: late 20s, average height, lean build, silver bob, grey eyes, ash-black coat, violet lantern","visualTraits":["late 20s","average height","lean build","silver bob","grey eyes","ash-black coat","violet lantern"],"voice":{"description":"warm low alto with precise diction and a guarded wryness","accent":"soft northern city accent","qualities":["controlled","observant","protective"],"register":"quietly authoritative","pace":"measured until threatened","pitch":"low alto","consistencyNotes":"Cinematic dialogue should keep her restraint and dry humor consistent."},"tags":["main cast"]}',
     'Example Story sequence_unit line: {"kind":"sequence_unit","id":"episode_01","name":"Episode 1: The Memory Tax","summary":"Mara discovers the empire is harvesting memories to keep its shadow throne alive.","context":"Opening episode that establishes the premise, pressure, and first irreversible choice.","visualDescription":"public memory tithe in a rain-slick plaza, shadow guards, glowing ledger pages, frightened crowd","unitKind":"episode","sequenceKey":"main","ordinal":1,"actLabel":"Act I","povCharacterKey":"mara_veyr","povCharacterName":"Mara Veyr","povNotes":"Close limited to Mara; use her fear for her brother and tactical distrust of officials.","synopsis":"Mara witnesses a public memory tithe and realizes her brother is next.","dramaticQuestion":"Will Mara expose the tithe before her family is erased?","storyFunction":"setup","outcome":"Mara steals a forbidden ledger and becomes hunted by the throne.","consequences":[{"cause":"Mara steals the tithe ledger.","effect":"The shadow guard marks her family as traitors.","affectedEntityKeys":["mara_veyr"],"threadKeys":[],"consequenceType":"plot"}],"characterArcDeltas":[{"actorKey":"mara_veyr","before":"Mara survives by staying invisible.","pressure":"Her brother is selected for the tithe.","choice":"She steals the ledger in public.","after":"She accepts becoming visible is the price of resistance."}],"openLoops":["Who built the tithe ledger?"],"resolvedLoops":[]}',
     'Example relationship line: {"kind":"relationship","id":"link_mara_seeks_artifact","source":"mara_veyr","target":"memory_artifact","verb":"seeks","notes":"The artifact is tied to Mara central objective."}',
     'Use only these operation types: upsert_entity, upsert_relationship, update_world_wiki_metadata, assistant_note.',
@@ -12278,6 +12277,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {}
+}
+
 function asStringArray(value: unknown) {
   if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean)
   if (typeof value === 'string') return value.split(',').map((entry) => entry.trim()).filter(Boolean)
@@ -12354,6 +12357,83 @@ function readVisualTraitMapCandidate(value: Record<string, unknown>) {
   }
 }
 
+function readVoiceCandidate(value: Record<string, unknown>) {
+  const metadata = isRecord(value.metadata) ? value.metadata : {}
+  const customProperties = isRecord(value.customProperties) ? value.customProperties : {}
+  const directVoice = isRecord(value.voice) ? value.voice : {}
+  const metadataVoice = isRecord(metadata.voice) ? metadata.voice : {}
+  const customVoice = isRecord(customProperties.voice) ? customProperties.voice : {}
+  const directVoiceDescription = asCompactString(
+    value.voiceDescription
+    ?? value.voice_description
+    ?? (typeof value.voice === 'string' ? value.voice : ''),
+  )
+  const metadataVoiceDescription = asCompactString(
+    metadata.voiceDescription
+    ?? (typeof metadata.voice === 'string' ? metadata.voice : ''),
+  )
+  const customVoiceDescription = asCompactString(
+    customProperties.voiceDescription
+    ?? (typeof customProperties.voice === 'string' ? customProperties.voice : ''),
+  )
+  const voice = {
+    ...customVoice,
+    ...metadataVoice,
+    ...directVoice,
+    description: directVoice.description
+      ?? directVoice.voiceDescription
+      ?? directVoiceDescription
+      ?? metadataVoice.description
+      ?? metadataVoice.voiceDescription
+      ?? metadataVoiceDescription
+      ?? customVoice.description
+      ?? customVoice.voiceDescription
+      ?? customVoiceDescription,
+    accent: directVoice.accent
+      ?? directVoice.dialect
+      ?? metadataVoice.accent
+      ?? metadataVoice.dialect
+      ?? customVoice.accent
+      ?? customVoice.dialect,
+    qualities: [
+      ...asStringArray(customVoice.qualities),
+      ...asStringArray(customVoice.traits),
+      ...asStringArray(customVoice.voiceTraits),
+      ...asStringArray(customProperties.voiceTraits),
+      ...asStringArray(metadataVoice.qualities),
+      ...asStringArray(metadataVoice.traits),
+      ...asStringArray(metadataVoice.voiceTraits),
+      ...asStringArray(metadata.voiceTraits),
+      ...asStringArray(directVoice.qualities),
+      ...asStringArray(directVoice.traits),
+      ...asStringArray(directVoice.voiceTraits),
+      ...asStringArray(value.voiceTraits),
+    ],
+    register: directVoice.register
+      ?? directVoice.delivery
+      ?? metadataVoice.register
+      ?? metadataVoice.delivery
+      ?? customVoice.register
+      ?? customVoice.delivery,
+    pace: directVoice.pace
+      ?? directVoice.rhythm
+      ?? metadataVoice.pace
+      ?? metadataVoice.rhythm
+      ?? customVoice.pace
+      ?? customVoice.rhythm,
+    pitch: directVoice.pitch ?? metadataVoice.pitch ?? customVoice.pitch,
+    consistencyNotes: directVoice.consistencyNotes
+      ?? directVoice.notes
+      ?? metadataVoice.consistencyNotes
+      ?? metadataVoice.notes
+      ?? customVoice.consistencyNotes
+      ?? customVoice.notes,
+  }
+  return Object.values(voice).some((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(asCompactString(entry)))
+    ? voice
+    : null
+}
+
 function mergeVisualDescriptionMetadata(
   metadata: Record<string, unknown>,
   visualDescription: unknown,
@@ -12365,6 +12445,11 @@ function mergeVisualDescriptionMetadata(
   } = {},
 ) {
   return mergeSharedWorldEntityVisualDescriptionMetadata(metadata, visualDescription, options)
+}
+
+function mergeVoiceMetadata(metadata: Record<string, unknown>, voice: unknown, source = 'planner') {
+  if (!voice) return metadata
+  return mergeSharedWorldEntityVoiceMetadata(metadata, voice, { source })
 }
 
 function markFallbackVisualDescription(metadata: Record<string, unknown>, visualDescription: string, explicitVisualDescription: string) {
@@ -12385,20 +12470,13 @@ function fallbackVisualDescriptionFromEntity(entity: Record<string, unknown>) {
 }
 
 function normalizeWorldEntityCreateInputVisual<T extends WorldEntityCreateInput>(entity: T): T {
-  const explicitVisualDescription = readVisualDescriptionCandidate({
-    metadata: entity.metadata ?? {},
-    customProperties: entity.customProperties ?? {},
-  })
+  const entityRecord = entity as unknown as Record<string, unknown>
+  const explicitVisualDescription = readVisualDescriptionCandidate(entityRecord)
   const visualDescription = explicitVisualDescription || fallbackVisualDescriptionFromEntity(entity as Record<string, unknown>)
-  const traits = readVisualTraitsCandidate({
-    metadata: entity.metadata ?? {},
-    customProperties: entity.customProperties ?? {},
-  })
-  const traitMap = readVisualTraitMapCandidate({
-    metadata: entity.metadata ?? {},
-    customProperties: entity.customProperties ?? {},
-  })
-  const metadata = markFallbackVisualDescription(
+  const traits = readVisualTraitsCandidate(entityRecord)
+  const traitMap = readVisualTraitMapCandidate(entityRecord)
+  const voice = readVoiceCandidate(entityRecord)
+  let metadata = markFallbackVisualDescription(
     mergeVisualDescriptionMetadata(entity.metadata ?? {}, visualDescription, {
       traits,
       traitMap,
@@ -12407,6 +12485,7 @@ function normalizeWorldEntityCreateInputVisual<T extends WorldEntityCreateInput>
     visualDescription,
     explicitVisualDescription,
   )
+  metadata = mergeVoiceMetadata(metadata, voice)
   return {
     ...entity,
     metadata,
@@ -12537,7 +12616,8 @@ function normalizeCompactStreamedEntityEnvelope(value: Record<string, unknown>) 
   )
   const visualTraits = readVisualTraitsCandidate(value)
   const visualTraitMap = readVisualTraitMapCandidate(value)
-  const metadata = markFallbackVisualDescription(
+  const voice = readVoiceCandidate(value)
+  let metadata = markFallbackVisualDescription(
     mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription, {
       traits: visualTraits,
       traitMap: visualTraitMap,
@@ -12546,6 +12626,7 @@ function normalizeCompactStreamedEntityEnvelope(value: Record<string, unknown>) 
     visualDescription,
     explicitVisualDescription,
   )
+  metadata = mergeVoiceMetadata(metadata, voice)
   return {
     kind: 'op',
     op: {
@@ -12593,7 +12674,8 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
   )
   const visualTraits = readVisualTraitsCandidate(value)
   const visualTraitMap = readVisualTraitMapCandidate(value)
-  const metadata = markFallbackVisualDescription(
+  const voice = readVoiceCandidate(value)
+  let metadata = markFallbackVisualDescription(
     mergeVisualDescriptionMetadata(isRecord(value.metadata) ? value.metadata : {}, visualDescription, {
       traits: visualTraits,
       traitMap: visualTraitMap,
@@ -12602,6 +12684,7 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
     visualDescription,
     explicitVisualDescription,
   )
+  metadata = mergeVoiceMetadata(metadata, voice)
   const sequence = {
     unitKind,
     sequenceKey: asCompactString(value.sequenceKey ?? value.sequence_key) || 'main',
@@ -12703,6 +12786,7 @@ function normalizeStreamedEnvelope(value: unknown) {
     const explicitVisualDescription = readVisualDescriptionCandidate(entity)
     const visualTraits = readVisualTraitsCandidate(entity)
     const visualTraitMap = readVisualTraitMapCandidate(entity)
+    const voice = readVoiceCandidate(entity)
     const sequence = isRecord(entity.customProperties) && isRecord(entity.customProperties.sequence)
       ? entity.customProperties.sequence
       : {}
@@ -12712,7 +12796,7 @@ function normalizeStreamedEnvelope(value: unknown) {
       || entity.context
       || entity.name,
     )
-    const metadata = markFallbackVisualDescription(
+    let metadata = markFallbackVisualDescription(
       mergeVisualDescriptionMetadata(
         isRecord(entity.metadata) ? entity.metadata : {},
         visualDescription,
@@ -12725,6 +12809,7 @@ function normalizeStreamedEnvelope(value: unknown) {
       visualDescription,
       explicitVisualDescription,
     )
+    metadata = mergeVoiceMetadata(metadata, voice)
     return {
       ...value,
       op: {
@@ -14143,9 +14228,15 @@ async function runWorldPromptGenerationJob(input: {
         }
       }
     }
+    const appliedEntityTargetKey = op.op === 'upsert_entity'
+      ? op.payload.targetEntityKey
+        || (typeof (op.payload.entity as { key?: unknown }).key === 'string'
+          ? (op.payload.entity as { key: string }).key
+          : '')
+      : ''
     for (const entity of result.applied.worldEntities ?? []) {
       touchedEntityKeys.add(entity.key)
-      if (op.op === 'upsert_entity' && entity.key === op.payload.entity.key) {
+      if (op.op === 'upsert_entity' && (!appliedEntityTargetKey || entity.key === appliedEntityTargetKey)) {
         await maybeQueueInitialSeedEntityReferenceSheet(entity, 'streamed_upsert_entity')
       }
     }
@@ -16062,6 +16153,7 @@ async function generateIncrementalWorkItemPlan(input: {
     'For update_entity_canon summaryPatch, provide a complete clean replacement display summary in one or two sentences. Never concatenate prior summaries, never include ellipses, and never output truncated text.',
     'For entity_batch items, create only the requested small set of concrete canon-ready entities.',
     'For every new or substantially updated entity, include metadata.visual.description, metadata.visual.traits, and legacy metadata.visualDescription. Identity visuals must be neutral defaults; reserve dynamic action/damage/lighting/weather for event or sequence_unit scene visuals.',
+    'For every new or substantially updated actor/persona, include metadata.voice with description, accent, qualities, register, pace, pitch, and consistencyNotes for dialogue and cinematic consistency.',
     ...promptStrategy.incrementalWorkItemGuidance,
     projectContextIsApp(input.payload.snapshot.projectContext)
       ? 'For app relationship_batch items, create app links only between existing/generated app graph nodes available in the ledger or relevant entity list.'

@@ -1,6 +1,7 @@
 import type { WorldEntity, WorldEntityCreateInput } from './worldGraph.ts'
 
 export const WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH = 480
+export const WORLD_ENTITY_VOICE_DESCRIPTION_MAX_LENGTH = 420
 
 const VISUAL_TRAIT_MAP_KEYS = [
   'age',
@@ -25,6 +26,16 @@ export type WorldEntityVisualIdentity = {
   traitMap: WorldEntityVisualTraitMap
   descriptionMode: 'neutral_identity'
   transientStateExcluded: true
+}
+
+export type WorldEntityVoiceIdentity = {
+  description: string
+  accent: string
+  qualities: string[]
+  register: string
+  pace: string
+  pitch: string
+  consistencyNotes: string
 }
 
 type VisualEntityLike = Pick<WorldEntity | WorldEntityCreateInput, 'summary' | 'context' | 'metadata' | 'customProperties'>
@@ -95,6 +106,12 @@ export function normalizeWorldEntityVisualDescription(value: unknown) {
   return normalized.slice(0, WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH).trim()
 }
 
+export function normalizeWorldEntityVoiceDescription(value: unknown) {
+  const normalized = compact(value)
+  if (!normalized) return ''
+  return normalized.slice(0, WORLD_ENTITY_VOICE_DESCRIPTION_MAX_LENGTH).trim()
+}
+
 export function composeWorldEntityVisualDescription(description: unknown, traits: unknown = []) {
   const parsed = parseComposedVisualDescription(description)
   const cleanDescription = normalizeWorldEntityVisualDescription(parsed.description)
@@ -107,6 +124,53 @@ export function composeWorldEntityVisualDescription(description: unknown, traits
     ? `${cleanDescription} Traits: ${cleanTraits.join(', ')}`
     : cleanDescription
   return normalizeWorldEntityVisualDescription(composed)
+}
+
+function readVoiceIdentityValue(value: unknown): WorldEntityVoiceIdentity {
+  const record = asRecord(value)
+  if (!Object.keys(record).length && typeof value === 'string') {
+    return {
+      description: normalizeWorldEntityVoiceDescription(value),
+      accent: '',
+      qualities: [],
+      register: '',
+      pace: '',
+      pitch: '',
+      consistencyNotes: '',
+    }
+  }
+  return {
+    description: normalizeWorldEntityVoiceDescription(
+      record.description
+      ?? record.voiceDescription
+      ?? record.timbre
+      ?? record.sound,
+    ),
+    accent: compact(record.accent ?? record.dialect),
+    qualities: uniqueStrings([
+      ...readStringList(record.qualities),
+      ...readStringList(record.traits),
+      ...readStringList(record.voiceTraits),
+    ]),
+    register: compact(record.register ?? record.delivery),
+    pace: compact(record.pace ?? record.rhythm),
+    pitch: compact(record.pitch),
+    consistencyNotes: compact(record.consistencyNotes ?? record.notes),
+  }
+}
+
+export function composeWorldEntityVoiceDescription(voice: Partial<WorldEntityVoiceIdentity> | unknown) {
+  const identity = readVoiceIdentityValue(voice)
+  const parts = [
+    identity.description,
+    identity.accent ? `Accent: ${identity.accent}.` : '',
+    identity.qualities.length > 0 ? `Qualities: ${identity.qualities.join(', ')}.` : '',
+    identity.register ? `Register: ${identity.register}.` : '',
+    identity.pace ? `Pace: ${identity.pace}.` : '',
+    identity.pitch ? `Pitch: ${identity.pitch}.` : '',
+    identity.consistencyNotes ? `Consistency: ${identity.consistencyNotes}.` : '',
+  ].filter(Boolean)
+  return normalizeWorldEntityVoiceDescription(parts.join(' '))
 }
 
 export function readWorldEntityVisualTraitMap(entity: VisualEntityLike) {
@@ -175,6 +239,42 @@ export function readWorldEntityVisualDescription(entity: VisualEntityLike) {
   return composeWorldEntityVisualDescription(identity.description, identity.traits)
 }
 
+export function readWorldEntityVoiceIdentity(entity: VisualEntityLike): WorldEntityVoiceIdentity {
+  const metadata = asRecord(entity.metadata)
+  const customProperties = asRecord(entity.customProperties)
+  const metadataVoice = asRecord(metadata.voice)
+  const customVoice = asRecord(customProperties.voice)
+  const legacyDescription = normalizeWorldEntityVoiceDescription(
+    metadata.voiceDescription
+    ?? customProperties.voiceDescription
+    ?? customProperties.voice,
+  )
+  const candidate = readVoiceIdentityValue({
+    ...customVoice,
+    ...metadataVoice,
+    description: metadataVoice.description
+      ?? metadataVoice.voiceDescription
+      ?? legacyDescription
+      ?? customVoice.description
+      ?? customVoice.voiceDescription,
+    qualities: uniqueStrings([
+      ...readStringList(customVoice.qualities),
+      ...readStringList(customVoice.traits),
+      ...readStringList(customVoice.voiceTraits),
+      ...readStringList(customProperties.voiceTraits),
+      ...readStringList(metadataVoice.qualities),
+      ...readStringList(metadataVoice.traits),
+      ...readStringList(metadataVoice.voiceTraits),
+      ...readStringList(metadata.voiceTraits),
+    ]),
+  })
+  return candidate
+}
+
+export function readWorldEntityVoiceDescription(entity: VisualEntityLike) {
+  return composeWorldEntityVoiceDescription(readWorldEntityVoiceIdentity(entity))
+}
+
 export function mergeWorldEntityVisualDescriptionMetadata(
   metadata: Record<string, unknown> | undefined,
   visualDescription: unknown,
@@ -221,5 +321,38 @@ export function mergeWorldEntityVisualDescriptionMetadata(
     const existing = normalizeWorldEntityVisualDescription(nextMetadata.visualDescription)
     if (existing) nextMetadata.visualDescription = existing
   }
+  return nextMetadata
+}
+
+export function mergeWorldEntityVoiceMetadata(
+  metadata: Record<string, unknown> | undefined,
+  voice: unknown,
+  options: {
+    source?: string
+  } = {},
+) {
+  const nextMetadata = { ...(metadata ?? {}) }
+  const existingEntity = {
+    summary: '',
+    context: '',
+    metadata: nextMetadata,
+    customProperties: {},
+  } satisfies VisualEntityLike
+  const existingVoice = readWorldEntityVoiceIdentity(existingEntity)
+  const incomingVoice = readVoiceIdentityValue(voice)
+  const voiceIdentity: WorldEntityVoiceIdentity = {
+    description: incomingVoice.description || existingVoice.description,
+    accent: incomingVoice.accent || existingVoice.accent,
+    qualities: uniqueStrings([...existingVoice.qualities, ...incomingVoice.qualities]),
+    register: incomingVoice.register || existingVoice.register,
+    pace: incomingVoice.pace || existingVoice.pace,
+    pitch: incomingVoice.pitch || existingVoice.pitch,
+    consistencyNotes: incomingVoice.consistencyNotes || existingVoice.consistencyNotes,
+  }
+  const voiceDescription = composeWorldEntityVoiceDescription(voiceIdentity)
+  if (!voiceDescription) return nextMetadata
+  nextMetadata.voice = voiceIdentity
+  nextMetadata.voiceDescription = voiceDescription
+  if (options.source) nextMetadata.voiceSource = options.source
   return nextMetadata
 }

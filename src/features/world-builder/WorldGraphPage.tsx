@@ -912,6 +912,42 @@ function readLooseRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+function hasNonEmptyMetadataValue(value: unknown) {
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
+  return value !== null && value !== undefined
+}
+
+function mergeWorldWikiMetadataWithNonEmptyOverride(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+) {
+  const next = { ...base }
+  for (const [key, value] of Object.entries(override)) {
+    if (hasNonEmptyMetadataValue(value)) {
+      next[key] = value
+    } else if (!(key in next)) {
+      next[key] = value
+    }
+  }
+  return next
+}
+
+function mergeRecoveredProjectDraftMetadata(
+  projectMetadata: Record<string, unknown>,
+  recoveredMetadata: Record<string, unknown> | null,
+) {
+  if (!recoveredMetadata) return projectMetadata
+  const projectWiki = readLooseRecord(projectMetadata.worldWiki)
+  const recoveredWiki = readLooseRecord(recoveredMetadata.worldWiki)
+  return {
+    ...recoveredMetadata,
+    ...projectMetadata,
+    worldWiki: mergeWorldWikiMetadataWithNonEmptyOverride(recoveredWiki, projectWiki),
+  }
+}
+
 function readAppCustomProperties(entity: WorldEntity): Record<string, unknown> {
   return readLooseRecord(readLooseRecord(entity.customProperties).app)
 }
@@ -1936,6 +1972,7 @@ export function WorldGraphPage({
   const {
     imageUrlByEntityKey,
     imageUrlByResultKey,
+    referenceSheetIconUrlByEntityKey,
     referenceSheetUrlByEntityKey,
     setSignedAssetUrl,
     signedAssetUrlsByKey,
@@ -1949,9 +1986,9 @@ export function WorldGraphPage({
   const wikiImageUrlByEntityKey = useMemo(() => (
     new Map(worldEntities.map((entity) => [
       entity.key,
-      referenceSheetUrlByEntityKey.get(entity.key) ?? imageUrlByEntityKey.get(entity.key) ?? null,
+      referenceSheetIconUrlByEntityKey.get(entity.key) ?? imageUrlByEntityKey.get(entity.key) ?? null,
     ]))
-  ), [imageUrlByEntityKey, referenceSheetUrlByEntityKey, worldEntities])
+  ), [imageUrlByEntityKey, referenceSheetIconUrlByEntityKey, worldEntities])
   const outputLibraryModel = useMemo(() => buildOutputLibraryModel({
     assets,
     outputArtifacts,
@@ -1979,7 +2016,10 @@ export function WorldGraphPage({
     const conceptAsset = conceptAssetKey ? assetByKey.get(conceptAssetKey) ?? null : null
     return Boolean(conceptAssetKey && (!conceptAsset || !isWorldConceptImageAsset(conceptAsset)))
   }, [assetByKey, projectDraftMetadata])
-  const effectiveProjectDraftMetadata = liveProjectDraftMetadata ?? projectDraftMetadata
+  const effectiveProjectDraftMetadata = useMemo(
+    () => mergeRecoveredProjectDraftMetadata(projectDraftMetadata, liveProjectDraftMetadata),
+    [liveProjectDraftMetadata, projectDraftMetadata],
+  )
   useEffect(() => {
     if (worldViewMode !== 'wiki' || !projectDraftId) return
 
@@ -2157,7 +2197,13 @@ export function WorldGraphPage({
     const next = new Map<string, EntityReferenceArtState>()
     const activeGridEntityKeys = new Set(activeLoreSequenceGridJobs.flatMap(visualGenerationGridJobTargetEntityKeys))
     for (const entity of worldEntities) {
-      const hasReferenceImage = Boolean(imageUrlByEntityKey.get(entity.key) || referenceSheetUrlByEntityKey.get(entity.key) || readEntityReferenceSheetAssetKey(entity))
+      const hasWikiImage = Boolean(referenceSheetIconUrlByEntityKey.get(entity.key) || imageUrlByEntityKey.get(entity.key))
+      const referenceSheetAvailable = Boolean(referenceSheetUrlByEntityKey.get(entity.key) || readEntityReferenceSheetAssetKey(entity))
+      if (!hasWikiImage && referenceSheetAvailable) {
+        next.set(entity.key, 'generating')
+        continue
+      }
+      const hasReferenceImage = hasWikiImage
       if (hasReferenceImage) continue
       if (activeGridEntityKeys.has(entity.key)) {
         next.set(entity.key, 'generating')
@@ -2173,7 +2219,7 @@ export function WorldGraphPage({
       }
     }
     return next
-  }, [activeLoreSequenceGridJobs, combinedEntityReferenceSheetJobs, imageUrlByEntityKey, liveWikiGenerationState.active, referenceSheetUrlByEntityKey, worldEntities])
+  }, [activeLoreSequenceGridJobs, combinedEntityReferenceSheetJobs, imageUrlByEntityKey, liveWikiGenerationState.active, referenceSheetIconUrlByEntityKey, referenceSheetUrlByEntityKey, worldEntities])
   useEffect(() => {
     if (!liveWikiGenerationState.active || !onStartVisualGenerationJob) return
     const activeReferenceSheetEntityKeys = new Set<string>()
@@ -6336,6 +6382,7 @@ export function WorldGraphPage({
         entityByKey={entityByKey}
         imageUrlByEntityKey={wikiImageUrlByEntityKey}
         imageUrlByResultKey={imageUrlByResultKey}
+        referenceSheetUrlByEntityKey={referenceSheetUrlByEntityKey}
         inspectorNodeKey={inspectorNodeKey}
         isPromptSubmitting={isPromptSubmitting}
         liveRevealEntryKeys={liveWikiRevealEntryKeySet}

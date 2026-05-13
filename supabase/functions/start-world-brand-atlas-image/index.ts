@@ -28,6 +28,7 @@ function readString(value: unknown) {
 
 async function resolveVisualGenerationImageProvider(client: Awaited<ReturnType<typeof requireUserClient>>['client'], projectId: string, draftId: string) {
   const provider = readString(Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER')).toLowerCase()
+  if (provider === 'openai' || provider === 'openai_direct' || provider === 'direct_openai') return 'openai'
   if (provider === 'fal') return 'fal'
   if (provider === 'both' || provider === 'balanced' || provider === 'load_balance' || provider === 'load-balanced' || provider === 'hybrid') {
     const response = await client
@@ -40,12 +41,12 @@ async function resolveVisualGenerationImageProvider(client: Awaited<ReturnType<t
       .order('updated_at', { ascending: false })
       .limit(80)
     if (response.error) {
-      console.warn('[GraphCore] mixed visual provider selector fell back to OpenAI.', {
+      console.warn('[GraphCore] mixed visual provider selector fell back to Fal.', {
         projectId,
         draftId,
         message: response.error.message,
       })
-      return 'openai'
+      return 'fal'
     }
     const scores = { openai: 0, fal: 0 }
     const recentFailureCutoff = Date.now() - 10 * 60_000
@@ -55,10 +56,10 @@ async function resolveVisualGenerationImageProvider(client: Awaited<ReturnType<t
       if (row.status === 'queued' || row.status === 'running') scores[selectedProvider] += 1
       if (row.status === 'failed' && Date.parse(String(row.updated_at ?? '')) > recentFailureCutoff) scores[selectedProvider] += 3
     }
-    if (scores.openai === scores.fal) return 'openai'
+    if (scores.openai === scores.fal) return 'fal'
     return scores.openai < scores.fal ? 'openai' : 'fal'
   }
-  return 'openai'
+  return 'fal'
 }
 
 function resolveVisualGenerationImageModel(provider: string) {

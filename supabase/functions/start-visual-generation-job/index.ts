@@ -27,9 +27,9 @@ function normalizeVisualGenerationProvider(value: unknown) {
 
 function readVisualGenerationProviderMode(value: unknown) {
   const provider = readString(value).toLowerCase()
-  if (provider === 'fal') return 'fal'
+  if (provider === 'openai' || provider === 'openai_direct' || provider === 'direct_openai') return 'openai'
   if (provider === 'both' || provider === 'balanced' || provider === 'load_balance' || provider === 'load-balanced' || provider === 'hybrid') return 'both'
-  return 'openai'
+  return 'fal'
 }
 
 async function chooseBalancedImageProvider(client: AuthedClient, projectId: string, draftId: string) {
@@ -44,12 +44,12 @@ async function chooseBalancedImageProvider(client: AuthedClient, projectId: stri
     .limit(80)
 
   if (response.error) {
-    console.warn('[GraphCore] mixed visual provider selector fell back to OpenAI.', {
+    console.warn('[GraphCore] mixed visual provider selector fell back to Fal.', {
       projectId,
       draftId,
       message: response.error.message,
     })
-    return 'openai'
+    return 'fal'
   }
 
   const scores = {
@@ -64,9 +64,7 @@ async function chooseBalancedImageProvider(client: AuthedClient, projectId: stri
     if (row.status === 'failed' && Date.parse(String(row.updated_at ?? '')) > recentFailureCutoff) scores[provider] += 3
   }
 
-  if (scores.openai === scores.fal) {
-    return 'openai'
-  }
+  if (scores.openai === scores.fal) return 'fal'
   return scores.openai < scores.fal ? 'openai' : 'fal'
 }
 

@@ -111,13 +111,13 @@ function normalizeFalImageModel(model: string | null | undefined) {
 
 function normalizeVisualImageProvider(value: unknown): VisualImageProvider {
   const normalized = readString(value).toLowerCase()
-  if (!normalized || normalized === 'both' || normalized === 'balanced' || normalized === 'load_balance' || normalized === 'load-balanced' || normalized === 'hybrid') return 'openai'
+  if (!normalized || normalized === 'both' || normalized === 'balanced' || normalized === 'load_balance' || normalized === 'load-balanced' || normalized === 'hybrid') return 'fal'
   if (normalized === 'openai' || normalized === 'openai_direct' || normalized === 'direct_openai') return 'openai'
   return 'fal'
 }
 
 function resolveVisualImageProvider(job: VisualJob): VisualImageProvider {
-  return normalizeVisualImageProvider(readString(job.provider) || Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER') || 'openai')
+  return normalizeVisualImageProvider(readString(job.provider) || Deno.env.get('VISUAL_GENERATION_IMAGE_PROVIDER') || 'fal')
 }
 
 function normalizeOpenAiImageModel(model: string | null | undefined) {
@@ -298,7 +298,7 @@ function mapVisualJobRow(row: Record<string, unknown>): VisualJob {
     requestedBy: typeof row.requested_by === 'string' ? row.requested_by : null,
     status: String(row.status) as VisualJobStatus,
     kind: String(row.kind) as VisualJobKind,
-    provider: readString(row.provider) || 'openai',
+    provider: readString(row.provider) || 'fal',
     model: readString(row.model) || 'openai/gpt-image-2',
     targetKeys: asRecord(row.target_keys),
     input: asRecord(row.input),

@@ -165,6 +165,7 @@ type WorldWikiSectionViewProps = {
   entityByKey: ReadonlyMap<string, WorldEntity>
   imageUrlByEntityKey: ReadonlyMap<string, string | null>
   imageUrlByResultKey: ReadonlyMap<string, string | null>
+  referenceSheetUrlByEntityKey: ReadonlyMap<string, string | null>
   inspectorNodeKey: string | null
   isPromptSubmitting: boolean
   normalizedWikiSearchQuery: string
@@ -199,6 +200,7 @@ export function WorldWikiSectionView({
   entityByKey,
   imageUrlByEntityKey,
   imageUrlByResultKey,
+  referenceSheetUrlByEntityKey,
   inspectorNodeKey,
   isPromptSubmitting,
   normalizedWikiSearchQuery,
@@ -245,6 +247,7 @@ export function WorldWikiSectionView({
     const entity = entityByKey.get(entityKey) ?? null
     if (!entity) return null
     const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
+    const detailImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? imageUrl
     const referenceArtState = referenceArtStateByEntityKey.get(entity.key) ?? null
     const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
@@ -265,7 +268,7 @@ export function WorldWikiSectionView({
             eyebrow: profile?.roleLabel || labelForWorldEntity(entity.nodeType),
             body: detailBody,
             icon: iconForWorldEntity(entity.nodeType),
-            imageUrl,
+            imageUrl: detailImageUrl,
             meta: [
               labelForWorldEntity(entity.nodeType),
               profile?.relationshipKeys.length ? `${profile.relationshipKeys.length} link${profile.relationshipKeys.length === 1 ? '' : 's'}` : null,
@@ -301,6 +304,7 @@ export function WorldWikiSectionView({
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
     const ordinal = sequence?.ordinal ?? null
     const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
+    const detailImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? imageUrl
     const referenceArtState = referenceArtStateByEntityKey.get(entity.key) ?? null
     const summary = sequence?.synopsis || profile?.shortSummary || entity.summary || entity.context || 'No story beat summary yet.'
     const outcome = sequence?.outcome || ''
@@ -325,7 +329,7 @@ export function WorldWikiSectionView({
             eyebrow: sequence?.unitKind || labelForWorldEntity(entity.nodeType),
             body: detailBody,
             icon: iconForWorldEntity(entity.nodeType),
-            imageUrl,
+            imageUrl: detailImageUrl,
             meta: [
               ordinal !== null ? `Step ${ordinal}` : null,
               sequence?.actLabel || null,

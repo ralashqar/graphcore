@@ -76,7 +76,7 @@ test('visual generation start request supports app mockup and analysis kinds', (
     input: { prompt: 'premium mobile home screen' },
   })
 
-  assert.equal(request.provider, 'openai')
+  assert.equal(request.provider, 'fal')
   assert.equal(request.model, 'openai/gpt-image-2')
   assert.equal(request.kind, 'app_screen_mockup')
 
@@ -102,6 +102,7 @@ test('visual generation schemas accept entity reference sheet jobs and legacy ch
     input: { entityKey: 'actor.eva_9', sheetKind: 'character' },
   })
   assert.equal(request.kind, 'entity_reference_sheet')
+  assert.equal(request.provider, 'fal')
   assert.equal(request.model, 'openai/gpt-image-2')
 
   const legacy = visualGenerationJobSchema.parse({
@@ -144,6 +145,7 @@ test('visual generation start endpoint preserves backend provider defaults when 
 
   assert.match(repositorySource, /delete payload\.provider/)
   assert.match(startEndpoint, /VISUAL_GENERATION_IMAGE_PROVIDER/)
+  assert.match(startEndpoint, /return 'fal'/)
   assert.match(startEndpoint, /providerMode === 'both'/)
   assert.match(startEndpoint, /chooseBalancedImageProvider/)
   assert.match(startEndpoint, /normalizeVisualGenerationModel/)
@@ -156,6 +158,7 @@ test('Fly visual worker can render queued visual jobs through OpenAI direct or F
 
   assert.match(visualWorker, /runTrackedOpenAiImages/)
   assert.match(visualWorker, /function normalizeOpenAiImageModel/)
+  assert.match(visualWorker, /Deno\.env\.get\('VISUAL_GENERATION_IMAGE_PROVIDER'\) \|\| 'fal'/)
   assert.match(visualWorker, /function generateVisualImage/)
   assert.match(visualWorker, /provider === 'openai'/)
   assert.match(visualWorker, /extractOpenAiImageOutput/)
@@ -206,9 +209,12 @@ test('initial streamed seed queues world concept image, per-entity reference she
 
   assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,180}await maybeQueueInitialSeedWorldConceptImage\('world_wiki_metadata'\)/)
   assert.doesNotMatch(source, /skippedReason:\s*'existing_asset'/)
+  assert.match(source, /function asRecord\(value: unknown\): Record<string, unknown>/)
   assert.match(source, /function hasInitialSeedReferenceArtDirection/)
   assert.match(source, /skippedReason:\s*'missing_world_wiki_art_style_description'/)
   assert.match(source, /op\.op === 'update_world_wiki_metadata'[\s\S]{0,260}await maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities\('world_wiki_metadata'\)/)
+  assert.match(source, /const appliedEntityTargetKey = op\.op === 'upsert_entity'[\s\S]{0,160}op\.payload\.targetEntityKey/)
+  assert.doesNotMatch(source, /entity\.key === op\.payload\.entity\.key/)
   assert.match(source, /op\.op === 'upsert_entity'[\s\S]{0,320}await maybeQueueInitialSeedEntityReferenceSheet\(entity,\s*'streamed_upsert_entity'\)/)
   assert.doesNotMatch(source, /op\.op === 'upsert_entity' && op\.payload\.entity\.nodeType === 'sequence_unit'[\s\S]{0,240}maybeQueueInitialSeedIconBatch/)
   assert.doesNotMatch(source, /initial_seed_sequence_boundary/)

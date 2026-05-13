@@ -10,6 +10,9 @@ import {
   readWorldEntityVisualDescription,
   readWorldEntityVisualIdentity,
   readWorldEntityVisualTraits,
+  mergeWorldEntityVoiceMetadata,
+  readWorldEntityVoiceDescription,
+  readWorldEntityVoiceIdentity,
   WORLD_ENTITY_VISUAL_DESCRIPTION_MAX_LENGTH,
 } from './worldEntityVisuals.ts'
 import type { WorldEntity } from './worldGraph.ts'
@@ -101,13 +104,55 @@ test('compact stream records accept visualDescription and visualTraits for entit
     name: 'Mara',
     visualDescription: 'silver-haired archivist with a violet lantern',
     visualTraits: ['late 20s', 'silver bob'],
+    voice: {
+      description: 'warm low alto with careful diction',
+      accent: 'soft northern city accent',
+      qualities: ['controlled', 'wry'],
+      register: 'quietly authoritative',
+      pace: 'measured',
+      pitch: 'low alto',
+      consistencyNotes: 'Keep the dry restraint consistent.',
+    },
   }) as Record<string, unknown>
   assert.equal(parsedEntity.visualDescription, 'silver-haired archivist with a violet lantern')
   assert.deepEqual(parsedEntity.visualTraits, ['late 20s', 'silver bob'])
+  assert.deepEqual(parsedEntity.voice, {
+    description: 'warm low alto with careful diction',
+    accent: 'soft northern city accent',
+    qualities: ['controlled', 'wry'],
+    register: 'quietly authoritative',
+    pace: 'measured',
+    pitch: 'low alto',
+    consistencyNotes: 'Keep the dry restraint consistent.',
+  })
 
   assert.equal(streamSequenceUnitRecordSchema.parse({
     kind: 'sequence_unit',
     ordinal: 1,
     visualDescription: 'rain-slick plaza with shadow guards and glowing ledger pages',
   }).visualDescription, 'rain-slick plaza with shadow guards and glowing ledger pages')
+})
+
+test('stores stable character voice metadata for cinematic consistency', () => {
+  const metadata = mergeWorldEntityVoiceMetadata({}, {
+    description: 'warm low alto with clipped careful diction',
+    accent: 'soft northern city accent',
+    qualities: ['controlled', 'wry', 'protective'],
+    register: 'intimate but firm',
+    pace: 'measured, quickens under pressure',
+    pitch: 'low alto',
+    consistencyNotes: 'Keep the same dry restraint in dialogue and cinematic performance.',
+  })
+  const mara = entity({
+    key: 'actor.mara',
+    name: 'Mara',
+    nodeType: 'actor',
+    metadata,
+  })
+
+  const voice = readWorldEntityVoiceIdentity(mara)
+  assert.equal(voice.accent, 'soft northern city accent')
+  assert.deepEqual(voice.qualities, ['controlled', 'wry', 'protective'])
+  assert.match(readWorldEntityVoiceDescription(mara), /Accent: soft northern city accent/)
+  assert.match(readWorldEntityVoiceDescription(mara), /Consistency: Keep the same dry restraint/)
 })
