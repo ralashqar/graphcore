@@ -275,8 +275,9 @@ export function useWorldAssetUrls({
         const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
         const referenceSheetUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? null
         const expectedCacheKey = referenceSheetIconStateKey(entity, asset)
-        if (!asset || !referenceSheetUrl || !expectedCacheKey) continue
+        if (!asset || !expectedCacheKey) continue
         desiredEntityKeys.add(entity.key)
+        if (!referenceSheetUrl) continue
         const current = referenceSheetIconEntriesByEntityKey.get(entity.key)
         if (current?.cacheKey === expectedCacheKey) continue
 

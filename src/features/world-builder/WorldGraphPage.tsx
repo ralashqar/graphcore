@@ -1986,7 +1986,9 @@ export function WorldGraphPage({
   const wikiImageUrlByEntityKey = useMemo(() => (
     new Map(worldEntities.map((entity) => [
       entity.key,
-      referenceSheetIconUrlByEntityKey.get(entity.key) ?? imageUrlByEntityKey.get(entity.key) ?? null,
+      readEntityReferenceSheetAssetKey(entity)
+        ? referenceSheetIconUrlByEntityKey.get(entity.key) ?? null
+        : imageUrlByEntityKey.get(entity.key) ?? null,
     ]))
   ), [imageUrlByEntityKey, referenceSheetIconUrlByEntityKey, worldEntities])
   const outputLibraryModel = useMemo(() => buildOutputLibraryModel({

@@ -39,6 +39,7 @@ test('character reference sheet prompt uses simplified stable turnaround section
   assert.match(prompt, /x=1536\.\.2048 and y=0\.\.512 is a locked wiki-icon export cell/i)
   assert.match(prompt, /Do not place any title, label, border, swatch, callout, arrow, gutter, white margin/i)
   assert.match(prompt, /no text, labels, borders, callout arrows/i)
+  assert.match(prompt, /central safe area of this cell, away from the top and right edges by roughly 10%/i)
   assert.match(prompt, /cinematic chest-up or shoulder-up profile close-up panel in the reserved top-right 512x512 square/i)
   assert.match(prompt, /Do not include expression grids/i)
   assert.match(prompt, /hand gesture sheets/i)

@@ -1,7 +1,9 @@
 import type { AssetDefinition } from './graphcore.ts'
 
-const REFERENCE_SHEET_ICON_CACHE_NAME = 'graphcore:reference-sheet-icon-crops:v1'
+const REFERENCE_SHEET_ICON_CACHE_NAME = 'graphcore:reference-sheet-icon-crops:v2'
 const REFERENCE_SHEET_ICON_OUTPUT_SIZE = 512
+const REFERENCE_SHEET_ICON_SAFE_INSET_RATIO = 0.1
+const REFERENCE_SHEET_ICON_CROP_VERSION = 'safe-inset-10'
 
 type ReferenceSheetIconCacheKeyInput = {
   projectId?: string | null
@@ -22,6 +24,7 @@ export type ReferenceSheetIconCropRect = {
 
 export function buildReferenceSheetIconCacheKey(input: ReferenceSheetIconCacheKeyInput) {
   return [
+    REFERENCE_SHEET_ICON_CROP_VERSION,
     input.projectId?.trim() ?? '',
     input.entityKey.trim(),
     input.referenceSheetAssetKey.trim(),
@@ -39,9 +42,12 @@ export function resolveTopRightReferenceSheetIconCropRect(input: {
   const naturalHeight = Math.max(1, Math.floor(input.naturalHeight))
   const preferredCropSize = Math.max(1, Math.floor(input.preferredCropSize ?? REFERENCE_SHEET_ICON_OUTPUT_SIZE))
   const cropSize = Math.min(preferredCropSize, naturalWidth, naturalHeight)
+  const desiredInset = Math.max(0, Math.round(cropSize * REFERENCE_SHEET_ICON_SAFE_INSET_RATIO))
+  const insetX = Math.min(desiredInset, Math.max(0, naturalWidth - cropSize))
+  const insetY = Math.min(desiredInset, Math.max(0, naturalHeight - cropSize))
   return {
-    sx: naturalWidth - cropSize,
-    sy: 0,
+    sx: naturalWidth - cropSize - insetX,
+    sy: insetY,
     sw: cropSize,
     sh: cropSize,
     outputWidth: REFERENCE_SHEET_ICON_OUTPUT_SIZE,

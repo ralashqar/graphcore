@@ -10124,7 +10124,13 @@ async function applyPromptOp(input: {
       }
     }
 
-    const currentDraftMetadata = input.snapshot.draft.metadata ?? {}
+    const currentDraftResponse = await input.client
+      .from('project_drafts')
+      .select('metadata')
+      .eq('id', input.snapshot.draft.id)
+      .single()
+    if (currentDraftResponse.error) throw new Error(currentDraftResponse.error.message)
+    const currentDraftMetadata = asRecord(currentDraftResponse.data?.metadata)
     const nextDraftMetadata = {
       ...currentDraftMetadata,
       worldWiki: {

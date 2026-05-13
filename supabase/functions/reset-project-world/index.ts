@@ -20,6 +20,10 @@ type ProjectAssetRow = {
   metadata: Record<string, unknown> | null
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
 async function verifyDraftAccess(client: Awaited<ReturnType<typeof requireUserClient>>['client'], projectId: string, draftId: string) {
   const response = await client
     .from('project_drafts')
@@ -125,6 +129,30 @@ async function deleteGeneratedWorldAssets(
   return { projectAssets: deletedAssetRows, storageObjects: removedStorageObjects }
 }
 
+async function clearResetWorldWikiMetadata(
+  admin: ReturnType<typeof createAdminClient>,
+  draftId: string,
+) {
+  const metadataResponse = await admin
+    .from('project_drafts')
+    .select('metadata')
+    .eq('id', draftId)
+    .single()
+  if (metadataResponse.error) {
+    throw new Error(metadataResponse.error.message)
+  }
+
+  const currentMetadata = asRecord(metadataResponse.data?.metadata)
+  const { worldWiki: _worldWiki, ...metadataWithoutWorldWiki } = currentMetadata
+  const updateResponse = await admin
+    .from('project_drafts')
+    .update({ metadata: metadataWithoutWorldWiki })
+    .eq('id', draftId)
+  if (updateResponse.error) {
+    throw new Error(updateResponse.error.message)
+  }
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -157,6 +185,7 @@ Deno.serve(async (request) => {
     if (rpcResponse.error) {
       throw new Error(rpcResponse.error.message)
     }
+    await clearResetWorldWikiMetadata(admin, payload.draftId)
 
     return json(resetProjectWorldResponseSchema.parse({
       ok: true,

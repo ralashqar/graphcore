@@ -4003,20 +4003,26 @@ export default function App() {
       const nextSnapshot = await resetProjectWorldAction(syncedSnapshot)
       commitPersistedSnapshot(nextSnapshot)
     } else {
-      applySnapshotUpdate((current) => ({
-        ...current,
-        worldEntities: [],
-        worldRelationships: [],
-        worldViews: [],
-        worldOperators: [],
-        worldResults: [],
-        worldGraphConnections: [],
-        worldThreads: [],
-        worldPromptSessions: [],
-        worldPromptTurns: [],
-        worldPromptMessages: [],
-        worldPromptEvents: [],
-        worldPromptGenerationJobs: [],
+      applySnapshotUpdate((current) => {
+        const { worldWiki: _resetWorldWiki, ...metadataWithoutWorldWiki } = current.draft.metadata ?? {}
+        return {
+          ...current,
+          draft: {
+            ...current.draft,
+            metadata: metadataWithoutWorldWiki,
+          },
+          worldEntities: [],
+          worldRelationships: [],
+          worldViews: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldThreads: [],
+          worldPromptSessions: [],
+          worldPromptTurns: [],
+          worldPromptMessages: [],
+          worldPromptEvents: [],
+          worldPromptGenerationJobs: [],
           worldPromptGenerationJobSteps: [],
           worldPromptSuggestions: [],
           worldBuildBatches: [],
@@ -4026,9 +4032,23 @@ export default function App() {
           outputWorkflowEdges: [],
           outputWorkflowRuns: [],
           outputArtifacts: [],
-          assets: current.assets.filter((asset) => asset.metadata.generatedBy !== 'output_workflow'),
-        }))
-      }
+          assets: current.assets.filter((asset) => {
+            const metadata = asset.metadata && typeof asset.metadata === 'object' ? asset.metadata as Record<string, unknown> : {}
+            const storagePath = typeof asset.storagePath === 'string' ? asset.storagePath.trim() : ''
+            const generatedBy = typeof metadata.generatedBy === 'string' ? metadata.generatedBy : ''
+            return generatedBy !== 'output_workflow'
+              && generatedBy !== 'world_concept_image'
+              && generatedBy !== 'entity_reference_sheet'
+              && generatedBy !== 'world_entity_icon_grid'
+              && generatedBy !== 'brand_atlas'
+              && !storagePath.startsWith('generated/wiki-concept-images/')
+              && !storagePath.startsWith('generated/entity-reference-sheets/')
+              && !storagePath.startsWith('generated/world-icons/')
+              && !storagePath.startsWith('generated/wiki-brand-atlas/')
+          }),
+        }
+      })
+    }
     setSelectedWorldNodeKey(null)
     setSelectedWorldEdgeKey(null)
     setSelectedWorldEntityKey(null)

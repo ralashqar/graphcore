@@ -111,7 +111,7 @@ function buildReferenceSheetContext(input: EntityReferenceSheetBaseInput) {
     traitMapEntries.length ? `Trait map: ${traitMapEntries.map(([key, value]) => `${key}: ${value}`).join('; ')}.` : null,
     references.length ? `Use supplied reference images as visual anchors: ${references.join('; ')}.` : null,
     'The board layout, background, section titles, labels, and spacing must stay clean, neutral, minimal, and technical; apply the project art style only to the subject visuals and rendered design panels.',
-    'The sheet must reserve a locked 512x512 export crop cell at the absolute top-right corner. That crop cell is not a label area, margin, title block, or decorative panel; it must contain only a clean cinematic profile / portrait / icon image for this entity, with no text, labels, borders, callout arrows, UI, captions, watermarks, or empty padding.',
+    'The sheet must reserve a locked 512x512 export crop cell at the absolute top-right corner. That crop cell is not a label area, margin, title block, or decorative panel; it must contain only a clean cinematic profile / portrait / icon image for this entity, with no text, labels, borders, callout arrows, UI, captions, watermarks, or empty padding. Keep the subject comfortably inside the central safe area of this cell, away from the top and right edges by roughly 10%, so an inward client crop can avoid edge borders and gutters.',
     'Use readable English labels only. Avoid tiny dense text, watermarks, logos, UI chrome, decorative poster composition, and clutter.',
   ].filter(Boolean).join(' ')
 }

@@ -271,10 +271,26 @@ test('wiki hero banner only renders world concept image assets, not entity refer
   assert.match(worldGraphSource, /const wikiOverviewImageUrl = liveWikiGenerationState\.active/)
   assert.match(worldGraphSource, /overviewWorldConceptAssetKey/)
   assert.match(worldGraphSource, /wikiWorldConceptAsset\?\.key === liveWikiGenerationState\.overviewWorldConceptAssetKey/)
+  assert.match(worldGraphSource, /readEntityReferenceSheetAssetKey\(entity\)[\s\S]{0,120}referenceSheetIconUrlByEntityKey\.get\(entity\.key\) \?\? null/)
   assert.match(wikiPanelSource, /const liveOverviewReady = !liveGenerationActive \|\| wikiOverviewShowMetadata/)
   assert.match(worldGraphSource, /onGenerateWorldConceptImage/)
   assert.match(worldGraphSource, /failed to auto-start world concept image generation from Wiki/)
   assert.doesNotMatch(worldGraphSource, /wikiOverviewImageUrl = liveWorldConceptImageUrl \?\? wikiWorldConceptImageUrl \?\? wikiHeroEntityImageUrl/)
+})
+
+test('project world reset clears stale wiki hero metadata and generated world visuals', () => {
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
+  const resetFunction = readFileSync(resolve(repoRoot, 'supabase/functions/reset-project-world/index.ts'), 'utf8')
+
+  assert.match(repositorySource, /const \{ worldWiki: _resetWorldWiki, \.\.\.metadataWithoutWorldWiki \} = snapshot\.draft\.metadata \?\? \{\}/)
+  assert.match(repositorySource, /draftMetadata = \{\s*\.\.\.metadataWithoutWorldWiki,\s*projectContext: nextProjectContext,/)
+  assert.match(resetFunction, /function clearResetWorldWikiMetadata/)
+  assert.match(resetFunction, /const \{ worldWiki: _worldWiki, \.\.\.metadataWithoutWorldWiki \} = currentMetadata/)
+  assert.match(resetFunction, /await clearResetWorldWikiMetadata\(admin, payload\.draftId\)/)
+  assert.match(appSource, /const \{ worldWiki: _resetWorldWiki, \.\.\.metadataWithoutWorldWiki \} = current\.draft\.metadata \?\? \{\}/)
+  assert.match(appSource, /generatedBy !== 'world_concept_image'/)
+  assert.match(appSource, /!storagePath\.startsWith\('generated\/wiki-concept-images\/'\)/)
 })
 
 test('Fly visual worker bounds Fal image downloads so completed jobs cannot hang forever', () => {

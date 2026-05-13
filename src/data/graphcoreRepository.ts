@@ -6891,8 +6891,9 @@ export async function resetProjectWorld(snapshot: ProjectSnapshot) {
       source: snapshot.projectContext.source,
       completed: false,
     })
+    const { worldWiki: _resetWorldWiki, ...metadataWithoutWorldWiki } = snapshot.draft.metadata ?? {}
     const draftMetadata = {
-      ...(snapshot.draft.metadata ?? {}),
+      ...metadataWithoutWorldWiki,
       projectContext: nextProjectContext,
     }
     const metadataUpdate = await supabase
