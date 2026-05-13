@@ -11,7 +11,7 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from '@xyflow/react'
-import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 
 import { resolveAssetSourceUrl } from '../../domain/assets'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
@@ -727,6 +727,8 @@ const WORLD_GRAPH_PRESENTATION_PRESETS: Array<{ value: WorldGraphPresentationPre
 ]
 const WORLD_GRAPH_NODE_ORIGIN: [number, number] = [0.5, 0.5]
 const WORLD_FEED_GRAPH_PREVIEW_NODE_RADIUS = 230
+const WIKI_ENTITY_ROUTE_ENTITY_PARAM = 'wikiEntity'
+const WIKI_ENTITY_ROUTE_SECTION_PARAM = 'wikiSection'
 
 function timeValue(value: string | null | undefined) {
   if (!value) return 0
@@ -762,6 +764,34 @@ function isWorldWorkspaceMode(mode: WorldLocalViewMode): mode is WorldWorkspaceM
 
 function isPersistableWorldViewMode(mode: WorldLocalViewMode): mode is WorldView['mode'] {
   return mode === 'graph' || mode === 'wiki' || mode === 'timeline' || mode === 'board'
+}
+
+function readWikiEntityPageRoute(): ActiveWikiEntityPageState {
+  if (typeof window === 'undefined') return null
+  const params = new URLSearchParams(window.location.search)
+  const entityKey = params.get(WIKI_ENTITY_ROUTE_ENTITY_PARAM)?.trim()
+  if (!entityKey) return null
+  const sectionKind = params.get(WIKI_ENTITY_ROUTE_SECTION_PARAM)?.trim() as WorldWikiSection['kind'] | null
+  return {
+    entityKey,
+    sectionKind: sectionKind || 'cast',
+  }
+}
+
+function writeWikiEntityPageRoute(page: ActiveWikiEntityPageState, mode: 'push' | 'replace' = 'push') {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  if (page) {
+    url.searchParams.set(WIKI_ENTITY_ROUTE_ENTITY_PARAM, page.entityKey)
+    url.searchParams.set(WIKI_ENTITY_ROUTE_SECTION_PARAM, page.sectionKind)
+  } else {
+    url.searchParams.delete(WIKI_ENTITY_ROUTE_ENTITY_PARAM)
+    url.searchParams.delete(WIKI_ENTITY_ROUTE_SECTION_PARAM)
+  }
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  if (nextUrl === currentUrl) return
+  window.history[mode === 'replace' ? 'replaceState' : 'pushState'](window.history.state, '', nextUrl)
 }
 
 function readStoredWorldGraphPresentationPreset(): WorldGraphPresentationPreset {
@@ -1374,6 +1404,7 @@ export function WorldGraphPage({
   const worldFeedLoadMoreRef = useRef<HTMLDivElement | null>(null)
   const worldFeedGraphPreviewFlowRef = useRef<ReactFlowInstance<Node<WorldNodeData>, Edge<WorldFlowEdgeData>> | null>(null)
   const savedWikiScrollTopRef = useRef(0)
+  const lastRouteSyncedWikiEntityKeyRef = useRef<string | null>(null)
   const handledAutoLensTurnIdRef = useRef<string | null>(null)
   const seenWorldFeedEntryIdsRef = useRef<Set<string>>(new Set())
   const hydratedWorldFeedEntryIdsRef = useRef(false)
@@ -2133,20 +2164,64 @@ export function WorldGraphPage({
     },
     view: selectedView,
   }), [effectiveProjectDraftMetadata, projectDraftId, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
-  const resolveWikiEntitySectionKind = (entityKey: string): WorldWikiSection['kind'] | null => {
+  const resolveWikiEntitySectionKind = useCallback((entityKey: string): WorldWikiSection['kind'] | null => {
     const section = wikiModel.sections.find((entry) => entry.entityKeys.includes(entityKey)) ?? null
     return section?.kind ?? null
-  }
+  }, [wikiModel.sections])
   const activeWikiEntity = activeWikiEntityPage ? entityByKey.get(activeWikiEntityPage.entityKey) ?? null : null
   const activeWikiEntitySection = activeWikiEntityPage
     ? wikiModel.sections.find((section) => section.kind === activeWikiEntityPage.sectionKind) ?? null
     : null
+  useEffect(() => {
+    if (viewMode === 'wiki' && wikiSubView === 'wiki') return
+    if (!activeWikiEntityPage && !readWikiEntityPageRoute()) return
+    lastRouteSyncedWikiEntityKeyRef.current = null
+    setActiveWikiEntityPage(null)
+    writeWikiEntityPageRoute(null, 'replace')
+  }, [activeWikiEntityPage, viewMode, wikiSubView])
+  useEffect(() => {
+    const syncWikiEntityRoute = () => {
+      const routePage = readWikiEntityPageRoute()
+      if (!routePage) {
+        lastRouteSyncedWikiEntityKeyRef.current = null
+        setActiveWikiEntityPage((current) => current ? null : current)
+        return
+      }
+      const entity = entityByKey.get(routePage.entityKey) ?? null
+      const resolvedSectionKind = resolveWikiEntitySectionKind(routePage.entityKey) ?? routePage.sectionKind
+      const section = wikiModel.sections.find((entry) => entry.kind === resolvedSectionKind) ?? null
+      if (!entity || !section?.entityKeys.includes(entity.key)) return
+      if (viewMode !== 'wiki') {
+        setViewMode('wiki')
+        onWorldViewModeChange('wiki')
+      }
+      if (wikiSubView !== 'wiki') {
+        setWikiSubView('wiki')
+        onWorldWikiSubViewChange('wiki')
+      }
+      setActiveWikiEntityPage((current) => {
+        if (current?.entityKey === entity.key && current.sectionKind === section.kind) return current
+        return { entityKey: entity.key, sectionKind: section.kind }
+      })
+      if (lastRouteSyncedWikiEntityKeyRef.current !== entity.key) {
+        lastRouteSyncedWikiEntityKeyRef.current = entity.key
+        selectWorldNode(entity.key)
+      }
+    }
+
+    syncWikiEntityRoute()
+    window.addEventListener('popstate', syncWikiEntityRoute)
+    return () => {
+      window.removeEventListener('popstate', syncWikiEntityRoute)
+    }
+  }, [entityByKey, onWorldViewModeChange, onWorldWikiSubViewChange, resolveWikiEntitySectionKind, selectWorldNode, viewMode, wikiModel.sections, wikiSubView])
   useEffect(() => {
     if (!activeWikiEntityPage) return
     const entity = entityByKey.get(activeWikiEntityPage.entityKey) ?? null
     const section = wikiModel.sections.find((entry) => entry.kind === activeWikiEntityPage.sectionKind) ?? null
     if (entity && section?.entityKeys.includes(entity.key)) return
     setActiveWikiEntityPage(null)
+    writeWikiEntityPageRoute(null, 'replace')
   }, [activeWikiEntityPage, entityByKey, wikiModel.sections])
   const liveWikiEntryKeys = useMemo(() => {
     const keys: string[] = []
@@ -6344,6 +6419,7 @@ export function WorldGraphPage({
       savedWikiScrollTopRef.current = wikiDocumentRef.current.scrollTop
     }
     setActiveWikiEntityPage(null)
+    writeWikiEntityPageRoute(null, 'replace')
     setWikiSubView(nextSubView)
     onWorldWikiSubViewChange(nextSubView)
     if (nextSubView === 'feed' && options.focusComposer !== false) {
@@ -6400,7 +6476,17 @@ export function WorldGraphPage({
   }
 
   function openWikiEntityPage(sectionKind: WorldWikiSection['kind'], entityKey: string) {
-    setActiveWikiEntityPage({ sectionKind, entityKey })
+    const page = { sectionKind, entityKey }
+    if (viewMode !== 'wiki') {
+      setViewMode('wiki')
+      onWorldViewModeChange('wiki')
+    }
+    if (wikiSubView !== 'wiki') {
+      setWikiSubView('wiki')
+      onWorldWikiSubViewChange('wiki')
+    }
+    setActiveWikiEntityPage(page)
+    writeWikiEntityPageRoute(page, 'push')
     selectWorldNode(entityKey)
     setActiveInspectorTab('overview')
     window.requestAnimationFrame(() => {
@@ -6420,6 +6506,7 @@ export function WorldGraphPage({
 
   function closeWikiEntityPage() {
     setActiveWikiEntityPage(null)
+    writeWikiEntityPageRoute(null, 'replace')
   }
 
   function renderWikiEntityPage() {
@@ -6479,7 +6566,6 @@ export function WorldGraphPage({
       .filter((row) => row.entityRefs.some((ref) => ref.key === entity.key))
       .slice(0, 6)
     const fieldCards = [
-      entity.summary.trim() ? { label: 'Summary', value: entity.summary.trim() } : null,
       entity.context.trim() ? { label: 'Context', value: entity.context.trim() } : null,
       visualDescription ? { label: 'Visual Description', value: visualDescription } : null,
       voiceDescription && (entity.nodeType === 'actor' || entity.nodeType === 'persona' || entity.nodeType === 'player_profile')
@@ -6495,11 +6581,6 @@ export function WorldGraphPage({
               <span className="eyebrow">{section.title}</span>
               <h2>{entity.name}</h2>
               <p>{profile?.shortSummary || entity.summary || entity.context || 'No story summary has been written yet.'}</p>
-              <div className="world-wiki-entity-meta-row">
-                <span>{entity.status}</span>
-                {entity.source ? <span>{entity.source}</span> : null}
-                {(profile?.relationshipKeys.length ?? 0) > 0 ? <span>{profile?.relationshipKeys.length} links</span> : null}
-              </div>
               {entity.tags.length > 0 ? (
                 <div className="world-wiki-entity-tags">
                   {entity.tags.slice(0, 8).map((tag) => <span key={tag}>{tag}</span>)}
@@ -6566,7 +6647,7 @@ export function WorldGraphPage({
                     })}
                     type="button"
                   >
-                    Expand
+                    <EntityIcon id="expand" />
                   </button>
                 </>
               ) : (

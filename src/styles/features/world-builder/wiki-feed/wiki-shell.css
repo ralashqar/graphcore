@@ -721,14 +721,24 @@
 }
 
 .world-wiki-entity-hero-art.has-image {
-  background: rgba(2, 6, 23, 0.78);
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.03) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.03) 75%),
+    rgba(2, 6, 23, 0.82);
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  background-size: 24px 24px;
 }
 
 .world-wiki-entity-hero-art > img {
   width: 100%;
   height: 100%;
+  min-width: 100%;
+  min-height: 100%;
   object-fit: cover;
   object-position: center;
+  display: block;
 }
 
 .world-wiki-entity-hero-art > svg,
@@ -739,18 +749,31 @@
 
 .world-wiki-entity-art-expand {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  min-height: 34px;
-  padding: 7px 11px;
-  border: 1px solid rgba(248, 250, 252, 0.18);
-  border-radius: 999px;
-  background: rgba(2, 6, 23, 0.62);
-  color: rgba(248, 250, 252, 0.92);
+  top: 14px;
+  right: 14px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(7, 11, 18, 0.76);
+  color: rgba(237, 244, 251, 0.92);
   cursor: pointer;
-  font-size: 0.74rem;
-  font-weight: 850;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(10px);
+}
+
+.world-wiki-entity-art-expand:hover {
+  border-color: rgba(57, 216, 255, 0.3);
+  background: rgba(12, 18, 27, 0.92);
+}
+
+.world-wiki-entity-art-expand svg,
+.world-wiki-entity-art-expand .entity-icon-image {
+  width: 16px;
+  height: 16px;
 }
 
 .world-wiki-entity-panel {

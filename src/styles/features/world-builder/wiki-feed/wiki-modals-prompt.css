@@ -1,7 +1,7 @@
 .world-wiki-modal-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 34;
+  z-index: 180;
   display: grid;
   place-items: center;
   padding: 24px;
