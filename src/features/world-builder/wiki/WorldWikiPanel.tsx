@@ -3,9 +3,11 @@ import { useEffect, useState, type CSSProperties, type MouseEvent as ReactMouseE
 import type { WorldEntity, WorldRelationship } from '../../../domain/worldGraph'
 import type { WorldPromptTurn } from '../../../domain/worldPrompt'
 import type { WorldWikiGap, WorldWikiModel, WorldWikiSection } from '../../../domain/worldWiki'
+import { iconForWorldEntity } from '../../../domain/worldGraphHelpers'
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
 import type { WorldWikiSubView } from '../../../shared/workspace'
 import { WorldInlinePromptComposer } from '../prompt/WorldInlinePromptComposer'
+import type { WorldWikiDetailModalInput } from './WorldWikiSections'
 import { iconForWikiSection } from './wikiSectionLabels'
 
 type WorldWikiSubViewToggleProps = {
@@ -54,6 +56,7 @@ export function WorldWikiSubViewToggle({
 }
 
 type WorldWikiPanelProps = {
+  activeWikiEntityPage: { sectionKind: WorldWikiSection['kind']; entityKey: string } | null
   activeWikiSectionKind: WorldWikiSection['kind']
   activePromptTurn: WorldPromptTurn | null
   isPromptSubmitting: boolean
@@ -93,18 +96,23 @@ type WorldWikiPanelProps = {
   wikiSubView: WorldWikiSubView
   worldEntities: readonly WorldEntity[]
   worldRelationships: readonly WorldRelationship[]
+  wikiEntityNavImageUrlByEntityKey: ReadonlyMap<string, string | null>
   onGrowWorkbenchResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onCancelPromptTurn: (turnId: string) => Promise<void> | void
   onResetGrowWorkbenchWidth: () => void
   onRunWikiGap: (gap: WorldWikiGap) => void
   onScrollToWikiSection: (sectionKind: WorldWikiSection['kind']) => void
   onSelectWikiSubView: (subView: WorldWikiSubView) => void
+  onCloseWikiEntityPage: () => void
+  onOpenWikiEntityPage: (sectionKind: WorldWikiSection['kind'], entityKey: string) => void
+  onOpenWikiDetailModal: (input: WorldWikiDetailModalInput) => void
   onSetWikiSearchQuery: (query: string) => void
   onSetWikiPromptText: (value: string) => void
   onSubmitWikiPrompt: () => Promise<void> | void
   renderAppPreviewPipelinePanel: () => ReactNode
   renderInteractivePrototypeModal: () => ReactNode
   renderNarrativeRpgPlayablePanel: () => ReactNode
+  renderWikiEntityPage: () => ReactNode
   renderOutputLibraryPanel: () => ReactNode
   renderOutputLibraryRail: () => ReactNode
   renderWikiSection: (section: WorldWikiSection) => ReactNode
@@ -308,6 +316,7 @@ function orderWikiSectionsForLiveDocument(sections: WorldWikiSection[]) {
 }
 
 export function WorldWikiPanel({
+  activeWikiEntityPage,
   activeWikiSectionKind,
   activePromptTurn,
   isPromptSubmitting,
@@ -338,8 +347,12 @@ export function WorldWikiPanel({
   wikiSubView,
   worldEntities,
   worldRelationships,
+  wikiEntityNavImageUrlByEntityKey,
   onCancelPromptTurn,
+  onCloseWikiEntityPage,
   onGrowWorkbenchResizeStart,
+  onOpenWikiEntityPage,
+  onOpenWikiDetailModal,
   onResetGrowWorkbenchWidth,
   onRunWikiGap,
   onScrollToWikiSection,
@@ -350,6 +363,7 @@ export function WorldWikiPanel({
   renderAppPreviewPipelinePanel,
   renderInteractivePrototypeModal,
   renderNarrativeRpgPlayablePanel,
+  renderWikiEntityPage,
   renderOutputLibraryPanel,
   renderOutputLibraryRail,
   renderWikiSection,
@@ -399,15 +413,62 @@ export function WorldWikiPanel({
       : [],
   )
   const visibleWikiGaps = liveGenerationActive ? [] : wikiModel.gaps.slice(0, 5)
+  const wikiEntityByKey = new Map(worldEntities.map((entity) => [entity.key, entity]))
+  const activeEntitySection = activeWikiEntityPage
+    ? wikiModel.sections.find((section) => section.kind === activeWikiEntityPage.sectionKind) ?? null
+    : null
+  const activeEntitySectionEntities = activeEntitySection
+    ? activeEntitySection.entityKeys.map((key) => wikiEntityByKey.get(key) ?? null).filter((entity): entity is WorldEntity => Boolean(entity))
+    : []
   return (
-    <div className={`world-alt-surface world-wiki-surface${liveGenerationActive ? ' is-live-generating' : ''}`}>
+    <div className={`world-alt-surface world-wiki-surface${liveGenerationActive ? ' is-live-generating' : ''}${activeWikiEntityPage ? ' is-entity-page' : ''}`}>
       <aside className="world-wiki-index" aria-label="Wiki sections">
         <div className="world-wiki-index-scroll">
           <WorldWikiSubViewToggle wikiSubView={wikiSubView} onSelectWikiSubView={onSelectWikiSubView} />
         {wikiSubView === 'outputs' ? renderOutputLibraryRail() : (
           <>
         <div className="world-wiki-index-list">
-          {populatedWikiSections.map((section) => {
+          {activeWikiEntityPage && activeEntitySection ? (
+            <>
+              <button className="world-wiki-entity-nav-crumb" onClick={onCloseWikiEntityPage} type="button">
+                <EntityIcon id="close" />
+                <strong>Back to world view</strong>
+              </button>
+              <button
+                className="world-wiki-index-row is-active is-entity-parent"
+                onClick={onCloseWikiEntityPage}
+                type="button"
+              >
+                <span className="world-wiki-index-icon"><EntityIcon id={iconForWikiSection(activeEntitySection.kind)} /></span>
+                <span className="world-wiki-index-copy">
+                  <strong>{activeEntitySection.title}</strong>
+                  <small>{activeEntitySectionEntities.length} entit{activeEntitySectionEntities.length === 1 ? 'y' : 'ies'}</small>
+                </span>
+                <em>{activeEntitySectionEntities.length}</em>
+              </button>
+              <div className="world-wiki-entity-subnav" aria-label={`${activeEntitySection.title} entities`}>
+                {activeEntitySectionEntities.map((entity) => {
+                  const imageUrl = wikiEntityNavImageUrlByEntityKey.get(entity.key) ?? null
+                  const active = activeWikiEntityPage.entityKey === entity.key
+                  return (
+                    <button
+                      key={entity.key}
+                      className={active ? 'world-wiki-entity-subnav-row is-active' : 'world-wiki-entity-subnav-row'}
+                      onClick={() => onOpenWikiEntityPage(activeEntitySection.kind, entity.key)}
+                      type="button"
+                    >
+                      <span className="world-wiki-entity-subnav-thumb">
+                        {imageUrl ? <img src={imageUrl} alt="" /> : <EntityIcon id={iconForWorldEntity(entity.nodeType)} />}
+                      </span>
+                      <span>
+                        <strong>{entity.name}</strong>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          ) : populatedWikiSections.map((section) => {
             const count = section.kind === 'style' ? 1 : countWikiSectionItems(section)
             const generationState = liveGenerationState?.sectionStates[section.kind] ?? null
             return (
@@ -437,7 +498,7 @@ export function WorldWikiPanel({
               </button>
             )
           })}
-          {visibleWikiGaps.length > 0 ? (
+          {!activeWikiEntityPage && visibleWikiGaps.length > 0 ? (
             <button
               key="gaps"
               className={[
@@ -512,6 +573,10 @@ export function WorldWikiPanel({
             </span>
           </div>
         ) : null}
+        {activeWikiEntityPage ? (
+          renderWikiEntityPage()
+        ) : (
+          <>
         <section id="world-wiki-section-overview" data-world-wiki-section-kind="overview" className="world-wiki-overview" style={wikiOverviewSectionStyle}>
           <div className="world-wiki-overview-copy">
             <span className="eyebrow">{wikiOverviewLabel}</span>
@@ -536,7 +601,23 @@ export function WorldWikiPanel({
                   liveGenerationActive ? 'is-typing' : '',
                 ].filter(Boolean).join(' ')}
               >
-                <span>{overviewLoglineText}</span>
+                {wikiOverviewDisplayLogline ? (
+                  <button
+                    className="world-wiki-logline-text"
+                    onClick={() => onOpenWikiDetailModal({
+                      title: wikiOverviewDisplayTitle || wikiModel.title || 'World logline',
+                      eyebrow: 'Logline',
+                      body: wikiOverviewDisplayLogline,
+                      icon: 'content',
+                      meta: wikiOverviewTags.slice(0, 4),
+                    })}
+                    type="button"
+                  >
+                    <span>{overviewLoglineText}</span>
+                  </button>
+                ) : (
+                  <span>{overviewLoglineText}</span>
+                )}
                 {showOverviewLoglineCaret ? <span className="world-wiki-typewriter-caret" aria-hidden="true" /> : null}
                 {!liveGenerationActive && !wikiOverviewDisplayLogline ? (
                   <button
@@ -639,6 +720,8 @@ export function WorldWikiPanel({
             </div>
           </section>
         ) : null}
+          </>
+        )}
           </>
         )}
       </div>

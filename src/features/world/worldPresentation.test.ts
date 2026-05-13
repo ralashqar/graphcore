@@ -21,6 +21,7 @@ import {
   promptSuggestionImpactLabel,
   resolveWorldEdgeReveal,
   stripInternalPlannerDiagnostics,
+  uniqueWorldPromptSuggestions,
 } from './worldPresentation.ts'
 import { promptToWorldOpSchema, worldPromptStartTurnResponseSchema } from '../../domain/worldPrompt.ts'
 import type { PromptToWorldOp, WorldPromptEvent, WorldPromptGenerationJob, WorldPromptGenerationJobStep, WorldPromptMessage, WorldPromptSuggestion, WorldPromptTurn } from '../../domain/worldPrompt.ts'
@@ -1231,7 +1232,7 @@ test('buildWorldPromptTranscriptEntries renders update rows for refined entities
   assert.ok(entries.some((entry) => entry.kind === 'relationship_updated' && entry.label === 'Updated link between Hero and world.group.order' && !entry.detail))
 })
 
-test('buildWorldFeedViewModel derives one turn card plus new entity child rows', () => {
+test('buildWorldFeedViewModel derives compact turn rows plus added and changed entity child rows', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
   const order = createWorldPresentationTestEntity('world.group.order', 'Order', 'group')
   const relationship: WorldRelationship = {
@@ -1276,10 +1277,40 @@ test('buildWorldFeedViewModel derives one turn card plus new entity child rows',
           worldGraphConnections: [],
           worldViews: [],
         },
+        audit: {
+          touchedEntityKeys: [order.key],
+        },
         suggestions: [],
         diagnostics: [],
       },
       createdAt: '2026-04-22T10:01:00.000Z',
+    }), makeEvent({
+      id: 'e-feed-update',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        op: {
+          id: 'op-update-order',
+          op: 'upsert_entity',
+          payload: {
+            targetEntityKey: order.key,
+            name: order.name,
+            nodeType: order.nodeType,
+            summary: 'The order now protects the heir from the palace wing.',
+          },
+        },
+        applied: {
+          worldEntities: [order],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:30.000Z',
     })],
     entityByKey: new Map([[hero.key, hero], [order.key, order]]),
     relationships: [relationship],
@@ -1288,8 +1319,19 @@ test('buildWorldFeedViewModel derives one turn card plus new entity child rows',
 
   const turnEntry = feed.entries.find((entry) => entry.kind === 'turn_update')
   assert.equal(turnEntry?.filter, 'additions')
-  assert.deepEqual(turnEntry?.relatedFilters, ['additions', 'relationships'])
-  assert.equal(turnEntry?.title, 'New Character: Hero')
+  assert.deepEqual(turnEntry?.relatedFilters, ['additions', 'changes', 'relationships'])
+  assert.equal(turnEntry?.badge, 'Prompt')
+  assert.equal(turnEntry?.promptExcerpt, 'Add a protected hero.')
+  assert.equal(turnEntry?.audit?.prompt, 'Add a protected hero.')
+  assert.deepEqual(turnEntry?.changeCounts, {
+    addedEntities: 1,
+    updatedEntities: 1,
+    relationships: 1,
+    wiki: 0,
+    media: 0,
+    suggestions: 0,
+    total: 3,
+  })
   assert.deepEqual(turnEntry?.thumbnailEntityKeys, [hero.key])
   assert.deepEqual(turnEntry?.audit?.relationshipKeys, [relationship.key])
 
@@ -1298,9 +1340,26 @@ test('buildWorldFeedViewModel derives one turn card plus new entity child rows',
   assert.equal(entityEntry?.entityKey, hero.key)
   assert.equal(entityEntry?.title, 'Hero')
 
+  const changedEntityEntry = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.parentTurnId === turn.id)
+  assert.equal(changedEntityEntry?.filter, 'changes')
+  assert.equal(changedEntityEntry?.entityKey, order.key)
+  assert.equal(changedEntityEntry?.title, 'Order')
+
+  const relationshipEntry = feed.entries.find((entry) => entry.kind === 'relationship_updated' && entry.parentTurnId === turn.id)
+  assert.equal(relationshipEntry?.filter, 'relationships')
+  assert.equal(relationshipEntry?.relationshipKey, relationship.key)
+
+  const turnIndex = feed.entries.findIndex((entry) => entry.id === `turn:${turn.id}`)
+  const addedIndex = feed.entries.findIndex((entry) => entry.id === `turn:${turn.id}:entity:${hero.key}`)
+  const updatedIndex = feed.entries.findIndex((entry) => entry.id === `turn:${turn.id}:entity-updated:${order.key}`)
+  const relationshipIndex = feed.entries.findIndex((entry) => entry.id === `turn:${turn.id}:relationships`)
+  assert.ok(turnIndex < addedIndex)
+  assert.ok(addedIndex < updatedIndex)
+  assert.ok(updatedIndex < relationshipIndex)
   assert.equal(feed.entries.some((entry) => entry.kind === 'relationship_created'), false)
   assert.equal(feed.countsByFilter.additions, 2)
-  assert.equal(feed.countsByFilter.relationships, 1)
+  assert.equal(feed.countsByFilter.changes, 2)
+  assert.equal(feed.countsByFilter.relationships, 2)
   assert.equal(feed.groups[0]?.label, 'Just now')
 })
 
@@ -1323,6 +1382,533 @@ test('buildWorldFeedViewModel keeps long turn summaries compact while preserving
   assert.match(turnEntry?.fullDetail ?? '', /^Expanded Anya/)
   assert.ok((turnEntry?.compactDetail?.length ?? 0) <= 148)
   assert.match(turnEntry?.compactDetail ?? '', /\.\.\.$/)
+  assert.equal(turnEntry?.promptExcerpt, 'Expand Anya address.')
+})
+
+test('buildWorldFeedViewModel renders every turn suggestion as a collapsible child row', () => {
+  const turn = makeTurn({ id: 't-suggestions', prompt: 'Suggest next story moves.' })
+  const suggestions = Array.from({ length: 5 }, (_, index) => ({
+    id: `suggestion-${index + 1}`,
+    label: `Suggestion ${index + 1}`,
+    prompt: `Add a canon beat number ${index + 1}.`,
+    kind: 'continue_scope',
+    style: 'primary',
+    source: 'wave2',
+    threadKey: null,
+    summary: `Add beat ${index + 1}.`,
+    estimatedNodeCount: 1,
+    estimatedEdgeCount: 0,
+    willQueueImages: false,
+    willQueueCinematics: false,
+  } satisfies WorldPromptSuggestion))
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-suggestions',
+      turnId: turn.id,
+      eventType: 'turn_completed',
+      payload: {
+        note: 'Finished with suggestions.',
+        suggestions,
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    entityByKey: new Map(),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const turnEntry = feed.entries.find((entry) => entry.kind === 'turn_update')
+  const suggestionRows = feed.entries.filter((entry) => entry.kind === 'suggestion' && entry.parentTurnId === turn.id)
+  assert.equal(turnEntry?.changeCounts?.suggestions, 5)
+  assert.equal(suggestionRows.length, 5)
+  assert.deepEqual(suggestionRows.map((entry) => entry.title), suggestions.map((suggestion) => suggestion.label))
+  assert.ok(suggestionRows.every((entry) => entry.suggestions?.length === 1))
+  assert.ok(suggestionRows.every((entry) => entry.parentTurnId === turn.id))
+})
+
+test('buildWorldFeedViewModel dedupes suggestions and never renders standalone suggestion rows', () => {
+  const turn = makeTurn({ id: 't-unique-suggestions', prompt: 'Suggest next story moves.' })
+  const suggestions = [
+    {
+      id: 'suggestion-a-1',
+      label: 'Add a rival',
+      prompt: 'Add a rival who challenges the hero.',
+      kind: 'continue_scope',
+      style: 'primary',
+      source: 'wave2',
+      threadKey: null,
+      summary: 'Create a rival pressure point.',
+      estimatedNodeCount: 1,
+      estimatedEdgeCount: 0,
+      willQueueImages: false,
+      willQueueCinematics: false,
+    },
+    {
+      id: 'suggestion-a-2',
+      label: 'Add a rival again',
+      prompt: '  Add a rival who challenges the hero. ',
+      kind: 'continue_scope',
+      style: 'secondary',
+      source: 'wave2',
+      threadKey: null,
+      summary: 'Duplicate copy should collapse.',
+      estimatedNodeCount: 1,
+      estimatedEdgeCount: 0,
+      willQueueImages: false,
+      willQueueCinematics: false,
+    },
+    {
+      id: 'suggestion-b',
+      label: 'Deepen the setting',
+      prompt: 'Add a hidden location with a cost.',
+      kind: 'continue_scope',
+      style: 'primary',
+      source: 'wave2',
+      threadKey: null,
+      summary: 'Add a place to explore.',
+      estimatedNodeCount: 1,
+      estimatedEdgeCount: 0,
+      willQueueImages: false,
+      willQueueCinematics: false,
+    },
+  ] satisfies WorldPromptSuggestion[]
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-unique-suggestions',
+      turnId: turn.id,
+      eventType: 'turn_completed',
+      payload: {
+        note: 'Finished with duplicate suggestions.',
+        suggestions,
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    suggestions,
+    entityByKey: new Map(),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const suggestionRows = feed.entries.filter((entry) => entry.kind === 'suggestion')
+  assert.equal(feed.entries.filter((entry) => entry.kind === 'suggestion' && !entry.parentTurnId).length, 0)
+  assert.equal(suggestionRows.length, 2)
+  assert.equal(feed.entries.find((entry) => entry.kind === 'turn_update')?.changeCounts?.suggestions, 2)
+  assert.deepEqual(suggestionRows.map((entry) => entry.title), ['Add a rival', 'Deepen the setting'])
+  assert.equal(feed.suggestions.length, 2)
+})
+
+test('buildWorldFeedViewModel treats target-key upserts as created when the entity was created during the turn', () => {
+  const turn = makeTurn({ id: 't-created-upsert', prompt: 'Create Mira.' })
+  const mira = {
+    ...createWorldPresentationTestEntity('world.actor.mira', 'Mira', 'actor'),
+    createdAt: '2026-04-22T10:00:20.000Z',
+    updatedAt: '2026-04-22T10:00:20.000Z',
+  } satisfies WorldEntity
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-created-upsert',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        op: {
+          id: 'op-created-upsert',
+          op: 'upsert_entity',
+          confidence: 0.9,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Create the new character.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetEntityKey: mira.key,
+            entity: {
+              name: mira.name,
+              summary: mira.summary,
+              context: mira.context,
+              nodeType: mira.nodeType,
+              aliases: [],
+              tags: [],
+              status: 'active',
+              thumbnailAssetKey: null,
+              linkedDefinitionKey: null,
+              source: 'ai',
+              customProperties: {},
+              metadata: {},
+            },
+          },
+        },
+        applied: {
+          worldEntities: [mira],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:00:25.000Z',
+    })],
+    entityByKey: new Map([[mira.key, mira]]),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  assert.equal(feed.entries.some((entry) => entry.kind === 'entity_created' && entry.entityKey === mira.key), true)
+  assert.equal(feed.entries.some((entry) => entry.kind === 'entity_updated' && entry.entityKey === mira.key), false)
+  assert.equal(feed.entries.find((entry) => entry.kind === 'turn_update')?.changeCounts?.addedEntities, 1)
+})
+
+test('buildWorldFeedViewModel treats initial seed upserts as created even without projectedCreate metadata', () => {
+  const turn = makeTurn({
+    id: 't-initial-seed-feed',
+    prompt: 'Generate the world.',
+    metadata: { initialSeedMode: 'generate_skeleton' },
+  })
+  const grove = createWorldPresentationTestEntity('world.place.grove', 'Grove', 'place')
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-initial-seed-feed',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        op: {
+          id: 'op-initial-seed-feed',
+          op: 'upsert_entity',
+          confidence: 0.9,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Seed the first world entity.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetEntityKey: grove.key,
+            entity: {
+              name: grove.name,
+              summary: grove.summary,
+              context: grove.context,
+              nodeType: grove.nodeType,
+              aliases: [],
+              tags: [],
+              status: 'active',
+              thumbnailAssetKey: null,
+              linkedDefinitionKey: null,
+              source: 'ai',
+              customProperties: {},
+              metadata: {},
+            },
+          },
+        },
+        applied: {
+          worldEntities: [grove],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:00:25.000Z',
+    })],
+    entityByKey: new Map([[grove.key, grove]]),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  assert.equal(feed.entries.some((entry) => entry.kind === 'entity_created' && entry.entityKey === grove.key), true)
+  assert.equal(feed.entries.some((entry) => entry.kind === 'entity_updated' && entry.entityKey === grove.key), false)
+})
+
+test('buildWorldFeedViewModel surfaces concrete changed fields for updated entity rows', () => {
+  const turn = makeTurn({ id: 't-update-highlight', prompt: 'Refine Mira.' })
+  const mira = {
+    ...createWorldPresentationTestEntity('world.actor.mira', 'Mira', 'actor'),
+    summary: 'Mira now hides the city charter.',
+    context: 'She protects the charter from the council.',
+    createdAt: '2026-04-20T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:01:00.000Z',
+  } satisfies WorldEntity
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-update-highlight',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        op: {
+          id: 'op-update-highlight',
+          op: 'update_entity',
+          confidence: 0.9,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Refine the current canon.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetEntityKey: mira.key,
+            changes: {
+              summary: mira.summary,
+              context: mira.context,
+            },
+          },
+        },
+        applied: {
+          worldEntities: [mira],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    entityByKey: new Map([[mira.key, mira]]),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const updated = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.entityKey === mira.key)
+  assert.deepEqual(updated?.changedFields, ['Canon added'])
+  assert.equal(updated?.detail, 'Canon added: Mira now hides the city charter.')
+  assert.deepEqual(updated?.audit?.changeDetails, [
+    'Canon added: Mira now hides the city charter.',
+  ])
+})
+
+test('buildWorldFeedViewModel keeps upsert update highlights focused on canon additions', () => {
+  const turn = makeTurn({ id: 't-sequence-canon', prompt: 'Refine chapter seven.' })
+  const chapter = {
+    ...createWorldPresentationTestEntity('world.sequence.chapter_7', 'Chapter 7: The Roar and the River', 'sequence_unit'),
+    summary: 'In Thunderroot Caverns, the allies must act before the waterworks fail.',
+    context: 'This climax chapter gives each core ally a specific turning beat under pressure.',
+    customProperties: { beatCount: 7 },
+    createdAt: '2026-04-20T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:01:00.000Z',
+  } satisfies WorldEntity
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-sequence-canon',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        op: {
+          id: 'op-sequence-canon',
+          op: 'upsert_entity',
+          confidence: 0.9,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Refine chapter canon.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetEntityKey: chapter.key,
+            entity: {
+              name: chapter.name,
+              summary: chapter.summary,
+              context: chapter.context,
+              nodeType: chapter.nodeType,
+              aliases: [],
+              tags: [],
+              status: 'active',
+              thumbnailAssetKey: null,
+              linkedDefinitionKey: null,
+              source: 'ai',
+              customProperties: chapter.customProperties,
+              metadata: {},
+              ensureLinkedDefinition: true,
+            },
+          },
+        },
+        applied: {
+          worldEntities: [chapter],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    entityByKey: new Map([[chapter.key, chapter]]),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const updated = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.entityKey === chapter.key)
+  assert.deepEqual(updated?.changedFields, ['Canon added'])
+  assert.deepEqual(updated?.audit?.changeDetails, [
+    'Canon added: In Thunderroot Caverns, the allies must act before the waterworks fail.',
+  ])
+})
+
+test('buildWorldFeedViewModel skips name and summary noise for changed entity details', () => {
+  const turn = makeTurn({ id: 't-noisy-update', prompt: 'Tighten the chapter.' })
+  const chapter = {
+    ...createWorldPresentationTestEntity('world.sequence.chapter_7', 'Chapter 7: The Roar and the River', 'sequence_unit'),
+    summary: 'In Thunderroot Caverns, the allies must turn private fears into action.',
+    context: 'This chapter now gives each core ally a specific turning beat under pressure.',
+    createdAt: '2026-04-20T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:01:00.000Z',
+  } satisfies WorldEntity
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-noisy-update',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        op: {
+          id: 'op-noisy-update',
+          op: 'update_entity',
+          confidence: 0.9,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Refine chapter canon.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetEntityKey: chapter.key,
+            changes: {
+              name: chapter.name,
+              summary: chapter.summary,
+              context: chapter.context,
+            },
+          },
+        },
+        applied: {
+          worldEntities: [chapter],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    entityByKey: new Map([[chapter.key, chapter]]),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const updated = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.entityKey === chapter.key)
+  assert.deepEqual(updated?.changedFields, ['Canon added'])
+  assert.deepEqual(updated?.audit?.changeDetails, [
+    'Canon added: In Thunderroot Caverns, the allies must turn private fears into action.',
+  ])
+})
+
+test('buildWorldFeedViewModel does not truncate canon-added update details', () => {
+  const turn = makeTurn({ id: 't-long-canon-added', prompt: 'Make the chapter more specific.' })
+  const longCanon = [
+    'In Thunderroot Caverns, the allies discover the old waterworks were not broken by age but by a protective choice made years earlier.',
+    'Tavo realizes his fear of machines is tied to the same accident, Suri has to trust someone else with the leap across the pressure bridge,',
+    'and Hollowvine can only be saved if the group accepts that the river must change course rather than return to its old path.',
+  ].join(' ')
+  const chapter = {
+    ...createWorldPresentationTestEntity('world.sequence.chapter_8', 'Chapter 8: The River Turns', 'sequence_unit'),
+    summary: longCanon,
+    context: 'A detailed climax beat.',
+    createdAt: '2026-04-20T10:00:00.000Z',
+    updatedAt: '2026-04-22T10:01:00.000Z',
+  } satisfies WorldEntity
+  const feed = buildWorldFeedViewModel({
+    turns: [turn],
+    messages: [],
+    events: [makeEvent({
+      id: 'e-long-canon-added',
+      turnId: turn.id,
+      eventType: 'op_applied',
+      payload: {
+        op: {
+          id: 'op-long-canon-added',
+          op: 'upsert_entity',
+          confidence: 0.9,
+          applyMode: 'auto',
+          dependencyOpIds: [],
+          rationale: 'Refine chapter canon.',
+          status: 'applied',
+          metadata: {},
+          payload: {
+            targetEntityKey: chapter.key,
+            entity: {
+              name: chapter.name,
+              summary: chapter.summary,
+              context: chapter.context,
+              nodeType: chapter.nodeType,
+              aliases: [],
+              tags: [],
+              status: 'active',
+              thumbnailAssetKey: null,
+              linkedDefinitionKey: null,
+              source: 'ai',
+              customProperties: {},
+              metadata: {},
+              ensureLinkedDefinition: true,
+            },
+          },
+        },
+        applied: {
+          worldEntities: [chapter],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:01:00.000Z',
+    })],
+    entityByKey: new Map([[chapter.key, chapter]]),
+    now: new Date('2026-04-22T10:02:00.000Z'),
+  })
+
+  const updated = feed.entries.find((entry) => entry.kind === 'entity_updated' && entry.entityKey === chapter.key)
+  assert.deepEqual(updated?.audit?.changeDetails, [`Canon added: ${longCanon}`])
+  assert.doesNotMatch(updated?.audit?.changeDetails?.[0] ?? '', /\.\.\.$/)
+})
+
+test('uniqueWorldPromptSuggestions collapses repeated active records by prompt', () => {
+  const base = {
+    label: 'Add a rival',
+    prompt: 'Add a rival who challenges the hero.',
+    kind: 'continue_scope',
+    style: 'primary',
+    source: 'wave2',
+    threadKey: null,
+    summary: 'Create a rival pressure point.',
+    estimatedNodeCount: 1,
+    estimatedEdgeCount: 0,
+    willQueueImages: false,
+    willQueueCinematics: false,
+  } satisfies Omit<WorldPromptSuggestion, 'id'>
+  const unique = uniqueWorldPromptSuggestions([
+    { ...base, id: 's1' },
+    { ...base, id: 's2', prompt: '  Add a rival who challenges the hero. ' },
+    { ...base, id: 's3', prompt: 'Add a hidden location with a cost.', label: 'Deepen the setting' },
+  ])
+
+  assert.deepEqual(unique.map((suggestion) => suggestion.id), ['s1', 's3'])
 })
 
 test('buildWorldFeedViewModel folds structural relationship patches into one relationship turn card', () => {
@@ -1383,6 +1969,7 @@ test('buildWorldFeedViewModel folds structural relationship patches into one rel
   assert.equal(turnEntry?.filter, 'relationships')
   assert.deepEqual(turnEntry?.thumbnailEntityKeys, [hero.key, protocol.key])
   assert.deepEqual(turnEntry?.audit?.relationshipKeys, ['rel-1'])
+  assert.equal(feed.entries.some((entry) => entry.kind === 'relationship_updated' && entry.parentTurnId === turn.id), true)
   assert.equal(feed.entries.some((entry) => entry.kind === 'canon_transaction'), false)
   assert.equal(feed.entries.some((entry) => entry.kind === 'relationship_rewired'), false)
 })
@@ -1477,6 +2064,7 @@ test('buildWorldFeedViewModel folds node evolution and canon fact updates into o
   assert.equal(turnEntry?.filter, 'changes')
   assert.deepEqual(turnEntry?.connectedEntityKeys, [hero.key])
   assert.deepEqual(turnEntry?.audit?.changedEntityKeys, [hero.key])
+  assert.equal(feed.entries.some((entry) => entry.kind === 'entity_updated' && entry.parentTurnId === turn.id && entry.entityKey === hero.key), true)
   assert.equal(feed.entries.some((entry) => entry.kind === 'node_evolution'), false)
   assert.equal(feed.entries.some((entry) => entry.kind === 'entity_canon_updated'), false)
 })

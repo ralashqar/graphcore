@@ -38,3 +38,18 @@ test('suggested actions has a canonical gaps navigation item', () => {
   assert.match(labelsSource, /case 'gaps':\s*return 'Suggested Actions'/)
   assert.match(worldGraphSource, /sectionKind === 'gaps' \? 'world-wiki-section-gaps'/)
 })
+
+test('wiki overview banner has fixed-height logline behavior with full-text modal', () => {
+  const wikiPanelSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/wiki/WorldWikiPanel.tsx'), 'utf8')
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const conceptOverrideCss = readFileSync(resolve(repoRoot, 'src/styles/features/world-builder/wiki-feed/wiki-sections/concept-image-override.css'), 'utf8')
+
+  assert.match(wikiPanelSource, /className="world-wiki-logline-text"/)
+  assert.match(wikiPanelSource, /onOpenWikiDetailModal\(\{/)
+  assert.match(wikiPanelSource, /eyebrow: 'Logline'/)
+  assert.match(worldGraphSource, /onOpenWikiDetailModal=\{openWikiDetailModal\}/)
+  assert.match(conceptOverrideCss, /\.world-wiki-overview\s*\{[\s\S]*height: clamp\(252px, 21vw, 310px\) !important/)
+  assert.match(conceptOverrideCss, /\.world-wiki-overview-bottom-row\s*\{[\s\S]*position: absolute !important/)
+  assert.match(conceptOverrideCss, /\.world-wiki-logline-text/)
+  assert.match(conceptOverrideCss, /-webkit-line-clamp: 2/)
+})

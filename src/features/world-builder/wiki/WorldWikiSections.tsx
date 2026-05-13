@@ -104,20 +104,6 @@ export function countWorldWikiSearchMatches(input: WikiSearchInput) {
     }, 0)
 }
 
-function buildWikiDetailBody(parts: Array<string | null | undefined>) {
-  const seen = new Set<string>()
-  return parts
-    .map((part) => part?.trim() ?? '')
-    .filter(Boolean)
-    .filter((part) => {
-      const key = part.toLowerCase()
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .join('\n\n')
-}
-
 type LiveWikiTextElement = 'strong' | 'em' | 'small' | 'span'
 
 function LiveWikiRevealText({
@@ -165,7 +151,6 @@ type WorldWikiSectionViewProps = {
   entityByKey: ReadonlyMap<string, WorldEntity>
   imageUrlByEntityKey: ReadonlyMap<string, string | null>
   imageUrlByResultKey: ReadonlyMap<string, string | null>
-  referenceSheetUrlByEntityKey: ReadonlyMap<string, string | null>
   inspectorNodeKey: string | null
   isPromptSubmitting: boolean
   normalizedWikiSearchQuery: string
@@ -186,10 +171,10 @@ type WorldWikiSectionViewProps = {
   wikiStyleExpanded: boolean
   onGenerateBrandAtlasImage: () => void
   onOpenBrandAtlasImageSplash: (imageUrl: string | null | undefined) => void
+  onOpenWikiEntityPage: (sectionKind: WorldWikiSection['kind'], entityKey: string) => void
   onOpenWikiDetailModal: (input: WorldWikiDetailModalInput) => void
   onRunWikiGap: (gap: WorldWikiGap) => void
   onSelectWorldNode: (nodeKey: string) => void
-  onSetActiveInspectorTab: (tab: 'overview' | 'relationships' | 'usage' | 'suggestions' | 'history') => void
   onSetSelectedPromptThreadKey: (threadKey: string) => void
   onSetWikiStyleExpanded: Dispatch<SetStateAction<boolean>>
 }
@@ -200,7 +185,6 @@ export function WorldWikiSectionView({
   entityByKey,
   imageUrlByEntityKey,
   imageUrlByResultKey,
-  referenceSheetUrlByEntityKey,
   inspectorNodeKey,
   isPromptSubmitting,
   normalizedWikiSearchQuery,
@@ -221,10 +205,10 @@ export function WorldWikiSectionView({
   wikiStyleExpanded,
   onGenerateBrandAtlasImage,
   onOpenBrandAtlasImageSplash,
+  onOpenWikiEntityPage,
   onOpenWikiDetailModal,
   onRunWikiGap,
   onSelectWorldNode,
-  onSetActiveInspectorTab,
   onSetSelectedPromptThreadKey,
   onSetWikiStyleExpanded,
 }: WorldWikiSectionViewProps) {
@@ -247,12 +231,10 @@ export function WorldWikiSectionView({
     const entity = entityByKey.get(entityKey) ?? null
     if (!entity) return null
     const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
-    const detailImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? imageUrl
     const referenceArtState = referenceArtStateByEntityKey.get(entity.key) ?? null
     const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key)
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
     const summary = profile?.shortSummary || entity.summary || entity.context || 'No wiki summary yet.'
-    const detailBody = buildWikiDetailBody([profile?.shortSummary, entity.summary, entity.context])
     const reveal = liveEntryProps('entity', entity.key)
     const isLiveReveal = liveRevealEntryKeys.has(reveal.dataEntryKey)
     return (
@@ -261,20 +243,7 @@ export function WorldWikiSectionView({
         className={`world-wiki-entity-card world-wiki-cell-reveal is-${entity.nodeType} is-${variant}${active ? ' is-active' : ''}${reveal.className}`}
         data-wiki-entry-key={reveal.dataEntryKey}
         onClick={() => {
-          onSelectWorldNode(entity.key)
-          onSetActiveInspectorTab('overview')
-          onOpenWikiDetailModal({
-            title: entity.name,
-            eyebrow: profile?.roleLabel || labelForWorldEntity(entity.nodeType),
-            body: detailBody,
-            icon: iconForWorldEntity(entity.nodeType),
-            imageUrl: detailImageUrl,
-            meta: [
-              labelForWorldEntity(entity.nodeType),
-              profile?.relationshipKeys.length ? `${profile.relationshipKeys.length} link${profile.relationshipKeys.length === 1 ? '' : 's'}` : null,
-              profile?.threadKeys.length ? `${profile.threadKeys.length} thread${profile.threadKeys.length === 1 ? '' : 's'}` : null,
-            ].filter((value): value is string => Boolean(value)),
-          })
+          onOpenWikiEntityPage(section.kind, entity.key)
         }}
         type="button"
       >
@@ -304,39 +273,18 @@ export function WorldWikiSectionView({
     const active = selectedWorldNodeKey === entity.key || inspectorNodeKey === entity.key
     const ordinal = sequence?.ordinal ?? null
     const imageUrl = imageUrlByEntityKey.get(entity.key) ?? null
-    const detailImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? imageUrl
     const referenceArtState = referenceArtStateByEntityKey.get(entity.key) ?? null
     const summary = sequence?.synopsis || profile?.shortSummary || entity.summary || entity.context || 'No story beat summary yet.'
     const outcome = sequence?.outcome || ''
     const reveal = liveEntryProps('entity', entity.key)
     const isLiveReveal = liveRevealEntryKeys.has(reveal.dataEntryKey)
-    const detailBody = buildWikiDetailBody([
-      sequence?.synopsis,
-      sequence?.dramaticQuestion ? `Dramatic question: ${sequence.dramaticQuestion}` : null,
-      outcome ? `Outcome: ${outcome}` : null,
-      entity.context,
-    ])
     return (
       <button
         key={entity.key}
         className={`world-wiki-timeline-card world-wiki-cell-reveal is-${entity.nodeType}${active ? ' is-active' : ''}${reveal.className}`}
         data-wiki-entry-key={reveal.dataEntryKey}
         onClick={() => {
-          onSelectWorldNode(entity.key)
-          onSetActiveInspectorTab('overview')
-          onOpenWikiDetailModal({
-            title: entity.name,
-            eyebrow: sequence?.unitKind || labelForWorldEntity(entity.nodeType),
-            body: detailBody,
-            icon: iconForWorldEntity(entity.nodeType),
-            imageUrl: detailImageUrl,
-            meta: [
-              ordinal !== null ? `Step ${ordinal}` : null,
-              sequence?.actLabel || null,
-              sequence?.storyFunction ? sequence.storyFunction.replace(/_/g, ' ') : null,
-              sequence?.scriptExpansionReady ? 'Script ready' : null,
-            ].filter((value): value is string => Boolean(value)),
-          })
+          onOpenWikiEntityPage(section.kind, entity.key)
         }}
         type="button"
       >

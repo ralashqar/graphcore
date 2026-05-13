@@ -69,3 +69,105 @@
   }
 }
 
+.world-wiki-overview {
+  height: clamp(252px, 21vw, 310px) !important;
+  min-height: clamp(252px, 21vw, 310px) !important;
+  max-height: clamp(252px, 21vw, 310px) !important;
+  padding-bottom: 58px !important;
+}
+
+.world-wiki-overview:has(.world-wiki-overview-media.has-image) {
+  height: clamp(252px, 21vw, 310px) !important;
+  min-height: clamp(252px, 21vw, 310px) !important;
+  max-height: clamp(252px, 21vw, 310px) !important;
+}
+
+.world-wiki-overview-copy {
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.world-wiki-logline {
+  min-width: 0;
+  max-width: min(660px, 100%);
+  min-height: 2.7em;
+  max-height: 2.7em;
+  overflow: hidden;
+}
+
+.world-wiki-logline-text {
+  min-width: 0;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-wiki-logline-text:hover,
+.world-wiki-logline-text:focus-visible {
+  color: rgba(153, 246, 228, 0.96);
+  outline: none;
+}
+
+.world-wiki-logline > span,
+.world-wiki-logline-text > span {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.world-wiki-overview-bottom-row {
+  position: absolute !important;
+  left: 0;
+  right: 0;
+  bottom: 10px;
+  z-index: 5;
+  margin-top: 0 !important;
+}
+
+.world-wiki-overview-tags {
+  flex-wrap: nowrap !important;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.world-wiki-overview-tags .chip {
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .world-wiki-overview,
+  .world-wiki-overview:has(.world-wiki-overview-media.has-image) {
+    height: 360px !important;
+    min-height: 360px !important;
+    max-height: 360px !important;
+    padding-bottom: 66px !important;
+  }
+
+  .world-wiki-overview-bottom-row {
+    bottom: 10px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .world-wiki-overview-tags {
+    justify-content: flex-start !important;
+    max-width: 100% !important;
+  }
+}
+

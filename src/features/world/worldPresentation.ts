@@ -14,7 +14,7 @@ import type {
   WorldPromptSuggestion,
   WorldPromptTurn,
 } from '../../domain/worldPrompt.ts'
-import { worldPromptEventPayloadSchema, worldPromptPlanPreviewSchema } from '../../domain/worldPrompt.ts'
+import { isInitialSeedGenerationTurn, worldPromptEventPayloadSchema, worldPromptPlanPreviewSchema } from '../../domain/worldPrompt.ts'
 import type { WorldEntity, WorldOperator, WorldRelationship, WorldResult } from '../../domain/worldGraph.ts'
 import type { WorldGraphDepthMode, WorldSceneDisplayTier, WorldSceneTransitionState } from '../../domain/worldGraphScene.ts'
 import { labelForWorldEntity } from '../../domain/worldGraphHelpers.ts'
@@ -257,6 +257,16 @@ export type WorldFeedEntry = {
   thumbnailEntityKeys?: string[]
   connectedEntityKeys?: string[]
   changedFields?: string[]
+  promptExcerpt?: string
+  changeCounts?: {
+    addedEntities: number
+    updatedEntities: number
+    relationships: number
+    wiki: number
+    media: number
+    suggestions: number
+    total: number
+  }
   fullDetail?: string
   turnId?: string
   parentTurnId?: string
@@ -2277,10 +2287,112 @@ function uniqueWorldFeedKeys(keys: Array<string | null | undefined>) {
   return Array.from(new Set(keys.filter((key): key is string => Boolean(key && key.trim()))))
 }
 
+function normalizeWorldPromptSuggestionText(value: string | null | undefined) {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function worldPromptSuggestionDedupeKey(suggestion: WorldPromptSuggestion) {
+  const prompt = normalizeWorldPromptSuggestionText(suggestion.prompt)
+  if (prompt) return `prompt:${prompt}`
+  const label = normalizeWorldPromptSuggestionText(suggestion.label)
+  const summary = normalizeWorldPromptSuggestionText(suggestion.summary)
+  return `copy:${label}:${summary}:${suggestion.kind}:${suggestion.threadKey ?? ''}`
+}
+
+export function uniqueWorldPromptSuggestions<T extends WorldPromptSuggestion>(suggestions: readonly T[]): T[] {
+  const seen = new Set<string>()
+  const result: T[] = []
+  for (const suggestion of suggestions) {
+    const key = worldPromptSuggestionDedupeKey(suggestion)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(suggestion)
+  }
+  return result
+}
+
 function latestWorldFeedEventTime(events: WorldPromptEvent[], fallback: string) {
   return events.reduce((latest, event) => (
     new Date(event.createdAt).getTime() > new Date(latest).getTime() ? event.createdAt : latest
   ), fallback)
+}
+
+function isWorldFeedEntityCreatedDuringTurn(entity: WorldEntity, turn: WorldPromptTurn, eventCreatedAt: string) {
+  if (!entity.createdAt || !turn.createdAt || !eventCreatedAt) return false
+  const entityCreatedAt = Date.parse(entity.createdAt)
+  const turnCreatedAt = Date.parse(turn.createdAt)
+  const eventTime = Date.parse(eventCreatedAt)
+  if (!Number.isFinite(entityCreatedAt) || !Number.isFinite(turnCreatedAt) || !Number.isFinite(eventTime)) return false
+  const lowerBound = turnCreatedAt - 5_000
+  const upperBound = eventTime + 60_000
+  return entityCreatedAt >= lowerBound && entityCreatedAt <= upperBound
+}
+
+function formatWorldFeedFieldLabel(key: string) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (letter) => letter.toUpperCase())
+}
+
+function compactWorldFeedChangeValue(value: unknown) {
+  if (typeof value === 'string') return compactWorldFeedText(value, 180)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    const textValues = value
+      .map((entry) => typeof entry === 'string' ? entry : typeof entry === 'number' || typeof entry === 'boolean' ? String(entry) : '')
+      .filter(Boolean)
+    return textValues.length > 0 ? compactWorldFeedText(textValues.join(', '), 180) : `${value.length} item${value.length === 1 ? '' : 's'}`
+  }
+  if (value && typeof value === 'object') return 'updated'
+  return ''
+}
+
+function fullWorldFeedChangeValue(value: unknown) {
+  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => typeof entry === 'string' ? entry.replace(/\s+/g, ' ').trim() : typeof entry === 'number' || typeof entry === 'boolean' ? String(entry) : '')
+      .filter(Boolean)
+      .join(', ')
+  }
+  return ''
+}
+
+function shouldIncludeWorldFeedChangeField(key: string, value: unknown) {
+  if (['source', 'ensureLinkedDefinition', 'customProperties', 'nodeType', 'thumbnailAssetKey', 'linkedDefinitionKey', 'aliases'].includes(key)) return false
+  if (value === null || value === undefined) return false
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return false
+    if (key === 'status' && trimmed === 'active') return false
+    if (key === 'source' && trimmed === 'ai') return false
+    return true
+  }
+  if (typeof value === 'object') return Object.keys(value).length > 0
+  return true
+}
+
+function shouldIncludeWorldFeedUpdateChangeField(key: string, value: unknown) {
+  if (['name', 'context'].includes(key)) return false
+  return shouldIncludeWorldFeedChangeField(key, value)
+}
+
+function addWorldFeedEntityChange(
+  map: Map<string, { labels: Set<string>; details: string[] }>,
+  entityKey: string | null | undefined,
+  label: string,
+  detail?: string,
+) {
+  if (!entityKey || !label.trim()) return
+  const entry = map.get(entityKey) ?? { labels: new Set<string>(), details: [] }
+  entry.labels.add(label)
+  if (detail && !entry.details.includes(detail)) entry.details.push(detail)
+  map.set(entityKey, entry)
 }
 
 function describeWorldFeedCounts(input: {
@@ -2346,19 +2458,102 @@ function buildTurnFeedSummary(input: {
   const lens = input.lens
   const createOpEntityKeys: string[] = []
   const changedOpEntityKeys: string[] = []
+  const entityChangeDetailsByKey = new Map<string, { labels: Set<string>; details: string[] }>()
   let sawAppliedOpWithPlannerOp = false
+  const forceAppliedEntitiesCreated = isInitialSeedGenerationTurn(input.turn)
   for (const { event, payload } of parsedEvents) {
     if (event.eventType !== 'op_applied') continue
-    const appliedEntityKeys = (payload.applied?.worldEntities ?? []).map((entity) => entity.key)
+    const appliedEntities = payload.applied?.worldEntities ?? []
+    const appliedEntityKeys = appliedEntities.map((entity) => entity.key)
     if (!payload.op) {
       createOpEntityKeys.push(...appliedEntityKeys)
       continue
     }
     sawAppliedOpWithPlannerOp = true
-    if (payload.op.op === 'upsert_entity' && (!payload.op.payload.targetEntityKey || payload.op.metadata?.projectedCreate === true)) {
+    const upsertCreatedNewEntity = payload.op.op === 'upsert_entity' && (
+      !payload.op.payload.targetEntityKey
+      || payload.op.metadata?.projectedCreate === true
+      || forceAppliedEntitiesCreated
+      || appliedEntities.every((entity) => isWorldFeedEntityCreatedDuringTurn(entity, input.turn, event.createdAt))
+    )
+    if (upsertCreatedNewEntity) {
       createOpEntityKeys.push(...appliedEntityKeys)
     } else {
       changedOpEntityKeys.push(...appliedEntityKeys)
+      if (payload.op.op === 'update_entity') {
+        for (const [key, value] of Object.entries(payload.op.payload.changes)) {
+          if (!shouldIncludeWorldFeedUpdateChangeField(key, value)) continue
+          if (key === 'summary') {
+            const canonAdded = fullWorldFeedChangeValue(value)
+            if (canonAdded) {
+              addWorldFeedEntityChange(
+                entityChangeDetailsByKey,
+                payload.op.payload.targetEntityKey,
+                'Canon added',
+                `Canon added: ${canonAdded}`,
+              )
+            }
+            continue
+          }
+          const label = formatWorldFeedFieldLabel(key)
+          const valuePreview = compactWorldFeedChangeValue(value)
+          addWorldFeedEntityChange(
+            entityChangeDetailsByKey,
+            payload.op.payload.targetEntityKey,
+            label,
+            valuePreview ? `${label}: ${valuePreview}` : `${label} updated`,
+          )
+        }
+      } else if (payload.op.op === 'update_entity_canon') {
+        const targetEntityKey = payload.op.payload.targetEntityKey
+        if (payload.op.payload.summaryPatch) {
+          const canonAdded = fullWorldFeedChangeValue(payload.op.payload.summaryPatch)
+          if (canonAdded) {
+            addWorldFeedEntityChange(entityChangeDetailsByKey, targetEntityKey, 'Canon added', `Canon added: ${canonAdded}`)
+          }
+        }
+        const currentStateKeys = Object.keys(payload.op.payload.currentStatePatch)
+        for (const key of currentStateKeys) {
+          const label = `State: ${formatWorldFeedFieldLabel(key)}`
+          addWorldFeedEntityChange(
+            entityChangeDetailsByKey,
+            targetEntityKey,
+            label,
+            `${label}: ${compactWorldFeedChangeValue(payload.op.payload.currentStatePatch[key]) || 'updated'}`,
+          )
+        }
+        if (payload.op.payload.factAdditions.length > 0) {
+          const label = 'Canon added'
+          const detail = payload.op.payload.factAdditions
+            .map((fact) => fact.text)
+            .filter(Boolean)
+            .slice(0, 6)
+            .join(' / ')
+          addWorldFeedEntityChange(entityChangeDetailsByKey, targetEntityKey, label, detail ? `${label}: ${fullWorldFeedChangeValue(detail)}` : label)
+        }
+        if (payload.op.payload.supersedeFactIds.length > 0) {
+          addWorldFeedEntityChange(entityChangeDetailsByKey, targetEntityKey, 'Canon facts superseded', `${payload.op.payload.supersedeFactIds.length} canon fact${payload.op.payload.supersedeFactIds.length === 1 ? '' : 's'} superseded`)
+        }
+      } else if (payload.op.op === 'upsert_entity') {
+        const targetEntityKey = payload.op.payload.targetEntityKey ?? appliedEntityKeys[0]
+        const entityInput = payload.op.payload.entity
+        if (shouldIncludeWorldFeedChangeField('summary', entityInput.summary)) {
+          const canonAdded = fullWorldFeedChangeValue(entityInput.summary)
+          addWorldFeedEntityChange(
+            entityChangeDetailsByKey,
+            targetEntityKey,
+            'Canon added',
+            canonAdded ? `Canon added: ${canonAdded}` : 'Canon added',
+          )
+        }
+        for (const key of ['tags', 'status'] as const) {
+          const value = entityInput[key]
+          if (!shouldIncludeWorldFeedChangeField(key, value)) continue
+          const label = formatWorldFeedFieldLabel(key)
+          const valuePreview = compactWorldFeedChangeValue(value)
+          addWorldFeedEntityChange(entityChangeDetailsByKey, targetEntityKey, label, valuePreview ? `${label}: ${valuePreview}` : `${label} updated`)
+        }
+      }
     }
   }
   const addedEntityKeys = uniqueWorldFeedKeys(
@@ -2368,7 +2563,7 @@ function buildTurnFeedSummary(input: {
         ? lens.entityKeys.filter((key) => lens.entityChangeKinds[key] === 'added')
         : [],
   )
-  const changedEntityKeys = uniqueWorldFeedKeys([
+  const plannedChangedEntityKeys = uniqueWorldFeedKeys([
     ...changedOpEntityKeys,
     ...(lens
       ? lens.entityKeys.filter((key) => lens.entityChangeKinds[key] && lens.entityChangeKinds[key] !== 'added' && lens.entityChangeKinds[key] !== 'touched')
@@ -2378,7 +2573,7 @@ function buildTurnFeedSummary(input: {
   const wikiLabels: string[] = []
   const assistantNotes: string[] = []
   const completionNotes: string[] = []
-  const suggestions: WorldPromptSuggestion[] = []
+  const rawSuggestions: WorldPromptSuggestion[] = []
   const auditTouchedEntityKeys: string[] = []
   const auditRelationshipKeys: string[] = []
 
@@ -2418,15 +2613,20 @@ function buildTurnFeedSummary(input: {
       }
     }
     if (payload.suggestions.length > 0) {
-      suggestions.push(...payload.suggestions)
+      rawSuggestions.push(...payload.suggestions)
     }
   }
+  const suggestions = uniqueWorldPromptSuggestions(rawSuggestions)
   const touchedEntityKeys = uniqueWorldFeedKeys([
     ...addedEntityKeys,
-    ...changedEntityKeys,
+    ...plannedChangedEntityKeys,
     ...(lens?.entityKeys ?? []),
     ...auditTouchedEntityKeys,
   ])
+  const changedEntityKeys = uniqueWorldFeedKeys([
+    ...plannedChangedEntityKeys,
+    ...auditTouchedEntityKeys,
+  ].filter((key) => !addedEntityKeys.includes(key)))
   const relationshipKeys = uniqueWorldFeedKeys([...(lens?.relationshipKeys ?? []), ...auditRelationshipKeys])
 
   const feedSummary = readFeedSummaryMetadata(input.turn)
@@ -2443,7 +2643,17 @@ function buildTurnFeedSummary(input: {
     wikiCount: wikiLabels.length,
     suggestionCount: suggestions.length,
   }
+  const changeCounts = {
+    addedEntities: counts.addedCount,
+    updatedEntities: counts.changedCount,
+    relationships: counts.relationshipCount,
+    wiki: counts.wikiCount,
+    media: counts.mediaCount,
+    suggestions: counts.suggestionCount,
+    total: counts.addedCount + counts.changedCount + counts.relationshipCount + counts.wikiCount + counts.mediaCount + counts.suggestionCount,
+  }
   const countSummary = describeWorldFeedCounts(counts)
+  const promptExcerpt = compactWorldFeedText(input.turn.prompt, 118)
   const summaryText = metadataSummary
     || stripInternalPlannerDiagnostics(input.turn.assistantSummary)
     || completionNotes.find(Boolean)
@@ -2507,8 +2717,10 @@ function buildTurnFeedSummary(input: {
     title,
     detail: summaryText,
     fullDetail,
-    badge: input.active ? (input.turn.status === 'queued' ? 'Queued' : 'Running') : 'World Update',
+    badge: 'Prompt',
     tone: input.active ? 'working' : 'success',
+    promptExcerpt,
+    changeCounts,
     thumbnailEntityKeys,
     connectedEntityKeys,
     changedFields,
@@ -2528,7 +2740,7 @@ function buildTurnFeedSummary(input: {
     suggestions: suggestions.slice(0, 3),
   } satisfies WorldFeedEntry)
 
-  const children = addedEntities.map((entity, index) => withCompactWorldFeedDetail({
+  const addedChildren = addedEntities.map((entity, index) => withCompactWorldFeedDetail({
     id: `turn:${input.turn.id}:entity:${entity.key}`,
     createdAt,
     kind: 'entity_created',
@@ -2548,6 +2760,120 @@ function buildTurnFeedSummary(input: {
     sortOrder: index + 1,
     turnLens: lens,
   } satisfies WorldFeedEntry))
+  const changedChildren = changedEntities.map((entity, index) => withCompactWorldFeedDetail({
+    ...(() => {
+      const changeDetail = entityChangeDetailsByKey.get(entity.key)
+      const changeLabels = changeDetail ? [...changeDetail.labels].slice(0, 8) : []
+      const changeDetails = changeDetail?.details.slice(0, 8) ?? []
+      const fallbackDetail = entity.context || entity.summary || labelForWorldEntity(entity.nodeType)
+      return {
+        detail: changeDetails[0] ?? fallbackDetail,
+        fullDetail: fallbackDetail,
+        changedFields: changeLabels.length > 0 ? changeLabels : undefined,
+        audit: changeDetails.length > 0 ? { changeDetails } : undefined,
+      }
+    })(),
+    id: `turn:${input.turn.id}:entity-updated:${entity.key}`,
+    createdAt,
+    kind: 'entity_updated',
+    filter: 'changes',
+    relatedFilters: ['changes'],
+    title: entity.name,
+    badge: 'Updated',
+    tone: 'normal',
+    entityKey: entity.key,
+    entityNodeType: entity.nodeType,
+    thumbnailEntityKeys: [entity.key],
+    connectedEntityKeys: [entity.key],
+    parentTurnId: input.turn.id,
+    turnId: input.turn.id,
+    sortOrder: addedChildren.length + index + 1,
+    turnLens: lens,
+  } satisfies WorldFeedEntry))
+  const secondaryStartOrder = addedChildren.length + changedChildren.length + 1
+  const suggestionChildren = suggestions.map((suggestion, index) => withCompactWorldFeedDetail({
+    id: `turn:${input.turn.id}:suggestion:${suggestion.id || index}`,
+    createdAt,
+    kind: 'suggestion',
+    filter: 'suggestions',
+    relatedFilters: ['suggestions'],
+    title: suggestion.label || suggestion.summary || 'Suggested action',
+    detail: suggestion.summary || suggestion.prompt || suggestion.label || 'Suggested next move',
+    fullDetail: suggestion.prompt || suggestion.summary || suggestion.label || 'Suggested next move',
+    badge: 'Suggestion',
+    tone: 'normal',
+    thumbnailEntityKeys: connectedEntityKeys.slice(0, 1),
+    connectedEntityKeys,
+    parentTurnId: input.turn.id,
+    turnId: input.turn.id,
+    sortOrder: secondaryStartOrder + 3 + index,
+    turnLens: lens,
+    suggestions: [suggestion],
+  } satisfies WorldFeedEntry))
+  const secondaryChildren = [
+    relationshipKeys.length > 0 ? withCompactWorldFeedDetail({
+      id: `turn:${input.turn.id}:relationships`,
+      createdAt,
+      kind: 'relationship_updated',
+      filter: 'relationships',
+      relatedFilters: ['relationships'],
+      title: `${relationshipKeys.length} relationship${relationshipKeys.length === 1 ? '' : 's'} changed`,
+      detail: relationshipKeys.slice(0, 4).map((key) => {
+        const relationship = input.relationshipByKey.get(key)
+        if (!relationship) return key
+        const source = input.entityByKey.get(relationship.sourceEntityKey)?.name ?? relationship.sourceEntityKey
+        const target = input.entityByKey.get(relationship.targetEntityKey)?.name ?? relationship.targetEntityKey
+        return `${source} ${relationship.verb.replace(/_/g, ' ')} ${target}`
+      }).join('; '),
+      fullDetail: relationshipKeys.join('\n'),
+      badge: 'Relationships',
+      tone: 'normal',
+      relationshipKey: relationshipKeys[0],
+      thumbnailEntityKeys: connectedEntityKeys.slice(0, 2),
+      connectedEntityKeys,
+      parentTurnId: input.turn.id,
+      turnId: input.turn.id,
+      sortOrder: secondaryStartOrder,
+      turnLens: lens,
+    } satisfies WorldFeedEntry) : null,
+    wikiLabels.length > 0 ? withCompactWorldFeedDetail({
+      id: `turn:${input.turn.id}:wiki`,
+      createdAt,
+      kind: 'wiki_updated',
+      filter: 'changes',
+      relatedFilters: ['changes'],
+      title: 'Wiki updated',
+      detail: wikiLabels.join(', '),
+      fullDetail: wikiLabels.join('\n'),
+      badge: 'Wiki',
+      tone: 'normal',
+      thumbnailEntityKeys: connectedEntityKeys.slice(0, 2),
+      connectedEntityKeys,
+      parentTurnId: input.turn.id,
+      turnId: input.turn.id,
+      sortOrder: secondaryStartOrder + 1,
+      turnLens: lens,
+    } satisfies WorldFeedEntry) : null,
+    mediaLabels.length > 0 ? withCompactWorldFeedDetail({
+      id: `turn:${input.turn.id}:media`,
+      createdAt,
+      kind: 'media_job',
+      filter: 'media',
+      relatedFilters: ['media'],
+      title: `${mediaLabels.length} media update${mediaLabels.length === 1 ? '' : 's'}`,
+      detail: mediaLabels.join(', '),
+      fullDetail: mediaLabels.join('\n'),
+      badge: 'Media',
+      tone: 'normal',
+      thumbnailEntityKeys: connectedEntityKeys.slice(0, 2),
+      connectedEntityKeys,
+      parentTurnId: input.turn.id,
+      turnId: input.turn.id,
+      sortOrder: secondaryStartOrder + 2,
+      turnLens: lens,
+    } satisfies WorldFeedEntry) : null,
+  ].filter((entry): entry is WorldFeedEntry => Boolean(entry))
+  const children = [...addedChildren, ...changedChildren, ...secondaryChildren, ...suggestionChildren]
 
   if (!input.active && parent.detail.trim().length === 0 && children.length === 0 && relatedFilters.length === 0) {
     return null
@@ -2915,24 +3241,6 @@ export function buildWorldFeedViewModel(input: {
     eventsByTurnId.set(event.turnId, list)
   }
 
-  const suggestionEntries = (input.suggestions ?? []).slice(0, 12).map((suggestion, index) => withCompactWorldFeedDetail({
-    id: `suggestion:${suggestion.id}`,
-    createdAt: (() => {
-      const value = (suggestion as unknown as { createdAt?: unknown }).createdAt
-      return typeof value === 'string' ? value : input.now?.toISOString() ?? new Date().toISOString()
-    })(),
-    kind: 'suggestion',
-    filter: 'suggestions',
-    relatedFilters: ['suggestions'],
-    title: suggestion.label || suggestion.summary || 'Suggested next move',
-    detail: suggestion.summary || suggestion.prompt,
-    fullDetail: suggestion.prompt || suggestion.summary,
-    badge: 'Suggestion',
-    tone: 'normal',
-    suggestions: [suggestion],
-    sortOrder: index,
-  } satisfies WorldFeedEntry))
-
   const turnEntries: WorldFeedEntry[] = []
   let activeTurnEntry: WorldFeedEntry | null = null
   for (const turn of input.turns ?? []) {
@@ -2969,10 +3277,7 @@ export function buildWorldFeedViewModel(input: {
     }
   }
 
-  const sortedEntries = [
-    ...turnEntries,
-    ...suggestionEntries,
-  ].sort((left, right) => {
+  const sortedEntries = turnEntries.sort((left, right) => {
     const timeDelta = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     if (timeDelta !== 0) return timeDelta
     if (left.turnId && right.turnId && left.turnId === right.turnId) {
@@ -3000,7 +3305,7 @@ export function buildWorldFeedViewModel(input: {
     groups: createWorldFeedGroups(sortedEntries, input.now ?? new Date()),
     countsByFilter,
     activeTurnEntry,
-    suggestions: input.suggestions ?? [],
+    suggestions: uniqueWorldPromptSuggestions(input.suggestions ?? []),
   }
 }
 

@@ -108,6 +108,8 @@ import {
   mergeWorldEntityVisualDescriptionMetadata,
   readWorldEntityVisualDescription,
   readWorldEntityVisualIdentity,
+  readWorldEntityVisualTraits,
+  readWorldEntityVoiceDescription,
 } from '../../domain/worldEntityVisuals'
 import {
   buildSuggestionsForEntity,
@@ -137,6 +139,7 @@ import {
   buildWorldInspectorViewModel,
   buildWorldRefinementHistoryViewModel,
   resolveWorldEdgeReveal,
+  uniqueWorldPromptSuggestions,
   worldNodeDataEqual,
   type WorldGraphDisplayFilters,
   type WorldGraphNodeRecord,
@@ -629,6 +632,10 @@ type WorldGraphPageProps = {
 }
 
 type WikiDetailModalState = WorldWikiDetailModalInput | null
+type ActiveWikiEntityPageState = {
+  sectionKind: WorldWikiSection['kind']
+  entityKey: string
+} | null
 
 type EntityComposerState = {
   mode: 'global' | 'related'
@@ -1361,6 +1368,7 @@ export function WorldGraphPage({
     setFlashTurnLens,
   } = useWorldPromptPanelState(worldPromptSessions)
   const [wikiDetailModal, setWikiDetailModal] = useState<WikiDetailModalState>(null)
+  const [activeWikiEntityPage, setActiveWikiEntityPage] = useState<ActiveWikiEntityPageState>(null)
   const wikiDocumentRef = useRef<HTMLDivElement | null>(null)
   const worldFeedMainRef = useRef<HTMLElement | null>(null)
   const worldFeedLoadMoreRef = useRef<HTMLDivElement | null>(null)
@@ -1575,9 +1583,11 @@ export function WorldGraphPage({
   }, [activeInitialSeedGenerationJob?.turnId, effectiveSeedInferenceResult?.turn.id, initialSeedGenerationTurn, sessionEvents, showProjectOnboarding])
   const sessionSuggestions = useMemo(
     () => selectedPromptSession
-      ? worldPromptSuggestions
-          .filter((suggestion) => suggestion.sessionId === selectedPromptSession.id)
-          .sort((left, right) => left.rank - right.rank || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+      ? uniqueWorldPromptSuggestions(
+          worldPromptSuggestions
+            .filter((suggestion) => suggestion.sessionId === selectedPromptSession.id)
+            .sort((left, right) => left.rank - right.rank || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+        )
       : [],
     [selectedPromptSession, worldPromptSuggestions],
   )
@@ -1586,11 +1596,20 @@ export function WorldGraphPage({
     [sessionSuggestions],
   )
   const activeSuggestionCountBySessionId = useMemo(
-    () => worldPromptSuggestions.reduce<Record<string, number>>((counts, suggestion) => {
-      if (suggestion.state !== 'active') return counts
-      counts[suggestion.sessionId] = (counts[suggestion.sessionId] ?? 0) + 1
+    () => {
+      const bySession = new Map<string, typeof worldPromptSuggestions>()
+      for (const suggestion of worldPromptSuggestions) {
+        if (suggestion.state !== 'active') continue
+        const list = bySession.get(suggestion.sessionId) ?? []
+        list.push(suggestion)
+        bySession.set(suggestion.sessionId, list)
+      }
+      const counts: Record<string, number> = {}
+      for (const [sessionId, suggestions] of bySession) {
+        counts[sessionId] = uniqueWorldPromptSuggestions(suggestions).length
+      }
       return counts
-    }, {}),
+    },
     [worldPromptSuggestions],
   )
   const turnLensByTurnId = useMemo(
@@ -2114,6 +2133,21 @@ export function WorldGraphPage({
     },
     view: selectedView,
   }), [effectiveProjectDraftMetadata, projectDraftId, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
+  const resolveWikiEntitySectionKind = (entityKey: string): WorldWikiSection['kind'] | null => {
+    const section = wikiModel.sections.find((entry) => entry.entityKeys.includes(entityKey)) ?? null
+    return section?.kind ?? null
+  }
+  const activeWikiEntity = activeWikiEntityPage ? entityByKey.get(activeWikiEntityPage.entityKey) ?? null : null
+  const activeWikiEntitySection = activeWikiEntityPage
+    ? wikiModel.sections.find((section) => section.kind === activeWikiEntityPage.sectionKind) ?? null
+    : null
+  useEffect(() => {
+    if (!activeWikiEntityPage) return
+    const entity = entityByKey.get(activeWikiEntityPage.entityKey) ?? null
+    const section = wikiModel.sections.find((entry) => entry.kind === activeWikiEntityPage.sectionKind) ?? null
+    if (entity && section?.entityKeys.includes(entity.key)) return
+    setActiveWikiEntityPage(null)
+  }, [activeWikiEntityPage, entityByKey, wikiModel.sections])
   const liveWikiEntryKeys = useMemo(() => {
     const keys: string[] = []
     const seen = new Set<string>()
@@ -6309,6 +6343,7 @@ export function WorldGraphPage({
     if (wikiSubView === 'wiki' && wikiDocumentRef.current) {
       savedWikiScrollTopRef.current = wikiDocumentRef.current.scrollTop
     }
+    setActiveWikiEntityPage(null)
     setWikiSubView(nextSubView)
     onWorldWikiSubViewChange(nextSubView)
     if (nextSubView === 'feed' && options.focusComposer !== false) {
@@ -6364,6 +6399,268 @@ export function WorldGraphPage({
     )
   }
 
+  function openWikiEntityPage(sectionKind: WorldWikiSection['kind'], entityKey: string) {
+    setActiveWikiEntityPage({ sectionKind, entityKey })
+    selectWorldNode(entityKey)
+    setActiveInspectorTab('overview')
+    window.requestAnimationFrame(() => {
+      if (wikiDocumentRef.current) wikiDocumentRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+    })
+  }
+
+  function openWikiEntityPageByKey(entityKey: string) {
+    const sectionKind = resolveWikiEntitySectionKind(entityKey)
+    if (!sectionKind) {
+      selectWorldNode(entityKey)
+      setActiveInspectorTab('overview')
+      return
+    }
+    openWikiEntityPage(sectionKind, entityKey)
+  }
+
+  function closeWikiEntityPage() {
+    setActiveWikiEntityPage(null)
+  }
+
+  function renderWikiEntityPage() {
+    const entity = activeWikiEntity
+    const section = activeWikiEntitySection
+    if (!activeWikiEntityPage || !entity || !section) {
+      return (
+        <section className="world-wiki-entity-page is-empty">
+          <EntityIcon id="content" />
+          <strong>Select a wiki entry</strong>
+          <span>Choose an entity from the Wiki to inspect its canon page.</span>
+        </section>
+      )
+    }
+
+    const profile = wikiModel.entityProfiles.find((entry) => entry.entity.key === entity.key) ?? null
+    const visualDescription = readWorldEntityVisualDescription(entity)
+    const visualTraits = readWorldEntityVisualTraits(entity)
+    const voiceDescription = readWorldEntityVoiceDescription(entity)
+    const metadata = readLooseRecord(entity.metadata)
+    const currentState = readLooseRecord(metadata.currentState)
+    const canonFacts = Array.isArray(metadata.canonFacts)
+      ? metadata.canonFacts
+          .map((entry) => {
+            const record = readLooseRecord(entry)
+            return trimOptionalString(record.text)
+              || trimOptionalString(record.fact)
+              || trimOptionalString(record.summary)
+              || trimOptionalString(record.value)
+          })
+          .filter(Boolean)
+          .slice(0, 8)
+      : []
+    const stateEntries = Object.entries(currentState)
+      .map(([key, value]) => [key, typeof value === 'string' ? value.trim() : Array.isArray(value) ? value.filter((entry) => typeof entry === 'string').join(', ') : ''] as const)
+      .filter(([, value]) => value)
+      .slice(0, 6)
+    const largeImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? wikiImageUrlByEntityKey.get(entity.key) ?? null
+    const relationshipRows = worldRelationships
+      .filter((relationship) => relationship.sourceEntityKey === entity.key || relationship.targetEntityKey === entity.key)
+      .map((relationship) => {
+        const isSource = relationship.sourceEntityKey === entity.key
+        const connectedKey = isSource ? relationship.targetEntityKey : relationship.sourceEntityKey
+        const connectedEntity = entityByKey.get(connectedKey) ?? null
+        return { relationship, isSource, connectedEntity }
+      })
+      .filter((entry) => entry.connectedEntity)
+    const linkedThreads = (profile?.threadKeys ?? [])
+      .map((key) => threadByKey.get(key) ?? null)
+      .filter((thread): thread is WorldThread => Boolean(thread))
+      .slice(0, 6)
+    const linkedResults = (profile?.resultKeys ?? [])
+      .map((key) => resultByKey.get(key) ?? null)
+      .filter((result): result is WorldResult => Boolean(result))
+      .slice(0, 6)
+    const linkedOutputs = outputLibraryModel.rows
+      .filter((row) => row.entityRefs.some((ref) => ref.key === entity.key))
+      .slice(0, 6)
+    const fieldCards = [
+      entity.summary.trim() ? { label: 'Summary', value: entity.summary.trim() } : null,
+      entity.context.trim() ? { label: 'Context', value: entity.context.trim() } : null,
+      visualDescription ? { label: 'Visual Description', value: visualDescription } : null,
+      voiceDescription && (entity.nodeType === 'actor' || entity.nodeType === 'persona' || entity.nodeType === 'player_profile')
+        ? { label: 'Voice', value: voiceDescription }
+        : null,
+    ].filter((entry): entry is { label: string; value: string } => Boolean(entry))
+
+    return (
+      <section className="world-wiki-entity-page" data-world-wiki-entity-page={entity.key}>
+        <div className="world-wiki-entity-page-body">
+          <div className="world-wiki-entity-main-column">
+            <div className="world-wiki-entity-page-copy">
+              <span className="eyebrow">{section.title}</span>
+              <h2>{entity.name}</h2>
+              <p>{profile?.shortSummary || entity.summary || entity.context || 'No story summary has been written yet.'}</p>
+              <div className="world-wiki-entity-meta-row">
+                <span>{entity.status}</span>
+                {entity.source ? <span>{entity.source}</span> : null}
+                {(profile?.relationshipKeys.length ?? 0) > 0 ? <span>{profile?.relationshipKeys.length} links</span> : null}
+              </div>
+              {entity.tags.length > 0 ? (
+                <div className="world-wiki-entity-tags">
+                  {entity.tags.slice(0, 8).map((tag) => <span key={tag}>{tag}</span>)}
+                </div>
+              ) : null}
+            </div>
+
+            <section className="world-wiki-entity-panel is-fields">
+              <div className="world-wiki-entity-panel-head">
+                <EntityIcon id="content" />
+                <h3>Canon Fields</h3>
+              </div>
+              <div className="world-wiki-entity-field-list">
+                {fieldCards.map((field) => (
+                  <article key={field.label} className="world-wiki-entity-field">
+                    <span>{field.label}</span>
+                    <p>{field.value}</p>
+                  </article>
+                ))}
+                {visualTraits.length > 0 ? (
+                  <article className="world-wiki-entity-field">
+                    <span>Visual Traits</span>
+                    <div className="world-wiki-entity-chip-row">
+                      {visualTraits.slice(0, 12).map((trait) => <em key={trait}>{trait}</em>)}
+                    </div>
+                  </article>
+                ) : null}
+                {stateEntries.length > 0 ? (
+                  <article className="world-wiki-entity-field">
+                    <span>Current State</span>
+                    <div className="world-wiki-entity-state-list">
+                      {stateEntries.map(([key, value]) => (
+                        <small key={key}><strong>{key.replace(/_/g, ' ')}</strong>{value}</small>
+                      ))}
+                    </div>
+                  </article>
+                ) : null}
+                {canonFacts.length > 0 ? (
+                  <article className="world-wiki-entity-field">
+                    <span>Canon Added</span>
+                    <ul>
+                      {canonFacts.map((fact) => <li key={fact}>{fact}</li>)}
+                    </ul>
+                  </article>
+                ) : null}
+              </div>
+            </section>
+          </div>
+
+          <aside className="world-wiki-entity-side-column">
+            <div className={largeImageUrl ? 'world-wiki-entity-hero-art has-image' : 'world-wiki-entity-hero-art'}>
+              {largeImageUrl ? (
+                <>
+                  <img src={largeImageUrl} alt="" />
+                  <button
+                    className="world-wiki-entity-art-expand"
+                    onClick={() => openWikiDetailModal({
+                      title: `${entity.name} reference image`,
+                      eyebrow: 'Reference image',
+                      body: visualDescription || entity.summary || entity.context,
+                      icon: iconForWorldEntity(entity.nodeType),
+                      imageUrl: largeImageUrl,
+                      variant: 'image',
+                    })}
+                    type="button"
+                  >
+                    Expand
+                  </button>
+                </>
+              ) : (
+                <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+              )}
+            </div>
+
+            <section className="world-wiki-entity-panel is-relationships">
+              <div className="world-wiki-entity-panel-head">
+                <EntityIcon id="graph" />
+                <h3>Relationships</h3>
+              </div>
+              {relationshipRows.length > 0 ? (
+                <div className="world-wiki-entity-relationship-list">
+                  {relationshipRows.map(({ relationship, isSource, connectedEntity }) => {
+                    if (!connectedEntity) return null
+                    const connectedImageUrl = wikiImageUrlByEntityKey.get(connectedEntity.key) ?? null
+                    return (
+                      <button
+                        key={relationship.key}
+                        className="world-wiki-entity-relationship-row"
+                        onClick={() => openWikiEntityPageByKey(connectedEntity.key)}
+                        type="button"
+                      >
+                        <span className="world-wiki-entity-row-thumb">
+                          {connectedImageUrl ? <img src={connectedImageUrl} alt="" /> : <EntityIcon id={iconForWorldEntity(connectedEntity.nodeType)} />}
+                        </span>
+                        <span>
+                          <strong>{connectedEntity.name}</strong>
+                          <em>{isSource ? 'Outgoing' : 'Incoming'} / {relationship.verb.replace(/_/g, ' ')}</em>
+                          <small>{relationship.notes || connectedEntity.summary || connectedEntity.context || labelForWorldEntity(connectedEntity.nodeType)}</small>
+                        </span>
+                        <i>{relationship.strength !== null ? `${Math.round(relationship.strength * 100)}%` : ''}</i>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="world-wiki-entity-empty">No relationships have been mapped yet.</div>
+              )}
+            </section>
+          </aside>
+        </div>
+
+        <section className="world-wiki-entity-panel is-backlinks">
+          <div className="world-wiki-entity-panel-head">
+            <EntityIcon id="thread" />
+            <h3>Backlinks</h3>
+          </div>
+          <div className="world-wiki-entity-backlink-grid">
+            {linkedThreads.map((thread) => (
+              <button key={thread.key} className="world-wiki-entity-backlink" onClick={() => setSelectedPromptThreadKey(thread.key)} type="button">
+                <EntityIcon id="thread" />
+                <span><strong>{thread.title}</strong><small>{thread.summary || thread.status}</small></span>
+              </button>
+            ))}
+            {linkedResults.map((result) => (
+              <button
+                key={result.key}
+                className="world-wiki-entity-backlink"
+                onClick={() => openWikiDetailModal({
+                  title: result.title,
+                  eyebrow: labelForWorldResult(result.resultType),
+                  body: result.summary || result.resultType,
+                  icon: 'result',
+                  imageUrl: imageUrlByResultKey.get(result.key) ?? null,
+                  meta: [result.status],
+                })}
+                type="button"
+              >
+                <EntityIcon id="result" />
+                <span><strong>{result.title}</strong><small>{result.summary || result.status}</small></span>
+              </button>
+            ))}
+            {linkedOutputs.map((row) => (
+              <button
+                key={row.id}
+                className="world-wiki-entity-backlink"
+                onClick={() => onOpenOutputStudio(row.id, row.canOpenTimeline ? 'timeline' : 'details')}
+                type="button"
+              >
+                {row.primaryArtifact?.thumbnailUrl ? <img src={row.primaryArtifact.thumbnailUrl} alt="" /> : <EntityIcon id={row.canOpenTimeline ? 'cinematic' : 'content'} />}
+                <span><strong>{row.title}</strong><small>{row.outputKindLabel} / {row.statusLabel}</small></span>
+              </button>
+            ))}
+            {linkedThreads.length + linkedResults.length + linkedOutputs.length === 0 ? (
+              <div className="world-wiki-entity-empty">No linked story arcs, results, or outputs yet.</div>
+            ) : null}
+          </div>
+        </section>
+      </section>
+    )
+  }
+
   function renderWikiSection(section: WorldWikiSection) {
     return (
       <WorldWikiSectionView
@@ -6373,7 +6670,6 @@ export function WorldGraphPage({
         entityByKey={entityByKey}
         imageUrlByEntityKey={wikiImageUrlByEntityKey}
         imageUrlByResultKey={imageUrlByResultKey}
-        referenceSheetUrlByEntityKey={referenceSheetUrlByEntityKey}
         inspectorNodeKey={inspectorNodeKey}
         isPromptSubmitting={isPromptSubmitting}
         liveRevealEntryKeys={liveWikiRevealEntryKeySet}
@@ -6394,10 +6690,10 @@ export function WorldGraphPage({
         referenceArtStateByEntityKey={referenceArtStateByEntityKey}
         onGenerateBrandAtlasImage={() => void handleGenerateBrandAtlasImage()}
         onOpenBrandAtlasImageSplash={openBrandAtlasImageSplash}
+        onOpenWikiEntityPage={openWikiEntityPage}
         onOpenWikiDetailModal={openWikiDetailModal}
         onRunWikiGap={(gap) => void handleRunWikiGap(gap)}
         onSelectWorldNode={selectWorldNode}
-        onSetActiveInspectorTab={setActiveInspectorTab}
         onSetSelectedPromptThreadKey={setSelectedPromptThreadKey}
         onSetWikiStyleExpanded={setWikiStyleExpanded}
       />
@@ -6844,7 +7140,7 @@ export function WorldGraphPage({
                   feedRelationshipClusters={feedRelationshipClusters}
                   hasDeferredWorldFeedEntries={hasDeferredWorldFeedEntries}
                   historyOpen={historyOpen}
-                  imageUrlByEntityKey={imageUrlByEntityKey}
+                  imageUrlByEntityKey={wikiImageUrlByEntityKey}
                   isPromptBusy={isPromptBusy}
                   isPromptCancelling={isPromptCancelling}
                   newWorldFeedEntryIds={newWorldFeedEntryIds}
@@ -6873,28 +7169,23 @@ export function WorldGraphPage({
                   onFeedScroll={handleWorldFeedScroll}
                   onGrowWorkbenchResizeStart={handleGrowWorkbenchResizeStart}
                   onLoadMoreWorldFeedEntries={loadMoreWorldFeedEntries}
-                  onOpenTurnLens={openTurnLens}
                   onRefreshPromptSuggestions={refreshSelectedPromptSuggestions}
                   onRunPromptSuggestion={handleRunPromptSuggestion}
                   onSelectGraphEdge={selectWorldEdge}
                   onSelectGraphNode={selectWorldNode}
                   onSelectPromptSessionKey={setSelectedPromptSessionKey}
-                  onSelectWikiSubView={handleSelectWikiSubView}
                   onSetHistoryOpen={setHistoryOpen}
                   onSetWorldFeedFilter={setWorldFeedFilter}
-                  onSetWorldFeedGraphPreviewEntryId={setWorldFeedGraphPreviewEntryId}
-                  onSetWorldFeedGraphPreviewFocusKey={setWorldFeedGraphPreviewFocusKey}
-                  onSetWorldFeedGraphPreviewSelectedNodeKey={setWorldFeedGraphPreviewSelectedNodeKey}
                   onSetWorldPromptText={setWorldPromptText}
                   onResetGrowWorkbenchWidth={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
                   onStartNewPromptSession={handleStartNewPromptSession}
                   onSubmitWorldPrompt={handleSubmitWorldPrompt}
-                  onWorldViewModeChange={onWorldViewModeChange}
                   renderWikiSubViewToggle={renderWikiSubViewToggle}
                   setSelectedWorldFeedEntryId={setSelectedWorldFeedEntryId}
                 />
               ) : (
                 <WorldWikiPanel
+                  activeWikiEntityPage={activeWikiEntityPage}
                   activeWikiSectionKind={activeWikiSectionKind}
                   activePromptTurn={activePromptTurn}
                   isPromptSubmitting={isPromptSubmitting}
@@ -6925,8 +7216,12 @@ export function WorldGraphPage({
                   wikiSubView={wikiSubView}
                   worldEntities={worldEntities}
                   worldRelationships={worldRelationships}
+                  wikiEntityNavImageUrlByEntityKey={wikiImageUrlByEntityKey}
                   onCancelPromptTurn={handleCancelPromptTurn}
+                  onCloseWikiEntityPage={closeWikiEntityPage}
                   onGrowWorkbenchResizeStart={handleGrowWorkbenchResizeStart}
+                  onOpenWikiEntityPage={openWikiEntityPage}
+                  onOpenWikiDetailModal={openWikiDetailModal}
                   onResetGrowWorkbenchWidth={() => setGrowWorkbenchWidth(GROW_WORKBENCH_WIDTH_DEFAULT)}
                   onRunWikiGap={(gap) => void handleRunWikiGap(gap)}
                   onScrollToWikiSection={handleScrollToWikiSection}
@@ -6953,6 +7248,7 @@ export function WorldGraphPage({
                   renderAppPreviewPipelinePanel={renderAppPreviewPipelinePanel}
                   renderInteractivePrototypeModal={renderInteractivePrototypeModal}
                   renderNarrativeRpgPlayablePanel={renderNarrativeRpgPlayablePanel}
+                  renderWikiEntityPage={renderWikiEntityPage}
                   renderOutputLibraryPanel={renderOutputLibraryPanel}
                   renderOutputLibraryRail={renderOutputLibraryRail}
                   renderWikiSection={renderWikiSection}
