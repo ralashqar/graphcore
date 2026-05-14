@@ -637,7 +637,7 @@ export const cinematicSequenceSchema = z.object({
   takes: z.array(cinematicTakeSpecSchema).default([]),
 })
 
-export const cinematicV2PipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration'])
+export const cinematicV2PipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration', 'v3_script_storyboards'])
 export const cinematicV2SourceInputTypeSchema = z.enum(['prompt', 'script', 'storyBeat', 'shotList'])
 export const cinematicV2ShotPurposeSchema = z.enum([
   'establishing',
@@ -804,6 +804,11 @@ export const cinematicV2ShotSchema = z.object({
   providerDurationSeconds: z.number().int().min(4).max(15).default(4),
   description: z.string().default(''),
   action: z.string().default(''),
+  caption: z.string().default(''),
+  lighting: z.string().default(''),
+  mood: z.string().default(''),
+  storyboardPanelPrompt: z.string().default(''),
+  videoDirection: z.string().default(''),
   dialogue: z.array(cinematicV2DialogueLineSchema).default([]),
   speakerRefIds: z.array(z.string()).default([]),
   visibleCharacterRefIds: z.array(z.string()).default([]),
@@ -856,12 +861,17 @@ export const cinematicV2StoryboardGroupSchema = z.object({
   rows: z.number().int().positive(),
   columns: z.number().int().positive(),
   panelCount: z.number().int().positive().max(9),
+  startSeconds: z.number().nonnegative().default(0),
+  endSeconds: z.number().nonnegative().default(0),
+  editorialDurationSeconds: z.number().nonnegative().max(180).default(0),
+  providerDurationSeconds: z.number().int().min(4).max(15).default(4),
   continuityNotes: z.array(z.string()).default([]),
 })
 
 export const cinematicV2StoryboardGroupPlanSchema = z.object({
-  groups: z.array(cinematicV2StoryboardGroupSchema).min(1).max(8),
+  groups: z.array(cinematicV2StoryboardGroupSchema).min(1).max(24),
   maxPanelsPerSheet: z.number().int().positive().max(9).default(9),
+  maxDurationPerGroupSeconds: z.number().positive().max(15).nullable().default(null),
   diagnostics: z.array(z.string()).default([]),
 })
 
@@ -987,10 +997,15 @@ export function deriveCinematicV2MaxShotCount(durationSeconds: number | null | u
 export function buildCinematicV2StoryboardGroupPlan(shotPlan: CinematicV2ShotPlan, maxPanelsPerSheet = 9): CinematicV2StoryboardGroupPlan {
   const maxPanels = Math.max(1, Math.min(9, Math.floor(maxPanelsPerSheet) || 9))
   const groups: z.infer<typeof cinematicV2StoryboardGroupSchema>[] = []
+  let runningSeconds = 0
   for (let index = 0; index < shotPlan.shots.length; index += maxPanels) {
     const shots = shotPlan.shots.slice(index, index + maxPanels)
     const layout = buildCinematicV2StoryboardLayout(shots.length)
     const groupIndex = groups.length + 1
+    const editorialDurationSeconds = shots.reduce((total, shot) => total + Math.max(0, shot.editorialDurationSeconds || 0), 0)
+    const startSeconds = runningSeconds
+    const endSeconds = startSeconds + editorialDurationSeconds
+    runningSeconds = endSeconds
     groups.push({
       id: `cinematic_v2_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
       index: groupIndex,
@@ -999,6 +1014,10 @@ export function buildCinematicV2StoryboardGroupPlan(shotPlan: CinematicV2ShotPla
       rows: layout.rows,
       columns: layout.columns,
       panelCount: layout.panelCount,
+      startSeconds,
+      endSeconds,
+      editorialDurationSeconds,
+      providerDurationSeconds: providerSafeCinematicV2DurationSeconds(editorialDurationSeconds),
       continuityNotes: [],
     })
   }
@@ -1006,6 +1025,69 @@ export function buildCinematicV2StoryboardGroupPlan(shotPlan: CinematicV2ShotPla
     groups,
     maxPanelsPerSheet: maxPanels,
     diagnostics: shotPlan.shots.length > maxPanels ? [`Split ${shotPlan.shots.length} shots into ${groups.length} storyboard sheets.`] : [],
+  })
+}
+
+export function buildCinematicV3StoryboardGroupPlan(
+  shotPlan: CinematicV2ShotPlan,
+  options: {
+    maxPanelsPerSheet?: number
+    maxDurationPerGroupSeconds?: number
+  } = {},
+): CinematicV2StoryboardGroupPlan {
+  const maxPanels = Math.max(1, Math.min(9, Math.floor(options.maxPanelsPerSheet ?? 9) || 9))
+  const maxDuration = Math.max(1, Math.min(15, Number(options.maxDurationPerGroupSeconds ?? 15) || 15))
+  const groups: z.infer<typeof cinematicV2StoryboardGroupSchema>[] = []
+  let currentShots: CinematicV2Shot[] = []
+  let currentStartSeconds = 0
+  let currentDurationSeconds = 0
+  let runningSeconds = 0
+
+  const flush = () => {
+    if (!currentShots.length) return
+    const groupIndex = groups.length + 1
+    const layout = buildCinematicV2StoryboardLayout(currentShots.length)
+    const endSeconds = currentStartSeconds + currentDurationSeconds
+    groups.push({
+      id: `cinematic_v3_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
+      index: groupIndex,
+      shotIds: currentShots.map((shot) => shot.id),
+      summary: currentShots.map((shot) => shot.title).filter(Boolean).join(' / '),
+      rows: layout.rows,
+      columns: layout.columns,
+      panelCount: layout.panelCount,
+      startSeconds: currentStartSeconds,
+      endSeconds,
+      editorialDurationSeconds: currentDurationSeconds,
+      providerDurationSeconds: providerSafeCinematicV2DurationSeconds(currentDurationSeconds),
+      continuityNotes: [
+        `Storyboard/video block ${groupIndex}: ${currentDurationSeconds.toFixed(1).replace(/\.0$/, '')}s across ${currentShots.length} shot${currentShots.length === 1 ? '' : 's'}.`,
+      ],
+    })
+    currentShots = []
+    currentDurationSeconds = 0
+    currentStartSeconds = runningSeconds
+  }
+
+  for (const shot of shotPlan.shots) {
+    const shotDuration = Math.max(0.1, Math.min(15, Number(shot.editorialDurationSeconds) || 2))
+    const wouldExceedDuration = currentShots.length > 0 && currentDurationSeconds + shotDuration > maxDuration
+    const wouldExceedPanels = currentShots.length >= maxPanels
+    if (wouldExceedDuration || wouldExceedPanels) flush()
+    if (!currentShots.length) currentStartSeconds = runningSeconds
+    currentShots.push(shot)
+    currentDurationSeconds += shotDuration
+    runningSeconds += shotDuration
+  }
+  flush()
+
+  return cinematicV2StoryboardGroupPlanSchema.parse({
+    groups,
+    maxPanelsPerSheet: maxPanels,
+    maxDurationPerGroupSeconds: maxDuration,
+    diagnostics: groups.length > 1
+      ? [`Split ${shotPlan.shots.length} shots into ${groups.length} storyboard/video blocks of ${maxDuration} seconds or less.`]
+      : [`Kept ${shotPlan.shots.length} shots in one storyboard/video block of ${maxDuration} seconds or less.`],
   })
 }
 

@@ -45,6 +45,16 @@ Deno.serve(async (request) => {
       .maybeSingle()
     if (projectionResponse.error) throw new Error(projectionResponse.error.message)
     const projection = projectionResponse.data ? mapOutputRequestStatusProjectionRow(projectionResponse.data as never) : null
+    if (projection) {
+      outputRequest = {
+        ...outputRequest,
+        latestRunId: projection.latestRunId ?? outputRequest.latestRunId,
+        metadata: {
+          ...outputRequest.metadata,
+          outputStatusProjection: projection,
+        },
+      }
+    }
 
     let workflow = null
     let run = null

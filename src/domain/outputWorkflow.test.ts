@@ -748,7 +748,7 @@ test('prompt-first entity binding is typo-tolerant and does not fall back to unr
   assert.equal((contextNode?.config as Record<string, unknown> | undefined)?.strictSourceEntityFilter, true)
 })
 
-test('story cinematic requests build V2 shot orchestration graph by default while UGC stays V1', () => {
+test('story cinematic requests build V3 storyboard graph by default while V2 and UGC stay available', () => {
   const plan = planOutputRequestWorkflow({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -761,58 +761,57 @@ test('story cinematic requests build V2 shot orchestration graph by default whil
   assert.equal(plan.preset, 'cinematic_episode_from_sequence')
   assert.deepEqual(plan.sourceEntityKeys.sort(), ['archive', 'hero'])
   assert.ok(plan.sourceEntityKeys.length < snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').length + 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_script_parse').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_screenplay_author').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_reference_select').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_storyboard_group_plan').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_reference_select').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_shot_parse').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_storyboard_group_plan').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_storyboard_fanout').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 0)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 0)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 0)
   assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
   assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_screenplay_author' && edge.targetNodeKey === 'cinematic_v2_script_parse'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_screenplay_author' && edge.targetNodeKey === 'cinematic_v2_shot_plan'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_reference_select' && edge.targetNodeKey === 'cinematic_v2_shot_plan'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_shot_plan' && edge.targetNodeKey === 'cinematic_v2_storyboard_group_plan'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_storyboard_group_plan' && edge.targetNodeKey === 'cinematic_v2_dynamic_shot_fanout'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v2_reference_select' && edge.targetNodeKey === 'cinematic_v2_dynamic_shot_fanout'))
-  assert.ok(plan.diagnostics.some((line) => line.includes('Cinematics V2')))
-  assert.ok(plan.diagnostics.some((line) => line.includes('Creative screenplay authoring')))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'cinematic_v3_shot_parse'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_reference_select' && edge.targetNodeKey === 'cinematic_v3_shot_parse'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_shot_parse' && edge.targetNodeKey === 'cinematic_v3_storyboard_group_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_storyboard_group_plan' && edge.targetNodeKey === 'cinematic_v3_dynamic_storyboard_fanout'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_reference_select' && edge.targetNodeKey === 'cinematic_v3_dynamic_storyboard_fanout'))
+  assert.ok(plan.diagnostics.some((line) => line.includes('Cinematics V3')))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 
-  const fanout = plan.nodes.find((node) => node.key === 'cinematic_v2_dynamic_shot_fanout')
-  assert.equal(fanout?.config.generateAudio, false)
-  assert.equal(fanout?.config.cinematicPipelineVersion, 'v2_shot_orchestration')
-  assert.equal(fanout?.config.cinematicV2AnimaticMode, 'fast_panels')
+  const fanout = plan.nodes.find((node) => node.key === 'cinematic_v3_dynamic_storyboard_fanout')
+  assert.equal(fanout?.config.cinematicPipelineVersion, 'v3_script_storyboards')
   assert.equal(fanout?.config.debugSkipVideoGeneration, true)
-  assert.ok(plan.diagnostics.some((line) => line.includes('Preview animatic mode')))
-  assert.ok(plan.diagnostics.some((line) => line.includes('Fast animatic mode')))
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   assert.match(workerSource, /cinematicVideoApprovedEnabled/)
   assert.match(workerSource, /cinematic_video_approval_required/)
-  assert.match(workerSource, /isCinematicV2ProductionNode\(asRecord\(node\.config\), node\) && !cinematicVideoApprovedEnabled\(run\)/)
-  assert.match(workerSource, /cinematic_v2_shot_asset_pack/)
-  assert.match(workerSource, /cinematic_v2_screenplay_author/)
+  assert.match(workerSource, /cinematic_v3_shot_parse/)
+  assert.match(workerSource, /cinematic_v3_dynamic_storyboard_fanout/)
+  assert.match(workerSource, /cinematic_v3_storyboard_group_video/)
+  assert.match(workerSource, /cinematic_v3_panel_extract/)
   assert.match(workerSource, /Return plain Markdown screenplay/)
-  assert.match(workerSource, /cinematic_v2_keyframe_qa/)
-  assert.match(workerSource, /cinematic_v2_shot_keyframe_passthrough/)
-  assert.match(workerSource, /quality_keyframes/)
-  assert.match(workerSource, /resolveCinematicV2QualityShotIds/)
-  assert.match(workerSource, /cinematicV2QualityShotIds/)
-  assert.match(workerSource, /shotUsesQualityKeyframe/)
-  assert.match(workerSource, /cinematic_v2_storyboard_group_plan/)
   assert.match(workerSource, /storyboardGroupPlan\.groups\.forEach/)
   assert.match(workerSource, /fixed \$\{layout\.rows\}x\$\{layout\.columns\} rectangular grid/)
   assert.match(workerSource, /Cells \$\{layout\.panelCount \+ 1\}-\$\{gridCellCount\} are intentional empty placeholders/)
-  assert.match(workerSource, /buildCinematicV2ShotAssetPack/)
-  assert.match(workerSource, /Use it for composition and blocking only, not as identity truth/)
-  assert.match(workerSource, /Required visible characters/)
+  assert.match(workerSource, /caption/)
+  assert.match(workerSource, /storyboardPanelPrompt/)
+  assert.match(workerSource, /videoDirection/)
   assert.match(workerSource, /performanceBeats/)
-  assert.match(workerSource, /Acting\/performance direction/)
-  assert.match(workerSource, /\$\{shotAssetPackKey\}__\$\{keyframeKey\}/)
-  assert.match(workerSource, /\$\{shotAssetPackKey\}__\$\{videoKey\}/)
+
+  const explicitV2Plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic sequence from Chapter 1 with a shot-by-shot storyboard.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    cinematicPipelineVersion: 'v2_shot_orchestration',
+    snapshot,
+  }, 'cinematic_episode')
+  assert.equal(explicitV2Plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 1)
+  assert.equal(explicitV2Plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 1)
+  assert.equal(explicitV2Plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 1)
+  assert.equal(validateOutputWorkflowGraph({ nodes: explicitV2Plan.nodes, edges: explicitV2Plan.edges }).ok, true)
 
   const ugcPlan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -824,6 +823,51 @@ test('story cinematic requests build V2 shot orchestration graph by default whil
   }, 'ugc_episode')
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 1)
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 0)
+  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_storyboard_fanout').length, 0)
+})
+
+test('cinematic V3 dynamically materialized storyboard nodes resolve strict guidance skills', () => {
+  const nodes = [
+    {
+      nodeType: 'image_generation',
+      purpose: 'cinematic_v3_storyboard_sheet',
+      skillKeys: [
+        'cinematic_beat_sheet_planning',
+        'storyboard_panel_accuracy',
+        'image_prompt_visual_only',
+        'entity_reference_fidelity',
+        'character_reference_continuity',
+        'provider_prompt_hygiene',
+      ],
+    },
+    {
+      nodeType: 'video_generation',
+      purpose: 'cinematic_v3_storyboard_group_video',
+      skillKeys: [
+        'seedance_reference_video_prompting',
+        'seedance_truth_source_modes',
+        'cinematic_shot_direction',
+        'provider_prompt_hygiene',
+      ],
+    },
+  ] as const
+
+  for (const node of nodes) {
+    const bundle = buildOutputGuidanceBundleForNode({
+      node: {
+        nodeType: node.nodeType,
+        config: {
+          purpose: node.purpose,
+          skillKeys: [...node.skillKeys],
+          guidanceMode: 'strict',
+        },
+        inputs: {},
+      },
+    })
+
+    assert.deepEqual(bundle.diagnostics, [], `${node.purpose} should accept all configured V3 dynamic skills`)
+    assert.ok(bundle.skills.length >= node.skillKeys.length)
+  }
 })
 
 test('cinematic V2 shot asset packs narrow references to visible shot refs', async () => {

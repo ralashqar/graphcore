@@ -27,7 +27,7 @@ function request(overrides: Partial<OutputRequest>): OutputRequest {
     targetFormat: 'pdf',
     plannerNotes: '',
     errorMessage: null,
-    metadata: {},
+    metadata: overrides.metadata ?? {},
     createdAt: overrides.createdAt ?? now,
     updatedAt: overrides.updatedAt ?? now,
   }
@@ -193,6 +193,65 @@ test('buildOutputLibraryModel treats completed runs as ready when request status
   assert.equal(row?.progress.label, '2/2 steps')
   assert.equal(model.groups.find((group) => group.key === 'ready')?.rows[0]?.id, 'poster-request')
   assert.equal(model.groups.find((group) => group.key === 'generating')?.rows.length, 0)
+})
+
+test('buildOutputLibraryModel uses compact status projection for live progress rows', () => {
+  const outputStatusProjection = {
+    requestId: 'cinematic-request',
+    projectId: 'project',
+    draftId: 'draft',
+    workflowId: 'workflow-1',
+    latestRunId: 'run-projected',
+    status: 'running',
+    outputKind: 'cinematic_episode',
+    title: 'Cinematic',
+    progress: {
+      totalSteps: 20,
+      steps: {
+        completed: 19,
+        running: 1,
+        queued: 0,
+        failed: 0,
+        cancelled: 0,
+        completedWithErrors: 0,
+      },
+    },
+    activeNodeKey: 'cinematic_v3_shot_parse',
+    activeNodeLabel: 'Parse Shots',
+    latestError: null,
+    artifactKeys: [],
+    previewAssetKeys: [],
+    graphRevision: 'rev-1',
+    timelineRevision: 'timeline-1',
+    terminal: false,
+    metadata: {},
+    createdAt: now,
+    updatedAt: now,
+  } as const
+
+  const model = buildOutputLibraryModel({
+    assets: [],
+    outputRequests: [
+      request({
+        id: 'cinematic-request',
+        latestRunId: null,
+        status: 'running',
+        outputKind: 'cinematic_episode',
+        metadata: { outputStatusProjection },
+      }),
+    ],
+    outputWorkflowRuns: [],
+    outputWorkflowNodes: [],
+    worldEntities: [],
+    outputArtifacts: [],
+  })
+
+  const row = model.rows.find((entry) => entry.id === 'cinematic-request')
+  assert.equal(row?.groupKey, 'generating')
+  assert.equal(row?.latestRunId, 'run-projected')
+  assert.equal(row?.progress.label, '19/20 steps')
+  assert.equal(row?.progress.percent, 95)
+  assert.equal(row?.currentStepLabel, 'Parse Shots')
 })
 
 test('buildOutputLibraryModel resolves gallery URLs from assets and artifact metadata', () => {

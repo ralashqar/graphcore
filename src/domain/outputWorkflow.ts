@@ -43,6 +43,7 @@ export const outputWorkflowNodeTypeSchema = z.enum([
 export const outputWorkflowRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputImageGenerationQualitySchema = z.enum(['low', 'medium', 'high'])
 export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'webp'])
+export const cinematicPipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration', 'v3_script_storyboards'])
 export const cinematicV2AnimaticModeSchema = z.enum(['fast_panels', 'quality_keyframes'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
@@ -361,7 +362,7 @@ export const outputWorkflowPlanRequestSchema = z.object({
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
-  cinematicPipelineVersion: z.enum(['v1_take_blocks', 'v2_shot_orchestration']).optional(),
+  cinematicPipelineVersion: cinematicPipelineVersionSchema.optional(),
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
@@ -403,7 +404,7 @@ export const outputRequestStartRequestSchema = z.object({
   generateAudio: z.boolean().optional(),
   cinematicPresetFamily: z.enum(['story_movie_tv', 'ugc_creator', 'ugc_direct_response_ad', 'ugc_faceless_format']).optional(),
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
-  cinematicPipelineVersion: z.enum(['v1_take_blocks', 'v2_shot_orchestration']).optional(),
+  cinematicPipelineVersion: cinematicPipelineVersionSchema.optional(),
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
@@ -971,6 +972,8 @@ const outputWorkflowEightWideMediaGroups = new Set([
   'cinematic_v2_storyboard_sheets',
   'cinematic_v2_shot_keyframes',
   'cinematic_v2_videos',
+  'cinematic_v3_storyboard_sheets',
+  'cinematic_v3_storyboard_group_videos',
 ])
 
 export function getOutputWorkflowNodeExecutionMetadata(
@@ -2579,7 +2582,20 @@ function shouldUseCinematicV2(input: {
   outputKind?: z.infer<typeof outputRequestKindSchema>
 }) {
   if (input.request.cinematicPipelineVersion === 'v1_take_blocks') return false
+  if (input.request.cinematicPipelineVersion === 'v3_script_storyboards') return false
   if (input.request.cinematicPipelineVersion === 'v2_shot_orchestration') return input.presetFamily === 'story_movie_tv'
+  if (input.presetFamily !== 'story_movie_tv') return false
+  return false
+}
+
+function shouldUseCinematicV3(input: {
+  request: z.infer<typeof outputWorkflowPlanRequestSchema>
+  presetFamily: CinematicPresetFamily
+  outputKind?: z.infer<typeof outputRequestKindSchema>
+}) {
+  if (input.request.cinematicPipelineVersion === 'v1_take_blocks') return false
+  if (input.request.cinematicPipelineVersion === 'v2_shot_orchestration') return false
+  if (input.request.cinematicPipelineVersion === 'v3_script_storyboards') return input.presetFamily === 'story_movie_tv'
   if (input.presetFamily !== 'story_movie_tv') return false
   return input.outputKind === 'cinematic_episode' || input.outputKind === 'cinematic_trailer'
 }
@@ -2867,6 +2883,218 @@ export function buildCinematicV2ShotOrchestrationPlan(
   })
 }
 
+export function buildCinematicV3ScriptStoryboardPlan(
+  request: z.infer<typeof outputWorkflowPlanRequestSchema>,
+  outputKind?: z.infer<typeof outputRequestKindSchema>,
+) {
+  const worldWiki = request.snapshot.worldWiki
+  const sequenceUnits = sortedSequenceUnits(request.snapshot.worldEntities)
+  const requestedSequenceKeys = request.selectedSequenceUnitKeys.filter(Boolean)
+  const selectedSequenceUnitKey = requestedSequenceKeys[0] ?? ''
+  const selectedSequenceUnit = selectedSequenceUnitKey
+    ? sequenceUnits.find((entity) => entity.key === selectedSequenceUnitKey) ?? null
+    : null
+  const sourceSequenceUnitKeys = selectedSequenceUnitKey ? [selectedSequenceUnitKey] : []
+  const selectedEntityKeys = chooseCinematicEntityKeys({
+    selectedEntityKeys: request.selectedEntityKeys,
+    selectedSequenceUnitKey,
+    sequenceUnit: selectedSequenceUnit,
+    worldEntities: request.snapshot.worldEntities,
+    worldRelationships: request.snapshot.worldRelationships,
+  })
+  const prompt = request.prompt.trim() || 'Create a directed cinematic storyboard sequence from this world context.'
+  const preset = inferCinematicPresetFromKind(outputKind, prompt)
+  const aspectRatio: CinematicAspectRatio = request.aspectRatio ?? '16:9'
+  const resolution: CinematicResolution = request.videoResolution ?? '720p'
+  const cinematicReferenceMode: CinematicReferenceMode = request.cinematicReferenceMode ?? 'storyboard_sheet'
+  const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? true
+  const videoProvider = resolveDefaultVideoProvider()
+  const videoModel = resolveDefaultVideoModel(videoProvider, resolution)
+  const title = worldWiki.title || request.snapshot.project.name
+  const sequenceTitle = selectedSequenceUnit?.name || ''
+  const name = preset === 'cinematic_trailer'
+    ? `${title} Cinematic Trailer`
+    : sequenceTitle
+      ? `${title} - ${sequenceTitle} Cinematic`
+      : `${title} Cinematic`
+  const maxShotCount = deriveCinematicV2MaxShotCount(null)
+  const nodes = [
+    nodeBase({
+      key: 'world_context',
+      nodeType: 'world_context_query',
+      label: 'World Context',
+      x: 80,
+      y: 120,
+      config: {
+        sourceEntityKeys: selectedEntityKeys,
+        sourceSequenceUnitKeys,
+        includeWiki: true,
+        includeVisualReferences: true,
+        strictSourceEntityFilter: sourceSequenceUnitKeys.length > 0,
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'skill_context',
+      nodeType: 'skill_context_query',
+      label: 'Cinematic Skills',
+      x: 80,
+      y: 300,
+      config: {
+        skillKeys: [
+          'cinematic_screenwriting_craft',
+          'cinematic_sequence_structure',
+          'cinematic_directorial_language',
+          'cinematic_shot_direction',
+          'cinematic_beat_sheet_planning',
+          'storyboard_panel_accuracy',
+          'entity_reference_fidelity',
+          'character_reference_continuity',
+          'environment_staging',
+          'provider_prompt_hygiene',
+        ],
+        autoSkillTags: ['cinematic_v3', 'screenplay', 'shot_json', 'storyboard', 'panel_grid', 'provider_hygiene'],
+        guidanceMode: 'strict',
+        execution: { resourceClass: 'utility' },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_entities',
+      nodeType: 'text_llm',
+      label: 'Cinematic References',
+      x: 360,
+      y: 120,
+      inputs: { prompt: 'Select canonical references for this cinematic scene.' },
+      config: {
+        purpose: 'cinematic_entity_selector',
+        sequenceUnitKey: selectedSequenceUnitKey,
+        sequenceUnitName: sequenceTitle,
+        skillKeys: ['entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'llm' },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_v3_reference_select',
+      nodeType: 'text_llm',
+      label: 'Reference Plan',
+      x: 680,
+      y: 120,
+      inputs: { prompt: 'Select the reference plan for this cinematic storyboard.' },
+      config: {
+        purpose: 'cinematic_v3_reference_select',
+        cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        maxReferenceCount: 16,
+        guidanceMode: 'append',
+        execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_planning', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_v3_screenplay_author',
+      nodeType: 'text_llm',
+      label: 'Author Screenplay',
+      x: 1000,
+      y: 120,
+      inputs: { prompt: 'Author the creative screenplay treatment for this cinematic.' },
+      config: {
+        purpose: 'cinematic_v3_screenplay_author',
+        cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        skillKeys: ['cinematic_screenwriting_craft', 'cinematic_sequence_structure', 'provider_prompt_hygiene'],
+        guidanceMode: 'append',
+        execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_planning', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_v3_shot_parse',
+      nodeType: 'text_llm',
+      label: 'Parse Shots',
+      x: 1320,
+      y: 120,
+      inputs: { prompt: 'Parse the authored screenplay directly into cinematic shots.' },
+      config: {
+        purpose: 'cinematic_v3_shot_parse',
+        cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        maxShotCount,
+        aspectRatio,
+        resolution,
+        execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_planning', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_v3_storyboard_group_plan',
+      nodeType: 'utility_transform',
+      label: 'Storyboard Groups',
+      x: 1640,
+      y: 120,
+      config: {
+        purpose: 'cinematic_v3_storyboard_group_plan',
+        cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        maxPanelsPerSheet: 9,
+        maxDurationPerGroupSeconds: 15,
+        execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_storyboard_group_plan', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
+      key: 'cinematic_v3_dynamic_storyboard_fanout',
+      nodeType: 'utility_transform',
+      label: 'Materialize Storyboards',
+      x: 1960,
+      y: 120,
+      config: {
+        purpose: 'cinematic_v3_dynamic_storyboard_fanout',
+        role: 'dynamic_cinematic_v3_storyboard_fanout',
+        cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        maxShotCount,
+        aspectRatio,
+        resolution,
+        cinematicReferenceMode,
+        videoProvider,
+        videoModel,
+        debugSkipVideoGeneration,
+        execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_dynamic_storyboard_fanout', maxConcurrency: 1 },
+      },
+    }),
+  ]
+  const edges = [
+    edgeBase('world_context', 'context', 'cinematic_entities', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_entities', 'guidance'),
+    edgeBase('world_context', 'context', 'cinematic_v3_reference_select', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_v3_reference_select', 'guidance'),
+    edgeBase('cinematic_entities', 'asset_pack', 'cinematic_v3_reference_select', 'asset_pack'),
+    edgeBase('world_context', 'context', 'cinematic_v3_screenplay_author', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_v3_screenplay_author', 'guidance'),
+    edgeBase('cinematic_v3_reference_select', 'asset_pack', 'cinematic_v3_screenplay_author', 'asset_pack'),
+    edgeBase('world_context', 'context', 'cinematic_v3_shot_parse', 'context'),
+    edgeBase('skill_context', 'guidance', 'cinematic_v3_shot_parse', 'guidance'),
+    edgeBase('cinematic_v3_reference_select', 'asset_pack', 'cinematic_v3_shot_parse', 'asset_pack'),
+    edgeBase('cinematic_v3_screenplay_author', 'text', 'cinematic_v3_shot_parse', 'screenplay'),
+    edgeBase('cinematic_v3_shot_parse', 'text', 'cinematic_v3_storyboard_group_plan', 'shot_plan'),
+    edgeBase('cinematic_v3_reference_select', 'asset_pack', 'cinematic_v3_dynamic_storyboard_fanout', 'asset_pack'),
+    edgeBase('cinematic_v3_screenplay_author', 'text', 'cinematic_v3_dynamic_storyboard_fanout', 'screenplay'),
+    edgeBase('cinematic_v3_shot_parse', 'text', 'cinematic_v3_dynamic_storyboard_fanout', 'shot_plan'),
+    edgeBase('cinematic_v3_storyboard_group_plan', 'text', 'cinematic_v3_dynamic_storyboard_fanout', 'storyboard_group_plan'),
+  ]
+  const graphValidation = validateOutputWorkflowGraph({ nodes, edges, worldWiki })
+  return outputWorkflowPlanResponseSchema.shape.plan.parse({
+    preset,
+    name,
+    description: 'Generate a simplified cinematic storyboard animatic from references, authored screenplay, direct shot JSON, grouped storyboard sheets, and extracted timeline panels.',
+    prompt,
+    targetFormat: 'video',
+    sourceEntityKeys: selectedEntityKeys,
+    sourceSequenceUnitKeys,
+    nodes,
+    edges,
+    diagnostics: [
+      ...graphValidation.diagnostics,
+      'Cinematics V3 is enabled: screenplay is parsed directly into timed shot JSON, then materialized as grouped storyboard sheets.',
+      'V3 omits scene-state, layout, per-shot asset-pack, keyframe QA, and per-shot video nodes for a smaller graph.',
+      'Storyboard sheets use deterministic 1x1, 2x2, or 3x3 crop grids with up to 9 panels per sheet.',
+      'Video production remains approval-gated and is deferred from the initial storyboard pass.',
+    ],
+  })
+}
+
 export function buildCinematicSequencePlan(
   request: z.infer<typeof outputWorkflowPlanRequestSchema>,
   outputKind?: z.infer<typeof outputRequestKindSchema>,
@@ -2888,6 +3116,9 @@ export function buildCinematicSequencePlan(
   })
   const prompt = request.prompt.trim() || 'Create a cinematic sequence from this world context with shot-by-shot scripts, storyboards, and final video clips.'
   const presetFamily = request.cinematicPresetFamily ?? inferCinematicPresetFamily(prompt, outputKind)
+  if (shouldUseCinematicV3({ request, presetFamily, outputKind })) {
+    return buildCinematicV3ScriptStoryboardPlan(request, outputKind)
+  }
   if (shouldUseCinematicV2({ request, presetFamily, outputKind })) {
     return buildCinematicV2ShotOrchestrationPlan(request, outputKind)
   }

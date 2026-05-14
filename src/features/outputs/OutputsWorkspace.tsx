@@ -57,6 +57,7 @@ type OutputsWorkspaceProps = {
     requestId: string | null
     target?: 'details' | 'graph' | 'timeline'
     nonce: number
+    returnToSourceOnClose?: boolean
   } | null
   onStartOutputRequest: (request: {
     prompt: string
@@ -68,7 +69,7 @@ type OutputsWorkspaceProps = {
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
-    cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
+    cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
     cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
@@ -131,6 +132,7 @@ type OutputsWorkspaceProps = {
     preset?: 'ebook_from_world'
   }) => Promise<OutputWorkflowUpgradeResponse>
   onRefreshLiveSnapshot: () => Promise<void>
+  onReturnToSourceSurface?: () => void
 }
 
 function formatStatus(value: string) {
@@ -367,22 +369,23 @@ function buildCinematicScriptViewData(
   const cinematicV2StoryboardGroupPlan = readNonEmptyRecord(workflowMetadata.cinematicV2StoryboardGroupPlan)
     ?? readFirstStepRecord(run, ['storyboardGroupPlan', 'storyboard_group_plan'])
   const cinematicV2Panels = mergeMediaRecords(
-    readArtifactMediaRecords(run, ['cinematic_v2_storyboard_panel']),
-    readAllStepRecords(run, ['panels']).filter((panel) => readTrimmedString(panel.role) === 'cinematic_v2_storyboard_panel' || readTrimmedString(panel.shotId)),
+    readArtifactMediaRecords(run, ['cinematic_v2_storyboard_panel', 'cinematic_v3_storyboard_panel']),
+    readAllStepRecords(run, ['panels']).filter((panel) => ['cinematic_v2_storyboard_panel', 'cinematic_v3_storyboard_panel'].includes(readTrimmedString(panel.role)) || readTrimmedString(panel.shotId)),
   )
-  const cinematicV2ArtifactImages = readArtifactMediaRecords(run, ['cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe'])
+  const cinematicV2ArtifactImages = readArtifactMediaRecords(run, ['cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe', 'cinematic_v3_storyboard_sheet'])
   const cinematicV2Images = mergeMediaRecords(
     cinematicV2ArtifactImages,
-    readAllStepRecords(run, ['image']).filter((image) => readTrimmedString(image.role).startsWith('cinematic_v2_')),
+    readAllStepRecords(run, ['image']).filter((image) => readTrimmedString(image.role).startsWith('cinematic_v2_') || readTrimmedString(image.role).startsWith('cinematic_v3_')),
   )
-  const cinematicV2ArtifactVideos = readArtifactMediaRecords(run, ['cinematic_v2_shot_video', 'cinematic_v2_final_timeline'])
+  const cinematicV2ArtifactVideos = readArtifactMediaRecords(run, ['cinematic_v2_shot_video', 'cinematic_v2_final_timeline', 'cinematic_v3_storyboard_group_video', 'cinematic_v3_final_timeline'])
   const cinematicV2Videos = mergeMediaRecords(
     cinematicV2ArtifactVideos,
-    readAllStepRecords(run, ['video']).filter((video) => readTrimmedString(video.role).startsWith('cinematic_v2_')),
+    readAllStepRecords(run, ['video']).filter((video) => readTrimmedString(video.role).startsWith('cinematic_v2_') || readTrimmedString(video.role).startsWith('cinematic_v3_')),
   )
   const cinematicV2Timeline = readFirstStepRecord(run, ['timeline'])
   const preset = readTrimmedString(workflow?.preset)
   const isV2 = readTrimmedString(workflowMetadata.cinematicPipelineVersion) === 'v2_shot_orchestration'
+    || readTrimmedString(workflowMetadata.cinematicPipelineVersion) === 'v3_script_storyboards'
     || Boolean(cinematicV2ParsedScript || cinematicV2SceneState || cinematicV2LayoutPlan || cinematicV2ShotPlan)
   const isCinematic = preset.includes('cinematic') || preset.includes('ugc') || Boolean(directorScriptDoc || executionScriptDoc || compiledCinematicSequence || isV2)
   return {
@@ -399,9 +402,9 @@ function buildCinematicScriptViewData(
       storyboardGroupPlan: cinematicV2StoryboardGroupPlan,
       panels: cinematicV2Panels,
       keyframes: cinematicV2Images.filter((image) => readTrimmedString(image.role) === 'cinematic_v2_shot_keyframe'),
-      storyboardSheets: cinematicV2Images.filter((image) => readTrimmedString(image.role) === 'cinematic_v2_storyboard_sheet'),
-      videos: cinematicV2Videos.filter((video) => readTrimmedString(video.role) === 'cinematic_v2_shot_video'),
-      finalVideos: cinematicV2Videos.filter((video) => readTrimmedString(video.role) === 'cinematic_v2_final_timeline'),
+      storyboardSheets: cinematicV2Images.filter((image) => ['cinematic_v2_storyboard_sheet', 'cinematic_v3_storyboard_sheet'].includes(readTrimmedString(image.role))),
+      videos: cinematicV2Videos.filter((video) => ['cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video'].includes(readTrimmedString(video.role))),
+      finalVideos: cinematicV2Videos.filter((video) => ['cinematic_v2_final_timeline', 'cinematic_v3_final_timeline'].includes(readTrimmedString(video.role))),
       timeline: cinematicV2Timeline,
     },
     title: readTrimmedString(cinematicV2ParsedScript?.title) || readTrimmedString(cinematicV2SceneState?.title) || readTrimmedString(directorScriptDoc?.title) || readTrimmedString(executionScriptDoc?.title) || 'Cinematic Script',
@@ -469,12 +472,17 @@ type CinematicV2ProductionEstimate = {
 function isCinematicV2ProductionNodeConfig(config: Record<string, unknown>, nodeType?: string) {
   const purpose = readTrimmedString(config.purpose)
   const role = readTrimmedString(config.role)
-  return readTrimmedString(config.cinematicPipelineVersion) === 'v2_shot_orchestration'
+  const pipelineVersion = readTrimmedString(config.cinematicPipelineVersion)
+  return (pipelineVersion === 'v2_shot_orchestration' || pipelineVersion === 'v3_script_storyboards')
     && (
       purpose === 'cinematic_v2_shot_video'
       || role === 'cinematic_v2_shot_video'
       || purpose === 'cinematic_v2_timeline_assemble'
       || role === 'cinematic_v2_final_timeline'
+      || purpose === 'cinematic_v3_storyboard_group_video'
+      || role === 'cinematic_v3_storyboard_group_video'
+      || purpose === 'cinematic_v3_timeline_assemble'
+      || role === 'cinematic_v3_final_timeline'
       || (nodeType === 'output_artifact' && purpose === 'cinematic_video_artifact')
     )
 }
@@ -1338,11 +1346,13 @@ export function OutputsWorkspace({
   onUpdateOutputWorkflowNode,
   onUpgradeOutputWorkflowPreset,
   onRefreshLiveSnapshot,
+  onReturnToSourceSurface,
 }: OutputsWorkspaceProps) {
   const [approvingVideoProduction, setApprovingVideoProduction] = useState(false)
   const [upgradingAnimaticQuality, setUpgradingAnimaticQuality] = useState(false)
   const [enhancingTimelineShotId, setEnhancingTimelineShotId] = useState<string | null>(null)
   const [creationMode, setCreationMode] = useState<'prompt' | 'story_unit'>('prompt')
+  const [returnToSourceOnClose, setReturnToSourceOnClose] = useState(false)
   const [cinematicTimelineModal, setCinematicTimelineModal] = useState<{
     title: string
     projection: CinematicTimelineProjection
@@ -1678,7 +1688,7 @@ export function OutputsWorkspace({
         imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
         imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
         cinematicReferenceMode: cinematic ? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault : undefined,
-        cinematicPipelineVersion: cinematic ? 'v2_shot_orchestration' : undefined,
+        cinematicPipelineVersion: cinematic ? 'v3_script_storyboards' : undefined,
         cinematicV2AnimaticMode: cinematic ? 'fast_panels' : undefined,
         debugCinematicStoryboardStyleSafeMode: cinematic ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault : undefined,
         cinematicStoryboardStyleOverride: cinematic ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt : undefined,
@@ -1934,6 +1944,22 @@ export function OutputsWorkspace({
     setCinematicTimelineModal(activeCinematicTimelineModalData)
   }
 
+  function closeOutputGraphOverlay() {
+    setGraphOpen(false)
+    if (returnToSourceOnClose) {
+      setReturnToSourceOnClose(false)
+      onReturnToSourceSurface?.()
+    }
+  }
+
+  function closeCinematicTimelineModal() {
+    setCinematicTimelineModal(null)
+    if (returnToSourceOnClose) {
+      setReturnToSourceOnClose(false)
+      onReturnToSourceSurface?.()
+    }
+  }
+
   useEffect(() => {
     if (!openIntent) return
     const request = openIntent.requestId
@@ -1943,6 +1969,7 @@ export function OutputsWorkspace({
     setSelectedRequestId(request.id)
     setActiveRunId(request.latestRunId ?? null)
     if (request.workflowId) setSelectedNodeKey(null)
+    setReturnToSourceOnClose(Boolean(openIntent.returnToSourceOnClose && (openIntent.target === 'graph' || openIntent.target === 'timeline')))
     if (openIntent.target === 'graph') {
       void openOutputGraphForRequest(request)
     } else if (openIntent.target === 'timeline') {
@@ -2684,7 +2711,7 @@ export function OutputsWorkspace({
           worldRelationships={snapshot.worldRelationships as unknown as Array<Record<string, unknown>>}
           canOpenTimeline={Boolean(activeCinematicTimelineModalData)}
           onCancelRun={cancelActiveRun}
-          onClose={() => setGraphOpen(false)}
+          onClose={closeOutputGraphOverlay}
           onOpenTimeline={openCinematicTimelineForActiveWorkflow}
           onRefreshGraph={() => void refreshOutputGraph({ manual: true })}
           onRunNode={(node, runScope) => void runSelectedNodeOnly(node, runScope)}
@@ -2713,7 +2740,7 @@ export function OutputsWorkspace({
           assets={snapshot.assets}
           enhancingShotId={enhancingTimelineShotId}
           onApplyDirectorPatch={applyCinematicDirectorPatchAndRegenerate}
-          onClose={() => setCinematicTimelineModal(null)}
+          onClose={closeCinematicTimelineModal}
           onGenerateQualityKeyframe={canRunOutputs ? generateTimelineShotQualityKeyframe : undefined}
           onPreviewDirectorNote={previewCinematicDirectorNoteFromTimeline}
           onUndoLastDirectorEdit={undoLastCinematicDirectorEdit}

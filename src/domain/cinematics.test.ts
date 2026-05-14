@@ -6,6 +6,7 @@ import {
   buildCinematicShotTimingMap,
   buildCinematicV2StoryboardGroupPlan,
   buildCinematicV2StoryboardLayout,
+  buildCinematicV3StoryboardGroupPlan,
   buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromPresetFamily,
   buildCinematicSettingsPatchFromStoryPresets,
@@ -186,6 +187,55 @@ test('Cinematics V2 schemas validate scene state, layout, short shots, and story
     shotPlan,
     referenceIds: ['kharzag'],
   }).some((diagnostic) => diagnostic.includes('unknown cinematic ref')))
+})
+
+test('Cinematics V3 storyboard grouping creates video-sized blocks with matching crop layouts', () => {
+  const shot = (index, duration) => ({
+    id: `shot_${index}`,
+    sceneId: 'scene_1',
+    index,
+    title: `Shot ${index}`,
+    purpose: 'action',
+    editorialDurationSeconds: duration,
+    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
+    description: `Shot ${index} description`,
+    action: `Shot ${index} action`,
+    visibleCharacterRefIds: [],
+    locationRefId: null,
+    propRefIds: [],
+    camera: { framing: 'medium', angle: 'eye level', lens: '35mm', movement: 'locked', screenDirectionRule: 'continuous' },
+  })
+  const grouped = buildCinematicV3StoryboardGroupPlan({
+    sceneId: 'scene_1',
+    totalEditorialDurationSeconds: 40,
+    shots: [
+      shot(1, 6),
+      shot(2, 7),
+      shot(3, 4),
+      shot(4, 5),
+      shot(5, 5),
+      shot(6, 5),
+      shot(7, 2),
+      shot(8, 2),
+      shot(9, 2),
+      shot(10, 2),
+    ],
+  })
+
+  assert.deepEqual(grouped.groups.map((group) => group.shotIds), [
+    ['shot_1', 'shot_2'],
+    ['shot_3', 'shot_4', 'shot_5'],
+    ['shot_6', 'shot_7', 'shot_8', 'shot_9', 'shot_10'],
+  ])
+  assert.deepEqual(grouped.groups.map((group) => group.editorialDurationSeconds), [13, 14, 13])
+  assert.ok(grouped.groups.every((group) => group.editorialDurationSeconds <= 15))
+  assert.deepEqual(grouped.groups.map((group) => `${group.rows}x${group.columns}:${group.panelCount}`), [
+    '2x2:2',
+    '2x2:3',
+    '3x3:5',
+  ])
+  assert.deepEqual(grouped.groups.map((group) => group.providerDurationSeconds), [13, 14, 13])
+  assert.equal(grouped.maxDurationPerGroupSeconds, 15)
 })
 
 test('Cinematics V2 timeline projection maps editorial clips, active shots, and media fallbacks', () => {

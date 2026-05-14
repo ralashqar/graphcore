@@ -126,8 +126,12 @@ function isCinematicV2TimelineNode(node: OutputWorkflowNode | null | undefined) 
   return purposeOrRole.includes('cinematic_v2_timeline_assemble')
     || purposeOrRole.includes('cinematic_v2_shot_keyframe')
     || purposeOrRole.includes('cinematic_v2_shot_video')
+    || purposeOrRole.includes('cinematic_v3_timeline_assemble')
+    || purposeOrRole.includes('cinematic_v3_storyboard_group_video')
     || key.includes('cinematic_v2_timeline_assemble')
+    || key.includes('cinematic_v3_timeline_assemble')
     || (key.includes('cinematic_v2_shot_') && (key.endsWith('_keyframe') || key.endsWith('_video')))
+    || (key.includes('cinematic_v3_storyboard_group_') && key.endsWith('_video'))
 }
 
 function formatStatus(value: string) {
@@ -893,7 +897,7 @@ export function OutputWorkflowGraphOverlay({
             {savingLayout ? 'Saving...' : 'Save layout'}
           </button>
           {activeRun && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(activeRun.status) ? (
-            <button onClick={onCancelRun} type="button">Cancel</button>
+            <button className="outputs-graph-danger" onClick={onCancelRun} type="button"><span aria-hidden="true">×</span>Cancel run</button>
           ) : null}
           <button className="outputs-graph-exit" onClick={onClose} type="button">Exit</button>
         </div>

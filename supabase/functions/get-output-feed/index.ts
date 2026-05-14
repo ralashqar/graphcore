@@ -182,7 +182,10 @@ Deno.serve(async (request) => {
 
     const projections = pageProjectionRows.map((row) => mapOutputRequestStatusProjectionRow(row as never))
     const workflowIds = [...new Set(requests.map((entry) => entry.workflowId).filter((id): id is string => Boolean(id)))]
-    const latestRunIds = [...new Set(requests.map((entry) => entry.latestRunId).filter((id): id is string => Boolean(id)))]
+    const latestRunIds = [...new Set([
+      ...requests.map((entry) => entry.latestRunId),
+      ...projections.map((entry) => entry.latestRunId),
+    ].filter((id): id is string => Boolean(id)))]
     const artifactKeys = [...new Set(projections.flatMap((projection) => projection.artifactKeys).filter(Boolean))].slice(0, 180)
 
     const [workflowResponse, runResponse, artifactResponse] = await Promise.all([

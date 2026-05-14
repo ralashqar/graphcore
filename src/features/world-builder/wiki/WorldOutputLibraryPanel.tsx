@@ -111,14 +111,16 @@ function outputRequestFallbackIcon(row: OutputLibraryRequestRow): EntityIconId {
 function OutputRequestThumb({ row }: { row: OutputLibraryRequestRow }) {
   const artifact = row.primaryArtifact
   const thumbnailUrl = artifact?.thumbnailUrl
+  const loading = row.groupKey === 'generating'
   return (
     <span className="world-output-row-thumb-stack">
-      <span className={`world-output-row-thumb is-${row.groupKey}`} aria-hidden="true">
+      <span className={`world-output-row-thumb is-${row.groupKey}${loading ? ' is-loading' : ''}`} aria-hidden="true">
         {thumbnailUrl && artifact?.type === 'images' ? <img src={thumbnailUrl} alt="" loading="lazy" /> : null}
         {thumbnailUrl && artifact?.type === 'video' ? <video src={thumbnailUrl} muted playsInline preload="metadata" /> : null}
         {!thumbnailUrl || (artifact?.type !== 'images' && artifact?.type !== 'video')
           ? <EntityIcon id={outputRequestFallbackIcon(row)} />
           : null}
+        {loading ? <span className="world-output-row-thumb-spinner" aria-hidden="true" /> : null}
       </span>
       <small className={`world-output-row-thumb-status is-${row.groupKey}`}>{row.statusLabel}</small>
     </span>
@@ -201,7 +203,6 @@ function OutputRequestRow({
   onCancelOutputRequest,
   onDeleteOutputRequest,
   onOpenOutputStudio,
-  onRefreshOutputRequest,
   setBusyRequestId,
   setError,
 }: {
@@ -210,22 +211,10 @@ function OutputRequestRow({
   onCancelOutputRequest: (requestId: string) => Promise<unknown> | unknown
   onDeleteOutputRequest: (requestId: string) => void
   onOpenOutputStudio: (requestId?: string | null, target?: OutputLibraryOpenTarget) => void
-  onRefreshOutputRequest: (requestId: string) => Promise<unknown> | unknown
   setBusyRequestId: (requestId: string | null) => void
   setError: (message: string | null) => void
 }) {
   const busy = busyRequestId === row.id
-  async function refresh() {
-    setBusyRequestId(row.id)
-    setError(null)
-    try {
-      await onRefreshOutputRequest(row.id)
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Could not refresh output request.')
-    } finally {
-      setBusyRequestId(null)
-    }
-  }
   async function cancel() {
     setBusyRequestId(row.id)
     setError(null)
@@ -245,6 +234,12 @@ function OutputRequestRow({
           <span className="eyebrow">{row.outputKindLabel}</span>
           <strong>{row.title}</strong>
           <OutputRequestEntityRefs refs={row.entityRefs} />
+          {row.groupKey === 'generating' ? (
+            <small className="world-output-row-step">
+              <span className="world-output-row-step-spinner" aria-hidden="true" />
+              {row.currentStepLabel || 'Preparing workflow'}
+            </small>
+          ) : null}
         </div>
       </div>
       <div className="world-output-row-side">
@@ -256,10 +251,8 @@ function OutputRequestRow({
           {row.primaryArtifact?.url ? <a href={row.primaryArtifact.url} target="_blank" rel="noreferrer">{row.primaryArtifact.openLabel}</a> : null}
           {row.canOpenGraph ? <button onClick={() => onOpenOutputStudio(row.id, 'graph')} type="button">Graph</button> : null}
           {row.canOpenTimeline ? <button onClick={() => onOpenOutputStudio(row.id, 'timeline')} type="button">Timeline</button> : null}
-          <button disabled={busy} onClick={refresh} type="button">{busy ? 'Refreshing' : 'Refresh'}</button>
-          {row.canCancel ? <button disabled={busy} onClick={cancel} type="button">Cancel</button> : null}
-          <button onClick={() => onOpenOutputStudio(row.id, 'details')} type="button">Studio</button>
-          {row.canRemove ? <button disabled={busy} onClick={() => onDeleteOutputRequest(row.id)} type="button">Remove</button> : null}
+          {row.canCancel ? <button className="world-output-danger-action" disabled={busy} onClick={cancel} type="button"><span aria-hidden="true">×</span>{busy ? 'Cancelling' : 'Cancel'}</button> : null}
+          {row.canRemove ? <button className="world-output-danger-action is-remove-action" disabled={busy} onClick={() => onDeleteOutputRequest(row.id)} type="button"><span aria-hidden="true">×</span>Remove</button> : null}
         </div>
       </div>
     </article>
@@ -493,7 +486,6 @@ export function WorldOutputLibraryPanel({
                     onCancelOutputRequest={onCancelOutputRequest}
                     onDeleteOutputRequest={onDeleteOutputRequest}
                     onOpenOutputStudio={onOpenOutputStudio}
-                    onRefreshOutputRequest={onRefreshOutputRequest}
                     setBusyRequestId={outputController.setBusyRequestId}
                     setError={outputController.setError}
                   />

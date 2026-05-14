@@ -8333,7 +8333,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   generateAudio?: boolean
   cinematicPresetFamily?: string
   cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
-  cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
+  cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
   cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
   debugCinematicStoryboardStyleSafeMode?: boolean
   cinematicStoryboardStyleOverride?: string
@@ -8665,6 +8665,19 @@ export async function loadOutputInbox(input: {
   const freshAssetKeys = new Set(freshAssets.map((asset) => asset.key))
   const reusableCachedAssets = cached?.result.assets.filter((asset) => !freshAssetKeys.has(asset.key)) ?? []
   const assets = [...freshAssets, ...reusableCachedAssets]
+  const projectionByRequestId = new Map(parsed.projections.map((projection) => [projection.requestId, projection]))
+  const requests = parsed.requests.map((request) => {
+    const projection = projectionByRequestId.get(request.id)
+    if (!projection) return request
+    return {
+      ...request,
+      latestRunId: projection.latestRunId ?? request.latestRunId,
+      metadata: {
+        ...request.metadata,
+        outputStatusProjection: projection,
+      },
+    }
+  })
   const artifacts = hydrateOutputArtifactsFromAssets(parsed.artifacts, assets)
   const artifactsByRunId = new Map<string, OutputArtifact[]>()
   for (const artifact of artifacts) {
@@ -8678,7 +8691,7 @@ export async function loadOutputInbox(input: {
   const result: OutputInboxLoadResult = {
     unchanged: parsed.unchanged,
     feedRevision: parsed.feedRevision,
-    requests: parsed.requests,
+    requests,
     workflows: parsed.workflows,
     runs,
     artifacts,
@@ -8867,7 +8880,7 @@ export async function startOutputRequest(
     generateAudio?: boolean
     cinematicPresetFamily?: 'story_movie_tv' | 'ugc_creator' | 'ugc_direct_response_ad' | 'ugc_faceless_format'
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
-    cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration'
+    cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
     cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string

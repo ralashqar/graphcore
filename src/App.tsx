@@ -1473,6 +1473,7 @@ export default function App() {
     requestId: string | null
     target: 'details' | 'graph' | 'timeline'
     nonce: number
+    returnToSourceOnClose?: boolean
   } | null>(null)
   const [activeInitialSeedSessionKey, setActiveInitialSeedSessionKey] = useState<string | null>(null)
   const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('wiki')
@@ -2942,7 +2943,7 @@ export default function App() {
         if (timeout !== null) window.clearTimeout(timeout)
         timeout = window.setTimeout(() => {
           timeout = null
-          void loadOutputInbox().catch((loadError) => {
+          void loadOutputInbox({ force: true }).catch((loadError) => {
             console.warn('[GraphCore] realtime output inbox refresh failed.', loadError)
           })
         }, 900)
@@ -3057,7 +3058,7 @@ export default function App() {
     setActiveTab('graph')
     setWorldViewMode('wiki')
     setWorldWikiSubView('outputs')
-    void loadOutputInbox().catch((loadError) => {
+    void loadOutputInbox({ force: true }).catch((loadError) => {
       console.warn('[GraphCore] output inbox failed to load for wiki outputs.', loadError)
     })
   }
@@ -8157,10 +8158,15 @@ export default function App() {
                 onCancelOutputRequest={cancelOutputRequest}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
                 onOpenOutputStudio={(requestId, target = 'details') => {
+                  const returnToWikiOutputs = activeTab === 'graph'
+                    && worldViewMode === 'wiki'
+                    && worldWikiSubView === 'outputs'
+                    && (target === 'graph' || target === 'timeline')
                   setPendingOutputOpenIntent({
                     requestId: requestId ?? null,
                     target,
                     nonce: Date.now(),
+                    returnToSourceOnClose: returnToWikiOutputs,
                   })
                   setActiveTab('outputs')
                 }}
@@ -8217,6 +8223,11 @@ export default function App() {
                 onPreviewCinematicDirectorNote={previewOutputCinematicDirectorNote}
                 onApplyCinematicDirectorPatch={applyOutputCinematicDirectorPatch}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
+                onReturnToSourceSurface={() => {
+                  setWorldViewMode('wiki')
+                  setWorldWikiSubView('outputs')
+                  setActiveTab('graph')
+                }}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
                 onStartOutputRequest={startOutputRequest}
                 onStartOutputWorkflow={startOutputWorkflow}

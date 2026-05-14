@@ -448,7 +448,7 @@ Deno.serve(async (request) => {
     const cinematicReferenceMode = payload.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
     const cinematicV2AnimaticMode = payload.cinematicV2AnimaticMode ?? 'fast_panels'
     const cinematicPipelineVersion = payload.cinematicPipelineVersion
-      ?? (planner.outputKind === 'cinematic_episode' || planner.outputKind === 'cinematic_trailer' ? 'v2_shot_orchestration' : 'v1_take_blocks')
+      ?? (planner.outputKind === 'cinematic_episode' || planner.outputKind === 'cinematic_trailer' ? 'v3_script_storyboards' : 'v1_take_blocks')
     const debugCinematicStoryboardStyleSafeMode = payload.debugCinematicStoryboardStyleSafeMode
       ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
     const cinematicStoryboardStyleOverride = debugCinematicStoryboardStyleSafeMode

@@ -4,6 +4,7 @@ import type {
   OutputArtifact,
   OutputRequest,
   OutputRequestKind,
+  OutputRequestStatusProjection,
   OutputWorkflowNode,
   OutputWorkflowRun,
   OutputWorkflowRunStep,
@@ -96,6 +97,7 @@ type BuildOutputLibraryModelInput = {
   imageUrlByEntityKey?: ReadonlyMap<string, string | null>
   outputArtifacts: readonly OutputArtifact[]
   outputRequests: readonly OutputRequest[]
+  outputRequestProjections?: readonly OutputRequestStatusProjection[]
   outputWorkflowNodes: readonly OutputWorkflowNode[]
   outputWorkflowRuns: readonly OutputWorkflowRun[]
   referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
@@ -195,8 +197,35 @@ function artifactCardPriority(artifact: OutputLibraryArtifactCard) {
   return 3
 }
 
-function statusGroup(request: OutputRequest, run: OutputWorkflowRun | null, artifacts: readonly OutputLibraryArtifactCard[]): OutputLibraryGroupKey {
-  const status = run?.status ?? request.status
+function readNonNegativeNumber(value: unknown) {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0
+  return Number.isFinite(number) && number > 0 ? number : 0
+}
+
+function readProjectionFromRequest(request: OutputRequest): OutputRequestStatusProjection | null {
+  const projection = readRecord(request.metadata).outputStatusProjection
+  if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return null
+  const record = projection as Partial<OutputRequestStatusProjection>
+  const requestId = readTrimmedString(record.requestId)
+  if (!requestId || requestId !== request.id) return null
+  return record as OutputRequestStatusProjection
+}
+
+function effectiveRequestStatus(
+  request: OutputRequest,
+  run: OutputWorkflowRun | null,
+  projection: OutputRequestStatusProjection | null,
+) {
+  return projection?.status ?? run?.status ?? request.status
+}
+
+function statusGroup(
+  request: OutputRequest,
+  run: OutputWorkflowRun | null,
+  artifacts: readonly OutputLibraryArtifactCard[],
+  projection: OutputRequestStatusProjection | null = null,
+): OutputLibraryGroupKey {
+  const status = effectiveRequestStatus(request, run, projection)
   if (status === 'failed' || status === 'completed_with_errors') return 'needs_attention'
   if (!run && (request.status === 'failed' || request.status === 'completed_with_errors')) return 'needs_attention'
   if (status === 'completed' || request.status === 'completed') return 'ready'
@@ -211,7 +240,34 @@ function stepStatusKey(step: OutputWorkflowRunStep | null | undefined) {
   return status
 }
 
-function buildProgress(run: OutputWorkflowRun | null, nodeCount: number) {
+function buildProgress(
+  run: OutputWorkflowRun | null,
+  nodeCount: number,
+  projection: OutputRequestStatusProjection | null = null,
+) {
+  if (projection) {
+    const progressRecord = readRecord(projection.progress)
+    const stepsRecord = readRecord(progressRecord.steps)
+    const total = readNonNegativeNumber(progressRecord.totalSteps)
+    const completed = Math.min(total, (
+      readNonNegativeNumber(stepsRecord.completed)
+      + readNonNegativeNumber(stepsRecord.skipped)
+      + readNonNegativeNumber(stepsRecord.completedWithErrors)
+    ))
+    const percent = total > 0 ? Math.round((completed / total) * 100) : 0
+    const currentStepLabel = readTrimmedString(projection.activeNodeLabel)
+      || (projection.terminal ? formatStatus(projection.status) : total > 0 ? 'Waiting for next workflow step' : 'Preparing workflow')
+    return {
+      progress: {
+        completed,
+        total,
+        percent,
+        label: total > 0 ? `${completed}/${total} steps` : 'Preparing plan',
+      },
+      currentStepLabel,
+    }
+  }
+
   const steps = run?.steps ?? []
   const completedSteps = steps.filter((step) => {
     const status = stepStatusKey(step)
@@ -408,6 +464,10 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
   const assetByKey = new Map(input.assets.map((asset) => [asset.key, asset]))
   const requestByWorkflowId = new Map(input.outputRequests.flatMap((request) => request.workflowId ? [[request.workflowId, request] as const] : []))
   const runById = new Map(input.outputWorkflowRuns.map((run) => [run.id, run]))
+  const projectionByRequestId = new Map<string, OutputRequestStatusProjection>()
+  for (const projection of input.outputRequestProjections ?? []) {
+    projectionByRequestId.set(projection.requestId, projection)
+  }
   const latestRunByWorkflowId = new Map<string, OutputWorkflowRun>()
   for (const run of input.outputWorkflowRuns.slice().sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())) {
     if (!latestRunByWorkflowId.has(run.workflowId)) latestRunByWorkflowId.set(run.workflowId, run)
@@ -472,9 +532,10 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
           const priorityDelta = artifactCardPriority(left) - artifactCardPriority(right)
           return priorityDelta || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
         })
-      const groupKey = statusGroup(request, run, artifacts)
+      const projection = projectionByRequestId.get(request.id) ?? readProjectionFromRequest(request)
+      const groupKey = statusGroup(request, run, artifacts, projection)
       const nodeCount = request.workflowId ? nodeCountByWorkflowId.get(request.workflowId) ?? 0 : 0
-      const { progress, currentStepLabel } = buildProgress(run, nodeCount)
+      const { progress, currentStepLabel } = buildProgress(run, nodeCount, projection)
       const entityRefs = buildEntityRefsForRequest(
         request,
         run,
@@ -491,10 +552,10 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
         outputKind: request.outputKind,
         outputKindLabel: formatKind(request.outputKind),
         status: request.status,
-        statusLabel: formatStatus(run?.status ?? request.status),
+        statusLabel: formatStatus(effectiveRequestStatus(request, run, projection)),
         groupKey,
         workflowId: request.workflowId,
-        latestRunId: request.latestRunId,
+        latestRunId: projection?.latestRunId ?? request.latestRunId,
         entityRefs,
         canOpenGraph: Boolean(request.workflowId),
         canOpenTimeline: Boolean(request.workflowId && isCinematicOutputKind(request.outputKind)),
