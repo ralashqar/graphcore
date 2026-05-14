@@ -153,6 +153,48 @@ test('buildOutputLibraryModel groups running and failed requests separately', ()
   assert.equal(model.rows.find((row) => row.id === 'running-request')?.currentStepLabel, 'Render document')
 })
 
+test('buildOutputLibraryModel treats completed runs as ready when request status lags', () => {
+  const model = buildOutputLibraryModel({
+    assets: [],
+    outputRequests: [
+      request({
+        id: 'poster-request',
+        latestRunId: 'poster-run',
+        outputKind: 'poster_image',
+        status: 'running',
+      }),
+    ],
+    outputWorkflowRuns: [
+      run({
+        id: 'poster-run',
+        status: 'completed',
+        steps: [
+          step({ id: 's1', runId: 'poster-run', nodeKey: 'world_context', orderIndex: 0, label: 'World context', status: 'completed' }),
+          step({ id: 's2', runId: 'poster-run', nodeKey: 'generated_image', orderIndex: 1, label: 'Generated image', status: 'completed' }),
+        ],
+      }),
+    ],
+    outputWorkflowNodes: [],
+    worldEntities: [],
+    outputArtifacts: [
+      artifact({
+        id: 'poster-artifact',
+        key: 'poster-artifact',
+        kind: 'image',
+        mimeType: 'image/webp',
+        runId: 'poster-run',
+      }),
+    ],
+  })
+
+  const row = model.rows.find((entry) => entry.id === 'poster-request')
+  assert.equal(row?.groupKey, 'ready')
+  assert.equal(row?.canCancel, false)
+  assert.equal(row?.progress.label, '2/2 steps')
+  assert.equal(model.groups.find((group) => group.key === 'ready')?.rows[0]?.id, 'poster-request')
+  assert.equal(model.groups.find((group) => group.key === 'generating')?.rows.length, 0)
+})
+
 test('buildOutputLibraryModel resolves gallery URLs from assets and artifact metadata', () => {
   const assets: AssetDefinition[] = [{
     id: 'asset-image',

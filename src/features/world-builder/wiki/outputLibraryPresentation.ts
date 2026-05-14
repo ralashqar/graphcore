@@ -198,10 +198,11 @@ function artifactCardPriority(artifact: OutputLibraryArtifactCard) {
 function statusGroup(request: OutputRequest, run: OutputWorkflowRun | null, artifacts: readonly OutputLibraryArtifactCard[]): OutputLibraryGroupKey {
   const status = run?.status ?? request.status
   if (status === 'failed' || status === 'completed_with_errors') return 'needs_attention'
-  if (request.status === 'failed' || request.status === 'completed_with_errors') return 'needs_attention'
-  if (status === 'running' || status === 'queued' || request.status === 'running' || request.status === 'planning') return 'generating'
+  if (!run && (request.status === 'failed' || request.status === 'completed_with_errors')) return 'needs_attention'
+  if (status === 'completed' || request.status === 'completed') return 'ready'
+  if (artifacts.length > 0 && status !== 'running' && status !== 'queued' && request.status !== 'planning') return 'ready'
   if (request.status === 'awaiting_confirmation' || status === 'cancelled' || request.status === 'cancelled') return 'drafts'
-  if (artifacts.length > 0 || request.status === 'completed' || status === 'completed') return 'ready'
+  if (status === 'running' || status === 'queued' || request.status === 'running' || request.status === 'planning') return 'generating'
   return 'drafts'
 }
 
@@ -212,11 +213,13 @@ function stepStatusKey(step: OutputWorkflowRunStep | null | undefined) {
 
 function buildProgress(run: OutputWorkflowRun | null, nodeCount: number) {
   const steps = run?.steps ?? []
-  const total = steps.length > 0 ? steps.length : nodeCount
-  const completed = steps.filter((step) => {
+  const completedSteps = steps.filter((step) => {
     const status = stepStatusKey(step)
     return status === 'completed' || status === 'skipped'
   }).length
+  const isCompletedRun = run?.status === 'completed'
+  const total = steps.length > 0 ? steps.length : nodeCount > 0 ? nodeCount : isCompletedRun ? 1 : 0
+  const completed = steps.length > 0 ? completedSteps : isCompletedRun ? total : 0
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0
   const active = steps.find((step) => stepStatusKey(step) === 'running')
     ?? steps.find((step) => stepStatusKey(step) === 'failed')

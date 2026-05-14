@@ -830,11 +830,13 @@ export function OutputWorkflowGraphOverlay({
   }, [activeRun?.steps])
   const runProgress = useMemo(() => {
     const steps = activeRun?.steps ?? []
-    const total = steps.length > 0 ? steps.length : nodes.length
-    const completed = steps.filter((step) => {
+    const completedSteps = steps.filter((step) => {
       const status = outputWorkflowStepStatusKey(step)
       return status === 'completed' || status === 'skipped'
     }).length
+    const isCompletedRun = activeRun?.status === 'completed'
+    const total = steps.length > 0 ? steps.length : nodes.length > 0 ? nodes.length : isCompletedRun ? 1 : 0
+    const completed = steps.length > 0 ? completedSteps : isCompletedRun ? total : 0
     const running = steps.filter((step) => outputWorkflowStepStatusKey(step) === 'running').length
     const failed = steps.filter((step) => outputWorkflowStepStatusKey(step) === 'failed').length
     return {
@@ -844,7 +846,14 @@ export function OutputWorkflowGraphOverlay({
       running,
       total,
     }
-  }, [activeRun?.steps, nodes.length])
+  }, [activeRun?.status, activeRun?.steps, nodes.length])
+  const executionPlanLabel = executionPlan.levels.length
+    ? `${executionPlan.levels.length} levels`
+    : activeRun
+      ? refreshingGraph
+        ? 'Updating graph'
+        : 'Workflow status only'
+      : 'No plan'
 
   return (
     <div className="outputs-graph-overlay" role="dialog" aria-modal="true" aria-label="Output workflow graph">
@@ -867,7 +876,7 @@ export function OutputWorkflowGraphOverlay({
             <i style={{ ['--progress' as string]: `${runProgress.percent}%` }} />
           </span>
           <small>
-            {executionPlan.levels.length ? `${executionPlan.levels.length} levels` : 'No levels'}
+            {executionPlanLabel}
             {executionPlan.diagnostics.length > 0 ? ` · ${executionPlan.diagnostics.length} diagnostics` : ''}
           </small>
         </div>
