@@ -151,6 +151,8 @@ import {
   outputArtifactResponseSchema,
   outputArtifactSchema,
   outputFeedResponseSchema,
+  promptIntentClassificationRequestSchema,
+  promptIntentClassificationResponseSchema,
   outputRequestDeleteResponseSchema,
   outputRequestSchema,
   outputRequestStartRequestSchema,
@@ -197,6 +199,7 @@ import {
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
 } from '../domain/outputWorkflow'
+import type { PromptIntentClassificationResult } from '../domain/promptIntentClassifier'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
   worldThreadSchema,
@@ -8809,6 +8812,41 @@ export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWork
     await clearProjectCache(parsed.run.projectId, parsed.run.draftId)
   }
   return parsed
+}
+
+export async function classifyPromptIntent(
+  snapshot: ProjectSnapshot,
+  request: {
+    prompt: string
+    sourceSurface?: string
+    selectedSuggestionId?: string | null
+    selectedEntityKeys?: string[]
+    selectedSequenceUnitKeys?: string[]
+  },
+): Promise<PromptIntentClassificationResult> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before classifying a prompt.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Prompt intent classification requires a live Supabase-backed draft.')
+  }
+  const payload = promptIntentClassificationRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    prompt: request.prompt,
+    sourceSurface: request.sourceSurface ?? 'world_prompt',
+    selectedSuggestionId: request.selectedSuggestionId ?? null,
+    selectedEntityKeys: request.selectedEntityKeys ?? [],
+    selectedSequenceUnitKeys: request.selectedSequenceUnitKeys ?? [],
+    snapshot: buildOutputWorkflowSnapshot(snapshot),
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'classify-prompt-intent',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return promptIntentClassificationResponseSchema.parse(response.data).classification
 }
 
 export async function startOutputRequest(

@@ -7,6 +7,12 @@ import {
   outputGuidanceModeSchema,
   resolveOutputSkillsForNode,
 } from './outputSkills.ts'
+import {
+  classifyPromptIntentScored,
+  promptIntentCatalogVersion,
+  promptIntentClassificationResultSchema,
+  type PromptIntentClassificationResult,
+} from './promptIntentClassifier.ts'
 import { projectContextSchema } from './projectContext.ts'
 import { buildCinematicV2StoryboardLayout, deriveCinematicV2MaxShotCount } from './cinematics.ts'
 import {
@@ -406,6 +412,22 @@ export const outputRequestStartRequestSchema = z.object({
   runInput: looseRecordSchema.default({}),
 })
 
+export const promptIntentClassificationRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  prompt: z.string().trim().min(1).max(12000),
+  sourceSurface: z.string().trim().min(1).max(64).default('world_prompt'),
+  selectedSuggestionId: z.string().nullable().optional(),
+  selectedEntityKeys: z.array(z.string()).default([]),
+  selectedSequenceUnitKeys: z.array(z.string()).default([]),
+  snapshot: outputWorkflowPlanRequestSchema.shape.snapshot,
+})
+
+export const promptIntentClassificationResponseSchema = z.object({
+  ok: z.literal(true),
+  classification: promptIntentClassificationResultSchema,
+})
+
 export const outputPromptPlannerResultSchema = z.object({
   intent: outputRequestIntentSchema,
   outputKind: outputRequestKindSchema,
@@ -423,6 +445,17 @@ export const outputPromptPlannerResultSchema = z.object({
   visualReferencePolicy: z.enum(['none', 'use_prompt_bound_entity_refs', 'use_selected_entity_refs', 'use_world_style_only']).default('none'),
   requiresConfirmation: z.boolean().default(false),
   plannerNotes: z.string().default(''),
+  classifierMode: z.string().default('scored'),
+  classifierCatalogVersion: z.string().default(promptIntentCatalogVersion),
+  classifierRationale: z.string().default(''),
+  classifierCandidates: z.array(z.object({
+    id: z.string(),
+    intent: outputRequestIntentSchema,
+    outputKind: outputRequestKindSchema,
+    targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image', 'video']).default('pdf'),
+    score: z.number().min(0).max(1),
+    rationale: z.string().default(''),
+  })).default([]),
 })
 
 export const outputRequestStatusRequestSchema = z.object({
@@ -1422,57 +1455,13 @@ export function classifyOutputPrompt(prompt: string): {
   confidence: number
   notes: string
 } {
-  const lowerPrompt = prompt.toLowerCase()
-  if (!lowerPrompt.trim()) {
-    return { intent: 'ambiguous', outputKind: 'unknown', confidence: 0, notes: 'Empty prompt.' }
+  const classification = classifyPromptIntentScored(prompt)
+  return {
+    intent: outputRequestIntentSchema.parse(classification.intent),
+    outputKind: outputRequestKindSchema.parse(classification.outputKind),
+    confidence: classification.confidence,
+    notes: classification.rationale,
   }
-  if (promptIncludesAny(lowerPrompt, ['create', 'make', 'generate', 'render', 'write', 'draft', 'produce', 'export', 'draw', 'paint', 'illustrate', 'design'])) {
-    if (promptIncludesAny(lowerPrompt, ['story bible', 'world bible', 'series bible', 'project bible', 'show bible'])) {
-      return { intent: 'output_generation', outputKind: 'story_bible_from_world', confidence: 0.92, notes: 'Prompt asks for a canon/reference story bible, not fiction prose.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['world reference', 'reference document', 'reference guide', 'world guide', 'canon guide'])) {
-      return { intent: 'output_generation', outputKind: 'world_reference_document', confidence: 0.86, notes: 'Prompt asks for a world reference document.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['lore guide', 'lore document', 'lorebook', 'lore book'])) {
-      return { intent: 'output_generation', outputKind: 'lore_guide', confidence: 0.86, notes: 'Prompt asks for a lore guide/reference output.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['character dossier', 'character dossiers', 'character bible', 'cast bible', 'cast dossier'])) {
-      return { intent: 'output_generation', outputKind: 'character_dossier_pack', confidence: 0.86, notes: 'Prompt asks for character dossiers from canon.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['comic', 'manga', 'graphic novel', 'issue'])) {
-      return { intent: 'output_generation', outputKind: 'comic_issue_from_sequence', confidence: 0.86, notes: 'Prompt asks for a comic-style output.' }
-    }
-    if (promptLooksCinematic(lowerPrompt)) {
-      const outputKind = promptLooksLikeUgcVideo(lowerPrompt)
-        ? 'ugc_episode'
-        : lowerPrompt.includes('trailer') || lowerPrompt.includes('teaser')
-          ? 'cinematic_trailer'
-          : 'cinematic_episode'
-      return { intent: 'output_generation', outputKind, confidence: 0.84, notes: 'Prompt asks for a cinematic/video output.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['write chapter', 'first chapter', 'chapter 1', 'chapter one', 'chapter prose', 'novel chapter'])) {
-      return { intent: 'output_generation', outputKind: 'narrative_chapter_or_ebook', confidence: 0.88, notes: 'Prompt asks for narrative chapter prose.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['ebook', 'book', 'novel', 'pdf', 'manuscript'])) {
-      return { intent: 'output_generation', outputKind: 'narrative_chapter_or_ebook', confidence: 0.84, notes: 'Prompt asks for a narrative book/document output.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['short story', 'story excerpt', 'scene prose'])) {
-      return { intent: 'output_generation', outputKind: 'short_story', confidence: 0.8, notes: 'Prompt asks for a prose output.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['poster', 'cover image', 'key art', 'one sheet'])) {
-      return { intent: 'output_generation', outputKind: 'poster_image', confidence: 0.82, notes: 'Prompt asks for poster/key art.' }
-    }
-    if (promptIncludesAny(lowerPrompt, ['concept art', 'image', 'illustration', 'portrait', 'character art', 'environment art'])) {
-      return { intent: 'output_generation', outputKind: 'concept_art_image', confidence: 0.78, notes: 'Prompt asks for a generated image.' }
-    }
-  }
-  if (promptIncludesAny(lowerPrompt, ['add to world', 'change canon', 'create character', 'add character', 'update entity', 'expand world'])) {
-    return { intent: 'world_mutation', outputKind: 'unknown', confidence: 0.72, notes: 'Prompt appears to ask for canon/world graph mutation.' }
-  }
-  if (promptIncludesAny(lowerPrompt, ['what is', 'explain', 'summarize', 'why', 'how does'])) {
-    return { intent: 'answer_only', outputKind: 'unknown', confidence: 0.65, notes: 'Prompt appears to ask for an answer, not an output artifact.' }
-  }
-  return { intent: 'ambiguous', outputKind: 'unknown', confidence: 0.35, notes: 'The prompt could be an output request or a world-authoring request.' }
 }
 
 function storyBibleSectionsForKind(kind: z.infer<typeof outputRequestKindSchema>): StoryBibleSection[] {
@@ -1511,8 +1500,13 @@ export function planOutputPrompt(input: {
   selectedEntityKeys?: string[]
   selectedSequenceUnitKeys?: string[]
   targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
+  classification?: PromptIntentClassificationResult
 }) {
-  const classification = classifyOutputPrompt(input.prompt)
+  const classification = input.classification
+    ? promptIntentClassificationResultSchema.parse(input.classification)
+    : classifyPromptIntentScored(input.prompt)
+  const outputKind = outputRequestKindSchema.parse(classification.outputKind)
+  const intent = outputRequestIntentSchema.parse(classification.intent)
   const boundScope = bindOutputPromptWorldScope({
     prompt: input.prompt,
     worldEntities: input.snapshot.worldEntities,
@@ -1525,10 +1519,10 @@ export function planOutputPrompt(input: {
     'lore_guide',
     'character_dossier_pack',
   ]
-  const imageKind = classification.outputKind === 'concept_art_image' || classification.outputKind === 'poster_image'
-  const cinematicKind = classification.outputKind === 'cinematic_episode'
-    || classification.outputKind === 'cinematic_trailer'
-    || classification.outputKind === 'ugc_episode'
+  const imageKind = outputKind === 'concept_art_image' || outputKind === 'poster_image'
+  const cinematicKind = outputKind === 'cinematic_episode'
+    || outputKind === 'cinematic_trailer'
+    || outputKind === 'ugc_episode'
   const cinematicSourceScope = cinematicKind
     ? resolveCinematicStorySourceScope({
       prompt: input.prompt,
@@ -1536,7 +1530,7 @@ export function planOutputPrompt(input: {
       selectedSequenceUnitKeys: input.selectedSequenceUnitKeys,
     })
     : null
-  const documentReference = referenceKinds.includes(classification.outputKind)
+  const documentReference = referenceKinds.includes(outputKind)
   const textOnlyReference = promptIncludesAny(input.prompt.toLowerCase(), ['text only', 'no images', 'without images', 'plain reference', 'simple reference'])
   const designedReference = documentReference && !textOnlyReference
   const selectedEntityKeys = imageKind
@@ -1549,25 +1543,29 @@ export function planOutputPrompt(input: {
     : cinematicKind
       ? cinematicSourceScope?.selectedSequenceUnitKeys ?? []
     : boundScope.selectedSequenceUnitKeys
-  const sections = documentReference ? storyBibleSectionsForKind(classification.outputKind) : []
+  const sections = documentReference ? storyBibleSectionsForKind(outputKind) : []
   return outputPromptPlannerResultSchema.parse({
-    intent: classification.intent,
-    outputKind: classification.outputKind,
+    intent,
+    outputKind,
     confidence: classification.confidence,
-    targetFormat: imageKind ? 'image' : cinematicKind ? 'video' : input.targetFormat ?? 'pdf',
+    targetFormat: imageKind ? 'image' : cinematicKind ? 'video' : classification.targetFormat ?? input.targetFormat ?? 'pdf',
     worldScope: documentReference ? 'full_world' : selectedEntityKeys.length || selectedSequenceUnitKeys.length ? 'prompt_bound_scope' : 'full_world',
     selectedEntityKeys,
     selectedSequenceUnitKeys,
-    documentMode: designedReference ? 'designed_reference' : documentReference ? 'reference' : imageKind ? 'visual' : cinematicKind ? 'cinematic' : classification.outputKind === 'comic_issue_from_sequence' ? 'comic' : 'narrative',
+    documentMode: designedReference ? 'designed_reference' : documentReference ? 'reference' : imageKind ? 'visual' : cinematicKind ? 'cinematic' : outputKind === 'comic_issue_from_sequence' ? 'comic' : 'narrative',
     sections,
     visualReferencePolicy: imageKind || cinematicKind ? 'use_prompt_bound_entity_refs' : 'none',
-    requiresConfirmation: classification.intent === 'ambiguous' || classification.confidence < 0.55,
+    requiresConfirmation: classification.requiresConfirmation || intent === 'ambiguous' || classification.confidence < 0.55,
     plannerNotes: [
-      classification.notes,
+      classification.rationale,
       cinematicSourceScope && cinematicSourceScope.sourceMode !== 'none'
         ? `Cinematic source resolver: ${cinematicSourceScope.rationale}`
         : '',
     ].filter(Boolean).join('\n'),
+    classifierMode: classification.classifierMode,
+    classifierCatalogVersion: classification.catalogVersion,
+    classifierRationale: classification.rationale,
+    classifierCandidates: classification.alternatives,
   })
 }
 

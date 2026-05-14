@@ -1,6 +1,7 @@
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { runOpenAiResponses } from '../_shared/openai.ts'
+import { classifyPromptIntentServer } from '../_shared/prompt-intent.ts'
 import {
   buildOutputWorkflowExecutionPlan,
   buildOutputWorkflowFingerprint,
@@ -76,12 +77,31 @@ function isCinematicOutputKind(outputKind: string) {
   return outputKind === 'cinematic_episode' || outputKind === 'cinematic_trailer' || outputKind === 'ugc_episode'
 }
 
-function buildEntityScopeCatalog(snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot']) {
+function buildVariantScopeCatalog(variants: Record<string, unknown>[]) {
+  return variants
+    .slice(0, 12)
+    .map((variant) => ({
+      variantKey: textFromUnknown(variant.variant_key) || textFromUnknown(variant.variantKey),
+      label: textFromUnknown(variant.label),
+      summary: textFromUnknown(variant.summary),
+      variantType: textFromUnknown(variant.variant_type) || textFromUnknown(variant.variantType),
+      guidance: textFromUnknown(variant.guidance),
+      status: textFromUnknown(variant.status),
+      hasAsset: Boolean(textFromUnknown(variant.asset_key) || textFromUnknown(variant.assetKey)),
+    }))
+    .filter((variant) => variant.variantKey || variant.label || variant.summary)
+}
+
+function buildEntityScopeCatalog(
+  snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot'],
+  variantsByEntityKey = new Map<string, Record<string, unknown>[]>(),
+) {
   return snapshot.worldEntities
     .filter((entity) => entity.nodeType !== 'sequence_unit')
     .slice(0, 160)
     .map((entity) => {
       const metadata = recordFromUnknown(entity.metadata)
+      const variants = buildVariantScopeCatalog(variantsByEntityKey.get(entity.key) ?? [])
       return {
         key: entity.key,
         name: entity.name,
@@ -90,7 +110,14 @@ function buildEntityScopeCatalog(snapshot: z.infer<typeof outputRequestStartRequ
         summary: entity.summary,
         context: entity.context,
         visualDescription: textFromUnknown(metadata.visualDescription),
-        hasImageAsset: Boolean(entity.thumbnailAssetKey || entity.thumbnail_asset_key || textFromUnknown(metadata.assetKey) || textFromUnknown(metadata.brandAtlasAssetKey)),
+        referenceVariants: variants,
+        hasImageAsset: Boolean(
+          entity.thumbnailAssetKey
+          || entity.thumbnail_asset_key
+          || textFromUnknown(metadata.assetKey)
+          || textFromUnknown(metadata.brandAtlasAssetKey)
+          || variants.some((variant) => variant.hasAsset && variant.status === 'completed')
+        ),
       }
     })
 }
@@ -111,6 +138,7 @@ async function resolveOutputRequestWorldScope(input: {
   prompt: string
   planner: z.infer<typeof outputPromptPlannerResultSchema>
   snapshot: z.infer<typeof outputRequestStartRequestSchema>['snapshot']
+  variantsByEntityKey?: Map<string, Record<string, unknown>[]>
 }) {
   if (isCinematicOutputKind(input.planner.outputKind) && input.planner.intent === 'output_generation') {
     const sourceResolution = resolveCinematicStorySourceScope({
@@ -119,7 +147,7 @@ async function resolveOutputRequestWorldScope(input: {
       selectedSequenceUnitKeys: input.planner.selectedSequenceUnitKeys,
     })
     const sequences = buildSequenceScopeCatalog(input.snapshot)
-    const validEntityKeys = new Set(buildEntityScopeCatalog(input.snapshot).map((entity) => entity.key))
+    const validEntityKeys = new Set(buildEntityScopeCatalog(input.snapshot, input.variantsByEntityKey).map((entity) => entity.key))
     const validSequenceKeys = new Set(sequences.map((sequence) => sequence.key))
     const selectedEntityKeys = input.planner.selectedEntityKeys.filter((key) => validEntityKeys.has(key))
     let selectedSequenceUnitKeys = sourceResolution.selectedSequenceUnitKeys
@@ -218,7 +246,7 @@ async function resolveOutputRequestWorldScope(input: {
     }
   }
 
-  const entities = buildEntityScopeCatalog(input.snapshot)
+  const entities = buildEntityScopeCatalog(input.snapshot, input.variantsByEntityKey)
   const sequences = buildSequenceScopeCatalog(input.snapshot)
   if (entities.length === 0 && sequences.length === 0) {
     return {
@@ -241,6 +269,7 @@ async function resolveOutputRequestWorldScope(input: {
         'You are GraphCore\'s output world-scope resolver.',
         'Select only the world graph entities and sequence units directly needed by the user prompt for this output.',
         'For image prompts, choose the characters, places, objects, or concepts explicitly named or clearly required as visual references.',
+        'If the prompt names a visual variant such as wardrobe, gear, outfit, room, chamber, cafe, or shot-location, select the parent entity that owns that referenceVariants entry.',
         'Do not broaden to the surrounding cast, chapter cast, factions, or related characters unless the prompt asks for them.',
         'If a prompt says "Ilya saluting to Anya", select Ilya and Anya only, plus a location only if it is named or visually required.',
         'Use only keys from the supplied catalog. Return JSON only.',
@@ -365,17 +394,49 @@ Deno.serve(async (request) => {
       .single()
     if (draftResponse.error || !draftResponse.data) throw new HttpError(404, 'Draft not found or not editable.')
 
+    const promptIntentClassification = await classifyPromptIntentServer({
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+      prompt: payload.prompt,
+      sourceSurface: payload.sourceSurface,
+      selectedSuggestionId: null,
+      selectedEntityKeys: payload.selectedEntityKeys,
+      selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
+      snapshot: payload.snapshot,
+    })
     const initialPlanner = planOutputPrompt({
       prompt: payload.prompt,
       snapshot: payload.snapshot,
       selectedEntityKeys: payload.selectedEntityKeys,
       selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
       targetFormat: payload.targetFormat,
+      classification: promptIntentClassification,
     })
+    const variantsByEntityKey = new Map<string, Record<string, unknown>[]>()
+    if (isImageOutputKind(initialPlanner.outputKind) && initialPlanner.intent === 'output_generation') {
+      const variantResponse = await client
+        .from('world_entity_visual_variants')
+        .select('entity_key, variant_key, label, summary, variant_type, asset_key, guidance, status')
+        .eq('draft_id', payload.draftId)
+      if (!variantResponse.error) {
+        for (const row of variantResponse.data ?? []) {
+          const record = recordFromUnknown(row)
+          const entityKey = textFromUnknown(record.entity_key)
+          if (!entityKey) continue
+          variantsByEntityKey.set(entityKey, [...(variantsByEntityKey.get(entityKey) ?? []), record])
+        }
+      } else {
+        console.warn('[start-output-request] failed to load entity visual variants for scope resolver', {
+          draftId: payload.draftId,
+          message: variantResponse.error.message,
+        })
+      }
+    }
     const scopeResolution = await resolveOutputRequestWorldScope({
       prompt: payload.prompt,
       planner: initialPlanner,
       snapshot: payload.snapshot,
+      variantsByEntityKey,
     })
     const planner = scopeResolution.planner
     const comicOutput = planner.outputKind === 'comic_issue_from_sequence'
@@ -413,6 +474,7 @@ Deno.serve(async (request) => {
         metadata: {
           planner,
           classification: planner,
+          promptIntentClassifier: promptIntentClassification,
           scopeResolver: scopeResolution.scopeResolver,
           confidence: planner.confidence,
           plannedSections: planner.sections,

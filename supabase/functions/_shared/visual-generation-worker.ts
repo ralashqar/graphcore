@@ -8,6 +8,7 @@ import {
   buildGroupReferenceSheetPrompt,
   buildItemReferenceSheetPrompt,
   buildLocationReferenceSheetPrompt,
+  buildShotLocationReferenceSheetPrompt,
 } from '../../../src/domain/visualAssetGeneration.ts'
 import {
   readWorldEntityVisualDescription,
@@ -1356,6 +1357,10 @@ function resolveEntityReferenceSheetPrompt(input: {
   visualTraits: string[]
   visualTraitMap: Record<string, string>
   referenceAssetNotes: string[]
+  variantType?: string
+  variantLabel?: string
+  variantSummary?: string
+  variantGuidance?: string
 }) {
   const base = {
     entityName: input.entity.name || input.entity.key,
@@ -1368,6 +1373,14 @@ function resolveEntityReferenceSheetPrompt(input: {
     visualTraits: input.visualTraits,
     visualTraitMap: input.visualTraitMap,
     referenceAssetNotes: input.referenceAssetNotes,
+  }
+  if (input.variantType === 'shot_location_sheet') {
+    return buildShotLocationReferenceSheetPrompt({
+      ...base,
+      variantLabel: input.variantLabel,
+      variantSummary: input.variantSummary,
+      variantGuidance: input.variantGuidance,
+    })
   }
   if (input.sheetKind === 'character') return buildCharacterReferenceSheetPrompt(base)
   if (input.sheetKind === 'location') {
@@ -1457,6 +1470,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   const sheetKind = resolveEntityReferenceSheetKind(entity.nodeType, readString(job.input.sheetKind) || readString(job.targetKeys.sheetKind))
   const variantKey = readString(job.input.variantKey) || readString(job.targetKeys.variantKey) || readString(job.metadata.variantKey)
   const variantType = readString(job.input.variantType) || readString(job.targetKeys.variantType) || readString(job.metadata.variantType)
+  const isShotLocationVariant = Boolean(variantKey && variantType === 'shot_location_sheet')
   const variantLabel = readString(job.input.variantLabel) || readString(job.metadata.variantLabel) || variantKey
   const variantSummary = readString(job.input.variantSummary) || readString(job.metadata.variantSummary)
   if (variantKey) {
@@ -1477,7 +1491,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   const referenceAssets = await loadProjectAssetRows(client, job.projectId, referenceImageAssetKeys)
   const referenceImageUrls = await createProjectAssetSignedUrls(client, referenceAssets)
   const referenceAssetNotes = referenceAssets.length > 0
-    ? referenceAssets.map((asset) => `${readString(asset.name) || readString(asset.key) || 'reference image'} should guide stable visual identity, not override the project art style.`)
+    ? referenceAssets.map((asset) => `${readString(asset.name) || readString(asset.key) || 'reference image'} should guide stable visual identity, proportions, layout continuity, and variant-specific grounding only; it must not override, dilute, or restyle the target project art style.`)
     : []
   const regenerationGuidance = readString(job.input.regenerationGuidance) || readString(job.metadata.regenerationGuidance)
   const basePrompt = resolveEntityReferenceSheetPrompt({
@@ -1490,17 +1504,22 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     visualTraits,
     visualTraitMap,
     referenceAssetNotes,
+    variantType: isShotLocationVariant ? variantType : '',
+    variantLabel,
+    variantSummary,
+    variantGuidance: regenerationGuidance || variantSummary || variantLabel,
   })
-  const variantPromptGuidance = variantKey
+  const variantPromptGuidance = variantKey && !isShotLocationVariant
     ? [
-        variantType === 'shot_location_sheet'
-          ? 'This is a visual-only SHOT LOCATION VARIANT. Create a square cinematic shot-location production sheet grounded in the attached default location reference. Show multiple camera angles for the requested specific shot location, consistent architecture/materials/palette, usable staging zones, and a compact top-down or isometric map/spatial layout panel. Do not replace the whole canonical location; focus on this shot-specific sub-location or set.'
-          : 'This is a visual-only REFERENCE ART VARIANT. Preserve the exact identity, proportions, face/silhouette, materials language, and project art style from the attached default reference sheet. Apply only the requested variant look/state.',
+        projectArtStyle
+          ? `Hard style lock: render the final variant in this exact target project art style, regardless of the source image style: ${projectArtStyle}. If the source reference looks photographic, painterly, cartoon, anime, sketchy, low-resolution, or otherwise different, preserve identity and relevant design cues only while converting the output fully back into the target style.`
+          : 'Hard style lock: the source reference image is not a style override. Preserve identity and relevant design cues only; keep the output in the current project art direction.',
+        'This is a visual-only REFERENCE ART VARIANT. Preserve the exact identity, proportions, face/silhouette, materials language, and project art style from the attached default reference sheet. Apply only the requested variant look/state.',
         variantLabel ? `Variant label: ${variantLabel}.` : '',
         variantSummary ? `Variant summary: ${variantSummary}.` : '',
       ].filter(Boolean).join(' ')
     : ''
-  const prompt = regenerationGuidance
+  const prompt = regenerationGuidance && !isShotLocationVariant
     ? `${basePrompt} Regeneration guidance from the user: ${regenerationGuidance}. Apply this as a constrained identity update while preserving canon, the refined visual description, and the project art style.`
     : basePrompt
   const finalPrompt = variantPromptGuidance

@@ -41,6 +41,7 @@ import {
   resolveOutputSkillsForNode,
   validateOutputSkillRegistry,
 } from './outputSkills.ts'
+import { classifyPromptIntentScored, promptIntentCatalogVersion } from './promptIntentClassifier.ts'
 import {
   buildOutputWorkflowGraphViewModel,
   buildOutputWorkflowLevelLayout,
@@ -248,6 +249,16 @@ test('output feed schemas support projection-backed inbox loading without run-st
   )
   assert.match(loadOutputInboxSource, /get-output-feed/)
   assert.doesNotMatch(loadOutputInboxSource, /output_workflow_run_steps/)
+})
+
+test('output request status projection tolerates queued runs without active steps', () => {
+  const migrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260514133431_fix_output_projection_unassigned_step_records.sql'), 'utf8')
+
+  assert.match(migrationSource, /active_node_key text/)
+  assert.match(migrationSource, /active_node_label text/)
+  assert.match(migrationSource, /latest_step_error text/)
+  assert.doesNotMatch(migrationSource, /running_step\.node_key/)
+  assert.doesNotMatch(migrationSource, /failed_step\.error_message/)
 })
 
 test('output workflow status endpoint uses run-only loader instead of graph bundle', () => {
@@ -506,9 +517,20 @@ test('output skill resolution supports explicit keys, auto tags, world metadata,
 })
 
 test('prompt-first output router classifies output prompts and binds mentioned entities', () => {
+  const catalogClassification = classifyPromptIntentScored('Create a vertical poster image of Suri in their samurai outfit standing inside the Pact Chamber, holding a confident heroic pose under warm cinematic light.')
+  assert.equal(catalogClassification.intent, 'output_generation')
+  assert.equal(catalogClassification.outputKind, 'poster_image')
+  assert.equal(catalogClassification.targetFormat, 'image')
+  assert.equal(catalogClassification.catalogVersion, promptIntentCatalogVersion)
+  assert.equal(catalogClassification.requiresConfirmation, false)
+
   const classification = classifyOutputPrompt('Make a poster image of Mara in The Archive')
   assert.equal(classification.intent, 'output_generation')
   assert.equal(classification.outputKind, 'poster_image')
+
+  const cinematicPosterClassification = classifyOutputPrompt('Create a vertical poster image of Suri in their samurai outfit standing inside the Pact Chamber, holding a confident heroic pose under warm cinematic light.')
+  assert.equal(cinematicPosterClassification.intent, 'output_generation')
+  assert.equal(cinematicPosterClassification.outputKind, 'poster_image')
 
   const drawClassification = classifyOutputPrompt('Draw an image of Mara in The Archive')
   assert.equal(drawClassification.intent, 'output_generation')
@@ -519,6 +541,20 @@ test('prompt-first output router classifies output prompts and binds mentioned e
     worldEntities: snapshot.worldEntities,
   })
   assert.deepEqual(scope.selectedEntityKeys.sort(), ['archive', 'hero'])
+})
+
+test('catalog-ranked prompt intent separates canon mutation, documents, and ambiguous mixed requests', () => {
+  const canon = classifyPromptIntentScored('Add a new chapter between Chapter 4 and Chapter 5 focused on the Echo Map awakening.')
+  assert.equal(canon.intent, 'world_mutation')
+  assert.equal(canon.outputKind, 'unknown')
+
+  const bible = classifyPromptIntentScored('Write a story bible for the current world.')
+  assert.equal(bible.intent, 'output_generation')
+  assert.equal(bible.outputKind, 'story_bible_from_world')
+  assert.equal(bible.targetFormat, 'pdf')
+
+  const mixed = classifyPromptIntentScored('Create something cool with Suri.')
+  assert.equal(mixed.requiresConfirmation, true)
 })
 
 test('prompt-first output router classifies cinematic and UGC video prompts', () => {
@@ -1748,6 +1784,36 @@ test('prompt-first image requests use approved workflow nodes only', () => {
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'generated_image' && edge.targetPort === 'references'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'image_references' && edge.sourcePort === 'asset_pack' && edge.targetNodeKey === 'visual_prompt' && edge.targetPort === 'asset_pack'))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
+})
+
+test('prompt-first image workflows select one entity variant reference per subject', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a poster image of Mara in a samurai outfit inside the Pact Chamber doing a heroic pose.',
+    targetFormat: 'image',
+    snapshot,
+  }, 'poster_image')
+
+  assert.deepEqual(plan.nodes.map((node) => node.key), ['world_context', 'skill_context', 'visual_prompt', 'image_references', 'generated_image'])
+  assert.match(workerSource, /function resolveImageOutputReferenceSelection/)
+  assert.match(workerSource, /selectedReferenceVariantLabel/)
+  assert.match(workerSource, /selectedReferenceVariantSummary/)
+  assert.match(workerSource, /primaryAssetKey/)
+  assert.match(workerSource, /assetKeys: referenceSelection\.primaryAssetKey \? \[referenceSelection\.primaryAssetKey\] : \[\]/)
+  assert.match(workerSource, /const primaryAssetKey = readText\(entity\.primaryAssetKey\)/)
+  assert.match(workerSource, /Selected visual variant:/)
+  assert.match(workerSource, /variant_pending/)
+  assert.match(workerSource, /variant_not_found/)
+  assert.match(workerSource, /selectedReferenceVariants/)
+  assert.match(workerSource, /selectedReferenceVariantKeys/)
+  assert.match(workerSource, /selectedReferenceAssetKeys/)
+  assert.match(workerSource, /referenceDiagnostics/)
+  assert.match(startOutputRequestSource, /world_entity_visual_variants/)
+  assert.match(startOutputRequestSource, /referenceVariants: variants/)
+  assert.match(startOutputRequestSource, /select the parent entity that owns that referenceVariants entry/)
 })
 
 test('image workflow quality defaults are configurable and client-overridable', () => {

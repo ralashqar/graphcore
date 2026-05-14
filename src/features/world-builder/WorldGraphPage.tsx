@@ -355,6 +355,23 @@ function liveWikiSectionKindForEntity(entity: WorldEntity | null): WorldWikiSect
   }
 }
 
+function wikiEntityBelongsToSectionKind(entity: WorldEntity | null, sectionKind: WorldWikiSection['kind'] | null | undefined) {
+  if (!entity || !sectionKind) return false
+  return liveWikiSectionKindForEntity(entity) === sectionKind
+}
+
+function canonicalWikiEntityPageSectionKind(input: {
+  entity: WorldEntity | null
+  requestedSectionKind: WorldWikiSection['kind']
+  fallbackSectionKind: WorldWikiSection['kind'] | null
+}) {
+  if (!input.entity) return input.fallbackSectionKind ?? input.requestedSectionKind
+  if (wikiEntityBelongsToSectionKind(input.entity, input.requestedSectionKind)) return input.requestedSectionKind
+  return input.fallbackSectionKind
+    ?? liveWikiSectionKindForEntity(input.entity)
+    ?? input.requestedSectionKind
+}
+
 function liveWikiActiveSectionKindForPhase(phase: string, latestEntity: WorldEntity | null): WorldWikiSection['kind'] {
   if (phase === 'generating_entity' || phase === 'generating_sequence_unit') {
     return liveWikiSectionKindForEntity(latestEntity) ?? phaseToWikiSectionKind(phase)
@@ -2249,9 +2266,12 @@ export function WorldGraphPage({
     view: selectedView,
   }), [effectiveProjectDraftMetadata, projectDraftId, projectName, projectSummary, selectedView, worldEntities, worldGraphConnections, worldRelationships, worldResults, worldThreads])
   const resolveWikiEntitySectionKind = useCallback((entityKey: string): WorldWikiSection['kind'] | null => {
-    const section = wikiModel.sections.find((entry) => entry.entityKeys.includes(entityKey)) ?? null
+    const entity = entityByKey.get(entityKey) ?? null
+    const entitySectionKind = liveWikiSectionKindForEntity(entity)
+    if (entitySectionKind && wikiModel.sections.some((entry) => entry.kind === entitySectionKind)) return entitySectionKind
+    const section = wikiModel.sections.find((entry) => entry.kind !== 'overview' && entry.entityKeys.includes(entityKey)) ?? null
     return section?.kind ?? null
-  }, [wikiModel.sections])
+  }, [entityByKey, wikiModel.sections])
   const activeWikiEntity = activeWikiEntityPage ? entityByKey.get(activeWikiEntityPage.entityKey) ?? null : null
   const activeWikiEntitySection = activeWikiEntityPage
     ? wikiModel.sections.find((section) => section.kind === activeWikiEntityPage.sectionKind) ?? null
@@ -2272,9 +2292,20 @@ export function WorldGraphPage({
         return
       }
       const entity = entityByKey.get(routePage.entityKey) ?? null
-      const resolvedSectionKind = resolveWikiEntitySectionKind(routePage.entityKey) ?? routePage.sectionKind
+      const requestedSection = wikiModel.sections.find((entry) => entry.kind === routePage.sectionKind) ?? null
+      const requestedSectionIsEntityCategory = requestedSection && requestedSection.kind !== 'overview'
+      const routeResolvedSectionKind = requestedSectionIsEntityCategory && entity && (
+        requestedSection.entityKeys.includes(entity.key) || wikiEntityBelongsToSectionKind(entity, requestedSection.kind)
+      )
+        ? requestedSection.kind
+        : resolveWikiEntitySectionKind(routePage.entityKey) ?? routePage.sectionKind
+      const resolvedSectionKind = canonicalWikiEntityPageSectionKind({
+        entity,
+        requestedSectionKind: routeResolvedSectionKind,
+        fallbackSectionKind: resolveWikiEntitySectionKind(routePage.entityKey),
+      })
       const section = wikiModel.sections.find((entry) => entry.kind === resolvedSectionKind) ?? null
-      if (!entity || !section?.entityKeys.includes(entity.key)) return
+      if (!entity || !section || (!section.entityKeys.includes(entity.key) && !wikiEntityBelongsToSectionKind(entity, section.kind))) return
       if (viewMode !== 'wiki') {
         setViewMode('wiki')
         onWorldViewModeChange('wiki')
@@ -2303,7 +2334,7 @@ export function WorldGraphPage({
     if (!activeWikiEntityPage) return
     const entity = entityByKey.get(activeWikiEntityPage.entityKey) ?? null
     const section = wikiModel.sections.find((entry) => entry.kind === activeWikiEntityPage.sectionKind) ?? null
-    if (entity && section?.entityKeys.includes(entity.key)) return
+    if (entity && section && (section.entityKeys.includes(entity.key) || wikiEntityBelongsToSectionKind(entity, section.kind))) return
     setActiveWikiEntityPage(null)
     writeWikiEntityPageRoute(null, 'replace')
   }, [activeWikiEntityPage, entityByKey, wikiModel.sections])
@@ -5181,7 +5212,7 @@ export function WorldGraphPage({
     const sessionKey = contextOverrides?.sessionKey ?? selectedPromptSessionKey ?? selectedPromptSession?.key ?? createWorldPromptSessionKey()
     setWorldPromptError(null)
     setIsPromptSubmitting(true)
-    setBusyMessage('Generating world updates from prompt...')
+    setBusyMessage('Analyzing request intent...')
     const sourceContext = contextOverrides?.sourceContext
       ? (({ promptMode: _promptMode, ...sourceContextWithoutMode }) => sourceContextWithoutMode)(contextOverrides.sourceContext)
       : {
@@ -5219,7 +5250,7 @@ export function WorldGraphPage({
         selectedViewKey: selectedView.key,
         selectedThreadKey: selectedPromptThread?.key ?? null,
       })
-      setWorldPromptError('World prompt failed. Open the browser console for details.')
+      setWorldPromptError(error instanceof Error ? error.message : 'World prompt failed. Open the browser console for details.')
     } finally {
       setIsPromptSubmitting(false)
       setBusyMessage(null)
@@ -6916,7 +6947,13 @@ export function WorldGraphPage({
   }
 
   function openWikiEntityPage(sectionKind: WorldWikiSection['kind'], entityKey: string) {
-    const page = { sectionKind, entityKey }
+    const entity = entityByKey.get(entityKey) ?? null
+    const canonicalSectionKind = canonicalWikiEntityPageSectionKind({
+      entity,
+      requestedSectionKind: sectionKind,
+      fallbackSectionKind: resolveWikiEntitySectionKind(entityKey),
+    })
+    const page = { sectionKind: canonicalSectionKind, entityKey }
     if (viewMode !== 'wiki') {
       setViewMode('wiki')
       onWorldViewModeChange('wiki')
@@ -7666,12 +7703,6 @@ export function WorldGraphPage({
                 {referenceSheetBusy ? <span className="loading-spinner" aria-hidden="true" /> : <EntityIcon id="asset" />}
                 {referenceSheetButtonLabel}
               </button>
-            ) : null}
-            {referenceSheetBusy && referenceSheetStatusLabel ? (
-              <p className="world-wiki-reference-regeneration-status" aria-live="polite">
-                <span className="loading-spinner" aria-hidden="true" />
-                {referenceSheetStatusLabel}
-              </p>
             ) : null}
             {!referenceSheetBusy && entityReferenceSheetError ? (
               <p className="inline-note is-error">{entityReferenceSheetError}</p>

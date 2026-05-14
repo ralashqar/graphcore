@@ -8,7 +8,7 @@ import {
   setCachedSignedAssetUrl,
 } from '../../../domain/assetUrlCache'
 import type { AssetDefinition, DefinitionBase } from '../../../domain/graphcore'
-import { loadReferenceSheetIconCrop } from '../../../domain/referenceSheetIconCrop'
+import { buildReferenceSheetIconCacheKey, loadReferenceSheetIconCrop } from '../../../domain/referenceSheetIconCrop'
 import type { WorldEntity, WorldResult } from '../../../domain/worldGraph'
 import type { WorldEntityVisualVariant } from '../../../domain/visualGeneration'
 import type { SignProjectAssetUrlsInput, SignedProjectAssetUrl } from '../../../application/ports'
@@ -86,13 +86,13 @@ function readAssetVisualJobId(asset: AssetDefinition | null | undefined) {
 
 function referenceSheetIconStateKey(entity: WorldEntity, asset: AssetDefinition | null | undefined) {
   if (!asset) return ''
-  return [
-    asset.projectId ?? '',
-    entity.key,
-    asset.key,
-    asset.storagePath ?? '',
-    readAssetVisualJobId(asset),
-  ].join('\u001f')
+  return buildReferenceSheetIconCacheKey({
+    projectId: asset.projectId,
+    entityKey: entity.key,
+    referenceSheetAssetKey: asset.key,
+    storagePath: asset.storagePath,
+    visualJobId: readAssetVisualJobId(asset),
+  })
 }
 
 export function useWorldAssetUrls({

@@ -846,8 +846,7 @@
 
 .world-wiki-entity-art-loading .loading-spinner,
 .world-wiki-reference-variant-spinner .loading-spinner,
-.world-wiki-reference-regenerate-button .loading-spinner,
-.world-wiki-reference-regeneration-status .loading-spinner {
+.world-wiki-reference-regenerate-button .loading-spinner {
   display: inline-block;
   border: 2px solid rgba(148, 163, 184, 0.34);
   border-top-color: rgba(94, 234, 212, 0.98);
@@ -1040,23 +1039,6 @@
 .world-wiki-reference-regenerate-button .loading-spinner {
   width: 16px;
   height: 16px;
-  flex: 0 0 auto;
-}
-
-.world-wiki-reference-regeneration-status {
-  margin: -4px 0 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: rgba(148, 163, 184, 0.86);
-  font-size: 0.76rem;
-  font-weight: 760;
-  line-height: 1.25;
-}
-
-.world-wiki-reference-regeneration-status .loading-spinner {
-  width: 14px;
-  height: 14px;
   flex: 0 0 auto;
 }
 

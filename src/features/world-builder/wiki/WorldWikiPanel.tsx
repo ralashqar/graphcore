@@ -156,6 +156,54 @@ const LIVE_OVERVIEW_TITLE_PHRASES = [
   'Sketching the story spine...',
 ] as const
 
+function wikiEntityBelongsToSectionKind(entity: WorldEntity, sectionKind: WorldWikiSection['kind']) {
+  switch (sectionKind) {
+    case 'cast':
+      return entity.nodeType === 'actor'
+    case 'places':
+      return entity.nodeType === 'place'
+    case 'factions':
+      return entity.nodeType === 'group'
+    case 'items':
+      return entity.nodeType === 'object'
+    case 'lore':
+      return entity.nodeType === 'concept'
+    case 'timeline':
+    case 'events':
+      return entity.nodeType === 'event' || entity.nodeType === 'sequence_unit'
+    default:
+      return false
+  }
+}
+
+function resolveEntityPageNavEntities(input: {
+  section: WorldWikiSection
+  worldEntities: readonly WorldEntity[]
+  entityByKey: ReadonlyMap<string, WorldEntity>
+}) {
+  const seeded = input.section.entityKeys
+    .map((key) => input.entityByKey.get(key) ?? null)
+    .filter((entity): entity is WorldEntity => Boolean(entity))
+  const byKey = new Map(seeded.map((entity) => [entity.key, entity]))
+
+  for (const entity of input.worldEntities) {
+    if (wikiEntityBelongsToSectionKind(entity, input.section.kind)) {
+      byKey.set(entity.key, entity)
+    }
+  }
+
+  return [...byKey.values()].sort((left, right) => {
+    const leftIndex = input.section.entityKeys.indexOf(left.key)
+    const rightIndex = input.section.entityKeys.indexOf(right.key)
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      if (leftIndex === -1) return 1
+      if (rightIndex === -1) return -1
+      return leftIndex - rightIndex
+    }
+    return left.name.localeCompare(right.name)
+  })
+}
+
 function usePrefersReducedMotion() {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
 
@@ -418,7 +466,11 @@ export function WorldWikiPanel({
     ? wikiModel.sections.find((section) => section.kind === activeWikiEntityPage.sectionKind) ?? null
     : null
   const activeEntitySectionEntities = activeEntitySection
-    ? activeEntitySection.entityKeys.map((key) => wikiEntityByKey.get(key) ?? null).filter((entity): entity is WorldEntity => Boolean(entity))
+    ? resolveEntityPageNavEntities({
+      section: activeEntitySection,
+      worldEntities,
+      entityByKey: wikiEntityByKey,
+    })
     : []
   return (
     <div className={`world-alt-surface world-wiki-surface${liveGenerationActive ? ' is-live-generating' : ''}${activeWikiEntityPage ? ' is-entity-page' : ''}`}>

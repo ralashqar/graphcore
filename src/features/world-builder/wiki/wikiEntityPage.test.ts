@@ -34,6 +34,8 @@ test('wiki panel renders entity-page navigation with sibling rows', () => {
   assert.match(panelSource, /onOpenWikiEntityPage\(activeEntitySection\.kind, entity\.key\)/)
   assert.match(panelSource, /onCloseWikiEntityPage/)
   assert.match(panelSource, /renderWikiEntityPage\(\)/)
+  assert.match(panelSource, /resolveEntityPageNavEntities/)
+  assert.match(panelSource, /wikiEntityBelongsToSectionKind\(entity, input\.section\.kind\)/)
   assert.doesNotMatch(panelSource, /<small>\{labelForWorldEntity\(entity\.nodeType\)\}<\/small>/)
 })
 
@@ -42,7 +44,7 @@ test('world graph entity page resolves relationships, output backlinks, and full
 
   assert.match(worldGraphSource, /function openWikiEntityPageByKey\(entityKey: string\)/)
   assert.match(worldGraphSource, /function renderWikiEntityPage\(\)/)
-  assert.match(worldGraphSource, /referenceSheetUrlByEntityKey\.get\(entity\.key\) \?\? wikiImageUrlByEntityKey\.get\(entity\.key\)/)
+  assert.match(worldGraphSource, /referenceSheetUrlByEntityKey\.get\(entity\.key\) \?\? null/)
   assert.match(worldGraphSource, /worldRelationships\s*\n\s*\.filter\(\(relationship\) => relationship\.sourceEntityKey === entity\.key \|\| relationship\.targetEntityKey === entity\.key\)/)
   assert.match(worldGraphSource, /openWikiEntityPageByKey\(connectedEntity\.key\)/)
   assert.match(worldGraphSource, /outputLibraryModel\.rows\s*\n\s*\.filter\(\(row\) => row\.entityRefs\.some\(\(ref\) => ref\.key === entity\.key\)\)/)
@@ -54,7 +56,7 @@ test('world graph entity page resolves relationships, output backlinks, and full
   assert.match(worldGraphSource, /setWikiEntityHeroImageMeasurementByUrl/)
   assert.match(worldGraphSource, /orientation: 'landscape' \| 'portrait' \| 'square'/)
   assert.match(worldGraphSource, /`is-\$\{largeImageMeasurement\.orientation\}`/)
-  assert.doesNotMatch(
+  assert.match(
     worldGraphSource.slice(worldGraphSource.indexOf('const fieldCards = ['), worldGraphSource.indexOf('].filter((entry): entry is { label: string; value: string }')),
     /label: 'Summary'/,
   )
@@ -76,6 +78,12 @@ test('wiki entity pages synchronize with browser history query state', () => {
   assert.match(worldGraphSource, /window\.addEventListener\('popstate', syncWikiEntityRoute\)/)
   assert.match(worldGraphSource, /writeWikiEntityPageRoute\(page, 'push'\)/)
   assert.match(worldGraphSource, /writeWikiEntityPageRoute\(null, 'replace'\)/)
+  assert.match(worldGraphSource, /function canonicalWikiEntityPageSectionKind/)
+  assert.match(worldGraphSource, /wikiEntityBelongsToSectionKind\(input\.entity, input\.requestedSectionKind\)/)
+  assert.match(worldGraphSource, /const canonicalSectionKind = canonicalWikiEntityPageSectionKind/)
+  assert.match(worldGraphSource, /requestedSection\.entityKeys\.includes\(entity\.key\) \|\| wikiEntityBelongsToSectionKind\(entity, requestedSection\.kind\)/)
+  assert.match(worldGraphSource, /requestedSection && requestedSection\.kind !== 'overview'/)
+  assert.match(worldGraphSource, /entry\.kind !== 'overview' && entry\.entityKeys\.includes\(entityKey\)/)
 })
 
 test('wiki sequence units render a bespoke chapter page', () => {

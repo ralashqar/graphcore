@@ -97,7 +97,6 @@ import { applyPatchOperations } from './domain/patchUtils'
 import { getResolvedDefinition3dBinding, getResolvedRender3dBinding } from './domain/render3d'
 import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
-import { classifyOutputPrompt } from './domain/outputWorkflow'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
 import type { VisualGenerationJob, VisualGenerationKind, VisualGenerationStatusResponse } from './domain/visualGeneration'
@@ -4841,8 +4840,18 @@ export default function App() {
       throw new Error('World prompt sessions require a live Supabase-backed draft.')
     }
     const syncedSnapshot = await syncWorldGraphBackfillIfNeeded(snapshot)
-    const outputIntent = classifyOutputPrompt(input.prompt)
-    if (!input.selectedSuggestionId && outputIntent.intent === 'output_generation' && outputIntent.confidence >= 0.7) {
+    const promptIntent = await workspaceService.classifyPromptIntent(syncedSnapshot, {
+      prompt: input.prompt,
+      sourceSurface: 'world_prompt',
+      selectedSuggestionId: input.selectedSuggestionId ?? null,
+      selectedEntityKeys: input.selectedRootEntityKey ? [input.selectedRootEntityKey] : [],
+      selectedSequenceUnitKeys: [],
+    })
+    const suggestionLocksCanon = Boolean(
+      input.selectedSuggestionId
+      && !(promptIntent.intent === 'output_generation' && promptIntent.confidence >= 0.82 && !promptIntent.requiresConfirmation),
+    )
+    if (!suggestionLocksCanon && promptIntent.intent === 'output_generation' && promptIntent.confidence >= 0.7 && !promptIntent.requiresConfirmation) {
       const outputResult = await workspaceService.startOutputRequest(syncedSnapshot, {
         prompt: input.prompt,
         sourceSurface: 'world_prompt',
@@ -4874,6 +4883,9 @@ export default function App() {
       setBundle(compileBundle(nextSnapshot))
       openOutputsLibrary()
       return
+    }
+    if (!suggestionLocksCanon && (promptIntent.intent === 'ambiguous' || promptIntent.intent === 'answer_only' || promptIntent.requiresConfirmation)) {
+      throw new Error(promptIntent.rationale || 'GraphCore needs a clearer request before changing canon or creating an output.')
     }
     const result = await workspaceService.startWorldPromptTurn(syncedSnapshot, {
       prompt: input.prompt,

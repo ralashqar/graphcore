@@ -2733,22 +2733,217 @@ function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string,
   return sortReferenceValues([...keys, ...matching])
 }
 
-function referenceVariantMatchesPrompt(variant: Record<string, unknown>, prompt: string) {
-  const haystack = prompt.toLowerCase()
-  if (!haystack) return false
-  const candidates = [
+const referenceVariantStopWords = new Set([
+  'about',
+  'after',
+  'again',
+  'asset',
+  'character',
+  'default',
+  'entity',
+  'from',
+  'generate',
+  'guidance',
+  'image',
+  'inside',
+  'into',
+  'look',
+  'make',
+  'reference',
+  'sheet',
+  'shot',
+  'that',
+  'their',
+  'them',
+  'this',
+  'variant',
+  'visual',
+  'with',
+])
+
+const referenceVariantCueWords = new Set([
+  'armor',
+  'armour',
+  'blue',
+  'cafe',
+  'cape',
+  'chamber',
+  'costume',
+  'dress',
+  'gear',
+  'gold',
+  'green',
+  'hall',
+  'hat',
+  'inside',
+  'interior',
+  'market',
+  'military',
+  'outfit',
+  'pact',
+  'red',
+  'robe',
+  'room',
+  'samurai',
+  'silver',
+  'suit',
+  'temple',
+  'uniform',
+  'wearing',
+  'wears',
+  'within',
+])
+
+function normalizeReferenceVariantText(value: string) {
+  return value.toLowerCase().replace(/[_-]+/g, ' ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function referenceVariantAssetKey(variant: Record<string, unknown>) {
+  return readText(variant.assetKey) || readText(variant.asset_key)
+}
+
+function referenceVariantStatus(variant: Record<string, unknown>) {
+  return readText(variant.status).toLowerCase()
+}
+
+function referenceVariantCandidatePhrases(variant: Record<string, unknown>) {
+  return [
     readText(variant.variantKey),
+    readText(variant.variant_key),
     readText(variant.label),
     readText(variant.summary),
     readText(variant.guidance),
-  ].join(' ').toLowerCase()
-  const words = [...new Set(candidates.split(/[^a-z0-9]+/i).filter((word) => word.length >= 4))]
-  return words.some((word) => haystack.includes(word))
+    readText(variant.variantType),
+    readText(variant.variant_type),
+  ]
+    .map(normalizeReferenceVariantText)
+    .filter((value) => value.length >= 3)
+}
+
+function referenceVariantWords(variant: Record<string, unknown>) {
+  return [...new Set(referenceVariantCandidatePhrases(variant)
+    .flatMap((phrase) => phrase.split(' '))
+    .filter((word) => word.length >= 3 && !referenceVariantStopWords.has(word)))]
+}
+
+function referenceVariantMatchScore(variant: Record<string, unknown>, prompt: string) {
+  const haystack = normalizeReferenceVariantText(prompt)
+  if (!haystack) return 0
+  let score = 0
+  for (const phrase of referenceVariantCandidatePhrases(variant)) {
+    if (phrase.length >= 4 && haystack.includes(phrase)) score += phrase.split(' ').length > 1 ? 80 : 40
+  }
+  for (const word of referenceVariantWords(variant)) {
+    if (haystack.split(' ').includes(word) || haystack.includes(word)) score += word.length <= 3 ? 8 : 12
+  }
+  return score
+}
+
+function referenceVariantMatchesPrompt(variant: Record<string, unknown>, prompt: string) {
+  return referenceVariantMatchScore(variant, prompt) > 0
+}
+
+function promptHasReferenceVariantCue(prompt: string) {
+  const words = normalizeReferenceVariantText(prompt).split(' ').filter(Boolean)
+  return words.some((word) => referenceVariantCueWords.has(word))
+}
+
+function selectReferenceVariantForPromptDetailed(variants: Record<string, unknown>[], prompt: string, entityKey = '') {
+  const scored = variants
+    .map((variant) => ({
+      variant,
+      score: referenceVariantMatchScore(variant, prompt),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score
+      return readText(left.variant.label).localeCompare(readText(right.variant.label))
+    })
+
+  const diagnostics: string[] = []
+  const completed = scored.find((entry) => referenceVariantAssetKey(entry.variant) && referenceVariantStatus(entry.variant) === 'completed')
+  if (completed) {
+    return {
+      selectedVariant: completed.variant,
+      reason: 'variant_match',
+      diagnostics,
+    }
+  }
+
+  const matchedUnavailable = scored[0]?.variant
+  if (matchedUnavailable) {
+    const key = readText(matchedUnavailable.variantKey) || readText(matchedUnavailable.variant_key)
+    const status = referenceVariantStatus(matchedUnavailable)
+    diagnostics.push(`${status === 'queued' || status === 'running' || status === 'pending' ? 'variant_pending' : 'variant_unavailable'}:${entityKey}:${key || 'unknown'}`)
+  } else if (variants.length > 0 && promptHasReferenceVariantCue(prompt)) {
+    diagnostics.push(`variant_not_found:${entityKey}`)
+  }
+
+  return {
+    selectedVariant: null,
+    reason: 'default',
+    diagnostics,
+  }
 }
 
 function selectReferenceVariantForPrompt(variants: Record<string, unknown>[], prompt: string) {
-  const completed = variants.filter((variant) => readText(variant.assetKey) && readText(variant.status) === 'completed')
-  return completed.find((variant) => referenceVariantMatchesPrompt(variant, prompt)) ?? null
+  return selectReferenceVariantForPromptDetailed(variants, prompt).selectedVariant
+}
+
+function defaultReferenceAssetKeyForEntity(entity: Record<string, unknown>, assets: Record<string, unknown>[]) {
+  const metadata = asRecord(entity.metadata)
+  const keys = [
+    readText(metadata.referenceSheetAssetKey),
+    ...readStringArray(metadata.referenceSheetAssetKeys),
+    readText(metadata.referenceSheetUrl),
+    readText(metadata.referenceSheetImageUrl),
+    readText(metadata.referenceSheetStoragePath),
+    readText(metadata.imageUrl),
+    readText(metadata.image_url),
+    readText(metadata.sourceUrl),
+    readText(metadata.sourceAssetUrl),
+    readText(entity.imageUrl),
+    readText(entity.image_url),
+    readText(entity.sourceUrl),
+    readText(entity.source_url),
+    readText(entity.thumbnailAssetKey),
+    readText(entity.thumbnail_asset_key),
+    readText(metadata.assetKey),
+    readText(metadata.storagePath),
+  ].filter(Boolean)
+  const matching = assets
+    .filter((asset) => keys.includes(readText(asset.key)))
+    .map((asset) => readText(asset.key))
+  return sortReferenceValues([...keys, ...matching])[0] ?? ''
+}
+
+function resolveImageOutputReferenceSelection(entity: Record<string, unknown>, assets: Record<string, unknown>[], prompt: string) {
+  const metadata = asRecord(entity.metadata)
+  const entityKey = readText(entity.key)
+  const referenceVariants = Array.isArray(metadata.referenceVariants)
+    ? metadata.referenceVariants.map(asRecord)
+    : Array.isArray(entity.referenceVariants)
+      ? entity.referenceVariants.map(asRecord)
+      : []
+  const selected = selectReferenceVariantForPromptDetailed(referenceVariants, prompt, entityKey)
+  const selectedVariant = selected.selectedVariant
+  const selectedVariantAssetKey = selectedVariant ? referenceVariantAssetKey(selectedVariant) : ''
+  const defaultAssetKey = defaultReferenceAssetKeyForEntity(entity, assets)
+  const primaryAssetKey = selectedVariantAssetKey || defaultAssetKey
+  const selectedReferenceVariantKey = selectedVariant
+    ? readText(selectedVariant.variantKey) || readText(selectedVariant.variant_key)
+    : 'default'
+  return {
+    primaryAssetKey,
+    selectedReferenceVariantKey,
+    selectedReferenceVariantAssetKey: selectedVariantAssetKey,
+    selectedReferenceVariantLabel: selectedVariant ? readText(selectedVariant.label) || selectedReferenceVariantKey : 'Default',
+    selectedReferenceVariantSummary: selectedVariant ? readText(selectedVariant.summary) : '',
+    selectedReferenceVariantType: selectedVariant ? readText(selectedVariant.variantType) || readText(selectedVariant.variant_type) : 'default',
+    referenceSelectionReason: selected.reason,
+    referenceDiagnostics: primaryAssetKey ? selected.diagnostics : [...selected.diagnostics, `missing_reference:${entityKey}`],
+    referenceVariants,
+  }
 }
 
 function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
@@ -2876,11 +3071,14 @@ async function refreshWorldContextVisualReferences(client: DatabaseClient, run: 
   }
 }
 
-function buildDeterministicImageAssetPack(context: Record<string, unknown>, limit = 8) {
+function buildDeterministicImageAssetPack(context: Record<string, unknown>, options: number | { limit?: number; prompt?: string } = 8) {
+  const limit = typeof options === 'number' ? options : Math.max(1, Math.floor(Number(options.limit ?? 8) || 8))
+  const prompt = typeof options === 'number' ? '' : readText(options.prompt)
   const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
   const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
   const packedEntities = entities.slice(0, limit).map((entity) => {
     const visualDescription = readOutputEntityVisualDescription(entity)
+    const referenceSelection = resolveImageOutputReferenceSelection(entity, assets, prompt)
     return {
       key: readText(entity.key),
       name: readText(entity.name),
@@ -2890,13 +3088,33 @@ function buildDeterministicImageAssetPack(context: Record<string, unknown>, limi
       visualDescription,
       visualTraits: readOutputEntityVisualTraits(entity),
       visualTraitMap: readOutputEntityVisualTraitMap(entity),
-      referenceVariants: Array.isArray(asRecord(entity.metadata).referenceVariants) ? asRecord(entity.metadata).referenceVariants : [],
-      selectedReferenceVariantKey: readText(asRecord(entity.metadata).selectedReferenceVariantKey) || readText(entity.selectedReferenceVariantKey) || 'default',
-      assetKeys: entityAssetKeys(entity, assets),
+      referenceVariants: referenceSelection.referenceVariants,
+      selectedReferenceVariantKey: referenceSelection.selectedReferenceVariantKey,
+      selectedReferenceVariantLabel: referenceSelection.selectedReferenceVariantLabel,
+      selectedReferenceVariantSummary: referenceSelection.selectedReferenceVariantSummary,
+      selectedReferenceVariantType: referenceSelection.selectedReferenceVariantType,
+      selectedReferenceVariantAssetKey: referenceSelection.selectedReferenceVariantAssetKey,
+      referenceSelectionReason: referenceSelection.referenceSelectionReason,
+      referenceDiagnostics: referenceSelection.referenceDiagnostics,
+      primaryAssetKey: referenceSelection.primaryAssetKey,
+      assetKeys: referenceSelection.primaryAssetKey ? [referenceSelection.primaryAssetKey] : [],
     }
   }).filter((entity) => entity.key || entity.name)
+  const referenceDiagnostics = [...new Set(packedEntities.flatMap((entity) => readStringArray(entity.referenceDiagnostics)))]
   return {
     entities: packedEntities,
+    selectedReferenceVariants: packedEntities
+      .filter((entity) => readText(entity.selectedReferenceVariantKey) && readText(entity.selectedReferenceVariantKey) !== 'default')
+      .map((entity) => ({
+        entityKey: entity.key,
+        entityName: entity.name,
+        variantKey: entity.selectedReferenceVariantKey,
+        label: entity.selectedReferenceVariantLabel,
+        summary: entity.selectedReferenceVariantSummary,
+        variantType: entity.selectedReferenceVariantType,
+        assetKey: entity.selectedReferenceVariantAssetKey,
+      })),
+    referenceDiagnostics,
     missingReferenceEntityKeys: packedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
   }
 }
@@ -7581,7 +7799,9 @@ async function collectAssetPackReferenceUrls(client: DatabaseClient, run: Output
   const references: string[] = []
   const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
   for (const entity of entities) {
-    for (const assetKey of sortReferenceValues(readStringArray(entity.assetKeys))) {
+    const primaryAssetKey = readText(entity.primaryAssetKey)
+    const entityReferenceAssetKeys = primaryAssetKey ? [primaryAssetKey] : sortReferenceValues(readStringArray(entity.assetKeys))
+    for (const assetKey of entityReferenceAssetKeys) {
       if (isDirectReferenceUrl(assetKey)) {
         references.push(assetKey)
         if (references.length >= limit) return references
@@ -8935,8 +9155,14 @@ async function executeNode(input: {
             const visualTraits = readStringArray(entity.visualTraits)
             const assetKeys = readStringArray(entity.assetKeys)
             const traitNote = visualTraits.length > 0 ? ` Traits: ${visualTraits.join(', ')}.` : ''
+            const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
+            const selectedVariantLabel = readText(entity.selectedReferenceVariantLabel) || selectedVariantKey
+            const selectedVariantSummary = readText(entity.selectedReferenceVariantSummary)
+            const variantNote = selectedVariantKey && selectedVariantKey !== 'default'
+              ? ` Selected visual variant: ${selectedVariantLabel}${selectedVariantSummary ? ` (${selectedVariantSummary})` : ''}.`
+              : ''
             const assetNote = assetKeys.length > 0 ? ` Reference image asset: ${assetKeys.join(', ')}.` : ''
-            return name ? `- ${name}: ${visualDescription}${traitNote}${assetNote}` : ''
+            return name ? `- ${name}: ${visualDescription}${traitNote}${variantNote}${assetNote}` : ''
           })
           .filter(Boolean)
           .join('\n')
@@ -8956,7 +9182,7 @@ async function executeNode(input: {
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-visual-prompt-v1' }
       }
       if (purpose === 'image_reference_selector') {
-        const assetPack = buildDeterministicImageAssetPack(context)
+        const assetPack = buildDeterministicImageAssetPack(context, { prompt: input.run.prompt })
         const outputs = {
           assetPack,
           asset_pack: assetPack,
@@ -10128,6 +10354,27 @@ async function executeNode(input: {
       await uploadBytes(input.client, storagePath, imageBytes, mimeType)
       const planningOnly = config.planningOnly === true || config.planning_only === true
       const usedAsVideoReference = config.usedAsVideoReference === true || config.used_as_video_reference === true
+      const packedReferenceEntities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+      const selectedReferenceVariants = packedReferenceEntities
+        .map((entity) => ({
+          entityKey: readText(entity.key),
+          entityName: readText(entity.name),
+          variantKey: readText(entity.selectedReferenceVariantKey) || 'default',
+          label: readText(entity.selectedReferenceVariantLabel) || (readText(entity.selectedReferenceVariantKey) === 'default' ? 'Default' : readText(entity.selectedReferenceVariantKey)),
+          summary: readText(entity.selectedReferenceVariantSummary),
+          variantType: readText(entity.selectedReferenceVariantType),
+          assetKey: readText(entity.primaryAssetKey) || readStringArray(entity.assetKeys)[0] || '',
+          selectionReason: readText(entity.referenceSelectionReason),
+        }))
+        .filter((entry) => entry.entityKey || entry.entityName)
+      const selectedReferenceVariantKeys = Object.fromEntries(selectedReferenceVariants
+        .filter((entry) => entry.entityKey)
+        .map((entry) => [entry.entityKey, entry.variantKey]))
+      const selectedReferenceAssetKeys = selectedReferenceVariants.map((entry) => entry.assetKey).filter(Boolean)
+      const referenceDiagnostics = [
+        ...readStringArray(assetPack.referenceDiagnostics),
+        ...packedReferenceEntities.flatMap((entity) => readStringArray(entity.referenceDiagnostics)),
+      ].filter(Boolean)
       const imageOutput = {
         assetKey,
         storagePath,
@@ -10151,6 +10398,10 @@ async function executeNode(input: {
         model,
         providerRequestId: falResult.requestId,
         referenceImageCount: referenceImageUrls.length,
+        selectedReferenceVariants,
+        selectedReferenceVariantKeys,
+        selectedReferenceAssetKeys,
+        referenceDiagnostics,
         sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
         sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
       }
@@ -10189,6 +10440,10 @@ async function executeNode(input: {
         keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
         pageNumber: Number(config.pageNumber ?? 0) || null,
         referenceImageCount: referenceImageUrls.length,
+        selectedReferenceVariants,
+        selectedReferenceVariantKeys,
+        selectedReferenceAssetKeys,
+        referenceDiagnostics,
         imageSize: normalizeImageSize(imageSize),
         quality,
         outputFormat,
@@ -10253,6 +10508,10 @@ async function executeNode(input: {
         shotId: readText(config.shotId) || null,
         shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
         keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
+        selectedReferenceVariants,
+        selectedReferenceVariantKeys,
+        selectedReferenceAssetKeys,
+        referenceDiagnostics,
         artifact,
         guidance,
       }

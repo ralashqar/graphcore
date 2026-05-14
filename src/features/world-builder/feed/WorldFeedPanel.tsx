@@ -551,8 +551,8 @@ export function WorldFeedPanel({
     const showOptimisticThinking = isPromptBusy || Boolean(activeTurnId && activePromptTurn)
     if (!showOptimisticThinking) return null
     const promptPreview = activePromptTurn?.prompt || worldPromptText.trim() || 'Sending prompt to the world worker...'
-    const statusLabel = activeTurnId ? 'Thinking' : 'Starting'
-    const title = activeTurnId ? 'Generating world update' : 'Starting world update'
+    const statusLabel = activeTurnId ? 'Thinking' : 'Analyzing'
+    const title = activeTurnId ? 'Generating world update' : 'Analyzing request intent'
     return (
       <div className="world-feed-thinking-header" role="status" aria-live="polite">
         <div className="world-feed-thinking-brain" aria-hidden="true">

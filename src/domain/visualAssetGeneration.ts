@@ -84,6 +84,12 @@ export type EntityReferenceSheetBaseInput = {
   referenceAssetNotes?: string[] | null
 }
 
+export type ShotLocationReferenceSheetPromptInput = EntityReferenceSheetBaseInput & {
+  variantLabel?: string | null
+  variantSummary?: string | null
+  variantGuidance?: string | null
+}
+
 function cleanPromptText(value: unknown) {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
 }
@@ -105,6 +111,7 @@ function buildReferenceSheetContext(input: EntityReferenceSheetBaseInput) {
     input.entitySummary ? `Summary: ${cleanPromptText(input.entitySummary)}.` : null,
     input.entityContext ? `Canon context: ${cleanPromptText(input.entityContext)}.` : null,
     input.projectArtStyle ? `Project art style: ${cleanPromptText(input.projectArtStyle)}.` : null,
+    input.projectArtStyle ? `Hard style lock: render the subject visuals in this exact target project art style, not as generic concept art, loose painterly brushwork, a rough mood board, sketch, different medium, or unrelated aesthetic. If the target style is crisp 3D CG, live action, anime, painterly illustration, or any other specific look, preserve that exact rendering language throughout the sheet.` : null,
     input.projectTone ? `Project tone: ${cleanPromptText(input.projectTone)}.` : null,
     input.visualDescription ? `Neutral visual identity: ${cleanPromptText(input.visualDescription)}.` : null,
     traits.length ? `Visual traits: ${traits.join(', ')}.` : null,
@@ -129,12 +136,11 @@ export function buildCharacterReferenceSheetPrompt(input: EntityReferenceSheetBa
     buildReferenceSheetContext(input),
     'Use a pure white or clean off-white production-board background with balanced spacing and clear section titles.',
     'The largest dominant section is MAIN CHARACTER TURNAROUND: show the same character in four large neutral standing views: front, 3/4 front, side profile, and back. Keep arms relaxed and simple; do not emphasize fingers or complex hand poses.',
-    'Include a small silhouette strip with two simple silhouettes: front neutral stance and side profile silhouette.',
-    'Include COLOR PALETTE with 5 to 7 clean swatches that match wardrobe, world, mood, and materials.',
-    'Include a HEAD AND IDENTITY DETAILS section with only 3 larger panels: 3/4 headshot, side profile headshot, and a close crop of the most important hair/face/marking detail.',
-    'Include 3 to 4 FEATURE CALLOUTS for important stable design features such as hairstyle, outerwear silhouette, footwear, signature accessory, texture, material, or permanent markings.',
+    'Do not include a color palette, swatch strip, silhouette strip, standalone silhouette panel, or palette labels; use that space for larger, more useful character renders and close-up design views.',
+    'Include a HEAD AND IDENTITY DETAILS section with larger panels: 3/4 headshot, side profile headshot, and close crops of the most important hair, face, marking, wardrobe, texture, material, or permanent accessory details.',
+    'Include 3 to 5 FEATURE DETAIL PANELS for important stable design features such as hairstyle, outerwear shape, footwear, signature accessory, texture, material, or permanent markings.',
     'Place exactly one cinematic chest-up or shoulder-up profile close-up panel in the reserved top-right 512x512 square: natural neutral expression, strong facial identity, hairstyle, upper wardrobe detail, and emotional presence.',
-    'Do not include expression grids, micro-expression panels, hand gesture sheets, complicated fingers, action poses, combat stances, or many tiny panels.',
+    'Do not include expression grids, micro-expression panels, hand gesture sheets, complicated fingers, action poses, combat stances, color palettes, silhouette strips, swatches, or many tiny panels.',
     'Keep identity, face, body proportions, hair, wardrobe, palette, materials, and distinguishing marks consistent across every panel.',
     'Neutral presentation only: no fighting pose, injury state, blood, crying, weather, scene lighting, event damage, or temporary story action unless it is a permanent identity trait.',
   ].join(' ')
@@ -143,17 +149,63 @@ export function buildCharacterReferenceSheetPrompt(input: EntityReferenceSheetBa
 export function buildLocationReferenceSheetPrompt(input: EntityReferenceSheetBaseInput & { includeMapView?: boolean }) {
   return [
     'Create a single unified MASTER LOCATION / ENVIRONMENT REFERENCE SHEET as a 2048x2048 square production board.',
-    topRightCropCellInstruction('2048x2048', 'cinematic profile-like location hero close-up'),
+    topRightCropCellInstruction('2048x2048', 'cinematic environment-only location hero close-up with no people or character subjects'),
     buildReferenceSheetContext(input),
     'Use a clean technical visual-bible layout with readable English section labels and short callout captions.',
     'Include a cinematic establishing view as the largest panel, plus entrance/threshold view, interior or key-zone views, material and lighting callouts, landmark/detail closeups, scale cues, and color palette.',
     input.includeMapView === false
       ? 'Include a spatial relationship / navigation diagram using visual zones instead of a literal map, because this place may be abstract or non-spatial.'
       : 'Include a top-down or isometric map view when spatially meaningful, showing the main zones, routes, thresholds, and key feature highlights.',
-    'Place exactly one cinematic profile-like hero panel in the reserved top-right 512x512 square so it functions as a recognizable close-up identity image for the place.',
+    'Place exactly one cinematic environment hero close-up in the reserved top-right 512x512 square so it functions as a recognizable location identity image: show architecture, landmark silhouette, entrance, room corner, key material detail, lighting mood, or spatial feature. Do not show a person, character, face, body, portrait, silhouette, mascot, crowd, or actor in that reserved square.',
+    'Keep every panel location-first. Incidental tiny scale figures are allowed only if absolutely necessary for scale, but they must not be the subject, must not be recognizable, and must never appear inside the reserved top-right 512x512 export cell.',
     'Preserve environment logic, architecture, palette, materials, scale, landmarks, and lighting direction across all views.',
     'Do not make a poster, tourism ad, mood board, random collage, UI table, or lore document. Keep text sparse and readable.',
   ].join(' ')
+}
+
+export function buildShotLocationReferenceSheetPrompt(input: ShotLocationReferenceSheetPromptInput) {
+  const references = Array.isArray(input.referenceAssetNotes)
+    ? input.referenceAssetNotes.map((note) => cleanPromptText(note)).filter(Boolean)
+    : []
+  const traits = Array.isArray(input.visualTraits)
+    ? input.visualTraits.map((trait) => cleanPromptText(trait)).filter(Boolean)
+    : []
+  const traitMapEntries = input.visualTraitMap && typeof input.visualTraitMap === 'object'
+    ? Object.entries(input.visualTraitMap)
+      .map(([key, value]) => [key, cleanPromptText(value)] as const)
+      .filter(([, value]) => value)
+    : []
+  const projectArtStyle = cleanPromptText(input.projectArtStyle)
+  const variantLabel = cleanPromptText(input.variantLabel)
+  const variantSummary = cleanPromptText(input.variantSummary)
+  const variantGuidance = cleanPromptText(input.variantGuidance)
+
+  return [
+    'Create a single unified SHOT LOCATION VARIANT REFERENCE SHEET as a 2048x2048 square cinematic production board.',
+    projectArtStyle
+      ? `Hard style lock: render the final shot-location variant in this exact target project art style, regardless of the source image style: ${projectArtStyle}. If the source reference looks photographic, painterly, cartoon, anime, sketchy, low-resolution, or otherwise different, preserve location identity and relevant design cues only while converting the output fully back into the target style.`
+      : 'Hard style lock: the source reference image is not a style override. Preserve location identity and relevant design cues only; keep the output in the current project art direction.',
+    'Location-specific style rule: apply the project style through set design, shape language, materials, lighting, color, atmosphere, composition, and rendering quality only; do not introduce animal characters, human figures, mascots, crowds, portraits, or silhouettes just because the project style mentions characters.',
+    topRightCropCellInstruction('2048x2048', 'cinematic environment-only hero close-up for the specific shot location with no people, scale figures, or character subjects'),
+    `Subject name: ${input.entityName}.`,
+    variantLabel ? `Shot variant label: ${variantLabel}.` : null,
+    variantSummary ? `Shot variant summary: ${variantSummary}.` : null,
+    variantGuidance ? `User shot-location request: ${variantGuidance}.` : null,
+    input.entitySummary ? `Parent location summary: ${cleanPromptText(input.entitySummary)}.` : null,
+    input.entityContext ? `Canon context: ${cleanPromptText(input.entityContext)}.` : null,
+    projectArtStyle ? `Project art style: ${projectArtStyle}.` : null,
+    input.projectTone ? `Project tone: ${cleanPromptText(input.projectTone)}.` : null,
+    input.visualDescription ? `Parent location visual identity: ${cleanPromptText(input.visualDescription)}.` : null,
+    traits.length ? `Parent visual traits: ${traits.join(', ')}.` : null,
+    traitMapEntries.length ? `Trait map: ${traitMapEntries.map(([key, value]) => `${key}: ${value}`).join('; ')}.` : null,
+    references.length ? `Use supplied reference images as visual anchors for architecture, palette continuity, spatial logic, landmarks, material language, and identity only: ${references.join('; ')}.` : null,
+    'Use the board space for production-ready images of the requested specific shot location: one large cinematic establishing angle, alternate lens distances, entrance or threshold views, staging zones, lighting states, material and architecture close-ups, and usable spots for blocking.',
+    'Do not include a map, floor plan, top-down diagram, isometric diagram, spatial diagram, color palette, swatch strip, UI table, infographic section, lore document, tourism poster, title card, or decorative poster layout.',
+    'Do not include characters, people, actors, mascots, crowds, portraits, faces, bodies, silhouettes, or tiny scale figures anywhere on the sheet.',
+    'Place exactly one cinematic environment-only hero close-up in the reserved top-right 512x512 square: show the set, landmark, entrance, room corner, lighting/material detail, or spatial feature for the shot variant. No text, labels, borders, callouts, watermarks, empty padding, figures, or character subjects inside that crop cell.',
+    'Do not replace the whole canonical location; focus on this shot-specific sub-location or set while preserving the parent location architecture, materials, palette, landmarks, lighting direction, and world logic.',
+    'Keep labels sparse and readable English only. Keep the layout clean, neutral, minimal, technical, and focused on cinematic production reference views.',
+  ].filter(Boolean).join(' ')
 }
 
 export function buildGroupReferenceSheetPrompt(input: EntityReferenceSheetBaseInput) {
