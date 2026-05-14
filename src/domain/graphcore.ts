@@ -28,6 +28,9 @@ import {
   outputWorkflowSchema,
 } from './outputWorkflow.ts'
 import {
+  worldEntityVisualVariantSchema,
+} from './visualGeneration.ts'
+import {
   worldEntitySchema,
   worldGraphConnectionSchema,
   worldOperatorSchema,
@@ -745,6 +748,7 @@ export const projectSnapshotSchema = z.object({
   worldOperators: z.array(worldOperatorSchema).default([]),
   worldResults: z.array(worldResultSchema).default([]),
   worldGraphConnections: z.array(worldGraphConnectionSchema).default([]),
+  worldEntityVisualVariants: z.array(worldEntityVisualVariantSchema).default([]),
   worldPromptSessions: z.array(worldPromptSessionSchema).default([]),
   worldPromptTurns: z.array(worldPromptTurnSchema).default([]),
   worldPromptMessages: z.array(worldPromptMessageSchema).default([]),

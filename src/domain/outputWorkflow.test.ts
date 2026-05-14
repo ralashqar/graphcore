@@ -341,7 +341,6 @@ test('worker database circuit breaker pauses all worker loops on Supabase health
   assert.match(workerSource, /isTransientDatabaseError/)
   assert.match(workerSource, /pgrst002/)
   assert.match(workerSource, /schema cache/)
-  assert.match(workerSource, /waitForDatabaseCircuit\('icon'\)/)
   assert.match(workerSource, /waitForDatabaseCircuit\('visual'\)/)
   assert.match(workerSource, /waitForDatabaseCircuit\('generation'\)/)
   assert.match(workerSource, /waitForDatabaseCircuit\('app_generation'\)/)

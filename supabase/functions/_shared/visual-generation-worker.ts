@@ -1455,9 +1455,23 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   const visualTraits = readWorldEntityVisualTraits(entity)
   const visualTraitMap = readWorldEntityVisualTraitMap(entity) as Record<string, string>
   const sheetKind = resolveEntityReferenceSheetKind(entity.nodeType, readString(job.input.sheetKind) || readString(job.targetKeys.sheetKind))
+  const variantKey = readString(job.input.variantKey) || readString(job.targetKeys.variantKey) || readString(job.metadata.variantKey)
+  const variantType = readString(job.input.variantType) || readString(job.targetKeys.variantType) || readString(job.metadata.variantType)
+  const variantLabel = readString(job.input.variantLabel) || readString(job.metadata.variantLabel) || variantKey
+  const variantSummary = readString(job.input.variantSummary) || readString(job.metadata.variantSummary)
+  if (variantKey) {
+    await client
+      .from('world_entity_visual_variants')
+      .update({ status: 'running', visual_job_id: job.id })
+      .eq('draft_id', job.draftId)
+      .eq('entity_key', entityKey)
+      .eq('variant_key', variantKey)
+  }
   const referenceImageAssetKeys = [
     readString(job.input.referenceImageAssetKey),
     readString(job.metadata.referenceImageAssetKey),
+    readString(job.input.baseReferenceAssetKey),
+    readString(job.metadata.baseReferenceAssetKey),
     ...readStringArray(job.input.referenceImageAssetKeys),
   ].filter(Boolean)
   const referenceAssets = await loadProjectAssetRows(client, job.projectId, referenceImageAssetKeys)
@@ -1477,9 +1491,21 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     visualTraitMap,
     referenceAssetNotes,
   })
+  const variantPromptGuidance = variantKey
+    ? [
+        variantType === 'shot_location_sheet'
+          ? 'This is a visual-only SHOT LOCATION VARIANT. Create a square cinematic shot-location production sheet grounded in the attached default location reference. Show multiple camera angles for the requested specific shot location, consistent architecture/materials/palette, usable staging zones, and a compact top-down or isometric map/spatial layout panel. Do not replace the whole canonical location; focus on this shot-specific sub-location or set.'
+          : 'This is a visual-only REFERENCE ART VARIANT. Preserve the exact identity, proportions, face/silhouette, materials language, and project art style from the attached default reference sheet. Apply only the requested variant look/state.',
+        variantLabel ? `Variant label: ${variantLabel}.` : '',
+        variantSummary ? `Variant summary: ${variantSummary}.` : '',
+      ].filter(Boolean).join(' ')
+    : ''
   const prompt = regenerationGuidance
     ? `${basePrompt} Regeneration guidance from the user: ${regenerationGuidance}. Apply this as a constrained identity update while preserving canon, the refined visual description, and the project art style.`
     : basePrompt
+  const finalPrompt = variantPromptGuidance
+    ? `${prompt} ${variantPromptGuidance} User variant request: ${regenerationGuidance || variantSummary || variantLabel}.`
+    : prompt
 
   const explicitModel = readString(job.input.model) || readString(job.targetKeys.model)
   const configuredModel = readString(Deno.env.get('VISUAL_GENERATION_ENTITY_REFERENCE_SHEET_MODEL'))
@@ -1494,7 +1520,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     job,
     workerId,
     model: requestedModel,
-    prompt,
+    prompt: finalPrompt,
     phasePrefix: 'entity_reference_sheet',
     imageSize: resolvedImageSize,
     quality,
@@ -1507,9 +1533,13 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   const extension = outputFormat === 'webp' ? 'webp' : outputFormat === 'jpeg' || outputFormat === 'jpg' ? 'jpg' : 'png'
   const mimeType = extension === 'webp' ? 'image/webp' : extension === 'jpg' ? 'image/jpeg' : 'image/png'
   const assetKey = readString(job.input.assetKey)
-    || `entity_reference_sheet_${slugify(entity.name || entity.key)}_${entity.key.replace(/[^a-z0-9]+/gi, '_').slice(0, 24)}`
+    || (variantKey
+      ? `entity_reference_variant_${entity.key.replace(/[^a-z0-9]+/gi, '_').slice(0, 40)}_${variantKey.replace(/[^a-z0-9_]+/gi, '_').slice(0, 40)}`
+      : `entity_reference_sheet_${slugify(entity.name || entity.key)}_${entity.key.replace(/[^a-z0-9]+/gi, '_').slice(0, 24)}`)
   const storagePath = readString(job.input.storagePath)
-    || `generated/entity-reference-sheets/${job.draftId}/${job.id}/${slugify(entity.name || entity.key)}.${extension}`
+    || (variantKey
+      ? `generated/entity-reference-variants/${job.draftId}/${entity.key.replace(/[^a-z0-9]+/gi, '_')}/${variantKey.replace(/[^a-z0-9_]+/gi, '_')}/${job.id}.${extension}`
+      : `generated/entity-reference-sheets/${job.draftId}/${job.id}/${slugify(entity.name || entity.key)}.${extension}`)
   await heartbeat(client, job.id, workerId, { phase: 'entity_reference_sheet_uploading_asset', imageBytes: imageBytes.byteLength, assetKey })
   await uploadBytes(client, storagePath, imageBytes, mimeType)
 
@@ -1525,7 +1555,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
       job,
       generatedBy: 'entity_reference_sheet',
       model,
-      prompt,
+      prompt: finalPrompt,
       storagePath,
       imageResult,
       extra: {
@@ -1534,6 +1564,10 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
         entityNodeType: entity.nodeType,
         linkedDefinitionKey,
         sheetKind,
+        variantKey,
+        variantLabel,
+        variantType,
+        variantSummary,
         visualDescription,
         visualTraits,
         visualTraitMap,
@@ -1547,6 +1581,77 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   }])
 
   const currentMetadata = asRecord(entity.metadata)
+  if (variantKey) {
+    const variantResponse = await client
+      .from('world_entity_visual_variants')
+      .select('metadata')
+      .eq('draft_id', job.draftId)
+      .eq('entity_key', entityKey)
+      .eq('variant_key', variantKey)
+      .maybeSingle()
+    if (variantResponse.error) throw new Error(variantResponse.error.message)
+    const variantMetadata = asRecord(asRecord(variantResponse.data).metadata)
+    const variantUpdate = await client
+      .from('world_entity_visual_variants')
+      .update({
+        asset_key: assetKey,
+        visual_job_id: job.id,
+        status: 'completed',
+        metadata: {
+          ...variantMetadata,
+          assetKey,
+          storagePath,
+          visualJobId: job.id,
+          completedAt: new Date().toISOString(),
+          provider: imageResult.provider,
+          model,
+        },
+      })
+      .eq('draft_id', job.draftId)
+      .eq('entity_key', entityKey)
+      .eq('variant_key', variantKey)
+    if (variantUpdate.error) throw new Error(variantUpdate.error.message)
+
+    await completeJob(client, job.id, workerId, {
+      assets: [{
+        assetKey,
+        storagePath,
+        targetKind: 'world_entity_visual_variant',
+        targetKey: entityKey,
+        role: 'entity_reference_variant',
+      }],
+      assetKey,
+      entityKey,
+      sheetKind,
+      variantKey,
+      variantType,
+    }, {
+      phase: 'completed',
+      provider: imageResult.provider,
+      model,
+      falRequestId: imageResult.provider === 'fal' ? imageResult.requestId : undefined,
+      falStatusUrl: imageResult.provider === 'fal' ? imageResult.statusUrl : undefined,
+      falResponseUrl: imageResult.provider === 'fal' ? imageResult.responseUrl : undefined,
+      falImageUrl: imageResult.provider === 'fal' ? imageResult.imageUrl : undefined,
+      openAiRequestId: imageResult.provider === 'openai' ? imageResult.requestId : undefined,
+      openAiResponseId: imageResult.provider === 'openai' ? imageResult.responseId : undefined,
+      openAiImageUrl: imageResult.provider === 'openai' ? imageResult.imageUrl : undefined,
+      assetKey,
+      entityKey,
+      sheetKind,
+      variantKey,
+      variantType,
+      requestedImageSize: resolvedImageSize,
+      requestedQuality: quality,
+      outputFormat,
+      referenceImageCount: referenceImageUrls.length,
+      referenceImageAssetKeys: referenceAssets.map((asset) => readString(asset.key)).filter(Boolean),
+      regenerationGuidance,
+    })
+
+    return { assetKey, entityKey, sheetKind, variantKey }
+  }
+
   const currentReferenceSheets = Array.isArray(currentMetadata.referenceSheetAssetKeys)
     ? currentMetadata.referenceSheetAssetKeys.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
     : []

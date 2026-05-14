@@ -77,6 +77,51 @@ export const visualGenerationStartResponseSchema = z.object({
   job: visualGenerationJobSchema,
 })
 
+export const worldEntityVisualVariantStatusSchema = z.enum([
+  'pending',
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+])
+
+export const worldEntityVisualVariantSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  projectId: z.string(),
+  draftId: z.string(),
+  entityKey: z.string(),
+  variantKey: z.string(),
+  label: z.string().default(''),
+  summary: z.string().default(''),
+  variantType: z.string().default('reference_variant'),
+  sourceVariantKey: z.string().default('default'),
+  assetKey: z.string().nullable().default(null),
+  visualJobId: z.string().nullable().default(null),
+  guidance: z.string().default(''),
+  status: worldEntityVisualVariantStatusSchema.default('pending'),
+  metadata: looseRecordSchema.default({}),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export const entityReferenceVariantCreateRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  entityKey: z.string().min(1),
+  guidance: z.string().min(1).max(1400),
+  baseVariantKey: z.string().nullable().default('default'),
+  variantKey: z.string().nullable().default(null),
+  regenerate: z.boolean().default(false),
+})
+
+export const entityReferenceVariantCreateResponseSchema = z.object({
+  ok: z.literal(true),
+  variant: worldEntityVisualVariantSchema,
+  job: visualGenerationJobSchema,
+})
+
 export const visualGenerationStatusRequestSchema = z.object({
   jobId: z.string().min(1),
 })
@@ -133,6 +178,9 @@ export type VisualGenerationStartRequest = z.infer<typeof visualGenerationStartR
 export type VisualGenerationStartResponse = z.infer<typeof visualGenerationStartResponseSchema>
 export type VisualGenerationStatusResponse = z.infer<typeof visualGenerationStatusResponseSchema>
 export type VisualGenerationCancelResponse = z.infer<typeof visualGenerationCancelResponseSchema>
+export type WorldEntityVisualVariant = z.infer<typeof worldEntityVisualVariantSchema>
+export type EntityReferenceVariantCreateRequest = z.infer<typeof entityReferenceVariantCreateRequestSchema>
+export type EntityReferenceVariantCreateResponse = z.infer<typeof entityReferenceVariantCreateResponseSchema>
 export type EntityReferenceGuidanceImageUploadRequest = z.infer<typeof entityReferenceGuidanceImageUploadRequestSchema>
 export type EntityReferenceGuidanceImageUploadResponse = z.infer<typeof entityReferenceGuidanceImageUploadResponseSchema>
 export type EntityVisualProfileRefinementRequest = z.infer<typeof entityVisualProfileRefinementRequestSchema>

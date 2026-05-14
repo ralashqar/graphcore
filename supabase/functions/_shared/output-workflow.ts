@@ -2695,9 +2695,21 @@ function sortReferenceValues(values: string[]) {
 
 function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string, unknown>[]) {
   const metadata = asRecord(entity.metadata)
+  const referenceVariants = Array.isArray(metadata.referenceVariants)
+    ? metadata.referenceVariants.map(asRecord)
+    : Array.isArray(entity.referenceVariants)
+      ? entity.referenceVariants.map(asRecord)
+      : []
+  const selectedReferenceVariantAssetKey = readText(metadata.selectedReferenceVariantAssetKey)
+    || readText(entity.selectedReferenceVariantAssetKey)
+  const variantAssetKeys = referenceVariants
+    .map((variant) => readText(variant.assetKey))
+    .filter(Boolean)
   const keys = [
+    selectedReferenceVariantAssetKey,
     readText(metadata.referenceSheetAssetKey),
     ...readStringArray(metadata.referenceSheetAssetKeys),
+    ...variantAssetKeys,
     readText(metadata.referenceSheetUrl),
     readText(metadata.referenceSheetImageUrl),
     readText(metadata.referenceSheetStoragePath),
@@ -2721,6 +2733,24 @@ function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string,
   return sortReferenceValues([...keys, ...matching])
 }
 
+function referenceVariantMatchesPrompt(variant: Record<string, unknown>, prompt: string) {
+  const haystack = prompt.toLowerCase()
+  if (!haystack) return false
+  const candidates = [
+    readText(variant.variantKey),
+    readText(variant.label),
+    readText(variant.summary),
+    readText(variant.guidance),
+  ].join(' ').toLowerCase()
+  const words = [...new Set(candidates.split(/[^a-z0-9]+/i).filter((word) => word.length >= 4))]
+  return words.some((word) => haystack.includes(word))
+}
+
+function selectReferenceVariantForPrompt(variants: Record<string, unknown>[], prompt: string) {
+  const completed = variants.filter((variant) => readText(variant.assetKey) && readText(variant.status) === 'completed')
+  return completed.find((variant) => referenceVariantMatchesPrompt(variant, prompt)) ?? null
+}
+
 function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
   const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
   const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
@@ -2735,6 +2765,8 @@ function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
     visualTraitMap: readOutputEntityVisualTraitMap(entity),
     voice: readOutputEntityVoiceIdentity(entity),
     voiceDescription: readOutputEntityVoiceDescription(entity),
+    referenceVariants: Array.isArray(asRecord(entity.metadata).referenceVariants) ? asRecord(entity.metadata).referenceVariants : [],
+    selectedReferenceVariantKey: readText(asRecord(entity.metadata).selectedReferenceVariantKey) || readText(entity.selectedReferenceVariantKey) || 'default',
     assetKeys: entityAssetKeys(entity, assets),
   })).filter((entity) => entity.key || entity.name)
   return {
@@ -2756,12 +2788,39 @@ async function refreshWorldContextVisualReferences(client: DatabaseClient, run: 
     .in('key', entityKeys)
   const latestRows = latestResponse.error ? [] : (latestResponse.data ?? []).map(asRecord)
   const latestByKey = new Map(latestRows.map((row) => [readText(row.key), row]).filter(([key]) => key))
+  const variantResponse = await client
+    .from('world_entity_visual_variants')
+    .select('entity_key, variant_key, label, summary, variant_type, asset_key, guidance, status, metadata')
+    .eq('draft_id', run.draftId)
+    .in('entity_key', entityKeys)
+  const variantsByEntityKey = new Map<string, Record<string, unknown>[]>()
+  if (!variantResponse.error) {
+    for (const row of variantResponse.data ?? []) {
+      const record = asRecord(row)
+      const entityKey = readText(record.entity_key)
+      if (!entityKey) continue
+      const entry = {
+        variantKey: readText(record.variant_key),
+        label: readText(record.label),
+        summary: readText(record.summary),
+        variantType: readText(record.variant_type),
+        assetKey: readText(record.asset_key),
+        guidance: readText(record.guidance),
+        status: readText(record.status),
+        metadata: asRecord(record.metadata),
+      }
+      variantsByEntityKey.set(entityKey, [...(variantsByEntityKey.get(entityKey) ?? []), entry])
+    }
+  }
   const refreshedEntities = entities.map((entity) => {
-    const latest = latestByKey.get(readText(entity.key))
-    if (!latest) return entity
+    const key = readText(entity.key)
+    const latest = latestByKey.get(key)
+    const variants = variantsByEntityKey.get(key) ?? []
+    const selectedVariant = selectReferenceVariantForPrompt(variants, run.prompt)
+    if (!latest && variants.length === 0) return entity
     const entityMetadata = asRecord(entity.metadata)
-    const latestMetadata = asRecord(latest.metadata)
-    const latestThumbnail = readText(latest.thumbnail_asset_key)
+    const latestMetadata = asRecord(latest?.metadata)
+    const latestThumbnail = readText(latest?.thumbnail_asset_key)
     return {
       ...entity,
       thumbnailAssetKey: latestThumbnail || readText(entity.thumbnailAssetKey),
@@ -2769,9 +2828,15 @@ async function refreshWorldContextVisualReferences(client: DatabaseClient, run: 
       metadata: {
         ...entityMetadata,
         ...latestMetadata,
+        referenceVariants: variants,
+        selectedReferenceVariantKey: selectedVariant ? readText(selectedVariant.variantKey) : 'default',
+        selectedReferenceVariantAssetKey: selectedVariant ? readText(selectedVariant.assetKey) : '',
       },
-      updatedAt: readText(latest.updated_at) || readText(entity.updatedAt),
-      updated_at: readText(latest.updated_at) || readText(entity.updated_at),
+      referenceVariants: variants,
+      selectedReferenceVariantKey: selectedVariant ? readText(selectedVariant.variantKey) : 'default',
+      selectedReferenceVariantAssetKey: selectedVariant ? readText(selectedVariant.assetKey) : '',
+      updatedAt: readText(latest?.updated_at) || readText(entity.updatedAt),
+      updated_at: readText(latest?.updated_at) || readText(entity.updated_at),
     }
   })
 
@@ -2825,6 +2890,8 @@ function buildDeterministicImageAssetPack(context: Record<string, unknown>, limi
       visualDescription,
       visualTraits: readOutputEntityVisualTraits(entity),
       visualTraitMap: readOutputEntityVisualTraitMap(entity),
+      referenceVariants: Array.isArray(asRecord(entity.metadata).referenceVariants) ? asRecord(entity.metadata).referenceVariants : [],
+      selectedReferenceVariantKey: readText(asRecord(entity.metadata).selectedReferenceVariantKey) || readText(entity.selectedReferenceVariantKey) || 'default',
       assetKeys: entityAssetKeys(entity, assets),
     }
   }).filter((entity) => entity.key || entity.name)

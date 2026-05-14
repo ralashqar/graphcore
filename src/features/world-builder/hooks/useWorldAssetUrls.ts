@@ -10,12 +10,14 @@ import {
 import type { AssetDefinition, DefinitionBase } from '../../../domain/graphcore'
 import { loadReferenceSheetIconCrop } from '../../../domain/referenceSheetIconCrop'
 import type { WorldEntity, WorldResult } from '../../../domain/worldGraph'
+import type { WorldEntityVisualVariant } from '../../../domain/visualGeneration'
 import type { SignProjectAssetUrlsInput, SignedProjectAssetUrl } from '../../../application/ports'
 
 type UseWorldAssetUrlsInput = {
   assetByKey: Map<string, AssetDefinition>
   definitionByKey: Map<string, DefinitionBase>
   worldEntities: WorldEntity[]
+  worldEntityVisualVariants?: WorldEntityVisualVariant[]
   worldResults: WorldResult[]
   onSignProjectAssetUrls: (input: SignProjectAssetUrlsInput) => Promise<SignedProjectAssetUrl[]> | SignedProjectAssetUrl[]
 }
@@ -24,6 +26,21 @@ type SignedAssetUrlEntry = { storagePath: string; url: string }
 type ReferenceSheetIconUrlEntry = { cacheKey: string; url: string }
 
 const worldGraphSignedAssetUrlCache = new Map<string, SignedAssetUrlEntry>()
+
+function mergeSignedAssetUrlEntries(
+  current: Map<string, SignedAssetUrlEntry>,
+  entries: Iterable<[string, SignedAssetUrlEntry]>,
+) {
+  let changed = false
+  const next = new Map(current)
+  for (const [assetKey, entry] of entries) {
+    const existing = current.get(assetKey)
+    if (existing?.storagePath === entry.storagePath && existing.url === entry.url) continue
+    next.set(assetKey, entry)
+    changed = true
+  }
+  return changed ? next : current
+}
 
 function isPendingVisualAsset(asset: AssetDefinition | null | undefined) {
   if (!asset) return false
@@ -82,6 +99,7 @@ export function useWorldAssetUrls({
   assetByKey,
   definitionByKey,
   worldEntities,
+  worldEntityVisualVariants = [],
   worldResults,
   onSignProjectAssetUrls,
 }: UseWorldAssetUrlsInput) {
@@ -103,6 +121,10 @@ export function useWorldAssetUrls({
       if (previewAssetKey) desiredAssetKeys.add(previewAssetKey)
       const referenceSheetAssetKey = readEntityReferenceSheetAssetKey(entity)
       if (referenceSheetAssetKey) desiredAssetKeys.add(referenceSheetAssetKey)
+    }
+
+    for (const variant of worldEntityVisualVariants) {
+      if (variant.assetKey) desiredAssetKeys.add(variant.assetKey)
     }
 
     for (const result of worldResults) {
@@ -127,13 +149,13 @@ export function useWorldAssetUrls({
 
     if (cachedUrls.size > 0) {
       setSignedAssetUrlEntriesByKey((current) => {
-        const next = new Map(current)
+        const entries: Array<[string, SignedAssetUrlEntry]> = []
         for (const [assetKey, signedUrl] of cachedUrls) {
           const asset = assetByKey.get(assetKey) ?? null
           if (!asset) continue
-          next.set(assetKey, { storagePath: asset.storagePath ?? '', url: signedUrl })
+          entries.push([assetKey, { storagePath: asset.storagePath ?? '', url: signedUrl }])
         }
-        return next
+        return mergeSignedAssetUrlEntries(current, entries)
       })
     }
 
@@ -163,13 +185,13 @@ export function useWorldAssetUrls({
 
       if (objectCacheUrls.size > 0) {
         setSignedAssetUrlEntriesByKey((current) => {
-          const next = new Map(current)
+          const entries: Array<[string, SignedAssetUrlEntry]> = []
           for (const [assetKey, signedUrl] of objectCacheUrls) {
             const asset = assetByKey.get(assetKey) ?? null
             if (!asset) continue
-            next.set(assetKey, { storagePath: asset.storagePath ?? '', url: signedUrl })
+            entries.push([assetKey, { storagePath: asset.storagePath ?? '', url: signedUrl }])
           }
-          return next
+          return mergeSignedAssetUrlEntries(current, entries)
         })
       }
 
@@ -217,13 +239,13 @@ export function useWorldAssetUrls({
       if (cancelled || nextUrls.size === 0) return
 
       setSignedAssetUrlEntriesByKey((current) => {
-        const next = new Map(current)
+        const entries: Array<[string, SignedAssetUrlEntry]> = []
         for (const [assetKey, signedUrl] of nextUrls) {
           const asset = assetByKey.get(assetKey) ?? null
           if (!asset) continue
-          next.set(assetKey, { storagePath: asset.storagePath ?? '', url: signedUrl })
+          entries.push([assetKey, { storagePath: asset.storagePath ?? '', url: signedUrl }])
         }
-        return next
+        return mergeSignedAssetUrlEntries(current, entries)
       })
     }
 
@@ -232,7 +254,7 @@ export function useWorldAssetUrls({
     return () => {
       cancelled = true
     }
-  }, [assetByKey, definitionByKey, onSignProjectAssetUrls, signedAssetUrlEntriesByKey, worldEntities, worldResults])
+  }, [assetByKey, definitionByKey, onSignProjectAssetUrls, signedAssetUrlEntriesByKey, worldEntities, worldEntityVisualVariants, worldResults])
 
   const signedAssetUrlsByKey = useMemo(() => {
     const next = new Map<string, string>()
@@ -264,6 +286,16 @@ export function useWorldAssetUrls({
       return [entity.key, resolveAssetSourceUrl(asset) ?? signedUrl]
     }))
   }, [assetByKey, signedAssetUrlEntriesByKey, worldEntities])
+
+  const referenceVariantUrlByVariantKey = useMemo(() => {
+    return new Map(worldEntityVisualVariants.map((variant) => {
+      const assetKey = variant.assetKey
+      const asset = assetKey ? assetByKey.get(assetKey) ?? null : null
+      const signedEntry = assetKey ? signedAssetUrlEntriesByKey.get(assetKey) ?? null : null
+      const signedUrl = asset && signedEntry?.storagePath === asset.storagePath ? signedEntry.url : null
+      return [`${variant.entityKey}:${variant.variantKey}`, resolveAssetSourceUrl(asset) ?? signedUrl]
+    }))
+  }, [assetByKey, signedAssetUrlEntriesByKey, worldEntityVisualVariants])
 
   useEffect(() => {
     let cancelled = false
@@ -308,6 +340,49 @@ export function useWorldAssetUrls({
         }
       }
 
+      for (const variant of worldEntityVisualVariants) {
+        const entity = worldEntities.find((candidate) => candidate.key === variant.entityKey) ?? null
+        const asset = variant.assetKey ? assetByKey.get(variant.assetKey) ?? null : null
+        const referenceSheetUrl = referenceVariantUrlByVariantKey.get(`${variant.entityKey}:${variant.variantKey}`) ?? null
+        const stateEntity = entity ?? {
+          key: `${variant.entityKey}:${variant.variantKey}`,
+        } as WorldEntity
+        const expectedCacheKey = referenceSheetIconStateKey(stateEntity, asset)
+        if (!asset || !expectedCacheKey) continue
+        const entryKey = `${variant.entityKey}:${variant.variantKey}`
+        desiredEntityKeys.add(entryKey)
+        if (!referenceSheetUrl) continue
+        const current = referenceSheetIconEntriesByEntityKey.get(entryKey)
+        if (current?.cacheKey === expectedCacheKey) continue
+
+        try {
+          const crop = await loadReferenceSheetIconCrop({
+            entityKey: entryKey,
+            referenceSheetAsset: asset,
+            referenceSheetUrl,
+          })
+          if (cancelled || !crop) continue
+          setReferenceSheetIconEntriesByEntityKey((currentEntries) => {
+            const existing = currentEntries.get(entryKey)
+            if (existing?.cacheKey === crop.cacheKey) {
+              if (existing.url !== crop.url && crop.url.startsWith('blob:')) URL.revokeObjectURL(crop.url)
+              return currentEntries
+            }
+            if (existing?.url && existing.url.startsWith('blob:')) URL.revokeObjectURL(existing.url)
+            const next = new Map(currentEntries)
+            next.set(entryKey, crop)
+            return next
+          })
+        } catch (error) {
+          console.warn('[GraphCore] failed to crop reference sheet variant icon.', {
+            entityKey: variant.entityKey,
+            variantKey: variant.variantKey,
+            assetKey: variant.assetKey,
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
       if (cancelled) return
       setReferenceSheetIconEntriesByEntityKey((currentEntries) => {
         let changed = false
@@ -327,7 +402,7 @@ export function useWorldAssetUrls({
     return () => {
       cancelled = true
     }
-  }, [assetByKey, referenceSheetIconEntriesByEntityKey, referenceSheetUrlByEntityKey, worldEntities])
+  }, [assetByKey, referenceSheetIconEntriesByEntityKey, referenceSheetUrlByEntityKey, referenceVariantUrlByVariantKey, worldEntities, worldEntityVisualVariants])
 
   useEffect(() => {
     return () => {
@@ -339,7 +414,11 @@ export function useWorldAssetUrls({
   }, [])
 
   const referenceSheetIconUrlByEntityKey = useMemo(() => {
-    return new Map(Array.from(referenceSheetIconEntriesByEntityKey.entries()).map(([entityKey, entry]) => [entityKey, entry.url]))
+    return new Map(Array.from(referenceSheetIconEntriesByEntityKey.entries()).filter(([entityKey]) => !entityKey.includes(':')).map(([entityKey, entry]) => [entityKey, entry.url]))
+  }, [referenceSheetIconEntriesByEntityKey])
+
+  const referenceVariantIconUrlByVariantKey = useMemo(() => {
+    return new Map(Array.from(referenceSheetIconEntriesByEntityKey.entries()).filter(([entryKey]) => entryKey.includes(':')).map(([entryKey, entry]) => [entryKey, entry.url]))
   }, [referenceSheetIconEntriesByEntityKey])
 
   const imageUrlByResultKey = useMemo(() => {
@@ -360,9 +439,7 @@ export function useWorldAssetUrls({
     if (!cleanAssetKey || !cleanSignedUrl) return
     const asset = assetByKey.get(cleanAssetKey) ?? null
     setSignedAssetUrlEntriesByKey((current) => {
-      const next = new Map(current)
-      next.set(cleanAssetKey, { storagePath: asset?.storagePath ?? '', url: cleanSignedUrl })
-      return next
+      return mergeSignedAssetUrlEntries(current, [[cleanAssetKey, { storagePath: asset?.storagePath ?? '', url: cleanSignedUrl }]])
     })
   }, [assetByKey])
 
@@ -371,6 +448,8 @@ export function useWorldAssetUrls({
     imageUrlByResultKey,
     referenceSheetIconUrlByEntityKey,
     referenceSheetUrlByEntityKey,
+    referenceVariantIconUrlByVariantKey,
+    referenceVariantUrlByVariantKey,
     setSignedAssetUrl,
     signedAssetUrlsByKey,
   }

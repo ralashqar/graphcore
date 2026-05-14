@@ -85,12 +85,15 @@ import type { WorldBrandAtlasImageResponse } from '../../domain/worldBrandAtlasI
 import type {
   EntityReferenceGuidanceImageUploadRequest,
   EntityReferenceGuidanceImageUploadResponse,
+  EntityReferenceVariantCreateRequest,
+  EntityReferenceVariantCreateResponse,
   EntityVisualProfileRefinementRequest,
   EntityVisualProfileRefinementResponse,
   VisualGenerationJob,
   VisualGenerationStartRequest,
   VisualGenerationStartResponse,
   VisualGenerationStatusResponse,
+  WorldEntityVisualVariant,
 } from '../../domain/visualGeneration'
 import {
   buildApprovedAppDesignBundle,
@@ -418,6 +421,13 @@ function shouldUseGridArtForWorldEntity(entity: Pick<WorldEntity, 'nodeType'>) {
   return entity.nodeType === 'concept' || entity.nodeType === 'sequence_unit'
 }
 
+function shouldCreateShotLocationVariant(entity: Pick<WorldEntity, 'nodeType'> | null | undefined) {
+  return entity?.nodeType === 'place'
+    || entity?.nodeType === 'location_spot'
+    || entity?.nodeType === 'travel_link'
+    || entity?.nodeType === 'marketplace'
+}
+
 function buildLiveWikiGenerationSectionStates(input: {
   activePhase: string
   latestEntity: WorldEntity | null
@@ -480,6 +490,13 @@ function visualGenerationJobTargetEntityKey(job: VisualGenerationJob) {
   return inputKey || null
 }
 
+function visualGenerationJobTargetVariantKey(job: VisualGenerationJob) {
+  const targetKey = typeof job.targetKeys.variantKey === 'string' ? job.targetKeys.variantKey.trim() : ''
+  if (targetKey) return targetKey
+  const inputKey = typeof job.input.variantKey === 'string' ? job.input.variantKey.trim() : ''
+  return inputKey || null
+}
+
 function visualGenerationGridJobTargetEntityKeys(job: VisualGenerationJob) {
   if (job.kind !== 'world_entity_icon_grid') return []
   const candidateKeys = Array.isArray(job.input.candidates)
@@ -524,6 +541,7 @@ type WorldGraphPageProps = {
   worldPromptGenerationJobs: WorldPromptGenerationJob[]
   worldPromptGenerationJobSteps: WorldPromptGenerationJobStep[]
   worldPromptSuggestions: WorldPromptSuggestionRecord[]
+  worldEntityVisualVariants: WorldEntityVisualVariant[]
   visualGenerationJobs: VisualGenerationJob[]
   outputRequests: OutputRequest[]
   outputWorkflowRuns: OutputWorkflowRun[]
@@ -579,6 +597,9 @@ type WorldGraphPageProps = {
   onRefineWorldEntityVisualProfile?: (
     request: Omit<EntityVisualProfileRefinementRequest, 'projectId' | 'draftId'>
   ) => Promise<(EntityVisualProfileRefinementResponse & { entity: WorldEntity })> | (EntityVisualProfileRefinementResponse & { entity: WorldEntity })
+  onCreateEntityReferenceVariant?: (
+    request: Omit<EntityReferenceVariantCreateRequest, 'projectId' | 'draftId'>
+  ) => Promise<EntityReferenceVariantCreateResponse> | EntityReferenceVariantCreateResponse
   onStartAppCodeGeneration?: () => Promise<AppGenerationStartResponse> | AppGenerationStartResponse
   onGetAppGenerationStatus?: (jobId: string) => Promise<AppGenerationStatusResponse> | AppGenerationStatusResponse
   onCancelAppGenerationJob?: (jobId: string) => Promise<AppGenerationCancelResponse> | AppGenerationCancelResponse
@@ -660,6 +681,8 @@ type WikiEntityHeroImageMeasurement = {
 }
 type EntityReferenceSheetRegenerationState = {
   entityKey: string
+  variantKey?: string | null
+  createVariant?: boolean
   guidance: string
   file: File | null
   busy: boolean
@@ -1200,6 +1223,7 @@ export function WorldGraphPage({
   worldPromptGenerationJobs,
   worldPromptGenerationJobSteps,
   worldPromptSuggestions,
+  worldEntityVisualVariants,
   visualGenerationJobs,
   outputRequests,
   outputWorkflowRuns,
@@ -1241,6 +1265,7 @@ export function WorldGraphPage({
   onGetVisualGenerationStatus,
   onUploadEntityReferenceGuidanceImage,
   onRefineWorldEntityVisualProfile,
+  onCreateEntityReferenceVariant,
   onStartAppCodeGeneration,
   onGetAppGenerationStatus,
   onCancelAppGenerationJob,
@@ -1412,6 +1437,7 @@ export function WorldGraphPage({
   const [activeWikiSectionKind, setActiveWikiSectionKind] = useState<WorldWikiSection['kind']>('overview')
   const [wikiEntityHeroImageMeasurementByUrl, setWikiEntityHeroImageMeasurementByUrl] = useState<Record<string, WikiEntityHeroImageMeasurement>>({})
   const [entityReferenceSheetRegeneration, setEntityReferenceSheetRegeneration] = useState<EntityReferenceSheetRegenerationState | null>(null)
+  const [selectedReferenceVariantKeyByEntityKey, setSelectedReferenceVariantKeyByEntityKey] = useState<Record<string, string>>({})
   const [referenceSheetRegenerationBusyEntityKey, setReferenceSheetRegenerationBusyEntityKey] = useState<string | null>(null)
   const [referenceSheetRegenerationPhase, setReferenceSheetRegenerationPhase] = useState<{
     entityKey: string
@@ -2079,12 +2105,15 @@ export function WorldGraphPage({
     imageUrlByResultKey,
     referenceSheetIconUrlByEntityKey,
     referenceSheetUrlByEntityKey,
+    referenceVariantIconUrlByVariantKey,
+    referenceVariantUrlByVariantKey,
     setSignedAssetUrl,
     signedAssetUrlsByKey,
   } = useWorldAssetUrls({
     assetByKey,
     definitionByKey,
     worldEntities,
+    worldEntityVisualVariants,
     worldResults,
     onSignProjectAssetUrls,
   })
@@ -5333,10 +5362,12 @@ export function WorldGraphPage({
     }
   }
 
-  function openEntityReferenceSheetRegenerationModal(entity: WorldEntity) {
+  function openEntityReferenceSheetRegenerationModal(entity: WorldEntity, options: { variantKey?: string | null; createVariant?: boolean } = {}) {
     setEntityReferenceSheetError(null)
     setEntityReferenceSheetRegeneration({
       entityKey: entity.key,
+      variantKey: options.variantKey ?? 'default',
+      createVariant: options.createVariant === true,
       guidance: '',
       file: null,
       busy: false,
@@ -5361,6 +5392,39 @@ export function WorldGraphPage({
         return 'Generating image with changes'
       default:
         return 'Preparing reference sheet'
+    }
+  }
+
+  function labelForReferenceVariantGeneration(variant: WorldEntityVisualVariant | null) {
+    if (!variant) return 'Creating variation'
+    if (variant.variantType === 'shot_location_sheet') return 'Creating shot location'
+    return `Creating ${variant.label || 'variation'}`
+  }
+
+  function copyForEntityReferenceVariationModal(modal: EntityReferenceSheetRegenerationState) {
+    const entity = entityByKey.get(modal.entityKey)
+    const isShotLocation = modal.createVariant === true && shouldCreateShotLocationVariant(entity)
+    return {
+      title: modal.createVariant
+        ? isShotLocation ? 'Create shot location' : 'Create reference variation'
+        : modal.variantKey && modal.variantKey !== 'default'
+          ? isShotLocation ? 'Regenerate shot location' : 'Regenerate variation'
+          : 'Update reference sheet',
+      label: modal.createVariant
+        ? isShotLocation ? 'Describe the shot location' : 'Describe the new variation'
+        : 'Describe the design changes',
+      placeholder: modal.createVariant
+        ? isShotLocation
+          ? 'Example: add a cozy rain-lit cafe interior off the town square, with booth seating, window reflections, and clear camera angles for dialogue scenes.'
+          : 'Example: in a red dress for a gala scene, while keeping the same character identity.'
+        : 'Example: make this a blue parrot with bigger eyes and softer, rounded CG features.',
+      note: isShotLocation
+        ? 'This shot location will use the default location reference sheet as its image source and will not change the default location canon.'
+        : 'This variation will use the default reference sheet as its image source and will not change the default entity canon.',
+      submitLabel: modal.createVariant
+        ? 'Create'
+        : 'Start update',
+      missingGuidance: isShotLocation ? 'Describe the shot location you want.' : 'Describe the visual variation you want.',
     }
   }
 
@@ -5398,7 +5462,9 @@ export function WorldGraphPage({
       setEntityReferenceSheetError('Visual generation is unavailable for this workspace.')
       return false
     }
-    const existingActiveJob = activeEntityReferenceSheetJobs.find((job) => visualGenerationJobTargetEntityKey(job) === entity.key)
+    const existingActiveJob = activeEntityReferenceSheetJobs.find((job) => (
+      visualGenerationJobTargetEntityKey(job) === entity.key && !visualGenerationJobTargetVariantKey(job)
+    ))
     if (existingActiveJob) {
       setEntityReferenceSheetJobs((current) => mergeVisualGenerationJobStatuses(current, [existingActiveJob]))
       return true
@@ -5474,6 +5540,58 @@ export function WorldGraphPage({
     }
     const guidance = modal.guidance.trim()
     const file = modal.file
+    const variantKey = modal.variantKey?.trim() || 'default'
+    const isVariantRequest = modal.createVariant === true || variantKey !== 'default'
+    if (isVariantRequest) {
+      const existingVariant = worldEntityVisualVariants.find((variant) => (
+        variant.entityKey === entity.key && variant.variantKey === variantKey
+      ))
+      const effectiveGuidance = guidance || (!modal.createVariant ? existingVariant?.guidance?.trim() ?? '' : '')
+      const modalCopy = copyForEntityReferenceVariationModal(modal)
+      if (!onCreateEntityReferenceVariant) {
+        setEntityReferenceSheetRegeneration((current) => current ? { ...current, error: 'Reference variations are unavailable for this workspace.' } : current)
+        return
+      }
+      if (!effectiveGuidance) {
+        setEntityReferenceSheetRegeneration((current) => current ? { ...current, error: modalCopy.missingGuidance } : current)
+        return
+      }
+      if (file) {
+        setEntityReferenceSheetRegeneration((current) => current ? { ...current, error: 'Image uploads are supported for default sheet regeneration; variations use the default reference sheet as their source.' } : current)
+        return
+      }
+      setEntityReferenceSheetRegeneration(null)
+      setEntityReferenceSheetError(null)
+      setReferenceSheetRegenerationBusyEntityKey(entity.key)
+      setReferenceSheetRegenerationPhase({ entityKey: entity.key, phase: 'queueing_image_generation' })
+      try {
+        const result = await onCreateEntityReferenceVariant({
+          entityKey: entity.key,
+          guidance: effectiveGuidance,
+          baseVariantKey: 'default',
+          variantKey: modal.createVariant ? null : variantKey,
+          regenerate: modal.createVariant !== true,
+        })
+        setEntityReferenceSheetJobs((current) => {
+          const next = new Map(current.map((job) => [job.id, job]))
+          next.set(result.job.id, result.job)
+          return [...next.values()]
+        })
+        setSelectedReferenceVariantKeyByEntityKey((current) => ({
+          ...current,
+          [entity.key]: result.variant.variantKey,
+        }))
+        setReferenceSheetRegenerationPhase({ entityKey: entity.key, phase: 'generating_image' })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not create the reference variation.'
+        setReferenceSheetRegenerationPhase(null)
+        setEntityReferenceSheetError(message)
+        console.error('[GraphCore] entity reference variation failed.', error)
+      } finally {
+        setReferenceSheetRegenerationBusyEntityKey(null)
+      }
+      return
+    }
     const initialPhase: EntityReferenceSheetRegenerationPhase = file ? 'uploading_reference_image' : guidance ? 'refining_visual_profile' : 'queueing_image_generation'
     setEntityReferenceSheetRegeneration(null)
     setEntityReferenceSheetError(null)
@@ -6876,7 +6994,52 @@ export function WorldGraphPage({
       .map(([key, value]) => [key, typeof value === 'string' ? value.trim() : Array.isArray(value) ? value.filter((entry) => typeof entry === 'string').join(', ') : ''] as const)
       .filter(([, value]) => value)
       .slice(0, 6)
-    const largeImageUrl = referenceSheetUrlByEntityKey.get(entity.key) ?? wikiImageUrlByEntityKey.get(entity.key) ?? null
+    const entityVariants = worldEntityVisualVariants
+      .filter((variant) => variant.entityKey === entity.key)
+      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+    const activeVariantJobs = activeEntityReferenceSheetJobs.filter((job) => (
+      visualGenerationJobTargetEntityKey(job) === entity.key && Boolean(visualGenerationJobTargetVariantKey(job))
+    ))
+    const syntheticJobVariants: WorldEntityVisualVariant[] = activeVariantJobs
+      .flatMap((job) => {
+        const jobVariantKey = visualGenerationJobTargetVariantKey(job)
+        if (!jobVariantKey || entityVariants.some((variant) => variant.variantKey === jobVariantKey)) return []
+        return [{
+          id: `job-${job.id}`,
+          key: `${entity.key}:${jobVariantKey}`,
+          projectId: '',
+          draftId: projectDraftId,
+          entityKey: entity.key,
+          variantKey: jobVariantKey,
+          label: trimOptionalString(job.metadata.variantLabel) || trimOptionalString(job.input.variantLabel) || jobVariantKey,
+          summary: trimOptionalString(job.metadata.variantSummary) || trimOptionalString(job.input.variantSummary) || '',
+          variantType: trimOptionalString(job.metadata.variantType) || trimOptionalString(job.input.variantType) || 'reference_variant',
+          sourceVariantKey: trimOptionalString(job.metadata.baseVariantKey) || trimOptionalString(job.input.baseVariantKey) || 'default',
+          assetKey: null,
+          visualJobId: job.id,
+          guidance: trimOptionalString(job.metadata.regenerationGuidance) || trimOptionalString(job.input.regenerationGuidance) || '',
+          status: job.status === 'running' ? 'running' as const : 'queued' as const,
+          metadata: {},
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+        }]
+      })
+    const allEntityVariants = [...entityVariants, ...syntheticJobVariants]
+    const selectedVariantKey = selectedReferenceVariantKeyByEntityKey[entity.key] && (
+      selectedReferenceVariantKeyByEntityKey[entity.key] === 'default'
+      || allEntityVariants.some((variant) => variant.variantKey === selectedReferenceVariantKeyByEntityKey[entity.key])
+    )
+      ? selectedReferenceVariantKeyByEntityKey[entity.key]
+      : 'default'
+    const selectedVariant = selectedVariantKey === 'default'
+      ? null
+      : allEntityVariants.find((variant) => variant.variantKey === selectedVariantKey) ?? null
+    const selectedVariantUrl = selectedVariant
+      ? referenceVariantUrlByVariantKey.get(`${entity.key}:${selectedVariant.variantKey}`) ?? null
+      : null
+    const largeImageUrl = selectedVariant
+      ? selectedVariantUrl
+      : referenceSheetUrlByEntityKey.get(entity.key) ?? null
     const relationshipRows = worldRelationships
       .filter((relationship) => relationship.sourceEntityKey === entity.key || relationship.targetEntityKey === entity.key)
       .map((relationship) => {
@@ -7250,27 +7413,43 @@ export function WorldGraphPage({
         </section>
       )
     }
+    const summaryFieldValue = (profile?.shortSummary || entity.summary).trim()
     const fieldCards = [
+      summaryFieldValue ? { label: 'Summary', value: summaryFieldValue } : null,
       entity.context.trim() ? { label: 'Context', value: entity.context.trim() } : null,
       visualDescription ? { label: 'Visual Description', value: visualDescription } : null,
       voiceDescription && (entity.nodeType === 'actor' || entity.nodeType === 'persona' || entity.nodeType === 'player_profile')
         ? { label: 'Voice', value: voiceDescription }
         : null,
     ].filter((entry): entry is { label: string; value: string } => Boolean(entry))
-    const referenceSheetJob = activeEntityReferenceSheetJobs.find((job) => visualGenerationJobTargetEntityKey(job) === entity.key) ?? null
+    const referenceSheetJob = activeEntityReferenceSheetJobs.find((job) => (
+      visualGenerationJobTargetEntityKey(job) === entity.key
+      && (selectedVariantKey === 'default'
+        ? !visualGenerationJobTargetVariantKey(job)
+        : visualGenerationJobTargetVariantKey(job) === selectedVariantKey)
+    )) ?? null
     const referenceSheetBusy = Boolean(referenceSheetJob || referenceSheetRegenerationBusyEntityKey === entity.key)
     const localReferenceSheetPhase = referenceSheetRegenerationPhase?.entityKey === entity.key ? referenceSheetRegenerationPhase.phase : null
+    const selectedVariantIsPending = Boolean(
+      selectedVariant
+      && !selectedVariant.assetKey
+      && ['pending', 'queued', 'running'].includes(selectedVariant.status),
+    )
     const referenceSheetStatusLabel = localReferenceSheetPhase
       ? labelForEntityReferenceSheetRegenerationPhase(localReferenceSheetPhase)
+      : selectedVariantIsPending
+        ? labelForReferenceVariantGeneration(selectedVariant)
       : referenceSheetJob
-        ? isRegeneratedEntityReferenceSheetJob(referenceSheetJob)
+        ? selectedVariant
+          ? labelForReferenceVariantGeneration(selectedVariant)
+          : isRegeneratedEntityReferenceSheetJob(referenceSheetJob)
           ? 'Generating image with changes'
           : 'Generating reference sheet'
         : null
     const referenceSheetButtonLabel = referenceSheetBusy
       ? referenceSheetStatusLabel ?? 'Generating reference sheet'
       : largeImageUrl
-        ? 'Regenerate reference sheet'
+        ? selectedVariantKey === 'default' ? 'Regenerate reference sheet' : 'Regenerate variation'
         : 'Generate reference sheet'
     const canRegenerateReferenceSheet = !shouldUseGridArtForWorldEntity(entity)
     const largeImageMeasurement = largeImageUrl ? wikiEntityHeroImageMeasurementByUrl[largeImageUrl] ?? null : null
@@ -7282,7 +7461,6 @@ export function WorldGraphPage({
             <div className="world-wiki-entity-page-copy">
               <span className="eyebrow">{section.title}</span>
               <h2>{entity.name}</h2>
-              <p>{profile?.shortSummary || entity.summary || entity.context || 'No story summary has been written yet.'}</p>
               <div className="world-wiki-entity-action-row">
                 <button className="world-wiki-entity-graph-button" onClick={() => openWikiEntityGraphModal(entity.key)} type="button">
                   <EntityIcon id="graph" />
@@ -7339,7 +7517,11 @@ export function WorldGraphPage({
           </div>
 
           <aside className="world-wiki-entity-side-column">
-            <div className={largeImageUrl ? 'world-wiki-entity-hero-art has-image' : 'world-wiki-entity-hero-art'}>
+            <div className={[
+              'world-wiki-entity-hero-art',
+              largeImageUrl ? 'has-image' : '',
+              referenceSheetBusy ? 'is-generating' : '',
+            ].filter(Boolean).join(' ')}>
               {largeImageUrl ? (
                 <>
                   <img
@@ -7399,16 +7581,86 @@ export function WorldGraphPage({
                     <span className="loading-spinner" aria-hidden="true" />
                     <strong>{referenceSheetStatusLabel ?? 'Generating reference sheet'}</strong>
                   </div>
+                ) : selectedVariant ? (
+                  <div className="world-wiki-entity-art-empty">
+                    <strong>{selectedVariant.status === 'failed' ? 'Variation was not created' : 'Variation image not ready'}</strong>
+                    <span>{selectedVariant.status === 'failed' ? 'Select Default to view the full reference sheet, or try creating the variation again.' : 'The full variation image will appear here after generation completes.'}</span>
+                  </div>
                 ) : (
-                  <EntityIcon id={iconForWorldEntity(entity.nodeType)} />
+                  <div className="world-wiki-entity-art-empty">
+                    <strong>No default reference sheet yet</strong>
+                    <span>Generate the default reference sheet before creating visual variations.</span>
+                  </div>
                 )
               )}
             </div>
             {canRegenerateReferenceSheet ? (
+              <div className="world-wiki-reference-variant-stack">
+                <div className="world-wiki-reference-variant-heading">
+                  <span>{selectedVariant ? 'Selected variation' : 'Selected reference'}</span>
+                  <strong>{selectedVariant?.label || 'Default'}</strong>
+                </div>
+                <div className="world-wiki-reference-variant-strip" role="list" aria-label={`${entity.name} reference variations`}>
+                  <button
+                    className={selectedVariantKey === 'default' ? 'is-active' : ''}
+                    onClick={() => setSelectedReferenceVariantKeyByEntityKey((current) => ({ ...current, [entity.key]: 'default' }))}
+                    type="button"
+                  >
+                    <span>
+                      {referenceSheetIconUrlByEntityKey.get(entity.key)
+                        ? <img src={referenceSheetIconUrlByEntityKey.get(entity.key) ?? ''} alt="" />
+                        : <EntityIcon id={iconForWorldEntity(entity.nodeType)} />}
+                    </span>
+                    <em>Default</em>
+                  </button>
+                  {allEntityVariants.map((variant) => {
+                    const variantEntryKey = `${entity.key}:${variant.variantKey}`
+                    const variantIconUrl = referenceVariantIconUrlByVariantKey.get(variantEntryKey)
+                    const variantJob = activeEntityReferenceSheetJobs.find((job) => (
+                      visualGenerationJobTargetEntityKey(job) === entity.key
+                      && visualGenerationJobTargetVariantKey(job) === variant.variantKey
+                    )) ?? null
+                    const variantBusy = Boolean(variantJob || variant.status === 'queued' || variant.status === 'running' || variant.status === 'pending')
+                    return (
+                      <button
+                        key={variant.variantKey}
+                        className={[
+                          selectedVariantKey === variant.variantKey ? 'is-active' : '',
+                          variantBusy ? 'is-generating' : '',
+                        ].filter(Boolean).join(' ')}
+                        onClick={() => setSelectedReferenceVariantKeyByEntityKey((current) => ({ ...current, [entity.key]: variant.variantKey }))}
+                        type="button"
+                      >
+                        <span>
+                          {variantIconUrl ? <img src={variantIconUrl} alt="" /> : <EntityIcon id="asset" />}
+                          {variantBusy ? (
+                            <b className="world-wiki-reference-variant-spinner" aria-hidden="true">
+                              <i className="loading-spinner" />
+                            </b>
+                          ) : null}
+                        </span>
+                        <em>{variant.label || variant.variantKey}</em>
+                      </button>
+                    )
+                  })}
+                  <button
+                    className="is-create"
+                    disabled={!onCreateEntityReferenceVariant}
+                    onClick={() => openEntityReferenceSheetRegenerationModal(entity, { variantKey: selectedVariantKey, createVariant: true })}
+                    type="button"
+                  >
+                    <span><EntityIcon id="plus" /></span>
+                    <em>{shouldCreateShotLocationVariant(entity) ? 'Add shot location' : 'Create variation'}</em>
+                  </button>
+                </div>
+                {selectedVariant?.summary ? <p>{selectedVariant.summary}</p> : null}
+              </div>
+            ) : null}
+            {canRegenerateReferenceSheet ? (
               <button
                 className="world-wiki-reference-regenerate-button"
-                disabled={referenceSheetBusy || !onStartVisualGenerationJob}
-                onClick={() => openEntityReferenceSheetRegenerationModal(entity)}
+                disabled={referenceSheetBusy || (selectedVariantKey === 'default' ? !onStartVisualGenerationJob : !onCreateEntityReferenceVariant)}
+                onClick={() => openEntityReferenceSheetRegenerationModal(entity, { variantKey: selectedVariantKey })}
                 type="button"
               >
                 {referenceSheetBusy ? <span className="loading-spinner" aria-hidden="true" /> : <EntityIcon id="asset" />}
@@ -7417,6 +7669,7 @@ export function WorldGraphPage({
             ) : null}
             {referenceSheetBusy && referenceSheetStatusLabel ? (
               <p className="world-wiki-reference-regeneration-status" aria-live="polite">
+                <span className="loading-spinner" aria-hidden="true" />
                 {referenceSheetStatusLabel}
               </p>
             ) : null}
@@ -8383,7 +8636,9 @@ export function WorldGraphPage({
                   </span>
                   <div>
                     <span className="eyebrow">Visual design</span>
-                    <h3 id="world-wiki-reference-regeneration-title">Update reference sheet</h3>
+                    <h3 id="world-wiki-reference-regeneration-title">
+                      {copyForEntityReferenceVariationModal(entityReferenceSheetRegeneration).title}
+                    </h3>
                   </div>
                 </div>
                 <button
@@ -8396,31 +8651,35 @@ export function WorldGraphPage({
                 </button>
               </div>
               <label className="field-block">
-                <span>Describe the design changes</span>
+                <span>{copyForEntityReferenceVariationModal(entityReferenceSheetRegeneration).label}</span>
                 <textarea
                   rows={4}
-                  placeholder="Example: make this a blue parrot with bigger eyes and softer, rounded CG features."
+                  placeholder={copyForEntityReferenceVariationModal(entityReferenceSheetRegeneration).placeholder}
                   value={entityReferenceSheetRegeneration.guidance}
                   onChange={(event) => setEntityReferenceSheetRegeneration((current) => current ? { ...current, guidance: event.target.value } : current)}
                 />
               </label>
-              <label className="world-wiki-reference-upload">
-                <span>
-                  <strong>Add a reference image</strong>
-                  <small>{entityReferenceSheetRegeneration.file?.name ?? 'Optional. PNG, JPEG, WebP, or AVIF under 8 MB.'}</small>
-                </span>
-                <span className="world-wiki-reference-upload-action">
-                  {entityReferenceSheetRegeneration.file ? 'Change image' : 'Choose image'}
-                </span>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/avif"
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0] ?? null
-                    setEntityReferenceSheetRegeneration((current) => current ? { ...current, file } : current)
-                  }}
-                />
-              </label>
+              {entityReferenceSheetRegeneration.createVariant || (entityReferenceSheetRegeneration.variantKey && entityReferenceSheetRegeneration.variantKey !== 'default') ? (
+                <div className="inline-note">{copyForEntityReferenceVariationModal(entityReferenceSheetRegeneration).note}</div>
+              ) : (
+                <label className="world-wiki-reference-upload">
+                  <span>
+                    <strong>Add a reference image</strong>
+                    <small>{entityReferenceSheetRegeneration.file?.name ?? 'Optional. PNG, JPEG, WebP, or AVIF under 8 MB.'}</small>
+                  </span>
+                  <span className="world-wiki-reference-upload-action">
+                    {entityReferenceSheetRegeneration.file ? 'Change image' : 'Choose image'}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/avif"
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0] ?? null
+                      setEntityReferenceSheetRegeneration((current) => current ? { ...current, file } : current)
+                    }}
+                  />
+                </label>
+              )}
               {entityReferenceSheetRegeneration.error ? (
                 <div className="inline-note is-warning">{entityReferenceSheetRegeneration.error}</div>
               ) : null}
@@ -8438,7 +8697,7 @@ export function WorldGraphPage({
                   type="button"
                 >
                   <EntityIcon id="asset" />
-                  Start update
+                  {copyForEntityReferenceVariationModal(entityReferenceSheetRegeneration).submitLabel}
                 </button>
               </div>
             </article>

@@ -79,6 +79,7 @@ async function deleteGeneratedWorldAssets(
     `generate/world-icons/${draftId}/`,
     `generated/wiki-concept-images/${draftId}/`,
     `generated/entity-reference-sheets/${draftId}/`,
+    `generated/entity-reference-variants/${draftId}/`,
     `generated/wiki-brand-atlas/${draftId}/`,
   ]
   const assetResponse = await admin

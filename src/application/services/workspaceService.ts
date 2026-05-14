@@ -19,6 +19,7 @@ export const workspaceService = {
   createWorldPromptSession: graphcoreWorkspaceAdapter.createWorldPromptSession,
   createWorldDerivedComposition: graphcoreWorkspaceAdapter.createWorldDerivedComposition,
   createWorldEntity: graphcoreWorkspaceAdapter.createWorldEntity,
+  createEntityReferenceVariant: graphcoreWorkspaceAdapter.createEntityReferenceVariant,
   createWorldRelationshipFromGraphGesture: graphcoreWorkspaceAdapter.createWorldRelationshipFromGraphGesture,
   createWorldRelationship: graphcoreWorkspaceAdapter.createWorldRelationship,
   createWorldView: graphcoreWorkspaceAdapter.createWorldView,

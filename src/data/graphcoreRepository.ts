@@ -118,10 +118,14 @@ import {
   visualGenerationStatusResponseSchema,
   entityReferenceGuidanceImageUploadRequestSchema,
   entityReferenceGuidanceImageUploadResponseSchema,
+  entityReferenceVariantCreateRequestSchema,
+  entityReferenceVariantCreateResponseSchema,
   entityVisualProfileRefinementRequestSchema,
   entityVisualProfileRefinementResponseSchema,
   type EntityReferenceGuidanceImageUploadRequest,
   type EntityReferenceGuidanceImageUploadResponse,
+  type EntityReferenceVariantCreateRequest,
+  type EntityReferenceVariantCreateResponse,
   type EntityVisualProfileRefinementRequest,
   type EntityVisualProfileRefinementResponse,
   type VisualGenerationCancelResponse,
@@ -1786,6 +1790,26 @@ type WorldEntityRow = {
   updated_at: string
 }
 
+type WorldEntityVisualVariantRow = {
+  id: string
+  key: string | null
+  project_id: string
+  draft_id: string
+  entity_key: string
+  variant_key: string
+  label: string | null
+  summary: string | null
+  variant_type: string | null
+  source_variant_key: string | null
+  asset_key: string | null
+  visual_job_id: string | null
+  guidance: string | null
+  status: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 type WorldRelationshipRow = {
   id: string
   key: string
@@ -2222,6 +2246,36 @@ function mapWorldEntityRow(entity: WorldEntityRow): WorldEntity {
     metadata: entity.metadata ?? {},
     createdAt: entity.created_at,
     updatedAt: entity.updated_at,
+  }
+}
+
+function mapWorldEntityVisualVariantRow(row: WorldEntityVisualVariantRow) {
+  const status: ProjectSnapshot['worldEntityVisualVariants'][number]['status'] = row.status === 'pending'
+    || row.status === 'queued'
+    || row.status === 'running'
+    || row.status === 'completed'
+    || row.status === 'failed'
+    || row.status === 'cancelled'
+    ? row.status
+    : 'pending'
+  return {
+    id: row.id,
+    key: row.key ?? `${row.entity_key}:${row.variant_key}`,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    entityKey: row.entity_key,
+    variantKey: row.variant_key,
+    label: row.label ?? '',
+    summary: row.summary ?? '',
+    variantType: row.variant_type ?? 'reference_variant',
+    sourceVariantKey: row.source_variant_key ?? 'default',
+    assetKey: row.asset_key,
+    visualJobId: row.visual_job_id,
+    guidance: row.guidance ?? '',
+    status,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }
 }
 
@@ -3609,6 +3663,7 @@ export async function loadProjectSnapshot(
     environmentBlueprintsResponse,
     assetsResponse,
     worldEntitiesResponse,
+    worldEntityVisualVariantsResponse,
     worldRelationshipsResponse,
     worldViewsResponse,
     worldOperatorsResponse,
@@ -3730,6 +3785,13 @@ export async function loadProjectSnapshot(
       ? supabase
           .from('world_entities')
           .select(WORLD_ENTITY_SELECT)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeWorld
+      ? supabase
+          .from('world_entity_visual_variants')
+          .select('id, key, project_id, draft_id, entity_key, variant_key, label, summary, variant_type, source_variant_key, asset_key, visual_job_id, guidance, status, metadata, created_at, updated_at')
           .eq('draft_id', draft.id)
           .order('created_at', { ascending: true })
       : Promise.resolve(emptyPostgrestResponse()),
@@ -3941,6 +4003,7 @@ export async function loadProjectSnapshot(
     ['draft_environment_blueprints', environmentBlueprintsResponse],
     ['project_assets', assetsResponse],
     ['world_entities', worldEntitiesResponse],
+    ['world_entity_visual_variants', worldEntityVisualVariantsResponse],
     ['world_relationships', worldRelationshipsResponse],
     ['world_views', worldViewsResponse],
     ['world_operators', worldOperatorsResponse],
@@ -4001,6 +4064,9 @@ export async function loadProjectSnapshot(
     || isMissingRelationError(worldOperatorsResponse.error, 'world_operators')
     || isMissingRelationError(worldResultsResponse.error, 'world_results')
     || isMissingRelationError(worldGraphConnectionsResponse.error, 'world_graph_connections')
+  const worldEntityVisualVariantsSchemaMissing =
+    postgrestStatus(worldEntityVisualVariantsResponse) === 404
+    || isMissingRelationError(worldEntityVisualVariantsResponse.error, 'world_entity_visual_variants')
   const worldPromptSchemaMissing =
     postgrestStatus(worldPromptSessionsResponse) === 404
     || postgrestStatus(worldPromptTurnsResponse) === 404
@@ -4063,6 +4129,7 @@ export async function loadProjectSnapshot(
   const environmentBlueprints = blueprintSchemaMissing ? [] : (environmentBlueprintsResponse.data as EnvironmentBlueprintRow[] | null) ?? []
   const assets = (assetsResponse.data as AssetRow[] | null) ?? []
   const worldEntities = worldGraphSchemaMissing ? [] : (worldEntitiesResponse.data as WorldEntityRow[] | null) ?? []
+  const worldEntityVisualVariants = worldEntityVisualVariantsSchemaMissing ? [] : (worldEntityVisualVariantsResponse.data as WorldEntityVisualVariantRow[] | null) ?? []
   const worldRelationships = worldGraphSchemaMissing ? [] : (worldRelationshipsResponse.data as WorldRelationshipRow[] | null) ?? []
   const worldViews = worldGraphSchemaMissing ? [] : (worldViewsResponse.data as WorldViewRow[] | null) ?? []
   const worldOperators = worldGraphSchemaMissing ? [] : (worldOperatorsResponse.data as WorldOperatorRow[] | null) ?? []
@@ -4430,6 +4497,7 @@ export async function loadProjectSnapshot(
       createdAt: entry.created_at,
       updatedAt: entry.updated_at,
     })),
+    worldEntityVisualVariants: worldEntityVisualVariants.map((entry) => mapWorldEntityVisualVariantRow(entry)),
     worldPromptSessions: worldPromptSessions.map((entry) => mapWorldPromptSessionRow(entry)),
     worldPromptTurns: worldPromptTurns.map((entry) => mapWorldPromptTurnRow(entry)),
     worldPromptMessages: worldPromptMessages.map((entry) => mapWorldPromptMessageRow(entry)),
@@ -4959,6 +5027,31 @@ function removeByKeys<T extends { key: string }>(entries: T[], keys: string[] | 
   return entries.filter((entry) => !keySet.has(entry.key))
 }
 
+function upsertVisualVariants(
+  current: ProjectSnapshot['worldEntityVisualVariants'],
+  incoming: ProjectSnapshot['worldEntityVisualVariants'],
+) {
+  let next = current
+  for (const entry of incoming) {
+    const existingIndex = next.findIndex((candidate) => (
+      candidate.entityKey === entry.entityKey && candidate.variantKey === entry.variantKey
+    ))
+    next = existingIndex === -1
+      ? [...next, entry]
+      : next.map((candidate, index) => index === existingIndex ? entry : candidate)
+  }
+  return next
+}
+
+function removeVisualVariantsByKeys(
+  current: ProjectSnapshot['worldEntityVisualVariants'],
+  keys: string[] | undefined,
+) {
+  if (!keys || keys.length === 0) return current
+  const keySet = new Set(keys)
+  return current.filter((entry) => !keySet.has(`${entry.entityKey}:${entry.variantKey}`) && !keySet.has(entry.variantKey))
+}
+
 function removeByIds<T extends { id: string }>(entries: T[], ids: string[] | undefined) {
   if (!ids || ids.length === 0) return entries
   const idSet = new Set(ids)
@@ -5131,6 +5224,9 @@ export function applyDraftDeltaToSnapshot(snapshot: ProjectSnapshot, delta: Draf
   let nextWorldEntities = removeByKeys(snapshot.worldEntities, deleted.world_entities)
   nextWorldEntities = upsertEntriesByKey(nextWorldEntities, ((rows.world_entities ?? []) as WorldEntityRow[]).map((row) => mapWorldEntityRow(row)))
 
+  let nextWorldEntityVisualVariants = removeVisualVariantsByKeys(snapshot.worldEntityVisualVariants ?? [], deleted.world_entity_visual_variants)
+  nextWorldEntityVisualVariants = upsertVisualVariants(nextWorldEntityVisualVariants, ((rows.world_entity_visual_variants ?? []) as WorldEntityVisualVariantRow[]).map((row) => mapWorldEntityVisualVariantRow(row)))
+
   let nextWorldRelationships = removeByKeys(snapshot.worldRelationships, deleted.world_relationships)
   nextWorldRelationships = upsertEntriesByKey(nextWorldRelationships, ((rows.world_relationships ?? []) as WorldRelationshipRow[]).map((row) => (
     mapWorldRelationshipRow(row, nextWorldEntities)
@@ -5243,6 +5339,7 @@ export function applyDraftDeltaToSnapshot(snapshot: ProjectSnapshot, delta: Draf
     definitions: nextDefinitions,
     assets: nextAssets,
     worldEntities: nextWorldEntities,
+    worldEntityVisualVariants: nextWorldEntityVisualVariants,
     worldRelationships: nextWorldRelationships,
     worldViews: nextWorldViews,
     worldOperators: nextWorldOperators,
@@ -8010,6 +8107,30 @@ export async function refineWorldEntityVisualProfile(
     ...parsed,
     entity: worldEntitySchema.parse(parsed.entity),
   }
+}
+
+export async function createEntityReferenceVariant(
+  snapshot: ProjectSnapshot,
+  request: Omit<EntityReferenceVariantCreateRequest, 'projectId' | 'draftId'>,
+): Promise<EntityReferenceVariantCreateResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before creating entity reference variations.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sign in and load a live GraphCore draft before creating entity reference variations.')
+  }
+  const payload = entityReferenceVariantCreateRequestSchema.parse({
+    ...request,
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'create-entity-reference-variant',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  return entityReferenceVariantCreateResponseSchema.parse(response.data)
 }
 
 function mapVisualGenerationJobRow(row: Record<string, unknown>) {

@@ -474,6 +474,35 @@ function mergeResourcesById<T extends { id: string }>(current: T[], incoming: T[
   return merged
 }
 
+function stableVisualGenerationJobKey(job: VisualGenerationJob) {
+  try {
+    return JSON.stringify(job)
+  } catch {
+    return [job.id, job.status, job.updatedAt, job.errorMessage ?? ''].join('\u001f')
+  }
+}
+
+function mergeVisualGenerationJobsById(current: VisualGenerationJob[], incoming: VisualGenerationJob[]) {
+  if (incoming.length === 0) return current
+  let changed = false
+  const incomingMap = new Map(incoming.map((entry) => [entry.id, entry]))
+  const merged = current.map((entry) => {
+    const next = incomingMap.get(entry.id)
+    if (!next) return entry
+    if (stableVisualGenerationJobKey(entry) === stableVisualGenerationJobKey(next)) return entry
+    changed = true
+    return next
+  })
+  const seen = new Set(current.map((entry) => entry.id))
+  for (const entry of incoming) {
+    if (!seen.has(entry.id)) {
+      merged.unshift(entry)
+      changed = true
+    }
+  }
+  return changed ? merged : current
+}
+
 function mergeResourcesByKey<T extends { key: string }>(current: T[], incoming: T[]) {
   if (incoming.length === 0) return current
   const incomingMap = new Map(incoming.map((entry) => [entry.key, entry]))
@@ -487,12 +516,35 @@ function mergeResourcesByKey<T extends { key: string }>(current: T[], incoming: 
   return merged
 }
 
+function upsertLocalEntityReferenceVariant(
+  current: ProjectSnapshot['worldEntityVisualVariants'],
+  variant: ProjectSnapshot['worldEntityVisualVariants'][number],
+) {
+  const existingIndex = current.findIndex((entry) => (
+    entry.entityKey === variant.entityKey && entry.variantKey === variant.variantKey
+  ))
+  if (existingIndex === -1) return [variant, ...current]
+  return current.map((entry, index) => index === existingIndex ? variant : entry)
+}
+
+function mergeLocalEntityReferenceVariants(
+  current: ProjectSnapshot['worldEntityVisualVariants'],
+  incoming: ProjectSnapshot['worldEntityVisualVariants'],
+) {
+  let next = current
+  for (const variant of incoming) {
+    next = upsertLocalEntityReferenceVariant(next, variant)
+  }
+  return next
+}
+
 function mergePersistedWorldGraphSnapshot(current: ProjectSnapshot, incoming: ProjectSnapshot) {
   return normalizeSnapshot({
     ...current,
     definitions: mergeResourcesByKey(current.definitions, incoming.definitions),
     worldEntities: mergeResourcesByKey(current.worldEntities, incoming.worldEntities),
     worldRelationships: mergeResourcesByKey(current.worldRelationships, incoming.worldRelationships),
+    worldEntityVisualVariants: mergeResourcesByKey(current.worldEntityVisualVariants, incoming.worldEntityVisualVariants),
     worldViews: mergeResourcesByKey(current.worldViews, incoming.worldViews),
     worldOperators: mergeResourcesByKey(current.worldOperators, incoming.worldOperators),
     worldResults: mergeResourcesByKey(current.worldResults, incoming.worldResults),
@@ -1502,6 +1554,7 @@ export default function App() {
   const surfaceHydrationLatestRequestIdsRef = useRef(new Map<string, number>())
   const surfaceHydrationInFlightRef = useRef(new Map<string, Promise<unknown>>())
   const visualGenerationStatusInFlightRef = useRef(new Map<string, Promise<VisualGenerationStatusResponse>>())
+  const locallyAppliedTerminalVisualJobRevisionsRef = useRef(new Set<string>())
   const surfaceHydrationLoadedKeysRef = useRef(new Set<string>())
   const backendHealthBackoffRef = useRef(new Map<string, { failureCount: number; retryAfter: number; lastError: string }>())
   const draftMetadataLoadInFlightRef = useRef(new Map<string, Promise<Record<string, unknown>>>())
@@ -2181,6 +2234,7 @@ export default function App() {
 
   useEffect(() => {
     setVisualGenerationJobs([])
+    locallyAppliedTerminalVisualJobRevisionsRef.current.clear()
   }, [snapshot?.draft.id])
 
   useEffect(() => {
@@ -2190,7 +2244,7 @@ export default function App() {
     workspaceService.listActiveVisualGenerationJobs(snapshot, activeVisualJobKinds)
       .then((jobs) => {
         if (cancelled) return
-        setVisualGenerationJobs((current) => mergeResourcesById(current, jobs))
+        setVisualGenerationJobs((current) => mergeVisualGenerationJobsById(current, jobs))
       })
       .catch((error) => {
         console.warn('Failed to load active visual generation jobs.', error)
@@ -2211,7 +2265,7 @@ export default function App() {
       try {
         const jobs = await workspaceService.listActiveVisualGenerationJobs(current, activeVisualJobKinds)
         if (cancelled) return
-        setVisualGenerationJobs((existingJobs) => mergeResourcesById(existingJobs, jobs))
+        setVisualGenerationJobs((existingJobs) => mergeVisualGenerationJobsById(existingJobs, jobs))
       } catch (error) {
         if (!cancelled) console.warn('Failed to poll active initial-seed visual generation jobs.', error)
       }
@@ -2473,7 +2527,7 @@ export default function App() {
         const current = snapshotRef.current
         if (!current) return
         if (current.draft.id !== job.draftId) return
-        setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [job]))
+        setVisualGenerationJobs((jobs) => mergeVisualGenerationJobsById(jobs, [job]))
         if (isTerminalVisualGenerationJobStatus(job.status)) {
           void (async () => {
             const appliedLocally = await applyCompletedVisualGenerationJobLocally(job)
@@ -3045,6 +3099,18 @@ export default function App() {
     setSnapshot(normalizedSnapshot)
     setHasLocalSnapshotChanges(false)
     setBundle(compileBundle(normalizedSnapshot))
+  }
+
+  function commitPersistedSnapshotUpdate(mutator: (current: ProjectSnapshot) => ProjectSnapshot) {
+    setSnapshot((current) => {
+      const base = current ?? snapshotRef.current
+      if (!base) return current
+      const next = normalizeSnapshot(mutator(base))
+      snapshotRef.current = next
+      setHasLocalSnapshotChanges(false)
+      setBundle(compileBundle(next))
+      return next
+    })
   }
 
   function setSurfaceHydrationState(
@@ -3957,6 +4023,26 @@ export default function App() {
     return result
   }
 
+  async function createEntityReferenceVariant(input: Parameters<typeof workspaceService.createEntityReferenceVariant>[1]) {
+    if (!snapshot) throw new Error('Load a project before creating entity reference variations.')
+    const syncedSnapshot = loadedState?.source === 'supabase'
+      ? await syncWorldGraphBackfillIfNeeded(snapshot)
+      : snapshot
+    const result = await workspaceService.createEntityReferenceVariant(syncedSnapshot, input)
+    setVisualGenerationJobs((jobs) => mergeVisualGenerationJobsById(jobs, [result.job]))
+    commitPersistedSnapshotUpdate((currentSnapshot) => {
+      const knownVariants = mergeLocalEntityReferenceVariants(
+        syncedSnapshot.worldEntityVisualVariants ?? [],
+        currentSnapshot.worldEntityVisualVariants ?? [],
+      )
+      return {
+        ...currentSnapshot,
+        worldEntityVisualVariants: mergeLocalEntityReferenceVariants(knownVariants, [result.variant]),
+      }
+    })
+    return result
+  }
+
   async function deleteWorldEntity(entityKey: string) {
     if (!snapshot) return
     if (loadedState?.source === 'supabase') {
@@ -4035,6 +4121,7 @@ export default function App() {
             metadata: metadataWithoutWorldWiki,
           },
           worldEntities: [],
+          worldEntityVisualVariants: [],
           worldRelationships: [],
           worldViews: [],
           worldOperators: [],
@@ -4066,6 +4153,7 @@ export default function App() {
               && generatedBy !== 'brand_atlas'
               && !storagePath.startsWith('generated/wiki-concept-images/')
               && !storagePath.startsWith('generated/entity-reference-sheets/')
+              && !storagePath.startsWith('generated/entity-reference-variants/')
               && !storagePath.startsWith('generated/world-icons/')
               && !storagePath.startsWith('generated/wiki-brand-atlas/')
           }),
@@ -5044,6 +5132,12 @@ export default function App() {
     if (!current || current.project.id !== job.projectId || current.draft.id !== job.draftId) return false
     const entity = current.worldEntities.find((candidate) => candidate.key === entityKey)
     if (!entity) return false
+    const variantKey = trimOptionalString(job.targetKeys.variantKey)
+      || trimOptionalString(job.input.variantKey)
+      || trimOptionalString(job.metadata.variantKey)
+    const variantType = trimOptionalString(job.targetKeys.variantType)
+      || trimOptionalString(job.input.variantType)
+      || trimOptionalString(job.metadata.variantType)
 
     let completedAsset = current.assets.find((asset) => asset.key === assetKey) ?? null
     const outputStoragePath = trimOptionalString(outputAsset?.storagePath)
@@ -5108,6 +5202,59 @@ export default function App() {
         },
         llmHints: {},
       }
+    }
+
+    if (variantKey && variantKey !== 'default') {
+      const existingVariant = (current.worldEntityVisualVariants ?? []).find((variant) => (
+        variant.entityKey === entityKey && variant.variantKey === variantKey
+      )) ?? null
+      const nextVariantMetadataStoragePath = outputStoragePath || completedAsset?.storagePath || ''
+      const existingVariantMetadata = readMetadataRecord(existingVariant?.metadata)
+      const variantAlreadyApplied = existingVariant?.assetKey === assetKey
+        && existingVariant.visualJobId === job.id
+        && existingVariant.status === 'completed'
+        && trimOptionalString(existingVariantMetadata.storagePath) === nextVariantMetadataStoragePath
+        && (!completedAsset || current.assets.some((asset) => asset.key === completedAsset.key && asset.storagePath === completedAsset.storagePath))
+      if (variantAlreadyApplied) {
+        return true
+      }
+      const updatedVariant = {
+        id: existingVariant?.id ?? `visual-variant-${entityKey}-${variantKey}`,
+        key: existingVariant?.key ?? `${entityKey}:${variantKey}`,
+        projectId: current.project.id,
+        draftId: current.draft.id,
+        entityKey,
+        variantKey,
+        label: existingVariant?.label || trimOptionalString(job.metadata.variantLabel) || trimOptionalString(job.input.variantLabel) || variantKey,
+        summary: existingVariant?.summary || trimOptionalString(job.metadata.variantSummary) || trimOptionalString(job.input.variantSummary) || '',
+        variantType: existingVariant?.variantType || variantType || 'reference_variant',
+        sourceVariantKey: existingVariant?.sourceVariantKey || trimOptionalString(job.metadata.baseVariantKey) || trimOptionalString(job.input.baseVariantKey) || 'default',
+        assetKey,
+        visualJobId: job.id,
+        guidance: existingVariant?.guidance || trimOptionalString(job.metadata.regenerationGuidance) || trimOptionalString(job.input.regenerationGuidance) || '',
+        status: 'completed' as const,
+        metadata: {
+          ...(existingVariant?.metadata ?? {}),
+          assetKey,
+          visualJobId: job.id,
+          storagePath: nextVariantMetadataStoragePath,
+        },
+        createdAt: existingVariant?.createdAt ?? job.createdAt,
+        updatedAt: new Date().toISOString(),
+      }
+      const nextVariants = mergeResourcesById(
+        (current.worldEntityVisualVariants ?? []).filter((variant) => !(variant.entityKey === entityKey && variant.variantKey === variantKey)),
+        [updatedVariant],
+      )
+      const nextSnapshot = normalizeSnapshot({
+        ...current,
+        worldEntityVisualVariants: nextVariants,
+        assets: completedAsset
+          ? mergeResourcesByKey(current.assets, [completedAsset])
+          : current.assets.filter((asset) => asset.key !== assetKey || !isPendingGeneratedAsset(asset)),
+      })
+      commitPersistedSnapshot(nextSnapshot)
+      return true
     }
 
     const entityMetadata = readMetadataRecord(entity.metadata)
@@ -5226,8 +5373,16 @@ export default function App() {
   }
 
   async function applyCompletedVisualGenerationJobLocally(job: VisualGenerationJob) {
-    return await applyCompletedEntityReferenceSheetVisualJob(job)
+    const revisionKey = [job.id, job.status, job.updatedAt ?? ''].join('\u001f')
+    if (locallyAppliedTerminalVisualJobRevisionsRef.current.has(revisionKey)) {
+      return true
+    }
+    const applied = await applyCompletedEntityReferenceSheetVisualJob(job)
       || await applyCompletedWorldConceptVisualJob(job)
+    if (applied) {
+      locallyAppliedTerminalVisualJobRevisionsRef.current.add(revisionKey)
+    }
+    return applied
   }
 
   async function getVisualGenerationStatus(jobId: string) {
@@ -5247,7 +5402,7 @@ export default function App() {
           terminal: isTerminalVisualGenerationJobStatus(cachedJob.status),
         }
       }
-      setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [status.job]))
+      setVisualGenerationJobs((jobs) => mergeVisualGenerationJobsById(jobs, [status.job]))
       if (status.terminal) {
         await applyCompletedVisualGenerationJobLocally(status.job)
       }
@@ -5270,7 +5425,7 @@ export default function App() {
       throw new Error('Visual generation requires a live Supabase-backed draft.')
     }
     const result = await workspaceService.startVisualGenerationJob(snapshot, request)
-    setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [result.job]))
+    setVisualGenerationJobs((jobs) => mergeVisualGenerationJobsById(jobs, [result.job]))
     return result
   }
 
@@ -5342,7 +5497,7 @@ export default function App() {
         queuedBy: 'global_workspace',
       },
     })
-    setVisualGenerationJobs((jobs) => mergeResourcesById(jobs, [result.job]))
+    setVisualGenerationJobs((jobs) => mergeVisualGenerationJobsById(jobs, [result.job]))
     const pendingAsset: ProjectSnapshot['assets'][number] = {
       id: createLocalEntityId('asset-world-concept'),
       projectId: current.project.id,
@@ -7923,6 +8078,7 @@ export default function App() {
                 worldPromptGenerationJobs={snapshot.worldPromptGenerationJobs}
                 worldPromptGenerationJobSteps={snapshot.worldPromptGenerationJobSteps}
                 worldPromptSuggestions={snapshot.worldPromptSuggestions}
+                worldEntityVisualVariants={snapshot.worldEntityVisualVariants}
                 visualGenerationJobs={visualGenerationJobs}
                 outputRequests={snapshot.outputRequests}
                 outputWorkflowRuns={snapshot.outputWorkflowRuns}
@@ -7965,6 +8121,7 @@ export default function App() {
                 onGetVisualGenerationStatus={getVisualGenerationStatus}
                 onUploadEntityReferenceGuidanceImage={uploadEntityReferenceGuidanceImage}
                 onRefineWorldEntityVisualProfile={refineWorldEntityVisualProfile}
+                onCreateEntityReferenceVariant={createEntityReferenceVariant}
                 onStartAppCodeGeneration={startAppCodeGeneration}
                 onGetAppGenerationStatus={getAppGenerationStatus}
                 onCancelAppGenerationJob={cancelAppGenerationJob}
