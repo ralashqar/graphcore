@@ -2144,12 +2144,14 @@ export function WorldGraphPage({
   ), [imageUrlByEntityKey, referenceSheetIconUrlByEntityKey, worldEntities])
   const outputLibraryModel = useMemo(() => buildOutputLibraryModel({
     assets,
+    imageUrlByEntityKey: wikiImageUrlByEntityKey,
     outputArtifacts,
     outputRequests,
     outputWorkflowNodes,
     outputWorkflowRuns,
+    referenceVariantIconUrlByVariantKey,
     worldEntities,
-  }), [assets, outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns, worldEntities])
+  }), [assets, outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceVariantIconUrlByVariantKey, wikiImageUrlByEntityKey, worldEntities])
   const outputLibraryController = useWorldOutputLibraryController({
     canRunOutputs,
     model: outputLibraryModel,

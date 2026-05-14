@@ -112,38 +112,86 @@ function OutputRequestThumb({ row }: { row: OutputLibraryRequestRow }) {
   const artifact = row.primaryArtifact
   const thumbnailUrl = artifact?.thumbnailUrl
   return (
-    <span className={`world-output-row-thumb is-${row.groupKey}`} aria-hidden="true">
-      {thumbnailUrl && artifact?.type === 'images' ? <img src={thumbnailUrl} alt="" loading="lazy" /> : null}
-      {thumbnailUrl && artifact?.type === 'video' ? <video src={thumbnailUrl} muted playsInline preload="metadata" /> : null}
-      {!thumbnailUrl || (artifact?.type !== 'images' && artifact?.type !== 'video')
-        ? <EntityIcon id={outputRequestFallbackIcon(row)} />
-        : null}
-      <span className={`world-output-status-dot is-${row.groupKey}`} />
+    <span className="world-output-row-thumb-stack">
+      <span className={`world-output-row-thumb is-${row.groupKey}`} aria-hidden="true">
+        {thumbnailUrl && artifact?.type === 'images' ? <img src={thumbnailUrl} alt="" loading="lazy" /> : null}
+        {thumbnailUrl && artifact?.type === 'video' ? <video src={thumbnailUrl} muted playsInline preload="metadata" /> : null}
+        {!thumbnailUrl || (artifact?.type !== 'images' && artifact?.type !== 'video')
+          ? <EntityIcon id={outputRequestFallbackIcon(row)} />
+          : null}
+      </span>
+      <small className={`world-output-row-thumb-status is-${row.groupKey}`}>{row.statusLabel}</small>
     </span>
   )
 }
 
 function OutputRequestEntityRefs({ refs }: { refs: OutputLibraryEntityRef[] }) {
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const visibleRefs = refs.slice(0, 8)
-  if (visibleRefs.length === 0) {
-    return (
-      <div className="world-output-row-refs is-empty" aria-label="Entity references">
-        <span>No entity refs</span>
-      </div>
-    )
-  }
+  if (visibleRefs.length === 0) return null
   return (
-    <div className="world-output-row-refs" aria-label="Entity references">
-      {visibleRefs.map((ref) => (
-        <span className="world-output-row-ref" key={ref.key} title={`${ref.label}${ref.role ? ` · ${ref.role}` : ''}`}>
-          <span className="world-output-row-ref-icon" aria-hidden="true">
-            {ref.imageUrl ? <img src={ref.imageUrl} alt="" loading="lazy" /> : <EntityIcon id={ref.icon} />}
-          </span>
-          <small>{ref.label}</small>
-        </span>
-      ))}
-      {refs.length > visibleRefs.length ? <span className="world-output-row-ref is-more">+{refs.length - visibleRefs.length}</span> : null}
-    </div>
+    <>
+      <div className="world-output-row-refs" aria-label="Entity references">
+        {visibleRefs.map((ref) => {
+          const subtitle = [ref.variantLabel, ref.role].filter(Boolean).join(' · ')
+          return (
+            <button
+              aria-label={`Show references for ${ref.label}`}
+              className="world-output-row-ref"
+              key={`${ref.key}:${ref.variantKey ?? 'default'}:${ref.role}`}
+              onClick={() => setDetailsOpen(true)}
+              title={`${ref.label}${subtitle ? ` · ${subtitle}` : ''}`}
+              type="button"
+            >
+              <span className="world-output-row-ref-icon" aria-hidden="true">
+                {ref.imageUrl ? <img src={ref.imageUrl} alt="" loading="lazy" /> : <EntityIcon id={ref.icon} />}
+              </span>
+            </button>
+          )
+        })}
+        {refs.length > visibleRefs.length ? (
+          <button className="world-output-row-ref is-more" onClick={() => setDetailsOpen(true)} type="button">
+            +{refs.length - visibleRefs.length}
+          </button>
+        ) : null}
+      </div>
+      {detailsOpen ? (
+        <div className="world-output-ref-popover-backdrop" onClick={() => setDetailsOpen(false)}>
+          <div
+            aria-label="Output references"
+            aria-modal="true"
+            className="world-output-ref-popover"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header>
+              <div>
+                <span className="eyebrow">References</span>
+                <strong>{refs.length} selected</strong>
+              </div>
+              <button aria-label="Close references" onClick={() => setDetailsOpen(false)} type="button">×</button>
+            </header>
+            <div className="world-output-ref-popover-list">
+              {refs.map((ref) => {
+                const variantLabel = ref.variantLabel || (ref.variantKey ? ref.variantKey.replace(/[_-]+/g, ' ') : '')
+                return (
+                  <div className="world-output-ref-popover-row" key={`${ref.key}:${ref.variantKey ?? 'default'}:${ref.role}`}>
+                    <span className="world-output-row-ref-icon" aria-hidden="true">
+                      {ref.imageUrl ? <img src={ref.imageUrl} alt="" loading="lazy" /> : <EntityIcon id={ref.icon} />}
+                    </span>
+                    <span>
+                      <strong>{ref.label}</strong>
+                      {variantLabel ? <small>Variant: {variantLabel}</small> : <small>Variant: Default</small>}
+                      {ref.summary ? <p>{ref.summary}</p> : null}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   )
 }
 
@@ -197,11 +245,6 @@ function OutputRequestRow({
           <span className="eyebrow">{row.outputKindLabel}</span>
           <strong>{row.title}</strong>
           <OutputRequestEntityRefs refs={row.entityRefs} />
-          <div className="world-output-row-meta">
-            <span>{row.statusLabel}</span>
-            <span>{row.currentStepLabel}</span>
-            <span>{row.primaryArtifact ? row.primaryArtifact.name : 'No artifact yet'}</span>
-          </div>
         </div>
       </div>
       <div className="world-output-row-side">

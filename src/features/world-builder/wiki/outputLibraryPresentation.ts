@@ -19,6 +19,10 @@ export type OutputLibraryEntityRef = {
   key: string
   label: string
   role: string
+  summary: string
+  variantAssetKey: string | null
+  variantKey: string | null
+  variantLabel: string | null
   icon: EntityIconId
   imageUrl: string | null
 }
@@ -29,6 +33,7 @@ export type OutputLibraryArtifactCard = {
   name: string
   kind: OutputArtifact['kind']
   mimeType: string
+  metadata: Record<string, unknown>
   createdAt: string
   assetKey: string | null
   url: string | null
@@ -88,10 +93,12 @@ export type OutputLibraryModel = {
 
 type BuildOutputLibraryModelInput = {
   assets: readonly AssetDefinition[]
+  imageUrlByEntityKey?: ReadonlyMap<string, string | null>
   outputArtifacts: readonly OutputArtifact[]
   outputRequests: readonly OutputRequest[]
   outputWorkflowNodes: readonly OutputWorkflowNode[]
   outputWorkflowRuns: readonly OutputWorkflowRun[]
+  referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
   worldEntities: readonly WorldEntity[]
 }
 
@@ -230,22 +237,55 @@ function isCinematicOutputKind(kind: OutputRequestKind) {
   return kind.includes('cinematic') || kind === 'ugc_episode'
 }
 
-function collectRequestEntityCandidates(request: OutputRequest, run: OutputWorkflowRun | null) {
-  const candidates: Array<{ value: string; role: string }> = []
-  const push = (value: unknown, role = '') => {
+function collectRequestEntityCandidates(
+  request: OutputRequest,
+  run: OutputWorkflowRun | null,
+  artifacts: readonly Pick<OutputLibraryArtifactCard, 'metadata'>[] = [],
+) {
+  const candidates: Array<{
+    value: string
+    role: string
+    variantAssetKey: string | null
+    variantKey: string | null
+    variantLabel: string | null
+  }> = []
+  const push = (
+    value: unknown,
+    role = '',
+    variantKey: string | null = null,
+    variantLabel: string | null = null,
+    variantAssetKey: string | null = null,
+  ) => {
     const text = readTrimmedString(value)
-    if (text) candidates.push({ value: text, role })
+    if (text) candidates.push({ value: text, role, variantAssetKey, variantKey, variantLabel })
   }
   const pushRecordIdentity = (value: unknown, role = '') => {
     const record = readRecord(value)
-    push(record.refId, role)
-    push(record.id, role)
-    push(record.key, role)
-    push(record.entityKey, role)
-    push(record.entityRefId, role)
-    push(record.label, role)
-    push(record.name, role)
-    push(record.sourceName, role)
+    const rawVariantKey = readTrimmedString(record.selectedReferenceVariantKey)
+      || readTrimmedString(record.variantKey)
+      || readTrimmedString(record.referenceVariantKey)
+      || null
+    const variantKey = rawVariantKey && rawVariantKey !== 'default' ? rawVariantKey : null
+    const rawVariantLabel = readTrimmedString(record.selectedReferenceVariantLabel)
+      || readTrimmedString(record.variantLabel)
+      || readTrimmedString(record.referenceVariantLabel)
+      || (role === 'selectedReferenceVariants' ? readTrimmedString(record.label) : '')
+    const variantLabel = variantKey ? rawVariantLabel || variantKey.replace(/[_-]+/g, ' ') : null
+    const variantAssetKey = variantKey
+      ? readTrimmedString(record.selectedReferenceVariantAssetKey)
+        || readTrimmedString(record.variantAssetKey)
+        || readTrimmedString(record.primaryAssetKey)
+        || readTrimmedString(record.assetKey)
+        || null
+      : null
+    push(record.refId, role, variantKey, variantLabel, variantAssetKey)
+    push(record.id, role, variantKey, variantLabel, variantAssetKey)
+    push(record.key, role, variantKey, variantLabel, variantAssetKey)
+    push(record.entityKey, role, variantKey, variantLabel, variantAssetKey)
+    push(record.entityRefId, role, variantKey, variantLabel, variantAssetKey)
+    push(record.label, role, variantKey, variantLabel, variantAssetKey)
+    push(record.name, role, variantKey, variantLabel, variantAssetKey)
+    push(record.sourceName, role, variantKey, variantLabel, variantAssetKey)
   }
   const collectSceneState = (value: unknown) => {
     const record = readRecord(value)
@@ -272,12 +312,13 @@ function collectRequestEntityCandidates(request: OutputRequest, run: OutputWorkf
   }
   const collectAssetPack = (value: unknown) => {
     const record = readRecord(value)
-    for (const groupKey of ['entities', 'references', 'entityRefs', 'visualReferences', 'assets']) {
+    for (const groupKey of ['entities', 'references', 'entityRefs', 'visualReferences', 'selectedReferenceVariants', 'assets']) {
       for (const entry of readArray(record[groupKey])) pushRecordIdentity(entry, groupKey)
     }
   }
 
   for (const key of request.selectedEntityKeys) push(key, 'selected')
+  for (const artifact of artifacts) collectAssetPack(artifact.metadata)
   for (const step of run?.steps ?? []) {
     const outputs = readRecord(step.outputs)
     collectSceneState(outputs)
@@ -313,8 +354,11 @@ function resolveWorldEntityReference(value: string, lookup: Map<string, WorldEnt
 function buildEntityRefsForRequest(
   request: OutputRequest,
   run: OutputWorkflowRun | null,
+  artifacts: readonly OutputLibraryArtifactCard[],
   worldEntities: readonly WorldEntity[],
   assetByKey: Map<string, AssetDefinition>,
+  imageUrlByEntityKey?: ReadonlyMap<string, string | null>,
+  referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>,
 ): OutputLibraryEntityRef[] {
   const lookup = new Map<string, WorldEntity>()
   for (const entity of worldEntities) {
@@ -323,19 +367,35 @@ function buildEntityRefsForRequest(
   }
 
   const refs: OutputLibraryEntityRef[] = []
-  const seen = new Set<string>()
-  for (const candidate of collectRequestEntityCandidates(request, run)) {
+  const indexByEntityKey = new Map<string, number>()
+  for (const candidate of collectRequestEntityCandidates(request, run, artifacts)) {
     const entity = resolveWorldEntityReference(candidate.value, lookup, worldEntities)
-    if (!entity || entity.nodeType === 'sequence_unit' || seen.has(entity.key)) continue
-    seen.add(entity.key)
+    if (!entity || entity.nodeType === 'sequence_unit') continue
+    const existingIndex = indexByEntityKey.get(entity.key)
+    if (existingIndex !== undefined) {
+      if (!candidate.variantKey || refs[existingIndex]?.variantKey) continue
+    }
     const asset = entity.thumbnailAssetKey ? assetByKey.get(entity.thumbnailAssetKey) ?? null : null
-    refs.push({
+    const variantEntryKey = candidate.variantKey ? `${entity.key}:${candidate.variantKey}` : ''
+    const variantImageUrl = variantEntryKey ? referenceVariantIconUrlByVariantKey?.get(variantEntryKey) ?? null : null
+    const variantAsset = candidate.variantAssetKey ? assetByKey.get(candidate.variantAssetKey) ?? null : null
+    const ref: OutputLibraryEntityRef = {
       key: entity.key,
       label: entity.name || entity.key,
       role: candidate.role,
+      summary: entity.summary || entity.context || '',
+      variantAssetKey: candidate.variantAssetKey,
+      variantKey: candidate.variantKey,
+      variantLabel: candidate.variantLabel,
       icon: iconForWorldEntity(entity.nodeType),
-      imageUrl: resolveAssetSourceUrl(asset) || null,
-    })
+      imageUrl: variantImageUrl || resolveAssetSourceUrl(variantAsset) || imageUrlByEntityKey?.get(entity.key) || resolveAssetSourceUrl(asset) || null,
+    }
+    if (existingIndex !== undefined) {
+      refs[existingIndex] = ref
+    } else {
+      indexByEntityKey.set(entity.key, refs.length)
+      refs.push(ref)
+    }
     if (refs.length >= 12) break
   }
   return refs
@@ -373,6 +433,7 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
         name: artifact.name,
         kind: artifact.kind,
         mimeType,
+        metadata,
         createdAt: artifact.createdAt,
         assetKey: artifact.assetKey,
         url,
@@ -411,7 +472,15 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
       const groupKey = statusGroup(request, run, artifacts)
       const nodeCount = request.workflowId ? nodeCountByWorkflowId.get(request.workflowId) ?? 0 : 0
       const { progress, currentStepLabel } = buildProgress(run, nodeCount)
-      const entityRefs = buildEntityRefsForRequest(request, run, input.worldEntities, assetByKey)
+      const entityRefs = buildEntityRefsForRequest(
+        request,
+        run,
+        artifacts,
+        input.worldEntities,
+        assetByKey,
+        input.imageUrlByEntityKey,
+        input.referenceVariantIconUrlByVariantKey,
+      )
       return {
         id: request.id,
         title: request.title || request.prompt.slice(0, 80) || 'Untitled output',

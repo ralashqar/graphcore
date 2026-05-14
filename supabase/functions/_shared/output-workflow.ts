@@ -2806,6 +2806,12 @@ function referenceVariantStatus(variant: Record<string, unknown>) {
   return readText(variant.status).toLowerCase()
 }
 
+function referenceVariantHasUsableAsset(variant: Record<string, unknown>) {
+  if (!referenceVariantAssetKey(variant)) return false
+  const status = referenceVariantStatus(variant)
+  return !['failed', 'cancelled', 'deleted', 'queued', 'pending', 'running'].includes(status)
+}
+
 function referenceVariantCandidatePhrases(variant: Record<string, unknown>) {
   return [
     readText(variant.variantKey),
@@ -2861,7 +2867,7 @@ function selectReferenceVariantForPromptDetailed(variants: Record<string, unknow
     })
 
   const diagnostics: string[] = []
-  const completed = scored.find((entry) => referenceVariantAssetKey(entry.variant) && referenceVariantStatus(entry.variant) === 'completed')
+  const completed = scored.find((entry) => referenceVariantHasUsableAsset(entry.variant))
   if (completed) {
     return {
       selectedVariant: completed.variant,
@@ -9173,6 +9179,7 @@ async function executeNode(input: {
           `User request: ${prompt}`,
           visualStyle ? `World visual style: ${visualStyle}` : '',
           entityLines ? `Canonical subjects:\n${entityLines}` : '',
+          'When a selected visual variant is listed for a subject, treat that variant reference as authoritative for costume, gear, props, location subset, and shot setting. Do not blend it with the default reference or replace it with the default look.',
           'Use exact canonical visual details. Keep the prompt visual-only. Do not mention GraphCore, schemas, nodes, world graph, internal keys, or implementation details.',
           purpose === 'poster_prompt'
             ? `If visible typography is needed, use the exact title text "${title}" and keep all other text minimal.`

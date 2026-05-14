@@ -240,3 +240,153 @@ test('buildOutputLibraryModel exposes wiki row entity refs and cinematic actions
   assert.equal(model.rows[0]?.canOpenGraph, true)
   assert.equal(model.rows[0]?.canOpenTimeline, true)
 })
+
+test('buildOutputLibraryModel prefers cropped variant icons for selected reference variants', () => {
+  const model = buildOutputLibraryModel({
+    assets: [],
+    imageUrlByEntityKey: new Map([['suri', 'blob:default-suri']]),
+    referenceVariantIconUrlByVariantKey: new Map([['suri:samurai_outfit', 'blob:suri-samurai']]),
+    outputRequests: [request({
+      outputKind: 'poster_image',
+      selectedEntityKeys: ['suri'],
+    })],
+    outputWorkflowRuns: [run({
+      steps: [
+        step({
+          nodeKey: 'image_references',
+          status: 'completed',
+          outputs: {
+            assetPack: {
+              entities: [{
+                key: 'suri',
+                label: 'Suri',
+                selectedReferenceVariantKey: 'samurai_outfit',
+                selectedReferenceVariantLabel: 'Samurai outfit',
+              }],
+            },
+          },
+        }),
+      ],
+    })],
+    outputWorkflowNodes: [],
+    worldEntities: [{
+      key: 'suri',
+      name: 'Suri',
+      nodeType: 'actor',
+      thumbnailAssetKey: null,
+    }] as never,
+    outputArtifacts: [],
+  })
+
+  assert.equal(model.rows[0]?.entityRefs[0]?.label, 'Suri')
+  assert.equal(model.rows[0]?.entityRefs[0]?.variantKey, 'samurai_outfit')
+  assert.equal(model.rows[0]?.entityRefs[0]?.variantLabel, 'Samurai outfit')
+  assert.equal(model.rows[0]?.entityRefs[0]?.imageUrl, 'blob:suri-samurai')
+})
+
+test('buildOutputLibraryModel falls back to selected variant asset before default entity icon', () => {
+  const assets: AssetDefinition[] = [{
+    id: 'asset-suri-variant',
+    key: 'asset-suri-variant',
+    name: 'Suri military gear',
+    kind: 'image',
+    storagePath: '',
+    mimeType: 'image/webp',
+    metadata: { sourceUrl: 'https://cdn.example.com/suri-military.webp' },
+    llmHints: {},
+  }]
+  const model = buildOutputLibraryModel({
+    assets,
+    imageUrlByEntityKey: new Map([['suri', 'blob:default-suri']]),
+    referenceVariantIconUrlByVariantKey: new Map(),
+    outputRequests: [request({ outputKind: 'poster_image', selectedEntityKeys: ['suri'] })],
+    outputWorkflowRuns: [run({
+      steps: [
+        step({
+          nodeKey: 'image_generation',
+          status: 'completed',
+          outputs: {
+            selectedReferenceVariants: [{
+              entityKey: 'suri',
+              variantKey: 'military_gear',
+              label: 'Military gear',
+              assetKey: 'asset-suri-variant',
+            }],
+          },
+        }),
+      ],
+    })],
+    outputWorkflowNodes: [],
+    worldEntities: [{
+      key: 'suri',
+      name: 'Suri',
+      nodeType: 'actor',
+      summary: 'A brave rainforest scout with a careful eye for danger.',
+      thumbnailAssetKey: null,
+    }] as never,
+    outputArtifacts: [],
+  })
+
+  const ref = model.rows[0]?.entityRefs[0]
+  assert.equal(ref?.variantKey, 'military_gear')
+  assert.equal(ref?.variantLabel, 'Military gear')
+  assert.equal(ref?.summary, 'A brave rainforest scout with a careful eye for danger.')
+  assert.equal(ref?.imageUrl, 'https://cdn.example.com/suri-military.webp')
+})
+
+test('buildOutputLibraryModel reads selected variants from completed artifact metadata when steps are compact', () => {
+  const assets: AssetDefinition[] = [{
+    id: 'asset-suri-samurai',
+    key: 'asset-suri-samurai',
+    name: 'Suri samurai outfit',
+    kind: 'image',
+    storagePath: '',
+    mimeType: 'image/webp',
+    metadata: { sourceUrl: 'https://cdn.example.com/suri-samurai.webp' },
+    llmHints: {},
+  }]
+  const model = buildOutputLibraryModel({
+    assets,
+    imageUrlByEntityKey: new Map([['suri', 'blob:default-suri']]),
+    referenceVariantIconUrlByVariantKey: new Map(),
+    outputRequests: [request({ outputKind: 'poster_image', selectedEntityKeys: ['suri'] })],
+    outputWorkflowRuns: [run({
+      steps: [
+        step({
+          nodeKey: 'generated_image',
+          status: 'completed',
+          outputs: {},
+        }),
+      ],
+    })],
+    outputWorkflowNodes: [],
+    worldEntities: [{
+      key: 'suri',
+      name: 'Suri',
+      nodeType: 'actor',
+      summary: 'A brave rainforest scout.',
+      thumbnailAssetKey: null,
+    }] as never,
+    outputArtifacts: [
+      artifact({
+        id: 'poster',
+        key: 'poster',
+        kind: 'image',
+        mimeType: 'image/webp',
+        metadata: {
+          selectedReferenceVariants: [{
+            entityKey: 'suri',
+            variantKey: 'samurai_outfit',
+            label: 'Samurai outfit',
+            assetKey: 'asset-suri-samurai',
+          }],
+        },
+      }),
+    ],
+  })
+
+  const ref = model.rows[0]?.entityRefs[0]
+  assert.equal(ref?.variantKey, 'samurai_outfit')
+  assert.equal(ref?.variantLabel, 'Samurai outfit')
+  assert.equal(ref?.imageUrl, 'https://cdn.example.com/suri-samurai.webp')
+})

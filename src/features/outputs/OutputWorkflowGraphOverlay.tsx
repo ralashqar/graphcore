@@ -828,6 +828,23 @@ export function OutputWorkflowGraphOverlay({
     }
     return counts
   }, [activeRun?.steps])
+  const runProgress = useMemo(() => {
+    const steps = activeRun?.steps ?? []
+    const total = steps.length > 0 ? steps.length : nodes.length
+    const completed = steps.filter((step) => {
+      const status = outputWorkflowStepStatusKey(step)
+      return status === 'completed' || status === 'skipped'
+    }).length
+    const running = steps.filter((step) => outputWorkflowStepStatusKey(step) === 'running').length
+    const failed = steps.filter((step) => outputWorkflowStepStatusKey(step) === 'failed').length
+    return {
+      completed,
+      failed,
+      percent: total > 0 ? Math.round((completed / total) * 100) : 0,
+      running,
+      total,
+    }
+  }, [activeRun?.steps, nodes.length])
 
   return (
     <div className="outputs-graph-overlay" role="dialog" aria-modal="true" aria-label="Output workflow graph">
@@ -838,8 +855,21 @@ export function OutputWorkflowGraphOverlay({
         </div>
         <div className="outputs-graph-run-status">
           {activeRun ? <span>{formatStatus(activeRun.status)}</span> : <span>Not run</span>}
-          {executionPlan.levels.length ? <small>{executionPlan.levels.length} levels</small> : null}
-          {executionPlan.diagnostics.length > 0 ? <small>{executionPlan.diagnostics.length} diagnostics</small> : null}
+          <span className="outputs-graph-progress-label">
+            <b>{runProgress.completed}/{runProgress.total || 0}</b> steps complete
+            {runProgress.running > 0 ? <small>{runProgress.running} running</small> : null}
+            {runProgress.failed > 0 ? <small>{runProgress.failed} failed</small> : null}
+          </span>
+          <span
+            aria-label={`${runProgress.completed} of ${runProgress.total || 0} workflow steps complete`}
+            className="outputs-graph-progress"
+          >
+            <i style={{ ['--progress' as string]: `${runProgress.percent}%` }} />
+          </span>
+          <small>
+            {executionPlan.levels.length ? `${executionPlan.levels.length} levels` : 'No levels'}
+            {executionPlan.diagnostics.length > 0 ? ` · ${executionPlan.diagnostics.length} diagnostics` : ''}
+          </small>
         </div>
         <div className="outputs-graph-toolbar-actions">
           <button disabled={refreshingGraph} onClick={onRefreshGraph} type="button">

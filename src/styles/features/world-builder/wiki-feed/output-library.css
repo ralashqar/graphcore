@@ -81,7 +81,6 @@
 .world-output-empty p,
 .world-output-artifact-copy small,
 .world-output-row-main p,
-.world-output-row-meta,
 .world-output-submit-row span {
   color: rgba(203, 213, 225, 0.72);
 }
@@ -332,11 +331,18 @@
   line-height: 1.45;
 }
 
+.world-output-row-thumb-stack {
+  width: 78px;
+  flex: 0 0 78px;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+}
+
 .world-output-row-thumb {
   position: relative;
-  width: 64px;
-  height: 64px;
-  flex: 0 0 64px;
+  width: 78px;
+  height: 78px;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -362,44 +368,72 @@
   height: 27px;
 }
 
-.world-output-row-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-height: 28px;
-  align-items: center;
+.world-output-row-thumb-status {
+  width: 100%;
+  overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 0.67rem;
+  font-weight: 950;
+  line-height: 1;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
 }
 
-.world-output-row-refs.is-empty span {
-  color: rgba(148, 163, 184, 0.72);
-  font-size: 0.76rem;
-  font-weight: 800;
+.world-output-row-thumb-status.is-ready {
+  color: rgba(187, 247, 208, 0.98);
+  background: rgba(34, 197, 94, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.2);
+}
+
+.world-output-row-thumb-status.is-needs_attention {
+  color: rgba(254, 202, 202, 0.98);
+  background: rgba(239, 68, 68, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.22);
+}
+
+.world-output-row-thumb-status.is-generating {
+  color: rgba(153, 246, 228, 0.98);
+  background: rgba(20, 184, 166, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.2);
+}
+
+.world-output-row-refs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-height: 40px;
+  align-items: center;
 }
 
 .world-output-row-ref {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  max-width: 174px;
-  min-height: 28px;
-  padding: 3px 8px 3px 4px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  padding: 0;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 999px;
   background: rgba(2, 6, 23, 0.34);
   color: rgba(226, 232, 240, 0.86);
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
-.world-output-row-ref small {
-  overflow: hidden;
-  color: inherit;
-  font-size: 0.72rem;
-  font-weight: 850;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.world-output-row-ref:hover {
+  z-index: 2;
+  transform: translateY(-1px);
+  border-color: rgba(45, 212, 191, 0.34);
+  background: rgba(20, 184, 166, 0.13);
 }
 
 .world-output-row-ref.is-more {
-  padding: 0 9px;
+  position: relative;
+  z-index: 3;
   color: rgba(148, 163, 184, 0.9);
   font-size: 0.72rem;
   font-weight: 900;
@@ -407,9 +441,9 @@
 
 .world-output-row-ref-icon {
   display: grid;
-  width: 22px;
-  height: 22px;
-  min-width: 22px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
   place-items: center;
   overflow: hidden;
   border-radius: 50%;
@@ -433,17 +467,115 @@
   color: rgba(226, 232, 240, 0.86);
 }
 
-.world-output-row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  font-size: 0.76rem;
+.world-output-ref-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 170;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(2, 6, 23, 0.58);
+  backdrop-filter: blur(8px);
 }
 
-.world-output-row-meta span {
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.08);
+.world-output-ref-popover {
+  width: min(440px, calc(100vw - 36px));
+  max-height: min(620px, calc(100vh - 44px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.97), rgba(8, 13, 22, 0.99)),
+    #0b1119;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.42);
+}
+
+.world-output-ref-popover header,
+.world-output-ref-popover-row {
+  display: flex;
+  align-items: center;
+}
+
+.world-output-ref-popover header {
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.world-output-ref-popover header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.world-output-ref-popover header strong,
+.world-output-ref-popover-row strong {
+  color: rgba(248, 250, 252, 0.96);
+}
+
+.world-output-ref-popover header button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.76);
+  color: rgba(226, 232, 240, 0.9);
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.world-output-ref-popover-list {
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.world-output-ref-popover-row {
+  gap: 10px;
+  min-width: 0;
+  min-height: 74px;
+  padding: 8px 10px 8px 8px;
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.32);
+}
+
+.world-output-ref-popover-row .world-output-row-ref-icon {
+  width: 58px;
+  height: 58px;
+  min-width: 58px;
+  align-self: stretch;
+  border-radius: 12px;
+}
+
+.world-output-ref-popover-row > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.world-output-ref-popover-row small {
+  overflow: hidden;
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-output-ref-popover-row p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: rgba(203, 213, 225, 0.74);
+  font-size: 0.76rem;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .world-output-row-side {
@@ -452,36 +584,6 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 10px;
-}
-
-.world-output-status-dot {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 auto;
-  margin-top: 5px;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.7);
-}
-
-.world-output-row-thumb .world-output-status-dot {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  margin: 0;
-  border: 2px solid rgba(8, 13, 25, 0.92);
-  box-shadow: 0 0 12px currentColor;
-}
-
-.world-output-status-dot.is-generating {
-  background: #2dd4bf;
-}
-
-.world-output-status-dot.is-needs_attention {
-  background: #f87171;
-}
-
-.world-output-status-dot.is-ready {
-  background: #86efac;
 }
 
 .world-output-progress {

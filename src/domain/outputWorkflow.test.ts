@@ -1811,6 +1811,8 @@ test('prompt-first image workflows select one entity variant reference per subje
   assert.match(workerSource, /selectedReferenceVariantKeys/)
   assert.match(workerSource, /selectedReferenceAssetKeys/)
   assert.match(workerSource, /referenceDiagnostics/)
+  assert.match(workerSource, /function referenceVariantHasUsableAsset/)
+  assert.match(workerSource, /selected visual variant is listed/)
   assert.match(startOutputRequestSource, /world_entity_visual_variants/)
   assert.match(startOutputRequestSource, /referenceVariants: variants/)
   assert.match(startOutputRequestSource, /select the parent entity that owns that referenceVariants entry/)
