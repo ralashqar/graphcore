@@ -1847,9 +1847,36 @@ function looksLikeQuestionPrompt(prompt: string) {
   return /\?/.test(prompt) || /^(what|why|how|should|could|would|is|are|do|does|can)\b/i.test(prompt.trim())
 }
 
+function promptAsksWhetherToMutate(prompt: string) {
+  return /^(should|could|would)\s+(we|i)\b/i.test(prompt.trim())
+    || /\bshould\s+we\b/i.test(prompt)
+}
+
+function promptHasStructuralMutationLanguage(prompt: string) {
+  return /\b(insert|reorder|move|split|merge|renumber|rewire|restructure)\b/i.test(prompt)
+    || /\b(add|create|introduce|insert|place|put)\b[\s\S]{0,90}\b(between|before|after)\b/i.test(prompt)
+    || /\b(between|before|after)\b[\s\S]{0,90}\b(chapters?|episodes?|acts?|sequences?|beats?|scenes?|missions?|quests?)\b/i.test(prompt)
+    || /\b(chapters?|episodes?|acts?|sequences?|beats?|scenes?|missions?|quests?)\b[\s\S]{0,90}\b(between|before|after|reorder|renumber|insert)\b/i.test(prompt)
+}
+
+function promptHasAppliedStructuralMutationLanguage(prompt: string) {
+  return promptHasStructuralMutationLanguage(prompt) && !promptAsksWhetherToMutate(prompt)
+}
+
+function promptHasRetconMutationLanguage(prompt: string) {
+  return /\b(retcon|replace|remove|delete|archive|no longer|instead of|change .* to|rewrite canon)\b/i.test(prompt)
+}
+
+function promptHasAppliedRetconMutationLanguage(prompt: string) {
+  return promptHasRetconMutationLanguage(prompt) && !promptAsksWhetherToMutate(prompt)
+}
+
 function detectPromptIntent(prompt: string, snapshot: WorldPromptSnapshot) {
   const trimmed = prompt.trim()
   if (!trimmed) return 'graph_build' satisfies PromptIntentHint
+  if (promptHasAppliedStructuralMutationLanguage(trimmed) || promptHasAppliedRetconMutationLanguage(trimmed)) {
+    return 'graph_build' satisfies PromptIntentHint
+  }
   if (looksLikeGraphDiagnosisPrompt(trimmed)) return 'graph_diagnosis' satisfies PromptIntentHint
   if (looksLikeQuestionPrompt(trimmed)) return 'advisory_question' satisfies PromptIntentHint
   const hasExistingEntityMention = snapshot.worldEntities.some((entity) => {
@@ -1917,7 +1944,7 @@ function advisoryPromptAsksForSuggestions(prompt: string) {
 }
 
 function promptExplicitlyRequestsMutation(prompt: string) {
-  return /\b(add|create|make|introduce|expand|grow|connect|link|update|revise|change|mutate|apply|put it in the graph|add it now|implement)\b/i.test(prompt)
+  return /\b(add|create|make|introduce|insert|reorder|move|split|merge|renumber|rewire|restructure|expand|grow|connect|link|update|revise|change|mutate|apply|put it in the graph|add it now|implement)\b/i.test(prompt)
 }
 
 function promptExplicitlyRequestsNoMutation(prompt: string) {
@@ -2077,6 +2104,9 @@ function resolvePlannerMode(input: {
 }) {
   const intent = detectPromptIntent(input.prompt, input.snapshot)
   if (input.selectedSuggestionId && !promptExplicitlyRequestsNoMutation(input.prompt)) {
+    return 'direct_build' satisfies PlannerMode
+  }
+  if (promptHasAppliedStructuralMutationLanguage(input.prompt) || promptHasAppliedRetconMutationLanguage(input.prompt)) {
     return 'direct_build' satisfies PlannerMode
   }
   if (intent === 'advisory_question' || intent === 'graph_diagnosis') {
@@ -4192,6 +4222,123 @@ function shouldAllowRichContext(mode: PlannerMode, prompt: string) {
   return mode !== 'direct_build' || looksLikeContextHeavyPrompt(prompt)
 }
 
+const PERSISTED_ENTITY_SUMMARY_MAX_LENGTH = 240
+const PERSISTED_SEQUENCE_SUMMARY_MAX_LENGTH = 420
+const PERSISTED_ENTITY_CONTEXT_MAX_LENGTH = 420
+
+function normalizePersistedTextAtBoundary(
+  value: unknown,
+  maxLength: number,
+  options: { preferSentence?: boolean; ellipsis?: boolean } = {},
+) {
+  const compact = typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? String(value).replace(/\s+/g, ' ').trim()
+    : ''
+  if (!compact) return ''
+  if (compact.length <= maxLength) return compact
+
+  const ellipsis = options.ellipsis === false ? '' : '...'
+  if (options.preferSentence) {
+    const sentences = compact.match(/[^.!?]+[.!?]+(?=\s|$)/g) ?? []
+    const complete = sentences.reduce((current, sentence) => {
+      const candidate = `${current} ${sentence.trim()}`.trim()
+      return candidate.length <= maxLength ? candidate : current
+    }, '')
+    if (complete) return complete
+  }
+
+  const hardLimit = Math.max(1, maxLength - ellipsis.length)
+  const clipped = compact.slice(0, hardLimit).trimEnd()
+  const boundaryCandidates = [' ', ',', ';', ':'].map((token) => clipped.lastIndexOf(token))
+  const boundary = Math.max(...boundaryCandidates)
+  const safeCut = boundary >= Math.floor(hardLimit * 0.55)
+    ? clipped.slice(0, boundary)
+    : clipped
+  const clean = safeCut.replace(/[\s,;:.!?-]+$/g, '').trim()
+  return clean ? `${clean}${ellipsis}` : compact.slice(0, maxLength).trim()
+}
+
+function readSequenceDataFromEntityLike(entity: Record<string, unknown>) {
+  const customProperties = isRecord(entity.customProperties)
+    ? entity.customProperties
+    : isRecord(entity.custom_properties)
+      ? entity.custom_properties
+      : {}
+  const sequence = isRecord(customProperties.sequence)
+    ? customProperties.sequence
+    : isRecord(entity.sequence)
+      ? entity.sequence
+      : {}
+  return sequence
+}
+
+function isSequenceEntityLike(entity: Record<string, unknown>) {
+  return entity.nodeType === 'sequence_unit'
+    || entity.node_type === 'sequence_unit'
+    || isRecord(readSequenceDataFromEntityLike(entity))
+      && Object.keys(readSequenceDataFromEntityLike(entity)).length > 0
+}
+
+function looksLikePersistedTextFragment(value: unknown) {
+  const compact = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+  if (!compact) return false
+  if (/(?:<truncated>|\.\.\.|â€¦|…)$/.test(compact)) return true
+  if (compact.length < 180) return false
+  if (/[.!?]["')\]]?$/.test(compact)) return false
+  if (compact.length === PERSISTED_ENTITY_SUMMARY_MAX_LENGTH || compact.length === PERSISTED_SEQUENCE_SUMMARY_MAX_LENGTH) return true
+  return /\b[a-zA-Z]{1,4}$/.test(compact)
+}
+
+function sequenceSummaryFallbackFromEntity(entity: Record<string, unknown>) {
+  const sequence = readSequenceDataFromEntityLike(entity)
+  const summary = looksLikePersistedTextFragment(entity.summary) ? '' : asCompactString(entity.summary)
+  return asCompactString(sequence.synopsis)
+    || asCompactString(sequence.outcome)
+    || asCompactString(sequence.dramaticQuestion)
+    || asCompactString(sequence.dramatic_question)
+    || summary
+    || asCompactString(entity.context)
+    || asCompactString(entity.name)
+}
+
+function normalizePersistedEntitySummary(entity: Record<string, unknown>) {
+  const sequenceEntity = isSequenceEntityLike(entity)
+  const candidate = sequenceEntity && (!asCompactString(entity.summary) || looksLikePersistedTextFragment(entity.summary))
+    ? sequenceSummaryFallbackFromEntity(entity)
+    : asCompactString(entity.summary)
+  return normalizePersistedTextAtBoundary(
+    candidate,
+    sequenceEntity ? PERSISTED_SEQUENCE_SUMMARY_MAX_LENGTH : PERSISTED_ENTITY_SUMMARY_MAX_LENGTH,
+    { preferSentence: sequenceEntity },
+  )
+}
+
+function buildSequenceContextFallback(entity: Record<string, unknown>) {
+  const sequence = readSequenceDataFromEntityLike(entity)
+  const unitKind = asCompactString(sequence.unitKind ?? sequence.unit_kind) || 'sequence unit'
+  const ordinal = typeof sequence.ordinal === 'number' && Number.isFinite(sequence.ordinal)
+    ? Math.floor(sequence.ordinal)
+    : null
+  const sequenceKey = asCompactString(sequence.sequenceKey ?? sequence.sequence_key) || 'main sequence'
+  const storyFunction = asCompactString(sequence.storyFunction ?? sequence.story_function)
+  const outcome = asCompactString(sequence.outcome)
+  const synopsis = asCompactString(sequence.synopsis)
+  const label = `${unitKind.replace(/_/g, ' ')}${ordinal ? ` ${ordinal}` : ''}`
+  const role = storyFunction ? ` serving the ${storyFunction.replace(/_/g, ' ')} function` : ''
+  const detail = outcome || synopsis
+  return `${label} in ${sequenceKey.replace(/_/g, ' ')}${role}.${detail ? ` ${detail}` : ''}`
+}
+
+function normalizePersistedEntityContext(entity: Record<string, unknown>, allowRichContext: boolean) {
+  const sequenceEntity = isSequenceEntityLike(entity)
+  if (!sequenceEntity && !allowRichContext) return ''
+  const candidate = asCompactString(entity.context)
+    || (sequenceEntity ? buildSequenceContextFallback(entity) : '')
+  return normalizePersistedTextAtBoundary(candidate, PERSISTED_ENTITY_CONTEXT_MAX_LENGTH, {
+    preferSentence: sequenceEntity,
+  })
+}
+
 function optimizePlannerOpsForMode(input: {
   mode: PlannerMode
   prompt: string
@@ -4201,19 +4348,21 @@ function optimizePlannerOpsForMode(input: {
   const normalizedOps = input.plan.wave1Ops.map((op) => {
     const cloned = structuredClone(op) as PromptToWorldOp
     if (cloned.op === 'upsert_entity') {
-      cloned.payload.entity.summary = trimPlannerText(cloned.payload.entity.summary ?? '', 240, { ellipsis: false })
-      cloned.payload.entity.context = allowRichContext
-        ? trimPlannerText(cloned.payload.entity.context ?? '', 420)
-        : ''
+      const entityRecord = cloned.payload.entity as unknown as Record<string, unknown>
+      cloned.payload.entity.summary = normalizePersistedEntitySummary(entityRecord)
+      cloned.payload.entity.context = normalizePersistedEntityContext(entityRecord, allowRichContext)
     }
     if (cloned.op === 'update_entity') {
-      if (typeof cloned.payload.changes.summary === 'string') {
-        cloned.payload.changes.summary = trimPlannerText(cloned.payload.changes.summary, 240, { ellipsis: false })
+      const changesRecord = cloned.payload.changes as unknown as Record<string, unknown>
+      const isSequenceUpdate = isSequenceEntityLike(changesRecord)
+      if (typeof cloned.payload.changes.summary === 'string' || isSequenceUpdate) {
+        const summary = normalizePersistedEntitySummary(changesRecord)
+        if (summary) cloned.payload.changes.summary = summary
       }
-      if (typeof cloned.payload.changes.context === 'string') {
-        cloned.payload.changes.context = allowRichContext
-          ? trimPlannerText(cloned.payload.changes.context, 420)
-        : undefined
+      if (typeof cloned.payload.changes.context === 'string' || isSequenceUpdate) {
+        const context = normalizePersistedEntityContext(changesRecord, allowRichContext)
+        if (context) cloned.payload.changes.context = context
+        else if (!isSequenceUpdate) cloned.payload.changes.context = undefined
       }
     }
     if (cloned.op === 'update_entity_canon') {
@@ -4570,6 +4719,31 @@ function resolveEntityReference(
   }
 
   return { entity: null, candidates: [], matchType: 'none' as const }
+}
+
+function resolveEntityTargetKey(
+  snapshot: WorldPromptSnapshot,
+  input: {
+    targetEntityKey?: string | null
+    name?: string | null
+    alias?: string | null
+    nodeTypeHint?: WorldEntity['nodeType'] | null
+    strictNodeType?: boolean
+  },
+) {
+  const direct = input.targetEntityKey
+    ? snapshot.worldEntities.find((entity) => entity.key === input.targetEntityKey) ?? null
+    : null
+  if (direct) {
+    return { entity: direct, candidates: [direct], matchType: 'exact_key' as const }
+  }
+  return resolveEntityReference(snapshot, {
+    entityKey: input.targetEntityKey,
+    name: input.name ?? input.targetEntityKey,
+    alias: input.alias,
+    nodeTypeHint: input.nodeTypeHint,
+    strictNodeType: input.strictNodeType,
+  })
 }
 
 function entityReferenceNameMatches(entity: WorldEntity, name?: string | null, alias?: string | null) {
@@ -8795,6 +8969,7 @@ async function generatePromptPlan(input: {
   sessionMemoryState: WorldPromptSessionMemoryState
   recentMessages: WorldPromptMessage[]
   selectedSuggestion?: WorldPromptSuggestionRecord | null
+  retrievalIntentOverride?: ReturnType<typeof buildWorldPromptRetrievalIntent> | null
   nodeEvolution?: WorldPromptNodeEvolutionResolution | null
   onPlannerProgress?: (progress: WorldPromptPlannerProgress, extras?: { plannerOutline?: string[] }) => Promise<void> | void
   usageRecorder?: WorldPromptTokenUsageRecorder
@@ -9464,15 +9639,26 @@ function sanitizePromptOp(input: {
   }
 
   if (op.op === 'update_entity') {
-    const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+    const resolvedTarget = resolveEntityTargetKey(input.snapshot, {
+      targetEntityKey: op.payload.targetEntityKey,
+      name: op.payload.changes.name ?? op.payload.targetEntityKey,
+      nodeTypeHint: op.payload.changes.nodeType,
+    })
+    const target = resolvedTarget.entity
     if (!target) {
       op.applyMode = 'needs_approval'
+      op.metadata = {
+        ...(op.metadata ?? {}),
+        targetCandidates: resolvedTarget.candidates.map((candidate) => candidate.key),
+        targetResolution: resolvedTarget.matchType,
+      }
       return annotatePromptOpMetadata({
         op,
         touchesExisting: true,
         approvalReason: 'Missing entity target',
       })
     }
+    op.payload.targetEntityKey = target.key
     const destructive = (
       op.payload.changes.name !== undefined
       || op.payload.changes.nodeType !== undefined
@@ -9511,15 +9697,24 @@ function sanitizePromptOp(input: {
   }
 
   if (op.op === 'update_entity_canon') {
-    const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+    const resolvedTarget = resolveEntityTargetKey(input.snapshot, {
+      targetEntityKey: op.payload.targetEntityKey,
+    })
+    const target = resolvedTarget.entity
     if (!target) {
       op.applyMode = 'needs_approval'
+      op.metadata = {
+        ...(op.metadata ?? {}),
+        targetCandidates: resolvedTarget.candidates.map((candidate) => candidate.key),
+        targetResolution: resolvedTarget.matchType,
+      }
       return annotatePromptOpMetadata({
         op,
         touchesExisting: true,
         approvalReason: 'Missing entity target',
       })
     }
+    op.payload.targetEntityKey = target.key
     if (typeof op.payload.summaryPatch === 'string' && hasTruncationArtifact(op.payload.summaryPatch)) {
       op.payload.summaryPatch = null
       op.payload.mergeSummary = false
@@ -9555,15 +9750,24 @@ function sanitizePromptOp(input: {
   }
 
   if (op.op === 'replace_entity') {
-    const target = input.snapshot.worldEntities.find((entity) => entity.key === op.payload.targetEntityKey) ?? null
+    const resolvedTarget = resolveEntityTargetKey(input.snapshot, {
+      targetEntityKey: op.payload.targetEntityKey,
+    })
+    const target = resolvedTarget.entity
     if (!target) {
       op.applyMode = 'needs_approval'
+      op.metadata = {
+        ...(op.metadata ?? {}),
+        targetCandidates: resolvedTarget.candidates.map((candidate) => candidate.key),
+        targetResolution: resolvedTarget.matchType,
+      }
       return annotatePromptOpMetadata({
         op,
         touchesExisting: true,
         approvalReason: 'Missing entity target',
       })
     }
+    op.payload.targetEntityKey = target.key
 
     if (op.payload.replacementMode === 'create' && op.payload.replacementEntity) {
       if (!projectTypeAllowsWorldNodeType(input.snapshot.projectContext, op.payload.replacementEntity.nodeType)) {
@@ -12467,6 +12671,17 @@ function markFallbackVisualDescription(metadata: Record<string, unknown>, visual
 }
 
 function fallbackVisualDescriptionFromEntity(entity: Record<string, unknown>) {
+  if (isSequenceEntityLike(entity)) {
+    const sequence = readSequenceDataFromEntityLike(entity)
+    const sequenceVisualFallback = asCompactString(sequence.synopsis)
+      || asCompactString(sequence.outcome)
+      || asCompactString(sequence.dramaticQuestion)
+      || asCompactString(sequence.dramatic_question)
+      || (looksLikePersistedTextFragment(entity.summary) ? '' : asCompactString(entity.summary))
+      || asCompactString(entity.context)
+      || asCompactString(entity.name)
+    return normalizeWorldEntityVisualDescription(sequenceVisualFallback)
+  }
   return normalizeWorldEntityVisualDescription(
     readVisualDescriptionCandidate(entity)
     || entity.summary
@@ -12669,13 +12884,46 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
   if (!stableKey) return value
   const name = asCompactString(value.name ?? value.title)
     || `${unitKind.replace(/_/g, ' ')} ${ordinal ?? ''}`.trim()
-  const summary = asCompactString(value.summary)
-  const context = asCompactString(value.context)
+  const sequenceSource = {
+    ...value,
+    nodeType: 'sequence_unit',
+    customProperties: {
+      ...(isRecord(value.customProperties) ? value.customProperties : {}),
+      sequence: {
+        unitKind,
+        sequenceKey: asCompactString(value.sequenceKey ?? value.sequence_key) || 'main',
+        ordinal: ordinal ?? 1,
+        actLabel: asCompactString(value.actLabel ?? value.act),
+        povCharacterKey: asCompactString(value.povCharacterKey ?? value.povActorKey ?? value.focalCharacterKey ?? value.pov_character_key),
+        povCharacterName: asCompactString(value.povCharacterName ?? value.focalCharacterName ?? value.pov_character_name),
+        povNotes: asCompactString(value.povNotes ?? value.povGuidance ?? value.pov_notes),
+        synopsis: asCompactString(value.synopsis),
+        dramaticQuestion: asCompactString(value.dramaticQuestion ?? value.dramatic_question),
+        storyFunction: asCompactString(value.storyFunction ?? value.story_function ?? value.function),
+        outcome: asCompactString(value.outcome),
+        consequences: Array.isArray(value.consequences) ? value.consequences : [],
+        characterArcDeltas: Array.isArray(value.characterArcDeltas)
+          ? value.characterArcDeltas
+          : Array.isArray(value.character_arc_deltas)
+            ? value.character_arc_deltas
+            : Array.isArray(value.arcDeltas)
+              ? value.arcDeltas
+              : [],
+        openLoops: asStringArray(value.openLoops ?? value.open_loops),
+        resolvedLoops: asStringArray(value.resolvedLoops ?? value.resolved_loops),
+        scriptExpansionReady: value.scriptExpansionReady !== false,
+      },
+    },
+    name,
+  } as Record<string, unknown>
+  const summary = normalizePersistedEntitySummary(sequenceSource)
+  const context = normalizePersistedEntityContext(sequenceSource, true)
   const explicitVisualDescription = readVisualDescriptionCandidate(value)
   const visualDescription = explicitVisualDescription || normalizeWorldEntityVisualDescription(
     value.synopsis
-    || summary
-    || context
+    || value.outcome
+    || value.dramaticQuestion
+    || value.dramatic_question
     || name,
   )
   const visualTraits = readVisualTraitsCandidate(value)
@@ -12693,27 +12941,7 @@ function normalizeCompactStreamedSequenceEnvelope(value: Record<string, unknown>
   metadata = mergeVoiceMetadata(metadata, voice)
   const sequence = {
     unitKind,
-    sequenceKey: asCompactString(value.sequenceKey ?? value.sequence_key) || 'main',
-    ordinal: ordinal ?? 1,
-    actLabel: asCompactString(value.actLabel ?? value.act),
-    povCharacterKey: asCompactString(value.povCharacterKey ?? value.povActorKey ?? value.focalCharacterKey ?? value.pov_character_key),
-    povCharacterName: asCompactString(value.povCharacterName ?? value.focalCharacterName ?? value.pov_character_name),
-    povNotes: asCompactString(value.povNotes ?? value.povGuidance ?? value.pov_notes),
-    synopsis: asCompactString(value.synopsis),
-    dramaticQuestion: asCompactString(value.dramaticQuestion ?? value.dramatic_question),
-    storyFunction: asCompactString(value.storyFunction ?? value.story_function ?? value.function),
-    outcome: asCompactString(value.outcome),
-    consequences: Array.isArray(value.consequences) ? value.consequences : [],
-    characterArcDeltas: Array.isArray(value.characterArcDeltas)
-      ? value.characterArcDeltas
-      : Array.isArray(value.character_arc_deltas)
-        ? value.character_arc_deltas
-        : Array.isArray(value.arcDeltas)
-          ? value.arcDeltas
-          : [],
-    openLoops: asStringArray(value.openLoops ?? value.open_loops),
-    resolvedLoops: asStringArray(value.resolvedLoops ?? value.resolved_loops),
-    scriptExpansionReady: value.scriptExpansionReady !== false,
+    ...(sequenceSource.customProperties as { sequence: Record<string, unknown> }).sequence,
   }
   return {
     kind: 'op',
@@ -13623,6 +13851,9 @@ async function runPromptUpdateGenerationJob(input: {
         entityRequirements: analyzeWorldPromptEntityRequirements(payload.prompt),
         selectedSuggestion,
       })
+  const retrievalIntentOverride = isRecord(metadata.retrievalIntent)
+    ? metadata.retrievalIntent as ReturnType<typeof buildWorldPromptRetrievalIntent>
+    : null
 
   job = await updateGenerationJob(input.client, job.id, {
     status: 'running',
@@ -13700,6 +13931,7 @@ async function runPromptUpdateGenerationJob(input: {
       recentMessages,
       selectedSuggestion,
       continuationMode,
+      retrievalIntentOverride,
       nodeEvolution,
       writeEvent,
       usageRecorder,
@@ -15143,7 +15375,20 @@ type CanonIntentClassification = {
   reason: string
   routingReason: string
   promptMode: 'add' | 'deepen' | 'rewire' | 'retcon' | 'ask' | 'visual' | null
+  plannerMode?: PlannerMode
+  inferredBy?: 'llm' | 'heuristic'
+  fallbackIntent?: CanonIntent
 }
+
+const llmCanonIntentClassificationSchema = z.object({
+  intent: z.enum(['add_canon', 'expand_canon', 'refine_canon', 'structural_rewire', 'retcon_replace', 'diagnose_only', 'visual_request', 'output_request']),
+  plannerMode: z.enum(['direct_build', 'refinement', 'advisory_diagnosis']),
+  confidence: z.number().min(0).max(1).default(0.65),
+  reason: z.string().default(''),
+  routingReason: z.string().default(''),
+  shouldMutate: z.boolean().default(false),
+  requiresClarification: z.boolean().default(false),
+})
 
 function readPromptMode(sourceContext: WorldPromptStartTurnRequest['sourceContext']): CanonIntentClassification['promptMode'] {
   const mode = sourceContext?.promptMode
@@ -15163,6 +15408,8 @@ function classifyCanonIntent(input: {
   const sourceContext = input.payload.sourceContext ?? null
   const sourceCharCount = sourceContext?.charCount ?? sourceContext?.extractedText?.length ?? 0
   const promptMode = readPromptMode(sourceContext)
+  const hasRetconMutation = promptMode === 'retcon' || promptHasAppliedRetconMutationLanguage(prompt)
+  const hasStructuralMutation = promptMode === 'rewire' || promptHasAppliedStructuralMutationLanguage(prompt)
 
   if (promptMode === 'visual' || /\b(image|visual|concept art|portrait|thumbnail|reference sheet|hero art|splash)\b/i.test(prompt)) {
     return { intent: 'visual_request', confidence: 0.78, reason: 'Prompt mode or wording asks for visual generation.', routingReason: 'visual requests use media queues or output routing.', promptMode }
@@ -15170,14 +15417,14 @@ function classifyCanonIntent(input: {
   if (/\b(export|output|ebook|comic|cinematic|video|poster|pdf|manuscript|story bible|lore guide)\b/i.test(prompt)) {
     return { intent: 'output_request', confidence: 0.72, reason: 'Prompt appears to request an output artifact.', routingReason: 'output requests should route to Output Studio when applicable.', promptMode }
   }
-  if (promptMode === 'ask' || input.plannerMode !== 'direct_build' || /\b(what|why|diagnose|analy[sz]e|suggest|recommend|missing|weak|should we)\b/i.test(prompt)) {
-    return { intent: 'diagnose_only', confidence: 0.7, reason: 'Prompt asks for analysis or guidance rather than mutation.', routingReason: 'diagnostic turns can stay synchronous.', promptMode }
-  }
-  if (promptMode === 'retcon' || /\b(retcon|replace|remove|delete|archive|no longer|instead of|change .* to|rewrite canon)\b/i.test(prompt)) {
+  if (hasRetconMutation) {
     return { intent: 'retcon_replace', confidence: 0.82, reason: 'Prompt asks to replace or contradict existing canon.', routingReason: 'retcons need preview or a durable streamed transaction.', promptMode }
   }
-  if (promptMode === 'rewire' || /\b(insert|between|before|after|reorder|move|split|merge|renumber|rewire|restructure|sequence|chapter|episode|act|story flow|story arc|beats?|relationship endpoint)\b/i.test(prompt)) {
+  if (hasStructuralMutation) {
     return { intent: 'structural_rewire', confidence: 0.84, reason: 'Prompt asks for structural graph or sequence changes.', routingReason: 'structural changes need atomic patch ops and audit cards.', promptMode }
+  }
+  if (promptMode === 'ask' || input.plannerMode !== 'direct_build' || /\b(what|why|diagnose|analy[sz]e|suggest|recommend|missing|weak|should we)\b/i.test(prompt)) {
+    return { intent: 'diagnose_only', confidence: 0.7, reason: 'Prompt asks for analysis or guidance rather than mutation.', routingReason: 'diagnostic turns can stay synchronous.', promptMode }
   }
   if (promptMode === 'deepen' || /\b(deepen|refine|detail|elaborate|polish|strengthen|clarify|update)\b/i.test(prompt)) {
     return { intent: 'refine_canon', confidence: 0.72, reason: 'Prompt asks to refine existing canon.', routingReason: 'small refinements can usually apply synchronously.', promptMode }
@@ -15186,6 +15433,147 @@ function classifyCanonIntent(input: {
     return { intent: 'expand_canon', confidence: 0.76, reason: 'Prompt requests a broad canon expansion.', routingReason: 'broad updates are better handled by streamed Fly jobs.', promptMode }
   }
   return { intent: 'add_canon', confidence: 0.66, reason: 'Prompt is additive and local.', routingReason: 'safe additive changes can use the normal prompt path.', promptMode }
+}
+
+async function inferCanonIntentWithLlm(input: {
+  payload: WorldPromptStartTurnRequest
+  plannerMode: PlannerMode
+  retrievalIntent: ReturnType<typeof buildWorldPromptRetrievalIntent>
+  entityRequirements: WorldPromptEntityRequirements
+  selectedSuggestion?: WorldPromptSuggestionRecord | null
+  fallback: CanonIntentClassification
+  turnId: string
+  usageRecorder?: WorldPromptTokenUsageRecorder
+}): Promise<CanonIntentClassification> {
+  if (input.payload.initialSeedMode !== 'standard') return input.fallback
+  const promptMode = readPromptMode(input.payload.sourceContext)
+  const catalog = buildCanonicalEntityKeyCatalog({
+    snapshot: input.payload.snapshot,
+    pinnedEntityKeys: extractMentionedEntityKeys(input.payload.prompt, input.payload.snapshot),
+    maxEntities: 360,
+  })
+  const sourceContext = input.payload.sourceContext ?? null
+  const schema = normalizeStrictJsonSchema(z.toJSONSchema(llmCanonIntentClassificationSchema))
+  const prompt = JSON.stringify({
+    prompt: input.payload.prompt,
+    sourceContext: sourceContext
+      ? {
+          kind: sourceContext.kind,
+          title: sourceContext.title,
+          promptMode,
+          charCount: sourceContext.charCount,
+          hasExtractedText: Boolean(sourceContext.extractedText?.trim()),
+        }
+      : null,
+    projectContext: input.payload.snapshot.projectContext,
+    selectedSuggestion: input.selectedSuggestion
+      ? {
+          label: input.selectedSuggestion.label,
+          prompt: input.selectedSuggestion.prompt,
+          kind: input.selectedSuggestion.kind,
+          actionMode: input.selectedSuggestion.actionMode,
+          executionMode: input.selectedSuggestion.executionMode,
+        }
+      : null,
+    selectedFocus: {
+      selectedRootEntityKey: input.payload.selectedRootEntityKey,
+      selectedViewKey: input.payload.selectedViewKey,
+      selectedThreadKey: input.payload.selectedThreadKey,
+    },
+    retrievalHints: {
+      focusLayer: input.retrievalIntent.focusLayer,
+      continuityMode: input.retrievalIntent.continuityMode,
+      resolvedIntent: input.retrievalIntent.resolvedIntent,
+      resolvedMode: input.retrievalIntent.resolvedMode,
+      mentionedEntityKeys: input.retrievalIntent.mentionedEntityKeys,
+      anchorEntityKeys: input.retrievalIntent.anchorEntityKeys,
+    },
+    entityRequirements: input.entityRequirements.summary,
+    canonicalEntityKeyCatalog: catalog,
+    heuristicFallback: {
+      intent: input.fallback.intent,
+      plannerMode: input.plannerMode,
+      reason: input.fallback.reason,
+      routingReason: input.fallback.routingReason,
+    },
+  })
+  try {
+    const response = await runOpenAiResponses({
+      model: input.payload.model,
+      input: prompt,
+      instructions: [
+        'You are GraphCore\'s lightweight prompt-intent router.',
+        'Infer the user intent semantically from the actual prompt, not from regex keywords.',
+        'Return only routing metadata. Do not plan graph operations and do not answer the user.',
+        'Classify whether this should mutate the world, answer/advice only, route to visual/output generation, or use structural/retcon handling.',
+        'Use direct_build for prompts that should apply graph/canon changes now, including structural story edits such as inserting or moving chapters.',
+        'Use advisory_diagnosis for questions, suggestions, audits, or prompts that ask what to do rather than asking you to do it.',
+        'Use refinement for local enrichment of existing nodes when it is still a mutation but not a broad/structural build.',
+        'If the prompt explicitly says plan only, preview only, answer only, do not apply, or do not mutate, classify it as diagnose_only/advisory_diagnosis even if it describes possible changes.',
+        'If the request is impossible because required anchors are absent or ambiguous in canonicalEntityKeyCatalog, use diagnose_only with requiresClarification true.',
+      ].join('\n'),
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'world_prompt_intent_routing',
+          schema,
+        },
+      },
+      reasoning: { effort: 'low' },
+      metadata: {
+        feature: 'world-prompt',
+        surface: 'intent-routing',
+        turnId: input.turnId,
+      },
+      store: false,
+      timeoutMs: 30_000,
+    })
+    input.usageRecorder?.record({
+      surface: 'intent-routing',
+      model: input.payload.model,
+      response,
+      metadata: {
+        fallbackIntent: input.fallback.intent,
+        catalogEntityCount: catalog.entries.length,
+        catalogOmittedEntityCount: catalog.omittedEntityCount,
+      },
+    })
+    if (!response.response.ok) return input.fallback
+    const parsedJson = extractJsonBlock(response.outputText)
+    if (!parsedJson) return input.fallback
+    const parsed = llmCanonIntentClassificationSchema.safeParse(parsedJson)
+    if (!parsed.success) return input.fallback
+    const llm = parsed.data
+    const noMutationRequested = promptExplicitlyRequestsNoMutation(input.payload.prompt)
+    const intent = noMutationRequested ? 'diagnose_only' : llm.intent
+    const plannerMode: PlannerMode = noMutationRequested
+      ? 'advisory_diagnosis'
+      : intent === 'diagnose_only' || intent === 'visual_request' || intent === 'output_request'
+        ? 'advisory_diagnosis'
+        : intent === 'refine_canon'
+          ? 'refinement'
+          : 'direct_build'
+    return {
+      intent,
+      plannerMode,
+      confidence: llm.confidence,
+      reason: llm.reason.trim() || `LLM classified this prompt as ${intent}.`,
+      routingReason: llm.routingReason.trim() || (llm.shouldMutate ? 'LLM inferred this should mutate the world.' : 'LLM inferred this should not apply graph mutations directly.'),
+      promptMode,
+      inferredBy: 'llm',
+      fallbackIntent: input.fallback.intent,
+    }
+  } catch (error) {
+    console.warn('[world-prompt] LLM intent routing failed; using heuristic fallback.', {
+      turnId: input.turnId,
+      message: error instanceof Error ? error.message : 'Unknown intent routing failure.',
+    })
+    return {
+      ...input.fallback,
+      inferredBy: 'heuristic',
+      fallbackIntent: input.fallback.intent,
+    }
+  }
 }
 
 function shouldUseIncrementalPromptPlanning(input: {
@@ -15555,6 +15943,7 @@ function inferBuildBriefFromManifest(input: {
 function buildIncrementalLedger(input: {
   snapshot: WorldPromptSnapshot
   maxEntries?: number
+  pinnedEntityKeys?: string[]
 }): WorldPromptBuildLedgerEntry[] {
   const entries: WorldPromptBuildLedgerEntry[] = []
   for (const entity of input.snapshot.worldEntities) {
@@ -15590,7 +15979,30 @@ function buildIncrementalLedger(input: {
     }))
   }
   const maxEntries = input.maxEntries ?? 160
-  return entries.slice(Math.max(0, entries.length - maxEntries))
+  if (entries.length <= maxEntries) return entries
+  const pinnedEntityKeys = new Set(input.pinnedEntityKeys ?? [])
+  const pinnedEntries = entries.filter((entry) => (
+    (entry.entryType === 'entity' || entry.entryType === 'sequence_stub') && pinnedEntityKeys.has(entry.key)
+  ) || (
+    entry.entryType === 'relationship'
+    && (pinnedEntityKeys.has(entry.sourceEntityKey ?? '') || pinnedEntityKeys.has(entry.targetEntityKey ?? ''))
+  ) || (
+    entry.entryType === 'thread'
+    && entry.linkedEntityKeys.some((key) => pinnedEntityKeys.has(key))
+  ))
+  const tailEntries = entries.slice(Math.max(0, entries.length - maxEntries))
+  const selected = new Map<string, WorldPromptBuildLedgerEntry>()
+  for (const entry of pinnedEntries) selected.set(`${entry.entryType}:${entry.key}`, entry)
+  for (const entry of tailEntries) selected.set(`${entry.entryType}:${entry.key}`, entry)
+  const selectedEntries = [...selected.values()]
+  if (selectedEntries.length <= maxEntries) return selectedEntries
+  const pinnedIds = new Set(pinnedEntries.map((entry) => `${entry.entryType}:${entry.key}`))
+  const pinned = selectedEntries.filter((entry) => pinnedIds.has(`${entry.entryType}:${entry.key}`))
+  const remainder = selectedEntries.filter((entry) => !pinnedIds.has(`${entry.entryType}:${entry.key}`))
+  return [
+    ...pinned,
+    ...remainder.slice(Math.max(0, remainder.length - Math.max(0, maxEntries - pinned.length))),
+  ].slice(0, maxEntries)
 }
 
 function workItemSearchTerms(workItem: WorldPromptIncrementalWorkItem) {
@@ -15659,12 +16071,22 @@ function buildRelevantWorkItemEntities(input: {
   snapshot: WorldPromptSnapshot
   workItem: WorldPromptIncrementalWorkItem
   ledgerOnly: boolean
+  prompt: string
 }) {
   if (input.ledgerOnly) return []
   const terms = workItemSearchTerms(input.workItem)
+  const promptMentionedEntityKeys = new Set(extractMentionedEntityKeys(input.prompt, input.snapshot))
   const candidates = input.snapshot.worldEntities.filter((entity) => entityMatchesWorkItem(entity, input.workItem, terms))
   const fallback = input.snapshot.worldEntities.slice(-28)
-  const selected = (candidates.length > 0 ? candidates : fallback).slice(-42)
+  const pinned = input.snapshot.worldEntities.filter((entity) => promptMentionedEntityKeys.has(entity.key))
+  const pool = candidates.length > 0 ? candidates : fallback
+  const selectedByKey = new Map<string, WorldEntity>()
+  for (const entity of pinned) selectedByKey.set(entity.key, entity)
+  const remainingSlots = Math.max(0, 42 - selectedByKey.size)
+  for (const entity of pool.filter((candidate) => !selectedByKey.has(candidate.key)).slice(-remainingSlots)) {
+    selectedByKey.set(entity.key, entity)
+  }
+  const selected = [...selectedByKey.values()]
   return selected.map((entity) => {
     const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
     return {
@@ -15721,6 +16143,38 @@ function buildRelevantWorkItemThreads(input: {
     }))
 }
 
+function buildCanonicalEntityKeyCatalog(input: {
+  snapshot: WorldPromptSnapshot
+  pinnedEntityKeys?: string[]
+  maxEntities?: number
+}) {
+  const maxEntities = Math.max(1, input.maxEntities ?? 500)
+  const pinnedEntityKeys = new Set(input.pinnedEntityKeys ?? [])
+  const activeEntities = input.snapshot.worldEntities.filter((entity) => entity.status !== 'archived')
+  const sorted = activeEntities.slice().sort((left, right) => {
+    const leftPinned = pinnedEntityKeys.has(left.key) ? 1 : 0
+    const rightPinned = pinnedEntityKeys.has(right.key) ? 1 : 0
+    if (leftPinned !== rightPinned) return rightPinned - leftPinned
+    if (left.nodeType !== right.nodeType) return left.nodeType.localeCompare(right.nodeType)
+    return left.name.localeCompare(right.name)
+  })
+  const entries = sorted.slice(0, maxEntities).map((entity) => {
+    const sequence = entity.nodeType === 'sequence_unit' ? readWorldSequenceMetadata(entity) : null
+    return {
+      key: entity.key,
+      name: entity.name,
+      nodeType: entity.nodeType,
+      aliases: entity.aliases.slice(0, 2),
+      ordinal: sequence?.ordinal ?? null,
+    }
+  })
+  return {
+    totalEntityCount: activeEntities.length,
+    omittedEntityCount: Math.max(0, activeEntities.length - entries.length),
+    entries,
+  }
+}
+
 function buildCompactWorkItemPrompt(input: {
   payload: WorldPromptStartTurnRequest
   snapshot: WorldPromptSnapshot
@@ -15734,6 +16188,7 @@ function buildCompactWorkItemPrompt(input: {
 }) {
   const usage = input.usageRecorder?.summary()
   const ledgerOnlyByBudget = (usage?.totalTokens ?? 0) >= INCREMENTAL_WORK_ITEM_LEDGER_ONLY_CUMULATIVE_TOKENS
+  const promptMentionedEntityKeys = extractMentionedEntityKeys(input.payload.prompt, input.snapshot)
   const buildBrief = inferBuildBriefFromManifest({
     manifest: input.manifest,
     payload: input.payload,
@@ -15741,11 +16196,13 @@ function buildCompactWorkItemPrompt(input: {
   const ledger = buildIncrementalLedger({
     snapshot: input.snapshot,
     maxEntries: ledgerOnlyByBudget ? 90 : 160,
+    pinnedEntityKeys: promptMentionedEntityKeys,
   })
   const relevantEntities = buildRelevantWorkItemEntities({
     snapshot: input.snapshot,
     workItem: input.workItem,
     ledgerOnly: ledgerOnlyByBudget,
+    prompt: input.payload.prompt,
   })
   const relevantEntityKeys = new Set(relevantEntities.map((entity) => entity.key))
   const baseContext = worldPromptWorkItemContextSchema.parse({
@@ -15807,6 +16264,10 @@ function buildCompactWorkItemPrompt(input: {
       workItemCount: input.manifest.workItems.length,
     },
     nodeEvolution: input.nodeEvolution ?? null,
+    canonicalEntityKeyCatalog: buildCanonicalEntityKeyCatalog({
+      snapshot: input.snapshot,
+      pinnedEntityKeys: promptMentionedEntityKeys,
+    }),
     workItemContext: context,
   }
   const diagnostics: WorldPromptTokenBudgetDiagnostics = worldPromptTokenBudgetDiagnosticsSchema.parse({
@@ -15951,6 +16412,7 @@ async function generateIncrementalManifest(input: {
   sessionMemoryState: WorldPromptSessionMemoryState
   recentMessages: WorldPromptMessage[]
   selectedSuggestion?: WorldPromptSuggestionRecord | null
+  retrievalIntentOverride?: ReturnType<typeof buildWorldPromptRetrievalIntent> | null
   usageRecorder?: WorldPromptTokenUsageRecorder
 }) : Promise<IncrementalPlannerResult> {
   const projectContextGuidance = describeProjectContextForPlanner(input.payload.snapshot.projectContext)
@@ -15962,7 +16424,7 @@ async function generateIncrementalManifest(input: {
   const initialSeedProfile = isInitialSeedGeneration
     ? getWorldSeedSkeletonProfile((initialSeedInference?.projectSubtype ?? input.payload.snapshot.projectContext?.projectSubtype ?? 'feature_film') as ProjectSubtype)
     : null
-  const retrievalIntent = buildWorldPromptRetrievalIntent({
+  const retrievalIntent = input.retrievalIntentOverride ?? buildWorldPromptRetrievalIntent({
     prompt: input.payload.prompt,
     snapshot: input.payload.snapshot,
     summaryMemory: input.summaryMemory,
@@ -16154,6 +16616,8 @@ async function generateIncrementalWorkItemPlan(input: {
     'Use wave1Ops for all operations. Keep assistantSummary to one concise user-facing operational note.',
     'Use the buildBrief and ledger as continuity. Do not ask for hidden prior chat context; it is not available to this call.',
     'Allowed operations: upsert_entity, update_entity, update_entity_canon, replace_entity, upsert_relationship, update_relationship, sequence_patch, relationship_rewire_patch, entity_merge_patch, create_derived_result, queue_image_generation, queue_cinematic_generation, update_world_wiki_metadata, assistant_note.',
+    'canonicalEntityKeyCatalog lists valid existing entity keys for this call. When targeting an existing entity, copy targetEntityKey/sourceEntityKey/targetEntityKey exactly from that catalog; do not invent slug keys from names.',
+    'If a named entity appears in the source prompt, check canonicalEntityKeyCatalog before creating a new node or skipping an update. Only ask for clarification when multiple catalog entries plausibly match.',
     'When nodeEvolution is present, follow its semantic create/update/state/retcon decision. Use update_entity_canon for existing-node canon facts and current-state changes; do not create duplicates just because a name is phrased differently.',
     'For state_change decisions, update metadata.currentState through update_entity_canon and add a canon fact. For event_or_sequence_change decisions, create or update the event/sequence node and link it to the affected entity.',
     'For update_entity_canon summaryPatch, provide a complete clean replacement display summary in one or two sentences. Never concatenate prior summaries, never include ellipses, and never output truncated text.',
@@ -16325,6 +16789,7 @@ async function executeIncrementalWorldPromptTurn(input: {
   recentMessages: WorldPromptMessage[]
   selectedSuggestion?: WorldPromptSuggestionRecord | null
   continuationMode: string
+  retrievalIntentOverride?: ReturnType<typeof buildWorldPromptRetrievalIntent> | null
   nodeEvolution?: WorldPromptNodeEvolutionResolution | null
   writeEvent: WorldPromptEventWriter
   usageRecorder: WorldPromptTokenUsageRecorder
@@ -16362,6 +16827,7 @@ async function executeIncrementalWorldPromptTurn(input: {
     sessionMemoryState: input.sessionMemoryState,
     recentMessages: input.recentMessages,
     selectedSuggestion: input.selectedSuggestion ?? null,
+    retrievalIntentOverride: input.retrievalIntentOverride ?? null,
     usageRecorder: input.usageRecorder,
   })
   turn = await persistTurnTokenUsage({
@@ -17199,12 +17665,14 @@ export async function startWorldPromptTurn(input: {
     selectedViewKey: payload.selectedViewKey,
   })
   const entityRequirements = analyzeWorldPromptEntityRequirements(payload.prompt)
-  const canonIntent = classifyCanonIntent({
+  const fallbackCanonIntent = classifyCanonIntent({
     payload,
     plannerMode: initialRetrievalIntent.plannerMode,
     entityRequirements,
     selectedSuggestion,
   })
+  let activeRetrievalIntent = initialRetrievalIntent
+  let canonIntent: CanonIntentClassification = fallbackCanonIntent
 
   const insertedTurn = await input.client
     .from('world_prompt_turns')
@@ -17235,7 +17703,7 @@ export async function startWorldPromptTurn(input: {
         resolvedMode: initialRetrievalIntent.resolvedMode,
         resolvedIntent: initialRetrievalIntent.resolvedIntent,
         resolvedFocus: initialRetrievalIntent.resolvedFocus,
-        canonIntent,
+        canonIntent: fallbackCanonIntent,
       },
     })
     .select(TURN_SELECT)
@@ -17257,6 +17725,61 @@ export async function startWorldPromptTurn(input: {
     await writeEvent('turn_started', {
       session: workingSession,
       turn,
+    })
+    await writeEvent('planner_status', {
+      plannerStatus: 'planning',
+      plannerProgress: {
+        phase: 'analyzing_graph',
+        message: 'Analysing prompt intent.',
+        sequence: 0,
+      },
+      turn: { id: turn.id },
+    })
+    canonIntent = await inferCanonIntentWithLlm({
+      payload,
+      plannerMode: initialRetrievalIntent.plannerMode,
+      retrievalIntent: initialRetrievalIntent,
+      entityRequirements,
+      selectedSuggestion,
+      fallback: fallbackCanonIntent,
+      turnId: turn.id,
+      usageRecorder: tokenUsageRecorder,
+    })
+    if (canonIntent.plannerMode && canonIntent.plannerMode !== initialRetrievalIntent.plannerMode) {
+      activeRetrievalIntent = {
+        ...initialRetrievalIntent,
+        plannerMode: canonIntent.plannerMode,
+        resolvedIntent: canonIntent.plannerMode === 'advisory_diagnosis'
+          ? 'diagnosis'
+          : canonIntent.plannerMode === 'refinement'
+            ? 'refinement'
+            : 'graph_build',
+        resolvedMode: canonIntent.plannerMode === 'advisory_diagnosis'
+          ? 'answer_only'
+          : initialRetrievalIntent.resolvedMode === 'answer_only'
+            ? 'apply_compact_wave'
+            : initialRetrievalIntent.resolvedMode,
+      }
+    }
+    turn = await updateTurn(input.client, turn.id, {
+      metadata: {
+        ...(turn.metadata ?? {}),
+        canonIntent,
+        intentRouting: {
+          inferredBy: canonIntent.inferredBy ?? 'heuristic',
+          fallbackIntent: fallbackCanonIntent.intent,
+          fallbackPlannerMode: initialRetrievalIntent.plannerMode,
+          plannerMode: activeRetrievalIntent.plannerMode,
+        },
+        resolvedMode: activeRetrievalIntent.resolvedMode,
+        resolvedIntent: activeRetrievalIntent.resolvedIntent,
+        resolvedFocus: activeRetrievalIntent.resolvedFocus,
+      },
+    })
+    turn = await persistTurnTokenUsage({
+      client: input.client,
+      turn,
+      usageRecorder: tokenUsageRecorder,
     })
     await writeEvent('intent_classified', {
       canonIntent,
@@ -17331,13 +17854,13 @@ export async function startWorldPromptTurn(input: {
 
     const useIncrementalPromptPlanning = shouldUseIncrementalPromptPlanning({
       payload,
-      plannerMode: initialRetrievalIntent.plannerMode,
+      plannerMode: activeRetrievalIntent.plannerMode,
       entityRequirements,
       selectedSuggestion,
     })
     if (useIncrementalPromptPlanning && shouldRoutePromptUpdateToFly({
       payload,
-      plannerMode: initialRetrievalIntent.plannerMode,
+      plannerMode: activeRetrievalIntent.plannerMode,
       entityRequirements,
       selectedSuggestion,
       canonIntent,
@@ -17352,7 +17875,7 @@ export async function startWorldPromptTurn(input: {
         recentMessages: compacted.recentMessages,
         selectedSuggestion,
         continuationMode,
-        retrievalIntent: initialRetrievalIntent,
+        retrievalIntent: activeRetrievalIntent,
         canonIntent,
       })
       const steps = await createPromptUpdateGenerationJobSteps({ client: input.client, job })
@@ -17400,7 +17923,7 @@ export async function startWorldPromptTurn(input: {
       model: payload.model,
       turnId: turn.id,
       canonIntent,
-      retrievedEntityKeys: initialRetrievalIntent.anchorEntityKeys,
+      retrievedEntityKeys: activeRetrievalIntent.anchorEntityKeys,
       usageRecorder: tokenUsageRecorder,
     })
     if (nodeEvolution) {
@@ -17428,6 +17951,7 @@ export async function startWorldPromptTurn(input: {
         recentMessages: compacted.recentMessages,
         selectedSuggestion,
         continuationMode,
+        retrievalIntentOverride: activeRetrievalIntent,
         nodeEvolution,
         writeEvent,
         usageRecorder: tokenUsageRecorder,
@@ -17442,6 +17966,7 @@ export async function startWorldPromptTurn(input: {
       sessionMemoryState,
       recentMessages: compacted.recentMessages,
       selectedSuggestion,
+      retrievalIntentOverride: activeRetrievalIntent,
       nodeEvolution,
       usageRecorder: tokenUsageRecorder,
       onPlannerProgress: async (plannerProgress, extras) => {

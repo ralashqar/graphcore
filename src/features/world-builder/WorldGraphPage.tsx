@@ -3199,7 +3199,7 @@ export function WorldGraphPage({
         title: displayName,
         subtitle: labelForWorldEntity(entity.nodeType),
         summary: displaySummary,
-        imageUrl: imageUrlByEntityKey.get(entity.key) ?? null,
+        imageUrl: wikiImageUrlByEntityKey.get(entity.key) ?? imageUrlByEntityKey.get(entity.key) ?? null,
       })
     }
     for (const operator of worldOperators) {
@@ -3237,6 +3237,7 @@ export function WorldGraphPage({
     entityOverviewDraft?.entityKey,
     imageUrlByEntityKey,
     imageUrlByResultKey,
+    wikiImageUrlByEntityKey,
     worldEntities,
     worldOperators,
     worldResults,

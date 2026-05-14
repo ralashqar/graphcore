@@ -3229,7 +3229,7 @@ export function buildWorldFeedViewModel(input: {
     if (!result) continue
     if (isActive) {
       activeTurnEntry = result.parent
-      turnEntries.push(result.parent)
+      turnEntries.push(result.parent, ...result.children)
     } else {
       turnEntries.push(result.parent, ...result.children)
     }
@@ -3246,7 +3246,7 @@ export function buildWorldFeedViewModel(input: {
     })
     if (result) {
       activeTurnEntry = result.parent
-      turnEntries.push(result.parent)
+      turnEntries.push(result.parent, ...result.children)
     }
   }
 

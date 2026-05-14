@@ -116,6 +116,17 @@ test('wiki entity pages can open a direct-neighborhood graph modal with relation
   assert.match(feedCss, /\.world-wiki-relationship-inspector dl\s*\{/)
 })
 
+test('world graph nodes prefer cropped wiki entity icons', () => {
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const nodeRecordsSource = worldGraphSource.slice(
+    worldGraphSource.indexOf('const nodeRecords = useMemo(() => {'),
+    worldGraphSource.indexOf('useEffect(() => {', worldGraphSource.indexOf('const nodeRecords = useMemo(() => {')),
+  )
+
+  assert.match(nodeRecordsSource, /imageUrl: wikiImageUrlByEntityKey\.get\(entity\.key\) \?\? imageUrlByEntityKey\.get\(entity\.key\) \?\? null/)
+  assert.match(nodeRecordsSource, /wikiImageUrlByEntityKey/)
+})
+
 test('wiki entity page styles include page, relationship, and backlink surfaces', () => {
   const shellCss = readFileSync(resolve(repoRoot, 'src/styles/features/world-builder/wiki-feed/wiki-shell.css'), 'utf8')
 

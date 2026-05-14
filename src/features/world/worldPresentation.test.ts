@@ -2061,6 +2061,7 @@ test('buildWorldFeedViewModel folds node evolution and canon fact updates into o
 
 test('buildWorldFeedViewModel includes active running turn and completed turn cards', () => {
   const hero = createWorldPresentationTestEntity('world.actor.hero', 'Hero', 'actor')
+  const rebel = createWorldPresentationTestEntity('world.group.rebels', 'Rebels', 'group')
   const activeTurn = makeTurn({
     id: 't-running',
     status: 'streaming',
@@ -2089,13 +2090,33 @@ test('buildWorldFeedViewModel includes active running turn and completed turn ca
         diagnostics: [],
       },
       createdAt: '2026-04-22T10:01:00.000Z',
+    }), makeEvent({
+      id: 'e-running',
+      turnId: activeTurn.id,
+      eventType: 'op_applied',
+      payload: {
+        applied: {
+          worldEntities: [rebel],
+          worldRelationships: [],
+          worldOperators: [],
+          worldResults: [],
+          worldGraphConnections: [],
+          worldViews: [],
+        },
+        suggestions: [],
+        diagnostics: [],
+      },
+      createdAt: '2026-04-22T10:05:20.000Z',
     })],
-    entityByKey: new Map([[hero.key, hero]]),
+    entityByKey: new Map([[hero.key, hero], [rebel.key, rebel]]),
     now: new Date('2026-04-22T10:06:00.000Z'),
   })
 
   assert.equal(feed.activeTurnEntry?.kind, 'active_turn')
   assert.equal(feed.entries[0]?.id, `active-turn:${activeTurn.id}`)
+  assert.equal(feed.entries[1]?.id, `turn:${activeTurn.id}:entity:${rebel.key}`)
+  assert.equal(feed.entries[1]?.kind, 'entity_created')
+  assert.equal(feed.entries[1]?.parentTurnId, activeTurn.id)
   const summary = feed.entries.find((entry) => entry.kind === 'turn_update')
   assert.equal(summary?.detail, 'Applied 1 new.')
   assert.equal(summary?.turnId, completedTurn.id)

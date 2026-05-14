@@ -102,30 +102,42 @@
   box-shadow: none;
 }
 
-.world-output-create-form.is-rail .world-output-preset-row {
-  gap: 6px;
+.world-output-create-form .compact-prompt-composer {
+  width: 100%;
+  align-items: end;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.26);
 }
 
-.world-output-create-form.is-rail .world-output-preset-row button {
-  min-height: 30px;
-  padding: 0 10px;
-  font-size: 0.72rem;
+.world-output-create-form.is-rail .compact-prompt-composer {
+  border-radius: 16px;
 }
 
-.world-output-create-form.is-rail .world-output-prompt-input textarea {
-  min-height: 160px;
+.world-output-create-form .compact-prompt-composer textarea {
+  min-height: 104px;
+  max-height: 220px;
   resize: vertical;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  line-height: 1.45;
 }
 
-.world-output-create-form.is-rail .world-output-submit-row {
-  align-items: stretch;
+.world-output-create-form.is-rail .compact-prompt-composer textarea {
+  min-height: 126px;
 }
 
-.world-output-create-form.is-rail .world-output-submit-row button {
-  flex: 1 1 auto;
+.world-output-create-form .compact-prompt-expand,
+.world-output-create-form .compact-prompt-send-button {
+  align-self: end;
 }
 
-.world-output-preset-row,
+.world-output-create-form .compact-prompt-thinking {
+  min-height: 104px;
+}
+
+.world-output-create-form.is-rail .compact-prompt-thinking {
+  min-height: 126px;
+}
+
 .world-output-filter-row,
 .world-output-actions,
 .world-output-submit-row {
@@ -135,7 +147,6 @@
   align-items: center;
 }
 
-.world-output-preset-row button,
 .world-output-filter-row button,
 .world-output-actions button,
 .world-output-actions a,
@@ -152,7 +163,6 @@
   transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
-.world-output-preset-row button,
 .world-output-filter-row button {
   padding: 0 12px;
 }
@@ -166,7 +176,6 @@
   padding: 0 11px;
 }
 
-.world-output-preset-row button:hover,
 .world-output-filter-row button:hover,
 .world-output-actions button:hover,
 .world-output-actions a:hover,
@@ -176,7 +185,6 @@
   background: rgba(20, 184, 166, 0.13);
 }
 
-.world-output-preset-row button.is-active,
 .world-output-filter-row button.is-active,
 .world-output-submit-row button:first-child {
   border-color: rgba(45, 212, 191, 0.44);
@@ -184,30 +192,19 @@
   color: rgba(240, 253, 250, 0.98);
 }
 
-.world-output-prompt-input {
+.world-output-inference-note {
   display: grid;
-  gap: 7px;
+  gap: 5px;
+  color: rgba(148, 163, 184, 0.76);
+  font-size: 0.74rem;
+  line-height: 1.35;
 }
 
-.world-output-prompt-input span {
-  color: rgba(226, 232, 240, 0.82);
-  font-size: 0.76rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
+.world-output-inference-note span:first-child {
+  color: rgba(153, 246, 228, 0.88);
+  font-weight: 850;
   text-transform: uppercase;
-}
-
-.world-output-prompt-input textarea {
-  width: 100%;
-  min-height: 112px;
-  resize: vertical;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 13px;
-  background: rgba(2, 6, 23, 0.72);
-  color: rgba(248, 250, 252, 0.95);
-  padding: 13px;
-  font: inherit;
-  line-height: 1.45;
+  letter-spacing: 0.08em;
 }
 
 .world-output-submit-row button:disabled,

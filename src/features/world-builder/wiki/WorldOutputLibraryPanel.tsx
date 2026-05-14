@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 
+import { CompactPromptComposer } from '../../prompts/CompactPromptComposer'
 import { EntityIcon, type EntityIconId } from '../../../shared/entityIcons'
 import type {
   OutputArtifactFilter,
@@ -9,8 +10,6 @@ import type {
   OutputLibraryOpenTarget,
   OutputLibraryRequestRow,
 } from './outputLibraryPresentation'
-
-type OutputPresetKey = 'image' | 'story' | 'comic' | 'ebook' | 'reference' | 'video'
 
 type WorldOutputLibraryBaseProps = {
   canRunOutputs: boolean
@@ -45,26 +44,16 @@ export type WorldOutputLibraryController = {
   downloadingArtifactKey: string | null
   error: string | null
   prompt: string
-  selectedPreset: OutputPresetKey
-  selectedPresetConfig: typeof outputPresets[number]
   visibleArtifacts: OutputLibraryArtifactCard[]
   handleDownloadArtifact: (artifact: OutputLibraryArtifactCard) => Promise<void>
   setArtifactFilter: (filter: OutputArtifactFilter) => void
   setBusyRequestId: (requestId: string | null) => void
   setError: (message: string | null) => void
   setPrompt: (prompt: string) => void
-  setSelectedPreset: (preset: OutputPresetKey) => void
   submitOutputRequest: () => Promise<void>
 }
 
-const outputPresets: Array<{ key: OutputPresetKey; label: string; promptHint: string; targetFormat?: 'pdf' | 'markdown' | 'image' | 'video'; pageCount?: number }> = [
-  { key: 'image', label: 'Image', promptHint: 'Create a poster image from this world...', targetFormat: 'image' },
-  { key: 'story', label: 'Story', promptHint: 'Write a short story using the strongest canon thread...', targetFormat: 'markdown' },
-  { key: 'comic', label: 'Comic', promptHint: 'Make an 8 page comic issue from a sequence...', targetFormat: 'pdf', pageCount: 8 },
-  { key: 'ebook', label: 'Ebook', promptHint: 'Create an ebook PDF from the full world...', targetFormat: 'pdf' },
-  { key: 'reference', label: 'Reference Doc', promptHint: 'Create a designed world reference document...', targetFormat: 'pdf' },
-  { key: 'video', label: 'Video', promptHint: 'Create a cinematic video package from this world...', targetFormat: 'video' },
-]
+const OUTPUT_PROMPT_PLACEHOLDER = 'Ask for a trailer, poster, chapter draft, comic issue, reference doc, or anything else this world should produce...'
 
 function artifactDownloadFileName(name: string, extension: string) {
   const baseName = name
@@ -269,14 +258,12 @@ export function useWorldOutputLibraryController({
   model,
   onStartOutputRequest,
 }: WorldOutputLibraryBaseProps): WorldOutputLibraryController {
-  const [selectedPreset, setSelectedPreset] = useState<OutputPresetKey>('image')
   const [prompt, setPrompt] = useState('')
   const [artifactFilter, setArtifactFilter] = useState<OutputArtifactFilter>('all')
   const [busy, setBusy] = useState(false)
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null)
   const [downloadingArtifactKey, setDownloadingArtifactKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const selectedPresetConfig = outputPresets.find((preset) => preset.key === selectedPreset) ?? outputPresets[0]
   const visibleArtifacts = useMemo(
     () => artifactFilter === 'all' ? model.artifacts : model.artifacts.filter((artifact) => artifact.type === artifactFilter),
     [artifactFilter, model.artifacts],
@@ -294,8 +281,6 @@ export function useWorldOutputLibraryController({
       await onStartOutputRequest({
         prompt: cleanPrompt,
         sourceSurface: 'wiki_outputs',
-        targetFormat: selectedPresetConfig.targetFormat,
-        pageCount: selectedPresetConfig.pageCount,
       })
       setPrompt('')
     } catch (submitError) {
@@ -325,15 +310,12 @@ export function useWorldOutputLibraryController({
     downloadingArtifactKey,
     error,
     prompt,
-    selectedPreset,
-    selectedPresetConfig,
     visibleArtifacts,
     handleDownloadArtifact,
     setArtifactFilter,
     setBusyRequestId,
     setError,
     setPrompt,
-    setSelectedPreset,
     submitOutputRequest,
   }
 }
@@ -348,39 +330,27 @@ export function WorldOutputCreateRail({
       <div className="world-output-rail-head">
         <span className="eyebrow">Outputs</span>
         <strong>Make deliverables</strong>
-        <small>Generate images, stories, comics, docs, and videos from this world.</small>
+        <small>Describe the deliverable. SynArc infers whether it should be image, video, prose, comic, or doc.</small>
       </div>
       <div className="world-output-create-form is-rail">
-        <div className="world-output-preset-row" role="tablist" aria-label="Output type">
-          {outputPresets.map((preset) => (
-            <button
-              key={preset.key}
-              aria-selected={controller.selectedPreset === preset.key}
-              className={controller.selectedPreset === preset.key ? 'is-active' : ''}
-              onClick={() => controller.setSelectedPreset(preset.key)}
-              role="tab"
-              type="button"
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-        <label className="world-output-prompt-input">
-          <span>Output request</span>
-          <textarea
-            aria-label="Prompt an output from this world"
-            onChange={(event) => controller.setPrompt(event.target.value)}
-            placeholder={controller.selectedPresetConfig.promptHint}
-            rows={5}
-            value={controller.prompt}
-          />
-        </label>
-        <div className="world-output-submit-row">
-          <button disabled={!canRunOutputs || controller.busy} onClick={() => void controller.submitOutputRequest()} type="button">
-            {controller.busy ? 'Creating...' : `Generate ${controller.selectedPresetConfig.label}`}
-          </button>
-          <button onClick={() => onOpenOutputStudio(null)} type="button">Studio</button>
-          {!canRunOutputs ? <span>Live Supabase draft required.</span> : null}
+        <CompactPromptComposer
+          ariaLabel="Prompt an output from this world"
+          busy={controller.busy}
+          busyLabel="Creating output..."
+          disabled={!canRunOutputs}
+          expandIcon="content"
+          expandLabel="Open Output Studio"
+          placeholder={OUTPUT_PROMPT_PLACEHOLDER}
+          sendLabel="Create output"
+          submitDisabled={!canRunOutputs || controller.prompt.trim().length === 0}
+          value={controller.prompt}
+          onChange={controller.setPrompt}
+          onExpand={() => onOpenOutputStudio(null)}
+          onSubmit={() => void controller.submitOutputRequest()}
+        />
+        <div className="world-output-inference-note">
+          <span>Type inferred from prompt</span>
+          {!canRunOutputs ? <span>Live Supabase draft required.</span> : <span>Use plain language: “make a trailer”, “draft chapter 3”, “create a poster”.</span>}
         </div>
         {controller.error ? <p className="world-output-error">{controller.error}</p> : null}
       </div>
@@ -420,36 +390,24 @@ export function WorldOutputLibraryPanel({
           <p>Finished artifacts stay visible beside the wiki, while workflow controls remain in Studio.</p>
         </div>
         <div className="world-output-create-form">
-          <div className="world-output-preset-row" role="tablist" aria-label="Output type">
-            {outputPresets.map((preset) => (
-              <button
-                key={preset.key}
-                aria-selected={outputController.selectedPreset === preset.key}
-                className={outputController.selectedPreset === preset.key ? 'is-active' : ''}
-                onClick={() => outputController.setSelectedPreset(preset.key)}
-                role="tab"
-                type="button"
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <label className="world-output-prompt-input">
-            <span>Output request</span>
-            <textarea
-              aria-label="Prompt an output from this world"
-              onChange={(event) => outputController.setPrompt(event.target.value)}
-              placeholder={outputController.selectedPresetConfig.promptHint}
-              rows={3}
-              value={outputController.prompt}
-            />
-          </label>
-          <div className="world-output-submit-row">
-            <button disabled={!canRunOutputs || outputController.busy} onClick={() => void outputController.submitOutputRequest()} type="button">
-              {outputController.busy ? 'Creating output...' : `Generate ${outputController.selectedPresetConfig.label}`}
-            </button>
-            <button onClick={() => onOpenOutputStudio(null)} type="button">Open Studio</button>
-            {!canRunOutputs ? <span>Live Supabase draft required.</span> : null}
+          <CompactPromptComposer
+            ariaLabel="Prompt an output from this world"
+            busy={outputController.busy}
+            busyLabel="Creating output..."
+            disabled={!canRunOutputs}
+            expandIcon="content"
+            expandLabel="Open Output Studio"
+            placeholder={OUTPUT_PROMPT_PLACEHOLDER}
+            sendLabel="Create output"
+            submitDisabled={!canRunOutputs || outputController.prompt.trim().length === 0}
+            value={outputController.prompt}
+            onChange={outputController.setPrompt}
+            onExpand={() => onOpenOutputStudio(null)}
+            onSubmit={() => void outputController.submitOutputRequest()}
+          />
+          <div className="world-output-inference-note">
+            <span>Type inferred from prompt</span>
+            {!canRunOutputs ? <span>Live Supabase draft required.</span> : <span>Ask directly for a trailer, poster, chapter, comic, document, or reference pack.</span>}
           </div>
           {outputController.error ? <p className="world-output-error">{outputController.error}</p> : null}
         </div>
