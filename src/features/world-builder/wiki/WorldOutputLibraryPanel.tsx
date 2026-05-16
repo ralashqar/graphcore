@@ -197,6 +197,31 @@ function OutputRequestEntityRefs({ refs }: { refs: OutputLibraryEntityRef[] }) {
   )
 }
 
+function OutputRequestActiveSteps({ row }: { row: OutputLibraryRequestRow }) {
+  const labels = row.activeStepLabels.length > 0 ? row.activeStepLabels : row.currentStepLabel ? [row.currentStepLabel] : []
+  const visibleLabels = labels.slice(0, 3)
+  const extraCount = Math.max(0, labels.length - visibleLabels.length)
+  if (labels.length > 1) {
+    return (
+      <div className="world-output-row-step-list" aria-label="Running workflow steps">
+        {visibleLabels.map((label) => (
+          <small className="world-output-row-step" key={label} title={label}>
+            <span className="world-output-row-step-spinner" aria-hidden="true" />
+            {label}
+          </small>
+        ))}
+        {extraCount > 0 ? <small className="world-output-row-step is-more">+{extraCount}</small> : null}
+      </div>
+    )
+  }
+  return (
+    <small className="world-output-row-step" title={labels[0] || 'Preparing workflow'}>
+      <span className="world-output-row-step-spinner" aria-hidden="true" />
+      {labels[0] || 'Preparing workflow'}
+    </small>
+  )
+}
+
 function OutputRequestRow({
   busyRequestId,
   row,
@@ -235,9 +260,11 @@ function OutputRequestRow({
           <strong>{row.title}</strong>
           <OutputRequestEntityRefs refs={row.entityRefs} />
           {row.groupKey === 'generating' ? (
-            <small className="world-output-row-step">
-              <span className="world-output-row-step-spinner" aria-hidden="true" />
-              {row.currentStepLabel || 'Preparing workflow'}
+            <OutputRequestActiveSteps row={row} />
+          ) : null}
+          {row.groupKey === 'needs_attention' && row.currentStepLabel ? (
+            <small className="world-output-row-step is-error" title={row.currentStepLabel}>
+              {row.currentStepLabel}
             </small>
           ) : null}
         </div>

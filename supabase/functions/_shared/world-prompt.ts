@@ -1841,10 +1841,12 @@ function promptHasExplicitCorrectionLanguage(prompt: string) {
 
 function looksLikeGraphDiagnosisPrompt(prompt: string) {
   return /\b(what(?:'s| is)\s+(?:weak|missing|underdeveloped)|weakness(?:es)?|gap(?:s)?|what should i add|underconnected|what is this world missing|what are we missing|diagnos(?:e|is)|audit)\b/i.test(prompt)
+    || /\b(where|what|how)\b[\s\S]{0,80}\b(flesh(?:ed)? out|develop(?:ed)?|strengthen(?:ed)?|improve(?:d)?|deepen(?:ed)?|underdeveloped)\b/i.test(prompt)
+    || /\b(suggest|recommend|critique|evaluate)\b[\s\S]{0,80}\b(world|story|canon|character|characters|chapter|chapters|plot|arc|relationship|relationships|flesh|develop|improve|strengthen|deepen)\b/i.test(prompt)
 }
 
 function looksLikeQuestionPrompt(prompt: string) {
-  return /\?/.test(prompt) || /^(what|why|how|should|could|would|is|are|do|does|can)\b/i.test(prompt.trim())
+  return /\?/.test(prompt) || /^(what|why|where|how|should|could|would|is|are|do|does|can)\b/i.test(prompt.trim())
 }
 
 function promptAsksWhetherToMutate(prompt: string) {
@@ -13655,6 +13657,7 @@ async function createInitialSeedGenerationJob(input: {
   session: WorldPromptSession
   turn: WorldPromptTurn
   payload: z.infer<typeof worldPromptSeedGenerationRequestSchema>
+  snapshot: WorldPromptSnapshot
   sourceContext: unknown
   inference: z.infer<typeof worldPromptProjectContextInferenceSchema>
   skeletonProfile: unknown
@@ -13684,7 +13687,7 @@ async function createInitialSeedGenerationJob(input: {
         selectedArtStyleDescription: input.selectedArtStyleDescription || input.selectedPreset.description,
         skeletonProfile: input.skeletonProfile,
         projectContext: input.projectContext,
-        snapshot: input.payload.snapshot,
+        snapshot: input.snapshot,
       },
     })
     .select(GENERATION_JOB_SELECT)
@@ -17500,6 +17503,7 @@ export async function continueWorldSeedGeneration(input: {
   delete draftMetadataWithoutProjectContext.projectContext
   seedSnapshot.draft.metadata = {
     ...draftMetadataWithoutProjectContext,
+    projectContext,
   }
   const selectedPreset = getArtStylePreset(payload.selectedArtStylePreset)
   const writeInferenceEvent = await createEventWriter({
@@ -17535,6 +17539,11 @@ export async function continueWorldSeedGeneration(input: {
     turn: completedInferenceTurn,
     session,
   })
+  await persistProjectContextForSeed({
+    client: input.client,
+    snapshot: seedSnapshot,
+    projectContext,
+  })
   const generationPrompt = buildInitialSeedGenerationPrompt({
     originalPrompt: inferenceTurn.prompt,
     inference,
@@ -17559,6 +17568,7 @@ export async function continueWorldSeedGeneration(input: {
     session,
     turn: generationTurnState.turn,
     payload,
+    snapshot: seedSnapshot,
     sourceContext,
     inference,
     skeletonProfile,
@@ -17605,7 +17615,7 @@ export async function continueWorldSeedGeneration(input: {
     suggestions: [],
     threads: [],
     definitions: [],
-    projectContext: null,
+    projectContext,
     worldEntities: seedSnapshot.worldEntities,
     worldRelationships: seedSnapshot.worldRelationships,
     worldViews: seedSnapshot.worldViews,

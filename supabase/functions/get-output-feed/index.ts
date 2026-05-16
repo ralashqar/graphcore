@@ -44,6 +44,22 @@ function assetRowToDefinition(row: Record<string, unknown>, signedUrl: string | 
   }
 }
 
+function collectReferenceSelectionAssetKeys(value: unknown, keys = new Set<string>(), depth = 0) {
+  if (depth > 8 || value == null) return keys
+  if (Array.isArray(value)) {
+    for (const entry of value) collectReferenceSelectionAssetKeys(entry, keys, depth + 1)
+    return keys
+  }
+  if (typeof value !== 'object') return keys
+  const record = value as Record<string, unknown>
+  for (const field of ['assetKey', 'primaryAssetKey', 'selectedReferenceVariantAssetKey', 'variantAssetKey']) {
+    const text = readText(record[field])
+    if (text) keys.add(text)
+  }
+  for (const entry of Object.values(record)) collectReferenceSelectionAssetKeys(entry, keys, depth + 1)
+  return keys
+}
+
 async function loadSignedAssets(client: DatabaseClient, projectId: string, assetKeys: string[], knownAssetKeys: string[]) {
   const known = new Set(knownAssetKeys.map((key) => key.trim()).filter(Boolean))
   const cleanKeys = [...new Set(assetKeys.map((key) => key.trim()).filter(Boolean))].slice(0, 160)
@@ -207,9 +223,14 @@ Deno.serve(async (request) => {
       admin,
       ((artifactResponse.data ?? []) as never[]).map(mapOutputArtifactRow),
     )
+    const requestReferenceAssetKeys = requests.flatMap((request) => {
+      const metadata = asRecord(request.metadata)
+      return [...collectReferenceSelectionAssetKeys(metadata.outputReferenceSelection)]
+    })
     const assets = await loadSignedAssets(admin, payload.projectId, [
       ...artifacts.map((artifact) => artifact.assetKey).filter((key): key is string => Boolean(key)),
       ...projections.flatMap((projection) => projection.previewAssetKeys),
+      ...requestReferenceAssetKeys,
     ], payload.knownAssetKeys ?? [])
 
     return json(outputFeedResponseSchema.parse({

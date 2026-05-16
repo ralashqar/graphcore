@@ -72,6 +72,7 @@ type WorldWikiPanelProps = {
   wikiModel: WorldWikiModel
   wikiOverviewDisplayTitle: string
   wikiOverviewDisplayLogline: string
+  wikiOverviewFullLogline: string
   wikiOverviewShowMetadata: boolean
   wikiOverviewActionGaps: Array<{ gap: WorldWikiGap; label: string }>
   wikiBrandAtlasImageUrl: string | null
@@ -374,6 +375,7 @@ export function WorldWikiPanel({
   wikiModel,
   wikiOverviewDisplayTitle,
   wikiOverviewDisplayLogline,
+  wikiOverviewFullLogline,
   wikiOverviewShowMetadata,
   wikiOverviewActionGaps,
   wikiBrandAtlasImageUrl,
@@ -450,6 +452,7 @@ export function WorldWikiPanel({
   const overviewLoglineText = liveGenerationActive
     ? typedOverviewLogline.displayText
     : wikiOverviewDisplayLogline || 'No logline yet.'
+  const overviewLoglineModalText = wikiOverviewFullLogline.trim() || wikiOverviewDisplayLogline
   const showOverviewLoglineCaret = liveGenerationActive && shouldTypeOverviewLogline && !typedOverviewLogline.complete
   const populatedWikiSections = orderWikiSectionsForLiveDocument(
     liveOverviewReady
@@ -659,7 +662,7 @@ export function WorldWikiPanel({
                     onClick={() => onOpenWikiDetailModal({
                       title: wikiOverviewDisplayTitle || wikiModel.title || 'World logline',
                       eyebrow: 'Logline',
-                      body: wikiOverviewDisplayLogline,
+                      body: overviewLoglineModalText,
                       icon: 'content',
                       meta: wikiOverviewTags.slice(0, 4),
                     })}

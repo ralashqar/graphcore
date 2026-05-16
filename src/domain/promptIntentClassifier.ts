@@ -266,9 +266,9 @@ export const promptIntentCatalog = [
     outputKind: 'unknown',
     targetFormat: 'markdown',
     description: 'A question or explanation request that should answer without mutating canon or creating an artifact.',
-    positiveExamples: ['Why does Suri hide the map?', 'Summarize Chapter 4.'],
+    positiveExamples: ['Why does Suri hide the map?', 'Summarize Chapter 4.', 'Evaluate where the story could be fleshed out more.'],
     negativeExamples: ['Create an image of Suri.', 'Add a new chapter.'],
-    positiveCues: ['what is', 'explain', 'summarize', 'why', 'how does', 'tell me about', 'what happened'],
+    positiveCues: ['what is', 'explain', 'summarize', 'why', 'where could', 'where can', 'how does', 'tell me about', 'what happened', 'evaluate', 'critique', 'assessment', 'what should i add', 'what are we missing', 'where is', 'suggest where', 'recommend where', 'fleshed out more'],
     negativeCues: ['create', 'make', 'generate', 'add', 'insert', 'change', 'update'],
   }),
 ] as const
@@ -341,6 +341,12 @@ export function classifyPromptIntentScored(prompt: string, input?: {
     }
     if (catalogEntry.id === 'world_mutation' && matchingCues(normalized, ['insert', 'add', 'change', 'update', 'between chapter']).length > 0) {
       score += 0.18
+    }
+    if (catalogEntry.id === 'answer_only' && /\b(where|what|how)\b[\s\S]{0,100}\b(flesh(?:ed)? out|develop(?:ed)?|improve(?:d)?|strengthen(?:ed)?|deepen(?:ed)?|missing|weak|underdeveloped)\b/.test(normalized)) {
+      score += 0.26
+    }
+    if (catalogEntry.id === 'world_mutation' && /\b(where|what|how|should|could)\b[\s\S]{0,100}\b(flesh(?:ed)? out|develop(?:ed)?|improve(?:d)?|strengthen(?:ed)?|deepen(?:ed)?|missing|weak|underdeveloped|suggest|recommend)\b/.test(normalized)) {
+      score -= 0.22
     }
 
     return promptIntentCandidateSchema.parse({

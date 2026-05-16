@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 
 const source = readFileSync(resolve('supabase/functions/_shared/world-prompt.ts'), 'utf8')
+const appSource = readFileSync(resolve('src/App.tsx'), 'utf8')
 
 function functionBody(name: string) {
   const start = source.indexOf(`function ${name}`)
@@ -53,6 +54,21 @@ test('prompt turn emits an LLM intent-routing step before main planning', () => 
   assert.equal(startTurnBody.includes('Analysing prompt intent.'), true)
   assert.equal(startTurnBody.includes('inferCanonIntentWithLlm'), true)
   assert.equal(startTurnBody.includes('intentRouting'), true)
+})
+
+test('answer-only critique prompts route into advisory feed turns instead of client errors', () => {
+  const detectBody = functionBody('detectPromptIntent')
+  const diagnosisBody = functionBody('looksLikeGraphDiagnosisPrompt')
+  const questionBody = functionBody('looksLikeQuestionPrompt')
+
+  assert.equal(questionBody.includes('where'), true)
+  assert.equal(diagnosisBody.includes('flesh(?:ed)? out'), true)
+  assert.equal(diagnosisBody.includes('suggest|recommend|critique|evaluate'), true)
+  assert.equal(detectBody.includes("return 'graph_diagnosis' satisfies PromptIntentHint"), true)
+  assert.equal(appSource.includes("promptIntent.intent !== 'answer_only' && (promptIntent.intent === 'ambiguous' || promptIntent.requiresConfirmation)"), true)
+  assert.equal(appSource.includes("promptMode: 'ask'"), true)
+  assert.equal(appSource.includes('sourceContext: sourceContextForPrompt'), true)
+  assert.equal(appSource.includes("promptIntent.intent === 'ambiguous' || promptIntent.intent === 'answer_only' || promptIntent.requiresConfirmation"), false)
 })
 
 test('prompt op optimization persists chapter summaries without silent mid-word truncation', () => {

@@ -18,6 +18,7 @@ import {
 } from '../../../src/domain/worldEntityVisuals.ts'
 import { runTrackedOpenAiImages, type AiUsageContext } from './ai-provider-gateway.ts'
 import type { OpenAiImagesRequest } from './openai.ts'
+import { buildFalWebhookUrl } from './fal-webhooks.ts'
 
 type DatabaseClient = {
   from: (table: string) => any
@@ -69,6 +70,13 @@ type FalImageResult = {
   resultBody: Record<string, unknown>
 }
 
+type FalWebhookImageResult = {
+  status: 'completed' | 'failed' | 'pending'
+  imageUrl: string
+  errorMessage: string
+  resultBody: Record<string, unknown>
+}
+
 type VisualImageProvider = 'fal' | 'openai'
 
 type GeneratedVisualImageResult = {
@@ -105,6 +113,17 @@ function readString(value: unknown) {
 function readPositiveInt(value: unknown, fallback: number) {
   const numberValue = typeof value === 'number' ? value : Number(value)
   return Number.isInteger(numberValue) && numberValue > 0 ? numberValue : fallback
+}
+
+function resolveFalWebhookUrl() {
+  try {
+    return buildFalWebhookUrl()
+  } catch (error) {
+    console.warn('[visual-generation-job] Fal webhook URL is not configured.', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return ''
+  }
 }
 
 function slugify(value: string) {
@@ -228,19 +247,26 @@ async function submitFalImageRequest(input: {
   quality?: string
   outputFormat?: string
   referenceImageUrls?: string[]
+  webhookUrl?: string
 }) {
-  return fetchFalJson(`${falQueueBaseUrl}/${input.model}`, {
+  const body: Record<string, unknown> = {
+    prompt: input.prompt,
+    image_size: input.imageSize ?? 'square_hd',
+    quality: input.quality ?? Deno.env.get('VISUAL_GENERATION_FAL_QUALITY') ?? 'high',
+    num_images: 1,
+    output_format: input.outputFormat ?? 'png',
+    ...(input.referenceImageUrls && input.referenceImageUrls.length > 0 ? { image_urls: input.referenceImageUrls } : {}),
+    sync_mode: false,
+  }
+  const url = new URL(`${falQueueBaseUrl}/${input.model}`)
+  if (input.webhookUrl) {
+    url.searchParams.set('fal_webhook', input.webhookUrl)
+    body.webhook_url = input.webhookUrl
+  }
+  return fetchFalJson(url.toString(), {
     method: 'POST',
     headers: buildFalHeaders(input.apiKey),
-    body: JSON.stringify({
-      prompt: input.prompt,
-      image_size: input.imageSize ?? 'square_hd',
-      quality: input.quality ?? Deno.env.get('VISUAL_GENERATION_FAL_QUALITY') ?? 'high',
-      num_images: 1,
-      output_format: input.outputFormat ?? 'png',
-      ...(input.referenceImageUrls && input.referenceImageUrls.length > 0 ? { image_urls: input.referenceImageUrls } : {}),
-      sync_mode: false,
-    }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -351,6 +377,44 @@ async function ensureVisualJobStillRunning(client: DatabaseClient, jobId: string
   throw new VisualJobCancelledError(`Visual generation job ${jobId} is ${status || 'not running'} before ${phase}; skipping stale side effects.`)
 }
 
+function readFalWebhookImageResult(metadata: Record<string, unknown>, requestId: string): FalWebhookImageResult | null {
+  const currentRequestId = readString(metadata.falRequestId)
+  if (currentRequestId && currentRequestId !== requestId) return null
+  const webhookStatus = readString(metadata.webhookStatus)
+  if (!webhookStatus) return null
+  const imageUrl = readString(metadata.falWebhookImageUrl) || readString(metadata.falImageUrl)
+  const errorMessage = readString(metadata.webhookErrorMessage)
+    || readString(metadata.falWebhookErrorMessage)
+    || readString(metadata.webhookPayloadError)
+  const resultBody = asRecord(metadata.falWebhookPayload)
+  if (webhookStatus === 'ERROR') {
+    return { status: 'failed', imageUrl: '', errorMessage: errorMessage || 'Fal webhook reported an image generation error.', resultBody }
+  }
+  if (imageUrl) return { status: 'completed', imageUrl, errorMessage: '', resultBody }
+  return { status: 'pending', imageUrl: '', errorMessage: '', resultBody }
+}
+
+async function loadVisualJobFalWebhookResult(
+  client: DatabaseClient,
+  jobId: string,
+  requestId: string,
+): Promise<FalWebhookImageResult | null> {
+  const response = await client
+    .from('visual_generation_jobs')
+    .select('status, metadata')
+    .eq('id', jobId)
+    .single()
+  if (response.error || !response.data) {
+    throw new Error(response.error?.message ?? `Visual generation job ${jobId} was not found while reading Fal webhook metadata.`)
+  }
+  const row = response.data as Record<string, unknown>
+  const status = readString(row.status)
+  if (status && status !== 'running') {
+    throw new VisualJobCancelledError(`Visual generation job ${jobId} is ${status} while waiting for Fal webhook result.`)
+  }
+  return readFalWebhookImageResult(asRecord(row.metadata), requestId)
+}
+
 async function heartbeat(client: DatabaseClient, jobId: string, workerId: string, metadataPatch: Record<string, unknown>) {
   const response = await client.rpc('heartbeat_visual_generation_job', {
     job_id: jobId,
@@ -400,6 +464,8 @@ async function waitForFalImage(input: {
   let requestId = existingRequestId
   let statusUrl: string | null = existingStatusUrl || null
   let responseUrl: string | null = existingResponseUrl || null
+  const webhookUrl = resolveFalWebhookUrl()
+  const webhookConfigured = Boolean(webhookUrl)
 
   if (!requestId) {
     console.info('[visual-generation-job] submitting Fal image request.', {
@@ -422,6 +488,7 @@ async function waitForFalImage(input: {
       quality: input.quality ?? null,
       outputFormat: input.outputFormat ?? 'png',
       referenceImageCount: input.referenceImageUrls?.length ?? 0,
+      webhookConfigured,
     })
 
     const submit = await submitFalImageRequest({
@@ -432,6 +499,7 @@ async function waitForFalImage(input: {
       quality: input.quality,
       outputFormat: input.outputFormat,
       referenceImageUrls: input.referenceImageUrls,
+      webhookUrl,
     })
     requestId = readString(submit.body.request_id)
     statusUrl = readString(submit.body.status_url) || null
@@ -465,15 +533,43 @@ async function waitForFalImage(input: {
       falOutputFormat: input.outputFormat ?? 'png',
       falReferenceImageCount: input.referenceImageUrls?.length ?? 0,
       falSubmittedAt: new Date().toISOString(),
+      webhookConfigured,
     })
   }
 
   const timeoutMs = Number(Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS') ?? 1_200_000)
-  const pollIntervalMs = Number(Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS') ?? 3_000)
+  const basePollIntervalMs = Number(Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS') ?? 3_000)
+  const webhookPollIntervalMs = Number(Deno.env.get('VISUAL_GENERATION_FAL_WEBHOOK_POLL_INTERVAL_MS') ?? 10_000)
+  const pollIntervalMs = webhookConfigured
+    ? Math.max(basePollIntervalMs, webhookPollIntervalMs)
+    : basePollIntervalMs
   const startedAt = Date.now()
   let lastHeartbeatAt = 0
 
   while (Date.now() - startedAt < timeoutMs) {
+    const webhookResult = await loadVisualJobFalWebhookResult(input.client, input.job.id, requestId)
+    if (webhookResult?.status === 'failed') {
+      throw new Error(webhookResult.errorMessage)
+    }
+    if (webhookResult?.status === 'completed' && webhookResult.imageUrl) {
+      await heartbeat(input.client, input.job.id, input.workerId, {
+        phase: `${input.phasePrefix}_fal_webhook_image_ready`,
+        provider: 'fal',
+        model: input.model,
+        falRequestId: requestId,
+        falImageUrl: webhookResult.imageUrl,
+        webhookConfigured,
+        webhookConsumedAt: new Date().toISOString(),
+      })
+      return {
+        requestId,
+        statusUrl,
+        responseUrl,
+        imageUrl: webhookResult.imageUrl,
+        resultBody: webhookResult.resultBody,
+      }
+    }
+
     const status = await getFalStatus({
       apiKey: input.apiKey,
       model: input.model,
@@ -491,6 +587,7 @@ async function waitForFalImage(input: {
         falRequestId: requestId,
         falStatus: providerStatus || null,
         falLastStatusAt: new Date().toISOString(),
+        webhookConfigured,
       })
     }
 

@@ -8331,6 +8331,9 @@ export function WorldGraphPage({
                   wikiModel={wikiModel}
                   wikiOverviewDisplayTitle={liveWikiGenerationState.active ? liveWikiGenerationState.overviewTitle : wikiModel.title}
                   wikiOverviewDisplayLogline={liveWikiGenerationState.active ? liveWikiGenerationState.overviewLogline : wikiModel.overview.logline}
+                  wikiOverviewFullLogline={liveWikiGenerationState.active
+                    ? liveWikiGenerationState.overviewLogline
+                    : trimOptionalString(readLooseRecord(effectiveProjectDraftMetadata.worldWiki).logline) || wikiModel.overview.logline}
                   wikiOverviewShowMetadata={liveWikiGenerationState.active ? liveWikiGenerationState.showOverviewMetadata : true}
                   wikiOverviewActionGaps={wikiOverviewActionGaps}
                   wikiBrandAtlasImageUrl={wikiBrandAtlasImageUrl}

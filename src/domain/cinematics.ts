@@ -770,6 +770,7 @@ export const cinematicV2ScreenplayDraftSchema = z.object({
   sourceRefIds: z.array(z.string()).default([]),
   visualMotifs: z.array(z.string()).default([]),
   diagnostics: z.array(z.string()).default([]),
+  metadata: rawRecordSchema.default({}),
 })
 
 export const cinematicV2DialogueLineSchema = z.object({

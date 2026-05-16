@@ -60,6 +60,7 @@ import {
 import { buildFalMediaUsageLine, buildMuapiMediaUsageLine, buildOpenAiUsageLine, summarizeAiUsageLines, type AiUsageLine } from '../../../src/domain/aiUsage.ts'
 import { hashOutputGuidanceBundle, outputGuidanceBundleSchema, type OutputGuidanceBundle } from '../../../src/domain/outputSkills.ts'
 import {
+  composeWorldEntityVoiceDescription,
   readWorldEntityVisualDescription,
   readWorldEntityVisualTraitMap,
   readWorldEntityVisualTraits,
@@ -67,6 +68,7 @@ import {
   readWorldEntityVoiceIdentity,
 } from '../../../src/domain/worldEntityVisuals.ts'
 import { recordAiUsageEvent } from './ai-provider-gateway.ts'
+import { buildFalWebhookUrl } from './fal-webhooks.ts'
 import {
   cancelOpenAiResponse,
   createOpenAiBackgroundResponse,
@@ -629,6 +631,16 @@ function collectOutputPreviewAssetKeys(value: unknown, assetKeys = new Set<strin
 }
 
 function firstOutputPreviewText(outputs: Record<string, unknown>) {
+  const storyboardGroup = asRecord(outputs.storyboardGroup)
+  const storyboardSummary = readText(storyboardGroup.summary)
+  const storyboardIndex = Number(storyboardGroup.index ?? 0) || 0
+  if (storyboardSummary) {
+    const prompt = readText(outputs.prompt) || readText(outputs.text) || readText(outputs.providerPrompt)
+    return truncateStatusText([
+      `Storyboard ${storyboardIndex || ''}: ${storyboardSummary}`.trim(),
+      prompt,
+    ].filter(Boolean).join('\n\n'), 2400)
+  }
   for (const key of ['text', 'screenplayMarkdown', 'prompt', 'providerPrompt', 'markdown', 'summary']) {
     const value = readText(outputs[key])
     if (value) return truncateStatusText(value, 2400)
@@ -686,6 +698,155 @@ export function compactOutputWorkflowRunForStatus(run: OutputWorkflowRun): Outpu
       outputs: compactRecordForStatus(step.outputs),
       errorMessage: step.errorMessage ? truncateStatusText(step.errorMessage) : step.errorMessage,
     })),
+  }
+}
+
+function outputArtifactNodeKey(artifact: OutputArtifact) {
+  const metadata = asRecord(artifact.metadata)
+  return readText(metadata.nodeKey) || readText(metadata.node_key)
+}
+
+function buildRecoveredNodeOutputsFromOutputArtifact(node: OutputWorkflowNode, artifact: OutputArtifact) {
+  const metadata = asRecord(artifact.metadata)
+  const assetKey = readText(artifact.assetKey)
+  if (!assetKey) return null
+  const storagePath = readText(metadata.storagePath) || readText(metadata.storage_path)
+  const role = readText(metadata.role) || readText(artifact.kind) || 'asset'
+  const media = {
+    assetKey,
+    storagePath,
+    mimeType: readText(artifact.mimeType),
+    role,
+    prompt: readText(metadata.prompt),
+    providerPrompt: readText(metadata.providerPrompt),
+    provider: readText(metadata.provider),
+    model: readText(metadata.model),
+    providerRequestId: readText(metadata.providerRequestId) || readText(metadata.falRequestId),
+    storyboardGroupId: readText(metadata.storyboardGroupId),
+    shotId: readText(metadata.shotId),
+    shotIndex: Number(metadata.shotIndex ?? -1) >= 0 ? Number(metadata.shotIndex) : null,
+    planningOnly: metadata.planningOnly === true || metadata.planning_only === true,
+    planning_only: metadata.planningOnly === true || metadata.planning_only === true,
+    usedAsVideoReference: metadata.usedAsVideoReference === true || metadata.used_as_video_reference === true,
+    used_as_video_reference: metadata.usedAsVideoReference === true || metadata.used_as_video_reference === true,
+    recoveredFromArtifact: true,
+  }
+  const artifactOutput = {
+    key: readText(artifact.key),
+    name: readText(artifact.name),
+    kind: readText(artifact.kind),
+    assetKey,
+    mimeType: readText(artifact.mimeType),
+    summary: readText(artifact.summary),
+    metadata,
+    recoveredFromArtifact: true,
+  }
+  return {
+    assetKey,
+    storagePath,
+    mimeType: readText(artifact.mimeType),
+    prompt: readText(metadata.prompt),
+    providerPrompt: readText(metadata.providerPrompt),
+    role,
+    image: readText(artifact.kind) === 'image' || node.nodeType === 'image_generation' ? media : undefined,
+    video: readText(artifact.kind) === 'video' || node.nodeType === 'video_generation' ? media : undefined,
+    artifact: artifactOutput,
+    artifacts: [artifactOutput],
+    storyboardGroupId: readText(metadata.storyboardGroupId),
+    recoveredFromArtifact: true,
+  }
+}
+
+async function recoverArtifactBackedWorkflowNodeOutputs(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  nodes: OutputWorkflowNode[]
+}) {
+  let recoveredCount = 0
+  const artifactByNodeKey = new Map(input.run.artifacts
+    .filter((artifact) => readText(artifact.assetKey))
+    .map((artifact) => [outputArtifactNodeKey(artifact), artifact] as const)
+    .filter(([nodeKey]) => Boolean(nodeKey)))
+  const stepByNodeKey = new Map(input.run.steps.map((step) => [step.nodeKey, step] as const))
+  for (const node of input.nodes) {
+    if (readText(node.outputHash) || hasStoredOutputs(node.outputs)) continue
+    const artifact = artifactByNodeKey.get(node.key)
+    if (!artifact) continue
+    const outputs = buildRecoveredNodeOutputsFromOutputArtifact(node, artifact)
+    if (!outputs) continue
+    const outputHash = hashOutputWorkflowValue(outputs)
+    const metadata = asRecord(artifact.metadata)
+    const preview = buildOutputWorkflowNodeOutputPreview({
+      node: { ...node, outputHash },
+      outputs,
+      provider: readText(metadata.provider) || null,
+      model: readText(metadata.model) || null,
+    })
+    const updateNode = await input.client
+      .from('output_workflow_nodes')
+      .update({
+        outputs,
+        dirty: false,
+        input_hash: readText(stepByNodeKey.get(node.key)?.inputHash) || readText(node.inputHash),
+        output_hash: outputHash,
+        metadata: {
+          ...node.metadata,
+          outputPreview: preview,
+          recoveredFromArtifact: true,
+          recoveredFromArtifactAt: new Date().toISOString(),
+        },
+      })
+      .eq('id', node.id)
+    if (updateNode.error) throw new Error(updateNode.error.message)
+    const step = stepByNodeKey.get(node.key)
+    await setStepStatus(input.client, {
+      runId: input.run.id,
+      node: { ...node, outputs, outputHash, dirty: false },
+      status: 'completed',
+      draftId: input.run.draftId,
+      orderIndex: step?.orderIndex ?? 0,
+      inputHash: readText(step?.inputHash) || readText(node.inputHash),
+      outputHash,
+      outputs,
+      provider: readText(metadata.provider) || readText(step?.provider) || null,
+      model: readText(metadata.model) || readText(step?.model) || null,
+      providerRequestId: readText(metadata.providerRequestId) || readText(metadata.falRequestId) || readText(step?.providerRequestId) || null,
+      metadata: {
+        ...asRecord(step?.metadata),
+        recoveredFromArtifact: true,
+        recoveredFromArtifactAt: new Date().toISOString(),
+        outputPreview: preview,
+      },
+    })
+    recoveredCount += 1
+  }
+  return recoveredCount
+}
+
+async function loadRecoverableArtifactBackedNodeOutputs(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  node: OutputWorkflowNode
+}) {
+  const artifactResponse = await input.client
+    .from('output_artifacts')
+    .select(outputArtifactSelect)
+    .eq('draft_id', input.run.draftId)
+    .eq('run_id', input.run.id)
+    .order('created_at', { ascending: false })
+    .limit(100)
+  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
+  const artifact = ((artifactResponse.data ?? []) as OutputArtifactRow[])
+    .map(mapOutputArtifactRow)
+    .find((entry) => outputArtifactNodeKey(entry) === input.node.key)
+  if (!artifact) return null
+  const outputs = buildRecoveredNodeOutputsFromOutputArtifact(input.node, artifact)
+  if (!outputs) return null
+  return {
+    outputs,
+    provider: readText(asRecord(artifact.metadata).provider) || 'graphcore',
+    model: readText(asRecord(artifact.metadata).model) || 'artifact-recovery',
+    providerRequestId: readText(asRecord(artifact.metadata).providerRequestId) || readText(asRecord(artifact.metadata).falRequestId) || null,
   }
 }
 
@@ -967,6 +1128,38 @@ function buildOutputStepAiUsage(input: {
   return { line: null, summary: null }
 }
 
+function terminalProviderStepMetadata(result?: {
+  outputs: Record<string, unknown>
+  provider?: string | null
+  model?: string | null
+  providerRequestId?: string | null
+  skipped?: boolean
+} | null) {
+  if (!result || result.skipped) return {}
+  const image = asRecord(result.outputs.image)
+  const video = asRecord(result.outputs.video)
+  const media = Object.keys(image).length > 0 ? image : video
+  const metadata = asRecord(media.metadata)
+  const provider = readText(result.provider) || readText(media.provider) || readText(metadata.provider)
+  if (!provider) return {}
+  const providerStatus = readText(media.providerStatus)
+    || readText(metadata.providerStatus)
+    || (provider === 'fal' || provider === 'openai' || provider === 'muapi' ? 'COMPLETED' : '')
+  const providerMode = readText(media.providerMode)
+    || readText(metadata.providerMode)
+    || (provider === 'fal' ? 'fal_queue' : provider === 'muapi' ? 'muapi_polling' : provider === 'openai' ? 'background' : '')
+  return {
+    providerStatus: providerStatus || undefined,
+    providerMode: providerMode || undefined,
+    lastProviderPollAt: new Date().toISOString(),
+    providerRequestId: readText(result.providerRequestId) || readText(media.providerRequestId) || readText(metadata.providerRequestId) || readText(metadata.falRequestId) || undefined,
+    falRequestId: readText(metadata.falRequestId) || (provider === 'fal' ? readText(result.providerRequestId) : '') || undefined,
+    falImageUrl: readText(metadata.falImageUrl) || undefined,
+    falStatusUrl: readText(metadata.falStatusUrl) || undefined,
+    falResponseUrl: readText(metadata.falResponseUrl) || undefined,
+  }
+}
+
 function hasStoredOutputs(value: unknown) {
   return Object.keys(asRecord(value)).length > 0
 }
@@ -979,6 +1172,14 @@ function isOptionalOutputWorkflowEdge(
   const sourceNodeKey = readText(edge.sourceNodeKey)
   const targetNodeKey = readText(edge.targetNodeKey)
   const targetPort = readText(edge.targetPort)
+  if (
+    sourceNodeKey.startsWith('cinematic_v3_storyboard_group_')
+    && sourceNodeKey.endsWith('_video')
+    && targetNodeKey === 'cinematic_v3_timeline_assemble'
+    && targetPort === 'videos'
+  ) {
+    return true
+  }
   return sourceNodeKey.startsWith('cinematic_v2_shot_')
     && sourceNodeKey.endsWith('_asset_pack')
     && targetNodeKey.startsWith('cinematic_v2_shot_')
@@ -1501,6 +1702,15 @@ function debugSkipVideoGenerationEnabled(config: Record<string, unknown>, run: O
   return true
 }
 
+function isManualOnlyOutputWorkflowNode(node: OutputWorkflowNode) {
+  const config = asRecord(node.config)
+  const execution = asRecord(config.execution)
+  return config.manualOnly === true
+    || config.manual_only === true
+    || execution.manualOnly === true
+    || execution.manual_only === true
+}
+
 function upstreamHasDebugSkippedVideo(upstream: Record<string, Record<string, unknown>>) {
   for (const outputs of Object.values(upstream)) {
     const video = asRecord(outputs.video)
@@ -1718,6 +1928,17 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function inferUuidV7TimestampIso(value: unknown) {
+  const clean = readText(value).replace(/-/g, '').toLowerCase()
+  if (!/^[0-9a-f]{32}$/.test(clean)) return ''
+  const timestampMs = Number.parseInt(clean.slice(0, 12), 16)
+  if (!Number.isFinite(timestampMs)) return ''
+  const earliestReasonable = Date.parse('2020-01-01T00:00:00.000Z')
+  const latestReasonable = Date.now() + 24 * 60 * 60 * 1000
+  if (timestampMs < earliestReasonable || timestampMs > latestReasonable) return ''
+  return new Date(timestampMs).toISOString()
+}
+
 function outputWorkflowImageModel(configModel?: unknown) {
   const configured = readText(configModel) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_MODEL')?.trim() || 'openai/gpt-image-2'
   return configured === 'gpt-image-2' ? 'openai/gpt-image-2' : configured
@@ -1729,10 +1950,33 @@ function outputWorkflowFalTimeoutMs() {
   return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 1_200_000
 }
 
+function outputWorkflowFalStaleRequestMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_STALE_REQUEST_MS') ?? Deno.env.get('OUTPUT_WORKFLOW_FAL_TIMEOUT_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 900_000
+}
+
 function outputWorkflowFalPollIntervalMs() {
   const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS')
   const parsed = raw ? Number(raw) : NaN
   return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 3_000
+}
+
+function outputWorkflowFalWebhookPollIntervalMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_WEBHOOK_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_WEBHOOK_POLL_INTERVAL_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 10_000
+}
+
+function resolveFalWebhookUrl() {
+  try {
+    return buildFalWebhookUrl()
+  } catch (error) {
+    console.warn('[output-workflow] Fal webhook URL is not configured.', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return ''
+  }
 }
 
 function outputWorkflowMuapiTimeoutMs() {
@@ -2041,6 +2285,7 @@ async function submitFalImageRequest(input: {
   quality: string
   outputFormat: string
   referenceImageUrls?: string[]
+  webhookUrl?: string
 }) {
   const body: Record<string, unknown> = {
     prompt: input.prompt,
@@ -2053,7 +2298,12 @@ async function submitFalImageRequest(input: {
   if (input.referenceImageUrls && input.referenceImageUrls.length > 0) {
     body.image_urls = input.referenceImageUrls
   }
-  return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
+  const url = new URL(`${FAL_QUEUE_BASE_URL}/${input.model}`)
+  if (input.webhookUrl) {
+    url.searchParams.set('fal_webhook', input.webhookUrl)
+    body.webhook_url = input.webhookUrl
+  }
+  return fetchFalJson(url.toString(), {
     method: 'POST',
     headers: buildFalHeaders(input.apiKey),
     body: JSON.stringify(body),
@@ -2700,6 +2950,19 @@ function sortReferenceValues(values: string[]) {
     })
 }
 
+function selectedReferenceVariantAssetKeyForEntity(entity: Record<string, unknown>) {
+  const metadata = asRecord(entity.metadata)
+  return readText(metadata.selectedReferenceVariantAssetKey)
+    || readText(entity.selectedReferenceVariantAssetKey)
+}
+
+function sortReferenceValuesWithPrimary(values: string[], primaryAssetKey = '') {
+  const primary = primaryAssetKey.trim()
+  const sorted = sortReferenceValues(values)
+  if (!primary) return sorted
+  return [primary, ...sorted.filter((value) => value !== primary)]
+}
+
 function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string, unknown>[]) {
   const metadata = asRecord(entity.metadata)
   const referenceVariants = Array.isArray(metadata.referenceVariants)
@@ -2707,8 +2970,7 @@ function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string,
     : Array.isArray(entity.referenceVariants)
       ? entity.referenceVariants.map(asRecord)
       : []
-  const selectedReferenceVariantAssetKey = readText(metadata.selectedReferenceVariantAssetKey)
-    || readText(entity.selectedReferenceVariantAssetKey)
+  const selectedReferenceVariantAssetKey = selectedReferenceVariantAssetKeyForEntity(entity)
   const variantAssetKeys = referenceVariants
     .map((variant) => readText(variant.assetKey))
     .filter(Boolean)
@@ -2737,7 +2999,7 @@ function entityAssetKeys(entity: Record<string, unknown>, assets: Record<string,
   const matching = assets
     .filter((asset) => keys.includes(readText(asset.key)))
     .map((asset) => readText(asset.key))
-  return sortReferenceValues([...keys, ...matching])
+  return sortReferenceValuesWithPrimary([...keys, ...matching], selectedReferenceVariantAssetKey)
 }
 
 const referenceVariantStopWords = new Set([
@@ -2962,23 +3224,59 @@ function resolveImageOutputReferenceSelection(entity: Record<string, unknown>, a
 function buildDeterministicComicAssetPack(context: Record<string, unknown>) {
   const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
   const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
-  const packedEntities = entities.slice(0, 16).map((entity) => ({
-    key: readText(entity.key),
-    name: readText(entity.name),
-    type: readText(entity.nodeType ?? entity.node_type),
-    role: readText(entity.nodeType ?? entity.node_type),
-    summary: readText(entity.summary),
-    visualDescription: readOutputEntityVisualDescription(entity),
-    visualTraits: readOutputEntityVisualTraits(entity),
-    visualTraitMap: readOutputEntityVisualTraitMap(entity),
-    voice: readOutputEntityVoiceIdentity(entity),
-    voiceDescription: readOutputEntityVoiceDescription(entity),
-    referenceVariants: Array.isArray(asRecord(entity.metadata).referenceVariants) ? asRecord(entity.metadata).referenceVariants : [],
-    selectedReferenceVariantKey: readText(asRecord(entity.metadata).selectedReferenceVariantKey) || readText(entity.selectedReferenceVariantKey) || 'default',
-    assetKeys: entityAssetKeys(entity, assets),
-  })).filter((entity) => entity.key || entity.name)
+  const packedEntities = entities.slice(0, 16).map((entity) => {
+    const metadata = asRecord(entity.metadata)
+    const referenceVariants = Array.isArray(metadata.referenceVariants)
+      ? metadata.referenceVariants.map(asRecord)
+      : Array.isArray(entity.referenceVariants)
+        ? entity.referenceVariants.map(asRecord)
+        : []
+    const selectedReferenceVariantKey = readText(metadata.selectedReferenceVariantKey) || readText(entity.selectedReferenceVariantKey) || 'default'
+    const selectedVariant = selectedReferenceVariantKey && selectedReferenceVariantKey !== 'default'
+      ? referenceVariants.find((variant) => {
+        const key = readText(variant.variantKey) || readText(variant.variant_key)
+        return key === selectedReferenceVariantKey
+      }) ?? null
+      : null
+    const selectedReferenceVariantAssetKey = selectedVariant
+      ? referenceVariantAssetKey(selectedVariant) || selectedReferenceVariantAssetKeyForEntity(entity)
+      : ''
+    const assetKeys = entityAssetKeys(entity, assets)
+    const primaryAssetKey = selectedReferenceVariantAssetKey || assetKeys[0] || ''
+    return {
+      key: readText(entity.key),
+      name: readText(entity.name),
+      type: readText(entity.nodeType ?? entity.node_type),
+      role: readText(entity.nodeType ?? entity.node_type),
+      summary: readText(entity.summary),
+      visualDescription: readOutputEntityVisualDescription(entity),
+      visualTraits: readOutputEntityVisualTraits(entity),
+      visualTraitMap: readOutputEntityVisualTraitMap(entity),
+      voice: readOutputEntityVoiceIdentity(entity),
+      voiceDescription: readOutputEntityVoiceDescription(entity),
+      referenceVariants,
+      selectedReferenceVariantKey,
+      selectedReferenceVariantLabel: selectedVariant ? readText(selectedVariant.label) || selectedReferenceVariantKey : 'Default',
+      selectedReferenceVariantSummary: selectedVariant ? readText(selectedVariant.summary) : '',
+      selectedReferenceVariantType: selectedVariant ? readText(selectedVariant.variantType) || readText(selectedVariant.variant_type) : 'default',
+      selectedReferenceVariantAssetKey,
+      primaryAssetKey,
+      assetKeys: sortReferenceValuesWithPrimary(assetKeys, primaryAssetKey),
+    }
+  }).filter((entity) => entity.key || entity.name)
   return {
     entities: packedEntities,
+    selectedReferenceVariants: packedEntities
+      .filter((entity) => readText(entity.selectedReferenceVariantKey) && readText(entity.selectedReferenceVariantKey) !== 'default')
+      .map((entity) => ({
+        entityKey: entity.key,
+        entityName: entity.name,
+        variantKey: entity.selectedReferenceVariantKey,
+        label: entity.selectedReferenceVariantLabel,
+        summary: entity.selectedReferenceVariantSummary,
+        variantType: entity.selectedReferenceVariantType,
+        assetKey: entity.selectedReferenceVariantAssetKey,
+      })),
     missingReferenceEntityKeys: packedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
   }
 }
@@ -3132,6 +3430,77 @@ function buildDeterministicImageAssetPack(context: Record<string, unknown>, opti
   }
 }
 
+function buildOutputReferenceSelectionSnapshot(outputs: unknown) {
+  const record = asRecord(outputs)
+  const assetPackCandidate = asRecord(record.assetPack)
+  const assetPack = Object.keys(assetPackCandidate).length > 0 ? assetPackCandidate : asRecord(record.asset_pack)
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  if (entities.length === 0) return null
+  const selectedReferenceVariants = entities
+    .filter((entity) => {
+      const selectedKey = readText(entity.selectedReferenceVariantKey)
+      return selectedKey && selectedKey !== 'default'
+    })
+    .map((entity) => ({
+      entityKey: readText(entity.key),
+      entityName: readText(entity.name),
+      variantKey: readText(entity.selectedReferenceVariantKey),
+      label: readText(entity.selectedReferenceVariantLabel) || readText(entity.selectedReferenceVariantKey),
+      summary: readText(entity.selectedReferenceVariantSummary),
+      variantType: readText(entity.selectedReferenceVariantType),
+      assetKey: readText(entity.selectedReferenceVariantAssetKey) || readText(entity.primaryAssetKey) || readStringArray(entity.assetKeys)[0] || '',
+    }))
+    .filter((entry) => entry.entityKey && entry.variantKey)
+  return {
+    source: 'workflow_reference_selection',
+    updatedAt: new Date().toISOString(),
+    selectedEntityKeys: entities.map((entity) => readText(entity.key)).filter(Boolean),
+    selectedReferenceVariants,
+    entities: entities.map((entity) => ({
+      key: readText(entity.key),
+      name: readText(entity.name),
+      type: readText(entity.type) || readText(entity.role),
+      summary: readText(entity.summary),
+      primaryAssetKey: readText(entity.primaryAssetKey) || readStringArray(entity.assetKeys)[0] || '',
+      assetKeys: readStringArray(entity.assetKeys).slice(0, 4),
+      selectedReferenceVariantKey: readText(entity.selectedReferenceVariantKey) || 'default',
+      selectedReferenceVariantLabel: readText(entity.selectedReferenceVariantLabel) || (readText(entity.selectedReferenceVariantKey) === 'default' ? 'Default' : readText(entity.selectedReferenceVariantKey)),
+      selectedReferenceVariantSummary: readText(entity.selectedReferenceVariantSummary),
+      selectedReferenceVariantType: readText(entity.selectedReferenceVariantType),
+      selectedReferenceVariantAssetKey: readText(entity.selectedReferenceVariantAssetKey),
+    })),
+  }
+}
+
+async function persistOutputRequestReferenceSelection(client: DatabaseClient, run: OutputWorkflowRun, outputs: unknown) {
+  const snapshot = buildOutputReferenceSelectionSnapshot(outputs)
+  if (!snapshot) return
+  const requestResponse = await client
+    .from('output_requests')
+    .select('id, metadata')
+    .eq('draft_id', run.draftId)
+    .eq('workflow_id', run.workflowId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (requestResponse.error || !requestResponse.data) return
+  const requestRow = asRecord(requestResponse.data)
+  const requestId = readText(requestRow.id)
+  if (!requestId) return
+  const metadata = asRecord(requestRow.metadata)
+  const updateResponse = await client
+    .from('output_requests')
+    .update({
+      metadata: {
+        ...metadata,
+        outputReferenceSelection: snapshot,
+      },
+    })
+    .eq('id', requestId)
+  if (updateResponse.error) throw new Error(updateResponse.error.message)
+  await client.rpc('refresh_output_request_status_projection', { p_request_id: requestId })
+}
+
 function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<string, unknown>>, fallbackPack: Record<string, unknown>) {
   const fallbackEntities = Array.isArray(fallbackPack.entities) ? fallbackPack.entities.map(asRecord) : []
   const fallbackByKey = new Map(fallbackEntities.map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
@@ -3188,10 +3557,96 @@ function referencePlanKeys(plan: Record<string, unknown>) {
 }
 
 function cloneCinematicAssetPackEntity(entity: Record<string, unknown>, maxAssetKeys = 2) {
+  const selectedReferenceVariantAssetKey = selectedReferenceVariantAssetKeyForEntity(entity)
+  const primaryAssetKey = readText(entity.primaryAssetKey) || selectedReferenceVariantAssetKey
   return {
     ...entity,
-    assetKeys: sortReferenceValues(readStringArray(entity.assetKeys)).slice(0, Math.max(1, maxAssetKeys)),
+    primaryAssetKey: primaryAssetKey || readStringArray(entity.assetKeys)[0] || '',
+    assetKeys: sortReferenceValuesWithPrimary(readStringArray(entity.assetKeys), primaryAssetKey || selectedReferenceVariantAssetKey)
+      .slice(0, Math.max(1, maxAssetKeys)),
   }
+}
+
+function cinematicEntityTypeBucket(entity: Record<string, unknown>) {
+  const type = readText(entity.type) || readText(entity.role)
+  if (['actor', 'character'].includes(type)) return 'primaryCastRefIds'
+  if (['group', 'faction'].includes(type)) return 'supportingCastRefIds'
+  if (['place', 'environment', 'location', 'location_spot'].includes(type)) return 'locationRefIds'
+  if (['object', 'item', 'inventory_item', 'prop'].includes(type)) return 'propRefIds'
+  if (['concept'].includes(type)) return 'conceptRefIds'
+  return 'continuityAnchorRefIds'
+}
+
+function selectedReferenceVariantForPackedEntity(entity: Record<string, unknown>) {
+  const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
+    || readText(asRecord(entity.metadata).selectedReferenceVariantKey)
+  if (!selectedVariantKey || selectedVariantKey === 'default') return null
+  const variants = Array.isArray(entity.referenceVariants)
+    ? entity.referenceVariants.map(asRecord)
+    : Array.isArray(asRecord(entity.metadata).referenceVariants)
+      ? asRecord(entity.metadata).referenceVariants.map(asRecord)
+      : []
+  return variants.find((variant) => {
+    const key = readText(variant.variantKey) || readText(variant.variant_key)
+    return key === selectedVariantKey
+  }) ?? null
+}
+
+function cinematicVariantMatchedPlanEntries(assetPack: Record<string, unknown>, prompt: string) {
+  return cinematicAssetPackEntities(assetPack)
+    .map((entity) => {
+      const variant = selectedReferenceVariantForPackedEntity(entity)
+      const score = variant ? referenceVariantMatchScore(variant, prompt) : 0
+      return { entity, variant, score }
+    })
+    .filter((entry) => entry.variant && entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+}
+
+function strengthenCinematicReferencePlanWithVariantMatches(plan: Record<string, unknown>, assetPack: Record<string, unknown>, prompt: string, maxReferenceCount = 16) {
+  const raw = cinematicV2ReferencePlanSchema.parse(plan)
+  const allowed = new Set(cinematicAssetPackEntityKeys(assetPack))
+  const selected = new Set(referencePlanKeys(raw))
+  const matchedEntries = cinematicVariantMatchedPlanEntries(assetPack, prompt)
+    .filter((entry) => allowed.has(readText(entry.entity.key)))
+  const strengthened = {
+    ...raw,
+    primaryCastRefIds: [...raw.primaryCastRefIds],
+    supportingCastRefIds: [...raw.supportingCastRefIds],
+    locationRefIds: [...raw.locationRefIds],
+    propRefIds: [...raw.propRefIds],
+    conceptRefIds: [...raw.conceptRefIds],
+    continuityAnchorRefIds: [...raw.continuityAnchorRefIds],
+    rejectedRefs: [...raw.rejectedRefs],
+  }
+
+  for (const entry of matchedEntries) {
+    if (selected.size >= Math.max(1, maxReferenceCount)) break
+    const key = readText(entry.entity.key)
+    if (!key || selected.has(key)) continue
+    const bucket = cinematicEntityTypeBucket(entry.entity) as keyof Pick<typeof strengthened, 'primaryCastRefIds' | 'supportingCastRefIds' | 'locationRefIds' | 'propRefIds' | 'conceptRefIds' | 'continuityAnchorRefIds'>
+    strengthened[bucket] = [...strengthened[bucket], key]
+    selected.add(key)
+  }
+
+  const variantMatchedKeys = matchedEntries.map((entry) => readText(entry.entity.key)).filter(Boolean)
+  const variantMatchedLocations = matchedEntries
+    .filter((entry) => readText(entry.variant?.variantType) === 'shot_location_sheet' || readText(entry.variant?.variant_type) === 'shot_location_sheet')
+    .map((entry) => readText(entry.entity.key))
+    .filter(Boolean)
+
+  return cinematicV2ReferencePlanSchema.parse({
+    ...strengthened,
+    rationale: [
+      raw.rationale,
+      variantMatchedKeys.length > 0
+        ? `Variant-aware strengthening kept parent references for matched visual variants: ${variantMatchedKeys.join(', ')}.`
+        : '',
+      variantMatchedLocations.length > 0
+        ? `Matched shot-location variants should be treated as sub-location/set references of their parent location: ${variantMatchedLocations.join(', ')}.`
+        : '',
+    ].filter(Boolean).join(' '),
+  })
 }
 
 function filterCinematicAssetPack(assetPack: Record<string, unknown>, keys: string[], limit = 16, maxAssetKeysPerEntity = 2) {
@@ -3594,6 +4049,9 @@ function buildCinematicEntityBindings(assetPack: Record<string, unknown>) {
       stagingNotes: [
         readText(entity.visualDescription),
         readStringArray(entity.visualTraits).length > 0 ? `Traits: ${readStringArray(entity.visualTraits).join(', ')}` : '',
+        readText(entity.selectedReferenceVariantKey) && readText(entity.selectedReferenceVariantKey) !== 'default'
+          ? `Selected visual variant: ${readText(entity.selectedReferenceVariantLabel) || readText(entity.selectedReferenceVariantKey)}${readText(entity.selectedReferenceVariantSummary) ? ` (${readText(entity.selectedReferenceVariantSummary)})` : ''}.`
+          : '',
       ].filter(Boolean).join(' '),
       priority: Math.max(10, 90 - index * 4),
       required: true,
@@ -4362,24 +4820,50 @@ function compactCinematicEntityAnchors(assetPack: Record<string, unknown>, limit
   const byKey = new Map<string, {
     key: string
     name: string
+    type: string
+    summary: string
     visualDescription: string
     visualTraits: string[]
+    voiceDescription: string
+    selectedReferenceVariantLabel: string
+    selectedReferenceVariantSummary: string
   }>()
   const seenNames = new Set<string>()
   for (const entity of entities) {
     const name = readText(entity.name)
+    const type = readText(entity.type) || readText(entity.role)
+    const summary = readText(entity.summary)
     const visualDescription = readText(entity.visualDescription)
     const visualTraits = readStringArray(entity.visualTraits)
-    if (!name && !visualDescription && visualTraits.length === 0) continue
-    if (!visualDescription && visualTraits.length === 0) continue
+    const voiceDescription = readText(entity.voiceDescription)
+      || composeWorldEntityVoiceDescription(asRecord(entity.voice))
+    const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
+    const selectedReferenceVariantLabel = selectedVariantKey && selectedVariantKey !== 'default'
+      ? readText(entity.selectedReferenceVariantLabel) || selectedVariantKey
+      : ''
+    const selectedReferenceVariantSummary = selectedReferenceVariantLabel
+      ? readText(entity.selectedReferenceVariantSummary)
+      : ''
+    if (!name && !summary && !visualDescription && visualTraits.length === 0 && !voiceDescription) continue
+    if (!summary && !visualDescription && visualTraits.length === 0 && !voiceDescription) continue
     const key = slugify(readText(entity.key) || readText(entity.id) || readText(entity.assetKey) || name)
     const nameKey = slugify(name)
     if (!key || byKey.has(key) || (nameKey && seenNames.has(nameKey))) continue
     if (nameKey) seenNames.add(nameKey)
-    byKey.set(key, { key, name, visualDescription, visualTraits })
+    byKey.set(key, { key, name, type, summary, visualDescription, visualTraits, voiceDescription, selectedReferenceVariantLabel, selectedReferenceVariantSummary })
     if (byKey.size >= limit) break
   }
   return [...byKey.values()]
+}
+
+function cinematicEntityByKey(assetPack: Record<string, unknown>) {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  const byKey = new Map<string, Record<string, unknown>>()
+  for (const entity of entities) {
+    const key = readText(entity.key)
+    if (key && !byKey.has(key)) byKey.set(key, entity)
+  }
+  return byKey
 }
 
 function cinematicEntityLabelByKey(assetPack: Record<string, unknown>) {
@@ -4415,11 +4899,51 @@ function resolveCinematicV2QualityShotIds(config: Record<string, unknown>, run?:
 function formatCinematicEntityAnchorLines(entities: ReturnType<typeof compactCinematicEntityAnchors>) {
   return entities.map((entity) => {
     const parts = [
+      entity.selectedReferenceVariantLabel
+        ? `Selected variant: ${entity.selectedReferenceVariantLabel}${entity.selectedReferenceVariantSummary ? ` (${compactBeatCaptionSentence(entity.selectedReferenceVariantSummary, '', 24).replace(/\.$/, '')})` : ''}`
+        : '',
       entity.visualDescription ? `Visual: ${compactBeatCaptionSentence(entity.visualDescription, '', 24).replace(/\.$/, '')}` : '',
       entity.visualTraits.length > 0 ? `Traits: ${entity.visualTraits.slice(0, 10).join(', ')}` : '',
     ].filter(Boolean)
     return `${entity.name || 'Visual anchor'}: ${parts.join('. ')}.`
   }).join('\n')
+}
+
+function buildSeedanceCharacterVoiceGuide(input: {
+  assetPack: Record<string, unknown>
+  shots: Array<z.infer<typeof cinematicV2ShotSchema>>
+  limit?: number
+}) {
+  const entityByKey = cinematicEntityByKey(input.assetPack)
+  const orderedKeys = uniqueStrings(input.shots.flatMap((shot) => [
+    ...shot.visibleCharacterRefIds,
+    ...shot.speakerRefIds,
+    ...shot.performanceBeats.map((beat) => beat.characterRefId),
+  ]))
+  const fallbackKeys = cinematicAssetPackEntities(input.assetPack)
+    .filter((entity) => ['actor', 'character', 'persona', 'group'].includes(readText(entity.type) || readText(entity.role)))
+    .map((entity) => readText(entity.key))
+    .filter(Boolean)
+  const keys = uniqueStrings([...orderedKeys, ...fallbackKeys]).slice(0, Math.max(1, input.limit ?? 8))
+  const lines: string[] = []
+  for (const key of keys) {
+    const entity = entityByKey.get(key)
+    if (!entity) continue
+    const name = readText(entity.name) || key
+    const summary = readText(entity.summary)
+    const visualDescription = readText(entity.visualDescription)
+    const visualTraits = readStringArray(entity.visualTraits)
+    const voiceDescription = readText(entity.voiceDescription)
+      || composeWorldEntityVoiceDescription(asRecord(entity.voice))
+    const descriptors = [
+      summary ? `role: ${compactBeatCaptionSentence(summary, '', 18).replace(/\.$/, '')}` : '',
+      visualDescription ? `visual identity: ${compactBeatCaptionSentence(visualDescription, '', 24).replace(/\.$/, '')}` : '',
+      visualTraits.length > 0 ? `visual traits: ${visualTraits.slice(0, 8).join(', ')}` : '',
+      voiceDescription ? `voice: ${compactBeatCaptionSentence(voiceDescription, '', 28).replace(/\.$/, '')}` : '',
+    ].filter(Boolean)
+    if (descriptors.length > 0) lines.push(`- ${name}: ${descriptors.join('; ')}.`)
+  }
+  return lines.join('\n')
 }
 
 function formatTimecode(seconds: number) {
@@ -5527,6 +6051,35 @@ function buildFallbackCinematicV2ScreenplayDraft(input: {
       return `SHOT ${index + 1} - VISIBLE ACTION\n${line}`
     }).join('\n\n'),
   ].join('\n')
+  const fallbackShots = storyLines.slice(0, 12).map((line, index) => {
+    const visible = characterRefIds.map((refId) => nameForCinematicRef(input.assetPack, refId) || refId).join(', ') || 'selected character refs'
+    const location = locationRefId ? nameForCinematicRef(input.assetPack, locationRefId) || locationRefId : 'selected story location'
+    const shotNumber = String(index + 1).padStart(3, '0')
+    const dialogueMatch = line.match(/([^:]{2,40}):\s*["“]?(.+?)["”]?$/)
+    return [
+      `### SHOT ${shotNumber}: ${index === 0 ? 'Opening visual beat' : index === storyLines.length - 1 ? 'Final visual beat' : 'Escalating visual beat'}`,
+      `Duration: ${index === 0 ? 4 : 3}s`,
+      `Visible: ${visible}`,
+      `Location: ${location}`,
+      'Props: ',
+      `Visual Action: ${line}`,
+      `Camera: ${index === 0 ? 'wide establishing frame with a controlled push-in' : /["“”]/.test(line) ? 'medium close coverage with subtle breathing motion' : 'readable cinematic action frame with grounded movement'}`,
+      `Lighting: ${visualMotifs[0] || readStringArray(wiki.toneTags).join(', ') || 'motivated cinematic light from the world palette'}`,
+      `Performance: ${index === 0 ? 'clear setup pressure' : index === storyLines.length - 1 ? 'visible consequence and changed intent' : 'controlled escalation through body language and gaze'}`,
+      dialogueMatch ? `Dialogue: ${dialogueMatch[1].trim()}: "${dialogueMatch[2].trim()}"` : 'Dialogue: ',
+      `Transition: ${index === storyLines.length - 1 ? 'cut to black or clean scene exit' : 'match action into the next beat'}`,
+    ].join('\n')
+  })
+  const visualShotScriptMarkdown = [
+    `# ${title}`,
+    '',
+    'Contract: visual_shot_script_v1',
+    '',
+    '## Visual Premise',
+    storyLines[0] ?? 'A cinematic moment unfolds through visible action and motivated camera coverage.',
+    '',
+    fallbackShots.join('\n\n'),
+  ].join('\n')
   return cinematicV2ScreenplayDraftSchema.parse({
     title,
     screenplayMarkdown,
@@ -5538,6 +6091,7 @@ function buildFallbackCinematicV2ScreenplayDraft(input: {
     sourceRefIds,
     visualMotifs,
     diagnostics: ['Fallback screenplay draft generated deterministically.'],
+    metadata: { scriptContract: 'screenplay_with_shot_markers_v1', deterministicFallback: true },
   })
 }
 
@@ -5560,6 +6114,538 @@ function inferCinematicV2ScreenplayTitle(markdown: string, fallbackTitle: string
     .map((line) => line.trim())
     .find((line) => /^#{1,3}\s+\S/.test(line))
   return heading ? heading.replace(/^#{1,3}\s+/, '').trim().slice(0, 120) || fallbackTitle : fallbackTitle
+}
+
+type CinematicV3ShotBreak = {
+  id: string
+  index: number
+  title: string
+  approximateDurationSeconds: number
+  startOffset: number
+  endOffset: number
+  text: string
+}
+
+type CinematicV3ShotBreakGroup = {
+  id: string
+  index: number
+  shotBreakIds: string[]
+  shotBreaks: CinematicV3ShotBreak[]
+  title: string
+  summary: string
+  startOffset: number
+  endOffset: number
+  screenplayExcerpt: string
+  approximateDurationSeconds: number
+  rows: number
+  columns: number
+  panelCount: number
+}
+
+function parseCinematicV3ShotMarker(line: string) {
+  const html = line.match(/<!--\s*SHOT\s+(\d{1,3})\s*:\s*([^|>-]+?)(?:\s*\|\s*~?\s*(\d+(?:\.\d+)?)\s*s?)?\s*-->/i)
+  if (html) {
+    return {
+      index: Number(html[1]) || 0,
+      title: html[2]?.trim() || '',
+      durationSeconds: Number(html[3] ?? 0) || null,
+    }
+  }
+  const markdown = line.match(/^\s*(?:#{2,4}\s*)?SHOT\s+(\d{1,3})\s*[:\-]\s*([^|(\n]+?)(?:\s*(?:\||\()\s*~?\s*(\d+(?:\.\d+)?)\s*s?\)?)?\s*$/i)
+  if (markdown) {
+    return {
+      index: Number(markdown[1]) || 0,
+      title: markdown[2]?.trim() || '',
+      durationSeconds: Number(markdown[3] ?? 0) || null,
+    }
+  }
+  return null
+}
+
+function estimateCinematicV3ShotDurationSeconds(text: string, fallback = 3) {
+  const explicit = text.match(/\b(?:duration|~)\s*:?\s*(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b/i)
+  const value = Number(explicit?.[1] ?? 0)
+  if (Number.isFinite(value) && value > 0) return Math.max(1, Math.min(8, value))
+  const dialogueLineCount = (text.match(/^[A-Z][A-Z\s.'-]{1,40}\s*$/gm) ?? []).length
+  const paragraphCount = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean).length
+  return Math.max(2, Math.min(6, fallback + Math.min(2, Math.floor(paragraphCount / 2)) + Math.min(2, dialogueLineCount)))
+}
+
+function buildCinematicV3FallbackShotBreaks(markdown: string, maxShotCount: number): CinematicV3ShotBreak[] {
+  const body = markdown.replace(/^#{1,3}\s+.*$/gm, '').trim()
+  const paragraphs = body.split(/\n{2,}/).map((part) => part.trim()).filter((part) => part && !/^##\s*(Performance Notes|Visual Motifs)/i.test(part))
+  const chunks: string[] = []
+  let current = ''
+  for (const paragraph of paragraphs) {
+    const next = current ? `${current}\n\n${paragraph}` : paragraph
+    if (current && next.length > 900) {
+      chunks.push(current)
+      current = paragraph
+    } else {
+      current = next
+    }
+    if (chunks.length >= maxShotCount - 1) break
+  }
+  if (current && chunks.length < maxShotCount) chunks.push(current)
+  const fallbackChunks = chunks.length > 0 ? chunks : [markdown.slice(0, 1200)]
+  let searchOffset = 0
+  return fallbackChunks.map((text, index) => {
+    const foundOffset = markdown.indexOf(text, searchOffset)
+    const startOffset = foundOffset >= 0 ? foundOffset : searchOffset
+    searchOffset = startOffset + text.length
+    return {
+      id: `shot_${String(index + 1).padStart(3, '0')}`,
+      index: index + 1,
+      title: truncateStatusText(text.split(/\r?\n/).find((line) => line.trim())?.trim() || `Shot ${index + 1}`, 80),
+      approximateDurationSeconds: estimateCinematicV3ShotDurationSeconds(text, 3),
+      startOffset,
+      endOffset: startOffset + text.length,
+      text,
+    }
+  })
+}
+
+function buildCinematicV3ShotBreakPlan(input: {
+  screenplayDraft: Record<string, unknown>
+  maxShotCount?: number
+  maxPanelsPerSheet?: number
+  maxDurationPerGroupSeconds?: number
+}) {
+  const draft = cinematicV2ScreenplayDraftSchema.safeParse(input.screenplayDraft)
+  const markdown = draft.success ? draft.data.screenplayMarkdown : readText(input.screenplayDraft.screenplayMarkdown)
+  const maxShotCount = Math.max(1, Math.min(36, Math.floor(input.maxShotCount ?? 18) || 18))
+  const maxPanels = Math.max(1, Math.min(9, Math.floor(input.maxPanelsPerSheet ?? 9) || 9))
+  const maxDuration = Math.max(1, Math.min(15, Number(input.maxDurationPerGroupSeconds ?? 15) || 15))
+  const markerMatches: Array<{ marker: NonNullable<ReturnType<typeof parseCinematicV3ShotMarker>>, offset: number, markerText: string }> = []
+  const markerPattern = /<!--\s*SHOT\s+\d{1,3}\s*:[\s\S]*?-->|^\s*(?:#{2,4}\s*)?SHOT\s+\d{1,3}\s*[:\-].*$/gim
+  for (const match of markdown.matchAll(markerPattern)) {
+    const markerText = match[0] ?? ''
+    const marker = parseCinematicV3ShotMarker(markerText)
+    if (marker) markerMatches.push({ marker, offset: match.index ?? 0, markerText })
+    if (markerMatches.length >= maxShotCount) break
+  }
+  let shotBreaks: CinematicV3ShotBreak[] = markerMatches.map((match, index) => {
+    const nextOffset = markerMatches[index + 1]?.offset ?? markdown.length
+    const textStart = match.offset + match.markerText.length
+    const text = markdown.slice(textStart, nextOffset).trim()
+    const duration = match.marker.durationSeconds || estimateCinematicV3ShotDurationSeconds(text, 3)
+    const markerIndex = match.marker.index || index + 1
+    return {
+      id: `shot_${String(markerIndex).padStart(3, '0')}`,
+      index: markerIndex,
+      title: truncateStatusText(match.marker.title || `Shot ${markerIndex}`, 80),
+      approximateDurationSeconds: Math.max(1, Math.min(8, duration)),
+      startOffset: match.offset,
+      endOffset: nextOffset,
+      text,
+    }
+  }).filter((shot) => shot.text.trim())
+  const diagnostics: string[] = []
+  if (shotBreaks.length === 0) {
+    shotBreaks = buildCinematicV3FallbackShotBreaks(markdown, maxShotCount)
+    diagnostics.push('No screenplay shot markers found; derived fallback shot breaks from screenplay paragraphs.')
+  }
+  shotBreaks = shotBreaks
+    .slice(0, maxShotCount)
+    .map((shot, index) => ({
+      ...shot,
+      id: `shot_${String(index + 1).padStart(3, '0')}`,
+      index: index + 1,
+    }))
+  const groups: CinematicV3ShotBreakGroup[] = []
+  let current: CinematicV3ShotBreak[] = []
+  const flush = () => {
+    if (!current.length) return
+    const groupIndex = groups.length + 1
+    const layout = buildCinematicV2StoryboardLayout(current.length)
+    const excerpt = markdown.slice(current[0].startOffset, current[current.length - 1].endOffset).trim()
+    const duration = current.reduce((total, shot) => total + shot.approximateDurationSeconds, 0)
+    groups.push({
+      id: `cinematic_v3_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
+      index: groupIndex,
+      shotBreakIds: current.map((shot) => shot.id),
+      shotBreaks: current,
+      title: `Storyboard ${groupIndex}`,
+      summary: current.map((shot) => shot.title).filter(Boolean).join(' / '),
+      startOffset: current[0].startOffset,
+      endOffset: current[current.length - 1].endOffset,
+      screenplayExcerpt: excerpt,
+      approximateDurationSeconds: duration,
+      rows: layout.rows,
+      columns: layout.columns,
+      panelCount: layout.panelCount,
+    })
+    current = []
+  }
+  for (const shotBreak of shotBreaks) {
+    const currentDuration = current.reduce((total, shot) => total + shot.approximateDurationSeconds, 0)
+    if (current.length > 0 && (current.length >= maxPanels || currentDuration + shotBreak.approximateDurationSeconds > maxDuration)) flush()
+    current.push(shotBreak)
+  }
+  flush()
+  if (groups.length > 1) diagnostics.push(`Split ${shotBreaks.length} screenplay shot markers into ${groups.length} parse/storyboard groups.`)
+  return {
+    shotBreaks,
+    groups,
+    maxPanelsPerSheet: maxPanels,
+    maxDurationPerGroupSeconds: maxDuration,
+    diagnostics,
+  }
+}
+
+function buildCinematicV3StoryboardGroupFromShotBreakGroup(
+  group: Record<string, unknown>,
+  index: number,
+): z.infer<typeof cinematicV2StoryboardGroupPlanSchema>['groups'][number] {
+  const groupIndex = Number(group.index ?? 0) || index + 1
+  const shotIds = readStringArray(group.shotBreakIds).length > 0
+    ? readStringArray(group.shotBreakIds)
+    : (Array.isArray(group.shotBreaks) ? group.shotBreaks.map(asRecord).map((shot) => readText(shot.id)).filter(Boolean) : [])
+  const panelCount = Math.max(1, Math.min(9, Number(group.panelCount ?? 0) || shotIds.length || 1))
+  const layout = buildCinematicV2StoryboardLayout(panelCount)
+  const duration = Math.max(1, Math.min(15, Number(group.approximateDurationSeconds ?? group.editorialDurationSeconds ?? 0) || panelCount * 3))
+  const startSeconds = Math.max(0, Number(group.startSeconds ?? 0) || 0)
+  return cinematicV2StoryboardGroupPlanSchema.shape.groups.element.parse({
+    id: readText(group.id) || `cinematic_v3_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
+    index: groupIndex,
+    shotIds: shotIds.length > 0 ? shotIds.slice(0, 9) : [`shot_${String(groupIndex).padStart(3, '0')}`],
+    summary: readText(group.summary) || readText(group.title) || `Storyboard ${groupIndex}`,
+    rows: layout.rows,
+    columns: layout.columns,
+    panelCount: layout.panelCount,
+    startSeconds,
+    endSeconds: startSeconds + duration,
+    editorialDurationSeconds: duration,
+    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
+    continuityNotes: [
+      ...readStringArray(group.continuityNotes),
+      `Storyboard block ${groupIndex} from screenplay shot markers.`,
+    ],
+  })
+}
+
+function collectCinematicV3ShotPlansFromUpstream(upstream: Record<string, Record<string, unknown>>) {
+  return Object.values(upstream)
+    .map((outputs) => cinematicV2ShotPlanSchema.safeParse(outputs.shotPlan ?? outputs.shot_plan))
+    .filter((result): result is { success: true; data: z.infer<typeof cinematicV2ShotPlanSchema> } => result.success)
+    .map((result) => result.data)
+}
+
+function mergeCinematicV3ShotPlansForTimeline(
+  plans: z.infer<typeof cinematicV2ShotPlanSchema>[],
+): z.infer<typeof cinematicV2ShotPlanSchema> {
+  if (plans.length === 0) throw new Error('No Cinematics V3 shot plans were available for timeline assembly.')
+  if (plans.length === 1) return plans[0]
+  const diagnostics = [
+    ...plans.flatMap((plan) => plan.diagnostics),
+    `Assembled timeline from ${plans.length} storyboard-block shot plan(s).`,
+  ]
+  const shots = plans
+    .flatMap((plan) => plan.shots)
+    .sort((left, right) => left.index - right.index)
+  const duplicateIds = shots
+    .map((shot) => readText(shot.id))
+    .filter((id, index, list) => id && list.indexOf(id) !== index)
+  const finalShots = duplicateIds.length > 0
+    ? shots.map((shot, index) => ({
+      ...shot,
+      id: `shot_${String(index + 1).padStart(3, '0')}`,
+      index: index + 1,
+    }))
+    : shots.map((shot, index) => ({ ...shot, index: index + 1 }))
+  if (duplicateIds.length > 0) diagnostics.push(`Renumbered duplicate shot IDs during timeline assembly: ${[...new Set(duplicateIds)].join(', ')}.`)
+  const audioSource = plans.map((plan) => plan.audioPlan).find((plan) => plan && (plan.ambience || plan.music || plan.sfx.length > 0)) ?? plans[0].audioPlan
+  return cinematicV2ShotPlanSchema.parse({
+    sceneId: plans[0].sceneId || 'scene_1',
+    totalEditorialDurationSeconds: finalShots.reduce((total, shot) => total + Math.max(0, Number(shot.editorialDurationSeconds) || 0), 0),
+    shots: finalShots,
+    performanceArc: plans.flatMap((plan) => plan.performanceArc),
+    audioPlan: {
+      ambience: audioSource.ambience,
+      music: audioSource.music,
+      sfx: [...new Set(plans.flatMap((plan) => plan.audioPlan.sfx))],
+      dialogueTrackCount: finalShots.reduce((total, shot) => total + (shot.dialogue.length > 0 ? 1 : 0), 0),
+      placeholderOnly: true,
+    },
+    diagnostics,
+  })
+}
+
+function normalizeVisualScriptLookupTerm(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[`"'()[\]{}]/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function splitVisualScriptList(value: string) {
+  const clean = value
+    .replace(/\band\b/gi, ',')
+    .split(/[,;|/]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry && !/^none|n\/a|unknown|selected\b/i.test(entry))
+  return [...new Set(clean)]
+}
+
+function parseVisualScriptDurationSeconds(value: string, fallback = 3) {
+  const range = value.match(/(\d+(?:\.\d+)?)\s*(?:-|to|–|—)\s*(\d+(?:\.\d+)?)/i)
+  if (range) {
+    const left = Number(range[1])
+    const right = Number(range[2])
+    if (Number.isFinite(left) && Number.isFinite(right)) return Math.max(0.5, Math.min(8, (left + right) / 2))
+  }
+  const match = value.match(/(\d+(?:\.\d+)?)/)
+  const parsed = match ? Number(match[1]) : fallback
+  return Number.isFinite(parsed) ? Math.max(0.5, Math.min(8, parsed)) : fallback
+}
+
+function visualScriptEntityCatalog(assetPack: Record<string, unknown>, context: Record<string, unknown>) {
+  const entities = [
+    ...(Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []),
+    ...(Array.isArray(context.entities) ? context.entities.map(asRecord) : []),
+  ]
+  const byAlias = new Map<string, Record<string, unknown>>()
+  for (const entity of entities) {
+    const key = readText(entity.key) || readText(entity.id)
+    if (!key) continue
+    const aliases = [
+      key,
+      readText(entity.name),
+      readText(entity.label),
+      readText(entity.title),
+    ].filter(Boolean)
+    for (const alias of aliases) {
+      const normalized = normalizeVisualScriptLookupTerm(alias)
+      if (normalized && !byAlias.has(normalized)) byAlias.set(normalized, entity)
+    }
+  }
+  return byAlias
+}
+
+function visualScriptEntityKind(entity: Record<string, unknown>) {
+  return readText(entity.type) || readText(entity.role) || readText(entity.nodeType ?? entity.node_type)
+}
+
+function resolveVisualScriptRefs(input: {
+  raw: string
+  catalog: Map<string, Record<string, unknown>>
+  allowedKinds?: string[]
+}) {
+  const refIds: string[] = []
+  const unknownNames: string[] = []
+  for (const name of splitVisualScriptList(input.raw)) {
+    const normalized = normalizeVisualScriptLookupTerm(name)
+    const entity = input.catalog.get(normalized)
+    if (!entity) {
+      unknownNames.push(name)
+      continue
+    }
+    const key = readText(entity.key) || readText(entity.id)
+    const kind = visualScriptEntityKind(entity)
+    if (input.allowedKinds && input.allowedKinds.length > 0 && !input.allowedKinds.includes(kind)) {
+      unknownNames.push(name)
+      continue
+    }
+    if (key) refIds.push(key)
+  }
+  return { refIds: [...new Set(refIds)], unknownNames }
+}
+
+function parseVisualShotScriptBlocks(markdown: string) {
+  const lines = markdown.split(/\r?\n/)
+  const blocks: Array<{ index: number; title: string; fields: Record<string, string> }> = []
+  let current: { index: number; title: string; fields: Record<string, string> } | null = null
+  let lastField = ''
+  const fieldNameByLabel: Record<string, string> = {
+    duration: 'duration',
+    visible: 'visible',
+    characters: 'visible',
+    character: 'visible',
+    location: 'location',
+    props: 'props',
+    prop: 'props',
+    action: 'visualAction',
+    visual_action: 'visualAction',
+    visual: 'visualAction',
+    camera: 'camera',
+    lighting: 'lighting',
+    mood: 'mood',
+    performance: 'performance',
+    dialogue: 'dialogue',
+    speaker: 'dialogue',
+    transition: 'transition',
+    caption: 'caption',
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const shotMatch = trimmed.match(/^#{0,4}\s*SHOT\s+(\d{1,3})(?:\s*[-:]\s*(.+))?$/i)
+    if (shotMatch) {
+      current = {
+        index: Number(shotMatch[1]) || blocks.length + 1,
+        title: readText(shotMatch[2]) || `Shot ${Number(shotMatch[1]) || blocks.length + 1}`,
+        fields: {},
+      }
+      blocks.push(current)
+      lastField = ''
+      continue
+    }
+    if (!current || !trimmed) continue
+    const fieldMatch = trimmed.match(/^(?:[-*]\s*)?([A-Za-z][A-Za-z _-]{1,32})\s*:\s*(.*)$/)
+    if (fieldMatch) {
+      const rawLabel = fieldMatch[1].toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+      const fieldName = fieldNameByLabel[rawLabel]
+      if (fieldName) {
+        current.fields[fieldName] = [current.fields[fieldName], fieldMatch[2].trim()].filter(Boolean).join(' ')
+        lastField = fieldName
+      }
+      continue
+    }
+    if (lastField) {
+      current.fields[lastField] = [current.fields[lastField], trimmed.replace(/^[-*]\s*/, '')].filter(Boolean).join(' ')
+    }
+  }
+
+  return blocks.filter((block) => readText(block.fields.visualAction) || readText(block.fields.action) || readText(block.fields.dialogue))
+}
+
+function buildCinematicV3ShotPlanFromVisualScript(input: {
+  screenplayDraft: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  context: Record<string, unknown>
+  prompt: string
+  maxShotCount: number
+}) {
+  const draft = cinematicV2ScreenplayDraftSchema.safeParse(input.screenplayDraft)
+  const markdown = draft.success ? draft.data.screenplayMarkdown : readText(input.screenplayDraft.screenplayMarkdown)
+  if (!/visual_shot_script_v1/i.test(markdown)) return null
+  const blocks = parseVisualShotScriptBlocks(markdown).slice(0, Math.max(1, Math.min(36, input.maxShotCount || 18)))
+  if (blocks.length === 0) return null
+
+  const catalog = visualScriptEntityCatalog(input.assetPack, input.context)
+  const characterKinds = ['actor', 'character', 'group']
+  const locationKinds = ['place', 'environment', 'location', 'location_spot']
+  const propKinds = ['object', 'item', 'inventory_item', 'prop']
+  const fallbackCharacterRefIds = cinematicV2CharacterRefIds(input.assetPack, input.context)
+  const fallbackLocationRefId = cinematicV2LocationRefId(input.assetPack, input.context)
+  const unknownRefNames = new Set<string>()
+  let cursor = 0
+
+  const shots = blocks.map((block, index) => {
+    const duration = parseVisualScriptDurationSeconds(readText(block.fields.duration), index === 0 ? 4 : 3)
+    const visible = resolveVisualScriptRefs({ raw: readText(block.fields.visible), catalog, allowedKinds: characterKinds })
+    const location = resolveVisualScriptRefs({ raw: readText(block.fields.location), catalog, allowedKinds: locationKinds })
+    const props = resolveVisualScriptRefs({ raw: readText(block.fields.props), catalog, allowedKinds: propKinds })
+    for (const name of [...visible.unknownNames, ...location.unknownNames, ...props.unknownNames]) unknownRefNames.add(name)
+    const dialogue = readText(block.fields.dialogue)
+    const dialogueMatch = dialogue.match(/^([^:]{2,60}):\s*["“]?(.+?)["”]?$/)
+    const speaker = dialogueMatch
+      ? resolveVisualScriptRefs({ raw: dialogueMatch[1], catalog, allowedKinds: characterKinds }).refIds[0] || visible.refIds[0] || fallbackCharacterRefIds[0] || 'speaker'
+      : ''
+    const dialogueText = dialogueMatch ? dialogueMatch[2].trim() : dialogue
+    const visibleCharacterRefIds = visible.refIds.length > 0 ? visible.refIds : fallbackCharacterRefIds
+    const locationRefId = location.refIds[0] || fallbackLocationRefId
+    const action = readText(block.fields.visualAction) || dialogueText || block.title
+    const cameraText = readText(block.fields.camera)
+    const purpose = index === 0
+      ? 'establishing'
+      : dialogueText
+        ? 'dialogue'
+        : index === blocks.length - 1
+          ? 'impact'
+          : 'action'
+    const startSeconds = cursor
+    cursor += duration
+    return {
+      id: `shot_${String(index + 1).padStart(3, '0')}`,
+      sceneId: 'scene_1',
+      index: index + 1,
+      title: block.title || `Shot ${index + 1}`,
+      purpose,
+      editorialDurationSeconds: duration,
+      providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
+      description: action,
+      action,
+      caption: readText(block.fields.caption) || action.slice(0, 100),
+      lighting: readText(block.fields.lighting),
+      mood: readText(block.fields.mood) || readText(block.fields.performance),
+      storyboardPanelPrompt: [
+        action,
+        cameraText ? `Camera: ${cameraText}` : '',
+        readText(block.fields.lighting) ? `Lighting: ${readText(block.fields.lighting)}` : '',
+        readText(block.fields.performance) ? `Performance: ${readText(block.fields.performance)}` : '',
+      ].filter(Boolean).join(' '),
+      videoDirection: [
+        action,
+        readText(block.fields.transition) ? `Transition: ${readText(block.fields.transition)}` : '',
+      ].filter(Boolean).join(' '),
+      dialogue: dialogueText ? [{
+        id: `dialogue_${String(index + 1).padStart(3, '0')}`,
+        speakerRefId: speaker,
+        text: dialogueText,
+        emotion: readText(block.fields.performance) || 'visible performance',
+        startSeconds,
+        endSeconds: startSeconds + duration,
+      }] : [],
+      speakerRefIds: dialogueText ? [speaker] : [],
+      visibleCharacterRefIds,
+      performanceBeats: visibleCharacterRefIds.map((characterRefId, characterIndex) => ({
+        characterRefId,
+        valence: purpose === 'impact' ? 0.2 : purpose === 'dialogue' ? 0 : -0.05,
+        arousal: purpose === 'impact' || purpose === 'action' ? 0.7 : 0.5,
+        confidence: purpose === 'impact' ? 0.6 : 0.45,
+        dominance: characterIndex === 0 ? 0.52 : 0.45,
+        bodyLanguage: readText(block.fields.performance) || 'readable physical intention',
+        facialExpression: readText(block.fields.performance) || 'focused cinematic expression',
+        gaze: 'motivated by the shot eyeline and scene geography',
+        gesture: action,
+        voiceEnergy: dialogueText ? readText(block.fields.performance) || 'scene-appropriate delivery' : undefined,
+      })),
+      locationRefId,
+      propRefIds: props.refIds,
+      continuityInputs: [readText(block.fields.transition), readText(block.fields.lighting)].filter(Boolean),
+      camera: {
+        framing: cameraText || (purpose === 'establishing' ? 'wide establishing frame' : purpose === 'dialogue' ? 'medium closeup' : 'readable cinematic action frame'),
+        angle: cameraText,
+        lens: '',
+        movement: cameraText,
+        screenDirectionRule: 'Preserve consistent geography and eyelines across the visual shot script.',
+      },
+      requiresLipSync: Boolean(dialogueText),
+      status: 'planned',
+    }
+  })
+
+  const totalEditorialDurationSeconds = shots.reduce((total, shot) => total + shot.editorialDurationSeconds, 0)
+  const shotPlan = cinematicV2ShotPlanSchema.parse({
+    sceneId: 'scene_1',
+    totalEditorialDurationSeconds,
+    shots,
+    performanceArc: [...new Set(shots.flatMap((shot) => shot.visibleCharacterRefIds))].map((characterRefId) => ({
+      characterRefId,
+      startState: 'introduced through the visual shot script',
+      endState: 'changed by the final visual beat',
+      arc: 'Preserve the visual script performance progression without adding unplanned story beats.',
+    })),
+    audioPlan: {
+      ambience: 'continuous scene ambience placeholder',
+      music: 'subtle continuous score placeholder',
+      sfx: shots.filter((shot) => shot.purpose === 'action' || shot.purpose === 'impact').map((shot) => `${shot.title} foley/impact placeholder`),
+      dialogueTrackCount: shots.reduce((total, shot) => total + shot.dialogue.length, 0),
+      placeholderOnly: true,
+    },
+    diagnostics: [
+      'deterministic_visual_script_parse',
+      ...(unknownRefNames.size > 0 ? [`unknown_ref_names: ${[...unknownRefNames].join(', ')}`] : []),
+      ...(shots.some((shot) => shot.providerDurationSeconds !== Math.round(shot.editorialDurationSeconds)) ? ['duration_normalized'] : []),
+    ],
+  })
+  return {
+    shotPlan,
+    shotBlocks: blocks,
+    unknownRefNames: [...unknownRefNames],
+  }
 }
 
 async function runCinematicV2ScreenplayAuthor(input: {
@@ -5845,6 +6931,125 @@ async function runCinematicV2StructuredNode<TValue>(input: {
   }
 }
 
+async function runCinematicV2StructuredNodeBackground<TValue>(input: {
+  nodeKey: string
+  schemaName: string
+  schema: z.ZodType<TValue>
+  instructions: string
+  prompt: string
+  fallback: TValue
+  maxOutputTokens?: number
+  priorProviderRequestId?: string | null
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: {
+    providerRequestId: string
+    providerStatus: string
+    providerMode: string
+    lastProviderPollAt: string
+  }) => Promise<void>
+}) {
+  const model = outputWorkflowTextModel()
+  const timeoutMs = outputWorkflowChapterTimeoutMs()
+  let result: OpenAiResponseResult
+
+  if (input.priorProviderRequestId) {
+    result = await retrieveOpenAiResponse(input.priorProviderRequestId, 45_000)
+  } else {
+    result = await createOpenAiBackgroundResponse({
+      model,
+      instructions: input.instructions,
+      input: input.prompt,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: input.schemaName,
+          schema: normalizeStrictJsonSchema(z.toJSONSchema(input.schema)),
+          strict: true,
+        },
+      },
+      maxOutputTokens: input.maxOutputTokens ?? 3200,
+      metadata: {
+        graphcore_task: input.schemaName,
+        graphcore_node_key: input.nodeKey,
+        graphcore_provider_mode: 'background',
+      },
+      timeoutMs: 45_000,
+    })
+  }
+
+  if (!result.response.ok) {
+    throw new Error(openAiErrorMessage(result, `OpenAI background structured response failed with status ${result.response.status}.`))
+  }
+  if (!result.id) throw new Error('OpenAI background structured response did not return a response id.')
+
+  let providerRequestId = result.id
+  let providerStatus = result.status
+  const startedAt = Date.now()
+
+  while (!isOpenAiTerminalStatus(providerStatus)) {
+    await input.onProgress?.({
+      providerRequestId,
+      providerStatus,
+      providerMode: 'background',
+      lastProviderPollAt: new Date().toISOString(),
+    })
+    if (await input.shouldCancel?.()) {
+      await cancelOpenAiResponse(providerRequestId, 30_000).catch(() => null)
+      await input.onProgress?.({
+        providerRequestId,
+        providerStatus: 'cancelled',
+        providerMode: 'background',
+        lastProviderPollAt: new Date().toISOString(),
+      })
+      throw new WorkflowCancelledError()
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`OpenAI background structured response did not complete after ${timeoutMs}ms. Response id: ${providerRequestId}.`)
+    }
+    await sleep(3_000)
+    result = await retrieveOpenAiResponse(providerRequestId, 45_000)
+    if (!result.response.ok) {
+      throw new Error(openAiErrorMessage(result, `OpenAI background structured response poll failed with status ${result.response.status}.`))
+    }
+    providerRequestId = result.id ?? providerRequestId
+    providerStatus = result.status
+  }
+
+  await input.onProgress?.({
+    providerRequestId,
+    providerStatus,
+    providerMode: 'background',
+    lastProviderPollAt: new Date().toISOString(),
+  })
+
+  if (providerStatus !== 'completed') {
+    throw new Error(openAiErrorMessage(result, `OpenAI background structured response ended with status ${providerStatus}.`))
+  }
+
+  try {
+    return {
+      value: input.schema.parse(parseJsonObject(result.outputText)),
+      response: result,
+      provider: 'openai',
+      model,
+      providerRequestId,
+      fallbackUsed: false,
+      fallbackReason: '',
+    }
+  } catch (error) {
+    const fallbackReason = error instanceof Error ? error.message : 'Background structured output parse failed.'
+    return {
+      value: input.fallback,
+      response: result,
+      provider: 'graphcore',
+      model: `deterministic-${input.schemaName}-fallback-v1`,
+      providerRequestId,
+      fallbackUsed: true,
+      fallbackReason,
+    }
+  }
+}
+
 function buildCinematicV2StoryboardPrompt(input: {
   shotPlan: Record<string, unknown>
   sceneState: Record<string, unknown>
@@ -6059,14 +7264,23 @@ function buildCinematicV2VideoPrompt(input: {
   const shot = cinematicV2ShotSchema.parse(input.shot)
   const sceneState = cinematicV2SceneStateSchema.parse(input.sceneState)
   const entities = compactCinematicEntityAnchors(input.assetPack, 6)
-  const dialogue = shot.dialogue.map((line) => `${line.speakerRefId}: "${line.text}" (${line.emotion})`).join(' ')
+  const labelByKey = cinematicEntityLabelByKey(input.assetPack)
+  const dialogue = shot.dialogue.map((line) => {
+    const speaker = labelByKey.get(line.speakerRefId) || line.speakerRefId
+    return `${speaker}: "${line.text}" (${line.emotion})`
+  }).join(' ')
   const performanceDirection = formatCinematicV2PerformanceDirection(shot)
   const entityLocks = entities
     .map((entity) => {
       const record = asRecord(entity)
       const name = readText(record.name)
       const visualDescription = readText(record.visualDescription)
-      return [name, visualDescription].filter(Boolean).join(': ')
+      const voiceDescription = readText(record.voiceDescription)
+      const details = [
+        visualDescription,
+        voiceDescription ? `Voice: ${voiceDescription}` : '',
+      ].filter(Boolean).join(' ')
+      return [name, details].filter(Boolean).join(': ')
     })
     .filter(Boolean)
     .slice(0, 4)
@@ -6381,22 +7595,53 @@ function dynamicNodeRow(input: {
 function preserveExistingDynamicNodeOutput(input: {
   nextRow: Record<string, unknown>
   existingNode: OutputWorkflowNodeRow | null | undefined
+  existingStep?: OutputWorkflowRunStepRow | null
   preserve: boolean
   compileHash: string
 }) {
   if (!input.preserve || !input.existingNode) return input.nextRow
   const existingMetadata = asRecord(input.existingNode.metadata)
+  const existingOutputs = asRecord(input.existingNode.outputs)
+  const existingPreview = asRecord(existingMetadata.outputPreview)
+  const existingOutputHash = readText(input.existingNode.output_hash)
+  const stepOutputs = asRecord(input.existingStep?.outputs)
+  const stepMetadata = asRecord(input.existingStep?.metadata)
+  const stepOutputHash = readText(input.existingStep?.output_hash)
+  const stepHasOutput = Boolean(stepOutputHash) || hasStoredOutputs(stepOutputs)
+  const useStepOutput = !existingOutputHash && !hasStoredOutputs(existingOutputs) && stepHasOutput
+  const preservedOutputs = useStepOutput ? stepOutputs : existingOutputs
+  const preservedOutputHash = useStepOutput ? stepOutputHash : existingOutputHash
+  const preservedInputHash = useStepOutput ? readText(input.existingStep?.input_hash) : readText(input.existingNode.input_hash)
+  const preservedPreview = Object.keys(existingPreview).length > 0
+    ? existingPreview
+    : Object.keys(asRecord(stepMetadata.outputPreview)).length > 0
+      ? asRecord(stepMetadata.outputPreview)
+      : preservedOutputHash
+        ? buildOutputWorkflowNodeOutputPreview({
+          node: {
+            key: readText(input.nextRow.key),
+            nodeType: readText(input.nextRow.node_type) as OutputWorkflowNode['nodeType'],
+            outputHash: preservedOutputHash,
+          },
+          outputs: preservedOutputs,
+          provider: useStepOutput ? readText(input.existingStep?.provider) || null : null,
+          model: useStepOutput ? readText(input.existingStep?.model) || null : null,
+        })
+        : {}
+  const stepCompleted = ['completed', 'completed_with_errors'].includes(readText(input.existingStep?.status))
   return {
     ...input.nextRow,
-    outputs: asRecord(input.existingNode.outputs),
-    dirty: input.existingNode.dirty === true,
-    input_hash: readText(input.existingNode.input_hash),
-    output_hash: readText(input.existingNode.output_hash),
+    outputs: preservedOutputs,
+    dirty: useStepOutput ? !stepCompleted : input.existingNode.dirty === true,
+    input_hash: preservedInputHash,
+    output_hash: preservedOutputHash,
     metadata: {
       ...asRecord(input.nextRow.metadata),
       execution: asRecord(existingMetadata.execution),
-      outputPreview: asRecord(existingMetadata.outputPreview),
+      outputPreview: preservedPreview,
+      preservedDuringDynamicRematerialization: true,
       preservedDuringSelectedShotMaterialization: true,
+      preservedFromRunStep: useStepOutput,
       preservedFromDynamicCompileHash: readText(existingMetadata.dynamicCompileHash),
       dynamicCompileHash: input.compileHash,
     },
@@ -6409,7 +7654,7 @@ function isStaleDynamicCinematicNode(node: { metadata?: unknown } | null | undef
 }
 
 function isDynamicCinematicFanoutNodeKey(key: string) {
-  return key === 'cinematic_v3_dynamic_storyboard_fanout' || key === 'cinematic_v2_dynamic_shot_fanout' || key === 'cinematic_dynamic_take_fanout'
+  return key === 'cinematic_v3_dynamic_shot_parse_fanout' || key === 'cinematic_v3_dynamic_storyboard_fanout' || key === 'cinematic_v2_dynamic_shot_fanout' || key === 'cinematic_dynamic_take_fanout'
 }
 
 function dynamicEdgeRow(input: {
@@ -6649,6 +7894,7 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
     || readText(input.config.model)
     || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
   const generatedByNodeKey = 'cinematic_v3_dynamic_storyboard_fanout'
+  const dynamicV3GraphPersistenceVersion = 'v3_persistence_authoring_1'
 
   const existingNodeResponse = await input.client
     .from('output_workflow_nodes')
@@ -6657,14 +7903,36 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
   if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
   const allExistingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
     .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
-    .filter((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
+    .filter((row) => {
+      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
+      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
+    })
   const existingDynamicNodes = allExistingDynamicNodes.filter((row) => !isStaleDynamicCinematicNode(row))
+  const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row] as const))
+  const existingStepResponse = await input.client
+    .from('output_workflow_run_steps')
+    .select(outputWorkflowRunStepSelect)
+    .eq('run_id', input.run.id)
+    .eq('workflow_id', input.workflow.id)
+  if (existingStepResponse.error) throw new Error(existingStepResponse.error.message)
+  const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
+    .map((row) => [readText(row.node_key), row] as const))
+  const hasRecoverableStepOutput = existingDynamicNodes.some((row) => {
+    if (readText(row.output_hash) || hasStoredOutputs(row.outputs)) return false
+    const step = existingStepByNodeKey.get(row.key)
+    return Boolean(step && (readText(step.output_hash) || hasStoredOutputs(step.outputs)))
+  })
   const existingSameHash = existingDynamicNodes.length > 0
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
+    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3GraphPersistenceVersion) === dynamicV3GraphPersistenceVersion)
     && existingDynamicNodes.some((row) => row.key === 'cinematic_v3_timeline_assemble')
+    && existingDynamicNodes.some((row) => row.key === 'artifact')
+    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_prompt`))
     && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_sheet`))
     && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_panel_extract`))
-  if (existingSameHash) return { expanded: false, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
+    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_video_prompt`))
+    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_video`))
+  if (existingSameHash && !hasRecoverableStepOutput) return { expanded: false, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
 
   const existingEdgeResponse = await input.client
     .from('output_workflow_edges')
@@ -6672,19 +7940,47 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
     .eq('workflow_id', input.workflow.id)
   if (existingEdgeResponse.error) throw new Error(existingEdgeResponse.error.message)
   const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
-    .filter((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
+    .filter((row) => {
+      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
+      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
+    })
     .map((row) => row.key)
   if (dynamicEdgeKeys.length > 0) {
     const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
     if (deleteEdges.error) throw new Error(deleteEdges.error.message)
   }
 
-  const v3Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicNodeRow({
-    workflow: input.workflow,
-    compileHash,
-    generatedByNodeKey,
-    ...args,
-  })
+  const preserveV3NodeRow = (row: Record<string, unknown>) => {
+    const key = readText(row.key)
+    const existingNode = existingDynamicNodeByKey.get(key)
+    const existingMetadata = asRecord(existingNode?.metadata)
+    const sameCompileHash = readText(existingMetadata.dynamicCompileHash) === compileHash
+    return preserveExistingDynamicNodeOutput({
+      nextRow: row,
+      existingNode,
+      existingStep: existingStepByNodeKey.get(key) ?? null,
+      compileHash,
+      preserve: Boolean(existingNode)
+        && sameCompileHash
+        && readText(existingNode?.node_type) === readText(row.node_type)
+        && readText(asRecord(existingNode?.config).purpose) === readText(asRecord(row.config).purpose),
+    })
+  }
+  const v3Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => {
+    const row = dynamicNodeRow({
+      workflow: input.workflow,
+      compileHash,
+      generatedByNodeKey,
+      ...args,
+    })
+    return preserveV3NodeRow({
+      ...row,
+      metadata: {
+        ...asRecord(row.metadata),
+        dynamicV3GraphPersistenceVersion,
+      },
+    })
+  }
   const v3Edge = (args: Omit<Parameters<typeof dynamicEdgeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicEdgeRow({
     workflow: input.workflow,
     compileHash,
@@ -6707,25 +8003,29 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
     const groupDurationSeconds = Math.max(4, Math.min(15, Math.ceil(Number(group.providerDurationSeconds || group.editorialDurationSeconds) || group.shotIds.length * 3)))
     nodeRows.push(
       v3Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard ${group.index} Prompt`, x: 1760, y, config: { purpose: 'cinematic_v3_storyboard_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, storyboardGroup: group, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_storyboard_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard ${group.index} Sheet`, x: 2040, y, config: { purpose: 'cinematic_v3_storyboard_sheet', role: 'cinematic_v3_storyboard_sheet', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'high', outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v3_storyboard_sheets', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 8) } } }),
+      v3Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard ${group.index} Sheet`, x: 2040, y, config: { purpose: 'cinematic_v3_storyboard_sheet', role: 'cinematic_v3_storyboard_sheet', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'high', outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v3_storyboard_sheets', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 8), continueOnError: true } } }),
       v3Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Storyboard ${group.index}`, x: 2320, y, config: { purpose: 'cinematic_v3_panel_extract', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_panel_extract', maxConcurrency: 6 } } }),
       v3Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Storyboard ${group.index} Video Prompt`, x: 2600, y, config: { purpose: 'cinematic_v3_storyboard_group_video_prompt', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_video_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: videoKey, nodeType: 'video_generation', label: `Storyboard ${group.index} Video`, x: 2880, y, config: { purpose: 'cinematic_v3_storyboard_group_video', role: 'cinematic_v3_storyboard_group_video', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'storyboard_sheet', assetPackReferenceLimit: 4, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'video_prompt', 'storyboard_sheet', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v3_storyboard_group_videos', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 4) } } }),
+      v3Node({ key: videoKey, nodeType: 'video_generation', label: `Storyboard ${group.index} Video`, x: 2880, y, config: { purpose: 'cinematic_v3_storyboard_group_video', role: 'cinematic_v3_storyboard_group_video', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'storyboard_sheet', assetPackReferenceLimit: 4, debugSkipVideoGeneration, syncMode: false, manualOnly: true, manual_only: true, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'video_prompt', 'storyboard_sheet', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v3_storyboard_group_videos', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 4), manualOnly: true } } }),
     )
     edgeRows.push(
-      v3Edge({ key: `shot_plan__${promptKey}`, sourceNodeKey: 'cinematic_v3_shot_parse', sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'shot_plan' }),
+      v3Edge({ key: `shot_plan__${promptKey}`, sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'shot_plan' }),
       v3Edge({ key: `${assetPackSourceNodeKey}__${promptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: promptKey, targetPort: 'asset_pack' }),
       v3Edge({ key: `skill_context__${promptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: promptKey, targetPort: 'guidance' }),
       v3Edge({ key: `${promptKey}__${sheetKey}`, sourceNodeKey: promptKey, sourcePort: 'text', targetNodeKey: sheetKey, targetPort: 'prompt' }),
       v3Edge({ key: `${assetPackSourceNodeKey}__${sheetKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: sheetKey, targetPort: 'references' }),
       v3Edge({ key: `skill_context__${sheetKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: sheetKey, targetPort: 'guidance' }),
       v3Edge({ key: `${sheetKey}__${extractKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: extractKey, targetPort: 'image' }),
-      v3Edge({ key: `shot_plan__${extractKey}`, sourceNodeKey: 'cinematic_v3_shot_parse', sourcePort: 'text', targetNodeKey: extractKey, targetPort: 'shot_plan' }),
-      v3Edge({ key: `shot_plan__${videoPromptKey}`, sourceNodeKey: 'cinematic_v3_shot_parse', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'shot_plan' }),
+      v3Edge({ key: `shot_plan__${extractKey}`, sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: extractKey, targetPort: 'shot_plan' }),
+      v3Edge({ key: `shot_plan__${videoPromptKey}`, sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'shot_plan' }),
+      v3Edge({ key: `${assetPackSourceNodeKey}__${videoPromptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack' }),
+      v3Edge({ key: `skill_context__${videoPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoPromptKey, targetPort: 'guidance' }),
       v3Edge({ key: `${sheetKey}__${videoPromptKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references' }),
       v3Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt' }),
       v3Edge({ key: `${sheetKey}__${videoKey}_reference`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references' }),
-      v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index } }),
+      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index } }),
+      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index } }),
+      v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index, optional: true, optionalDependency: true, manualOnly: true } }),
     )
   })
 
@@ -6734,7 +8034,7 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
     v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Cinematic', x: 3440, y: 120, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
   )
   edgeRows.push(
-    v3Edge({ key: 'shot_plan__timeline', sourceNodeKey: 'cinematic_v3_shot_parse', sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'shot_plan' }),
+    v3Edge({ key: 'shot_plan__timeline', sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'shot_plan' }),
     v3Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v3_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
   )
 
@@ -6790,6 +8090,253 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
   }).eq('id', input.workflow.id)
   if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
   return { expanded: true, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
+}
+
+async function materializeDynamicCinematicV3ShotParseFanout(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  compileOutputs: Record<string, unknown>
+  config: Record<string, unknown>
+}) {
+  const shotBreakPlan = asRecord(input.compileOutputs.shotBreakPlan)
+  const groups = (Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : [])
+    .filter((group) => readText(group.id))
+  const screenplayDraft = asRecord(input.compileOutputs.screenplayDraft)
+  const referencePlan = asRecord(input.compileOutputs.cinematicReferencePlan)
+  const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue({
+    shotBreakPlan,
+    screenplayDraft,
+    referencePlan,
+  })
+  const aspectRatio = readText(input.config.aspectRatio) || '16:9'
+  const resolution = readText(input.config.resolution) || '720p'
+  const maxShotCount = Number(input.config.maxShotCount ?? 0) || 36
+  const debugSkipVideoGeneration = input.config.debugSkipVideoGeneration !== false
+  const videoProvider = resolveOutputVideoProvider(input.config)
+  const videoModel = readText(input.config.videoModel)
+    || readText(input.config.model)
+    || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
+  const generatedByNodeKey = 'cinematic_v3_dynamic_shot_parse_fanout'
+  const dynamicV3ParsePersistenceVersion = 'v3_parse_groups_direct_storyboards_1'
+  const storyboardGroups = groups.map((group, index) => buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index))
+
+  const existingNodeResponse = await input.client
+    .from('output_workflow_nodes')
+    .select(outputWorkflowNodeSelect)
+    .eq('workflow_id', input.workflow.id)
+  if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
+  const allExistingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
+    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
+    .filter((row) => {
+      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
+      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
+    })
+  const existingDynamicNodes = allExistingDynamicNodes.filter((row) => !isStaleDynamicCinematicNode(row))
+  const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row] as const))
+  const existingStepResponse = await input.client
+    .from('output_workflow_run_steps')
+    .select(outputWorkflowRunStepSelect)
+    .eq('run_id', input.run.id)
+    .eq('workflow_id', input.workflow.id)
+  if (existingStepResponse.error) throw new Error(existingStepResponse.error.message)
+  const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
+    .map((row) => [readText(row.node_key), row] as const))
+  const groupParseKeys = groups.map((group) => `${readText(group.id)}_shot_parse`)
+  const directStoryboardKeys = storyboardGroups.flatMap((group) => [
+    `${group.id}_prompt`,
+    `${group.id}_sheet`,
+    `${group.id}_panel_extract`,
+    `${group.id}_video_prompt`,
+    `${group.id}_video`,
+  ])
+  const expectedDynamicKeys = [...groupParseKeys, ...directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact']
+  const hasRecoverableStepOutput = existingDynamicNodes.some((row) => {
+    if (readText(row.output_hash) || hasStoredOutputs(row.outputs)) return false
+    const step = existingStepByNodeKey.get(row.key)
+    return Boolean(step && (readText(step.output_hash) || hasStoredOutputs(step.outputs)))
+  })
+  const existingSameHash = existingDynamicNodes.length > 0
+    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
+    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3ParsePersistenceVersion) === dynamicV3ParsePersistenceVersion)
+    && expectedDynamicKeys.every((key) => existingDynamicNodes.some((row) => row.key === key))
+  if (existingSameHash && !hasRecoverableStepOutput) {
+    return { expanded: false, compileHash, parseGroupCount: groups.length, storyboardSheetCount: storyboardGroups.length }
+  }
+
+  const existingEdgeResponse = await input.client
+    .from('output_workflow_edges')
+    .select(outputWorkflowEdgeSelect)
+    .eq('workflow_id', input.workflow.id)
+  if (existingEdgeResponse.error) throw new Error(existingEdgeResponse.error.message)
+  const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
+    .filter((row) => {
+      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
+      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
+    })
+    .map((row) => row.key)
+  if (dynamicEdgeKeys.length > 0) {
+    const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
+    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
+  }
+
+  const preserveNodeRow = (row: Record<string, unknown>) => {
+    const key = readText(row.key)
+    const existingNode = existingDynamicNodeByKey.get(key)
+    const existingMetadata = asRecord(existingNode?.metadata)
+    const sameCompileHash = readText(existingMetadata.dynamicCompileHash) === compileHash
+    return preserveExistingDynamicNodeOutput({
+      nextRow: row,
+      existingNode,
+      existingStep: existingStepByNodeKey.get(key) ?? null,
+      compileHash,
+      preserve: Boolean(existingNode)
+        && sameCompileHash
+        && readText(existingNode?.node_type) === readText(row.node_type)
+        && readText(asRecord(existingNode?.config).purpose) === readText(asRecord(row.config).purpose),
+    })
+  }
+  const v3Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => {
+    const row = dynamicNodeRow({
+      workflow: input.workflow,
+      compileHash,
+      generatedByNodeKey,
+      ...args,
+    })
+    return preserveNodeRow({
+      ...row,
+      metadata: {
+        ...asRecord(row.metadata),
+        dynamicV3ParsePersistenceVersion,
+      },
+    })
+  }
+  const v3Edge = (args: Omit<Parameters<typeof dynamicEdgeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicEdgeRow({
+    workflow: input.workflow,
+    compileHash,
+    generatedByNodeKey,
+    ...args,
+  })
+
+  const nodeRows: Record<string, unknown>[] = []
+  const edgeRows: Record<string, unknown>[] = []
+  const assetPackSourceNodeKey = 'cinematic_v3_reference_select'
+  groups.forEach((group, index) => {
+    const groupId = readText(group.id)
+    const storyboardGroup = storyboardGroups[index]
+    const storyboardLayout = { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
+    const storyboardImageSize = storyboardImageSizeForLayout({ columns: storyboardGroup.columns, rows: storyboardGroup.rows, aspectRatio })
+    const parseKey = `${groupId}_shot_parse`
+    const promptKey = `${storyboardGroup.id}_prompt`
+    const sheetKey = `${storyboardGroup.id}_sheet`
+    const extractKey = `${storyboardGroup.id}_panel_extract`
+    const videoPromptKey = `${storyboardGroup.id}_video_prompt`
+    const videoKey = `${storyboardGroup.id}_video`
+    const y = 80 + index * 180
+    const groupDurationSeconds = Math.max(4, Math.min(15, Math.ceil(Number(storyboardGroup.providerDurationSeconds || storyboardGroup.editorialDurationSeconds) || storyboardGroup.shotIds.length * 3)))
+    nodeRows.push(
+      v3Node({
+        key: parseKey,
+        nodeType: 'text_llm',
+        label: `Parse Storyboard ${storyboardGroup.index}`,
+        x: 1960,
+        y,
+        config: {
+          purpose: 'cinematic_v3_shot_parse_group',
+          cinematicPipelineVersion: 'v3_script_storyboards',
+          storyboardGroup: group,
+          storyboardGroupId: groupId,
+          maxShotCount: Math.max(1, Math.min(9, readStringArray(group.shotBreakIds).length || maxShotCount)),
+          aspectRatio,
+          resolution,
+          skillKeys: ['cinematic_shot_direction', 'cinematic_directorial_language', 'provider_prompt_hygiene'],
+          guidanceMode: 'strict',
+          execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_shot_parse_groups', maxConcurrency: Math.min(groups.length, 6) },
+        },
+      }),
+      v3Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Prompt`, x: 2240, y, config: { purpose: 'cinematic_v3_storyboard_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, storyboardGroup, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_storyboard_prompts', maxConcurrency: 6 } } }),
+      v3Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard ${storyboardGroup.index} Sheet`, x: 2520, y, config: { purpose: 'cinematic_v3_storyboard_sheet', role: 'cinematic_v3_storyboard_sheet', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'high', outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v3_storyboard_sheets', maxConcurrency: Math.min(storyboardGroups.length, 8), continueOnError: true } } }),
+      v3Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Storyboard ${storyboardGroup.index}`, x: 2800, y, config: { purpose: 'cinematic_v3_panel_extract', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_panel_extract', maxConcurrency: 6 } } }),
+      v3Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Video Prompt`, x: 3080, y, config: { purpose: 'cinematic_v3_storyboard_group_video_prompt', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_video_prompts', maxConcurrency: 6 } } }),
+      v3Node({ key: videoKey, nodeType: 'video_generation', label: `Storyboard ${storyboardGroup.index} Video`, x: 3360, y, config: { purpose: 'cinematic_v3_storyboard_group_video', role: 'cinematic_v3_storyboard_group_video', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'storyboard_sheet', assetPackReferenceLimit: 4, debugSkipVideoGeneration, syncMode: false, manualOnly: true, manual_only: true, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'video_prompt', 'storyboard_sheet', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v3_storyboard_group_videos', maxConcurrency: Math.min(storyboardGroups.length, 4), manualOnly: true } } }),
+    )
+    edgeRows.push(
+      v3Edge({ key: `screenplay__${parseKey}`, sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: parseKey, targetPort: 'screenplay' }),
+      v3Edge({ key: `shot_break_plan__${parseKey}`, sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: parseKey, targetPort: 'shot_break_plan' }),
+      v3Edge({ key: `context__${parseKey}`, sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: parseKey, targetPort: 'context' }),
+      v3Edge({ key: `guidance__${parseKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: parseKey, targetPort: 'guidance' }),
+      v3Edge({ key: `references__${parseKey}`, sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: parseKey, targetPort: 'asset_pack' }),
+      v3Edge({ key: `${parseKey}__${promptKey}`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'shot_plan' }),
+      v3Edge({ key: `${assetPackSourceNodeKey}__${promptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: promptKey, targetPort: 'asset_pack' }),
+      v3Edge({ key: `skill_context__${promptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: promptKey, targetPort: 'guidance' }),
+      v3Edge({ key: `${promptKey}__${sheetKey}`, sourceNodeKey: promptKey, sourcePort: 'text', targetNodeKey: sheetKey, targetPort: 'prompt' }),
+      v3Edge({ key: `${assetPackSourceNodeKey}__${sheetKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: sheetKey, targetPort: 'references' }),
+      v3Edge({ key: `skill_context__${sheetKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: sheetKey, targetPort: 'guidance' }),
+      v3Edge({ key: `${sheetKey}__${extractKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: extractKey, targetPort: 'image' }),
+      v3Edge({ key: `${parseKey}__${extractKey}`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: extractKey, targetPort: 'shot_plan' }),
+      v3Edge({ key: `${parseKey}__${videoPromptKey}`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'shot_plan' }),
+      v3Edge({ key: `${assetPackSourceNodeKey}__${videoPromptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack' }),
+      v3Edge({ key: `skill_context__${videoPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoPromptKey, targetPort: 'guidance' }),
+      v3Edge({ key: `${sheetKey}__${videoPromptKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references' }),
+      v3Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt' }),
+      v3Edge({ key: `${sheetKey}__${videoKey}_reference`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references' }),
+      v3Edge({ key: `${parseKey}__timeline`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
+      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
+      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
+      v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, manualOnly: true } }),
+    )
+  })
+  nodeRows.push(
+    v3Node({ key: 'cinematic_v3_timeline_assemble', nodeType: 'utility_transform', label: 'Assemble Storyboard Timeline', x: 3660, y: 120, config: { purpose: 'cinematic_v3_timeline_assemble', role: 'cinematic_v3_final_timeline', cinematicPipelineVersion: 'v3_script_storyboards', dynamicShotCount: Array.isArray(shotBreakPlan.shotBreaks) ? shotBreakPlan.shotBreaks.length : groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0), aspectRatio, resolution, debugSkipVideoGeneration, execution: { resourceClass: 'video', groupKey: 'cinematic_v3_timeline_assemble', maxConcurrency: 1 } } }),
+    v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Cinematic', x: 3940, y: 120, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+  )
+  edgeRows.push(
+    v3Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v3_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
+  )
+
+  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
+  if (insertNodes.error) throw new Error(insertNodes.error.message)
+  const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
+  if (insertEdges.error) throw new Error(insertEdges.error.message)
+
+  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
+  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
+  if (obsoleteDynamicNodes.length > 0) {
+    const staleAt = new Date().toISOString()
+    for (const obsoleteNode of obsoleteDynamicNodes) {
+      const markStale = await input.client
+        .from('output_workflow_nodes')
+        .update({
+          dirty: true,
+          metadata: {
+            ...asRecord(obsoleteNode.metadata),
+            dynamicCinematicStale: true,
+            staleAt,
+            staleReason: 'dynamic_v3_shot_parse_fanout_rematerialized',
+            replacedByDynamicCompileHash: compileHash,
+          },
+        })
+        .eq('id', obsoleteNode.id)
+      if (markStale.error) throw new Error(markStale.error.message)
+    }
+  }
+  const updateWorkflow = await input.client.from('output_workflows').update({
+    metadata: {
+      ...input.workflow.metadata,
+      cinematicPipelineVersion: 'v3_script_storyboards',
+      cinematicV3ScreenplayDraft: screenplayDraft,
+      cinematicV3ShotBreakPlan: shotBreakPlan,
+      dynamicCinematicParseCompileHash: compileHash,
+      dynamicV3ParseGroupCount: groups.length,
+      storyboardSheetCount: storyboardGroups.length,
+      dynamicShotCount: groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0),
+      dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
+      lastDynamicGraphUpdatedAt: new Date().toISOString(),
+      dynamicNodeCount: nodeRows.length,
+    },
+  }).eq('id', input.workflow.id)
+  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  return { expanded: true, compileHash, parseGroupCount: groups.length, storyboardSheetCount: storyboardGroups.length }
 }
 
 async function materializeDynamicCinematicV2ShotFanout(input: {
@@ -8161,6 +9708,30 @@ async function buildDocumentReferenceImages(input: {
   return images
 }
 
+type FalWebhookImageResult = {
+  status: 'completed' | 'failed' | 'pending'
+  imageUrl: string
+  errorMessage: string
+  resultBody: Record<string, unknown>
+}
+
+function readFalWebhookImageResult(metadata: Record<string, unknown>, requestId: string): FalWebhookImageResult | null {
+  const currentRequestId = readText(metadata.falRequestId)
+  if (currentRequestId && currentRequestId !== requestId) return null
+  const webhookStatus = readText(metadata.webhookStatus)
+  if (!webhookStatus) return null
+  const imageUrl = readText(metadata.falWebhookImageUrl) || readText(metadata.falImageUrl)
+  const errorMessage = readText(metadata.webhookErrorMessage)
+    || readText(metadata.falWebhookErrorMessage)
+    || readText(metadata.webhookPayloadError)
+  const resultBody = asRecord(metadata.falWebhookPayload)
+  if (webhookStatus === 'ERROR') {
+    return { status: 'failed', imageUrl: '', errorMessage: errorMessage || 'Fal webhook reported an image generation error.', resultBody }
+  }
+  if (imageUrl) return { status: 'completed', imageUrl, errorMessage: '', resultBody }
+  return { status: 'pending', imageUrl: '', errorMessage: '', resultBody }
+}
+
 async function waitForOutputFalImage(input: {
   priorStep?: OutputWorkflowRunStep | null
   apiKey: string
@@ -8176,15 +9747,41 @@ async function waitForOutputFalImage(input: {
     providerStatus: string
     providerMode: string
     lastProviderPollAt: string
+    webhookConfigured?: boolean
+    providerSubmittedAt?: string | null
+    providerElapsedMs?: number | null
+    staleRequestRestarted?: boolean
     statusUrl?: string | null
     responseUrl?: string | null
   }) => Promise<void>
+  getWebhookResult?: (requestId: string) => Promise<FalWebhookImageResult | null>
 }) {
   const priorMetadata = asRecord(input.priorStep?.metadata)
   let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.falRequestId)
   let statusUrl: string | null = readText(priorMetadata.falStatusUrl) || null
   let responseUrl: string | null = readText(priorMetadata.falResponseUrl) || null
+  let providerSubmittedAt = readText(priorMetadata.providerSubmittedAt)
+    || readText(priorMetadata.falSubmittedAt)
+    || inferUuidV7TimestampIso(requestId)
+    || readText(input.priorStep?.startedAt)
+    || ''
+  let staleRequestRestarted = false
 
+  const providerSubmittedAtMs = providerSubmittedAt ? Date.parse(providerSubmittedAt) : NaN
+  if (
+    requestId
+    && Number.isFinite(providerSubmittedAtMs)
+    && Date.now() - providerSubmittedAtMs > outputWorkflowFalStaleRequestMs()
+  ) {
+    requestId = ''
+    statusUrl = null
+    responseUrl = null
+    providerSubmittedAt = ''
+    staleRequestRestarted = true
+  }
+
+  const webhookUrl = resolveFalWebhookUrl()
+  const webhookConfigured = Boolean(webhookUrl)
   if (!requestId) {
     const submit = await submitFalImageRequest({
       apiKey: input.apiKey,
@@ -8194,6 +9791,7 @@ async function waitForOutputFalImage(input: {
       quality: input.quality,
       outputFormat: input.outputFormat,
       referenceImageUrls: input.referenceImageUrls,
+      webhookUrl,
     })
     if (!submit.response.ok) {
       throw new Error(falErrorMessage(submit.body, `Fal image submission failed with HTTP ${submit.response.status}.`))
@@ -8202,24 +9800,67 @@ async function waitForOutputFalImage(input: {
     statusUrl = readText(submit.body.status_url) || null
     responseUrl = readText(submit.body.response_url) || null
     if (!requestId) throw new Error('Fal did not return a request id for the output image generation node.')
+    providerSubmittedAt = new Date().toISOString()
+  }
+
+  if (!providerSubmittedAt) providerSubmittedAt = new Date().toISOString()
+  const providerElapsedMs = () => {
+    const submittedAtMs = Date.parse(providerSubmittedAt)
+    return Number.isFinite(submittedAtMs) ? Math.max(0, Date.now() - submittedAtMs) : null
   }
 
   await input.onProgress?.({
     providerRequestId: requestId,
     providerStatus: 'IN_QUEUE',
-    providerMode: 'fal_queue',
+    providerMode: webhookConfigured ? 'fal_webhook_polling' : 'fal_queue',
     lastProviderPollAt: new Date().toISOString(),
+    webhookConfigured,
+    providerSubmittedAt,
+    providerElapsedMs: providerElapsedMs(),
+    staleRequestRestarted,
     statusUrl,
     responseUrl,
   })
 
   const timeoutMs = outputWorkflowFalTimeoutMs()
-  const pollIntervalMs = outputWorkflowFalPollIntervalMs()
+  const pollIntervalMs = webhookConfigured
+    ? Math.max(outputWorkflowFalPollIntervalMs(), outputWorkflowFalWebhookPollIntervalMs())
+    : outputWorkflowFalPollIntervalMs()
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < timeoutMs) {
     if (await input.shouldCancel?.()) {
       throw new WorkflowCancelledError()
+    }
+    const webhookResult = await input.getWebhookResult?.(requestId)
+    if (webhookResult?.status === 'failed') {
+      throw new Error(webhookResult.errorMessage || 'Fal webhook reported an output image generation error.')
+    }
+    if (webhookResult?.status === 'completed' && webhookResult.imageUrl) {
+      await input.onProgress?.({
+        providerRequestId: requestId,
+        providerStatus: 'COMPLETED',
+        providerMode: 'fal_webhook_result',
+        lastProviderPollAt: new Date().toISOString(),
+        webhookConfigured,
+        providerSubmittedAt,
+        providerElapsedMs: providerElapsedMs(),
+        statusUrl,
+        responseUrl,
+      })
+      const image = extractFalImageRecord(webhookResult.resultBody)
+      return {
+        requestId,
+        statusUrl,
+        responseUrl,
+        imageUrl: webhookResult.imageUrl,
+        width: Number(image?.width ?? 0) || null,
+        height: Number(image?.height ?? 0) || null,
+        mimeType: readText(image?.content_type) || `image/${input.outputFormat}`,
+        fileName: readText(image?.file_name),
+        fileSize: Number(image?.file_size ?? 0) || null,
+        resultBody: webhookResult.resultBody,
+      }
     }
     const status = await getFalStatus({
       apiKey: input.apiKey,
@@ -8231,8 +9872,11 @@ async function waitForOutputFalImage(input: {
     await input.onProgress?.({
       providerRequestId: requestId,
       providerStatus,
-      providerMode: 'fal_queue',
+      providerMode: webhookConfigured ? 'fal_webhook_polling' : 'fal_queue',
       lastProviderPollAt: new Date().toISOString(),
+      webhookConfigured,
+      providerSubmittedAt,
+      providerElapsedMs: providerElapsedMs(),
       statusUrl,
       responseUrl,
     })
@@ -8280,7 +9924,20 @@ async function waitForOutputFalImage(input: {
     await sleep(pollIntervalMs)
   }
 
-  throw new Error(`Fal image request timed out before completion after ${timeoutMs}ms.`)
+  await input.onProgress?.({
+    providerRequestId: requestId,
+    providerStatus: 'TIMED_OUT',
+    providerMode: webhookConfigured ? 'fal_webhook_polling' : 'fal_queue',
+    lastProviderPollAt: new Date().toISOString(),
+    webhookConfigured,
+    providerSubmittedAt,
+    providerElapsedMs: providerElapsedMs(),
+    staleRequestRestarted,
+    statusUrl,
+    responseUrl,
+  })
+
+  throw new Error(`Fal image request ${requestId} timed out before completion after ${timeoutMs}ms.`)
 }
 
 async function waitForOutputFalVideo(input: {
@@ -8358,6 +10015,9 @@ async function waitForOutputFalVideo(input: {
       providerStatus,
       providerMode: 'fal_queue',
       lastProviderPollAt: new Date().toISOString(),
+      providerSubmittedAt,
+      providerElapsedMs: providerElapsedMs(),
+      staleRequestRestarted,
       statusUrl,
       responseUrl,
     })
@@ -8597,6 +10257,38 @@ async function registerVideoArtifact(input: {
     .select(outputArtifactSelect)
     .single()
   if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register output video artifact.')
+  return mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow)
+}
+
+async function registerOtherOutputArtifact(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  node: OutputWorkflowNode
+  key: string
+  name: string
+  summary: string
+  metadata: Record<string, unknown>
+}) {
+  const artifactResponse = await input.client
+    .from('output_artifacts')
+    .upsert({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      node_id: input.node.id,
+      key: input.key,
+      name: input.name,
+      kind: 'other',
+      asset_key: null,
+      mime_type: 'application/json',
+      summary: input.summary,
+      metadata: input.metadata,
+    }, { onConflict: 'draft_id,key' })
+    .select(outputArtifactSelect)
+    .single()
+  if (artifactResponse.error || !artifactResponse.data) throw new Error(artifactResponse.error?.message ?? 'Failed to register output authoring artifact.')
   return mapOutputArtifactRow(artifactResponse.data as OutputArtifactRow)
 }
 
@@ -9483,6 +11175,9 @@ async function executeNode(input: {
             'Choose the cinematic-level reference plan from the already sequence-scoped asset pack.',
             'Do not add or invent world entities. Do not select every available reference by default.',
             'Select primary cast, supporting cast, locations, props, concepts, and continuity anchors that are genuinely needed for the storyboard and shot plan.',
+            'Visual variants are not separate refs. When the user names a room, chamber, cafe, outfit, gear, or other visual variant, select the parent entity that owns the matching referenceVariants entry.',
+            'For location phrases such as "in the leader\'s chamber of Whistlewick" or "inside the Pact Chamber", prefer the parent location with the matching shot_location_sheet variant. Do not select unrelated props/items merely because one word like "chamber" appears in their name.',
+            'A multi-word variant label or summary match beats a single-token entity-name match.',
             'Reject refs that are unrelated to this prompt/sequence and explain briefly.',
             `User brief:\n${input.run.prompt}`,
             guidanceMarkdown(guidance),
@@ -9495,7 +11190,12 @@ async function executeNode(input: {
           fallback: fallbackPlan,
           maxOutputTokens: 2800,
         })
-        const cinematicReferencePlan = sanitizeCinematicV2ReferencePlan(asRecord(result.value), sourceAssetPack, maxReferenceCount)
+        const cinematicReferencePlan = strengthenCinematicReferencePlanWithVariantMatches(
+          sanitizeCinematicV2ReferencePlan(asRecord(result.value), sourceAssetPack, maxReferenceCount),
+          sourceAssetPack,
+          input.run.prompt,
+          maxReferenceCount,
+        )
         const assetPack = filterCinematicAssetPack(sourceAssetPack, referencePlanKeys(cinematicReferencePlan), maxReferenceCount, 2)
         const outputs = {
           cinematicReferencePlan,
@@ -9544,36 +11244,65 @@ async function executeNode(input: {
       if (purpose === 'cinematic_v2_screenplay_author' || purpose === 'cinematic_v3_screenplay_author') {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const fallback = buildFallbackCinematicV2ScreenplayDraft({ context, assetPack, prompt: input.run.prompt })
+        const v3ShotMarkedScreenplay = purpose === 'cinematic_v3_screenplay_author'
         const result = await runCinematicV2ScreenplayAuthor({
           nodeKey: input.node.key,
           instructions: [
             'You are a senior screenwriter and cinematic story artist.',
             'Return plain Markdown screenplay/treatment text only. Do not return JSON.',
           ].join('\n'),
-          prompt: [
-            'Write the cinematic source screenplay before any technical planning happens.',
-            'Format it for production parsing: scene heading, concise visible action lines, dialogue blocks, short performance notes, and visual motifs.',
-            'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
-            'Target roughly 600-1200 words for one cinematic part unless the selected story unit clearly needs less.',
-            'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
-            'Keep performance direction compact: valence/arousal-style emotional movement may be described in plain language, but do not emit numeric JSON.',
-            'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
-            'Do not write graph operations, provider instructions, image prompts, video prompts, model names, @Image labels, resolution, aspect-ratio instructions, or schema fields.',
-            'Do not include a JSON object, bullet-only outline, or workflow metadata.',
-            'Recommended shape:',
-            '## Scene: [short title]',
-            'EXT./INT. LOCATION - TIME',
-            'Action lines and dialogue.',
-            '## Performance Notes',
-            '- Character: visible acting direction.',
-            '## Visual Motifs',
-            '- concrete recurring image.',
-            `User brief:\n${input.run.prompt}`,
-            guidanceMarkdown(guidance),
-            compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 11000),
-          ].filter(Boolean).join('\n\n'),
+          prompt: v3ShotMarkedScreenplay
+            ? [
+              'Write the cinematic source screenplay before technical parsing happens.',
+              'Keep it creative and readable: scene heading, concise visible action lines, dialogue blocks, performance notes, and visual motifs.',
+              'Insert one lightweight HTML shot marker immediately before every intended storyboard/video shot beat using this exact form:',
+              '<!-- SHOT 001: short visual beat title | ~3s -->',
+              'Shot markers are structural anchors only. Do not turn the script into JSON, a rigid field list, image prompts, or provider instructions.',
+              'Use 6-18 shot markers depending on the requested scene duration. Each marked shot should be a coherent storyboard panel and future short-video beat.',
+              'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
+              'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
+              'Keep performance direction compact: valence/arousal-style emotional movement may be described in plain language, but do not emit numeric JSON.',
+              'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
+              'Do not write graph operations, provider instructions, image prompts, video prompts, model names, @Image labels, resolution, aspect-ratio instructions, schema fields, visible subtitles, or workflow metadata.',
+              'Recommended shape:',
+              '## Scene: [short title]',
+              'EXT./INT. LOCATION - TIME',
+              '<!-- SHOT 001: threshold reveal | ~3s -->',
+              'Action lines and dialogue.',
+              '<!-- SHOT 002: reaction closeup | ~2s -->',
+              'Action lines and dialogue.',
+              '## Performance Notes',
+              '- Character: visible acting direction.',
+              '## Visual Motifs',
+              '- concrete recurring image.',
+              `User brief:\n${input.run.prompt}`,
+              guidanceMarkdown(guidance),
+              compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 11000),
+            ].filter(Boolean).join('\n\n')
+            : [
+              'Write the cinematic source screenplay before any technical planning happens.',
+              'Format it for production parsing: scene heading, concise visible action lines, dialogue blocks, short performance notes, and visual motifs.',
+              'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
+              'Target roughly 600-1200 words for one cinematic part unless the selected story unit clearly needs less.',
+              'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
+              'Keep performance direction compact: valence/arousal-style emotional movement may be described in plain language, but do not emit numeric JSON.',
+              'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
+              'Do not write graph operations, provider instructions, image prompts, video prompts, model names, @Image labels, resolution, aspect-ratio instructions, or schema fields.',
+              'Do not include a JSON object, bullet-only outline, or workflow metadata.',
+              'Recommended shape:',
+              '## Scene: [short title]',
+              'EXT./INT. LOCATION - TIME',
+              'Action lines and dialogue.',
+              '## Performance Notes',
+              '- Character: visible acting direction.',
+              '## Visual Motifs',
+              '- concrete recurring image.',
+              `User brief:\n${input.run.prompt}`,
+              guidanceMarkdown(guidance),
+              compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 11000),
+            ].filter(Boolean).join('\n\n'),
           fallback,
-          maxOutputTokens: 4200,
+          maxOutputTokens: v3ShotMarkedScreenplay ? 5200 : 4200,
         })
         const screenplayDraft = result.fallbackUsed
           ? cinematicV2ScreenplayDraftSchema.parse({
@@ -9582,18 +11311,126 @@ async function executeNode(input: {
               ...readStringArray(asRecord(result.value).diagnostics),
               `Screenplay author fallback reason: ${result.fallbackReason}`,
             ],
+            metadata: {
+              ...asRecord(result.value.metadata),
+              scriptContract: v3ShotMarkedScreenplay ? 'screenplay_with_shot_markers_v1' : readText(asRecord(result.value.metadata).scriptContract),
+            },
           })
-          : result.value
+          : cinematicV2ScreenplayDraftSchema.parse({
+            ...result.value,
+            metadata: {
+              ...asRecord(result.value.metadata),
+              ...(v3ShotMarkedScreenplay ? { scriptContract: 'screenplay_with_shot_markers_v1' } : {}),
+            },
+          })
+        const v3ShotBreakPlan = v3ShotMarkedScreenplay
+          ? buildCinematicV3ShotBreakPlan({
+            screenplayDraft,
+            maxShotCount: deriveCinematicV2MaxShotCount(screenplayDraft.suggestedDurationSeconds),
+            maxPanelsPerSheet: 9,
+            maxDurationPerGroupSeconds: 15,
+          })
+          : null
+        const screenplayDraftWithMarkers = v3ShotMarkedScreenplay
+          ? cinematicV2ScreenplayDraftSchema.parse({
+            ...screenplayDraft,
+            metadata: {
+              ...asRecord(screenplayDraft.metadata),
+              scriptContract: 'screenplay_with_shot_markers_v1',
+              shotBreaks: v3ShotBreakPlan?.shotBreaks ?? [],
+            },
+          })
+          : screenplayDraft
         const outputs = {
-          screenplayDraft,
-          screenplay_draft: screenplayDraft,
-          text: screenplayDraft.screenplayMarkdown,
+          screenplayDraft: screenplayDraftWithMarkers,
+          screenplay_draft: screenplayDraftWithMarkers,
+          shotBreaks: v3ShotBreakPlan?.shotBreaks ?? [],
+          shot_breaks: v3ShotBreakPlan?.shotBreaks ?? [],
+          text: screenplayDraftWithMarkers.screenplayMarkdown,
           fallbackUsed: result.fallbackUsed,
           fallbackReason: result.fallbackReason,
           guidance,
           usage: asRecord(result.response).usage,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
+      }
+      if (purpose === 'cinematic_v3_shot_parse_group') {
+        const config = asRecord(input.node.config)
+        const group = asRecord(config.storyboardGroup)
+        const groupIndex = Number(group.index ?? 0) || 1
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
+        const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
+        const groupBreaks = (Array.isArray(group.shotBreaks) ? group.shotBreaks.map(asRecord) : [])
+        const groupExcerpt = readText(group.screenplayExcerpt) || groupBreaks.map((entry) => readText(entry.text)).filter(Boolean).join('\n\n')
+        const parsedScript = buildFallbackCinematicV2ParsedScript({ context, assetPack, prompt: input.run.prompt, screenplayDraft })
+        const sceneState = buildFallbackCinematicV2SceneState({ parsedScript, context })
+        const maxShotCount = Math.max(1, Math.min(9, groupBreaks.length || Number(config.maxShotCount ?? 0) || 6))
+        const fallback = buildFallbackCinematicV2ShotPlan({ parsedScript, sceneState, maxShotCount })
+        const expectedShotIds = groupBreaks.map((entry, index) => readText(entry.id) || `shot_${String(index + 1).padStart(3, '0')}`)
+        const result = await runCinematicV2StructuredNodeBackground({
+          nodeKey: input.node.key,
+          schemaName: 'output_workflow_cinematic_v3_shot_parse_group',
+          schema: cinematicV2ShotPlanSchema,
+          instructions: 'You are a cinematic shot parser. Return strict JSON only. Parse one screenplay segment into timed storyboard/video shots using only supplied reference keys.',
+          prompt: [
+            `Parse only storyboard/video block ${groupIndex} into at most ${maxShotCount} cinematic shots.`,
+            'The screenplay excerpt is the authority for this block. Preserve its creative beats, dialogue, emotional turn, and shot markers.',
+            'Each output shot must be a concrete storyboard panel and future short video beat: timing, visible action, dialogue/caption meaning, camera, lighting, mood, acting direction, and reference IDs.',
+            'Fill caption as semantic beat meaning only; it must not become visible text in generated images.',
+            'Fill storyboardPanelPrompt with a concise visual panel instruction. Fill videoDirection with concise movement/action continuity for the future storyboard-group video.',
+            'Use only canonical reference keys from the supplied asset pack/context. If a subject is implied but not bound, leave it in prose rather than inventing a key.',
+            'Provider durations must be 4-15 seconds; editorial durations should reflect actual timeline timing.',
+            expectedShotIds.length > 0 ? `Preferred shot IDs in order: ${expectedShotIds.join(', ')}` : '',
+            `User brief:\n${input.run.prompt}`,
+            `Screenplay excerpt for this block:\n${groupExcerpt}`,
+            compactForPrompt({ shotBreakPlan: { groups: [group], diagnostics: asRecord(shotBreakPlan).diagnostics ?? [] } }, 5000),
+            guidanceMarkdown(guidance),
+            compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 9000),
+          ].filter(Boolean).join('\n\n'),
+          fallback,
+          maxOutputTokens: 9000,
+          priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
+          shouldCancel: input.shouldCancel,
+          onProgress: input.onProgress,
+        })
+        const normalizedShotPlan = cinematicV2ShotPlanSchema.parse({
+          ...result.value,
+          shots: result.value.shots.slice(0, maxShotCount).map((shot, index) => ({
+            ...shot,
+            id: expectedShotIds[index] || readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`,
+            index: index + 1,
+            providerDurationSeconds: providerSafeCinematicV2DurationSeconds(shot.editorialDurationSeconds),
+          })),
+        })
+        const referenceDiagnostics = validateCinematicV2ShotPlanReferences({
+          shotPlan: normalizedShotPlan,
+          referenceIds: cinematicV2ReferenceIds(assetPack, {}),
+        })
+        const outputShotPlan = {
+          ...normalizedShotPlan,
+          diagnostics: [
+            ...normalizedShotPlan.diagnostics,
+            `parsed_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
+            ...(result.fallbackUsed ? [`V3 group shot parser fallback used. ${result.fallbackReason}`] : []),
+            ...referenceDiagnostics,
+          ],
+        }
+        const outputs = {
+          shotPlan: outputShotPlan,
+          shot_plan: outputShotPlan,
+          shots: outputShotPlan.shots,
+          storyboardGroup: group,
+          storyboard_group: group,
+          storyboardGroupId: readText(group.id),
+          text: JSON.stringify(outputShotPlan, null, 2),
+          referenceDiagnostics,
+          fallbackUsed: result.fallbackUsed,
+          fallbackReason: result.fallbackReason,
+          guidance,
+          usage: asRecord(result.response).usage,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || readText(asRecord(result.response).id) || undefined }
       }
       if (purpose === 'cinematic_v3_shot_parse') {
         const config = asRecord(input.node.config)
@@ -9605,42 +11442,64 @@ async function executeNode(input: {
         const suggestedDurationSeconds = Number(asRecord(screenplayDraft).suggestedDurationSeconds ?? 0) || null
         const maxShotCount = Math.max(1, Math.min(36, configuredMaxShotCount > 0 ? configuredMaxShotCount : deriveCinematicV2MaxShotCount(suggestedDurationSeconds)))
         const fallback = buildFallbackCinematicV2ShotPlan({ parsedScript, sceneState, maxShotCount })
-        let result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: 'output_workflow_cinematic_v3_shot_parse',
-          schema: cinematicV2ShotPlanSchema,
-          instructions: 'You are a cinematic shot parser. Return strict JSON only. Parse the authored screenplay directly into timed storyboard/video shots using only supplied reference keys.',
-          prompt: [
-            `Parse the authored screenplay directly into at most ${maxShotCount} cinematic shots. Do not create separate scene-state, layout, or secondary shot-planning abstractions.`,
-            'Each shot must be a concrete storyboard panel and potential short video beat: timing, visible action, dialogue/caption meaning, camera, lighting, mood, acting direction, and reference IDs.',
-            'Fill caption as semantic caption/beat meaning only; it must not become visible text in generated images.',
-            'Fill storyboardPanelPrompt with a concise visual panel instruction. Fill videoDirection with concise movement/action continuity for the future storyboard-group video.',
-            'Use only canonical reference keys from the supplied asset pack/context. If a subject is implied but not bound, leave it in prose rather than inventing a key.',
-            'Provider durations must be 4-15 seconds; editorial durations should reflect actual timeline timing.',
-            `User brief:\n${input.run.prompt}`,
-            compactForPrompt({ screenplayDraft }, 8000),
-            guidanceMarkdown(guidance),
-            compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 10000),
-          ].filter(Boolean).join('\n\n'),
-          fallback,
-          maxOutputTokens: 12000,
+        const deterministicVisualScript = buildCinematicV3ShotPlanFromVisualScript({
+          screenplayDraft,
+          assetPack,
+          context,
+          prompt: input.run.prompt,
+          maxShotCount,
         })
-        if (result.fallbackUsed && result.response.response.ok) {
-          result = await runCinematicV2StructuredNode({
+        let result: {
+          value: z.infer<typeof cinematicV2ShotPlanSchema>
+          response: OpenAiResponseResult | Record<string, unknown>
+          provider: string
+          model: string
+          providerRequestId?: string | null
+          fallbackUsed: boolean
+          fallbackReason: string
+          shotBlocks?: Array<Record<string, unknown>>
+          unknownRefNames?: string[]
+        }
+        if (deterministicVisualScript) {
+          result = {
+            value: deterministicVisualScript.shotPlan,
+            response: { usage: {}, id: null },
+            provider: 'graphcore',
+            model: 'deterministic-visual-shot-script-v1',
+            providerRequestId: null,
+            fallbackUsed: false,
+            fallbackReason: '',
+            shotBlocks: deterministicVisualScript.shotBlocks,
+            unknownRefNames: deterministicVisualScript.unknownRefNames,
+          }
+        } else {
+          result = await runCinematicV2StructuredNodeBackground({
             nodeKey: input.node.key,
             schemaName: 'output_workflow_cinematic_v3_shot_parse_repair',
             schema: cinematicV2ShotPlanSchema,
-            instructions: 'Repair a Cinematics V3 shot JSON response into strict valid JSON only. Preserve screenplay coverage and do not shorten the scene unless requested.',
+            instructions: 'Repair or parse a Cinematics V3 visual script into strict valid JSON only. Preserve screenplay coverage, use only supplied reference keys, and keep shots storyboard/video ready.',
             prompt: [
-              'The previous V3 shot parse response failed validation. Return a complete valid shot plan JSON matching the schema.',
-              `Validation or parse failure:\n${result.fallbackReason}`,
+              'The authored script did not match the visual_shot_script_v1 deterministic contract. Return a complete valid shot plan JSON matching the schema.',
               `Maximum shots: ${maxShotCount}.`,
-              `Previous model output:\n${result.response.outputText.slice(0, 24000)}`,
-              compactForPrompt({ screenplayDraft, assetPack }, 14000),
+              'Do not invent entity/location/prop keys. Unknown subjects must remain in prose fields.',
+              'Fill caption as semantic beat meaning only; it must not become visible text in generated images.',
+              'Fill storyboardPanelPrompt and videoDirection for every shot.',
+              `User brief:\n${input.run.prompt}`,
+              compactForPrompt({ screenplayDraft }, 12000),
+              guidanceMarkdown(guidance),
+              compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, fallback }, 12000),
             ].filter(Boolean).join('\n\n'),
             fallback,
             maxOutputTokens: 12000,
+            priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
+            shouldCancel: input.shouldCancel,
+            onProgress: input.onProgress,
           })
+          result = {
+            ...result,
+            fallbackUsed: result.fallbackUsed || result.provider === 'graphcore',
+            fallbackReason: result.fallbackReason || 'llm_repair_used',
+          }
         }
         const normalizedShotPlan = cinematicV2ShotPlanSchema.parse({
           ...result.value,
@@ -9655,12 +11514,20 @@ async function executeNode(input: {
         })
         const outputShotPlan = {
           ...normalizedShotPlan,
-          diagnostics: [...normalizedShotPlan.diagnostics, ...(result.fallbackUsed ? [`V3 shot parser failed; fallback plan generated. ${result.fallbackReason}`] : []), ...referenceDiagnostics],
+          diagnostics: [
+            ...normalizedShotPlan.diagnostics,
+            ...(deterministicVisualScript ? ['deterministic_visual_script_parse'] : ['llm_repair_used']),
+            ...(result.fallbackUsed ? [`V3 shot parser fallback used. ${result.fallbackReason}`] : []),
+            ...referenceDiagnostics,
+          ],
         }
         const outputs = {
           shotPlan: outputShotPlan,
           shot_plan: outputShotPlan,
           shots: outputShotPlan.shots,
+          parsedShotBlocks: result.shotBlocks ?? [],
+          parsed_shot_blocks: result.shotBlocks ?? [],
+          unknownRefNames: result.unknownRefNames ?? [],
           text: JSON.stringify(outputShotPlan, null, 2),
           referenceDiagnostics,
           fallbackUsed: result.fallbackUsed,
@@ -9668,7 +11535,7 @@ async function executeNode(input: {
           guidance,
           usage: asRecord(result.response).usage,
         }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || readText(asRecord(result.response).id) || undefined }
       }
       if (purpose === 'cinematic_v2_scene_compile') {
         const parsedScript = readFirstUpstreamRecord(input.upstream, ['parsedScript', 'parsed_script'])
@@ -10607,6 +12474,22 @@ async function executeNode(input: {
           providerRequestId: input.priorStep.providerRequestId,
         }
       }
+      const recoverableArtifact = await loadRecoverableArtifactBackedNodeOutputs({
+        client: input.client,
+        run: input.run,
+        node: input.node,
+      })
+      if (recoverableArtifact) {
+        const outputHash = hashOutputWorkflowValue(recoverableArtifact.outputs)
+        return {
+          inputHash: input.priorStep?.inputHash || input.inputHash,
+          outputHash,
+          outputs: recoverableArtifact.outputs,
+          provider: recoverableArtifact.provider,
+          model: recoverableArtifact.model,
+          providerRequestId: recoverableArtifact.providerRequestId,
+        }
+      }
       const falApiKey = Deno.env.get('FAL_KEY')
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
@@ -10667,6 +12550,10 @@ async function executeNode(input: {
               providerMode: progress.providerMode,
               providerStatus: progress.providerStatus,
               lastProviderPollAt: progress.lastProviderPollAt,
+              webhookConfigured: progress.webhookConfigured === true,
+              providerSubmittedAt: progress.providerSubmittedAt ?? null,
+              providerElapsedMs: progress.providerElapsedMs ?? null,
+              staleRequestRestarted: progress.staleRequestRestarted === true,
               falRequestId: progress.providerRequestId,
               falStatusUrl: progress.statusUrl ?? null,
               falResponseUrl: progress.responseUrl ?? null,
@@ -10676,6 +12563,23 @@ async function executeNode(input: {
               referenceImageCount: referenceImageUrls.length,
             },
           })
+        },
+        getWebhookResult: async (requestId) => {
+          const stepResponse = await input.client
+            .from('output_workflow_run_steps')
+            .select('id, status, provider_request_id, metadata')
+            .eq('run_id', input.run.id)
+            .eq('node_key', input.node.key)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          if (stepResponse.error) throw new Error(stepResponse.error.message)
+          const step = asRecord(stepResponse.data)
+          if (!Object.keys(step).length) return null
+          const stepMetadata = asRecord(step.metadata)
+          const currentRequestId = readText(step.provider_request_id) || readText(stepMetadata.falRequestId)
+          if (currentRequestId && currentRequestId !== requestId) return null
+          return readFalWebhookImageResult(stepMetadata, requestId)
         },
       })
       const imageBytes = await downloadRemoteBytes(falResult.imageUrl)
@@ -10728,6 +12632,12 @@ async function executeNode(input: {
         provider: 'fal',
         model,
         providerRequestId: falResult.requestId,
+        providerMode: 'fal_queue',
+        providerStatus: 'COMPLETED',
+        falRequestId: falResult.requestId,
+        falImageUrl: falResult.imageUrl,
+        falStatusUrl: falResult.statusUrl,
+        falResponseUrl: falResult.responseUrl,
         referenceImageCount: referenceImageUrls.length,
         selectedReferenceVariants,
         selectedReferenceVariantKeys,
@@ -11267,12 +13177,150 @@ async function executeNode(input: {
     }
     case 'utility_transform': {
       const purpose = readText(asRecord(input.node.config).purpose)
+      if (purpose === 'cinematic_v3_shot_break_plan') {
+        const config = asRecord(input.node.config)
+        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
+        const suggestedDurationSeconds = Number(asRecord(screenplayDraft).suggestedDurationSeconds ?? 0) || null
+        const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
+        const shotBreakPlan = buildCinematicV3ShotBreakPlan({
+          screenplayDraft,
+          maxShotCount: configuredMaxShotCount > 0 ? configuredMaxShotCount : deriveCinematicV2MaxShotCount(suggestedDurationSeconds),
+          maxPanelsPerSheet: Number(config.maxPanelsPerSheet ?? 9) || 9,
+          maxDurationPerGroupSeconds: Number(config.maxDurationPerGroupSeconds ?? 15) || 15,
+        })
+        const outputs = {
+          shotBreakPlan,
+          shot_break_plan: shotBreakPlan,
+          shotBreaks: shotBreakPlan.shotBreaks,
+          shot_breaks: shotBreakPlan.shotBreaks,
+          groups: shotBreakPlan.groups,
+          text: JSON.stringify(shotBreakPlan, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-shot-break-plan-v1' }
+      }
+      if (purpose === 'cinematic_v3_shot_plan_merge') {
+        const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
+        const groupPlans = Object.values(input.upstream)
+          .map((outputs) => asRecord(outputs.shotPlan ?? outputs.shot_plan))
+          .filter((plan) => Array.isArray(plan.shots))
+        const breakGroups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
+        const diagnostics = [
+          ...readStringArray(shotBreakPlan.diagnostics),
+          `Merged ${groupPlans.length} storyboard parse group${groupPlans.length === 1 ? '' : 's'}.`,
+        ]
+        const shots = groupPlans
+          .flatMap((plan) => Array.isArray(plan.shots) ? plan.shots.map(asRecord) : [])
+          .map((shot, index) => ({
+            ...shot,
+            id: readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`,
+            index: index + 1,
+            editorialDurationSeconds: Math.max(0.5, Math.min(8, Number(shot.editorialDurationSeconds ?? 0) || 3)),
+            providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(shot.editorialDurationSeconds ?? 0) || 3),
+          }))
+        if (shots.length === 0) throw new Error('No parsed Cinematics V3 shot groups were available to merge.')
+        const duplicateIds = shots
+          .map((shot) => readText(shot.id))
+          .filter((id, index, list) => id && list.indexOf(id) !== index)
+        const finalShots = duplicateIds.length > 0
+          ? shots.map((shot, index) => ({ ...shot, id: `shot_${String(index + 1).padStart(3, '0')}` }))
+          : shots
+        if (duplicateIds.length > 0) diagnostics.push(`Renumbered duplicate shot IDs: ${[...new Set(duplicateIds)].join(', ')}.`)
+        const audioPlanSource = groupPlans.map((plan) => asRecord(plan.audioPlan)).find((plan) => Object.keys(plan).length > 0) ?? {}
+        const performanceArc = groupPlans.flatMap((plan) => Array.isArray(plan.performanceArc) ? plan.performanceArc.map(asRecord) : [])
+        const shotPlan = cinematicV2ShotPlanSchema.parse({
+          sceneId: 'scene_1',
+          totalEditorialDurationSeconds: finalShots.reduce((total, shot) => total + Number(shot.editorialDurationSeconds ?? 0), 0),
+          shots: finalShots,
+          performanceArc,
+          audioPlan: {
+            ambience: readText(audioPlanSource.ambience),
+            music: readText(audioPlanSource.music),
+            sfx: Array.isArray(audioPlanSource.sfx) ? audioPlanSource.sfx : [],
+            dialogueTrackCount: finalShots.reduce((total, shot) => total + (Array.isArray(shot.dialogue) && shot.dialogue.length > 0 ? 1 : 0), 0),
+            placeholderOnly: true,
+          },
+          diagnostics,
+        })
+        const preferredStoryboardGroupPlan = cinematicV2StoryboardGroupPlanSchema.safeParse({
+          groups: breakGroups.map((group, index) => {
+            const shotIds = readStringArray(group.shotBreakIds).filter((id) => shotPlan.shots.some((shot) => shot.id === id))
+            const groupShots = shotIds.length > 0 ? shotPlan.shots.filter((shot) => shotIds.includes(shot.id)) : []
+            const layout = buildCinematicV2StoryboardLayout(Math.max(1, groupShots.length || Number(group.panelCount ?? 1) || 1))
+            const duration = groupShots.reduce((total, shot) => total + shot.editorialDurationSeconds, 0) || Number(group.approximateDurationSeconds ?? 0) || 3
+            const startSeconds = shotPlan.shots
+              .slice(0, Math.max(0, shotPlan.shots.findIndex((shot) => shot.id === groupShots[0]?.id)))
+              .reduce((total, shot) => total + shot.editorialDurationSeconds, 0)
+            return {
+              id: readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`,
+              index: index + 1,
+              shotIds: groupShots.length > 0 ? groupShots.map((shot) => shot.id) : shotPlan.shots.slice(index, index + 1).map((shot) => shot.id),
+              summary: readText(group.summary) || groupShots.map((shot) => shot.title).join(' / '),
+              rows: layout.rows,
+              columns: layout.columns,
+              panelCount: layout.panelCount,
+              startSeconds,
+              endSeconds: startSeconds + duration,
+              editorialDurationSeconds: duration,
+              providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
+              continuityNotes: [`Parse group ${index + 1} from screenplay shot markers.`],
+            }
+          }).filter((group) => group.shotIds.length > 0),
+          maxPanelsPerSheet: Math.max(1, Math.min(9, Number(shotBreakPlan.maxPanelsPerSheet ?? 9) || 9)),
+          maxDurationPerGroupSeconds: Math.max(1, Math.min(15, Number(shotBreakPlan.maxDurationPerGroupSeconds ?? 15) || 15)),
+          diagnostics: ['Storyboard groups preserved from screenplay shot-marker parse groups.'],
+        }).data ?? buildCinematicV3StoryboardGroupPlan(shotPlan, {
+          maxPanelsPerSheet: Number(shotBreakPlan.maxPanelsPerSheet ?? 9) || 9,
+          maxDurationPerGroupSeconds: Number(shotBreakPlan.maxDurationPerGroupSeconds ?? 15) || 15,
+        })
+        const outputs = {
+          shotPlan,
+          shot_plan: shotPlan,
+          shots: shotPlan.shots,
+          preferredStoryboardGroupPlan,
+          preferred_storyboard_group_plan: preferredStoryboardGroupPlan,
+          text: JSON.stringify(shotPlan, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-shot-plan-merge-v1' }
+      }
+      if (purpose === 'cinematic_v3_dynamic_shot_parse_fanout') {
+        const config = asRecord(input.node.config)
+        const compileOutputs = {
+          screenplayDraft: readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft']),
+          shotBreakPlan: readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan']),
+          cinematicReferencePlan: readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan']),
+          compileHash: readText(config.compileHash),
+        }
+        const result = await materializeDynamicCinematicV3ShotParseFanout({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          compileOutputs,
+          config,
+        })
+        const outputs = {
+          dynamicGraphExpanded: result.expanded,
+          graphExpanded: result.expanded,
+          compileHash: result.compileHash,
+          parseGroupCount: result.parseGroupCount,
+          storyboardSheetCount: result.storyboardSheetCount,
+          text: result.expanded
+            ? `Materialized ${result.parseGroupCount} Cinematics V3 screenplay parse group node(s) and ${result.storyboardSheetCount} direct storyboard workflow(s).`
+            : `Cinematics V3 parse groups and storyboard workflows already materialized (${result.parseGroupCount} group(s), ${result.storyboardSheetCount} sheet(s)).`,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-dynamic-shot-parse-fanout-v1' }
+      }
       if (purpose === 'cinematic_v2_storyboard_group_plan' || purpose === 'cinematic_v3_storyboard_group_plan') {
         const config = asRecord(input.node.config)
         const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
         const maxPanelsPerSheet = Math.max(1, Math.min(9, Number(config.maxPanelsPerSheet ?? 9) || 9))
         const maxDurationPerGroupSeconds = Math.max(1, Math.min(15, Number(config.maxDurationPerGroupSeconds ?? 15) || 15))
-        const storyboardGroupPlan = purpose === 'cinematic_v3_storyboard_group_plan'
+        const preferredStoryboardGroupPlan = cinematicV2StoryboardGroupPlanSchema.safeParse(readFirstUpstreamRecord(input.upstream, ['preferredStoryboardGroupPlan', 'preferred_storyboard_group_plan']))
+        const storyboardGroupPlan = purpose === 'cinematic_v3_storyboard_group_plan' && preferredStoryboardGroupPlan.success
+          ? preferredStoryboardGroupPlan.data
+          : purpose === 'cinematic_v3_storyboard_group_plan'
           ? buildCinematicV3StoryboardGroupPlan(shotPlan, {
             maxPanelsPerSheet,
             maxDurationPerGroupSeconds,
@@ -11457,8 +13505,11 @@ async function executeNode(input: {
             ? imageLayout.data
             : buildCinematicV2StoryboardLayout(shotPlan.shots.length)
         const groupShotIds = new Set(storyboardGroup?.shotIds ?? [])
+        const matchedGroupShots = storyboardGroup
+          ? shotPlan.shots.filter((shot) => groupShotIds.has(shot.id))
+          : []
         const shotsToExtract = storyboardGroup
-          ? shotPlan.shots.filter((shot) => groupShotIds.has(shot.id)).slice(0, layout.panelCount)
+          ? (matchedGroupShots.length > 0 ? matchedGroupShots : shotPlan.shots).slice(0, layout.panelCount)
           : shotPlan.shots.slice(0, layout.panelCount)
         const sheetStoragePath = readText(sheetImage.storagePath) || readText(sheetImage.storage_path)
         const sheetBytes = sheetStoragePath
@@ -11695,13 +13746,43 @@ async function executeNode(input: {
       if (purpose === 'cinematic_v3_storyboard_group_video_prompt') {
         const config = asRecord(input.node.config)
         const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const configuredGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(config.storyboardGroup)
         const storyboardGroup = configuredGroup.success ? configuredGroup.data : null
         const groupShotIds = new Set(storyboardGroup?.shotIds ?? [])
-        const groupShots = storyboardGroup
+        const matchedGroupShots = storyboardGroup
           ? shotPlan.shots.filter((shot) => groupShotIds.has(shot.id))
+          : []
+        const groupShots = storyboardGroup
+          ? (matchedGroupShots.length > 0 ? matchedGroupShots : shotPlan.shots)
           : shotPlan.shots
         const upstreamImages = readUpstreamImages(input.upstream)
+        const entityByKey = cinematicEntityByKey(assetPack)
+        const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({ assetPack, shots: groupShots, limit: 8 })
+        let localCursorSeconds = 0
+        const timelineLines = groupShots.map((shot) => {
+          const shotDurationSeconds = Math.max(0.1, Math.min(15, Number(shot.editorialDurationSeconds) || 2))
+          const localStartSeconds = localCursorSeconds
+          const localEndSeconds = localStartSeconds + shotDurationSeconds
+          localCursorSeconds = localEndSeconds
+          const dialogueLines = shot.dialogue
+            .map((line) => {
+              const text = readText(line.text)
+              if (!text) return ''
+              const speakerKey = readText(line.speakerRefId)
+              const speaker = readText(entityByKey.get(speakerKey)?.name) || speakerKey || 'Speaker'
+              const emotion = readText(line.emotion)
+              return `${speaker}: "${text}"${emotion ? ` (${emotion})` : ''}`
+            })
+            .filter(Boolean)
+            .join(' ')
+          return [
+            `[${formatTimecode(localStartSeconds)}-${formatTimecode(localEndSeconds)}] Shot ${shot.index}: ${shot.action || shot.description || shot.title}.`,
+            readText((shot as unknown as Record<string, unknown>).videoDirection) ? `Motion: ${readText((shot as unknown as Record<string, unknown>).videoDirection)}.` : '',
+            `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.movement}.`,
+            dialogueLines ? `Dialogue: ${dialogueLines}.` : '',
+          ].filter(Boolean).join(' ')
+        }).join('\n')
         const actionLines = groupShots.map((shot) => [
           `Shot ${shot.index}: ${shot.action || shot.description || shot.title}.`,
           readText((shot as unknown as Record<string, unknown>).videoDirection) ? `Motion: ${readText((shot as unknown as Record<string, unknown>).videoDirection)}.` : '',
@@ -11712,6 +13793,8 @@ async function executeNode(input: {
           `Aspect ratio: ${readText(config.aspectRatio) || '16:9'}. Resolution: ${readText(config.resolution) || '720p'}.`,
           'Preserve the storyboard panel order, character identities, location, costume/variant references, lighting, and emotional continuity.',
           'Use subtle cinematic motion, readable acting, and clean transitions; do not add captions, subtitles, UI, watermarks, or new characters.',
+          `Timestamped local timing call sheet for this ${Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3)))}-second clip:\n${timelineLines || actionLines}`,
+          characterVoiceGuide ? `Character identity and speaker guide. Use this to know exactly which character is speaking and how they sound; if generated audio is disabled, still use it for mouth movement, expression, and delivery:\n${characterVoiceGuide}` : '',
           actionLines,
           `User brief: ${input.run.prompt}`,
         ].filter(Boolean).join('\n\n')
@@ -11720,6 +13803,7 @@ async function executeNode(input: {
           prompt,
           text: prompt,
           shotPlan,
+          assetPack,
           storyboardGroup,
           primaryReferenceImage: upstreamImages[0] ?? null,
           referenceImageCount: upstreamImages.length,
@@ -11766,21 +13850,76 @@ async function executeNode(input: {
       }
       if (purpose === 'cinematic_v3_timeline_assemble') {
         const config = asRecord(input.node.config)
-        const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
+        const shotPlan = mergeCinematicV3ShotPlansForTimeline(collectCinematicV3ShotPlansFromUpstream(input.upstream))
         const videos = collectCinematicV2ShotVideos(input.upstream)
+        const rawPanels = Object.values(input.upstream)
+          .flatMap((outputs) => {
+            const directPanels = Array.isArray(outputs.panels) ? outputs.panels.map(asRecord) : []
+            const images = Array.isArray(outputs.images) ? outputs.images.map(asRecord) : []
+            return [...directPanels, ...images].filter((entry) => (
+              readText(entry.assetKey)
+              && (
+                readText(entry.role) === 'cinematic_v3_storyboard_panel'
+                || readText(asRecord(entry.metadata).role) === 'cinematic_v3_storyboard_panel'
+                || readText(entry.shotId)
+              )
+            ))
+          })
+        const seenPanelKeys = new Set<string>()
+        const panels = rawPanels.filter((panel) => {
+          const key = readText(panel.assetKey) || `${readText(panel.storyboardGroupId)}:${readText(panel.shotId)}:${readText(panel.id)}`
+          if (!key || seenPanelKeys.has(key)) return false
+          seenPanelKeys.add(key)
+          return true
+        })
+        const videoPrompts = Object.entries(input.upstream)
+          .map(([nodeKey, outputs]) => {
+            const prompt = readText(outputs.prompt) || readText(outputs.text)
+            if (!prompt) return null
+            const storyboardGroup = asRecord(outputs.storyboardGroup)
+            return {
+              nodeKey,
+              prompt,
+              promptHash: hashOutputWorkflowValue(prompt),
+              storyboardGroupId: readText(outputs.storyboardGroupId) || readText(storyboardGroup.id),
+              storyboardGroupIndex: Number(storyboardGroup.index ?? 0) || null,
+              durationSeconds: Number(outputs.durationSeconds ?? 0) || null,
+              referenceImageCount: Number(outputs.referenceImageCount ?? 0) || 0,
+            }
+          })
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
         const timeline = buildCinematicV2Timeline({ shotPlan, videos })
         if (!cinematicVideoApprovedEnabled(input.run)) {
           const video = {
-            skipped: true,
+            authoringOnly: true,
             approvalRequired: true,
             skippedReason: 'cinematic_video_approval_required',
             provider: 'graphcore',
-            model: 'cinematic-v3-timeline-approval-gate-v1',
+            model: 'cinematic-v3-authoring-timeline-v1',
             role: 'cinematic_v3_final_timeline',
             sourceVideoCount: videos.length,
+            sourcePanelCount: panels.length,
+            videoPromptCount: videoPrompts.length,
           }
-          const outputs = { video, videos, timeline, approvalRequired: true, skippedReason: 'cinematic_video_approval_required' }
-          return { status: 'skipped', inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'cinematic-v3-timeline-approval-gate-v1' }
+          const outputs = {
+            video,
+            videos,
+            shotPlan,
+            shot_plan: shotPlan,
+            panels,
+            videoPrompts,
+            timeline,
+            approvalRequired: true,
+            authoringReady: true,
+            skippedReason: 'cinematic_video_approval_required',
+            text: JSON.stringify({
+              timeline,
+              panelCount: panels.length,
+              videoPromptCount: videoPrompts.length,
+              approvalRequired: true,
+            }, null, 2),
+          }
+          return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'cinematic-v3-authoring-timeline-v1' }
         }
         if (videos.length === 0 && (debugSkipVideoGenerationEnabled(config, input.run) || upstreamHasDebugSkippedVideo(input.upstream))) {
           const video = {
@@ -11792,7 +13931,7 @@ async function executeNode(input: {
             role: 'cinematic_v3_final_timeline',
             sourceVideoCount: 0,
           }
-          const outputs = { video, videos: [], timeline, debugSkipVideoGeneration: true, skippedReason: 'debug_skip_video_generation' }
+          const outputs = { video, videos: [], shotPlan, shot_plan: shotPlan, timeline, debugSkipVideoGeneration: true, skippedReason: 'debug_skip_video_generation' }
           return { status: 'skipped', inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'debug-skip-cinematic-v3-timeline-v1' }
         }
         const stitchResult = await stitchVideoBytes({ client: input.client, videos })
@@ -11840,7 +13979,7 @@ async function executeNode(input: {
           sourceVideoCount: videos.length,
           stitchMode: stitchResult.mode,
         }
-        const outputs = { video, videos, timeline, artifact, assetKey, storagePath, mimeType: stitchResult.mimeType }
+        const outputs = { video, videos, shotPlan, shot_plan: shotPlan, timeline, artifact, assetKey, storagePath, mimeType: stitchResult.mimeType }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-cinematic-v3-timeline-assemble-v1' }
       }
       if (purpose === 'cinematic_v2_timeline_assemble') {
@@ -12454,6 +14593,67 @@ async function executeNode(input: {
       if (purpose === 'cinematic_video_artifact') {
         const video = readFirstUpstreamRecord(input.upstream, ['video'])
         const artifact = readFirstUpstreamRecord(input.upstream, ['artifact'])
+        if (video.authoringOnly === true || (video.approvalRequired === true && readText(video.role) === 'cinematic_v3_final_timeline')) {
+          const timeline = readFirstUpstreamRecord(input.upstream, ['timeline'])
+          const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
+          const panels = readFirstUpstreamArray(input.upstream, ['panels'])
+          const videoPrompts = readFirstUpstreamArray(input.upstream, ['videoPrompts', 'video_prompts'])
+          const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}.authoring`
+          const authoringArtifact = await registerOtherOutputArtifact({
+            client: input.client,
+            run: input.run,
+            workflow: input.workflow,
+            node: input.node,
+            key: artifactKey,
+            name: `${input.node.label} Authoring Timeline`,
+            summary: 'Cinematics V3 storyboard authoring timeline with panel crops and video prompts; video generation is approval-gated.',
+            metadata: {
+              generatedBy: 'output_workflow',
+              workflowId: input.workflow.id,
+              workflowKey: input.workflow.key,
+              runId: input.run.id,
+              nodeId: input.node.id,
+              nodeKey: input.node.key,
+              preset: input.run.preset,
+              provider: 'graphcore',
+              model: 'cinematic-v3-authoring-artifact-v1',
+              role: 'cinematic_v3_authoring_timeline',
+              timeline,
+              shotPlan,
+              panelAssetKeys: panels.map((panel) => readText(panel.assetKey)).filter(Boolean),
+              panelCount: panels.length,
+              videoPromptCount: videoPrompts.length,
+              videoPrompts: videoPrompts.map((prompt) => ({
+                nodeKey: readText(prompt.nodeKey),
+                storyboardGroupId: readText(prompt.storyboardGroupId),
+                storyboardGroupIndex: Number(prompt.storyboardGroupIndex ?? 0) || null,
+                durationSeconds: Number(prompt.durationSeconds ?? 0) || null,
+                promptHash: readText(prompt.promptHash),
+              })),
+              approvalRequired: true,
+            },
+          })
+          const outputs = {
+            artifactKey: authoringArtifact.key,
+            assetKey: '',
+            artifact: authoringArtifact,
+            artifacts: [authoringArtifact],
+            video,
+            timeline,
+            shotPlan,
+            panels,
+            videoPrompts,
+            approvalRequired: true,
+            authoringReady: true,
+          }
+          return {
+            inputHash: input.inputHash,
+            outputHash: hashOutputWorkflowValue(outputs),
+            outputs,
+            provider: 'graphcore',
+            model: 'cinematic-v3-authoring-artifact-v1',
+          }
+        }
         if (
           video.debugSkipVideoGeneration === true
           || video.skippedReason === 'debug_skip_video_generation'
@@ -12586,6 +14786,15 @@ export async function processFlyOutputWorkflowRuns(input: {
       activeWorkflowNodeKeys.has(edge.sourceNodeKey)
       && activeWorkflowNodeKeys.has(edge.targetNodeKey)
     ))
+    const recoveredArtifactNodeCount = await recoverArtifactBackedWorkflowNodeOutputs({
+      client: input.client,
+      run: bundle.run,
+      nodes: activeWorkflowNodes,
+    })
+    if (recoveredArtifactNodeCount > 0) {
+      bundle = await loadOutputWorkflowRunBundle(input.client, runId, { includeStepOutputs: false })
+      continue
+    }
     const validation = validateOutputWorkflowGraph({ nodes: activeWorkflowNodes, edges: activeWorkflowEdges })
     if (!validation.ok) {
       throw new Error(validation.diagnostics.join(' '))
@@ -12621,7 +14830,8 @@ export async function processFlyOutputWorkflowRuns(input: {
     })
     if (selectedSubgraph.diagnostics.length > 0) throw new Error(selectedSubgraph.diagnostics.join(' '))
     const fanoutGateNode = selectedSubgraph.nodes.find((node) => (
-      node.key === 'cinematic_v3_dynamic_storyboard_fanout'
+      node.key === 'cinematic_v3_dynamic_shot_parse_fanout'
+      || node.key === 'cinematic_v3_dynamic_storyboard_fanout'
       || node.key === 'cinematic_v2_dynamic_shot_fanout'
       || node.key === 'cinematic_dynamic_take_fanout'
     )) ?? null
@@ -12630,13 +14840,18 @@ export async function processFlyOutputWorkflowRuns(input: {
       || forceNodeKeys.has(fanoutGateNode?.key ?? '')
       || !hasStoredOutputs(fanoutGateNode?.outputs)
     )
-    const executionNodes = fanoutGateActive
+    let executionNodes = fanoutGateActive
       ? selectedSubgraph.nodes.filter((node) => node.key === fanoutGateNode?.key || asRecord(node.metadata).dynamicCinematicGenerated !== true)
       : selectedSubgraph.nodes
+    const manualNodeAllowed = (node: OutputWorkflowNode) => (
+      !isManualOnlyOutputWorkflowNode(node)
+      || cinematicVideoApprovedEnabled(bundle.run)
+      || targetNodeKeys.includes(node.key)
+      || forceNodeKeys.has(node.key)
+    )
+    executionNodes = executionNodes.filter(manualNodeAllowed)
     const executionNodeKeySetForGate = new Set(executionNodes.map((node) => node.key))
-    const executionEdges = fanoutGateActive
-      ? selectedSubgraph.edges.filter((edge) => executionNodeKeySetForGate.has(edge.sourceNodeKey) && executionNodeKeySetForGate.has(edge.targetNodeKey))
-      : selectedSubgraph.edges
+    const executionEdges = selectedSubgraph.edges.filter((edge) => executionNodeKeySetForGate.has(edge.sourceNodeKey) && executionNodeKeySetForGate.has(edge.targetNodeKey))
     const executionPlan = buildOutputWorkflowExecutionPlan(executionNodes, executionEdges)
     const nodeByKey = new Map(executionNodes.map((node) => [node.key, node]))
     const workflowNodeByKey = new Map(activeWorkflowNodes.map((node) => [node.key, node]))
@@ -12949,6 +15164,7 @@ export async function processFlyOutputWorkflowRuns(input: {
         const result = nodeResults.get(node.key)
         const guidanceMetadata = guidanceStepMetadata(result?.outputs.guidance)
         const aiUsage = buildOutputStepAiUsage({ run: bundle.run, node, result, skipped })
+        const providerStepMetadata = terminalProviderStepMetadata(result ? { ...result, skipped } : null)
         await setStepStatus(input.client, {
           runId,
           node,
@@ -12968,6 +15184,7 @@ export async function processFlyOutputWorkflowRuns(input: {
             resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
             groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
             ...guidanceMetadata,
+            ...providerStepMetadata,
             skipped,
             reason: skipped ? result?.skippedReason ?? 'input_hash_unchanged' : undefined,
             reusedNodeKeys: result?.reusedNodeKeys ?? [],
@@ -12978,6 +15195,11 @@ export async function processFlyOutputWorkflowRuns(input: {
             aiUsageLine: aiUsage.line,
           },
         })
+        try {
+          await persistOutputRequestReferenceSelection(input.client, bundle.run, result?.outputs ?? {})
+        } catch (error) {
+          console.warn('[GraphCore][output-worker] failed to persist compact output reference selection.', error)
+        }
         if (aiUsage.line) {
           await recordAiUsageEvent(input.client, {
             line: aiUsage.line,
@@ -13086,21 +15308,29 @@ export async function processFlyOutputWorkflowRuns(input: {
     }
     const fanoutOutputs = asRecord(
       schedulerResult.outputsByNodeKey.cinematic_dynamic_take_fanout
+      ?? schedulerResult.outputsByNodeKey.cinematic_v3_dynamic_shot_parse_fanout
       ?? schedulerResult.outputsByNodeKey.cinematic_v3_dynamic_storyboard_fanout
       ?? schedulerResult.outputsByNodeKey.cinematic_v2_dynamic_shot_fanout,
     )
     const dynamicGraphExpanded = fanoutOutputs.dynamicGraphExpanded === true || fanoutOutputs.graphExpanded === true
-    const dynamicFanoutNodeKey = schedulerResult.outputsByNodeKey.cinematic_v3_dynamic_storyboard_fanout
+    const dynamicFanoutNodeKey = schedulerResult.outputsByNodeKey.cinematic_v3_dynamic_shot_parse_fanout
+      ? 'cinematic_v3_dynamic_shot_parse_fanout'
+      : schedulerResult.outputsByNodeKey.cinematic_v3_dynamic_storyboard_fanout
       ? 'cinematic_v3_dynamic_storyboard_fanout'
       : schedulerResult.outputsByNodeKey.cinematic_v2_dynamic_shot_fanout
         ? 'cinematic_v2_dynamic_shot_fanout'
         : schedulerResult.outputsByNodeKey.cinematic_dynamic_take_fanout
           ? 'cinematic_dynamic_take_fanout'
           : ''
-    if (dynamicGraphExpanded && dynamicFanoutNodeKey) {
+    const dynamicFanoutWasCacheSkipped = dynamicFanoutNodeKey
+      ? schedulerResult.skipped.includes(dynamicFanoutNodeKey)
+      : false
+    if (dynamicGraphExpanded && dynamicFanoutNodeKey && !dynamicFanoutWasCacheSkipped) {
       await heartbeat(input.client, runId, input.workerId, {
         runtime: 'fly_output_workflow_worker',
-        stage: dynamicFanoutNodeKey === 'cinematic_v3_dynamic_storyboard_fanout'
+        stage: dynamicFanoutNodeKey === 'cinematic_v3_dynamic_shot_parse_fanout'
+          ? 'dynamic_cinematic_v3_shot_parse_fanout_materialized'
+          : dynamicFanoutNodeKey === 'cinematic_v3_dynamic_storyboard_fanout'
           ? 'dynamic_cinematic_v3_storyboard_fanout_materialized'
           : dynamicFanoutNodeKey === 'cinematic_v2_dynamic_shot_fanout'
             ? 'dynamic_cinematic_v2_shot_fanout_materialized'

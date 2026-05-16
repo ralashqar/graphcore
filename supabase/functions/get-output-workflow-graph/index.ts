@@ -15,6 +15,7 @@ import {
   outputWorkflowNodeSelect,
   outputWorkflowNodeStatusSelect,
   outputWorkflowRunStatusSelect,
+  outputWorkflowRunStepSelect,
   outputWorkflowRunStepStatusSelect,
   outputWorkflowSelect,
 } from '../_shared/output-workflow.ts'
@@ -59,6 +60,89 @@ function addPreviewAssetKeys(value: unknown, assetKeys: Set<string>) {
   for (const key of readStringArray(preview.assetKeys)) assetKeys.add(key)
   const assetKey = readText(preview.assetKey) || readText(preview.asset_key)
   if (assetKey) assetKeys.add(assetKey)
+}
+
+function nodeHasUsefulPreview(node: Record<string, unknown>) {
+  const preview = asRecord(asRecord(node.metadata).outputPreview)
+  if (Object.keys(preview).length === 0) return false
+  return readStringArray(preview.assetKeys).length > 0
+    || readText(preview.text).length > 0
+    || Object.keys(asRecord(preview.preview)).length > 0
+}
+
+function artifactBelongsToNode(artifact: Record<string, unknown>, node: Record<string, unknown>) {
+  const metadata = asRecord(artifact.metadata)
+  const nodeKey = readText(node.key)
+  return readText(metadata.nodeKey) === nodeKey
+    || readText(metadata.node_key) === nodeKey
+    || readText(artifact.node_id) === readText(node.id)
+}
+
+function buildRecoveredNodeOutputPreview(input: {
+  node: Record<string, unknown>
+  artifacts: Record<string, unknown>[]
+  step: Record<string, unknown> | null
+}) {
+  const stepPreview = asRecord(asRecord(input.step?.metadata).outputPreview)
+  if (Object.keys(stepPreview).length > 0) {
+    return {
+      ...stepPreview,
+      recoveredFromRunStepPreview: true,
+    }
+  }
+
+  const relatedArtifacts = input.artifacts.filter((artifact) => artifactBelongsToNode(artifact, input.node))
+  if (relatedArtifacts.length === 0) return null
+  const assetKeys = relatedArtifacts.map((artifact) => readText(artifact.asset_key)).filter(Boolean)
+  const artifactKeys = relatedArtifacts.map((artifact) => readText(artifact.key)).filter(Boolean)
+  const role = readText(asRecord(relatedArtifacts[0]?.metadata).role) || readText(relatedArtifacts[0]?.kind)
+  return {
+    nodeKey: readText(input.node.key),
+    nodeType: readText(input.node.node_type ?? input.node.nodeType),
+    outputHash: readText(input.node.output_hash ?? input.node.outputHash) || readText(input.step?.output_hash ?? input.step?.outputHash) || hashOutputWorkflowValue({ artifactKeys, assetKeys }),
+    outputBytes: 0,
+    truncated: false,
+    text: readText(relatedArtifacts[0]?.summary) || readText(relatedArtifacts[0]?.name) || 'Recovered durable output preview from output artifacts.',
+    preview: {
+      recoveredFromArtifacts: true,
+      artifactKeys,
+      artifactCount: relatedArtifacts.length,
+    },
+    assetKeys,
+    role,
+    recoveredFromArtifacts: true,
+  }
+}
+
+function buildRecoveredNodeOutputsFromArtifacts(input: {
+  node: Record<string, unknown>
+  artifacts: Record<string, unknown>[]
+}) {
+  const relatedArtifacts = input.artifacts.filter((artifact) => artifactBelongsToNode(artifact, input.node))
+  if (relatedArtifacts.length === 0) return {}
+  const images = relatedArtifacts
+    .filter((artifact) => readText(artifact.kind) === 'image' && readText(artifact.asset_key))
+    .map((artifact) => ({
+      assetKey: readText(artifact.asset_key),
+      mimeType: readText(artifact.mime_type),
+      role: readText(asRecord(artifact.metadata).role) || 'image',
+      artifactKey: readText(artifact.key),
+      nodeKey: readText(input.node.key),
+      metadata: asRecord(artifact.metadata),
+      recoveredFromArtifact: true,
+    }))
+  const artifactOutputs = relatedArtifacts.map((artifact) => ({
+    key: readText(artifact.key),
+    name: readText(artifact.name),
+    kind: readText(artifact.kind),
+    assetKey: readText(artifact.asset_key) || null,
+    mimeType: readText(artifact.mime_type),
+    summary: readText(artifact.summary),
+    metadata: asRecord(artifact.metadata),
+    recoveredFromArtifact: true,
+  }))
+  if (images.length > 0) return { image: images[0], images, artifact: artifactOutputs[0] ?? {}, artifacts: artifactOutputs, recoveredFromArtifacts: true }
+  return { artifact: artifactOutputs[0] ?? {}, artifacts: artifactOutputs, recoveredFromArtifacts: true }
 }
 
 function assetRowToDefinition(row: Record<string, unknown>, signedUrl: string | null, signedUrlExpiresAt: string | null) {
@@ -303,7 +387,26 @@ Deno.serve(async (request) => {
         .maybeSingle()
       if (selectedResponse.error) throw new Error(selectedResponse.error.message)
       if (selectedResponse.data) {
-        const outputs = asRecord((selectedResponse.data as Record<string, unknown>).outputs)
+        let outputs = asRecord((selectedResponse.data as Record<string, unknown>).outputs)
+        if (Object.keys(outputs).length === 0 && runRow) {
+          const selectedStepResponse = await admin
+            .from('output_workflow_run_steps')
+            .select(outputWorkflowRunStepSelect)
+            .eq('run_id', readText(runRow.id))
+            .eq('workflow_id', payload.workflowId)
+            .eq('node_key', selectedNodeKey)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+          if (selectedStepResponse.error) throw new Error(selectedStepResponse.error.message)
+          const selectedStepRow = ((selectedStepResponse.data ?? []) as Record<string, unknown>[])[0] ?? null
+          outputs = asRecord(selectedStepRow?.outputs)
+        }
+        if (Object.keys(outputs).length === 0) {
+          outputs = buildRecoveredNodeOutputsFromArtifacts({
+            node: selectedResponse.data as Record<string, unknown>,
+            artifacts: (artifactResponse.data ?? []) as Record<string, unknown>[],
+          })
+        }
         const compact = compactRecordForStatus(outputs, 650_000)
         selectedNodeOutput = {
           nodeKey: selectedNodeKey,
@@ -319,8 +422,29 @@ Deno.serve(async (request) => {
     const runArtifacts = runRow ? hydratedArtifacts.filter((artifact) => artifact.runId === readText(runRow?.id)) : []
     const run = runRow ? compactOutputWorkflowRunForStatus(mapOutputWorkflowRunRow(runRow as never, steps, runArtifacts)) : null
     const edges = ((edgeResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputWorkflowEdgeRow(row as never))
+    const rawStepByNodeKey = new Map(((stepResponse.data ?? []) as Record<string, unknown>[]).map((row) => [readText(row.node_key), row] as const))
+    const rawArtifacts = (artifactResponse.data ?? []) as Record<string, unknown>[]
+    const mappedNodeRows = ((nodeResponse.data ?? []) as Record<string, unknown>[])
+      .map((row) => mapOutputWorkflowNodeRow(row as never) as unknown as Record<string, unknown>)
+      .map((node) => {
+        if (nodeHasUsefulPreview(node)) return node
+        const fallbackPreview = buildRecoveredNodeOutputPreview({
+          node,
+          artifacts: rawArtifacts,
+          step: rawStepByNodeKey.get(readText(node.key)) ?? null,
+        })
+        if (!fallbackPreview) return node
+        return {
+          ...node,
+          metadata: {
+            ...asRecord(node.metadata),
+            outputPreview: fallbackPreview,
+            outputRecoverable: true,
+          },
+        }
+      })
     const nodes = buildGraphNodesWithCacheStatus({
-      nodes: ((nodeResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputWorkflowNodeRow(row as never) as unknown as Record<string, unknown>),
+      nodes: mappedNodeRows,
       edges: edges as unknown as Record<string, unknown>[],
       steps: steps as unknown as Record<string, unknown>[],
     }).map((row) => outputWorkflowNodeSchema.parse(row))

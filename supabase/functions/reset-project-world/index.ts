@@ -154,10 +154,14 @@ async function clearResetWorldWikiMetadata(
   }
 
   const currentMetadata = asRecord(metadataResponse.data?.metadata)
-  const { worldWiki: _worldWiki, ...metadataWithoutWorldWiki } = currentMetadata
+  const {
+    worldWiki: _worldWiki,
+    projectContext: _projectContext,
+    ...metadataWithoutGeneratedWorld
+  } = currentMetadata
   const updateResponse = await admin
     .from('project_drafts')
-    .update({ metadata: metadataWithoutWorldWiki })
+    .update({ metadata: metadataWithoutGeneratedWorld })
     .eq('id', draftId)
   if (updateResponse.error) {
     throw new Error(updateResponse.error.message)

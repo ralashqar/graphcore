@@ -173,6 +173,11 @@ test('output workflow graph loader schemas support compact graph refresh and sel
   })
   assert.equal(unchanged.unchanged, true)
   assert.equal(unchanged.nodes.length, 0)
+
+  const graphFunctionSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-graph/index.ts'), 'utf8')
+  assert.match(graphFunctionSource, /outputWorkflowRunStepSelect/)
+  assert.match(graphFunctionSource, /Object\.keys\(outputs\)\.length === 0 && runRow/)
+  assert.match(graphFunctionSource, /eq\('node_key', selectedNodeKey\)/)
 })
 
 test('output feed schemas support projection-backed inbox loading without run-step payloads', () => {
@@ -251,14 +256,47 @@ test('output feed schemas support projection-backed inbox loading without run-st
   assert.doesNotMatch(loadOutputInboxSource, /output_workflow_run_steps/)
 })
 
+test('Fal image webhooks are recorded as metadata while workers keep finalization authority', () => {
+  const outputWorkerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const webhookSource = readFileSync(resolve(repoRoot, 'supabase/functions/fal-webhook/index.ts'), 'utf8')
+  const migrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260515165615_fal_webhook_result_cache_indexes.sql'), 'utf8')
+
+  assert.match(outputWorkerSource, /buildFalWebhookUrl/)
+  assert.match(outputWorkerSource, /webhook_url/)
+  assert.match(outputWorkerSource, /getWebhookResult/)
+  assert.match(outputWorkerSource, /falWebhookImageUrl/)
+  assert.match(outputWorkerSource, /OUTPUT_WORKFLOW_FAL_WEBHOOK_POLL_INTERVAL_MS/)
+  assert.match(webhookSource, /FAL_WEBHOOK_REQUIRE_SIGNATURE/)
+  assert.match(webhookSource, /visual_generation_jobs/)
+  assert.match(webhookSource, /output_workflow_run_steps/)
+  assert.match(webhookSource, /falWebhookImageUrl/)
+  assert.match(webhookSource, /webhookMatchedTable/)
+  assert.doesNotMatch(webhookSource, /complete_visual_generation_job/)
+  assert.match(migrationSource, /output_workflow_run_steps_provider_request_id_idx/)
+  assert.match(migrationSource, /output_workflow_run_steps_fal_request_id_metadata_idx/)
+  assert.match(migrationSource, /visual_generation_jobs_fal_request_id_metadata_idx/)
+})
+
 test('output request status projection tolerates queued runs without active steps', () => {
   const migrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260514133431_fix_output_projection_unassigned_step_records.sql'), 'utf8')
+  const activeStepMigrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260514155916_improve_output_projection_active_step_selection.sql'), 'utf8')
+  const parallelStepsMigrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260515112500_expose_parallel_output_projection_steps.sql'), 'utf8')
 
   assert.match(migrationSource, /active_node_key text/)
   assert.match(migrationSource, /active_node_label text/)
   assert.match(migrationSource, /latest_step_error text/)
   assert.doesNotMatch(migrationSource, /running_step\.node_key/)
   assert.doesNotMatch(migrationSource, /failed_step\.error_message/)
+  assert.match(activeStepMigrationSource, /status in \('running', 'failed', 'queued'\)/)
+  assert.match(activeStepMigrationSource, /when 'running' then 0/)
+  assert.match(activeStepMigrationSource, /when 'failed' then 1/)
+  assert.match(activeStepMigrationSource, /when 'queued' then 2/)
+  assert.match(activeStepMigrationSource, /'projectionVersion', 3/)
+  assert.match(parallelStepsMigrationSource, /active_nodes jsonb := '\[\]'::jsonb/)
+  assert.match(parallelStepsMigrationSource, /'activeNodes', coalesce\(active_nodes/)
+  assert.match(parallelStepsMigrationSource, /'providerStatus', metadata ->> 'providerStatus'/)
+  assert.match(parallelStepsMigrationSource, /'providerElapsedMs', metadata -> 'providerElapsedMs'/)
+  assert.match(parallelStepsMigrationSource, /'falRequestId', metadata ->> 'falRequestId'/)
 })
 
 test('output workflow status endpoint uses run-only loader instead of graph bundle', () => {
@@ -370,6 +408,21 @@ test('frontend skips live draft metadata reloads for demo draft ids and backs of
   assert.match(appSource, /direct draft metadata reload skipped while backend health backoff is active/)
   assert.match(appSource, /noteBackendHydrationFailure/)
   assert.match(appSource, /output inbox refresh skipped while backend health backoff is active/)
+})
+
+test('frontend keeps active output progress live without opening the graph', () => {
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  assert.match(appSource, /collectActiveOutputRequestIds/)
+  assert.match(appSource, /activeOutputRequestSignature/)
+  assert.match(appSource, /subscribeOutputSignals/)
+  assert.match(appSource, /refreshCompactOutputInbox\('watchdog'\)/)
+  assert.match(appSource, /loadOutputInbox\(\{ force: true \}\)/)
+  const progressWatcherStart = appSource.indexOf('const activeOutputRequestSignature')
+  const graphLoaderStart = appSource.indexOf('async function loadOutputWorkflowGraph')
+  assert.notEqual(progressWatcherStart, -1)
+  assert.notEqual(graphLoaderStart, -1)
+  const progressWatcherBlock = appSource.slice(progressWatcherStart, graphLoaderStart)
+  assert.doesNotMatch(progressWatcherBlock, /loadOutputWorkflowGraph\(/)
 })
 
 test('timeline shot quality keyframe materialization can regenerate missing upstream planning nodes', () => {
@@ -547,6 +600,11 @@ test('catalog-ranked prompt intent separates canon mutation, documents, and ambi
   const canon = classifyPromptIntentScored('Add a new chapter between Chapter 4 and Chapter 5 focused on the Echo Map awakening.')
   assert.equal(canon.intent, 'world_mutation')
   assert.equal(canon.outputKind, 'unknown')
+
+  const critique = classifyPromptIntentScored('Evaluate where the story could be fleshed out more and suggest the strongest next areas.')
+  assert.equal(critique.intent, 'answer_only')
+  assert.equal(critique.outputKind, 'unknown')
+  assert.equal(critique.requiresConfirmation, false)
 
   const bible = classifyPromptIntentScored('Write a story bible for the current world.')
   assert.equal(bible.intent, 'output_generation')
@@ -763,41 +821,67 @@ test('story cinematic requests build V3 storyboard graph by default while V2 and
   assert.ok(plan.sourceEntityKeys.length < snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').length + 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_reference_select').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_shot_parse').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_storyboard_group_plan').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_storyboard_fanout').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_shot_break_plan').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_shot_parse_fanout').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_storyboard_fanout').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 0)
   assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
   assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'cinematic_v3_shot_parse'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_reference_select' && edge.targetNodeKey === 'cinematic_v3_shot_parse'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_shot_parse' && edge.targetNodeKey === 'cinematic_v3_storyboard_group_plan'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_storyboard_group_plan' && edge.targetNodeKey === 'cinematic_v3_dynamic_storyboard_fanout'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_reference_select' && edge.targetNodeKey === 'cinematic_v3_dynamic_storyboard_fanout'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'cinematic_v3_shot_break_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_reference_select' && edge.targetNodeKey === 'cinematic_v3_shot_break_plan'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_shot_break_plan' && edge.targetNodeKey === 'cinematic_v3_dynamic_shot_parse_fanout'))
   assert.ok(plan.diagnostics.some((line) => line.includes('Cinematics V3')))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 
-  const fanout = plan.nodes.find((node) => node.key === 'cinematic_v3_dynamic_storyboard_fanout')
+  const fanout = plan.nodes.find((node) => node.key === 'cinematic_v3_dynamic_shot_parse_fanout')
   assert.equal(fanout?.config.cinematicPipelineVersion, 'v3_script_storyboards')
   assert.equal(fanout?.config.debugSkipVideoGeneration, true)
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const v3ParseMaterializer = workerSource.slice(
+    workerSource.indexOf('async function materializeDynamicCinematicV3ShotParseFanout'),
+    workerSource.indexOf('async function materializeDynamicCinematicV2ShotFanout'),
+  )
   assert.match(workerSource, /cinematicVideoApprovedEnabled/)
   assert.match(workerSource, /cinematic_video_approval_required/)
-  assert.match(workerSource, /cinematic_v3_shot_parse/)
-  assert.match(workerSource, /cinematic_v3_dynamic_storyboard_fanout/)
+  assert.match(workerSource, /cinematic_v3_shot_break_plan/)
+  assert.match(workerSource, /cinematic_v3_shot_parse_group/)
+  assert.match(v3ParseMaterializer, /v3_parse_groups_direct_storyboards_1/)
+  assert.match(v3ParseMaterializer, /cinematic_v3_storyboard_prompt/)
+  assert.match(v3ParseMaterializer, /cinematic_v3_storyboard_sheet/)
+  assert.match(v3ParseMaterializer, /cinematic_v3_panel_extract/)
+  assert.match(v3ParseMaterializer, /cinematic_v3_storyboard_group_video_prompt/)
+  assert.match(v3ParseMaterializer, /cinematic_v3_timeline_assemble/)
+  assert.match(v3ParseMaterializer, /key: 'artifact', nodeType: 'output_artifact'/)
+  assert.match(v3ParseMaterializer, /expectedDynamicKeys = \[\.\.\.groupParseKeys, \.\.\.directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact'\]/)
+  assert.doesNotMatch(v3ParseMaterializer, /cinematic_v3_shot_plan_merge/)
+  assert.doesNotMatch(v3ParseMaterializer, /purpose: 'cinematic_v3_dynamic_storyboard_fanout'/)
   assert.match(workerSource, /cinematic_v3_storyboard_group_video/)
   assert.match(workerSource, /cinematic_v3_panel_extract/)
   assert.match(workerSource, /Return plain Markdown screenplay/)
-  assert.match(workerSource, /storyboardGroupPlan\.groups\.forEach/)
+  assert.match(v3ParseMaterializer, /storyboardGroups/)
   assert.match(workerSource, /fixed \$\{layout\.rows\}x\$\{layout\.columns\} rectangular grid/)
   assert.match(workerSource, /Cells \$\{layout\.panelCount \+ 1\}-\$\{gridCellCount\} are intentional empty placeholders/)
+  assert.match(workerSource, /cinematic_v3_storyboard_sheets[\s\S]*continueOnError: true/)
+  assert.match(workerSource, /\$\{assetPackSourceNodeKey\}__\$\{videoPromptKey\}/)
+  assert.match(workerSource, /targetNodeKey: videoPromptKey, targetPort: 'asset_pack'/)
   assert.match(workerSource, /caption/)
   assert.match(workerSource, /storyboardPanelPrompt/)
   assert.match(workerSource, /videoDirection/)
   assert.match(workerSource, /performanceBeats/)
+  assert.match(workerSource, /Timestamped local timing call sheet/)
+  assert.match(workerSource, /formatTimecode\(localStartSeconds\)/)
+  assert.match(workerSource, /formatTimecode\(localEndSeconds\)/)
+  assert.match(workerSource, /Character identity and speaker guide/)
+  assert.match(workerSource, /buildSeedanceCharacterVoiceGuide/)
+  assert.match(workerSource, /voiceDescription/)
+  assert.match(workerSource, /screenplay_with_shot_markers_v1/)
+  assert.match(workerSource, /buildCinematicV3ShotBreakPlan/)
+  assert.match(workerSource, /Materialized \$\{result\.parseGroupCount\} Cinematics V3 screenplay parse group/)
+  assert.match(workerSource, /runCinematicV2StructuredNodeBackground/)
+  assert.match(workerSource, /priorProviderRequestId/)
 
   const explicitV2Plan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -868,6 +952,55 @@ test('cinematic V3 dynamically materialized storyboard nodes resolve strict guid
     assert.deepEqual(bundle.diagnostics, [], `${node.purpose} should accept all configured V3 dynamic skills`)
     assert.ok(bundle.skills.length >= node.skillKeys.length)
   }
+})
+
+test('cinematic V3 authoring uses creative screenplay with shot markers', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /Write the cinematic source screenplay before technical parsing happens/)
+  assert.match(source, /<!-- SHOT 001: short visual beat title \| ~3s -->/)
+  assert.match(source, /Shot markers are structural anchors only/)
+  assert.match(source, /Do not turn the script into JSON/)
+  assert.match(source, /scriptContract: 'screenplay_with_shot_markers_v1'/)
+  assert.doesNotMatch(source, /Create a lightweight visual shot script/)
+})
+
+test('cinematic V3 shot parse fanout uses screenplay groups and background OpenAI', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const skillsSource = readFileSync(resolve(repoRoot, 'src/domain/outputSkills.ts'), 'utf8')
+  const breakBlock = source.slice(source.indexOf("if (purpose === 'cinematic_v3_shot_break_plan')"), source.indexOf("if (purpose === 'cinematic_v2_storyboard_group_plan'"))
+  const parseBlock = source.slice(source.indexOf("if (purpose === 'cinematic_v3_shot_parse_group')"), source.indexOf("if (purpose === 'cinematic_v3_shot_parse')"))
+
+  assert.match(source, /function buildCinematicV3ShotBreakPlan/)
+  assert.match(source, /function materializeDynamicCinematicV3ShotParseFanout/)
+  assert.match(breakBlock, /maxDurationPerGroupSeconds/)
+  const materializerBlock = source.slice(
+    source.indexOf('async function materializeDynamicCinematicV3ShotParseFanout'),
+    source.indexOf('async function materializeDynamicCinematicV2ShotFanout'),
+  )
+  assert.match(materializerBlock, /cinematic_v3_storyboard_prompt/)
+  assert.match(materializerBlock, /cinematic_v3_storyboard_sheet/)
+  assert.match(materializerBlock, /cinematic_v3_panel_extract/)
+  assert.doesNotMatch(materializerBlock, /cinematic_v3_shot_plan_merge/)
+  assert.doesNotMatch(materializerBlock, /purpose: 'cinematic_v3_dynamic_storyboard_fanout'/)
+  assert.match(parseBlock, /runCinematicV2StructuredNodeBackground/)
+  assert.doesNotMatch(parseBlock, /runCinematicV2StructuredNode\(\{/)
+  assert.match(parseBlock, /Screenplay excerpt for this block/)
+  assert.match(parseBlock, /Preferred shot IDs in order/)
+  assert.match(skillsSource, /cinematic_directorial_language[\s\S]*cinematic_v3_shot_parse_group/)
+  assert.match(skillsSource, /cinematic_shot_direction[\s\S]*cinematic_v3_shot_parse_group/)
+  assert.match(skillsSource, /provider_prompt_hygiene[\s\S]*cinematic_v3_shot_parse_group/)
+})
+
+test('cinematic V3 background repair reuses provider request ids instead of duplicate foreground calls', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /function runCinematicV2StructuredNodeBackground/)
+  assert.match(source, /createOpenAiBackgroundResponse/)
+  assert.match(source, /retrieveOpenAiResponse\(input\.priorProviderRequestId/)
+  assert.match(source, /graphcore_provider_mode: 'background'/)
+  assert.match(source, /providerMode: 'background'/)
+  assert.match(source, /cancelOpenAiResponse/)
 })
 
 test('cinematic V2 shot asset packs narrow references to visible shot refs', async () => {
@@ -1857,9 +1990,29 @@ test('prompt-first image workflows select one entity variant reference per subje
   assert.match(workerSource, /referenceDiagnostics/)
   assert.match(workerSource, /function referenceVariantHasUsableAsset/)
   assert.match(workerSource, /selected visual variant is listed/)
+  assert.match(workerSource, /function buildOutputReferenceSelectionSnapshot/)
+  assert.match(workerSource, /outputReferenceSelection/)
+  assert.match(workerSource, /persistOutputRequestReferenceSelection/)
   assert.match(startOutputRequestSource, /world_entity_visual_variants/)
   assert.match(startOutputRequestSource, /referenceVariants: variants/)
   assert.match(startOutputRequestSource, /select the parent entity that owns that referenceVariants entry/)
+})
+
+test('cinematic reference selection keeps shot-location variants on their parent location', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
+
+  assert.match(workerSource, /function strengthenCinematicReferencePlanWithVariantMatches/)
+  assert.match(workerSource, /shot_location_sheet/)
+  assert.match(workerSource, /variant-aware strengthening kept parent references/i)
+  assert.match(workerSource, /in the leader\\'s chamber of Whistlewick/)
+  assert.match(workerSource, /Do not select unrelated props\/items merely because one word like "chamber"/)
+  assert.match(workerSource, /sortReferenceValuesWithPrimary/)
+  assert.match(workerSource, /selectedReferenceVariantAssetKeyForEntity/)
+  assert.match(workerSource, /const primaryAssetKey = readText\(entity\.primaryAssetKey\) \|\| selectedReferenceVariantAssetKey/)
+  assert.match(workerSource, /assetKeys: sortReferenceValuesWithPrimary\(readStringArray\(entity\.assetKeys\), primaryAssetKey \|\| selectedReferenceVariantAssetKey\)/)
+  assert.match(startOutputRequestSource, /leader\\'s chamber of Whistlewick/)
+  assert.match(startOutputRequestSource, /Prefer exact or multi-word variant label\/summary matches/)
 })
 
 test('image workflow quality defaults are configurable and client-overridable', () => {
@@ -2610,6 +2763,15 @@ test('dynamic cinematic execution ignores stale materialized nodes when settling
   assert.match(startRunSource, /dynamicCinematicStale/)
 })
 
+test('dynamic cinematic execution does not loop on cached fanout expansion outputs', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(workerSource, /dynamicFanoutWasCacheSkipped/)
+  assert.match(workerSource, /schedulerResult\.skipped\.includes\(dynamicFanoutNodeKey\)/)
+  assert.match(workerSource, /dynamicGraphExpanded && dynamicFanoutNodeKey && !dynamicFanoutWasCacheSkipped/)
+  assert.match(workerSource, /Cinematic dynamic workflow expansion did not settle after 4 scheduler passes/)
+})
+
 test('selected-shot cinematic materialization preserves existing non-target dynamic outputs', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
 
@@ -2623,6 +2785,75 @@ test('selected-shot cinematic materialization preserves existing non-target dyna
   assert.match(source, /function resolveCinematicV2QualityShotIds[\s\S]*uniqueStrings/)
 })
 
+test('cinematic v3 dynamic rematerialization preserves durable node outputs and previews', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /materializeDynamicCinematicV3StoryboardFanout/)
+  assert.match(source, /existingDynamicNodeByKey/)
+  assert.match(source, /existingStepByNodeKey/)
+  assert.match(source, /hasRecoverableStepOutput/)
+  assert.match(source, /preserveV3NodeRow/)
+  assert.match(source, /existingStep: existingStepByNodeKey\.get\(key\) \?\? null/)
+  assert.match(source, /preservedFromRunStep/)
+  assert.match(source, /preservedDuringDynamicRematerialization/)
+  assert.match(source, /dynamicV3GraphPersistenceVersion/)
+  assert.match(source, /readText\(asRecord\(existingNode\?\.config\)\.purpose\)[\s\S]*readText\(asRecord\(row\.config\)\.purpose\)/)
+  assert.match(source, /upsert\(nodeRows/)
+})
+
+test('output worker repairs artifact-backed nodes left running after upload interruptions', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /function buildRecoveredNodeOutputsFromOutputArtifact/)
+  assert.match(source, /async function recoverArtifactBackedWorkflowNodeOutputs/)
+  assert.match(source, /recoveredFromArtifact/)
+  assert.match(source, /const recoveredArtifactNodeCount = await recoverArtifactBackedWorkflowNodeOutputs/)
+  assert.match(source, /if \(recoveredArtifactNodeCount > 0\)[\s\S]*loadOutputWorkflowRunBundle/)
+  assert.match(source, /async function loadRecoverableArtifactBackedNodeOutputs/)
+  assert.match(source, /const recoverableArtifact = await loadRecoverableArtifactBackedNodeOutputs/)
+  assert.match(source, /terminalProviderStepMetadata/)
+  assert.match(source, /providerStatus: 'COMPLETED'/)
+})
+
+test('cinematic v3 storyboard prompt previews lead with unique group summary', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /const storyboardGroup = asRecord\(outputs\.storyboardGroup\)/)
+  assert.match(source, /Storyboard \$\{storyboardIndex \|\| ''\}: \$\{storyboardSummary\}/)
+})
+
+test('output Fal image progress stores provider submission age for stale request recovery', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /function outputWorkflowFalStaleRequestMs/)
+  assert.match(source, /providerSubmittedAt/)
+  assert.match(source, /inferUuidV7TimestampIso/)
+  assert.match(source, /providerElapsedMs/)
+  assert.match(source, /staleRequestRestarted/)
+  assert.match(source, /providerStatus: 'TIMED_OUT'/)
+  assert.match(source, /Fal image request \$\{requestId\} timed out/)
+  assert.match(source, /Date\.now\(\) - providerSubmittedAtMs > outputWorkflowFalStaleRequestMs\(\)/)
+})
+
+test('cinematic v3 default graph stops at authoring timeline and keeps video nodes manual-only', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(source, /purpose: 'cinematic_v3_storyboard_group_video'/)
+  assert.match(source, /manualOnly: true/)
+  assert.match(source, /isManualOnlyOutputWorkflowNode/)
+  assert.match(source, /executionNodes = executionNodes\.filter\(manualNodeAllowed\)/)
+  assert.match(source, /extractKey\}__timeline_panels/)
+  assert.match(source, /videoPromptKey\}__timeline_prompt/)
+  assert.match(source, /targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: \{[^}]*optional: true/)
+  assert.match(source, /sourceNodeKey\.startsWith\('cinematic_v3_storyboard_group_'\)/)
+  assert.match(source, /targetNodeKey === 'cinematic_v3_timeline_assemble'/)
+  assert.match(source, /model: 'cinematic-v3-authoring-timeline-v1'/)
+  assert.match(source, /shotPlan,\s*shot_plan: shotPlan/)
+  assert.match(source, /registerOtherOutputArtifact/)
+  assert.match(source, /role: 'cinematic_v3_authoring_timeline'[\s\S]*shotPlan/)
+  assert.match(source, /model: 'cinematic-v3-authoring-artifact-v1'/)
+})
+
 test('graph loader returns cache status diagnostics without bulk node outputs', () => {
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-graph/index.ts'), 'utf8')
 
@@ -2634,6 +2865,18 @@ test('graph loader returns cache status diagnostics without bulk node outputs', 
   assert.match(source, /knownGraphRevision/)
   assert.match(source, /unchanged/)
   assert.doesNotMatch(source, /select\(outputWorkflowNodeSelect\)\.eq\('workflow_id', payload\.workflowId\)\.eq\('draft_id'/)
+})
+
+test('graph loader recovers cinematic previews from durable artifacts and run-step previews', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-graph/index.ts'), 'utf8')
+
+  assert.match(source, /buildRecoveredNodeOutputPreview/)
+  assert.match(source, /recoveredFromRunStepPreview/)
+  assert.match(source, /recoveredFromArtifacts/)
+  assert.match(source, /buildRecoveredNodeOutputsFromArtifacts/)
+  assert.match(source, /outputRecoverable/)
+  assert.match(source, /assetKeys/)
+  assert.match(source, /selectedNodeOutput/)
 })
 
 test('outputs graph UI defaults to repairable upstream runs when cache is not ready', () => {

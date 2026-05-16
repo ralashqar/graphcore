@@ -72,6 +72,7 @@ export type OutputLibraryRequestRow = {
     label: string
   }
   currentStepLabel: string
+  activeStepLabels: string[]
   canCancel: boolean
   canRemove: boolean
 }
@@ -202,6 +203,60 @@ function readNonNegativeNumber(value: unknown) {
   return Number.isFinite(number) && number > 0 ? number : 0
 }
 
+function compactDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  const totalSeconds = Math.max(1, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
+  }
+  if (minutes > 0) return `${minutes}m ${seconds.toString().padStart(2, '0')}s`
+  return `${seconds}s`
+}
+
+function activeNodeElapsedMs(record: Record<string, unknown>) {
+  const explicit = readNonNegativeNumber(record.providerElapsedMs)
+  if (explicit > 0) return explicit
+  const submittedAt = readTrimmedString(record.providerSubmittedAt)
+  if (!submittedAt) return 0
+  const submittedAtMs = Date.parse(submittedAt)
+  return Number.isFinite(submittedAtMs) ? Math.max(0, Date.now() - submittedAtMs) : 0
+}
+
+function activeNodeLabel(entry: unknown) {
+  const record = readRecord(entry)
+  const label = readTrimmedString(record.label)
+  if (!label) return ''
+  const providerStatus = readTrimmedString(record.providerStatus)
+  const provider = readTrimmedString(record.provider)
+  const requestId = readTrimmedString(record.falRequestId) || readTrimmedString(record.providerRequestId)
+  const elapsed = compactDuration(activeNodeElapsedMs(record))
+  const details = [
+    providerStatus ? providerStatus.replace(/_/g, ' ') : '',
+    elapsed ? `${elapsed} elapsed` : '',
+    requestId ? requestId.slice(0, 8) : '',
+  ].filter(Boolean)
+  if (details.length === 0) return label
+  return `${label} · ${provider ? `${provider} ` : ''}${details.join(' · ')}`
+}
+
+function readProjectionActiveStepLabels(projection: OutputRequestStatusProjection | null) {
+  if (!projection) return []
+  const progressRecord = readRecord(projection.progress)
+  const metadataRecord = readRecord(projection.metadata)
+  const candidates = [
+    ...readArray(progressRecord.activeNodes),
+    ...readArray(metadataRecord.activeNodes),
+  ]
+  const labels = candidates
+    .map(activeNodeLabel)
+    .filter(Boolean)
+  return [...new Set(labels)]
+}
+
 function readProjectionFromRequest(request: OutputRequest): OutputRequestStatusProjection | null {
   const projection = readRecord(request.metadata).outputStatusProjection
   if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return null
@@ -257,6 +312,7 @@ function buildProgress(
     const percent = total > 0 ? Math.round((completed / total) * 100) : 0
     const currentStepLabel = readTrimmedString(projection.activeNodeLabel)
       || (projection.terminal ? formatStatus(projection.status) : total > 0 ? 'Waiting for next workflow step' : 'Preparing workflow')
+    const activeStepLabels = readProjectionActiveStepLabels(projection)
     return {
       progress: {
         completed,
@@ -265,6 +321,7 @@ function buildProgress(
         label: total > 0 ? `${completed}/${total} steps` : 'Preparing plan',
       },
       currentStepLabel,
+      activeStepLabels: activeStepLabels.length > 0 ? activeStepLabels : currentStepLabel ? [currentStepLabel] : [],
     }
   }
 
@@ -281,6 +338,10 @@ function buildProgress(
     ?? steps.find((step) => stepStatusKey(step) === 'failed')
     ?? steps.find((step) => stepStatusKey(step) === 'queued')
     ?? null
+  const activeStepLabels = steps
+    .filter((step) => stepStatusKey(step) === 'running')
+    .map((step) => readTrimmedString(step.label))
+    .filter(Boolean)
   return {
     progress: {
       completed,
@@ -289,6 +350,7 @@ function buildProgress(
       label: total > 0 ? `${completed}/${total} steps` : 'Not planned',
     },
     currentStepLabel: active?.label || (run ? formatStatus(run.status) : 'Waiting for workflow'),
+    activeStepLabels,
   }
 }
 
@@ -376,6 +438,11 @@ function collectRequestEntityCandidates(
     }
   }
 
+  const requestMetadata = readRecord(request.metadata)
+  collectAssetPack(requestMetadata.outputReferenceSelection)
+  collectAssetPack(readRecord(requestMetadata.outputReferenceSelection).assetPack)
+  for (const entry of readArray(readRecord(requestMetadata.outputReferenceSelection).entities)) pushRecordIdentity(entry, 'selectedReference')
+  for (const entry of readArray(readRecord(requestMetadata.outputReferenceSelection).selectedReferenceVariants)) pushRecordIdentity(entry, 'selectedReferenceVariants')
   for (const key of request.selectedEntityKeys) push(key, 'selected')
   for (const artifact of artifacts) collectAssetPack(artifact.metadata)
   for (const step of run?.steps ?? []) {
@@ -535,7 +602,7 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
       const projection = projectionByRequestId.get(request.id) ?? readProjectionFromRequest(request)
       const groupKey = statusGroup(request, run, artifacts, projection)
       const nodeCount = request.workflowId ? nodeCountByWorkflowId.get(request.workflowId) ?? 0 : 0
-      const { progress, currentStepLabel } = buildProgress(run, nodeCount, projection)
+      const { progress, currentStepLabel, activeStepLabels } = buildProgress(run, nodeCount, projection)
       const entityRefs = buildEntityRefsForRequest(
         request,
         run,
@@ -563,6 +630,7 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
         artifacts,
         progress,
         currentStepLabel,
+        activeStepLabels,
         canCancel: groupKey === 'generating',
         canRemove: groupKey !== 'generating',
       }

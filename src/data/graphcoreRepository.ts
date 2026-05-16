@@ -239,7 +239,6 @@ import {
 import { gameSpecSchema } from '../domain/gameSpec'
 import { projectContextSchema, type ProjectContext } from '../domain/projectContext'
 import {
-  buildProjectContext,
   getCinematicFormatSubtypeForProjectSubtype,
   getCinematicPresetFamilyForProjectSubtype,
   getGameArchetypeIdForProjectSubtype,
@@ -6990,29 +6989,6 @@ export async function resetProjectWorld(snapshot: ProjectSnapshot) {
   }
 
   resetProjectWorldResponseSchema.parse(response.data)
-
-  if (snapshot.projectContext) {
-    const nextProjectContext = buildProjectContext({
-      projectType: snapshot.projectContext.projectType,
-      projectSubtype: snapshot.projectContext.projectSubtype,
-      artStylePreset: snapshot.projectContext.artStylePreset,
-      artStyleDescription: snapshot.projectContext.artStyleDescription,
-      source: snapshot.projectContext.source,
-      completed: false,
-    })
-    const { worldWiki: _resetWorldWiki, ...metadataWithoutWorldWiki } = snapshot.draft.metadata ?? {}
-    const draftMetadata = {
-      ...metadataWithoutWorldWiki,
-      projectContext: nextProjectContext,
-    }
-    const metadataUpdate = await supabase
-      .from('project_drafts')
-      .update({ metadata: draftMetadata })
-      .eq('id', snapshot.draft.id)
-    if (metadataUpdate.error) {
-      throw new Error(metadataUpdate.error.message)
-    }
-  }
 
   return reloadLiveSnapshot(snapshot)
 }

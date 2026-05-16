@@ -208,13 +208,17 @@ test('buildOutputLibraryModel uses compact status projection for live progress r
     progress: {
       totalSteps: 20,
       steps: {
-        completed: 19,
-        running: 1,
+        completed: 18,
+        running: 2,
         queued: 0,
         failed: 0,
         cancelled: 0,
         completedWithErrors: 0,
       },
+      activeNodes: [
+        { nodeKey: 'storyboard_001_sheet', label: 'Storyboard 1 Sheet', status: 'running', orderIndex: 8, provider: 'fal', providerStatus: 'IN_PROGRESS', providerElapsedMs: 185000, falRequestId: '019e2c48-da61-7421-b710-c9595a0f38a5' },
+        { nodeKey: 'storyboard_002_sheet', label: 'Storyboard 2 Sheet', status: 'running', orderIndex: 9, provider: 'fal', providerStatus: 'IN_QUEUE', providerElapsedMs: 61000, falRequestId: '019e2c48-da97-7a92-92ab-5dc32599a2be' },
+      ],
     },
     activeNodeKey: 'cinematic_v3_shot_parse',
     activeNodeLabel: 'Parse Shots',
@@ -249,9 +253,13 @@ test('buildOutputLibraryModel uses compact status projection for live progress r
   const row = model.rows.find((entry) => entry.id === 'cinematic-request')
   assert.equal(row?.groupKey, 'generating')
   assert.equal(row?.latestRunId, 'run-projected')
-  assert.equal(row?.progress.label, '19/20 steps')
-  assert.equal(row?.progress.percent, 95)
+  assert.equal(row?.progress.label, '18/20 steps')
+  assert.equal(row?.progress.percent, 90)
   assert.equal(row?.currentStepLabel, 'Parse Shots')
+  assert.deepEqual(row?.activeStepLabels, [
+    'Storyboard 1 Sheet · fal IN PROGRESS · 3m 05s elapsed · 019e2c48',
+    'Storyboard 2 Sheet · fal IN QUEUE · 1m 01s elapsed · 019e2c48',
+  ])
 })
 
 test('buildOutputLibraryModel resolves gallery URLs from assets and artifact metadata', () => {
@@ -383,6 +391,63 @@ test('buildOutputLibraryModel prefers cropped variant icons for selected referen
   assert.equal(model.rows[0]?.entityRefs[0]?.variantKey, 'samurai_outfit')
   assert.equal(model.rows[0]?.entityRefs[0]?.variantLabel, 'Samurai outfit')
   assert.equal(model.rows[0]?.entityRefs[0]?.imageUrl, 'blob:suri-samurai')
+})
+
+test('buildOutputLibraryModel shows persisted reference variants before artifacts complete', () => {
+  const assets: AssetDefinition[] = [{
+    id: 'asset-suri-samurai',
+    key: 'asset-suri-samurai',
+    name: 'Suri samurai outfit',
+    kind: 'image',
+    storagePath: '',
+    mimeType: 'image/webp',
+    metadata: { sourceUrl: 'https://cdn.example.com/suri-samurai.webp' },
+    llmHints: {},
+  }]
+  const model = buildOutputLibraryModel({
+    assets,
+    imageUrlByEntityKey: new Map([['suri', 'blob:default-suri']]),
+    referenceVariantIconUrlByVariantKey: new Map(),
+    outputRequests: [request({
+      outputKind: 'cinematic_episode',
+      status: 'running',
+      selectedEntityKeys: ['suri'],
+      metadata: {
+        outputReferenceSelection: {
+          selectedReferenceVariants: [{
+            entityKey: 'suri',
+            variantKey: 'samurai_outfit',
+            label: 'Samurai outfit',
+            summary: 'Suri wearing ceremonial samurai armor and helmet.',
+            assetKey: 'asset-suri-samurai',
+          }],
+          entities: [{
+            key: 'suri',
+            name: 'Suri',
+            selectedReferenceVariantKey: 'samurai_outfit',
+            selectedReferenceVariantLabel: 'Samurai outfit',
+            selectedReferenceVariantSummary: 'Suri wearing ceremonial samurai armor and helmet.',
+            selectedReferenceVariantAssetKey: 'asset-suri-samurai',
+            primaryAssetKey: 'asset-suri-samurai',
+          }],
+        },
+      },
+    })],
+    outputWorkflowRuns: [run({ status: 'running', steps: [] })],
+    outputWorkflowNodes: [],
+    worldEntities: [{
+      key: 'suri',
+      name: 'Suri',
+      nodeType: 'actor',
+      thumbnailAssetKey: null,
+    }] as never,
+    outputArtifacts: [],
+  })
+
+  const ref = model.rows[0]?.entityRefs[0]
+  assert.equal(ref?.variantKey, 'samurai_outfit')
+  assert.equal(ref?.variantLabel, 'Samurai outfit')
+  assert.equal(ref?.imageUrl, 'https://cdn.example.com/suri-samurai.webp')
 })
 
 test('buildOutputLibraryModel falls back to selected variant asset before default entity icon', () => {

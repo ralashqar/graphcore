@@ -95,6 +95,34 @@ function asRecord(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+function readText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function falWebhookRequiresSignature() {
+  const raw = Deno.env.get('FAL_WEBHOOK_REQUIRE_SIGNATURE')?.trim().toLowerCase()
+  return raw === 'true' || raw === '1' || raw === 'yes'
+}
+
+function buildFalWebhookProviderMetadata(payload: z.infer<typeof falWebhookPayloadOnlySchema>) {
+  const payloadRecord = asRecord(payload.payload)
+  const imageUrl = extractFalImageUrls(payload.payload)[0] ?? ''
+  const errorMessage = readFalWebhookErrorMessage(payload.payload)
+    || readText(payload.error)
+    || readText(payload.payload_error)
+  return {
+    webhookStatus: payload.status,
+    webhookReceivedAt: new Date().toISOString(),
+    webhookGatewayRequestId: payload.gateway_request_id ?? null,
+    providerStatus: payload.status === 'OK' ? (imageUrl ? 'COMPLETED' : 'OK') : 'ERROR',
+    falWebhookPayload: payloadRecord,
+    falWebhookImageUrl: imageUrl || null,
+    falImageUrl: imageUrl || null,
+    webhookPayloadError: readText(payload.payload_error) || null,
+    webhookErrorMessage: errorMessage || null,
+  }
+}
+
 function readWorldBuildQueueMetadata(
   resultContext: Record<string, unknown> | null | undefined,
   overrides?: {
@@ -897,6 +925,108 @@ async function handleMeshWebhook(
   })
 }
 
+async function recordVisualGenerationFalWebhook(
+  admin: ReturnType<typeof createAdminClient>,
+  payload: z.infer<typeof falWebhookPayloadOnlySchema>,
+) {
+  const lookup = await admin
+    .from('visual_generation_jobs')
+    .select('id, status, metadata')
+    .filter('metadata->>falRequestId', 'eq', payload.request_id)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (lookup.error) throw new Error(lookup.error.message)
+  const job = lookup.data as { id: string; status: string | null; metadata: Record<string, unknown> | null } | null
+  if (!job) return false
+  const metadata = asRecord(job.metadata)
+  if (readText(metadata.falRequestId) !== payload.request_id) return false
+  if (['completed', 'succeeded', 'failed', 'cancelled', 'canceled'].includes(readText(job.status))) {
+    console.info('[fal-webhook] ignoring terminal visual generation job webhook.', {
+      requestId: payload.request_id,
+      jobId: job.id,
+      status: job.status,
+    })
+    return true
+  }
+  const update = await admin
+    .from('visual_generation_jobs')
+    .update({
+      metadata: {
+        ...metadata,
+        ...buildFalWebhookProviderMetadata(payload),
+        falRequestId: payload.request_id,
+        webhookMatchedAt: new Date().toISOString(),
+        webhookMatchedTable: 'visual_generation_jobs',
+      },
+    })
+    .eq('id', job.id)
+  if (update.error) throw new Error(update.error.message)
+  console.info('[fal-webhook] recorded visual generation provider result metadata.', {
+    requestId: payload.request_id,
+    jobId: job.id,
+    status: payload.status,
+  })
+  return true
+}
+
+async function recordOutputWorkflowStepFalWebhook(
+  admin: ReturnType<typeof createAdminClient>,
+  payload: z.infer<typeof falWebhookPayloadOnlySchema>,
+) {
+  let lookup = await admin
+    .from('output_workflow_run_steps')
+    .select('id, status, provider_request_id, metadata')
+    .eq('provider_request_id', payload.request_id)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (lookup.error) throw new Error(lookup.error.message)
+  if (!lookup.data) {
+    lookup = await admin
+      .from('output_workflow_run_steps')
+      .select('id, status, provider_request_id, metadata')
+      .filter('metadata->>falRequestId', 'eq', payload.request_id)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (lookup.error) throw new Error(lookup.error.message)
+  }
+  const step = lookup.data as { id: string; status: string | null; provider_request_id: string | null; metadata: Record<string, unknown> | null } | null
+  if (!step) return false
+  const metadata = asRecord(step.metadata)
+  const currentRequestId = readText(step.provider_request_id) || readText(metadata.falRequestId)
+  if (currentRequestId !== payload.request_id) return false
+  if (['completed', 'failed', 'cancelled', 'canceled', 'skipped'].includes(readText(step.status))) {
+    console.info('[fal-webhook] ignoring terminal output workflow step webhook.', {
+      requestId: payload.request_id,
+      stepId: step.id,
+      status: step.status,
+    })
+    return true
+  }
+  const update = await admin
+    .from('output_workflow_run_steps')
+    .update({
+      provider_request_id: step.provider_request_id || payload.request_id,
+      metadata: {
+        ...metadata,
+        ...buildFalWebhookProviderMetadata(payload),
+        falRequestId: payload.request_id,
+        webhookMatchedAt: new Date().toISOString(),
+        webhookMatchedTable: 'output_workflow_run_steps',
+      },
+    })
+    .eq('id', step.id)
+  if (update.error) throw new Error(update.error.message)
+  console.info('[fal-webhook] recorded output workflow provider result metadata.', {
+    requestId: payload.request_id,
+    stepId: step.id,
+    status: payload.status,
+  })
+  return true
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -933,6 +1063,9 @@ Deno.serve(async (request) => {
         requestId: parsed.headers.requestId,
       })
     } catch (error) {
+      if (falWebhookRequiresSignature()) {
+        throw new HttpError(401, `Fal webhook signature verification failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
       console.warn('[fal-webhook] proceeding without signature verification.', {
         requestId: parsed.headers.requestId,
         requestIp,
@@ -1032,6 +1165,16 @@ Deno.serve(async (request) => {
         status: payload.status,
       })
       return json({ ok: true, handled: 'world_build', requestId: payload.request_id })
+    }
+
+    const visualGenerationHandled = await recordVisualGenerationFalWebhook(admin, payload)
+    if (visualGenerationHandled) {
+      return json({ ok: true, handled: 'visual_generation', requestId: payload.request_id })
+    }
+
+    const outputWorkflowHandled = await recordOutputWorkflowStepFalWebhook(admin, payload)
+    if (outputWorkflowHandled) {
+      return json({ ok: true, handled: 'output_workflow_step', requestId: payload.request_id })
     }
 
     console.warn('[fal-webhook] no matching queued job found.', {

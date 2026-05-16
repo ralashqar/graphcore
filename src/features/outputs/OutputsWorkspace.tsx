@@ -79,7 +79,12 @@ type OutputsWorkspaceProps = {
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
   onRequestDeleteOutputRequest: (requestId: string) => void
   onLoadOutputInbox: () => Promise<void>
-  onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null, selectedNodeKey?: string | null) => Promise<void>
+  onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null, selectedNodeKey?: string | null) => Promise<{
+    workflow: OutputWorkflow | null
+    nodes: OutputWorkflowNode[]
+    run: OutputWorkflowRun | null
+    unchanged?: boolean
+  } | null | void>
   onSubscribeOutputWorkflowGraphSignals: (input: {
     draftId: string
     workflowId: string
@@ -323,6 +328,20 @@ function readArtifactMediaRecords(run: OutputWorkflowRun | null | undefined, rol
   return records
 }
 
+function readFirstArtifactMetadataRecord(run: OutputWorkflowRun | null | undefined, roles: string[], keys: string[]) {
+  const roleSet = new Set(roles)
+  for (const artifact of run?.artifacts ?? []) {
+    const metadata = readRecord(artifact.metadata)
+    const role = readTrimmedString(metadata.role)
+    if (!roleSet.has(role)) continue
+    for (const key of keys) {
+      const record = readNonEmptyRecord(metadata[key])
+      if (record) return record
+    }
+  }
+  return null
+}
+
 function mergeMediaRecords(primary: Record<string, unknown>[], fallback: Record<string, unknown>[]) {
   const seen = new Set<string>()
   const merged: Record<string, unknown>[] = []
@@ -365,8 +384,11 @@ function buildCinematicScriptViewData(
   const cinematicV2LayoutPlan = readNonEmptyRecord(workflowMetadata.cinematicV2LayoutPlan)
     ?? readFirstStepRecord(run, ['layoutPlan', 'layout_plan'])
   const cinematicV2ShotPlan = readNonEmptyRecord(workflowMetadata.cinematicV2ShotPlan)
+    ?? readNonEmptyRecord(workflowMetadata.cinematicV3ShotPlan)
     ?? readFirstStepRecord(run, ['shotPlan', 'shot_plan'])
+    ?? readFirstArtifactMetadataRecord(run, ['cinematic_v3_authoring_timeline'], ['shotPlan', 'shot_plan'])
   const cinematicV2StoryboardGroupPlan = readNonEmptyRecord(workflowMetadata.cinematicV2StoryboardGroupPlan)
+    ?? readNonEmptyRecord(workflowMetadata.cinematicV3StoryboardGroupPlan)
     ?? readFirstStepRecord(run, ['storyboardGroupPlan', 'storyboard_group_plan'])
   const cinematicV2Panels = mergeMediaRecords(
     readArtifactMediaRecords(run, ['cinematic_v2_storyboard_panel', 'cinematic_v3_storyboard_panel']),
@@ -383,6 +405,7 @@ function buildCinematicScriptViewData(
     readAllStepRecords(run, ['video']).filter((video) => readTrimmedString(video.role).startsWith('cinematic_v2_') || readTrimmedString(video.role).startsWith('cinematic_v3_')),
   )
   const cinematicV2Timeline = readFirstStepRecord(run, ['timeline'])
+    ?? readFirstArtifactMetadataRecord(run, ['cinematic_v3_authoring_timeline'], ['timeline'])
   const preset = readTrimmedString(workflow?.preset)
   const isV2 = readTrimmedString(workflowMetadata.cinematicPipelineVersion) === 'v2_shot_orchestration'
     || readTrimmedString(workflowMetadata.cinematicPipelineVersion) === 'v3_script_storyboards'
@@ -458,6 +481,54 @@ function buildCinematicV2TimelineModalData(
     runId: run?.id ?? null,
     canUndoLastDirectorEdit: Array.isArray(edits) && edits.length > 0,
   }
+}
+
+function mergeTimelineNodeOutputsIntoRun(
+  run: OutputWorkflowRun | null | undefined,
+  nodes: OutputWorkflowNode[] | null | undefined,
+): OutputWorkflowRun | null | undefined {
+  if (!run) return run
+  const timelineNode = (nodes ?? []).find((node) => {
+    const config = readRecord(node.config)
+    const purpose = readTrimmedString(config.purpose)
+    const role = readTrimmedString(config.role)
+    return purpose === 'cinematic_v3_timeline_assemble'
+      || purpose === 'cinematic_v2_timeline_assemble'
+      || role === 'cinematic_v3_final_timeline'
+      || role === 'cinematic_v2_final_timeline'
+  })
+  const outputs = readRecord(timelineNode?.outputs)
+  if (Object.keys(outputs).length === 0) return run
+  const existingIndex = run.steps.findIndex((step) => step.nodeKey === timelineNode?.key)
+  const syntheticStep: OutputWorkflowRunStep = {
+    ...(existingIndex >= 0 ? run.steps[existingIndex] : {
+      id: `${run.id}:${timelineNode?.key ?? 'timeline'}`,
+      runId: run.id,
+      workflowId: run.workflowId,
+      nodeId: timelineNode?.id ?? '',
+      nodeKey: timelineNode?.key ?? 'cinematic_v3_timeline_assemble',
+      nodeType: timelineNode?.nodeType ?? 'utility_transform',
+      status: 'completed',
+      orderIndex: Number.MAX_SAFE_INTEGER,
+      label: timelineNode?.label ?? 'Assemble Storyboard Timeline',
+      inputHash: '',
+      outputHash: '',
+      provider: 'graphcore',
+      model: '',
+      providerRequestId: null,
+      errorMessage: null,
+      metadata: {},
+      startedAt: null,
+      completedAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as OutputWorkflowRunStep),
+    outputs,
+  }
+  const nextSteps = [...run.steps]
+  if (existingIndex >= 0) nextSteps[existingIndex] = syntheticStep
+  else nextSteps.push(syntheticStep)
+  return { ...run, steps: nextSteps }
 }
 
 type CinematicV2ProductionEstimate = {
@@ -1920,13 +1991,24 @@ export function OutputsWorkspace({
           rememberLiveRun(status.run)
         }
         if (!workflow) {
-          await onLoadOutputWorkflowGraph(request.workflowId, run?.id ?? request.latestRunId ?? null)
-          workflow = workflows.find((entry) => entry.id === request.workflowId) ?? null
+          const graph = await onLoadOutputWorkflowGraph(request.workflowId, run?.id ?? request.latestRunId ?? null, 'cinematic_v3_timeline_assemble')
+          if (graph && !graph.unchanged) {
+            workflow = graph.workflow ?? workflow
+            run = mergeTimelineNodeOutputsIntoRun(graph.run ?? run, graph.nodes) ?? run
+          } else {
+            workflow = workflows.find((entry) => entry.id === request.workflowId) ?? null
+          }
+        } else {
+          const graph = await onLoadOutputWorkflowGraph(request.workflowId, run?.id ?? request.latestRunId ?? null, 'cinematic_v3_timeline_assemble')
+          if (graph && !graph.unchanged) {
+            workflow = graph.workflow ?? workflow
+            run = mergeTimelineNodeOutputsIntoRun(graph.run ?? run, graph.nodes) ?? run
+          }
         }
         modalData = buildCinematicV2TimelineModalData(workflow, run)
       }
       if (!modalData) {
-        throw new Error('Timeline pending. Run or refresh this cinematic until the V2 shot plan is available.')
+        throw new Error('Timeline pending. Run or refresh this cinematic until the storyboard shot plan and panel extracts are available.')
       }
       setCinematicTimelineModal(modalData)
     } catch (timelineError) {
@@ -1938,7 +2020,7 @@ export function OutputsWorkspace({
 
   function openCinematicTimelineForActiveWorkflow() {
     if (!activeCinematicTimelineModalData) {
-      setError('Timeline pending. Run or refresh this cinematic until the V2 shot plan is available.')
+      setError('Timeline pending. Run or refresh this cinematic until the storyboard shot plan and panel extracts are available.')
       return
     }
     setCinematicTimelineModal(activeCinematicTimelineModalData)

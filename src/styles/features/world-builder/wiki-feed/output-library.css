@@ -483,6 +483,30 @@
   white-space: nowrap;
 }
 
+.world-output-row-step-list {
+  display: flex;
+  max-width: min(640px, 100%);
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.world-output-row-step-list .world-output-row-step {
+  max-width: min(360px, 100%);
+}
+
+.world-output-row-step.is-more {
+  border-color: rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.56);
+  color: rgba(203, 213, 225, 0.82);
+}
+
+.world-output-row-step.is-error {
+  border-color: rgba(248, 113, 113, 0.24);
+  background: rgba(127, 29, 29, 0.22);
+  color: rgba(254, 202, 202, 0.95);
+}
+
 .world-output-row-ref {
   display: inline-flex;
   align-items: center;

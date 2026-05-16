@@ -270,6 +270,8 @@ async function resolveOutputRequestWorldScope(input: {
         'Select only the world graph entities and sequence units directly needed by the user prompt for this output.',
         'For image prompts, choose the characters, places, objects, or concepts explicitly named or clearly required as visual references.',
         'If the prompt names a visual variant such as wardrobe, gear, outfit, room, chamber, cafe, or shot-location, select the parent entity that owns that referenceVariants entry.',
+        'For place phrases like "in the leader\'s chamber of Whistlewick", select the Whistlewick/location parent that owns the Leader\'s Chamber-style variant; do not select unrelated props or items just because their names include one generic word such as chamber.',
+        'Prefer exact or multi-word variant label/summary matches over single-word entity-name matches.',
         'Do not broaden to the surrounding cast, chapter cast, factions, or related characters unless the prompt asks for them.',
         'If a prompt says "Ilya saluting to Anya", select Ilya and Anya only, plus a location only if it is named or visually required.',
         'Use only keys from the supplied catalog. Return JSON only.',

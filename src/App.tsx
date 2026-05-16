@@ -1267,6 +1267,60 @@ function hasGeneratedWorldOverviewMetadata(snapshot: ProjectSnapshot) {
   return worldWikiOverviewCompletenessScore(snapshot) > 0
 }
 
+const ACTIVE_OUTPUT_REQUEST_STATUSES = new Set(['queued', 'planning', 'running'])
+const TERMINAL_OUTPUT_REQUEST_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
+
+function readOutputStatusProjectionMetadata(request: ProjectSnapshot['outputRequests'][number]) {
+  return readMetadataRecord(readMetadataRecord(request.metadata).outputStatusProjection)
+}
+
+function outputRequestEffectiveStatus(request: ProjectSnapshot['outputRequests'][number]) {
+  const projection = readOutputStatusProjectionMetadata(request)
+  const projectionStatus = trimOptionalString(projection.status)
+  if (projectionStatus) return projectionStatus
+  return request.status
+}
+
+function isActiveOutputRequest(request: ProjectSnapshot['outputRequests'][number], runsById: Map<string, ProjectSnapshot['outputWorkflowRuns'][number]>) {
+  const projection = readOutputStatusProjectionMetadata(request)
+  if (projection.terminal === true) return false
+  const projectionStatus = trimOptionalString(projection.status)
+  if (projectionStatus) return ACTIVE_OUTPUT_REQUEST_STATUSES.has(projectionStatus)
+  const runId = trimOptionalString(projection.latestRunId) || request.latestRunId
+  const run = runId ? runsById.get(runId) ?? null : null
+  if (run && TERMINAL_OUTPUT_REQUEST_STATUSES.has(run.status)) return false
+  if (run && ACTIVE_OUTPUT_REQUEST_STATUSES.has(run.status)) return true
+  return ACTIVE_OUTPUT_REQUEST_STATUSES.has(request.status)
+}
+
+function collectActiveOutputRequestIds(snapshot: ProjectSnapshot) {
+  const runsById = new Map(snapshot.outputWorkflowRuns.map((run) => [run.id, run] as const))
+  return snapshot.outputRequests
+    .filter((request) => isActiveOutputRequest(request, runsById))
+    .map((request) => request.id)
+    .sort()
+}
+
+function outputProgressSignature(snapshot: ProjectSnapshot | null | undefined) {
+  if (!snapshot) return ''
+  const activeIds = collectActiveOutputRequestIds(snapshot)
+  if (activeIds.length === 0) return ''
+  return activeIds.map((requestId) => {
+    const request = snapshot.outputRequests.find((entry) => entry.id === requestId)
+    if (!request) return requestId
+    const projection = readOutputStatusProjectionMetadata(request)
+    return [
+      request.id,
+      outputRequestEffectiveStatus(request),
+      trimOptionalString(projection.activeNodeKey),
+      trimOptionalString(projection.activeNodeLabel),
+      trimOptionalString(projection.graphRevision),
+      trimOptionalString(projection.timelineRevision),
+      request.updatedAt,
+    ].join(':')
+  }).join('|')
+}
+
 function reconcileSparseWorldHydrationSnapshot(current: ProjectSnapshot | null | undefined, incoming: ProjectSnapshot) {
   if (!current) return incoming
   if (current.project.id !== incoming.project.id || current.draft.id !== incoming.draft.id) return incoming
@@ -2925,6 +2979,11 @@ export default function App() {
     setSelectedEdgeKey(null)
   }, [activeTab, cinematicGraphs, selectedCinematicGraph, setSelectedEdgeKey, setSelectedGraphKey, setSelectedNodeKey])
 
+  const activeOutputRequestSignature = useMemo(() => outputProgressSignature(snapshot), [
+    snapshot?.outputRequests,
+    snapshot?.outputWorkflowRuns,
+  ])
+
   useEffect(() => {
     if (activeTab !== 'graph' || worldViewMode !== 'wiki' || worldWikiSubView !== 'outputs') return
     void loadOutputInbox().catch((loadError) => {
@@ -2935,25 +2994,65 @@ export default function App() {
   useEffect(() => {
     if (loadedState?.source !== 'supabase' || !snapshot) return
     const outputSurfaceVisible = activeTab === 'outputs' || (activeTab === 'graph' && worldViewMode === 'wiki' && worldWikiSubView === 'outputs')
-    if (!outputSurfaceVisible) return
+    const activeRequestIds = collectActiveOutputRequestIds(snapshot)
+    if (!outputSurfaceVisible && activeRequestIds.length === 0) return
     let timeout: number | null = null
+    let watchdog: number | null = null
+    let refreshInFlight = false
+    let cancelled = false
+    let failureCount = 0
+    const refreshCompactOutputInbox = async (reason: 'realtime' | 'watchdog') => {
+      if (refreshInFlight) return
+      refreshInFlight = true
+      try {
+        await loadOutputInbox({ force: true })
+        failureCount = 0
+      } catch (loadError) {
+        failureCount += 1
+        if (failureCount >= 2) {
+          console.warn('[GraphCore] output progress sync delayed.', {
+            reason,
+            draftId: snapshot.draft.id,
+            activeOutputRequests: collectActiveOutputRequestIds(snapshotRef.current ?? snapshot).length,
+            message: loadError instanceof Error ? loadError.message : String(loadError),
+          })
+        }
+      } finally {
+        refreshInFlight = false
+      }
+    }
+    const scheduleWatchdog = (delayMs: number) => {
+      if (watchdog !== null) window.clearTimeout(watchdog)
+      watchdog = window.setTimeout(() => {
+        watchdog = null
+        const latest = snapshotRef.current
+        if (cancelled || !latest || latest.draft.id !== snapshot.draft.id) return
+        if (collectActiveOutputRequestIds(latest).length === 0) return
+        void refreshCompactOutputInbox('watchdog').finally(() => {
+          if (cancelled) return
+          const nextDelay = failureCount > 0 ? Math.min(10000, 2500 * (failureCount + 1)) : 2500
+          scheduleWatchdog(nextDelay)
+        })
+      }, delayMs)
+    }
     const subscription = workspaceService.subscribeOutputSignals({
       draftId: snapshot.draft.id,
       onSignal: () => {
         if (timeout !== null) window.clearTimeout(timeout)
         timeout = window.setTimeout(() => {
           timeout = null
-          void loadOutputInbox({ force: true }).catch((loadError) => {
-            console.warn('[GraphCore] realtime output inbox refresh failed.', loadError)
-          })
-        }, 900)
+          void refreshCompactOutputInbox('realtime')
+        }, activeRequestIds.length > 0 ? 350 : 900)
       },
     })
+    if (activeRequestIds.length > 0) scheduleWatchdog(2500)
     return () => {
+      cancelled = true
       if (timeout !== null) window.clearTimeout(timeout)
+      if (watchdog !== null) window.clearTimeout(watchdog)
       void subscription.unsubscribe()
     }
-  }, [activeTab, loadedState?.source, snapshot?.draft.id, worldViewMode, worldWikiSubView])
+  }, [activeOutputRequestSignature, activeTab, loadedState?.source, snapshot?.draft.id, worldViewMode, worldWikiSubView])
 
   const persistedPatchHistory = useMemo<PatchSessionView[]>(() => {
     return (snapshot?.patchSets ?? []).map((patch) => {
@@ -4113,13 +4212,18 @@ export default function App() {
       commitPersistedSnapshot(nextSnapshot)
     } else {
       applySnapshotUpdate((current) => {
-        const { worldWiki: _resetWorldWiki, ...metadataWithoutWorldWiki } = current.draft.metadata ?? {}
+        const {
+          worldWiki: _resetWorldWiki,
+          projectContext: _resetProjectContext,
+          ...metadataWithoutGeneratedWorld
+        } = current.draft.metadata ?? {}
         return {
           ...current,
           draft: {
             ...current.draft,
-            metadata: metadataWithoutWorldWiki,
+            metadata: metadataWithoutGeneratedWorld,
           },
+          projectContext: null,
           worldEntities: [],
           worldEntityVisualVariants: [],
           worldRelationships: [],
@@ -4885,14 +4989,27 @@ export default function App() {
       openOutputsLibrary()
       return
     }
-    if (!suggestionLocksCanon && (promptIntent.intent === 'ambiguous' || promptIntent.intent === 'answer_only' || promptIntent.requiresConfirmation)) {
+    if (!suggestionLocksCanon && promptIntent.intent !== 'answer_only' && (promptIntent.intent === 'ambiguous' || promptIntent.requiresConfirmation)) {
       throw new Error(promptIntent.rationale || 'GraphCore needs a clearer request before changing canon or creating an output.')
     }
+    const sourceContextForPrompt: WorldPromptSourceContext | undefined = promptIntent.intent === 'answer_only'
+      ? {
+          kind: input.sourceContext?.kind ?? 'prompt',
+          title: input.sourceContext?.title ?? '',
+          fileName: input.sourceContext?.fileName ?? null,
+          mimeType: input.sourceContext?.mimeType ?? null,
+          url: input.sourceContext?.url ?? null,
+          extractedText: input.sourceContext?.extractedText ?? '',
+          charCount: input.sourceContext?.charCount ?? 0,
+          truncated: input.sourceContext?.truncated ?? false,
+          promptMode: 'ask',
+        }
+      : input.sourceContext
     const result = await workspaceService.startWorldPromptTurn(syncedSnapshot, {
       prompt: input.prompt,
       model: promptModel,
       sessionKey: input.sessionKey ?? null,
-      sourceContext: input.sourceContext,
+      sourceContext: sourceContextForPrompt,
       initialSeedMode: 'standard',
       selectedSuggestionId: input.selectedSuggestionId ?? null,
       selectedRootEntityKey: input.selectedRootEntityKey ?? null,
@@ -5715,7 +5832,7 @@ export default function App() {
       return
     }
     const inFlight = surfaceHydrationInFlightRef.current.get(surfaceKey) as Promise<void> | undefined
-    if (inFlight && !options?.force) return inFlight
+    if (inFlight && !options?.cursor) return inFlight
     const requestId = beginSurfaceHydration(surfaceKey)
     const startedAt = performance.now()
     let loadPromise: Promise<void>
@@ -5812,7 +5929,7 @@ export default function App() {
           graphRevision: result.graphRevision,
         })
       }
-      return
+      return result
     }
     commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
       workflows: result.workflow ? [result.workflow] : [],
@@ -5833,6 +5950,7 @@ export default function App() {
         graphRevision: result.graphRevision,
       })
     }
+    return result
   }
 
   async function cancelOutputWorkflowRun(runId: string) {

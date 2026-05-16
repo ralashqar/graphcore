@@ -131,9 +131,14 @@
 }
 
 .world-wiki-modal-body {
+  display: block;
+  max-height: none;
+  overflow: visible;
   white-space: pre-wrap;
   color: rgba(203, 213, 225, 0.88);
   line-height: 1.65;
+  -webkit-box-orient: initial;
+  -webkit-line-clamp: unset;
 }
 
 .world-wiki-reference-regeneration-modal {
