@@ -21,6 +21,9 @@ type CinematicTimelinePlayerProps = {
   title?: string
   subtitle?: string
   emptyMessage?: string
+  referenceIconUrlByAssetKey?: ReadonlyMap<string, string | null>
+  referenceIconUrlByEntityKey?: ReadonlyMap<string, string | null>
+  referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
   directorNotes?: {
     onPreview: (request: { note: string; scope: CinematicDirectorNoteScope }) => Promise<CinematicDirectorNotePreviewResponse>
     onApply: (preview: CinematicDirectorPatchPreview) => Promise<void>
@@ -45,6 +48,11 @@ type TimelineReferencePreview = {
   label: string
   asset: AssetDefinition | null
   url: string | null
+}
+
+type TimelineReferenceSource = {
+  assetKey: string | null
+  label: string
 }
 
 const BASE_PIXELS_PER_SECOND = 84
@@ -146,18 +154,75 @@ function assetMatchesReferenceId(asset: AssetDefinition, refId: string) {
     || asset.key.includes(`_${refId}_`)
 }
 
-function resolveReferencePreview(assets: AssetDefinition[], refId: string): TimelineReferencePreview {
-  const candidates = assets
-    .filter((asset) => asset.kind === 'image' && assetMatchesReferenceId(asset, refId))
+function readAssetReferenceEntityKey(asset: AssetDefinition | null | undefined) {
+  const metadata = asset?.metadata && typeof asset.metadata === 'object' && !Array.isArray(asset.metadata)
+    ? asset.metadata as Record<string, unknown>
+    : {}
+  return readMetadataString(metadata, 'entityKey')
+    || readMetadataString(metadata, 'worldEntityKey')
+    || readMetadataString(metadata, 'sourceEntityKey')
+    || readMetadataString(metadata, 'targetEntityKey')
+}
+
+function readAssetReferenceVariantKey(asset: AssetDefinition | null | undefined) {
+  const metadata = asset?.metadata && typeof asset.metadata === 'object' && !Array.isArray(asset.metadata)
+    ? asset.metadata as Record<string, unknown>
+    : {}
+  return readMetadataString(metadata, 'variantKey')
+    || readMetadataString(metadata, 'referenceVariantKey')
+    || readMetadataString(metadata, 'selectedReferenceVariantKey')
+}
+
+function resolveCroppedReferenceIcon(input: {
+  asset: AssetDefinition | null
+  refId: string
+  referenceIconUrlByAssetKey?: ReadonlyMap<string, string | null>
+  referenceIconUrlByEntityKey?: ReadonlyMap<string, string | null>
+  referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
+}) {
+  const assetKeyIcon = input.asset?.key ? input.referenceIconUrlByAssetKey?.get(input.asset.key) ?? null : null
+  if (assetKeyIcon) return assetKeyIcon
+
+  const entityKey = readAssetReferenceEntityKey(input.asset) || input.refId
+  const variantKey = readAssetReferenceVariantKey(input.asset)
+  const variantIcon = entityKey && variantKey
+    ? input.referenceVariantIconUrlByVariantKey?.get(`${entityKey}:${variantKey}`) ?? null
+    : null
+  if (variantIcon) return variantIcon
+
+  return entityKey ? input.referenceIconUrlByEntityKey?.get(entityKey) ?? null : null
+}
+
+function resolveReferencePreview(input: {
+  assets: AssetDefinition[]
+  refId: string
+  source: TimelineReferenceSource | null
+  referenceIconUrlByAssetKey?: ReadonlyMap<string, string | null>
+  referenceIconUrlByEntityKey?: ReadonlyMap<string, string | null>
+  referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
+}): TimelineReferencePreview {
+  const sourceAsset = input.source?.assetKey
+    ? input.assets.find((asset) => asset.key === input.source?.assetKey) ?? null
+    : null
+  const candidates = input.assets
+    .filter((asset) => asset.kind === 'image' && assetMatchesReferenceId(asset, input.refId))
     .map((asset) => ({ asset, url: resolveAssetPreviewUrl(asset) || resolveAssetSourceUrl(asset) }))
     .filter((entry): entry is { asset: AssetDefinition; url: string } => Boolean(entry.url))
   const referenceSheet = candidates.find((entry) => entry.asset.key.startsWith('entity_reference_sheet_'))
   const chosen = referenceSheet ?? candidates[0] ?? null
+  const asset = sourceAsset ?? chosen?.asset ?? null
+  const croppedIconUrl = resolveCroppedReferenceIcon({
+    asset,
+    refId: input.refId,
+    referenceIconUrlByAssetKey: input.referenceIconUrlByAssetKey,
+    referenceIconUrlByEntityKey: input.referenceIconUrlByEntityKey,
+    referenceVariantIconUrlByVariantKey: input.referenceVariantIconUrlByVariantKey,
+  })
   return {
-    id: refId,
-    label: chosen?.asset.name || humanizeReferenceId(refId),
-    asset: chosen?.asset ?? null,
-    url: chosen?.url ?? null,
+    id: input.refId,
+    label: input.source?.label || asset?.name || chosen?.asset.name || humanizeReferenceId(input.refId),
+    asset,
+    url: croppedIconUrl ?? (asset ? resolveAssetPreviewUrl(asset) || resolveAssetSourceUrl(asset) : chosen?.url ?? null),
   }
 }
 
@@ -170,6 +235,9 @@ export function CinematicTimelinePlayer({
   directorNotes,
   qualityKeyframes,
   projection,
+  referenceIconUrlByAssetKey,
+  referenceIconUrlByEntityKey,
+  referenceVariantIconUrlByVariantKey,
   title = 'Cinematic Timeline',
   subtitle = 'Read-only production preview',
   emptyMessage = 'Shot planning has not produced a timeline yet.',
@@ -215,9 +283,39 @@ export function CinematicTimelinePlayer({
   const timelineWidth = timelineTrackWidth(projection, pixelsPerSecond)
   const zoomPercent = Math.round((pixelsPerSecond / BASE_PIXELS_PER_SECOND) * 100)
   const activeRefs = useMemo(() => activeShot?.activeRefIds ?? [], [activeShot])
+  const referenceSourceById = useMemo(() => {
+    const next = new Map<string, TimelineReferenceSource>()
+    if (!projection) return next
+    for (const reference of projection.sequence.references) {
+      next.set(reference.id, {
+        assetKey: reference.assetKey,
+        label: reference.label || humanizeReferenceId(reference.id),
+      })
+    }
+    for (const reference of projection.sequence.compositeRefs) {
+      next.set(reference.id, {
+        assetKey: reference.outputAssetKey,
+        label: reference.title || humanizeReferenceId(reference.id),
+      })
+    }
+    for (const panel of projection.sequence.storyboard?.panels ?? []) {
+      next.set(panel.id, {
+        assetKey: panel.assetKey,
+        label: panel.title || humanizeReferenceId(panel.id),
+      })
+    }
+    return next
+  }, [projection])
   const activeReferencePreviews = useMemo(
-    () => activeRefs.map((refId) => resolveReferencePreview(assets, refId)),
-    [activeRefs, assets],
+    () => activeRefs.map((refId) => resolveReferencePreview({
+      assets,
+      refId,
+      source: referenceSourceById.get(refId) ?? null,
+      referenceIconUrlByAssetKey,
+      referenceIconUrlByEntityKey,
+      referenceVariantIconUrlByVariantKey,
+    })),
+    [activeRefs, assets, referenceIconUrlByAssetKey, referenceIconUrlByEntityKey, referenceSourceById, referenceVariantIconUrlByVariantKey],
   )
   const directorScopeSummary = directorScopeMode === 'scene'
     ? 'Whole scene'
@@ -519,34 +617,9 @@ export function CinematicTimelinePlayer({
               <span>{activeShot?.beat ?? 'Panels, keyframes, and videos will appear here as the workflow completes.'}</span>
             </div>
           )}
-          {activeReferencePreviews.length > 0 ? (
-            <div className="timeline-preview-reference-rail" aria-label="Active shot references" role="list">
-              {activeReferencePreviews.slice(0, MAX_PREVIEW_REFERENCE_ICONS).map((reference) => (
-                <div
-                  className={reference.url ? 'timeline-preview-reference-icon has-image' : 'timeline-preview-reference-icon'}
-                  key={reference.id}
-                  role="listitem"
-                  title={reference.label}
-                >
-                  <span className="timeline-preview-reference-thumb">
-                    {reference.url ? <img alt="" src={reference.url} /> : <EntityIcon id="asset" />}
-                  </span>
-                  <span className="timeline-preview-reference-label">{reference.label}</span>
-                </div>
-              ))}
-              {activeReferencePreviews.length > MAX_PREVIEW_REFERENCE_ICONS ? (
-                <div
-                  className="timeline-preview-reference-icon is-count"
-                  role="listitem"
-                  title={`${activeReferencePreviews.length - MAX_PREVIEW_REFERENCE_ICONS} more references`}
-                >
-                  +{activeReferencePreviews.length - MAX_PREVIEW_REFERENCE_ICONS}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
           <div className="timeline-preview-overlay">
-            <div className="timeline-preview-meta">
+            <div className="timeline-preview-top-stack">
+              <div className="timeline-preview-meta">
               <span className="eyebrow">{subtitle}</span>
               <strong>{activeShot?.title ?? title}</strong>
               <span>
@@ -554,6 +627,33 @@ export function CinematicTimelinePlayer({
                   ? `${formatTimecode(activeShot.startSeconds)} - ${formatTimecode(activeShot.endSeconds)} · ${activeShot.durationSeconds.toFixed(1)}s`
                   : `${projection.shots.length} shots`}
               </span>
+              </div>
+              {activeReferencePreviews.length > 0 ? (
+                <div className="timeline-preview-reference-rail" aria-label="Active shot references" role="list">
+                  {activeReferencePreviews.slice(0, MAX_PREVIEW_REFERENCE_ICONS).map((reference) => (
+                    <div
+                      className={reference.url ? 'timeline-preview-reference-icon has-image' : 'timeline-preview-reference-icon'}
+                      key={reference.id}
+                      role="listitem"
+                      title={reference.label}
+                    >
+                      <span className="timeline-preview-reference-thumb">
+                        {reference.url ? <img alt="" src={reference.url} /> : <EntityIcon id="asset" />}
+                      </span>
+                      <span className="timeline-preview-reference-label">{reference.label}</span>
+                    </div>
+                  ))}
+                  {activeReferencePreviews.length > MAX_PREVIEW_REFERENCE_ICONS ? (
+                    <div
+                      className="timeline-preview-reference-icon is-count"
+                      role="listitem"
+                      title={`${activeReferencePreviews.length - MAX_PREVIEW_REFERENCE_ICONS} more references`}
+                    >
+                      +{activeReferencePreviews.length - MAX_PREVIEW_REFERENCE_ICONS}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             {currentSubtitle ? (
               <div className="timeline-preview-subtitle">
@@ -567,16 +667,28 @@ export function CinematicTimelinePlayer({
         <div className="timeline-transport">
           <div className="timeline-transport-copy">
             <span className="eyebrow">Transport</span>
-            <strong>{formatTimecode(playheadSeconds)}</strong>
+            <strong className="timeline-timecode">{formatTimecode(playheadSeconds)}</strong>
             <span>{activeTake ? `${activeTake.title} · ${activeTake.durationSeconds.toFixed(1)}s` : 'No active take'}</span>
-            <span>{isPlaying ? 'Playing' : 'Paused'}</span>
+            <span className={isPlaying ? 'timeline-play-state is-playing' : 'timeline-play-state'}>{isPlaying ? 'Playing' : 'Paused'}</span>
           </div>
           <div className="timeline-transport-actions">
-            <button className="ghost-button compact" onClick={() => jumpPlayhead(0)} type="button">Start</button>
-            <button className="ghost-button compact" onClick={() => stepPlayhead(-1)} type="button">-1s</button>
-            <button className="primary-button compact" onClick={togglePlayback} type="button">{isPlaying ? 'Pause' : 'Play'}</button>
-            <button className="ghost-button compact" onClick={() => stepPlayhead(1)} type="button">+1s</button>
-            <button className="ghost-button compact" onClick={() => jumpPlayhead(projection.totalDurationSeconds)} type="button">End</button>
+            <button aria-label="Jump to start" className="timeline-transport-button" onClick={() => jumpPlayhead(0)} title="Jump to start" type="button">
+              <span aria-hidden="true" className="timeline-icon timeline-icon-skip-start" />
+            </button>
+            <button aria-label="Step back one second" className="timeline-transport-button timeline-step-button" onClick={() => stepPlayhead(-1)} title="Step back one second" type="button">-1</button>
+            <button
+              aria-label={isPlaying ? 'Pause timeline' : 'Play timeline'}
+              className={isPlaying ? 'timeline-transport-button timeline-play-toggle is-playing' : 'timeline-transport-button timeline-play-toggle'}
+              onClick={togglePlayback}
+              title={isPlaying ? 'Pause' : 'Play'}
+              type="button"
+            >
+              <span aria-hidden="true" className={isPlaying ? 'timeline-icon timeline-icon-pause' : 'timeline-icon timeline-icon-play'} />
+            </button>
+            <button aria-label="Step forward one second" className="timeline-transport-button timeline-step-button" onClick={() => stepPlayhead(1)} title="Step forward one second" type="button">+1</button>
+            <button aria-label="Jump to end" className="timeline-transport-button" onClick={() => jumpPlayhead(projection.totalDurationSeconds)} title="Jump to end" type="button">
+              <span aria-hidden="true" className="timeline-icon timeline-icon-skip-end" />
+            </button>
           </div>
           <div className="timeline-zoom-row">
             <span className="eyebrow">Zoom</span>
@@ -597,15 +709,6 @@ export function CinematicTimelinePlayer({
               <span>Space toggles playback</span>
             </div>
           </div>
-          <input
-            className="timeline-range"
-            max={Math.max(0, projection.totalDurationSeconds)}
-            min={0}
-            onChange={(event) => setClampedPlayhead(Number(event.target.value))}
-            step={0.1}
-            type="range"
-            value={playheadSeconds}
-          />
         </div>
       </div>
 

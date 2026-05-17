@@ -629,7 +629,7 @@
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   width: min(1540px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
   overflow: hidden;
@@ -652,14 +652,42 @@
   font-size: 1rem;
 }
 
+.outputs-cinematic-timeline-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 8;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(3, 8, 14, 0.72);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+}
+
+.outputs-cinematic-timeline-close:hover,
+.outputs-cinematic-timeline-close:focus-visible {
+  border-color: rgba(57, 216, 255, 0.46);
+  background: rgba(57, 216, 255, 0.14);
+  outline: none;
+}
+
 .outputs-cinematic-timeline-panel .timeline-surface {
   min-height: 0;
   overflow: auto;
-  padding: 14px;
+  padding: 10px;
 }
 
 .outputs-cinematic-timeline-panel .timeline-preview-stage {
-  height: clamp(340px, 50dvh, 620px);
+  height: clamp(420px, 58dvh, 720px);
 }
 
 .outputs-cinematic-timeline-panel .timeline-sidebar {
@@ -687,6 +715,10 @@
     width: calc(100vw - 20px);
     max-height: calc(100dvh - 20px);
     border-radius: 18px;
+  }
+
+  .outputs-cinematic-timeline-panel .timeline-preview-stage {
+    height: clamp(260px, 44dvh, 440px);
   }
 }
 

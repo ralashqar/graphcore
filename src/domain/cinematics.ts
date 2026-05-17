@@ -990,6 +990,14 @@ export function buildCinematicV2StoryboardLayout(shotCount: number): CinematicV2
   return { rows: 3, columns: 3, panelCount }
 }
 
+export function buildCinematicV3StoryboardLayout(shotCount: number): CinematicV2StoryboardLayout {
+  const panelCount = Math.max(1, Math.min(9, Math.ceil(shotCount)))
+  if (panelCount <= 1) return { rows: 1, columns: 1, panelCount }
+  if (panelCount === 2) return { rows: 1, columns: 2, panelCount }
+  if (panelCount <= 6) return { rows: 2, columns: 3, panelCount }
+  return { rows: 3, columns: 3, panelCount }
+}
+
 export function deriveCinematicV2MaxShotCount(durationSeconds: number | null | undefined) {
   const duration = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) ? durationSeconds : 64
   return Math.max(4, Math.min(36, Math.ceil(duration / 4)))
@@ -1047,7 +1055,7 @@ export function buildCinematicV3StoryboardGroupPlan(
   const flush = () => {
     if (!currentShots.length) return
     const groupIndex = groups.length + 1
-    const layout = buildCinematicV2StoryboardLayout(currentShots.length)
+    const layout = buildCinematicV3StoryboardLayout(currentShots.length)
     const endSeconds = currentStartSeconds + currentDurationSeconds
     groups.push({
       id: `cinematic_v3_storyboard_group_${String(groupIndex).padStart(3, '0')}`,

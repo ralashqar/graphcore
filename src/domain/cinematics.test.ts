@@ -6,6 +6,7 @@ import {
   buildCinematicShotTimingMap,
   buildCinematicV2StoryboardGroupPlan,
   buildCinematicV2StoryboardLayout,
+  buildCinematicV3StoryboardLayout,
   buildCinematicV3StoryboardGroupPlan,
   buildCinematicSequenceFromScriptDoc,
   buildCinematicSettingsPatchFromPresetFamily,
@@ -161,6 +162,13 @@ test('Cinematics V2 schemas validate scene state, layout, short shots, and story
   assert.deepEqual(buildCinematicV2StoryboardLayout(5), { rows: 3, columns: 3, panelCount: 5 })
   assert.deepEqual(buildCinematicV2StoryboardLayout(9), { rows: 3, columns: 3, panelCount: 9 })
   assert.deepEqual(buildCinematicV2StoryboardLayout(12), { rows: 3, columns: 3, panelCount: 9 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(1), { rows: 1, columns: 1, panelCount: 1 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(2), { rows: 1, columns: 2, panelCount: 2 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(3), { rows: 2, columns: 3, panelCount: 3 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(6), { rows: 2, columns: 3, panelCount: 6 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(7), { rows: 3, columns: 3, panelCount: 7 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(9), { rows: 3, columns: 3, panelCount: 9 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(12), { rows: 3, columns: 3, panelCount: 9 })
   const groupedStoryboard = buildCinematicV2StoryboardGroupPlan({
     ...shotPlan,
     shots: Array.from({ length: 23 }, (_, index) => ({
@@ -230,9 +238,9 @@ test('Cinematics V3 storyboard grouping creates video-sized blocks with matching
   assert.deepEqual(grouped.groups.map((group) => group.editorialDurationSeconds), [13, 14, 13])
   assert.ok(grouped.groups.every((group) => group.editorialDurationSeconds <= 15))
   assert.deepEqual(grouped.groups.map((group) => `${group.rows}x${group.columns}:${group.panelCount}`), [
-    '2x2:2',
-    '2x2:3',
-    '3x3:5',
+    '1x2:2',
+    '2x3:3',
+    '2x3:5',
   ])
   assert.deepEqual(grouped.groups.map((group) => group.providerDurationSeconds), [13, 14, 13])
   assert.equal(grouped.maxDurationPerGroupSeconds, 15)

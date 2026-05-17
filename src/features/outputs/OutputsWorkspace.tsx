@@ -20,6 +20,7 @@ import type {
   CinematicDirectorPatchPreview,
 } from '../../domain/cinematicDirectorNotes'
 import { cinematicDirectorPatchPreviewSchema } from '../../domain/cinematicDirectorNotes'
+import type { SignProjectAssetUrlsInput, SignedProjectAssetUrl } from '../../application/ports'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import {
   buildOutputGuidanceBundleForNode,
@@ -42,6 +43,7 @@ import {
 } from '../../domain/outputWorkflow'
 import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
 import { CinematicTimelinePlayer } from '../cinematics/CinematicTimelinePlayer'
+import { useWorldAssetUrls } from '../world-builder/hooks/useWorldAssetUrls'
 import { deriveSequenceOutputStatuses, type SequenceOutputStatus } from './outputSequenceStatus'
 import {
   useOutputWorkspaceState,
@@ -79,6 +81,7 @@ type OutputsWorkspaceProps = {
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse>
   onRequestDeleteOutputRequest: (requestId: string) => void
   onLoadOutputInbox: () => Promise<void>
+  onSignProjectAssetUrls: (input: SignProjectAssetUrlsInput) => Promise<SignedProjectAssetUrl[]> | SignedProjectAssetUrl[]
   onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null, selectedNodeKey?: string | null) => Promise<{
     workflow: OutputWorkflow | null
     nodes: OutputWorkflowNode[]
@@ -157,6 +160,14 @@ function sequenceOrdinalLabel(sequence: ProjectSnapshot['worldEntities'][number]
   const sequenceData = readRecord(sequence.customProperties?.sequence)
   const ordinal = readNumber(sequenceData.ordinal)
   return ordinal ? `Chapter ${ordinal}` : `Unit ${fallbackIndex + 1}`
+}
+
+function readReferenceSheetAssetKey(entity: ProjectSnapshot['worldEntities'][number]) {
+  const metadata = entity.metadata && typeof entity.metadata === 'object' && !Array.isArray(entity.metadata)
+    ? entity.metadata as Record<string, unknown>
+    : {}
+  const value = metadata.referenceSheetAssetKey
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
 const DEFAULT_OUTPUT_REQUEST_PROMPT = 'Make a poster image from this world using the main characters and strongest location.'
@@ -613,6 +624,9 @@ function buildCinematicV2ProductionEstimate(
 function CinematicV2TimelineModal({
   assets,
   enhancingShotId,
+  referenceIconUrlByAssetKey,
+  referenceIconUrlByEntityKey,
+  referenceVariantIconUrlByVariantKey,
   onApplyDirectorPatch,
   onClose,
   onGenerateQualityKeyframe,
@@ -626,6 +640,9 @@ function CinematicV2TimelineModal({
 }: {
   assets: ProjectSnapshot['assets']
   enhancingShotId?: string | null
+  referenceIconUrlByAssetKey?: ReadonlyMap<string, string | null>
+  referenceIconUrlByEntityKey?: ReadonlyMap<string, string | null>
+  referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
   onApplyDirectorPatch: (request: { workflowId: string; runId?: string | null; preview: CinematicDirectorPatchPreview; startRegeneration: boolean }) => Promise<void>
   onClose: () => void
   onGenerateQualityKeyframe?: (request: { workflowId: string; runId?: string | null; shot: CinematicTimelineShotClip }) => Promise<void>
@@ -651,13 +668,9 @@ function CinematicV2TimelineModal({
     <div aria-label="Cinematic timeline preview" aria-modal="true" className="outputs-cinematic-timeline-modal" role="dialog">
       <button aria-label="Close cinematic timeline" className="outputs-cinematic-timeline-backdrop" onClick={onClose} type="button" />
       <div className="outputs-cinematic-timeline-panel">
-        <div className="outputs-cinematic-timeline-header">
-          <div>
-            <p className="outputs-eyebrow">Cinematic Timeline</p>
-            <h3>{title}</h3>
-          </div>
-          <button className="outputs-node-action" onClick={onClose} type="button">Close</button>
-        </div>
+        <button aria-label="Close cinematic timeline" className="outputs-cinematic-timeline-close" onClick={onClose} type="button">
+          <span aria-hidden="true">X</span>
+        </button>
         <CinematicTimelinePlayer
           assets={assets}
           directorNotes={{
@@ -676,7 +689,10 @@ function CinematicV2TimelineModal({
             onGenerateShot: (shot) => onGenerateQualityKeyframe({ workflowId, runId, shot }),
           } : undefined}
           projection={projection}
-          subtitle="V2 shot orchestration preview"
+          referenceIconUrlByAssetKey={referenceIconUrlByAssetKey}
+          referenceIconUrlByEntityKey={referenceIconUrlByEntityKey}
+          referenceVariantIconUrlByVariantKey={referenceVariantIconUrlByVariantKey}
+          subtitle="Timeline preview"
           title={title}
         />
       </div>
@@ -1406,6 +1422,7 @@ export function OutputsWorkspace({
   onCancelOutputRequest,
   onRequestDeleteOutputRequest,
   onLoadOutputInbox,
+  onSignProjectAssetUrls,
   onLoadOutputWorkflowGraph,
   onSubscribeOutputWorkflowGraphSignals,
   onStartOutputWorkflow,
@@ -1489,7 +1506,6 @@ export function OutputsWorkspace({
   const graphLastRefreshAtRef = useRef(0)
   const [graphSyncDelayed, setGraphSyncDelayed] = useState(false)
   const [graphSyncDelayedMessage, setGraphSyncDelayedMessage] = useState<string | null>(null)
-
   const sequenceUnits = useMemo(
     () => snapshot.worldEntities.filter((entity) => entity.nodeType === 'sequence_unit'),
     [snapshot.worldEntities],
@@ -1573,6 +1589,33 @@ export function OutputsWorkspace({
     [displayRun?.steps],
   )
   const assetByKey = useMemo(() => new Map(snapshot.assets.map((asset) => [asset.key, asset])), [snapshot.assets])
+  const definitionByKey = useMemo(() => new Map(snapshot.definitions.map((definition) => [definition.key, definition])), [snapshot.definitions])
+  const {
+    referenceSheetIconUrlByEntityKey,
+    referenceVariantIconUrlByVariantKey,
+  } = useWorldAssetUrls({
+    assetByKey,
+    definitionByKey,
+    onSignProjectAssetUrls,
+    worldEntities: snapshot.worldEntities,
+    worldEntityVisualVariants: snapshot.worldEntityVisualVariants,
+    worldResults: snapshot.worldResults,
+  })
+  const timelineReferenceIconUrlByAssetKey = useMemo(() => {
+    const next = new Map<string, string | null>()
+    for (const entity of snapshot.worldEntities) {
+      const assetKey = readReferenceSheetAssetKey(entity)
+      if (!assetKey) continue
+      const iconUrl = referenceSheetIconUrlByEntityKey.get(entity.key) ?? null
+      if (iconUrl) next.set(assetKey, iconUrl)
+    }
+    for (const variant of snapshot.worldEntityVisualVariants) {
+      if (!variant.assetKey) continue
+      const iconUrl = referenceVariantIconUrlByVariantKey.get(`${variant.entityKey}:${variant.variantKey}`) ?? null
+      if (iconUrl) next.set(variant.assetKey, iconUrl)
+    }
+    return next
+  }, [referenceSheetIconUrlByEntityKey, referenceVariantIconUrlByVariantKey, snapshot.worldEntities, snapshot.worldEntityVisualVariants])
   const selectedStep = selectedNode ? stepsByNodeKey.get(selectedNode.key) ?? null : null
   const selectedOutputPreview = truncatePreview(readOutputPreview(selectedStep) || readNodeOutputPreview(selectedNode))
   const selectedOutputImageUrl = useMemo(() => {
@@ -2821,6 +2864,9 @@ export function OutputsWorkspace({
         <CinematicV2TimelineModal
           assets={snapshot.assets}
           enhancingShotId={enhancingTimelineShotId}
+          referenceIconUrlByAssetKey={timelineReferenceIconUrlByAssetKey}
+          referenceIconUrlByEntityKey={referenceSheetIconUrlByEntityKey}
+          referenceVariantIconUrlByVariantKey={referenceVariantIconUrlByVariantKey}
           onApplyDirectorPatch={applyCinematicDirectorPatchAndRegenerate}
           onClose={closeCinematicTimelineModal}
           onGenerateQualityKeyframe={canRunOutputs ? generateTimelineShotQualityKeyframe : undefined}

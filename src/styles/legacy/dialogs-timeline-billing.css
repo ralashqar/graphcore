@@ -148,8 +148,8 @@
   display: grid;
   grid-template-rows: auto auto;
   align-content: start;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 12px;
 }
 
 .timeline-preview-shell,
@@ -162,8 +162,8 @@
 
 .timeline-preview-shell {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 6px;
+  padding: 8px;
 }
 
 .timeline-preview-stage {
@@ -205,30 +205,37 @@
 }
 
 .timeline-preview-reference-rail {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  z-index: 2;
-  display: grid;
-  gap: 6px;
-  transform: translateY(-50%);
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  max-width: min(100%, 440px);
+  overflow: hidden;
   padding: 6px;
-  border-radius: 16px;
+  border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(3, 8, 14, 0.66);
   backdrop-filter: blur(12px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.timeline-preview-reference-icon {
-  width: 128px;
-  min-height: 36px;
+.timeline-preview-top-stack {
+  width: fit-content;
+  max-width: min(100%, 760px);
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.timeline-preview-reference-icon {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
   overflow: hidden;
-  padding: 2px 8px 2px 2px;
+  padding: 2px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.055);
@@ -238,8 +245,8 @@
 }
 
 .timeline-preview-reference-thumb {
-  width: 30px;
-  height: 30px;
+  width: 100%;
+  height: 100%;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -261,8 +268,12 @@
 }
 
 .timeline-preview-reference-label {
+  position: absolute;
   min-width: 0;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
+  clip: rect(0 0 0 0);
   color: var(--text);
   font-size: 0.7rem;
   line-height: 1.05;
@@ -271,8 +282,11 @@
 }
 
 .timeline-preview-reference-icon.is-count {
-  width: 34px;
-  min-height: 34px;
+  position: relative;
+  z-index: 3;
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
   display: grid;
   grid-template-columns: 1fr;
   place-items: center;
@@ -287,7 +301,7 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 18px;
+  padding: 12px;
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 32%, transparent 68%, rgba(0, 0, 0, 0.72));
 }
@@ -297,9 +311,9 @@
   width: fit-content;
   max-width: min(100%, 760px);
   display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border-radius: 16px;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 12px;
   background: rgba(3, 8, 14, 0.72);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -317,12 +331,12 @@
 
 .timeline-transport {
   display: grid;
-  grid-template-columns: max-content max-content max-content minmax(180px, 1fr);
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 8px 10px;
-  border-radius: 14px;
+  padding: 6px 8px;
+  border-radius: 12px;
   background: rgba(3, 8, 14, 0.54);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -348,10 +362,132 @@
   display: none;
 }
 
+.timeline-timecode {
+  min-width: 7ch;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.timeline-play-state {
+  min-width: 52px;
+}
+
+.timeline-play-state.is-playing {
+  color: var(--accent);
+}
+
 .timeline-transport-actions {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: nowrap;
+}
+
+.timeline-transport-button {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.timeline-transport-button:hover,
+.timeline-transport-button:focus-visible {
+  border-color: rgba(57, 216, 255, 0.42);
+  background: rgba(57, 216, 255, 0.11);
+  outline: none;
+}
+
+.timeline-play-toggle {
+  width: 34px;
+  border-color: rgba(57, 216, 255, 0.38);
+  background: rgba(57, 216, 255, 0.14);
+}
+
+.timeline-step-button {
+  width: 34px;
+}
+
+.timeline-icon {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.timeline-icon-play {
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 10px solid currentColor;
+}
+
+.timeline-icon-pause::before,
+.timeline-icon-pause::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 4px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.timeline-icon-pause::before {
+  left: 2px;
+}
+
+.timeline-icon-pause::after {
+  right: 2px;
+}
+
+.timeline-icon-skip-start::before,
+.timeline-icon-skip-end::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 2px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.timeline-icon-skip-start::before {
+  left: 1px;
+}
+
+.timeline-icon-skip-end::before {
+  right: 1px;
+}
+
+.timeline-icon-skip-start::after,
+.timeline-icon-skip-end::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+
+.timeline-icon-skip-start::after {
+  left: 4px;
+  border-right: 8px solid currentColor;
+}
+
+.timeline-icon-skip-end::after {
+  right: 4px;
+  border-left: 8px solid currentColor;
 }
 
 .timeline-transport-actions .compact,
@@ -403,7 +539,7 @@
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 12px;
+  gap: 10px;
   align-items: start;
 }
 
@@ -417,14 +553,14 @@
   height: auto;
   min-height: 0;
   overflow: visible;
-  padding: 14px;
+  padding: 10px;
 }
 
 .timeline-canvas {
   position: relative;
   min-width: 100%;
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .timeline-ruler {
@@ -453,7 +589,7 @@
 
 .timeline-track-shell {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .timeline-track-label {

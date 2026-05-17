@@ -8335,6 +8335,7 @@ export default function App() {
                 onGetOutputRequestStatus={getOutputRequestStatus}
                 onGetOutputWorkflowStatus={getOutputWorkflowStatus}
                 onLoadOutputInbox={loadOutputInbox}
+                onSignProjectAssetUrls={handleSignProjectAssetUrlEntries}
                 onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
                 onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
                 onPlanOutputWorkflow={planOutputWorkflow}

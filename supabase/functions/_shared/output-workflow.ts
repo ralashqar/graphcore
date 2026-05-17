@@ -41,6 +41,7 @@ import {
   buildCinematicV2StoryboardGroupPlan,
   buildCinematicV2StoryboardLayout,
   buildCinematicV3StoryboardGroupPlan,
+  buildCinematicV3StoryboardLayout,
   deriveCinematicV2MaxShotCount,
   cinematicScriptDocSchema,
   cinematicV2ParsedScriptSchema,
@@ -6257,7 +6258,7 @@ function buildCinematicV3ShotBreakPlan(input: {
   const flush = () => {
     if (!current.length) return
     const groupIndex = groups.length + 1
-    const layout = buildCinematicV2StoryboardLayout(current.length)
+    const layout = buildCinematicV3StoryboardLayout(current.length)
     const excerpt = markdown.slice(current[0].startOffset, current[current.length - 1].endOffset).trim()
     const duration = current.reduce((total, shot) => total + shot.approximateDurationSeconds, 0)
     groups.push({
@@ -6302,7 +6303,7 @@ function buildCinematicV3StoryboardGroupFromShotBreakGroup(
     ? readStringArray(group.shotBreakIds)
     : (Array.isArray(group.shotBreaks) ? group.shotBreaks.map(asRecord).map((shot) => readText(shot.id)).filter(Boolean) : [])
   const panelCount = Math.max(1, Math.min(9, Number(group.panelCount ?? 0) || shotIds.length || 1))
-  const layout = buildCinematicV2StoryboardLayout(panelCount)
+  const layout = buildCinematicV3StoryboardLayout(panelCount)
   const duration = Math.max(1, Math.min(15, Number(group.approximateDurationSeconds ?? group.editorialDurationSeconds ?? 0) || panelCount * 3))
   const startSeconds = Math.max(0, Number(group.startSeconds ?? 0) || 0)
   return cinematicV2StoryboardGroupPlanSchema.shape.groups.element.parse({
@@ -7148,7 +7149,7 @@ function buildCinematicV3StoryboardPrompt(input: {
   }
   const layout = storyboardGroup
     ? { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
-    : buildCinematicV2StoryboardLayout(shotPlan.shots.length)
+    : buildCinematicV3StoryboardLayout(shotPlan.shots.length)
   const gridCellCount = layout.rows * layout.columns
   const blankCellCount = Math.max(0, gridCellCount - layout.panelCount)
   const entities = compactCinematicEntityAnchors(input.assetPack, 12)
@@ -7176,16 +7177,24 @@ function buildCinematicV3StoryboardPrompt(input: {
   const blankCellInstruction = blankCellCount > 0
     ? `Cells ${layout.panelCount + 1}-${gridCellCount} are intentional empty placeholders: keep them plain dark/neutral blank cells with no characters, no props, no action, and no text.`
     : ''
+  const layoutInstruction = gridCellCount === 1
+    ? [
+      'Create one high-quality cinematic storyboard frame as a single full-image panel, not a multi-cell grid.',
+      'Do not divide the image into cells, gutters, borders, frames, labels, captions, or panels. The whole image is Panel 1.',
+    ]
+    : [
+      `Create a high-quality cinematic storyboard sheet as a fixed ${layout.rows}x${layout.columns} rectangular grid with exactly ${gridCellCount} equal-size cells.`,
+      `Fill cells 1-${layout.panelCount} with the storyboard panels below, ordered left-to-right then top-to-bottom. Do not change row count, column count, cell sizes, or panel positions.`,
+      'Use straight, evenly spaced gutters that divide the sheet into identical rectangular cells so automated cropping can split the image by rows and columns.',
+      'Do not create a masonry layout, irregular comic layout, unequal panel sizes, merged panels, staggered rows, inset panels, diagonal dividers, floating panels, or extra panels.',
+    ]
   return [
-    `Create a high-quality cinematic storyboard sheet as a fixed ${layout.rows}x${layout.columns} rectangular grid with exactly ${gridCellCount} equal-size cells.`,
-    `Fill cells 1-${layout.panelCount} with the storyboard panels below, ordered left-to-right then top-to-bottom. Do not change row count, column count, cell sizes, or panel positions.`,
+    ...layoutInstruction,
     blankCellInstruction,
     storyboardGroup ? `This is storyboard sheet ${storyboardGroup.index}: ${storyboardGroup.summary}.` : '',
     storyboardGroup ? `This sheet represents one video block of ${Math.min(15, Math.max(0, Number(storyboardGroup.editorialDurationSeconds) || 0)).toFixed(1).replace(/\.0$/, '')} seconds or less. It may contain fewer than 4 panels for a slow scene; leave unused grid cells blank exactly as instructed.` : '',
     storyboardGroup?.continuityNotes.length ? `Group continuity notes: ${storyboardGroup.continuityNotes.join(' ')}` : '',
     `Every panel must have an internal ${input.aspectRatio} cinematic crop and feel like frames from the same continuous sequence.`,
-    'Use straight, evenly spaced gutters that divide the sheet into identical rectangular cells so automated cropping can split the image by rows and columns.',
-    'Do not create a masonry layout, irregular comic layout, unequal panel sizes, merged panels, staggered rows, inset panels, diagonal dividers, floating panels, or extra panels.',
     'No captions, no labels, no speech bubbles, no UI, no watermark, no text inside the image.',
     'Shot panels:',
     shotLines,
@@ -7601,6 +7610,21 @@ function preserveExistingDynamicNodeOutput(input: {
 }) {
   if (!input.preserve || !input.existingNode) return input.nextRow
   const existingMetadata = asRecord(input.existingNode.metadata)
+  const nextConfigHash = hashOutputWorkflowValue(asRecord(input.nextRow.config))
+  const existingConfigHash = hashOutputWorkflowValue(asRecord(input.existingNode.config))
+  if (nextConfigHash !== existingConfigHash) {
+    return {
+      ...input.nextRow,
+      metadata: {
+        ...asRecord(input.nextRow.metadata),
+        invalidatedPreviousOutput: true,
+        invalidatedReason: 'dynamic_node_config_changed',
+        previousDynamicCompileHash: readText(existingMetadata.dynamicCompileHash),
+        previousConfigHash: existingConfigHash,
+        nextConfigHash,
+      },
+    }
+  }
   const existingOutputs = asRecord(input.existingNode.outputs)
   const existingPreview = asRecord(existingMetadata.outputPreview)
   const existingOutputHash = readText(input.existingNode.output_hash)
@@ -13246,7 +13270,7 @@ async function executeNode(input: {
           groups: breakGroups.map((group, index) => {
             const shotIds = readStringArray(group.shotBreakIds).filter((id) => shotPlan.shots.some((shot) => shot.id === id))
             const groupShots = shotIds.length > 0 ? shotPlan.shots.filter((shot) => shotIds.includes(shot.id)) : []
-            const layout = buildCinematicV2StoryboardLayout(Math.max(1, groupShots.length || Number(group.panelCount ?? 1) || 1))
+            const layout = buildCinematicV3StoryboardLayout(Math.max(1, groupShots.length || Number(group.panelCount ?? 1) || 1))
             const duration = groupShots.reduce((total, shot) => total + shot.editorialDurationSeconds, 0) || Number(group.approximateDurationSeconds ?? 0) || 3
             const startSeconds = shotPlan.shots
               .slice(0, Math.max(0, shotPlan.shots.findIndex((shot) => shot.id === groupShots[0]?.id)))
@@ -13421,7 +13445,9 @@ async function executeNode(input: {
         const storyboardGroup = configuredGroup.success ? configuredGroup.data : null
         const layout = storyboardGroup
           ? { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
-          : buildCinematicV2StoryboardLayout(cinematicV2ShotPlanSchema.parse(shotPlan).shots.length)
+          : purpose === 'cinematic_v3_storyboard_prompt'
+            ? buildCinematicV3StoryboardLayout(cinematicV2ShotPlanSchema.parse(shotPlan).shots.length)
+            : buildCinematicV2StoryboardLayout(cinematicV2ShotPlanSchema.parse(shotPlan).shots.length)
         const imageSize = storyboardImageSizeForLayout({ columns: layout.columns, rows: layout.rows, aspectRatio })
         const prompt = purpose === 'cinematic_v3_storyboard_prompt'
           ? buildCinematicV3StoryboardPrompt({
@@ -13503,7 +13529,9 @@ async function executeNode(input: {
           ? configuredLayout.data
           : imageLayout.success
             ? imageLayout.data
-            : buildCinematicV2StoryboardLayout(shotPlan.shots.length)
+            : purpose === 'cinematic_v3_panel_extract'
+              ? buildCinematicV3StoryboardLayout(shotPlan.shots.length)
+              : buildCinematicV2StoryboardLayout(shotPlan.shots.length)
         const groupShotIds = new Set(storyboardGroup?.shotIds ?? [])
         const matchedGroupShots = storyboardGroup
           ? shotPlan.shots.filter((shot) => groupShotIds.has(shot.id))

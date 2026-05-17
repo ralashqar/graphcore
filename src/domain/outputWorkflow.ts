@@ -3079,7 +3079,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
       ...graphValidation.diagnostics,
       'Cinematics V3 is enabled: screenplay authors mark shot breaks, parse groups run in parallel, then merged timed shot JSON materializes grouped storyboard sheets.',
       'V3 omits scene-state, layout, per-shot asset-pack, keyframe QA, and per-shot video nodes for a smaller graph.',
-      'Storyboard sheets use deterministic 1x1, 2x2, or 3x3 crop grids with up to 9 panels per sheet.',
+      'Storyboard sheets use deterministic V3 crop grids: 1x1 for one panel, 1x2 for two, 2x3 for three to six, and 3x3 for seven to nine panels.',
       'Video production remains approval-gated and is deferred from the initial storyboard pass.',
     ],
   })
