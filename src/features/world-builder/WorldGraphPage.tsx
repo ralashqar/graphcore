@@ -1129,10 +1129,20 @@ function readArtifactMediaRecords(artifacts: readonly OutputArtifact[], roles: s
         panelIndexInGroup: metadata.panelIndexInGroup,
         sourceSheetAssetKey: trimOptionalString(metadata.sourceSheetAssetKey),
         storagePath: trimOptionalString(metadata.storagePath),
+        previewUrl: trimOptionalString(metadata.previewUrl),
+        sourceUrl: trimOptionalString(metadata.sourceUrl),
+        url: trimOptionalString(metadata.sourceUrl) || trimOptionalString(metadata.previewUrl),
         cropRect: metadata.cropRect ?? metadata.crop,
         metadata,
       } as Record<string, unknown>
     })
+}
+
+function resolveSequenceAnimaticMediaUrl(media: Record<string, unknown> | null | undefined, assetByKey: ReadonlyMap<string, AssetDefinition>) {
+  const directUrl = trimOptionalString(media?.url) || trimOptionalString(media?.sourceUrl) || trimOptionalString(media?.previewUrl)
+  if (directUrl) return directUrl
+  const assetKey = trimOptionalString(media?.assetKey)
+  return assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null
 }
 
 type SequenceAnimaticShotView = {
@@ -1150,6 +1160,7 @@ type SequenceAnimaticShotView = {
   panelStatusLabel: string
   panelError: string
   panelUrl: string | null
+  panelRunning: boolean
   references: SequenceAnimaticReferenceView[]
 }
 
@@ -1207,6 +1218,16 @@ type SequenceAnimaticBlockView = {
   videoNodeKey: string
   failedNodeLabel: string
   hasPanels: boolean
+  storyboardReady: boolean
+  storyboardRunning: boolean
+  storyboardProgressLabel: string
+  videoPromptReady: boolean
+  videoReady: boolean
+  videoRunning: boolean
+  videoAssetKey: string | null
+  videoUrl: string | null
+  videoProgressLabel: string
+  videoError: string
   shots: SequenceAnimaticShotView[]
 }
 
@@ -1219,6 +1240,13 @@ type SequenceAnimaticViewModel = {
   screenplayMarkdown: string
   blocks: SequenceAnimaticBlockView[]
   hasPanels: boolean
+}
+
+type SequenceAnimaticVideoPreview = {
+  title: string
+  url: string
+  durationLabel: string
+  statusLabel: string
 }
 
 const ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set(['queued', 'planning', 'awaiting_confirmation', 'running'])
@@ -1286,6 +1314,21 @@ function sequenceAnimaticProjectionTerminal(request: OutputRequest | null) {
   return sequenceAnimaticProjectionForRequest(request)?.terminal === true
 }
 
+function sequenceAnimaticProjectionActiveLabel(request: OutputRequest | null) {
+  const projection = sequenceAnimaticProjectionForRequest(request)
+  return trimOptionalString(projection?.activeNodeLabel)
+}
+
+function sequenceAnimaticProjectionActiveNodeKey(request: OutputRequest | null) {
+  const projection = sequenceAnimaticProjectionForRequest(request)
+  return trimOptionalString(projection?.activeNodeKey)
+}
+
+function sequenceAnimaticRequestIsActive(request: OutputRequest | null) {
+  if (!request || sequenceAnimaticProjectionTerminal(request)) return false
+  return ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(sequenceAnimaticEffectiveStatus(request))
+}
+
 function latestWikiSequenceAnimaticRequest(requests: readonly OutputRequest[], sequenceKey: string) {
   return requests
     .filter((request) => isWikiSequenceAnimaticRequest(request, sequenceKey))
@@ -1330,6 +1373,74 @@ function statusLabelForOutputRunStep(step: ReturnType<typeof outputRunStepForNod
   if (step.status === 'failed') return 'Failed'
   if (step.status === 'completed' || step.status === 'completed_with_errors') return 'Complete'
   return summarizeOutputStatus(step.status)
+}
+
+function outputRunStepTextOutput(step: ReturnType<typeof outputRunStepForNode>) {
+  const outputs = readLooseRecord(step?.outputs)
+  return trimOptionalString(outputs.providerPrompt)
+    || trimOptionalString(outputs.prompt)
+    || trimOptionalString(outputs.text)
+}
+
+function outputWorkflowNodeTextOutput(node: OutputWorkflowNode | null | undefined) {
+  const outputs = readLooseRecord(node?.outputs)
+  return trimOptionalString(outputs.providerPrompt)
+    || trimOptionalString(outputs.prompt)
+    || trimOptionalString(outputs.text)
+}
+
+function outputRunStepAssetKey(step: ReturnType<typeof outputRunStepForNode>, fields: string[]) {
+  const outputs = readLooseRecord(step?.outputs)
+  for (const field of fields) {
+    const value = outputs[field]
+    if (typeof value === 'string' && trimOptionalString(value)) return trimOptionalString(value)
+    const record = readLooseRecord(value)
+    const assetKey = trimOptionalString(record.assetKey)
+    if (assetKey) return assetKey
+  }
+  return ''
+}
+
+function outputWorkflowNodeAssetKey(node: OutputWorkflowNode | null | undefined, fields: string[]) {
+  const outputs = readLooseRecord(node?.outputs)
+  for (const field of fields) {
+    const value = outputs[field]
+    if (typeof value === 'string' && trimOptionalString(value)) return trimOptionalString(value)
+    const record = readLooseRecord(value)
+    const assetKey = trimOptionalString(record.assetKey)
+    if (assetKey) return assetKey
+  }
+  const preview = readLooseRecord(readLooseRecord(node?.metadata).outputPreview)
+  const assetKeys = readLooseArray(preview.assetKeys).map(trimOptionalString).filter(Boolean)
+  return assetKeys[0] ?? ''
+}
+
+function outputWorkflowNodeForKey(nodes: readonly OutputWorkflowNode[], workflowId: string | null | undefined, nodeKey: string) {
+  if (!workflowId) return null
+  return nodes.find((node) => node.workflowId === workflowId && node.key === nodeKey) ?? null
+}
+
+function isOutputRunStepActive(step: ReturnType<typeof outputRunStepForNode>) {
+  return step?.status === 'queued' || step?.status === 'running'
+}
+
+function sequenceAnimaticVideoProgressLabel(step: ReturnType<typeof outputRunStepForNode>) {
+  if (!step) return ''
+  const metadata = readLooseRecord(step.metadata)
+  const outputs = readLooseRecord(step.outputs)
+  const providerStatus = trimOptionalString(metadata.providerStatus)
+  if (step.status === 'queued') return 'Video queued'
+  if (providerStatus) {
+    if (providerStatus === 'SUBMITTED' || providerStatus === 'IN_QUEUE') return 'MUAPI queued'
+    if (providerStatus === 'IN_PROGRESS' || providerStatus === 'PROCESSING') return 'Generating video'
+    if (providerStatus === 'COMPLETED') return 'Finalizing video asset'
+    return providerStatus.replace(/_/g, ' ').toLowerCase()
+  }
+  if (trimOptionalString(metadata.muapiRequestId)) return 'Generating video'
+  if (trimOptionalString(outputs.assetKey)) return 'Video ready'
+  if (step.status === 'running') return 'Submitting video request'
+  if (step.status === 'failed') return step.errorMessage || 'Video generation failed'
+  return statusLabelForOutputRunStep(step)
 }
 
 function cameraLineFromShot(shot: Record<string, unknown>) {
@@ -1581,6 +1692,7 @@ function buildSequenceAnimaticViewModel(input: {
   row: { statusLabel: string; progress: { label: string }; currentStepLabel: string } | null
   requests: readonly OutputRequest[]
   runs: readonly OutputWorkflowRun[]
+  nodes: readonly OutputWorkflowNode[]
   assets: readonly AssetDefinition[]
   artifacts: readonly OutputArtifact[]
   worldEntities: readonly WorldEntity[]
@@ -1639,18 +1751,43 @@ function buildSequenceAnimaticViewModel(input: {
     }),
     ...readAllOutputRunRecords(input.run, ['panels']).filter((panel) => trimOptionalString(panel.shotId) || trimOptionalString(panel.role).includes('storyboard_panel')),
   ]
-  const sheets = readArtifactMediaRecords(requestArtifacts, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet'])
+  const sheets = [
+    ...readArtifactMediaRecords(childArtifacts, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet']),
+    ...readArtifactMediaRecords(requestArtifacts, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet']),
+  ]
   const groups = readLooseArray(readLooseRecord(storyboardGroupPlan).groups).map(readLooseRecord)
   const timelineShotPlan = Object.keys(readLooseRecord(shotPlan)).length > 0
     ? normalizeSequenceAnimaticShotPlanForTimeline(readLooseRecord(shotPlan), groups)
     : shotPlan
-  const panelAssetKeyByShotId = new Map<string, string>()
+  const panelPreviewByShotId = new Map<string, { assetKey: string; url: string | null }>()
   for (const panel of panels) {
     const shotId = trimOptionalString(panel.shotId)
     const assetKey = trimOptionalString(panel.assetKey)
-    if (shotId && assetKey && !panelAssetKeyByShotId.has(shotId)) {
-      panelAssetKeyByShotId.set(shotId, assetKey)
+    if (shotId && assetKey && !panelPreviewByShotId.has(shotId)) {
+      panelPreviewByShotId.set(shotId, {
+        assetKey,
+        url: resolveSequenceAnimaticMediaUrl(panel, assetByKey),
+      })
     }
+  }
+  const buildPanelPreviewMap = (records: Record<string, unknown>[], storyboardGroupId = '') => {
+    const scoped = new Map<string, { assetKey: string; url: string | null }>()
+    for (const panel of records) {
+      const metadata = readLooseRecord(panel.metadata)
+      const panelGroupId = trimOptionalString(panel.storyboardGroupId) || trimOptionalString(metadata.storyboardGroupId)
+      const panelBlockId = trimOptionalString(metadata.storyboardBlockId)
+      if (storyboardGroupId && panelGroupId && panelGroupId !== storyboardGroupId) continue
+      if (storyboardGroupId && panelBlockId && panelBlockId !== storyboardGroupId) continue
+      const shotId = trimOptionalString(panel.shotId)
+      const assetKey = trimOptionalString(panel.assetKey)
+      if (shotId && assetKey && !scoped.has(shotId)) {
+        scoped.set(shotId, {
+          assetKey,
+          url: resolveSequenceAnimaticMediaUrl(panel, assetByKey),
+        })
+      }
+    }
+    return scoped
   }
   let projection: ReturnType<typeof buildCinematicV2TimelineProjection> | null = null
   if (timelineShotPlan) {
@@ -1682,18 +1819,101 @@ function buildSequenceAnimaticViewModel(input: {
       const childPanelExtractNodeKey = childRequest ? 'panel_extract' : panelExtractNodeKey
       const childVideoPromptNodeKey = childRequest ? 'video_prompt' : videoPromptNodeKey
       const childVideoNodeKey = childRequest ? 'video' : videoNodeKey
+      const blockArtifacts = childRequest
+        ? input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, childRequest))
+        : requestArtifacts
+      const blockManifestMetadata = blockArtifacts
+        .map((artifact) => readLooseRecord(artifact.metadata))
+        .find((metadata) => trimOptionalString(metadata.role) === 'sequence_animatic_block_manifest') ?? null
+      const workflowId = childRequest?.workflowId ?? input.request.workflowId
+      const sheetNode = outputWorkflowNodeForKey(input.nodes, workflowId, childSheetNodeKey)
+      const videoPromptNode = outputWorkflowNodeForKey(input.nodes, workflowId, childVideoPromptNodeKey)
+      const sheetStep = outputRunStepForNode(childRun ?? input.run, childSheetNodeKey)
+      const panelExtractStep = outputRunStepForNode(childRun ?? input.run, childPanelExtractNodeKey)
+      const videoPromptStep = outputRunStepForNode(childRun ?? input.run, childVideoPromptNodeKey)
+      const videoStep = outputRunStepForNode(childRun ?? input.run, childVideoNodeKey)
       const blockSteps = [
         outputRunStepForNode(childRun ?? input.run, childPromptNodeKey),
-        outputRunStepForNode(childRun ?? input.run, childSheetNodeKey),
-        outputRunStepForNode(childRun ?? input.run, childPanelExtractNodeKey),
-        outputRunStepForNode(childRun ?? input.run, childVideoPromptNodeKey),
+        sheetStep,
+        panelExtractStep,
+        videoPromptStep,
       ].filter(Boolean)
       const failedStep = blockSteps.find((step) => step?.status === 'failed') ?? null
       const runningStep = blockSteps.find((step) => step?.status === 'running' || step?.status === 'queued') ?? null
+      const childProjectionActiveNodeKey = sequenceAnimaticProjectionActiveNodeKey(childRequest)
+      const childProjectionActiveLabel = sequenceAnimaticProjectionActiveLabel(childRequest)
+      const childPrepNodeKeys = new Set([childPromptNodeKey, childSheetNodeKey, childPanelExtractNodeKey, childVideoPromptNodeKey])
+      const childPrepActiveFromProjection = Boolean(childRequest)
+        && Boolean(childRun || childRequest?.latestRunId)
+        && sequenceAnimaticRequestIsActive(childRequest)
+        && (!childProjectionActiveNodeKey || childPrepNodeKeys.has(childProjectionActiveNodeKey))
       const shotIds = readLooseArray(group.shotIds).map(trimOptionalString).filter(Boolean)
       const groupShots = shotIds
         .map((shotId) => rawShots.find((shot) => trimOptionalString(shot.id) === shotId) ?? null)
         .filter((shot): shot is Record<string, unknown> => Boolean(shot))
+      const blockPanels = [
+        ...readArtifactMediaRecords(blockArtifacts, ['cinematic_v3_storyboard_panel', 'cinematic_v2_storyboard_panel', 'sequence_animatic_block_panel']),
+        ...(childRun
+          ? readAllOutputRunRecords(childRun, ['panels'])
+          : readAllOutputRunRecords(input.run, ['panels']).filter((panel) => {
+            const metadata = readLooseRecord(panel.metadata)
+            const panelGroupId = trimOptionalString(panel.storyboardGroupId) || trimOptionalString(metadata.storyboardGroupId)
+            const panelBlockId = trimOptionalString(metadata.storyboardBlockId)
+            return panelGroupId === groupId || panelBlockId === groupId
+          })),
+      ]
+      const blockPanelPreviewByShotId = buildPanelPreviewMap(blockPanels, groupId)
+      const panelsReady = groupShots.length > 0 && groupShots.every((shot) => blockPanelPreviewByShotId.has(trimOptionalString(shot.id)))
+      const sheetAssetKey = readArtifactMediaRecords(blockArtifacts, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet'])
+        .map((artifact) => trimOptionalString(artifact.assetKey))
+        .find(Boolean)
+        || outputRunStepAssetKey(sheetStep, ['image', 'assetKey'])
+        || outputWorkflowNodeAssetKey(sheetNode, ['image', 'assetKey'])
+      const storyboardReady = Boolean(sheetAssetKey) && panelsReady
+      const videoPromptText = outputRunStepTextOutput(videoPromptStep) || outputWorkflowNodeTextOutput(videoPromptNode)
+      const blockManifestVideoPromptHash = trimOptionalString(blockManifestMetadata?.videoPromptHash)
+      const videoPromptReady = Boolean(videoPromptText)
+        || Boolean(blockManifestVideoPromptHash)
+        || (videoPromptStep?.status === 'completed' && Boolean(videoPromptStep.outputHash))
+        || (Boolean(videoPromptNode?.outputHash) && videoPromptNode?.dirty !== true)
+      const videoArtifacts = blockArtifacts
+        .filter((artifact) => artifact.kind === 'video')
+        .filter((artifact) => {
+          const metadata = readLooseRecord(artifact.metadata)
+          const role = trimOptionalString(metadata.role)
+          return trimOptionalString(metadata.nodeKey) === childVideoNodeKey
+            || role === 'cinematic_v3_storyboard_group_video'
+            || role === 'sequence_animatic_block_video'
+        })
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      const latestVideoArtifact = videoArtifacts[0] ?? null
+      const videoStepAssetKey = outputRunStepAssetKey(videoStep, ['video', 'assetKey'])
+      const videoAssetKey = latestVideoArtifact?.assetKey ?? videoStepAssetKey ?? null
+      const videoUrl = videoAssetKey ? resolveAssetSourceUrl(assetByKey.get(videoAssetKey) ?? null) : null
+      const videoRunning = isOutputRunStepActive(videoStep)
+      const videoReady = Boolean(videoUrl) && videoStep?.status !== 'failed'
+      const videoError = videoStep?.status === 'failed' ? videoStep.errorMessage ?? 'Video generation failed.' : ''
+      const videoProgressLabel = videoRunning
+        ? sequenceAnimaticVideoProgressLabel(videoStep)
+        : videoReady
+          ? 'Video ready'
+          : videoAssetKey
+            ? 'Video asset saved; loading preview'
+          : videoError
+            ? videoError
+          : storyboardReady && videoPromptReady
+            ? 'Ready for video'
+          : !storyboardReady
+              ? 'Ready to generate storyboard'
+              : 'Storyboard generated; video prompt pending'
+      const storyboardRunning = !storyboardReady && (Boolean(runningStep) || childPrepActiveFromProjection)
+      const storyboardProgressLabel = storyboardRunning
+        ? childProjectionActiveLabel || runningStep?.label || 'Generating storyboard'
+        : storyboardReady
+          ? 'Storyboard panels ready'
+          : failedStep
+            ? `Failed: ${failedStep.label}`
+            : 'Ready to generate storyboard'
       return {
         id: groupId,
         index: typeof group.index === 'number' ? group.index : groupIndex + 1,
@@ -1703,7 +1923,9 @@ function buildSequenceAnimaticViewModel(input: {
           ? `Failed: ${failedStep.label}`
           : runningStep
             ? `${statusLabelForOutputRunStep(runningStep)}: ${runningStep.label}`
-            : groupShots.every((shot) => panelAssetKeyByShotId.has(trimOptionalString(shot.id))) ? 'Panels ready' : childRequest ? 'Ready to generate' : 'Preparing block graph',
+            : childPrepActiveFromProjection
+              ? `Running: ${childProjectionActiveLabel || 'Storyboard prep'}`
+              : groupShots.every((shot) => blockPanelPreviewByShotId.has(trimOptionalString(shot.id))) ? 'Panels ready' : childRequest ? 'Ready to generate' : 'Preparing block graph',
         shotRangeLabel: shotIds.length > 0 ? `Shots ${shotIds[0]}-${shotIds[shotIds.length - 1]}` : 'Shots pending',
         childRequestId: childRequest?.id ?? null,
         childWorkflowId: childRequest?.workflowId ?? null,
@@ -1715,12 +1937,23 @@ function buildSequenceAnimaticViewModel(input: {
         videoPromptNodeKey: childVideoPromptNodeKey,
         videoNodeKey: childVideoNodeKey,
         failedNodeLabel: failedStep?.label ?? '',
-        hasPanels: groupShots.some((shot) => panelAssetKeyByShotId.has(trimOptionalString(shot.id))),
+        hasPanels: groupShots.some((shot) => blockPanelPreviewByShotId.has(trimOptionalString(shot.id))),
+        storyboardReady,
+        storyboardRunning,
+        storyboardProgressLabel,
+        videoPromptReady,
+        videoReady,
+        videoRunning,
+        videoAssetKey,
+        videoUrl,
+        videoProgressLabel,
+        videoError,
         shots: groupShots.map((shot, shotIndex) => {
           const shotId = trimOptionalString(shot.id) || `${groupIndex + 1}:${shotIndex + 1}`
           const projectionShot = projectionShotById.get(shotId)
-          const previewAssetKey = panelAssetKeyByShotId.get(shotId) ?? projectionShot?.previewAssetKey ?? null
-          const panelStep = outputRunStepForNode(childRun ?? input.run, childPanelExtractNodeKey)
+          const preview = blockPanelPreviewByShotId.get(shotId) ?? null
+          const previewAssetKey = preview?.assetKey ?? null
+          const panelUrl = preview?.url ?? null
           return {
             id: shotId,
             index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
@@ -1735,9 +1968,10 @@ function buildSequenceAnimaticViewModel(input: {
             lighting: trimOptionalString(shot.lighting),
             performance: performanceLineFromShot(shot),
             performanceBeats: buildSequenceAnimaticPerformanceBeats(shot, resolveReference),
-            panelStatusLabel: previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : runningStep ? 'Panel pending' : 'Panel not generated',
-            panelError: panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : '',
-            panelUrl: previewAssetKey ? resolveAssetSourceUrl(assetByKey.get(previewAssetKey) ?? null) : null,
+            panelStatusLabel: previewAssetKey ? 'Panel ready' : panelExtractStep?.status === 'failed' ? 'Panel extraction failed' : storyboardRunning ? 'Panel extraction running' : 'Panel not generated',
+            panelError: panelExtractStep?.status === 'failed' ? panelExtractStep.errorMessage ?? '' : '',
+            panelUrl,
+            panelRunning: storyboardRunning && !panelUrl,
             references: buildSequenceAnimaticShotReferences(shot, resolveReference),
           }
         }),
@@ -1762,10 +1996,22 @@ function buildSequenceAnimaticViewModel(input: {
         videoNodeKey: 'cinematic_v3_storyboard_group_001_video',
         failedNodeLabel: '',
         hasPanels: panels.length > 0,
+        storyboardReady: rawShots.length > 0 && rawShots.every((shot) => panelPreviewByShotId.has(trimOptionalString(shot.id))),
+        storyboardRunning: false,
+        storyboardProgressLabel: panels.length > 0 ? 'Storyboard panels ready' : 'Ready to generate storyboard',
+        videoPromptReady: false,
+        videoReady: false,
+        videoRunning: false,
+        videoAssetKey: null,
+        videoUrl: null,
+        videoProgressLabel: panels.length > 0 ? 'Storyboard generated; video prompt pending' : 'Ready to generate storyboard',
+        videoError: '',
         shots: rawShots.map((shot, shotIndex) => {
           const shotId = trimOptionalString(shot.id) || `shot_${shotIndex + 1}`
           const projectionShot = projectionShotById.get(shotId)
-          const previewAssetKey = panelAssetKeyByShotId.get(shotId) ?? projectionShot?.previewAssetKey ?? null
+          const preview = panelPreviewByShotId.get(shotId) ?? null
+          const previewAssetKey = preview?.assetKey ?? projectionShot?.previewAssetKey ?? null
+          const panelUrl = preview?.url ?? (previewAssetKey ? resolveAssetSourceUrl(assetByKey.get(previewAssetKey) ?? null) : null)
           const panelStep = outputRunStepForNode(input.run, 'cinematic_v3_storyboard_group_001_panel_extract')
           return {
             id: shotId,
@@ -1783,7 +2029,8 @@ function buildSequenceAnimaticViewModel(input: {
             performanceBeats: buildSequenceAnimaticPerformanceBeats(shot, resolveReference),
             panelStatusLabel: previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
             panelError: panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : '',
-            panelUrl: previewAssetKey ? resolveAssetSourceUrl(assetByKey.get(previewAssetKey) ?? null) : null,
+            panelUrl,
+            panelRunning: false,
             references: buildSequenceAnimaticShotReferences(shot, resolveReference),
           }
         }),
@@ -2948,6 +3195,7 @@ export function WorldGraphPage({
   const [sequenceAnimaticBlockRunKey, setSequenceAnimaticBlockRunKey] = useState<string | null>(null)
   const [sequenceAnimaticErrorByKey, setSequenceAnimaticErrorByKey] = useState<Record<string, string>>({})
   const [sequenceAnimaticPreviewRequestId, setSequenceAnimaticPreviewRequestId] = useState<string | null>(null)
+  const [sequenceAnimaticVideoPreview, setSequenceAnimaticVideoPreview] = useState<SequenceAnimaticVideoPreview | null>(null)
   const sequenceAnimaticPreviewModel = useMemo(() => {
     const request = sequenceAnimaticPreviewRequestId
       ? outputRequests.find((entry) => entry.id === sequenceAnimaticPreviewRequestId) ?? null
@@ -2964,13 +3212,35 @@ export function WorldGraphPage({
       row: outputLibraryRowByRequestId.get(request.id) ?? null,
       requests: outputRequests,
       runs: outputWorkflowRuns,
+      nodes: outputWorkflowNodes,
       assets,
       artifacts: outputArtifacts,
       worldEntities,
       imageUrlByEntityKey: wikiImageUrlByEntityKey,
       referenceSheetIconUrlByEntityKey,
     })
-  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticPreviewRequestId, wikiImageUrlByEntityKey, worldEntities])
+  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticPreviewRequestId, wikiImageUrlByEntityKey, worldEntities])
+  useEffect(() => {
+    if (!sequenceAnimaticPreviewModel) return undefined
+    const refreshIds = sequenceAnimaticPreviewModel.blocks
+      .filter((block) => block.childRequestId && (block.storyboardRunning || block.videoRunning))
+      .map((block) => block.childRequestId)
+      .filter((id): id is string => Boolean(id))
+    if (refreshIds.length === 0) return undefined
+    let cancelled = false
+    const refresh = () => {
+      for (const requestId of refreshIds) {
+        void Promise.resolve(onGetOutputRequestStatus(requestId)).catch((error) => {
+          if (!cancelled) console.warn('[GraphCore] sequence animatic block refresh failed.', error)
+        })
+      }
+    }
+    const timer = window.setInterval(refresh, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [onGetOutputRequestStatus, sequenceAnimaticPreviewModel])
   const handleGenerateSequenceAnimatic = useCallback(async (sequenceEntity: WorldEntity) => {
     if (!canRunOutputs || sequenceAnimaticBusyKey) return
     setSequenceAnimaticBusyKey(sequenceEntity.key)
@@ -3035,6 +3305,9 @@ export function WorldGraphPage({
         }
       }
       if (!targetBlock.childWorkflowId) throw new Error('Storyboard block workflow is not ready yet.')
+      if (mode === 'generate_video' && (!targetBlock.storyboardReady || !targetBlock.videoPromptReady)) {
+        throw new Error('Generate the storyboard panels and video prompt before generating video.')
+      }
       const forceNodeKeys = mode === 'generate_video'
         ? [targetBlock.videoNodeKey]
         : [targetBlock.sheetNodeKey, targetBlock.panelExtractNodeKey, targetBlock.videoPromptNodeKey, 'artifact']
@@ -3059,17 +3332,17 @@ export function WorldGraphPage({
           cinematicVideoApprovalScope: mode === 'generate_video' ? 'sequence_animatic_block' : undefined,
         },
         metadata: {
-          sourceRunId: model.request.latestRunId,
           runMode: mode === 'generate_video'
             ? 'sequence_animatic_block_video'
             : 'sequence_animatic_storyboard_block_regenerate',
-          runScope: 'upstream_to_node',
+          runScope: mode === 'generate_video' ? 'node_only' : 'upstream_to_node',
           targetNodeKeys,
           forceNodeKeys,
           reuseExistingUpstreamOutputs: true,
-          allowStaleUpstreamOutputs: false,
+          allowStaleUpstreamOutputs: mode === 'generate_video',
           debugSkipVideoGeneration: mode !== 'generate_video',
           cinematicVideoApproved: mode === 'generate_video',
+          sourceRunId: childRun?.id ?? targetBlock.childRunId ?? model.request.latestRunId,
           parentRequestId: model.request.id,
           sequenceAnimaticRole: 'storyboard_block',
           sequenceAnimaticBlockId: targetBlock.id,
@@ -11055,24 +11328,58 @@ export function WorldGraphPage({
                         </button>
                         <button
                           className="ghost-button compact"
-                          disabled={sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`}
+                          disabled={block.storyboardRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`}
                           onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'regenerate_storyboard')}
                           type="button"
                         >
-                          {sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`
-                            ? 'Generating...'
-                            : block.hasPanels
+                          {block.storyboardRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`
+                            ? <><span className="world-mini-spinner" aria-hidden="true" />{block.storyboardProgressLabel || 'Generating storyboard'}</>
+                            : block.storyboardReady && block.videoPromptReady
                               ? 'Regenerate storyboard'
+                              : block.storyboardReady
+                                ? 'Finish storyboard prep'
                               : 'Generate storyboard'}
                         </button>
-                        <button
-                          className="ghost-button compact"
-                          disabled={sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`}
-                          onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'generate_video')}
-                          type="button"
-                        >
-                          {sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video` ? 'Starting video...' : 'Generate video'}
-                        </button>
+                        {block.videoReady && block.videoUrl ? (
+                          <button
+                            className="ghost-button compact world-wiki-sequence-animatic-video-action"
+                            onClick={() => setSequenceAnimaticVideoPreview({
+                              title: `${block.title} - last take`,
+                              url: block.videoUrl ?? '',
+                              durationLabel: block.durationLabel,
+                              statusLabel: block.videoProgressLabel,
+                            })}
+                            type="button"
+                          >
+                            <span className="world-wiki-sequence-animatic-play-glyph" aria-hidden="true" />
+                            Play last take
+                          </button>
+                        ) : block.storyboardReady && block.videoPromptReady ? (
+                          <button
+                            className="ghost-button compact world-wiki-sequence-animatic-video-action"
+                            disabled={block.videoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`}
+                            onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'generate_video')}
+                            type="button"
+                          >
+                            {block.videoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`
+                              ? <><span className="world-mini-spinner" aria-hidden="true" />Generating video</>
+                              : 'Generate video'}
+                          </button>
+                        ) : null}
+                        {block.videoReady && block.videoUrl && block.storyboardReady && block.videoPromptReady ? (
+                          <button
+                            className="ghost-button compact"
+                            disabled={block.videoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`}
+                            onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'generate_video')}
+                            type="button"
+                          >
+                            {sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video` ? 'Starting...' : 'Regenerate video'}
+                          </button>
+                        ) : null}
+                        <small className={block.videoError ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
+                          {block.videoRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                          {block.videoProgressLabel}
+                        </small>
                       </div>
                     </div>
                     <div className="world-wiki-sequence-animatic-shot-list">
@@ -11139,6 +11446,7 @@ export function WorldGraphPage({
                             <div className="world-wiki-sequence-animatic-frame">
                               {shot.panelUrl ? <img src={shot.panelUrl} alt="" /> : (
                                 <span>
+                                  {shot.panelRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
                                   {shot.panelStatusLabel}
                                   {shot.panelError ? <small>{shot.panelError}</small> : null}
                                 </span>
@@ -11170,6 +11478,32 @@ export function WorldGraphPage({
                 {sequenceAnimaticPreviewModel.screenplayMarkdown ? <pre>{sequenceAnimaticPreviewModel.screenplayMarkdown}</pre> : null}
               </div>
             )}
+          </section>
+        </div>
+      ) : null}
+      {sequenceAnimaticVideoPreview ? (
+        <div className="world-wiki-sequence-video-overlay" onClick={() => setSequenceAnimaticVideoPreview(null)}>
+          <section
+            className="world-wiki-sequence-video-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sequence animatic video take"
+          >
+            <button
+              className="world-wiki-sequence-animatic-close"
+              onClick={() => setSequenceAnimaticVideoPreview(null)}
+              type="button"
+              aria-label="Close video preview"
+            >
+              <EntityIcon id="close" />
+            </button>
+            <header>
+              <span className="eyebrow">Last generated take</span>
+              <h3>{sequenceAnimaticVideoPreview.title}</h3>
+              <p>{sequenceAnimaticVideoPreview.durationLabel} / {sequenceAnimaticVideoPreview.statusLabel}</p>
+            </header>
+            <video src={sequenceAnimaticVideoPreview.url} controls autoPlay playsInline />
           </section>
         </div>
       ) : null}

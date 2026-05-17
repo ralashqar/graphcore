@@ -1850,6 +1850,7 @@ test('MUAPI video helpers build payloads and parse result shapes', async () => {
       prompt: string
       durationSeconds: number
       aspectRatio?: string
+      quality?: string
       referenceImageUrls?: string[]
       referenceVideoUrls?: string[]
       referenceAudioUrls?: string[]
@@ -1870,6 +1871,7 @@ test('MUAPI video helpers build payloads and parse result shapes', async () => {
     video_files: ['https://example.com/ref.mp4'],
     audio_files: ['https://example.com/ref.wav'],
     aspect_ratio: '16:9',
+    quality: 'high',
     duration: 10,
   })
 
@@ -3057,6 +3059,30 @@ test('cinematic v3 default graph stops at authoring timeline and keeps video nod
   assert.match(source, /model: 'cinematic-v3-authoring-artifact-v1'/)
   assert.match(source, /v3AuthoringReady/)
   assert.match(source, /nonCriticalCompletedWithErrors/)
+  assert.match(source, /Cinematics V3 storyboard video generation requires a completed Video Prompt node/)
+  assert.match(source, /Cinematics V3 storyboard video generation requires the storyboard sheet reference/)
+  assert.match(source, /role === 'cinematic_v3_storyboard_sheet'/)
+  assert.match(source, /usedAsVideoReference/)
+  assert.match(source, /loadLatestWorkflowStepOutputsByNodeKey/)
+  assert.match(source, /loadRecoverableWorkflowArtifactOutputsByNodeKey/)
+  assert.doesNotMatch(source, /\.in\('status', \['completed', 'skipped'\]\)/)
+  assert.match(source, /recoveredOutputsByNodeKey/)
+  assert.match(source, /outputContainsEdgePortValue/)
+  assert.match(source, /readUpstreamImages\(\{ value: record \}/)
+  assert.match(source, /resolveProjectAssetByKey\(client, run, assetKey\)/)
+  assert.match(source, /imageReferenceToFalUrl\(input\.client, image, input\.run\)/)
+  assert.match(source, /function buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(source, /referenceScope: 'cinematic_v3_storyboard_group'/)
+  assert.match(source, /purpose === 'cinematic_v3_storyboard_prompt'[\s\S]*buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(source, /purpose === 'cinematic_v3_storyboard_sheet'[\s\S]*buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(source, /isCinematicV3StoryboardGroupVideo[\s\S]*buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(source, /rewriteSeedanceReferenceLegend\(prompt, manifest, isCinematicV3StoryboardGroupVideo \? '' : referencePolicy\)/)
+  assert.match(source, /if \(isCinematicV3StoryboardGroupVideo\) \{[\s\S]*return promptWithLegend/)
+  assert.doesNotMatch(source, /purpose === 'cinematic_v3_storyboard_group_video_prompt'[\s\S]{0,5000}User brief:/)
+  assert.match(source, /sd-2-vip-omni-reference'.*seedance-2\.0-omni-reference/s)
+  assert.match(source, /resolveMuapiVideoDurationSeconds/)
+  assert.match(source, /OUTPUT_WORKFLOW_MUAPI_VIDEO_QUALITY/)
+  assert.match(source, /Provider response:/)
 })
 
 test('graph loader returns cache status diagnostics without bulk node outputs', () => {

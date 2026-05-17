@@ -1783,8 +1783,49 @@
 
 .world-wiki-sequence-animatic-block-head > div:last-child {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  justify-content: flex-end;
+  max-width: min(520px, 48%);
+}
+
+.world-wiki-sequence-animatic-video-action {
+  gap: 6px;
+}
+
+.world-wiki-sequence-animatic-video-action .world-mini-spinner {
+  width: 13px;
+  height: 13px;
+}
+
+.world-wiki-sequence-animatic-play-glyph {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid currentColor;
+}
+
+.world-wiki-sequence-animatic-video-status {
+  display: inline-flex;
+  flex-basis: 100%;
+  justify-content: flex-end;
+  gap: 6px;
+  align-items: center;
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 0.72rem;
+  font-weight: 780;
+  line-height: 1.2;
+}
+
+.world-wiki-sequence-animatic-video-status.is-error {
+  color: rgba(248, 113, 113, 0.9);
+}
+
+.world-wiki-sequence-animatic-video-status .world-mini-spinner {
+  width: 12px;
+  height: 12px;
 }
 
 .world-wiki-sequence-animatic-shot-list {
@@ -2070,6 +2111,59 @@
   padding: 12px;
   background: rgba(2, 6, 23, 0.38);
   white-space: pre-wrap;
+}
+
+.world-wiki-sequence-video-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.82);
+  backdrop-filter: blur(16px);
+}
+
+.world-wiki-sequence-video-modal {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 14px;
+  width: min(1040px, 94vw);
+  max-height: 92vh;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  padding: 18px;
+  background: rgba(7, 13, 28, 0.98);
+  box-shadow: 0 28px 80px rgba(2, 6, 23, 0.5);
+}
+
+.world-wiki-sequence-video-modal header {
+  display: grid;
+  gap: 4px;
+  padding-right: 46px;
+}
+
+.world-wiki-sequence-video-modal h3 {
+  margin: 0;
+  color: rgba(248, 250, 252, 0.96);
+  font-size: 1.05rem;
+  letter-spacing: 0;
+}
+
+.world-wiki-sequence-video-modal p {
+  margin: 0;
+  color: rgba(148, 163, 184, 0.84);
+  font-size: 0.8rem;
+  font-weight: 760;
+}
+
+.world-wiki-sequence-video-modal video {
+  width: 100%;
+  max-height: min(72vh, 720px);
+  border-radius: 12px;
+  background: #020617;
 }
 
 .world-wiki-entity-empty {

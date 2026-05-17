@@ -853,6 +853,62 @@ async function loadRecoverableArtifactBackedNodeOutputs(input: {
   }
 }
 
+async function loadLatestWorkflowStepOutputsByNodeKey(input: {
+  client: DatabaseClient
+  workflowId: string
+  nodeKeys: string[]
+}) {
+  const nodeKeys = [...new Set(input.nodeKeys.map((key) => key.trim()).filter(Boolean))]
+  const result = new Map<string, OutputWorkflowRunStep>()
+  if (nodeKeys.length === 0) return result
+  const response = await input.client
+    .from('output_workflow_run_steps')
+    .select(outputWorkflowRunStepSelect)
+    .eq('workflow_id', input.workflowId)
+    .in('node_key', nodeKeys)
+    .eq('status', 'completed')
+    .order('updated_at', { ascending: false })
+    .limit(Math.min(500, Math.max(50, nodeKeys.length * 20)))
+  if (response.error) throw new Error(response.error.message)
+  for (const row of (response.data ?? []) as OutputWorkflowRunStepRow[]) {
+    const step = mapOutputWorkflowRunStepRow(row)
+    if (!nodeKeys.includes(step.nodeKey) || result.has(step.nodeKey) || !hasStoredOutputs(step.outputs)) continue
+    result.set(step.nodeKey, step)
+  }
+  return result
+}
+
+async function loadRecoverableWorkflowArtifactOutputsByNodeKey(input: {
+  client: DatabaseClient
+  draftId: string
+  workflowId: string
+  nodesByKey: Map<string, OutputWorkflowNode>
+  nodeKeys: string[]
+}) {
+  const nodeKeys = new Set(input.nodeKeys.map((key) => key.trim()).filter(Boolean))
+  const result = new Map<string, Record<string, unknown>>()
+  if (nodeKeys.size === 0) return result
+  const response = await input.client
+    .from('output_artifacts')
+    .select(outputArtifactSelect)
+    .eq('draft_id', input.draftId)
+    .eq('workflow_id', input.workflowId)
+    .order('created_at', { ascending: false })
+    .limit(300)
+  if (response.error) throw new Error(response.error.message)
+  for (const row of (response.data ?? []) as OutputArtifactRow[]) {
+    const artifact = mapOutputArtifactRow(row)
+    const nodeKey = outputArtifactNodeKey(artifact)
+    if (!nodeKeys.has(nodeKey) || result.has(nodeKey)) continue
+    const node = input.nodesByKey.get(nodeKey)
+    if (!node) continue
+    const outputs = buildRecoveredNodeOutputsFromOutputArtifact(node, artifact)
+    if (!outputs || !hasStoredOutputs(outputs)) continue
+    result.set(nodeKey, outputs)
+  }
+  return result
+}
+
 export function planOutputWorkflowFromRequest(raw: unknown) {
   const request = outputWorkflowPlanRequestSchema.parse(raw)
   return outputWorkflowPlanResponseSchema.parse({
@@ -1167,6 +1223,30 @@ function hasStoredOutputs(value: unknown) {
   return Object.keys(asRecord(value)).length > 0
 }
 
+function outputContainsEdgePortValue(outputs: unknown, edge: Pick<OutputWorkflowEdge, 'sourcePort'> | Partial<Pick<OutputWorkflowEdge, 'sourcePort'>>) {
+  const record = asRecord(outputs)
+  if (!hasStoredOutputs(record)) return false
+  const sourcePort = readText(edge.sourcePort)
+  if (!sourcePort) return true
+  if (sourcePort === 'image' || sourcePort === 'coverImage' || sourcePort === 'primaryReferenceImage' || sourcePort === 'keyframe') {
+    const direct = asRecord(record[sourcePort])
+    if (readText(direct.assetKey) || readText(direct.storagePath) || readText(direct.storage_path) || readText(direct.url)) return true
+    if (readText(record.assetKey) || readText(record.storagePath) || readText(record.storage_path) || readText(record.url)) return true
+    return readUpstreamImages({ value: record }, [sourcePort, 'image', 'coverImage', 'primaryReferenceImage', 'keyframe']).length > 0
+  }
+  if (sourcePort === 'text' || sourcePort === 'prompt' || sourcePort === 'markdown') {
+    return Boolean(readText(record[sourcePort]) || readText(record.providerPrompt) || readText(record.prompt) || readText(record.text) || readText(record.markdown))
+  }
+  if (sourcePort === 'asset_pack' || sourcePort === 'assetPack') {
+    return Object.keys(asRecord(record.assetPack)).length > 0 || Object.keys(asRecord(record.asset_pack)).length > 0
+  }
+  const value = record[sourcePort]
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'string') return Boolean(readText(value))
+  if (value && typeof value === 'object') return Object.keys(asRecord(value)).length > 0
+  return hasStoredOutputs(record)
+}
+
 function isOptionalOutputWorkflowEdge(
   edge: Pick<OutputWorkflowEdge, 'metadata'> | Partial<Pick<OutputWorkflowEdge, 'metadata' | 'sourceNodeKey' | 'targetNodeKey' | 'targetPort'>>,
 ) {
@@ -1256,6 +1336,7 @@ function collectCachedExternalUpstream(input: {
   node: OutputWorkflowNode
   nodesByKey: Map<string, OutputWorkflowNode>
   stepsByNodeKey?: Map<string, OutputWorkflowRunStep>
+  recoveredOutputsByNodeKey?: Map<string, Record<string, unknown>>
   executionNodeKeys: Set<string>
   edges: OutputWorkflowEdge[]
 }) {
@@ -1268,9 +1349,9 @@ function collectCachedExternalUpstream(input: {
   for (const edge of input.edges) {
     if (edge.targetNodeKey !== input.node.key || input.executionNodeKeys.has(edge.sourceNodeKey)) continue
     const sourceNode = input.nodesByKey.get(edge.sourceNodeKey)
-    if (!sourceNode || !hasStoredOutputs(sourceNode.outputs)) {
+    if (!sourceNode || !outputContainsEdgePortValue(sourceNode.outputs, edge)) {
       const cachedStepOutputs = asRecord(input.stepsByNodeKey?.get(edge.sourceNodeKey)?.outputs)
-      if (hasStoredOutputs(cachedStepOutputs)) {
+      if (outputContainsEdgePortValue(cachedStepOutputs, edge)) {
         outputs[edge.sourceNodeKey] = cachedStepOutputs
         reusedNodeKeys.push(edge.sourceNodeKey)
         staleReusedNodeKeys.push(edge.sourceNodeKey)
@@ -1279,8 +1360,15 @@ function collectCachedExternalUpstream(input: {
         continue
       }
       const cachedSourceOutputs = asRecord(cachedInputUpstream[edge.sourceNodeKey])
-      if (hasStoredOutputs(cachedSourceOutputs)) {
+      if (outputContainsEdgePortValue(cachedSourceOutputs, edge)) {
         outputs[edge.sourceNodeKey] = cachedSourceOutputs
+        reusedNodeKeys.push(edge.sourceNodeKey)
+        staleReusedNodeKeys.push(edge.sourceNodeKey)
+        continue
+      }
+      const recoveredOutputs = asRecord(input.recoveredOutputsByNodeKey?.get(edge.sourceNodeKey))
+      if (outputContainsEdgePortValue(recoveredOutputs, edge)) {
+        outputs[edge.sourceNodeKey] = recoveredOutputs
         reusedNodeKeys.push(edge.sourceNodeKey)
         staleReusedNodeKeys.push(edge.sourceNodeKey)
         continue
@@ -1651,6 +1739,12 @@ function readUpstreamImages(upstream: Record<string, Record<string, unknown>>, f
       const record = asRecord(value)
       if (readText(record.assetKey) || readText(record.storagePath) || readText(record.url)) images.push(record)
     }
+    if (
+      (readText(outputs.assetKey) || readText(outputs.storagePath) || readText(outputs.storage_path) || readText(outputs.url))
+      && !images.some((image) => readText(image.assetKey) === readText(outputs.assetKey) && readText(image.storagePath || image.storage_path) === readText(outputs.storagePath || outputs.storage_path))
+    ) {
+      images.push(outputs)
+    }
   }
   return images
 }
@@ -1689,7 +1783,16 @@ function orderCinematicVideoReferenceImages(images: Record<string, unknown>[], c
     .filter((image) => {
       if (!imageIsPlanningOnly(image)) return true
       const role = readText(image.role) || readText(asRecord(image.metadata).role)
-      return (role === 'cinematic_beat_sheet' || role === 'cinematic_direction_sheet') && mode !== 'keyframes'
+      const usedAsVideoReference = image.usedAsVideoReference === true
+        || image.used_as_video_reference === true
+        || asRecord(image.metadata).usedAsVideoReference === true
+        || asRecord(image.metadata).used_as_video_reference === true
+      return (
+        role === 'cinematic_v3_storyboard_sheet'
+        || role === 'cinematic_beat_sheet'
+        || role === 'cinematic_direction_sheet'
+        || usedAsVideoReference
+      ) && mode !== 'keyframes'
     })
     .sort((left, right) => cinematicImageReferencePriority(left, mode) - cinematicImageReferencePriority(right, mode))
 }
@@ -2074,6 +2177,30 @@ function resolveFalVideoModel(resolution: string) {
   return resolution === '1080p' ? DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL : DEFAULT_FAL_VIDEO_MODEL
 }
 
+export function resolveMuapiVideoModel(value: unknown) {
+  const model = readText(value) || DEFAULT_MUAPI_VIDEO_MODEL
+  const aliases: Record<string, string> = {
+    'sd-2-vip-omni-reference': 'seedance-2.0-omni-reference',
+    'sd-2-vip-omni-reference-fast': 'seedance-2.0-omni-reference',
+    'sd-2-omni-reference': 'seedance-2.0-omni-reference',
+    'seedance-2-vip-omni-reference': 'seedance-2.0-omni-reference',
+    'seedance-2-vip-omni-reference-fast': 'seedance-2.0-omni-reference',
+  }
+  return aliases[model] ?? model
+}
+
+export function resolveMuapiVideoQuality(value: unknown) {
+  const quality = readText(value).toLowerCase()
+  return quality === 'standard' || quality === 'high' ? quality : 'high'
+}
+
+export function resolveMuapiVideoDurationSeconds(value: unknown) {
+  const duration = Math.max(1, Math.round(Number(value) || 5))
+  if (duration <= 5) return 5
+  if (duration <= 10) return 10
+  return 15
+}
+
 function buildFalHeaders(apiKey: string) {
   return new Headers({
     Authorization: `Key ${apiKey}`,
@@ -2127,10 +2254,18 @@ function muapiErrorMessage(body: Record<string, unknown>, fallback: string) {
   return direct || fallback
 }
 
+function muapiErrorMessageWithRaw(body: Record<string, unknown>, rawText: string, fallback: string) {
+  const message = muapiErrorMessage(body, fallback)
+  const raw = rawText.trim()
+  if (!raw || message !== fallback) return message
+  return `${fallback} Provider response: ${raw.slice(0, 800)}`
+}
+
 export function buildMuapiVideoPayload(input: {
   prompt: string
   durationSeconds: number
   aspectRatio?: string
+  quality?: string
   referenceImageUrls?: string[]
   referenceVideoUrls?: string[]
   referenceAudioUrls?: string[]
@@ -2141,6 +2276,7 @@ export function buildMuapiVideoPayload(input: {
     video_files: input.referenceVideoUrls ?? [],
     audio_files: input.referenceAudioUrls ?? [],
     aspect_ratio: input.aspectRatio ?? '16:9',
+    quality: resolveMuapiVideoQuality(input.quality),
     duration: input.durationSeconds,
   }
 }
@@ -2389,15 +2525,17 @@ async function submitFalVideoRequest(input: {
 
 async function submitMuapiVideoRequest(input: {
   apiKey: string
+  model: string
   prompt: string
   durationSeconds: number
   aspectRatio?: string
+  quality?: string
   referenceImageUrls?: string[]
   referenceVideoUrls?: string[]
   referenceAudioUrls?: string[]
   webhookUrl?: string
 }) {
-  const url = new URL(`${MUAPI_BASE_URL}/seedance-2-vip-omni-reference`)
+  const url = new URL(`${MUAPI_BASE_URL}/${resolveMuapiVideoModel(input.model)}`)
   if (input.webhookUrl) {
     url.searchParams.set('webhook', input.webhookUrl)
   }
@@ -3985,6 +4123,83 @@ export function buildCinematicV2ShotAssetPack(input: {
     shotReferenceKeys: selectedKeys,
     referencePlan,
     text: JSON.stringify(shotAssetPack, null, 2),
+  }
+}
+
+function cinematicV3StoryboardGroupShots(input: {
+  shotPlan: Record<string, unknown>
+  storyboardGroup?: Record<string, unknown> | null
+}) {
+  const parsedShotPlan = cinematicV2ShotPlanSchema.safeParse(input.shotPlan)
+  if (!parsedShotPlan.success) return []
+  const parsedGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(input.storyboardGroup ?? {})
+  if (!parsedGroup.success) return parsedShotPlan.data.shots
+  const groupShotIds = new Set(parsedGroup.data.shotIds)
+  const matchedGroupShots = parsedShotPlan.data.shots.filter((shot) => groupShotIds.has(shot.id))
+  return matchedGroupShots.length > 0 ? matchedGroupShots : parsedShotPlan.data.shots
+}
+
+function buildCinematicV3StoryboardGroupAssetPack(input: {
+  assetPack: Record<string, unknown>
+  shots: Record<string, unknown>[]
+  maxEntityCount?: number
+  maxAssetKeysPerEntity?: number
+}) {
+  const byKey = new Map(cinematicAssetPackEntities(input.assetPack).map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
+  const keys: string[] = []
+  const addKey = (key: string) => {
+    if (key && byKey.has(key) && !keys.includes(key)) keys.push(key)
+  }
+  const groupTextParts: string[] = []
+
+  input.shots.forEach((rawShot) => {
+    const parsedShot = cinematicV2ShotSchema.safeParse(rawShot)
+    const shot = parsedShot.success ? parsedShot.data : null
+    if (shot) {
+      shot.speakerRefIds.forEach(addKey)
+      shot.visibleCharacterRefIds.forEach(addKey)
+      if (shot.locationRefId) addKey(shot.locationRefId)
+      shot.propRefIds.forEach(addKey)
+      shot.dialogue.forEach((line) => addKey(line.speakerRefId))
+      shot.performanceBeats.forEach((beat) => addKey(beat.characterRefId))
+      groupTextParts.push([
+        shot.title,
+        shot.description,
+        shot.action,
+        shot.caption,
+        shot.lighting,
+        shot.mood,
+        shot.storyboardPanelPrompt,
+        shot.videoDirection,
+        ...shot.dialogue.map((line) => `${line.speakerName || line.speakerRefId} ${line.text} ${line.emotion}`),
+      ].filter(Boolean).join(' '))
+      return
+    }
+    readStringArray(rawShot.speakerRefIds).forEach(addKey)
+    readStringArray(rawShot.visibleCharacterRefIds).forEach(addKey)
+    const locationRefId = readText(rawShot.locationRefId)
+    if (locationRefId) addKey(locationRefId)
+    readStringArray(rawShot.propRefIds).forEach(addKey)
+    groupTextParts.push(JSON.stringify(rawShot))
+  })
+
+  const groupText = normalizeComicReferenceText(groupTextParts.join(' ')).replace(/_/g, ' ')
+  cinematicAssetPackEntities(input.assetPack)
+    .filter((entity) => entityMentionedInShotText(entity, groupText))
+    .forEach((entity) => addKey(readText(entity.key)))
+
+  const selectedKeys = keys.slice(0, Math.max(0, input.maxEntityCount ?? 4))
+  const groupAssetPack = filterCinematicAssetPack(
+    input.assetPack,
+    selectedKeys,
+    Math.max(1, input.maxEntityCount ?? 4),
+    input.maxAssetKeysPerEntity ?? 2,
+  )
+  return {
+    ...groupAssetPack,
+    storyboardGroupReferenceKeys: selectedKeys,
+    referenceScope: 'cinematic_v3_storyboard_group',
+    text: JSON.stringify(groupAssetPack, null, 2),
   }
 }
 
@@ -9992,12 +10207,18 @@ async function downloadRemoteBytes(url: string) {
   return new Uint8Array(await response.arrayBuffer())
 }
 
-async function imageReferenceToFalUrl(client: DatabaseClient, image: Record<string, unknown>) {
+async function imageReferenceToFalUrl(client: DatabaseClient, image: Record<string, unknown>, run?: OutputWorkflowRun) {
   const url = readText(image.url)
   if (url) return url
   const storagePath = readText(image.storagePath) || readText(image.storage_path)
-  if (!storagePath) return ''
-  return projectAssetReferenceUrl(client, storagePath, readText(image.mimeType) || readText(image.mime_type) || 'image/png')
+  if (storagePath) return projectAssetReferenceUrl(client, storagePath, readText(image.mimeType) || readText(image.mime_type) || 'image/png')
+  const assetKey = readText(image.assetKey) || readText(image.asset_key) || readText(image.key)
+  if (!assetKey || !run) return ''
+  const asset = await resolveProjectAssetByKey(client, run, assetKey)
+  if (!asset) return ''
+  const assetStoragePath = readText(asset.storagePath) || readText(asset.storage_path)
+  if (!assetStoragePath) return ''
+  return projectAssetReferenceUrl(client, assetStoragePath, readText(asset.mimeType) || readText(asset.mime_type) || 'image/png')
 }
 
 function resolveAssetByKey(run: OutputWorkflowRun, assetKey: string) {
@@ -10511,6 +10732,7 @@ async function waitForOutputMuapiVideo(input: {
   prompt: string
   durationSeconds: number
   aspectRatio?: string
+  quality?: string
   referenceImageUrls?: string[]
   referenceVideoUrls?: string[]
   referenceAudioUrls?: string[]
@@ -10532,16 +10754,18 @@ async function waitForOutputMuapiVideo(input: {
   if (!requestId) {
     const submit = await submitMuapiVideoRequest({
       apiKey: input.apiKey,
+      model: input.model,
       prompt: input.prompt,
       durationSeconds: input.durationSeconds,
       aspectRatio: input.aspectRatio,
+      quality: input.quality,
       referenceImageUrls: input.referenceImageUrls,
       referenceVideoUrls: input.referenceVideoUrls,
       referenceAudioUrls: input.referenceAudioUrls,
       webhookUrl,
     })
     if (!submit.response.ok) {
-      throw new Error(muapiErrorMessage(submit.body, `MUAPI video submission failed with HTTP ${submit.response.status}.`))
+      throw new Error(muapiErrorMessageWithRaw(submit.body, submit.rawText, `MUAPI video submission failed with HTTP ${submit.response.status}.`))
     }
     requestId = readMuapiRequestId(submit.body)
     if (!requestId) throw new Error('MUAPI did not return a request id for the output video generation node.')
@@ -10592,7 +10816,7 @@ async function waitForOutputMuapiVideo(input: {
     }
 
     if (!result.response.ok && ![404, 409, 425, 429, 500, 502, 503, 504].includes(result.response.status)) {
-      throw new Error(muapiErrorMessage(result.body, `MUAPI video result failed with HTTP ${result.response.status}.`))
+      throw new Error(muapiErrorMessageWithRaw(result.body, result.rawText, `MUAPI video result failed with HTTP ${result.response.status}.`))
     }
     if (muapiStatusIsFailed(providerStatus)) {
       throw new Error(muapiErrorMessage(result.body, `MUAPI video generation failed with status ${providerStatus}.`))
@@ -12975,10 +13199,23 @@ async function executeNode(input: {
       const falApiKey = Deno.env.get('FAL_KEY')
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
-      const assetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
+      const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
       const referenceLimit = referenceLimitForImageNode(config, role)
+      const isCinematicV3StoryboardSheet = purpose === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_v3_storyboard_sheet'
+      const storyboardSheetShotPlan = isCinematicV3StoryboardSheet ? readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']) : {}
+      const storyboardSheetGroupShots = isCinematicV3StoryboardSheet
+        ? cinematicV3StoryboardGroupShots({ shotPlan: storyboardSheetShotPlan, storyboardGroup: asRecord(config.storyboardGroup) })
+        : []
+      const assetPack = isCinematicV3StoryboardSheet && storyboardSheetGroupShots.length > 0
+        ? buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: storyboardSheetGroupShots,
+          maxEntityCount: referenceLimitForImageNode(config, role),
+          maxAssetKeysPerEntity: 1,
+        })
+        : rawAssetPack
       const referenceImageUrls = [...new Set([
-        ...(await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))),
+        ...(await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image, input.run)))),
         ...(await collectAssetPackReferenceUrls(input.client, input.run, assetPack, referenceLimit)),
       ].filter(Boolean))].slice(0, referenceLimit)
       const baseModel = outputWorkflowImageModel(config.model)
@@ -13250,7 +13487,8 @@ async function executeNode(input: {
     case 'video_generation': {
       const config = asRecord(input.node.config)
       const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
-      const prompt = readVideoPromptFromUpstream(input.upstream)
+      const upstreamVideoPrompt = readVideoPromptFromUpstream(input.upstream)
+      const prompt = upstreamVideoPrompt
         || readText(input.node.inputs.prompt)
         || input.run.prompt
       if (!prompt) throw new Error('Video generation node is missing a prompt.')
@@ -13274,16 +13512,24 @@ async function executeNode(input: {
       }
       const resolution = readText(config.resolution) || '720p'
       const provider = resolveOutputVideoProvider(config)
-      const model = readText(config.model)
+      const configuredModel = readText(config.model)
         || (provider === 'muapi'
           ? Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_MODEL')?.trim()
           : Deno.env.get('OUTPUT_WORKFLOW_FAL_VIDEO_MODEL')?.trim())
         || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_MODEL')?.trim()
         || (provider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
-      const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
+      const model = provider === 'muapi' ? resolveMuapiVideoModel(configuredModel) : configuredModel
+      const requestedDurationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
+      const durationSeconds = provider === 'muapi' ? resolveMuapiVideoDurationSeconds(requestedDurationSeconds) : requestedDurationSeconds
       const aspectRatio = readText(config.aspectRatio) || '16:9'
+      const quality = provider === 'muapi'
+        ? resolveMuapiVideoQuality(readText(config.quality) || Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_QUALITY'))
+        : readText(config.quality)
       const generateAudio = config.generateAudio !== false
       const syncMode = config.syncMode === true
+      if ((readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video') && !upstreamVideoPrompt) {
+        throw new Error('Cinematics V3 storyboard video generation requires a completed Video Prompt node. Run the block storyboard prep first, then generate video.')
+      }
       if (isCinematicV2ProductionNode(config, input.node) && !cinematicVideoApprovedEnabled(input.run)) {
         const outputs = {
           video: {
@@ -13366,14 +13612,27 @@ async function executeNode(input: {
           model: 'debug-skip-video-generation-v1',
         }
       }
-      const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+      const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+      const isCinematicV3StoryboardGroupVideo = readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video'
+      const upstreamShotPlanForVideo = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
+      const cinematicV3VideoGroupShots = isCinematicV3StoryboardGroupVideo
+        ? cinematicV3StoryboardGroupShots({ shotPlan: upstreamShotPlanForVideo, storyboardGroup: asRecord(config.storyboardGroup) })
+        : []
+      const assetPack = isCinematicV3StoryboardGroupVideo && cinematicV3VideoGroupShots.length > 0
+        ? buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: cinematicV3VideoGroupShots,
+          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 4) || 4)),
+          maxAssetKeysPerEntity: 1,
+        })
+        : rawAssetPack
       const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
       const upstreamImages = orderCinematicVideoReferenceImages(
         readUpstreamImages(input.upstream, ['image', 'coverImage', 'primaryReferenceImage', 'keyframe']),
         cinematicReferenceMode,
       )
       const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
-        const url = await imageReferenceToFalUrl(input.client, image)
+        const url = await imageReferenceToFalUrl(input.client, image, input.run)
         if (!url) return null
         return {
           url,
@@ -13401,12 +13660,15 @@ async function executeNode(input: {
         })
         .slice(0, totalReferenceImageLimit)
       const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+      if (isCinematicV3StoryboardGroupVideo && cinematicReferenceMode === 'storyboard_sheet' && directImageRecords.length === 0) {
+        throw new Error('Cinematics V3 storyboard video generation requires the storyboard sheet reference. Generate the storyboard sheet before generating video.')
+      }
       if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
         throw new Error('Cinematics V2 video generation requires a shot keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
       }
       const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
       const referenceVideoRecords = (await Promise.all(upstreamVideos.map(async (video, index) => {
-        const url = await imageReferenceToFalUrl(input.client, video)
+        const url = await imageReferenceToFalUrl(input.client, video, input.run)
         if (!url) return null
         return {
           url,
@@ -13428,8 +13690,13 @@ async function executeNode(input: {
           audioReferences: [],
           cinematicReferenceMode,
         })
-        const promptWithLegend = rewriteSeedanceReferenceLegend(prompt, manifest, referencePolicy)
+        const promptWithLegend = rewriteSeedanceReferenceLegend(prompt, manifest, isCinematicV3StoryboardGroupVideo ? '' : referencePolicy)
         const artifactBan = seedanceProductionBoardArtifactBan(manifest)
+        if (isCinematicV3StoryboardGroupVideo) {
+          return promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
+            ? promptWithLegend
+            : [promptWithLegend, '', artifactBan].filter(Boolean).join('\n')
+        }
         return [
           promptWithLegend,
           '',
@@ -13488,6 +13755,7 @@ async function executeNode(input: {
               prompt: providerPrompt,
               durationSeconds,
               aspectRatio,
+              quality,
               referenceImageUrls: usedReferenceImageUrls,
               referenceVideoUrls,
               referenceAudioUrls,
@@ -13505,7 +13773,9 @@ async function executeNode(input: {
                     muapiResultUrl: progress.resultUrl,
                     muapiWebhookConfigured: progress.webhookConfigured ?? false,
                     durationSeconds,
+                    requestedDurationSeconds,
                     aspectRatio,
+                    quality,
                     resolution,
                     generateAudio,
                     referenceImageCount: usedReferenceImageUrls.length,
@@ -13518,6 +13788,7 @@ async function executeNode(input: {
                       prompt: providerPrompt,
                       durationSeconds,
                       aspectRatio,
+                      quality,
                       referenceImageUrls: usedReferenceImageUrls,
                       referenceVideoUrls,
                       referenceAudioUrls,
@@ -13610,7 +13881,9 @@ async function executeNode(input: {
         prompt,
         providerPrompt,
         durationSeconds,
+        requestedDurationSeconds,
         aspectRatio,
+        quality: provider === 'muapi' ? quality : null,
         resolution,
         generateAudio,
         referenceImageCount: usedReferenceImageUrls.length,
@@ -13625,6 +13898,7 @@ async function executeNode(input: {
           prompt: providerPrompt,
           durationSeconds,
           aspectRatio,
+          quality,
           referenceImageUrls: usedReferenceImageUrls,
           referenceVideoUrls,
           referenceAudioUrls,
@@ -13660,7 +13934,9 @@ async function executeNode(input: {
           providerRequestId: providerResult.requestId,
           providerMode: provider === 'muapi' ? muapiProviderMode : 'fal_queue',
           durationSeconds,
+          requestedDurationSeconds,
           aspectRatio,
+          quality: provider === 'muapi' ? quality : null,
           resolution,
           generateAudio,
           referenceImageCount: usedReferenceImageUrls.length,
@@ -13683,6 +13959,7 @@ async function executeNode(input: {
         prompt,
         providerPrompt,
         durationSeconds,
+        requestedDurationSeconds,
         seedanceReferenceManifest: usedSeedanceReferenceManifest,
         artifact,
         guidance,
@@ -14035,10 +14312,21 @@ async function executeNode(input: {
         const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
         const sceneState = readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state'])
         const layoutPlan = readFirstUpstreamRecord(input.upstream, ['layoutPlan', 'layout_plan'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const aspectRatio = readText(config.aspectRatio) || '16:9'
         const configuredGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(config.storyboardGroup)
         const storyboardGroup = configuredGroup.success ? configuredGroup.data : null
+        const groupShots = purpose === 'cinematic_v3_storyboard_prompt'
+          ? cinematicV3StoryboardGroupShots({ shotPlan, storyboardGroup })
+          : []
+        const assetPack = purpose === 'cinematic_v3_storyboard_prompt'
+          ? buildCinematicV3StoryboardGroupAssetPack({
+            assetPack: rawAssetPack,
+            shots: groupShots,
+            maxEntityCount: 8,
+            maxAssetKeysPerEntity: 1,
+          })
+          : rawAssetPack
         const layout = storyboardGroup
           ? { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
           : purpose === 'cinematic_v3_storyboard_prompt'
@@ -14070,6 +14358,7 @@ async function executeNode(input: {
           sceneState,
           layoutPlan,
           assetPack,
+          asset_pack: assetPack,
           storyboardLayout: layout,
           storyboardGroup,
           storyboardGroupId: storyboardGroup?.id ?? null,
@@ -14375,23 +14664,24 @@ async function executeNode(input: {
       if (purpose === 'cinematic_v3_storyboard_group_video_prompt') {
         const config = asRecord(input.node.config)
         const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const configuredGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(config.storyboardGroup)
         const storyboardGroup = configuredGroup.success ? configuredGroup.data : null
-        const groupShotIds = new Set(storyboardGroup?.shotIds ?? [])
-        const matchedGroupShots = storyboardGroup
-          ? shotPlan.shots.filter((shot) => groupShotIds.has(shot.id))
-          : []
-        const groupShots = storyboardGroup
-          ? (matchedGroupShots.length > 0 ? matchedGroupShots : shotPlan.shots)
-          : shotPlan.shots
+        const groupShots = cinematicV3StoryboardGroupShots({ shotPlan, storyboardGroup })
         const upstreamImages = readUpstreamImages(input.upstream)
+        const assetPackReferenceLimit = Math.max(0, Math.min(8, Number(asRecord(input.node.config).assetPackReferenceLimit ?? 4) || 4))
+        const assetPack = buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: groupShots,
+          maxEntityCount: assetPackReferenceLimit,
+          maxAssetKeysPerEntity: 1,
+        })
         const entityByKey = cinematicEntityByKey(assetPack)
         const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({ assetPack, shots: groupShots, limit: 8 })
         const seedanceReferenceManifest = buildSeedanceReferenceManifest({
           imageReferences: [
             ...seedanceReferenceRecordsFromImages(upstreamImages, 'storyboard_sheet'),
-            ...seedanceReferenceRecordsFromAssetPack(assetPack, Number(asRecord(input.node.config).assetPackReferenceLimit ?? 4) || 4),
+            ...seedanceReferenceRecordsFromAssetPack(assetPack, assetPackReferenceLimit),
           ].slice(0, 9),
           cinematicReferenceMode: 'storyboard_sheet',
         })
@@ -14438,7 +14728,6 @@ async function executeNode(input: {
           'Preserve character identities, selected variants, location, props, lighting direction, and emotional continuity.',
           'Use smooth connected animation between storyboard poses, readable acting, natural physical motion, and clean transitions.',
           seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
-          `User brief: ${input.run.prompt}`,
         ].filter(Boolean).join('\n\n')
         const guidance = readUpstreamGuidanceBundle(input.upstream)
         const outputs = {
@@ -14446,9 +14735,11 @@ async function executeNode(input: {
           text: prompt,
           shotPlan,
           assetPack,
+          asset_pack: assetPack,
           storyboardGroup,
           primaryReferenceImage: upstreamImages[0] ?? null,
           referenceImageCount: upstreamImages.length,
+          storyboardGroupReferenceKeys: readStringArray(assetPack.storyboardGroupReferenceKeys),
           seedanceReferenceManifest,
           durationSeconds: Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3))),
           guidance,
@@ -15592,6 +15883,12 @@ export async function processFlyOutputWorkflowRuns(input: {
     const nodeByKey = new Map(executionNodes.map((node) => [node.key, node]))
     const workflowNodeByKey = new Map(activeWorkflowNodes.map((node) => [node.key, node]))
     const stepByNodeKey = new Map(bundle.run.steps.map((step) => [step.nodeKey, step]))
+    const executionNodeKeys = new Set(executionNodes.map((node) => node.key))
+    const externalUpstreamNodeKeys = [...new Set(activeWorkflowEdges
+      .filter((edge) => executionNodeKeys.has(edge.targetNodeKey) && !executionNodeKeys.has(edge.sourceNodeKey))
+      .filter((edge) => !isOptionalOutputWorkflowEdge(edge))
+      .map((edge) => edge.sourceNodeKey)
+      .filter(Boolean))]
     const sourceRunIdForCache = readText(runMetadata.sourceRunId)
     if (sourceRunIdForCache && sourceRunIdForCache !== runId) {
       const sourceStepResponse = await input.client
@@ -15607,18 +15904,39 @@ export async function processFlyOutputWorkflowRuns(input: {
         if (!existingStep || !hasStoredOutputs(existingStep.outputs)) stepByNodeKey.set(sourceStep.nodeKey, sourceStep)
       }
     }
-    const executionNodeKeys = new Set(executionNodes.map((node) => node.key))
+    const latestWorkflowStepByNodeKey = await loadLatestWorkflowStepOutputsByNodeKey({
+      client: input.client,
+      workflowId: bundle.workflow.id,
+      nodeKeys: externalUpstreamNodeKeys,
+    })
+    for (const [nodeKey, step] of latestWorkflowStepByNodeKey) {
+      const existingStep = stepByNodeKey.get(nodeKey)
+      if (!existingStep || !hasStoredOutputs(existingStep.outputs)) stepByNodeKey.set(nodeKey, step)
+    }
+    const recoveredArtifactOutputsByNodeKey = await loadRecoverableWorkflowArtifactOutputsByNodeKey({
+      client: input.client,
+      draftId: bundle.run.draftId,
+      workflowId: bundle.workflow.id,
+      nodesByKey: workflowNodeByKey,
+      nodeKeys: externalUpstreamNodeKeys,
+    })
     const cachedExternalUpstreamByNodeKey = new Map(executionNodes.map((node) => [node.key, collectCachedExternalUpstream({
       node,
       nodesByKey: workflowNodeByKey,
       stepsByNodeKey: stepByNodeKey,
+      recoveredOutputsByNodeKey: recoveredArtifactOutputsByNodeKey,
       executionNodeKeys,
       edges: activeWorkflowEdges,
     })] as const))
     const missingCachedInputs = [...cachedExternalUpstreamByNodeKey.entries()]
       .flatMap(([nodeKey, cached]) => cached.missingNodeKeys.map((sourceKey) => `${nodeKey} <- ${sourceKey}`))
     if (missingCachedInputs.length > 0) {
-      throw new Error(`Required upstream cached output is missing: ${missingCachedInputs.join(', ')}. Run upstream to this node first.`)
+      const missingLabels = missingCachedInputs.map((entry) => {
+        if (entry === 'video <- storyboard_sheet') return 'video <- storyboard_sheet image'
+        if (entry === 'video <- video_prompt') return 'video <- video_prompt text'
+        return entry
+      })
+      throw new Error(`Required upstream cached output is missing: ${missingLabels.join(', ')}. The worker could not recover the saved graph outputs from node cache, run steps, or durable artifacts; run storyboard prep once to repair this block.`)
     }
     const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
     const nodeResults = new Map<string, {

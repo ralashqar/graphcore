@@ -60,18 +60,73 @@ function collectReferenceSelectionAssetKeys(value: unknown, keys = new Set<strin
   return keys
 }
 
+function chunkStringsForPostgrestIn(values: string[], options: { maxCount?: number; maxEncodedLength?: number } = {}) {
+  const maxCount = Math.max(1, options.maxCount ?? 24)
+  const maxEncodedLength = Math.max(500, options.maxEncodedLength ?? 2800)
+  const chunks: string[][] = []
+  let current: string[] = []
+  let encodedLength = 0
+  for (const value of [...new Set(values.map((entry) => entry.trim()).filter(Boolean))]) {
+    const valueLength = encodeURIComponent(value).length + 4
+    if (current.length > 0 && (current.length >= maxCount || encodedLength + valueLength > maxEncodedLength)) {
+      chunks.push(current)
+      current = []
+      encodedLength = 0
+    }
+    current.push(value)
+    encodedLength += valueLength
+  }
+  if (current.length > 0) chunks.push(current)
+  return chunks
+}
+
+async function loadOutputArtifactsByKeys(client: DatabaseClient, draftId: string, artifactKeys: string[]) {
+  const rows: Record<string, unknown>[] = []
+  const seenIds = new Set<string>()
+  for (const keyBatch of chunkStringsForPostgrestIn(artifactKeys)) {
+    const response = await client
+      .from('output_artifacts')
+      .select(outputArtifactSelect)
+      .eq('draft_id', draftId)
+      .in('key', keyBatch)
+      .order('created_at', { ascending: false })
+    if (response.error) throw new Error(response.error.message)
+    for (const row of (response.data ?? []) as Record<string, unknown>[]) {
+      const id = readText(row.id)
+      if (id && seenIds.has(id)) continue
+      if (id) seenIds.add(id)
+      rows.push(row)
+    }
+  }
+  return rows
+}
+
+async function loadProjectAssetRowsByKeys(client: DatabaseClient, projectId: string, assetKeys: string[]) {
+  const rows: Record<string, unknown>[] = []
+  const seenIds = new Set<string>()
+  for (const keyBatch of chunkStringsForPostgrestIn(assetKeys, { maxCount: 32, maxEncodedLength: 3200 })) {
+    const response = await client
+      .from('project_assets')
+      .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+      .eq('project_id', projectId)
+      .in('key', keyBatch)
+    if (response.error) throw new Error(response.error.message)
+    for (const row of (response.data ?? []) as Record<string, unknown>[]) {
+      const id = readText(row.id)
+      if (id && seenIds.has(id)) continue
+      if (id) seenIds.add(id)
+      rows.push(row)
+    }
+  }
+  return rows
+}
+
 async function loadSignedAssets(client: DatabaseClient, projectId: string, assetKeys: string[], knownAssetKeys: string[]) {
   const known = new Set(knownAssetKeys.map((key) => key.trim()).filter(Boolean))
   const cleanKeys = [...new Set(assetKeys.map((key) => key.trim()).filter(Boolean))].slice(0, 160)
     .filter((key) => !known.has(key))
   if (cleanKeys.length === 0) return []
-  const response = await client
-    .from('project_assets')
-    .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-    .eq('project_id', projectId)
-    .in('key', cleanKeys)
-  if (response.error) throw new Error(response.error.message)
-  const rows = (response.data ?? []) as Record<string, unknown>[]
+  const rows = await loadProjectAssetRowsByKeys(client, projectId, cleanKeys)
   return Promise.all(rows.map(async (row) => {
     const storagePath = readText(row.storage_path)
     let signedUrl: string | null = null
@@ -260,17 +315,18 @@ Deno.serve(async (request) => {
       latestRunIds.length > 0
         ? admin.from('output_workflow_runs').select(outputWorkflowRunStatusSelect).in('id', latestRunIds).eq('draft_id', payload.draftId)
         : Promise.resolve({ data: [], error: null }),
-      artifactKeys.length > 0
-        ? admin.from('output_artifacts').select(outputArtifactSelect).eq('draft_id', payload.draftId).in('key', artifactKeys).order('created_at', { ascending: false })
-        : Promise.resolve({ data: [], error: null }),
+      Promise.resolve({ data: [], error: null }),
     ])
     if (workflowResponse.error) throw new Error(workflowResponse.error.message)
     if (runResponse.error) throw new Error(runResponse.error.message)
     if (artifactResponse.error) throw new Error(artifactResponse.error.message)
 
+    const artifactRows = artifactKeys.length > 0
+      ? await loadOutputArtifactsByKeys(admin, payload.draftId, artifactKeys)
+      : []
     const artifacts = await hydrateOutputArtifactSignedUrls(
       admin,
-      ((artifactResponse.data ?? []) as never[]).map(mapOutputArtifactRow),
+      (artifactRows as never[]).map(mapOutputArtifactRow),
     )
     const requestReferenceAssetKeys = requests.flatMap((request) => {
       const metadata = asRecord(request.metadata)

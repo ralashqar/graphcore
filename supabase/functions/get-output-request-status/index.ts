@@ -19,6 +19,53 @@ import {
   outputWorkflowSelect,
 } from '../_shared/output-workflow.ts'
 
+type DatabaseClient = ReturnType<typeof createAdminClient>
+
+function readText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function chunkStringsForPostgrestIn(values: string[], options: { maxCount?: number; maxEncodedLength?: number } = {}) {
+  const maxCount = Math.max(1, options.maxCount ?? 24)
+  const maxEncodedLength = Math.max(500, options.maxEncodedLength ?? 2800)
+  const chunks: string[][] = []
+  let current: string[] = []
+  let encodedLength = 0
+  for (const value of [...new Set(values.map((entry) => entry.trim()).filter(Boolean))]) {
+    const valueLength = encodeURIComponent(value).length + 4
+    if (current.length > 0 && (current.length >= maxCount || encodedLength + valueLength > maxEncodedLength)) {
+      chunks.push(current)
+      current = []
+      encodedLength = 0
+    }
+    current.push(value)
+    encodedLength += valueLength
+  }
+  if (current.length > 0) chunks.push(current)
+  return chunks
+}
+
+async function loadOutputArtifactsByKeys(client: DatabaseClient, draftId: string, artifactKeys: string[]) {
+  const rows: Record<string, unknown>[] = []
+  const seenIds = new Set<string>()
+  for (const keyBatch of chunkStringsForPostgrestIn(artifactKeys)) {
+    const response = await client
+      .from('output_artifacts')
+      .select(outputArtifactSelect)
+      .eq('draft_id', draftId)
+      .in('key', keyBatch)
+      .order('created_at', { ascending: false })
+    if (response.error) throw new Error(response.error.message)
+    for (const row of (response.data ?? []) as Record<string, unknown>[]) {
+      const id = readText(row.id)
+      if (id && seenIds.has(id)) continue
+      if (id) seenIds.add(id)
+      rows.push(row)
+    }
+  }
+  return rows
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -63,13 +110,14 @@ Deno.serve(async (request) => {
       const artifactKeys = projection?.artifactKeys ?? []
       const [workflowResponse, artifactResponse] = await Promise.all([
         admin.from('output_workflows').select(outputWorkflowSelect).eq('id', outputRequest.workflowId).eq('draft_id', outputRequest.draftId).single(),
-        artifactKeys.length > 0
-          ? admin.from('output_artifacts').select(outputArtifactSelect).eq('draft_id', outputRequest.draftId).in('key', artifactKeys).order('created_at', { ascending: false })
-          : Promise.resolve({ data: [], error: null }),
+        Promise.resolve({ data: [], error: null }),
       ])
       if (!workflowResponse.error && workflowResponse.data) workflow = mapOutputWorkflowRow(workflowResponse.data)
       if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-      artifacts = await hydrateOutputArtifactSignedUrls(admin, (artifactResponse.data ?? []).map(mapOutputArtifactRow))
+      const artifactRows = artifactKeys.length > 0
+        ? await loadOutputArtifactsByKeys(admin, outputRequest.draftId, artifactKeys)
+        : []
+      artifacts = await hydrateOutputArtifactSignedUrls(admin, artifactRows.map(mapOutputArtifactRow))
     }
     if (outputRequest.latestRunId) {
       const runResponse = await admin
