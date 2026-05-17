@@ -525,10 +525,14 @@ test('cinematic storyboard style override accepts blank as default', () => {
     projectId: 'project-1',
     draftId: 'draft-1',
     prompt: 'Create a cinematic in the cafe',
+    outputKindOverride: 'cinematic_episode',
+    selectedSequenceUnitKeys: ['chapter_01'],
     cinematicStoryboardStyleOverride: '   ',
     snapshot,
   })
   assert.equal(parsedStart.cinematicStoryboardStyleOverride, undefined)
+  assert.equal(parsedStart.outputKindOverride, 'cinematic_episode')
+  assert.deepEqual(parsedStart.selectedSequenceUnitKeys, ['chapter_01'])
 
   const parsedPlan = outputWorkflowPlanRequestSchema.parse({
     projectId: 'project-1',
@@ -855,7 +859,8 @@ test('story cinematic requests build V3 storyboard graph by default while V2 and
   assert.match(v3ParseMaterializer, /cinematic_v3_storyboard_group_video_prompt/)
   assert.match(v3ParseMaterializer, /cinematic_v3_timeline_assemble/)
   assert.match(v3ParseMaterializer, /key: 'artifact', nodeType: 'output_artifact'/)
-  assert.match(v3ParseMaterializer, /expectedDynamicKeys = \[\.\.\.groupParseKeys, \.\.\.directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact'\]/)
+  assert.match(v3ParseMaterializer, /sequenceAnimaticMasterMode/)
+  assert.match(v3ParseMaterializer, /: \[\.\.\.groupParseKeys, \.\.\.directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact'\]/)
   assert.doesNotMatch(v3ParseMaterializer, /cinematic_v3_shot_plan_merge/)
   assert.doesNotMatch(v3ParseMaterializer, /purpose: 'cinematic_v3_dynamic_storyboard_fanout'/)
   assert.match(workerSource, /cinematic_v3_storyboard_group_video/)
@@ -873,10 +878,10 @@ test('story cinematic requests build V3 storyboard graph by default while V2 and
   assert.match(workerSource, /storyboardPanelPrompt/)
   assert.match(workerSource, /videoDirection/)
   assert.match(workerSource, /performanceBeats/)
-  assert.match(workerSource, /Timestamped local timing call sheet/)
+  assert.match(workerSource, /TIMESTAMPED SHOT CALL SHEET/)
   assert.match(workerSource, /formatTimecode\(localStartSeconds\)/)
   assert.match(workerSource, /formatTimecode\(localEndSeconds\)/)
-  assert.match(workerSource, /Character identity and speaker guide/)
+  assert.match(workerSource, /IDENTITY AND SPEAKER GUIDE/)
   assert.match(workerSource, /buildSeedanceCharacterVoiceGuide/)
   assert.match(workerSource, /voiceDescription/)
   assert.match(workerSource, /screenplay_with_shot_markers_v1/)
@@ -910,6 +915,40 @@ test('story cinematic requests build V3 storyboard graph by default while V2 and
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 1)
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 0)
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_storyboard_fanout').length, 0)
+})
+
+test('wiki sequence-unit animatics use full chapter screenplay master mode', () => {
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a screenplay animatic for Opening Ash.',
+    targetFormat: 'video',
+    selectedSequenceUnitKeys: ['chapter-1'],
+    cinematicPipelineVersion: 'v3_script_storyboards',
+    sequenceAnimaticMode: 'full_sequence_unit',
+    snapshot,
+  }, 'cinematic_episode')
+
+  const screenplayNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author')
+  const shotBreakNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_shot_break_plan')
+  const fanoutNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_shot_parse_fanout')
+
+  assert.equal(screenplayNode?.config.sequenceAnimaticMode, 'full_sequence_unit')
+  assert.equal(screenplayNode?.config.maxShotCount, 36)
+  assert.equal(shotBreakNode?.config.maxShotCount, 36)
+  assert.equal(fanoutNode?.config.maxShotCount, 36)
+  assert.ok(plan.diagnostics.some((line) => line.includes('Sequence-unit screenplay animatic mode')))
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
+  assert.match(workerSource, /Selected sequence unit to adapt fully/)
+  assert.match(workerSource, /dramatic question, outcome, POV notes, character arc deltas, consequences, open loops/)
+  assert.match(workerSource, /Use 24-36 shot markers/)
+  assert.match(workerSource, /sequenceAnimaticRole\) === 'master'/)
+  assert.match(startOutputRequestSource, /sequenceAnimaticMasterRequest/)
+  assert.match(startOutputRequestSource, /sequenceAnimaticMode === 'full_sequence_unit'/)
+  assert.match(workerSource, /sequence_animatic_manifest/)
+  assert.match(workerSource, /sequence_animatic_manifest_artifact/)
 })
 
 test('cinematic V3 dynamically materialized storyboard nodes resolve strict guidance skills', () => {
@@ -1657,6 +1696,135 @@ test('cinematic direction-sheet mode builds director reference sheet and Seedanc
   assert.match(videoPrompt, /Ilya Sorin: "You pick very public hiding spots\."/)
 })
 
+test('Seedance V3 prompt contract uses exact reference manifests and conditional movement logic', async (t) => {
+  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+  let imported: {
+    buildCinematicVideoPrompt: (input: {
+      blockScript: Record<string, unknown>
+      assetPack: Record<string, unknown>
+      prompt: string
+      guidance: null
+      durationSeconds: number
+      aspectRatio: string
+      resolution: string
+      generateAudio: boolean
+      referenceImageCount: number
+      seedanceReferenceManifest?: Array<Record<string, unknown>>
+      cinematicReferenceMode?: string
+    }) => string
+    buildSeedanceReferenceManifest: (input: {
+      imageReferences?: Array<{ label: string; role?: string; url?: string }>
+      videoReferences?: Array<{ label: string; role?: string; url?: string }>
+      audioReferences?: Array<{ label: string; role?: string; url?: string }>
+      cinematicReferenceMode?: string
+    }) => Array<Record<string, unknown>>
+    rewriteSeedanceReferenceLegend: (prompt: string, manifest: Array<Record<string, unknown>>, referencePolicy?: string) => string
+  }
+  try {
+    imported = await import(sharedModulePath) as typeof imported
+  } catch (error) {
+    if (error instanceof Error && /npm:/.test(error.message)) {
+      t.skip('Local Node ESM loader cannot import Supabase npm: specifiers; covered by source checks and worker build.')
+      return
+    }
+    throw error
+  }
+  const {
+    buildCinematicVideoPrompt,
+    buildSeedanceReferenceManifest,
+    rewriteSeedanceReferenceLegend,
+  } = imported
+  const manifest = buildSeedanceReferenceManifest({
+    imageReferences: [
+      { label: 'Storyboard block 2 sheet', role: 'storyboard_sheet', url: 'https://example.com/storyboard.webp' },
+      { label: 'Suri Samurai variant', role: 'entity_reference', url: 'https://example.com/suri.webp' },
+      { label: 'Pact Chamber shot-location variant', role: 'location_reference', url: 'https://example.com/chamber.webp' },
+    ],
+    videoReferences: [{ label: 'prior motion reference', role: 'video_reference', url: 'https://example.com/motion.mp4' }],
+    cinematicReferenceMode: 'storyboard_sheet',
+  })
+  const actionScript = {
+    shots: [
+      {
+        id: 'shot_01',
+        index: 1,
+        title: 'Flying diagonal strike',
+        startSeconds: 0,
+        endSeconds: 3,
+        action: 'Suri leaps into a samurai sword strike through dust.',
+        videoDirection: 'fast airborne slash with fabric lag and impact sparks',
+        camera: 'low wide rush-in',
+        dialogue: [],
+      },
+      {
+        id: 'shot_02',
+        index: 2,
+        title: 'Temple impact',
+        startSeconds: 3,
+        endSeconds: 6,
+        action: 'The blade hits the floor and debris jumps outward.',
+        videoDirection: 'strong grounded impact',
+        camera: 'violent low-angle push',
+        dialogue: [],
+      },
+    ],
+  }
+  const prompt = buildCinematicVideoPrompt({
+    blockScript: actionScript,
+    assetPack: {
+      entities: [
+        {
+          name: 'Suri',
+          visualDescription: 'small heroic warrior with a samurai outfit and clear helmet silhouette',
+          visualTraits: ['samurai outfit', 'helmet silhouette'],
+          voiceDescription: 'bright, brave, focused voice',
+        },
+      ],
+    },
+    prompt: 'create a martial arts samurai action clip',
+    guidance: null,
+    durationSeconds: 6,
+    aspectRatio: '16:9',
+    resolution: '720p',
+    generateAudio: false,
+    referenceImageCount: 3,
+    seedanceReferenceManifest: manifest,
+    cinematicReferenceMode: 'storyboard_sheet',
+  })
+  assert.match(prompt, /@Image1: Storyboard block 2 sheet; primary sequential storyboard keyframe reference\./)
+  assert.match(prompt, /@Image2: Suri Samurai variant; entity identity, wardrobe, variant, or prop continuity reference\./)
+  assert.match(prompt, /@Image3: Pact Chamber shot-location variant; environment or shot-location continuity reference\./)
+  assert.match(prompt, /@Video1: prior motion reference; motion continuity reference\./)
+  assert.match(prompt, /\[TIMESTAMPED SHOT CALL SHEET\][\s\S]*\[00:00-00:03\][\s\S]*\[00:03-00:06\]/)
+  assert.match(prompt, /Laban movement logic/)
+  assert.equal((prompt.match(/Do not render production-board artifacts/g) ?? []).length, 1)
+
+  const noStoryboardPrompt = buildCinematicVideoPrompt({
+    blockScript: { shots: [{ id: 'shot_01', index: 1, title: 'Quiet look', startSeconds: 0, endSeconds: 4, action: 'Two characters exchange a quiet look.', camera: 'static medium two-shot', dialogue: [] }] },
+    assetPack: { entities: [] },
+    prompt: 'quiet dialogue in a room',
+    guidance: null,
+    durationSeconds: 4,
+    aspectRatio: '16:9',
+    resolution: '720p',
+    generateAudio: false,
+    referenceImageCount: 0,
+    seedanceReferenceManifest: [],
+    cinematicReferenceMode: 'storyboard_sheet',
+  })
+  assert.doesNotMatch(noStoryboardPrompt, /@Image1 is the storyboard|@Image1: storyboard/i)
+  assert.doesNotMatch(noStoryboardPrompt, /Laban movement logic/)
+
+  const reducedManifest = buildSeedanceReferenceManifest({
+    imageReferences: [{ label: 'Storyboard block 2 sheet', role: 'storyboard_sheet', url: 'https://example.com/storyboard.webp' }],
+    cinematicReferenceMode: 'storyboard_sheet',
+  })
+  const rewritten = rewriteSeedanceReferenceLegend(prompt, reducedManifest, 'storyboard_only')
+  assert.match(rewritten, /@Image1: Storyboard block 2 sheet/)
+  assert.doesNotMatch(rewritten, /@Image2: Suri Samurai variant|@Image3: Pact Chamber/)
+  assert.match(rewritten, /Reference fallback mode: storyboard_only/)
+})
+
 test('MUAPI video helpers build payloads and parse result shapes', async () => {
   const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
   const { buildMuapiVideoPayload, extractMuapiVideoUrlFromResult } = await import(sharedModulePath) as {
@@ -2015,6 +2183,17 @@ test('cinematic reference selection keeps shot-location variants on their parent
   assert.match(workerSource, /assetKeys: sortReferenceValuesWithPrimary\(readStringArray\(entity\.assetKeys\), primaryAssetKey \|\| selectedReferenceVariantAssetKey\)/)
   assert.match(startOutputRequestSource, /leader\\'s chamber of Whistlewick/)
   assert.match(startOutputRequestSource, /Prefer exact or multi-word variant label\/summary matches/)
+})
+
+test('trusted output-kind override bypasses prompt classification for sequence UI actions', () => {
+  const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
+
+  assert.match(startOutputRequestSource, /payload\.outputKindOverride/)
+  assert.match(startOutputRequestSource, /trusted_ui_override/)
+  assert.match(startOutputRequestSource, /Trusted UI action from \$\{payload\.sourceSurface\} bypassed prompt intent classification/)
+  assert.match(startOutputRequestSource, /outputKindOverride\s*\?\s*\{/)
+  assert.match(startOutputRequestSource, /:\s*await classifyPromptIntentServer/)
+  assert.match(startOutputRequestSource, /selectedSequenceUnitKeys: payload\.selectedSequenceUnitKeys/)
 })
 
 test('image workflow quality defaults are configurable and client-overridable', () => {
@@ -2848,6 +3027,8 @@ test('cinematic v3 default graph stops at authoring timeline and keeps video nod
   assert.match(source, /executionNodes = executionNodes\.filter\(manualNodeAllowed\)/)
   assert.match(source, /extractKey\}__timeline_panels/)
   assert.match(source, /videoPromptKey\}__timeline_prompt/)
+  assert.match(source, /\$\{extractKey\}__timeline_panels[\s\S]*authoringOptional: true/)
+  assert.match(source, /\$\{videoPromptKey\}__timeline_prompt[\s\S]*authoringOptional: true/)
   assert.match(source, /targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: \{[^}]*optional: true/)
   assert.match(source, /sourceNodeKey\.startsWith\('cinematic_v3_storyboard_group_'\)/)
   assert.match(source, /targetNodeKey === 'cinematic_v3_timeline_assemble'/)
@@ -2856,6 +3037,8 @@ test('cinematic v3 default graph stops at authoring timeline and keeps video nod
   assert.match(source, /registerOtherOutputArtifact/)
   assert.match(source, /role: 'cinematic_v3_authoring_timeline'[\s\S]*shotPlan/)
   assert.match(source, /model: 'cinematic-v3-authoring-artifact-v1'/)
+  assert.match(source, /v3AuthoringReady/)
+  assert.match(source, /nonCriticalCompletedWithErrors/)
 })
 
 test('graph loader returns cache status diagnostics without bulk node outputs', () => {

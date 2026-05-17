@@ -387,6 +387,10 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client, user } = await requireUserClient(request, 'start-output-request')
     const payload = outputRequestStartRequestSchema.parse(await request.json())
+    const sequenceAnimaticMode = payload.sequenceAnimaticMode ?? null
+    const sequenceAnimaticMasterRequest = payload.sourceSurface === 'wiki_sequence_unit'
+      && (sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only')
+    const sequenceAnimaticRole = sequenceAnimaticMasterRequest ? 'master' : null
 
     const draftResponse = await client
       .from('project_drafts')
@@ -396,24 +400,78 @@ Deno.serve(async (request) => {
       .single()
     if (draftResponse.error || !draftResponse.data) throw new HttpError(404, 'Draft not found or not editable.')
 
-    const promptIntentClassification = await classifyPromptIntentServer({
-      projectId: payload.projectId,
-      draftId: payload.draftId,
-      prompt: payload.prompt,
-      sourceSurface: payload.sourceSurface,
-      selectedSuggestionId: null,
-      selectedEntityKeys: payload.selectedEntityKeys,
-      selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
-      snapshot: payload.snapshot,
-    })
-    const initialPlanner = planOutputPrompt({
-      prompt: payload.prompt,
-      snapshot: payload.snapshot,
-      selectedEntityKeys: payload.selectedEntityKeys,
-      selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
-      targetFormat: payload.targetFormat,
-      classification: promptIntentClassification,
-    })
+    const outputKindOverride = payload.outputKindOverride && payload.outputKindOverride !== 'unknown'
+      ? payload.outputKindOverride
+      : null
+    const promptIntentClassification = outputKindOverride
+      ? {
+        intent: 'output_generation' as const,
+        outputKind: outputKindOverride,
+        targetFormat: payload.targetFormat,
+        confidence: 1,
+        requiresConfirmation: false,
+        rationale: `Trusted UI action from ${payload.sourceSurface} selected ${outputKindOverride}.`,
+        alternatives: [],
+        catalogVersion: 'trusted-ui-output-kind-override-v1',
+        classifierMode: 'trusted_ui_override',
+      }
+      : await classifyPromptIntentServer({
+        projectId: payload.projectId,
+        draftId: payload.draftId,
+        prompt: payload.prompt,
+        sourceSurface: payload.sourceSurface,
+        selectedSuggestionId: null,
+        selectedEntityKeys: payload.selectedEntityKeys,
+        selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
+        snapshot: payload.snapshot,
+      })
+    const initialPlanner = outputKindOverride
+      ? outputPromptPlannerResultSchema.parse({
+        intent: 'output_generation',
+        outputKind: outputKindOverride,
+        confidence: 1,
+        targetFormat: outputKindOverride === 'poster_image' || outputKindOverride === 'concept_art_image'
+          ? 'image'
+          : outputKindOverride === 'cinematic_episode' || outputKindOverride === 'cinematic_trailer' || outputKindOverride === 'ugc_episode'
+            ? 'video'
+            : payload.targetFormat,
+        worldScope: payload.selectedSequenceUnitKeys.length > 0
+          ? 'selected_sequence_units'
+          : payload.selectedEntityKeys.length > 0
+            ? 'selected_entities'
+            : 'prompt_bound_scope',
+        selectedEntityKeys: payload.selectedEntityKeys,
+        selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
+        documentMode: outputKindOverride === 'poster_image' || outputKindOverride === 'concept_art_image'
+          ? 'visual'
+          : outputKindOverride === 'cinematic_episode' || outputKindOverride === 'cinematic_trailer' || outputKindOverride === 'ugc_episode'
+            ? 'cinematic'
+            : outputKindOverride === 'comic_issue_from_sequence'
+              ? 'comic'
+              : 'narrative',
+        sections: [],
+        visualReferencePolicy: outputKindOverride === 'poster_image'
+          || outputKindOverride === 'concept_art_image'
+          || outputKindOverride === 'cinematic_episode'
+          || outputKindOverride === 'cinematic_trailer'
+          || outputKindOverride === 'ugc_episode'
+          ? 'use_prompt_bound_entity_refs'
+          : 'none',
+        requiresConfirmation: false,
+        plannerNotes: `Trusted UI action from ${payload.sourceSurface} bypassed prompt intent classification.`,
+        classifierMode: 'trusted_ui_override',
+        classifierCatalogVersion: 'trusted-ui-output-kind-override-v1',
+        classifierRationale: `Trusted UI action selected ${outputKindOverride}.`,
+        classifierCandidates: [],
+      })
+      : planOutputPrompt({
+        prompt: payload.prompt,
+        snapshot: payload.snapshot,
+        selectedEntityKeys: payload.selectedEntityKeys,
+        selectedSequenceUnitKeys: payload.selectedSequenceUnitKeys,
+        targetFormat: payload.targetFormat,
+        classification: promptIntentClassification,
+      })
     const variantsByEntityKey = new Map<string, Record<string, unknown>[]>()
     if (isImageOutputKind(initialPlanner.outputKind) && initialPlanner.intent === 'output_generation') {
       const variantResponse = await client
@@ -491,11 +549,13 @@ Deno.serve(async (request) => {
               cinematicReferenceMode,
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
+              sequenceAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
             }
             : null,
+          sequenceAnimaticRole,
         },
       })
       .select(outputRequestSelect)
@@ -543,6 +603,7 @@ Deno.serve(async (request) => {
       cinematicPipelineVersion,
       debugCinematicStoryboardStyleSafeMode,
       cinematicStoryboardStyleOverride,
+      sequenceAnimaticMode: payload.sequenceAnimaticMode,
       debugSkipVideoGeneration,
       snapshot: payload.snapshot,
     }, planner.outputKind)
@@ -587,11 +648,13 @@ Deno.serve(async (request) => {
               cinematicReferenceMode,
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
+              sequenceAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
             }
             : null,
+          sequenceAnimaticRole,
           usageEstimate: plan.usageEstimate ?? null,
         },
       })
@@ -662,6 +725,7 @@ Deno.serve(async (request) => {
           cinematicReferenceMode,
           cinematicPipelineVersion,
           cinematicV2AnimaticMode,
+          sequenceAnimaticMode,
           debugCinematicStoryboardStyleSafeMode,
           cinematicStoryboardStyleOverride,
           debugSkipVideoGeneration,
@@ -704,6 +768,7 @@ Deno.serve(async (request) => {
               cinematicReferenceMode,
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
+              sequenceAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
@@ -779,6 +844,7 @@ Deno.serve(async (request) => {
               cinematicReferenceMode,
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
+              sequenceAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,

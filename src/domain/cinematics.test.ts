@@ -164,7 +164,9 @@ test('Cinematics V2 schemas validate scene state, layout, short shots, and story
   assert.deepEqual(buildCinematicV2StoryboardLayout(12), { rows: 3, columns: 3, panelCount: 9 })
   assert.deepEqual(buildCinematicV3StoryboardLayout(1), { rows: 1, columns: 1, panelCount: 1 })
   assert.deepEqual(buildCinematicV3StoryboardLayout(2), { rows: 1, columns: 2, panelCount: 2 })
-  assert.deepEqual(buildCinematicV3StoryboardLayout(3), { rows: 2, columns: 3, panelCount: 3 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(3), { rows: 2, columns: 2, panelCount: 3 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(4), { rows: 2, columns: 2, panelCount: 4 })
+  assert.deepEqual(buildCinematicV3StoryboardLayout(5), { rows: 2, columns: 3, panelCount: 5 })
   assert.deepEqual(buildCinematicV3StoryboardLayout(6), { rows: 2, columns: 3, panelCount: 6 })
   assert.deepEqual(buildCinematicV3StoryboardLayout(7), { rows: 3, columns: 3, panelCount: 7 })
   assert.deepEqual(buildCinematicV3StoryboardLayout(9), { rows: 3, columns: 3, panelCount: 9 })
@@ -239,7 +241,7 @@ test('Cinematics V3 storyboard grouping creates video-sized blocks with matching
   assert.ok(grouped.groups.every((group) => group.editorialDurationSeconds <= 15))
   assert.deepEqual(grouped.groups.map((group) => `${group.rows}x${group.columns}:${group.panelCount}`), [
     '1x2:2',
-    '2x3:3',
+    '2x2:3',
     '2x3:5',
   ])
   assert.deepEqual(grouped.groups.map((group) => group.providerDurationSeconds), [13, 14, 13])

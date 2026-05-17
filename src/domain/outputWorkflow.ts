@@ -45,6 +45,7 @@ export const outputImageGenerationQualitySchema = z.enum(['low', 'medium', 'high
 export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'webp'])
 export const cinematicPipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration', 'v3_script_storyboards'])
 export const cinematicV2AnimaticModeSchema = z.enum(['fast_panels', 'quality_keyframes'])
+export const sequenceAnimaticModeSchema = z.enum(['full_sequence_unit', 'master_script_only'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -289,6 +290,7 @@ export const outputRequestSchema = z.object({
   id: z.string(),
   projectId: z.string(),
   draftId: z.string(),
+  parentRequestId: z.string().nullable().default(null),
   workflowId: z.string().nullable().default(null),
   latestRunId: z.string().nullable().default(null),
   requestedBy: z.string().nullable().default(null),
@@ -364,6 +366,7 @@ export const outputWorkflowPlanRequestSchema = z.object({
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
   cinematicPipelineVersion: cinematicPipelineVersionSchema.optional(),
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
+  sequenceAnimaticMode: sequenceAnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -391,6 +394,7 @@ export const outputRequestStartRequestSchema = z.object({
   draftId: z.string().min(1),
   prompt: z.string().trim().min(1).max(12000),
   sourceSurface: z.string().trim().min(1).max(64).default('outputs'),
+  outputKindOverride: outputRequestKindSchema.optional(),
   selectedEntityKeys: z.array(z.string()).default([]),
   selectedSequenceUnitKeys: z.array(z.string()).default([]),
   targetFormat: z.enum(['pdf', 'epub', 'docx', 'markdown', 'image', 'video']).default('pdf'),
@@ -406,6 +410,7 @@ export const outputRequestStartRequestSchema = z.object({
   cinematicReferenceMode: z.enum(['keyframes', 'storyboard_sheet', 'keyframes_and_storyboard', 'shot_reference_sheet']).optional(),
   cinematicPipelineVersion: cinematicPipelineVersionSchema.optional(),
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
+  sequenceAnimaticMode: sequenceAnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -658,6 +663,21 @@ export const outputWorkflowRunStatusResponseSchema = z.object({
   ok: z.literal(true),
   run: outputWorkflowRunSchema,
   terminal: z.boolean().default(false),
+})
+
+export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+})
+
+export const sequenceAnimaticBlockWorkflowEnsureResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  childRequests: z.array(outputRequestSchema).default([]),
+  workflows: z.array(outputWorkflowSchema).default([]),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
 })
 
 export const outputWorkflowGraphRequestSchema = z.object({
@@ -2908,6 +2928,8 @@ export function buildCinematicV3ScriptStoryboardPlan(
   const resolution: CinematicResolution = request.videoResolution ?? '720p'
   const cinematicReferenceMode: CinematicReferenceMode = request.cinematicReferenceMode ?? 'storyboard_sheet'
   const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? true
+  const sequenceAnimaticMode = request.sequenceAnimaticMode
+  const fullSequenceUnitAnimatic = sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only'
   const videoProvider = resolveDefaultVideoProvider()
   const videoModel = resolveDefaultVideoModel(videoProvider, resolution)
   const title = worldWiki.title || request.snapshot.project.name
@@ -2917,7 +2939,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
     : sequenceTitle
       ? `${title} - ${sequenceTitle} Cinematic`
       : `${title} Cinematic`
-  const maxShotCount = deriveCinematicV2MaxShotCount(null)
+  const maxShotCount = fullSequenceUnitAnimatic ? 36 : deriveCinematicV2MaxShotCount(null)
   const nodes = [
     nodeBase({
       key: 'world_context',
@@ -2931,6 +2953,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         includeWiki: true,
         includeVisualReferences: true,
         strictSourceEntityFilter: sourceSequenceUnitKeys.length > 0,
+        sequenceAnimaticMode,
         execution: { resourceClass: 'utility' },
       },
     }),
@@ -2999,6 +3022,8 @@ export function buildCinematicV3ScriptStoryboardPlan(
       config: {
         purpose: 'cinematic_v3_screenplay_author',
         cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        sequenceAnimaticMode,
+        maxShotCount,
         skillKeys: ['cinematic_screenwriting_craft', 'cinematic_sequence_structure', 'provider_prompt_hygiene'],
         guidanceMode: 'append',
         execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_planning', maxConcurrency: 1 },
@@ -3015,6 +3040,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         purpose: 'cinematic_v3_shot_break_plan',
         cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
         maxShotCount,
+        sequenceAnimaticMode,
         aspectRatio,
         resolution,
         maxPanelsPerSheet: 9,
@@ -3033,6 +3059,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         role: 'dynamic_cinematic_v3_shot_parse_fanout',
         cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
         maxShotCount,
+        sequenceAnimaticMode,
         aspectRatio,
         resolution,
         maxPanelsPerSheet: 9,
@@ -3079,8 +3106,11 @@ export function buildCinematicV3ScriptStoryboardPlan(
       ...graphValidation.diagnostics,
       'Cinematics V3 is enabled: screenplay authors mark shot breaks, parse groups run in parallel, then merged timed shot JSON materializes grouped storyboard sheets.',
       'V3 omits scene-state, layout, per-shot asset-pack, keyframe QA, and per-shot video nodes for a smaller graph.',
-      'Storyboard sheets use deterministic V3 crop grids: 1x1 for one panel, 1x2 for two, 2x3 for three to six, and 3x3 for seven to nine panels.',
+      'Storyboard sheets use deterministic V3 crop grids: 1x1 for one panel, 1x2 for two, 2x2 for three to four, 2x3 for five to six, and 3x3 for seven to nine panels.',
       'Video production remains approval-gated and is deferred from the initial storyboard pass.',
+      ...(fullSequenceUnitAnimatic
+        ? ['Sequence-unit screenplay animatic mode is enabled: author the selected chapter as a fuller screenplay from its synopsis, dramatic question, outcome, arc deltas, consequences, open loops, and visual identity before storyboard grouping.']
+        : []),
     ],
   })
 }
@@ -3561,6 +3591,7 @@ export type OutputWorkflowPlanRequest = z.infer<typeof outputWorkflowPlanRequest
 export type OutputWorkflowPlanResponse = z.infer<typeof outputWorkflowPlanResponseSchema>
 export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResponseSchema>
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
+export type SequenceAnimaticBlockWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticBlockWorkflowEnsureResponseSchema>
 export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphRequestSchema>
 export type OutputWorkflowGraphResponse = z.infer<typeof outputWorkflowGraphResponseSchema>
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>

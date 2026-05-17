@@ -14,6 +14,7 @@ import {
 import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 
 import { resolveAssetSourceUrl } from '../../domain/assets'
+import { buildCinematicV2TimelineProjection } from '../../domain/cinematicTimelineProjection'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
 import { getArtStylePresetLabel, getArtStylePresetPromptDirectives } from '../../domain/artStylePresets'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../../domain/graphcore'
@@ -667,13 +668,34 @@ type WorldGraphPageProps = {
   onStartOutputRequest: (request: {
     prompt: string
     sourceSurface?: string
+    outputKindOverride?: 'concept_art_image' | 'poster_image' | 'story_bible_from_world' | 'world_reference_document' | 'lore_guide' | 'character_dossier_pack' | 'short_story' | 'narrative_chapter_or_ebook' | 'ebook_from_world' | 'comic_issue_from_sequence' | 'cinematic_episode' | 'cinematic_trailer' | 'ugc_episode' | 'unknown'
+    selectedEntityKeys?: string[]
+    selectedSequenceUnitKeys?: string[]
     pageCount?: number
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
+    cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
+    cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
+    cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
+    sequenceAnimaticMode?: 'full_sequence_unit' | 'master_script_only'
+    debugSkipVideoGeneration?: boolean
   }) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
+  onStartOutputWorkflowRun: (request: {
+    workflowId: string
+    prompt: string
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
+    selectedEntityKeys?: string[]
+    selectedSequenceUnitKeys?: string[]
+    pageCount?: number
+    input?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+  }) => Promise<{ run: OutputWorkflowRun }> | { run: OutputWorkflowRun }
+  onEnsureSequenceAnimaticBlockWorkflows: (request: {
+    masterRequestId: string
+  }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onRequestDeleteOutputRequest: (requestId: string) => void
-  onOpenOutputStudio: (requestId?: string | null, target?: OutputLibraryOpenTarget) => void
+  onOpenOutputStudio: (requestId?: string | null, target?: OutputLibraryOpenTarget, selectedNodeKey?: string | null) => void
   canRunOutputs: boolean
   onResolveWorldThread: (input: { threadKey: string }) => Promise<void> | void
   onParkWorldThread: (input: { threadKey: string }) => Promise<void> | void
@@ -1024,6 +1046,712 @@ function readLooseRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+function readLooseArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function readNonEmptyLooseRecord(value: unknown): Record<string, unknown> | null {
+  const record = readLooseRecord(value)
+  return Object.keys(record).length > 0 ? record : null
+}
+
+function readFirstOutputRunRecord(run: OutputWorkflowRun | null | undefined, keys: string[]) {
+  for (const step of run?.steps ?? []) {
+    const outputs = readLooseRecord(step.outputs)
+    for (const key of keys) {
+      const record = readNonEmptyLooseRecord(outputs[key])
+      if (record) return record
+    }
+  }
+  return null
+}
+
+function readAllOutputRunRecords(run: OutputWorkflowRun | null | undefined, keys: string[]) {
+  const records: Record<string, unknown>[] = []
+  for (const step of run?.steps ?? []) {
+    const outputs = readLooseRecord(step.outputs)
+    for (const key of keys) {
+      const value = outputs[key]
+      if (Array.isArray(value)) {
+        records.push(...value.map(readLooseRecord).filter((entry) => Object.keys(entry).length > 0))
+        continue
+      }
+      const record = readNonEmptyLooseRecord(value)
+      if (record) records.push(record)
+    }
+  }
+  return records
+}
+
+function artifactBelongsToRequest(artifact: OutputArtifact, request: OutputRequest) {
+  return Boolean(
+    (request.workflowId && artifact.workflowId === request.workflowId)
+    || (request.latestRunId && artifact.runId === request.latestRunId),
+  )
+}
+
+function readArtifactRole(artifact: OutputArtifact) {
+  return trimOptionalString(readLooseRecord(artifact.metadata).role)
+}
+
+function readArtifactMetadataRecord(
+  artifacts: readonly OutputArtifact[],
+  roles: string[],
+  keys: string[],
+) {
+  const roleSet = new Set(roles)
+  for (const artifact of artifacts) {
+    if (!roleSet.has(readArtifactRole(artifact))) continue
+    const metadata = readLooseRecord(artifact.metadata)
+    for (const key of keys) {
+      const record = readNonEmptyLooseRecord(metadata[key])
+      if (record) return record
+    }
+  }
+  return null
+}
+
+function readArtifactMediaRecords(artifacts: readonly OutputArtifact[], roles: string[]) {
+  const roleSet = new Set(roles)
+  return artifacts
+    .filter((artifact) => roleSet.has(readArtifactRole(artifact)))
+    .map((artifact) => {
+      const metadata = readLooseRecord(artifact.metadata)
+      return {
+        id: artifact.id,
+        artifactKey: artifact.key,
+        assetKey: artifact.assetKey,
+        mimeType: artifact.mimeType,
+        role: readArtifactRole(artifact),
+        shotId: trimOptionalString(metadata.shotId),
+        shotIndex: metadata.shotIndex,
+        storyboardGroupId: trimOptionalString(metadata.storyboardGroupId),
+        panelIndexInGroup: metadata.panelIndexInGroup,
+        sourceSheetAssetKey: trimOptionalString(metadata.sourceSheetAssetKey),
+        storagePath: trimOptionalString(metadata.storagePath),
+        cropRect: metadata.cropRect ?? metadata.crop,
+        metadata,
+      } as Record<string, unknown>
+    })
+}
+
+type SequenceAnimaticShotView = {
+  id: string
+  index: number
+  title: string
+  timeLabel: string
+  durationLabel: string
+  action: string
+  dialogue: SequenceAnimaticDialogueLineView[]
+  camera: string
+  lighting: string
+  performance: string
+  performanceBeats: SequenceAnimaticPerformanceBeatView[]
+  panelStatusLabel: string
+  panelError: string
+  panelUrl: string | null
+  references: SequenceAnimaticReferenceView[]
+}
+
+type SequenceAnimaticReferenceView = {
+  entityKey: string
+  name: string
+  role: string
+  iconId: EntityIconId
+  iconUrl: string | null
+}
+
+type SequenceAnimaticDialogueLineView = {
+  id: string
+  text: string
+  emotion: string
+  speakerRefId: string
+  speakerName: string
+  speakerIconId: EntityIconId
+  speakerIconUrl: string | null
+}
+
+type SequenceAnimaticPerformanceBeatView = {
+  id: string
+  characterRefId: string
+  characterName: string
+  characterIconId: EntityIconId
+  characterIconUrl: string | null
+  toneLabel: string
+  valenceLabel: string
+  arousalLabel: string
+  confidenceLabel: string
+  dominanceLabel: string
+  bodyLanguage: string
+  facialExpression: string
+  gaze: string
+  gesture: string
+  voiceEnergy: string
+}
+
+type SequenceAnimaticBlockView = {
+  id: string
+  index: number
+  title: string
+  durationLabel: string
+  statusLabel: string
+  shotRangeLabel: string
+  childRequestId: string | null
+  childWorkflowId: string | null
+  childRunId: string | null
+  readyToRun: boolean
+  promptNodeKey: string
+  sheetNodeKey: string
+  panelExtractNodeKey: string
+  videoPromptNodeKey: string
+  videoNodeKey: string
+  failedNodeLabel: string
+  hasPanels: boolean
+  shots: SequenceAnimaticShotView[]
+}
+
+type SequenceAnimaticViewModel = {
+  request: OutputRequest
+  title: string
+  statusLabel: string
+  progressLabel: string
+  currentStepLabel: string
+  screenplayMarkdown: string
+  blocks: SequenceAnimaticBlockView[]
+  hasPanels: boolean
+}
+
+const ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set(['queued', 'planning', 'awaiting_confirmation', 'running'])
+const FAILED_SEQUENCE_ANIMATIC_STATUSES = new Set(['failed', 'cancelled'])
+
+function formatAnimaticSeconds(value: unknown) {
+  const seconds = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s'
+  return seconds >= 10 ? `${Math.round(seconds)}s` : `${Number(seconds.toFixed(1))}s`
+}
+
+function formatAnimaticTimecode(value: unknown) {
+  const seconds = Math.max(0, Math.round(typeof value === 'number' ? value : Number(value) || 0))
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return `${minutes}:${String(remainder).padStart(2, '0')}`
+}
+
+function formatAnimaticTimeRange(start: unknown, end: unknown) {
+  return `${formatAnimaticTimecode(start)}-${formatAnimaticTimecode(end)}`
+}
+
+function formatAnimaticPerformanceNumber(value: unknown) {
+  const number = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(number) ? number.toFixed(2).replace(/\.?0+$/, '') : '0'
+}
+
+function animaticPerformanceToneLabel(valence: unknown, arousal: unknown) {
+  const valenceNumber = typeof valence === 'number' ? valence : Number(valence)
+  const arousalNumber = typeof arousal === 'number' ? arousal : Number(arousal)
+  const valenceLabel = valenceNumber < -0.25 ? 'low valence' : valenceNumber > 0.25 ? 'high valence' : 'neutral valence'
+  const arousalLabel = arousalNumber > 0.66 ? 'high arousal' : arousalNumber < 0.33 ? 'low arousal' : 'medium arousal'
+  return `${valenceLabel}, ${arousalLabel}`
+}
+
+function summarizeOutputStatus(value: string) {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function requestUpdatedAtMs(request: OutputRequest) {
+  return Date.parse(request.updatedAt || request.createdAt || '') || 0
+}
+
+function isWikiSequenceAnimaticRequest(request: OutputRequest, sequenceKey: string) {
+  return request.sourceSurface === 'wiki_sequence_unit'
+    && !request.parentRequestId
+    && request.selectedSequenceUnitKeys.includes(sequenceKey)
+    && (request.outputKind === 'cinematic_episode' || request.outputKind === 'cinematic_trailer')
+    && (readLooseRecord(request.metadata).sequenceAnimaticRole !== 'storyboard_block')
+}
+
+function latestWikiSequenceAnimaticRequest(requests: readonly OutputRequest[], sequenceKey: string) {
+  return requests
+    .filter((request) => isWikiSequenceAnimaticRequest(request, sequenceKey))
+    .sort((left, right) => requestUpdatedAtMs(right) - requestUpdatedAtMs(left))[0] ?? null
+}
+
+function sequenceAnimaticStateForRequest(
+  request: OutputRequest | null,
+  runs: readonly OutputWorkflowRun[],
+  artifacts: readonly OutputArtifact[],
+): 'none' | 'in_progress' | 'animatic_ready' | 'video_ready' | 'failed' {
+  if (!request) return 'none'
+  const run = request.latestRunId
+    ? runs.find((entry) => entry.id === request.latestRunId) ?? null
+    : request.workflowId
+      ? runs.find((entry) => entry.workflowId === request.workflowId) ?? null
+      : null
+  if (ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(request.status) || (run && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status))) {
+    return 'in_progress'
+  }
+  if (FAILED_SEQUENCE_ANIMATIC_STATUSES.has(request.status) || run?.status === 'failed' || run?.status === 'cancelled') {
+    return 'failed'
+  }
+  const requestArtifacts = artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))
+  if (requestArtifacts.some((artifact) => artifact.kind === 'video' || artifact.mimeType.startsWith('video/'))) return 'video_ready'
+  return 'animatic_ready'
+}
+
+function normalizeStoryboardGroupNodeKey(groupId: string, suffix: 'prompt' | 'sheet' | 'panel_extract' | 'video_prompt' | 'video') {
+  return groupId.endsWith(`_${suffix}`) ? groupId : `${groupId}_${suffix}`
+}
+
+function outputRunStepForNode(run: OutputWorkflowRun | null | undefined, nodeKey: string) {
+  return run?.steps.find((step) => step.nodeKey === nodeKey) ?? null
+}
+
+function statusLabelForOutputRunStep(step: ReturnType<typeof outputRunStepForNode>) {
+  if (!step) return ''
+  if (step.status === 'running' || step.status === 'queued') return summarizeOutputStatus(step.status)
+  if (step.status === 'failed') return 'Failed'
+  if (step.status === 'completed' || step.status === 'completed_with_errors') return 'Complete'
+  return summarizeOutputStatus(step.status)
+}
+
+function cameraLineFromShot(shot: Record<string, unknown>) {
+  const camera = readLooseRecord(shot.camera)
+  return [
+    trimOptionalString(camera.framing),
+    trimOptionalString(camera.angle),
+    trimOptionalString(camera.lens),
+    trimOptionalString(camera.movement),
+  ].filter(Boolean).join(' / ')
+}
+
+function performanceLineFromShot(shot: Record<string, unknown>) {
+  const performanceBeats = readLooseArray(shot.performanceBeats).map(readLooseRecord)
+  const direct = trimOptionalString(shot.performance)
+  if (direct) return direct
+  return performanceBeats
+    .map((beat) => [
+      trimOptionalString(beat.characterRefId),
+      trimOptionalString(beat.bodyLanguage),
+      trimOptionalString(beat.facialExpression),
+      trimOptionalString(beat.gesture),
+      trimOptionalString(beat.voiceEnergy),
+    ].filter(Boolean).join(': '))
+    .filter(Boolean)
+    .join(' / ')
+}
+
+function normalizeAnimaticRefLookup(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+function buildSequenceAnimaticReferenceResolver(input: {
+  worldEntities: readonly WorldEntity[]
+  assetByKey: ReadonlyMap<string, AssetDefinition>
+  imageUrlByEntityKey: ReadonlyMap<string, string | null>
+  referenceSheetIconUrlByEntityKey: ReadonlyMap<string, string | null>
+}) {
+  const entityByLookup = new Map<string, WorldEntity>()
+  for (const entity of input.worldEntities) {
+    const lookupKeys = [
+      entity.key,
+      entity.name,
+      ...entity.aliases,
+    ].map(normalizeAnimaticRefLookup).filter(Boolean)
+    for (const key of lookupKeys) {
+      if (!entityByLookup.has(key)) entityByLookup.set(key, entity)
+    }
+  }
+  return (refId: string, role = 'Reference'): SequenceAnimaticReferenceView | null => {
+    const cleanRefId = trimOptionalString(refId)
+    if (!cleanRefId) return null
+    const entity = entityByLookup.get(normalizeAnimaticRefLookup(cleanRefId)) ?? null
+    if (!entity) return null
+    const fallbackAssetUrl = entity.thumbnailAssetKey
+      ? resolveAssetSourceUrl(input.assetByKey.get(entity.thumbnailAssetKey) ?? null)
+      : null
+    return {
+      entityKey: entity.key,
+      name: entity.name || cleanRefId,
+      role,
+      iconId: iconForWorldEntity(entity.nodeType),
+      iconUrl: input.referenceSheetIconUrlByEntityKey.get(entity.key)
+        ?? input.imageUrlByEntityKey.get(entity.key)
+        ?? fallbackAssetUrl
+        ?? null,
+    }
+  }
+}
+
+function buildSequenceAnimaticShotReferences(
+  shot: Record<string, unknown>,
+  resolveReference: (refId: string, role?: string) => SequenceAnimaticReferenceView | null,
+) {
+  const references: SequenceAnimaticReferenceView[] = []
+  const seen = new Set<string>()
+  const addRef = (refId: string, role: string) => {
+    const reference = resolveReference(refId, role)
+    if (!reference || seen.has(reference.entityKey)) return
+    seen.add(reference.entityKey)
+    references.push(reference)
+  }
+  for (const line of readLooseArray(shot.dialogue).map(readLooseRecord)) {
+    addRef(trimOptionalString(line.speakerRefId) || trimOptionalString(line.speaker) || trimOptionalString(line.characterRefId), 'Speaker')
+  }
+  for (const beat of readLooseArray(shot.performanceBeats).map(readLooseRecord)) {
+    addRef(trimOptionalString(beat.characterRefId) || trimOptionalString(beat.characterName) || trimOptionalString(beat.name), 'Performance')
+  }
+  for (const refId of readLooseArray(shot.speakerRefIds).map(trimOptionalString).filter(Boolean)) addRef(refId, 'Speaker')
+  for (const refId of readLooseArray(shot.visibleCharacterRefIds).map(trimOptionalString).filter(Boolean)) addRef(refId, 'Character')
+  addRef(trimOptionalString(shot.locationRefId), 'Location')
+  for (const refId of readLooseArray(shot.propRefIds).map(trimOptionalString).filter(Boolean)) addRef(refId, 'Prop')
+  return references.slice(0, 8)
+}
+
+function displayNameFromRefId(value: string) {
+  const clean = value.replace(/^temporary[_-]/i, '').replace(/[_-]+/g, ' ').trim()
+  if (!clean) return 'Unknown character'
+  return clean.replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function buildSequenceAnimaticPerformanceBeats(
+  shot: Record<string, unknown>,
+  resolveReference: (refId: string, role?: string) => SequenceAnimaticReferenceView | null,
+): SequenceAnimaticPerformanceBeatView[] {
+  return readLooseArray(shot.performanceBeats).map((entry, index) => {
+    const record = readLooseRecord(entry)
+    const characterRefId = trimOptionalString(record.characterRefId)
+      || trimOptionalString(record.character)
+      || trimOptionalString(record.characterName)
+      || trimOptionalString(record.name)
+    const character = resolveReference(characterRefId, 'Performance')
+    const id = trimOptionalString(record.id) || `${trimOptionalString(shot.id) || 'shot'}_performance_${index + 1}`
+    const fallbackName = trimOptionalString(record.characterName) || displayNameFromRefId(characterRefId)
+    return {
+      id,
+      characterRefId: character?.entityKey ?? characterRefId,
+      characterName: character?.name ?? fallbackName,
+      characterIconId: character?.iconId ?? 'character',
+      characterIconUrl: character?.iconUrl ?? null,
+      toneLabel: animaticPerformanceToneLabel(record.valence, record.arousal),
+      valenceLabel: formatAnimaticPerformanceNumber(record.valence),
+      arousalLabel: formatAnimaticPerformanceNumber(record.arousal),
+      confidenceLabel: formatAnimaticPerformanceNumber(record.confidence),
+      dominanceLabel: formatAnimaticPerformanceNumber(record.dominance),
+      bodyLanguage: trimOptionalString(record.bodyLanguage),
+      facialExpression: trimOptionalString(record.facialExpression),
+      gaze: trimOptionalString(record.gaze),
+      gesture: trimOptionalString(record.gesture),
+      voiceEnergy: trimOptionalString(record.voiceEnergy),
+    }
+  }).filter((beat) => beat.characterRefId || beat.bodyLanguage || beat.facialExpression || beat.gesture || beat.voiceEnergy)
+}
+
+function inferTemporarySpeakerLabelFromShotAction(shot: Record<string, unknown>, dialogueIndex: number) {
+  if (dialogueIndex === 0) return ''
+  const actionText = [
+    trimOptionalString(shot.action),
+    trimOptionalString(shot.description),
+    trimOptionalString(shot.storyboardPanelPrompt),
+  ].filter(Boolean).join(' ')
+  if (!actionText) return ''
+  const match = actionText.match(/\b(?:the\s+)?([a-z][a-z\s-]{2,44}?)\s+(?:brushes|waves|calls|says|replies|answers|responds|mutters|asks|snaps|shouts|whispers|murmurs|continues)\b/i)
+  const label = match?.[1]?.trim().replace(/\s+/g, ' ') ?? ''
+  if (!label) return ''
+  return label
+}
+
+function buildSequenceAnimaticDialogueLines(
+  shot: Record<string, unknown>,
+  resolveReference: (refId: string, role?: string) => SequenceAnimaticReferenceView | null,
+): SequenceAnimaticDialogueLineView[] {
+  return readLooseArray(shot.dialogue).map((entry, index) => {
+    const record = readLooseRecord(entry)
+    const rawText = typeof entry === 'string'
+      ? entry
+      : trimOptionalString(record.text) || trimOptionalString(record.line)
+    const parsed = rawText.match(/^\s*([^:]{1,48}):\s*(.+)$/)
+    const speakerRefId = trimOptionalString(record.speakerRefId) || trimOptionalString(record.characterRefId)
+    const speakerLabel = trimOptionalString(record.speaker)
+      || trimOptionalString(record.speakerName)
+      || trimOptionalString(record.characterName)
+      || (parsed ? parsed[1] : '')
+    const firstShotSpeakerRef = trimOptionalString(readLooseArray(shot.speakerRefIds)[0])
+    const explicitSpeakerLabel = speakerLabel || inferTemporarySpeakerLabelFromShotAction(shot, index)
+    const speakerCandidate = explicitSpeakerLabel || speakerRefId || firstShotSpeakerRef
+    const text = parsed && !trimOptionalString(record.text) && !trimOptionalString(record.line)
+      ? parsed[2].trim()
+      : rawText
+    if (!text) return null
+    const speakerFromLabel = resolveReference(explicitSpeakerLabel, 'Speaker')
+    const speaker = speakerFromLabel
+      ?? (!explicitSpeakerLabel
+        ? resolveReference(speakerRefId, 'Speaker') ?? resolveReference(firstShotSpeakerRef, 'Speaker')
+        : null)
+    const fallbackSpeakerName = explicitSpeakerLabel || speakerRefId || firstShotSpeakerRef || 'Unknown speaker'
+    return {
+      id: trimOptionalString(record.id) || `${trimOptionalString(shot.id) || 'shot'}_dialogue_${index + 1}`,
+      text,
+      emotion: trimOptionalString(record.emotion),
+      speakerRefId: speaker?.entityKey ?? speakerCandidate,
+      speakerName: speaker?.name ?? fallbackSpeakerName,
+      speakerIconId: speaker?.iconId ?? 'character',
+      speakerIconUrl: speaker?.iconUrl ?? null,
+    }
+  }).filter((line): line is SequenceAnimaticDialogueLineView => Boolean(line))
+}
+
+function sequenceAnimaticShotOrderNumber(shot: Record<string, unknown>, fallback: number) {
+  const match = trimOptionalString(shot.id).match(/(\d+)(?!.*\d)/)
+  const parsed = Number(match?.[1] ?? 0)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function normalizeSequenceAnimaticShotPlanForTimeline(
+  shotPlan: Record<string, unknown>,
+  groups: readonly Record<string, unknown>[],
+) {
+  const shots = readLooseArray(shotPlan.shots).map(readLooseRecord)
+  if (shots.length <= 1) return shotPlan
+  const shotById = new Map(shots.map((shot) => [trimOptionalString(shot.id), shot] as const))
+  const orderedIds = groups.flatMap((group) => readLooseArray(group.shotIds).map(trimOptionalString).filter(Boolean))
+  const orderedShots = orderedIds.length > 0
+    ? [
+      ...orderedIds.map((shotId) => shotById.get(shotId)).filter((shot): shot is Record<string, unknown> => Boolean(shot)),
+      ...shots.filter((shot) => !orderedIds.includes(trimOptionalString(shot.id))),
+    ]
+    : [...shots].sort((left, right) => sequenceAnimaticShotOrderNumber(left, shots.indexOf(left) + 1) - sequenceAnimaticShotOrderNumber(right, shots.indexOf(right) + 1))
+  return {
+    ...shotPlan,
+    shots: orderedShots.map((shot, index) => ({ ...shot, index: index + 1 })),
+    totalEditorialDurationSeconds: orderedShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds) || 0), 0),
+  }
+}
+
+function buildSequenceAnimaticViewModel(input: {
+  request: OutputRequest
+  run: OutputWorkflowRun | null
+  row: { statusLabel: string; progress: { label: string }; currentStepLabel: string } | null
+  requests: readonly OutputRequest[]
+  runs: readonly OutputWorkflowRun[]
+  assets: readonly AssetDefinition[]
+  artifacts: readonly OutputArtifact[]
+  worldEntities: readonly WorldEntity[]
+  imageUrlByEntityKey: ReadonlyMap<string, string | null>
+  referenceSheetIconUrlByEntityKey: ReadonlyMap<string, string | null>
+}): SequenceAnimaticViewModel {
+  const requestArtifacts = input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, input.request))
+  const childRequests = input.requests
+    .filter((request) => request.parentRequestId === input.request.id && readLooseRecord(request.metadata).sequenceAnimaticRole === 'storyboard_block')
+    .sort((left, right) => (Number(readLooseRecord(left.metadata).storyboardBlockIndex ?? 0) || 0) - (Number(readLooseRecord(right.metadata).storyboardBlockIndex ?? 0) || 0))
+  const childRequestByBlockId = new Map(childRequests
+    .map((request) => [trimOptionalString(readLooseRecord(request.metadata).storyboardBlockId), request] as const)
+    .filter(([blockId]) => Boolean(blockId)))
+  const childRunByRequestId = new Map(childRequests
+    .map((request) => {
+      const run = request.latestRunId
+        ? input.runs.find((entry) => entry.id === request.latestRunId) ?? null
+        : request.workflowId
+          ? input.runs.find((entry) => entry.workflowId === request.workflowId) ?? null
+          : null
+      return [request.id, run] as const
+    }))
+  const childArtifacts = childRequests.flatMap((request) => input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request)))
+  const assetByKey = new Map(input.assets.map((asset) => [asset.key, asset] as const))
+  const resolveReference = buildSequenceAnimaticReferenceResolver({
+    worldEntities: input.worldEntities,
+    assetByKey,
+    imageUrlByEntityKey: input.imageUrlByEntityKey,
+    referenceSheetIconUrlByEntityKey: input.referenceSheetIconUrlByEntityKey,
+  })
+  const manifest = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
+  const manifestBlocks = readLooseArray(readLooseRecord(manifest).blocks).map(readLooseRecord)
+  const manifestStoryboardGroupPlan = manifestBlocks.length > 0
+    ? { groups: manifestBlocks.map((block) => readLooseRecord(block.storyboardGroup)).filter((group) => trimOptionalString(group.id)) }
+    : null
+  const shotPlan = readLooseRecord(manifest).shotPlan
+    ? readLooseRecord(manifest).shotPlan
+    : readFirstOutputRunRecord(input.run, ['shotPlan', 'shot_plan'])
+    ?? readArtifactMetadataRecord(requestArtifacts, ['cinematic_v3_authoring_timeline'], ['shotPlan', 'shot_plan'])
+  const storyboardGroupPlan = manifestStoryboardGroupPlan
+    ?? readFirstOutputRunRecord(input.run, ['storyboardGroupPlan', 'storyboard_group_plan'])
+    ?? readArtifactMetadataRecord(requestArtifacts, ['cinematic_v3_authoring_timeline'], ['storyboardGroupPlan', 'storyboard_group_plan'])
+  const timeline = readFirstOutputRunRecord(input.run, ['timeline'])
+    ?? readArtifactMetadataRecord(requestArtifacts, ['cinematic_v3_authoring_timeline'], ['timeline'])
+  const screenplay = readLooseRecord(readLooseRecord(manifest).screenplayDraft)
+  const fallbackScreenplay = Object.keys(screenplay).length > 0
+    ? screenplay
+    : readFirstOutputRunRecord(input.run, ['screenplayDraft', 'screenplay', 'script'])
+  const panels = [
+    ...readArtifactMediaRecords(childArtifacts, ['cinematic_v3_storyboard_panel', 'cinematic_v2_storyboard_panel', 'sequence_animatic_block_panel']),
+    ...readArtifactMediaRecords(requestArtifacts, ['cinematic_v3_storyboard_panel', 'cinematic_v2_storyboard_panel']),
+    ...childRequests.flatMap((request) => {
+      const childRun = childRunByRequestId.get(request.id) ?? null
+      return readAllOutputRunRecords(childRun, ['panels']).filter((panel) => trimOptionalString(panel.shotId) || trimOptionalString(panel.role).includes('storyboard_panel'))
+    }),
+    ...readAllOutputRunRecords(input.run, ['panels']).filter((panel) => trimOptionalString(panel.shotId) || trimOptionalString(panel.role).includes('storyboard_panel')),
+  ]
+  const sheets = readArtifactMediaRecords(requestArtifacts, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet'])
+  const groups = readLooseArray(readLooseRecord(storyboardGroupPlan).groups).map(readLooseRecord)
+  const timelineShotPlan = Object.keys(readLooseRecord(shotPlan)).length > 0
+    ? normalizeSequenceAnimaticShotPlanForTimeline(readLooseRecord(shotPlan), groups)
+    : shotPlan
+  const panelAssetKeyByShotId = new Map<string, string>()
+  for (const panel of panels) {
+    const shotId = trimOptionalString(panel.shotId)
+    const assetKey = trimOptionalString(panel.assetKey)
+    if (shotId && assetKey && !panelAssetKeyByShotId.has(shotId)) {
+      panelAssetKeyByShotId.set(shotId, assetKey)
+    }
+  }
+  let projection: ReturnType<typeof buildCinematicV2TimelineProjection> | null = null
+  if (timelineShotPlan) {
+    try {
+      projection = buildCinematicV2TimelineProjection({
+        shotPlan: timelineShotPlan,
+        timeline,
+        panels,
+        storyboardSheets: sheets,
+      })
+    } catch {
+      projection = null
+    }
+  }
+  const rawShots = readLooseArray(readLooseRecord(shotPlan).shots).map(readLooseRecord)
+  const projectionShotById = new Map((projection?.shots ?? []).map((shot) => [shot.id, shot] as const))
+  const blocks: SequenceAnimaticBlockView[] = groups.length > 0
+    ? groups.map((group, groupIndex) => {
+      const groupId = trimOptionalString(group.id) || `cinematic_v3_storyboard_group_${String(groupIndex + 1).padStart(3, '0')}`
+      const promptNodeKey = normalizeStoryboardGroupNodeKey(groupId, 'prompt')
+      const sheetNodeKey = normalizeStoryboardGroupNodeKey(groupId, 'sheet')
+      const panelExtractNodeKey = normalizeStoryboardGroupNodeKey(groupId, 'panel_extract')
+      const videoPromptNodeKey = normalizeStoryboardGroupNodeKey(groupId, 'video_prompt')
+      const videoNodeKey = normalizeStoryboardGroupNodeKey(groupId, 'video')
+      const childRequest = childRequestByBlockId.get(groupId) ?? null
+      const childRun = childRequest ? childRunByRequestId.get(childRequest.id) ?? null : null
+      const childPromptNodeKey = childRequest ? 'storyboard_prompt' : promptNodeKey
+      const childSheetNodeKey = childRequest ? 'storyboard_sheet' : sheetNodeKey
+      const childPanelExtractNodeKey = childRequest ? 'panel_extract' : panelExtractNodeKey
+      const childVideoPromptNodeKey = childRequest ? 'video_prompt' : videoPromptNodeKey
+      const childVideoNodeKey = childRequest ? 'video' : videoNodeKey
+      const blockSteps = [
+        outputRunStepForNode(childRun ?? input.run, childPromptNodeKey),
+        outputRunStepForNode(childRun ?? input.run, childSheetNodeKey),
+        outputRunStepForNode(childRun ?? input.run, childPanelExtractNodeKey),
+        outputRunStepForNode(childRun ?? input.run, childVideoPromptNodeKey),
+      ].filter(Boolean)
+      const failedStep = blockSteps.find((step) => step?.status === 'failed') ?? null
+      const runningStep = blockSteps.find((step) => step?.status === 'running' || step?.status === 'queued') ?? null
+      const shotIds = readLooseArray(group.shotIds).map(trimOptionalString).filter(Boolean)
+      const groupShots = shotIds
+        .map((shotId) => rawShots.find((shot) => trimOptionalString(shot.id) === shotId) ?? null)
+        .filter((shot): shot is Record<string, unknown> => Boolean(shot))
+      return {
+        id: groupId,
+        index: typeof group.index === 'number' ? group.index : groupIndex + 1,
+        title: trimOptionalString(group.summary) || `Storyboard block ${groupIndex + 1}`,
+        durationLabel: formatAnimaticSeconds(group.editorialDurationSeconds),
+        statusLabel: failedStep
+          ? `Failed: ${failedStep.label}`
+          : runningStep
+            ? `${statusLabelForOutputRunStep(runningStep)}: ${runningStep.label}`
+            : groupShots.every((shot) => panelAssetKeyByShotId.has(trimOptionalString(shot.id))) ? 'Panels ready' : childRequest ? 'Ready to generate' : 'Preparing block graph',
+        shotRangeLabel: shotIds.length > 0 ? `Shots ${shotIds[0]}-${shotIds[shotIds.length - 1]}` : 'Shots pending',
+        childRequestId: childRequest?.id ?? null,
+        childWorkflowId: childRequest?.workflowId ?? null,
+        childRunId: childRun?.id ?? null,
+        readyToRun: childRequest ? readLooseRecord(childRequest.metadata).readyToRun !== false : false,
+        promptNodeKey: childPromptNodeKey,
+        sheetNodeKey: childSheetNodeKey,
+        panelExtractNodeKey: childPanelExtractNodeKey,
+        videoPromptNodeKey: childVideoPromptNodeKey,
+        videoNodeKey: childVideoNodeKey,
+        failedNodeLabel: failedStep?.label ?? '',
+        hasPanels: groupShots.some((shot) => panelAssetKeyByShotId.has(trimOptionalString(shot.id))),
+        shots: groupShots.map((shot, shotIndex) => {
+          const shotId = trimOptionalString(shot.id) || `${groupIndex + 1}:${shotIndex + 1}`
+          const projectionShot = projectionShotById.get(shotId)
+          const previewAssetKey = panelAssetKeyByShotId.get(shotId) ?? projectionShot?.previewAssetKey ?? null
+          const panelStep = outputRunStepForNode(childRun ?? input.run, childPanelExtractNodeKey)
+          return {
+            id: shotId,
+            index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
+            title: trimOptionalString(shot.title) || `Shot ${shotIndex + 1}`,
+            timeLabel: projectionShot
+              ? formatAnimaticTimeRange(projectionShot.startSeconds, projectionShot.endSeconds)
+              : 'Timing pending',
+            durationLabel: formatAnimaticSeconds(shot.editorialDurationSeconds),
+            action: trimOptionalString(shot.action) || trimOptionalString(shot.description) || trimOptionalString(shot.storyboardPanelPrompt),
+            dialogue: buildSequenceAnimaticDialogueLines(shot, resolveReference),
+            camera: cameraLineFromShot(shot),
+            lighting: trimOptionalString(shot.lighting),
+            performance: performanceLineFromShot(shot),
+            performanceBeats: buildSequenceAnimaticPerformanceBeats(shot, resolveReference),
+            panelStatusLabel: previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : runningStep ? 'Panel pending' : 'Panel not generated',
+            panelError: panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : '',
+            panelUrl: previewAssetKey ? resolveAssetSourceUrl(assetByKey.get(previewAssetKey) ?? null) : null,
+            references: buildSequenceAnimaticShotReferences(shot, resolveReference),
+          }
+        }),
+      }
+    })
+    : rawShots.length > 0
+      ? [{
+        id: 'storyboard_group_1',
+        index: 1,
+        title: 'Storyboard block 1',
+        durationLabel: formatAnimaticSeconds(readLooseRecord(shotPlan).totalEditorialDurationSeconds),
+        statusLabel: panels.length > 0 ? 'Panels ready' : 'Generating panels',
+        shotRangeLabel: `Shots 1-${rawShots.length}`,
+        childRequestId: null,
+        childWorkflowId: null,
+        childRunId: null,
+        readyToRun: false,
+        promptNodeKey: 'cinematic_v3_storyboard_group_001_prompt',
+        sheetNodeKey: 'cinematic_v3_storyboard_group_001_sheet',
+        panelExtractNodeKey: 'cinematic_v3_storyboard_group_001_panel_extract',
+        videoPromptNodeKey: 'cinematic_v3_storyboard_group_001_video_prompt',
+        videoNodeKey: 'cinematic_v3_storyboard_group_001_video',
+        failedNodeLabel: '',
+        hasPanels: panels.length > 0,
+        shots: rawShots.map((shot, shotIndex) => {
+          const shotId = trimOptionalString(shot.id) || `shot_${shotIndex + 1}`
+          const projectionShot = projectionShotById.get(shotId)
+          const previewAssetKey = panelAssetKeyByShotId.get(shotId) ?? projectionShot?.previewAssetKey ?? null
+          const panelStep = outputRunStepForNode(input.run, 'cinematic_v3_storyboard_group_001_panel_extract')
+          return {
+            id: shotId,
+            index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
+            title: trimOptionalString(shot.title) || `Shot ${shotIndex + 1}`,
+            timeLabel: projectionShot
+              ? formatAnimaticTimeRange(projectionShot.startSeconds, projectionShot.endSeconds)
+              : 'Timing pending',
+            durationLabel: formatAnimaticSeconds(shot.editorialDurationSeconds),
+            action: trimOptionalString(shot.action) || trimOptionalString(shot.description) || trimOptionalString(shot.storyboardPanelPrompt),
+            dialogue: buildSequenceAnimaticDialogueLines(shot, resolveReference),
+            camera: cameraLineFromShot(shot),
+            lighting: trimOptionalString(shot.lighting),
+            performance: performanceLineFromShot(shot),
+            performanceBeats: buildSequenceAnimaticPerformanceBeats(shot, resolveReference),
+            panelStatusLabel: previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
+            panelError: panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : '',
+            panelUrl: previewAssetKey ? resolveAssetSourceUrl(assetByKey.get(previewAssetKey) ?? null) : null,
+            references: buildSequenceAnimaticShotReferences(shot, resolveReference),
+          }
+        }),
+      }]
+      : []
+  return {
+    request: input.request,
+    title: trimOptionalString(fallbackScreenplay?.title) || input.request.title || 'Sequence screenplay animatic',
+    statusLabel: input.row?.statusLabel ?? summarizeOutputStatus(input.request.status),
+    progressLabel: input.row?.progress.label ?? '',
+    currentStepLabel: input.row?.currentStepLabel ?? '',
+    screenplayMarkdown: trimOptionalString(fallbackScreenplay?.screenplayMarkdown) || trimOptionalString(fallbackScreenplay?.markdown) || input.request.prompt,
+    blocks,
+    hasPanels: panels.length > 0,
+  }
+}
+
 function hasNonEmptyMetadataValue(value: unknown) {
   if (typeof value === 'string') return value.trim().length > 0
   if (Array.isArray(value)) return value.length > 0
@@ -1302,6 +2030,8 @@ export function WorldGraphPage({
   onCancelWorldPromptTurn,
   onDismissWorldPromptSuggestion,
   onStartOutputRequest,
+  onStartOutputWorkflowRun,
+  onEnsureSequenceAnimaticBlockWorkflows,
   onGetOutputRequestStatus,
   onCancelOutputRequest,
   onRequestDeleteOutputRequest,
@@ -2161,6 +2891,175 @@ export function WorldGraphPage({
     onRefreshOutputRequest: onGetOutputRequestStatus,
     onStartOutputRequest,
   })
+  const outputLibraryRowByRequestId = useMemo(
+    () => new Map(outputLibraryModel.rows.map((row) => [row.id, row] as const)),
+    [outputLibraryModel.rows],
+  )
+  const [sequenceAnimaticBusyKey, setSequenceAnimaticBusyKey] = useState<string | null>(null)
+  const [sequenceAnimaticBlockRunKey, setSequenceAnimaticBlockRunKey] = useState<string | null>(null)
+  const [sequenceAnimaticErrorByKey, setSequenceAnimaticErrorByKey] = useState<Record<string, string>>({})
+  const [sequenceAnimaticPreviewRequestId, setSequenceAnimaticPreviewRequestId] = useState<string | null>(null)
+  const sequenceAnimaticPreviewModel = useMemo(() => {
+    const request = sequenceAnimaticPreviewRequestId
+      ? outputRequests.find((entry) => entry.id === sequenceAnimaticPreviewRequestId) ?? null
+      : null
+    if (!request) return null
+    const run = request.latestRunId
+      ? outputWorkflowRuns.find((entry) => entry.id === request.latestRunId) ?? null
+      : request.workflowId
+        ? outputWorkflowRuns.find((entry) => entry.workflowId === request.workflowId) ?? null
+        : null
+    return buildSequenceAnimaticViewModel({
+      request,
+      run,
+      row: outputLibraryRowByRequestId.get(request.id) ?? null,
+      requests: outputRequests,
+      runs: outputWorkflowRuns,
+      assets,
+      artifacts: outputArtifacts,
+      worldEntities,
+      imageUrlByEntityKey: wikiImageUrlByEntityKey,
+      referenceSheetIconUrlByEntityKey,
+    })
+  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticPreviewRequestId, wikiImageUrlByEntityKey, worldEntities])
+  const handleGenerateSequenceAnimatic = useCallback(async (sequenceEntity: WorldEntity) => {
+    if (!canRunOutputs || sequenceAnimaticBusyKey) return
+    setSequenceAnimaticBusyKey(sequenceEntity.key)
+    setSequenceAnimaticErrorByKey((previous) => {
+      const next = { ...previous }
+      delete next[sequenceEntity.key]
+      return next
+    })
+    try {
+      const sequence = readWorldSequenceMetadata(sequenceEntity)
+      const prompt = [
+        `Create a screenplay animatic for ${sequenceEntity.name}.`,
+        sequence.synopsis || sequenceEntity.summary || sequenceEntity.context
+          ? `Adapt this sequence unit only: ${sequence.synopsis || sequenceEntity.summary || sequenceEntity.context}.`
+          : 'Adapt this selected sequence unit only.',
+        'Generate a creative screenplay with storyboard block markers, parse it into shots, create storyboard sheets, extract panels, and stop before video generation.',
+      ].join(' ')
+      const result = await onStartOutputRequest({
+        prompt,
+        sourceSurface: 'wiki_sequence_unit',
+        outputKindOverride: 'cinematic_episode',
+        selectedSequenceUnitKeys: [sequenceEntity.key],
+        targetFormat: 'video',
+        cinematicReferenceMode: 'storyboard_sheet',
+        cinematicPipelineVersion: 'v3_script_storyboards',
+        cinematicV2AnimaticMode: 'fast_panels',
+        sequenceAnimaticMode: 'full_sequence_unit',
+        debugSkipVideoGeneration: true,
+      })
+      setSequenceAnimaticPreviewRequestId(result.request.id)
+    } catch (error) {
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceEntity.key]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setSequenceAnimaticBusyKey(null)
+    }
+  }, [canRunOutputs, onStartOutputRequest, sequenceAnimaticBusyKey])
+  const handleRunSequenceAnimaticBlock = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    block: SequenceAnimaticBlockView,
+    mode: 'regenerate_storyboard' | 'generate_video',
+  ) => {
+    if (sequenceAnimaticBlockRunKey) return
+    const blockRunKey = `${model.request.id}:${block.id}:${mode}`
+    setSequenceAnimaticBlockRunKey(blockRunKey)
+    setSequenceAnimaticErrorByKey((previous) => {
+      const next = { ...previous }
+      for (const key of model.request.selectedSequenceUnitKeys) delete next[key]
+      return next
+    })
+    try {
+      let targetBlock = block
+      if (!targetBlock.childWorkflowId) {
+        const ensureResult = await onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: model.request.id })
+        const ensuredChild = ensureResult.childRequests.find((request) => trimOptionalString(readLooseRecord(request.metadata).storyboardBlockId) === block.id) ?? null
+        targetBlock = {
+          ...targetBlock,
+          childRequestId: ensuredChild?.id ?? targetBlock.childRequestId,
+          childWorkflowId: ensuredChild?.workflowId ?? targetBlock.childWorkflowId,
+        }
+      }
+      if (!targetBlock.childWorkflowId) throw new Error('Storyboard block workflow is not ready yet.')
+      const forceNodeKeys = mode === 'generate_video'
+        ? [targetBlock.videoNodeKey]
+        : [targetBlock.sheetNodeKey, targetBlock.panelExtractNodeKey, targetBlock.videoPromptNodeKey, 'artifact']
+      const targetNodeKeys = mode === 'generate_video'
+        ? [targetBlock.videoNodeKey]
+        : ['artifact']
+      const childRun = targetBlock.childRunId
+        ? outputWorkflowRuns.find((run) => run.id === targetBlock.childRunId) ?? null
+        : targetBlock.childWorkflowId
+          ? outputWorkflowRuns.find((run) => run.workflowId === targetBlock.childWorkflowId) ?? null
+          : null
+      const latestRunInput = readLooseRecord(childRun?.input)
+      await onStartOutputWorkflowRun({
+        workflowId: targetBlock.childWorkflowId,
+        prompt: model.request.prompt,
+        targetFormat: 'video',
+        selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
+        input: {
+          ...latestRunInput,
+          debugSkipVideoGeneration: mode !== 'generate_video',
+          cinematicVideoApproved: mode === 'generate_video',
+          cinematicVideoApprovalScope: mode === 'generate_video' ? 'sequence_animatic_block' : undefined,
+        },
+        metadata: {
+          sourceRunId: model.request.latestRunId,
+          runMode: mode === 'generate_video'
+            ? 'sequence_animatic_block_video'
+            : 'sequence_animatic_storyboard_block_regenerate',
+          runScope: 'upstream_to_node',
+          targetNodeKeys,
+          forceNodeKeys,
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: false,
+          debugSkipVideoGeneration: mode !== 'generate_video',
+          cinematicVideoApproved: mode === 'generate_video',
+          parentRequestId: model.request.id,
+          sequenceAnimaticRole: 'storyboard_block',
+          sequenceAnimaticBlockId: targetBlock.id,
+          storyboardBlockId: targetBlock.id,
+        },
+      })
+      await onGetOutputRequestStatus(targetBlock.childRequestId ?? model.request.id)
+      await onGetOutputRequestStatus(model.request.id)
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setSequenceAnimaticBlockRunKey(null)
+    }
+  }, [onEnsureSequenceAnimaticBlockWorkflows, onGetOutputRequestStatus, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  const handleOpenSequenceAnimaticBlockGraph = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    block: SequenceAnimaticBlockView,
+  ) => {
+    try {
+      let childRequestId = block.childRequestId
+      if (!childRequestId) {
+        const ensureResult = await onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: model.request.id })
+        childRequestId = ensureResult.childRequests.find((request) => trimOptionalString(readLooseRecord(request.metadata).storyboardBlockId) === block.id)?.id ?? null
+      }
+      if (childRequestId) {
+        onOpenOutputStudio(childRequestId, 'graph')
+      }
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    }
+  }, [onEnsureSequenceAnimaticBlockWorkflows, onOpenOutputStudio])
   const shouldRunLiveWikiHeaderRecovery = useMemo(() => {
     const worldWiki = readLooseRecord(projectDraftMetadata.worldWiki)
     const title = trimOptionalString(worldWiki.title)
@@ -7191,6 +8090,22 @@ export function WorldGraphPage({
         sequence.storyFunction ? sequence.storyFunction.replace(/_/g, ' ') : null,
         sequence.scriptExpansionReady ? 'Script expansion ready' : 'Needs script expansion hook',
       ].filter((value): value is string => Boolean(value))
+      const sequenceAnimaticRequest = latestWikiSequenceAnimaticRequest(outputRequests, entity.key)
+      const sequenceAnimaticRow = sequenceAnimaticRequest ? outputLibraryRowByRequestId.get(sequenceAnimaticRequest.id) ?? null : null
+      const sequenceAnimaticState = sequenceAnimaticStateForRequest(sequenceAnimaticRequest, outputWorkflowRuns, outputArtifacts)
+      const sequenceAnimaticBusy = sequenceAnimaticBusyKey === entity.key
+      const sequenceAnimaticError = sequenceAnimaticErrorByKey[entity.key] ?? ''
+      const sequenceAnimaticPrimaryLabel = sequenceAnimaticBusy
+        ? 'Starting animatic'
+        : sequenceAnimaticState === 'none'
+          ? 'Generate screenplay animatic'
+          : sequenceAnimaticState === 'failed'
+            ? 'Regenerate animatic'
+            : sequenceAnimaticState === 'in_progress'
+              ? 'View progress'
+              : 'View animatic'
+      const sequenceAnimaticProgressLabel = sequenceAnimaticRow?.currentStepLabel
+        || (sequenceAnimaticState === 'in_progress' ? 'Generating screenplay animatic' : '')
 
       return (
         <section className="world-wiki-entity-page world-wiki-sequence-page" data-world-wiki-entity-page={entity.key}>
@@ -7203,6 +8118,50 @@ export function WorldGraphPage({
                 <EntityIcon id="graph" />
                 Graph view
               </button>
+              <div className="world-wiki-sequence-animatic-actions">
+                <button
+                  className="world-wiki-sequence-animatic-primary"
+                  disabled={!canRunOutputs || sequenceAnimaticBusy}
+                  onClick={() => {
+                    if (sequenceAnimaticRequest && sequenceAnimaticState !== 'failed' && sequenceAnimaticState !== 'none') {
+                      setSequenceAnimaticPreviewRequestId(sequenceAnimaticRequest.id)
+                    } else {
+                      void handleGenerateSequenceAnimatic(entity)
+                    }
+                  }}
+                  type="button"
+                >
+                  {sequenceAnimaticBusy ? <span className="world-mini-spinner" aria-hidden="true" /> : <EntityIcon id="cinematic" />}
+                  {sequenceAnimaticPrimaryLabel}
+                </button>
+                {sequenceAnimaticRequest?.workflowId ? (
+                  <button className="ghost-button compact" onClick={() => onOpenOutputStudio(sequenceAnimaticRequest.id, 'graph')} type="button">
+                    Open graph
+                  </button>
+                ) : null}
+                {sequenceAnimaticRequest ? (
+                  <button className="ghost-button compact" onClick={() => onGetOutputRequestStatus(sequenceAnimaticRequest.id)} type="button">
+                    Continue generation
+                  </button>
+                ) : null}
+                {sequenceAnimaticRequest ? (
+                  <button
+                    className="ghost-button compact"
+                    disabled={!canRunOutputs || sequenceAnimaticBusy}
+                    onClick={() => void handleGenerateSequenceAnimatic(entity)}
+                    type="button"
+                  >
+                    Generate new full chapter animatic
+                  </button>
+                ) : null}
+              </div>
+              {sequenceAnimaticProgressLabel ? (
+                <div className="world-wiki-sequence-animatic-progress">
+                  <span>{sequenceAnimaticRow?.progress.label || summarizeOutputStatus(sequenceAnimaticState)}</span>
+                  <strong>{sequenceAnimaticProgressLabel}</strong>
+                </div>
+              ) : null}
+              {sequenceAnimaticError ? <div className="inline-note is-warning">{sequenceAnimaticError}</div> : null}
               <div className="world-wiki-sequence-chip-row">
                 {sequenceStats.map((stat) => <span key={stat}>{stat}</span>)}
               </div>
@@ -9989,6 +10948,180 @@ export function WorldGraphPage({
         )}
       </aside>
         </>
+      ) : null}
+
+      {sequenceAnimaticPreviewModel ? (
+        <div className="world-wiki-sequence-animatic-overlay" onClick={() => setSequenceAnimaticPreviewRequestId(null)}>
+          <section
+            className="world-wiki-sequence-animatic-viewer"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sequence screenplay animatic"
+          >
+            <button
+              className="world-wiki-sequence-animatic-close"
+              onClick={() => setSequenceAnimaticPreviewRequestId(null)}
+              type="button"
+              aria-label="Close animatic preview"
+            >
+              <EntityIcon id="close" />
+            </button>
+            <header className="world-wiki-sequence-animatic-head">
+              <div>
+                <span className="eyebrow">Screenplay animatic</span>
+                <h2>{sequenceAnimaticPreviewModel.title}</h2>
+              </div>
+              <div className="world-wiki-sequence-animatic-head-actions">
+                <span>{sequenceAnimaticPreviewModel.statusLabel}</span>
+                {sequenceAnimaticPreviewModel.progressLabel ? <em>{sequenceAnimaticPreviewModel.progressLabel}</em> : null}
+                <button className="ghost-button compact" onClick={() => onOpenOutputStudio(sequenceAnimaticPreviewModel.request.id, 'graph')} type="button">
+                  Open graph
+                </button>
+                <button className="ghost-button compact" onClick={() => onOpenOutputStudio(sequenceAnimaticPreviewModel.request.id, 'timeline')} type="button">
+                  Timeline
+                </button>
+              </div>
+            </header>
+            {sequenceAnimaticPreviewModel.currentStepLabel ? (
+              <div className="world-wiki-sequence-animatic-live">
+                <span className="world-mini-spinner" aria-hidden="true" />
+                <strong>{sequenceAnimaticPreviewModel.currentStepLabel}</strong>
+              </div>
+            ) : null}
+            {sequenceAnimaticPreviewModel.blocks.length > 0 ? (
+              <div className="world-wiki-sequence-animatic-document">
+                {sequenceAnimaticPreviewModel.blocks.map((block) => (
+                  <section key={block.id} className="world-wiki-sequence-animatic-block">
+                    <div className="world-wiki-sequence-animatic-block-head">
+                      <div>
+                        <span>Block {block.index} / {block.durationLabel}</span>
+                        <h3>{block.title}</h3>
+                        <em>{block.shotRangeLabel} / {block.statusLabel}</em>
+                      </div>
+                      <div>
+                        <button className="ghost-button compact" onClick={() => void handleOpenSequenceAnimaticBlockGraph(sequenceAnimaticPreviewModel, block)} type="button">
+                          Open block graph
+                        </button>
+                        <button
+                          className="ghost-button compact"
+                          disabled={sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`}
+                          onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'regenerate_storyboard')}
+                          type="button"
+                        >
+                          {sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`
+                            ? 'Generating...'
+                            : block.hasPanels
+                              ? 'Regenerate storyboard'
+                              : 'Generate storyboard'}
+                        </button>
+                        <button
+                          className="ghost-button compact"
+                          disabled={sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`}
+                          onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'generate_video')}
+                          type="button"
+                        >
+                          {sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video` ? 'Starting video...' : 'Generate video'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="world-wiki-sequence-animatic-shot-list">
+                      {block.shots.map((shot) => (
+                        <article key={shot.id} className="world-wiki-sequence-animatic-shot">
+                          <div className="world-wiki-sequence-animatic-shot-copy">
+                            <div className="world-wiki-sequence-animatic-shot-kicker">
+                              <span>Shot {String(shot.index).padStart(3, '0')}</span>
+                              <span>Chapter time {shot.timeLabel}</span>
+                              <span>Duration {shot.durationLabel}</span>
+                            </div>
+                            <h4>{shot.title}</h4>
+                            <p>{shot.action || 'Shot action is still being parsed.'}</p>
+                            {shot.camera || shot.lighting || (shot.performance && shot.performanceBeats.length === 0) ? (
+                              <dl className="world-wiki-sequence-animatic-shot-notes">
+                                {shot.camera ? <div><dt>Camera</dt><dd>{shot.camera}</dd></div> : null}
+                                {shot.lighting ? <div><dt>Lighting</dt><dd>{shot.lighting}</dd></div> : null}
+                                {shot.performance && shot.performanceBeats.length === 0 ? <div><dt>Performance</dt><dd>{shot.performance}</dd></div> : null}
+                              </dl>
+                            ) : null}
+                            {shot.performanceBeats.length > 0 ? (
+                              <div className="world-wiki-sequence-animatic-performance-list" aria-label="Shot performance beats">
+                                {shot.performanceBeats.map((beat) => (
+                                  <div key={beat.id} className="world-wiki-sequence-animatic-performance-card">
+                                    <div className="world-wiki-sequence-animatic-performance-head">
+                                      <span title={beat.characterName}>
+                                        {beat.characterIconUrl
+                                          ? <img src={beat.characterIconUrl} alt="" />
+                                          : <EntityIcon id={beat.characterIconId} />}
+                                        <strong>{beat.characterName}</strong>
+                                      </span>
+                                      <em>{beat.toneLabel}</em>
+                                    </div>
+                                    <div className="world-wiki-sequence-animatic-performance-values" aria-label={`Performance values for ${beat.characterName}`}>
+                                      <span>V {beat.valenceLabel}</span>
+                                      <span>A {beat.arousalLabel}</span>
+                                      <span>C {beat.confidenceLabel}</span>
+                                      <span>D {beat.dominanceLabel}</span>
+                                    </div>
+                                    {[beat.facialExpression, beat.bodyLanguage, beat.gaze, beat.gesture, beat.voiceEnergy].filter(Boolean).length > 0 ? (
+                                      <p>{[beat.facialExpression, beat.bodyLanguage, beat.gaze, beat.gesture, beat.voiceEnergy].filter(Boolean).join(' / ')}</p>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                            {shot.dialogue.length > 0 ? (
+                              <div className="world-wiki-sequence-animatic-dialogue-list">
+                                {shot.dialogue.map((line) => (
+                                  <div key={line.id} className="world-wiki-sequence-animatic-dialogue-line">
+                                    <span className="world-wiki-sequence-animatic-dialogue-speaker" title={line.speakerName}>
+                                      {line.speakerIconUrl
+                                        ? <img src={line.speakerIconUrl} alt="" />
+                                        : <EntityIcon id={line.speakerIconId} />}
+                                      <strong>{line.speakerName}</strong>
+                                    </span>
+                                    <p>{line.text}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="world-wiki-sequence-animatic-panel-stack">
+                            <div className="world-wiki-sequence-animatic-frame">
+                              {shot.panelUrl ? <img src={shot.panelUrl} alt="" /> : (
+                                <span>
+                                  {shot.panelStatusLabel}
+                                  {shot.panelError ? <small>{shot.panelError}</small> : null}
+                                </span>
+                              )}
+                            </div>
+                            {shot.references.length > 0 ? (
+                              <div className="world-wiki-sequence-animatic-ref-strip" aria-label="Shot references">
+                                {shot.references.map((reference) => (
+                                  <span key={reference.entityKey} className="world-wiki-sequence-animatic-ref-chip" title={`${reference.role}: ${reference.name}`}>
+                                    {reference.iconUrl
+                                      ? <img src={reference.iconUrl} alt="" />
+                                      : <EntityIcon id={reference.iconId} />}
+                                    <em>{reference.name}</em>
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div className="world-wiki-sequence-animatic-empty">
+                <strong>Screenplay generation has started.</strong>
+                <p>Shot blocks and storyboard panels will appear here as the output graph saves them.</p>
+                {sequenceAnimaticPreviewModel.screenplayMarkdown ? <pre>{sequenceAnimaticPreviewModel.screenplayMarkdown}</pre> : null}
+              </div>
+            )}
+          </section>
+        </div>
       ) : null}
     </div>
   )

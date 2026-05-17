@@ -597,13 +597,15 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
     appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
     guidance: [
-      'Write a compact reference legend that gives each @ImageN one job: storyboard timing board, entity reference sheet, environment reference, prop reference, or keyframe when keyframe mode is explicitly enabled.',
+      'Write the reference legend from the actual submitted provider reference order. Only name @ImageN, @VideoN, or @AudioN references that are attached in that order.',
+      'Give each reference one job: storyboard keyframes, shot keyframe, character/variant identity, shot-location environment, prop continuity, motion reference, or audio reference.',
+      'Do not claim @Image1 is a storyboard unless the first submitted image is actually the storyboard sheet.',
       'Do not re-describe faces or designs against the reference; state what each reference locks and what must not drift.',
     ],
     avoid: [
-      'Avoid contradictory reference duties, excessive visual bloat, or asking Seedance to reproduce caption bands, borders, gutters, UI, or grid layout as on-screen content.',
+      'Avoid stale @ImageN numbering, contradictory reference duties, excessive visual bloat, or asking Seedance to reproduce caption bands, borders, gutters, UI, or grid layout as on-screen content.',
     ],
-    structuredDirectives: { promptBlock: 'reference_legend', storyboardFirst: true },
+    structuredDirectives: { promptBlock: 'reference_legend', exactProviderOrder: true },
     priority: 98,
     tokenBudget: 220,
     version: '1.0.0',
@@ -618,8 +620,8 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
     appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
     guidance: [
-      'Use a four-block call sheet: truth source, reference legend, timestamped timeline, and positive constraints.',
-      'Each timeline cell should carry one shot range, camera/framing, visible action, physics/material behavior, and audio cue when audio is enabled.',
+      'Use a compact call sheet: intent line, exact reference legend, storyboard/keyframe instruction when relevant, timestamped shot ranges, identity/speaker guide, and positive constraints.',
+      'Each timeline cell should carry one shot range, camera/framing, visible action, physics/material behavior, transition note when useful, and audio cue when audio is enabled.',
       'State continuous-take versus cut-forward mode clearly when it matters.',
     ],
     avoid: [
@@ -640,13 +642,14 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
     appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
     guidance: [
-      'Use the storyboard beat sheet first by default: @Image1 is the compiled take timing/continuity board. Put individual entity, location, and prop reference assets after it.',
-      'Use clean keyframes first only when cinematicReferenceMode is keyframes; in keyframes_and_storyboard mode, keep the storyboard grid first and put keyframes after it.',
-      'Keep the clip prompt focused on one dominant action path and one camera direction, with block duration, aspect ratio, and continuity constraints explicit.',
+      'For V3 storyboard-block videos, prefer the storyboard sheet first, then selected character/location/prop variant references, then optional video/audio references.',
+      'For V2 keyframe videos, preserve the shot keyframe as @Image1 and put supporting entity/location/prop references after it.',
+      'Keep the clip prompt focused on the attached storyboard/keyframe progression, timestamped shot call sheet, block duration, aspect ratio, and continuity constraints.',
       'Use reference images as anchors rather than asking the model to redesign characters, locations, products, or brand surfaces.',
+      'Use Laban movement language only for high-physicality action such as fights, martial arts, chase, parkour, staff/sword work, impacts, and aerial motion.',
     ],
     avoid: [
-      'Avoid conflicting @Image references, long scene summaries, multiple camera styles in one clip, or prompts that exceed the provider reference limits.',
+      'Avoid stale @Image references after fallback, long scene summaries, repeated artifact bans, multiple camera styles in one clip, or prompts that exceed the provider reference limits.',
     ],
     structuredDirectives: { provider: 'fal', modelFamily: 'seedance_2_reference_to_video', maxImages: 9, maxVideos: 3, maxAudio: 3, maxFiles: 12 },
     priority: 98,

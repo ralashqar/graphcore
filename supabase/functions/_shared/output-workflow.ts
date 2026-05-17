@@ -165,7 +165,7 @@ export const outputWorkflowRunStatusSelect = 'id, project_id, draft_id, workflow
 export const outputWorkflowRunStepSelect = 'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 export const outputWorkflowRunStepStatusSelect = 'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 export const outputArtifactSelect = 'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
-export const outputRequestSelect = 'id, project_id, draft_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
+export const outputRequestSelect = 'id, project_id, draft_id, parent_request_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
 export const outputRequestStatusProjectionSelect = 'request_id, project_id, draft_id, workflow_id, latest_run_id, status, output_kind, title, progress, active_node_key, active_node_label, latest_error, artifact_keys, preview_asset_keys, graph_revision, timeline_revision, terminal, metadata, created_at, updated_at'
 
 type OutputWorkflowRow = {
@@ -284,6 +284,7 @@ type OutputRequestRow = {
   id: string
   project_id: string
   draft_id: string
+  parent_request_id: string | null
   workflow_id: string | null
   latest_run_id: string | null
   requested_by: string | null
@@ -380,6 +381,7 @@ export function mapOutputRequestRow(row: OutputRequestRow): OutputRequest {
     id: row.id,
     projectId: row.project_id,
     draftId: row.draft_id,
+    parentRequestId: row.parent_request_id,
     workflowId: row.workflow_id,
     latestRunId: row.latest_run_id,
     requestedBy: row.requested_by,
@@ -1394,6 +1396,43 @@ function readOutputEntityVoiceDescription(entity: Record<string, unknown>) {
 function readEntitySequence(entity: Record<string, unknown>) {
   const customProperties = asRecord(entity.customProperties ?? entity.custom_properties)
   return asRecord(customProperties.sequence)
+}
+
+function buildSelectedSequenceUnitScreenplayBrief(context: Record<string, unknown>) {
+  const sequenceUnits = Array.isArray(context.sequenceUnits) ? context.sequenceUnits.map(asRecord) : []
+  if (sequenceUnits.length === 0) return null
+  const sourceSequenceUnitKeys = readStringArray(context.sourceSequenceUnitKeys)
+  const sequenceUnit = sourceSequenceUnitKeys.length > 0
+    ? sequenceUnits.find((entry) => sourceSequenceUnitKeys.includes(readText(entry.key))) ?? sequenceUnits[0]
+    : sequenceUnits[0]
+  if (!sequenceUnit) return null
+  const sequence = readEntitySequence(sequenceUnit)
+  const metadata = asRecord(sequenceUnit.metadata)
+  const visual = asRecord(metadata.visual)
+  return {
+    key: readText(sequenceUnit.key),
+    name: readText(sequenceUnit.name),
+    summary: readText(sequenceUnit.summary),
+    context: readText(sequenceUnit.context),
+    visualDescription: readText(metadata.visualDescription) || readText(visual.description),
+    sequence: {
+      unitKind: readText(sequence.unitKind),
+      actLabel: readText(sequence.actLabel),
+      ordinal: Number(sequence.ordinal ?? 0) || null,
+      sequenceKey: readText(sequence.sequenceKey),
+      storyFunction: readText(sequence.storyFunction),
+      povCharacterKey: readText(sequence.povCharacterKey),
+      povCharacterName: readText(sequence.povCharacterName),
+      povNotes: readText(sequence.povNotes),
+      synopsis: readText(sequence.synopsis),
+      dramaticQuestion: readText(sequence.dramaticQuestion),
+      outcome: readText(sequence.outcome),
+      openLoops: readStringArray(sequence.openLoops),
+      resolvedLoops: readStringArray(sequence.resolvedLoops),
+      characterArcDeltas: Array.isArray(sequence.characterArcDeltas) ? sequence.characterArcDeltas.map(asRecord) : [],
+      consequences: Array.isArray(sequence.consequences) ? sequence.consequences.map(asRecord) : [],
+    },
+  }
 }
 
 function normalizeComicReferenceText(value: string) {
@@ -3762,7 +3801,7 @@ export function buildCinematicV2ShotAssetPack(input: {
     shot.camera.angle,
     shot.camera.movement,
     shot.camera.screenDirectionRule,
-    ...shot.dialogue.map((line) => `${line.speakerRefId} ${line.text} ${line.emotion}`),
+    ...shot.dialogue.map((line) => `${line.speakerName || line.speakerRefId} ${line.text} ${line.emotion}`),
   ].filter(Boolean).join(' ')).replace(/_/g, ' ')
   const priorityKeys = [
     ...shot.speakerRefIds,
@@ -4074,7 +4113,7 @@ function sanitizeCinematicScriptText(value: unknown) {
 function normalizeDirectorDialogue(value: unknown, durationSeconds = 1) {
   const entries = Array.isArray(value) ? value.map(asRecord) : []
   return entries.map((entry) => ({
-    speaker: sanitizeCinematicScriptText(entry.speaker ?? entry.speakerRefId),
+    speaker: sanitizeCinematicScriptText(entry.speaker ?? entry.speakerName ?? entry.speakerRefId),
     line: sanitizeCinematicScriptText(entry.line),
     delivery: sanitizeCinematicScriptText(entry.delivery),
     startSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.startSeconds ?? 0) || 0)),
@@ -4241,6 +4280,7 @@ function normalizeCinematicScriptAuthoring(input: {
       dialogue: directorDialogue.map((entry, dialogueIndex) => ({
         id: `${shotId}_dialogue_${dialogueIndex + 1}`,
         speakerRefId: normalizeMaybeNullString(entry.speaker),
+        speakerName: readText(entry.speaker),
         line: readText(entry.line),
         delivery: readText(entry.delivery),
         startSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.startSeconds ?? dialogueIndex) || dialogueIndex)),
@@ -5263,7 +5303,7 @@ function readShotDialogueRecords(shot: Record<string, unknown>) {
 function readShotDialogueClauses(shot: Record<string, unknown>) {
   const dialogueRecords = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
   return dialogueRecords.flatMap((entry) => {
-    const speaker = readText(entry.speaker) || readText(entry.speakerRefId)
+    const speaker = readText(entry.speaker) || readText(entry.speakerName) || readText(entry.speakerRefId)
     const line = readText(entry.line)
     const delivery = readText(entry.delivery)
     return [
@@ -5363,7 +5403,7 @@ function storyboardSpeechVisualCue(shot: Record<string, unknown>, occurrenceInde
   const targetIndex = Math.max(0, Math.min(occurrenceCount - 1, Math.floor(occurrenceCount / 2)))
   if (occurrenceIndex !== targetIndex) return ''
   const entry = dialogue[0]
-  const speaker = naturalizeCinematicActorName(entry.speaker) || naturalizeCinematicActorName(entry.speakerRefId) || 'The speaker'
+  const speaker = naturalizeCinematicActorName(entry.speaker) || naturalizeCinematicActorName(entry.speakerName) || naturalizeCinematicActorName(entry.speakerRefId) || 'The speaker'
   const delivery = cleanBeatCaptionText(entry.delivery).toLowerCase()
   if (/\b(deadpan|even|flat|controlled|cold)\b/.test(delivery)) {
     return `${speaker}'s lips are barely parted, expression flat and precise.`
@@ -5816,7 +5856,7 @@ function formatSeedanceDialogueForShot(shot: Record<string, unknown>) {
   const dialogueRecords = readShotDialogueRecords(shot).filter((entry) => readText(entry.line))
   if (dialogueRecords.length === 0) return ''
   return dialogueRecords.map((entry) => {
-    const speaker = readText(entry.speaker) || readText(entry.speakerRefId) || 'Voice'
+    const speaker = readText(entry.speaker) || readText(entry.speakerName) || readText(entry.speakerRefId) || 'Voice'
     const line = readText(entry.line).replace(/^["']|["']$/g, '')
     const delivery = readText(entry.delivery)
     return `${speaker}: "${line}"${delivery ? ` (${delivery})` : ''}`
@@ -5843,6 +5883,183 @@ function formatSeedanceActionForShot(shot: Record<string, unknown>) {
     || 'one coherent visible action'
 }
 
+type SeedanceReferenceRecord = {
+  url?: string
+  label: string
+  role?: string
+  modality?: 'image' | 'video' | 'audio'
+}
+
+type SeedanceReferenceManifestEntry = {
+  tag: string
+  modality: 'image' | 'video' | 'audio'
+  index: number
+  label: string
+  role: string
+  url?: string
+}
+
+function compactSeedanceLabel(value: string, fallback: string) {
+  const cleaned = value.replace(/\s+/g, ' ').trim()
+  return cleaned ? cleaned.slice(0, 140) : fallback
+}
+
+function seedanceImageReferenceLabel(image: Record<string, unknown>, cinematicReferenceMode: string, fallbackIndex: number) {
+  const metadata = asRecord(image.metadata)
+  const role = readText(image.role) || readText(metadata.role)
+  const name = readText(image.name) || readText(image.title) || readText(image.label)
+  if (role === 'cinematic_v3_storyboard_sheet') return 'storyboard sheet'
+  if (role === 'cinematic_beat_sheet') return 'storyboard beat sheet'
+  if (role === 'cinematic_direction_sheet') return 'cinematic direction sheet'
+  if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') {
+    const keyframeIndex = Number(image.keyframeIndex ?? metadata.keyframeIndex ?? fallbackIndex - 1) || 0
+    return keyframeIndex === 0 ? 'opening shot keyframe' : keyframeIndex === 1 ? 'midpoint shot keyframe' : keyframeIndex === 2 ? 'ending shot keyframe' : `shot keyframe ${keyframeIndex + 1}`
+  }
+  if (role === 'cinematic_v2_storyboard_panel' || role === 'cinematic_v3_storyboard_panel') return name || 'cropped storyboard panel'
+  if (name) return name
+  return normalizeCinematicReferenceMode(cinematicReferenceMode) === 'keyframes' ? `keyframe/reference image ${fallbackIndex}` : `reference image ${fallbackIndex}`
+}
+
+function seedanceReferenceRoleDescription(entry: SeedanceReferenceRecord, cinematicReferenceMode: string, index: number) {
+  const role = readText(entry.role)
+  if (role === 'storyboard_sheet' || /storyboard/i.test(entry.label)) return 'primary sequential storyboard keyframe reference'
+  if (role === 'direction_sheet') return 'primary director/camera/spatial reference'
+  if (role === 'keyframe') return index === 1 && normalizeCinematicReferenceMode(cinematicReferenceMode) === 'keyframes'
+    ? 'primary opening keyframe reference'
+    : 'keyframe continuity reference'
+  if (role === 'entity_reference') return 'entity identity, wardrobe, variant, or prop continuity reference'
+  if (role === 'location_reference') return 'environment or shot-location continuity reference'
+  if (role === 'video_reference') return 'motion continuity reference'
+  if (role === 'audio_reference') return 'audio continuity reference'
+  return 'supporting continuity reference'
+}
+
+export function buildSeedanceReferenceManifest(input: {
+  imageReferences?: SeedanceReferenceRecord[]
+  videoReferences?: SeedanceReferenceRecord[]
+  audioReferences?: SeedanceReferenceRecord[]
+  cinematicReferenceMode?: string
+}) {
+  const cinematicReferenceMode = normalizeCinematicReferenceMode(input.cinematicReferenceMode)
+  const entries: SeedanceReferenceManifestEntry[] = []
+  const pushEntries = (records: SeedanceReferenceRecord[] | undefined, modality: 'image' | 'video' | 'audio') => {
+    const source = records ?? []
+    source.forEach((record, localIndex) => {
+      const index = localIndex + 1
+      const prefix = modality === 'image' ? 'Image' : modality === 'video' ? 'Video' : 'Audio'
+      const label = compactSeedanceLabel(record.label, `${modality} reference ${index}`)
+      entries.push({
+        tag: `@${prefix}${index}`,
+        modality,
+        index,
+        label,
+        role: seedanceReferenceRoleDescription(record, cinematicReferenceMode, index),
+        url: record.url,
+      })
+    })
+  }
+  pushEntries(input.imageReferences, 'image')
+  pushEntries(input.videoReferences, 'video')
+  pushEntries(input.audioReferences, 'audio')
+  return entries
+}
+
+export function formatSeedanceReferenceManifest(manifest: SeedanceReferenceManifestEntry[]) {
+  if (manifest.length === 0) return 'No provider references are attached; use the written identity, action, and continuity instructions only.'
+  return manifest.map((entry) => `${entry.tag}: ${entry.label}; ${entry.role}.`).join('\n')
+}
+
+function seedanceStoryboardManifestInstruction(manifest: SeedanceReferenceManifestEntry[]) {
+  const storyboard = manifest.find((entry) => entry.modality === 'image' && /storyboard/i.test(`${entry.label} ${entry.role}`))
+  if (!storyboard) return ''
+  return `Treat ${storyboard.tag} as sequential visual keyframes for this clip. Follow its panel order, action progression, camera rhythm, framing, readable movement direction, lighting continuity, and pacing. Do not render storyboard markings, arrows, labels, panel numbers, borders, gutters, captions, notes, UI, or watermarks.`
+}
+
+function seedanceProductionBoardArtifactBan(manifest: SeedanceReferenceManifestEntry[]) {
+  const hasBoard = manifest.some((entry) => entry.modality === 'image' && /(storyboard|direction sheet|keyframe|panel)/i.test(`${entry.label} ${entry.role}`))
+  return hasBoard
+    ? 'Do not render production-board artifacts: no arrows, labels, captions, subtitles, guide boxes, panel borders, grid gutters, map diagrams, UI, logos, watermarks, or handwritten notes.'
+    : 'Do not render captions, subtitles, UI, logos, watermarks, or unrelated text.'
+}
+
+function seedanceShotPhysicalityText(shot: Record<string, unknown>) {
+  return [
+    readText(shot.title),
+    readText(shot.action),
+    readText(shot.description),
+    readText(shot.videoDirection),
+    readText(shot.mood),
+    readText(shot.lighting),
+    JSON.stringify(shot.performanceBeats ?? ''),
+  ].join(' ').toLowerCase()
+}
+
+function shouldUseSeedanceLabanMovement(input: { shots: Record<string, unknown>[]; prompt: string }) {
+  const text = `${input.prompt} ${input.shots.map(seedanceShotPhysicalityText).join(' ')}`
+  const physicalHits = countRegexMatches(text, /\b(fight|combat|martial|kung\s*fu|karate|ninja|samurai|duel|chase|sprint|leap|jump|kick|strike|punch|staff|sword|blade|dodge|tumble|flip|parkour|impact|vortex|shockwave|battle)\b/g)
+  const quietHits = countRegexMatches(text, /\b(dialogue|conversation|whisper|quiet|banter|romance|tender|still|subtle|mystery|investigate|environment|establishing)\b/g)
+  return physicalHits >= 2 && physicalHits > quietHits
+}
+
+function seedanceLabanMovementBlock(shots: Record<string, unknown>[], prompt: string) {
+  if (!shouldUseSeedanceLabanMovement({ shots, prompt })) return ''
+  return [
+    'Laban movement logic for physical action only:',
+    '- weight: strong and grounded on impacts; light during jumps, aerial turns, or recoveries.',
+    '- time: quick during strikes, dodges, runs, and impacts; sustained during held poses or suspended beats.',
+    '- space: direct for attacks, lunges, throws, and goal-oriented motion; indirect for spins, evasions, or swirling effects.',
+    '- flow: bound for precise controlled moves; free for cloth, hair, debris, and release moments.',
+  ].join('\n')
+}
+
+function seedanceReferenceRecordsFromImages(images: Record<string, unknown>[], cinematicReferenceMode: string): SeedanceReferenceRecord[] {
+  return images.map((image, index) => ({
+    label: seedanceImageReferenceLabel(image, cinematicReferenceMode, index + 1),
+    role: (() => {
+      const role = readText(image.role) || readText(asRecord(image.metadata).role)
+      if (role === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_beat_sheet') return 'storyboard_sheet'
+      if (role === 'cinematic_direction_sheet') return 'direction_sheet'
+      if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') return 'keyframe'
+      return 'image_reference'
+    })(),
+    modality: 'image',
+  }))
+}
+
+function seedanceReferenceRecordsFromAssetPack(assetPack: Record<string, unknown>, limit = 4): SeedanceReferenceRecord[] {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  return entities.slice(0, Math.max(0, limit)).map((entity) => {
+    const name = readText(entity.name) || readText(entity.key) || 'Entity reference'
+    const type = readText(entity.type) || readText(entity.role)
+    const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
+    const selectedVariantLabel = readText(entity.selectedReferenceVariantLabel)
+    const selectedVariantSummary = readText(entity.selectedReferenceVariantSummary)
+    const variantText = selectedVariantKey && selectedVariantKey !== 'default'
+      ? `${selectedVariantLabel || selectedVariantKey} variant${selectedVariantSummary ? `, ${compactBeatCaptionSentence(selectedVariantSummary, '', 16).replace(/\.$/, '')}` : ''}`
+      : 'default reference'
+    return {
+      label: `${name} ${variantText}`,
+      role: ['location', 'place', 'environment', 'location_spot'].includes(type) ? 'location_reference' : 'entity_reference',
+      modality: 'image' as const,
+    }
+  })
+}
+
+export function rewriteSeedanceReferenceLegend(prompt: string, manifest: SeedanceReferenceManifestEntry[], referencePolicy = '') {
+  const legend = [
+    '[REFERENCE LEGEND]',
+    formatSeedanceReferenceManifest(manifest),
+    referencePolicy ? `Reference fallback mode: ${referencePolicy}.` : '',
+  ].filter(Boolean).join('\n')
+  if (/\[REFERENCE LEGEND\][\s\S]*?(?=\n\n\[[A-Z][^\]]+\]|\s*$)/.test(prompt)) {
+    return prompt.replace(/\[REFERENCE LEGEND\][\s\S]*?(?=\n\n\[[A-Z][^\]]+\]|\s*$)/, legend)
+  }
+  if (/\[IMAGE REFERENCES \/ LEGEND\][\s\S]*?(?=\n\n\[[A-Z][^\]]+\]|\s*$)/.test(prompt)) {
+    return prompt.replace(/\[IMAGE REFERENCES \/ LEGEND\][\s\S]*?(?=\n\n\[[A-Z][^\]]+\]|\s*$)/, legend)
+  }
+  return [prompt, '', legend].join('\n')
+}
+
 export function buildCinematicVideoPrompt(input: {
   blockScript: Record<string, unknown>
   assetPack: Record<string, unknown>
@@ -5853,6 +6070,7 @@ export function buildCinematicVideoPrompt(input: {
   resolution: string
   generateAudio: boolean
   referenceImageCount: number
+  seedanceReferenceManifest?: SeedanceReferenceManifestEntry[]
   cinematicReferenceMode?: string
   debugCinematicStoryboardStyleSafeMode?: boolean
   cinematicStoryboardStyleOverride?: string
@@ -5863,10 +6081,6 @@ export function buildCinematicVideoPrompt(input: {
   const keyframeCount = cinematicReferenceMode === 'keyframes'
     ? Math.min(3, Math.max(0, input.referenceImageCount))
     : 0
-  const extraReferenceStart = cinematicReferenceMode === 'keyframes' ? keyframeCount + 1 : 2
-  const extraReferenceCount = cinematicReferenceMode === 'keyframes'
-    ? Math.max(0, input.referenceImageCount - keyframeCount)
-    : Math.max(0, input.referenceImageCount - 1)
   const truthSourceMode = readText(input.blockScript.truthSourceMode)
     || (String(input.prompt).toLowerCase().match(/\b(ugc|phone|selfie|tiktok|reel|creator)\b/) ? 'UGC / PHONE'
       : String(input.prompt).toLowerCase().match(/\b(broadcast|sports|live tv|news)\b/) ? 'BROADCAST SETUP'
@@ -5881,22 +6095,17 @@ export function buildCinematicVideoPrompt(input: {
   const storyboardStyle = storyboardStyleSafeMode
     ? (readText(input.cinematicStoryboardStyleOverride) || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT)
     : ''
-  const referenceLegend = cinematicReferenceMode === 'keyframes'
-    ? [
-      keyframeCount >= 1 ? '@Image1: opening keyframe; lock the opening look, subject identity, wardrobe, palette, and starting composition.' : '',
-      keyframeCount >= 2 ? '@Image2: midpoint keyframe; lock the midpoint composition and continuity state.' : '',
-      keyframeCount >= 3 ? '@Image3: ending keyframe; lock the final composition and emotional/visual beat.' : '',
-      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional continuity reference assets only.` : '',
-    ].filter(Boolean)
-    : cinematicReferenceMode === 'shot_reference_sheet'
-      ? [
-        input.referenceImageCount >= 1 ? '@Image1: cinematic direction sheet; follow the timed shot strip, blocking, camera layout, spatial map, lighting direction, identity anchors, and continuity.' : '',
-        extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional continuity reference sheets.` : '',
-      ].filter(Boolean)
-    : [
-      input.referenceImageCount >= 1 ? '@Image1: storyboard beat-sheet grid; use it as the primary visual continuity and timing board, following panel order left-to-right then top-to-bottom.' : '',
-      extraReferenceCount > 0 ? `@Image${extraReferenceStart}${extraReferenceCount > 1 ? `-@Image${input.referenceImageCount}` : ''}: individual entity, environment, prop, or optional keyframe continuity reference assets.` : '',
-    ].filter(Boolean)
+  const fallbackImageReferences = Array.from({ length: Math.max(0, input.referenceImageCount) }, (_, index) => ({
+    label: cinematicReferenceMode === 'keyframes'
+      ? index === 0 ? 'opening keyframe' : index === 1 ? 'midpoint keyframe' : index === 2 ? 'ending keyframe' : `supporting reference image ${index + 1}`
+      : index === 0 ? (cinematicReferenceMode === 'shot_reference_sheet' ? 'cinematic direction sheet' : 'storyboard sheet') : `supporting reference image ${index + 1}`,
+    role: index === 0 && cinematicReferenceMode !== 'keyframes'
+      ? cinematicReferenceMode === 'shot_reference_sheet' ? 'direction_sheet' : 'storyboard_sheet'
+      : cinematicReferenceMode === 'keyframes' && index < keyframeCount ? 'keyframe' : 'image_reference',
+  }))
+  const referenceManifest = input.seedanceReferenceManifest && input.seedanceReferenceManifest.length > 0
+    ? input.seedanceReferenceManifest
+    : buildSeedanceReferenceManifest({ imageReferences: fallbackImageReferences, cinematicReferenceMode })
   const timeline = shots.length > 0
     ? shots.map((shot) => {
       const start = formatTimecode(readShotStartSeconds(shot))
@@ -5916,31 +6125,34 @@ export function buildCinematicVideoPrompt(input: {
     'Maintain the same subject identity, face/body shape, wardrobe/product details, color palette, environment logic, and lighting style across the full clip.',
     entities.length > 0 ? compactForPrompt({ entities }, 2200) : '',
   ].filter(Boolean).join('\n')
+  const storyboardInstruction = seedanceStoryboardManifestInstruction(referenceManifest)
+  const artifactBan = seedanceProductionBoardArtifactBan(referenceManifest)
+  const labanBlock = seedanceLabanMovementBlock(shots, input.prompt)
   return [
     `[${truthSourceMode}]`,
     `Generate one ${input.durationSeconds}-second Seedance 2 reference-to-video clip at ${input.aspectRatio}, ${input.resolution}.`,
     `Target video style: ${targetVideoStyle}.`,
     input.generateAudio ? 'Audio: native audio may include restrained music, natural foley, and any authored dialogue/audio cue on the exact timeline.' : 'Audio: keep generated audio minimal or absent.',
     '',
-    '[IMAGE REFERENCES / LEGEND]',
-    referenceLegend.length > 0
-      ? referenceLegend.join('\n')
-      : 'No image references are attached; use the written continuity locks only.',
+    '[REFERENCE LEGEND]',
+    formatSeedanceReferenceManifest(referenceManifest),
+    storyboardInstruction,
     cinematicReferenceMode === 'keyframes'
-      ? 'Beat sheets are planning-only and should not appear in the video. Use keyframes as the main visual references.'
+      ? 'Use keyframes as visual anchors for the opening, midpoint, and ending states when they are attached.'
       : cinematicReferenceMode === 'shot_reference_sheet'
         ? storyboardStyleSafeMode
-          ? `Cinematic direction-sheet reference mode is enabled. @Image1 is a stylized director/DP reference sheet rendered as ${storyboardStyle}; follow its timed shot strip, subject blocking, camera layout, floor-map spatial logic, lighting direction, hero frame, identity anchors, and continuity, but render the final clip in the target video style: ${targetVideoStyle}. Do not reproduce sheet labels, maps, arrows, camera cones, gutters, caption bands, UI, diagram elements, or text as on-screen content. Use the written timeline below for dialogue, foley, music, and audio timing.`
-          : 'Cinematic direction-sheet reference mode is enabled. Follow @Image1 for timed shot progression, subject blocking, camera layout, floor-map spatial logic, lighting direction, hero frame, identity anchors, and continuity. Do not reproduce sheet labels, maps, arrows, camera cones, gutters, caption bands, UI, diagram elements, or text as on-screen content. Use the written timeline below for dialogue, foley, music, and audio timing.'
+          ? `If a cinematic direction sheet is attached, follow its timed shot strip, blocking, camera layout, spatial logic, lighting direction, hero frame, identity anchors, and continuity, but render the final clip in the target video style: ${targetVideoStyle}. The sheet may be stylized as ${storyboardStyle}; do not copy that style unless it matches the target video style.`
+          : 'If a cinematic direction sheet is attached, follow its timed shot progression, blocking, camera layout, spatial logic, lighting direction, hero frame, identity anchors, and continuity.'
       : storyboardStyleSafeMode
-        ? `Storyboard-grid reference mode is enabled. @Image1 is a stylized storyboard/timing reference rendered as ${storyboardStyle}; follow its panel order, blocking, composition, identity anchors, and continuity, but render the final clip in the target video style: ${targetVideoStyle}. Do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.`
-        : 'Storyboard-grid reference mode is enabled. Follow @Image1 as the visual continuity and timing board, but do not reproduce caption bands, panel borders, grid gutters, UI, or text as on-screen elements. Use the written timeline below for dialogue, foley, music, and audio timing.',
+        ? `If a storyboard sheet is attached, use it for panel order, blocking, composition, identity anchors, and continuity, but render the final clip in the target video style: ${targetVideoStyle}. The storyboard may be stylized as ${storyboardStyle}; do not copy that style unless it matches the target video style.`
+        : '',
     '',
-    '[TIMELINE SECOND BY SECOND]',
+    '[TIMESTAMPED SHOT CALL SHEET]',
     timeline,
     '',
     '[CONSISTENCY LOCK]',
     continuityLock,
+    labanBlock ? `\n[MOVEMENT LOGIC]\n${labanBlock}` : '',
     '',
     '[POSITIVE CONSTRAINTS]',
     '- stable face and body proportions',
@@ -5948,7 +6160,7 @@ export function buildCinematicVideoPrompt(input: {
     '- natural physical motion',
     '- continuous lighting direction',
     '- coherent spatial layout',
-    '- no on-screen text, UI, captions, watermark, storyboard-panel artifacts, map diagrams, arrows, or camera-layout marks',
+    `- ${artifactBan}`,
     input.prompt ? `\nUser brief: ${input.prompt}` : '',
   ].filter(Boolean).join('\n\n')
 }
@@ -6341,9 +6553,20 @@ function mergeCinematicV3ShotPlansForTimeline(
     ...plans.flatMap((plan) => plan.diagnostics),
     `Assembled timeline from ${plans.length} storyboard-block shot plan(s).`,
   ]
+  const shotOrderNumber = (shot: z.infer<typeof cinematicV2ShotSchema>, fallback: number) => {
+    const match = readText(shot.id).match(/(\d+)(?!.*\d)/)
+    const parsed = Number(match?.[1] ?? 0)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+  }
   const shots = plans
-    .flatMap((plan) => plan.shots)
-    .sort((left, right) => left.index - right.index)
+    .flatMap((plan, planIndex) => plan.shots.map((shot, shotIndex) => ({
+      shot,
+      planIndex,
+      shotIndex,
+      orderNumber: shotOrderNumber(shot, (planIndex * 1000) + shotIndex + 1),
+    })))
+    .sort((left, right) => left.orderNumber - right.orderNumber || left.planIndex - right.planIndex || left.shotIndex - right.shotIndex)
+    .map((entry) => entry.shot)
   const duplicateIds = shots
     .map((shot) => readText(shot.id))
     .filter((id, index, list) => id && list.indexOf(id) !== index)
@@ -6541,6 +6764,7 @@ function buildCinematicV3ShotPlanFromVisualScript(input: {
     for (const name of [...visible.unknownNames, ...location.unknownNames, ...props.unknownNames]) unknownRefNames.add(name)
     const dialogue = readText(block.fields.dialogue)
     const dialogueMatch = dialogue.match(/^([^:]{2,60}):\s*["“]?(.+?)["”]?$/)
+    const speakerName = dialogueMatch ? dialogueMatch[1].trim() : ''
     const speaker = dialogueMatch
       ? resolveVisualScriptRefs({ raw: dialogueMatch[1], catalog, allowedKinds: characterKinds }).refIds[0] || visible.refIds[0] || fallbackCharacterRefIds[0] || 'speaker'
       : ''
@@ -6584,6 +6808,7 @@ function buildCinematicV3ShotPlanFromVisualScript(input: {
       dialogue: dialogueText ? [{
         id: `dialogue_${String(index + 1).padStart(3, '0')}`,
         speakerRefId: speaker,
+        speakerName,
         text: dialogueText,
         emotion: readText(block.fields.performance) || 'visible performance',
         startSeconds,
@@ -6818,6 +7043,7 @@ function buildFallbackCinematicV2ShotPlan(input: {
       ? [{
         id: `dialogue_${index + 1}`,
         speakerRefId: beat.speakerRefId || parsed.characterRefIds[0] || 'speaker',
+        speakerName: beat.speakerRefId || '',
         text: beat.text.replace(/^["“]|["”]$/g, ''),
         emotion: beat.emotionalIntent || 'controlled',
       }]
@@ -7275,7 +7501,7 @@ function buildCinematicV2VideoPrompt(input: {
   const entities = compactCinematicEntityAnchors(input.assetPack, 6)
   const labelByKey = cinematicEntityLabelByKey(input.assetPack)
   const dialogue = shot.dialogue.map((line) => {
-    const speaker = labelByKey.get(line.speakerRefId) || line.speakerRefId
+    const speaker = labelByKey.get(line.speakerRefId) || line.speakerName || line.speakerRefId
     return `${speaker}: "${line.text}" (${line.emotion})`
   }).join(' ')
   const performanceDirection = formatCinematicV2PerformanceDirection(shot)
@@ -7450,7 +7676,7 @@ function directorActionsForCompiledShot(shot: Record<string, unknown>, assetPack
 function directorDialogueForCompiledShot(shot: Record<string, unknown>, assetPack: Record<string, unknown>) {
   const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
   return dialogue.map((entry, index) => ({
-    speaker: nameForCinematicRef(assetPack, entry.speakerRefId) || readText(entry.speakerRefId),
+    speaker: nameForCinematicRef(assetPack, entry.speakerRefId) || readText(entry.speakerName) || readText(entry.speakerRefId),
     line: readText(entry.line),
     delivery: readText(entry.delivery),
     startSeconds: Number(entry.startSeconds ?? 0) || 0,
@@ -7475,7 +7701,7 @@ function audioTextForCompiledShot(shot: Record<string, unknown>) {
   const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
   const audio = Array.isArray(shot.audio) ? shot.audio.map(asRecord) : []
   const dialogueText = dialogue.map((entry) => [
-    readText(entry.speakerRefId),
+    readText(entry.speakerName) || readText(entry.speakerRefId),
     readText(entry.line),
     readText(entry.delivery),
   ].filter(Boolean).join(': ')).filter(Boolean).join(' ')
@@ -8047,8 +8273,8 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
       v3Edge({ key: `${sheetKey}__${videoPromptKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references' }),
       v3Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt' }),
       v3Edge({ key: `${sheetKey}__${videoKey}_reference`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references' }),
-      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index } }),
-      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index } }),
+      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index, optional: true, optionalDependency: true, authoringOptional: true } }),
+      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index, optional: true, optionalDependency: true, authoringOptional: true } }),
       v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index, optional: true, optionalDependency: true, manualOnly: true } }),
     )
   })
@@ -8142,7 +8368,12 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     || readText(input.config.model)
     || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
   const generatedByNodeKey = 'cinematic_v3_dynamic_shot_parse_fanout'
-  const dynamicV3ParsePersistenceVersion = 'v3_parse_groups_direct_storyboards_1'
+  const sequenceAnimaticMode = readText(input.config.sequenceAnimaticMode)
+  const sequenceAnimaticMasterMode = sequenceAnimaticMode === 'master_script_only'
+    || readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'master'
+  const dynamicV3ParsePersistenceVersion = sequenceAnimaticMasterMode
+    ? 'v3_sequence_master_parse_groups_1'
+    : 'v3_parse_groups_direct_storyboards_1'
   const storyboardGroups = groups.map((group, index) => buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index))
 
   const existingNodeResponse = await input.client
@@ -8167,14 +8398,18 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
     .map((row) => [readText(row.node_key), row] as const))
   const groupParseKeys = groups.map((group) => `${readText(group.id)}_shot_parse`)
-  const directStoryboardKeys = storyboardGroups.flatMap((group) => [
-    `${group.id}_prompt`,
-    `${group.id}_sheet`,
-    `${group.id}_panel_extract`,
-    `${group.id}_video_prompt`,
-    `${group.id}_video`,
-  ])
-  const expectedDynamicKeys = [...groupParseKeys, ...directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact']
+  const directStoryboardKeys = sequenceAnimaticMasterMode
+    ? []
+    : storyboardGroups.flatMap((group) => [
+      `${group.id}_prompt`,
+      `${group.id}_sheet`,
+      `${group.id}_panel_extract`,
+      `${group.id}_video_prompt`,
+      `${group.id}_video`,
+    ])
+  const expectedDynamicKeys = sequenceAnimaticMasterMode
+    ? [...groupParseKeys, 'sequence_animatic_manifest', 'artifact']
+    : [...groupParseKeys, ...directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact']
   const hasRecoverableStepOutput = existingDynamicNodes.some((row) => {
     if (readText(row.output_hash) || hasStoredOutputs(row.outputs)) return false
     const step = existingStepByNodeKey.get(row.key)
@@ -8185,7 +8420,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3ParsePersistenceVersion) === dynamicV3ParsePersistenceVersion)
     && expectedDynamicKeys.every((key) => existingDynamicNodes.some((row) => row.key === key))
   if (existingSameHash && !hasRecoverableStepOutput) {
-    return { expanded: false, compileHash, parseGroupCount: groups.length, storyboardSheetCount: storyboardGroups.length }
+    return { expanded: false, compileHash, parseGroupCount: groups.length, storyboardSheetCount: sequenceAnimaticMasterMode ? 0 : storyboardGroups.length }
   }
 
   const existingEdgeResponse = await input.client
@@ -8278,11 +8513,6 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
           execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_shot_parse_groups', maxConcurrency: Math.min(groups.length, 6) },
         },
       }),
-      v3Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Prompt`, x: 2240, y, config: { purpose: 'cinematic_v3_storyboard_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, storyboardGroup, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_storyboard_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard ${storyboardGroup.index} Sheet`, x: 2520, y, config: { purpose: 'cinematic_v3_storyboard_sheet', role: 'cinematic_v3_storyboard_sheet', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'high', outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v3_storyboard_sheets', maxConcurrency: Math.min(storyboardGroups.length, 8), continueOnError: true } } }),
-      v3Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Storyboard ${storyboardGroup.index}`, x: 2800, y, config: { purpose: 'cinematic_v3_panel_extract', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_panel_extract', maxConcurrency: 6 } } }),
-      v3Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Video Prompt`, x: 3080, y, config: { purpose: 'cinematic_v3_storyboard_group_video_prompt', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_video_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: videoKey, nodeType: 'video_generation', label: `Storyboard ${storyboardGroup.index} Video`, x: 3360, y, config: { purpose: 'cinematic_v3_storyboard_group_video', role: 'cinematic_v3_storyboard_group_video', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'storyboard_sheet', assetPackReferenceLimit: 4, debugSkipVideoGeneration, syncMode: false, manualOnly: true, manual_only: true, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'video_prompt', 'storyboard_sheet', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v3_storyboard_group_videos', maxConcurrency: Math.min(storyboardGroups.length, 4), manualOnly: true } } }),
     )
     edgeRows.push(
       v3Edge({ key: `screenplay__${parseKey}`, sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: parseKey, targetPort: 'screenplay' }),
@@ -8290,6 +8520,21 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       v3Edge({ key: `context__${parseKey}`, sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: parseKey, targetPort: 'context' }),
       v3Edge({ key: `guidance__${parseKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: parseKey, targetPort: 'guidance' }),
       v3Edge({ key: `references__${parseKey}`, sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: parseKey, targetPort: 'asset_pack' }),
+    )
+    if (sequenceAnimaticMasterMode) {
+      edgeRows.push(
+        v3Edge({ key: `${parseKey}__sequence_manifest`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
+      )
+      return
+    }
+    nodeRows.push(
+      v3Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Prompt`, x: 2240, y, config: { purpose: 'cinematic_v3_storyboard_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, storyboardGroup, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_storyboard_prompts', maxConcurrency: 6 } } }),
+      v3Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard ${storyboardGroup.index} Sheet`, x: 2520, y, config: { purpose: 'cinematic_v3_storyboard_sheet', role: 'cinematic_v3_storyboard_sheet', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'high', outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v3_storyboard_sheets', maxConcurrency: Math.min(storyboardGroups.length, 8), continueOnError: true } } }),
+      v3Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Storyboard ${storyboardGroup.index}`, x: 2800, y, config: { purpose: 'cinematic_v3_panel_extract', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_panel_extract', maxConcurrency: 6 } } }),
+      v3Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Video Prompt`, x: 3080, y, config: { purpose: 'cinematic_v3_storyboard_group_video_prompt', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_video_prompts', maxConcurrency: 6 } } }),
+      v3Node({ key: videoKey, nodeType: 'video_generation', label: `Storyboard ${storyboardGroup.index} Video`, x: 3360, y, config: { purpose: 'cinematic_v3_storyboard_group_video', role: 'cinematic_v3_storyboard_group_video', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'storyboard_sheet', assetPackReferenceLimit: 4, debugSkipVideoGeneration, syncMode: false, manualOnly: true, manual_only: true, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'video_prompt', 'storyboard_sheet', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v3_storyboard_group_videos', maxConcurrency: Math.min(storyboardGroups.length, 4), manualOnly: true } } }),
+    )
+    edgeRows.push(
       v3Edge({ key: `${parseKey}__${promptKey}`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'shot_plan' }),
       v3Edge({ key: `${assetPackSourceNodeKey}__${promptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: promptKey, targetPort: 'asset_pack' }),
       v3Edge({ key: `skill_context__${promptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: promptKey, targetPort: 'guidance' }),
@@ -8305,18 +8550,31 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       v3Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt' }),
       v3Edge({ key: `${sheetKey}__${videoKey}_reference`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references' }),
       v3Edge({ key: `${parseKey}__timeline`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
-      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
-      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
+      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, authoringOptional: true } }),
+      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, authoringOptional: true } }),
       v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, manualOnly: true } }),
     )
   })
-  nodeRows.push(
-    v3Node({ key: 'cinematic_v3_timeline_assemble', nodeType: 'utility_transform', label: 'Assemble Storyboard Timeline', x: 3660, y: 120, config: { purpose: 'cinematic_v3_timeline_assemble', role: 'cinematic_v3_final_timeline', cinematicPipelineVersion: 'v3_script_storyboards', dynamicShotCount: Array.isArray(shotBreakPlan.shotBreaks) ? shotBreakPlan.shotBreaks.length : groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0), aspectRatio, resolution, debugSkipVideoGeneration, execution: { resourceClass: 'video', groupKey: 'cinematic_v3_timeline_assemble', maxConcurrency: 1 } } }),
-    v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Cinematic', x: 3940, y: 120, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
-  )
-  edgeRows.push(
-    v3Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v3_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
-  )
+  if (sequenceAnimaticMasterMode) {
+    nodeRows.push(
+      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 2240, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
+      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 2520, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+    )
+    edgeRows.push(
+      v3Edge({ key: 'screenplay__sequence_manifest', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'screenplay' }),
+      v3Edge({ key: 'shot_break_plan__sequence_manifest', sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_break_plan' }),
+      v3Edge({ key: 'references__sequence_manifest', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'text', targetNodeKey: 'artifact', targetPort: 'input' }),
+    )
+  } else {
+    nodeRows.push(
+      v3Node({ key: 'cinematic_v3_timeline_assemble', nodeType: 'utility_transform', label: 'Assemble Storyboard Timeline', x: 3660, y: 120, config: { purpose: 'cinematic_v3_timeline_assemble', role: 'cinematic_v3_final_timeline', cinematicPipelineVersion: 'v3_script_storyboards', dynamicShotCount: Array.isArray(shotBreakPlan.shotBreaks) ? shotBreakPlan.shotBreaks.length : groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0), aspectRatio, resolution, debugSkipVideoGeneration, execution: { resourceClass: 'video', groupKey: 'cinematic_v3_timeline_assemble', maxConcurrency: 1 } } }),
+      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Cinematic', x: 3940, y: 120, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+    )
+    edgeRows.push(
+      v3Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v3_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
+    )
+  }
 
   const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
   if (insertNodes.error) throw new Error(insertNodes.error.message)
@@ -8352,7 +8610,8 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       cinematicV3ShotBreakPlan: shotBreakPlan,
       dynamicCinematicParseCompileHash: compileHash,
       dynamicV3ParseGroupCount: groups.length,
-      storyboardSheetCount: storyboardGroups.length,
+      sequenceAnimaticRole: sequenceAnimaticMasterMode ? 'master' : asRecord(input.workflow.metadata).sequenceAnimaticRole,
+      storyboardSheetCount: sequenceAnimaticMasterMode ? 0 : storyboardGroups.length,
       dynamicShotCount: groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0),
       dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
       lastDynamicGraphUpdatedAt: new Date().toISOString(),
@@ -8360,7 +8619,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     },
   }).eq('id', input.workflow.id)
   if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
-  return { expanded: true, compileHash, parseGroupCount: groups.length, storyboardSheetCount: storyboardGroups.length }
+  return { expanded: true, compileHash, parseGroupCount: groups.length, storyboardSheetCount: sequenceAnimaticMasterMode ? 0 : storyboardGroups.length }
 }
 
 async function materializeDynamicCinematicV2ShotFanout(input: {
@@ -9622,26 +9881,40 @@ async function resolveProjectAssetByKey(client: DatabaseClient, run: OutputWorkf
 }
 
 async function collectAssetPackReferenceUrls(client: DatabaseClient, run: OutputWorkflowRun, assetPack: Record<string, unknown>, limit = 3) {
-  const references: string[] = []
+  return (await collectAssetPackReferenceRecords(client, run, assetPack, limit)).map((entry) => entry.url).filter(Boolean)
+}
+
+async function collectAssetPackReferenceRecords(client: DatabaseClient, run: OutputWorkflowRun, assetPack: Record<string, unknown>, limit = 3): Promise<SeedanceReferenceRecord[]> {
+  const references: SeedanceReferenceRecord[] = []
   const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
   for (const entity of entities) {
     const primaryAssetKey = readText(entity.primaryAssetKey)
     const entityReferenceAssetKeys = primaryAssetKey ? [primaryAssetKey] : sortReferenceValues(readStringArray(entity.assetKeys))
+    const name = readText(entity.name) || readText(entity.key) || 'Entity reference'
+    const type = readText(entity.type) || readText(entity.role)
+    const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
+    const selectedVariantLabel = readText(entity.selectedReferenceVariantLabel)
+    const selectedVariantSummary = readText(entity.selectedReferenceVariantSummary)
+    const variantText = selectedVariantKey && selectedVariantKey !== 'default'
+      ? `${selectedVariantLabel || selectedVariantKey} variant${selectedVariantSummary ? `, ${compactBeatCaptionSentence(selectedVariantSummary, '', 16).replace(/\.$/, '')}` : ''}`
+      : 'default reference'
+    const label = `${name} ${variantText}`
+    const role = ['location', 'place', 'environment', 'location_spot'].includes(type) ? 'location_reference' : 'entity_reference'
     for (const assetKey of entityReferenceAssetKeys) {
       if (isDirectReferenceUrl(assetKey)) {
-        references.push(assetKey)
+        references.push({ url: assetKey, label, role, modality: 'image' })
         if (references.length >= limit) return references
         continue
       }
       if (isProjectAssetStoragePath(assetKey)) {
-        references.push(await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)))
+        references.push({ url: await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)), label, role, modality: 'image' })
         if (references.length >= limit) return references
         continue
       }
       const asset = await resolveProjectAssetByKey(client, run, assetKey)
       const storagePath = readText(asset?.storagePath) || readText(asset?.storage_path)
       if (!storagePath) continue
-      references.push(await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'))
+      references.push({ url: await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'), label, role, modality: 'image' })
       if (references.length >= limit) return references
     }
   }
@@ -11266,9 +11539,16 @@ async function executeNode(input: {
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
       }
       if (purpose === 'cinematic_v2_screenplay_author' || purpose === 'cinematic_v3_screenplay_author') {
+        const config = asRecord(input.node.config)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const fallback = buildFallbackCinematicV2ScreenplayDraft({ context, assetPack, prompt: input.run.prompt })
         const v3ShotMarkedScreenplay = purpose === 'cinematic_v3_screenplay_author'
+        const sequenceAnimaticMode = readText(config.sequenceAnimaticMode)
+        const fullSequenceUnitAnimatic = v3ShotMarkedScreenplay && (sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only')
+        const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
+        const selectedSequenceUnitBrief = fullSequenceUnitAnimatic
+          ? buildSelectedSequenceUnitScreenplayBrief(context)
+          : null
         const result = await runCinematicV2ScreenplayAuthor({
           nodeKey: input.node.key,
           instructions: [
@@ -11277,12 +11557,22 @@ async function executeNode(input: {
           ].join('\n'),
           prompt: v3ShotMarkedScreenplay
             ? [
-              'Write the cinematic source screenplay before technical parsing happens.',
+              fullSequenceUnitAnimatic
+                ? 'Write a full sequence-unit screenplay animatic for the selected chapter/sequence unit before technical parsing happens.'
+                : 'Write the cinematic source screenplay before technical parsing happens.',
               'Keep it creative and readable: scene heading, concise visible action lines, dialogue blocks, performance notes, and visual motifs.',
               'Insert one lightweight HTML shot marker immediately before every intended storyboard/video shot beat using this exact form:',
               '<!-- SHOT 001: short visual beat title | ~3s -->',
               'Shot markers are structural anchors only. Do not turn the script into JSON, a rigid field list, image prompts, or provider instructions.',
-              'Use 6-18 shot markers depending on the requested scene duration. Each marked shot should be a coherent storyboard panel and future short-video beat.',
+              fullSequenceUnitAnimatic
+                ? 'This is not a short teaser. Use 24-36 shot markers when the selected sequence unit has enough material, expanding the whole chapter spine into storyboard-ready screenplay beats.'
+                : 'Use 6-18 shot markers depending on the requested scene duration. Each marked shot should be a coherent storyboard panel and future short-video beat.',
+              fullSequenceUnitAnimatic
+                ? 'Treat the selected sequence unit fields as authoritative: synopsis, dramatic question, outcome, POV notes, character arc deltas, consequences, open loops, context, summary, and visual identity all need to shape the screenplay.'
+                : '',
+              fullSequenceUnitAnimatic
+                ? 'Dramatize the chapter pressure instead of summarizing it: setup ordinary life, show the protagonist flaw under pressure, escalate attempts and discoveries, land the outcome, and clearly seed unresolved open loops.'
+                : '',
               'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
               'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
               'Keep performance direction compact: valence/arousal-style emotional movement may be described in plain language, but do not emit numeric JSON.',
@@ -11300,8 +11590,16 @@ async function executeNode(input: {
               '## Visual Motifs',
               '- concrete recurring image.',
               `User brief:\n${input.run.prompt}`,
+              selectedSequenceUnitBrief
+                ? `Selected sequence unit to adapt fully:\n${JSON.stringify(selectedSequenceUnitBrief, null, 2)}`
+                : '',
               guidanceMarkdown(guidance),
-              compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 11000),
+              compactForPrompt({
+                world: asRecord(context.wiki ?? context.worldWiki),
+                selectedSequenceUnit: selectedSequenceUnitBrief,
+                assetPack,
+                entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [],
+              }, fullSequenceUnitAnimatic ? 14000 : 11000),
             ].filter(Boolean).join('\n\n')
             : [
               'Write the cinematic source screenplay before any technical planning happens.',
@@ -11326,7 +11624,7 @@ async function executeNode(input: {
               compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 11000),
             ].filter(Boolean).join('\n\n'),
           fallback,
-          maxOutputTokens: v3ShotMarkedScreenplay ? 5200 : 4200,
+          maxOutputTokens: fullSequenceUnitAnimatic ? 9000 : v3ShotMarkedScreenplay ? 5200 : 4200,
         })
         const screenplayDraft = result.fallbackUsed
           ? cinematicV2ScreenplayDraftSchema.parse({
@@ -11350,7 +11648,9 @@ async function executeNode(input: {
         const v3ShotBreakPlan = v3ShotMarkedScreenplay
           ? buildCinematicV3ShotBreakPlan({
             screenplayDraft,
-            maxShotCount: deriveCinematicV2MaxShotCount(screenplayDraft.suggestedDurationSeconds),
+            maxShotCount: configuredMaxShotCount > 0
+              ? configuredMaxShotCount
+              : deriveCinematicV2MaxShotCount(screenplayDraft.suggestedDurationSeconds),
             maxPanelsPerSheet: 9,
             maxDurationPerGroupSeconds: 15,
           })
@@ -11404,6 +11704,7 @@ async function executeNode(input: {
             'Fill caption as semantic beat meaning only; it must not become visible text in generated images.',
             'Fill storyboardPanelPrompt with a concise visual panel instruction. Fill videoDirection with concise movement/action continuity for the future storyboard-group video.',
             'Use only canonical reference keys from the supplied asset pack/context. If a subject is implied but not bound, leave it in prose rather than inventing a key.',
+            'For dialogue, preserve the exact script speaker label in dialogue[].speakerName. Set dialogue[].speakerRefId only when the speaker is confidently one of the supplied canonical reference keys; for minor or temporary speakers such as a shopkeeper, guard, mechanic, crowd voice, or passerby, use a stable temporary speakerRefId like temporary_vole_mechanic and keep speakerRefIds limited to canonical reference keys only.',
             'Provider durations must be 4-15 seconds; editorial durations should reflect actual timeline timing.',
             expectedShotIds.length > 0 ? `Preferred shot IDs in order: ${expectedShotIds.join(', ')}` : '',
             `User brief:\n${input.run.prompt}`,
@@ -12914,55 +13215,82 @@ async function executeNode(input: {
         readUpstreamImages(input.upstream, ['image', 'coverImage', 'primaryReferenceImage', 'keyframe']),
         cinematicReferenceMode,
       )
-      const directImageUrls = (await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image)))).filter(Boolean)
+      const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
+        const url = await imageReferenceToFalUrl(input.client, image)
+        if (!url) return null
+        return {
+          url,
+          label: seedanceImageReferenceLabel(image, cinematicReferenceMode, index + 1),
+          role: (() => {
+            const role = readText(image.role) || readText(asRecord(image.metadata).role)
+            if (role === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_beat_sheet') return 'storyboard_sheet'
+            if (role === 'cinematic_direction_sheet') return 'direction_sheet'
+            if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') return 'keyframe'
+            return 'image_reference'
+          })(),
+          modality: 'image' as const,
+        }
+      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
       const assetPackReferenceLimit = Math.max(1, Math.min(9, Number(config.assetPackReferenceLimit ?? 9) || 9))
-      const totalReferenceImageLimit = Math.max(1, Math.min(9, directImageUrls.length + assetPackReferenceLimit))
-      const assetPackImageUrls = await collectAssetPackReferenceUrls(input.client, input.run, assetPack, assetPackReferenceLimit)
-      const referenceImageUrls = [...new Set([...directImageUrls, ...assetPackImageUrls])].slice(0, totalReferenceImageLimit)
-      if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageUrls.length === 0) {
+      const totalReferenceImageLimit = Math.max(1, Math.min(9, directImageRecords.length + assetPackReferenceLimit))
+      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
+      const seenReferenceImageUrls = new Set<string>()
+      const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
+        .filter((entry) => {
+          const url = readText(entry.url)
+          if (!url || seenReferenceImageUrls.has(url)) return false
+          seenReferenceImageUrls.add(url)
+          return true
+        })
+        .slice(0, totalReferenceImageLimit)
+      const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+      if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
         throw new Error('Cinematics V2 video generation requires a shot keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
       }
       const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
-      const referenceVideoUrls = (await Promise.all(upstreamVideos.map((video) => imageReferenceToFalUrl(input.client, video))))
-        .filter(Boolean)
-        .slice(0, 3)
+      const referenceVideoRecords = (await Promise.all(upstreamVideos.map(async (video, index) => {
+        const url = await imageReferenceToFalUrl(input.client, video)
+        if (!url) return null
+        return {
+          url,
+          label: readText(video.name) || readText(video.title) || readText(video.label) || `reference video ${index + 1}`,
+          role: 'video_reference',
+          modality: 'video' as const,
+        }
+      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url)).slice(0, 3)
+      const referenceVideoUrls = referenceVideoRecords.map((entry) => readText(entry.url)).filter(Boolean)
       const referenceAudioUrls: string[] = []
       const totalReferences = referenceImageUrls.length + referenceVideoUrls.length + referenceAudioUrls.length
       if (totalReferences > 12) {
         throw new Error('Seedance 2 Omni Reference supports at most 12 total reference files.')
       }
-      const supportingReferenceText = (count: number) => count > 1
-        ? ` @Image2 through @Image${count} are supporting entity, location, or prop references.`
-        : ''
-      const buildProviderPrompt = (imageUrls: string[], referencePolicy: string) => [
-        prompt,
-        imageUrls.length > 0
-          ? (cinematicReferenceMode === 'keyframes'
-            ? `Reference order: @Image1 is the shot keyframe and must drive the opening frame. In fast animatics this may be the cropped storyboard panel; in quality animatics it is the enhanced keyframe.${supportingReferenceText(imageUrls.length)}`
-            : cinematicReferenceMode === 'shot_reference_sheet'
-              ? `Reference order: @Image1 is the cinematic direction sheet timing/camera/spatial continuity board.${supportingReferenceText(imageUrls.length)}`
-              : `Reference order: @Image1 is the storyboard beat-sheet timing/continuity board.${supportingReferenceText(imageUrls.length)}`)
-          : '- No image references are attached; use the written continuity anchors in the prompt.',
-        referenceVideoUrls.length > 0 ? `- Reference videos are ordered as @Video1 through @Video${referenceVideoUrls.length}.` : '',
-        cinematicReferenceMode === 'keyframes'
-          ? '- Do not copy reference-sheet layout, panel borders, or storyboard artifacts into the video.'
-          : cinematicReferenceMode === 'shot_reference_sheet'
-            ? '- A cinematic direction sheet is attached as the primary visual reference; follow its shot strip, camera layout, floor-map spatial logic, and hero frame while avoiding labels, map diagrams, arrows, UI, or sheet artifacts in the video.'
-            : '- A beat sheet is attached as the primary visual reference; follow its panel order while avoiding caption-band, border, gutter, UI, or grid artifacts in the video.',
-        referencePolicy !== (cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs') ? `Reference fallback mode: ${referencePolicy}. Preserve character continuity from written entity descriptions instead of rejected identity images.` : '',
-        `Technical target: one continuous ${durationSeconds}-second clip, ${aspectRatio}, ${resolution}.`,
-        imageUrls.length > 0 ? 'Preserve identity, wardrobe, environment, and prop continuity from the references.' : 'Preserve identity, wardrobe, environment, and prop continuity from written descriptions.',
-      ].filter(Boolean).join('\n')
-      const primaryReferenceOnlyUrls = cinematicReferenceMode === 'keyframes'
-        ? directImageUrls.slice(0, 1)
-        : directImageUrls.slice(0, 1)
+      const buildProviderPrompt = (imageRecords: SeedanceReferenceRecord[], referencePolicy: string) => {
+        const manifest = buildSeedanceReferenceManifest({
+          imageReferences: imageRecords,
+          videoReferences: referenceVideoRecords,
+          audioReferences: [],
+          cinematicReferenceMode,
+        })
+        const promptWithLegend = rewriteSeedanceReferenceLegend(prompt, manifest, referencePolicy)
+        const artifactBan = seedanceProductionBoardArtifactBan(manifest)
+        return [
+          promptWithLegend,
+          '',
+          `[PROVIDER TARGET]\nOne continuous ${durationSeconds}-second clip, ${aspectRatio}, ${resolution}.`,
+          imageRecords.length > 0 ? 'Preserve identity, wardrobe, environment, prop continuity, and selected variants from the attached references.' : 'Preserve identity, wardrobe, environment, and prop continuity from written descriptions.',
+          promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
+            ? ''
+            : artifactBan,
+        ].filter(Boolean).join('\n')
+      }
+      const primaryReferenceOnlyRecords = directImageRecords.slice(0, 1)
       const referenceAttempts = [
-        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs', imageUrls: referenceImageUrls },
-        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_only' : 'storyboard_only', imageUrls: primaryReferenceOnlyUrls },
-        { policy: 'text_only_no_image_refs', imageUrls: [] },
+        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs', imageRecords: referenceImageRecords },
+        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_only' : 'storyboard_only', imageRecords: primaryReferenceOnlyRecords },
+        { policy: 'text_only_no_image_refs', imageRecords: [] },
       ].filter((attempt, index, attempts) => (
         index === attempts.findIndex((candidate) => candidate.policy === attempt.policy
-          && candidate.imageUrls.join('\n') === attempt.imageUrls.join('\n'))
+          && candidate.imageRecords.map((entry) => readText(entry.url)).join('\n') === attempt.imageRecords.map((entry) => readText(entry.url)).join('\n'))
       ))
       const priorFailedReferencePolicy = isFalReferencePolicyError(input.priorStep?.errorMessage)
       const startAttemptIndex = priorFailedReferencePolicy && referenceAttempts.length > 1 ? 1 : 0
@@ -12979,11 +13307,18 @@ async function executeNode(input: {
       } | null = null
       let providerPrompt = ''
       let usedReferenceImageUrls = referenceImageUrls
+      let usedSeedanceReferenceManifest: SeedanceReferenceManifestEntry[] = []
       let referencePolicy = cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs'
       for (let attemptIndex = startAttemptIndex; attemptIndex < referenceAttempts.length; attemptIndex += 1) {
         const attempt = referenceAttempts[attemptIndex]
-        providerPrompt = buildProviderPrompt(attempt.imageUrls, attempt.policy)
-        usedReferenceImageUrls = attempt.imageUrls
+        providerPrompt = buildProviderPrompt(attempt.imageRecords, attempt.policy)
+        usedReferenceImageUrls = attempt.imageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+        usedSeedanceReferenceManifest = buildSeedanceReferenceManifest({
+          imageReferences: attempt.imageRecords,
+          videoReferences: referenceVideoRecords,
+          audioReferences: [],
+          cinematicReferenceMode,
+        })
         referencePolicy = attempt.policy
         try {
           if (provider === 'muapi') {
@@ -12996,7 +13331,7 @@ async function executeNode(input: {
               prompt: providerPrompt,
               durationSeconds,
               aspectRatio,
-              referenceImageUrls: attempt.imageUrls,
+              referenceImageUrls: usedReferenceImageUrls,
               referenceVideoUrls,
               referenceAudioUrls,
               shouldCancel: input.shouldCancel,
@@ -13016,16 +13351,17 @@ async function executeNode(input: {
                     aspectRatio,
                     resolution,
                     generateAudio,
-                    referenceImageCount: attempt.imageUrls.length,
+                    referenceImageCount: usedReferenceImageUrls.length,
                     referenceVideoCount: referenceVideoUrls.length,
                     referenceAudioCount: referenceAudioUrls.length,
                     referencePolicy: attempt.policy,
                     cinematicReferenceMode,
+                    seedanceReferenceManifest: usedSeedanceReferenceManifest,
                     providerPayload: buildMuapiVideoPayload({
                       prompt: providerPrompt,
                       durationSeconds,
                       aspectRatio,
-                      referenceImageUrls: attempt.imageUrls,
+                      referenceImageUrls: usedReferenceImageUrls,
                       referenceVideoUrls,
                       referenceAudioUrls,
                     }),
@@ -13046,7 +13382,7 @@ async function executeNode(input: {
               resolution,
               generateAudio,
               syncMode,
-              referenceImageUrls: attempt.imageUrls,
+              referenceImageUrls: usedReferenceImageUrls,
               referenceVideoUrls,
               referenceAudioUrls,
               shouldCancel: input.shouldCancel,
@@ -13066,11 +13402,12 @@ async function executeNode(input: {
                     aspectRatio,
                     resolution,
                     generateAudio,
-                    referenceImageCount: attempt.imageUrls.length,
+                    referenceImageCount: usedReferenceImageUrls.length,
                     referenceVideoCount: referenceVideoUrls.length,
                     referenceAudioCount: referenceAudioUrls.length,
                     referencePolicy: attempt.policy,
                     cinematicReferenceMode,
+                    seedanceReferenceManifest: usedSeedanceReferenceManifest,
                   },
                 })
               },
@@ -13124,6 +13461,7 @@ async function executeNode(input: {
         referenceAudioCount: referenceAudioUrls.length,
         referencePolicy,
         cinematicReferenceMode,
+        seedanceReferenceManifest: usedSeedanceReferenceManifest,
         shotId: readText(config.shotId) || null,
         shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
         providerPayload: provider === 'muapi' ? buildMuapiVideoPayload({
@@ -13173,6 +13511,7 @@ async function executeNode(input: {
           referenceAudioCount: referenceAudioUrls.length,
           referencePolicy,
           cinematicReferenceMode,
+          seedanceReferenceManifest: usedSeedanceReferenceManifest,
           muapiRequestId: provider === 'muapi' ? providerResult.requestId : null,
           muapiResultUrl: provider === 'muapi' ? providerResult.resultUrl ?? null : null,
           muapiWebhookConfigured,
@@ -13187,6 +13526,7 @@ async function executeNode(input: {
         prompt,
         providerPrompt,
         durationSeconds,
+        seedanceReferenceManifest: usedSeedanceReferenceManifest,
         artifact,
         guidance,
       }
@@ -13222,6 +13562,102 @@ async function executeNode(input: {
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-shot-break-plan-v1' }
+      }
+      if (purpose === 'sequence_animatic_manifest') {
+        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
+        const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
+        const mergedShotPlan = mergeCinematicV3ShotPlansForTimeline(groupPlans)
+        const breakGroups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
+        const blocks = breakGroups.map((group, index) => {
+          const storyboardGroup = buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index)
+          const shotIds = readStringArray(group.shotBreakIds)
+          const shots = mergedShotPlan.shots.filter((shot) => shotIds.includes(shot.id))
+          const resolvedShots = shots.length > 0
+            ? shots
+            : mergedShotPlan.shots.filter((shot) => storyboardGroup.shotIds.includes(shot.id))
+          return {
+            id: storyboardGroup.id,
+            index: storyboardGroup.index,
+            title: readText(group.title) || readText(group.summary) || storyboardGroup.summary || `Storyboard block ${storyboardGroup.index}`,
+            summary: storyboardGroup.summary,
+            sourceText: readText(group.sourceText),
+            shotIds: (resolvedShots.length > 0 ? resolvedShots.map((shot) => shot.id) : storyboardGroup.shotIds),
+            shots: resolvedShots,
+            storyboardGroup,
+            storyboardLayout: { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount },
+            durationSeconds: storyboardGroup.editorialDurationSeconds,
+            startSeconds: storyboardGroup.startSeconds,
+            endSeconds: storyboardGroup.endSeconds,
+            childRequestId: null,
+            childWorkflowId: null,
+          }
+        })
+        const manifest = {
+          role: 'sequence_animatic_manifest',
+          sequenceAnimaticRole: 'master',
+          requestId: input.run.metadata?.outputRequestId ?? null,
+          workflowId: input.workflow.id,
+          runId: input.run.id,
+          screenplayDraft,
+          screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
+          shotBreakPlan,
+          shotPlan: mergedShotPlan,
+          blocks,
+          assetPack,
+          selectedReferences: assetPack,
+          diagnostics: [
+            ...readStringArray(shotBreakPlan.diagnostics),
+            `Built sequence animatic manifest with ${blocks.length} storyboard block${blocks.length === 1 ? '' : 's'} and ${mergedShotPlan.shots.length} shot${mergedShotPlan.shots.length === 1 ? '' : 's'}.`,
+          ],
+        }
+        const outputs = {
+          manifest,
+          sequenceAnimaticManifest: manifest,
+          sequence_animatic_manifest: manifest,
+          screenplayDraft,
+          screenplay_draft: screenplayDraft,
+          shotBreakPlan,
+          shot_break_plan: shotBreakPlan,
+          shotPlan: mergedShotPlan,
+          shot_plan: mergedShotPlan,
+          blocks,
+          assetPack,
+          asset_pack: assetPack,
+          text: JSON.stringify(manifest, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-manifest-v1' }
+      }
+      if (purpose === 'sequence_animatic_block_input') {
+        const config = asRecord(input.node.config)
+        const block = asRecord(config.block)
+        const shotPlan = cinematicV2ShotPlanSchema.parse(config.shotPlan)
+        const storyboardGroup = asRecord(config.storyboardGroup)
+        const storyboardLayout = asRecord(config.storyboardLayout)
+        const assetPack = asRecord(config.assetPack)
+        const manifestSummary = asRecord(config.manifestSummary)
+        const outputs = {
+          block,
+          shotPlan,
+          shot_plan: shotPlan,
+          storyboardGroup,
+          storyboardGroupId: readText(storyboardGroup.id) || readText(block.id),
+          storyboardLayout,
+          assetPack,
+          asset_pack: assetPack,
+          manifestSummary,
+          sequenceAnimaticRole: 'storyboard_block',
+          text: JSON.stringify({
+            block,
+            shotPlan,
+            storyboardGroup,
+            storyboardLayout,
+          }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-block-input-v1' }
       }
       if (purpose === 'cinematic_v3_shot_plan_merge') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
@@ -13586,6 +14022,10 @@ async function executeNode(input: {
               nodeKey: input.node.key,
               preset: input.run.preset,
               role: purpose === 'cinematic_v3_panel_extract' ? 'cinematic_v3_storyboard_panel' : 'cinematic_v2_storyboard_panel',
+              sequenceAnimaticArtifactRole: readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'storyboard_block' ? 'sequence_animatic_block_panel' : null,
+              parentRequestId: readText(asRecord(input.workflow.metadata).parentRequestId) || readText(asRecord(input.run.metadata).parentRequestId) || null,
+              sequenceUnitKey: readText(asRecord(input.workflow.metadata).sequenceUnitKey) || readText(asRecord(input.run.metadata).sequenceUnitKey) || null,
+              storyboardBlockId: readText(asRecord(input.workflow.metadata).storyboardBlockId) || storyboardGroup?.id || null,
               purpose,
               shotId: shot.id,
               shotIndex: shot.index,
@@ -13629,6 +14069,7 @@ async function executeNode(input: {
               width: panelWidth,
               height: panelHeight,
               role: purpose === 'cinematic_v3_panel_extract' ? 'cinematic_v3_storyboard_panel' : 'cinematic_v2_storyboard_panel',
+              sequenceAnimaticArtifactRole: readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'storyboard_block' ? 'sequence_animatic_block_panel' : null,
               artifact,
             })
           }
@@ -13787,6 +14228,13 @@ async function executeNode(input: {
         const upstreamImages = readUpstreamImages(input.upstream)
         const entityByKey = cinematicEntityByKey(assetPack)
         const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({ assetPack, shots: groupShots, limit: 8 })
+        const seedanceReferenceManifest = buildSeedanceReferenceManifest({
+          imageReferences: [
+            ...seedanceReferenceRecordsFromImages(upstreamImages, 'storyboard_sheet'),
+            ...seedanceReferenceRecordsFromAssetPack(assetPack, Number(asRecord(input.node.config).assetPackReferenceLimit ?? 4) || 4),
+          ].slice(0, 9),
+          cinematicReferenceMode: 'storyboard_sheet',
+        })
         let localCursorSeconds = 0
         const timelineLines = groupShots.map((shot) => {
           const shotDurationSeconds = Math.max(0.1, Math.min(15, Number(shot.editorialDurationSeconds) || 2))
@@ -13798,7 +14246,7 @@ async function executeNode(input: {
               const text = readText(line.text)
               if (!text) return ''
               const speakerKey = readText(line.speakerRefId)
-              const speaker = readText(entityByKey.get(speakerKey)?.name) || speakerKey || 'Speaker'
+              const speaker = readText(entityByKey.get(speakerKey)?.name) || readText(line.speakerName) || speakerKey || 'Speaker'
               const emotion = readText(line.emotion)
               return `${speaker}: "${text}"${emotion ? ` (${emotion})` : ''}`
             })
@@ -13817,13 +14265,19 @@ async function executeNode(input: {
           `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.movement}.`,
         ].filter(Boolean).join(' ')).join('\n')
         const prompt = [
-          `Animate storyboard group ${storyboardGroup?.index ?? 1} as one short cinematic clip using the supplied storyboard sheet as the primary visual reference.`,
+          `Generate one ${Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3)))}-second Seedance 2 reference-to-video clip for storyboard group ${storyboardGroup?.index ?? 1}.`,
           `Aspect ratio: ${readText(config.aspectRatio) || '16:9'}. Resolution: ${readText(config.resolution) || '720p'}.`,
-          'Preserve the storyboard panel order, character identities, location, costume/variant references, lighting, and emotional continuity.',
-          'Use subtle cinematic motion, readable acting, and clean transitions; do not add captions, subtitles, UI, watermarks, or new characters.',
-          `Timestamped local timing call sheet for this ${Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3)))}-second clip:\n${timelineLines || actionLines}`,
-          characterVoiceGuide ? `Character identity and speaker guide. Use this to know exactly which character is speaking and how they sound; if generated audio is disabled, still use it for mouth movement, expression, and delivery:\n${characterVoiceGuide}` : '',
-          actionLines,
+          '[REFERENCE LEGEND]',
+          formatSeedanceReferenceManifest(seedanceReferenceManifest),
+          seedanceStoryboardManifestInstruction(seedanceReferenceManifest),
+          '[TIMESTAMPED SHOT CALL SHEET]',
+          timelineLines || actionLines,
+          characterVoiceGuide ? `[IDENTITY AND SPEAKER GUIDE]\nUse this to keep characters visually distinct and to know exactly which character is speaking. If generated audio is disabled, still use it for mouth movement, expression, and delivery:\n${characterVoiceGuide}` : '',
+          seedanceLabanMovementBlock(groupShots, input.run.prompt) ? `[MOVEMENT LOGIC]\n${seedanceLabanMovementBlock(groupShots, input.run.prompt)}` : '',
+          '[POSITIVE CONSTRAINTS]',
+          'Preserve character identities, selected variants, location, props, lighting direction, and emotional continuity.',
+          'Use smooth connected animation between storyboard poses, readable acting, natural physical motion, and clean transitions.',
+          seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
           `User brief: ${input.run.prompt}`,
         ].filter(Boolean).join('\n\n')
         const guidance = readUpstreamGuidanceBundle(input.upstream)
@@ -13835,6 +14289,7 @@ async function executeNode(input: {
           storyboardGroup,
           primaryReferenceImage: upstreamImages[0] ?? null,
           referenceImageCount: upstreamImages.length,
+          seedanceReferenceManifest,
           durationSeconds: Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3))),
           guidance,
           deterministic: true,
@@ -14618,6 +15073,99 @@ async function executeNode(input: {
     }
     case 'output_artifact': {
       const purpose = readText(asRecord(input.node.config).purpose)
+      if (purpose === 'sequence_animatic_manifest_artifact') {
+        const manifest = readFirstUpstreamRecord(input.upstream, ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
+        if (!Object.keys(manifest).length) throw new Error('Sequence animatic manifest artifact requires a manifest input.')
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-manifest`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${input.node.label} Manifest`,
+          summary: 'Sequence-unit screenplay animatic manifest with parsed storyboard blocks and shot data.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-manifest-artifact-v1',
+            role: 'sequence_animatic_manifest',
+            sequenceAnimaticRole: 'master',
+            manifest,
+            screenplayDraft: asRecord(manifest.screenplayDraft),
+            shotBreakPlan: asRecord(manifest.shotBreakPlan),
+            shotPlan: asRecord(manifest.shotPlan),
+            blocks: Array.isArray(manifest.blocks) ? manifest.blocks : [],
+            blockCount: Array.isArray(manifest.blocks) ? manifest.blocks.length : 0,
+          },
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: '',
+          artifact,
+          artifacts: [artifact],
+          manifest,
+          sequenceAnimaticManifest: manifest,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-manifest-artifact-v1' }
+      }
+      if (purpose === 'sequence_animatic_block_artifact') {
+        const config = asRecord(input.node.config)
+        const block = readFirstUpstreamRecord(input.upstream, ['block'])
+        const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
+        const panels = readFirstUpstreamArray(input.upstream, ['panels'])
+        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-block`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${input.node.label} Manifest`,
+          summary: 'Sequence animatic storyboard block manifest with panels and video prompt.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-block-artifact-v1',
+            role: 'sequence_animatic_block_manifest',
+            sequenceAnimaticRole: 'storyboard_block',
+            parentRequestId: readText(config.parentRequestId) || readText(asRecord(input.workflow.metadata).parentRequestId) || null,
+            sequenceUnitKey: readText(config.sequenceUnitKey) || readText(asRecord(input.workflow.metadata).sequenceUnitKey) || null,
+            storyboardBlockId: readText(config.storyboardBlockId) || readText(block.id) || null,
+            block,
+            shotPlan,
+            panelAssetKeys: panels.map((panel) => readText(asRecord(panel).assetKey)).filter(Boolean),
+            panelCount: panels.length,
+            videoPromptHash: prompt ? hashOutputWorkflowValue(prompt) : '',
+          },
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: '',
+          artifact,
+          artifacts: [artifact],
+          block,
+          shotPlan,
+          panels,
+          videoPrompt: prompt,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-block-artifact-v1' }
+      }
       if (purpose === 'cinematic_video_artifact') {
         const video = readFirstUpstreamRecord(input.upstream, ['video'])
         const artifact = readFirstUpstreamRecord(input.upstream, ['artifact'])
@@ -15375,20 +15923,30 @@ export async function processFlyOutputWorkflowRuns(input: {
       nodes: schedulerResult.outputsByNodeKey,
       artifact: schedulerResult.outputsByNodeKey.artifact ?? null,
     }
+    const finalArtifactOutputs = asRecord(schedulerResult.outputsByNodeKey.artifact)
+    const finalArtifact = asRecord(finalArtifactOutputs.artifact)
+    const finalArtifactMetadata = asRecord(finalArtifact.metadata)
+    const v3AuthoringReady = finalArtifactOutputs.authoringReady === true
+      || readText(finalArtifactMetadata.role) === 'cinematic_v3_authoring_timeline'
+      || asRecord(finalArtifactOutputs.video).authoringOnly === true
+    const effectiveRunStatus = schedulerResult.status === 'completed_with_errors' && v3AuthoringReady
+      ? 'completed'
+      : schedulerResult.status
     const completeResponse = await input.client.rpc('complete_output_workflow_run', {
       run_id: runId,
       worker_id: input.workerId,
       outputs: finalOutputs,
       metadata_patch: {
         runtime: 'fly_output_workflow_worker',
-        stage: schedulerResult.status,
+        stage: effectiveRunStatus,
           runMode: targetNodeKeys.length > 0 ? 'targeted_node_run' : 'full_workflow_run',
           runScope,
           targetNodeKeys,
           forceNodeKeys: [...forceNodeKeys],
           reuseExistingUpstreamOutputs,
           allowStaleUpstreamOutputs,
-          status: schedulerResult.status === 'completed_with_errors' ? 'completed_with_errors' : undefined,
+          status: effectiveRunStatus === 'completed_with_errors' ? 'completed_with_errors' : undefined,
+          nonCriticalCompletedWithErrors: schedulerResult.status === 'completed_with_errors' && effectiveRunStatus === 'completed',
         completedNodeKeys: schedulerResult.completed,
         failedNodeKeys: schedulerResult.failed,
         cancelledNodeKeys: schedulerResult.cancelled,
@@ -15397,7 +15955,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       },
     })
     if (completeResponse.error) throw new Error(completeResponse.error.message)
-    return { processed: true, run: { id: bundle.run.id, status: schedulerResult.status, preset: bundle.run.preset } }
+    return { processed: true, run: { id: bundle.run.id, status: effectiveRunStatus, preset: bundle.run.preset } }
     }
     throw new Error('Cinematic dynamic workflow expansion did not settle after 4 scheduler passes.')
   } catch (error) {

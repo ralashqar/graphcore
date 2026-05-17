@@ -105,6 +105,37 @@ Deno.serve(async (request) => {
     if (runResponse.error || !runResponse.data) throw new Error(runResponse.error?.message ?? 'Failed to create output workflow run.')
 
     const runRow = runResponse.data
+    const linkedRequestResponse = await client
+      .from('output_requests')
+      .select('id, metadata')
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .eq('workflow_id', payload.workflowId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const linkedRequestId = typeof linkedRequestResponse.data?.id === 'string' ? linkedRequestResponse.data.id : ''
+    if (linkedRequestId) {
+      const linkedMetadata = linkedRequestResponse.data?.metadata && typeof linkedRequestResponse.data.metadata === 'object'
+        ? linkedRequestResponse.data.metadata as Record<string, unknown>
+        : {}
+      const requestUpdateResponse = await client
+        .from('output_requests')
+        .update({
+          latest_run_id: runRow.id,
+          status: 'running',
+          error_message: null,
+          metadata: {
+            ...linkedMetadata,
+            readyToRun: false,
+            lastRunStartedAt: now,
+            latestRunId: runRow.id,
+          },
+        })
+        .eq('id', linkedRequestId)
+      if (requestUpdateResponse.error) throw new Error(requestUpdateResponse.error.message)
+      await client.rpc('refresh_output_request_status_projection', { p_request_id: linkedRequestId })
+    }
     const targetNodeKeys = readStringArray(payload.metadata.targetNodeKeys)
     const runScope = payload.metadata.runScope
     const selectedSubgraph = selectOutputWorkflowRunSubgraph({

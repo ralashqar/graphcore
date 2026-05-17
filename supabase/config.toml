@@ -173,6 +173,9 @@ verify_jwt = false
 [functions.start-output-workflow-run]
 verify_jwt = false
 
+[functions.ensure-sequence-animatic-block-workflows]
+verify_jwt = false
+
 [functions.get-output-workflow-status]
 verify_jwt = false
 

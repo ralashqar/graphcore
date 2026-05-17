@@ -1526,6 +1526,7 @@ export default function App() {
   const [pendingOutputOpenIntent, setPendingOutputOpenIntent] = useState<{
     requestId: string | null
     target: 'details' | 'graph' | 'timeline'
+    selectedNodeKey?: string | null
     nonce: number
     returnToSourceOnClose?: boolean
   } | null>(null)
@@ -5762,6 +5763,42 @@ export default function App() {
     return result
   }
 
+  async function ensureSequenceAnimaticBlockWorkflows(request: Parameters<typeof workspaceService.ensureSequenceAnimaticBlockWorkflows>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before preparing sequence animatic block workflows.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic block workflows require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticBlockWorkflows(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...result.childRequests,
+        result.masterRequest,
+        ...current.outputRequests.filter((requestRow) => (
+          requestRow.id !== result.masterRequest.id
+          && !result.childRequests.some((child) => child.id === requestRow.id)
+        )),
+      ],
+      outputWorkflows: [
+        ...result.workflows,
+        ...current.outputWorkflows.filter((workflow) => !result.workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !result.workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !result.workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function previewOutputCinematicDirectorNote(request: Parameters<typeof workspaceService.previewOutputCinematicDirectorNote>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before directing a cinematic timeline.')
@@ -8272,10 +8309,12 @@ export default function App() {
                 onCancelWorldPromptTurn={cancelWorldPromptTurn}
                 onDismissWorldPromptSuggestion={dismissWorldPromptSuggestion}
                 onStartOutputRequest={startOutputRequest}
+                onStartOutputWorkflowRun={startOutputWorkflowRun}
+                onEnsureSequenceAnimaticBlockWorkflows={ensureSequenceAnimaticBlockWorkflows}
                 onGetOutputRequestStatus={getOutputRequestStatus}
                 onCancelOutputRequest={cancelOutputRequest}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
-                onOpenOutputStudio={(requestId, target = 'details') => {
+                onOpenOutputStudio={(requestId, target = 'details', selectedNodeKey = null) => {
                   const returnToWikiOutputs = activeTab === 'graph'
                     && worldViewMode === 'wiki'
                     && worldWikiSubView === 'outputs'
@@ -8283,6 +8322,7 @@ export default function App() {
                   setPendingOutputOpenIntent({
                     requestId: requestId ?? null,
                     target,
+                    selectedNodeKey,
                     nonce: Date.now(),
                     returnToSourceOnClose: returnToWikiOutputs,
                   })

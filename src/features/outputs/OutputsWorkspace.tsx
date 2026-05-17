@@ -58,6 +58,7 @@ type OutputsWorkspaceProps = {
   openIntent?: {
     requestId: string | null
     target?: 'details' | 'graph' | 'timeline'
+    selectedNodeKey?: string | null
     nonce: number
     returnToSourceOnClose?: boolean
   } | null
@@ -1992,16 +1993,16 @@ export function OutputsWorkspace({
     void refreshOutputGraph({ manual: true })
   }
 
-  async function openOutputGraphForRequest(request: OutputRequest | null | undefined) {
+  async function openOutputGraphForRequest(request: OutputRequest | null | undefined, requestedNodeKey: string | null = null) {
     if (!request?.workflowId) return
     setSelectedRequestId(request.id)
     if (request.latestRunId) setActiveRunId(request.latestRunId)
-    setSelectedNodeKey(null)
+    setSelectedNodeKey(requestedNodeKey)
     setGraphOpen(true)
     setRefreshingGraph(true)
     setError(null)
     try {
-      await onLoadOutputWorkflowGraph(request.workflowId, request.latestRunId ?? null)
+      await onLoadOutputWorkflowGraph(request.workflowId, request.latestRunId ?? null, requestedNodeKey)
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : 'Could not open output workflow graph.')
     } finally {
@@ -2096,7 +2097,7 @@ export function OutputsWorkspace({
     if (request.workflowId) setSelectedNodeKey(null)
     setReturnToSourceOnClose(Boolean(openIntent.returnToSourceOnClose && (openIntent.target === 'graph' || openIntent.target === 'timeline')))
     if (openIntent.target === 'graph') {
-      void openOutputGraphForRequest(request)
+      void openOutputGraphForRequest(request, openIntent.selectedNodeKey ?? null)
     } else if (openIntent.target === 'timeline') {
       void openCinematicTimelineForRequest(request)
     }

@@ -132,7 +132,9 @@ function buildDialogueCue(input: {
     type: 'dialogue' as const,
     startSeconds: input.shotStartSeconds + relative.startSeconds,
     endSeconds: input.shotStartSeconds + relative.endSeconds,
-    label: input.cue.speakerRefId ? input.labelByRefId.get(input.cue.speakerRefId) ?? 'Speaker' : 'Speaker',
+    label: input.cue.speakerRefId
+      ? ((input.labelByRefId.get(input.cue.speakerRefId) ?? input.cue.speakerName) || 'Speaker')
+      : input.cue.speakerName || 'Speaker',
     text,
   }
 }
@@ -332,7 +334,7 @@ export function buildCinematicV2TimelineProjection(input: {
         type: 'dialogue' as const,
         startSeconds: cueStart,
         endSeconds: Math.min(endSeconds, Math.max(cueStart + 0.1, cueEnd)),
-        label: line.speakerRefId || 'Dialogue',
+        label: line.speakerName || line.speakerRefId || 'Dialogue',
         text: line.text,
       }
     }).filter((cue) => cue.text.trim().length > 0)

@@ -21,6 +21,7 @@ type SupabaseAdminClient = {
 
 type OutputRequestRow = {
   id: string
+  parent_request_id: string | null
   workflow_id: string | null
   latest_run_id: string | null
 }
@@ -180,13 +181,41 @@ async function loadOutputRequests(
 ) {
   let query = admin
     .from('output_requests')
-    .select('id, workflow_id, latest_run_id')
+    .select('id, parent_request_id, workflow_id, latest_run_id')
     .eq('project_id', projectId)
     .eq('draft_id', draftId)
   if (requestIds && requestIds.length > 0) {
     query = query.in('id', requestIds)
   }
   return selectRows<OutputRequestRow>(query)
+}
+
+async function loadOutputRequestDescendants(
+  admin: SupabaseAdminClient,
+  projectId: string,
+  draftId: string,
+  parentIds: string[],
+) {
+  const descendants: OutputRequestRow[] = []
+  let frontier = unique(parentIds)
+  const seen = new Set(frontier)
+  while (frontier.length > 0) {
+    const batchRows: OutputRequestRow[] = []
+    for (const parentBatch of chunk(frontier, 100)) {
+      batchRows.push(...await selectRows<OutputRequestRow>(
+        admin
+          .from('output_requests')
+          .select('id, parent_request_id, workflow_id, latest_run_id')
+          .eq('project_id', projectId)
+          .eq('draft_id', draftId)
+          .in('parent_request_id', parentBatch),
+      ))
+    }
+    descendants.push(...batchRows)
+    frontier = unique(batchRows.map((row) => row.id)).filter((id) => !seen.has(id))
+    frontier.forEach((id) => seen.add(id))
+  }
+  return descendants
 }
 
 async function loadDraftWorkflows(
@@ -402,10 +431,17 @@ export async function cleanupOutputRequests(input: {
   dryRun?: boolean
 }): Promise<OutputCleanupResult> {
   const counts = emptyCounts()
-  const requests = await loadOutputRequests(input.admin, input.projectId, input.draftId, input.requestIds)
-  if (input.requestIds && requests.length !== unique(input.requestIds).length) {
+  const rootRequests = await loadOutputRequests(input.admin, input.projectId, input.draftId, input.requestIds)
+  if (input.requestIds && rootRequests.length !== unique(input.requestIds).length) {
     throw new Error('One or more output requests could not be found for cleanup.')
   }
+  const childRequests = input.requestIds
+    ? await loadOutputRequestDescendants(input.admin, input.projectId, input.draftId, rootRequests.map((row) => row.id))
+    : []
+  const requests = [
+    ...rootRequests,
+    ...childRequests.filter((child) => !rootRequests.some((root) => root.id === child.id)),
+  ]
 
   const draftWorkflows = input.includeAllDraftWorkflows
     ? await loadDraftWorkflows(input.admin, input.projectId, input.draftId)

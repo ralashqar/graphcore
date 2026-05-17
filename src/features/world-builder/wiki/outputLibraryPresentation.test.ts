@@ -12,6 +12,7 @@ function request(overrides: Partial<OutputRequest>): OutputRequest {
     id: overrides.id ?? 'request-1',
     projectId: 'project',
     draftId: 'draft',
+    parentRequestId: overrides.parentRequestId ?? null,
     workflowId: overrides.workflowId ?? 'workflow-1',
     latestRunId: overrides.latestRunId ?? 'run-1',
     requestedBy: null,
@@ -193,6 +194,48 @@ test('buildOutputLibraryModel treats completed runs as ready when request status
   assert.equal(row?.progress.label, '2/2 steps')
   assert.equal(model.groups.find((group) => group.key === 'ready')?.rows[0]?.id, 'poster-request')
   assert.equal(model.groups.find((group) => group.key === 'generating')?.rows.length, 0)
+})
+
+test('buildOutputLibraryModel treats cinematic authoring timelines as ready despite noncritical branch errors', () => {
+  const model = buildOutputLibraryModel({
+    assets: [],
+    outputRequests: [
+      request({
+        id: 'cinematic-request',
+        latestRunId: 'cinematic-run',
+        outputKind: 'cinematic_episode',
+        status: 'completed_with_errors',
+      }),
+    ],
+    outputWorkflowRuns: [
+      run({
+        id: 'cinematic-run',
+        status: 'completed_with_errors',
+        steps: [
+          step({ id: 's1', runId: 'cinematic-run', nodeKey: 'screenplay', orderIndex: 0, label: 'Screenplay', status: 'completed' }),
+          step({ id: 's2', runId: 'cinematic-run', nodeKey: 'storyboard_sheet', orderIndex: 1, label: 'Storyboard Sheet', status: 'completed' }),
+          step({ id: 's3', runId: 'cinematic-run', nodeKey: 'optional_video_prompt', orderIndex: 2, label: 'Video Prompt', status: 'failed' }),
+        ],
+      }),
+    ],
+    outputWorkflowNodes: [],
+    worldEntities: [],
+    outputArtifacts: [
+      artifact({
+        id: 'authoring-artifact',
+        key: 'authoring-artifact',
+        kind: 'other',
+        mimeType: 'application/json',
+        runId: 'cinematic-run',
+        metadata: { role: 'cinematic_v3_authoring_timeline' },
+      }),
+    ],
+  })
+
+  const row = model.rows.find((entry) => entry.id === 'cinematic-request')
+  assert.equal(row?.groupKey, 'ready')
+  assert.equal(row?.canOpenTimeline, true)
+  assert.equal(model.groups.find((group) => group.key === 'ready')?.rows[0]?.id, 'cinematic-request')
 })
 
 test('buildOutputLibraryModel uses compact status projection for live progress rows', () => {

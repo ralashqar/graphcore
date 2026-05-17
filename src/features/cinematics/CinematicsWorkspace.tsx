@@ -4775,7 +4775,10 @@ function DialogueBeatEditor({
           </div>
           <label className="field-block compact-block">
             <span>Speaker</span>
-            <select value={line.speakerRefId ?? ''} onChange={(event) => onChange(dialogue.map((entry, entryIndex) => entryIndex === index ? { ...entry, speakerRefId: event.target.value || null } : entry))}>
+            <select value={line.speakerRefId ?? ''} onChange={(event) => {
+              const selectedOption = speakerOptions.find((option) => option.id === event.target.value)
+              onChange(dialogue.map((entry, entryIndex) => entryIndex === index ? { ...entry, speakerRefId: event.target.value || null, speakerName: selectedOption?.label ?? entry.speakerName } : entry))
+            }}>
               <option value="">Select speaker</option>
               {speakerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
             </select>
@@ -4800,6 +4803,7 @@ function DialogueBeatEditor({
         onClick={() => onChange([...dialogue, {
           id: buildNextId('dialogue', dialogue.map((entry) => entry.id)),
           speakerRefId: null,
+          speakerName: '',
           line: '',
           delivery: '',
           startSeconds: null,

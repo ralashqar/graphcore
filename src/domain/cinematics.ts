@@ -273,6 +273,7 @@ export const cinematicCompositeReferenceSchema = z.object({
 export const dialogueBeatSchema = z.object({
   id: z.string(),
   speakerRefId: z.string().nullable().default(null),
+  speakerName: z.string().default(''),
   line: z.string().default(''),
   delivery: z.string().default(''),
   startSeconds: z.number().nonnegative().nullable().default(null),
@@ -776,6 +777,7 @@ export const cinematicV2ScreenplayDraftSchema = z.object({
 export const cinematicV2DialogueLineSchema = z.object({
   id: z.string(),
   speakerRefId: z.string(),
+  speakerName: z.string().default(''),
   text: z.string().default(''),
   emotion: z.string().default(''),
   startSeconds: z.number().nonnegative().nullable().default(null),
@@ -994,6 +996,7 @@ export function buildCinematicV3StoryboardLayout(shotCount: number): CinematicV2
   const panelCount = Math.max(1, Math.min(9, Math.ceil(shotCount)))
   if (panelCount <= 1) return { rows: 1, columns: 1, panelCount }
   if (panelCount === 2) return { rows: 1, columns: 2, panelCount }
+  if (panelCount <= 4) return { rows: 2, columns: 2, panelCount }
   if (panelCount <= 6) return { rows: 2, columns: 3, panelCount }
   return { rows: 3, columns: 3, panelCount }
 }

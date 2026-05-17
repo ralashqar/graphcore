@@ -1,0 +1,374 @@
+import { requireUserClient } from '../_shared/auth.ts'
+import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import {
+  mapOutputRequestRow,
+  mapOutputWorkflowEdgeRow,
+  mapOutputWorkflowNodeRow,
+  mapOutputWorkflowRow,
+  outputArtifactSelect,
+  outputRequestSelect,
+  outputWorkflowEdgeSelect,
+  outputWorkflowNodeSelect,
+  outputWorkflowSelect,
+} from '../_shared/output-workflow.ts'
+import {
+  sequenceAnimaticBlockWorkflowEnsureRequestSchema,
+  sequenceAnimaticBlockWorkflowEnsureResponseSchema,
+} from '../../../src/domain/outputWorkflow.ts'
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readArray(value: unknown) {
+  return Array.isArray(value) ? value : []
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'output'
+}
+
+function storyboardImageSize(columns: number, rows: number, aspectRatio: string) {
+  const cellWidth = aspectRatio === '9:16' || aspectRatio === '3:4' ? 864 : 960
+  const cellHeight = aspectRatio === '9:16' ? 1536 : aspectRatio === '1:1' ? 1024 : 540
+  return {
+    width: Math.max(1024, Math.min(4096, columns * cellWidth)),
+    height: Math.max(1024, Math.min(4096, rows * cellHeight)),
+  }
+}
+
+function buildNode(workflowId: string, draftId: string, key: string, nodeType: string, label: string, x: number, y: number, config: Record<string, unknown>, inputs: Record<string, unknown> = {}) {
+  return {
+    workflow_id: workflowId,
+    draft_id: draftId,
+    key,
+    node_type: nodeType,
+    label,
+    position: { x, y },
+    config,
+    inputs,
+    outputs: {},
+    dirty: true,
+    input_hash: '',
+    output_hash: '',
+    metadata: {
+      sequenceAnimaticGenerated: true,
+      sequenceAnimaticRole: 'storyboard_block',
+    },
+  }
+}
+
+function buildEdge(workflowId: string, draftId: string, key: string, sourceNodeKey: string, sourcePort: string, targetNodeKey: string, targetPort: string, metadata: Record<string, unknown> = {}) {
+  return {
+    workflow_id: workflowId,
+    draft_id: draftId,
+    key,
+    source_node_key: sourceNodeKey,
+    source_port: sourcePort,
+    target_node_key: targetNodeKey,
+    target_port: targetPort,
+    metadata: {
+      sequenceAnimaticGenerated: true,
+      sequenceAnimaticRole: 'storyboard_block',
+      ...metadata,
+    },
+  }
+}
+
+Deno.serve(async (request) => {
+  const preflight = maybeHandleOptions(request)
+  if (preflight) return preflight
+
+  try {
+    if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
+    const { client, user } = await requireUserClient(request, 'ensure-sequence-animatic-block-workflows')
+    const payload = sequenceAnimaticBlockWorkflowEnsureRequestSchema.parse(await request.json())
+
+    const masterResponse = await client
+      .from('output_requests')
+      .select(outputRequestSelect)
+      .eq('id', payload.masterRequestId)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .single()
+    if (masterResponse.error || !masterResponse.data) throw new HttpError(404, 'Sequence animatic master request not found.')
+    const masterRequest = mapOutputRequestRow(masterResponse.data)
+    const masterMetadata = asRecord(masterRequest.metadata)
+    if (readText(masterMetadata.sequenceAnimaticRole) !== 'master') {
+      throw new HttpError(409, 'This output is not a sequence animatic master request.')
+    }
+    if (!masterRequest.workflowId) throw new HttpError(409, 'Sequence animatic master has no workflow yet.')
+
+    const artifactsResponse = await client
+      .from('output_artifacts')
+      .select(outputArtifactSelect)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .eq('workflow_id', masterRequest.workflowId)
+      .order('created_at', { ascending: false })
+    if (artifactsResponse.error) throw new Error(artifactsResponse.error.message)
+    const manifestArtifact = (artifactsResponse.data ?? [])
+      .map((row) => asRecord(asRecord(row).metadata))
+      .find((metadata) => readText(metadata.role) === 'sequence_animatic_manifest')
+    const manifest = asRecord(manifestArtifact?.manifest)
+    const blocks = readArray(manifest.blocks).map(asRecord).filter((block) => readText(block.id))
+    if (blocks.length === 0) throw new HttpError(409, 'Generate the screenplay animatic master first; no parsed storyboard blocks are available yet.')
+
+    const existingChildrenResponse = await client
+      .from('output_requests')
+      .select(outputRequestSelect)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .eq('parent_request_id', masterRequest.id)
+      .order('created_at', { ascending: true })
+    if (existingChildrenResponse.error) throw new Error(existingChildrenResponse.error.message)
+    const existingChildren = (existingChildrenResponse.data ?? []).map(mapOutputRequestRow)
+    const existingByBlockId = new Map(existingChildren.map((child) => [readText(asRecord(child.metadata).storyboardBlockId), child] as const).filter(([id]) => id))
+
+    const createdWorkflowIds: string[] = []
+    const childRequests = [...existingChildren]
+    const now = new Date().toISOString()
+    for (const block of blocks) {
+      const blockId = readText(block.id)
+      if (!blockId || existingByBlockId.has(blockId)) continue
+      const storyboardGroup = asRecord(block.storyboardGroup)
+      const layout = asRecord(block.storyboardLayout)
+      const rows = Math.max(1, Number(layout.rows ?? storyboardGroup.rows ?? 1) || 1)
+      const columns = Math.max(1, Number(layout.columns ?? storyboardGroup.columns ?? 1) || 1)
+      const panelCount = Math.max(1, Number(layout.panelCount ?? storyboardGroup.panelCount ?? readArray(block.shots).length) || 1)
+      const aspectRatio = readText(asRecord(manifest.assetPack).aspectRatio) || '16:9'
+      const imageSize = storyboardImageSize(columns, rows, aspectRatio)
+      const workflowResponse = await client
+        .from('output_workflows')
+        .insert({
+          project_id: payload.projectId,
+          draft_id: payload.draftId,
+          key: `sequence_animatic_${slugify(masterRequest.id)}_${slugify(blockId)}`,
+          name: `${masterRequest.title} / Block ${Number(block.index ?? 0) || childRequests.length + 1}`,
+          description: 'Sequence animatic storyboard block workflow.',
+          preset: 'cinematic_episode_from_sequence',
+          status: 'active',
+          created_by: user.id,
+          metadata: {
+            parentRequestId: masterRequest.id,
+            sequenceAnimaticRole: 'storyboard_block',
+            storyboardBlockId: blockId,
+            sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+            sourceMasterWorkflowId: masterRequest.workflowId,
+            readyToRun: true,
+          },
+        })
+        .select(outputWorkflowSelect)
+        .single()
+      if (workflowResponse.error || !workflowResponse.data) throw new Error(workflowResponse.error?.message ?? 'Failed to create block workflow.')
+      const workflow = mapOutputWorkflowRow(workflowResponse.data)
+      createdWorkflowIds.push(workflow.id)
+
+      const blockShotPlan = {
+        ...asRecord(manifest.shotPlan),
+        totalEditorialDurationSeconds: Number(block.durationSeconds ?? storyboardGroup.editorialDurationSeconds ?? 0) || readArray(block.shots).reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds ?? 0) || 0), 0),
+        shots: readArray(block.shots).map(asRecord),
+      }
+      const commonConfig = {
+        cinematicPipelineVersion: 'v3_script_storyboards',
+        sequenceAnimaticRole: 'storyboard_block',
+        parentRequestId: masterRequest.id,
+        sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+        storyboardBlockId: blockId,
+      }
+      const nodes = [
+        buildNode(workflow.id, payload.draftId, 'block_input', 'utility_transform', 'Block Input', 80, 100, {
+          purpose: 'sequence_animatic_block_input',
+          ...commonConfig,
+          block,
+          manifestSummary: {
+            title: readText(manifest.title) || masterRequest.title,
+            screenplayMarkdown: readText(manifest.screenplayMarkdown),
+          },
+          shotPlan: blockShotPlan,
+          storyboardGroup,
+          storyboardLayout: { rows, columns, panelCount },
+          assetPack: asRecord(manifest.assetPack),
+        }),
+        buildNode(workflow.id, payload.draftId, 'storyboard_prompt', 'utility_transform', 'Storyboard Prompt', 360, 100, {
+          purpose: 'cinematic_v3_storyboard_prompt',
+          ...commonConfig,
+          aspectRatio,
+          storyboardGroup,
+          storyboardLayout: { rows, columns, panelCount },
+          planningOnly: true,
+          execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_block_prompt', maxConcurrency: 1 },
+        }),
+        buildNode(workflow.id, payload.draftId, 'storyboard_sheet', 'image_generation', 'Storyboard Sheet', 640, 100, {
+          purpose: 'cinematic_v3_storyboard_sheet',
+          role: 'cinematic_v3_storyboard_sheet',
+          ...commonConfig,
+          storyboardGroup,
+          storyboardGroupId: blockId,
+          model: 'openai/gpt-image-2',
+          referenceModel: 'openai/gpt-image-2/edit',
+          quality: 'high',
+          outputFormat: 'webp',
+          maxReferenceImages: 16,
+          imageSize,
+          aspectRatio,
+          storyboardLayout: { rows, columns, panelCount },
+          planningOnly: true,
+          planning_only: true,
+          usedAsVideoReference: true,
+          used_as_video_reference: true,
+          execution: { resourceClass: 'image', groupKey: `sequence_animatic_block_${slugify(blockId)}`, maxConcurrency: 1 },
+        }),
+        buildNode(workflow.id, payload.draftId, 'panel_extract', 'utility_transform', 'Extract Panels', 920, 100, {
+          purpose: 'cinematic_v3_panel_extract',
+          ...commonConfig,
+          storyboardGroup,
+          storyboardGroupId: blockId,
+          storyboardLayout: { rows, columns, panelCount },
+          aspectRatio,
+          execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_block_extract', maxConcurrency: 1 },
+        }),
+        buildNode(workflow.id, payload.draftId, 'video_prompt', 'utility_transform', 'Video Prompt', 1200, 100, {
+          purpose: 'cinematic_v3_storyboard_group_video_prompt',
+          ...commonConfig,
+          storyboardGroup,
+          storyboardGroupId: blockId,
+          durationSeconds: Math.max(4, Math.min(15, Number(block.durationSeconds ?? storyboardGroup.providerDurationSeconds ?? 0) || 8)),
+          aspectRatio,
+          resolution: '720p',
+          generateAudio: false,
+          execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_block_video_prompt', maxConcurrency: 1 },
+        }),
+        buildNode(workflow.id, payload.draftId, 'video', 'video_generation', 'Video', 1480, 100, {
+          purpose: 'cinematic_v3_storyboard_group_video',
+          role: 'cinematic_v3_storyboard_group_video',
+          ...commonConfig,
+          storyboardGroup,
+          storyboardGroupId: blockId,
+          durationSeconds: Math.max(4, Math.min(15, Number(block.durationSeconds ?? storyboardGroup.providerDurationSeconds ?? 0) || 8)),
+          aspectRatio,
+          resolution: '720p',
+          generateAudio: false,
+          cinematicReferenceMode: 'storyboard_sheet',
+          debugSkipVideoGeneration: true,
+          manualOnly: true,
+          manual_only: true,
+          execution: { resourceClass: 'video', groupKey: 'sequence_animatic_block_video', maxConcurrency: 1, manualOnly: true },
+        }),
+        buildNode(workflow.id, payload.draftId, 'artifact', 'output_artifact', 'Register Block', 1760, 100, {
+          purpose: 'sequence_animatic_block_artifact',
+          artifactKind: 'other',
+          ...commonConfig,
+          execution: { resourceClass: 'utility' },
+        }),
+      ]
+      const nodeResponse = await client.from('output_workflow_nodes').insert(nodes).select(outputWorkflowNodeSelect)
+      if (nodeResponse.error) throw new Error(nodeResponse.error.message)
+
+      const edges = [
+        buildEdge(workflow.id, payload.draftId, 'block__prompt_plan', 'block_input', 'text', 'storyboard_prompt', 'shot_plan'),
+        buildEdge(workflow.id, payload.draftId, 'block__prompt_refs', 'block_input', 'asset_pack', 'storyboard_prompt', 'asset_pack'),
+        buildEdge(workflow.id, payload.draftId, 'prompt__sheet', 'storyboard_prompt', 'text', 'storyboard_sheet', 'prompt'),
+        buildEdge(workflow.id, payload.draftId, 'block__sheet_refs', 'block_input', 'asset_pack', 'storyboard_sheet', 'references'),
+        buildEdge(workflow.id, payload.draftId, 'sheet__extract', 'storyboard_sheet', 'image', 'panel_extract', 'image'),
+        buildEdge(workflow.id, payload.draftId, 'block__extract_plan', 'block_input', 'text', 'panel_extract', 'shot_plan'),
+        buildEdge(workflow.id, payload.draftId, 'block__video_prompt_plan', 'block_input', 'text', 'video_prompt', 'shot_plan'),
+        buildEdge(workflow.id, payload.draftId, 'block__video_prompt_refs', 'block_input', 'asset_pack', 'video_prompt', 'asset_pack'),
+        buildEdge(workflow.id, payload.draftId, 'sheet__video_prompt_refs', 'storyboard_sheet', 'image', 'video_prompt', 'references'),
+        buildEdge(workflow.id, payload.draftId, 'video_prompt__video', 'video_prompt', 'text', 'video', 'prompt'),
+        buildEdge(workflow.id, payload.draftId, 'sheet__video_refs', 'storyboard_sheet', 'image', 'video', 'references'),
+        buildEdge(workflow.id, payload.draftId, 'video_prompt__artifact', 'video_prompt', 'text', 'artifact', 'input'),
+        buildEdge(workflow.id, payload.draftId, 'panels__artifact', 'panel_extract', 'panels', 'artifact', 'panels', { optional: true, optionalDependency: true }),
+      ]
+      const edgeResponse = await client.from('output_workflow_edges').insert(edges).select(outputWorkflowEdgeSelect)
+      if (edgeResponse.error) throw new Error(edgeResponse.error.message)
+
+      const childResponse = await client
+        .from('output_requests')
+        .insert({
+          project_id: payload.projectId,
+          draft_id: payload.draftId,
+          parent_request_id: masterRequest.id,
+          workflow_id: workflow.id,
+          requested_by: user.id,
+          source_surface: 'wiki_sequence_unit',
+          prompt: `${masterRequest.prompt}\n\nStoryboard block ${Number(block.index ?? 0) || childRequests.length + 1}: ${readText(block.title) || blockId}`,
+          title: `${masterRequest.title} / Block ${Number(block.index ?? 0) || childRequests.length + 1}`,
+          intent: 'output_generation',
+          output_kind: 'cinematic_episode',
+          status: 'awaiting_confirmation',
+          selected_entity_keys: masterRequest.selectedEntityKeys,
+          selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
+          page_count: null,
+          target_format: 'video',
+          planner_notes: 'Storyboard block graph prepared from a sequence animatic master manifest.',
+          metadata: {
+            sequenceAnimaticRole: 'storyboard_block',
+            parentRequestId: masterRequest.id,
+            storyboardBlockId: blockId,
+            storyboardBlockIndex: Number(block.index ?? 0) || childRequests.length + 1,
+            sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+            sourceMasterWorkflowId: masterRequest.workflowId,
+            readyToRun: true,
+            createdFromManifestAt: now,
+            block,
+          },
+        })
+        .select(outputRequestSelect)
+        .single()
+      if (childResponse.error || !childResponse.data) throw new Error(childResponse.error?.message ?? 'Failed to create block request.')
+      const child = mapOutputRequestRow(childResponse.data)
+      childRequests.push(child)
+      await client.rpc('refresh_output_request_status_projection', { p_request_id: child.id })
+    }
+
+    if (createdWorkflowIds.length > 0) {
+      await client
+        .from('output_requests')
+        .update({
+          metadata: {
+            ...masterMetadata,
+            sequenceAnimaticRole: 'master',
+            childBlockRequestIds: childRequests.map((child) => child.id),
+            childBlockWorkflowIds: childRequests.map((child) => child.workflowId).filter(Boolean),
+            blockWorkflowsEnsuredAt: now,
+          },
+        })
+        .eq('id', masterRequest.id)
+      await client.rpc('refresh_output_request_status_projection', { p_request_id: masterRequest.id })
+    }
+
+    const workflowIds = childRequests.map((child) => child.workflowId).filter((id): id is string => Boolean(id))
+    const [workflowRows, nodeRows, edgeRows, latestMasterResponse] = await Promise.all([
+      workflowIds.length > 0
+        ? client.from('output_workflows').select(outputWorkflowSelect).in('id', workflowIds)
+        : Promise.resolve({ data: [], error: null }),
+      workflowIds.length > 0
+        ? client.from('output_workflow_nodes').select(outputWorkflowNodeSelect).in('workflow_id', workflowIds)
+        : Promise.resolve({ data: [], error: null }),
+      workflowIds.length > 0
+        ? client.from('output_workflow_edges').select(outputWorkflowEdgeSelect).in('workflow_id', workflowIds)
+        : Promise.resolve({ data: [], error: null }),
+      client.from('output_requests').select(outputRequestSelect).eq('id', masterRequest.id).single(),
+    ])
+    if (workflowRows.error) throw new Error(workflowRows.error.message)
+    if (nodeRows.error) throw new Error(nodeRows.error.message)
+    if (edgeRows.error) throw new Error(edgeRows.error.message)
+    if (latestMasterResponse.error || !latestMasterResponse.data) throw new Error(latestMasterResponse.error?.message ?? 'Failed to reload master request.')
+
+    return json(sequenceAnimaticBlockWorkflowEnsureResponseSchema.parse({
+      ok: true,
+      masterRequest: mapOutputRequestRow(latestMasterResponse.data),
+      childRequests,
+      workflows: (workflowRows.data ?? []).map(mapOutputWorkflowRow),
+      nodes: (nodeRows.data ?? []).map(mapOutputWorkflowNodeRow),
+      edges: (edgeRows.data ?? []).map(mapOutputWorkflowEdgeRow),
+    }))
+  } catch (error) {
+    return errorResponse(error, 'Failed to prepare sequence animatic block workflows.')
+  }
+})

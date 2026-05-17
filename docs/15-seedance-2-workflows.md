@@ -70,6 +70,59 @@ Example:
 Shot 1: Character A draws Sword B and rushes Character C across the temple floor. Camera tracks left at waist height and then pushes in on the clash. Keep the lit doorway behind Character C and make the sword silhouette readable. Dialogue: "Move." @Image1 is the shot panel. @Image2 is Character A with Sword B. @Image3 is the temple environment.
 ```
 
+## Reference-Led Prompt Contract
+
+GraphCore prompts must describe only references that are actually submitted to the provider. The provider-facing reference legend is generated from the final input order, using one-based tags:
+
+- `@Image1`, `@Image2`, etc. for images
+- `@Video1`, `@Video2`, etc. for video references
+- `@Audio1`, `@Audio2`, etc. for audio references
+
+Do not hard-code `@Image1 is the storyboard` unless the storyboard sheet is actually the first submitted image. If a fallback run drops entity references, the prompt must be rebuilt so stale `@ImageN` labels do not remain.
+
+For V3 storyboard-block videos, prefer this image order:
+
+1. Storyboard sheet as the sequential visual keyframe source
+2. Selected character or group variant reference sheets
+3. Selected shot-location or environment variants
+4. Hero props or continuity assets
+5. Optional video/audio references through their own `@VideoN` / `@AudioN` tags
+
+For V2 keyframe videos, keep the shot keyframe as `@Image1`; supporting entity, location, and prop references follow it.
+
+The recommended Seedance prompt structure is:
+
+1. Intent line: one clip, exact duration, aspect ratio, and resolution
+2. Reference legend: exact `@ImageN`, `@VideoN`, and `@AudioN` duties
+3. Storyboard/keyframe instruction only when that reference exists
+4. Timestamped shot call sheet with action, camera, dialogue, physics, and transition notes
+5. Identity/speaker guide with visual and voice descriptions
+6. Positive constraints and one concise artifact ban
+
+When a storyboard sheet is attached, treat it as a sequence of visual keyframes. Ask Seedance to follow panel order, action progression, body direction, camera rhythm, framing, lighting continuity, and pacing, while animating smoothly between poses.
+
+Production-board markings are never final-video content. Prompts should ban arrows, handwritten notes, labels, panel numbers, borders, gutters, captions, UI, guide boxes, watermarks, and map/camera diagrams once, not repeatedly.
+
+Use physics cues when they clarify motion: cloth inertia, hair/fabric lag, object weight, dust displacement, water ripple, prop bounce, impact sparks, motivated glow, or debris flow. Use Laban movement terms only for high-physicality action such as martial arts, fights, chases, staff/sword choreography, impacts, aerial turns, or parkour. Do not add Laban language to quiet dialogue, romance, investigation, or environmental establishing shots.
+
+Compact example:
+
+```text
+Generate one 12-second Seedance 2 reference-to-video clip, 16:9, 720p.
+
+[REFERENCE LEGEND]
+@Image1: Storyboard block 3 sheet; primary sequential storyboard keyframe reference.
+@Image2: Suri Samurai variant; character identity, wardrobe, and silhouette continuity.
+@Image3: Pact Chamber shot-location variant; environment, lighting, and spatial continuity.
+
+Treat @Image1 as sequential visual keyframes. Follow panel order, action progression, camera rhythm, framing, and pacing. Do not render storyboard markings, arrows, labels, borders, captions, UI, or watermarks.
+
+[TIMESTAMPED SHOT CALL SHEET]
+[00:00-00:03] Shot 8: Suri enters the chamber threshold. Camera: low wide push-in. Physics: cloth and hair settle after the step.
+[00:03-00:07] Shot 9: Suri draws the blade and turns toward the blue light. Camera: orbit left. Physics: sleeve lag and controlled metal weight.
+[00:07-00:12] Shot 10: Suri holds a heroic stance under warm light. Camera: slow pull-back. Physics: subtle breathing and lantern flicker.
+```
+
 ## Directing Model, Not Description Model
 
 Treat Seedance like a compact film set, not a text-to-video lottery box.

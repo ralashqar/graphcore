@@ -179,6 +179,8 @@ import {
   outputWorkflowStartResponseSchema,
   outputWorkflowUpgradeRequestSchema,
   outputWorkflowUpgradeResponseSchema,
+  sequenceAnimaticBlockWorkflowEnsureRequestSchema,
+  sequenceAnimaticBlockWorkflowEnsureResponseSchema,
   type OutputArtifact,
   type OutputFeedResponse,
   type OutputRequest,
@@ -198,6 +200,7 @@ import {
   type OutputWorkflowRunStatusResponse,
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
+  type SequenceAnimaticBlockWorkflowEnsureResponse,
 } from '../domain/outputWorkflow'
 import type { PromptIntentClassificationResult } from '../domain/promptIntentClassifier'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
@@ -2005,6 +2008,7 @@ type OutputRequestRow = {
   id: string
   project_id: string
   draft_id: string
+  parent_request_id: string | null
   workflow_id: string | null
   latest_run_id: string | null
   requested_by: string | null
@@ -2192,7 +2196,7 @@ const OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT =
 const OUTPUT_ARTIFACT_SELECT =
   'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const OUTPUT_REQUEST_SELECT =
-  'id, project_id, draft_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
+  'id, project_id, draft_id, parent_request_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
 const WORLD_PROMPT_SESSION_SELECT =
   'id, draft_id, key, title, status, is_active, summary_memory, last_context, selected_root_entity_key, selected_view_key, model, metadata, created_at, updated_at'
 const WORLD_PROMPT_TURN_SELECT =
@@ -2562,6 +2566,7 @@ function mapOutputRequestRow(entry: OutputRequestRow): OutputRequest {
     id: entry.id,
     projectId: entry.project_id,
     draftId: entry.draft_id,
+    parentRequestId: entry.parent_request_id,
     workflowId: entry.workflow_id,
     latestRunId: entry.latest_run_id,
     requestedBy: entry.requested_by,
@@ -8311,6 +8316,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
   cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
   cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
+  sequenceAnimaticMode?: 'full_sequence_unit' | 'master_script_only'
   debugCinematicStoryboardStyleSafeMode?: boolean
   cinematicStoryboardStyleOverride?: string
   debugSkipVideoGeneration?: boolean
@@ -8349,6 +8355,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     cinematicReferenceMode: request?.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
     cinematicPipelineVersion: request?.cinematicPipelineVersion,
     cinematicV2AnimaticMode: request?.cinematicV2AnimaticMode ?? 'fast_panels',
+    sequenceAnimaticMode: request?.sequenceAnimaticMode,
     debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
@@ -8385,6 +8392,7 @@ export async function planOutputWorkflow(
     cinematicReferenceMode: request?.cinematicReferenceMode,
     cinematicPipelineVersion: request?.cinematicPipelineVersion,
     cinematicV2AnimaticMode: request?.cinematicV2AnimaticMode,
+    sequenceAnimaticMode: request?.sequenceAnimaticMode,
     debugCinematicStoryboardStyleSafeMode: request?.debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride: request?.cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration,
@@ -8468,6 +8476,32 @@ export async function startOutputWorkflowRun(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = outputWorkflowRunStatusResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function ensureSequenceAnimaticBlockWorkflows(
+  snapshot: ProjectSnapshot,
+  request: { masterRequestId: string },
+): Promise<SequenceAnimaticBlockWorkflowEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic block workflows.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic block workflows require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticBlockWorkflowEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-block-workflows',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticBlockWorkflowEnsureResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }
@@ -8843,6 +8877,7 @@ export async function startOutputRequest(
   request: {
     prompt: string
     sourceSurface?: string
+    outputKindOverride?: 'concept_art_image' | 'poster_image' | 'story_bible_from_world' | 'world_reference_document' | 'lore_guide' | 'character_dossier_pack' | 'short_story' | 'narrative_chapter_or_ebook' | 'ebook_from_world' | 'comic_issue_from_sequence' | 'cinematic_episode' | 'cinematic_trailer' | 'ugc_episode' | 'unknown'
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
@@ -8858,6 +8893,7 @@ export async function startOutputRequest(
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
     cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
     cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
+    sequenceAnimaticMode?: 'full_sequence_unit' | 'master_script_only'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -8872,6 +8908,7 @@ export async function startOutputRequest(
     draftId: snapshot.draft.id,
     prompt: request.prompt,
     sourceSurface: request.sourceSurface ?? 'outputs',
+    outputKindOverride: request.outputKindOverride,
     selectedEntityKeys: request.selectedEntityKeys ?? [],
     selectedSequenceUnitKeys: request.selectedSequenceUnitKeys ?? [],
     targetFormat: request.targetFormat ?? 'pdf',
@@ -8887,6 +8924,7 @@ export async function startOutputRequest(
     cinematicReferenceMode: request.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
     cinematicPipelineVersion: request.cinematicPipelineVersion,
     cinematicV2AnimaticMode: request.cinematicV2AnimaticMode ?? 'fast_panels',
+    sequenceAnimaticMode: request.sequenceAnimaticMode,
     debugCinematicStoryboardStyleSafeMode: request.debugCinematicStoryboardStyleSafeMode ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
     cinematicStoryboardStyleOverride: request.cinematicStoryboardStyleOverride ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
     debugSkipVideoGeneration: request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,

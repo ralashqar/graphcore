@@ -274,6 +274,10 @@ function effectiveRequestStatus(
   return projection?.status ?? run?.status ?? request.status
 }
 
+function hasAuthoringTimelineArtifact(artifacts: readonly OutputLibraryArtifactCard[]) {
+  return artifacts.some((artifact) => readTrimmedString(readRecord(artifact.metadata).role) === 'cinematic_v3_authoring_timeline')
+}
+
 function statusGroup(
   request: OutputRequest,
   run: OutputWorkflowRun | null,
@@ -281,6 +285,7 @@ function statusGroup(
   projection: OutputRequestStatusProjection | null = null,
 ): OutputLibraryGroupKey {
   const status = effectiveRequestStatus(request, run, projection)
+  if (status === 'completed_with_errors' && hasAuthoringTimelineArtifact(artifacts)) return 'ready'
   if (status === 'failed' || status === 'completed_with_errors') return 'needs_attention'
   if (!run && (request.status === 'failed' || request.status === 'completed_with_errors')) return 'needs_attention'
   if (status === 'completed' || request.status === 'completed') return 'ready'
@@ -586,6 +591,7 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
 
   const rows = input.outputRequests
     .slice()
+    .filter((request) => !(request.parentRequestId && readTrimmedString(readRecord(request.metadata).sequenceAnimaticRole) === 'storyboard_block'))
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
     .map((request): OutputLibraryRequestRow => {
       const run = request.latestRunId
