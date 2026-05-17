@@ -3767,15 +3767,150 @@ function sanitizeCinematicV2ReferencePlan(plan: Record<string, unknown>, assetPa
 }
 
 function entityMentionedInShotText(entity: Record<string, unknown>, shotText: string) {
+  const selectedVariant = selectedReferenceVariantForPackedEntity(entity)
   const candidates = [
     readText(entity.key),
     readText(entity.name),
     ...readStringArray(entity.aliases),
+    readText(entity.selectedReferenceVariantKey),
+    readText(entity.selectedReferenceVariantLabel),
+    readText(selectedVariant?.variantKey ?? selectedVariant?.variant_key),
+    readText(selectedVariant?.label),
+    readText(selectedVariant?.summary),
+    readText(selectedVariant?.guidance),
   ]
   return candidates
     .map((candidate) => normalizeComicReferenceText(candidate).replace(/_/g, ' '))
     .filter((candidate) => candidate.length > 2)
     .some((candidate) => shotText.includes(candidate))
+}
+
+function cinematicShotReferenceRepairText(shot: z.infer<typeof cinematicV2ShotSchema>) {
+  return normalizeComicReferenceText([
+    shot.title,
+    shot.description,
+    shot.action,
+    shot.caption,
+    shot.lighting,
+    shot.mood,
+    shot.storyboardPanelPrompt,
+    shot.videoDirection,
+    shot.continuityInputs.join(' '),
+    shot.camera.framing,
+    shot.camera.angle,
+    shot.camera.lens,
+    shot.camera.movement,
+    shot.camera.screenDirectionRule,
+    ...shot.dialogue.map((line) => `${line.speakerName} ${line.speakerRefId} ${line.text} ${line.emotion}`),
+    ...shot.performanceBeats.map((beat) => [
+      beat.characterRefId,
+      beat.bodyLanguage,
+      beat.facialExpression,
+      beat.gaze,
+      beat.gesture,
+      beat.voiceEnergy,
+    ].filter(Boolean).join(' ')),
+  ].filter(Boolean).join(' ')).replace(/_/g, ' ')
+}
+
+function entityExactNameMatched(entity: Record<string, unknown>, value: string) {
+  const normalizedValue = normalizeComicReferenceText(value).replace(/_/g, ' ')
+  if (!normalizedValue) return false
+  const candidates = [
+    readText(entity.key),
+    readText(entity.name),
+    ...readStringArray(entity.aliases),
+  ]
+    .map((candidate) => normalizeComicReferenceText(candidate).replace(/_/g, ' '))
+    .filter((candidate) => candidate.length > 1)
+  return candidates.some((candidate) => {
+    if (candidate === normalizedValue) return true
+    const parts = candidate.split(/\s+/).filter((part) => part.length > 1)
+    return parts.includes(normalizedValue)
+  })
+}
+
+export function repairCinematicV2ShotPlanVisualReferences(input: {
+  shotPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+}) {
+  const shotPlan = cinematicV2ShotPlanSchema.parse(input.shotPlan)
+  const entities = cinematicAssetPackEntities(input.assetPack)
+  const allowedKeys = new Set(entities.map((entity) => readText(entity.key)).filter(Boolean))
+  const byKey = new Map(entities.map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
+  const diagnostics: string[] = []
+  const actorTypes = new Set(['actor', 'character'])
+  const locationTypes = new Set(['place', 'environment', 'location', 'location_spot'])
+  const propTypes = new Set(['object', 'item', 'inventory_item', 'prop'])
+
+  const repairedShots = shotPlan.shots.map((shot) => {
+    const parsedShot = cinematicV2ShotSchema.parse(shot)
+    const shotText = cinematicShotReferenceRepairText(parsedShot)
+    const visibleCharacterRefIds = [...new Set(parsedShot.visibleCharacterRefIds.filter((key) => allowedKeys.has(key)))]
+    const speakerRefIds = [...new Set(parsedShot.speakerRefIds.filter((key) => allowedKeys.has(key)))]
+    const propRefIds = [...new Set(parsedShot.propRefIds.filter((key) => allowedKeys.has(key)))]
+    let locationRefId = parsedShot.locationRefId && allowedKeys.has(parsedShot.locationRefId) ? parsedShot.locationRefId : null
+    const matchedEntities = entities.filter((entity) => {
+      const key = readText(entity.key)
+      return key && entityMentionedInShotText(entity, shotText)
+    })
+
+    for (const line of parsedShot.dialogue) {
+      const currentSpeaker = readText(line.speakerRefId)
+      if (currentSpeaker && allowedKeys.has(currentSpeaker)) {
+        if (!speakerRefIds.includes(currentSpeaker)) speakerRefIds.push(currentSpeaker)
+        continue
+      }
+      const matchedSpeaker = entities.find((entity) => {
+        const key = readText(entity.key)
+        const type = readText(entity.type) || readText(entity.role)
+        return key && actorTypes.has(type) && entityExactNameMatched(entity, readText(line.speakerName))
+      })
+      const speakerKey = matchedSpeaker ? readText(matchedSpeaker.key) : ''
+      if (speakerKey && !speakerRefIds.includes(speakerKey)) {
+        speakerRefIds.push(speakerKey)
+        diagnostics.push(`Repaired speaker reference ${speakerKey} on ${parsedShot.id} from dialogue speaker name.`)
+      }
+      if (speakerKey && !visibleCharacterRefIds.includes(speakerKey)) visibleCharacterRefIds.push(speakerKey)
+    }
+
+    for (const entity of matchedEntities) {
+      const key = readText(entity.key)
+      const type = readText(entity.type) || readText(entity.role)
+      if (!key) continue
+      if (actorTypes.has(type) && !visibleCharacterRefIds.includes(key)) {
+        visibleCharacterRefIds.push(key)
+        diagnostics.push(`Repaired visible character reference ${key} on ${parsedShot.id} from shot text.`)
+      } else if (locationTypes.has(type)) {
+        const currentLocation = locationRefId ? byKey.get(locationRefId) : null
+        const currentLocationMentioned = currentLocation ? entityMentionedInShotText(currentLocation, shotText) : false
+        if (!locationRefId || (!currentLocationMentioned && locationRefId !== key)) {
+          const previousLocation = locationRefId
+          locationRefId = key
+          diagnostics.push(previousLocation
+            ? `Repaired location reference on ${parsedShot.id} from ${previousLocation} to ${key} based on shot text.`
+            : `Repaired location reference ${key} on ${parsedShot.id} from shot text.`)
+        }
+      } else if (propTypes.has(type) && !propRefIds.includes(key)) {
+        propRefIds.push(key)
+        diagnostics.push(`Repaired prop reference ${key} on ${parsedShot.id} from shot text.`)
+      }
+    }
+
+    return cinematicV2ShotSchema.parse({
+      ...parsedShot,
+      visibleCharacterRefIds,
+      speakerRefIds,
+      locationRefId,
+      propRefIds,
+    })
+  })
+
+  return cinematicV2ShotPlanSchema.parse({
+    ...shotPlan,
+    shots: repairedShots,
+    diagnostics: [...shotPlan.diagnostics, ...diagnostics],
+  })
 }
 
 export function buildCinematicV2ShotAssetPack(input: {
@@ -3796,12 +3931,26 @@ export function buildCinematicV2ShotAssetPack(input: {
     shot.title,
     shot.description,
     shot.action,
+    shot.caption,
+    shot.lighting,
+    shot.mood,
+    shot.storyboardPanelPrompt,
+    shot.videoDirection,
     shot.continuityInputs.join(' '),
     shot.camera.framing,
     shot.camera.angle,
+    shot.camera.lens,
     shot.camera.movement,
     shot.camera.screenDirectionRule,
     ...shot.dialogue.map((line) => `${line.speakerName || line.speakerRefId} ${line.text} ${line.emotion}`),
+    ...shot.performanceBeats.map((beat) => [
+      beat.characterRefId,
+      beat.bodyLanguage,
+      beat.facialExpression,
+      beat.gaze,
+      beat.gesture,
+      beat.voiceEnergy,
+    ].filter(Boolean).join(' ')),
   ].filter(Boolean).join(' ')).replace(/_/g, ' ')
   const priorityKeys = [
     ...shot.speakerRefIds,
@@ -11719,7 +11868,7 @@ async function executeNode(input: {
           shouldCancel: input.shouldCancel,
           onProgress: input.onProgress,
         })
-        const normalizedShotPlan = cinematicV2ShotPlanSchema.parse({
+        const parsedShotPlan = cinematicV2ShotPlanSchema.parse({
           ...result.value,
           shots: result.value.shots.slice(0, maxShotCount).map((shot, index) => ({
             ...shot,
@@ -11727,6 +11876,10 @@ async function executeNode(input: {
             index: index + 1,
             providerDurationSeconds: providerSafeCinematicV2DurationSeconds(shot.editorialDurationSeconds),
           })),
+        })
+        const normalizedShotPlan = repairCinematicV2ShotPlanVisualReferences({
+          shotPlan: parsedShotPlan,
+          assetPack,
         })
         const referenceDiagnostics = validateCinematicV2ShotPlanReferences({
           shotPlan: normalizedShotPlan,
@@ -11826,12 +11979,16 @@ async function executeNode(input: {
             fallbackReason: result.fallbackReason || 'llm_repair_used',
           }
         }
-        const normalizedShotPlan = cinematicV2ShotPlanSchema.parse({
+        const parsedShotPlan = cinematicV2ShotPlanSchema.parse({
           ...result.value,
           shots: result.value.shots.map((shot) => ({
             ...shot,
             providerDurationSeconds: providerSafeCinematicV2DurationSeconds(shot.editorialDurationSeconds),
           })),
+        })
+        const normalizedShotPlan = repairCinematicV2ShotPlanVisualReferences({
+          shotPlan: parsedShotPlan,
+          assetPack,
         })
         const referenceDiagnostics = validateCinematicV2ShotPlanReferences({
           shotPlan: normalizedShotPlan,
@@ -13568,7 +13725,10 @@ async function executeNode(input: {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
-        const mergedShotPlan = mergeCinematicV3ShotPlansForTimeline(groupPlans)
+        const mergedShotPlan = repairCinematicV2ShotPlanVisualReferences({
+          shotPlan: mergeCinematicV3ShotPlansForTimeline(groupPlans),
+          assetPack,
+        })
         const breakGroups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
         const blocks = breakGroups.map((group, index) => {
           const storyboardGroup = buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index)

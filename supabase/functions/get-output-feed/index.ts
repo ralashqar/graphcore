@@ -117,6 +117,35 @@ function buildProjectionQuery(admin: DatabaseClient, draftId: string, cursor: st
   return query
 }
 
+async function loadSequenceAnimaticFeedRequestIds(client: DatabaseClient, draftId: string) {
+  const masterResponse = await client
+    .from('output_requests')
+    .select('id')
+    .eq('draft_id', draftId)
+    .eq('source_surface', 'wiki_sequence_unit')
+    .is('parent_request_id', null)
+    .order('updated_at', { ascending: false })
+    .limit(50)
+  if (masterResponse.error) throw new Error(masterResponse.error.message)
+  const masterIds = ((masterResponse.data ?? []) as Record<string, unknown>[])
+    .map((row) => readText(row.id))
+    .filter(Boolean)
+  if (masterIds.length === 0) return []
+
+  const childResponse = await client
+    .from('output_requests')
+    .select('id')
+    .eq('draft_id', draftId)
+    .in('parent_request_id', masterIds)
+    .order('created_at', { ascending: false })
+    .limit(250)
+  if (childResponse.error) throw new Error(childResponse.error.message)
+  const childIds = ((childResponse.data ?? []) as Record<string, unknown>[])
+    .map((row) => readText(row.id))
+    .filter(Boolean)
+  return [...masterIds, ...childIds]
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -159,7 +188,26 @@ Deno.serve(async (request) => {
     }
 
     const hasMore = projectionRows.length > limit
-    const pageProjectionRows = projectionRows.slice(0, limit)
+    let pageProjectionRows = projectionRows.slice(0, limit)
+    const nextCursor = hasMore ? readText(pageProjectionRows[pageProjectionRows.length - 1]?.created_at) || null : null
+
+    const supplementalSequenceRequestIds = !payload.cursor
+      ? await loadSequenceAnimaticFeedRequestIds(admin, payload.draftId)
+      : []
+    const existingProjectionIds = new Set(pageProjectionRows.map((row) => readText(row.request_id)).filter(Boolean))
+    const missingSupplementalIds = supplementalSequenceRequestIds.filter((id) => id && !existingProjectionIds.has(id))
+    if (missingSupplementalIds.length > 0) {
+      const supplementalProjectionResponse = await admin
+        .from('output_request_status_projections')
+        .select(outputRequestStatusProjectionSelect)
+        .eq('draft_id', payload.draftId)
+        .in('request_id', missingSupplementalIds.slice(0, 300))
+      if (supplementalProjectionResponse.error) throw new Error(supplementalProjectionResponse.error.message)
+      pageProjectionRows = [
+        ...pageProjectionRows,
+        ...((supplementalProjectionResponse.data ?? []) as Record<string, unknown>[]),
+      ]
+    }
     const revision = feedRevision({ projections: pageProjectionRows, cursor: payload.cursor, hasMore })
     if (!payload.cursor && readText(payload.knownFeedRevision) && readText(payload.knownFeedRevision) === revision) {
       return json(outputFeedResponseSchema.parse({
@@ -180,7 +228,10 @@ Deno.serve(async (request) => {
       }))
     }
 
-    const requestIds = pageProjectionRows.map((row) => readText(row.request_id)).filter(Boolean)
+    const requestIds = [...new Set([
+      ...pageProjectionRows.map((row) => readText(row.request_id)).filter(Boolean),
+      ...supplementalSequenceRequestIds,
+    ])]
     const requestResponse = requestIds.length > 0
       ? await client
           .from('output_requests')
@@ -194,8 +245,6 @@ Deno.serve(async (request) => {
       const row = requestById.get(id)
       return row ? [mapOutputRequestRow(row as never)] : []
     })
-    const nextCursor = hasMore ? readText(pageProjectionRows[pageProjectionRows.length - 1]?.created_at) || null : null
-
     const projections = pageProjectionRows.map((row) => mapOutputRequestStatusProjectionRow(row as never))
     const workflowIds = [...new Set(requests.map((entry) => entry.workflowId).filter((id): id is string => Boolean(id)))]
     const latestRunIds = [...new Set([

@@ -1526,6 +1526,9 @@ export function OutputsWorkspace({
     ? outputRequests.find((request) => request.id === selectedRequestId) ?? null
     : outputRequests[0] ?? null
   const workflows = snapshot.outputWorkflows
+  const selectedRequestWorkflow = selectedOutputRequest?.workflowId
+    ? workflows.find((workflow) => workflow.id === selectedOutputRequest.workflowId) ?? null
+    : null
   const recentOutputRuns = useMemo(() => {
     const byId = new Map(snapshot.outputWorkflowRuns.map((run) => [run.id, run]))
     for (const run of Object.values(liveRunsById)) byId.set(run.id, run)
@@ -1533,12 +1536,23 @@ export function OutputsWorkspace({
       new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     ))
   }, [liveRunsById, snapshot.outputWorkflowRuns])
-  const snapshotActiveRun = recentOutputRuns.find((run) => run.id === activeRunId) ?? recentOutputRuns[0] ?? null
+  const selectedRequestRuns = selectedRequestWorkflow
+    ? recentOutputRuns.filter((run) => run.workflowId === selectedRequestWorkflow.id)
+    : []
+  const snapshotActiveRun = activeRunId
+    ? recentOutputRuns.find((run) => run.id === activeRunId) ?? null
+    : selectedOutputRequest?.latestRunId
+      ? recentOutputRuns.find((run) => run.id === selectedOutputRequest.latestRunId) ?? null
+      : selectedRequestWorkflow
+        ? selectedRequestRuns[0] ?? null
+        : recentOutputRuns[0] ?? null
   const liveRun = activeRunId ? liveRunsById[activeRunId] ?? null : null
   const activeRun = liveRun && liveRun.id === (activeRunId ?? liveRun.id) ? liveRun : snapshotActiveRun
-  const activeWorkflow = activeRun
-    ? workflows.find((workflow) => workflow.id === activeRun.workflowId) ?? null
-    : workflows[0] ?? null
+  const activeWorkflow = (() => {
+    if (selectedRequestWorkflow) return selectedRequestWorkflow
+    if (activeRun) return workflows.find((workflow) => workflow.id === activeRun.workflowId) ?? null
+    return workflows.length > 0 ? workflows[0] : null
+  })()
   const activeNodes = activeWorkflow
     ? snapshot.outputWorkflowNodes.filter((node) => node.workflowId === activeWorkflow.id)
     : []
@@ -1996,7 +2010,7 @@ export function OutputsWorkspace({
   async function openOutputGraphForRequest(request: OutputRequest | null | undefined, requestedNodeKey: string | null = null) {
     if (!request?.workflowId) return
     setSelectedRequestId(request.id)
-    if (request.latestRunId) setActiveRunId(request.latestRunId)
+    setActiveRunId(request.latestRunId ?? null)
     setSelectedNodeKey(requestedNodeKey)
     setGraphOpen(true)
     setRefreshingGraph(true)

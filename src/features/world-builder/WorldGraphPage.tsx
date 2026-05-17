@@ -1270,6 +1270,22 @@ function isWikiSequenceAnimaticRequest(request: OutputRequest, sequenceKey: stri
     && (readLooseRecord(request.metadata).sequenceAnimaticRole !== 'storyboard_block')
 }
 
+function sequenceAnimaticProjectionForRequest(request: OutputRequest | null) {
+  if (!request) return null
+  const projection = readLooseRecord(readLooseRecord(request.metadata).outputStatusProjection)
+  return Object.keys(projection).length > 0 ? projection : null
+}
+
+function sequenceAnimaticEffectiveStatus(request: OutputRequest | null) {
+  const projection = sequenceAnimaticProjectionForRequest(request)
+  const projectionStatus = trimOptionalString(projection?.status)
+  return projectionStatus || request?.status || ''
+}
+
+function sequenceAnimaticProjectionTerminal(request: OutputRequest | null) {
+  return sequenceAnimaticProjectionForRequest(request)?.terminal === true
+}
+
 function latestWikiSequenceAnimaticRequest(requests: readonly OutputRequest[], sequenceKey: string) {
   return requests
     .filter((request) => isWikiSequenceAnimaticRequest(request, sequenceKey))
@@ -1282,15 +1298,17 @@ function sequenceAnimaticStateForRequest(
   artifacts: readonly OutputArtifact[],
 ): 'none' | 'in_progress' | 'animatic_ready' | 'video_ready' | 'failed' {
   if (!request) return 'none'
+  const effectiveStatus = sequenceAnimaticEffectiveStatus(request)
+  const projectionTerminal = sequenceAnimaticProjectionTerminal(request)
   const run = request.latestRunId
     ? runs.find((entry) => entry.id === request.latestRunId) ?? null
     : request.workflowId
       ? runs.find((entry) => entry.workflowId === request.workflowId) ?? null
       : null
-  if (ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(request.status) || (run && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status))) {
+  if (!projectionTerminal && (ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || (run && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status)))) {
     return 'in_progress'
   }
-  if (FAILED_SEQUENCE_ANIMATIC_STATUSES.has(request.status) || run?.status === 'failed' || run?.status === 'cancelled') {
+  if (FAILED_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || run?.status === 'failed' || run?.status === 'cancelled') {
     return 'failed'
   }
   const requestArtifacts = artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))
@@ -1341,7 +1359,22 @@ function performanceLineFromShot(shot: Record<string, unknown>) {
 }
 
 function normalizeAnimaticRefLookup(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  return value
+    .replace(/^temporary[_\s-]+/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function animaticRefLookupAliases(value: string) {
+  const normalized = normalizeAnimaticRefLookup(value)
+  if (!normalized) return []
+  const aliases = [normalized]
+  const parts = normalized.split('_').filter((part) => part.length >= 3 && !['the', 'and', 'for', 'with'].includes(part))
+  if (parts.length > 1) {
+    aliases.push(parts[0], parts[parts.length - 1])
+  }
+  return [...new Set(aliases)]
 }
 
 function buildSequenceAnimaticReferenceResolver(input: {
@@ -1350,21 +1383,36 @@ function buildSequenceAnimaticReferenceResolver(input: {
   imageUrlByEntityKey: ReadonlyMap<string, string | null>
   referenceSheetIconUrlByEntityKey: ReadonlyMap<string, string | null>
 }) {
-  const entityByLookup = new Map<string, WorldEntity>()
+  const directLookupEntries: Array<[string, WorldEntity]> = []
+  const shorthandLookupEntries: Array<[string, WorldEntity]> = []
   for (const entity of input.worldEntities) {
-    const lookupKeys = [
+    const directLookupKeys = [
       entity.key,
       entity.name,
       ...entity.aliases,
     ].map(normalizeAnimaticRefLookup).filter(Boolean)
-    for (const key of lookupKeys) {
-      if (!entityByLookup.has(key)) entityByLookup.set(key, entity)
-    }
+    for (const key of directLookupKeys) directLookupEntries.push([key, entity])
+    const shorthandKeys = [
+      entity.name,
+      ...entity.aliases,
+    ].flatMap(animaticRefLookupAliases).filter((key) => key && !directLookupKeys.includes(key))
+    for (const key of shorthandKeys) shorthandLookupEntries.push([key, entity])
+  }
+  const entityByLookup = new Map<string, WorldEntity>()
+  for (const [key, entity] of directLookupEntries) {
+    if (!entityByLookup.has(key)) entityByLookup.set(key, entity)
+  }
+  const shorthandCounts = new Map<string, number>()
+  for (const [key] of shorthandLookupEntries) shorthandCounts.set(key, (shorthandCounts.get(key) ?? 0) + 1)
+  for (const [key, entity] of shorthandLookupEntries) {
+    if (shorthandCounts.get(key) === 1 && !entityByLookup.has(key)) entityByLookup.set(key, entity)
   }
   return (refId: string, role = 'Reference'): SequenceAnimaticReferenceView | null => {
     const cleanRefId = trimOptionalString(refId)
     if (!cleanRefId) return null
-    const entity = entityByLookup.get(normalizeAnimaticRefLookup(cleanRefId)) ?? null
+    const entity = animaticRefLookupAliases(cleanRefId)
+      .map((key) => entityByLookup.get(key) ?? null)
+      .find((entry): entry is WorldEntity => Boolean(entry)) ?? null
     if (!entity) return null
     const fallbackAssetUrl = entity.thumbnailAssetKey
       ? resolveAssetSourceUrl(input.assetByKey.get(entity.thumbnailAssetKey) ?? null)
@@ -1539,6 +1587,7 @@ function buildSequenceAnimaticViewModel(input: {
   imageUrlByEntityKey: ReadonlyMap<string, string | null>
   referenceSheetIconUrlByEntityKey: ReadonlyMap<string, string | null>
 }): SequenceAnimaticViewModel {
+  const isActive = sequenceAnimaticStateForRequest(input.request, input.runs, input.artifacts) === 'in_progress'
   const requestArtifacts = input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, input.request))
   const childRequests = input.requests
     .filter((request) => request.parentRequestId === input.request.id && readLooseRecord(request.metadata).sequenceAnimaticRole === 'storyboard_block')
@@ -1745,7 +1794,7 @@ function buildSequenceAnimaticViewModel(input: {
     title: trimOptionalString(fallbackScreenplay?.title) || input.request.title || 'Sequence screenplay animatic',
     statusLabel: input.row?.statusLabel ?? summarizeOutputStatus(input.request.status),
     progressLabel: input.row?.progress.label ?? '',
-    currentStepLabel: input.row?.currentStepLabel ?? '',
+    currentStepLabel: isActive ? input.row?.currentStepLabel ?? '' : '',
     screenplayMarkdown: trimOptionalString(fallbackScreenplay?.screenplayMarkdown) || trimOptionalString(fallbackScreenplay?.markdown) || input.request.prompt,
     blocks,
     hasPanels: panels.length > 0,
@@ -8104,8 +8153,9 @@ export function WorldGraphPage({
             : sequenceAnimaticState === 'in_progress'
               ? 'View progress'
               : 'View animatic'
-      const sequenceAnimaticProgressLabel = sequenceAnimaticRow?.currentStepLabel
-        || (sequenceAnimaticState === 'in_progress' ? 'Generating screenplay animatic' : '')
+      const sequenceAnimaticProgressLabel = sequenceAnimaticState === 'in_progress'
+        ? sequenceAnimaticRow?.currentStepLabel || 'Generating screenplay animatic'
+        : ''
 
       return (
         <section className="world-wiki-entity-page world-wiki-sequence-page" data-world-wiki-entity-page={entity.key}>

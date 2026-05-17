@@ -1106,6 +1106,24 @@ test('cinematic V2 shot asset packs narrow references to visible shot refs', asy
   assert.ok(!keys.includes('aster'))
 })
 
+test('cinematic V3 shot parse repairs missing visual refs before validation and manifest assembly', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const mentionBlock = source.slice(source.indexOf('function entityMentionedInShotText'), source.indexOf('export function buildCinematicV2ShotAssetPack'))
+  const parseGroupBlock = source.slice(source.indexOf("if (purpose === 'cinematic_v3_shot_parse_group')"), source.indexOf("if (purpose === 'cinematic_v3_shot_parse')"))
+  const parseBlock = source.slice(source.indexOf("if (purpose === 'cinematic_v3_shot_parse')"), source.indexOf("if (purpose === 'cinematic_v2_parsed_script')"))
+  const manifestBlock = source.slice(source.indexOf("if (purpose === 'sequence_animatic_manifest')"), source.indexOf("if (purpose === 'sequence_animatic_block_input')"))
+
+  assert.match(source, /export function repairCinematicV2ShotPlanVisualReferences/)
+  assert.match(mentionBlock, /selectedReferenceVariantLabel/)
+  assert.match(mentionBlock, /storyboardPanelPrompt/)
+  assert.match(mentionBlock, /videoDirection/)
+  assert.match(mentionBlock, /Repaired prop reference/)
+  assert.match(mentionBlock, /Repaired location reference/)
+  assert.match(parseGroupBlock, /repairCinematicV2ShotPlanVisualReferences[\s\S]*validateCinematicV2ShotPlanReferences/)
+  assert.match(parseBlock, /repairCinematicV2ShotPlanVisualReferences[\s\S]*validateCinematicV2ShotPlanReferences/)
+  assert.match(manifestBlock, /repairCinematicV2ShotPlanVisualReferences[\s\S]*mergeCinematicV3ShotPlansForTimeline/)
+})
+
 test('cinematic output preset creates script-first dynamic take fanout placeholder', () => {
   const plan = planOutputRequestWorkflow({
     projectId: 'project-1',
