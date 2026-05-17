@@ -135,9 +135,9 @@ export const FAL_MEDIA_PRICE_SNAPSHOT: Record<string, ImagePrice> = {
 }
 
 export const MUAPI_MEDIA_PRICE_SNAPSHOT: Record<string, ImagePrice> = {
-  'seedance-2.0-omni-reference': { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_seedance_2_conservative_per_second_snapshot' },
-  'sd-2-vip-omni-reference': { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_seedance_2_conservative_per_second_snapshot' },
-  'seedance-2-vip-omni-reference': { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_seedance_2_legacy_alias_conservative_per_second_snapshot' },
+  'seedance-2-vip-omni-reference': { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_seedance_2_conservative_per_second_snapshot' },
+  'sd-2-vip-omni-reference': { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_seedance_2_legacy_alias_conservative_per_second_snapshot' },
+  'seedance-2.0-omni-reference': { unitUsd: DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD, source: 'muapi_seedance_2_legacy_alias_conservative_per_second_snapshot' },
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -509,7 +509,7 @@ export function estimateOutputWorkflowUsage(plan: {
       const model = typeof config.model === 'string'
         ? config.model
         : provider === 'muapi'
-          ? 'seedance-2.0-omni-reference'
+          ? 'seedance-2-vip-omni-reference'
           : 'bytedance/seedance-2.0/fast/reference-to-video'
       const durationSeconds = readNumber(config.durationSeconds) || 8
       const usageInput = {

@@ -95,12 +95,12 @@ test('prices Seedance 2 video estimates per generated second', () => {
 
 test('prices MUAPI Seedance 2 with conservative per-second fallback', () => {
   const cost = estimateMuapiMediaCost({
-    model: 'seedance-2.0-omni-reference',
+    model: 'seedance-2-vip-omni-reference',
     durationSeconds: 12,
   })
 
   assert.equal(cost.priceSnapshot.provider, 'muapi')
-  assert.equal(cost.priceSnapshot.model, 'seedance-2.0-omni-reference')
+  assert.equal(cost.priceSnapshot.model, 'seedance-2-vip-omni-reference')
   assert.equal(cost.priceSnapshot.billingUnit, 'generated_second')
   assert.equal(cost.actualCostUsd, 12 * DEFAULT_SEEDANCE_2_VIDEO_SECOND_USD)
 })

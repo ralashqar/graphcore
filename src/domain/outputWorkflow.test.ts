@@ -3079,7 +3079,7 @@ test('cinematic v3 default graph stops at authoring timeline and keeps video nod
   assert.match(source, /rewriteSeedanceReferenceLegend\(prompt, manifest, isCinematicV3StoryboardGroupVideo \? '' : referencePolicy\)/)
   assert.match(source, /if \(isCinematicV3StoryboardGroupVideo\) \{[\s\S]*return promptWithLegend/)
   assert.doesNotMatch(source, /purpose === 'cinematic_v3_storyboard_group_video_prompt'[\s\S]{0,5000}User brief:/)
-  assert.match(source, /sd-2-vip-omni-reference'.*seedance-2\.0-omni-reference/s)
+  assert.match(source, /seedance-2\.0-omni-reference'.*DEFAULT_MUAPI_VIDEO_MODEL/s)
   assert.match(source, /resolveMuapiVideoDurationSeconds/)
   assert.match(source, /OUTPUT_WORKFLOW_MUAPI_VIDEO_QUALITY/)
   assert.match(source, /Provider response:/)

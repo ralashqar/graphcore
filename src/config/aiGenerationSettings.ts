@@ -23,7 +23,7 @@ export const aiGenerationSettings = {
     debugCinematicStoryboardStylePrompt: 'painterly comic-book cinematic production art, expressive ink-and-paint rendering, premium graphic novel storyboard look, not photorealistic',
     debugSkipVideoGenerationDefault: true,
     videoProviderDefault: 'muapi',
-    videoMuapiModel: 'seedance-2.0-omni-reference',
+    videoMuapiModel: 'seedance-2-vip-omni-reference',
     videoFalModel: 'bytedance/seedance-2.0/fast/reference-to-video',
     videoFalHighResolutionModel: 'bytedance/seedance-2.0/reference-to-video',
   },

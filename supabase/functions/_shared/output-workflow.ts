@@ -2180,11 +2180,13 @@ function resolveFalVideoModel(resolution: string) {
 export function resolveMuapiVideoModel(value: unknown) {
   const model = readText(value) || DEFAULT_MUAPI_VIDEO_MODEL
   const aliases: Record<string, string> = {
-    'sd-2-vip-omni-reference': 'seedance-2.0-omni-reference',
-    'sd-2-vip-omni-reference-fast': 'seedance-2.0-omni-reference',
-    'sd-2-omni-reference': 'seedance-2.0-omni-reference',
-    'seedance-2-vip-omni-reference': 'seedance-2.0-omni-reference',
-    'seedance-2-vip-omni-reference-fast': 'seedance-2.0-omni-reference',
+    'seedance-2.0-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
+    'sd-2-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
+    'seedance-2-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
+    'sd-2-vip-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
+    'seedance-2-vip-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
+    'sd-2-vip-omni-reference-fast': DEFAULT_MUAPI_VIDEO_MODEL,
+    'seedance-2-vip-omni-reference-fast': DEFAULT_MUAPI_VIDEO_MODEL,
   }
   return aliases[model] ?? model
 }
