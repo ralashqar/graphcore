@@ -669,6 +669,10 @@ export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
   masterRequestId: z.string().min(1),
+  sequenceAnimaticMode: z.enum(['storyboard_blocks', 'shot_video']).default('storyboard_blocks'),
+  blockRequestId: z.string().min(1).optional(),
+  storyboardBlockId: z.string().min(1).optional(),
+  shotId: z.string().min(1).optional(),
 })
 
 export const sequenceAnimaticBlockWorkflowEnsureResponseSchema = z.object({

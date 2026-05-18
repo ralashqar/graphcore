@@ -8482,7 +8482,13 @@ export async function startOutputWorkflowRun(
 
 export async function ensureSequenceAnimaticBlockWorkflows(
   snapshot: ProjectSnapshot,
-  request: { masterRequestId: string },
+  request: {
+    masterRequestId: string
+    sequenceAnimaticMode?: 'storyboard_blocks' | 'shot_video'
+    blockRequestId?: string
+    storyboardBlockId?: string
+    shotId?: string
+  },
 ): Promise<SequenceAnimaticBlockWorkflowEnsureResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic block workflows.')
   if (!hasLiveSnapshotIds(snapshot)) {
@@ -8492,6 +8498,10 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     masterRequestId: request.masterRequestId,
+    sequenceAnimaticMode: request.sequenceAnimaticMode ?? 'storyboard_blocks',
+    blockRequestId: request.blockRequestId,
+    storyboardBlockId: request.storyboardBlockId,
+    shotId: request.shotId,
   })
   const response = await invokeAuthedFunctionWithSessionRecovery(
     'ensure-sequence-animatic-block-workflows',

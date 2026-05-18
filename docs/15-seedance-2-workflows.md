@@ -90,14 +90,24 @@ For V3 storyboard-block videos, prefer this image order:
 
 For V2 keyframe videos, keep the shot keyframe as `@Image1`; supporting entity, location, and prop references follow it.
 
-The recommended Seedance prompt structure is:
+The recommended compact Seedance prompt structure is:
 
-1. Intent line: one clip, exact duration, aspect ratio, and resolution
+1. Intent line: one clip, aspect ratio, and resolution. Timing comes from the provider duration parameter and shot call sheet, not a duplicated headline.
 2. Reference legend: exact `@ImageN`, `@VideoN`, and `@AudioN` duties
 3. Storyboard/keyframe instruction only when that reference exists
-4. Timestamped shot call sheet with action, camera, dialogue, physics, and transition notes
-5. Identity/speaker guide with visual and voice descriptions
-6. Positive constraints and one concise artifact ban
+4. Directed controls: camera motion, subject motion, focus target, framing lock, visibility, performance, voice, and motion intensity
+5. Short timestamped shot line with action and dialogue
+6. One concise artifact/continuity constraint
+
+For MUAPI VIP `seedance-2-vip-omni-reference`, keep the final provider prompt under 4000 characters. Preserve the reference legend and timed action first, then shorten identity guidance, drop lower-priority movement prose, and keep only one artifact ban. Do not send project briefs, long world summaries, or repeated continuity bans to the provider.
+
+For sequence animatic per-shot videos, ignore rough screenplay marker timing when setting the shot take duration. Infer a realistic editorial duration from the shot action, dialogue length, camera movement, performance beats, and needed settle/hold, then use that inferred duration as the provider duration parameter and prompt shot range. The cropped panel remains `@Image1`; supporting refs must stay shot-scoped.
+
+Offscreen speakers should not be sent as visual image references. Keep their name and voice/performance guidance in the speaker guide, but attach art references only for visible characters, the shot location, visible props, and the cropped panel/keyframe.
+
+Prefer directed controls over verbose cinematic prose. Prompts should explicitly state the camera path, subject path, focus target, framing lock, visibility/reveal rule, visible performance, voice delivery, and motion intensity when those controls are relevant. Voice guidance should include available character context such as age/gender cue, accent, pitch, register, pace, and delivery quality without adding offscreen visual references.
+
+Per-shot animatic videos should use narrow native audio: scripted dialogue plus direct diegetic sound effects caused by visible or explicitly offscreen shot action. Do not include music, score, audio beds, room tone, crowd wash, or general background ambience in shot-video prompts.
 
 When a storyboard sheet is attached, treat it as a sequence of visual keyframes. Ask Seedance to follow panel order, action progression, body direction, camera rhythm, framing, lighting continuity, and pacing, while animating smoothly between poses.
 
@@ -108,7 +118,7 @@ Use physics cues when they clarify motion: cloth inertia, hair/fabric lag, objec
 Compact example:
 
 ```text
-Generate one 12-second Seedance 2 reference-to-video clip, 16:9, 720p.
+Generate one Seedance 2 reference-to-video clip, 16:9, 720p.
 
 [REFERENCE LEGEND]
 @Image1: Storyboard block 3 sheet; primary sequential storyboard keyframe reference.

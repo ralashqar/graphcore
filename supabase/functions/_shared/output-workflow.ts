@@ -1703,6 +1703,19 @@ function readVideoPromptFromUpstream(upstream: Record<string, Record<string, unk
   return readFirstUpstreamText(upstream, ['providerPrompt', 'prompt', 'text'])
 }
 
+function readVideoPromptRecordFromUpstream(upstream: Record<string, Record<string, unknown>>) {
+  const preferredKeys = Object.keys(upstream).filter((key) => key === 'video_prompt' || key.endsWith('_video_prompt') || key.includes('video_prompt'))
+  for (const key of preferredKeys) {
+    const outputs = asRecord(upstream[key])
+    if (readText(outputs.providerPrompt) || readText(outputs.prompt) || readText(outputs.text)) return outputs
+  }
+  for (const outputs of Object.values(upstream)) {
+    const record = asRecord(outputs)
+    if (readText(record.providerPrompt) || readText(record.prompt) || readText(record.text)) return record
+  }
+  return {}
+}
+
 function readFirstUpstreamArray(upstream: Record<string, Record<string, unknown>>, fields: string[]) {
   for (const outputs of Object.values(upstream)) {
     for (const field of fields) {
@@ -1828,6 +1841,8 @@ function isCinematicV2ProductionNode(config: Record<string, unknown>, node?: Out
       || node?.key === 'cinematic_v2_timeline_assemble'
       || purpose === 'cinematic_v3_storyboard_group_video'
       || role === 'cinematic_v3_storyboard_group_video'
+      || purpose === 'sequence_animatic_shot_video'
+      || role === 'sequence_animatic_shot_video'
       || purpose === 'cinematic_v3_timeline_assemble'
       || role === 'cinematic_v3_final_timeline'
       || node?.key === 'cinematic_v3_timeline_assemble'
@@ -2263,6 +2278,73 @@ function muapiErrorMessageWithRaw(body: Record<string, unknown>, rawText: string
   return `${fallback} Provider response: ${raw.slice(0, 800)}`
 }
 
+const MUAPI_VIDEO_PROMPT_MAX_CHARS = 4000
+const MUAPI_VIDEO_PROMPT_SAFE_CHARS = 3900
+
+function compactSeedanceIdentitySectionForProvider(section: string) {
+  const lines = section
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const speakerLines = lines
+    .filter((line) => line.startsWith('- '))
+    .slice(0, 6)
+    .map((line) => {
+      const withoutRole = line
+        .replace(/; role:[^;.]*/gi, '')
+        .replace(/; visual traits:[^;.]*/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      return withoutRole.length > 240 ? `${withoutRole.slice(0, 237).replace(/\s+\S*$/, '')}.` : withoutRole
+    })
+    .filter(Boolean)
+  return speakerLines.length > 0
+    ? ['[IDENTITY AND SPEAKER GUIDE]', ...speakerLines].join('\n')
+    : ''
+}
+
+function replaceSeedanceSection(prompt: string, header: string, replacement: string) {
+  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(`\\n?\\n?\\[${escaped}\\][\\s\\S]*?(?=\\n\\n\\[[A-Z][^\\]]+\\]|\\s*$)`, 'i')
+  return prompt.replace(pattern, replacement ? `\n\n${replacement}` : '')
+}
+
+function compactSeedancePromptForProvider(prompt: string, maxChars = MUAPI_VIDEO_PROMPT_SAFE_CHARS) {
+  let next = prompt.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+  if (next.length <= maxChars) return next
+
+  const identityMatch = next.match(/\[IDENTITY AND SPEAKER GUIDE\][\s\S]*?(?=\n\n\[[A-Z][^\]]+\]|\s*$)/i)
+  if (identityMatch) {
+    next = replaceSeedanceSection(next, 'IDENTITY AND SPEAKER GUIDE', compactSeedanceIdentitySectionForProvider(identityMatch[0]))
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+    if (next.length <= maxChars) return next
+  }
+
+  next = replaceSeedanceSection(next, 'MOVEMENT LOGIC', '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  if (next.length <= maxChars) return next
+
+  next = replaceSeedanceSection(
+    next,
+    'POSITIVE CONSTRAINTS',
+    '[POSITIVE CONSTRAINTS]\nPreserve attached reference identity, shot location, props, lighting, readable acting, natural motion, clean camera movement, and no captions/UI/watermarks.',
+  ).replace(/\n{3,}/g, '\n\n').trim()
+  if (next.length <= maxChars) return next
+
+  const hardLimit = Math.max(1000, maxChars)
+  const sliced = next.slice(0, hardLimit)
+  const boundary = Math.max(
+    sliced.lastIndexOf('\n\n'),
+    sliced.lastIndexOf('. '),
+    sliced.lastIndexOf('\n'),
+  )
+  return `${sliced.slice(0, boundary > 1200 ? boundary : hardLimit).trim()}\n\nDo not render captions, subtitles, UI, logos, watermarks, or production-board markings.`
+    .slice(0, maxChars)
+    .trim()
+}
+
 export function buildMuapiVideoPayload(input: {
   prompt: string
   durationSeconds: number
@@ -2273,7 +2355,7 @@ export function buildMuapiVideoPayload(input: {
   referenceAudioUrls?: string[]
 }) {
   return {
-    prompt: input.prompt,
+    prompt: compactSeedancePromptForProvider(input.prompt, MUAPI_VIDEO_PROMPT_MAX_CHARS),
     images_list: input.referenceImageUrls ?? [],
     video_files: input.referenceVideoUrls ?? [],
     audio_files: input.referenceAudioUrls ?? [],
@@ -4146,6 +4228,9 @@ function buildCinematicV3StoryboardGroupAssetPack(input: {
   shots: Record<string, unknown>[]
   maxEntityCount?: number
   maxAssetKeysPerEntity?: number
+  includeSpeakerRefs?: boolean
+  includePerformanceRefs?: boolean
+  includeTextMentionedRefs?: boolean
 }) {
   const byKey = new Map(cinematicAssetPackEntities(input.assetPack).map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
   const keys: string[] = []
@@ -4158,12 +4243,16 @@ function buildCinematicV3StoryboardGroupAssetPack(input: {
     const parsedShot = cinematicV2ShotSchema.safeParse(rawShot)
     const shot = parsedShot.success ? parsedShot.data : null
     if (shot) {
-      shot.speakerRefIds.forEach(addKey)
       shot.visibleCharacterRefIds.forEach(addKey)
       if (shot.locationRefId) addKey(shot.locationRefId)
       shot.propRefIds.forEach(addKey)
-      shot.dialogue.forEach((line) => addKey(line.speakerRefId))
-      shot.performanceBeats.forEach((beat) => addKey(beat.characterRefId))
+      if (input.includeSpeakerRefs !== false) {
+        shot.speakerRefIds.forEach(addKey)
+        shot.dialogue.forEach((line) => addKey(line.speakerRefId))
+      }
+      if (input.includePerformanceRefs !== false) {
+        shot.performanceBeats.forEach((beat) => addKey(beat.characterRefId))
+      }
       groupTextParts.push([
         shot.title,
         shot.description,
@@ -4173,22 +4262,24 @@ function buildCinematicV3StoryboardGroupAssetPack(input: {
         shot.mood,
         shot.storyboardPanelPrompt,
         shot.videoDirection,
-        ...shot.dialogue.map((line) => `${line.speakerName || line.speakerRefId} ${line.text} ${line.emotion}`),
+        ...(input.includeSpeakerRefs === false ? [] : shot.dialogue.map((line) => `${line.speakerName || line.speakerRefId} ${line.text} ${line.emotion}`)),
       ].filter(Boolean).join(' '))
       return
     }
-    readStringArray(rawShot.speakerRefIds).forEach(addKey)
     readStringArray(rawShot.visibleCharacterRefIds).forEach(addKey)
     const locationRefId = readText(rawShot.locationRefId)
     if (locationRefId) addKey(locationRefId)
     readStringArray(rawShot.propRefIds).forEach(addKey)
+    if (input.includeSpeakerRefs !== false) readStringArray(rawShot.speakerRefIds).forEach(addKey)
     groupTextParts.push(JSON.stringify(rawShot))
   })
 
-  const groupText = normalizeComicReferenceText(groupTextParts.join(' ')).replace(/_/g, ' ')
-  cinematicAssetPackEntities(input.assetPack)
-    .filter((entity) => entityMentionedInShotText(entity, groupText))
-    .forEach((entity) => addKey(readText(entity.key)))
+  if (input.includeTextMentionedRefs !== false) {
+    const groupText = normalizeComicReferenceText(groupTextParts.join(' ')).replace(/_/g, ' ')
+    cinematicAssetPackEntities(input.assetPack)
+      .filter((entity) => entityMentionedInShotText(entity, groupText))
+      .forEach((entity) => addKey(readText(entity.key)))
+  }
 
   const selectedKeys = keys.slice(0, Math.max(0, input.maxEntityCount ?? 4))
   const groupAssetPack = filterCinematicAssetPack(
@@ -5320,6 +5411,7 @@ function buildSeedanceCharacterVoiceGuide(input: {
   assetPack: Record<string, unknown>
   shots: Array<z.infer<typeof cinematicV2ShotSchema>>
   limit?: number
+  visualIdentityKeys?: Set<string>
 }) {
   const entityByKey = cinematicEntityByKey(input.assetPack)
   const orderedKeys = uniqueStrings(input.shots.flatMap((shot) => [
@@ -5338,15 +5430,16 @@ function buildSeedanceCharacterVoiceGuide(input: {
     if (!entity) continue
     const name = readText(entity.name) || key
     const summary = readText(entity.summary)
+    const includeVisualIdentity = !input.visualIdentityKeys || input.visualIdentityKeys.has(key)
     const visualDescription = readText(entity.visualDescription)
     const visualTraits = readStringArray(entity.visualTraits)
     const voiceDescription = readText(entity.voiceDescription)
       || composeWorldEntityVoiceDescription(asRecord(entity.voice))
     const descriptors = [
-      summary ? `role: ${compactBeatCaptionSentence(summary, '', 18).replace(/\.$/, '')}` : '',
-      visualDescription ? `visual identity: ${compactBeatCaptionSentence(visualDescription, '', 24).replace(/\.$/, '')}` : '',
-      visualTraits.length > 0 ? `visual traits: ${visualTraits.slice(0, 8).join(', ')}` : '',
-      voiceDescription ? `voice: ${compactBeatCaptionSentence(voiceDescription, '', 28).replace(/\.$/, '')}` : '',
+      summary ? `role: ${compactBeatCaptionSentence(summary, '', 12).replace(/\.$/, '')}` : '',
+      includeVisualIdentity && visualDescription ? `identity: ${compactBeatCaptionSentence(visualDescription, '', 14).replace(/\.$/, '')}` : '',
+      includeVisualIdentity && visualTraits.length > 0 ? `traits: ${visualTraits.slice(0, 5).join(', ')}` : '',
+      voiceDescription ? `voice: ${compactBeatCaptionSentence(voiceDescription, '', 24).replace(/\.$/, '')}` : '',
     ].filter(Boolean)
     if (descriptors.length > 0) lines.push(`- ${name}: ${descriptors.join('; ')}.`)
   }
@@ -6346,6 +6439,74 @@ function seedanceProductionBoardArtifactBan(manifest: SeedanceReferenceManifestE
   return hasBoard
     ? 'Do not render production-board artifacts: no arrows, labels, captions, subtitles, guide boxes, panel borders, grid gutters, map diagrams, UI, logos, watermarks, or handwritten notes.'
     : 'Do not render captions, subtitles, UI, logos, watermarks, or unrelated text.'
+}
+
+function formatSeedanceDirectedControls(controls: SeedanceDirectedControls) {
+  const lines = [
+    readText(controls.cameraMotion) ? `Camera: ${readText(controls.cameraMotion)}.` : '',
+    readText(controls.subjectMotion) ? `Subject motion: ${readText(controls.subjectMotion)}.` : '',
+    readText(controls.focusTarget) ? `Focus: ${readText(controls.focusTarget)}.` : '',
+    readText(controls.framingLock) ? `Framing: ${readText(controls.framingLock)}.` : '',
+    readText(controls.visibility) ? `Visibility: ${readText(controls.visibility)}.` : '',
+    readText(controls.performance) ? `Performance: ${readText(controls.performance)}.` : '',
+    readText(controls.voice) ? `Voice: ${readText(controls.voice)}.` : '',
+    readText(controls.motionIntensity) ? `Motion: ${readText(controls.motionIntensity)}.` : '',
+  ].filter(Boolean)
+  return lines.join('\n')
+}
+
+function formatSeedanceShotLine(input: {
+  shot: z.infer<typeof cinematicV2ShotSchema>
+  startSeconds: number
+  endSeconds: number
+  dialogueLines?: string
+}) {
+  const action = compactSeedanceControlText(input.shot.action || input.shot.description || input.shot.storyboardPanelPrompt || input.shot.title, 34)
+  const timing = `${formatTimecode(input.startSeconds)}-${formatTimecode(input.endSeconds)}`
+  return [
+    `${timing}: ${action}.`,
+    input.dialogueLines ? `Dialogue: ${input.dialogueLines}.` : '',
+  ].filter(Boolean).join(' ')
+}
+
+function buildCompactSeedanceVideoPrompt(input: {
+  durationSeconds: number
+  aspectRatio: string
+  resolution: string
+  referenceManifest: SeedanceReferenceManifestEntry[]
+  referenceInstruction?: string
+  directedControls: SeedanceDirectedControls | SeedanceDirectedControls[]
+  shotSectionTitle?: 'SHOT' | 'SHOTS'
+  shotLines: string
+  identityGuide?: string
+  audioPolicy?: string
+  movementLogic?: string
+  artifactBan?: string
+  clipLabel?: string
+}) {
+  const controlBlocks = Array.isArray(input.directedControls)
+    ? input.directedControls.map((controls, index) => {
+      const block = formatSeedanceDirectedControls(controls)
+      return block ? `Shot ${index + 1}: ${block.replace(/\n/g, ' ')}` : ''
+    }).filter(Boolean).join('\n')
+    : formatSeedanceDirectedControls(input.directedControls)
+  const artifactBan = readText(input.artifactBan) || seedanceProductionBoardArtifactBan(input.referenceManifest)
+  const hasStoryboard = input.referenceManifest.some((entry) => entry.modality === 'image' && /storyboard/i.test(`${entry.label} ${entry.role}`))
+  const compositionTarget = hasStoryboard ? 'storyboard/keyframe composition' : 'keyframe composition'
+  return compactSeedancePromptForProvider([
+    `Generate one Seedance 2 clip${input.clipLabel ? ` for ${input.clipLabel}` : ''}, ${input.aspectRatio}, ${input.resolution}.`,
+    '[REFERENCE LEGEND]',
+    formatSeedanceReferenceManifest(input.referenceManifest),
+    readText(input.referenceInstruction),
+    controlBlocks ? '[DIRECTED CONTROLS]' : '',
+    controlBlocks,
+    `[${input.shotSectionTitle ?? 'SHOT'}]`,
+    input.shotLines,
+    input.identityGuide ? `[PERFORMANCE / VOICE]\n${input.identityGuide}` : '',
+    input.audioPolicy ? `[AUDIO]\n${input.audioPolicy}` : '',
+    input.movementLogic ? `[MOVEMENT LOGIC]\n${input.movementLogic}` : '',
+    `${artifactBan} Preserve attached refs and ${compositionTarget}.`,
+  ].filter(Boolean).join('\n\n'))
 }
 
 function seedanceShotPhysicalityText(shot: Record<string, unknown>) {
@@ -7521,6 +7682,215 @@ async function runCinematicV2StructuredNode<TValue>(input: {
   } catch (error) {
     const fallbackReason = error instanceof Error ? error.message : 'Structured output parse failed.'
     return { value: input.fallback, response, provider: 'graphcore', model: `deterministic-${input.schemaName}-fallback-v1`, fallbackUsed: true, fallbackReason }
+  }
+}
+
+const seedanceDirectedControlsSchema = z.object({
+  cameraMotion: z.string().max(220).default(''),
+  subjectMotion: z.string().max(260).default(''),
+  focusTarget: z.string().max(180).default(''),
+  framingLock: z.string().max(180).default(''),
+  visibility: z.string().max(220).default(''),
+  motionIntensity: z.string().max(160).default(''),
+  performance: z.string().max(280).default(''),
+  voice: z.string().max(260).default(''),
+})
+
+type SeedanceDirectedControls = z.infer<typeof seedanceDirectedControlsSchema>
+
+const sequenceAnimaticShotVideoTimingSchema = z.object({
+  editorialDurationSeconds: z.number().min(1).max(15),
+  rationale: z.string().max(600).default(''),
+  pacingNotes: z.string().max(500).default(''),
+  directedControls: seedanceDirectedControlsSchema.default({}),
+})
+
+function estimateSequenceShotVideoDurationSeconds(shot: Record<string, unknown>) {
+  const dialogueText = Array.isArray(shot.dialogue)
+    ? shot.dialogue.map((line) => readText(asRecord(line).text)).filter(Boolean).join(' ')
+    : ''
+  const actionText = [
+    readText(shot.action),
+    readText(shot.description),
+    readText(shot.storyboardPanelPrompt),
+    readText(shot.videoDirection),
+    readText(asRecord(shot.camera).movement),
+    readText(asRecord(shot.camera).framing),
+  ].filter(Boolean).join(' ')
+  const dialogueWords = dialogueText.split(/\s+/).filter(Boolean).length
+  const actionWords = actionText.split(/\s+/).filter(Boolean).length
+  const dialogueSeconds = dialogueWords > 0 ? Math.max(1.2, dialogueWords / 2.6 + 0.6) : 0
+  const actionSeconds = Math.max(1.8, Math.min(8, actionWords / 12))
+  const hasFastAction = /\b(run|runs|running|leap|leaps|jump|jumps|fight|fighting|strike|strikes|slam|slams|crash|chase|skid|rush|dash|spin|falls?|lands?|burst|explodes?)\b/i.test(actionText)
+  const hasQuietActing = /\b(looks?|glances?|holds?|listens?|waits?|breathes?|realizes?|smiles?|frowns?|stares?|hesitates?|settles?)\b/i.test(actionText)
+  const cameraSeconds = /\b(slow|push|dolly|drift|linger|hold)\b/i.test(actionText) ? 0.8 : 0.3
+  const actionBias = hasFastAction ? 1.1 : hasQuietActing ? 0.4 : 0.7
+  return Math.max(2, Math.min(12, Number((dialogueSeconds + actionSeconds + cameraSeconds + actionBias).toFixed(1))))
+}
+
+function compactSeedanceControlText(value: unknown, maxWords = 18) {
+  return compactBeatCaptionSentence(readText(value).replace(/\s+/g, ' ').trim(), '', maxWords).replace(/\.$/, '')
+}
+
+function seedanceMotionIntensityForShot(shot: Record<string, unknown>) {
+  const text = seedanceShotPhysicalityText(shot)
+  if (/\b(fight|combat|strike|kick|punch|sword|staff|leap|jump|chase|sprint|crash|impact|explosion|vortex|shockwave)\b/i.test(text)) return 'high intensity; prioritize readable action direction and clean motion arcs'
+  if (/\b(run|rush|dash|skid|climb|fall|spin|turn|grab|throw|slam)\b/i.test(text)) return 'moderate intensity; keep movement readable with natural follow-through'
+  if (/\b(look|glance|listen|hold|wait|breathe|smile|frown|hesitate|realize|watch|stare)\b/i.test(text)) return 'low intensity; subtle face, eye, breath, ear, cloth, and prop micro-motion'
+  return 'controlled intensity; natural physical motion and stable final settle'
+}
+
+function buildSeedanceDirectedControlsFromShot(input: {
+  shot: Record<string, unknown>
+  entityByKey?: Map<string, Record<string, unknown>>
+  visibleCharacterRefIds?: string[]
+}) {
+  const shot = input.shot
+  const camera = asRecord(shot.camera)
+  const visibleKeys = input.visibleCharacterRefIds ?? readStringArray(shot.visibleCharacterRefIds)
+  const speakerKeys = readStringArray(shot.speakerRefIds)
+  const entityName = (key: string) => readText(input.entityByKey?.get(key)?.name) || key
+  const visibleNames = visibleKeys.map(entityName).filter(Boolean)
+  const offscreenNames = speakerKeys.filter((key) => key && !visibleKeys.includes(key)).map(entityName).filter(Boolean)
+  const dialogueRecords = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
+  const dialogueSpeakers = dialogueRecords
+    .map((line) => readText(line.speakerName) || entityName(readText(line.speakerRefId)))
+    .filter(Boolean)
+  const dialogueSpeakerVoiceGuides = uniqueStrings(dialogueRecords
+    .map((line) => readText(line.speakerRefId))
+    .filter(Boolean))
+    .map((key) => {
+      const entity = input.entityByKey?.get(key)
+      const name = entityName(key)
+      const voice = entity
+        ? readText(entity.voiceDescription) || composeWorldEntityVoiceDescription(asRecord(entity.voice))
+        : ''
+      return voice ? `${name}: ${compactSeedanceControlText(voice, 14)}` : ''
+    })
+    .filter(Boolean)
+  const dialogueEmotion = dialogueRecords
+    .map((line) => readText(line.emotion))
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(', ')
+  const performanceBeats = Array.isArray(shot.performanceBeats) ? shot.performanceBeats.map(asRecord) : []
+  const performanceText = performanceBeats
+    .map((beat) => {
+      const who = entityName(readText(beat.characterRefId))
+      const parts = [
+        readText(beat.bodyLanguage),
+        readText(beat.facialExpression),
+        readText(beat.gaze),
+        readText(beat.gesture),
+      ].filter(Boolean).join(', ')
+      return parts ? `${who}: ${parts}` : ''
+    })
+    .filter(Boolean)
+    .join('; ')
+  const voiceText = [
+    dialogueSpeakers.length > 0 ? `${uniqueStrings(dialogueSpeakers).join(', ')} speaking` : '',
+    dialogueEmotion ? `delivery: ${dialogueEmotion}` : '',
+    dialogueSpeakerVoiceGuides.slice(0, 2).join('; '),
+    performanceBeats.map((beat) => readText(beat.voiceEnergy)).filter(Boolean).slice(0, 2).join(', '),
+  ].filter(Boolean).join('; ')
+  const focusFallback = [
+    visibleNames[0],
+    readText(shot.caption),
+    readText(shot.title),
+    readText(shot.locationRefId),
+    ...readStringArray(shot.propRefIds).slice(0, 1),
+  ].filter(Boolean).join(', ')
+  const movement = readText((shot as Record<string, unknown>).videoDirection)
+    || readText(shot.action)
+    || readText(shot.description)
+    || readText(shot.storyboardPanelPrompt)
+  return seedanceDirectedControlsSchema.parse({
+    cameraMotion: compactSeedanceControlText([readText(camera.framing), readText(camera.angle), readText(camera.movement)].filter(Boolean).join('; '), 18),
+    subjectMotion: compactSeedanceControlText(movement, 22),
+    focusTarget: compactSeedanceControlText(focusFallback || 'main visible subject and key prop', 14),
+    framingLock: compactSeedanceControlText(readText(camera.framing) ? `preserve ${readText(camera.framing)} composition` : 'preserve keyframe composition and subject scale', 14),
+    visibility: compactSeedanceControlText([
+      visibleNames.length > 0 ? `show ${visibleNames.join(', ')}` : 'show only subjects visible in the keyframe',
+      offscreenNames.length > 0 ? `${offscreenNames.join(', ')} speaks offscreen; do not reveal them` : '',
+    ].filter(Boolean).join('; '), 22),
+    motionIntensity: seedanceMotionIntensityForShot(shot),
+    performance: compactSeedanceControlText(performanceText || readText(shot.mood) || readText(shot.caption) || readText(shot.title), 24),
+    voice: compactSeedanceControlText(voiceText || (dialogueRecords.length > 0 ? 'match dialogue emotion and timing' : 'no dialogue; use silent facial/body acting'), 22),
+  })
+}
+
+function mergeSeedanceDirectedControls(primary: unknown, fallback: SeedanceDirectedControls) {
+  const parsed = seedanceDirectedControlsSchema.safeParse(primary)
+  const value = parsed.success ? parsed.data : {}
+  return seedanceDirectedControlsSchema.parse({
+    cameraMotion: readText(value.cameraMotion) || fallback.cameraMotion,
+    subjectMotion: readText(value.subjectMotion) || fallback.subjectMotion,
+    focusTarget: readText(value.focusTarget) || fallback.focusTarget,
+    framingLock: readText(value.framingLock) || fallback.framingLock,
+    visibility: readText(value.visibility) || fallback.visibility,
+    motionIntensity: readText(value.motionIntensity) || fallback.motionIntensity,
+    performance: readText(value.performance) || fallback.performance,
+    voice: readText(value.voice) || fallback.voice,
+  })
+}
+
+async function inferSequenceShotVideoTiming(input: {
+  nodeKey: string
+  shot: Record<string, unknown>
+  entityByKey?: Map<string, Record<string, unknown>>
+}) {
+  const fallbackDuration = estimateSequenceShotVideoDurationSeconds(input.shot)
+  const fallbackDirectedControls = buildSeedanceDirectedControlsFromShot({
+    shot: input.shot,
+    entityByKey: input.entityByKey,
+  })
+  const dialogue = Array.isArray(input.shot.dialogue)
+    ? input.shot.dialogue.map((line) => {
+      const record = asRecord(line)
+      const speaker = readText(record.speakerName) || readText(record.speakerRefId) || 'Speaker'
+      const text = readText(record.text)
+      return text ? `${speaker}: ${text}` : ''
+    }).filter(Boolean).join('\n')
+    : ''
+  const prompt = [
+    'Infer compact video-generation controls for one Seedance shot. Ignore any screenplay marker or existing tagged duration.',
+    'Base the duration only on visible action, dialogue length, camera movement, performance beats, and the time needed for a readable settle.',
+    'Return the shortest realistic duration that still feels cinematic. Do not pad to 15 seconds.',
+    'Also return direct, short controls for camera, subject motion, focus, framing, visibility, motion intensity, performance, and voice.',
+    'For offscreen speakers, put delivery in voice and visibility, but do not imply they are visible.',
+    '',
+    `Title: ${readText(input.shot.title) || 'Untitled shot'}`,
+    `Action: ${readText(input.shot.action) || readText(input.shot.description) || readText(input.shot.storyboardPanelPrompt)}`,
+    `Video direction: ${readText(input.shot.videoDirection)}`,
+    `Camera: ${readText(asRecord(input.shot.camera).framing)}; ${readText(asRecord(input.shot.camera).angle)}; ${readText(asRecord(input.shot.camera).movement)}`,
+    `Performance: ${Array.isArray(input.shot.performanceBeats) ? input.shot.performanceBeats.map((beat) => readText(asRecord(beat).description) || JSON.stringify(beat)).filter(Boolean).join('; ') : ''}`,
+    dialogue ? `Dialogue:\n${dialogue}` : 'Dialogue: none',
+  ].join('\n')
+  const result = await runCinematicV2StructuredNode({
+    nodeKey: input.nodeKey,
+    schemaName: 'sequence_animatic_shot_video_timing',
+    schema: sequenceAnimaticShotVideoTimingSchema,
+    instructions: 'You are a cinematic editor timing a single shot for reference-to-video generation. Return strict JSON only.',
+    prompt,
+    fallback: {
+      editorialDurationSeconds: fallbackDuration,
+      rationale: 'Deterministic fallback based on action, dialogue, camera movement, and settle time.',
+      pacingNotes: 'Use a natural shot pace without padding to the screenplay marker.',
+      directedControls: fallbackDirectedControls,
+    },
+    maxOutputTokens: 900,
+  })
+  const value = sequenceAnimaticShotVideoTimingSchema.parse(result.value)
+  const directedControls = mergeSeedanceDirectedControls(value.directedControls, fallbackDirectedControls)
+  return {
+    editorialDurationSeconds: Math.max(1, Math.min(15, Number(value.editorialDurationSeconds) || fallbackDuration)),
+    rationale: readText(value.rationale),
+    pacingNotes: readText(value.pacingNotes),
+    directedControls,
+    provider: result.provider,
+    model: result.model,
+    fallbackUsed: result.fallbackUsed,
+    fallbackReason: result.fallbackReason,
   }
 }
 
@@ -13489,6 +13859,7 @@ async function executeNode(input: {
     case 'video_generation': {
       const config = asRecord(input.node.config)
       const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
+      const upstreamVideoPromptRecord = readVideoPromptRecordFromUpstream(input.upstream)
       const upstreamVideoPrompt = readVideoPromptFromUpstream(input.upstream)
       const prompt = upstreamVideoPrompt
         || readText(input.node.inputs.prompt)
@@ -13521,8 +13892,16 @@ async function executeNode(input: {
         || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_MODEL')?.trim()
         || (provider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
       const model = provider === 'muapi' ? resolveMuapiVideoModel(configuredModel) : configuredModel
-      const requestedDurationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
-      const durationSeconds = provider === 'muapi' ? resolveMuapiVideoDurationSeconds(requestedDurationSeconds) : requestedDurationSeconds
+      const isSequenceAnimaticShotVideoConfig = readText(config.purpose) === 'sequence_animatic_shot_video' || readText(config.role) === 'sequence_animatic_shot_video'
+      const upstreamDurationSeconds = Number(upstreamVideoPromptRecord.durationSeconds ?? upstreamVideoPromptRecord.providerDurationSeconds ?? 0)
+      const configuredDurationSeconds = Number(config.durationSeconds ?? 8) || 8
+      const rawRequestedDurationSeconds = Number(upstreamDurationSeconds || configuredDurationSeconds) || 8
+      const requestedDurationSeconds = isSequenceAnimaticShotVideoConfig
+        ? Math.max(1, Math.min(15, Math.round(rawRequestedDurationSeconds)))
+        : Math.max(4, Math.min(15, rawRequestedDurationSeconds))
+      const durationSeconds = provider === 'muapi' && !isSequenceAnimaticShotVideoConfig
+        ? resolveMuapiVideoDurationSeconds(requestedDurationSeconds)
+        : requestedDurationSeconds
       const aspectRatio = readText(config.aspectRatio) || '16:9'
       const quality = provider === 'muapi'
         ? resolveMuapiVideoQuality(readText(config.quality) || Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_QUALITY'))
@@ -13616,10 +13995,15 @@ async function executeNode(input: {
       }
       const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
       const isCinematicV3StoryboardGroupVideo = readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video'
+      const isSequenceAnimaticShotVideo = isSequenceAnimaticShotVideoConfig
       const upstreamShotPlanForVideo = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
       const cinematicV3VideoGroupShots = isCinematicV3StoryboardGroupVideo
         ? cinematicV3StoryboardGroupShots({ shotPlan: upstreamShotPlanForVideo, storyboardGroup: asRecord(config.storyboardGroup) })
         : []
+      const upstreamVideoShotPlanShots = asRecord(upstreamShotPlanForVideo).shots
+      const sequenceAnimaticShotForVideo = isSequenceAnimaticShotVideo
+        ? asRecord(readFirstUpstreamRecord(input.upstream, ['shot']) || (Array.isArray(upstreamVideoShotPlanShots) ? upstreamVideoShotPlanShots.map(asRecord)[0] : null))
+        : {}
       const assetPack = isCinematicV3StoryboardGroupVideo && cinematicV3VideoGroupShots.length > 0
         ? buildCinematicV3StoryboardGroupAssetPack({
           assetPack: rawAssetPack,
@@ -13627,6 +14011,13 @@ async function executeNode(input: {
           maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 4) || 4)),
           maxAssetKeysPerEntity: 1,
         })
+        : isSequenceAnimaticShotVideo && Object.keys(sequenceAnimaticShotForVideo).length > 0
+          ? buildCinematicV3StoryboardGroupAssetPack({
+            assetPack: rawAssetPack,
+            shots: [sequenceAnimaticShotForVideo],
+            maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
+            maxAssetKeysPerEntity: 1,
+          })
         : rawAssetPack
       const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
       const upstreamImages = orderCinematicVideoReferenceImages(
@@ -13665,6 +14056,9 @@ async function executeNode(input: {
       if (isCinematicV3StoryboardGroupVideo && cinematicReferenceMode === 'storyboard_sheet' && directImageRecords.length === 0) {
         throw new Error('Cinematics V3 storyboard video generation requires the storyboard sheet reference. Generate the storyboard sheet before generating video.')
       }
+      if (isSequenceAnimaticShotVideo && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
+        throw new Error('Sequence animatic shot video generation requires the cropped shot panel as @Image1. Generate/extract the storyboard panel before generating shot video.')
+      }
       if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
         throw new Error('Cinematics V2 video generation requires a shot keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
       }
@@ -13692,14 +14086,15 @@ async function executeNode(input: {
           audioReferences: [],
           cinematicReferenceMode,
         })
-        const promptWithLegend = rewriteSeedanceReferenceLegend(prompt, manifest, isCinematicV3StoryboardGroupVideo ? '' : referencePolicy)
+        const promptWithLegend = rewriteSeedanceReferenceLegend(prompt, manifest, (isCinematicV3StoryboardGroupVideo || isSequenceAnimaticShotVideo) ? '' : referencePolicy)
         const artifactBan = seedanceProductionBoardArtifactBan(manifest)
-        if (isCinematicV3StoryboardGroupVideo) {
-          return promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
+        if (isCinematicV3StoryboardGroupVideo || isSequenceAnimaticShotVideo) {
+          const directPrompt = promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
             ? promptWithLegend
             : [promptWithLegend, '', artifactBan].filter(Boolean).join('\n')
+          return compactSeedancePromptForProvider(directPrompt)
         }
-        return [
+        return compactSeedancePromptForProvider([
           promptWithLegend,
           '',
           `[PROVIDER TARGET]\nOne continuous ${durationSeconds}-second clip, ${aspectRatio}, ${resolution}.`,
@@ -13707,7 +14102,7 @@ async function executeNode(input: {
           promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
             ? ''
             : artifactBan,
-        ].filter(Boolean).join('\n')
+        ].filter(Boolean).join('\n'))
       }
       const primaryReferenceOnlyRecords = directImageRecords.slice(0, 1)
       const referenceAttempts = [
@@ -13896,6 +14291,10 @@ async function executeNode(input: {
         seedanceReferenceManifest: usedSeedanceReferenceManifest,
         shotId: readText(config.shotId) || null,
         shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+        storyboardBlockId: readText(config.storyboardBlockId) || null,
+        parentRequestId: readText(config.parentRequestId) || null,
+        masterRequestId: readText(config.masterRequestId) || null,
+        sequenceAnimaticRole: readText(config.sequenceAnimaticRole) || null,
         providerPayload: provider === 'muapi' ? buildMuapiVideoPayload({
           prompt: providerPrompt,
           durationSeconds,
@@ -13954,6 +14353,10 @@ async function executeNode(input: {
           blockNumber: Number(config.blockNumber ?? 0) || null,
           shotId: readText(config.shotId) || null,
           shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+          storyboardBlockId: readText(config.storyboardBlockId) || null,
+          parentRequestId: readText(config.parentRequestId) || null,
+          masterRequestId: readText(config.masterRequestId) || null,
+          sequenceAnimaticRole: readText(config.sequenceAnimaticRole) || null,
         },
         assetKey,
         storagePath,
@@ -14097,6 +14500,78 @@ async function executeNode(input: {
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-block-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_shot_input') {
+        const config = asRecord(input.node.config)
+        const shot = cinematicV2ShotPlanSchema.shape.shots.element.parse({
+          ...asRecord(config.shot),
+          editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(asRecord(config.shot).editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3)),
+          providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(asRecord(config.shot).editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3),
+        })
+        const panel = asRecord(config.panel)
+        const panelAssetKey = readText(panel.assetKey)
+        if (!panelAssetKey) {
+          throw new Error('Sequence animatic shot video requires a cropped panel asset. Generate/extract the storyboard panel before generating shot video.')
+        }
+        const rawAssetPack = asRecord(config.assetPack)
+        const assetPack = buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: [shot as unknown as Record<string, unknown>],
+          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
+          maxAssetKeysPerEntity: 1,
+        })
+        const editorialDurationSeconds = Math.max(0.5, Math.min(15, Number(config.editorialDurationSeconds ?? shot.editorialDurationSeconds ?? 0) || 3))
+        const providerDurationSeconds = providerSafeCinematicV2DurationSeconds(editorialDurationSeconds)
+        const image = {
+          ...panel,
+          assetKey: panelAssetKey,
+          role: 'cinematic_v2_shot_keyframe',
+          name: readText(panel.name) || `${shot.title || `Shot ${shot.index}`} cropped panel keyframe`,
+          shotId: shot.id,
+          shotIndex: shot.index,
+          storyboardBlockId: readText(config.storyboardBlockId),
+          usedAsVideoReference: true,
+          metadata: {
+            ...asRecord(panel.metadata),
+            role: 'cinematic_v2_shot_keyframe',
+            shotId: shot.id,
+            shotIndex: shot.index,
+            storyboardBlockId: readText(config.storyboardBlockId),
+          },
+        }
+        const shotPlan = cinematicV2ShotPlanSchema.parse({
+          sceneId: 'sequence_animatic_shot',
+          totalEditorialDurationSeconds: editorialDurationSeconds,
+          shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
+          performanceArc: [],
+          audioPlan: {
+            ambience: '',
+            music: '',
+            sfx: [],
+            dialogueTrackCount: shot.dialogue.length > 0 ? 1 : 0,
+            placeholderOnly: true,
+          },
+          diagnostics: ['Sequence animatic shot input built from a cropped storyboard panel.'],
+        })
+        const outputs = {
+          shot: { ...shot, editorialDurationSeconds, providerDurationSeconds },
+          shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
+          shotPlan,
+          shot_plan: shotPlan,
+          image,
+          keyframe: image,
+          primaryReferenceImage: image,
+          assetPack,
+          asset_pack: assetPack,
+          panel,
+          editorialDurationSeconds,
+          providerDurationSeconds,
+          durationSeconds: providerDurationSeconds,
+          sequenceAnimaticRole: 'shot_video',
+          text: JSON.stringify({ shot, image, assetPack }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-input-v1' }
       }
       if (purpose === 'cinematic_v3_shot_plan_merge') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
@@ -14663,6 +15138,138 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-keyframe-qa-v1' }
       }
+      if (purpose === 'sequence_animatic_shot_video_prompt') {
+        const config = asRecord(input.node.config)
+        const shotRecord = readFirstUpstreamRecord(input.upstream, ['shot'])
+        const shot = cinematicV2ShotPlanSchema.shape.shots.element.parse({
+          ...shotRecord,
+          editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(shotRecord.editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3)),
+          providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(shotRecord.editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3),
+        })
+        const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const upstreamImages = readUpstreamImages(input.upstream, ['image', 'keyframe', 'primaryReferenceImage'])
+        const assetPackReferenceLimit = Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6))
+        const visualAssetPack = buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: [shot as unknown as Record<string, unknown>],
+          maxEntityCount: assetPackReferenceLimit,
+          maxAssetKeysPerEntity: 1,
+          includeSpeakerRefs: false,
+          includePerformanceRefs: false,
+          includeTextMentionedRefs: false,
+        })
+        const voiceGuideAssetPack = buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: [shot as unknown as Record<string, unknown>],
+          maxEntityCount: assetPackReferenceLimit,
+          maxAssetKeysPerEntity: 1,
+          includeSpeakerRefs: true,
+          includePerformanceRefs: true,
+          includeTextMentionedRefs: false,
+        })
+        const entityByKey = cinematicEntityByKey(voiceGuideAssetPack)
+        const timing = await inferSequenceShotVideoTiming({
+          nodeKey: input.node.key,
+          shot: shot as unknown as Record<string, unknown>,
+          entityByKey,
+        })
+        const editorialDurationSeconds = Math.max(1, Math.min(15, timing.editorialDurationSeconds))
+        const providerDurationSeconds = Math.max(1, Math.min(15, Math.round(editorialDurationSeconds)))
+        const dialogueLines = shot.dialogue
+          .map((line) => {
+            const text = readText(line.text)
+            if (!text) return ''
+            const speakerKey = readText(line.speakerRefId)
+            const speaker = readText(entityByKey.get(speakerKey)?.name) || readText(line.speakerName) || speakerKey || 'Speaker'
+            const emotion = readText(line.emotion)
+            return `${speaker}: "${text}"${emotion ? ` (${emotion})` : ''}`
+          })
+          .filter(Boolean)
+          .join(' ')
+        const seedanceReferenceManifest = buildSeedanceReferenceManifest({
+          imageReferences: [
+            ...seedanceReferenceRecordsFromImages(upstreamImages.slice(0, 1), 'keyframes'),
+            ...seedanceReferenceRecordsFromAssetPack(visualAssetPack, assetPackReferenceLimit),
+          ].slice(0, 9),
+          cinematicReferenceMode: 'keyframes',
+        })
+        const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({
+          assetPack: voiceGuideAssetPack,
+          shots: [shot as unknown as z.infer<typeof cinematicV2ShotSchema>],
+          limit: 4,
+          visualIdentityKeys: new Set(shot.visibleCharacterRefIds),
+        })
+        const shotAction = readText(shot.action) || readText(shot.description) || readText(shot.storyboardPanelPrompt) || readText(shot.title)
+        const shotLine = [
+          formatSeedanceShotLine({
+            shot,
+            startSeconds: 0,
+            endSeconds: editorialDurationSeconds,
+            dialogueLines,
+          }),
+          readText(shot.lighting) ? `Lighting: ${compactSeedanceControlText(shot.lighting, 12)}.` : '',
+        ].filter(Boolean).join(' ')
+        const prompt = buildCompactSeedanceVideoPrompt({
+          durationSeconds: providerDurationSeconds,
+          aspectRatio: readText(config.aspectRatio) || '16:9',
+          resolution: readText(config.resolution) || '720p',
+          referenceManifest: seedanceReferenceManifest,
+          referenceInstruction: 'Treat @Image1 as the cropped shot keyframe reference, not a storyboard sheet. Preserve composition, visible subjects, lighting, environment, and props while animating the shot.',
+          directedControls: timing.directedControls,
+          shotSectionTitle: 'SHOT',
+          shotLines: shotLine || shotAction,
+          identityGuide: characterVoiceGuide,
+          audioPolicy: 'No music, score, audio bed, room tone, crowd wash, or background ambience. Use only scripted dialogue and direct diegetic sound effects caused by visible or explicitly offscreen shot action.',
+          movementLogic: seedanceLabanMovementBlock([shot as unknown as Record<string, unknown>], input.run.prompt),
+          artifactBan: seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
+          clipLabel: 'this single shot',
+        })
+        const guidance = readUpstreamGuidanceBundle(input.upstream)
+        const outputs = {
+          prompt,
+          text: prompt,
+          shot: { ...shot, editorialDurationSeconds, providerDurationSeconds },
+          shotPlan: {
+            sceneId: 'sequence_animatic_shot',
+            totalEditorialDurationSeconds: editorialDurationSeconds,
+            shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
+          },
+          shot_plan: {
+            sceneId: 'sequence_animatic_shot',
+            totalEditorialDurationSeconds: editorialDurationSeconds,
+            shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
+          },
+          assetPack: visualAssetPack,
+          asset_pack: visualAssetPack,
+          voiceGuideAssetPack,
+          voice_guide_asset_pack: voiceGuideAssetPack,
+          primaryReferenceImage: upstreamImages[0] ?? null,
+          referenceImageCount: upstreamImages.length,
+          seedanceReferenceManifest,
+          directedControls: timing.directedControls,
+          audioPolicy: 'dialogue_and_direct_diegetic_sfx_only',
+          visualReferencePolicy: 'visible_characters_location_props_only',
+          offscreenSpeakerVisualReferencesExcluded: true,
+          editorialDurationSeconds,
+          providerDurationSeconds,
+          durationSeconds: providerDurationSeconds,
+          timingInference: {
+            mode: 'llm_from_shot_details',
+            ignoredTaggedShotTiming: true,
+            rationale: timing.rationale,
+            pacingNotes: timing.pacingNotes,
+            provider: timing.provider,
+            model: timing.model,
+            fallbackUsed: timing.fallbackUsed,
+            fallbackReason: timing.fallbackReason,
+          },
+          storyboardBlockId: readText(config.storyboardBlockId),
+          sequenceAnimaticRole: 'shot_video',
+          guidance,
+          deterministic: timing.provider === 'graphcore',
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: timing.provider, model: timing.model || 'sequence-animatic-shot-video-prompt-v2' }
+      }
       if (purpose === 'cinematic_v3_storyboard_group_video_prompt') {
         const config = asRecord(input.node.config)
         const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
@@ -14687,6 +15294,11 @@ async function executeNode(input: {
           ].slice(0, 9),
           cinematicReferenceMode: 'storyboard_sheet',
         })
+        const directedControls = groupShots.map((shot) => buildSeedanceDirectedControlsFromShot({
+          shot: shot as unknown as Record<string, unknown>,
+          entityByKey,
+          visibleCharacterRefIds: shot.visibleCharacterRefIds,
+        }))
         let localCursorSeconds = 0
         const timelineLines = groupShots.map((shot) => {
           const shotDurationSeconds = Math.max(0.1, Math.min(15, Number(shot.editorialDurationSeconds) || 2))
@@ -14704,33 +15316,28 @@ async function executeNode(input: {
             })
             .filter(Boolean)
             .join(' ')
-          return [
-            `[${formatTimecode(localStartSeconds)}-${formatTimecode(localEndSeconds)}] Shot ${shot.index}: ${shot.action || shot.description || shot.title}.`,
-            readText((shot as unknown as Record<string, unknown>).videoDirection) ? `Motion: ${readText((shot as unknown as Record<string, unknown>).videoDirection)}.` : '',
-            `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.movement}.`,
-            dialogueLines ? `Dialogue: ${dialogueLines}.` : '',
-          ].filter(Boolean).join(' ')
+          return formatSeedanceShotLine({
+            shot,
+            startSeconds: localStartSeconds,
+            endSeconds: localEndSeconds,
+            dialogueLines,
+          })
         }).join('\n')
-        const actionLines = groupShots.map((shot) => [
-          `Shot ${shot.index}: ${shot.action || shot.description || shot.title}.`,
-          readText((shot as unknown as Record<string, unknown>).videoDirection) ? `Motion: ${readText((shot as unknown as Record<string, unknown>).videoDirection)}.` : '',
-          `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.movement}.`,
-        ].filter(Boolean).join(' ')).join('\n')
-        const prompt = [
-          `Generate one ${Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3)))}-second Seedance 2 reference-to-video clip for storyboard group ${storyboardGroup?.index ?? 1}.`,
-          `Aspect ratio: ${readText(config.aspectRatio) || '16:9'}. Resolution: ${readText(config.resolution) || '720p'}.`,
-          '[REFERENCE LEGEND]',
-          formatSeedanceReferenceManifest(seedanceReferenceManifest),
-          seedanceStoryboardManifestInstruction(seedanceReferenceManifest),
-          '[TIMESTAMPED SHOT CALL SHEET]',
-          timelineLines || actionLines,
-          characterVoiceGuide ? `[IDENTITY AND SPEAKER GUIDE]\nUse this to keep characters visually distinct and to know exactly which character is speaking. If generated audio is disabled, still use it for mouth movement, expression, and delivery:\n${characterVoiceGuide}` : '',
-          seedanceLabanMovementBlock(groupShots, input.run.prompt) ? `[MOVEMENT LOGIC]\n${seedanceLabanMovementBlock(groupShots, input.run.prompt)}` : '',
-          '[POSITIVE CONSTRAINTS]',
-          'Preserve character identities, selected variants, location, props, lighting direction, and emotional continuity.',
-          'Use smooth connected animation between storyboard poses, readable acting, natural physical motion, and clean transitions.',
-          seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
-        ].filter(Boolean).join('\n\n')
+        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3)))
+        const prompt = buildCompactSeedanceVideoPrompt({
+          durationSeconds,
+          aspectRatio: readText(config.aspectRatio) || '16:9',
+          resolution: readText(config.resolution) || '720p',
+          referenceManifest: seedanceReferenceManifest,
+          referenceInstruction: seedanceStoryboardManifestInstruction(seedanceReferenceManifest),
+          directedControls,
+          shotSectionTitle: 'SHOTS',
+          shotLines: timelineLines,
+          identityGuide: characterVoiceGuide,
+          movementLogic: seedanceLabanMovementBlock(groupShots, input.run.prompt),
+          artifactBan: seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
+          clipLabel: `storyboard group ${storyboardGroup?.index ?? 1}`,
+        })
         const guidance = readUpstreamGuidanceBundle(input.upstream)
         const outputs = {
           prompt,
@@ -14743,7 +15350,8 @@ async function executeNode(input: {
           referenceImageCount: upstreamImages.length,
           storyboardGroupReferenceKeys: readStringArray(assetPack.storyboardGroupReferenceKeys),
           seedanceReferenceManifest,
-          durationSeconds: Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3))),
+          directedControls,
+          durationSeconds,
           guidance,
           deterministic: true,
         }

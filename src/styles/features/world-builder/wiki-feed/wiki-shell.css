@@ -2023,7 +2023,7 @@
 
 .world-wiki-sequence-animatic-panel-stack {
   display: grid;
-  grid-template-rows: minmax(180px, 1fr) auto;
+  grid-template-rows: minmax(180px, 1fr) auto auto;
   gap: 8px;
   min-width: 0;
 }
@@ -2057,6 +2057,20 @@
   font-weight: 760;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-shot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.world-wiki-sequence-animatic-shot-actions .world-wiki-sequence-animatic-video-status {
+  flex-basis: 100%;
+  justify-content: flex-end;
 }
 
 .world-wiki-sequence-animatic-frame {

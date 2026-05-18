@@ -691,6 +691,10 @@ type WorldGraphPageProps = {
   }) => Promise<{ run: OutputWorkflowRun }> | { run: OutputWorkflowRun }
   onEnsureSequenceAnimaticBlockWorkflows: (request: {
     masterRequestId: string
+    sequenceAnimaticMode?: 'storyboard_blocks' | 'shot_video'
+    blockRequestId?: string
+    storyboardBlockId?: string
+    shotId?: string
   }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
@@ -1162,6 +1166,14 @@ type SequenceAnimaticShotView = {
   panelUrl: string | null
   panelRunning: boolean
   references: SequenceAnimaticReferenceView[]
+  shotVideoRequestId: string | null
+  shotVideoWorkflowId: string | null
+  shotVideoRunId: string | null
+  shotVideoReady: boolean
+  shotVideoRunning: boolean
+  shotVideoUrl: string | null
+  shotVideoProgressLabel: string
+  shotVideoError: string
 }
 
 type SequenceAnimaticReferenceView = {
@@ -1716,7 +1728,28 @@ function buildSequenceAnimaticViewModel(input: {
           : null
       return [request.id, run] as const
     }))
+  const shotVideoRequests = input.requests
+    .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'shot_video')
+  const shotVideoRequestEntries: Array<[string, OutputRequest]> = shotVideoRequests
+    .map((request) => {
+      const metadata = readLooseRecord(request.metadata)
+      const parentId = request.parentRequestId || trimOptionalString(metadata.parentRequestId)
+      const shotId = trimOptionalString(metadata.shotId)
+      return parentId && shotId ? [`${parentId}:${shotId}`, request] as [string, OutputRequest] : null
+    })
+    .filter((entry): entry is [string, OutputRequest] => Boolean(entry))
+  const shotVideoRequestsByParentAndShot = new Map(shotVideoRequestEntries)
+  const shotVideoRunByRequestId = new Map(shotVideoRequests
+    .map((request) => {
+      const run = request.latestRunId
+        ? input.runs.find((entry) => entry.id === request.latestRunId) ?? null
+        : request.workflowId
+          ? input.runs.find((entry) => entry.workflowId === request.workflowId) ?? null
+          : null
+      return [request.id, run] as const
+    }))
   const childArtifacts = childRequests.flatMap((request) => input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request)))
+  const shotVideoArtifacts = shotVideoRequests.flatMap((request) => input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request)))
   const assetByKey = new Map(input.assets.map((asset) => [asset.key, asset] as const))
   const resolveReference = buildSequenceAnimaticReferenceResolver({
     worldEntities: input.worldEntities,
@@ -1954,6 +1987,38 @@ function buildSequenceAnimaticViewModel(input: {
           const preview = blockPanelPreviewByShotId.get(shotId) ?? null
           const previewAssetKey = preview?.assetKey ?? null
           const panelUrl = preview?.url ?? null
+          const shotVideoRequest = childRequest ? shotVideoRequestsByParentAndShot.get(`${childRequest.id}:${shotId}`) ?? null : null
+          const shotVideoRun = shotVideoRequest ? shotVideoRunByRequestId.get(shotVideoRequest.id) ?? null : null
+          const shotVideoStep = outputRunStepForNode(shotVideoRun, 'shot_video')
+          const shotVideoPromptStep = outputRunStepForNode(shotVideoRun, 'shot_video_prompt')
+          const shotVideoArtifactsForShot = shotVideoRequest
+            ? shotVideoArtifacts
+                .filter((artifact) => artifactBelongsToRequest(artifact, shotVideoRequest))
+                .filter((artifact) => {
+                  const metadata = readLooseRecord(artifact.metadata)
+                  return artifact.kind === 'video'
+                    && (trimOptionalString(metadata.role) === 'sequence_animatic_shot_video' || trimOptionalString(metadata.nodeKey) === 'shot_video')
+                    && (!trimOptionalString(metadata.shotId) || trimOptionalString(metadata.shotId) === shotId)
+                })
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+            : []
+          const shotVideoArtifact = shotVideoArtifactsForShot[0] ?? null
+          const shotVideoAssetKey = shotVideoArtifact?.assetKey ?? outputRunStepAssetKey(shotVideoStep, ['video', 'assetKey'])
+          const shotVideoUrl = shotVideoAssetKey ? resolveAssetSourceUrl(assetByKey.get(shotVideoAssetKey) ?? null) : null
+          const shotVideoRunning = isOutputRunStepActive(shotVideoStep) || isOutputRunStepActive(shotVideoPromptStep) || sequenceAnimaticRequestIsActive(shotVideoRequest)
+          const shotVideoError = shotVideoStep?.status === 'failed' ? shotVideoStep.errorMessage ?? 'Shot video generation failed.' : ''
+          const shotVideoReady = Boolean(shotVideoUrl) && shotVideoStep?.status !== 'failed'
+          const shotVideoProgressLabel = shotVideoRunning
+            ? sequenceAnimaticVideoProgressLabel(shotVideoStep) || shotVideoPromptStep?.label || 'Generating shot video'
+            : shotVideoReady
+              ? 'Shot take ready'
+              : shotVideoAssetKey
+                ? 'Shot take saved; loading preview'
+                : shotVideoError
+                  ? shotVideoError
+                  : previewAssetKey
+                    ? 'Ready for shot video'
+                    : 'Panel required'
           return {
             id: shotId,
             index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
@@ -1973,6 +2038,14 @@ function buildSequenceAnimaticViewModel(input: {
             panelUrl,
             panelRunning: storyboardRunning && !panelUrl,
             references: buildSequenceAnimaticShotReferences(shot, resolveReference),
+            shotVideoRequestId: shotVideoRequest?.id ?? null,
+            shotVideoWorkflowId: shotVideoRequest?.workflowId ?? null,
+            shotVideoRunId: shotVideoRun?.id ?? null,
+            shotVideoReady,
+            shotVideoRunning,
+            shotVideoUrl,
+            shotVideoProgressLabel,
+            shotVideoError,
           }
         }),
       }
@@ -2032,6 +2105,14 @@ function buildSequenceAnimaticViewModel(input: {
             panelUrl,
             panelRunning: false,
             references: buildSequenceAnimaticShotReferences(shot, resolveReference),
+            shotVideoRequestId: null,
+            shotVideoWorkflowId: null,
+            shotVideoRunId: null,
+            shotVideoReady: false,
+            shotVideoRunning: false,
+            shotVideoUrl: null,
+            shotVideoProgressLabel: previewAssetKey ? 'Ready for shot video' : 'Panel required',
+            shotVideoError: '',
           }
         }),
       }]
@@ -3382,6 +3463,116 @@ export function WorldGraphPage({
       }))
     }
   }, [onEnsureSequenceAnimaticBlockWorkflows, onOpenOutputStudio])
+  const ensureSequenceAnimaticShotVideoRequest = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    block: SequenceAnimaticBlockView,
+    shot: SequenceAnimaticShotView,
+  ) => {
+    let blockRequestId = block.childRequestId
+    if (!blockRequestId) {
+      const ensureBlocks = await onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: model.request.id })
+      blockRequestId = ensureBlocks.childRequests.find((request) => trimOptionalString(readLooseRecord(request.metadata).storyboardBlockId) === block.id)?.id ?? null
+    }
+    if (!blockRequestId) throw new Error('Storyboard block workflow is not ready yet.')
+    if (!shot.panelUrl) throw new Error('Generate/extract the storyboard panel before generating shot video.')
+    const ensureShot = await onEnsureSequenceAnimaticBlockWorkflows({
+      masterRequestId: model.request.id,
+      sequenceAnimaticMode: 'shot_video',
+      blockRequestId,
+      storyboardBlockId: block.id,
+      shotId: shot.id,
+    })
+    const shotRequest = ensureShot.childRequests.find((request) => {
+      const metadata = readLooseRecord(request.metadata)
+      return request.parentRequestId === blockRequestId
+        && trimOptionalString(metadata.sequenceAnimaticRole) === 'shot_video'
+        && trimOptionalString(metadata.shotId) === shot.id
+    }) ?? null
+    if (!shotRequest?.workflowId) throw new Error('Shot video workflow is not ready yet.')
+    return shotRequest
+  }, [onEnsureSequenceAnimaticBlockWorkflows])
+  const handleRunSequenceAnimaticShotVideo = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    block: SequenceAnimaticBlockView,
+    shot: SequenceAnimaticShotView,
+  ) => {
+    const runKey = `${model.request.id}:${block.id}:${shot.id}:shot_video`
+    if (sequenceAnimaticBlockRunKey) return
+    setSequenceAnimaticBlockRunKey(runKey)
+    setSequenceAnimaticErrorByKey((previous) => {
+      const next = { ...previous }
+      for (const key of model.request.selectedSequenceUnitKeys) delete next[key]
+      return next
+    })
+    try {
+      const shotRequest = await ensureSequenceAnimaticShotVideoRequest(model, block, shot)
+      const shotWorkflowId = shotRequest.workflowId
+      if (!shotWorkflowId) throw new Error('Shot video workflow is not ready yet.')
+      const existingRun = shotRequest.latestRunId
+        ? outputWorkflowRuns.find((run) => run.id === shotRequest.latestRunId) ?? null
+        : shotWorkflowId
+          ? outputWorkflowRuns.find((run) => run.workflowId === shotWorkflowId) ?? null
+          : null
+      const latestRunInput = readLooseRecord(existingRun?.input)
+      await onStartOutputWorkflowRun({
+        workflowId: shotWorkflowId,
+        prompt: shotRequest.prompt || `Generate a per-shot video take for ${shot.title}.`,
+        targetFormat: 'video',
+        selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
+        input: {
+          ...latestRunInput,
+          debugSkipVideoGeneration: false,
+          cinematicVideoApproved: true,
+          cinematicVideoApprovalScope: 'sequence_animatic_shot',
+        },
+        metadata: {
+          runMode: 'sequence_animatic_shot_video',
+          runScope: 'upstream_to_node',
+          targetNodeKeys: ['shot_video'],
+          forceNodeKeys: ['shot_video_prompt', 'shot_video'],
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: true,
+          debugSkipVideoGeneration: false,
+          cinematicVideoApproved: true,
+          sourceRunId: existingRun?.id ?? shotRequest.latestRunId ?? null,
+          parentRequestId: block.childRequestId,
+          masterRequestId: model.request.id,
+          sequenceAnimaticRole: 'shot_video',
+          storyboardBlockId: block.id,
+          shotId: shot.id,
+        },
+      })
+      await onGetOutputRequestStatus(shotRequest.id)
+      if (block.childRequestId) await onGetOutputRequestStatus(block.childRequestId)
+      await onGetOutputRequestStatus(model.request.id)
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setSequenceAnimaticBlockRunKey(null)
+    }
+  }, [ensureSequenceAnimaticShotVideoRequest, onGetOutputRequestStatus, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  const handleOpenSequenceAnimaticShotGraph = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    block: SequenceAnimaticBlockView,
+    shot: SequenceAnimaticShotView,
+  ) => {
+    try {
+      const shotRequest = shot.shotVideoRequestId && shot.shotVideoWorkflowId
+        ? { id: shot.shotVideoRequestId, workflowId: shot.shotVideoWorkflowId }
+        : await ensureSequenceAnimaticShotVideoRequest(model, block, shot)
+      onOpenOutputStudio(shotRequest.id, 'graph')
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    }
+  }, [ensureSequenceAnimaticShotVideoRequest, onOpenOutputStudio])
   const shouldRunLiveWikiHeaderRecovery = useMemo(() => {
     const worldWiki = readLooseRecord(projectDraftMetadata.worldWiki)
     const title = trimOptionalString(worldWiki.title)
@@ -11464,6 +11655,58 @@ export function WorldGraphPage({
                                 ))}
                               </div>
                             ) : null}
+                            <div className="world-wiki-sequence-animatic-shot-actions">
+                              {shot.shotVideoReady && shot.shotVideoUrl ? (
+                                <button
+                                  className="ghost-button compact world-wiki-sequence-animatic-video-action"
+                                  onClick={() => setSequenceAnimaticVideoPreview({
+                                    title: `${shot.title} - shot take`,
+                                    url: shot.shotVideoUrl ?? '',
+                                    durationLabel: shot.durationLabel,
+                                    statusLabel: shot.shotVideoProgressLabel,
+                                  })}
+                                  type="button"
+                                >
+                                  <span className="world-wiki-sequence-animatic-play-glyph" aria-hidden="true" />
+                                  Play shot take
+                                </button>
+                              ) : (
+                                <button
+                                  className="ghost-button compact world-wiki-sequence-animatic-video-action"
+                                  disabled={!shot.panelUrl || shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`}
+                                  onClick={() => void handleRunSequenceAnimaticShotVideo(sequenceAnimaticPreviewModel, block, shot)}
+                                  type="button"
+                                >
+                                  {shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`
+                                    ? <><span className="world-mini-spinner" aria-hidden="true" />Generating shot video</>
+                                    : 'Generate shot video'}
+                                </button>
+                              )}
+                              {shot.shotVideoReady && shot.shotVideoUrl ? (
+                                <button
+                                  className="ghost-button compact"
+                                  disabled={shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`}
+                                  onClick={() => void handleRunSequenceAnimaticShotVideo(sequenceAnimaticPreviewModel, block, shot)}
+                                  type="button"
+                                >
+                                  Regenerate
+                                </button>
+                              ) : null}
+                              {(shot.shotVideoRequestId || shot.panelUrl) ? (
+                                <button
+                                  className="ghost-button compact"
+                                  disabled={!shot.panelUrl}
+                                  onClick={() => void handleOpenSequenceAnimaticShotGraph(sequenceAnimaticPreviewModel, block, shot)}
+                                  type="button"
+                                >
+                                  Open shot graph
+                                </button>
+                              ) : null}
+                              <small className={shot.shotVideoError ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
+                                {shot.shotVideoRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                                {shot.shotVideoProgressLabel}
+                              </small>
+                            </div>
                           </div>
                         </article>
                       ))}

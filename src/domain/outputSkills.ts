@@ -419,10 +419,11 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'cinematic',
     modality: 'text',
     appliesToNodeTypes: ['text_llm', 'video_generation'],
-    appliesToPurposes: ['cinematic_script_authoring', 'cinematic_block_script', 'cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_shot_parse', 'cinematic_v3_shot_parse_group', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['cinematic_script_authoring', 'cinematic_block_script', 'cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_shot_parse', 'cinematic_v3_shot_parse_group', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
       'For every shot, specify one dominant subject, one visible action, one camera move or framing choice, and the continuity state at the start and end.',
       'Make timestamps usable by video generation: start and end times must be ordered and fit inside the block duration.',
+      'For sequence animatic per-shot videos, infer a natural shot duration from action, dialogue, camera movement, and settle time instead of trusting rough screenplay marker timing.',
       'Describe what should be seen and heard, not abstract intent or production commentary.',
     ],
     avoid: [
@@ -574,7 +575,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'provider',
     modality: 'video',
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
-    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_script_authoring', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_script_authoring', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
       'Pick one truth source per clip: cinematic, broadcast, UGC/phone, or animation. Use it as the law for camera behavior, texture, color, and audio.',
       'Do not average modes unless the user explicitly asks for a hybrid; broadcast should feel like broadcast, phone footage should feel like phone footage, and cinematic should feel like staged film.',
@@ -595,7 +596,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'provider',
     modality: 'video',
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
-    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
       'Write the reference legend from the actual submitted provider reference order. Only name @ImageN, @VideoN, or @AudioN references that are attached in that order.',
       'Give each reference one job: storyboard keyframes, shot keyframe, character/variant identity, shot-location environment, prop continuity, motion reference, or audio reference.',
@@ -618,9 +619,10 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'provider',
     modality: 'video',
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
-    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
-      'Use a compact call sheet: intent line, exact reference legend, storyboard/keyframe instruction when relevant, timestamped shot ranges, identity/speaker guide, and positive constraints.',
+      'Use a compact call sheet: intent line without duplicated duration, exact reference legend, storyboard/keyframe instruction when relevant, timestamped shot ranges, identity/speaker guide, and positive constraints.',
+      'Prefer directed controls over verbose prose: camera motion, subject motion, focus target, framing lock, visibility/reveal rule, performance, voice, and motion intensity.',
       'Each timeline cell should carry one shot range, camera/framing, visible action, physics/material behavior, transition note when useful, and audio cue when audio is enabled.',
       'State continuous-take versus cut-forward mode clearly when it matters.',
     ],
@@ -640,9 +642,13 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'provider',
     modality: 'video',
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
-    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
       'For V3 storyboard-block videos, prefer the storyboard sheet first, then selected character/location/prop variant references, then optional video/audio references.',
+      'For sequence animatic per-shot videos, use the cropped panel as @Image1 keyframe, include only shot-scoped refs, and use the inferred shot duration as the provider duration and prompt shot range.',
+      'For offscreen dialogue, keep the speaker in voice/performance guidance but do not attach their visual reference unless they are visible in the shot.',
+      'Voice guidance should include available character context such as age/gender cue, accent, pitch, register, pace, and delivery quality without adding offscreen visual references.',
+      'For sequence animatic per-shot videos, audio should be scripted dialogue plus direct diegetic sound effects only; forbid music, score, audio beds, room tone, crowd wash, and general ambience.',
       'For V2 keyframe videos, preserve the shot keyframe as @Image1 and put supporting entity/location/prop references after it.',
       'Keep the clip prompt focused on the attached storyboard/keyframe progression, timestamped shot call sheet, block duration, aspect ratio, and continuity constraints.',
       'Use reference images as anchors rather than asking the model to redesign characters, locations, products, or brand surfaces.',
@@ -946,7 +952,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['image_generation', 'video_generation', 'text_llm'],
-    appliesToPurposes: ['image_prompt', 'video_prompt', 'storyboard_prompt', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_beat_sheet', 'cinematic_keyframe', 'cinematic_block_video', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['image_prompt', 'video_prompt', 'storyboard_prompt', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_beat_sheet', 'cinematic_keyframe', 'cinematic_block_video', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video'],
     guidance: [
       'Treat character reference images and entity visual descriptions as identity constraints.',
       'Preserve face, silhouette, wardrobe anchors, color cues, and role-specific props unless the node explicitly changes them.',
@@ -1072,7 +1078,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
-    appliesToPurposes: ['image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_beat_sheet', 'cinematic_keyframe', 'cinematic_block_video', 'cinematic_v2_reference_select', 'cinematic_v2_screenplay_author', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_reference_select', 'cinematic_v3_screenplay_author', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_entity_selector', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page', 'cinematic_entity_selector', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_beat_sheet', 'cinematic_keyframe', 'cinematic_block_video', 'cinematic_v2_reference_select', 'cinematic_v2_screenplay_author', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_reference_select', 'cinematic_v3_screenplay_author', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
       'Preserve entity identity, material, silhouette, and visible role cues from source references.',
       'Use source entity keys and visual descriptions as provenance anchors for generated assets.',
@@ -1093,7 +1099,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'visual',
     modality: 'image',
     appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
-    appliesToPurposes: ['image_prompt', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_block_video', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video'],
+    appliesToPurposes: ['image_prompt', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_image', 'video_prompt', 'composite_reference', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard', 'cinematic_block_video', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video'],
     guidance: [
       'Stage subject scale, light direction, surface contact, and spatial depth so references feel physically present in the same place.',
       'Use environment references for architecture, palette, weather, and atmosphere.',
@@ -1135,7 +1141,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'quality',
     modality: 'workflow',
     appliesToNodeTypes: ['text_llm', 'image_generation', 'video_generation'],
-    appliesToPurposes: ['outline', 'chapter_plan', 'chapter_section_plan', 'chapter_prose', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'bible_section_plan', 'bible_section', 'bible_assembly', 'story_bible_document_render', 'image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_prompt', 'ebook_cover_image', 'video_prompt', 'storyboard_prompt', 'ugc_script', 'cinematic_script', 'cinematic_entity_selector', 'cinematic_script_authoring', 'cinematic_sequence_compile', 'cinematic_dynamic_take_fanout', 'cinematic_sequence_plan', 'cinematic_block_script', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard_prompt', 'cinematic_storyboard', 'cinematic_beat_sheet_prompt', 'cinematic_beat_sheet', 'cinematic_keyframe_prompt_pack', 'cinematic_keyframe', 'cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_reference_select', 'cinematic_v2_screenplay_author', 'cinematic_v2_script_parse', 'cinematic_v2_scene_compile', 'cinematic_v2_layout_plan', 'cinematic_v2_shot_plan', 'cinematic_v2_dynamic_shot_fanout', 'cinematic_v2_storyboard_prompt', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_keyframe_prompt', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v2_timeline_assemble', 'cinematic_v3_reference_select', 'cinematic_v3_screenplay_author', 'cinematic_v3_shot_parse', 'cinematic_v3_shot_parse_group', 'cinematic_v3_dynamic_storyboard_fanout', 'cinematic_v3_storyboard_prompt', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'cinematic_v3_timeline_assemble', 'comic_entity_selector', 'comic_scene_script', 'comic_page_plan', 'comic_script', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
+    appliesToPurposes: ['outline', 'chapter_plan', 'chapter_section_plan', 'chapter_prose', 'chapter_section_prose', 'editor_pass', 'front_back_matter', 'bible_section_plan', 'bible_section', 'bible_assembly', 'story_bible_document_render', 'image_prompt', 'image_reference_selector', 'concept_art_prompt', 'concept_art_image', 'poster_prompt', 'poster_image', 'ebook_cover_prompt', 'ebook_cover_image', 'video_prompt', 'storyboard_prompt', 'ugc_script', 'cinematic_script', 'cinematic_entity_selector', 'cinematic_script_authoring', 'cinematic_sequence_compile', 'cinematic_dynamic_take_fanout', 'cinematic_sequence_plan', 'cinematic_block_script', 'cinematic_atlas_prompt', 'cinematic_reference_atlas', 'cinematic_storyboard_prompt', 'cinematic_storyboard', 'cinematic_beat_sheet_prompt', 'cinematic_beat_sheet', 'cinematic_keyframe_prompt_pack', 'cinematic_keyframe', 'cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_reference_select', 'cinematic_v2_screenplay_author', 'cinematic_v2_script_parse', 'cinematic_v2_scene_compile', 'cinematic_v2_layout_plan', 'cinematic_v2_shot_plan', 'cinematic_v2_dynamic_shot_fanout', 'cinematic_v2_storyboard_prompt', 'cinematic_v2_storyboard_sheet', 'cinematic_v2_keyframe_prompt', 'cinematic_v2_shot_keyframe', 'cinematic_v2_keyframe_qa', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v2_timeline_assemble', 'cinematic_v3_reference_select', 'cinematic_v3_screenplay_author', 'cinematic_v3_shot_parse', 'cinematic_v3_shot_parse_group', 'cinematic_v3_dynamic_storyboard_fanout', 'cinematic_v3_storyboard_prompt', 'cinematic_v3_storyboard_sheet', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video', 'cinematic_v3_timeline_assemble', 'comic_entity_selector', 'comic_scene_script', 'comic_page_plan', 'comic_script', 'comic_atlas_prompt', 'comic_style_atlas', 'comic_page_prompt', 'comic_page'],
     guidance: [
       'Keep provider-facing prompts compact, declarative, and focused on the artifact the node must produce.',
       'Separate canon facts, style guidance, and output requirements so they do not blur together.',
