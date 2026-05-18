@@ -44,6 +44,7 @@ import {
 import { OutputWorkflowGraphOverlay } from './OutputWorkflowGraphOverlay'
 import { CinematicTimelinePlayer } from '../cinematics/CinematicTimelinePlayer'
 import { useWorldAssetUrls } from '../world-builder/hooks/useWorldAssetUrls'
+import type { OutputLibraryOpenTarget, OutputStudioReturnTarget } from '../world-builder/wiki/outputLibraryPresentation'
 import { deriveSequenceOutputStatuses, type SequenceOutputStatus } from './outputSequenceStatus'
 import {
   useOutputWorkspaceState,
@@ -57,10 +58,10 @@ type OutputsWorkspaceProps = {
   cinematicsPanel: ReactNode
   openIntent?: {
     requestId: string | null
-    target?: 'details' | 'graph' | 'timeline'
+    target?: OutputLibraryOpenTarget
     selectedNodeKey?: string | null
     nonce: number
-    returnToSourceOnClose?: boolean
+    returnTarget?: OutputStudioReturnTarget | null
   } | null
   onStartOutputRequest: (request: {
     prompt: string
@@ -74,6 +75,7 @@ type OutputsWorkspaceProps = {
     cinematicReferenceMode?: 'keyframes' | 'storyboard_sheet' | 'keyframes_and_storyboard' | 'shot_reference_sheet'
     cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
     cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
+    cinematicAnimaticMode?: 'prompt_cinematic_master'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -116,6 +118,13 @@ type OutputsWorkspaceProps = {
     input?: Record<string, unknown>
     metadata?: Record<string, unknown>
   }) => Promise<OutputWorkflowRunStatusResponse>
+  onEnsureSequenceAnimaticBlockWorkflows: (request: {
+    masterRequestId: string
+    sequenceAnimaticMode?: 'storyboard_blocks' | 'shot_video'
+    blockRequestId?: string
+    storyboardBlockId?: string
+    shotId?: string
+  }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
   onPreviewCinematicDirectorNote: (request: {
     workflowId: string
     runId?: string | null
@@ -141,7 +150,7 @@ type OutputsWorkspaceProps = {
     preset?: 'ebook_from_world'
   }) => Promise<OutputWorkflowUpgradeResponse>
   onRefreshLiveSnapshot: () => Promise<void>
-  onReturnToSourceSurface?: () => void
+  onReturnToSourceSurface?: (target: OutputStudioReturnTarget) => void
 }
 
 function formatStatus(value: string) {
@@ -275,6 +284,20 @@ function readStringArray(value: unknown) {
 
 function readTrimmedString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
+  return readTrimmedString(metadata.screenplayAnimaticRole) || readTrimmedString(metadata.sequenceAnimaticRole)
+}
+
+function isScreenplayAnimaticMasterRequest(request: OutputRequest | null | undefined) {
+  if (!request || request.parentRequestId) return false
+  const metadata = readRecord(request.metadata)
+  return readScreenplayAnimaticRole(metadata) === 'master'
+}
+
+function isStoryboardBlockRequest(request: OutputRequest) {
+  return readScreenplayAnimaticRole(readRecord(request.metadata)) === 'storyboard_block'
 }
 
 function readNumber(value: unknown) {
@@ -495,6 +518,139 @@ function buildCinematicV2TimelineModalData(
   }
 }
 
+type ScreenplayAnimaticShotPreview = {
+  id: string
+  index: number
+  title: string
+  action: string
+  dialogue: string[]
+  panelUrl: string
+}
+
+type ScreenplayAnimaticBlockPreview = {
+  id: string
+  index: number
+  title: string
+  durationLabel: string
+  childRequest: OutputRequest | null
+  storyboardReady: boolean
+  running: boolean
+  shots: ScreenplayAnimaticShotPreview[]
+}
+
+type ScreenplayAnimaticPreviewData = {
+  request: OutputRequest
+  title: string
+  statusLabel: string
+  screenplayMarkdown: string
+  blocks: ScreenplayAnimaticBlockPreview[]
+}
+
+function outputArtifactBelongsToRequest(artifact: OutputArtifact, request: OutputRequest) {
+  const metadata = readRecord(artifact.metadata)
+  return artifact.workflowId === request.workflowId
+    || readTrimmedString(metadata.outputRequestId) === request.id
+    || readTrimmedString(metadata.requestId) === request.id
+}
+
+function findScreenplayAnimaticManifest(request: OutputRequest, runs: readonly OutputWorkflowRun[], artifacts: readonly OutputArtifact[]) {
+  const directArtifacts = artifacts.filter((artifact) => outputArtifactBelongsToRequest(artifact, request))
+  const runArtifacts = runs
+    .filter((run) => run.workflowId === request.workflowId || run.id === request.latestRunId)
+    .flatMap((run) => run.artifacts)
+  for (const artifact of [...directArtifacts, ...runArtifacts]) {
+    const metadata = readRecord(artifact.metadata)
+    if (readTrimmedString(metadata.role) === 'sequence_animatic_manifest') {
+      return readRecord(metadata.manifest)
+    }
+  }
+  return null
+}
+
+function assetUrlByKey(assets: readonly ProjectSnapshot['assets'][number][]) {
+  return new Map(assets.map((asset) => [asset.key, resolveAssetSourceUrl(asset)] as const))
+}
+
+function buildScreenplayAnimaticPreviewData(input: {
+  request: OutputRequest
+  requests: readonly OutputRequest[]
+  runs: readonly OutputWorkflowRun[]
+  artifacts: readonly OutputArtifact[]
+  assets: readonly ProjectSnapshot['assets'][number][]
+}): ScreenplayAnimaticPreviewData | null {
+  const manifest = findScreenplayAnimaticManifest(input.request, input.runs, input.artifacts)
+  if (!manifest) {
+    return {
+      request: input.request,
+      title: input.request.title,
+      statusLabel: formatStatus(input.request.status),
+      screenplayMarkdown: '',
+      blocks: [],
+    }
+  }
+  const urlsByAssetKey = assetUrlByKey(input.assets)
+  const childRequests = input.requests
+    .filter((request) => request.parentRequestId === input.request.id && isStoryboardBlockRequest(request))
+  const childRequestByBlockId = new Map(childRequests.map((request) => [readTrimmedString(readRecord(request.metadata).storyboardBlockId), request] as const))
+  const childArtifacts = [
+    ...childRequests.flatMap((request) => input.artifacts.filter((artifact) => outputArtifactBelongsToRequest(artifact, request))),
+    ...input.runs
+      .filter((run) => childRequests.some((request) => request.workflowId === run.workflowId || request.latestRunId === run.id))
+      .flatMap((run) => run.artifacts),
+  ]
+  const panelUrlByShotId = new Map<string, string>()
+  for (const artifact of childArtifacts) {
+    const metadata = readRecord(artifact.metadata)
+    const role = readTrimmedString(metadata.role)
+    if (!['cinematic_v3_storyboard_panel', 'cinematic_v2_storyboard_panel', 'sequence_animatic_block_panel'].includes(role)) continue
+    const shotId = readTrimmedString(metadata.shotId)
+    const assetKey = artifact.assetKey
+    const url = assetKey ? urlsByAssetKey.get(assetKey) ?? '' : ''
+    if (shotId && url && !panelUrlByShotId.has(shotId)) panelUrlByShotId.set(shotId, url)
+  }
+  const blocks = (Array.isArray(manifest.blocks) ? manifest.blocks.map(readRecord) : []).map((block, blockIndex) => {
+    const blockId = readTrimmedString(block.id) || `block_${blockIndex + 1}`
+    const childRequest = childRequestByBlockId.get(blockId) ?? null
+    const childRun = childRequest?.latestRunId ? input.runs.find((run) => run.id === childRequest.latestRunId) ?? null : null
+    const running = Boolean(childRun && !isTerminalOutputWorkflowRunStatus(childRun.status))
+    const shots = (Array.isArray(block.shots) ? block.shots.map(readRecord) : []).map((shot, shotIndex) => {
+      const dialogue = Array.isArray(shot.dialogue)
+        ? shot.dialogue.map(readRecord).map((line) => {
+          const speaker = readTrimmedString(line.speakerName) || readTrimmedString(line.speaker) || readTrimmedString(line.speakerRefId)
+          const text = readTrimmedString(line.text) || readTrimmedString(line.line)
+          return [speaker, text].filter(Boolean).join(': ')
+        }).filter(Boolean)
+        : []
+      const shotId = readTrimmedString(shot.id) || `${blockId}_shot_${shotIndex + 1}`
+      return {
+        id: shotId,
+        index: Number(shot.index ?? shotIndex + 1) || shotIndex + 1,
+        title: readTrimmedString(shot.title) || `Shot ${shotIndex + 1}`,
+        action: readTrimmedString(shot.action) || readTrimmedString(shot.description) || readTrimmedString(shot.visualAction),
+        dialogue,
+        panelUrl: panelUrlByShotId.get(shotId) ?? '',
+      }
+    })
+    return {
+      id: blockId,
+      index: Number(block.index ?? blockIndex + 1) || blockIndex + 1,
+      title: readTrimmedString(block.title) || `Storyboard block ${blockIndex + 1}`,
+      durationLabel: `${Math.round(Number(block.durationSeconds ?? 0) || shots.length * 3)}s`,
+      childRequest,
+      storyboardReady: shots.length > 0 && shots.every((shot) => Boolean(shot.panelUrl)),
+      running,
+      shots,
+    }
+  })
+  return {
+    request: input.request,
+    title: readTrimmedString(manifest.title) || input.request.title,
+    statusLabel: blocks.some((block) => block.running) ? 'Generating storyboard' : blocks.some((block) => block.storyboardReady) ? 'Animatic ready' : 'Screenplay ready',
+    screenplayMarkdown: readTrimmedString(manifest.screenplayMarkdown),
+    blocks,
+  }
+}
+
 function mergeTimelineNodeOutputsIntoRun(
   run: OutputWorkflowRun | null | undefined,
   nodes: OutputWorkflowNode[] | null | undefined,
@@ -696,6 +852,101 @@ function CinematicV2TimelineModal({
           subtitle="Timeline preview"
           title={title}
         />
+      </div>
+    </div>
+  )
+}
+
+function ScreenplayAnimaticModal({
+  data,
+  busyKey,
+  onClose,
+  onGenerateStoryboard,
+  onOpenBlockGraph,
+  onOpenMasterGraph,
+}: {
+  data: ScreenplayAnimaticPreviewData
+  busyKey: string | null
+  onClose: () => void
+  onGenerateStoryboard: (block: ScreenplayAnimaticBlockPreview) => void | Promise<void>
+  onOpenBlockGraph: (block: ScreenplayAnimaticBlockPreview) => void | Promise<void>
+  onOpenMasterGraph: () => void
+}) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
+    <div aria-label="Screenplay animatic" aria-modal="true" className="outputs-cinematic-timeline-modal" role="dialog">
+      <button aria-label="Close screenplay animatic" className="outputs-cinematic-timeline-backdrop" onClick={onClose} type="button" />
+      <div className="outputs-cinematic-timeline-panel">
+        <button aria-label="Close screenplay animatic" className="outputs-cinematic-timeline-close" onClick={onClose} type="button">
+          <span aria-hidden="true">X</span>
+        </button>
+        <div className="outputs-script-preview">
+          <div className="outputs-panel-heading">
+            <div>
+              <p className="outputs-eyebrow">Screenplay animatic</p>
+              <h3>{data.title}</h3>
+            </div>
+            <div className="outputs-request-actions">
+              <span className="outputs-secondary-action outputs-compact-action">{data.statusLabel}</span>
+              <button className="outputs-secondary-action outputs-compact-action" onClick={onOpenMasterGraph} type="button">Open master graph</button>
+            </div>
+          </div>
+          {data.blocks.length === 0 ? (
+            <div className="outputs-empty-state">
+              <strong>Screenplay generation is running.</strong>
+              <p>Shot blocks and panel slots will appear when the master graph writes the animatic manifest.</p>
+            </div>
+          ) : (
+            <div className="outputs-script-stack">
+              {data.blocks.map((block) => (
+                <section className="outputs-script-card" key={block.id}>
+                  <div className="outputs-panel-heading">
+                    <div>
+                      <p className="outputs-eyebrow">Block {block.index} / {block.durationLabel}</p>
+                      <h3>{block.title}</h3>
+                    </div>
+                    <div className="outputs-request-actions">
+                      <button className="outputs-secondary-action outputs-compact-action" onClick={() => void onOpenBlockGraph(block)} type="button">
+                        Open block graph
+                      </button>
+                      <button
+                        className="outputs-secondary-action outputs-compact-action"
+                        disabled={block.running || busyKey === `${data.request.id}:${block.id}:storyboard`}
+                        onClick={() => void onGenerateStoryboard(block)}
+                        type="button"
+                      >
+                        {block.running || busyKey === `${data.request.id}:${block.id}:storyboard`
+                          ? 'Generating...'
+                          : block.storyboardReady ? 'Regenerate storyboard' : 'Generate storyboard'}
+                      </button>
+                    </div>
+                  </div>
+                  {block.shots.map((shot) => (
+                    <article className="outputs-script-shot" key={shot.id}>
+                      <div>
+                        <b>Shot {String(shot.index).padStart(3, '0')} / {shot.title}</b>
+                        {shot.action ? <p>{shot.action}</p> : null}
+                        {shot.dialogue.map((line) => <p key={line}><b>Dialogue:</b> {line}</p>)}
+                      </div>
+                      <div className={`outputs-request-preview ${shot.panelUrl ? 'has-image' : ''}`} style={{ width: 180, aspectRatio: '16 / 9' }}>
+                        {shot.panelUrl ? <img src={shot.panelUrl} alt="" loading="lazy" /> : <span className="outputs-status-icon is-queued" aria-hidden="true" />}
+                      </div>
+                    </article>
+                  ))}
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -1428,6 +1679,7 @@ export function OutputsWorkspace({
   onSubscribeOutputWorkflowGraphSignals,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
+  onEnsureSequenceAnimaticBlockWorkflows,
   onPreviewCinematicDirectorNote,
   onApplyCinematicDirectorPatch,
   onGetOutputWorkflowStatus,
@@ -1441,7 +1693,7 @@ export function OutputsWorkspace({
   const [upgradingAnimaticQuality, setUpgradingAnimaticQuality] = useState(false)
   const [enhancingTimelineShotId, setEnhancingTimelineShotId] = useState<string | null>(null)
   const [creationMode, setCreationMode] = useState<'prompt' | 'story_unit'>('prompt')
-  const [returnToSourceOnClose, setReturnToSourceOnClose] = useState(false)
+  const [returnTargetOnClose, setReturnTargetOnClose] = useState<OutputStudioReturnTarget | null>(null)
   const [cinematicTimelineModal, setCinematicTimelineModal] = useState<{
     title: string
     projection: CinematicTimelineProjection
@@ -1450,6 +1702,8 @@ export function OutputsWorkspace({
     canUndoLastDirectorEdit: boolean
   } | null>(null)
   const [timelineOpeningRequestId, setTimelineOpeningRequestId] = useState<string | null>(null)
+  const [screenplayAnimaticRequestId, setScreenplayAnimaticRequestId] = useState<string | null>(null)
+  const [screenplayAnimaticBusyKey, setScreenplayAnimaticBusyKey] = useState<string | null>(null)
   const {
     activeRunId,
     busy,
@@ -1604,6 +1858,19 @@ export function OutputsWorkspace({
     [displayRun?.steps],
   )
   const assetByKey = useMemo(() => new Map(snapshot.assets.map((asset) => [asset.key, asset])), [snapshot.assets])
+  const screenplayAnimaticPreviewData = useMemo(() => {
+    const request = screenplayAnimaticRequestId
+      ? outputRequests.find((entry) => entry.id === screenplayAnimaticRequestId) ?? null
+      : null
+    if (!request) return null
+    return buildScreenplayAnimaticPreviewData({
+      request,
+      requests: snapshot.outputRequests,
+      runs: recentOutputRuns,
+      artifacts: snapshot.outputArtifacts,
+      assets: snapshot.assets,
+    })
+  }, [outputRequests, recentOutputRuns, screenplayAnimaticRequestId, snapshot.assets, snapshot.outputArtifacts, snapshot.outputRequests])
   const definitionByKey = useMemo(() => new Map(snapshot.definitions.map((definition) => [definition.key, definition])), [snapshot.definitions])
   const {
     referenceSheetIconUrlByEntityKey,
@@ -1776,7 +2043,9 @@ export function OutputsWorkspace({
         imageQuality: requestImageQuality === 'preset' ? undefined : requestImageQuality,
         imageOutputFormat: requestImageOutputFormat === 'preset' ? undefined : requestImageOutputFormat,
         cinematicReferenceMode: aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault,
+        cinematicPipelineVersion: 'v3_script_storyboards',
         cinematicV2AnimaticMode: 'fast_panels',
+        cinematicAnimaticMode: 'prompt_cinematic_master',
         debugCinematicStoryboardStyleSafeMode: aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
         cinematicStoryboardStyleOverride: aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
         debugSkipVideoGeneration: aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
@@ -2003,15 +2272,21 @@ export function OutputsWorkspace({
   }
 
   function openOutputGraph() {
+    setReturnTargetOnClose(null)
     setGraphOpen(true)
     void refreshOutputGraph({ manual: true })
   }
 
-  async function openOutputGraphForRequest(request: OutputRequest | null | undefined, requestedNodeKey: string | null = null) {
+  async function openOutputGraphForRequest(
+    request: OutputRequest | null | undefined,
+    requestedNodeKey: string | null = null,
+    returnTarget: OutputStudioReturnTarget | null = null,
+  ) {
     if (!request?.workflowId) return
     setSelectedRequestId(request.id)
     setActiveRunId(request.latestRunId ?? null)
     setSelectedNodeKey(requestedNodeKey)
+    setReturnTargetOnClose(returnTarget)
     setGraphOpen(true)
     setRefreshingGraph(true)
     setError(null)
@@ -2021,6 +2296,77 @@ export function OutputsWorkspace({
       setError(refreshError instanceof Error ? refreshError.message : 'Could not open output workflow graph.')
     } finally {
       setRefreshingGraph(false)
+    }
+  }
+
+  async function ensureScreenplayAnimaticBlockRequest(masterRequest: OutputRequest, block: ScreenplayAnimaticBlockPreview) {
+    if (block.childRequest) return block.childRequest
+    const ensureResult = await onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: masterRequest.id })
+    const childRequest = ensureResult.childRequests.find((request) => readTrimmedString(readRecord(request.metadata).storyboardBlockId) === block.id) ?? null
+    if (!childRequest) throw new Error('Storyboard block workflow is not ready yet.')
+    return childRequest
+  }
+
+  async function openScreenplayAnimaticBlockGraph(data: ScreenplayAnimaticPreviewData, block: ScreenplayAnimaticBlockPreview) {
+    setError(null)
+    try {
+      const childRequest = await ensureScreenplayAnimaticBlockRequest(data.request, block)
+      await openOutputGraphForRequest(childRequest, null, {
+        kind: 'outputs_screenplay_animatic',
+        masterRequestId: data.request.id,
+      })
+      await onRefreshLiveSnapshot()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not open storyboard block graph.')
+    }
+  }
+
+  async function generateScreenplayAnimaticStoryboard(data: ScreenplayAnimaticPreviewData, block: ScreenplayAnimaticBlockPreview) {
+    const key = `${data.request.id}:${block.id}:storyboard`
+    if (screenplayAnimaticBusyKey) return
+    setScreenplayAnimaticBusyKey(key)
+    setError(null)
+    try {
+      const childRequest = await ensureScreenplayAnimaticBlockRequest(data.request, block)
+      if (!childRequest.workflowId) throw new Error('Storyboard block workflow is not ready yet.')
+      const childRun = childRequest.latestRunId
+        ? recentOutputRuns.find((run) => run.id === childRequest.latestRunId) ?? null
+        : recentOutputRuns.find((run) => run.workflowId === childRequest.workflowId) ?? null
+      const runStatus = await onStartOutputWorkflowRun({
+        workflowId: childRequest.workflowId,
+        prompt: childRequest.prompt || data.request.prompt,
+        targetFormat: 'video',
+        selectedEntityKeys: data.request.selectedEntityKeys,
+        selectedSequenceUnitKeys: data.request.selectedSequenceUnitKeys,
+        input: {
+          ...readRecord(childRun?.input),
+          debugSkipVideoGeneration: true,
+          cinematicVideoApproved: false,
+        },
+        metadata: {
+          runIntent: 'prepare_storyboard_block',
+          runMode: 'screenplay_animatic_storyboard_block',
+          runScope: 'upstream_to_node',
+          targetNodeKeys: ['artifact'],
+          forceNodeKeys: ['storyboard_sheet', 'panel_extract', 'video_prompt', 'artifact'],
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: false,
+          debugSkipVideoGeneration: true,
+          sourceRunId: childRun?.id ?? childRequest.latestRunId ?? null,
+          parentRequestId: data.request.id,
+          screenplayAnimaticRole: 'storyboard_block',
+          sequenceAnimaticRole: 'storyboard_block',
+          storyboardBlockId: block.id,
+        },
+      })
+      if (runStatus.run) rememberLiveRun(runStatus.run)
+      await onGetOutputRequestStatus(childRequest.id)
+      await onGetOutputRequestStatus(data.request.id)
+      await onRefreshLiveSnapshot()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not generate storyboard block.')
+    } finally {
+      setScreenplayAnimaticBusyKey(null)
     }
   }
 
@@ -2085,18 +2431,26 @@ export function OutputsWorkspace({
   }
 
   function closeOutputGraphOverlay() {
+    const returnTarget = returnTargetOnClose
     setGraphOpen(false)
-    if (returnToSourceOnClose) {
-      setReturnToSourceOnClose(false)
-      onReturnToSourceSurface?.()
+    setReturnTargetOnClose(null)
+    if (returnTarget) {
+      if (returnTarget.kind === 'outputs_screenplay_animatic') {
+        setScreenplayAnimaticRequestId(returnTarget.masterRequestId)
+      }
+      onReturnToSourceSurface?.(returnTarget)
     }
   }
 
   function closeCinematicTimelineModal() {
+    const returnTarget = returnTargetOnClose
     setCinematicTimelineModal(null)
-    if (returnToSourceOnClose) {
-      setReturnToSourceOnClose(false)
-      onReturnToSourceSurface?.()
+    setReturnTargetOnClose(null)
+    if (returnTarget) {
+      if (returnTarget.kind === 'outputs_screenplay_animatic') {
+        setScreenplayAnimaticRequestId(returnTarget.masterRequestId)
+      }
+      onReturnToSourceSurface?.(returnTarget)
     }
   }
 
@@ -2109,9 +2463,9 @@ export function OutputsWorkspace({
     setSelectedRequestId(request.id)
     setActiveRunId(request.latestRunId ?? null)
     if (request.workflowId) setSelectedNodeKey(null)
-    setReturnToSourceOnClose(Boolean(openIntent.returnToSourceOnClose && (openIntent.target === 'graph' || openIntent.target === 'timeline')))
+    setReturnTargetOnClose((openIntent.target === 'graph' || openIntent.target === 'timeline') ? openIntent.returnTarget ?? null : null)
     if (openIntent.target === 'graph') {
-      void openOutputGraphForRequest(request, openIntent.selectedNodeKey ?? null)
+      void openOutputGraphForRequest(request, openIntent.selectedNodeKey ?? null, openIntent.returnTarget ?? null)
     } else if (openIntent.target === 'timeline') {
       void openCinematicTimelineForRequest(request)
     }
@@ -2894,6 +3248,19 @@ export function OutputsWorkspace({
           canUndoLastDirectorEdit={cinematicTimelineModal.canUndoLastDirectorEdit}
         />
       ) : null}
+      {screenplayAnimaticPreviewData ? (
+        <ScreenplayAnimaticModal
+          busyKey={screenplayAnimaticBusyKey}
+          data={screenplayAnimaticPreviewData}
+          onClose={() => setScreenplayAnimaticRequestId(null)}
+          onGenerateStoryboard={(block) => generateScreenplayAnimaticStoryboard(screenplayAnimaticPreviewData, block)}
+          onOpenBlockGraph={(block) => openScreenplayAnimaticBlockGraph(screenplayAnimaticPreviewData, block)}
+          onOpenMasterGraph={() => void openOutputGraphForRequest(screenplayAnimaticPreviewData.request, null, {
+            kind: 'outputs_screenplay_animatic',
+            masterRequestId: screenplayAnimaticPreviewData.request.id,
+          })}
+        />
+      ) : null}
       <header className="outputs-hero">
         <div className="outputs-hero-copy">
           <p className="outputs-eyebrow">Output Studio</p>
@@ -3216,12 +3583,16 @@ export function OutputsWorkspace({
                       const requestTimelineProjection = requestIsV2Animatic
                         ? buildSafeCinematicV2TimelineProjection(requestCinematicData)
                         : null
-                      const requestAnimaticReady = requestIsV2Animatic && (
+                      const requestIsScreenplayAnimatic = isScreenplayAnimaticMasterRequest(request)
+                      const requestScreenplayAnimaticManifest = requestIsScreenplayAnimatic
+                        ? findScreenplayAnimaticManifest(request, recentOutputRuns, snapshot.outputArtifacts)
+                        : null
+                      const requestAnimaticReady = (requestIsV2Animatic && (
                         requestCinematicData.cinematicV2.keyframes.length > 0
                         || requestCinematicData.cinematicV2.panels.length > 0
                         || requestCinematicData.cinematicV2.storyboardSheets.length > 0
                         || Object.keys(readRecord(requestCinematicData.cinematicV2.timeline)).length > 0
-                      )
+                      )) || Boolean(requestScreenplayAnimaticManifest)
                       const requestSideStatus = activeStep
                         ? activeStep.label
                         : failedCount > 0
@@ -3229,7 +3600,9 @@ export function OutputsWorkspace({
                           : requestPrimaryArtifact
                             ? requestPrimaryArtifact.name
                             : requestAnimaticReady
-                              ? 'Animatic ready'
+                              ? requestIsScreenplayAnimatic
+                                ? 'Screenplay ready'
+                                : 'Animatic ready'
                               : requestIsV2Animatic
                                 ? 'Generating animatic'
                                 : 'Waiting for artifact'
@@ -3328,6 +3701,20 @@ export function OutputsWorkspace({
                                   onClick={() => void openOutputGraphForRequest(request)}
                                 >
                                   {refreshingGraph && selectedRequestId === request.id ? 'Opening...' : 'Graph'}
+                                </button>
+                              ) : null}
+                              {requestIsScreenplayAnimatic ? (
+                                <button
+                                  className="outputs-secondary-action outputs-compact-action"
+                                  disabled={busyRequestId === request.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedRequestId(request.id)
+                                    if (request.latestRunId) setActiveRunId(request.latestRunId)
+                                    setScreenplayAnimaticRequestId(request.id)
+                                  }}
+                                >
+                                  Open animatic
                                 </button>
                               ) : null}
                               {requestIsV2Animatic ? (

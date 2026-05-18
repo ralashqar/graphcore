@@ -15,6 +15,10 @@ import type { EntityIconId } from '../../../shared/entityIcons'
 export type OutputLibraryGroupKey = 'generating' | 'needs_attention' | 'ready' | 'drafts'
 export type OutputArtifactFilter = 'all' | 'images' | 'documents' | 'video' | 'other'
 export type OutputLibraryOpenTarget = 'details' | 'graph' | 'timeline'
+export type OutputStudioReturnTarget =
+  | { kind: 'wiki_outputs' }
+  | { kind: 'wiki_sequence_animatic'; masterRequestId: string; sequenceUnitKey?: string | null }
+  | { kind: 'outputs_screenplay_animatic'; masterRequestId: string }
 
 export type OutputLibraryEntityRef = {
   key: string

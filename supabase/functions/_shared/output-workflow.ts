@@ -35,6 +35,17 @@ import {
   type OutputWorkflowRun,
   type OutputWorkflowRunStep,
 } from '../../../src/domain/outputWorkflow.ts'
+import {
+  buildRecoveredOutputFromArtifact,
+  outputArtifactNodeKey as sharedOutputArtifactNodeKey,
+} from '../../../src/domain/outputWorkflowDurableResolver.ts'
+import {
+  getOutputWorkflowNodeContract,
+  outputWorkflowRunIntentDefaults,
+} from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import type {
+  SeedanceReferenceManifestEntry,
+} from '../../../src/domain/seedanceReferenceManifest.ts'
 import { buildEbookDocumentMetadata, buildEbookHtmlDocument } from '../../../src/domain/ebookDocument.ts'
 import {
   buildCinematicSequenceFromScriptDoc,
@@ -705,59 +716,11 @@ export function compactOutputWorkflowRunForStatus(run: OutputWorkflowRun): Outpu
 }
 
 function outputArtifactNodeKey(artifact: OutputArtifact) {
-  const metadata = asRecord(artifact.metadata)
-  return readText(metadata.nodeKey) || readText(metadata.node_key)
+  return sharedOutputArtifactNodeKey(artifact)
 }
 
 function buildRecoveredNodeOutputsFromOutputArtifact(node: OutputWorkflowNode, artifact: OutputArtifact) {
-  const metadata = asRecord(artifact.metadata)
-  const assetKey = readText(artifact.assetKey)
-  if (!assetKey) return null
-  const storagePath = readText(metadata.storagePath) || readText(metadata.storage_path)
-  const role = readText(metadata.role) || readText(artifact.kind) || 'asset'
-  const media = {
-    assetKey,
-    storagePath,
-    mimeType: readText(artifact.mimeType),
-    role,
-    prompt: readText(metadata.prompt),
-    providerPrompt: readText(metadata.providerPrompt),
-    provider: readText(metadata.provider),
-    model: readText(metadata.model),
-    providerRequestId: readText(metadata.providerRequestId) || readText(metadata.falRequestId),
-    storyboardGroupId: readText(metadata.storyboardGroupId),
-    shotId: readText(metadata.shotId),
-    shotIndex: Number(metadata.shotIndex ?? -1) >= 0 ? Number(metadata.shotIndex) : null,
-    planningOnly: metadata.planningOnly === true || metadata.planning_only === true,
-    planning_only: metadata.planningOnly === true || metadata.planning_only === true,
-    usedAsVideoReference: metadata.usedAsVideoReference === true || metadata.used_as_video_reference === true,
-    used_as_video_reference: metadata.usedAsVideoReference === true || metadata.used_as_video_reference === true,
-    recoveredFromArtifact: true,
-  }
-  const artifactOutput = {
-    key: readText(artifact.key),
-    name: readText(artifact.name),
-    kind: readText(artifact.kind),
-    assetKey,
-    mimeType: readText(artifact.mimeType),
-    summary: readText(artifact.summary),
-    metadata,
-    recoveredFromArtifact: true,
-  }
-  return {
-    assetKey,
-    storagePath,
-    mimeType: readText(artifact.mimeType),
-    prompt: readText(metadata.prompt),
-    providerPrompt: readText(metadata.providerPrompt),
-    role,
-    image: readText(artifact.kind) === 'image' || node.nodeType === 'image_generation' ? media : undefined,
-    video: readText(artifact.kind) === 'video' || node.nodeType === 'video_generation' ? media : undefined,
-    artifact: artifactOutput,
-    artifacts: [artifactOutput],
-    storyboardGroupId: readText(metadata.storyboardGroupId),
-    recoveredFromArtifact: true,
-  }
+  return buildRecoveredOutputFromArtifact(node, artifact)
 }
 
 async function recoverArtifactBackedWorkflowNodeOutputs(input: {
@@ -899,12 +862,20 @@ async function loadRecoverableWorkflowArtifactOutputsByNodeKey(input: {
   for (const row of (response.data ?? []) as OutputArtifactRow[]) {
     const artifact = mapOutputArtifactRow(row)
     const nodeKey = outputArtifactNodeKey(artifact)
-    if (!nodeKeys.has(nodeKey) || result.has(nodeKey)) continue
-    const node = input.nodesByKey.get(nodeKey)
+    const artifactRole = readText(asRecord(artifact.metadata).role) || readText(artifact.kind)
+    const matchedNodeKey = nodeKeys.has(nodeKey)
+      ? nodeKey
+      : [...nodeKeys].find((candidateKey) => {
+        const candidateNode = input.nodesByKey.get(candidateKey)
+        const contract = getOutputWorkflowNodeContract(candidateNode ?? null)
+        return Boolean(contract?.artifactRoles.includes(artifactRole))
+      }) ?? ''
+    if (!matchedNodeKey || result.has(matchedNodeKey)) continue
+    const node = input.nodesByKey.get(matchedNodeKey)
     if (!node) continue
     const outputs = buildRecoveredNodeOutputsFromOutputArtifact(node, artifact)
     if (!outputs || !hasStoredOutputs(outputs)) continue
-    result.set(nodeKey, outputs)
+    result.set(matchedNodeKey, outputs)
   }
   return result
 }
@@ -4240,6 +4211,8 @@ function buildCinematicV3StoryboardGroupAssetPack(input: {
   const groupTextParts: string[] = []
 
   input.shots.forEach((rawShot) => {
+    readStringArray(rawShot.continuityAnchorIds).forEach(addKey)
+    readStringArray(rawShot.continuityAnchorRefIds).forEach(addKey)
     const parsedShot = cinematicV2ShotSchema.safeParse(rawShot)
     const shot = parsedShot.success ? parsedShot.data : null
     if (shot) {
@@ -4294,6 +4267,395 @@ function buildCinematicV3StoryboardGroupAssetPack(input: {
     referenceScope: 'cinematic_v3_storyboard_group',
     text: JSON.stringify(groupAssetPack, null, 2),
   }
+}
+
+type SequenceAnimaticContinuityAnchor = {
+  id: string
+  name: string
+  anchorType: 'prop' | 'location_spot' | 'character'
+  baseLocationRefId?: string | null
+  summary: string
+  visualBrief: string
+  shotIds: string[]
+  storyboardBlockIds: string[]
+  usageCount: number
+  connectedTo?: string[]
+  entryFrom?: string[]
+  visibleFrom?: string[]
+  relationshipHints?: string[]
+  sourcePhrases?: string[]
+  assetKey?: string | null
+  artifactKey?: string | null
+  sourceAtlasAssetKey?: string | null
+  cropRect?: Record<string, number> | null
+}
+
+function normalizeAnchorName(value: string) {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function sequenceAnchorId(prefix: 'prop' | 'spot' | 'char', name: string, baseLocationRefId = '') {
+  const base = [baseLocationRefId, name].filter(Boolean).join(' ')
+  return `${prefix}_${slugify(base).slice(0, 72)}`
+}
+
+function sequenceAnimaticAtlasLayout(count: number) {
+  const panelCount = Math.max(0, Math.min(9, Math.ceil(count)))
+  if (panelCount <= 0) return { rows: 0, columns: 0, panelCount: 0 }
+  if (panelCount === 1) return { rows: 1, columns: 1, panelCount }
+  if (panelCount === 2) return { rows: 1, columns: 2, panelCount }
+  if (panelCount <= 4) return { rows: 2, columns: 2, panelCount }
+  if (panelCount <= 6) return { rows: 2, columns: 3, panelCount }
+  return { rows: 3, columns: 3, panelCount }
+}
+
+function sequenceAnimaticAtlasImageSize(layout: { rows: number; columns: number }) {
+  if (layout.rows <= 0 || layout.columns <= 0) return { width: 1024, height: 1024 }
+  return {
+    width: Math.max(1024, Math.min(3072, layout.columns * 768)),
+    height: Math.max(1024, Math.min(3072, layout.rows * 768)),
+  }
+}
+
+function sequenceShotSearchText(shot: Record<string, unknown>) {
+  const dialogue = (Array.isArray(shot.dialogue) ? shot.dialogue : [])
+    .map((line) => `${readText(asRecord(line).speakerName)} ${readText(asRecord(line).text)}`)
+    .join(' ')
+  const camera = asRecord(shot.camera)
+  return [
+    shot.id,
+    shot.title,
+    shot.description,
+    shot.action,
+    shot.caption,
+    shot.storyboardPanelPrompt,
+    shot.videoDirection,
+    shot.lighting,
+    shot.mood,
+    camera.framing,
+    camera.angle,
+    camera.movement,
+    dialogue,
+  ].map(readText).filter(Boolean).join(' ')
+}
+
+function titleFromRefLike(value: string) {
+  return normalizeAnchorName(value)
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
+}
+
+const sequenceAnimaticPropPhrases = [
+  'tide dial',
+  'broken tide dial',
+  'saltglass atlas',
+  'saltglass gauge',
+  'brass keys',
+  'hidden latch',
+  'map threads',
+  'stitched map',
+  'wall map',
+  'schematic',
+  'metal shard',
+  'inspection slate',
+  'tool-belt satchel',
+  'brass tool-belt',
+  'mail tube',
+  'paper notices',
+  'wet slips',
+  'clamp',
+  'leak clamp',
+  'lantern',
+  'oilskin lantern',
+]
+
+const sequenceAnimaticImportantSinglePropPhrases = new Set([
+  'broken tide dial',
+  'saltglass atlas',
+  'saltglass gauge',
+  'brass keys',
+  'hidden latch',
+  'metal shard',
+  'inspection slate',
+])
+
+const sequenceAnimaticSpotPhrases = [
+  'threshold',
+  'doorway',
+  'entrance',
+  'hidden passage',
+  'service gap',
+  'service shaft',
+  'central chamber',
+  'leader chamber table',
+  'long table',
+  'map wall',
+  'saltglass window',
+  'porthole window',
+  'catwalk',
+  'platform',
+  'rail',
+  'corridor',
+  'archive wall',
+  'pipe lane',
+  'clock face',
+  'engine heart',
+]
+
+const sequenceAnimaticImportantSingleSpotPhrases = new Set([
+  'hidden passage',
+  'service shaft',
+  'central chamber',
+  'leader chamber table',
+  'map wall',
+  'saltglass window',
+  'engine heart',
+])
+
+const sequenceAnimaticIncidentalCharacterPhrases = [
+  'vole mechanic',
+  'elder mechanic',
+  'old mechanic',
+  'courier',
+  'puffin courier',
+  'cashier',
+  'shopkeeper',
+  'guard',
+  'watchman',
+  'attendant',
+  'scribe',
+  'clerk',
+  'messenger',
+  'apprentice',
+]
+
+const sequenceAnimaticNonCharacterSpeakerNames = new Set([
+  'unknown',
+  'narrator',
+  'voiceover',
+  'voice over',
+  'offscreen voice',
+  'crowd',
+  'all',
+])
+
+function anchorUsageFromPhrase(shots: Record<string, unknown>[], phrase: string) {
+  const normalizedPhrase = normalizeComicReferenceText(phrase)
+  return shots.filter((shot) => normalizeComicReferenceText(sequenceShotSearchText(shot)).includes(normalizedPhrase))
+}
+
+function collectSequenceAnimaticContinuityAnchors(input: {
+  shotPlan: Record<string, unknown>
+  shotBreakPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+}) {
+  const shots = Array.isArray(input.shotPlan.shots) ? input.shotPlan.shots.map(asRecord) : []
+  const groups = Array.isArray(input.shotBreakPlan.groups) ? input.shotBreakPlan.groups.map(asRecord) : []
+  const groupIdByShotId = new Map<string, string>()
+  groups.forEach((group, index) => {
+    const groupId = readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
+    readStringArray(group.shotBreakIds).forEach((shotId) => groupIdByShotId.set(shotId, groupId))
+  })
+  const entityByKey = new Map(cinematicAssetPackEntities(input.assetPack).map((entity) => [readText(entity.key), entity] as const).filter(([key]) => key))
+  const knownCharacterAliases = new Set<string>()
+  cinematicAssetPackEntities(input.assetPack).forEach((entity) => {
+    const type = readText(entity.type) || readText(entity.nodeType) || readText(entity.entityType)
+    const role = readText(entity.role)
+    const looksCharacter = ['character', 'person', 'cast', 'actor'].some((token) => type.toLowerCase().includes(token) || role.toLowerCase().includes(token))
+    if (!looksCharacter) return
+    ;[entity.key, entity.name, entity.label].map(readText).filter(Boolean).forEach((value) => {
+      knownCharacterAliases.add(normalizeComicReferenceText(value))
+      const parts = normalizeComicReferenceText(value).split(' ').filter((part) => part.length >= 3)
+      if (parts.length > 1) {
+        knownCharacterAliases.add(parts[0])
+        knownCharacterAliases.add(parts[parts.length - 1])
+      }
+    })
+  })
+  const anchorById = new Map<string, SequenceAnimaticContinuityAnchor>()
+  const addAnchor = (anchor: SequenceAnimaticContinuityAnchor) => {
+    const existing = anchorById.get(anchor.id)
+    if (!existing) {
+      anchorById.set(anchor.id, anchor)
+      return
+    }
+    existing.shotIds = [...new Set([...existing.shotIds, ...anchor.shotIds])]
+    existing.storyboardBlockIds = [...new Set([...existing.storyboardBlockIds, ...anchor.storyboardBlockIds])]
+    existing.usageCount = Math.max(existing.usageCount, existing.shotIds.length)
+    existing.sourcePhrases = [...new Set([...(existing.sourcePhrases ?? []), ...(anchor.sourcePhrases ?? [])])]
+  }
+  const anchorFromShotRefs = new Map<string, Set<string>>()
+  shots.forEach((shot) => {
+    const shotId = readText(shot.id)
+    readStringArray(shot.propRefIds).forEach((propId) => {
+      if (!entityByKey.has(propId)) return
+      const set = anchorFromShotRefs.get(propId) ?? new Set<string>()
+      if (shotId) set.add(shotId)
+      anchorFromShotRefs.set(propId, set)
+    })
+  })
+  anchorFromShotRefs.forEach((shotIdSet, propId) => {
+    if (shotIdSet.size < 2) return
+    const entity = entityByKey.get(propId) ?? {}
+    const name = readText(entity.name) || titleFromRefLike(propId)
+    const shotIds = [...shotIdSet]
+    addAnchor({
+      id: sequenceAnchorId('prop', name),
+      name,
+      anchorType: 'prop',
+      summary: `Reusable prop continuity reference for ${name}.`,
+      visualBrief: readOutputEntityVisualDescription(entity) || readText(entity.summary) || `${name}, isolated reusable prop reference.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      sourcePhrases: [propId],
+    })
+  })
+  const temporaryCharacterShotIds = new Map<string, Set<string>>()
+  const temporaryCharacterNames = new Map<string, string>()
+  const addTemporaryCharacterUsage = (name: string, shotId: string) => {
+    const normalizedName = normalizeAnchorName(name)
+    const lookup = normalizeComicReferenceText(normalizedName)
+    if (!normalizedName || !lookup || sequenceAnimaticNonCharacterSpeakerNames.has(lookup) || knownCharacterAliases.has(lookup)) return
+    const set = temporaryCharacterShotIds.get(lookup) ?? new Set<string>()
+    if (shotId) set.add(shotId)
+    temporaryCharacterShotIds.set(lookup, set)
+    if (!temporaryCharacterNames.has(lookup)) temporaryCharacterNames.set(lookup, titleFromRefLike(normalizedName))
+  }
+  shots.forEach((shot) => {
+    const shotId = readText(shot.id)
+    const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
+    dialogue.forEach((line) => {
+      const speakerRefId = readText(line.speakerRefId) || readText(line.characterRefId)
+      if (speakerRefId && entityByKey.has(speakerRefId)) return
+      const speakerName = readText(line.speakerName) || readText(line.speaker) || readText(line.characterName)
+      addTemporaryCharacterUsage(speakerName, shotId)
+    })
+    const searchText = normalizeComicReferenceText(sequenceShotSearchText(shot))
+    sequenceAnimaticIncidentalCharacterPhrases.forEach((phrase) => {
+      if (searchText.includes(normalizeComicReferenceText(phrase))) addTemporaryCharacterUsage(phrase, shotId)
+    })
+  })
+  temporaryCharacterShotIds.forEach((shotIdSet, lookup) => {
+    if (shotIdSet.size < 1) return
+    const name = temporaryCharacterNames.get(lookup) ?? titleFromRefLike(lookup)
+    const shotIds = [...shotIdSet]
+    addAnchor({
+      id: sequenceAnchorId('char', name),
+      name,
+      anchorType: 'character',
+      summary: `Temporary character continuity reference for ${name}.`,
+      visualBrief: `${name}, temporary supporting character design for storyboard continuity. Show a clean readable half-body or full-body character reference, consistent species/age/wardrobe/silhouette, neutral pose, no text.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      sourcePhrases: [name],
+    })
+  })
+  sequenceAnimaticPropPhrases.forEach((phrase) => {
+    const usedShots = anchorUsageFromPhrase(shots, phrase)
+    if (usedShots.length < (sequenceAnimaticImportantSinglePropPhrases.has(phrase) ? 1 : 2)) return
+    const shotIds = usedShots.map((shot) => readText(shot.id)).filter(Boolean)
+    const name = titleFromRefLike(phrase)
+    addAnchor({
+      id: sequenceAnchorId('prop', name),
+      name,
+      anchorType: 'prop',
+      summary: `Reusable prop continuity reference for ${name}.`,
+      visualBrief: `${name}, clean isolated prop reference, consistent shape, material, scale, color, and worn detail for reuse across shots.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      sourcePhrases: [phrase],
+    })
+  })
+  sequenceAnimaticSpotPhrases.forEach((phrase) => {
+    const usedShots = anchorUsageFromPhrase(shots, phrase)
+    if (usedShots.length < (sequenceAnimaticImportantSingleSpotPhrases.has(phrase) ? 1 : 2)) return
+    const shotIds = usedShots.map((shot) => readText(shot.id)).filter(Boolean)
+    const firstShot = usedShots[0] ?? {}
+    const baseLocationRefId = readText(firstShot.locationRefId) || null
+    const name = titleFromRefLike(phrase)
+    const connectedTo = sequenceAnimaticSpotPhrases
+      .filter((other) => other !== phrase && usedShots.some((shot) => normalizeComicReferenceText(sequenceShotSearchText(shot)).includes(normalizeComicReferenceText(other))))
+      .map(titleFromRefLike)
+      .slice(0, 4)
+    addAnchor({
+      id: sequenceAnchorId('spot', name, baseLocationRefId ?? ''),
+      name,
+      anchorType: 'location_spot',
+      baseLocationRefId,
+      summary: `Reusable set-continuity spot for ${name}.`,
+      visualBrief: `${name} inside ${baseLocationRefId ? titleFromRefLike(baseLocationRefId) : 'the base location'}, cinematic set-reference angle, clear entrances, surfaces, lighting direction, scale, and spatial relation to adjacent areas.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      connectedTo,
+      entryFrom: phrase.includes('entrance') || phrase.includes('threshold') || phrase.includes('door') ? connectedTo : [],
+      visibleFrom: connectedTo,
+      relationshipHints: connectedTo.map((target) => `${name} visible/connected to ${target}`),
+      sourcePhrases: [phrase],
+    })
+  })
+  const anchors = [...anchorById.values()]
+    .map((anchor) => ({ ...anchor, shotIds: [...new Set(anchor.shotIds)], storyboardBlockIds: [...new Set(anchor.storyboardBlockIds)] }))
+    .sort((left, right) => right.usageCount - left.usageCount || left.id.localeCompare(right.id))
+    .slice(0, 18)
+  const characterAnchors = anchors.filter((anchor) => anchor.anchorType === 'character').slice(0, 9)
+  const propAnchors = anchors.filter((anchor) => anchor.anchorType === 'prop').slice(0, 9)
+  const locationSpotAnchors = anchors.filter((anchor) => anchor.anchorType === 'location_spot').slice(0, 9)
+  const selectedAnchors = [...characterAnchors, ...propAnchors, ...locationSpotAnchors]
+  const continuityAnchorIdsByShotId: Record<string, string[]> = {}
+  selectedAnchors.forEach((anchor) => {
+    anchor.shotIds.forEach((shotId) => {
+      continuityAnchorIdsByShotId[shotId] = [...new Set([...(continuityAnchorIdsByShotId[shotId] ?? []), anchor.id])]
+    })
+  })
+  return {
+    version: 'sequence_animatic_continuity_anchor_plan_v1',
+    planningMode: 'deterministic_first',
+    llmRepairUsed: false,
+    characterAnchors,
+    propAnchors,
+    locationSpotAnchors,
+    continuityAnchorIdsByShotId,
+    diagnostics: [
+      `Planned ${characterAnchors.length} temporary character anchor${characterAnchors.length === 1 ? '' : 's'}, ${propAnchors.length} prop continuity anchor${propAnchors.length === 1 ? '' : 's'}, and ${locationSpotAnchors.length} location spot anchor${locationSpotAnchors.length === 1 ? '' : 's'}.`,
+    ],
+  }
+}
+
+function buildSequenceAnimaticAnchorAtlasPrompt(input: {
+  anchorType: 'prop' | 'location_spot' | 'character'
+  anchors: SequenceAnimaticContinuityAnchor[]
+  layout: { rows: number; columns: number; panelCount: number }
+  assetPack: Record<string, unknown>
+}) {
+  const kindLabel = input.anchorType === 'character'
+    ? 'temporary supporting character continuity reference atlas'
+    : input.anchorType === 'prop'
+      ? 'prop continuity reference atlas'
+      : 'location spot and angle continuity reference atlas'
+  const cellLines = input.anchors.map((anchor, index) => {
+    const cell = index + 1
+    return `Cell ${cell}: ${anchor.name}. ${anchor.visualBrief}`
+  })
+  return [
+    `Create one ${kindLabel} as a fixed ${input.layout.rows} row x ${input.layout.columns} column grid.`,
+    'Fill cells left-to-right, top-to-bottom. Leave unused cells cleanly blank. Do not add labels, numbers, arrows, borders, captions, UI, watermarks, or handwritten notes.',
+    input.anchorType === 'character'
+      ? 'Each populated cell should show one temporary supporting character reference in neutral pose, consistent project art style, clear species/body shape/wardrobe/silhouette, no action scene, no duplicate poses, no labels.'
+      : input.anchorType === 'prop'
+        ? 'Each populated cell should show one isolated reusable prop/object reference in neutral cinematic lighting, consistent with the project art style, with enough detail for later storyboard continuity.'
+        : 'Each populated cell should show one reusable cinematic set-reference spot or camera angle inside the base location. No characters, no crowds, no actor silhouettes unless scale is essential; prioritize entrances, surfaces, sightlines, and lighting direction.',
+    '',
+    ...cellLines,
+  ].filter(Boolean).join('\n')
 }
 
 function cinematicContextBrief(context: Record<string, unknown>) {
@@ -6347,15 +6709,6 @@ type SeedanceReferenceRecord = {
   label: string
   role?: string
   modality?: 'image' | 'video' | 'audio'
-}
-
-type SeedanceReferenceManifestEntry = {
-  tag: string
-  modality: 'image' | 'video' | 'audio'
-  index: number
-  label: string
-  role: string
-  url?: string
 }
 
 function compactSeedanceLabel(value: string, fallback: string) {
@@ -9105,10 +9458,18 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
   const generatedByNodeKey = 'cinematic_v3_dynamic_shot_parse_fanout'
   const sequenceAnimaticMode = readText(input.config.sequenceAnimaticMode)
-  const sequenceAnimaticMasterMode = sequenceAnimaticMode === 'master_script_only'
-    || readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'master'
-  const dynamicV3ParsePersistenceVersion = sequenceAnimaticMasterMode
-    ? 'v3_sequence_master_parse_groups_1'
+  const cinematicAnimaticMode = readText(input.config.cinematicAnimaticMode)
+    || readText(asRecord(input.workflow.metadata).cinematicAnimaticMode)
+  const workflowMetadata = asRecord(input.workflow.metadata)
+  const screenplayAnimaticMasterMode = sequenceAnimaticMode === 'master_script_only'
+    || sequenceAnimaticMode === 'full_sequence_unit'
+    || cinematicAnimaticMode === 'prompt_cinematic_master'
+    || readText(workflowMetadata.screenplayAnimaticRole) === 'master'
+    || readText(workflowMetadata.sequenceAnimaticRole) === 'master'
+  const screenplayAnimaticSource = readText(workflowMetadata.screenplayAnimaticSource)
+    || (cinematicAnimaticMode === 'prompt_cinematic_master' ? 'prompt_cinematic' : '')
+  const dynamicV3ParsePersistenceVersion = screenplayAnimaticMasterMode
+    ? 'v3_sequence_master_parse_groups_continuity_1'
     : 'v3_parse_groups_direct_storyboards_1'
   const storyboardGroups = groups.map((group, index) => buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index))
 
@@ -9134,7 +9495,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
     .map((row) => [readText(row.node_key), row] as const))
   const groupParseKeys = groups.map((group) => `${readText(group.id)}_shot_parse`)
-  const directStoryboardKeys = sequenceAnimaticMasterMode
+  const directStoryboardKeys = screenplayAnimaticMasterMode
     ? []
     : storyboardGroups.flatMap((group) => [
       `${group.id}_prompt`,
@@ -9143,8 +9504,22 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       `${group.id}_video_prompt`,
       `${group.id}_video`,
     ])
-  const expectedDynamicKeys = sequenceAnimaticMasterMode
-    ? [...groupParseKeys, 'sequence_animatic_manifest', 'artifact']
+  const expectedDynamicKeys = screenplayAnimaticMasterMode
+    ? [
+      ...groupParseKeys,
+      'sequence_animatic_continuity_anchor_plan',
+      'sequence_animatic_character_anchor_atlas_prompt',
+      'sequence_animatic_character_anchor_atlas',
+      'sequence_animatic_character_anchor_extract',
+      'sequence_animatic_prop_anchor_atlas_prompt',
+      'sequence_animatic_prop_anchor_atlas',
+      'sequence_animatic_prop_anchor_extract',
+      'sequence_animatic_location_anchor_atlas_prompt',
+      'sequence_animatic_location_anchor_atlas',
+      'sequence_animatic_location_anchor_extract',
+      'sequence_animatic_manifest',
+      'artifact',
+    ]
     : [...groupParseKeys, ...directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact']
   const hasRecoverableStepOutput = existingDynamicNodes.some((row) => {
     if (readText(row.output_hash) || hasStoredOutputs(row.outputs)) return false
@@ -9156,7 +9531,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3ParsePersistenceVersion) === dynamicV3ParsePersistenceVersion)
     && expectedDynamicKeys.every((key) => existingDynamicNodes.some((row) => row.key === key))
   if (existingSameHash && !hasRecoverableStepOutput) {
-    return { expanded: false, compileHash, parseGroupCount: groups.length, storyboardSheetCount: sequenceAnimaticMasterMode ? 0 : storyboardGroups.length }
+    return { expanded: false, compileHash, parseGroupCount: groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
   }
 
   const existingEdgeResponse = await input.client
@@ -9257,8 +9632,9 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       v3Edge({ key: `guidance__${parseKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: parseKey, targetPort: 'guidance' }),
       v3Edge({ key: `references__${parseKey}`, sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: parseKey, targetPort: 'asset_pack' }),
     )
-    if (sequenceAnimaticMasterMode) {
+    if (screenplayAnimaticMasterMode) {
       edgeRows.push(
+        v3Edge({ key: `${parseKey}__sequence_anchor_plan`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
         v3Edge({ key: `${parseKey}__sequence_manifest`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
       )
       return
@@ -9291,15 +9667,50 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, manualOnly: true } }),
     )
   })
-  if (sequenceAnimaticMasterMode) {
+  if (screenplayAnimaticMasterMode) {
     nodeRows.push(
-      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 2240, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
-      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 2520, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+      v3Node({ key: 'sequence_animatic_continuity_anchor_plan', nodeType: 'utility_transform', label: 'Plan Continuity Anchors', x: 2240, y: 120, config: { purpose: 'sequence_animatic_continuity_anchor_plan', role: 'sequence_animatic_continuity_anchor_plan', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_anchors', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_character_anchor_atlas_prompt', nodeType: 'utility_transform', label: 'Character Anchor Atlas Prompt', x: 2520, y: -180, config: { purpose: 'sequence_animatic_character_anchor_atlas_prompt', role: 'sequence_animatic_character_anchor_atlas_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_character_anchor_atlas', nodeType: 'image_generation', label: 'Character Anchor Atlas', x: 2800, y: -180, config: { purpose: 'sequence_animatic_character_anchor_atlas', role: 'sequence_animatic_character_anchor_atlas', cinematicPipelineVersion: 'v3_script_storyboards', model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 8, imageSize: { width: 2048, height: 2048 }, planningOnly: true, planning_only: true, execution: { resourceClass: 'image', groupKey: 'sequence_animatic_character_anchor_atlas', maxConcurrency: 1, continueOnError: true } } }),
+      v3Node({ key: 'sequence_animatic_character_anchor_extract', nodeType: 'utility_transform', label: 'Extract Character Anchors', x: 3080, y: -180, config: { purpose: 'sequence_animatic_character_anchor_extract', role: 'sequence_animatic_character_anchor_extract', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_prop_anchor_atlas_prompt', nodeType: 'utility_transform', label: 'Prop Anchor Atlas Prompt', x: 2520, y: 20, config: { purpose: 'sequence_animatic_prop_anchor_atlas_prompt', role: 'sequence_animatic_prop_anchor_atlas_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_prop_anchor_atlas', nodeType: 'image_generation', label: 'Prop Anchor Atlas', x: 2800, y: 20, config: { purpose: 'sequence_animatic_prop_anchor_atlas', role: 'sequence_animatic_prop_anchor_atlas', cinematicPipelineVersion: 'v3_script_storyboards', model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 8, imageSize: { width: 2048, height: 2048 }, planningOnly: true, planning_only: true, execution: { resourceClass: 'image', groupKey: 'sequence_animatic_prop_anchor_atlas', maxConcurrency: 1, continueOnError: true } } }),
+      v3Node({ key: 'sequence_animatic_prop_anchor_extract', nodeType: 'utility_transform', label: 'Extract Prop Anchors', x: 3080, y: 20, config: { purpose: 'sequence_animatic_prop_anchor_extract', role: 'sequence_animatic_prop_anchor_extract', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_location_anchor_atlas_prompt', nodeType: 'utility_transform', label: 'Location Anchor Atlas Prompt', x: 2520, y: 220, config: { purpose: 'sequence_animatic_location_anchor_atlas_prompt', role: 'sequence_animatic_location_anchor_atlas_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_location_anchor_atlas', nodeType: 'image_generation', label: 'Location Anchor Atlas', x: 2800, y: 220, config: { purpose: 'sequence_animatic_location_anchor_atlas', role: 'sequence_animatic_location_anchor_atlas', cinematicPipelineVersion: 'v3_script_storyboards', model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 8, imageSize: { width: 2048, height: 2048 }, planningOnly: true, planning_only: true, execution: { resourceClass: 'image', groupKey: 'sequence_animatic_location_anchor_atlas', maxConcurrency: 1, continueOnError: true } } }),
+      v3Node({ key: 'sequence_animatic_location_anchor_extract', nodeType: 'utility_transform', label: 'Extract Location Anchors', x: 3080, y: 220, config: { purpose: 'sequence_animatic_location_anchor_extract', role: 'sequence_animatic_location_anchor_extract', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 3360, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
+      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 3640, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
     )
     edgeRows.push(
+      v3Edge({ key: 'screenplay__sequence_anchor_plan', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'screenplay' }),
+      v3Edge({ key: 'shot_break_plan__sequence_anchor_plan', sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'shot_break_plan' }),
+      v3Edge({ key: 'references__sequence_anchor_plan', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'continuity_plan__character_prompt', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_character_anchor_atlas_prompt', targetPort: 'continuity_anchor_plan' }),
+      v3Edge({ key: 'references__character_prompt', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_character_anchor_atlas_prompt', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'character_prompt__character_atlas', sourceNodeKey: 'sequence_animatic_character_anchor_atlas_prompt', sourcePort: 'text', targetNodeKey: 'sequence_animatic_character_anchor_atlas', targetPort: 'prompt' }),
+      v3Edge({ key: 'references__character_atlas', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_character_anchor_atlas', targetPort: 'references' }),
+      v3Edge({ key: 'continuity_plan__character_extract', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_character_anchor_extract', targetPort: 'continuity_anchor_plan' }),
+      v3Edge({ key: 'character_atlas__character_extract', sourceNodeKey: 'sequence_animatic_character_anchor_atlas', sourcePort: 'image', targetNodeKey: 'sequence_animatic_character_anchor_extract', targetPort: 'image' }),
+      v3Edge({ key: 'continuity_plan__prop_prompt', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_prop_anchor_atlas_prompt', targetPort: 'continuity_anchor_plan' }),
+      v3Edge({ key: 'references__prop_prompt', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_prop_anchor_atlas_prompt', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'prop_prompt__prop_atlas', sourceNodeKey: 'sequence_animatic_prop_anchor_atlas_prompt', sourcePort: 'text', targetNodeKey: 'sequence_animatic_prop_anchor_atlas', targetPort: 'prompt' }),
+      v3Edge({ key: 'references__prop_atlas', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_prop_anchor_atlas', targetPort: 'references' }),
+      v3Edge({ key: 'continuity_plan__prop_extract', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_prop_anchor_extract', targetPort: 'continuity_anchor_plan' }),
+      v3Edge({ key: 'prop_atlas__prop_extract', sourceNodeKey: 'sequence_animatic_prop_anchor_atlas', sourcePort: 'image', targetNodeKey: 'sequence_animatic_prop_anchor_extract', targetPort: 'image' }),
+      v3Edge({ key: 'continuity_plan__location_prompt', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_location_anchor_atlas_prompt', targetPort: 'continuity_anchor_plan' }),
+      v3Edge({ key: 'references__location_prompt', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_location_anchor_atlas_prompt', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'location_prompt__location_atlas', sourceNodeKey: 'sequence_animatic_location_anchor_atlas_prompt', sourcePort: 'text', targetNodeKey: 'sequence_animatic_location_anchor_atlas', targetPort: 'prompt' }),
+      v3Edge({ key: 'references__location_atlas', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_location_anchor_atlas', targetPort: 'references' }),
+      v3Edge({ key: 'continuity_plan__location_extract', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_location_anchor_extract', targetPort: 'continuity_anchor_plan' }),
+      v3Edge({ key: 'location_atlas__location_extract', sourceNodeKey: 'sequence_animatic_location_anchor_atlas', sourcePort: 'image', targetNodeKey: 'sequence_animatic_location_anchor_extract', targetPort: 'image' }),
       v3Edge({ key: 'screenplay__sequence_manifest', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'screenplay' }),
       v3Edge({ key: 'shot_break_plan__sequence_manifest', sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_break_plan' }),
       v3Edge({ key: 'references__sequence_manifest', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'continuity_plan__sequence_manifest', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'continuity_anchor_plan' }),
+      v3Edge({ key: 'character_extract__sequence_manifest', sourceNodeKey: 'sequence_animatic_character_anchor_extract', sourcePort: 'anchors', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'character_anchors' }),
+      v3Edge({ key: 'prop_extract__sequence_manifest', sourceNodeKey: 'sequence_animatic_prop_anchor_extract', sourcePort: 'anchors', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'prop_anchors' }),
+      v3Edge({ key: 'location_extract__sequence_manifest', sourceNodeKey: 'sequence_animatic_location_anchor_extract', sourcePort: 'anchors', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'location_anchors' }),
       v3Edge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'text', targetNodeKey: 'artifact', targetPort: 'input' }),
     )
   } else {
@@ -9346,8 +9757,10 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       cinematicV3ShotBreakPlan: shotBreakPlan,
       dynamicCinematicParseCompileHash: compileHash,
       dynamicV3ParseGroupCount: groups.length,
-      sequenceAnimaticRole: sequenceAnimaticMasterMode ? 'master' : asRecord(input.workflow.metadata).sequenceAnimaticRole,
-      storyboardSheetCount: sequenceAnimaticMasterMode ? 0 : storyboardGroups.length,
+      screenplayAnimaticRole: screenplayAnimaticMasterMode ? 'master' : asRecord(input.workflow.metadata).screenplayAnimaticRole,
+      screenplayAnimaticSource: screenplayAnimaticMasterMode ? screenplayAnimaticSource || asRecord(input.workflow.metadata).screenplayAnimaticSource : asRecord(input.workflow.metadata).screenplayAnimaticSource,
+      sequenceAnimaticRole: screenplayAnimaticMasterMode ? 'master' : asRecord(input.workflow.metadata).sequenceAnimaticRole,
+      storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length,
       dynamicShotCount: groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0),
       dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
       lastDynamicGraphUpdatedAt: new Date().toISOString(),
@@ -9355,7 +9768,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     },
   }).eq('id', input.workflow.id)
   if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
-  return { expanded: true, compileHash, parseGroupCount: groups.length, storyboardSheetCount: sequenceAnimaticMasterMode ? 0 : storyboardGroups.length }
+  return { expanded: true, compileHash, parseGroupCount: groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
 }
 
 async function materializeDynamicCinematicV2ShotFanout(input: {
@@ -13534,6 +13947,24 @@ async function executeNode(input: {
         || readFirstUpstreamText(input.upstream, ['text'])
         || readText(input.node.inputs.prompt)
         || input.run.prompt
+      const skipImageGeneration = Object.values(input.upstream).some((record) => asRecord(record).skipImageGeneration === true || asRecord(record).skip_image_generation === true)
+        || input.node.inputs.skipImageGeneration === true
+        || input.node.inputs.skip_image_generation === true
+      if (skipImageGeneration) {
+        const outputs = {
+          skipped: true,
+          skipImageGeneration: true,
+          skip_image_generation: true,
+          reason: readFirstUpstreamText(input.upstream, ['skipReason', 'skip_reason']) || 'No image generation needed for this node.',
+          role,
+          purpose,
+          image: null,
+          images: [],
+          text: readFirstUpstreamText(input.upstream, ['text']) || '',
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-image-generation-skip-v1' }
+      }
       if (!prompt) throw new Error('Image generation node is missing a prompt.')
       const priorStepOutputs = asRecord(input.priorStep?.outputs)
       const priorImageOutput = asRecord(priorStepOutputs.image)
@@ -14402,8 +14833,7 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-shot-break-plan-v1' }
       }
-      if (purpose === 'sequence_animatic_manifest') {
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
+      if (purpose === 'sequence_animatic_continuity_anchor_plan') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
@@ -14411,6 +14841,239 @@ async function executeNode(input: {
           shotPlan: mergeCinematicV3ShotPlansForTimeline(groupPlans),
           assetPack,
         })
+        const continuityAnchorPlan = collectSequenceAnimaticContinuityAnchors({
+          shotPlan: mergedShotPlan,
+          shotBreakPlan,
+          assetPack,
+        })
+        const outputs = {
+          continuityAnchorPlan,
+          continuity_anchor_plan: continuityAnchorPlan,
+          characterAnchors: continuityAnchorPlan.characterAnchors,
+          character_anchors: continuityAnchorPlan.characterAnchors,
+          propAnchors: continuityAnchorPlan.propAnchors,
+          prop_anchors: continuityAnchorPlan.propAnchors,
+          locationSpotAnchors: continuityAnchorPlan.locationSpotAnchors,
+          location_spot_anchors: continuityAnchorPlan.locationSpotAnchors,
+          continuityAnchorIdsByShotId: continuityAnchorPlan.continuityAnchorIdsByShotId,
+          shotContinuityAnchorIds: continuityAnchorPlan.continuityAnchorIdsByShotId,
+          shotPlan: mergedShotPlan,
+          shot_plan: mergedShotPlan,
+          text: JSON.stringify(continuityAnchorPlan, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-continuity-anchor-plan-v1' }
+      }
+      if (purpose === 'sequence_animatic_character_anchor_atlas_prompt' || purpose === 'sequence_animatic_prop_anchor_atlas_prompt' || purpose === 'sequence_animatic_location_anchor_atlas_prompt') {
+        const anchorType = purpose === 'sequence_animatic_character_anchor_atlas_prompt'
+          ? 'character'
+          : purpose === 'sequence_animatic_prop_anchor_atlas_prompt' ? 'prop' : 'location_spot'
+        const plan = readFirstUpstreamRecord(input.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const anchors = (anchorType === 'character'
+          ? (Array.isArray(plan.characterAnchors) ? plan.characterAnchors : [])
+          : anchorType === 'prop'
+            ? (Array.isArray(plan.propAnchors) ? plan.propAnchors : [])
+            : (Array.isArray(plan.locationSpotAnchors) ? plan.locationSpotAnchors : []))
+          .map(asRecord)
+          .slice(0, 9) as SequenceAnimaticContinuityAnchor[]
+        const layout = sequenceAnimaticAtlasLayout(anchors.length)
+        if (anchors.length === 0) {
+          const outputs = {
+            skipImageGeneration: true,
+            skip_image_generation: true,
+            skipReason: `No ${anchorType === 'character' ? 'temporary character' : anchorType === 'prop' ? 'prop' : 'location spot'} continuity anchors needed.`,
+            anchors,
+            atlasLayout: layout,
+            imageSize: sequenceAnimaticAtlasImageSize(layout),
+            text: `No ${anchorType === 'character' ? 'temporary character' : anchorType === 'prop' ? 'prop' : 'location spot'} continuity anchors needed.`,
+            deterministic: true,
+          }
+          return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-anchor-atlas-prompt-v1' }
+        }
+        const prompt = buildSequenceAnimaticAnchorAtlasPrompt({ anchorType, anchors, layout, assetPack })
+        const outputs = {
+          prompt,
+          text: prompt,
+          anchors,
+          atlasLayout: layout,
+          imageSize: sequenceAnimaticAtlasImageSize(layout),
+          continuityAnchorPlan: plan,
+          continuity_anchor_plan: plan,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-anchor-atlas-prompt-v1' }
+      }
+      if (purpose === 'sequence_animatic_character_anchor_extract' || purpose === 'sequence_animatic_prop_anchor_extract' || purpose === 'sequence_animatic_location_anchor_extract') {
+        const anchorType = purpose === 'sequence_animatic_character_anchor_extract'
+          ? 'character'
+          : purpose === 'sequence_animatic_prop_anchor_extract' ? 'prop' : 'location_spot'
+        const plan = readFirstUpstreamRecord(input.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
+        const anchors = (anchorType === 'character'
+          ? (Array.isArray(plan.characterAnchors) ? plan.characterAnchors : [])
+          : anchorType === 'prop'
+            ? (Array.isArray(plan.propAnchors) ? plan.propAnchors : [])
+            : (Array.isArray(plan.locationSpotAnchors) ? plan.locationSpotAnchors : []))
+          .map(asRecord)
+          .slice(0, 9) as SequenceAnimaticContinuityAnchor[]
+        const atlasImage = readFirstUpstreamImage(input.upstream, ['image'])
+        if (anchors.length === 0 || !atlasImage) {
+          const outputs = {
+            anchors: [],
+            anchorAssets: [],
+            anchor_assets: [],
+            characterAnchors: anchorType === 'character' ? [] : undefined,
+            propAnchors: anchorType === 'prop' ? [] : undefined,
+            locationSpotAnchors: anchorType === 'location_spot' ? [] : undefined,
+            text: `No ${anchorType === 'character' ? 'temporary character' : anchorType === 'prop' ? 'prop' : 'location spot'} continuity anchor atlas to extract.`,
+            deterministic: true,
+          }
+          return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-sequence-animatic-anchor-extract-v1' }
+        }
+        const layout = sequenceAnimaticAtlasLayout(anchors.length)
+        const atlasStoragePath = readText(atlasImage.storagePath) || readText(atlasImage.storage_path)
+        const atlasBytes = atlasStoragePath
+          ? await downloadProjectAssetBytes(input.client, atlasStoragePath)
+          : await downloadRemoteBytes(readText(atlasImage.url))
+        const sourceMimeType = readText(atlasImage.mimeType) || readText(atlasImage.mime_type) || 'image/webp'
+        const tempDir = await Deno.makeTempDir({ prefix: 'graphcore-sequence-anchors-' })
+        const extractedAnchors: Record<string, unknown>[] = []
+        try {
+          const sourcePath = `${tempDir}/atlas.${sourceMimeType.includes('png') ? 'png' : sourceMimeType.includes('jpeg') || sourceMimeType.includes('jpg') ? 'jpg' : 'webp'}`
+          await Deno.writeFile(sourcePath, atlasBytes)
+          const probedSize = await probeImageSize(sourcePath)
+          const width = probedSize?.width || Number(atlasImage.width ?? 0) || 2048
+          const height = probedSize?.height || Number(atlasImage.height ?? 0) || 2048
+          for (const [index, anchor] of anchors.entries()) {
+            const row = Math.floor(index / layout.columns)
+            const column = index % layout.columns
+            const cropX = Math.floor((width * column) / layout.columns)
+            const cropY = Math.floor((height * row) / layout.rows)
+            const nextX = Math.floor((width * (column + 1)) / layout.columns)
+            const nextY = Math.floor((height * (row + 1)) / layout.rows)
+            const cellWidth = Math.max(1, Math.min(width - cropX, nextX - cropX))
+            const cellHeight = Math.max(1, Math.min(height - cropY, nextY - cropY))
+            const outputPath = `${tempDir}/anchor-${String(index + 1).padStart(3, '0')}.webp`
+            const crop = await runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${cellWidth}:${cellHeight}:${cropX}:${cropY}`, outputPath])
+            if (!crop.ok) {
+              throw new Error(`Sequence animatic continuity anchor crop failed for ${anchor.id}: ${crop.stderr.slice(0, 1200)}`)
+            }
+            const anchorBytes = await Deno.readFile(outputPath)
+            const assetKey = `seq_anchor.${input.run.id.slice(0, 8)}.${anchorType === 'character' ? 'char' : anchorType === 'prop' ? 'prop' : 'spot'}.${slugify(anchor.id).slice(0, 54)}`
+            const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/sequence-anchors/${anchorType}/${slugify(anchor.id)}.webp`
+            const mimeType = 'image/webp'
+            await uploadBytes(input.client, storagePath, anchorBytes, mimeType)
+            const cropRect = { x: cropX, y: cropY, width: cellWidth, height: cellHeight }
+            const metadata = {
+              generatedBy: 'output_workflow',
+              workflowId: input.workflow.id,
+              workflowKey: input.workflow.key,
+              runId: input.run.id,
+              nodeId: input.node.id,
+              nodeKey: input.node.key,
+              preset: input.run.preset,
+              role: anchorType === 'character' ? 'sequence_animatic_character_anchor' : anchorType === 'prop' ? 'sequence_animatic_prop_anchor' : 'sequence_animatic_location_anchor',
+              sequenceAnimaticArtifactRole: anchorType === 'character' ? 'sequence_animatic_character_anchor' : anchorType === 'prop' ? 'sequence_animatic_prop_anchor' : 'sequence_animatic_location_anchor',
+              parentRequestId: input.run.metadata?.outputRequestId ?? null,
+              sequenceUnitKey: readStringArray(input.run.input.sourceSequenceUnitKeys)[0] ?? null,
+              anchorId: anchor.id,
+              anchorType,
+              anchorName: anchor.name,
+              baseLocationRefId: anchor.baseLocationRefId ?? null,
+              shotIds: anchor.shotIds,
+              storyboardBlockIds: anchor.storyboardBlockIds,
+              sourceAtlasAssetKey: readText(atlasImage.assetKey),
+              sourceAtlasStoragePath: atlasStoragePath,
+              row,
+              column,
+              crop: cropRect,
+              cropRect,
+              cropMode: 'ffmpeg_crop',
+              storageBucket: 'project-assets',
+              storagePath,
+            }
+            const artifact = await registerImageArtifact({
+              client: input.client,
+              run: input.run,
+              workflow: input.workflow,
+              node: input.node,
+              assetKey,
+              storagePath,
+              name: `${anchor.name} Continuity Anchor`,
+              summary: anchor.summary,
+              mimeType,
+              metadata,
+            })
+            extractedAnchors.push({
+              ...anchor,
+              assetKey,
+              storagePath,
+              mimeType,
+              artifactKey: artifact.key,
+              sourceAtlasAssetKey: readText(atlasImage.assetKey) || null,
+              row,
+              column,
+              cropRect,
+              role: metadata.role,
+              artifact,
+            })
+          }
+        } finally {
+          await Deno.remove(tempDir, { recursive: true }).catch(() => {})
+        }
+        const outputs = {
+          anchors: extractedAnchors,
+          anchorAssets: extractedAnchors,
+          anchor_assets: extractedAnchors,
+          characterAnchors: anchorType === 'character' ? extractedAnchors : [],
+          character_anchors: anchorType === 'character' ? extractedAnchors : [],
+          propAnchors: anchorType === 'prop' ? extractedAnchors : [],
+          prop_anchors: anchorType === 'prop' ? extractedAnchors : [],
+          locationSpotAnchors: anchorType === 'location_spot' ? extractedAnchors : [],
+          location_spot_anchors: anchorType === 'location_spot' ? extractedAnchors : [],
+          sourceAtlasImage: atlasImage,
+          sourceAtlasAssetKey: readText(atlasImage.assetKey) || null,
+          atlasLayout: layout,
+          deterministic: true,
+          text: `Extracted ${extractedAnchors.length} ${anchorType === 'character' ? 'temporary character' : anchorType === 'prop' ? 'prop' : 'location spot'} continuity anchor${extractedAnchors.length === 1 ? '' : 's'}.`,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-sequence-animatic-anchor-extract-v1' }
+      }
+      if (purpose === 'sequence_animatic_manifest') {
+        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
+        const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const continuityAnchorPlan = readFirstUpstreamRecord(input.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
+        const readAnchorArray = (fields: string[]) => {
+          const arrays = Object.values(input.upstream).flatMap((outputs) => fields.flatMap((field) => {
+            const value = outputs[field]
+            return Array.isArray(value) ? value.map(asRecord) : []
+          }))
+          const withAssets = arrays.filter((anchor) => readText(anchor.assetKey))
+          return (withAssets.length > 0 ? withAssets : arrays)
+            .filter((anchor, index, values) => readText(anchor.id) && values.findIndex((candidate) => readText(candidate.id) === readText(anchor.id)) === index)
+        }
+        const characterAnchors = readAnchorArray(['characterAnchors', 'character_anchors']).filter((anchor) => readText(anchor.anchorType) === 'character')
+        const propAnchors = readAnchorArray(['propAnchors', 'prop_anchors']).filter((anchor) => readText(anchor.anchorType) !== 'location_spot' && readText(anchor.anchorType) !== 'character')
+        const locationSpotAnchors = readAnchorArray(['locationSpotAnchors', 'location_spot_anchors']).filter((anchor) => readText(anchor.anchorType) === 'location_spot' || readText(anchor.baseLocationRefId))
+        const anchorAssets = [...characterAnchors, ...propAnchors, ...locationSpotAnchors].map(asRecord).filter((anchor) => readText(anchor.id))
+        const continuityAnchorIdsByShotId = asRecord(continuityAnchorPlan.continuityAnchorIdsByShotId ?? continuityAnchorPlan.shotContinuityAnchorIds)
+        const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
+        const baseMergedShotPlan = repairCinematicV2ShotPlanVisualReferences({
+          shotPlan: mergeCinematicV3ShotPlansForTimeline(groupPlans),
+          assetPack,
+        })
+        const mergedShotPlan = {
+          ...baseMergedShotPlan,
+          shots: baseMergedShotPlan.shots.map((shot) => {
+            const anchorIds = readStringArray(continuityAnchorIdsByShotId[shot.id])
+            return {
+              ...shot,
+              continuityAnchorIds: anchorIds,
+              continuityAnchorRefIds: anchorIds,
+            }
+          }),
+        }
         const breakGroups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
         const blocks = breakGroups.map((group, index) => {
           const storyboardGroup = buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index)
@@ -14419,6 +15082,7 @@ async function executeNode(input: {
           const resolvedShots = shots.length > 0
             ? shots
             : mergedShotPlan.shots.filter((shot) => storyboardGroup.shotIds.includes(shot.id))
+          const blockAnchorIds = [...new Set(resolvedShots.flatMap((shot) => readStringArray(asRecord(shot).continuityAnchorIds)))]
           return {
             id: storyboardGroup.id,
             index: storyboardGroup.index,
@@ -14427,6 +15091,7 @@ async function executeNode(input: {
             sourceText: readText(group.sourceText),
             shotIds: (resolvedShots.length > 0 ? resolvedShots.map((shot) => shot.id) : storyboardGroup.shotIds),
             shots: resolvedShots,
+            continuityAnchorIds: blockAnchorIds,
             storyboardGroup,
             storyboardLayout: { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount },
             durationSeconds: storyboardGroup.editorialDurationSeconds,
@@ -14438,6 +15103,9 @@ async function executeNode(input: {
         })
         const manifest = {
           role: 'sequence_animatic_manifest',
+          screenplayAnimaticRole: 'master',
+          screenplayAnimaticSource: readText(asRecord(input.workflow.metadata).screenplayAnimaticSource)
+            || (readText(asRecord(input.workflow.metadata).cinematicAnimaticMode) === 'prompt_cinematic_master' ? 'prompt_cinematic' : 'wiki_sequence_unit'),
           sequenceAnimaticRole: 'master',
           requestId: input.run.metadata?.outputRequestId ?? null,
           workflowId: input.workflow.id,
@@ -14449,8 +15117,14 @@ async function executeNode(input: {
           blocks,
           assetPack,
           selectedReferences: assetPack,
+          continuityAnchorPlan,
+          characterAnchors,
+          propAnchors,
+          locationSpotAnchors,
+          anchorAssets,
           diagnostics: [
             ...readStringArray(shotBreakPlan.diagnostics),
+            ...readStringArray(continuityAnchorPlan.diagnostics),
             `Built sequence animatic manifest with ${blocks.length} storyboard block${blocks.length === 1 ? '' : 's'} and ${mergedShotPlan.shots.length} shot${mergedShotPlan.shots.length === 1 ? '' : 's'}.`,
           ],
         }
@@ -14467,6 +15141,16 @@ async function executeNode(input: {
           blocks,
           assetPack,
           asset_pack: assetPack,
+          continuityAnchorPlan,
+          continuity_anchor_plan: continuityAnchorPlan,
+          characterAnchors,
+          character_anchors: characterAnchors,
+          propAnchors,
+          prop_anchors: propAnchors,
+          locationSpotAnchors,
+          location_spot_anchors: locationSpotAnchors,
+          anchorAssets,
+          anchor_assets: anchorAssets,
           text: JSON.stringify(manifest, null, 2),
           deterministic: true,
         }
@@ -14490,6 +15174,7 @@ async function executeNode(input: {
           assetPack,
           asset_pack: assetPack,
           manifestSummary,
+          screenplayAnimaticRole: 'storyboard_block',
           sequenceAnimaticRole: 'storyboard_block',
           text: JSON.stringify({
             block,
@@ -14567,6 +15252,8 @@ async function executeNode(input: {
           editorialDurationSeconds,
           providerDurationSeconds,
           durationSeconds: providerDurationSeconds,
+          screenplayAnimaticRole: 'shot_video',
+          screenplayAnimaticSource: readText(config.screenplayAnimaticSource),
           sequenceAnimaticRole: 'shot_video',
           text: JSON.stringify({ shot, image, assetPack }, null, 2),
           deterministic: true,
@@ -16446,8 +17133,9 @@ export async function processFlyOutputWorkflowRuns(input: {
     const targetNodeKeys = readStringArray(runMetadata.targetNodeKeys)
     const forceNodeKeys = new Set(readStringArray(runMetadata.forceNodeKeys))
     const reuseExistingUpstreamOutputs = runMetadata.reuseExistingUpstreamOutputs === true
-    const allowStaleUpstreamOutputs = runMetadata.allowStaleUpstreamOutputs === true
-    const runScope = readText(runMetadata.runScope) || (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow')
+    const runIntentDefaults = outputWorkflowRunIntentDefaults(readText(runMetadata.runIntent))
+    const allowStaleUpstreamOutputs = runMetadata.allowStaleUpstreamOutputs === true || (runMetadata.allowStaleUpstreamOutputs === undefined && runIntentDefaults?.allowStaleUpstreamOutputs === true)
+    const runScope = readText(runMetadata.runScope) || runIntentDefaults?.runScope || (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow')
     const continueDynamicFanoutDependents = runScope === 'node_and_downstream'
       && targetNodeKeys.some(isDynamicCinematicFanoutNodeKey)
       && activeWorkflowNodes.some((node) => {
@@ -16530,6 +17218,32 @@ export async function processFlyOutputWorkflowRuns(input: {
       nodesByKey: workflowNodeByKey,
       nodeKeys: externalUpstreamNodeKeys,
     })
+    for (const [nodeKey, outputs] of recoveredArtifactOutputsByNodeKey) {
+      const sourceNode = workflowNodeByKey.get(nodeKey)
+      if (!sourceNode || hasStoredOutputs(sourceNode.outputs)) continue
+      const outputHash = hashOutputWorkflowValue(outputs)
+      const updateNodeResponse = await input.client
+        .from('output_workflow_nodes')
+        .update({
+          outputs,
+          dirty: false,
+          output_hash: outputHash,
+          metadata: {
+            ...sourceNode.metadata,
+            recoveredForTargetedExecution: true,
+            recoveredForTargetedExecutionAt: new Date().toISOString(),
+            outputPreview: buildOutputWorkflowNodeOutputPreview({
+              node: { ...sourceNode, outputHash },
+              outputs,
+              provider: 'graphcore',
+              model: 'artifact-recovery',
+            }),
+          },
+        })
+        .eq('id', sourceNode.id)
+      if (updateNodeResponse.error) throw new Error(updateNodeResponse.error.message)
+      workflowNodeByKey.set(nodeKey, { ...sourceNode, outputs, dirty: false, outputHash })
+    }
     const cachedExternalUpstreamByNodeKey = new Map(executionNodes.map((node) => [node.key, collectCachedExternalUpstream({
       node,
       nodesByKey: workflowNodeByKey,

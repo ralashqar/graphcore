@@ -34,6 +34,18 @@ import {
   hashOutputWorkflowValue,
 } from './outputWorkflow.ts'
 import {
+  buildRecoveredOutputFromArtifact,
+  resolveDurableWorkflowNodeOutput,
+} from './outputWorkflowDurableResolver.ts'
+import {
+  getOutputWorkflowNodeContract,
+  outputWorkflowRunIntentDefaults,
+} from './outputWorkflowNodeContracts.ts'
+import {
+  buildReferenceManifestEntries,
+  formatReferenceManifest,
+} from './seedanceReferenceManifest.ts'
+import {
   OUTPUT_SKILL_REGISTRY,
   buildOutputGuidanceBundle,
   hashOutputGuidanceBundle,
@@ -51,6 +63,119 @@ import { aiGenerationSettings } from '../config/aiGenerationSettings.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
 const repoRoot = resolve(import.meta.dirname, '../..')
+
+test('durable workflow output resolver normalizes node, run-step, and artifact outputs', () => {
+  const node = {
+    id: 'node-storyboard',
+    workflowId: 'workflow-1',
+    key: 'storyboard_sheet',
+    nodeType: 'image_generation',
+    label: 'Storyboard Sheet',
+    position: { x: 0, y: 0 },
+    config: { purpose: 'cinematic_v3_storyboard_sheet' },
+    inputs: {},
+    outputs: {},
+    dirty: true,
+    inputHash: '',
+    outputHash: '',
+    metadata: {},
+    createdAt: now,
+    updatedAt: now,
+  } as const
+  const artifact = {
+    id: 'artifact-1',
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    workflowId: 'workflow-1',
+    runId: 'run-1',
+    nodeId: node.id,
+    key: 'storyboard-sheet-artifact',
+    name: 'Storyboard Sheet',
+    kind: 'image',
+    assetKey: 'asset-storyboard',
+    mimeType: 'image/webp',
+    summary: '',
+    metadata: {
+      nodeKey: 'storyboard_sheet',
+      role: 'cinematic_v3_storyboard_sheet',
+      usedAsVideoReference: true,
+    },
+    createdAt: now,
+    updatedAt: now,
+  } as const
+  const fromArtifact = resolveDurableWorkflowNodeOutput({
+    node,
+    artifacts: [artifact],
+    artifactRoles: ['cinematic_v3_storyboard_sheet'],
+  })
+  assert.equal(fromArtifact.status, 'ready')
+  assert.equal(fromArtifact.source, 'artifact')
+  assert.equal(fromArtifact.image?.assetKey, 'asset-storyboard')
+  assert.equal(buildRecoveredOutputFromArtifact(node, artifact)?.assetKey, 'asset-storyboard')
+
+  const fromNode = resolveDurableWorkflowNodeOutput({
+    node: { ...node, outputs: { text: 'cached prompt' } },
+    artifacts: [artifact],
+  })
+  assert.equal(fromNode.source, 'node_outputs')
+  assert.equal(fromNode.text, 'cached prompt')
+
+  const fromStep = resolveDurableWorkflowNodeOutput({
+    node,
+    step: {
+      id: 'step-1',
+      runId: 'run-1',
+      workflowId: 'workflow-1',
+      nodeId: node.id,
+      nodeKey: 'storyboard_sheet',
+      nodeType: 'image_generation',
+      status: 'completed',
+      orderIndex: 0,
+      label: 'Storyboard Sheet',
+      inputHash: '',
+      outputHash: 'hash',
+      outputs: { image: { assetKey: 'asset-step' } },
+      provider: null,
+      model: null,
+      providerRequestId: null,
+      errorMessage: null,
+      metadata: {},
+      startedAt: null,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    },
+  })
+  assert.equal(fromStep.source, 'run_step_outputs')
+  assert.equal(fromStep.image?.assetKey, 'asset-step')
+})
+
+test('workflow node contracts and run intents expose cinematic sequence defaults', () => {
+  const sheetContract = getOutputWorkflowNodeContract({ purpose: 'cinematic_v3_storyboard_sheet' })
+  assert.equal(sheetContract?.recoveryStrategy, 'node_step_artifact')
+  assert.deepEqual(sheetContract?.artifactRoles, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet'])
+  assert.equal(outputWorkflowRunIntentDefaults('generate_block_video')?.runScope, 'node_only')
+  assert.equal(outputWorkflowRunIntentDefaults('generate_block_video')?.cinematicVideoApproved, true)
+  assert.equal(outputWorkflowRunIntentDefaults('prepare_storyboard_block')?.debugSkipVideoGeneration, true)
+  const startRunSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-workflow-run/index.ts'), 'utf8')
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(startRunSource, /outputWorkflowRunIntentDefaults/)
+  assert.match(workerSource, /outputWorkflowRunIntentDefaults/)
+  assert.match(workerSource, /recoveredForTargetedExecution/)
+})
+
+test('shared Seedance reference manifest formats exact provider order', () => {
+  const manifest = buildReferenceManifestEntries({
+    imageReferences: [
+      { label: 'Storyboard sheet', role: 'storyboard_sheet' },
+      { label: 'Tansy Mott', role: 'entity_reference' },
+    ],
+    videoReferences: [{ label: 'prior take', role: 'video_reference' }],
+  })
+  assert.deepEqual(manifest.map((entry) => entry.tag), ['@Image1', '@Image2', '@Video1'])
+  assert.match(formatReferenceManifest(manifest), /@Image1: Storyboard sheet; primary sequential storyboard keyframe reference\./)
+  assert.match(formatReferenceManifest(manifest), /@Video1: prior take; motion continuity reference\./)
+})
 
 function worldEntity(key: string, nodeType: string, name: string, customProperties: Record<string, unknown> = {}) {
   return {
@@ -859,7 +984,7 @@ test('story cinematic requests build V3 storyboard graph by default while V2 and
   assert.match(v3ParseMaterializer, /cinematic_v3_storyboard_group_video_prompt/)
   assert.match(v3ParseMaterializer, /cinematic_v3_timeline_assemble/)
   assert.match(v3ParseMaterializer, /key: 'artifact', nodeType: 'output_artifact'/)
-  assert.match(v3ParseMaterializer, /sequenceAnimaticMasterMode/)
+  assert.match(v3ParseMaterializer, /screenplayAnimaticMasterMode/)
   assert.match(v3ParseMaterializer, /: \[\.\.\.groupParseKeys, \.\.\.directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact'\]/)
   assert.doesNotMatch(v3ParseMaterializer, /cinematic_v3_shot_plan_merge/)
   assert.doesNotMatch(v3ParseMaterializer, /purpose: 'cinematic_v3_dynamic_storyboard_fanout'/)
@@ -945,11 +1070,79 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   assert.match(workerSource, /Selected sequence unit to adapt fully/)
   assert.match(workerSource, /dramatic question, outcome, POV notes, character arc deltas, consequences, open loops/)
   assert.match(workerSource, /Use 24-36 shot markers/)
-  assert.match(workerSource, /sequenceAnimaticRole\) === 'master'/)
+  assert.match(workerSource, /screenplayAnimaticRole\) === 'master'|workflowMetadata\.screenplayAnimaticRole\) === 'master'/)
   assert.match(startOutputRequestSource, /sequenceAnimaticMasterRequest/)
   assert.match(startOutputRequestSource, /sequenceAnimaticMode === 'full_sequence_unit'/)
   assert.match(workerSource, /sequence_animatic_manifest/)
   assert.match(workerSource, /sequence_animatic_manifest_artifact/)
+  assert.match(workerSource, /sequence_animatic_continuity_anchor_plan/)
+  assert.match(workerSource, /sequence_animatic_character_anchor_atlas_prompt/)
+  assert.match(workerSource, /sequence_animatic_prop_anchor_atlas_prompt/)
+  assert.match(workerSource, /sequence_animatic_location_anchor_extract/)
+  assert.match(workerSource, /continuityAnchorIdsByShotId/)
+})
+
+test('prompt-created cinematics can use screenplay animatic master mode', () => {
+  const plan = planOutputRequestWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'Create a cinematic where Ava argues with Bram in the observatory.',
+    targetFormat: 'video',
+    selectedEntityKeys: ['hero'],
+    cinematicPipelineVersion: 'v3_script_storyboards',
+    cinematicAnimaticMode: 'prompt_cinematic_master',
+    snapshot,
+  }, 'cinematic_episode')
+
+  const screenplayNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author')
+  const fanoutNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_shot_parse_fanout')
+
+  assert.equal(screenplayNode?.config.cinematicAnimaticMode, 'prompt_cinematic_master')
+  assert.equal(screenplayNode?.config.maxShotCount, 36)
+  assert.equal(fanoutNode?.config.cinematicAnimaticMode, 'prompt_cinematic_master')
+  assert.equal(fanoutNode?.config.maxShotCount, 36)
+  assert.ok(plan.diagnostics.some((line) => line.includes('Prompt cinematic screenplay animatic mode')))
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
+  const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-block-workflows/index.ts'), 'utf8')
+  const outputsSource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputsWorkspace.tsx'), 'utf8')
+
+  assert.match(workerSource, /cinematicAnimaticMode === 'prompt_cinematic_master'/)
+  assert.match(workerSource, /screenplayAnimaticRole: screenplayAnimaticMasterMode \? 'master'/)
+  assert.match(startOutputRequestSource, /promptCinematicAnimaticMasterRequest/)
+  assert.match(startOutputRequestSource, /screenplayAnimaticSource/)
+  assert.match(ensureSource, /readScreenplayAnimaticRole/)
+  assert.match(ensureSource, /screenplayAnimaticSource/)
+  assert.match(outputsSource, /cinematicAnimaticMode: 'prompt_cinematic_master'/)
+  assert.match(outputsSource, /Open animatic/)
+})
+
+test('sequence animatic continuity anchors are planned, extracted, and passed to child workflows', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-block-workflows/index.ts'), 'utf8')
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const agentsSource = readFileSync(resolve(repoRoot, 'AGENTS.md'), 'utf8')
+
+  assert.match(workerSource, /collectSequenceAnimaticContinuityAnchors/)
+  assert.match(workerSource, /sequence_animatic_character_anchor_atlas/)
+  assert.match(workerSource, /sequence_animatic_prop_anchor_atlas/)
+  assert.match(workerSource, /sequence_animatic_location_anchor_atlas/)
+  assert.match(workerSource, /sequence_animatic_character_anchor_extract/)
+  assert.match(workerSource, /sequence_animatic_prop_anchor_extract/)
+  assert.match(workerSource, /sequence_animatic_location_anchor_extract/)
+  assert.match(workerSource, /sequenceAnimaticArtifactRole: anchorType === 'character' \? 'sequence_animatic_character_anchor'/)
+  assert.match(workerSource, /characterAnchors/)
+  assert.match(workerSource, /temporaryCharacterShotIds/)
+  assert.match(workerSource, /continuityAnchorIds: anchorIds/)
+  assert.match(workerSource, /readStringArray\(rawShot\.continuityAnchorIds\)\.forEach\(addKey\)/)
+  assert.match(ensureSource, /assetPackWithContinuityAnchors/)
+  assert.match(ensureSource, /readStringArray\(block\.continuityAnchorIds\)/)
+  assert.match(ensureSource, /readStringArray\(shot\.continuityAnchorIds\)/)
+  assert.match(worldGraphSource, /manifestContinuityAnchors/)
+  assert.match(worldGraphSource, /continuityAnchors\.characters/)
+  assert.match(worldGraphSource, /shot\.continuityAnchorIds/)
+  assert.match(agentsSource, /Sequence animatic continuity anchors are output-local references/)
 })
 
 test('cinematic V3 dynamically materialized storyboard nodes resolve strict guidance skills', () => {

@@ -8317,6 +8317,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
   cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
   sequenceAnimaticMode?: 'full_sequence_unit' | 'master_script_only'
+  cinematicAnimaticMode?: 'prompt_cinematic_master'
   debugCinematicStoryboardStyleSafeMode?: boolean
   cinematicStoryboardStyleOverride?: string
   debugSkipVideoGeneration?: boolean
@@ -8356,6 +8357,7 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     cinematicPipelineVersion: request?.cinematicPipelineVersion,
     cinematicV2AnimaticMode: request?.cinematicV2AnimaticMode ?? 'fast_panels',
     sequenceAnimaticMode: request?.sequenceAnimaticMode,
+    cinematicAnimaticMode: request?.cinematicAnimaticMode,
     debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,
@@ -8393,6 +8395,7 @@ export async function planOutputWorkflow(
     cinematicPipelineVersion: request?.cinematicPipelineVersion,
     cinematicV2AnimaticMode: request?.cinematicV2AnimaticMode,
     sequenceAnimaticMode: request?.sequenceAnimaticMode,
+    cinematicAnimaticMode: request?.cinematicAnimaticMode,
     debugCinematicStoryboardStyleSafeMode: request?.debugCinematicStoryboardStyleSafeMode,
     cinematicStoryboardStyleOverride: request?.cinematicStoryboardStyleOverride,
     debugSkipVideoGeneration: request?.debugSkipVideoGeneration,
@@ -8904,6 +8907,7 @@ export async function startOutputRequest(
     cinematicPipelineVersion?: 'v1_take_blocks' | 'v2_shot_orchestration' | 'v3_script_storyboards'
     cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
     sequenceAnimaticMode?: 'full_sequence_unit' | 'master_script_only'
+    cinematicAnimaticMode?: 'prompt_cinematic_master'
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -8935,6 +8939,7 @@ export async function startOutputRequest(
     cinematicPipelineVersion: request.cinematicPipelineVersion,
     cinematicV2AnimaticMode: request.cinematicV2AnimaticMode ?? 'fast_panels',
     sequenceAnimaticMode: request.sequenceAnimaticMode,
+    cinematicAnimaticMode: request.cinematicAnimaticMode,
     debugCinematicStoryboardStyleSafeMode: request.debugCinematicStoryboardStyleSafeMode ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
     cinematicStoryboardStyleOverride: request.cinematicStoryboardStyleOverride ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
     debugSkipVideoGeneration: request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,

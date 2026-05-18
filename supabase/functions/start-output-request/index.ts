@@ -388,9 +388,7 @@ Deno.serve(async (request) => {
     const { client, user } = await requireUserClient(request, 'start-output-request')
     const payload = outputRequestStartRequestSchema.parse(await request.json())
     const sequenceAnimaticMode = payload.sequenceAnimaticMode ?? null
-    const sequenceAnimaticMasterRequest = payload.sourceSurface === 'wiki_sequence_unit'
-      && (sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only')
-    const sequenceAnimaticRole = sequenceAnimaticMasterRequest ? 'master' : null
+    const cinematicAnimaticMode = payload.cinematicAnimaticMode ?? null
 
     const draftResponse = await client
       .from('project_drafts')
@@ -509,6 +507,19 @@ Deno.serve(async (request) => {
     const cinematicV2AnimaticMode = payload.cinematicV2AnimaticMode ?? 'fast_panels'
     const cinematicPipelineVersion = payload.cinematicPipelineVersion
       ?? (planner.outputKind === 'cinematic_episode' || planner.outputKind === 'cinematic_trailer' ? 'v3_script_storyboards' : 'v1_take_blocks')
+    const sequenceAnimaticMasterRequest = payload.sourceSurface === 'wiki_sequence_unit'
+      && (sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only')
+    const promptCinematicAnimaticMasterRequest = cinematicOutput
+      && cinematicPipelineVersion === 'v3_script_storyboards'
+      && cinematicAnimaticMode === 'prompt_cinematic_master'
+    const screenplayAnimaticMasterRequest = sequenceAnimaticMasterRequest || promptCinematicAnimaticMasterRequest
+    const screenplayAnimaticRole = screenplayAnimaticMasterRequest ? 'master' : null
+    const screenplayAnimaticSource = sequenceAnimaticMasterRequest
+      ? 'wiki_sequence_unit'
+      : promptCinematicAnimaticMasterRequest
+        ? 'prompt_cinematic'
+        : null
+    const sequenceAnimaticRole = screenplayAnimaticRole
     const debugCinematicStoryboardStyleSafeMode = payload.debugCinematicStoryboardStyleSafeMode
       ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
     const cinematicStoryboardStyleOverride = debugCinematicStoryboardStyleSafeMode
@@ -550,11 +561,14 @@ Deno.serve(async (request) => {
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
               sequenceAnimaticMode,
+              cinematicAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
             }
             : null,
+          screenplayAnimaticRole,
+          screenplayAnimaticSource,
           sequenceAnimaticRole,
         },
       })
@@ -604,6 +618,7 @@ Deno.serve(async (request) => {
       debugCinematicStoryboardStyleSafeMode,
       cinematicStoryboardStyleOverride,
       sequenceAnimaticMode: payload.sequenceAnimaticMode,
+      cinematicAnimaticMode: payload.cinematicAnimaticMode,
       debugSkipVideoGeneration,
       snapshot: payload.snapshot,
     }, planner.outputKind)
@@ -649,11 +664,14 @@ Deno.serve(async (request) => {
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
               sequenceAnimaticMode,
+              cinematicAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
             }
             : null,
+          screenplayAnimaticRole,
+          screenplayAnimaticSource,
           sequenceAnimaticRole,
           usageEstimate: plan.usageEstimate ?? null,
         },
@@ -726,6 +744,7 @@ Deno.serve(async (request) => {
           cinematicPipelineVersion,
           cinematicV2AnimaticMode,
           sequenceAnimaticMode,
+          cinematicAnimaticMode,
           debugCinematicStoryboardStyleSafeMode,
           cinematicStoryboardStyleOverride,
           debugSkipVideoGeneration,
@@ -769,11 +788,14 @@ Deno.serve(async (request) => {
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
               sequenceAnimaticMode,
+              cinematicAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
             }
             : null,
+          screenplayAnimaticRole,
+          screenplayAnimaticSource,
           usageEstimate: plan.usageEstimate ?? null,
         },
         heartbeat_at: now,
@@ -845,11 +867,15 @@ Deno.serve(async (request) => {
               cinematicPipelineVersion,
               cinematicV2AnimaticMode,
               sequenceAnimaticMode,
+              cinematicAnimaticMode,
               debugCinematicStoryboardStyleSafeMode,
               cinematicStoryboardStyleOverride,
               debugSkipVideoGeneration,
             }
             : null,
+          screenplayAnimaticRole,
+          screenplayAnimaticSource,
+          sequenceAnimaticRole,
           usageEstimate: plan.usageEstimate ?? null,
         },
       })

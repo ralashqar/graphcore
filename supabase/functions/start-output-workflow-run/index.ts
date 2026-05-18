@@ -21,6 +21,7 @@ import {
   validateOutputWorkflowGraph,
 } from '../_shared/output-workflow.ts'
 import { outputWorkflowRunStartRequestSchema } from '../../../src/domain/outputWorkflow.ts'
+import { outputWorkflowRunIntentDefaults } from '../../../src/domain/outputWorkflowNodeContracts.ts'
 
 function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
@@ -38,6 +39,17 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client, user } = await requireUserClient(request, 'start-output-workflow-run')
     const payload = outputWorkflowRunStartRequestSchema.parse(await request.json())
+    const runIntent = typeof payload.metadata.runIntent === 'string' ? payload.metadata.runIntent : ''
+    const intentDefaults = outputWorkflowRunIntentDefaults(runIntent)
+    const metadata = intentDefaults
+      ? {
+        ...payload.metadata,
+        runScope: payload.metadata.runScope ?? intentDefaults.runScope,
+        allowStaleUpstreamOutputs: payload.metadata.allowStaleUpstreamOutputs ?? intentDefaults.allowStaleUpstreamOutputs,
+        debugSkipVideoGeneration: payload.metadata.debugSkipVideoGeneration ?? intentDefaults.debugSkipVideoGeneration,
+        cinematicVideoApproved: payload.metadata.cinematicVideoApproved ?? intentDefaults.cinematicVideoApproved,
+      }
+      : payload.metadata
 
     const workflowResponse = await client
       .from('output_workflows')
@@ -94,7 +106,7 @@ Deno.serve(async (request) => {
         world_snapshot_fingerprint: buildOutputWorkflowInputFingerprint(input),
         input,
         metadata: {
-          ...payload.metadata,
+          ...metadata,
           queuedAt: now,
           startedBy: 'start-output-workflow-run',
         },
@@ -136,8 +148,8 @@ Deno.serve(async (request) => {
       if (requestUpdateResponse.error) throw new Error(requestUpdateResponse.error.message)
       await client.rpc('refresh_output_request_status_projection', { p_request_id: linkedRequestId })
     }
-    const targetNodeKeys = readStringArray(payload.metadata.targetNodeKeys)
-    const runScope = payload.metadata.runScope
+    const targetNodeKeys = readStringArray(metadata.targetNodeKeys)
+    const runScope = metadata.runScope
     const selectedSubgraph = selectOutputWorkflowRunSubgraph({
       nodes,
       edges,

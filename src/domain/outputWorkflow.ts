@@ -46,6 +46,7 @@ export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'w
 export const cinematicPipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration', 'v3_script_storyboards'])
 export const cinematicV2AnimaticModeSchema = z.enum(['fast_panels', 'quality_keyframes'])
 export const sequenceAnimaticModeSchema = z.enum(['full_sequence_unit', 'master_script_only'])
+export const cinematicAnimaticModeSchema = z.enum(['prompt_cinematic_master'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -78,6 +79,14 @@ export const outputWorkflowPortValueTypeSchema = z.enum(['world_context', 'guida
 export const outputWorkflowResourceClassSchema = z.enum(['llm', 'image', 'video', 'document', 'utility'])
 export const outputWorkflowRunScopeSchema = z.enum(['node_only', 'upstream_to_node', 'node_and_downstream', 'artifact_rebake'])
 export type OutputWorkflowRunScope = z.infer<typeof outputWorkflowRunScopeSchema>
+export const outputWorkflowRunIntentSchema = z.enum([
+  'prepare_storyboard_block',
+  'generate_block_video',
+  'generate_shot_video',
+  'repair_upstream_cache',
+  'rerun_node_and_dependents',
+])
+export type OutputWorkflowRunIntent = z.infer<typeof outputWorkflowRunIntentSchema>
 
 export const outputWorkflowPortSchema = z.object({
   id: z.string().min(1),
@@ -367,6 +376,7 @@ export const outputWorkflowPlanRequestSchema = z.object({
   cinematicPipelineVersion: cinematicPipelineVersionSchema.optional(),
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   sequenceAnimaticMode: sequenceAnimaticModeSchema.optional(),
+  cinematicAnimaticMode: cinematicAnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -411,6 +421,7 @@ export const outputRequestStartRequestSchema = z.object({
   cinematicPipelineVersion: cinematicPipelineVersionSchema.optional(),
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   sequenceAnimaticMode: sequenceAnimaticModeSchema.optional(),
+  cinematicAnimaticMode: cinematicAnimaticModeSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -652,6 +663,7 @@ export const outputWorkflowRunStartRequestSchema = z.object({
   input: looseRecordSchema.default({}),
   metadata: z.object({
     runScope: outputWorkflowRunScopeSchema.optional(),
+    runIntent: outputWorkflowRunIntentSchema.optional(),
   }).catchall(z.unknown()).default({}),
 })
 
@@ -2933,7 +2945,10 @@ export function buildCinematicV3ScriptStoryboardPlan(
   const cinematicReferenceMode: CinematicReferenceMode = request.cinematicReferenceMode ?? 'storyboard_sheet'
   const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? true
   const sequenceAnimaticMode = request.sequenceAnimaticMode
+  const cinematicAnimaticMode = request.cinematicAnimaticMode
   const fullSequenceUnitAnimatic = sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only'
+  const promptCinematicAnimatic = cinematicAnimaticMode === 'prompt_cinematic_master'
+  const screenplayAnimaticMaster = fullSequenceUnitAnimatic || promptCinematicAnimatic
   const videoProvider = resolveDefaultVideoProvider()
   const videoModel = resolveDefaultVideoModel(videoProvider, resolution)
   const title = worldWiki.title || request.snapshot.project.name
@@ -2943,7 +2958,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
     : sequenceTitle
       ? `${title} - ${sequenceTitle} Cinematic`
       : `${title} Cinematic`
-  const maxShotCount = fullSequenceUnitAnimatic ? 36 : deriveCinematicV2MaxShotCount(null)
+  const maxShotCount = screenplayAnimaticMaster ? 36 : deriveCinematicV2MaxShotCount(null)
   const nodes = [
     nodeBase({
       key: 'world_context',
@@ -2958,6 +2973,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         includeVisualReferences: true,
         strictSourceEntityFilter: sourceSequenceUnitKeys.length > 0,
         sequenceAnimaticMode,
+        cinematicAnimaticMode,
         execution: { resourceClass: 'utility' },
       },
     }),
@@ -3027,6 +3043,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         purpose: 'cinematic_v3_screenplay_author',
         cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
         sequenceAnimaticMode,
+        cinematicAnimaticMode,
         maxShotCount,
         skillKeys: ['cinematic_screenwriting_craft', 'cinematic_sequence_structure', 'provider_prompt_hygiene'],
         guidanceMode: 'append',
@@ -3045,6 +3062,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
         maxShotCount,
         sequenceAnimaticMode,
+        cinematicAnimaticMode,
         aspectRatio,
         resolution,
         maxPanelsPerSheet: 9,
@@ -3064,6 +3082,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
         maxShotCount,
         sequenceAnimaticMode,
+        cinematicAnimaticMode,
         aspectRatio,
         resolution,
         maxPanelsPerSheet: 9,
@@ -3114,6 +3133,9 @@ export function buildCinematicV3ScriptStoryboardPlan(
       'Video production remains approval-gated and is deferred from the initial storyboard pass.',
       ...(fullSequenceUnitAnimatic
         ? ['Sequence-unit screenplay animatic mode is enabled: author the selected chapter as a fuller screenplay from its synopsis, dramatic question, outcome, arc deltas, consequences, open loops, and visual identity before storyboard grouping.']
+        : []),
+      ...(promptCinematicAnimatic
+        ? ['Prompt cinematic screenplay animatic mode is enabled: create a master screenplay/shot-block manifest first; storyboard, block video, and shot video generation are manual child workflows.']
         : []),
     ],
   })

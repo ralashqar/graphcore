@@ -1709,6 +1709,152 @@
   font-size: 0.82rem;
 }
 
+.world-wiki-sequence-animatic-continuity-panel {
+  display: grid;
+  gap: 10px;
+  margin: 0 22px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.34);
+}
+
+.world-wiki-sequence-animatic-continuity-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.world-wiki-sequence-animatic-continuity-head strong {
+  display: block;
+  margin-top: 2px;
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 0.86rem;
+}
+
+.world-wiki-sequence-animatic-continuity-group {
+  display: grid;
+  gap: 7px;
+}
+
+.world-wiki-sequence-animatic-continuity-group > span {
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.world-wiki-sequence-animatic-continuity-empty {
+  border: 1px dashed rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(2, 6, 23, 0.18);
+}
+
+.world-wiki-sequence-animatic-continuity-empty strong {
+  display: block;
+  color: rgba(226, 232, 240, 0.92);
+  font-size: 0.8rem;
+}
+
+.world-wiki-sequence-animatic-continuity-empty p {
+  margin: 3px 0 0;
+  color: rgba(148, 163, 184, 0.84);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.world-wiki-sequence-animatic-continuity-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.world-wiki-sequence-animatic-continuity-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 10px;
+  padding: 7px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.world-wiki-sequence-animatic-continuity-card.is-ready {
+  border-color: rgba(45, 212, 191, 0.2);
+}
+
+.world-wiki-sequence-animatic-continuity-card.is-failed {
+  border-color: rgba(248, 113, 113, 0.22);
+}
+
+.world-wiki-sequence-animatic-continuity-thumb {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.world-wiki-sequence-animatic-continuity-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.world-wiki-sequence-animatic-continuity-thumb svg,
+.world-wiki-sequence-animatic-continuity-thumb .entity-icon-image {
+  width: 22px;
+  height: 22px;
+}
+
+.world-wiki-sequence-animatic-continuity-card strong,
+.world-wiki-sequence-animatic-continuity-card em,
+.world-wiki-sequence-animatic-continuity-card small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-continuity-card strong {
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 0.78rem;
+}
+
+.world-wiki-sequence-animatic-continuity-card em {
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.world-wiki-sequence-animatic-continuity-card small {
+  color: rgba(203, 213, 225, 0.82);
+  font-size: 0.68rem;
+}
+
+.world-wiki-sequence-animatic-continuity-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: rgba(15, 23, 42, 0.62);
+  color: rgba(226, 232, 240, 0.88);
+  font-size: 0.66rem;
+  font-weight: 850;
+}
+
 .world-wiki-sequence-animatic-document {
   min-height: 0;
   overflow: auto;
@@ -1779,6 +1925,43 @@
   color: rgba(148, 163, 184, 0.82);
   font-size: 0.78rem;
   font-style: normal;
+}
+
+.world-wiki-sequence-animatic-block-continuity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.world-wiki-sequence-animatic-block-continuity small {
+  color: rgba(153, 246, 228, 0.88);
+  font-size: 0.7rem;
+  font-weight: 820;
+}
+
+.world-wiki-sequence-animatic-block-continuity span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  overflow: hidden;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 999px;
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.world-wiki-sequence-animatic-block-continuity img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.world-wiki-sequence-animatic-block-continuity svg,
+.world-wiki-sequence-animatic-block-continuity .entity-icon-image {
+  width: 14px;
+  height: 14px;
 }
 
 .world-wiki-sequence-animatic-block-head > div:last-child {
@@ -2049,6 +2232,11 @@
   color: rgba(226, 232, 240, 0.88);
 }
 
+.world-wiki-sequence-animatic-ref-chip.is-continuity {
+  border-color: rgba(45, 212, 191, 0.2);
+  background: rgba(20, 184, 166, 0.08);
+}
+
 .world-wiki-sequence-animatic-ref-chip em {
   min-width: 0;
   overflow: hidden;
@@ -2057,6 +2245,18 @@
   font-weight: 760;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-ref-chip small {
+  flex: 0 0 auto;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 999px;
+  padding: 1px 5px;
+  color: rgba(153, 246, 228, 0.9);
+  font-size: 0.58rem;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .world-wiki-sequence-animatic-shot-actions {

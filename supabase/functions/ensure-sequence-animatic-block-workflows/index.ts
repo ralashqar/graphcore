@@ -15,6 +15,12 @@ import {
   sequenceAnimaticBlockWorkflowEnsureRequestSchema,
   sequenceAnimaticBlockWorkflowEnsureResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
+import {
+  providerSafeSequenceAnimaticVideoDurationSeconds,
+  sequenceAnimaticStoryboardImageSize,
+  sequenceAnimaticWorkflowEdge,
+  sequenceAnimaticWorkflowNode,
+} from '../_shared/sequence-animatic-workflow-factory.ts'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -32,60 +38,78 @@ function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'output'
 }
 
-function storyboardImageSize(columns: number, rows: number, aspectRatio: string) {
-  const cellWidth = aspectRatio === '9:16' || aspectRatio === '3:4' ? 864 : 960
-  const cellHeight = aspectRatio === '9:16' ? 1536 : aspectRatio === '1:1' ? 1024 : 540
+function readStringArray(value: unknown) {
+  return Array.isArray(value) ? value.map(readText).filter(Boolean) : []
+}
+
+function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
+  return readText(metadata.screenplayAnimaticRole) || readText(metadata.sequenceAnimaticRole)
+}
+
+function readScreenplayAnimaticSource(metadata: Record<string, unknown>, fallback: 'wiki_sequence_unit' | 'prompt_cinematic' = 'wiki_sequence_unit') {
+  const source = readText(metadata.screenplayAnimaticSource)
+  return source === 'prompt_cinematic' || source === 'wiki_sequence_unit' ? source : fallback
+}
+
+function continuityAnchorAssetPackEntity(anchor: Record<string, unknown>) {
+  const id = readText(anchor.id)
+  const assetKey = readText(anchor.assetKey)
+  if (!id || !assetKey) return null
+  const anchorType = readText(anchor.anchorType)
+  const name = readText(anchor.name) || id
+  const isCharacter = anchorType === 'character'
+  const isLocation = anchorType === 'location_spot'
   return {
-    width: Math.max(1024, Math.min(4096, columns * cellWidth)),
-    height: Math.max(1024, Math.min(4096, rows * cellHeight)),
+    key: id,
+    name,
+    type: isCharacter ? 'character' : isLocation ? 'location_spot' : 'prop',
+    role: isCharacter ? 'character_reference' : isLocation ? 'location_reference' : 'prop_reference',
+    summary: readText(anchor.summary),
+    visualDescription: readText(anchor.visualBrief) || readText(anchor.summary),
+    assetKeys: [assetKey],
+    primaryAssetKey: assetKey,
+    selectedReferenceAssetKey: assetKey,
+    selectedReferenceVariantKey: 'continuity_anchor',
+    selectedReferenceVariantLabel: name,
+    selectedReferenceVariantSummary: readText(anchor.summary),
+    selectedReferenceVariantType: anchorType,
+    continuityAnchor: true,
+    continuityAnchorType: anchorType,
+    baseLocationRefId: readText(anchor.baseLocationRefId) || null,
+    shotIds: readStringArray(anchor.shotIds),
+    storyboardBlockIds: readStringArray(anchor.storyboardBlockIds),
+    referenceSelectionReason: 'Sequence animatic continuity anchor generated from the parsed screenplay.',
   }
 }
 
-function providerSafeVideoDurationSeconds(value: unknown) {
-  const seconds = Number(value)
-  if (!Number.isFinite(seconds) || seconds <= 0) return 5
-  if (seconds <= 5) return 5
-  if (seconds <= 10) return 10
-  return 15
-}
-
-function buildNode(workflowId: string, draftId: string, key: string, nodeType: string, label: string, x: number, y: number, config: Record<string, unknown>, inputs: Record<string, unknown> = {}, sequenceAnimaticRole = 'storyboard_block') {
+function assetPackWithContinuityAnchors(assetPack: Record<string, unknown>, manifest: Record<string, unknown>, anchorIds: string[]) {
+  const idSet = new Set(anchorIds.filter(Boolean))
+  if (idSet.size === 0) return assetPack
+  const anchors = [
+    ...readArray(manifest.characterAnchors).map(asRecord),
+    ...readArray(manifest.propAnchors).map(asRecord),
+    ...readArray(manifest.locationSpotAnchors).map(asRecord),
+    ...readArray(manifest.anchorAssets).map(asRecord),
+  ]
+  const anchorEntities = anchors
+    .filter((anchor) => idSet.has(readText(anchor.id)))
+    .map(continuityAnchorAssetPackEntity)
+    .filter((entity): entity is NonNullable<ReturnType<typeof continuityAnchorAssetPackEntity>> => Boolean(entity))
+  if (anchorEntities.length === 0) return assetPack
+  const existingEntities = readArray(assetPack.entities).map(asRecord)
+  const existingKeys = new Set(existingEntities.map((entity) => readText(entity.key)).filter(Boolean))
   return {
-    workflow_id: workflowId,
-    draft_id: draftId,
-    key,
-    node_type: nodeType,
-    label,
-    position: { x, y },
-    config,
-    inputs,
-    outputs: {},
-    dirty: true,
-    input_hash: '',
-    output_hash: '',
-    metadata: {
-      sequenceAnimaticGenerated: true,
-      sequenceAnimaticRole,
-    },
+    ...assetPack,
+    entities: [
+      ...existingEntities,
+      ...anchorEntities.filter((entity) => !existingKeys.has(readText(entity.key))),
+    ],
+    continuityAnchors: anchorEntities,
   }
 }
 
-function buildEdge(workflowId: string, draftId: string, key: string, sourceNodeKey: string, sourcePort: string, targetNodeKey: string, targetPort: string, metadata: Record<string, unknown> = {}, sequenceAnimaticRole = 'storyboard_block') {
-  return {
-    workflow_id: workflowId,
-    draft_id: draftId,
-    key,
-    source_node_key: sourceNodeKey,
-    source_port: sourcePort,
-    target_node_key: targetNodeKey,
-    target_port: targetPort,
-    metadata: {
-      sequenceAnimaticGenerated: true,
-      sequenceAnimaticRole,
-      ...metadata,
-    },
-  }
-}
+const buildNode = sequenceAnimaticWorkflowNode
+const buildEdge = sequenceAnimaticWorkflowEdge
 
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
@@ -103,13 +127,17 @@ Deno.serve(async (request) => {
       .eq('project_id', payload.projectId)
       .eq('draft_id', payload.draftId)
       .single()
-    if (masterResponse.error || !masterResponse.data) throw new HttpError(404, 'Sequence animatic master request not found.')
+    if (masterResponse.error || !masterResponse.data) throw new HttpError(404, 'Screenplay animatic master request not found.')
     const masterRequest = mapOutputRequestRow(masterResponse.data)
     const masterMetadata = asRecord(masterRequest.metadata)
-    if (readText(masterMetadata.sequenceAnimaticRole) !== 'master') {
-      throw new HttpError(409, 'This output is not a sequence animatic master request.')
+    if (readScreenplayAnimaticRole(masterMetadata) !== 'master') {
+      throw new HttpError(409, 'This output is not a screenplay animatic master request.')
     }
-    if (!masterRequest.workflowId) throw new HttpError(409, 'Sequence animatic master has no workflow yet.')
+    if (!masterRequest.workflowId) throw new HttpError(409, 'Screenplay animatic master has no workflow yet.')
+    const screenplayAnimaticSource = readScreenplayAnimaticSource(
+      masterMetadata,
+      masterRequest.sourceSurface === 'wiki_sequence_unit' ? 'wiki_sequence_unit' : 'prompt_cinematic',
+    )
 
     const artifactsResponse = await client
       .from('output_artifacts')
@@ -146,7 +174,7 @@ Deno.serve(async (request) => {
       const blockRequest = existingChildren.find((child) => child.id === blockRequestId) ?? null
       if (!blockRequest) throw new HttpError(404, 'Storyboard block request was not found under this sequence animatic master.')
       const blockMetadata = asRecord(blockRequest.metadata)
-      if (readText(blockMetadata.sequenceAnimaticRole) !== 'storyboard_block') {
+      if (readScreenplayAnimaticRole(blockMetadata) !== 'storyboard_block') {
         throw new HttpError(409, 'The selected parent request is not a storyboard block workflow.')
       }
       if (!blockRequest.workflowId) throw new HttpError(409, 'Storyboard block request has no workflow yet.')
@@ -169,7 +197,7 @@ Deno.serve(async (request) => {
       const shotChildren = (shotChildrenResponse.data ?? []).map(mapOutputRequestRow)
       const existingShotChild = shotChildren.find((child) => {
         const metadata = asRecord(child.metadata)
-        return readText(metadata.sequenceAnimaticRole) === 'shot_video' && readText(metadata.shotId) === shotId
+        return readScreenplayAnimaticRole(metadata) === 'shot_video' && readText(metadata.shotId) === shotId
       }) ?? null
 
       let shotChild = existingShotChild
@@ -201,7 +229,7 @@ Deno.serve(async (request) => {
         const panelArtifactRecord = asRecord(panelArtifact)
         const panelMetadata = asRecord(panelArtifactRecord.metadata)
         const editorialDurationSeconds = Math.max(0.5, Math.min(15, Number(shot.editorialDurationSeconds ?? 0) || Number(panelMetadata.editorialDurationSeconds ?? 0) || 3))
-        const providerDurationSeconds = providerSafeVideoDurationSeconds(shot.providerDurationSeconds ?? editorialDurationSeconds)
+        const providerDurationSeconds = providerSafeSequenceAnimaticVideoDurationSeconds(shot.providerDurationSeconds ?? editorialDurationSeconds)
         const workflowResponse = await client
           .from('output_workflows')
           .insert({
@@ -216,6 +244,8 @@ Deno.serve(async (request) => {
             metadata: {
               parentRequestId: blockRequest.id,
               masterRequestId: masterRequest.id,
+              screenplayAnimaticRole: 'shot_video',
+              screenplayAnimaticSource,
               sequenceAnimaticRole: 'shot_video',
               storyboardBlockId,
               shotId,
@@ -232,6 +262,8 @@ Deno.serve(async (request) => {
         const aspectRatio = readText(asRecord(manifest.assetPack).aspectRatio) || '16:9'
         const commonConfig = {
           cinematicPipelineVersion: 'v3_script_storyboards',
+          screenplayAnimaticRole: 'shot_video',
+          screenplayAnimaticSource,
           sequenceAnimaticRole: 'shot_video',
           masterRequestId: masterRequest.id,
           parentRequestId: blockRequest.id,
@@ -252,6 +284,11 @@ Deno.serve(async (request) => {
           shotId,
           metadata: panelMetadata,
         }
+        const shotAssetPack = assetPackWithContinuityAnchors(
+          asRecord(manifest.assetPack),
+          manifest,
+          readStringArray(shot.continuityAnchorIds).concat(readStringArray(shot.continuityAnchorRefIds)),
+        )
         const nodes = [
           buildNode(workflow.id, payload.draftId, 'shot_input', 'utility_transform', 'Shot Input', 80, 100, {
             purpose: 'sequence_animatic_shot_input',
@@ -259,7 +296,7 @@ Deno.serve(async (request) => {
             block,
             shot,
             panel,
-            assetPack: asRecord(manifest.assetPack),
+            assetPack: shotAssetPack,
             editorialDurationSeconds,
             providerDurationSeconds,
             aspectRatio,
@@ -315,7 +352,7 @@ Deno.serve(async (request) => {
             parent_request_id: blockRequest.id,
             workflow_id: workflow.id,
             requested_by: user.id,
-            source_surface: 'wiki_sequence_unit',
+            source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
             prompt: `Generate a per-shot video take for ${readText(shot.title) || shotId}.`,
             title: `${blockRequest.title} / Shot ${Number(shot.index ?? 0) || shots.indexOf(shot) + 1}`,
             intent: 'output_generation',
@@ -327,6 +364,8 @@ Deno.serve(async (request) => {
             target_format: 'video',
             planner_notes: 'Per-shot sequence animatic video graph prepared from a cropped storyboard panel.',
             metadata: {
+              screenplayAnimaticRole: 'shot_video',
+              screenplayAnimaticSource,
               sequenceAnimaticRole: 'shot_video',
               parentRequestId: blockRequest.id,
               masterRequestId: masterRequest.id,
@@ -400,7 +439,7 @@ Deno.serve(async (request) => {
       const columns = Math.max(1, Number(layout.columns ?? storyboardGroup.columns ?? 1) || 1)
       const panelCount = Math.max(1, Number(layout.panelCount ?? storyboardGroup.panelCount ?? readArray(block.shots).length) || 1)
       const aspectRatio = readText(asRecord(manifest.assetPack).aspectRatio) || '16:9'
-      const imageSize = storyboardImageSize(columns, rows, aspectRatio)
+      const imageSize = sequenceAnimaticStoryboardImageSize(columns, rows, aspectRatio)
       const workflowResponse = await client
         .from('output_workflows')
         .insert({
@@ -414,6 +453,8 @@ Deno.serve(async (request) => {
           created_by: user.id,
           metadata: {
             parentRequestId: masterRequest.id,
+            screenplayAnimaticRole: 'storyboard_block',
+            screenplayAnimaticSource,
             sequenceAnimaticRole: 'storyboard_block',
             storyboardBlockId: blockId,
             sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
@@ -432,8 +473,15 @@ Deno.serve(async (request) => {
         totalEditorialDurationSeconds: Number(block.durationSeconds ?? storyboardGroup.editorialDurationSeconds ?? 0) || readArray(block.shots).reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds ?? 0) || 0), 0),
         shots: readArray(block.shots).map(asRecord),
       }
+      const blockAssetPack = assetPackWithContinuityAnchors(
+        asRecord(manifest.assetPack),
+        manifest,
+        readStringArray(block.continuityAnchorIds),
+      )
       const commonConfig = {
         cinematicPipelineVersion: 'v3_script_storyboards',
+        screenplayAnimaticRole: 'storyboard_block',
+        screenplayAnimaticSource,
         sequenceAnimaticRole: 'storyboard_block',
         parentRequestId: masterRequest.id,
         sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
@@ -451,7 +499,7 @@ Deno.serve(async (request) => {
           shotPlan: blockShotPlan,
           storyboardGroup,
           storyboardLayout: { rows, columns, panelCount },
-          assetPack: asRecord(manifest.assetPack),
+          assetPack: blockAssetPack,
         }),
         buildNode(workflow.id, payload.draftId, 'storyboard_prompt', 'utility_transform', 'Storyboard Prompt', 360, 100, {
           purpose: 'cinematic_v3_storyboard_prompt',
@@ -554,7 +602,7 @@ Deno.serve(async (request) => {
           parent_request_id: masterRequest.id,
           workflow_id: workflow.id,
           requested_by: user.id,
-          source_surface: 'wiki_sequence_unit',
+          source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
           prompt: `${masterRequest.prompt}\n\nStoryboard block ${Number(block.index ?? 0) || childRequests.length + 1}: ${readText(block.title) || blockId}`,
           title: `${masterRequest.title} / Block ${Number(block.index ?? 0) || childRequests.length + 1}`,
           intent: 'output_generation',
@@ -566,6 +614,8 @@ Deno.serve(async (request) => {
           target_format: 'video',
           planner_notes: 'Storyboard block graph prepared from a sequence animatic master manifest.',
           metadata: {
+            screenplayAnimaticRole: 'storyboard_block',
+            screenplayAnimaticSource,
             sequenceAnimaticRole: 'storyboard_block',
             parentRequestId: masterRequest.id,
             storyboardBlockId: blockId,
@@ -591,6 +641,8 @@ Deno.serve(async (request) => {
         .update({
           metadata: {
             ...masterMetadata,
+            screenplayAnimaticRole: 'master',
+            screenplayAnimaticSource,
             sequenceAnimaticRole: 'master',
             childBlockRequestIds: childRequests.map((child) => child.id),
             childBlockWorkflowIds: childRequests.map((child) => child.workflowId).filter(Boolean),

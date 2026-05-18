@@ -106,6 +106,7 @@ import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { BillingPage } from './features/billing/BillingPage'
 import { SpecializedDefinitionWorkspace } from './features/content/SpecializedDefinitionWorkspace'
+import type { OutputStudioReturnTarget } from './features/world-builder/wiki/outputLibraryPresentation'
 import { useEditorStore } from './state/editorStore'
 import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
 import type {
@@ -1528,7 +1529,11 @@ export default function App() {
     target: 'details' | 'graph' | 'timeline'
     selectedNodeKey?: string | null
     nonce: number
-    returnToSourceOnClose?: boolean
+    returnTarget?: OutputStudioReturnTarget | null
+  } | null>(null)
+  const [pendingSequenceAnimaticOpenIntent, setPendingSequenceAnimaticOpenIntent] = useState<{
+    requestId: string | null
+    nonce: number
   } | null>(null)
   const [activeInitialSeedSessionKey, setActiveInitialSeedSessionKey] = useState<string | null>(null)
   const [worldViewMode, setWorldViewMode] = useState<WorldWorkspaceMode>('wiki')
@@ -3161,6 +3166,27 @@ export default function App() {
     void loadOutputInbox({ force: true }).catch((loadError) => {
       console.warn('[GraphCore] output inbox failed to load for wiki outputs.', loadError)
     })
+  }
+
+  function returnToOutputStudioSource(target: OutputStudioReturnTarget) {
+    if (target.kind === 'wiki_outputs') {
+      openOutputsLibrary()
+      return
+    }
+    if (target.kind === 'wiki_sequence_animatic') {
+      setActiveTab('graph')
+      setWorldViewMode('wiki')
+      setWorldWikiSubView('wiki')
+      setPendingSequenceAnimaticOpenIntent({
+        requestId: target.masterRequestId,
+        nonce: Date.now(),
+      })
+      void getOutputRequestStatus(target.masterRequestId).catch((statusError) => {
+        console.warn('[GraphCore] sequence animatic status refresh failed while returning from graph.', statusError)
+      })
+      return
+    }
+    setActiveTab('outputs')
   }
 
   function openWorldNodeFromRecord(worldEntityKey: string) {
@@ -8314,20 +8340,24 @@ export default function App() {
                 onGetOutputRequestStatus={getOutputRequestStatus}
                 onCancelOutputRequest={cancelOutputRequest}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
-                onOpenOutputStudio={(requestId, target = 'details', selectedNodeKey = null) => {
-                  const returnToWikiOutputs = activeTab === 'graph'
+                onOpenOutputStudio={(requestId, target = 'details', selectedNodeKey = null, returnTarget = null) => {
+                  const inferredReturnTarget: OutputStudioReturnTarget | null = returnTarget ?? (activeTab === 'graph'
                     && worldViewMode === 'wiki'
                     && worldWikiSubView === 'outputs'
                     && (target === 'graph' || target === 'timeline')
+                    ? { kind: 'wiki_outputs' }
+                    : null)
                   setPendingOutputOpenIntent({
                     requestId: requestId ?? null,
                     target,
                     selectedNodeKey,
                     nonce: Date.now(),
-                    returnToSourceOnClose: returnToWikiOutputs,
+                    returnTarget: inferredReturnTarget,
                   })
                   setActiveTab('outputs')
                 }}
+                sequenceAnimaticOpenIntent={pendingSequenceAnimaticOpenIntent}
+                onSequenceAnimaticOpenIntentConsumed={() => setPendingSequenceAnimaticOpenIntent(null)}
                 canRunOutputs={loadedState?.source === 'supabase'}
                 onResolveWorldThread={resolveWorldThread}
                 onParkWorldThread={parkWorldThread}
@@ -8382,15 +8412,12 @@ export default function App() {
                 onPreviewCinematicDirectorNote={previewOutputCinematicDirectorNote}
                 onApplyCinematicDirectorPatch={applyOutputCinematicDirectorPatch}
                 onRefreshLiveSnapshot={refreshLiveSnapshot}
-                onReturnToSourceSurface={() => {
-                  setWorldViewMode('wiki')
-                  setWorldWikiSubView('outputs')
-                  setActiveTab('graph')
-                }}
+                onReturnToSourceSurface={returnToOutputStudioSource}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
                 onStartOutputRequest={startOutputRequest}
                 onStartOutputWorkflow={startOutputWorkflow}
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
+                onEnsureSequenceAnimaticBlockWorkflows={ensureSequenceAnimaticBlockWorkflows}
                 onUpdateOutputWorkflowNode={updateOutputWorkflowNode}
                 onUpgradeOutputWorkflowPreset={upgradeOutputWorkflowPreset}
                 cinematicsPanel={(
