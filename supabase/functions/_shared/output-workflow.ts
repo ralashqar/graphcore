@@ -4273,12 +4273,20 @@ type SequenceAnimaticContinuityAnchor = {
   id: string
   name: string
   anchorType: 'prop' | 'location_spot' | 'character'
+  continuitySubtype?: 'prop' | 'location_set' | 'location_angle' | 'location_spot' | 'character'
   baseLocationRefId?: string | null
   summary: string
   visualBrief: string
+  persistenceReason?: string
+  confidence?: number
+  sourceEvidence?: string[]
+  existingWorldEntityMatch?: string | null
+  rejectionRisk?: string
   shotIds: string[]
   storyboardBlockIds: string[]
   usageCount: number
+  setId?: string | null
+  angleId?: string | null
   connectedTo?: string[]
   entryFrom?: string[]
   visibleFrom?: string[]
@@ -4289,6 +4297,96 @@ type SequenceAnimaticContinuityAnchor = {
   sourceAtlasAssetKey?: string | null
   cropRect?: Record<string, number> | null
 }
+
+const sequenceAnimaticContinuityRejectedReasonSchema = z.enum([
+  'existing_world_entity',
+  'abstract_or_atmospheric',
+  'not_visual',
+  'single_use_not_story_critical',
+  'too_generic',
+  'low_confidence',
+])
+
+const sequenceAnimaticContinuityPlannerAnchorSchema = z.object({
+  id: z.string().optional(),
+  type: z.enum(['character', 'prop', 'location_spot', 'location_set', 'location_angle']),
+  name: z.string(),
+  visualBrief: z.string(),
+  persistenceReason: z.string(),
+  confidence: z.number().min(0).max(1),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+  sourceEvidence: z.array(z.string()).default([]),
+  existingWorldEntityMatch: z.string().nullable().default(null),
+  rejectionRisk: z.string().default(''),
+  baseLocationRefId: z.string().nullable().default(null),
+  setId: z.string().nullable().default(null),
+  angleId: z.string().nullable().default(null),
+  connectedTo: z.array(z.string()).default([]),
+  visibleFrom: z.array(z.string()).default([]),
+  entryFrom: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityLocationSetSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  baseLocationRefId: z.string().nullable().default(null),
+  visualBrief: z.string(),
+  persistenceReason: z.string(),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+  connectedSetIds: z.array(z.string()).default([]),
+  entrances: z.array(z.string()).default([]),
+  landmarks: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityLocationAngleSchema = z.object({
+  id: z.string(),
+  setId: z.string(),
+  name: z.string(),
+  visualBrief: z.string(),
+  framing: z.string().default(''),
+  screenDirectionRule: z.string().default(''),
+  visibleLandmarks: z.array(z.string()).default([]),
+  lightingDirection: z.string().default(''),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuitySceneGraphSchema = z.object({
+  nodes: z.array(z.object({
+    id: z.string(),
+    type: z.enum(['location_set', 'location_angle']),
+    name: z.string(),
+  })).default([]),
+  edges: z.array(z.object({
+    sourceId: z.string(),
+    targetId: z.string(),
+    relationship: z.enum(['connected_to', 'visible_from', 'entrance_to', 'adjacent_to', 'same_space_angle']),
+    evidence: z.string().default(''),
+  })).default([]),
+})
+
+const sequenceAnimaticContinuityRejectedCandidateSchema = z.object({
+  name: z.string(),
+  type: z.enum(['character', 'prop', 'location_spot', 'location_set', 'location_angle', 'unknown']).default('unknown'),
+  reason: sequenceAnimaticContinuityRejectedReasonSchema,
+  sourceEvidence: z.array(z.string()).default([]),
+  shotIds: z.array(z.string()).default([]),
+  existingWorldEntityMatch: z.string().nullable().default(null),
+})
+
+const sequenceAnimaticContinuityPlanV2Schema = z.object({
+  version: z.literal('sequence_animatic_continuity_plan_v2').default('sequence_animatic_continuity_plan_v2'),
+  planningMode: z.enum(['llm_structured_v2', 'deterministic_fallback']).default('llm_structured_v2'),
+  anchors: z.array(sequenceAnimaticContinuityPlannerAnchorSchema).default([]),
+  locationSets: z.array(sequenceAnimaticContinuityLocationSetSchema).default([]),
+  locationAngles: z.array(sequenceAnimaticContinuityLocationAngleSchema).default([]),
+  sceneGraph: sequenceAnimaticContinuitySceneGraphSchema.default({ nodes: [], edges: [] }),
+  rejectedCandidates: z.array(sequenceAnimaticContinuityRejectedCandidateSchema).default([]),
+  warnings: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
 
 function normalizeAnchorName(value: string) {
   return value
@@ -4317,6 +4415,44 @@ function sequenceAnimaticAtlasImageSize(layout: { rows: number; columns: number 
   return {
     width: Math.max(1024, Math.min(3072, layout.columns * 768)),
     height: Math.max(1024, Math.min(3072, layout.rows * 768)),
+  }
+}
+
+async function verifySequenceAnimaticAnchorCrop(input: {
+  outputPath: string
+  anchorId: string
+  expectedWidth: number
+  expectedHeight: number
+  row: number
+  column: number
+}) {
+  const [fileStat, size] = await Promise.all([
+    Deno.stat(input.outputPath),
+    probeImageSize(input.outputPath),
+  ])
+  if (!size || size.width <= 0 || size.height <= 0) {
+    throw new Error(`Sequence animatic continuity crop verification failed for ${input.anchorId}: output is not a readable image.`)
+  }
+  if (size.width < 32 || size.height < 32) {
+    throw new Error(`Sequence animatic continuity crop verification failed for ${input.anchorId}: crop is too small (${size.width}x${size.height}).`)
+  }
+  if (Math.abs(size.width - input.expectedWidth) > 2 || Math.abs(size.height - input.expectedHeight) > 2) {
+    throw new Error(`Sequence animatic continuity crop verification failed for ${input.anchorId}: expected ${input.expectedWidth}x${input.expectedHeight}, got ${size.width}x${size.height}.`)
+  }
+  if (fileStat.size < 512) {
+    throw new Error(`Sequence animatic continuity crop verification failed for ${input.anchorId}: output byte size is suspiciously small (${fileStat.size} bytes).`)
+  }
+  const signal = await runFfmpeg(['-v', 'info', '-i', input.outputPath, '-vf', 'signalstats,metadata=print', '-frames:v', '1', '-f', 'null', '-'])
+  const yMin = Number(signal.stderr.match(/lavfi\.signalstats\.YMIN=([0-9.]+)/)?.[1] ?? NaN)
+  const yMax = Number(signal.stderr.match(/lavfi\.signalstats\.YMAX=([0-9.]+)/)?.[1] ?? NaN)
+  if (Number.isFinite(yMin) && Number.isFinite(yMax) && Math.abs(yMax - yMin) <= 1) {
+    throw new Error(`Sequence animatic continuity crop verification failed for ${input.anchorId}: crop appears visually blank at row ${input.row + 1}, column ${input.column + 1}.`)
+  }
+  return {
+    width: size.width,
+    height: size.height,
+    byteSize: fileStat.size,
+    lumaRange: Number.isFinite(yMin) && Number.isFinite(yMax) ? Math.round((yMax - yMin) * 100) / 100 : null,
   }
 }
 
@@ -4444,6 +4580,85 @@ const sequenceAnimaticNonCharacterSpeakerNames = new Set([
   'all',
 ])
 
+const sequenceAnimaticAbstractContinuityTerms = new Set([
+  'rain',
+  'fog',
+  'mist',
+  'smoke',
+  'tension',
+  'silence',
+  'ambience',
+  'ambiance',
+  'atmosphere',
+  'mood',
+  'danger',
+  'blue light',
+  'red light',
+  'lighting',
+  'shadow',
+  'shadows',
+  'darkness',
+  'wind',
+  'motion',
+  'movement',
+  'music',
+  'score',
+  'room tone',
+])
+
+function sequenceAnimaticKnownEntityAliases(assetPack: Record<string, unknown>) {
+  const aliases = new Map<string, string>()
+  cinematicAssetPackEntities(assetPack).forEach((entity) => {
+    const key = readText(entity.key)
+    const values = [
+      key,
+      readText(entity.name),
+      readText(entity.label),
+      ...readStringArray(entity.aliases),
+      ...readStringArray(asRecord(entity.metadata).aliases),
+    ].map(normalizeComicReferenceText).filter(Boolean)
+    values.forEach((value) => {
+      if (key && value) aliases.set(value, key)
+    })
+  })
+  return aliases
+}
+
+function sequenceAnimaticContinuityAbstractReason(name: string, visualBrief = '') {
+  const normalized = normalizeComicReferenceText(name) || normalizeComicReferenceText(visualBrief)
+  if (!normalized) return 'too_generic'
+  for (const term of sequenceAnimaticAbstractContinuityTerms) {
+    const normalizedTerm = normalizeComicReferenceText(term)
+    if (normalized === normalizedTerm || normalized.includes(` ${normalizedTerm} `) || normalized.startsWith(`${normalizedTerm} `) || normalized.endsWith(` ${normalizedTerm}`)) {
+      return 'abstract_or_atmospheric'
+    }
+  }
+  const words = normalized.split(' ').filter(Boolean)
+  if (words.length <= 1 && ['door', 'wall', 'floor', 'window', 'table', 'room', 'corridor', 'hall', 'light'].includes(normalized)) return 'too_generic'
+  return ''
+}
+
+function sequenceAnimaticRejectedCandidate(input: {
+  name: string
+  type?: string
+  reason: z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>
+  sourceEvidence?: string[]
+  shotIds?: string[]
+  existingWorldEntityMatch?: string | null
+}) {
+  const type = input.type === 'character' || input.type === 'prop' || input.type === 'location_spot' || input.type === 'location_set' || input.type === 'location_angle'
+    ? input.type
+    : 'unknown'
+  return {
+    name: input.name || 'Unnamed candidate',
+    type,
+    reason: input.reason,
+    sourceEvidence: input.sourceEvidence ?? [],
+    shotIds: input.shotIds ?? [],
+    existingWorldEntityMatch: input.existingWorldEntityMatch ?? null,
+  }
+}
+
 function anchorUsageFromPhrase(shots: Record<string, unknown>[], phrase: string) {
   const normalizedPhrase = normalizeComicReferenceText(phrase)
   return shots.filter((shot) => normalizeComicReferenceText(sequenceShotSearchText(shot)).includes(normalizedPhrase))
@@ -4514,6 +4729,35 @@ function collectSequenceAnimaticContinuityAnchors(input: {
       storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
       usageCount: shotIds.length,
       sourcePhrases: [propId],
+    })
+  })
+  shots.forEach((shot) => {
+    const shotId = readText(shot.id)
+    const structuredAnchors = [
+      ...(Array.isArray(shot.continuityAnchors) ? shot.continuityAnchors : []),
+      ...(Array.isArray(shot.plannedContinuityAnchors) ? shot.plannedContinuityAnchors : []),
+      ...(Array.isArray(shot.temporaryReferenceAnchors) ? shot.temporaryReferenceAnchors : []),
+    ].map(asRecord)
+    structuredAnchors.forEach((entry) => {
+      const rawType = readText(entry.anchorType) || readText(entry.type)
+      const anchorType = rawType === 'character' || rawType === 'prop' || rawType === 'location_spot'
+        ? rawType
+        : rawType.includes('location') ? 'location_spot' : rawType.includes('char') ? 'character' : 'prop'
+      const name = readText(entry.name) || readText(entry.label) || readText(entry.id)
+      if (!name) return
+      const shotIds = [...new Set([shotId, ...readStringArray(entry.shotIds)].filter(Boolean))]
+      addAnchor({
+        id: readText(entry.id) || sequenceAnchorId(anchorType === 'location_spot' ? 'spot' : anchorType === 'character' ? 'char' : 'prop', name, readText(entry.baseLocationRefId)),
+        name,
+        anchorType,
+        baseLocationRefId: readText(entry.baseLocationRefId) || null,
+        summary: readText(entry.summary) || `Structured ${anchorType.replace(/_/g, ' ')} continuity reference for ${name}.`,
+        visualBrief: readText(entry.visualBrief) || readText(entry.visualDescription) || readText(entry.summary) || `${name}, reusable continuity reference for storyboard consistency.`,
+        shotIds,
+        storyboardBlockIds: [...new Set(shotIds.map((id) => groupIdByShotId.get(id) ?? '').filter(Boolean))],
+        usageCount: Math.max(1, shotIds.length),
+        sourcePhrases: [readText(entry.source) || 'structured_shot_anchor'],
+      })
     })
   })
   const temporaryCharacterShotIds = new Map<string, Set<string>>()
@@ -4617,16 +4861,387 @@ function collectSequenceAnimaticContinuityAnchors(input: {
     })
   })
   return {
-    version: 'sequence_animatic_continuity_anchor_plan_v1',
-    planningMode: 'deterministic_first',
+    version: 'sequence_animatic_continuity_plan_v2',
+    planningMode: 'deterministic_fallback',
     llmRepairUsed: false,
+    anchors: selectedAnchors,
+    locationSets: [],
+    locationAngles: [],
+    sceneGraph: { nodes: [], edges: [] },
+    rejectedCandidates: [],
     characterAnchors,
     propAnchors,
     locationSpotAnchors,
     continuityAnchorIdsByShotId,
+    shotContinuityMap: continuityAnchorIdsByShotId,
+    warnings: ['Continuity planner used deterministic fallback extraction; review anchors before relying on them for detailed continuity.'],
     diagnostics: [
       `Planned ${characterAnchors.length} temporary character anchor${characterAnchors.length === 1 ? '' : 's'}, ${propAnchors.length} prop continuity anchor${propAnchors.length === 1 ? '' : 's'}, and ${locationSpotAnchors.length} location spot anchor${locationSpotAnchors.length === 1 ? '' : 's'}.`,
     ],
+  }
+}
+
+function sequenceAnimaticGroupIdByShotId(shotBreakPlan: Record<string, unknown>) {
+  const groupIdByShotId = new Map<string, string>()
+  const groups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
+  groups.forEach((group, index) => {
+    const groupId = readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
+    readStringArray(group.shotBreakIds).forEach((shotId) => groupIdByShotId.set(shotId, groupId))
+  })
+  return groupIdByShotId
+}
+
+function normalizeSequenceAnimaticContinuityPlan(input: {
+  rawPlan: z.infer<typeof sequenceAnimaticContinuityPlanV2Schema>
+  fallbackPlan: Record<string, unknown>
+  shotPlan: Record<string, unknown>
+  shotBreakPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  fallbackUsed: boolean
+  fallbackReason?: string
+}) {
+  if (input.fallbackUsed) {
+    return {
+      ...input.fallbackPlan,
+      planningMode: 'deterministic_fallback',
+      warnings: [
+        ...readStringArray(input.fallbackPlan.warnings),
+        input.fallbackReason ? `LLM continuity planner fallback: ${input.fallbackReason}` : 'LLM continuity planner fallback was used.',
+      ],
+    }
+  }
+  const knownAliases = sequenceAnimaticKnownEntityAliases(input.assetPack)
+  const shots = Array.isArray(input.shotPlan.shots) ? input.shotPlan.shots.map(asRecord) : []
+  const knownShotIds = new Set(shots.map((shot) => readText(shot.id)).filter(Boolean))
+  const groupIdByShotId = sequenceAnimaticGroupIdByShotId(input.shotBreakPlan)
+  const rejectedCandidates = [...input.rawPlan.rejectedCandidates]
+  const anchorById = new Map<string, SequenceAnimaticContinuityAnchor>()
+  const addRejected = (entry: ReturnType<typeof sequenceAnimaticRejectedCandidate>) => {
+    const key = `${entry.name}:${entry.reason}:${entry.shotIds.join(',')}`
+    if (rejectedCandidates.some((candidate) => `${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}` === key)) return
+    rejectedCandidates.push(entry)
+  }
+  const acceptedSourceIds = new Set<string>()
+
+  const cleanShotIds = (ids: string[]) => [...new Set(ids.map(readText).filter((id) => !knownShotIds.size || knownShotIds.has(id)))]
+  const cleanBlockIds = (ids: string[], shotIds: string[]) => {
+    const explicit = ids.map(readText).filter(Boolean)
+    const inferred = shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean)
+    return [...new Set([...explicit, ...inferred])]
+  }
+  const anchorPrefixForType = (type: string): 'char' | 'prop' | 'spot' => type === 'character' ? 'char' : type === 'prop' ? 'prop' : 'spot'
+
+  for (const rawAnchor of input.rawPlan.anchors) {
+    const name = normalizeAnchorName(rawAnchor.name)
+    const visualBrief = readText(rawAnchor.visualBrief)
+    const type = rawAnchor.type
+    const sourceEvidence = rawAnchor.sourceEvidence.map(readText).filter(Boolean)
+    const shotIds = cleanShotIds(rawAnchor.shotIds)
+    const explicitExistingMatch = readText(rawAnchor.existingWorldEntityMatch)
+    const aliasMatch = knownAliases.get(normalizeComicReferenceText(name)) ?? ''
+    const existingWorldEntityMatch = explicitExistingMatch || aliasMatch
+    const abstractReason = sequenceAnimaticContinuityAbstractReason(name, visualBrief)
+    const storyCritical = /story[-\s]?critical|hero|plot|recurring|reuse|continuity|required|persistent/i.test(rawAnchor.persistenceReason)
+      || sourceEvidence.length >= 2
+      || shotIds.length >= 2
+    const confidence = Math.max(0, Math.min(1, Number(rawAnchor.confidence) || 0))
+    if (!name || !visualBrief) {
+      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'not_visual', sourceEvidence, shotIds }))
+      continue
+    }
+    if (abstractReason) {
+      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence, shotIds }))
+      continue
+    }
+    if (existingWorldEntityMatch && type !== 'location_angle' && type !== 'location_set') {
+      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'existing_world_entity', sourceEvidence, shotIds, existingWorldEntityMatch }))
+      continue
+    }
+    if (confidence < 0.45) {
+      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'low_confidence', sourceEvidence, shotIds }))
+      continue
+    }
+    if (shotIds.length <= 1 && !storyCritical) {
+      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'single_use_not_story_critical', sourceEvidence, shotIds }))
+      continue
+    }
+    const continuitySubtype = type === 'location_set' || type === 'location_angle' ? type : type === 'location_spot' ? 'location_spot' : type
+    const legacyAnchorType: SequenceAnimaticContinuityAnchor['anchorType'] = type === 'character' ? 'character' : type === 'prop' ? 'prop' : 'location_spot'
+    const baseLocationRefId = readText(rawAnchor.baseLocationRefId) || null
+    const id = readText(rawAnchor.id) || sequenceAnchorId(anchorPrefixForType(legacyAnchorType), name, baseLocationRefId ?? '')
+    if (acceptedSourceIds.has(id)) continue
+    acceptedSourceIds.add(id)
+    const storyboardBlockIds = cleanBlockIds(rawAnchor.storyboardBlockIds, shotIds)
+    anchorById.set(id, {
+      id,
+      name,
+      anchorType: legacyAnchorType,
+      continuitySubtype,
+      baseLocationRefId,
+      summary: readText(rawAnchor.persistenceReason) || `Reusable ${legacyAnchorType.replace(/_/g, ' ')} continuity reference for ${name}.`,
+      visualBrief,
+      persistenceReason: readText(rawAnchor.persistenceReason),
+      confidence,
+      sourceEvidence,
+      existingWorldEntityMatch: existingWorldEntityMatch || null,
+      rejectionRisk: readText(rawAnchor.rejectionRisk),
+      shotIds,
+      storyboardBlockIds,
+      usageCount: Math.max(shotIds.length, storyboardBlockIds.length, 1),
+      setId: readText(rawAnchor.setId) || null,
+      angleId: readText(rawAnchor.angleId) || null,
+      connectedTo: rawAnchor.connectedTo.map(readText).filter(Boolean),
+      visibleFrom: rawAnchor.visibleFrom.map(readText).filter(Boolean),
+      entryFrom: rawAnchor.entryFrom.map(readText).filter(Boolean),
+      relationshipHints: [],
+      sourcePhrases: sourceEvidence,
+    })
+  }
+
+  const anchors = [...anchorById.values()]
+    .sort((left, right) => right.usageCount - left.usageCount || (right.confidence ?? 0) - (left.confidence ?? 0) || left.id.localeCompare(right.id))
+    .slice(0, 24)
+  const characterAnchors = anchors.filter((anchor) => anchor.anchorType === 'character').slice(0, 9)
+  const propAnchors = anchors.filter((anchor) => anchor.anchorType === 'prop').slice(0, 9)
+  const locationSpotAnchors = anchors.filter((anchor) => anchor.anchorType === 'location_spot').slice(0, 12)
+  const selectedAnchors = [...characterAnchors, ...propAnchors, ...locationSpotAnchors]
+  const shotContinuityMap: Record<string, string[]> = {}
+  selectedAnchors.forEach((anchor) => {
+    anchor.shotIds.forEach((shotId) => {
+      shotContinuityMap[shotId] = [...new Set([...(shotContinuityMap[shotId] ?? []), anchor.id])]
+    })
+  })
+
+  const selectedAnchorIds = new Set(selectedAnchors.map((anchor) => anchor.id))
+  const locationSets = input.rawPlan.locationSets
+    .filter((entry) => {
+      const abstractReason = sequenceAnimaticContinuityAbstractReason(entry.name, entry.visualBrief)
+      if (abstractReason) {
+        addRejected(sequenceAnimaticRejectedCandidate({ name: entry.name, type: 'location_set', reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence: [entry.persistenceReason], shotIds: entry.shotIds }))
+        return false
+      }
+      const aliasMatch = knownAliases.get(normalizeComicReferenceText(entry.name)) ?? ''
+      if (aliasMatch && (!entry.baseLocationRefId || entry.baseLocationRefId === aliasMatch)) {
+        addRejected(sequenceAnimaticRejectedCandidate({ name: entry.name, type: 'location_set', reason: 'existing_world_entity', sourceEvidence: [entry.persistenceReason], shotIds: entry.shotIds, existingWorldEntityMatch: aliasMatch }))
+        return false
+      }
+      return true
+    })
+    .map((entry) => ({
+      ...entry,
+      shotIds: cleanShotIds(entry.shotIds),
+      storyboardBlockIds: cleanBlockIds(entry.storyboardBlockIds, cleanShotIds(entry.shotIds)),
+    }))
+    .slice(0, 12)
+  const locationAngles = input.rawPlan.locationAngles
+    .filter((entry) => {
+      const abstractReason = sequenceAnimaticContinuityAbstractReason(entry.name, entry.visualBrief)
+      if (abstractReason) {
+        addRejected(sequenceAnimaticRejectedCandidate({ name: entry.name, type: 'location_angle', reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence: [entry.visualBrief], shotIds: entry.shotIds }))
+        return false
+      }
+      return true
+    })
+    .map((entry) => ({
+      ...entry,
+      shotIds: cleanShotIds(entry.shotIds),
+      storyboardBlockIds: cleanBlockIds(entry.storyboardBlockIds, cleanShotIds(entry.shotIds)),
+    }))
+    .slice(0, 18)
+  const graphNodeById = new Map<string, { id: string; type: 'location_set' | 'location_angle'; name: string }>()
+  locationSets.forEach((entry) => graphNodeById.set(entry.id, { id: entry.id, type: 'location_set', name: entry.name }))
+  locationAngles.forEach((entry) => graphNodeById.set(entry.id, { id: entry.id, type: 'location_angle', name: entry.name }))
+  input.rawPlan.sceneGraph.nodes.forEach((entry) => {
+    if (graphNodeById.has(entry.id)) return
+    if (entry.type === 'location_set' || entry.type === 'location_angle') graphNodeById.set(entry.id, entry)
+  })
+  const sceneGraph = {
+    nodes: [...graphNodeById.values()],
+    edges: input.rawPlan.sceneGraph.edges
+      .filter((edge) => graphNodeById.has(edge.sourceId) && graphNodeById.has(edge.targetId) && edge.sourceId !== edge.targetId)
+      .slice(0, 40),
+  }
+  const warnings = [
+    ...input.rawPlan.warnings,
+    ...(selectedAnchorIds.size === 0 ? ['LLM continuity planner found no physical, non-duplicative sidecar anchors worth persisting.'] : []),
+  ]
+  return {
+    version: 'sequence_animatic_continuity_plan_v2',
+    planningMode: 'llm_structured_v2',
+    anchors: selectedAnchors,
+    characterAnchors,
+    propAnchors,
+    locationSpotAnchors,
+    locationSets,
+    locationAngles,
+    sceneGraph,
+    continuityAnchorIdsByShotId: shotContinuityMap,
+    shotContinuityMap,
+    rejectedCandidates,
+    warnings,
+    diagnostics: [
+      ...input.rawPlan.diagnostics,
+      `LLM continuity planner accepted ${selectedAnchors.length} anchor${selectedAnchors.length === 1 ? '' : 's'} and rejected ${rejectedCandidates.length} candidate${rejectedCandidates.length === 1 ? '' : 's'}.`,
+    ],
+  }
+}
+
+async function planSequenceAnimaticContinuityAnchors(input: {
+  nodeKey: string
+  prompt: string
+  screenplayDraft: Record<string, unknown>
+  shotPlan: Record<string, unknown>
+  shotBreakPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  priorProviderRequestId?: string | null
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: {
+    providerRequestId: string
+    providerStatus: string
+    providerMode: string
+    lastProviderPollAt: string
+  }) => Promise<void>
+}) {
+  const fallbackPlan = collectSequenceAnimaticContinuityAnchors({
+    shotPlan: input.shotPlan,
+    shotBreakPlan: input.shotBreakPlan,
+    assetPack: input.assetPack,
+  })
+  const sourceShots = Array.isArray(input.shotPlan.shots) ? input.shotPlan.shots.map(asRecord) : []
+  const sourceBlocks = Array.isArray(input.shotBreakPlan.groups) ? input.shotBreakPlan.groups.map(asRecord) : []
+  const assetEntities = cinematicAssetPackEntities(input.assetPack).map((entity) => ({
+    key: readText(entity.key),
+    name: readText(entity.name) || readText(entity.label) || readText(entity.key),
+    type: readText(entity.type) || readText(entity.nodeType) || readText(entity.role),
+    aliases: readStringArray(entity.aliases),
+    summary: readText(entity.summary) || readText(entity.context) || readOutputEntityVisualDescription(entity),
+  })).filter((entity) => entity.key || entity.name)
+  const continuityPrompt = [
+      'Plan output-local continuity references for a screenplay animatic.',
+      'Persist only visual physical assets that need continuity and do not already have a world/entity reference.',
+      'Accept: incidental speakers without world entities, recurring or story-critical props, set pieces, rooms, sub-locations, and persistent camera angles.',
+      'Reject atmosphere/effects/abstracts/non-assets: rain, fog, mist, smoke, tension, silence, ambience, mood, danger, lighting/color-only cues, music, generic motion.',
+      'Reject existing world entities by key/name/alias. If a shot uses an existing character/location/prop, do not create a sidecar anchor for it.',
+      'For locations, infer locationSets and locationAngles. Build sceneGraph edges for connected_to, visible_from, entrance_to, adjacent_to, or same_space_angle.',
+      'Use stable IDs: char_*, prop_*, set_*, angle_* or spot_*. Group aliases across shots into one anchor.',
+      'Every accepted anchor needs a persistenceReason, confidence 0-1, shotIds, storyboardBlockIds, sourceEvidence, existingWorldEntityMatch null unless rejected, and rejectionRisk.',
+      'Put rejected candidates and the reason in rejectedCandidates.',
+      `User brief:\n${input.prompt}`,
+      compactForPrompt({
+        screenplay: {
+          title: readText(input.screenplayDraft.title),
+          screenplayMarkdown: readText(input.screenplayDraft.screenplayMarkdown) || readText(input.screenplayDraft.markdown) || readText(input.screenplayDraft.text),
+        },
+        blocks: sourceBlocks.map((block) => ({
+          id: readText(block.id),
+          title: readText(block.title) || readText(block.summary),
+          shotBreakIds: readStringArray(block.shotBreakIds),
+          sourceText: readText(block.sourceText),
+        })),
+        shots: sourceShots.map((shot) => ({
+          id: readText(shot.id),
+          title: readText(shot.title),
+          action: readText(shot.action) || readText(shot.description),
+          locationRefId: readText(shot.locationRefId),
+          propRefIds: readStringArray(shot.propRefIds),
+          visibleCharacterRefIds: readStringArray(shot.visibleCharacterRefIds),
+          speakerRefIds: readStringArray(shot.speakerRefIds),
+          dialogue: Array.isArray(shot.dialogue) ? shot.dialogue.map((line) => ({
+            speakerRefId: readText(asRecord(line).speakerRefId),
+            speakerName: readText(asRecord(line).speakerName) || readText(asRecord(line).speaker),
+            text: readText(asRecord(line).text),
+          })) : [],
+          camera: asRecord(shot.camera),
+          lighting: readText(shot.lighting),
+          storyboardPanelPrompt: readText(shot.storyboardPanelPrompt),
+          continuityInputs: readStringArray(shot.continuityInputs),
+        })),
+        existingWorldReferences: assetEntities,
+      }, 16_000),
+    ].filter(Boolean).join('\n\n')
+  let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground<z.infer<typeof sequenceAnimaticContinuityPlanV2Schema>>>>
+  try {
+    result = await runCinematicV2StructuredNodeBackground({
+      nodeKey: input.nodeKey,
+      schemaName: 'sequence_animatic_continuity_plan_v2',
+      schema: sequenceAnimaticContinuityPlanV2Schema,
+      instructions: 'You are a film continuity supervisor. Return strict JSON only. Infer only physical, drawable, reusable sidecar continuity assets from parsed shots.',
+      prompt: continuityPrompt,
+      fallback: sequenceAnimaticContinuityPlanV2Schema.parse({
+        ...fallbackPlan,
+        anchors: readArray(fallbackPlan.anchors).map((entry) => {
+          const anchor = asRecord(entry)
+          const anchorType = readText(anchor.anchorType)
+          return {
+            id: readText(anchor.id),
+            type: anchorType === 'character' ? 'character' : anchorType === 'prop' ? 'prop' : 'location_spot',
+            name: readText(anchor.name),
+            visualBrief: readText(anchor.visualBrief) || readText(anchor.summary),
+            persistenceReason: readText(anchor.persistenceReason) || readText(anchor.summary) || 'Deterministic fallback continuity anchor.',
+            confidence: Number(anchor.confidence ?? 0.55) || 0.55,
+            shotIds: readStringArray(anchor.shotIds),
+            storyboardBlockIds: readStringArray(anchor.storyboardBlockIds),
+            sourceEvidence: readStringArray(anchor.sourceEvidence).length > 0 ? readStringArray(anchor.sourceEvidence) : readStringArray(anchor.sourcePhrases),
+            existingWorldEntityMatch: readText(anchor.existingWorldEntityMatch) || null,
+            rejectionRisk: readText(anchor.rejectionRisk),
+            baseLocationRefId: readText(anchor.baseLocationRefId) || null,
+          }
+        }),
+        rejectedCandidates: readArray(fallbackPlan.rejectedCandidates).map(asRecord),
+      }),
+      maxOutputTokens: 5200,
+      priorProviderRequestId: input.priorProviderRequestId,
+      shouldCancel: input.shouldCancel,
+      onProgress: input.onProgress,
+    })
+  } catch (error) {
+    const fallbackReason = error instanceof Error ? error.message : 'Background continuity planner failed.'
+    result = {
+      value: sequenceAnimaticContinuityPlanV2Schema.parse({
+        ...fallbackPlan,
+        anchors: readArray(fallbackPlan.anchors).map((entry) => {
+          const anchor = asRecord(entry)
+          const anchorType = readText(anchor.anchorType)
+          return {
+            id: readText(anchor.id),
+            type: anchorType === 'character' ? 'character' : anchorType === 'prop' ? 'prop' : 'location_spot',
+            name: readText(anchor.name),
+            visualBrief: readText(anchor.visualBrief) || readText(anchor.summary),
+            persistenceReason: readText(anchor.persistenceReason) || readText(anchor.summary) || 'Deterministic fallback continuity anchor.',
+            confidence: Number(anchor.confidence ?? 0.55) || 0.55,
+            shotIds: readStringArray(anchor.shotIds),
+            storyboardBlockIds: readStringArray(anchor.storyboardBlockIds),
+            sourceEvidence: readStringArray(anchor.sourceEvidence).length > 0 ? readStringArray(anchor.sourceEvidence) : readStringArray(anchor.sourcePhrases),
+            existingWorldEntityMatch: readText(anchor.existingWorldEntityMatch) || null,
+            rejectionRisk: readText(anchor.rejectionRisk),
+            baseLocationRefId: readText(anchor.baseLocationRefId) || null,
+          }
+        }),
+        rejectedCandidates: readArray(fallbackPlan.rejectedCandidates).map(asRecord),
+      }),
+      response: { response: new Response(null, { status: 599, statusText: 'continuity planner fallback' }), body: {}, outputText: '', id: readText(input.priorProviderRequestId), status: 'failed' } as never,
+      provider: 'graphcore',
+      model: 'deterministic-sequence_animatic_continuity_plan_v2-fallback-v1',
+      providerRequestId: readText(input.priorProviderRequestId),
+      fallbackUsed: true,
+      fallbackReason,
+    }
+  }
+  const normalizedPlan = normalizeSequenceAnimaticContinuityPlan({
+    rawPlan: result.value,
+    fallbackPlan,
+    shotPlan: input.shotPlan,
+    shotBreakPlan: input.shotBreakPlan,
+    assetPack: input.assetPack,
+    fallbackUsed: result.fallbackUsed,
+    fallbackReason: result.fallbackReason,
+  })
+  return {
+    ...normalizedPlan,
+    providerRequestId: result.providerRequestId || readText(input.priorProviderRequestId) || null,
+    plannerProvider: result.provider,
+    plannerModel: result.model,
+    plannerFallbackReason: result.fallbackReason,
   }
 }
 
@@ -4643,7 +5258,9 @@ function buildSequenceAnimaticAnchorAtlasPrompt(input: {
       : 'location spot and angle continuity reference atlas'
   const cellLines = input.anchors.map((anchor, index) => {
     const cell = index + 1
-    return `Cell ${cell}: ${anchor.name}. ${anchor.visualBrief}`
+    const subtype = anchor.continuitySubtype && anchor.continuitySubtype !== anchor.anchorType ? ` (${anchor.continuitySubtype.replace(/_/g, ' ')})` : ''
+    const reason = anchor.persistenceReason ? ` Persistence: ${anchor.persistenceReason}` : ''
+    return `Cell ${cell}: ${anchor.name}${subtype}. ${anchor.visualBrief}${reason}`
   })
   return [
     `Create one ${kindLabel} as a fixed ${input.layout.rows} row x ${input.layout.columns} column grid.`,
@@ -4652,7 +5269,7 @@ function buildSequenceAnimaticAnchorAtlasPrompt(input: {
       ? 'Each populated cell should show one temporary supporting character reference in neutral pose, consistent project art style, clear species/body shape/wardrobe/silhouette, no action scene, no duplicate poses, no labels.'
       : input.anchorType === 'prop'
         ? 'Each populated cell should show one isolated reusable prop/object reference in neutral cinematic lighting, consistent with the project art style, with enough detail for later storyboard continuity.'
-        : 'Each populated cell should show one reusable cinematic set-reference spot or camera angle inside the base location. No characters, no crowds, no actor silhouettes unless scale is essential; prioritize entrances, surfaces, sightlines, and lighting direction.',
+        : 'Each populated cell should show one reusable cinematic set, room, sub-location, or camera-facing angle inside the base location. No characters, no crowds, no actor silhouettes unless scale is essential; prioritize entrances, surfaces, sightlines, landmarks, screen direction, and lighting direction.',
     '',
     ...cellLines,
   ].filter(Boolean).join('\n')
@@ -9462,7 +10079,6 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     || readText(asRecord(input.workflow.metadata).cinematicAnimaticMode)
   const workflowMetadata = asRecord(input.workflow.metadata)
   const screenplayAnimaticMasterMode = sequenceAnimaticMode === 'master_script_only'
-    || sequenceAnimaticMode === 'full_sequence_unit'
     || cinematicAnimaticMode === 'prompt_cinematic_master'
     || readText(workflowMetadata.screenplayAnimaticRole) === 'master'
     || readText(workflowMetadata.sequenceAnimaticRole) === 'master'
@@ -9507,16 +10123,6 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   const expectedDynamicKeys = screenplayAnimaticMasterMode
     ? [
       ...groupParseKeys,
-      'sequence_animatic_continuity_anchor_plan',
-      'sequence_animatic_character_anchor_atlas_prompt',
-      'sequence_animatic_character_anchor_atlas',
-      'sequence_animatic_character_anchor_extract',
-      'sequence_animatic_prop_anchor_atlas_prompt',
-      'sequence_animatic_prop_anchor_atlas',
-      'sequence_animatic_prop_anchor_extract',
-      'sequence_animatic_location_anchor_atlas_prompt',
-      'sequence_animatic_location_anchor_atlas',
-      'sequence_animatic_location_anchor_extract',
       'sequence_animatic_manifest',
       'artifact',
     ]
@@ -9634,7 +10240,6 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     )
     if (screenplayAnimaticMasterMode) {
       edgeRows.push(
-        v3Edge({ key: `${parseKey}__sequence_anchor_plan`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
         v3Edge({ key: `${parseKey}__sequence_manifest`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
       )
       return
@@ -9669,48 +10274,13 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   })
   if (screenplayAnimaticMasterMode) {
     nodeRows.push(
-      v3Node({ key: 'sequence_animatic_continuity_anchor_plan', nodeType: 'utility_transform', label: 'Plan Continuity Anchors', x: 2240, y: 120, config: { purpose: 'sequence_animatic_continuity_anchor_plan', role: 'sequence_animatic_continuity_anchor_plan', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_anchors', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_character_anchor_atlas_prompt', nodeType: 'utility_transform', label: 'Character Anchor Atlas Prompt', x: 2520, y: -180, config: { purpose: 'sequence_animatic_character_anchor_atlas_prompt', role: 'sequence_animatic_character_anchor_atlas_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_character_anchor_atlas', nodeType: 'image_generation', label: 'Character Anchor Atlas', x: 2800, y: -180, config: { purpose: 'sequence_animatic_character_anchor_atlas', role: 'sequence_animatic_character_anchor_atlas', cinematicPipelineVersion: 'v3_script_storyboards', model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 8, imageSize: { width: 2048, height: 2048 }, planningOnly: true, planning_only: true, execution: { resourceClass: 'image', groupKey: 'sequence_animatic_character_anchor_atlas', maxConcurrency: 1, continueOnError: true } } }),
-      v3Node({ key: 'sequence_animatic_character_anchor_extract', nodeType: 'utility_transform', label: 'Extract Character Anchors', x: 3080, y: -180, config: { purpose: 'sequence_animatic_character_anchor_extract', role: 'sequence_animatic_character_anchor_extract', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_prop_anchor_atlas_prompt', nodeType: 'utility_transform', label: 'Prop Anchor Atlas Prompt', x: 2520, y: 20, config: { purpose: 'sequence_animatic_prop_anchor_atlas_prompt', role: 'sequence_animatic_prop_anchor_atlas_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_prop_anchor_atlas', nodeType: 'image_generation', label: 'Prop Anchor Atlas', x: 2800, y: 20, config: { purpose: 'sequence_animatic_prop_anchor_atlas', role: 'sequence_animatic_prop_anchor_atlas', cinematicPipelineVersion: 'v3_script_storyboards', model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 8, imageSize: { width: 2048, height: 2048 }, planningOnly: true, planning_only: true, execution: { resourceClass: 'image', groupKey: 'sequence_animatic_prop_anchor_atlas', maxConcurrency: 1, continueOnError: true } } }),
-      v3Node({ key: 'sequence_animatic_prop_anchor_extract', nodeType: 'utility_transform', label: 'Extract Prop Anchors', x: 3080, y: 20, config: { purpose: 'sequence_animatic_prop_anchor_extract', role: 'sequence_animatic_prop_anchor_extract', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_location_anchor_atlas_prompt', nodeType: 'utility_transform', label: 'Location Anchor Atlas Prompt', x: 2520, y: 220, config: { purpose: 'sequence_animatic_location_anchor_atlas_prompt', role: 'sequence_animatic_location_anchor_atlas_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_location_anchor_atlas', nodeType: 'image_generation', label: 'Location Anchor Atlas', x: 2800, y: 220, config: { purpose: 'sequence_animatic_location_anchor_atlas', role: 'sequence_animatic_location_anchor_atlas', cinematicPipelineVersion: 'v3_script_storyboards', model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 8, imageSize: { width: 2048, height: 2048 }, planningOnly: true, planning_only: true, execution: { resourceClass: 'image', groupKey: 'sequence_animatic_location_anchor_atlas', maxConcurrency: 1, continueOnError: true } } }),
-      v3Node({ key: 'sequence_animatic_location_anchor_extract', nodeType: 'utility_transform', label: 'Extract Location Anchors', x: 3080, y: 220, config: { purpose: 'sequence_animatic_location_anchor_extract', role: 'sequence_animatic_location_anchor_extract', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 3360, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
-      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 3640, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 2240, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
+      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 2520, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
     )
     edgeRows.push(
-      v3Edge({ key: 'screenplay__sequence_anchor_plan', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'screenplay' }),
-      v3Edge({ key: 'shot_break_plan__sequence_anchor_plan', sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'shot_break_plan' }),
-      v3Edge({ key: 'references__sequence_anchor_plan', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_continuity_anchor_plan', targetPort: 'asset_pack' }),
-      v3Edge({ key: 'continuity_plan__character_prompt', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_character_anchor_atlas_prompt', targetPort: 'continuity_anchor_plan' }),
-      v3Edge({ key: 'references__character_prompt', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_character_anchor_atlas_prompt', targetPort: 'asset_pack' }),
-      v3Edge({ key: 'character_prompt__character_atlas', sourceNodeKey: 'sequence_animatic_character_anchor_atlas_prompt', sourcePort: 'text', targetNodeKey: 'sequence_animatic_character_anchor_atlas', targetPort: 'prompt' }),
-      v3Edge({ key: 'references__character_atlas', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_character_anchor_atlas', targetPort: 'references' }),
-      v3Edge({ key: 'continuity_plan__character_extract', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_character_anchor_extract', targetPort: 'continuity_anchor_plan' }),
-      v3Edge({ key: 'character_atlas__character_extract', sourceNodeKey: 'sequence_animatic_character_anchor_atlas', sourcePort: 'image', targetNodeKey: 'sequence_animatic_character_anchor_extract', targetPort: 'image' }),
-      v3Edge({ key: 'continuity_plan__prop_prompt', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_prop_anchor_atlas_prompt', targetPort: 'continuity_anchor_plan' }),
-      v3Edge({ key: 'references__prop_prompt', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_prop_anchor_atlas_prompt', targetPort: 'asset_pack' }),
-      v3Edge({ key: 'prop_prompt__prop_atlas', sourceNodeKey: 'sequence_animatic_prop_anchor_atlas_prompt', sourcePort: 'text', targetNodeKey: 'sequence_animatic_prop_anchor_atlas', targetPort: 'prompt' }),
-      v3Edge({ key: 'references__prop_atlas', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_prop_anchor_atlas', targetPort: 'references' }),
-      v3Edge({ key: 'continuity_plan__prop_extract', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_prop_anchor_extract', targetPort: 'continuity_anchor_plan' }),
-      v3Edge({ key: 'prop_atlas__prop_extract', sourceNodeKey: 'sequence_animatic_prop_anchor_atlas', sourcePort: 'image', targetNodeKey: 'sequence_animatic_prop_anchor_extract', targetPort: 'image' }),
-      v3Edge({ key: 'continuity_plan__location_prompt', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_location_anchor_atlas_prompt', targetPort: 'continuity_anchor_plan' }),
-      v3Edge({ key: 'references__location_prompt', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_location_anchor_atlas_prompt', targetPort: 'asset_pack' }),
-      v3Edge({ key: 'location_prompt__location_atlas', sourceNodeKey: 'sequence_animatic_location_anchor_atlas_prompt', sourcePort: 'text', targetNodeKey: 'sequence_animatic_location_anchor_atlas', targetPort: 'prompt' }),
-      v3Edge({ key: 'references__location_atlas', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_location_anchor_atlas', targetPort: 'references' }),
-      v3Edge({ key: 'continuity_plan__location_extract', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_location_anchor_extract', targetPort: 'continuity_anchor_plan' }),
-      v3Edge({ key: 'location_atlas__location_extract', sourceNodeKey: 'sequence_animatic_location_anchor_atlas', sourcePort: 'image', targetNodeKey: 'sequence_animatic_location_anchor_extract', targetPort: 'image' }),
       v3Edge({ key: 'screenplay__sequence_manifest', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'screenplay' }),
       v3Edge({ key: 'shot_break_plan__sequence_manifest', sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_break_plan' }),
       v3Edge({ key: 'references__sequence_manifest', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'asset_pack' }),
-      v3Edge({ key: 'continuity_plan__sequence_manifest', sourceNodeKey: 'sequence_animatic_continuity_anchor_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'continuity_anchor_plan' }),
-      v3Edge({ key: 'character_extract__sequence_manifest', sourceNodeKey: 'sequence_animatic_character_anchor_extract', sourcePort: 'anchors', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'character_anchors' }),
-      v3Edge({ key: 'prop_extract__sequence_manifest', sourceNodeKey: 'sequence_animatic_prop_anchor_extract', sourcePort: 'anchors', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'prop_anchors' }),
-      v3Edge({ key: 'location_extract__sequence_manifest', sourceNodeKey: 'sequence_animatic_location_anchor_extract', sourcePort: 'anchors', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'location_anchors' }),
       v3Edge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'text', targetNodeKey: 'artifact', targetPort: 'input' }),
     )
   } else {
@@ -12702,7 +13272,7 @@ async function executeNode(input: {
         const fallback = buildFallbackCinematicV2ScreenplayDraft({ context, assetPack, prompt: input.run.prompt })
         const v3ShotMarkedScreenplay = purpose === 'cinematic_v3_screenplay_author'
         const sequenceAnimaticMode = readText(config.sequenceAnimaticMode)
-        const fullSequenceUnitAnimatic = v3ShotMarkedScreenplay && (sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only')
+        const fullSequenceUnitAnimatic = v3ShotMarkedScreenplay && sequenceAnimaticMode === 'master_script_only'
         const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
         const selectedSequenceUnitBrief = fullSequenceUnitAnimatic
           ? buildSelectedSequenceUnitScreenplayBrief(context)
@@ -14833,18 +15403,68 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-shot-break-plan-v1' }
       }
+      if (purpose === 'sequence_animatic_continuity_input') {
+        const config = asRecord(input.node.config)
+        const manifest = asRecord(config.manifest)
+        const assetPack = asRecord(config.assetPack) || asRecord(manifest.assetPack)
+        const screenplayDraft = asRecord(manifest.screenplayDraft)
+        const shotPlan = asRecord(manifest.shotPlan)
+        const shotBreakPlan = asRecord(manifest.shotBreakPlan)
+        const outputs = {
+          masterManifest: manifest,
+          master_manifest: manifest,
+          screenplay: screenplayDraft,
+          screenplayDraft,
+          screenplay_draft: screenplayDraft,
+          shotBreakPlan,
+          shot_break_plan: shotBreakPlan,
+          shotPlan,
+          shot_plan: shotPlan,
+          assetPack,
+          asset_pack: assetPack,
+          screenplayAnimaticRole: 'continuity_pack',
+          sequenceAnimaticRole: 'continuity_pack',
+          text: JSON.stringify({
+            screenplayDraft,
+            shotBreakPlan,
+            shotPlan,
+            blockCount: Array.isArray(manifest.blocks) ? manifest.blocks.length : 0,
+          }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-continuity-input-v1' }
+      }
       if (purpose === 'sequence_animatic_continuity_anchor_plan') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
         const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
         const mergedShotPlan = repairCinematicV2ShotPlanVisualReferences({
           shotPlan: mergeCinematicV3ShotPlansForTimeline(groupPlans),
           assetPack,
         })
-        const continuityAnchorPlan = collectSequenceAnimaticContinuityAnchors({
+        const continuityAnchorPlan = await planSequenceAnimaticContinuityAnchors({
+          nodeKey: input.node.key,
+          prompt: input.run.prompt,
+          screenplayDraft,
           shotPlan: mergedShotPlan,
           shotBreakPlan,
           assetPack,
+          priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
+          shouldCancel: input.shouldCancel,
+          onProgress: async (progress) => {
+            await input.onProgress?.({
+              provider: 'openai',
+              model: outputWorkflowTextModel(),
+              providerRequestId: progress.providerRequestId,
+              metadata: {
+                providerMode: progress.providerMode,
+                providerStatus: progress.providerStatus,
+                lastProviderPollAt: progress.lastProviderPollAt,
+                continuityPlanner: true,
+              },
+            })
+          },
         })
         const outputs = {
           continuityAnchorPlan,
@@ -14856,13 +15476,34 @@ async function executeNode(input: {
           locationSpotAnchors: continuityAnchorPlan.locationSpotAnchors,
           location_spot_anchors: continuityAnchorPlan.locationSpotAnchors,
           continuityAnchorIdsByShotId: continuityAnchorPlan.continuityAnchorIdsByShotId,
+          shotContinuityMap: continuityAnchorPlan.shotContinuityMap,
+          shot_continuity_map: continuityAnchorPlan.shotContinuityMap,
+          locationSets: continuityAnchorPlan.locationSets,
+          location_sets: continuityAnchorPlan.locationSets,
+          locationAngles: continuityAnchorPlan.locationAngles,
+          location_angles: continuityAnchorPlan.locationAngles,
+          sceneGraph: continuityAnchorPlan.sceneGraph,
+          scene_graph: continuityAnchorPlan.sceneGraph,
+          rejectedCandidates: continuityAnchorPlan.rejectedCandidates,
+          rejected_candidates: continuityAnchorPlan.rejectedCandidates,
           shotContinuityAnchorIds: continuityAnchorPlan.continuityAnchorIdsByShotId,
           shotPlan: mergedShotPlan,
           shot_plan: mergedShotPlan,
           text: JSON.stringify(continuityAnchorPlan, null, 2),
-          deterministic: true,
+          deterministic: continuityAnchorPlan.planningMode === 'deterministic_fallback',
+          providerRequestId: readText(asRecord(continuityAnchorPlan).providerRequestId),
+          plannerProvider: readText(asRecord(continuityAnchorPlan).plannerProvider),
+          plannerModel: readText(asRecord(continuityAnchorPlan).plannerModel),
+          plannerFallbackReason: readText(asRecord(continuityAnchorPlan).plannerFallbackReason),
         }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-continuity-anchor-plan-v1' }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: readText(asRecord(continuityAnchorPlan).plannerProvider) || (continuityAnchorPlan.planningMode === 'llm_structured_v2' ? 'openai' : 'graphcore'),
+          model: readText(asRecord(continuityAnchorPlan).plannerModel) || (continuityAnchorPlan.planningMode === 'llm_structured_v2' ? outputWorkflowTextModel() : 'deterministic-sequence-animatic-continuity-anchor-plan-fallback-v2'),
+          providerRequestId: readText(asRecord(continuityAnchorPlan).providerRequestId) || undefined,
+        }
       }
       if (purpose === 'sequence_animatic_character_anchor_atlas_prompt' || purpose === 'sequence_animatic_prop_anchor_atlas_prompt' || purpose === 'sequence_animatic_location_anchor_atlas_prompt') {
         const anchorType = purpose === 'sequence_animatic_character_anchor_atlas_prompt'
@@ -14958,6 +15599,14 @@ async function executeNode(input: {
             if (!crop.ok) {
               throw new Error(`Sequence animatic continuity anchor crop failed for ${anchor.id}: ${crop.stderr.slice(0, 1200)}`)
             }
+            const cropVerification = await verifySequenceAnimaticAnchorCrop({
+              outputPath,
+              anchorId: anchor.id,
+              expectedWidth: cellWidth,
+              expectedHeight: cellHeight,
+              row,
+              column,
+            })
             const anchorBytes = await Deno.readFile(outputPath)
             const assetKey = `seq_anchor.${input.run.id.slice(0, 8)}.${anchorType === 'character' ? 'char' : anchorType === 'prop' ? 'prop' : 'spot'}.${slugify(anchor.id).slice(0, 54)}`
             const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/sequence-anchors/${anchorType}/${slugify(anchor.id)}.webp`
@@ -14988,6 +15637,7 @@ async function executeNode(input: {
               column,
               crop: cropRect,
               cropRect,
+              cropVerification,
               cropMode: 'ffmpeg_crop',
               storageBucket: 'project-assets',
               storagePath,
@@ -15014,9 +15664,13 @@ async function executeNode(input: {
               row,
               column,
               cropRect,
+              cropVerification,
               role: metadata.role,
               artifact,
             })
+          }
+          if (extractedAnchors.length !== anchors.length) {
+            throw new Error(`Sequence animatic continuity anchor extraction count mismatch for ${anchorType}: expected ${anchors.length}, extracted ${extractedAnchors.length}.`)
           }
         } finally {
           await Deno.remove(tempDir, { recursive: true }).catch(() => {})
@@ -15103,6 +15757,7 @@ async function executeNode(input: {
         })
         const manifest = {
           role: 'sequence_animatic_manifest',
+          graphSpecVersion: 'sequence_animatic_graph_v1',
           screenplayAnimaticRole: 'master',
           screenplayAnimaticSource: readText(asRecord(input.workflow.metadata).screenplayAnimaticSource)
             || (readText(asRecord(input.workflow.metadata).cinematicAnimaticMode) === 'prompt_cinematic_master' ? 'prompt_cinematic' : 'wiki_sequence_unit'),
@@ -15616,6 +16271,9 @@ async function executeNode(input: {
             const nextY = Math.floor((height * (row + 1)) / layout.rows)
             const panelWidth = Math.max(1, Math.min(width - cropX, nextX - cropX))
             const panelHeight = Math.max(1, Math.min(height - cropY, nextY - cropY))
+            if (panelWidth < 32 || panelHeight < 32) {
+              throw new Error(`Cinematics V3 panel extraction produced an invalid crop for shot ${shot.index}: ${panelWidth}x${panelHeight}. Check the persisted storyboard grid layout.`)
+            }
             const outputPath = `${tempDir}/panel-${String(index + 1).padStart(3, '0')}.webp`
             const crop = await runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${panelWidth}:${panelHeight}:${cropX}:${cropY}`, outputPath])
             if (!crop.ok) {
@@ -15688,6 +16346,15 @@ async function executeNode(input: {
           }
         } finally {
           await Deno.remove(tempDir, { recursive: true }).catch(() => {})
+        }
+        if (panels.length !== shotsToExtract.length) {
+          throw new Error(`Cinematics V3 panel extraction expected ${shotsToExtract.length} cropped panel${shotsToExtract.length === 1 ? '' : 's'} from the persisted ${layout.rows}x${layout.columns} grid but produced ${panels.length}.`)
+        }
+        const missingPanelShotIds = shotsToExtract
+          .map((shot) => shot.id)
+          .filter((shotId) => !panels.some((panel) => readText(panel.shotId) === shotId && readText(panel.assetKey)))
+        if (missingPanelShotIds.length > 0) {
+          throw new Error(`Cinematics V3 panel extraction missed shot panel asset(s): ${missingPanelShotIds.join(', ')}.`)
         }
         const outputs = {
           panels,
@@ -16844,6 +17511,7 @@ async function executeNode(input: {
             provider: 'graphcore',
             model: 'sequence-animatic-manifest-artifact-v1',
             role: 'sequence_animatic_manifest',
+            graphSpecVersion: 'sequence_animatic_graph_v1',
             sequenceAnimaticRole: 'master',
             manifest,
             screenplayDraft: asRecord(manifest.screenplayDraft),
@@ -16863,6 +17531,133 @@ async function executeNode(input: {
           authoringReady: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-manifest-artifact-v1' }
+      }
+      if (purpose === 'sequence_animatic_continuity_artifact') {
+        const config = asRecord(input.node.config)
+        const continuityAnchorPlan = readFirstUpstreamRecord(input.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
+        const readAnchorArray = (fields: string[]) => {
+          const arrays = Object.values(input.upstream).flatMap((outputs) => fields.flatMap((field) => {
+            const value = outputs[field]
+            return Array.isArray(value) ? value.map(asRecord) : []
+          }))
+          const withAssets = arrays.filter((anchor) => readText(anchor.assetKey))
+          return (withAssets.length > 0 ? withAssets : arrays)
+            .filter((anchor, index, values) => readText(anchor.id) && values.findIndex((candidate) => readText(candidate.id) === readText(anchor.id)) === index)
+        }
+        const characterAnchors = readAnchorArray(['characterAnchors', 'character_anchors']).filter((anchor) => readText(anchor.anchorType) === 'character')
+        const propAnchors = readAnchorArray(['propAnchors', 'prop_anchors']).filter((anchor) => readText(anchor.anchorType) !== 'location_spot' && readText(anchor.anchorType) !== 'character')
+        const locationSpotAnchors = readAnchorArray(['locationSpotAnchors', 'location_spot_anchors']).filter((anchor) => readText(anchor.anchorType) === 'location_spot' || readText(anchor.baseLocationRefId))
+        const anchorAssets = [...characterAnchors, ...propAnchors, ...locationSpotAnchors].filter((anchor) => readText(anchor.assetKey))
+        const locationSets = readArray(continuityAnchorPlan.locationSets ?? continuityAnchorPlan.location_sets).map(asRecord)
+        const locationAngles = readArray(continuityAnchorPlan.locationAngles ?? continuityAnchorPlan.location_angles).map(asRecord)
+        const sceneGraph = asRecord(continuityAnchorPlan.sceneGraph ?? continuityAnchorPlan.scene_graph)
+        const shotContinuityMap = asRecord(continuityAnchorPlan.shotContinuityMap ?? continuityAnchorPlan.shot_continuity_map ?? continuityAnchorPlan.continuityAnchorIdsByShotId)
+        const rejectedCandidates = readArray(continuityAnchorPlan.rejectedCandidates ?? continuityAnchorPlan.rejected_candidates).map(asRecord)
+        const plannerWarnings = readStringArray(continuityAnchorPlan.warnings)
+        const plannerDiagnostics = readStringArray(continuityAnchorPlan.diagnostics)
+        const planningMode = readText(continuityAnchorPlan.planningMode) || 'legacy_manifest'
+        const manifestHash = readText(config.manifestHash) || readText(asRecord(input.workflow.metadata).manifestHash)
+        const masterManifestArtifactKey = readText(config.masterManifestArtifactKey) || readText(asRecord(input.workflow.metadata).masterManifestArtifactKey)
+        const packBase = {
+          graphSpecVersion: 'sequence_animatic_graph_v1',
+          screenplayAnimaticRole: 'continuity_pack',
+          sequenceAnimaticRole: 'continuity_pack',
+          planningMode,
+          masterRequestId: readText(config.parentRequestId) || readText(asRecord(input.workflow.metadata).parentRequestId) || readText(input.run.metadata?.parentRequestId),
+          masterManifestArtifactKey,
+          manifestHash,
+          characterAnchors,
+          propAnchors,
+          locationSpotAnchors,
+          locationSets,
+          locationAngles,
+          sceneGraph,
+          shotContinuityMap,
+          rejectedCandidates,
+          plannerWarnings,
+          plannerDiagnostics,
+          anchorAssets,
+          warnings: [
+            ...plannerWarnings,
+            ...(anchorAssets.length === 0 && (
+              characterAnchors.length > 0 || propAnchors.length > 0 || locationSpotAnchors.length > 0
+            ) ? ['Continuity anchors were planned, but no visual anchor assets were extracted. Storyboards can still run with missing-reference warnings.'] : []),
+          ],
+          diagnostics: plannerDiagnostics,
+        }
+        const continuityPack = {
+          ...packBase,
+          continuityPackHash: hashOutputWorkflowValue(packBase),
+        }
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-continuity`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${input.node.label} Pack`,
+          summary: 'Sequence animatic continuity pack with temporary character, prop, and location spot references.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-continuity-pack-v1',
+            role: 'sequence_animatic_continuity_pack',
+            graphSpecVersion: 'sequence_animatic_graph_v1',
+            sequenceAnimaticRole: 'continuity_pack',
+            planningMode,
+            manifestHash,
+            masterManifestArtifactKey,
+            continuityPack,
+            characterAnchors,
+            propAnchors,
+            locationSpotAnchors,
+            locationSets,
+            locationAngles,
+            sceneGraph,
+            shotContinuityMap,
+            rejectedCandidates,
+            plannerWarnings,
+            plannerDiagnostics,
+            anchorAssets,
+          },
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: '',
+          artifact,
+          artifacts: [artifact],
+          continuityPack,
+          continuity_pack: continuityPack,
+          continuityAnchorPlan,
+          continuity_anchor_plan: continuityAnchorPlan,
+          characterAnchors,
+          character_anchors: characterAnchors,
+          propAnchors,
+          prop_anchors: propAnchors,
+          locationSpotAnchors,
+          location_spot_anchors: locationSpotAnchors,
+          locationSets,
+          location_sets: locationSets,
+          locationAngles,
+          location_angles: locationAngles,
+          sceneGraph,
+          scene_graph: sceneGraph,
+          shotContinuityMap,
+          shot_continuity_map: shotContinuityMap,
+          rejectedCandidates,
+          rejected_candidates: rejectedCandidates,
+          anchorAssets,
+          anchor_assets: anchorAssets,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-pack-v1' }
       }
       if (purpose === 'sequence_animatic_block_artifact') {
         const config = asRecord(input.node.config)

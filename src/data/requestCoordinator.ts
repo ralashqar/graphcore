@@ -42,6 +42,7 @@ const DEFAULT_LIMITS: Record<string, number> = {
   'asset-signing': 2,
   'snapshot-refresh': 1,
   'edge-function': 6,
+  'output-graph': 2,
   mutation: 6,
   postgrest: 6,
 }

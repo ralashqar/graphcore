@@ -710,6 +710,18 @@ type WorldGraphPageProps = {
     storyboardBlockId?: string
     shotId?: string
   }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
+  onEnsureSequenceAnimaticContinuityWorkflow: (request: {
+    masterRequestId: string
+  }) => Promise<{ continuityRequest: OutputRequest | null }> | { continuityRequest: OutputRequest | null }
+  onLoadSequenceAnimaticState: (request: {
+    masterRequestId: string
+    knownRevision?: string | null
+  }) => Promise<{ unchanged?: boolean; revision?: string }> | { unchanged?: boolean; revision?: string }
+  onSubscribeSequenceAnimaticStateSignals: (input: {
+    draftId: string
+    masterRequestId: string
+    onSignal: () => void
+  }) => { unsubscribe: () => Promise<unknown> | unknown }
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onRequestDeleteOutputRequest: (requestId: string) => void
@@ -1221,6 +1233,20 @@ type SequenceAnimaticContinuityAnchorView = {
   usageDetailLabel: string
 }
 
+type SequenceAnimaticContinuityLocationView = {
+  id: string
+  name: string
+  summary: string
+  shotIds: string[]
+  blockIds: string[]
+}
+
+type SequenceAnimaticContinuityRejectedView = {
+  name: string
+  reason: string
+  evidence: string
+}
+
 type SequenceAnimaticDialogueLineView = {
   id: string
   text: string
@@ -1280,11 +1306,19 @@ type SequenceAnimaticBlockView = {
   continuityAnchors: SequenceAnimaticContinuityAnchorView[]
   continuityAnchorCountLabel: string
   continuityAnchorsPending: boolean
+  continuityChanged: boolean
   shots: SequenceAnimaticShotView[]
 }
 
 type SequenceAnimaticViewModel = {
   request: OutputRequest
+  continuityRequest: OutputRequest | null
+  continuityRun: OutputWorkflowRun | null
+  continuityReady: boolean
+  continuityRunning: boolean
+  continuityStale: boolean
+  continuityButtonLabel: string
+  continuityStatusLabel: string
   title: string
   statusLabel: string
   progressLabel: string
@@ -1295,6 +1329,9 @@ type SequenceAnimaticViewModel = {
     props: SequenceAnimaticContinuityAnchorView[]
     locationSpots: SequenceAnimaticContinuityAnchorView[]
   }
+  continuityLocationSets: SequenceAnimaticContinuityLocationView[]
+  continuityLocationAngles: SequenceAnimaticContinuityLocationView[]
+  continuityRejectedCandidates: SequenceAnimaticContinuityRejectedView[]
   blocks: SequenceAnimaticBlockView[]
   hasPanels: boolean
 }
@@ -1550,6 +1587,7 @@ function buildSequenceAnimaticContinuityAnchorViews(input: {
   return [...mergedById.values()].map((anchor): SequenceAnimaticContinuityAnchorView => {
     const id = trimOptionalString(anchor.id)
     const anchorType = trimOptionalString(anchor.anchorType)
+    const continuitySubtype = trimOptionalString(anchor.continuitySubtype)
     const type: SequenceAnimaticContinuityAnchorView['type'] = anchorType === 'character'
       ? 'character'
       : anchorType === 'location_spot' ? 'location_spot' : 'prop'
@@ -1594,7 +1632,11 @@ function buildSequenceAnimaticContinuityAnchorViews(input: {
       id,
       name: trimOptionalString(anchor.name) || displayNameFromRefId(id),
       type,
-      typeLabel: type === 'character' ? 'Temporary character' : type === 'location_spot' ? 'Location spot' : 'Prop',
+      typeLabel: type === 'character'
+        ? 'Temporary character'
+        : type === 'location_spot'
+          ? continuitySubtype === 'location_angle' ? 'Location angle' : continuitySubtype === 'location_set' ? 'Location set' : 'Location spot'
+          : 'Prop',
       iconId: iconForWorldEntity(type === 'character' ? 'actor' : type === 'location_spot' ? 'place' : 'object'),
       thumbnailUrl,
       status,
@@ -1901,6 +1943,14 @@ function buildSequenceAnimaticViewModel(input: {
   const childRequests = input.requests
     .filter((request) => request.parentRequestId === input.request.id && readLooseRecord(request.metadata).sequenceAnimaticRole === 'storyboard_block')
     .sort((left, right) => (Number(readLooseRecord(left.metadata).storyboardBlockIndex ?? 0) || 0) - (Number(readLooseRecord(right.metadata).storyboardBlockIndex ?? 0) || 0))
+  const continuityRequest = input.requests
+    .filter((request) => request.parentRequestId === input.request.id && readLooseRecord(request.metadata).sequenceAnimaticRole === 'continuity_pack')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
+  const continuityRun = continuityRequest?.latestRunId
+    ? input.runs.find((entry) => entry.id === continuityRequest.latestRunId) ?? null
+    : continuityRequest?.workflowId
+      ? input.runs.find((entry) => entry.workflowId === continuityRequest.workflowId) ?? null
+      : null
   const childRequestByBlockId = new Map(childRequests
     .map((request) => [trimOptionalString(readLooseRecord(request.metadata).storyboardBlockId), request] as const)
     .filter(([blockId]) => Boolean(blockId)))
@@ -1946,27 +1996,83 @@ function buildSequenceAnimaticViewModel(input: {
   })
   const assetByKey = new Map(input.assets.map((asset) => [asset.key, asset] as const))
   const manifest = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
+  const continuityArtifacts = continuityRequest
+    ? input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, continuityRequest))
+    : []
+  const continuityPack = readArtifactMetadataRecord(continuityArtifacts, ['sequence_animatic_continuity_pack'], ['continuityPack', 'continuity_pack'])
   const manifestContinuityAnchors = [
     ...readLooseArray(readLooseRecord(manifest).propAnchors).map(readLooseRecord),
     ...readLooseArray(readLooseRecord(manifest).characterAnchors).map(readLooseRecord),
     ...readLooseArray(readLooseRecord(manifest).locationSpotAnchors).map(readLooseRecord),
     ...readLooseArray(readLooseRecord(manifest).anchorAssets).map(readLooseRecord),
+    ...readLooseArray(readLooseRecord(continuityPack).propAnchors).map(readLooseRecord),
+    ...readLooseArray(readLooseRecord(continuityPack).characterAnchors).map(readLooseRecord),
+    ...readLooseArray(readLooseRecord(continuityPack).locationSpotAnchors).map(readLooseRecord),
+    ...readLooseArray(readLooseRecord(continuityPack).anchorAssets).map(readLooseRecord),
   ]
   const manifestContinuityAnchorPlan = readLooseRecord(readLooseRecord(manifest).continuityAnchorPlan)
   const continuityAnchorPlan = Object.keys(manifestContinuityAnchorPlan).length > 0
     ? manifestContinuityAnchorPlan
-    : readFirstOutputRunRecord(input.run, ['continuityAnchorPlan', 'continuity_anchor_plan'])
+    : readFirstOutputRunRecord(continuityRun, ['continuityAnchorPlan', 'continuity_anchor_plan'])
+    ?? readFirstOutputRunRecord(input.run, ['continuityAnchorPlan', 'continuity_anchor_plan'])
   const plannedContinuityAnchors = [
     ...readLooseArray(readLooseRecord(continuityAnchorPlan).propAnchors).map(readLooseRecord),
     ...readLooseArray(readLooseRecord(continuityAnchorPlan).characterAnchors).map(readLooseRecord),
     ...readLooseArray(readLooseRecord(continuityAnchorPlan).locationSpotAnchors).map(readLooseRecord),
   ]
+  const continuityLocationSource = Object.keys(readLooseRecord(continuityPack)).length > 0 ? readLooseRecord(continuityPack) : readLooseRecord(continuityAnchorPlan)
+  const continuityLocationSets = readLooseArray(continuityLocationSource.locationSets ?? continuityLocationSource.location_sets).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
+    id: trimOptionalString(entry.id),
+    name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
+    summary: trimOptionalString(entry.visualBrief) || trimOptionalString(entry.persistenceReason),
+    shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
+    blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
+  })).filter((entry) => entry.id || entry.name)
+  const continuityLocationAngles = readLooseArray(continuityLocationSource.locationAngles ?? continuityLocationSource.location_angles).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
+    id: trimOptionalString(entry.id),
+    name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
+    summary: [
+      trimOptionalString(entry.visualBrief),
+      trimOptionalString(entry.framing),
+      trimOptionalString(entry.screenDirectionRule),
+    ].filter(Boolean).join(' / '),
+    shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
+    blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
+  })).filter((entry) => entry.id || entry.name)
+  const continuityRejectedCandidates = readLooseArray(continuityLocationSource.rejectedCandidates ?? continuityLocationSource.rejected_candidates).map(readLooseRecord).map((entry): SequenceAnimaticContinuityRejectedView => ({
+    name: trimOptionalString(entry.name) || 'Unnamed candidate',
+    reason: trimOptionalString(entry.reason).replace(/_/g, ' ') || 'rejected',
+    evidence: readLooseArray(entry.sourceEvidence).map(trimOptionalString).filter(Boolean).slice(0, 2).join(' / '),
+  })).slice(0, 12)
   const continuityAnchorViews = buildSequenceAnimaticContinuityAnchorViews({
     manifestAnchors: manifestContinuityAnchors,
     plannedAnchors: plannedContinuityAnchors,
     assetByKey,
-    run: input.run,
+    run: continuityRun ?? input.run,
   })
+  const continuityMetadata = readLooseRecord(continuityRequest?.metadata)
+  const continuityStale = continuityMetadata.sequenceAnimaticStale === true
+  const continuityRunning = sequenceAnimaticRequestIsActive(continuityRequest)
+  const continuityReady = Object.keys(readLooseRecord(continuityPack)).length > 0
+  const currentContinuityPackHash = trimOptionalString(readLooseRecord(continuityPack).continuityPackHash)
+  const continuityButtonLabel = !continuityRequest
+    ? 'Prepare continuity'
+    : continuityRunning
+      ? 'Generating continuity'
+      : continuityStale
+        ? 'Regenerate stale continuity'
+        : continuityReady
+          ? 'Regenerate continuity'
+          : 'Generate continuity'
+  const continuityStatusLabel = continuityRunning
+    ? sequenceAnimaticProjectionActiveLabel(continuityRequest) || 'Generating continuity'
+    : continuityStale
+      ? 'Continuity changed; regeneration recommended'
+      : continuityReady
+        ? 'Continuity ready'
+        : continuityRequest
+          ? 'Continuity prepared'
+          : 'Continuity not prepared'
   const continuityAnchorById = new Map(continuityAnchorViews.map((anchor) => [anchor.id, anchor] as const))
   const resolveReference = buildSequenceAnimaticReferenceResolver({
     worldEntities: input.worldEntities,
@@ -2064,6 +2170,9 @@ function buildSequenceAnimaticViewModel(input: {
       const blockContinuityAnchorIds = [
         ...readLooseArray(manifestBlock?.continuityAnchorIds).map(trimOptionalString),
         ...readLooseArray(group.continuityAnchorIds).map(trimOptionalString),
+        ...continuityAnchorViews
+          .filter((anchor) => anchor.blockIds.includes(groupId))
+          .map((anchor) => anchor.id),
       ].filter(Boolean).filter((value, index, values) => values.indexOf(value) === index)
       const blockContinuityAnchors = blockContinuityAnchorIds
         .map((anchorId) => continuityAnchorById.get(anchorId) ?? null)
@@ -2075,6 +2184,9 @@ function buildSequenceAnimaticViewModel(input: {
       const videoPromptNodeKey = normalizeStoryboardGroupNodeKey(groupId, 'video_prompt')
       const videoNodeKey = normalizeStoryboardGroupNodeKey(groupId, 'video')
       const childRequest = childRequestByBlockId.get(groupId) ?? null
+      const childMetadata = readLooseRecord(childRequest?.metadata)
+      const blockContinuityPackHash = trimOptionalString(childMetadata.continuityPackHash)
+      const blockContinuityChanged = Boolean(currentContinuityPackHash && blockContinuityPackHash && currentContinuityPackHash !== blockContinuityPackHash)
       const childRun = childRequest ? childRunByRequestId.get(childRequest.id) ?? null : null
       const childPromptNodeKey = childRequest ? 'storyboard_prompt' : promptNodeKey
       const childSheetNodeKey = childRequest ? 'storyboard_sheet' : sheetNodeKey
@@ -2197,8 +2309,6 @@ function buildSequenceAnimaticViewModel(input: {
           ? 'Storyboard panels ready'
           : failedStep
             ? `Failed: ${failedStep.label}`
-            : blockContinuityAnchorsPending
-              ? 'Preparing continuity refs'
             : 'Ready to generate storyboard'
       return {
         id: groupId,
@@ -2239,8 +2349,21 @@ function buildSequenceAnimaticViewModel(input: {
           ? `Using ${blockContinuityAnchors.length} continuity ref${blockContinuityAnchors.length === 1 ? '' : 's'}`
           : 'No continuity refs',
         continuityAnchorsPending: blockContinuityAnchorsPending,
+        continuityChanged: blockContinuityChanged,
         shots: groupShots.map((shot, shotIndex) => {
           const shotId = trimOptionalString(shot.id) || `${groupIndex + 1}:${shotIndex + 1}`
+          const shotContinuityAnchorIds = [
+            ...readLooseArray(shot.continuityAnchorIds).map(trimOptionalString),
+            ...readLooseArray(shot.continuityAnchorRefIds).map(trimOptionalString),
+            ...continuityAnchorViews
+              .filter((anchor) => anchor.shotIds.includes(shotId))
+              .map((anchor) => anchor.id),
+          ].filter(Boolean).filter((value, index, values) => values.indexOf(value) === index)
+          const shotWithContinuityAnchors = {
+            ...shot,
+            continuityAnchorIds: shotContinuityAnchorIds,
+            continuityAnchorRefIds: shotContinuityAnchorIds,
+          }
           const projectionShot = projectionShotById.get(shotId)
           const preview = blockPanelPreviewByShotId.get(shotId) ?? null
           const previewAssetKey = preview?.assetKey ?? null
@@ -2275,15 +2398,10 @@ function buildSequenceAnimaticViewModel(input: {
                 ? 'Shot take saved; loading preview'
                 : shotVideoError
                   ? shotVideoError
-                  : previewAssetKey && readLooseArray(shot.continuityAnchorIds).map(trimOptionalString).filter(Boolean).some((anchorId) => {
-                    const anchor = continuityAnchorById.get(anchorId)
-                    return anchor && !['ready', 'skipped'].includes(anchor.status)
-                  })
-                    ? 'Continuity refs pending'
                   : previewAssetKey
                     ? 'Ready for shot video'
                     : 'Panel required'
-          const shotContinuityAnchorsPending = readLooseArray(shot.continuityAnchorIds).map(trimOptionalString).filter(Boolean).some((anchorId) => {
+          const shotContinuityAnchorsPending = shotContinuityAnchorIds.some((anchorId) => {
             const anchor = continuityAnchorById.get(anchorId)
             return anchor && !['ready', 'skipped'].includes(anchor.status)
           })
@@ -2296,16 +2414,16 @@ function buildSequenceAnimaticViewModel(input: {
               : 'Timing pending',
             durationLabel: formatAnimaticSeconds(shot.editorialDurationSeconds),
             action: trimOptionalString(shot.action) || trimOptionalString(shot.description) || trimOptionalString(shot.storyboardPanelPrompt),
-            dialogue: buildSequenceAnimaticDialogueLines(shot, resolveReference),
+            dialogue: buildSequenceAnimaticDialogueLines(shotWithContinuityAnchors, resolveReference),
             camera: cameraLineFromShot(shot),
             lighting: trimOptionalString(shot.lighting),
             performance: performanceLineFromShot(shot),
-            performanceBeats: buildSequenceAnimaticPerformanceBeats(shot, resolveReference),
+            performanceBeats: buildSequenceAnimaticPerformanceBeats(shotWithContinuityAnchors, resolveReference),
             panelStatusLabel: previewAssetKey ? 'Panel ready' : panelExtractStep?.status === 'failed' ? 'Panel extraction failed' : storyboardRunning ? 'Panel extraction running' : 'Panel not generated',
             panelError: panelExtractStep?.status === 'failed' ? panelExtractStep.errorMessage ?? '' : '',
             panelUrl,
             panelRunning: storyboardRunning && !panelUrl,
-            references: buildSequenceAnimaticShotReferences(shot, resolveReference),
+            references: buildSequenceAnimaticShotReferences(shotWithContinuityAnchors, resolveReference),
             continuityAnchorsPending: shotContinuityAnchorsPending,
             shotVideoRequestId: shotVideoRequest?.id ?? null,
             shotVideoWorkflowId: shotVideoRequest?.workflowId ?? null,
@@ -2351,6 +2469,7 @@ function buildSequenceAnimaticViewModel(input: {
         continuityAnchors: [],
         continuityAnchorCountLabel: 'No continuity refs',
         continuityAnchorsPending: false,
+        continuityChanged: false,
         shots: rawShots.map((shot, shotIndex) => {
           const shotId = trimOptionalString(shot.id) || `shot_${shotIndex + 1}`
           const projectionShot = projectionShotById.get(shotId)
@@ -2392,6 +2511,13 @@ function buildSequenceAnimaticViewModel(input: {
       : []
   return {
     request: input.request,
+    continuityRequest,
+    continuityRun,
+    continuityReady,
+    continuityRunning,
+    continuityStale,
+    continuityButtonLabel,
+    continuityStatusLabel,
     title: trimOptionalString(fallbackScreenplay?.title) || input.request.title || 'Sequence screenplay animatic',
     statusLabel: input.row?.statusLabel ?? summarizeOutputStatus(input.request.status),
     progressLabel: input.row?.progress.label ?? '',
@@ -2404,6 +2530,9 @@ function buildSequenceAnimaticViewModel(input: {
       props: continuityAnchorViews.filter((anchor) => anchor.type === 'prop'),
       locationSpots: continuityAnchorViews.filter((anchor) => anchor.type === 'location_spot'),
     },
+    continuityLocationSets,
+    continuityLocationAngles,
+    continuityRejectedCandidates,
     blocks,
     hasPanels: panels.length > 0,
   }
@@ -2689,6 +2818,9 @@ export function WorldGraphPage({
   onStartOutputRequest,
   onStartOutputWorkflowRun,
   onEnsureSequenceAnimaticBlockWorkflows,
+  onEnsureSequenceAnimaticContinuityWorkflow,
+  onLoadSequenceAnimaticState,
+  onSubscribeSequenceAnimaticStateSignals,
   onGetOutputRequestStatus,
   onCancelOutputRequest,
   onRequestDeleteOutputRequest,
@@ -3559,6 +3691,8 @@ export function WorldGraphPage({
   const [sequenceAnimaticErrorByKey, setSequenceAnimaticErrorByKey] = useState<Record<string, string>>({})
   const [sequenceAnimaticPreviewRequestId, setSequenceAnimaticPreviewRequestId] = useState<string | null>(null)
   const [sequenceAnimaticVideoPreview, setSequenceAnimaticVideoPreview] = useState<SequenceAnimaticVideoPreview | null>(null)
+  const sequenceAnimaticStateRevisionRef = useRef<string | null>(null)
+  const continuityEnsureInFlightRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     if (!sequenceAnimaticOpenIntent?.requestId) return
     setSequenceAnimaticPreviewRequestId(sequenceAnimaticOpenIntent.requestId)
@@ -3590,30 +3724,66 @@ export function WorldGraphPage({
   }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticPreviewRequestId, wikiImageUrlByEntityKey, worldEntities])
   useEffect(() => {
     if (!sequenceAnimaticPreviewModel) return undefined
-    const blockRefreshIds = sequenceAnimaticPreviewModel.blocks
-      .filter((block) => block.childRequestId && (block.storyboardRunning || block.videoRunning))
-      .map((block) => block.childRequestId)
-      .filter((id): id is string => Boolean(id))
-    const shotRefreshIds = sequenceAnimaticPreviewModel.blocks.flatMap((block) => block.shots
-      .filter((shot) => shot.shotVideoRequestId && shot.shotVideoRunning)
-      .map((shot) => shot.shotVideoRequestId)
-      .filter((id): id is string => Boolean(id)))
-    const refreshIds = [...new Set([...blockRefreshIds, ...shotRefreshIds])]
-    if (refreshIds.length === 0) return undefined
+    const active = sequenceAnimaticRequestIsActive(sequenceAnimaticPreviewModel.request)
+      || sequenceAnimaticPreviewModel.continuityRunning
+      || sequenceAnimaticPreviewModel.blocks.some((block) => block.storyboardRunning || block.videoRunning || block.shots.some((shot) => shot.shotVideoRunning))
+    if (!active) return undefined
     let cancelled = false
+    let refreshTimer: number | null = null
+    let lastSignalAt = 0
+    let lastRefreshAt = 0
     const refresh = () => {
-      for (const requestId of refreshIds) {
-        void Promise.resolve(onGetOutputRequestStatus(requestId)).catch((error) => {
-          if (!cancelled) console.warn('[GraphCore] sequence animatic block refresh failed.', error)
-        })
-      }
+      lastRefreshAt = Date.now()
+      void Promise.resolve(onLoadSequenceAnimaticState({
+        masterRequestId: sequenceAnimaticPreviewModel.request.id,
+        knownRevision: sequenceAnimaticStateRevisionRef.current,
+      })).then((result) => {
+        if (!cancelled && result.revision) sequenceAnimaticStateRevisionRef.current = result.revision
+      }).catch((error) => {
+        if (!cancelled) console.warn('[GraphCore] sequence animatic state refresh failed.', error)
+      })
     }
-    const timer = window.setInterval(refresh, 2500)
+    const scheduleRefresh = (delayMs = 400) => {
+      lastSignalAt = Date.now()
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null
+        refresh()
+      }, delayMs)
+    }
+    const subscription = onSubscribeSequenceAnimaticStateSignals({
+      draftId: projectDraftId,
+      masterRequestId: sequenceAnimaticPreviewModel.request.id,
+      onSignal: () => scheduleRefresh(400),
+    })
+    refresh()
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      const signalRecentlyArrived = lastSignalAt > 0 && now - lastSignalAt < 6500
+      const refreshedRecently = lastRefreshAt > 0 && now - lastRefreshAt < 6500
+      if (!signalRecentlyArrived && !refreshedRecently) refresh()
+    }, 7500)
     return () => {
       cancelled = true
+      void subscription.unsubscribe()
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer)
       window.clearInterval(timer)
     }
-  }, [onGetOutputRequestStatus, sequenceAnimaticPreviewModel])
+  }, [onLoadSequenceAnimaticState, onSubscribeSequenceAnimaticStateSignals, projectDraftId, sequenceAnimaticPreviewModel])
+  useEffect(() => {
+    if (!sequenceAnimaticPreviewModel) return
+    if (sequenceAnimaticPreviewModel.continuityRequest || sequenceAnimaticPreviewModel.blocks.length === 0) return
+    const requestId = sequenceAnimaticPreviewModel.request.id
+    if (continuityEnsureInFlightRef.current.has(requestId)) return
+    continuityEnsureInFlightRef.current.add(requestId)
+    void Promise.resolve(onEnsureSequenceAnimaticContinuityWorkflow({ masterRequestId: requestId }))
+      .catch((error) => {
+        console.warn('[GraphCore] sequence animatic continuity ensure failed.', error)
+      })
+      .finally(() => {
+        continuityEnsureInFlightRef.current.delete(requestId)
+      })
+  }, [onEnsureSequenceAnimaticContinuityWorkflow, sequenceAnimaticPreviewModel])
   const pollSequenceAnimaticOutputRequest = useCallback(async (requestId: string) => {
     let status = await Promise.resolve(onGetOutputRequestStatus(requestId))
     for (let attempt = 0; attempt < 240; attempt += 1) {
@@ -3649,7 +3819,7 @@ export function WorldGraphPage({
         cinematicReferenceMode: 'storyboard_sheet',
         cinematicPipelineVersion: 'v3_script_storyboards',
         cinematicV2AnimaticMode: 'fast_panels',
-        sequenceAnimaticMode: 'full_sequence_unit',
+        sequenceAnimaticMode: 'master_script_only',
         debugSkipVideoGeneration: true,
       })
       setSequenceAnimaticPreviewRequestId(result.request.id)
@@ -3746,6 +3916,65 @@ export function WorldGraphPage({
       setSequenceAnimaticBlockRunKey(null)
     }
   }, [onEnsureSequenceAnimaticBlockWorkflows, onGetOutputRequestStatus, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  const handleRunSequenceAnimaticContinuity = useCallback(async (model: SequenceAnimaticViewModel) => {
+    const runKey = `${model.request.id}:continuity_pack`
+    if (sequenceAnimaticBlockRunKey) return
+    setSequenceAnimaticBlockRunKey(runKey)
+    try {
+      const ensureResult = await onEnsureSequenceAnimaticContinuityWorkflow({ masterRequestId: model.request.id })
+      const continuityRequest = ensureResult.continuityRequest
+      if (!continuityRequest?.workflowId) throw new Error('Continuity workflow is not ready yet.')
+      const existingRun = continuityRequest.latestRunId
+        ? outputWorkflowRuns.find((run) => run.id === continuityRequest.latestRunId) ?? null
+        : outputWorkflowRuns.find((run) => run.workflowId === continuityRequest.workflowId) ?? null
+      await onStartOutputWorkflowRun({
+        workflowId: continuityRequest.workflowId,
+        prompt: continuityRequest.prompt || `Prepare continuity references for ${model.title}.`,
+        targetFormat: 'video',
+        selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
+        input: {
+          ...readLooseRecord(existingRun?.input),
+          debugSkipVideoGeneration: true,
+          cinematicVideoApproved: false,
+        },
+        metadata: {
+          runIntent: 'generate_continuity_pack',
+          runMode: 'sequence_animatic_continuity_pack',
+          runScope: 'upstream_to_node',
+          targetNodeKeys: ['continuity_artifact'],
+          forceNodeKeys: [
+            'continuity_plan',
+            'character_anchor_atlas_prompt',
+            'character_anchor_atlas',
+            'character_anchor_extract',
+            'prop_anchor_atlas_prompt',
+            'prop_anchor_atlas',
+            'prop_anchor_extract',
+            'location_anchor_atlas_prompt',
+            'location_anchor_atlas',
+            'location_anchor_extract',
+            'continuity_artifact',
+          ],
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: false,
+          debugSkipVideoGeneration: true,
+          cinematicVideoApproved: false,
+          sourceRunId: existingRun?.id ?? continuityRequest.latestRunId ?? model.request.latestRunId,
+          parentRequestId: model.request.id,
+          sequenceAnimaticRole: 'continuity_pack',
+        },
+      })
+      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setSequenceAnimaticBlockRunKey(null)
+    }
+  }, [onEnsureSequenceAnimaticContinuityWorkflow, onLoadSequenceAnimaticState, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
   const handleOpenSequenceAnimaticBlockGraph = useCallback(async (
     model: SequenceAnimaticViewModel,
     block: SequenceAnimaticBlockView,
@@ -11829,7 +12058,18 @@ export function WorldGraphPage({
                 <div>
                   <span className="eyebrow">Continuity refs</span>
                   <strong>{sequenceAnimaticPreviewModel.continuityAnchors.characters.length + sequenceAnimaticPreviewModel.continuityAnchors.props.length + sequenceAnimaticPreviewModel.continuityAnchors.locationSpots.length} temporary refs</strong>
+                  <small>{sequenceAnimaticPreviewModel.continuityStatusLabel}</small>
                 </div>
+                <button
+                  className="ghost-button compact"
+                  disabled={sequenceAnimaticPreviewModel.continuityRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:continuity_pack`}
+                  onClick={() => void handleRunSequenceAnimaticContinuity(sequenceAnimaticPreviewModel)}
+                  type="button"
+                >
+                  {sequenceAnimaticPreviewModel.continuityRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:continuity_pack`
+                    ? <><span className="world-mini-spinner" aria-hidden="true" />Generating continuity</>
+                    : sequenceAnimaticPreviewModel.continuityButtonLabel}
+                </button>
                 <button className="ghost-button compact" onClick={() => onOpenOutputStudio(sequenceAnimaticPreviewModel.request.id, 'graph', null, {
                   kind: 'wiki_sequence_animatic',
                   masterRequestId: sequenceAnimaticPreviewModel.request.id,
@@ -11838,16 +12078,22 @@ export function WorldGraphPage({
                   Open master graph
                 </button>
               </div>
+              {sequenceAnimaticPreviewModel.continuityStale ? (
+                <div className="world-wiki-sequence-animatic-continuity-empty">
+                  <strong>Continuity changed; regeneration recommended.</strong>
+                  <p>Existing storyboard panels and videos remain usable, but new renders should regenerate continuity from the current master manifest first.</p>
+                </div>
+              ) : null}
               {sequenceAnimaticPreviewModel.continuityAnchors.characters.length + sequenceAnimaticPreviewModel.continuityAnchors.props.length + sequenceAnimaticPreviewModel.continuityAnchors.locationSpots.length === 0 ? (
                 <div className="world-wiki-sequence-animatic-continuity-empty">
                   <strong>No temporary continuity refs planned.</strong>
-                  <p>The planner did not extract extra secondary characters, reusable props, or sub-location spots for this screenplay. Open the master graph to inspect Plan Continuity Anchors and the manifest.</p>
+                  <p>Generate continuity to extract secondary characters, reusable props, and sub-location spots from the parsed shots. Storyboards and videos can still run without this pack.</p>
                 </div>
               ) : null}
               {([
                 ['Characters', sequenceAnimaticPreviewModel.continuityAnchors.characters],
                 ['Props', sequenceAnimaticPreviewModel.continuityAnchors.props],
-                ['Location spots', sequenceAnimaticPreviewModel.continuityAnchors.locationSpots],
+                ['Location refs', sequenceAnimaticPreviewModel.continuityAnchors.locationSpots],
               ] as const).map(([label, anchors]) => anchors.length > 0 ? (
                 <div key={label} className="world-wiki-sequence-animatic-continuity-group">
                   <span>{label}</span>
@@ -11869,6 +12115,46 @@ export function WorldGraphPage({
                   </div>
                 </div>
               ) : null)}
+              {sequenceAnimaticPreviewModel.continuityLocationSets.length + sequenceAnimaticPreviewModel.continuityLocationAngles.length > 0 ? (
+                <div className="world-wiki-sequence-animatic-continuity-group">
+                  <span>Set graph</span>
+                  <div className="world-wiki-sequence-animatic-continuity-list">
+                    {[...sequenceAnimaticPreviewModel.continuityLocationSets, ...sequenceAnimaticPreviewModel.continuityLocationAngles].slice(0, 10).map((entry) => (
+                      <article key={entry.id || entry.name} className="world-wiki-sequence-animatic-continuity-card is-planned">
+                        <div className="world-wiki-sequence-animatic-continuity-thumb">
+                          <EntityIcon id="environment" />
+                        </div>
+                        <div>
+                          <strong>{entry.name}</strong>
+                          <em>{entry.blockIds.length > 0 ? `Blocks ${entry.blockIds.length}` : 'Set continuity'} / {entry.shotIds.length > 0 ? `Shots ${entry.shotIds.length}` : 'No shots'}</em>
+                          <small>{entry.summary}</small>
+                        </div>
+                        <span className="world-wiki-sequence-animatic-continuity-status">Planned</span>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {sequenceAnimaticPreviewModel.continuityRejectedCandidates.length > 0 ? (
+                <div className="world-wiki-sequence-animatic-continuity-group">
+                  <span>Rejected candidates</span>
+                  <div className="world-wiki-sequence-animatic-continuity-list">
+                    {sequenceAnimaticPreviewModel.continuityRejectedCandidates.slice(0, 8).map((entry) => (
+                      <article key={`${entry.name}:${entry.reason}`} className="world-wiki-sequence-animatic-continuity-card is-skipped">
+                        <div className="world-wiki-sequence-animatic-continuity-thumb">
+                          <EntityIcon id="close" />
+                        </div>
+                        <div>
+                          <strong>{entry.name}</strong>
+                          <em>{entry.reason}</em>
+                          {entry.evidence ? <small>{entry.evidence}</small> : null}
+                        </div>
+                        <span className="world-wiki-sequence-animatic-continuity-status">Skipped</span>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </section>
             {sequenceAnimaticPreviewModel.blocks.length > 0 ? (
               <div className="world-wiki-sequence-animatic-document">
@@ -11881,6 +12167,7 @@ export function WorldGraphPage({
                         <em>{block.shotRangeLabel} / {block.statusLabel}</em>
                         <div className="world-wiki-sequence-animatic-block-continuity" aria-label={`Continuity refs for block ${block.index}`}>
                           <small>{block.continuityAnchorCountLabel}</small>
+                          {block.continuityChanged ? <small>Continuity changed; regeneration recommended</small> : null}
                           {block.continuityAnchors.slice(0, 8).map((anchor) => (
                             <span key={anchor.id} title={`${anchor.typeLabel}: ${anchor.name} / ${anchor.statusLabel}`}>
                               {anchor.thumbnailUrl ? <img src={anchor.thumbnailUrl} alt="" /> : <EntityIcon id={anchor.iconId} />}
@@ -11894,13 +12181,11 @@ export function WorldGraphPage({
                         </button>
                         <button
                           className="ghost-button compact"
-                          disabled={block.storyboardRunning || block.continuityAnchorsPending || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`}
+                          disabled={block.storyboardRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`}
                           onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'regenerate_storyboard')}
                           type="button"
                         >
-                          {block.continuityAnchorsPending
-                            ? <><span className="world-mini-spinner" aria-hidden="true" />Preparing continuity refs</>
-                            : block.storyboardRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`
+                          {block.storyboardRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`
                             ? <><span className="world-mini-spinner" aria-hidden="true" />{block.storyboardProgressLabel || 'Generating storyboard'}</>
                             : block.storyboardReady && block.videoPromptReady
                               ? 'Regenerate storyboard'
@@ -12057,13 +12342,11 @@ export function WorldGraphPage({
                               ) : (
                                 <button
                                   className="ghost-button compact world-wiki-sequence-animatic-video-action"
-                                  disabled={!shot.panelUrl || shot.continuityAnchorsPending || shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`}
+                                  disabled={!shot.panelUrl || shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`}
                                   onClick={() => void handleRunSequenceAnimaticShotVideo(sequenceAnimaticPreviewModel, block, shot)}
                                   type="button"
                                 >
-                                  {shot.continuityAnchorsPending
-                                    ? <><span className="world-mini-spinner" aria-hidden="true" />Continuity refs pending</>
-                                    : shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`
+                                  {shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`
                                     ? <><span className="world-mini-spinner" aria-hidden="true" />Generating shot video</>
                                     : 'Generate shot video'}
                                 </button>

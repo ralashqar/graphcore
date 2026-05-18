@@ -1,4 +1,4 @@
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -29,10 +29,18 @@ import {
   resolveCinematicStorySourceScope,
   runOutputWorkflowReadyQueue,
   selectOutputWorkflowRunSubgraph,
+  sequenceAnimaticContinuityPackV1Schema,
+  sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
+  sequenceAnimaticGraphRoleSchema,
+  sequenceAnimaticModeSchema,
   topologicallySortOutputWorkflow,
   validateOutputWorkflowGraph,
   hashOutputWorkflowValue,
 } from './outputWorkflow.ts'
+import {
+  buildSequenceAnimaticContinuityWorkflowGraph,
+  sequenceAnimaticGraphSpecVersion,
+} from '../../supabase/functions/_shared/sequence-animatic-workflow-factory.ts'
 import {
   buildRecoveredOutputFromArtifact,
   resolveDurableWorkflowNodeOutput,
@@ -63,6 +71,22 @@ import { aiGenerationSettings } from '../config/aiGenerationSettings.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
 const repoRoot = resolve(import.meta.dirname, '../..')
+const sharedOutputWorkflowModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
+
+async function importSharedOutputWorkflow<T>(t: TestContext): Promise<T | null> {
+  try {
+    return await import(sharedOutputWorkflowModulePath) as T
+  } catch (error) {
+    const message = error instanceof Error
+      ? `${error.message} ${String((error as { code?: unknown }).code ?? '')}`
+      : String(error)
+    if (/npm:|ERR_UNSUPPORTED_ESM_URL_SCHEME|Received protocol 'npm:'/.test(message)) {
+      t.skip('Local Node ESM loader cannot import Supabase npm: specifiers; covered by source checks and worker build.')
+      return null
+    }
+    throw error
+  }
+}
 
 test('durable workflow output resolver normalizes node, run-step, and artifact outputs', () => {
   const node = {
@@ -157,11 +181,28 @@ test('workflow node contracts and run intents expose cinematic sequence defaults
   assert.equal(outputWorkflowRunIntentDefaults('generate_block_video')?.runScope, 'node_only')
   assert.equal(outputWorkflowRunIntentDefaults('generate_block_video')?.cinematicVideoApproved, true)
   assert.equal(outputWorkflowRunIntentDefaults('prepare_storyboard_block')?.debugSkipVideoGeneration, true)
+  assert.equal(getOutputWorkflowNodeContract({ purpose: 'sequence_animatic_manifest_artifact' })?.recoveryStrategy, 'node_step_artifact')
+  assert.equal(sequenceAnimaticModeSchema.parse('full_sequence_unit'), 'master_script_only')
   const startRunSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-workflow-run/index.ts'), 'utf8')
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   assert.match(startRunSource, /outputWorkflowRunIntentDefaults/)
   assert.match(workerSource, /outputWorkflowRunIntentDefaults/)
   assert.match(workerSource, /recoveredForTargetedExecution/)
+})
+
+test('workflow contract validation reports missing required sequence animatic ports', () => {
+  const validation = validateOutputWorkflowGraph({
+    nodes: [
+      { key: 'manifest', nodeType: 'utility_transform', config: { purpose: 'sequence_animatic_manifest' } },
+      { key: 'artifact', nodeType: 'output_artifact', config: { purpose: 'sequence_animatic_manifest_artifact' } },
+    ],
+    edges: [
+      { sourceNodeKey: 'manifest', sourcePort: 'text', targetNodeKey: 'artifact', targetPort: 'input' },
+    ],
+  })
+  assert.equal(validation.ok, false)
+  assert.match(validation.diagnostics.join('\n'), /manifest: missing required "screenplay" input/)
+  assert.match(validation.diagnostics.join('\n'), /manifest: missing required "shot_break_plan" input/)
 })
 
 test('shared Seedance reference manifest formats exact provider order', () => {
@@ -854,14 +895,15 @@ test('cinematic story-source resolver defers prompt-mode source binding to backe
   assert.deepEqual(explicitResolution.selectedSequenceUnitKeys, ['chapter-2'])
 })
 
-test('cinematic asset packs prefer entity reference sheets over stale world icons', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildDeterministicCinematicAssetPack } = await import(sharedModulePath) as {
+test('cinematic asset packs prefer entity reference sheets over stale world icons', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildDeterministicCinematicAssetPack: (context: Record<string, unknown>) => {
       entities: Array<{ key: string; assetKeys: string[] }>
       missingReferenceEntityKeys: string[]
     }
-  }
+  }>(t)
+  if (!imported) return
+  const { buildDeterministicCinematicAssetPack } = imported
 
   const referenceSheetKey = 'entity_reference_sheet_anya_sorin_anya_sorin'
   const worldIconKey = 'world_icon_anya_sorin_anya_sorin'
@@ -1051,7 +1093,7 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
     targetFormat: 'video',
     selectedSequenceUnitKeys: ['chapter-1'],
     cinematicPipelineVersion: 'v3_script_storyboards',
-    sequenceAnimaticMode: 'full_sequence_unit',
+    sequenceAnimaticMode: 'master_script_only',
     snapshot,
   }, 'cinematic_episode')
 
@@ -1059,7 +1101,7 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   const shotBreakNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_shot_break_plan')
   const fanoutNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_shot_parse_fanout')
 
-  assert.equal(screenplayNode?.config.sequenceAnimaticMode, 'full_sequence_unit')
+  assert.equal(screenplayNode?.config.sequenceAnimaticMode, 'master_script_only')
   assert.equal(screenplayNode?.config.maxShotCount, 36)
   assert.equal(shotBreakNode?.config.maxShotCount, 36)
   assert.equal(fanoutNode?.config.maxShotCount, 36)
@@ -1072,14 +1114,104 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   assert.match(workerSource, /Use 24-36 shot markers/)
   assert.match(workerSource, /screenplayAnimaticRole\) === 'master'|workflowMetadata\.screenplayAnimaticRole\) === 'master'/)
   assert.match(startOutputRequestSource, /sequenceAnimaticMasterRequest/)
-  assert.match(startOutputRequestSource, /sequenceAnimaticMode === 'full_sequence_unit'/)
+  assert.match(startOutputRequestSource, /sequenceAnimaticMode === 'master_script_only'/)
   assert.match(workerSource, /sequence_animatic_manifest/)
   assert.match(workerSource, /sequence_animatic_manifest_artifact/)
-  assert.match(workerSource, /sequence_animatic_continuity_anchor_plan/)
-  assert.match(workerSource, /sequence_animatic_character_anchor_atlas_prompt/)
-  assert.match(workerSource, /sequence_animatic_prop_anchor_atlas_prompt/)
-  assert.match(workerSource, /sequence_animatic_location_anchor_extract/)
-  assert.match(workerSource, /continuityAnchorIdsByShotId/)
+  assert.doesNotMatch(workerSource, /continuityEdge\(/)
+})
+
+test('sequence animatic continuity sidecar has typed role, pack schema, and graph contracts', () => {
+  assert.equal(sequenceAnimaticGraphRoleSchema.parse('continuity_pack'), 'continuity_pack')
+  assert.equal(sequenceAnimaticContinuityWorkflowEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+  }).masterRequestId, 'request-master')
+  assert.equal(sequenceAnimaticContinuityPackV1Schema.parse({
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    screenplayAnimaticRole: 'continuity_pack',
+    sequenceAnimaticRole: 'continuity_pack',
+    masterRequestId: 'request-master',
+    masterManifestArtifactKey: 'manifest-artifact',
+    manifestHash: 'manifest-hash',
+    continuityPackHash: 'pack-hash',
+    planningMode: 'llm_structured_v2',
+    characterAnchors: [],
+    propAnchors: [],
+    locationSpotAnchors: [],
+    locationSets: [{ id: 'set_bridge', name: 'Bridge', shotIds: ['shot_001'] }],
+    locationAngles: [{ id: 'angle_bridge_wide', setId: 'set_bridge', name: 'Bridge wide angle', shotIds: ['shot_001'] }],
+    sceneGraph: { nodes: [{ id: 'set_bridge', type: 'location_set', name: 'Bridge' }], edges: [] },
+    shotContinuityMap: { shot_001: ['angle_bridge_wide'] },
+    rejectedCandidates: [{ name: 'rain', reason: 'abstract_or_atmospheric' }],
+    plannerWarnings: [],
+    plannerDiagnostics: [],
+    anchorAssets: [],
+    warnings: ['No anchor assets were needed.'],
+    diagnostics: [],
+  }).sequenceAnimaticRole, 'continuity_pack')
+
+  const continuityPlanContract = getOutputWorkflowNodeContract({
+    key: 'continuity_plan',
+    nodeType: 'utility_transform',
+    config: { purpose: 'sequence_animatic_continuity_anchor_plan' },
+  })
+  assert.equal(continuityPlanContract?.providerBacked, true)
+  assert.ok(continuityPlanContract?.requiredInputs.includes('asset_pack'))
+  assert.ok(continuityPlanContract?.producedOutputs.includes('locationSets'))
+  assert.ok(continuityPlanContract?.producedOutputs.includes('sceneGraph'))
+  assert.ok(continuityPlanContract?.producedOutputs.includes('rejectedCandidates'))
+
+  const graph = buildSequenceAnimaticContinuityWorkflowGraph({
+    workflowId: 'workflow-continuity',
+    draftId: 'draft-1',
+    commonConfig: {
+      graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+      screenplayAnimaticRole: 'continuity_pack',
+      sequenceAnimaticRole: 'continuity_pack',
+      parentRequestId: 'request-master',
+      manifestHash: 'manifest-hash',
+      masterManifestArtifactKey: 'manifest-artifact',
+    },
+    manifest: {
+      title: 'Opening Ash',
+      shotPlan: {
+        sceneId: 'scene-1',
+        shots: [],
+        diagnostics: [],
+        performanceArc: [],
+        audioPlan: { sfx: [] },
+      },
+      blocks: [],
+      screenplayDraft: {},
+      assetPack: { entities: [] },
+    },
+    assetPack: { entities: [] },
+    aspectRatio: '16:9',
+  })
+  const purposes = graph.nodes.map((node) => readConfigPurpose({ config: node.config }))
+  assert.ok(purposes.includes('sequence_animatic_continuity_input'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_anchor_plan'))
+  assert.ok(purposes.includes('sequence_animatic_character_anchor_atlas_prompt'))
+  assert.ok(purposes.includes('sequence_animatic_prop_anchor_atlas_prompt'))
+  assert.ok(purposes.includes('sequence_animatic_location_anchor_extract'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_artifact'))
+  const validation = validateOutputWorkflowGraph({
+    nodes: graph.nodes.map((node) => ({
+      key: node.key,
+      nodeType: node.node_type as 'utility_transform',
+      config: node.config,
+      inputs: node.inputs,
+    })),
+    edges: graph.edges.map((edge) => ({
+      sourceNodeKey: edge.source_node_key,
+      sourcePort: edge.source_port,
+      targetNodeKey: edge.target_node_key,
+      targetPort: edge.target_port,
+      metadata: edge.metadata,
+    })),
+  })
+  assert.equal(validation.ok, true, validation.diagnostics.join('\n'))
 })
 
 test('prompt-created cinematics can use screenplay animatic master mode', () => {
@@ -1125,12 +1257,24 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   const agentsSource = readFileSync(resolve(repoRoot, 'AGENTS.md'), 'utf8')
 
   assert.match(workerSource, /collectSequenceAnimaticContinuityAnchors/)
+  assert.match(workerSource, /runCinematicV2StructuredNode/)
+  assert.match(workerSource, /planningMode: 'llm_structured_v2'/)
+  assert.match(workerSource, /planningMode: 'deterministic_fallback'/)
+  assert.match(workerSource, /sequenceAnimaticAbstractContinuityTerms/)
+  assert.match(workerSource, /'rain'/)
+  assert.match(workerSource, /existing_world_entity/)
+  assert.match(workerSource, /shotContinuityMap/)
+  assert.match(workerSource, /locationSets/)
+  assert.match(workerSource, /locationAngles/)
+  assert.match(workerSource, /sceneGraph/)
   assert.match(workerSource, /sequence_animatic_character_anchor_atlas/)
   assert.match(workerSource, /sequence_animatic_prop_anchor_atlas/)
   assert.match(workerSource, /sequence_animatic_location_anchor_atlas/)
   assert.match(workerSource, /sequence_animatic_character_anchor_extract/)
   assert.match(workerSource, /sequence_animatic_prop_anchor_extract/)
   assert.match(workerSource, /sequence_animatic_location_anchor_extract/)
+  assert.match(workerSource, /verifySequenceAnimaticAnchorCrop/)
+  assert.match(workerSource, /extraction count mismatch/)
   assert.match(workerSource, /sequenceAnimaticArtifactRole: anchorType === 'character' \? 'sequence_animatic_character_anchor'/)
   assert.match(workerSource, /characterAnchors/)
   assert.match(workerSource, /temporaryCharacterShotIds/)
@@ -1143,6 +1287,49 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(worldGraphSource, /continuityAnchors\.characters/)
   assert.match(worldGraphSource, /shot\.continuityAnchorIds/)
   assert.match(agentsSource, /Sequence animatic continuity anchors are output-local references/)
+})
+
+test('sequence animatic production hardening uses atomic ensures, signal refresh, and background continuity planning', () => {
+  const migrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260518181946_sequence_animatic_atomic_child_ensure.sql'), 'utf8')
+  const blockEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-block-workflows/index.ts'), 'utf8')
+  const continuityEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-continuity-workflow/index.ts'), 'utf8')
+  const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const graphSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-graph/index.ts'), 'utf8')
+  const nodeOutputSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-node-output/index.ts'), 'utf8')
+
+  assert.match(migrationSource, /create or replace function public\.ensure_sequence_animatic_child_workflow/)
+  assert.match(migrationSource, /on conflict \(draft_id, key\) do update/)
+  assert.match(migrationSource, /on conflict \(workflow_id, key\) do update/)
+  assert.match(migrationSource, /exception when unique_violation/)
+  assert.match(migrationSource, /refresh_output_request_status_projection\(ensured_request\.id\)/)
+  assert.match(migrationSource, /grant execute on function public\.ensure_sequence_animatic_child_workflow/)
+
+  assert.match(blockEnsureSource, /ensure_sequence_animatic_child_workflow/)
+  assert.match(blockEnsureSource, /p_role: 'storyboard_block'/)
+  assert.match(blockEnsureSource, /p_role: 'shot_video'/)
+  assert.match(blockEnsureSource, /sequence animatic storyboard block ensure rpc completed/)
+  assert.match(blockEnsureSource, /sequence animatic shot ensure rpc completed/)
+  assert.match(continuityEnsureSource, /ensure_sequence_animatic_child_workflow/)
+  assert.match(continuityEnsureSource, /p_role: 'continuity_pack'/)
+  assert.match(continuityEnsureSource, /sequence animatic continuity ensure rpc completed/)
+
+  assert.match(repositorySource, /subscribeSequenceAnimaticStateSignals/)
+  assert.match(repositorySource, /output_workflow_run_steps/)
+  assert.match(repositorySource, /output_request_status_projections/)
+  assert.match(worldGraphSource, /onSubscribeSequenceAnimaticStateSignals/)
+  assert.match(worldGraphSource, /scheduleRefresh\(400\)/)
+  assert.match(worldGraphSource, /window\.setInterval\(\(\) =>/)
+  assert.doesNotMatch(worldGraphSource, /setInterval\(refresh, 2500\)/)
+
+  assert.match(workerSource, /runCinematicV2StructuredNodeBackground\({[\s\S]*schemaName: 'sequence_animatic_continuity_plan_v2'/)
+  assert.match(workerSource, /priorProviderRequestId: readText\(input\.priorStep\?\.providerRequestId\)/)
+  assert.match(workerSource, /plannerFallbackReason/)
+  assert.match(workerSource, /continuityPlanner: true/)
+  assert.match(graphSource, /output workflow graph unchanged/)
+  assert.match(graphSource, /output workflow graph hydrated/)
+  assert.match(nodeOutputSource, /selected node output hydrated/)
 })
 
 test('cinematic V3 dynamically materialized storyboard nodes resolve strict guidance skills', () => {
@@ -1238,9 +1425,8 @@ test('cinematic V3 background repair reuses provider request ids instead of dupl
   assert.match(source, /cancelOpenAiResponse/)
 })
 
-test('cinematic V2 shot asset packs narrow references to visible shot refs', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildCinematicV2ShotAssetPack } = await import(sharedModulePath) as {
+test('cinematic V2 shot asset packs narrow references to visible shot refs', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildCinematicV2ShotAssetPack: (input: {
       assetPack: Record<string, unknown>
       referencePlan: Record<string, unknown>
@@ -1248,7 +1434,9 @@ test('cinematic V2 shot asset packs narrow references to visible shot refs', asy
       maxEntityCount?: number
       maxAssetKeysPerEntity?: number
     }) => { entities: Array<Record<string, unknown>>, shotReferenceKeys: string[] }
-  }
+  }>(t)
+  if (!imported) return
+  const { buildCinematicV2ShotAssetPack } = imported
 
   const shotPack = buildCinematicV2ShotAssetPack({
     assetPack: {
@@ -1321,10 +1509,11 @@ test('cinematic V3 shot parse repairs missing visual refs before validation and 
 test('sequence animatic shot videos use cropped panel keyframe mini graphs', () => {
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-block-workflows/index.ts'), 'utf8')
+  const factorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
   const skillsSource = readFileSync(resolve(repoRoot, 'src/domain/outputSkills.ts'), 'utf8')
 
   assert.match(ensureSource, /sequenceAnimaticMode === 'shot_video'/)
-  assert.match(ensureSource, /shot_input[\s\S]*shot_video_prompt[\s\S]*shot_video/)
+  assert.match(factorySource, /shot_input[\s\S]*shot_video_prompt[\s\S]*shot_video/)
   assert.match(ensureSource, /role: 'cinematic_v2_shot_keyframe'/)
   assert.match(workerSource, /purpose === 'sequence_animatic_shot_input'/)
   assert.match(workerSource, /purpose === 'sequence_animatic_shot_video_prompt'/)
@@ -1533,9 +1722,8 @@ test('cinematic authoring uses lean director script and internal execution scrip
   assert.match(schemaSource, /ugcDirectives/)
 })
 
-test('cinematic beat-sheet prompts use distinct clean micro-beat captions', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildCinematicBeatSheetPrompt } = await import(sharedModulePath) as {
+test('cinematic beat-sheet prompts use distinct clean micro-beat captions', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildCinematicBeatSheetPrompt: (input: {
       blockScript: Record<string, unknown>
       assetPack: Record<string, unknown>
@@ -1543,7 +1731,9 @@ test('cinematic beat-sheet prompts use distinct clean micro-beat captions', asyn
       prompt: string
       guidance: null
     }) => { prompt: string; beatSheetPlan: Record<string, unknown> }
-  }
+  }>(t)
+  if (!imported) return
+  const { buildCinematicBeatSheetPrompt } = imported
   const beatSheet = buildCinematicBeatSheetPrompt({
     aspectRatio: '16:9',
     prompt: 'create a cinematic of Ilya running from the civic harmony unit in the underrail warrens',
@@ -1646,9 +1836,8 @@ test('cinematic beat-sheet prompts use distinct clean micro-beat captions', asyn
   assert.match(prompt, /Storyboard rules: every Panel visual must be action-based/)
 })
 
-test('cinematic adaptive shot density keeps slow scenes sparse and action scenes dense', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildCinematicBeatSheetPrompt, buildCinematicDirectionSheetPrompt, buildCinematicVideoPrompt } = await import(sharedModulePath) as {
+test('cinematic adaptive shot density keeps slow scenes sparse and action scenes dense', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildCinematicBeatSheetPrompt: (input: {
       blockScript: Record<string, unknown>
       assetPack: Record<string, unknown>
@@ -1675,7 +1864,9 @@ test('cinematic adaptive shot density keeps slow scenes sparse and action scenes
       referenceImageCount: number
       cinematicReferenceMode?: string
     }) => string
-  }
+  }>(t)
+  if (!imported) return
+  const { buildCinematicBeatSheetPrompt, buildCinematicDirectionSheetPrompt, buildCinematicVideoPrompt } = imported
   const slowCafeScript = {
     title: 'Cafe Static',
     durationSeconds: 15,
@@ -1828,9 +2019,8 @@ test('cinematic adaptive shot density keeps slow scenes sparse and action scenes
   assert.match(videoPrompt, /EVA-9: "I practiced with your voice while you were asleep\."/)
 })
 
-test('cinematic direction-sheet mode builds director reference sheet and Seedance legend', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildCinematicDirectionSheetPrompt, buildCinematicVideoPrompt } = await import(sharedModulePath) as {
+test('cinematic direction-sheet mode builds director reference sheet and Seedance legend', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildCinematicDirectionSheetPrompt: (input: {
       blockScript: Record<string, unknown>
       assetPack: Record<string, unknown>
@@ -1854,7 +2044,9 @@ test('cinematic direction-sheet mode builds director reference sheet and Seedanc
       debugCinematicStoryboardStyleSafeMode?: boolean
       cinematicStoryboardStyleOverride?: string
     }) => string
-  }
+  }>(t)
+  if (!imported) return
+  const { buildCinematicDirectionSheetPrompt, buildCinematicVideoPrompt } = imported
   const blockScript = {
     title: 'Cafe Static Take',
     durationSeconds: 15,
@@ -2071,9 +2263,8 @@ test('Seedance V3 prompt contract uses exact reference manifests and conditional
   assert.match(rewritten, /Reference fallback mode: storyboard_only/)
 })
 
-test('MUAPI video helpers build payloads and parse result shapes', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildMuapiVideoPayload, extractMuapiVideoUrlFromResult } = await import(sharedModulePath) as {
+test('MUAPI video helpers build payloads and parse result shapes', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildMuapiVideoPayload: (input: {
       prompt: string
       durationSeconds: number
@@ -2084,7 +2275,9 @@ test('MUAPI video helpers build payloads and parse result shapes', async () => {
       referenceAudioUrls?: string[]
     }) => Record<string, unknown>
     extractMuapiVideoUrlFromResult: (value: unknown) => string
-  }
+  }>(t)
+  if (!imported) return
+  const { buildMuapiVideoPayload, extractMuapiVideoUrlFromResult } = imported
 
   assert.deepEqual(buildMuapiVideoPayload({
     prompt: 'Generate one cinematic take.',
@@ -2111,9 +2304,8 @@ test('MUAPI video helpers build payloads and parse result shapes', async () => {
   assert.equal(extractMuapiVideoUrlFromResult({ status: 'failed', error_message: 'moderated' }), '')
 })
 
-test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dialogue', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildCinematicBeatSheetPrompt, buildCinematicVideoPrompt } = await import(sharedModulePath) as {
+test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dialogue', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildCinematicBeatSheetPrompt: (input: {
       blockScript: Record<string, unknown>
       assetPack: Record<string, unknown>
@@ -2137,7 +2329,9 @@ test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dia
       debugCinematicStoryboardStyleSafeMode?: boolean
       cinematicStoryboardStyleOverride?: string
     }) => string
-  }
+  }>(t)
+  if (!imported) return
+  const { buildCinematicBeatSheetPrompt, buildCinematicVideoPrompt } = imported
   const assetPack = {
     entities: [
       {
@@ -2247,9 +2441,8 @@ test('cinematic Nara EVA-9 fixture separates visual storyboard from Seedance dia
   assert.match(normalStoryboardPrompt, /Storyboard style safe mode: disabled/)
 })
 
-test('cinematic cafe storyboard prompt naturalizes actions and strips dialogue delivery', async () => {
-  const sharedModulePath = ['..', '..', 'supabase', 'functions', '_shared', 'output-workflow.ts'].join('/')
-  const { buildCinematicBeatSheetPrompt } = await import(sharedModulePath) as {
+test('cinematic cafe storyboard prompt naturalizes actions and strips dialogue delivery', async (t) => {
+  const imported = await importSharedOutputWorkflow<{
     buildCinematicBeatSheetPrompt: (input: {
       blockScript: Record<string, unknown>
       assetPack: Record<string, unknown>
@@ -2257,7 +2450,9 @@ test('cinematic cafe storyboard prompt naturalizes actions and strips dialogue d
       prompt: string
       guidance: null
     }) => { prompt: string }
-  }
+  }>(t)
+  if (!imported) return
+  const { buildCinematicBeatSheetPrompt } = imported
   const prompt = buildCinematicBeatSheetPrompt({
     aspectRatio: '16:9',
     prompt: 'create a cinematic of Eva-9 and Ilya bantering in a cafe',

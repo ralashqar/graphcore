@@ -85,12 +85,17 @@ type OutputsWorkspaceProps = {
   onRequestDeleteOutputRequest: (requestId: string) => void
   onLoadOutputInbox: () => Promise<void>
   onSignProjectAssetUrls: (input: SignProjectAssetUrlsInput) => Promise<SignedProjectAssetUrl[]> | SignedProjectAssetUrl[]
-  onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null, selectedNodeKey?: string | null) => Promise<{
+  onLoadOutputWorkflowGraph: (workflowId: string, runId?: string | null, selectedNodeKey?: string | null, options?: {
+    knownGraphRevision?: string | null
+    assetHydrationMode?: 'none' | 'preview' | 'selected' | 'all'
+  }) => Promise<{
     workflow: OutputWorkflow | null
     nodes: OutputWorkflowNode[]
     run: OutputWorkflowRun | null
+    graphRevision?: string
     unchanged?: boolean
   } | null | void>
+  onLoadOutputWorkflowNodeOutput: (workflowId: string, runId: string | null | undefined, nodeKey: string, graphRevision?: string | null) => Promise<unknown>
   onSubscribeOutputWorkflowGraphSignals: (input: {
     draftId: string
     workflowId: string
@@ -284,6 +289,11 @@ function readStringArray(value: unknown) {
 
 function readTrimmedString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function readOutputRequestGraphRevision(request: OutputRequest | null | undefined) {
+  const projection = readRecord(readRecord(request?.metadata).outputStatusProjection)
+  return readTrimmedString(projection.graphRevision)
 }
 
 function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
@@ -1676,6 +1686,7 @@ export function OutputsWorkspace({
   onLoadOutputInbox,
   onSignProjectAssetUrls,
   onLoadOutputWorkflowGraph,
+  onLoadOutputWorkflowNodeOutput,
   onSubscribeOutputWorkflowGraphSignals,
   onStartOutputWorkflow,
   onStartOutputWorkflowRun,
@@ -1754,6 +1765,7 @@ export function OutputsWorkspace({
     usageBreakdownOpen,
   } = useOutputWorkspaceState(snapshot)
   const graphRefreshSeqRef = useRef(0)
+  const graphRevisionRef = useRef<string | null>(null)
   const graphRefreshTimerRef = useRef<number | null>(null)
   const graphRetryTimerRef = useRef<number | null>(null)
   const graphWatchdogTimerRef = useRef<number | null>(null)
@@ -2020,8 +2032,10 @@ export function OutputsWorkspace({
 
   useEffect(() => {
     if (!graphOpen || !activeWorkflow || !selectedNodeKey) return
-    scheduleOutputGraphRefresh(0)
-  }, [activeWorkflow?.id, graphOpen, selectedNodeKey])
+    void onLoadOutputWorkflowNodeOutput(activeWorkflow.id, activeRun?.id ?? null, selectedNodeKey, graphRevisionRef.current).catch((loadError) => {
+      console.warn('[GraphCore] output workflow node output sync delayed.', loadError)
+    })
+  }, [activeRun?.id, activeWorkflow?.id, graphOpen, onLoadOutputWorkflowNodeOutput, selectedNodeKey])
 
   useEffect(() => {
     if (selectedComicSequenceKey && sequenceUnits.some((entity) => entity.key === selectedComicSequenceKey)) return
@@ -2228,9 +2242,17 @@ export function OutputsWorkspace({
     if (!options.quiet) setRefreshingGraph(true)
     if (options.manual) setError(null)
     const graphRunId = options.runId ?? activeRun?.id ?? null
+    const requestForGraph = selectedOutputRequest?.workflowId === workflowId
+      ? selectedOutputRequest
+      : outputRequests.find((request) => request.workflowId === workflowId) ?? null
+    const knownGraphRevision = readOutputRequestGraphRevision(requestForGraph) || graphRevisionRef.current
     try {
-      await onLoadOutputWorkflowGraph(workflowId, graphRunId, selectedKey)
+      const result = await onLoadOutputWorkflowGraph(workflowId, graphRunId, selectedKey, {
+        knownGraphRevision,
+        assetHydrationMode: selectedKey ? 'selected' : 'preview',
+      })
       if (sequence !== graphRefreshSeqRef.current) return
+      if (result?.graphRevision) graphRevisionRef.current = result.graphRevision
       graphLastRefreshAtRef.current = Date.now()
       graphBackoffMsRef.current = 0
       setGraphSyncDelayed(false)
@@ -2291,7 +2313,11 @@ export function OutputsWorkspace({
     setRefreshingGraph(true)
     setError(null)
     try {
-      await onLoadOutputWorkflowGraph(request.workflowId, request.latestRunId ?? null, requestedNodeKey)
+      const result = await onLoadOutputWorkflowGraph(request.workflowId, request.latestRunId ?? null, requestedNodeKey, {
+        knownGraphRevision: readOutputRequestGraphRevision(request) || graphRevisionRef.current,
+        assetHydrationMode: requestedNodeKey ? 'selected' : 'preview',
+      })
+      if (result?.graphRevision) graphRevisionRef.current = result.graphRevision
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : 'Could not open output workflow graph.')
     } finally {

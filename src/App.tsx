@@ -5825,6 +5825,63 @@ export default function App() {
     return result
   }
 
+  async function ensureSequenceAnimaticContinuityWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticContinuityWorkflow>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before preparing sequence animatic continuity.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic continuity requires a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticContinuityWorkflow(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const workflows = result.workflow ? [result.workflow] : []
+    const requests = [result.masterRequest, ...(result.continuityRequest ? [result.continuityRequest] : [])]
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+      outputWorkflows: [
+        ...workflows,
+        ...current.outputWorkflows.filter((workflow) => !workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
+  async function loadSequenceAnimaticState(request: Parameters<typeof workspaceService.loadSequenceAnimaticState>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before loading sequence animatic state.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic state requires a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.loadSequenceAnimaticState(snapshot, request)
+    if (result.unchanged) return result
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(current, {
+      requests: result.requests,
+      workflows: result.workflows,
+      runs: result.runs,
+      artifacts: result.artifacts,
+      assets: result.assets.flatMap((asset) => {
+        const parsedAsset = schemaCatalog.assetDefinitionSchema.safeParse(asset)
+        return parsedAsset.success ? [parsedAsset.data] : []
+      }),
+    }))
+    return result
+  }
+
   async function previewOutputCinematicDirectorNote(request: Parameters<typeof workspaceService.previewOutputCinematicDirectorNote>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before directing a cinematic timeline.')
@@ -5967,7 +6024,12 @@ export default function App() {
     return loadPromise
   }
 
-  async function loadOutputWorkflowGraph(workflowId: string, runId?: string | null, selectedNodeKey?: string | null) {
+  async function loadOutputWorkflowGraph(
+    workflowId: string,
+    runId?: string | null,
+    selectedNodeKey?: string | null,
+    options?: { knownGraphRevision?: string | null; assetHydrationMode?: 'none' | 'preview' | 'selected' | 'all' },
+  ) {
     const current = snapshotRef.current ?? snapshot
     if (!current || loadedState?.source !== 'supabase') return
     const requestId = outputGraphLoadRequestIdRef.current + 1
@@ -5980,6 +6042,8 @@ export default function App() {
       runId,
       selectedNodeKey: selectedNodeKey ?? null,
       includeSelectedNodeOutput: Boolean(selectedNodeKey),
+      knownGraphRevision: options?.knownGraphRevision ?? null,
+      assetHydrationMode: options?.assetHydrationMode ?? (selectedNodeKey ? 'selected' : 'preview'),
     })
     const latest = snapshotRef.current ?? current
     if (requestId !== outputGraphLoadRequestIdRef.current) return
@@ -6013,6 +6077,33 @@ export default function App() {
         graphRevision: result.graphRevision,
       })
     }
+    return result
+  }
+
+  async function loadOutputWorkflowNodeOutput(workflowId: string, runId: string | null | undefined, nodeKey: string, graphRevision?: string | null) {
+    const current = snapshotRef.current ?? snapshot
+    if (!current || loadedState?.source !== 'supabase') return null
+    const result = await workspaceService.loadOutputWorkflowNodeOutput({
+      projectId: current.project.id,
+      draftId: current.draft.id,
+      workflowId,
+      runId: runId ?? null,
+      nodeKey,
+      graphRevision: graphRevision ?? null,
+    })
+    const latest = snapshotRef.current ?? current
+    if (!isSameProjectDraft(latest, current)) return result
+    commitPersistedSnapshot(mergeOutputSliceIntoSnapshot(latest, {
+      nodes: latest.outputWorkflowNodes
+        .filter((node) => !(node.workflowId === workflowId && node.key === result.selectedNodeOutput.nodeKey))
+        .concat(latest.outputWorkflowNodes
+          .filter((node) => node.workflowId === workflowId && node.key === result.selectedNodeOutput.nodeKey)
+          .map((node) => ({ ...node, outputs: result.selectedNodeOutput.outputs }))),
+      assets: result.assets.flatMap((asset) => {
+        const parsedAsset = schemaCatalog.assetDefinitionSchema.safeParse(asset)
+        return parsedAsset.success ? [parsedAsset.data] : []
+      }),
+    }))
     return result
   }
 
@@ -8337,6 +8428,9 @@ export default function App() {
                 onStartOutputRequest={startOutputRequest}
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
                 onEnsureSequenceAnimaticBlockWorkflows={ensureSequenceAnimaticBlockWorkflows}
+                onEnsureSequenceAnimaticContinuityWorkflow={ensureSequenceAnimaticContinuityWorkflow}
+                onLoadSequenceAnimaticState={loadSequenceAnimaticState}
+                onSubscribeSequenceAnimaticStateSignals={workspaceService.subscribeSequenceAnimaticStateSignals}
                 onGetOutputRequestStatus={getOutputRequestStatus}
                 onCancelOutputRequest={cancelOutputRequest}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
@@ -8407,6 +8501,7 @@ export default function App() {
                 onLoadOutputInbox={loadOutputInbox}
                 onSignProjectAssetUrls={handleSignProjectAssetUrlEntries}
                 onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
+                onLoadOutputWorkflowNodeOutput={loadOutputWorkflowNodeOutput}
                 onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
                 onPlanOutputWorkflow={planOutputWorkflow}
                 onPreviewCinematicDirectorNote={previewOutputCinematicDirectorNote}

@@ -7,6 +7,7 @@ import {
   outputGuidanceModeSchema,
   resolveOutputSkillsForNode,
 } from './outputSkills.ts'
+import { getOutputWorkflowNodeContract } from './outputWorkflowNodeContracts.ts'
 import {
   classifyPromptIntentScored,
   promptIntentCatalogVersion,
@@ -23,6 +24,7 @@ import {
 import { worldThreadSchema } from './worldThread.ts'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
+const looseObjectSchema = z.object({}).catchall(z.unknown())
 const optionalTrimmedNonEmptyStringSchema = z.string()
   .trim()
   .max(1000)
@@ -45,8 +47,13 @@ export const outputImageGenerationQualitySchema = z.enum(['low', 'medium', 'high
 export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'webp'])
 export const cinematicPipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration', 'v3_script_storyboards'])
 export const cinematicV2AnimaticModeSchema = z.enum(['fast_panels', 'quality_keyframes'])
-export const sequenceAnimaticModeSchema = z.enum(['full_sequence_unit', 'master_script_only'])
+export const sequenceAnimaticModeSchema = z.preprocess(
+  (value) => value === 'full_sequence_unit' ? 'master_script_only' : value,
+  z.enum(['master_script_only']),
+)
 export const cinematicAnimaticModeSchema = z.enum(['prompt_cinematic_master'])
+export const sequenceAnimaticGraphSpecVersionSchema = z.literal('sequence_animatic_graph_v1')
+export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'continuity_pack', 'storyboard_block', 'shot_video'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -81,6 +88,7 @@ export const outputWorkflowRunScopeSchema = z.enum(['node_only', 'upstream_to_no
 export type OutputWorkflowRunScope = z.infer<typeof outputWorkflowRunScopeSchema>
 export const outputWorkflowRunIntentSchema = z.enum([
   'prepare_storyboard_block',
+  'generate_continuity_pack',
   'generate_block_video',
   'generate_shot_video',
   'repair_upstream_cache',
@@ -677,6 +685,79 @@ export const outputWorkflowRunStatusResponseSchema = z.object({
   terminal: z.boolean().default(false),
 })
 
+export const sequenceAnimaticStoryboardBlockV1Schema = looseObjectSchema.extend({
+  id: z.string().min(1),
+  index: z.number().optional(),
+  title: z.string().optional(),
+  shotIds: z.array(z.string()).default([]),
+  shots: z.array(looseRecordSchema).default([]),
+  continuityAnchorIds: z.array(z.string()).default([]),
+  storyboardGroup: looseRecordSchema.default({}),
+  storyboardLayout: looseRecordSchema.default({}),
+  durationSeconds: z.number().optional(),
+})
+
+export const sequenceAnimaticManifestV1Schema = looseObjectSchema.extend({
+  role: z.literal('sequence_animatic_manifest'),
+  graphSpecVersion: sequenceAnimaticGraphSpecVersionSchema.default('sequence_animatic_graph_v1'),
+  screenplayAnimaticRole: z.literal('master'),
+  sequenceAnimaticRole: z.literal('master'),
+  requestId: z.string().nullable().optional(),
+  workflowId: z.string().min(1),
+  runId: z.string().min(1),
+  screenplayDraft: looseRecordSchema.default({}),
+  screenplayMarkdown: z.string().default(''),
+  shotBreakPlan: looseRecordSchema.default({}),
+  shotPlan: looseRecordSchema.default({}),
+  blocks: z.array(sequenceAnimaticStoryboardBlockV1Schema).default([]),
+  assetPack: looseRecordSchema.default({}),
+  continuityAnchorPlan: looseRecordSchema.default({}),
+  characterAnchors: z.array(looseRecordSchema).default([]),
+  propAnchors: z.array(looseRecordSchema).default([]),
+  locationSpotAnchors: z.array(looseRecordSchema).default([]),
+  anchorAssets: z.array(looseRecordSchema).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+export const sequenceAnimaticContinuityPackV1Schema = looseObjectSchema.extend({
+  graphSpecVersion: sequenceAnimaticGraphSpecVersionSchema.default('sequence_animatic_graph_v1'),
+  screenplayAnimaticRole: z.literal('continuity_pack'),
+  sequenceAnimaticRole: z.literal('continuity_pack'),
+  masterRequestId: z.string().min(1),
+  masterManifestArtifactKey: z.string().min(1),
+  manifestHash: z.string().min(1),
+  continuityPackHash: z.string().min(1),
+  planningMode: z.enum(['llm_structured_v2', 'deterministic_fallback', 'legacy_manifest']).optional(),
+  characterAnchors: z.array(looseRecordSchema).default([]),
+  propAnchors: z.array(looseRecordSchema).default([]),
+  locationSpotAnchors: z.array(looseRecordSchema).default([]),
+  locationSets: z.array(looseRecordSchema).default([]),
+  locationAngles: z.array(looseRecordSchema).default([]),
+  sceneGraph: looseRecordSchema.default({}),
+  shotContinuityMap: looseRecordSchema.default({}),
+  rejectedCandidates: z.array(looseRecordSchema).default([]),
+  plannerWarnings: z.array(z.string()).default([]),
+  plannerDiagnostics: z.array(z.string()).default([]),
+  anchorAssets: z.array(looseRecordSchema).default([]),
+  warnings: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+export const sequenceAnimaticShotVideoInputV1Schema = looseObjectSchema.extend({
+  graphSpecVersion: sequenceAnimaticGraphSpecVersionSchema.default('sequence_animatic_graph_v1'),
+  screenplayAnimaticRole: z.literal('shot_video'),
+  sequenceAnimaticRole: z.literal('shot_video'),
+  masterRequestId: z.string().min(1),
+  parentRequestId: z.string().min(1),
+  storyboardBlockId: z.string().min(1),
+  shotId: z.string().min(1),
+  shot: looseRecordSchema,
+  panel: looseRecordSchema,
+  assetPack: looseRecordSchema.default({}),
+  editorialDurationSeconds: z.number().positive(),
+  providerDurationSeconds: z.number().positive(),
+})
+
 export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -696,6 +777,43 @@ export const sequenceAnimaticBlockWorkflowEnsureResponseSchema = z.object({
   edges: z.array(outputWorkflowEdgeSchema).default([]),
 })
 
+export const sequenceAnimaticContinuityWorkflowEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+})
+
+export const sequenceAnimaticContinuityWorkflowEnsureResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  continuityRequest: outputRequestSchema.nullable().default(null),
+  workflow: outputWorkflowSchema.nullable().default(null),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+})
+
+export const sequenceAnimaticStateRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  knownRevision: z.string().nullable().optional(),
+})
+
+export const sequenceAnimaticStateResponseSchema = z.object({
+  ok: z.literal(true),
+  unchanged: z.boolean().default(false),
+  revision: z.string().default(''),
+  masterRequest: outputRequestSchema.nullable().default(null),
+  requests: z.array(outputRequestSchema).default([]),
+  workflows: z.array(outputWorkflowSchema).default([]),
+  runs: z.array(outputWorkflowRunSchema).default([]),
+  artifacts: z.array(outputArtifactSchema).default([]),
+  assets: z.array(looseRecordSchema).default([]),
+  projections: z.array(outputRequestStatusProjectionSchema).default([]),
+})
+
+export const outputWorkflowAssetHydrationModeSchema = z.enum(['none', 'preview', 'selected', 'all'])
+
 export const outputWorkflowGraphRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -704,6 +822,7 @@ export const outputWorkflowGraphRequestSchema = z.object({
   selectedNodeKey: z.string().min(1).nullable().optional(),
   includeSelectedNodeOutput: z.boolean().default(false),
   knownGraphRevision: z.string().nullable().optional(),
+  assetHydrationMode: outputWorkflowAssetHydrationModeSchema.default('all'),
 })
 
 export const outputWorkflowSelectedNodeOutputSchema = z.object({
@@ -723,6 +842,24 @@ export const outputWorkflowGraphResponseSchema = z.object({
   assets: z.array(looseRecordSchema).default([]),
   graphRevision: z.string().default(''),
   selectedNodeOutput: outputWorkflowSelectedNodeOutputSchema.nullable().default(null),
+})
+
+export const outputWorkflowNodeOutputRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  workflowId: z.string().min(1),
+  runId: z.string().min(1).nullable().optional(),
+  nodeKey: z.string().min(1),
+  graphRevision: z.string().nullable().optional(),
+})
+
+export const outputWorkflowNodeOutputResponseSchema = z.object({
+  ok: z.literal(true),
+  workflowId: z.string(),
+  runId: z.string().nullable().default(null),
+  graphRevision: z.string().default(''),
+  selectedNodeOutput: outputWorkflowSelectedNodeOutputSchema,
+  assets: z.array(looseRecordSchema).default([]),
 })
 
 export const outputWorkflowCancelResponseSchema = z.object({
@@ -807,7 +944,7 @@ export function hashOutputWorkflowValue(value: unknown) {
 
 export function validateOutputWorkflowGraph(input: {
   nodes: Array<Pick<z.infer<typeof outputWorkflowNodeSchema>, 'key' | 'nodeType'> & Partial<Pick<z.infer<typeof outputWorkflowNodeSchema>, 'config' | 'inputs'>>>
-  edges: Array<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourceNodeKey' | 'targetNodeKey'>>
+  edges: Array<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourceNodeKey' | 'targetNodeKey'> & Partial<Pick<z.infer<typeof outputWorkflowEdgeSchema>, 'sourcePort' | 'targetPort' | 'metadata'>>>
   worldWiki?: unknown
 }) {
   const executionPlan = buildOutputWorkflowExecutionPlan(input.nodes, input.edges)
@@ -823,7 +960,28 @@ export function validateOutputWorkflowGraph(input: {
     })
     return bundle.diagnostics.map((diagnostic) => `${node.key}: ${diagnostic}`)
   })
-  const diagnostics = [...executionPlan.diagnostics, ...skillDiagnostics]
+  const nodeByKey = new Map(input.nodes.map((node) => [node.key, node] as const))
+  const contractDiagnostics = input.nodes.flatMap((node) => {
+    const contract = getOutputWorkflowNodeContract(node)
+    if (!contract || contract.requiredInputs.length === 0) return []
+    const incomingPorts = new Set(input.edges
+      .filter((edge) => edge.targetNodeKey === node.key)
+      .map((edge) => typeof edge.targetPort === 'string' ? edge.targetPort : '')
+      .filter(Boolean))
+    return contract.requiredInputs
+      .filter((port) => !incomingPorts.has(port))
+      .map((port) => `${node.key}: missing required "${port}" input for ${contract.purpose}.`)
+  })
+  const edgeContractDiagnostics = input.edges.flatMap((edge) => {
+    const sourceNode = nodeByKey.get(edge.sourceNodeKey)
+    const sourceContract = getOutputWorkflowNodeContract(sourceNode)
+    const sourcePort = typeof edge.sourcePort === 'string' ? edge.sourcePort : ''
+    if (!sourceContract || !sourcePort || sourceContract.producedOutputs.length === 0) return []
+    return sourceContract.producedOutputs.includes(sourcePort)
+      ? []
+      : [`${edge.sourceNodeKey}: edge uses undeclared "${sourcePort}" output for ${sourceContract.purpose}.`]
+  })
+  const diagnostics = [...executionPlan.diagnostics, ...skillDiagnostics, ...contractDiagnostics, ...edgeContractDiagnostics]
   return {
     ok: diagnostics.length === 0,
     diagnostics,
@@ -2946,7 +3104,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
   const debugSkipVideoGeneration = request.debugSkipVideoGeneration ?? true
   const sequenceAnimaticMode = request.sequenceAnimaticMode
   const cinematicAnimaticMode = request.cinematicAnimaticMode
-  const fullSequenceUnitAnimatic = sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only'
+  const fullSequenceUnitAnimatic = sequenceAnimaticMode === 'master_script_only'
   const promptCinematicAnimatic = cinematicAnimaticMode === 'prompt_cinematic_master'
   const screenplayAnimaticMaster = fullSequenceUnitAnimatic || promptCinematicAnimatic
   const videoProvider = resolveDefaultVideoProvider()
@@ -3618,8 +3776,11 @@ export type OutputWorkflowPlanResponse = z.infer<typeof outputWorkflowPlanRespon
 export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResponseSchema>
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
 export type SequenceAnimaticBlockWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticBlockWorkflowEnsureResponseSchema>
+export type SequenceAnimaticContinuityWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityWorkflowEnsureResponseSchema>
+export type SequenceAnimaticStateResponse = z.infer<typeof sequenceAnimaticStateResponseSchema>
 export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphRequestSchema>
 export type OutputWorkflowGraphResponse = z.infer<typeof outputWorkflowGraphResponseSchema>
+export type OutputWorkflowNodeOutputResponse = z.infer<typeof outputWorkflowNodeOutputResponseSchema>
 export type OutputWorkflowCancelResponse = z.infer<typeof outputWorkflowCancelResponseSchema>
 export type OutputRequestStatusResponse = z.infer<typeof outputRequestStatusResponseSchema>
 export type OutputFeedResponse = z.infer<typeof outputFeedResponseSchema>

@@ -163,6 +163,8 @@ import {
   outputWorkflowGraphRequestSchema,
   outputWorkflowGraphResponseSchema,
   outputWorkflowNodeSchema,
+  outputWorkflowNodeOutputRequestSchema,
+  outputWorkflowNodeOutputResponseSchema,
   outputWorkflowNodeUpdateRequestSchema,
   outputWorkflowNodeUpdateResponseSchema,
   outputWorkflowPlanRequestSchema,
@@ -181,6 +183,10 @@ import {
   outputWorkflowUpgradeResponseSchema,
   sequenceAnimaticBlockWorkflowEnsureRequestSchema,
   sequenceAnimaticBlockWorkflowEnsureResponseSchema,
+  sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
+  sequenceAnimaticContinuityWorkflowEnsureResponseSchema,
+  sequenceAnimaticStateRequestSchema,
+  sequenceAnimaticStateResponseSchema,
   type OutputArtifact,
   type OutputFeedResponse,
   type OutputRequest,
@@ -201,6 +207,9 @@ import {
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
   type SequenceAnimaticBlockWorkflowEnsureResponse,
+  type SequenceAnimaticContinuityWorkflowEnsureResponse,
+  type SequenceAnimaticStateResponse,
+  type OutputWorkflowNodeOutputResponse,
 } from '../domain/outputWorkflow'
 import type { PromptIntentClassificationResult } from '../domain/promptIntentClassifier'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
@@ -8519,6 +8528,64 @@ export async function ensureSequenceAnimaticBlockWorkflows(
   return parsed
 }
 
+export async function ensureSequenceAnimaticContinuityWorkflow(
+  snapshot: ProjectSnapshot,
+  request: { masterRequestId: string },
+): Promise<SequenceAnimaticContinuityWorkflowEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic continuity.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic continuity requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticContinuityWorkflowEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-continuity-workflow',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticContinuityWorkflowEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function loadSequenceAnimaticState(
+  snapshot: ProjectSnapshot,
+  request: { masterRequestId: string; knownRevision?: string | null },
+): Promise<SequenceAnimaticStateResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading sequence animatic state.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic state requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticStateRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    knownRevision: request.knownRevision ?? null,
+  })
+  return runCoalescedRequest({
+    className: 'output-graph',
+    key: `sequence-animatic-state:${payload.projectId}:${payload.draftId}:${payload.masterRequestId}:${payload.knownRevision ?? ''}`,
+    ttlMs: 300,
+    fn: async () => {
+      const response = await invokeAuthedFunctionWithSessionRecovery(
+        'get-sequence-animatic-state',
+        payload,
+        session,
+      )
+      if (response.error) {
+        throw new Error(await readFunctionsErrorMessage(response.error))
+      }
+      return sequenceAnimaticStateResponseSchema.parse(response.data)
+    },
+  })
+}
+
 export async function previewOutputCinematicDirectorNote(
   snapshot: ProjectSnapshot,
   request: Omit<CinematicDirectorNotePreviewRequest, 'projectId' | 'draftId'>,
@@ -8738,8 +8805,10 @@ export async function loadOutputWorkflowGraph(input: {
   selectedNodeKey?: string | null
   includeSelectedNodeOutput?: boolean
   knownGraphRevision?: string | null
+  assetHydrationMode?: 'none' | 'preview' | 'selected' | 'all'
 }): Promise<OutputWorkflowGraphLoadResult> {
-  const graphCacheKey = `${input.projectId}:${input.draftId}:${input.workflowId}:${input.runId ?? 'latest'}`
+  const assetHydrationMode = input.assetHydrationMode ?? 'preview'
+  const graphCacheKey = `${input.projectId}:${input.draftId}:${input.workflowId}:${input.runId ?? 'latest'}:${assetHydrationMode}`
   const cachedRevision = outputGraphRevisionSessionCache.get(graphCacheKey)
   const selectedNodeRequested = Boolean(input.selectedNodeKey && input.includeSelectedNodeOutput === true)
   const selectedCacheKey = selectedNodeRequested
@@ -8770,12 +8839,18 @@ export async function loadOutputWorkflowGraph(input: {
     selectedNodeKey: input.selectedNodeKey ?? null,
     includeSelectedNodeOutput: input.includeSelectedNodeOutput === true,
     knownGraphRevision: input.knownGraphRevision ?? cachedRevision?.revision ?? null,
+    assetHydrationMode,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'get-output-workflow-graph',
-    payload,
-    session,
-  )
+  const response = await runCoalescedRequest({
+    className: 'output-graph',
+    key: `output-graph:${stableRequestKey(payload)}`,
+    ttlMs: 250,
+    fn: () => invokeAuthedFunctionWithSessionRecovery(
+      'get-output-workflow-graph',
+      payload,
+      session,
+    ),
+  })
   if (response.error) {
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
@@ -8830,6 +8905,41 @@ export async function loadOutputWorkflowGraph(input: {
     })
   }
   return result
+}
+
+export async function loadOutputWorkflowNodeOutput(input: {
+  projectId: string
+  draftId: string
+  workflowId: string
+  runId?: string | null
+  nodeKey: string
+  graphRevision?: string | null
+}): Promise<OutputWorkflowNodeOutputResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading output workflow node output.')
+  const payload = outputWorkflowNodeOutputRequestSchema.parse({
+    projectId: input.projectId,
+    draftId: input.draftId,
+    workflowId: input.workflowId,
+    runId: input.runId ?? null,
+    nodeKey: input.nodeKey,
+    graphRevision: input.graphRevision ?? null,
+  })
+  return runCoalescedRequest({
+    className: 'output-graph',
+    key: `output-node-output:${stableRequestKey(payload)}`,
+    ttlMs: 500,
+    fn: async () => {
+      const response = await invokeAuthedFunctionWithSessionRecovery(
+        'get-output-workflow-node-output',
+        payload,
+        session,
+      )
+      if (response.error) {
+        throw new Error(await readFunctionsErrorMessage(response.error))
+      }
+      return outputWorkflowNodeOutputResponseSchema.parse(response.data)
+    },
+  })
 }
 
 export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWorkflowCancelResponse> {
@@ -9451,6 +9561,50 @@ export function subscribeOutputWorkflowGraphSignals(input: {
       filter: `draft_id=eq.${input.draftId}`,
     }, () => input.onSignal())
   }
+
+  void channel.subscribe()
+  return {
+    unsubscribe: () => supabase.removeChannel(channel),
+  }
+}
+
+export function subscribeSequenceAnimaticStateSignals(input: {
+  draftId: string
+  masterRequestId: string
+  onSignal: () => void
+}) {
+  const channel = supabase
+    .channel(`graphcore-sequence-animatic-state-${input.masterRequestId}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_requests',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_workflow_runs',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_workflow_run_steps',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_artifacts',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_request_status_projections',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, () => input.onSignal())
 
   void channel.subscribe()
   return {

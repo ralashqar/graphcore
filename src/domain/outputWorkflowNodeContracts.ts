@@ -15,6 +15,78 @@ export type OutputWorkflowNodeContract = {
 
 const cinematicSequenceContracts = [
   {
+    purpose: 'sequence_animatic_manifest',
+    label: 'Build Animatic Manifest',
+    requiredInputs: ['screenplay', 'shot_break_plan'],
+    producedOutputs: ['text', 'manifest', 'sequenceAnimaticManifest', 'shot_plan'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Building animatic manifest',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_manifest_artifact',
+    label: 'Register Animatic Manifest',
+    requiredInputs: ['input'],
+    producedOutputs: ['artifact', 'manifest'],
+    artifactRoles: ['sequence_animatic_manifest'],
+    previewRoles: ['artifact'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Registering animatic manifest',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_block_input',
+    label: 'Block Input',
+    requiredInputs: [],
+    producedOutputs: ['text', 'shot_plan', 'asset_pack', 'block'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing storyboard block',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_block_artifact',
+    label: 'Register Block',
+    requiredInputs: ['input'],
+    producedOutputs: ['artifact', 'block', 'panels', 'videoPrompt'],
+    artifactRoles: ['sequence_animatic_block_manifest'],
+    previewRoles: ['artifact'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving storyboard block manifest',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_shot_input',
+    label: 'Shot Input',
+    requiredInputs: [],
+    producedOutputs: ['shot', 'image', 'asset_pack', 'shot_plan'],
+    artifactRoles: [],
+    previewRoles: ['image'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing shot video input',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_input',
+    label: 'Continuity Input',
+    requiredInputs: [],
+    producedOutputs: ['text', 'master_manifest', 'screenplay', 'shot_plan', 'shot_break_plan', 'asset_pack'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing continuity pack input',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
     purpose: 'cinematic_v3_storyboard_prompt',
     label: 'Storyboard Prompt',
     requiredInputs: ['shot_plan', 'asset_pack'],
@@ -101,12 +173,24 @@ const cinematicSequenceContracts = [
   {
     purpose: 'sequence_animatic_continuity_anchor_plan',
     label: 'Plan Continuity Anchors',
-    requiredInputs: ['screenplay', 'shot_plan'],
-    producedOutputs: ['text', 'continuityAnchorPlan'],
+    requiredInputs: ['screenplay', 'shot_plan', 'asset_pack'],
+    producedOutputs: ['text', 'continuityAnchorPlan', 'continuity_anchor_plan', 'characterAnchors', 'propAnchors', 'locationSpotAnchors', 'locationSets', 'locationAngles', 'sceneGraph', 'shotContinuityMap', 'rejectedCandidates'],
     artifactRoles: [],
     previewRoles: ['text'],
     recoveryStrategy: 'node_step',
     progressLabel: 'Finding reusable characters, props, and locations',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_character_anchor_atlas_prompt',
+    label: 'Character Anchor Atlas Prompt',
+    requiredInputs: ['continuity_anchor_plan'],
+    producedOutputs: ['text', 'prompt', 'anchors', 'atlasLayout'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing temporary character atlas prompt',
     providerBacked: false,
     manualOnly: false,
   },
@@ -135,6 +219,18 @@ const cinematicSequenceContracts = [
     manualOnly: false,
   },
   {
+    purpose: 'sequence_animatic_prop_anchor_atlas_prompt',
+    label: 'Prop Anchor Atlas Prompt',
+    requiredInputs: ['continuity_anchor_plan'],
+    producedOutputs: ['text', 'prompt', 'anchors', 'atlasLayout'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing prop atlas prompt',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
     purpose: 'sequence_animatic_prop_anchor_atlas',
     label: 'Prop Anchor Atlas',
     requiredInputs: ['prompt'],
@@ -159,6 +255,18 @@ const cinematicSequenceContracts = [
     manualOnly: false,
   },
   {
+    purpose: 'sequence_animatic_location_anchor_atlas_prompt',
+    label: 'Location Anchor Atlas Prompt',
+    requiredInputs: ['continuity_anchor_plan'],
+    producedOutputs: ['text', 'prompt', 'anchors', 'atlasLayout'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing location spot atlas prompt',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
     purpose: 'sequence_animatic_location_anchor_atlas',
     label: 'Location Anchor Atlas',
     requiredInputs: ['prompt'],
@@ -179,6 +287,18 @@ const cinematicSequenceContracts = [
     previewRoles: ['anchors'],
     recoveryStrategy: 'node_step_artifact',
     progressLabel: 'Splitting location refs',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_artifact',
+    label: 'Register Continuity Pack',
+    requiredInputs: ['continuity_anchor_plan'],
+    producedOutputs: ['artifact', 'continuityPack', 'characterAnchors', 'propAnchors', 'locationSpotAnchors'],
+    artifactRoles: ['sequence_animatic_continuity_pack'],
+    previewRoles: ['artifact'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving continuity pack',
     providerBacked: false,
     manualOnly: false,
   },
@@ -208,6 +328,7 @@ export function getOutputWorkflowNodeContract(nodeOrConfig: Pick<OutputWorkflowN
 
 export type OutputWorkflowRunIntent =
   | 'prepare_storyboard_block'
+  | 'generate_continuity_pack'
   | 'generate_block_video'
   | 'generate_shot_video'
   | 'repair_upstream_cache'
@@ -223,6 +344,13 @@ export type OutputWorkflowRunIntentDefaults = {
 export function outputWorkflowRunIntentDefaults(intent: string | null | undefined): OutputWorkflowRunIntentDefaults | null {
   switch (intent) {
     case 'prepare_storyboard_block':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: true,
+        cinematicVideoApproved: false,
+        allowStaleUpstreamOutputs: false,
+      }
+    case 'generate_continuity_pack':
       return {
         runScope: 'upstream_to_node',
         debugSkipVideoGeneration: true,

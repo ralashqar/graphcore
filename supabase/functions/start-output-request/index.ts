@@ -508,7 +508,7 @@ Deno.serve(async (request) => {
     const cinematicPipelineVersion = payload.cinematicPipelineVersion
       ?? (planner.outputKind === 'cinematic_episode' || planner.outputKind === 'cinematic_trailer' ? 'v3_script_storyboards' : 'v1_take_blocks')
     const sequenceAnimaticMasterRequest = payload.sourceSurface === 'wiki_sequence_unit'
-      && (sequenceAnimaticMode === 'full_sequence_unit' || sequenceAnimaticMode === 'master_script_only')
+      && sequenceAnimaticMode === 'master_script_only'
     const promptCinematicAnimaticMasterRequest = cinematicOutput
       && cinematicPipelineVersion === 'v3_script_storyboards'
       && cinematicAnimaticMode === 'prompt_cinematic_master'

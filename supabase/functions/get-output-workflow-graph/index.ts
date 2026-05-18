@@ -361,6 +361,12 @@ Deno.serve(async (request) => {
     })
 
     if (!payload.includeSelectedNodeOutput && readText(payload.knownGraphRevision) && readText(payload.knownGraphRevision) === revision) {
+      console.info('[GraphCore] output workflow graph unchanged.', {
+        workflowId: payload.workflowId,
+        runId: readText(payload.runId) || null,
+        graphRevision: revision,
+        assetHydrationMode: payload.assetHydrationMode,
+      })
       return json(outputWorkflowGraphResponseSchema.parse({
         ok: true,
         unchanged: true,
@@ -376,6 +382,7 @@ Deno.serve(async (request) => {
     }
 
     const selectedNodeKey = readText(payload.selectedNodeKey)
+    const assetHydrationMode = payload.assetHydrationMode
     let selectedNodeOutput = null
     if (payload.includeSelectedNodeOutput && selectedNodeKey) {
       const selectedResponse = await admin
@@ -417,7 +424,9 @@ Deno.serve(async (request) => {
     }
 
     const artifacts = (artifactResponse.data ?? []).map(mapOutputArtifactRow)
-    const hydratedArtifacts = await hydrateOutputArtifactSignedUrls(admin, artifacts)
+    const hydratedArtifacts = assetHydrationMode === 'all'
+      ? await hydrateOutputArtifactSignedUrls(admin, artifacts)
+      : artifacts
     const steps = ((stepResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputWorkflowRunStepRow(row as never))
     const runArtifacts = runRow ? hydratedArtifacts.filter((artifact) => artifact.runId === readText(runRow?.id)) : []
     const run = runRow ? compactOutputWorkflowRunForStatus(mapOutputWorkflowRunRow(runRow as never, steps, runArtifacts)) : null
@@ -450,12 +459,27 @@ Deno.serve(async (request) => {
     }).map((row) => outputWorkflowNodeSchema.parse(row))
 
     const assetKeys = new Set<string>()
-    for (const artifact of hydratedArtifacts) {
-      if (artifact.assetKey) assetKeys.add(artifact.assetKey)
+    if (assetHydrationMode === 'all' || assetHydrationMode === 'preview') {
+      for (const artifact of hydratedArtifacts) {
+        if (artifact.assetKey) assetKeys.add(artifact.assetKey)
+      }
+      for (const node of nodes) addPreviewAssetKeys(asRecord(node.metadata).outputPreview, assetKeys)
     }
-    for (const node of nodes) addPreviewAssetKeys(asRecord(node.metadata).outputPreview, assetKeys)
-    if (selectedNodeOutput) addAssetKey(selectedNodeOutput.outputs, assetKeys)
-    const assets = await loadSignedAssets(admin, payload.projectId, [...assetKeys])
+    if ((assetHydrationMode === 'all' || assetHydrationMode === 'selected') && selectedNodeOutput) {
+      addAssetKey(selectedNodeOutput.outputs, assetKeys)
+    }
+    const assets = assetHydrationMode === 'none' ? [] : await loadSignedAssets(admin, payload.projectId, [...assetKeys])
+    console.info('[GraphCore] output workflow graph hydrated.', {
+      workflowId: payload.workflowId,
+      runId: readText(runRow?.id) || null,
+      graphRevision: revision,
+      assetHydrationMode,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      artifactCount: artifacts.length,
+      signedAssetCount: assets.length,
+      selectedNodeKey: selectedNodeKey || null,
+    })
 
     return json(outputWorkflowGraphResponseSchema.parse({
       ok: true,
