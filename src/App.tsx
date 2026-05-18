@@ -106,6 +106,7 @@ import { WorkspaceBanner } from './features/shell/WorkspaceBanner'
 import { WorkspaceTopbar } from './features/shell/WorkspaceTopbar'
 import { BillingPage } from './features/billing/BillingPage'
 import { SpecializedDefinitionWorkspace } from './features/content/SpecializedDefinitionWorkspace'
+import type { OutputGraphOverlayIntent } from './features/outputs/OutputGraphOverlayHost'
 import type { OutputStudioReturnTarget } from './features/world-builder/wiki/outputLibraryPresentation'
 import { useEditorStore } from './state/editorStore'
 import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
@@ -132,6 +133,9 @@ import type { SignProjectAssetUrlsInput } from './application/ports'
 
 const WorldGraphPage = lazy(() =>
   import('./features/worldGraphPage').then((module) => ({ default: module.WorldGraphPage })),
+)
+const OutputGraphOverlayHost = lazy(() =>
+  import('./features/outputs/OutputGraphOverlayHost').then((module) => ({ default: module.OutputGraphOverlayHost })),
 )
 const ContentWorkspace = lazy(() =>
   import('./features/itemAssetWorkspace').then((module) => ({ default: module.ContentWorkspace })),
@@ -1531,6 +1535,7 @@ export default function App() {
     nonce: number
     returnTarget?: OutputStudioReturnTarget | null
   } | null>(null)
+  const [pendingOutputGraphOverlayIntent, setPendingOutputGraphOverlayIntent] = useState<OutputGraphOverlayIntent | null>(null)
   const [pendingSequenceAnimaticOpenIntent, setPendingSequenceAnimaticOpenIntent] = useState<{
     requestId: string | null
     nonce: number
@@ -8435,6 +8440,15 @@ export default function App() {
                 onCancelOutputRequest={cancelOutputRequest}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
                 onOpenOutputStudio={(requestId, target = 'details', selectedNodeKey = null, returnTarget = null) => {
+                  if (target === 'graph' && activeTab === 'graph') {
+                    setPendingOutputGraphOverlayIntent({
+                      requestId: requestId ?? null,
+                      selectedNodeKey,
+                      returnTarget,
+                      nonce: Date.now(),
+                    })
+                    return
+                  }
                   const inferredReturnTarget: OutputStudioReturnTarget | null = returnTarget ?? (activeTab === 'graph'
                     && worldViewMode === 'wiki'
                     && worldWikiSubView === 'outputs'
@@ -8791,6 +8805,48 @@ export default function App() {
           </Suspense>
         ) : null}
       </div>
+      {pendingOutputGraphOverlayIntent ? (
+        <Suspense fallback={(
+          <div className="outputs-graph-overlay" role="dialog" aria-modal="true" aria-label="Output workflow graph">
+            <header className="outputs-graph-toolbar">
+              <div>
+                <span className="eyebrow">Output graph</span>
+                <h2>Opening graph</h2>
+                <p>Loading the graph shell.</p>
+              </div>
+              <button onClick={() => setPendingOutputGraphOverlayIntent(null)} type="button">Close</button>
+            </header>
+            <div className="outputs-graph-canvas-shell">
+              <div className="outputs-graph-loading-state">
+                <span className="outputs-graph-mini-spinner" aria-hidden="true" />
+                <strong>Preparing graph...</strong>
+                <p>The Wiki page stays loaded while the graph viewer module starts.</p>
+              </div>
+            </div>
+          </div>
+        )}>
+          <OutputGraphOverlayHost
+            canRunOutputs={loadedState?.source === 'supabase'}
+            openIntent={pendingOutputGraphOverlayIntent}
+            snapshot={snapshot}
+            onClose={() => {
+              setPendingOutputGraphOverlayIntent(null)
+              const returnTarget = pendingOutputGraphOverlayIntent.returnTarget
+              if (returnTarget?.kind === 'wiki_sequence_animatic' && returnTarget.masterRequestId) {
+                setPendingSequenceAnimaticOpenIntent({
+                  requestId: returnTarget.masterRequestId,
+                  nonce: Date.now(),
+                })
+              }
+            }}
+            onGetOutputRequestStatus={getOutputRequestStatus}
+            onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
+            onLoadOutputWorkflowNodeOutput={loadOutputWorkflowNodeOutput}
+            onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
+            onUpdateOutputWorkflowNode={updateOutputWorkflowNode}
+          />
+        </Suspense>
+      ) : null}
       {historyOpen ? (
         <div className="bootstrap-overlay" onClick={() => setHistoryOpen(false)} role="presentation">
           <div className="bootstrap-dialog history-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="History">

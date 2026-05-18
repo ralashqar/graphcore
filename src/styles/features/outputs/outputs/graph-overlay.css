@@ -120,6 +120,43 @@
   opacity: 0.48;
 }
 
+.outputs-graph-canvas-shell {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+    #070b12;
+  background-size: 32px 32px;
+}
+
+.outputs-graph-loading-state {
+  width: min(420px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  padding: 26px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.82);
+  box-shadow: 0 18px 48px rgba(2, 6, 23, 0.28);
+  text-align: center;
+}
+
+.outputs-graph-loading-state strong {
+  color: var(--text);
+  font-size: 0.98rem;
+}
+
+.outputs-graph-loading-state p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
 .outputs-graph-toolbar-actions .outputs-graph-exit {
   border-color: rgba(110, 231, 183, 0.32);
   color: var(--accent);

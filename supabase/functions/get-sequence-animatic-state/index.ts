@@ -95,20 +95,59 @@ Deno.serve(async (request) => {
     const admin = createAdminClient('get-sequence-animatic-state')
     const payload = sequenceAnimaticStateRequestSchema.parse(await request.json())
 
-    const masterAccess = await client
-      .from('output_requests')
-      .select('id')
-      .eq('id', payload.masterRequestId)
-      .eq('project_id', payload.projectId)
-      .eq('draft_id', payload.draftId)
-      .maybeSingle()
-    if (masterAccess.error) throw new Error(masterAccess.error.message)
-    if (!masterAccess.data) throw new HttpError(404, 'Screenplay animatic master request not found.')
+    let masterRequestId = readText(payload.masterRequestId)
+    if (!masterRequestId) {
+      const sequenceUnitKey = readText(payload.sequenceUnitKey)
+      const lookupResponse = await client
+        .from('output_requests')
+        .select(outputRequestSelect)
+        .eq('project_id', payload.projectId)
+        .eq('draft_id', payload.draftId)
+        .is('parent_request_id', null)
+        .contains('selected_sequence_unit_keys', [sequenceUnitKey])
+        .order('created_at', { ascending: false })
+        .limit(20)
+      if (lookupResponse.error) throw new Error(lookupResponse.error.message)
+      const candidate = (lookupResponse.data ?? [])
+        .map(mapOutputRequestRow)
+        .find((entry) => readScreenplayAnimaticRole(asRecord(entry.metadata)) === 'master') ?? null
+      if (!candidate) {
+        const revision = hashOutputWorkflowValue({
+          projectId: payload.projectId,
+          draftId: payload.draftId,
+          sequenceUnitKey,
+          state: 'not_generated',
+        })
+        return json(sequenceAnimaticStateResponseSchema.parse({
+          ok: true,
+          unchanged: readText(payload.knownRevision) === revision,
+          revision,
+          masterRequest: null,
+          requests: [],
+          workflows: [],
+          runs: [],
+          artifacts: [],
+          assets: [],
+          projections: [],
+        }))
+      }
+      masterRequestId = candidate.id
+    } else {
+      const masterAccess = await client
+        .from('output_requests')
+        .select('id')
+        .eq('id', masterRequestId)
+        .eq('project_id', payload.projectId)
+        .eq('draft_id', payload.draftId)
+        .maybeSingle()
+      if (masterAccess.error) throw new Error(masterAccess.error.message)
+      if (!masterAccess.data) throw new HttpError(404, 'Screenplay animatic master request not found.')
+    }
 
     const masterResponse = await admin
       .from('output_requests')
       .select(outputRequestSelect)
-      .eq('id', payload.masterRequestId)
+      .eq('id', masterRequestId)
       .eq('project_id', payload.projectId)
       .eq('draft_id', payload.draftId)
       .single()

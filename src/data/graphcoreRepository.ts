@@ -156,6 +156,7 @@ import {
   outputRequestDeleteResponseSchema,
   outputRequestSchema,
   outputRequestStartRequestSchema,
+  outputRequestStatusProjectionSchema,
   outputRequestStatusRequestSchema,
   outputRequestStatusResponseSchema,
   outputWorkflowCancelResponseSchema,
@@ -181,6 +182,7 @@ import {
   outputWorkflowStartResponseSchema,
   outputWorkflowUpgradeRequestSchema,
   outputWorkflowUpgradeResponseSchema,
+  hashOutputWorkflowValue,
   sequenceAnimaticBlockWorkflowEnsureRequestSchema,
   sequenceAnimaticBlockWorkflowEnsureResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
@@ -2206,6 +2208,8 @@ const OUTPUT_ARTIFACT_SELECT =
   'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const OUTPUT_REQUEST_SELECT =
   'id, project_id, draft_id, parent_request_id, workflow_id, latest_run_id, requested_by, source_surface, prompt, title, intent, output_kind, status, selected_entity_keys, selected_sequence_unit_keys, page_count, target_format, planner_notes, error_message, metadata, created_at, updated_at'
+const OUTPUT_REQUEST_STATUS_PROJECTION_SELECT =
+  'request_id, project_id, draft_id, workflow_id, latest_run_id, status, output_kind, title, progress, active_node_key, active_node_label, latest_error, artifact_keys, preview_asset_keys, graph_revision, timeline_revision, terminal, metadata, created_at, updated_at'
 const WORLD_PROMPT_SESSION_SELECT =
   'id, draft_id, key, title, status, is_active, summary_memory, last_context, selected_root_entity_key, selected_view_key, model, metadata, created_at, updated_at'
 const WORLD_PROMPT_TURN_SELECT =
@@ -2629,6 +2633,31 @@ function mapOutputWorkflowRunRow(
   })
 }
 
+function mapOutputRequestStatusProjectionRow(entry: Record<string, unknown>) {
+  return outputRequestStatusProjectionSchema.parse({
+    requestId: typeof entry.request_id === 'string' ? entry.request_id : '',
+    projectId: typeof entry.project_id === 'string' ? entry.project_id : '',
+    draftId: typeof entry.draft_id === 'string' ? entry.draft_id : '',
+    workflowId: typeof entry.workflow_id === 'string' ? entry.workflow_id : null,
+    latestRunId: typeof entry.latest_run_id === 'string' ? entry.latest_run_id : null,
+    status: typeof entry.status === 'string' ? entry.status : 'queued',
+    outputKind: typeof entry.output_kind === 'string' ? entry.output_kind : 'unknown',
+    title: typeof entry.title === 'string' ? entry.title : 'Untitled output',
+    progress: readRepositoryRecord(entry.progress),
+    activeNodeKey: typeof entry.active_node_key === 'string' ? entry.active_node_key : null,
+    activeNodeLabel: typeof entry.active_node_label === 'string' ? entry.active_node_label : null,
+    latestError: typeof entry.latest_error === 'string' ? entry.latest_error : null,
+    artifactKeys: Array.isArray(entry.artifact_keys) ? entry.artifact_keys.filter((key): key is string => typeof key === 'string') : [],
+    previewAssetKeys: Array.isArray(entry.preview_asset_keys) ? entry.preview_asset_keys.filter((key): key is string => typeof key === 'string') : [],
+    graphRevision: typeof entry.graph_revision === 'string' ? entry.graph_revision : '',
+    timelineRevision: typeof entry.timeline_revision === 'string' ? entry.timeline_revision : '',
+    terminal: entry.terminal === true,
+    metadata: readRepositoryRecord(entry.metadata),
+    createdAt: typeof entry.created_at === 'string' ? entry.created_at : new Date(0).toISOString(),
+    updatedAt: typeof entry.updated_at === 'string' ? entry.updated_at : new Date(0).toISOString(),
+  })
+}
+
 function mapWorldPromptSessionRow(entry: WorldPromptSessionRow): WorldPromptSession {
   return worldPromptSessionSchema.parse({
     id: entry.id,
@@ -2933,8 +2962,17 @@ export type SignedProjectAssetUrlEntry = SignProjectAssetUrlsResponse['urls'][nu
 
 const PROJECT_ASSET_SIGNING_BATCH_SIZE = 100
 const PROJECT_ASSET_SIGNING_BATCH_WINDOW_MS = 75
+const SEQUENCE_ANIMATIC_STATE_EDGE_UNAVAILABLE_TTL_MS = 5 * 60 * 1000
 
 const storageAssetUrlCache = new Map<string, { storagePath: string; url: string; expiresAt: number | null }>()
+let sequenceAnimaticStateEdgeUnavailableUntil = 0
+
+function shouldLoadSequenceAnimaticStateDirectly(message: string) {
+  return message === 'Failed to send a request to the Edge Function'
+    || message.includes('Requested function was not found')
+    || message.includes('"code":"NOT_FOUND"')
+    || message.includes('"code": "NOT_FOUND"')
+}
 
 type PendingAssetSigningRequest = {
   keys: string[]
@@ -8556,7 +8594,7 @@ export async function ensureSequenceAnimaticContinuityWorkflow(
 
 export async function loadSequenceAnimaticState(
   snapshot: ProjectSnapshot,
-  request: { masterRequestId: string; knownRevision?: string | null },
+  request: { masterRequestId?: string | null; sequenceUnitKey?: string | null; knownRevision?: string | null },
 ): Promise<SequenceAnimaticStateResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading sequence animatic state.')
   if (!hasLiveSnapshotIds(snapshot)) {
@@ -8565,23 +8603,41 @@ export async function loadSequenceAnimaticState(
   const payload = sequenceAnimaticStateRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
-    masterRequestId: request.masterRequestId,
+    masterRequestId: request.masterRequestId ?? null,
+    sequenceUnitKey: request.sequenceUnitKey ?? null,
     knownRevision: request.knownRevision ?? null,
   })
   return runCoalescedRequest({
     className: 'output-graph',
-    key: `sequence-animatic-state:${payload.projectId}:${payload.draftId}:${payload.masterRequestId}:${payload.knownRevision ?? ''}`,
+    key: `sequence-animatic-state:${payload.projectId}:${payload.draftId}:${payload.masterRequestId ?? ''}:${payload.sequenceUnitKey ?? ''}:${payload.knownRevision ?? ''}`,
     ttlMs: 300,
     fn: async () => {
+      if (payload.sequenceUnitKey && !payload.masterRequestId) {
+        return loadSequenceAnimaticStateDirect(payload)
+      }
+      if (Date.now() < sequenceAnimaticStateEdgeUnavailableUntil) {
+        return loadSequenceAnimaticStateDirect(payload)
+      }
       const response = await invokeAuthedFunctionWithSessionRecovery(
         'get-sequence-animatic-state',
         payload,
         session,
       )
       if (response.error) {
-        throw new Error(await readFunctionsErrorMessage(response.error))
+        const message = await readFunctionsErrorMessage(response.error)
+        if (shouldLoadSequenceAnimaticStateDirectly(message)) {
+          sequenceAnimaticStateEdgeUnavailableUntil = Date.now() + SEQUENCE_ANIMATIC_STATE_EDGE_UNAVAILABLE_TTL_MS
+          console.warn('[GraphCore] get-sequence-animatic-state unavailable; loading animatic state directly from Supabase tables.', {
+            projectId: payload.projectId,
+            draftId: payload.draftId,
+            masterRequestId: payload.masterRequestId,
+            sequenceUnitKey: payload.sequenceUnitKey,
+          })
+          return loadSequenceAnimaticStateDirect(payload)
+        }
+        throw new Error(message)
       }
-      return sequenceAnimaticStateResponseSchema.parse(response.data)
+      return finalizeSequenceAnimaticStateResponse(sequenceAnimaticStateResponseSchema.parse(response.data))
     },
   })
 }
@@ -8700,6 +8756,256 @@ export type OutputWorkflowGraphLoadResult = {
   graphRevision: string
 }
 
+function hydrateOutputStateSlice(input: {
+  requests: OutputRequest[]
+  runs: OutputWorkflowRun[]
+  artifacts: OutputArtifact[]
+  assets: AssetDefinition[]
+  projections?: OutputFeedResponse['projections']
+}) {
+  const projectionByRequestId = new Map((input.projections ?? []).map((projection) => [projection.requestId, projection]))
+  const requests = input.requests.map((request) => {
+    const projection = projectionByRequestId.get(request.id)
+    if (!projection) return request
+    return {
+      ...request,
+      latestRunId: projection.latestRunId ?? request.latestRunId,
+      metadata: {
+        ...request.metadata,
+        outputStatusProjection: projection,
+      },
+    }
+  })
+  const artifacts = hydrateOutputArtifactsFromAssets(input.artifacts, input.assets)
+  const artifactsByRunId = new Map<string, OutputArtifact[]>()
+  for (const artifact of artifacts) {
+    if (!artifact.runId) continue
+    artifactsByRunId.set(artifact.runId, [...(artifactsByRunId.get(artifact.runId) ?? []), artifact])
+  }
+  const runs = input.runs.map((run) => ({
+    ...run,
+    artifacts: hydrateOutputArtifactsFromAssets(artifactsByRunId.get(run.id) ?? run.artifacts, input.assets),
+  }))
+  return { requests, runs, artifacts }
+}
+
+function readOutputRequestScreenplayAnimaticRole(request: OutputRequest) {
+  const metadata = readRepositoryRecord(request.metadata)
+  return readRepositoryString(metadata.screenplayAnimaticRole) || readRepositoryString(metadata.sequenceAnimaticRole)
+}
+
+function collectSequenceAnimaticStateAssetKeys(input: {
+  artifacts: OutputArtifact[]
+  projections: OutputFeedResponse['projections']
+}) {
+  const keys = new Set<string>()
+  const known = new Set<string>()
+  for (const artifact of input.artifacts) {
+    const artifactKey = readRepositoryString(artifact.assetKey)
+    if (artifactKey) keys.add(artifactKey)
+    collectOutputAssetReferences(artifact.metadata, known, keys)
+  }
+  for (const projection of input.projections) {
+    for (const key of projection.previewAssetKeys) {
+      const text = readRepositoryString(key)
+      if (text) keys.add(text)
+    }
+    collectOutputAssetReferences(projection.progress, known, keys)
+    collectOutputAssetReferences(projection.metadata, known, keys)
+  }
+  return [...keys]
+}
+
+function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResponse): SequenceAnimaticStateResponse {
+  if (parsed.unchanged) return parsed
+  const assets = parsed.assets.flatMap((asset) => {
+    const parsedAsset = assetDefinitionSchema.safeParse(asset)
+    if (parsedAsset.success) return [parsedAsset.data]
+    console.warn('[GraphCore] ignored invalid sequence animatic state asset payload.', parsedAsset.error.flatten())
+    return []
+  })
+  const hydrated = hydrateOutputStateSlice({
+    requests: parsed.requests,
+    runs: parsed.runs,
+    artifacts: parsed.artifacts,
+    assets,
+    projections: parsed.projections,
+  })
+  const masterRequest = parsed.masterRequest
+    ? hydrated.requests.find((request) => request.id === parsed.masterRequest?.id) ?? parsed.masterRequest
+    : null
+  return sequenceAnimaticStateResponseSchema.parse({
+    ...parsed,
+    masterRequest,
+    requests: hydrated.requests,
+    runs: hydrated.runs,
+    artifacts: hydrated.artifacts,
+    assets,
+  })
+}
+
+async function loadSequenceAnimaticStateDirect(
+  payload: ReturnType<typeof sequenceAnimaticStateRequestSchema.parse>,
+): Promise<SequenceAnimaticStateResponse> {
+  let masterRequest: OutputRequest | null = null
+
+  if (payload.masterRequestId) {
+    const masterResponse = await supabase
+      .from('output_requests')
+      .select(OUTPUT_REQUEST_SELECT)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .eq('id', payload.masterRequestId)
+      .maybeSingle()
+    if (masterResponse.error) throw new Error(masterResponse.error.message)
+    if (!masterResponse.data) throw new Error('Screenplay animatic master request not found.')
+    masterRequest = mapOutputRequestRow(masterResponse.data as OutputRequestRow)
+  } else {
+    const sequenceUnitKey = readRepositoryString(payload.sequenceUnitKey)
+    const lookupResponse = await supabase
+      .from('output_requests')
+      .select(OUTPUT_REQUEST_SELECT)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .is('parent_request_id', null)
+      .contains('selected_sequence_unit_keys', [sequenceUnitKey])
+      .order('updated_at', { ascending: false })
+      .limit(25)
+    if (lookupResponse.error) throw new Error(lookupResponse.error.message)
+    masterRequest = ((lookupResponse.data ?? []) as OutputRequestRow[])
+      .map(mapOutputRequestRow)
+      .find((request) => readOutputRequestScreenplayAnimaticRole(request) === 'master') ?? null
+    if (!masterRequest) {
+      const revision = hashOutputWorkflowValue({
+        projectId: payload.projectId,
+        draftId: payload.draftId,
+        sequenceUnitKey,
+        state: 'not_generated',
+      })
+      return sequenceAnimaticStateResponseSchema.parse({
+        ok: true,
+        unchanged: readRepositoryString(payload.knownRevision) === revision,
+        revision,
+        masterRequest: null,
+        requests: [],
+        workflows: [],
+        runs: [],
+        artifacts: [],
+        assets: [],
+        projections: [],
+      })
+    }
+  }
+
+  if (readOutputRequestScreenplayAnimaticRole(masterRequest) !== 'master') {
+    throw new Error('This output is not a screenplay animatic master request.')
+  }
+
+  const directChildrenResponse = await supabase
+    .from('output_requests')
+    .select(OUTPUT_REQUEST_SELECT)
+    .eq('project_id', payload.projectId)
+    .eq('draft_id', payload.draftId)
+    .eq('parent_request_id', masterRequest.id)
+    .order('created_at', { ascending: true })
+  if (directChildrenResponse.error) throw new Error(directChildrenResponse.error.message)
+  const directChildren = ((directChildrenResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
+  const blockRequestIds = directChildren
+    .filter((child) => readOutputRequestScreenplayAnimaticRole(child) === 'storyboard_block')
+    .map((child) => child.id)
+
+  let shotChildren: OutputRequest[] = []
+  if (blockRequestIds.length > 0) {
+    const shotChildrenResponse = await supabase
+      .from('output_requests')
+      .select(OUTPUT_REQUEST_SELECT)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .in('parent_request_id', blockRequestIds)
+      .order('created_at', { ascending: true })
+    if (shotChildrenResponse.error) throw new Error(shotChildrenResponse.error.message)
+    shotChildren = ((shotChildrenResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
+  }
+
+  const requests = [masterRequest, ...directChildren, ...shotChildren]
+  const requestIds = requests.map((request) => request.id)
+  const workflowIds = [...new Set(requests.map((request) => request.workflowId).filter((id): id is string => Boolean(id)))]
+  const runIds = [...new Set(requests.map((request) => request.latestRunId).filter((id): id is string => Boolean(id)))]
+
+  const [workflowResponse, runResponse, artifactResponse, projectionResponse] = await Promise.all([
+    workflowIds.length > 0
+      ? supabase.from('output_workflows').select(OUTPUT_WORKFLOW_SELECT).eq('draft_id', payload.draftId).in('id', workflowIds)
+      : Promise.resolve({ data: [], error: null }),
+    runIds.length > 0
+      ? supabase.from('output_workflow_runs').select(OUTPUT_WORKFLOW_RUN_SELECT).eq('draft_id', payload.draftId).in('id', runIds)
+      : Promise.resolve({ data: [], error: null }),
+    workflowIds.length > 0
+      ? supabase.from('output_artifacts').select(OUTPUT_ARTIFACT_SELECT).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    requestIds.length > 0
+      ? supabase.from('output_request_status_projections').select(OUTPUT_REQUEST_STATUS_PROJECTION_SELECT).eq('draft_id', payload.draftId).in('request_id', requestIds)
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  if (workflowResponse.error) throw new Error(workflowResponse.error.message)
+  if (runResponse.error) throw new Error(runResponse.error.message)
+  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
+  if (projectionResponse.error) throw new Error(projectionResponse.error.message)
+
+  const workflows = ((workflowResponse.data ?? []) as OutputWorkflowRow[]).map(mapOutputWorkflowRow)
+  const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
+  const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map(mapOutputRequestStatusProjectionRow)
+  const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ artifacts, projections }))
+  const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
+  const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, [], hydratedArtifacts))
+  const revision = hashOutputWorkflowValue({
+    requests: requests.map((request) => ({
+      id: request.id,
+      status: request.status,
+      workflowId: request.workflowId,
+      latestRunId: request.latestRunId,
+      updatedAt: request.updatedAt,
+      metadata: request.metadata,
+    })),
+    workflows: workflows.map((workflow) => ({ id: workflow.id, updatedAt: workflow.updatedAt, metadata: workflow.metadata })),
+    runs: runs.map((run) => ({ id: run.id, status: run.status, updatedAt: run.updatedAt, outputs: run.outputs })),
+    artifacts: hydratedArtifacts.map((artifact) => ({ id: artifact.id, key: artifact.key, assetKey: artifact.assetKey, updatedAt: artifact.updatedAt })),
+    projections: projections.map((projection) => ({
+      requestId: projection.requestId,
+      graphRevision: projection.graphRevision,
+      timelineRevision: projection.timelineRevision,
+      status: projection.status,
+      updatedAt: projection.updatedAt,
+    })),
+  })
+  if (readRepositoryString(payload.knownRevision) === revision) {
+    return sequenceAnimaticStateResponseSchema.parse({
+      ok: true,
+      unchanged: true,
+      revision,
+      masterRequest: null,
+      requests: [],
+      workflows: [],
+      runs: [],
+      artifacts: [],
+      assets: [],
+      projections: [],
+    })
+  }
+
+  return finalizeSequenceAnimaticStateResponse(sequenceAnimaticStateResponseSchema.parse({
+    ok: true,
+    unchanged: false,
+    revision,
+    masterRequest,
+    requests,
+    workflows,
+    runs,
+    artifacts: hydratedArtifacts,
+    assets,
+    projections,
+  }))
+}
+
 export async function loadOutputInbox(input: {
   projectId: string
   draftId: string
@@ -8755,36 +9061,20 @@ export async function loadOutputInbox(input: {
   const freshAssetKeys = new Set(freshAssets.map((asset) => asset.key))
   const reusableCachedAssets = cached?.result.assets.filter((asset) => !freshAssetKeys.has(asset.key)) ?? []
   const assets = [...freshAssets, ...reusableCachedAssets]
-  const projectionByRequestId = new Map(parsed.projections.map((projection) => [projection.requestId, projection]))
-  const requests = parsed.requests.map((request) => {
-    const projection = projectionByRequestId.get(request.id)
-    if (!projection) return request
-    return {
-      ...request,
-      latestRunId: projection.latestRunId ?? request.latestRunId,
-      metadata: {
-        ...request.metadata,
-        outputStatusProjection: projection,
-      },
-    }
+  const hydrated = hydrateOutputStateSlice({
+    requests: parsed.requests,
+    runs: parsed.runs,
+    artifacts: parsed.artifacts,
+    assets,
+    projections: parsed.projections,
   })
-  const artifacts = hydrateOutputArtifactsFromAssets(parsed.artifacts, assets)
-  const artifactsByRunId = new Map<string, OutputArtifact[]>()
-  for (const artifact of artifacts) {
-    if (!artifact.runId) continue
-    artifactsByRunId.set(artifact.runId, [...(artifactsByRunId.get(artifact.runId) ?? []), artifact])
-  }
-  const runs = parsed.runs.map((run) => ({
-    ...run,
-    artifacts: hydrateOutputArtifactsFromAssets(artifactsByRunId.get(run.id) ?? run.artifacts, assets),
-  }))
   const result: OutputInboxLoadResult = {
     unchanged: parsed.unchanged,
     feedRevision: parsed.feedRevision,
-    requests,
+    requests: hydrated.requests,
     workflows: parsed.workflows,
-    runs,
-    artifacts,
+    runs: hydrated.runs,
+    artifacts: hydrated.artifacts,
     assets,
     projections: parsed.projections,
     page: parsed.page,

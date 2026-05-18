@@ -23,6 +23,7 @@ import {
   type OutputArtifact,
   type OutputRequest,
   type OutputRequestStatusResponse,
+  type SequenceAnimaticStateResponse,
   type OutputWorkflowNode,
   type OutputWorkflowRun,
 } from '../../domain/outputWorkflow'
@@ -714,9 +715,10 @@ type WorldGraphPageProps = {
     masterRequestId: string
   }) => Promise<{ continuityRequest: OutputRequest | null }> | { continuityRequest: OutputRequest | null }
   onLoadSequenceAnimaticState: (request: {
-    masterRequestId: string
+    masterRequestId?: string | null
+    sequenceUnitKey?: string | null
     knownRevision?: string | null
-  }) => Promise<{ unchanged?: boolean; revision?: string }> | { unchanged?: boolean; revision?: string }
+  }) => Promise<SequenceAnimaticStateResponse> | SequenceAnimaticStateResponse
   onSubscribeSequenceAnimaticStateSignals: (input: {
     draftId: string
     masterRequestId: string
@@ -3689,15 +3691,51 @@ export function WorldGraphPage({
   const [sequenceAnimaticBusyKey, setSequenceAnimaticBusyKey] = useState<string | null>(null)
   const [sequenceAnimaticBlockRunKey, setSequenceAnimaticBlockRunKey] = useState<string | null>(null)
   const [sequenceAnimaticErrorByKey, setSequenceAnimaticErrorByKey] = useState<Record<string, string>>({})
+  const [sequenceAnimaticLookupByKey, setSequenceAnimaticLookupByKey] = useState<Record<string, {
+    status: 'idle' | 'checking' | 'not_generated' | 'ready' | 'failed'
+    requestId?: string | null
+    revision?: string | null
+    error?: string | null
+  }>>({})
   const [sequenceAnimaticPreviewRequestId, setSequenceAnimaticPreviewRequestId] = useState<string | null>(null)
+  const [sequenceAnimaticPreviewHydration, setSequenceAnimaticPreviewHydration] = useState<{
+    status: 'idle' | 'checking' | 'failed'
+    error?: string | null
+  }>({ status: 'idle', error: null })
   const [sequenceAnimaticVideoPreview, setSequenceAnimaticVideoPreview] = useState<SequenceAnimaticVideoPreview | null>(null)
   const sequenceAnimaticStateRevisionRef = useRef<string | null>(null)
-  const continuityEnsureInFlightRef = useRef<Set<string>>(new Set())
+  const sequenceAnimaticLookupInFlightRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     if (!sequenceAnimaticOpenIntent?.requestId) return
     setSequenceAnimaticPreviewRequestId(sequenceAnimaticOpenIntent.requestId)
+    setSequenceAnimaticPreviewHydration({ status: 'checking', error: null })
     onSequenceAnimaticOpenIntentConsumed?.()
   }, [onSequenceAnimaticOpenIntentConsumed, sequenceAnimaticOpenIntent?.nonce, sequenceAnimaticOpenIntent?.requestId])
+  useEffect(() => {
+    if (!sequenceAnimaticPreviewRequestId) return
+    if (outputRequests.some((entry) => entry.id === sequenceAnimaticPreviewRequestId)) {
+      setSequenceAnimaticPreviewHydration((current) => current.status === 'idle' ? current : { status: 'idle', error: null })
+      return
+    }
+    let cancelled = false
+    setSequenceAnimaticPreviewHydration({ status: 'checking', error: null })
+    void Promise.resolve(onLoadSequenceAnimaticState({
+      masterRequestId: sequenceAnimaticPreviewRequestId,
+      knownRevision: null,
+    })).then(() => {
+      if (!cancelled) setSequenceAnimaticPreviewHydration({ status: 'idle', error: null })
+    }).catch((error) => {
+      if (!cancelled) {
+        setSequenceAnimaticPreviewHydration({
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [onLoadSequenceAnimaticState, outputRequests, sequenceAnimaticPreviewRequestId])
   const sequenceAnimaticPreviewModel = useMemo(() => {
     const request = sequenceAnimaticPreviewRequestId
       ? outputRequests.find((entry) => entry.id === sequenceAnimaticPreviewRequestId) ?? null
@@ -3770,20 +3808,6 @@ export function WorldGraphPage({
       window.clearInterval(timer)
     }
   }, [onLoadSequenceAnimaticState, onSubscribeSequenceAnimaticStateSignals, projectDraftId, sequenceAnimaticPreviewModel])
-  useEffect(() => {
-    if (!sequenceAnimaticPreviewModel) return
-    if (sequenceAnimaticPreviewModel.continuityRequest || sequenceAnimaticPreviewModel.blocks.length === 0) return
-    const requestId = sequenceAnimaticPreviewModel.request.id
-    if (continuityEnsureInFlightRef.current.has(requestId)) return
-    continuityEnsureInFlightRef.current.add(requestId)
-    void Promise.resolve(onEnsureSequenceAnimaticContinuityWorkflow({ masterRequestId: requestId }))
-      .catch((error) => {
-        console.warn('[GraphCore] sequence animatic continuity ensure failed.', error)
-      })
-      .finally(() => {
-        continuityEnsureInFlightRef.current.delete(requestId)
-      })
-  }, [onEnsureSequenceAnimaticContinuityWorkflow, sequenceAnimaticPreviewModel])
   const pollSequenceAnimaticOutputRequest = useCallback(async (requestId: string) => {
     let status = await Promise.resolve(onGetOutputRequestStatus(requestId))
     for (let attempt = 0; attempt < 240; attempt += 1) {
@@ -4232,6 +4256,75 @@ export function WorldGraphPage({
   const activeWikiEntitySection = activeWikiEntityPage
     ? wikiModel.sections.find((section) => section.kind === activeWikiEntityPage.sectionKind) ?? null
     : null
+  useEffect(() => {
+    if (!canRunOutputs || viewMode !== 'wiki' || wikiSubView !== 'wiki') return
+    if (!activeWikiEntity || activeWikiEntity.nodeType !== 'sequence_unit') return
+    const sequenceKey = activeWikiEntity.key
+    const localRequest = latestWikiSequenceAnimaticRequest(outputRequests, sequenceKey)
+    if (localRequest) {
+      setSequenceAnimaticLookupByKey((previous) => {
+        const current = previous[sequenceKey]
+        if (current?.status === 'ready' && current.requestId === localRequest.id && !current.error) return previous
+        return {
+          ...previous,
+          [sequenceKey]: {
+            status: 'ready',
+            requestId: localRequest.id,
+            revision: current?.revision ?? null,
+            error: null,
+          },
+        }
+      })
+      return
+    }
+    const currentLookup = sequenceAnimaticLookupByKey[sequenceKey]
+    if (currentLookup?.status === 'ready' && currentLookup.requestId) return
+    if (currentLookup?.status === 'not_generated' || currentLookup?.status === 'failed') return
+    if (currentLookup?.status === 'checking' || sequenceAnimaticLookupInFlightRef.current.has(sequenceKey)) return
+    sequenceAnimaticLookupInFlightRef.current.add(sequenceKey)
+    setSequenceAnimaticLookupByKey((previous) => ({
+      ...previous,
+      [sequenceKey]: {
+        status: 'checking',
+        requestId: previous[sequenceKey]?.requestId ?? null,
+        revision: previous[sequenceKey]?.revision ?? null,
+        error: null,
+      },
+    }))
+    void Promise.resolve(onLoadSequenceAnimaticState({
+      sequenceUnitKey: sequenceKey,
+      knownRevision: currentLookup?.revision ?? null,
+    })).then((result) => {
+      const requestId = result.masterRequest?.id ?? result.requests.find((request) => request.parentRequestId === null)?.id ?? null
+      setSequenceAnimaticLookupByKey((previous) => {
+        const current = previous[sequenceKey]
+        const nextStatus = requestId ? 'ready' : 'not_generated'
+        const nextRevision = result.revision ?? current?.revision ?? null
+        if (current?.status === nextStatus && current.requestId === requestId && current.revision === nextRevision && !current.error) return previous
+        return {
+          ...previous,
+          [sequenceKey]: {
+            status: nextStatus,
+            requestId,
+            revision: nextRevision,
+            error: null,
+          },
+        }
+      })
+    }).catch((error) => {
+      setSequenceAnimaticLookupByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: {
+          status: 'failed',
+          requestId: previous[sequenceKey]?.requestId ?? null,
+          revision: previous[sequenceKey]?.revision ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }))
+    }).finally(() => {
+      sequenceAnimaticLookupInFlightRef.current.delete(sequenceKey)
+    })
+  }, [activeWikiEntity, canRunOutputs, onLoadSequenceAnimaticState, outputRequests, sequenceAnimaticLookupByKey, viewMode, wikiSubView])
   useEffect(() => {
     if (viewMode === 'wiki' && wikiSubView === 'wiki') return
     if (!activeWikiEntityPage && !readWikiEntityPageRoute()) return
@@ -9146,22 +9239,32 @@ export function WorldGraphPage({
         sequence.scriptExpansionReady ? 'Script expansion ready' : 'Needs script expansion hook',
       ].filter((value): value is string => Boolean(value))
       const sequenceAnimaticRequest = latestWikiSequenceAnimaticRequest(outputRequests, entity.key)
+      const sequenceAnimaticLookup = sequenceAnimaticLookupByKey[entity.key] ?? { status: 'idle' as const }
+      const sequenceAnimaticRequestId = sequenceAnimaticRequest?.id ?? sequenceAnimaticLookup.requestId ?? null
       const sequenceAnimaticRow = sequenceAnimaticRequest ? outputLibraryRowByRequestId.get(sequenceAnimaticRequest.id) ?? null : null
       const sequenceAnimaticState = sequenceAnimaticStateForRequest(sequenceAnimaticRequest, outputWorkflowRuns, outputArtifacts)
       const sequenceAnimaticBusy = sequenceAnimaticBusyKey === entity.key
-      const sequenceAnimaticError = sequenceAnimaticErrorByKey[entity.key] ?? ''
+      const sequenceAnimaticError = sequenceAnimaticErrorByKey[entity.key] ?? sequenceAnimaticLookup.error ?? ''
       const sequenceAnimaticPrimaryLabel = sequenceAnimaticBusy
         ? 'Starting animatic'
-        : sequenceAnimaticState === 'none'
-          ? 'Generate screenplay animatic'
-          : sequenceAnimaticState === 'failed'
-            ? 'Regenerate animatic'
-            : sequenceAnimaticState === 'in_progress'
-              ? 'View progress'
-              : 'View animatic'
+        : sequenceAnimaticLookup.status === 'checking'
+          ? 'Checking outputs'
+          : sequenceAnimaticLookup.status === 'failed'
+            ? 'Retry output lookup'
+            : sequenceAnimaticRequestId && sequenceAnimaticLookup.status === 'ready' && !sequenceAnimaticRequest
+              ? 'View animatic'
+            : sequenceAnimaticState === 'none'
+              ? 'Generate screenplay animatic'
+              : sequenceAnimaticState === 'failed'
+                ? 'Regenerate animatic'
+                : sequenceAnimaticState === 'in_progress'
+                  ? 'View progress'
+                  : 'View animatic'
       const sequenceAnimaticProgressLabel = sequenceAnimaticState === 'in_progress'
         ? sequenceAnimaticRow?.currentStepLabel || 'Generating screenplay animatic'
-        : ''
+        : sequenceAnimaticLookup.status === 'checking'
+          ? 'Checking linked outputs without opening Output Studio'
+          : ''
 
       return (
         <section className="world-wiki-entity-page world-wiki-sequence-page" data-world-wiki-entity-page={entity.key}>
@@ -9179,15 +9282,28 @@ export function WorldGraphPage({
                   className="world-wiki-sequence-animatic-primary"
                   disabled={!canRunOutputs || sequenceAnimaticBusy}
                   onClick={() => {
-                    if (sequenceAnimaticRequest && sequenceAnimaticState !== 'failed' && sequenceAnimaticState !== 'none') {
-                      setSequenceAnimaticPreviewRequestId(sequenceAnimaticRequest.id)
+                    if (sequenceAnimaticLookup.status === 'checking') return
+                    if (sequenceAnimaticLookup.status === 'failed') {
+                      setSequenceAnimaticLookupByKey((previous) => ({
+                        ...previous,
+                        [entity.key]: {
+                          status: 'idle',
+                          requestId: previous[entity.key]?.requestId ?? null,
+                          revision: null,
+                          error: null,
+                        },
+                      }))
+                      return
+                    }
+                    if (sequenceAnimaticRequestId && sequenceAnimaticState !== 'failed') {
+                      setSequenceAnimaticPreviewRequestId(sequenceAnimaticRequestId)
                     } else {
                       void handleGenerateSequenceAnimatic(entity)
                     }
                   }}
                   type="button"
                 >
-                  {sequenceAnimaticBusy ? <span className="world-mini-spinner" aria-hidden="true" /> : <EntityIcon id="cinematic" />}
+                  {sequenceAnimaticBusy || sequenceAnimaticLookup.status === 'checking' ? <span className="world-mini-spinner" aria-hidden="true" /> : <EntityIcon id="cinematic" />}
                   {sequenceAnimaticPrimaryLabel}
                 </button>
                 {sequenceAnimaticRequest?.workflowId ? (
@@ -9213,7 +9329,7 @@ export function WorldGraphPage({
               </div>
               {sequenceAnimaticProgressLabel ? (
                 <div className="world-wiki-sequence-animatic-progress">
-                  <span>{sequenceAnimaticRow?.progress.label || summarizeOutputStatus(sequenceAnimaticState)}</span>
+                  <span>{sequenceAnimaticLookup.status === 'checking' ? 'Cached, syncing' : sequenceAnimaticRow?.progress.label || summarizeOutputStatus(sequenceAnimaticState)}</span>
                   <strong>{sequenceAnimaticProgressLabel}</strong>
                 </div>
               ) : null}
@@ -12390,6 +12506,62 @@ export function WorldGraphPage({
                 {sequenceAnimaticPreviewModel.screenplayMarkdown ? <pre>{sequenceAnimaticPreviewModel.screenplayMarkdown}</pre> : null}
               </div>
             )}
+          </section>
+        </div>
+      ) : sequenceAnimaticPreviewRequestId ? (
+        <div className="world-wiki-sequence-animatic-overlay" onClick={() => setSequenceAnimaticPreviewRequestId(null)}>
+          <section
+            className="world-wiki-sequence-animatic-viewer"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sequence screenplay animatic loading"
+          >
+            <button
+              className="world-wiki-sequence-animatic-close"
+              onClick={() => setSequenceAnimaticPreviewRequestId(null)}
+              type="button"
+              aria-label="Close animatic preview"
+            >
+              <EntityIcon id="close" />
+            </button>
+            <header className="world-wiki-sequence-animatic-head">
+              <div>
+                <span className="eyebrow">Screenplay animatic</span>
+                <h2>{sequenceAnimaticPreviewHydration.status === 'failed' ? 'Animatic unavailable' : 'Loading linked animatic'}</h2>
+              </div>
+              <div className="world-wiki-sequence-animatic-head-actions">
+                <span>{sequenceAnimaticPreviewHydration.status === 'failed' ? 'Load failed' : 'Checking outputs'}</span>
+              </div>
+            </header>
+            <section className="world-wiki-sequence-animatic-empty">
+              {sequenceAnimaticPreviewHydration.status === 'failed' ? (
+                <>
+                  <strong>Could not load this animatic.</strong>
+                  <p>{sequenceAnimaticPreviewHydration.error || 'The linked output may have been deleted or is not available in this workspace.'}</p>
+                  <button
+                    className="ghost-button compact"
+                    onClick={() => {
+                      setSequenceAnimaticPreviewHydration({ status: 'checking', error: null })
+                      void Promise.resolve(onLoadSequenceAnimaticState({ masterRequestId: sequenceAnimaticPreviewRequestId, knownRevision: null }))
+                        .then(() => setSequenceAnimaticPreviewHydration({ status: 'idle', error: null }))
+                        .catch((error) => setSequenceAnimaticPreviewHydration({
+                          status: 'failed',
+                          error: error instanceof Error ? error.message : String(error),
+                        }))
+                    }}
+                    type="button"
+                  >
+                    Retry
+                  </button>
+                </>
+              ) : (
+                <>
+                  <strong>Checking output state...</strong>
+                  <p>The animatic viewer is opening from the linked request while the compact state sync catches up.</p>
+                </>
+              )}
+            </section>
           </section>
         </div>
       ) : null}

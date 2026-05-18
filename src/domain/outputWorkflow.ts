@@ -795,8 +795,11 @@ export const sequenceAnimaticContinuityWorkflowEnsureResponseSchema = z.object({
 export const sequenceAnimaticStateRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
-  masterRequestId: z.string().min(1),
+  masterRequestId: z.string().min(1).nullable().optional(),
+  sequenceUnitKey: z.string().min(1).nullable().optional(),
   knownRevision: z.string().nullable().optional(),
+}).refine((value) => Boolean(value.masterRequestId || value.sequenceUnitKey), {
+  message: 'Provide masterRequestId or sequenceUnitKey.',
 })
 
 export const sequenceAnimaticStateResponseSchema = z.object({

@@ -176,6 +176,18 @@ verify_jwt = false
 [functions.ensure-sequence-animatic-block-workflows]
 verify_jwt = false
 
+[functions.ensure-sequence-animatic-continuity-workflow]
+verify_jwt = false
+
+[functions.get-sequence-animatic-state]
+verify_jwt = false
+
+[functions.get-output-workflow-graph]
+verify_jwt = false
+
+[functions.get-output-workflow-node-output]
+verify_jwt = false
+
 [functions.get-output-workflow-status]
 verify_jwt = false
 
