@@ -1545,23 +1545,39 @@
 .world-wiki-sequence-animatic-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
+  margin-top: 14px;
 }
 
 .world-wiki-sequence-animatic-primary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 36px;
-  border: 1px solid rgba(56, 189, 248, 0.26);
-  border-radius: 10px;
-  padding: 8px 12px;
-  background: linear-gradient(135deg, rgba(14, 165, 233, 0.2), rgba(45, 212, 191, 0.13));
-  color: rgba(240, 249, 255, 0.96);
-  font-size: 0.82rem;
-  font-weight: 850;
+  min-height: 44px;
+  border: 1px solid rgba(125, 211, 252, 0.48);
+  border-radius: 12px;
+  padding: 11px 16px;
+  background:
+    linear-gradient(135deg, rgba(14, 165, 233, 0.42), rgba(45, 212, 191, 0.22)),
+    rgba(8, 47, 73, 0.72);
+  color: rgba(248, 250, 252, 0.98);
+  font-size: 0.9rem;
+  font-weight: 900;
   cursor: pointer;
+  box-shadow:
+    0 18px 44px rgba(14, 165, 233, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+.world-wiki-sequence-animatic-primary:hover:not(:disabled) {
+  border-color: rgba(153, 246, 228, 0.62);
+  background:
+    linear-gradient(135deg, rgba(14, 165, 233, 0.54), rgba(45, 212, 191, 0.3)),
+    rgba(8, 47, 73, 0.84);
+  box-shadow:
+    0 20px 52px rgba(14, 165, 233, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
 .world-wiki-sequence-animatic-primary:disabled {
@@ -1571,9 +1587,9 @@
 
 .world-wiki-sequence-animatic-primary svg,
 .world-wiki-sequence-animatic-primary .entity-icon-image {
-  width: 17px;
-  height: 17px;
-  margin-right: 7px;
+  width: 19px;
+  height: 19px;
+  margin-right: 8px;
 }
 
 .world-mini-spinner {
@@ -1747,27 +1763,36 @@
 
 .world-wiki-sequence-animatic-main {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
 }
 
 .world-wiki-sequence-animatic-page-head,
 .world-wiki-sequence-animatic-block-toolbar {
   display: flex;
-  gap: 14px;
-  align-items: flex-start;
+  gap: 10px;
+  align-items: start;
   justify-content: space-between;
+}
+
+.world-wiki-sequence-animatic-page-head {
+  min-height: 0;
+}
+
+.world-wiki-sequence-animatic-page-head > div:first-child {
+  min-width: 0;
 }
 
 .world-wiki-sequence-animatic-page-head h2,
 .world-wiki-sequence-animatic-block-toolbar h3 {
-  margin: 2px 0;
+  margin: 1px 0;
   color: rgba(248, 250, 252, 0.96);
   letter-spacing: 0;
 }
 
 .world-wiki-sequence-animatic-page-head h2 {
-  font-size: 1.34rem;
+  font-size: 1.16rem;
+  line-height: 1.1;
 }
 
 .world-wiki-sequence-animatic-page-head p,
@@ -1775,6 +1800,7 @@
   margin: 0;
   color: rgba(148, 163, 184, 0.84);
   font-size: 0.78rem;
+  line-height: 1.25;
 }
 
 .world-wiki-sequence-animatic-page-actions,
@@ -1782,7 +1808,31 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
   justify-content: flex-end;
+}
+
+.world-wiki-sequence-animatic-page-actions {
+  flex: 0 0 auto;
+  align-self: start;
+}
+
+.world-wiki-sequence-animatic-page-actions .ghost-button.compact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-page-actions .ghost-button.compact svg,
+.world-wiki-sequence-animatic-page-actions .ghost-button.compact .entity-icon-image {
+  width: 14px;
+  height: 14px;
 }
 
 .world-wiki-sequence-animatic-skeleton,
@@ -1833,13 +1883,38 @@
   font-style: normal;
 }
 
-.world-wiki-sequence-animatic-continuity-strip div {
+.world-wiki-sequence-animatic-continuity-strip-actions {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   margin-left: auto;
 }
 
-.world-wiki-sequence-animatic-continuity-strip div span {
+.world-wiki-sequence-animatic-continuity-strip-actions .ghost-button.compact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-continuity-strip-actions .world-mini-spinner {
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  border-width: 1.5px;
+}
+
+.world-wiki-sequence-animatic-continuity-strip-thumbs {
+  display: flex;
+  gap: 4px;
+}
+
+.world-wiki-sequence-animatic-continuity-strip-thumbs span {
   display: grid;
   place-items: center;
   width: 26px;
@@ -2835,6 +2910,7 @@
 }
 
 .world-wiki-sequence-animatic-frame {
+  position: relative;
   display: block;
   width: 100%;
   overflow: hidden;
@@ -2880,6 +2956,38 @@
   height: auto;
   max-width: none;
   max-height: none;
+  transform: scale(1.1);
+  transform-origin: center center;
+}
+
+.world-wiki-sequence-animatic-frame-expand {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  background: rgba(7, 11, 18, 0.76);
+  color: rgba(237, 244, 251, 0.94);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.world-wiki-sequence-animatic-frame-expand:hover {
+  border-color: rgba(57, 216, 255, 0.34);
+  background: rgba(12, 18, 27, 0.94);
+}
+
+.world-wiki-sequence-animatic-frame-expand svg,
+.world-wiki-sequence-animatic-frame-expand .entity-icon-image {
+  width: 15px;
+  height: 15px;
 }
 
 .world-wiki-sequence-animatic-empty {

@@ -1513,21 +1513,25 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
     }
   }
 
-  const context = 'context' in response.error ? (response.error as FunctionsHttpError & { context?: unknown }).context : null
-  const responseInfo = context instanceof Response
-    ? {
-        status: context.status,
-        statusText: context.statusText,
-      }
-    : null
-  const errorPayload = await readFunctionsErrorPayload<Record<string, unknown> | string>(response.error)
+  const suppressExpectedFallbackLog = functionName === 'get-sequence-animatic-state'
+    && shouldLoadSequenceAnimaticStateDirectlyFromError(response.error)
+  if (!suppressExpectedFallbackLog) {
+    const context = 'context' in response.error ? (response.error as FunctionsHttpError & { context?: unknown }).context : null
+    const responseInfo = context instanceof Response
+      ? {
+          status: context.status,
+          statusText: context.statusText,
+        }
+      : null
+    const errorPayload = await readFunctionsErrorPayload<Record<string, unknown> | string>(response.error)
 
-  console.error(`[GraphCore] ${functionName} SDK invocation failed.`, {
-    message: response.error.message,
-    response: responseInfo,
-    request: summarizeFunctionBody(body),
-    errorPayload,
-  })
+    console.error(`[GraphCore] ${functionName} SDK invocation failed.`, {
+      message: response.error.message,
+      response: responseInfo,
+      request: summarizeFunctionBody(body),
+      errorPayload,
+    })
+  }
   return response
 }
 
@@ -2975,6 +2979,19 @@ function shouldLoadSequenceAnimaticStateDirectly(message: string) {
     || message.includes('Requested function was not found')
     || message.includes('"code":"NOT_FOUND"')
     || message.includes('"code": "NOT_FOUND"')
+}
+
+function functionsErrorStatus(error: FunctionsHttpError | Error) {
+  if (!('context' in error)) return null
+  const context = (error as FunctionsHttpError & { context?: unknown }).context
+  return context instanceof Response ? context.status : null
+}
+
+function shouldLoadSequenceAnimaticStateDirectlyFromError(error: FunctionsHttpError | Error) {
+  const status = functionsErrorStatus(error)
+  return shouldLoadSequenceAnimaticStateDirectly(error.message)
+    || status === 546
+    || (typeof status === 'number' && status >= 500)
 }
 
 type PendingAssetSigningRequest = {
@@ -8661,6 +8678,18 @@ export async function loadSequenceAnimaticState(
         session,
       )
       if (response.error) {
+        if (shouldLoadSequenceAnimaticStateDirectlyFromError(response.error)) {
+          sequenceAnimaticStateEdgeUnavailableUntil = Date.now() + SEQUENCE_ANIMATIC_STATE_EDGE_UNAVAILABLE_TTL_MS
+          console.warn('[GraphCore] get-sequence-animatic-state edge load failed; loading animatic state directly from Supabase tables.', {
+            projectId: payload.projectId,
+            draftId: payload.draftId,
+            masterRequestId: payload.masterRequestId,
+            sequenceUnitKey: payload.sequenceUnitKey,
+            status: functionsErrorStatus(response.error),
+            message: response.error.message,
+          })
+          return loadSequenceAnimaticStateDirect(payload)
+        }
         const message = await readFunctionsErrorMessage(response.error)
         if (shouldLoadSequenceAnimaticStateDirectly(message)) {
           sequenceAnimaticStateEdgeUnavailableUntil = Date.now() + SEQUENCE_ANIMATIC_STATE_EDGE_UNAVAILABLE_TTL_MS

@@ -9805,7 +9805,31 @@ export function WorldGraphPage({
                     <span>{routeAnimaticModel.continuityStatusLabel}</span>
                     {routeAnimaticModel.continuityStale ? <em>Continuity changed; regeneration recommended</em> : null}
                     {routeAnimaticModel.continuityFailed ? <em>{routeAnimaticModel.continuityError || 'Continuity failed'}</em> : null}
-                    <div>
+                    <div className="world-wiki-sequence-animatic-continuity-strip-actions">
+                      <button
+                        className="ghost-button compact"
+                        disabled={routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack`}
+                        onClick={() => void handleRunSequenceAnimaticContinuity(routeAnimaticModel)}
+                        type="button"
+                      >
+                        {routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack`
+                          ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</>
+                          : routeAnimaticModel.continuityButtonLabel}
+                      </button>
+                      <button
+                        className="ghost-button compact"
+                        disabled={!routeAnimaticModel.continuityRequest}
+                        onClick={() => {
+                          if (routeAnimaticModel.continuityRequest) {
+                            openSequenceAnimaticOutputGraph(routeAnimaticModel, routeAnimaticModel.continuityRequest.id)
+                          }
+                        }}
+                        type="button"
+                      >
+                        Graph
+                      </button>
+                    </div>
+                    <div className="world-wiki-sequence-animatic-continuity-strip-thumbs">
                       {[...routeAnimaticModel.continuityAnchors.characters, ...routeAnimaticModel.continuityAnchors.props, ...routeAnimaticModel.continuityAnchors.locationSpots].slice(0, 10).map((anchor) => (
                         <span key={anchor.id} title={`${anchor.typeLabel}: ${anchor.name} / ${anchor.statusLabel}`}>
                           {anchor.thumbnailUrl ? <img src={anchor.thumbnailUrl} alt="" /> : <EntityIcon id={anchor.iconId} />}
@@ -9967,7 +9991,26 @@ export function WorldGraphPage({
                               </div>
                               <div className="world-wiki-sequence-animatic-panel-stack">
                                 <div className={shot.panelUrl ? 'world-wiki-sequence-animatic-frame has-image' : 'world-wiki-sequence-animatic-frame is-empty'}>
-                                  {shot.panelUrl ? <img src={shot.panelUrl} alt="" /> : (
+                                  {shot.panelUrl ? (
+                                    <>
+                                      <img src={shot.panelUrl} alt="" />
+                                      <button
+                                        className="world-wiki-sequence-animatic-frame-expand"
+                                        onClick={() => openWikiDetailModal({
+                                          title: `${shot.title} keyframe`,
+                                          eyebrow: 'Animatic keyframe',
+                                          body: shot.action || shot.camera || shot.lighting || 'Generated keyframe for this animatic shot.',
+                                          icon: 'asset',
+                                          imageUrl: shot.panelUrl,
+                                          variant: 'image',
+                                        })}
+                                        type="button"
+                                        aria-label={`Open ${shot.title} keyframe full size`}
+                                      >
+                                        <EntityIcon id="expand" />
+                                      </button>
+                                    </>
+                                  ) : (
                                     <span>
                                       {shot.panelRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
                                       {shot.panelStatusLabel}
@@ -10020,10 +10063,6 @@ export function WorldGraphPage({
               <span className="eyebrow">Authored chapter</span>
               <h2>{entity.name}</h2>
               <p>{sequence.synopsis || entity.summary || entity.context || 'No sequence synopsis has been written yet.'}</p>
-              <button className="world-wiki-entity-graph-button" onClick={() => openWikiEntityGraphModal(entity.key)} type="button">
-                <EntityIcon id="graph" />
-                Graph view
-              </button>
               <div className="world-wiki-sequence-animatic-actions">
                 <button
                   className="world-wiki-sequence-animatic-primary"
@@ -13180,7 +13219,26 @@ export function WorldGraphPage({
                           </div>
                           <div className="world-wiki-sequence-animatic-panel-stack">
                             <div className={shot.panelUrl ? 'world-wiki-sequence-animatic-frame has-image' : 'world-wiki-sequence-animatic-frame is-empty'}>
-                              {shot.panelUrl ? <img src={shot.panelUrl} alt="" /> : (
+                              {shot.panelUrl ? (
+                                <>
+                                  <img src={shot.panelUrl} alt="" />
+                                  <button
+                                    className="world-wiki-sequence-animatic-frame-expand"
+                                    onClick={() => openWikiDetailModal({
+                                      title: `${shot.title} keyframe`,
+                                      eyebrow: 'Animatic keyframe',
+                                      body: shot.action || shot.camera || shot.lighting || 'Generated keyframe for this animatic shot.',
+                                      icon: 'asset',
+                                      imageUrl: shot.panelUrl,
+                                      variant: 'image',
+                                    })}
+                                    type="button"
+                                    aria-label={`Open ${shot.title} keyframe full size`}
+                                  >
+                                    <EntityIcon id="expand" />
+                                  </button>
+                                </>
+                              ) : (
                                 <span>
                                   {shot.panelRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
                                   {shot.panelStatusLabel}
