@@ -104,6 +104,7 @@ const DEFAULT_FAL_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoFalMode
 const DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL = aiGenerationSettings.outputWorkflow.videoFalHighResolutionModel
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_CONTINUITY_PLANNER_TIMEOUT_MS = 240_000
+const DEFAULT_CONTINUITY_BLOCK_PLANNER_TIMEOUT_MS = 90_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
 const MUAPI_BASE_URL = 'https://api.muapi.ai/api/v1'
@@ -782,6 +783,7 @@ async function recoverArtifactBackedWorkflowNodeOutputs(input: {
       provider: readText(metadata.provider) || readText(step?.provider) || null,
       model: readText(metadata.model) || readText(step?.model) || null,
       providerRequestId: readText(metadata.providerRequestId) || readText(metadata.falRequestId) || readText(step?.providerRequestId) || null,
+      startedAt: step?.startedAt,
       metadata: {
         ...asRecord(step?.metadata),
         recoveredFromArtifact: true,
@@ -1020,9 +1022,11 @@ async function setStepStatus(
     providerRequestId?: string | null
     errorMessage?: string | null
     metadata?: Record<string, unknown>
+    startedAt?: string | null
   },
 ) {
   const now = new Date().toISOString()
+  const startedAt = readText(input.startedAt) || now
   const writeStep = async (nodeId: string | null) => client
     .from('output_workflow_run_steps')
     .upsert({
@@ -1043,7 +1047,7 @@ async function setStepStatus(
       provider_request_id: input.providerRequestId ?? null,
       error_message: input.errorMessage ?? null,
       metadata: input.metadata ?? {},
-      started_at: input.status === 'queued' ? null : now,
+      started_at: input.status === 'queued' ? null : startedAt,
       completed_at: ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(input.status) ? now : null,
     }, { onConflict: 'run_id,node_key' })
   let response = await writeStep(input.node.id)
@@ -1942,6 +1946,28 @@ function readFirstUpstreamRecord(upstream: Record<string, Record<string, unknown
   return {}
 }
 
+function readPreferredUpstreamRecord(upstream: Record<string, Record<string, unknown>>, preferredNodeKeys: string[], fields: string[]) {
+  for (const nodeKey of preferredNodeKeys) {
+    const outputs = upstream[nodeKey]
+    if (!outputs) continue
+    for (const field of fields) {
+      const record = asRecord(outputs[field])
+      if (Object.keys(record).length > 0) return record
+    }
+  }
+  return readFirstUpstreamRecord(upstream, fields)
+}
+
+function continuityBlockNodeSuffix(nodeKey: string) {
+  return /^continuity_block_(\d+)_/.exec(nodeKey)?.[1] ?? ''
+}
+
+function previousContinuityGraphNodeKeys(blockSuffix: string) {
+  const blockNumber = Number.parseInt(blockSuffix, 10)
+  if (!Number.isFinite(blockNumber) || blockNumber <= 1) return ['continuity_seed_graph']
+  return [`continuity_block_${String(blockNumber - 1).padStart(3, '0')}_merge`, 'continuity_seed_graph']
+}
+
 function readUpstreamGuidanceBundle(upstream: Record<string, Record<string, unknown>>) {
   for (const outputs of Object.values(upstream)) {
     const candidate = outputs.guidance ?? outputs.guidanceBundle
@@ -2035,6 +2061,14 @@ function outputWorkflowContinuityPlannerTimeoutMs() {
   return Number.isFinite(parsed) && parsed > 0
     ? Math.max(60_000, Math.floor(parsed))
     : DEFAULT_CONTINUITY_PLANNER_TIMEOUT_MS
+}
+
+function outputWorkflowContinuityBlockPlannerTimeoutMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_CONTINUITY_BLOCK_PLANNER_TIMEOUT_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.max(30_000, Math.floor(parsed))
+    : DEFAULT_CONTINUITY_BLOCK_PLANNER_TIMEOUT_MS
 }
 
 function outputWorkflowChapterAttempts() {
@@ -3747,6 +3781,58 @@ async function persistOutputRequestReferenceSelection(client: DatabaseClient, ru
   await client.rpc('refresh_output_request_status_projection', { p_request_id: requestId })
 }
 
+async function persistSequenceAnimaticContinuityRequestState(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  artifactKey: string
+  continuityPack: Record<string, unknown>
+  blockStates: Record<string, unknown>
+  pendingDeltas: Record<string, unknown>
+}) {
+  const requestResponse = await input.client
+    .from('output_requests')
+    .select('id, metadata')
+    .eq('draft_id', input.run.draftId)
+    .eq('workflow_id', input.workflow.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (requestResponse.error) throw new Error(requestResponse.error.message)
+  if (!requestResponse.data) return
+
+  const requestRow = asRecord(requestResponse.data)
+  const requestId = readText(requestRow.id)
+  if (!requestId) return
+
+  const metadata = asRecord(requestRow.metadata)
+  const mergedBlockStates = {
+    ...asRecord(metadata.blockStates),
+    ...input.blockStates,
+  }
+  const continuityGraphStatus = readText(input.continuityPack.continuityGraphStatus ?? input.continuityPack.continuity_graph_status)
+  const assetGenerationStatus = readText(input.continuityPack.assetGenerationStatus ?? input.continuityPack.asset_generation_status)
+  const updateResponse = await input.client
+    .from('output_requests')
+    .update({
+      metadata: {
+        ...metadata,
+        screenplayAnimaticRole: readText(metadata.screenplayAnimaticRole) || 'continuity_pack',
+        sequenceAnimaticRole: readText(metadata.sequenceAnimaticRole) || 'continuity_pack',
+        blockStates: mergedBlockStates,
+        pendingDeltas: input.pendingDeltas,
+        continuityGraphStatus: continuityGraphStatus || sequenceAnimaticContinuityGraphStatusFromBlockStates(mergedBlockStates),
+        continuityPackHash: readText(input.continuityPack.continuityPackHash),
+        assetGenerationStatus: assetGenerationStatus || readText(metadata.assetGenerationStatus) || 'none',
+        lastContinuityStructureArtifactKey: input.artifactKey,
+        continuityStructureUpdatedAt: new Date().toISOString(),
+      },
+    })
+    .eq('id', requestId)
+  if (updateResponse.error) throw new Error(updateResponse.error.message)
+  await input.client.rpc('refresh_output_request_status_projection', { p_request_id: requestId })
+}
+
 function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<string, unknown>>, fallbackPack: Record<string, unknown>) {
   const fallbackEntities = Array.isArray(fallbackPack.entities) ? fallbackPack.entities.map(asRecord) : []
   const fallbackByKey = new Map(fallbackEntities.map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
@@ -4108,6 +4194,11 @@ export function repairCinematicV2ShotPlanVisualReferences(input: {
       visibleCharacterRefIds,
       speakerRefIds,
       locationRefId,
+      worldLocationRefId: readText(parsedShot.worldLocationRefId) || locationRefId,
+      continuitySetId: readText(parsedShot.continuitySetId) || (locationRefId ? `set_${slugify(locationRefId)}_primary` : ''),
+      continuityZoneId: readText(parsedShot.continuityZoneId),
+      continuitySpotIds: readStringArray(parsedShot.continuitySpotIds),
+      continuityAngleId: readText(parsedShot.continuityAngleId),
       propRefIds,
     })
   })
@@ -4380,6 +4471,82 @@ const sequenceAnimaticContinuitySceneGraphSchema = z.object({
   })).default([]),
 })
 
+const sequenceAnimaticContinuityGraphEdgeSchema = z.object({
+  sourceId: z.string(),
+  targetId: z.string(),
+  relationship: z.enum(['connected_to', 'adjacent_to', 'entrance_to', 'visible_from', 'same_space_angle', 'contains', 'camera_faces']),
+  evidence: z.string().default(''),
+})
+
+const sequenceAnimaticContinuityWorldLocationRefSchema = z.object({
+  id: z.string(),
+  name: z.string().default(''),
+  summary: z.string().default(''),
+  visualSummary: z.string().default(''),
+})
+
+const sequenceAnimaticContinuityGraphSetSchema = z.object({
+  id: z.string(),
+  worldLocationRefId: z.string().nullable().default(null),
+  name: z.string(),
+  visualBrief: z.string().default(''),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityGraphZoneSchema = z.object({
+  id: z.string(),
+  setId: z.string(),
+  worldLocationRefId: z.string().nullable().default(null),
+  name: z.string(),
+  visualBrief: z.string().default(''),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityGraphSpotSchema = z.object({
+  id: z.string(),
+  zoneId: z.string().default(''),
+  setId: z.string(),
+  worldLocationRefId: z.string().nullable().default(null),
+  name: z.string(),
+  visualBrief: z.string().default(''),
+  landmarks: z.array(z.string()).default([]),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityGraphAngleSchema = z.object({
+  id: z.string(),
+  setId: z.string(),
+  zoneId: z.string().default(''),
+  spotIds: z.array(z.string()).default([]),
+  worldLocationRefId: z.string().nullable().default(null),
+  name: z.string(),
+  visualBrief: z.string().default(''),
+  framing: z.string().default(''),
+  cameraPosition: z.string().default(''),
+  facingDirection: z.string().default(''),
+  subjectPosition: z.string().default(''),
+  visibleLandmarks: z.array(z.string()).default([]),
+  lightingDirection: z.string().default(''),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityShotBindingSchema = z.object({
+  shotId: z.string(),
+  storyboardBlockId: z.string().default(''),
+  worldLocationRefId: z.string().nullable().default(null),
+  setId: z.string().default(''),
+  zoneId: z.string().default(''),
+  spotIds: z.array(z.string()).default([]),
+  angleId: z.string().default(''),
+  characterAnchorIds: z.array(z.string()).default([]),
+  propAnchorIds: z.array(z.string()).default([]),
+  continuityAnchorIds: z.array(z.string()).default([]),
+})
+
 const sequenceAnimaticContinuityRejectedCandidateSchema = z.object({
   name: z.string(),
   type: z.enum(['character', 'prop', 'location_spot', 'location_set', 'location_angle', 'unknown']).default('unknown'),
@@ -4389,16 +4556,77 @@ const sequenceAnimaticContinuityRejectedCandidateSchema = z.object({
   existingWorldEntityMatch: z.string().nullable().default(null),
 })
 
-const sequenceAnimaticContinuityPlanV2Schema = z.object({
-  version: z.literal('sequence_animatic_continuity_plan_v2').default('sequence_animatic_continuity_plan_v2'),
-  planningMode: z.enum(['llm_structured_v2', 'deterministic_fallback']).default('llm_structured_v2'),
-  anchors: z.array(sequenceAnimaticContinuityPlannerAnchorSchema).default([]),
-  locationSets: z.array(sequenceAnimaticContinuityLocationSetSchema).default([]),
-  locationAngles: z.array(sequenceAnimaticContinuityLocationAngleSchema).default([]),
-  sceneGraph: sequenceAnimaticContinuitySceneGraphSchema.default({ nodes: [], edges: [] }),
+const sequenceAnimaticContinuityGraphV2Schema = z.object({
+  version: z.literal('sequence_animatic_continuity_graph_v2').default('sequence_animatic_continuity_graph_v2'),
+  planningMode: z.enum(['block_graph_v2', 'deterministic_fallback']).default('block_graph_v2'),
+  worldLocationRefs: z.array(sequenceAnimaticContinuityWorldLocationRefSchema).default([]),
+  locationSets: z.array(sequenceAnimaticContinuityGraphSetSchema).default([]),
+  zones: z.array(sequenceAnimaticContinuityGraphZoneSchema).default([]),
+  spots: z.array(sequenceAnimaticContinuityGraphSpotSchema).default([]),
+  angles: z.array(sequenceAnimaticContinuityGraphAngleSchema).default([]),
+  edges: z.array(sequenceAnimaticContinuityGraphEdgeSchema).default([]),
+  shotBindings: z.record(z.string(), sequenceAnimaticContinuityShotBindingSchema).default({}),
+  assetAnchors: z.array(sequenceAnimaticContinuityPlannerAnchorSchema).default([]),
+  rejectedCandidates: z.array(sequenceAnimaticContinuityRejectedCandidateSchema).default([]),
+  blockSummaries: z.array(z.object({
+    blockId: z.string(),
+    summary: z.string().default(''),
+    status: z.enum(['planned', 'fallback', 'failed']).default('planned'),
+  })).default([]),
+  warnings: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityBlockDeltaSchema = z.object({
+  blockId: z.string(),
+  blockSummary: z.string().default(''),
+  worldLocationRefs: z.array(sequenceAnimaticContinuityWorldLocationRefSchema).default([]),
+  locationSets: z.array(sequenceAnimaticContinuityGraphSetSchema).default([]),
+  zones: z.array(sequenceAnimaticContinuityGraphZoneSchema).default([]),
+  spots: z.array(sequenceAnimaticContinuityGraphSpotSchema).default([]),
+  angles: z.array(sequenceAnimaticContinuityGraphAngleSchema).default([]),
+  edges: z.array(sequenceAnimaticContinuityGraphEdgeSchema).default([]),
+  shotBindings: z.record(z.string(), sequenceAnimaticContinuityShotBindingSchema).default({}),
+  assetAnchors: z.array(sequenceAnimaticContinuityPlannerAnchorSchema).default([]),
   rejectedCandidates: z.array(sequenceAnimaticContinuityRejectedCandidateSchema).default([]),
   warnings: z.array(z.string()).default([]),
   diagnostics: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityPlanV2Schema = z.object({
+  version: z.literal('sequence_animatic_continuity_plan_v2').default('sequence_animatic_continuity_plan_v2'),
+  planningMode: z.enum(['block_graph_v2', 'llm_structured_v2', 'deterministic_fallback']).default('llm_structured_v2'),
+  anchors: z.array(sequenceAnimaticContinuityPlannerAnchorSchema).default([]),
+  continuityGraphV2: sequenceAnimaticContinuityGraphV2Schema.optional(),
+  locationSets: z.array(sequenceAnimaticContinuityLocationSetSchema).default([]),
+  locationAngles: z.array(sequenceAnimaticContinuityLocationAngleSchema).default([]),
+  sceneGraph: sequenceAnimaticContinuitySceneGraphSchema.default({ nodes: [], edges: [] }),
+  shotBindings: z.record(z.string(), sequenceAnimaticContinuityShotBindingSchema).default({}),
+  rejectedCandidates: z.array(sequenceAnimaticContinuityRejectedCandidateSchema).default([]),
+  warnings: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticContinuityAssetStateSchema = z.object({
+  status: z.enum(['missing', 'generating', 'ready', 'stale', 'failed']).default('missing'),
+  inputHash: z.string().default(''),
+  assetKey: z.string().nullable().default(null),
+  artifactKey: z.string().nullable().default(null),
+  prompt: z.string().default(''),
+  referenceAssetKeys: z.array(z.string()).default([]),
+  sourceNodeId: z.string(),
+  assetKind: z.string().default('continuity_asset'),
+  generatedAt: z.string().nullable().default(null),
+  warnings: z.array(z.string()).default([]),
+  error: z.string().default(''),
+})
+
+const sequenceAnimaticContinuityVisualDependencyEdgeSchema = z.object({
+  sourceNodeId: z.string(),
+  targetNodeId: z.string(),
+  relationship: z.string(),
+  required: z.boolean().default(false),
+  evidence: z.string().default(''),
 })
 
 function normalizeAnchorName(value: string) {
@@ -5289,23 +5517,157 @@ function normalizedSequenceAnimaticReferenceKey(value: unknown) {
   return normalizeComicReferenceText(readText(value))
 }
 
+const sequenceAnimaticReferenceAliasStopwords = new Set([
+  'a',
+  'an',
+  'and',
+  'at',
+  'by',
+  'for',
+  'from',
+  'in',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'with',
+])
+
+function sequenceAnimaticReferenceIsCharacterLike(entry: Record<string, unknown>) {
+  const type = normalizeComicReferenceText([
+    readText(entry.type),
+    readText(entry.referenceRole),
+    readText(entry.nodeType),
+  ].filter(Boolean).join(' '))
+  return /\b(actor|character|cast|person|persona|protagonist|antagonist)\b/.test(type)
+}
+
+function sequenceAnimaticReferenceAliasCandidates(entry: Record<string, unknown>) {
+  const rawValues = [
+    readText(entry.key),
+    readText(entry.key).replace(/_/g, ' '),
+    readText(entry.name),
+    readText(entry.label),
+    ...readStringArray(entry.aliases),
+  ].filter(Boolean)
+  const candidates = new Set<string>()
+  for (const value of rawValues) {
+    const normalized = normalizedSequenceAnimaticReferenceKey(value)
+    if (normalized) candidates.add(normalized)
+  }
+
+  if (sequenceAnimaticReferenceIsCharacterLike(entry)) {
+    for (const value of rawValues) {
+      const parts = normalizedSequenceAnimaticReferenceKey(value)
+        .split('_')
+        .filter((part) => part.length >= 3 && !sequenceAnimaticReferenceAliasStopwords.has(part))
+      if (parts.length >= 2) {
+        candidates.add(parts[0])
+        candidates.add(parts[parts.length - 1])
+      }
+    }
+  }
+
+  return [...candidates]
+}
+
 function buildSequenceAnimaticReferenceLookup(catalog: Array<Record<string, unknown>>) {
   const byKey = new Map<string, Record<string, unknown>>()
   const byAlias = new Map<string, Record<string, unknown>>()
   for (const entry of catalog) {
     const key = readText(entry.key)
     if (key) byKey.set(key, entry)
-    const names = [
-      key,
-      readText(entry.name),
-      ...readStringArray(entry.aliases),
-    ].filter(Boolean)
-    for (const name of names) {
-      const normalized = normalizedSequenceAnimaticReferenceKey(name)
+    for (const normalized of sequenceAnimaticReferenceAliasCandidates(entry)) {
       if (normalized && !byAlias.has(normalized)) byAlias.set(normalized, entry)
     }
   }
   return { byKey, byAlias }
+}
+
+function sequenceAnimaticReferenceLookupFromPlannerContext(context: Record<string, unknown>) {
+  const references = readArray(context.existingWorldReferences).map(asRecord)
+  const resolvedReferences: Array<Record<string, unknown>> = []
+  for (const shot of readArray(context.shots).map(asRecord)) {
+    const resolvedRefs = asRecord(shot.resolvedRefs)
+    for (const value of Object.values(resolvedRefs)) {
+      if (Array.isArray(value)) resolvedReferences.push(...value.map(asRecord))
+      else {
+        const record = asRecord(value)
+        if (Object.keys(record).length > 0) resolvedReferences.push(record)
+      }
+    }
+  }
+  return buildSequenceAnimaticReferenceLookup(mergeSequenceAnimaticReferenceCatalogEntries([
+    ...references,
+    ...resolvedReferences,
+  ]))
+}
+
+function sequenceAnimaticCanonicalReferenceMatchForAnchor(
+  anchor: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>,
+  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>,
+) {
+  const anchorType = readText(anchor.type)
+  if (anchorType !== 'character' && anchorType !== 'prop') return null
+  const explicitMatch = readText(anchor.existingWorldEntityMatch)
+  if (explicitMatch) {
+    return lookup.byKey.get(explicitMatch)
+      ?? lookup.byAlias.get(normalizedSequenceAnimaticReferenceKey(explicitMatch))
+      ?? { key: explicitMatch, name: explicitMatch, type: 'world_entity' }
+  }
+  const candidates = [
+    readText(anchor.name),
+    readText(anchor.id).replace(/^anchor_(character|prop)_/i, '').replace(/_block\d+$/i, '').replace(/_/g, ' '),
+  ].filter(Boolean)
+  for (const candidate of candidates) {
+    const match = lookup.byAlias.get(normalizedSequenceAnimaticReferenceKey(candidate))
+    if (match) return match
+  }
+  return null
+}
+
+function sequenceAnimaticContinuityTextHasPhysicalLocationCue(value: unknown) {
+  const normalized = ` ${normalizeComicReferenceText(readText(value)).replace(/_/g, ' ')} `
+  return /\b(row|lane|street|city|station|clock|face|pipe|rail|catwalk|walkway|chamber|room|corridor|passage|gap|hatch|ledge|platform|shaft|wall|door|gate|workshop|bay|bench|tunnel|engine|basin|bridge|stair|dock|harbor|drain|crate|lamp|lantern)\b/.test(normalized)
+}
+
+function sequenceAnimaticCanonicalCharacterMatchForText(
+  value: unknown,
+  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>,
+) {
+  const normalized = normalizedSequenceAnimaticReferenceKey(value)
+  if (!normalized) return null
+  for (const [alias, entry] of lookup.byAlias.entries()) {
+    if (alias.length < 3 || !sequenceAnimaticReferenceIsCharacterLike(entry)) continue
+    if (normalized === alias || normalized.includes(`_${alias}_`) || normalized.startsWith(`${alias}_`) || normalized.endsWith(`_${alias}`)) {
+      return entry
+    }
+  }
+  return null
+}
+
+function sequenceAnimaticContinuityLocationNodeLooksCharacterDerived(
+  node: Record<string, unknown>,
+  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>,
+) {
+  const label = readText(node.name) || readText(node.id)
+  const match = sequenceAnimaticCanonicalCharacterMatchForText(label, lookup)
+  return Boolean(match && !sequenceAnimaticContinuityTextHasPhysicalLocationCue(label))
+}
+
+function sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived(
+  node: Record<string, unknown>,
+  shots: Array<Record<string, unknown>>,
+) {
+  const nodeText = normalizedSequenceAnimaticReferenceKey([node.id, node.name].map(readText).filter(Boolean).join(' '))
+  if (!nodeText) return false
+  for (const shot of shots) {
+    const title = readText(shot.title)
+    const normalizedTitle = normalizedSequenceAnimaticReferenceKey(title)
+    if (normalizedTitle.length >= 8 && nodeText.includes(normalizedTitle) && !sequenceAnimaticContinuityTextHasPhysicalLocationCue(title)) return true
+  }
+  return false
 }
 
 function compactResolvedSequenceAnimaticReference(entry: Record<string, unknown>) {
@@ -5409,6 +5771,12 @@ function buildSequenceAnimaticContinuityPlannerContext(input: {
           camera: compactSequenceAnimaticCamera(shot),
           lighting: sequenceAnimaticPersistentLightingCue(shot.lighting),
           locationRefId: readText(shot.locationRefId) || readText(shot.location_ref_id),
+          worldLocationRefId: readText(shot.worldLocationRefId) || readText(shot.world_location_ref_id) || readText(shot.locationRefId) || readText(shot.location_ref_id),
+          continuitySetId: readText(shot.continuitySetId) || readText(shot.continuity_set_id),
+          continuityZoneId: readText(shot.continuityZoneId) || readText(shot.continuity_zone_id),
+          continuitySpotIds: sequenceAnimaticShotStringArray(shot, ['continuitySpotIds', 'continuity_spot_ids']),
+          continuityAngleId: readText(shot.continuityAngleId) || readText(shot.continuity_angle_id),
+          spatialContinuity: sequenceAnimaticSpatialRecord(shot),
           propRefIds: sequenceAnimaticShotStringArray(shot, ['propRefIds', 'prop_ref_ids']),
           visibleCharacterRefIds: sequenceAnimaticShotStringArray(shot, ['visibleCharacterRefIds', 'visible_character_ref_ids', 'characterRefIds', 'character_ref_ids']),
           speakerRefIds: sequenceAnimaticShotStringArray(shot, ['speakerRefIds', 'speaker_ref_ids']),
@@ -5430,6 +5798,973 @@ function buildSequenceAnimaticContinuityPlannerContext(input: {
   }
 }
 
+function sequenceAnimaticGraphLocationRefsFromContext(context: Record<string, unknown>) {
+  return readArray(context.existingWorldReferences).map(asRecord)
+    .filter((entry) => /\b(place|location|environment|set)\b/i.test(readText(entry.type)))
+    .map((entry) => ({
+      id: readText(entry.key),
+      name: readText(entry.name) || readText(entry.key),
+      summary: compactSequenceAnimaticText(entry.summary, 360),
+      visualSummary: compactSequenceAnimaticText(entry.visualSummary, 420),
+    }))
+    .filter((entry, index, values) => entry.id && values.findIndex((candidate) => candidate.id === entry.id) === index)
+}
+
+function sequenceAnimaticEmptyGraphV2(context: Record<string, unknown> = {}) {
+  return sequenceAnimaticContinuityGraphV2Schema.parse({
+    version: 'sequence_animatic_continuity_graph_v2',
+    planningMode: 'block_graph_v2',
+    worldLocationRefs: sequenceAnimaticGraphLocationRefsFromContext(context),
+    locationSets: [],
+    zones: [],
+    spots: [],
+    angles: [],
+    edges: [],
+    shotBindings: {},
+    assetAnchors: [],
+    rejectedCandidates: [],
+    blockSummaries: [],
+    warnings: [],
+    diagnostics: [],
+  })
+}
+
+function parseSequenceAnimaticGraphV2(value: unknown) {
+  const parsed = sequenceAnimaticContinuityGraphV2Schema.safeParse(value)
+  return parsed.success ? parsed.data : sequenceAnimaticEmptyGraphV2()
+}
+
+function sequenceAnimaticBlockShots(context: Record<string, unknown>, block: Record<string, unknown>) {
+  const shotIds = new Set(readStringArray(block.shotIds).length > 0 ? readStringArray(block.shotIds) : readStringArray(block.shotBreakIds))
+  const shots = readArray(context.shots).map(asRecord)
+  return shotIds.size > 0 ? shots.filter((shot) => shotIds.has(readText(shot.id))) : shots
+}
+
+function sequenceAnimaticGraphSlug(...parts: unknown[]) {
+  return slugify(parts.map(readText).filter(Boolean).join(' ')).slice(0, 84)
+}
+
+function sequenceAnimaticShotWorldLocationRefId(shot: Record<string, unknown>, graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>) {
+  const resolvedLocation = asRecord(asRecord(shot.resolvedRefs).location)
+  return readText(shot.worldLocationRefId)
+    || readText(shot.locationRefId)
+    || readText(resolvedLocation.key)
+    || graph.worldLocationRefs[0]?.id
+    || 'unknown_location'
+}
+
+function sequenceAnimaticSpatialRecord(shot: Record<string, unknown>) {
+  return asRecord(shot.spatialContinuity ?? shot.spatial_continuity)
+}
+
+function sequenceAnimaticGraphSetId(shot: Record<string, unknown>, worldLocationRefId: string) {
+  return readText(shot.continuitySetId)
+    || `set_${sequenceAnimaticGraphSlug(worldLocationRefId, 'primary')}`
+}
+
+function sequenceAnimaticGraphZoneSeed(shot: Record<string, unknown>, worldLocationRefId: string) {
+  const spatial = sequenceAnimaticSpatialRecord(shot)
+  const physicalCandidates = [
+    readText(shot.continuityZoneLabel),
+    readText(spatial.subjectPosition),
+    ...readStringArray(spatial.visibleLandmarks),
+    readText(shot.title),
+  ].filter(Boolean)
+  const physicalCandidate = physicalCandidates.find((candidate) => sequenceAnimaticContinuityTextHasPhysicalLocationCue(candidate))
+  return physicalCandidate || `${worldLocationRefId} action area`
+}
+
+function sequenceAnimaticGraphZoneId(shot: Record<string, unknown>, worldLocationRefId: string, setId: string) {
+  return readText(shot.continuityZoneId)
+    || `zone_${sequenceAnimaticGraphSlug(setId, sequenceAnimaticGraphZoneSeed(shot, worldLocationRefId)).slice(0, 64)}`
+}
+
+function sequenceAnimaticGraphAngleId(shot: Record<string, unknown>, setId: string, zoneId: string) {
+  const camera = asRecord(shot.camera)
+  return readText(shot.continuityAngleId)
+    || `angle_${sequenceAnimaticGraphSlug(setId, zoneId, camera.framing, camera.angle, camera.movement).slice(0, 64)}`
+}
+
+function sequenceAnimaticGraphSpotIds(shot: Record<string, unknown>, zoneId: string) {
+  const explicit = readStringArray(shot.continuitySpotIds)
+  if (explicit.length > 0) return explicit
+  const action = normalizeComicReferenceText([shot.title, shot.action, shot.description].map(readText).filter(Boolean).join(' '))
+  const phrases = sequenceAnimaticSpotPhrases.filter((phrase) => action.includes(normalizeComicReferenceText(phrase))).slice(0, 3)
+  return phrases.length > 0
+    ? phrases.map((phrase) => `spot_${sequenceAnimaticGraphSlug(zoneId, phrase).slice(0, 72)}`)
+    : [`spot_${sequenceAnimaticGraphSlug(zoneId, 'primary').slice(0, 72)}`]
+}
+
+function sequenceAnimaticGraphShotBindingAnchorIds(graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>, shotId: string) {
+  const characterAnchorIds: string[] = []
+  const propAnchorIds: string[] = []
+  graph.assetAnchors.forEach((anchor) => {
+    if (!anchor.shotIds.includes(shotId)) return
+    const id = readText(anchor.id)
+    if (!id) return
+    if (anchor.type === 'character') characterAnchorIds.push(id)
+    if (anchor.type === 'prop') propAnchorIds.push(id)
+  })
+  return {
+    characterAnchorIds: [...new Set(characterAnchorIds)],
+    propAnchorIds: [...new Set(propAnchorIds)],
+  }
+}
+
+function buildDeterministicSequenceAnimaticBlockDelta(input: {
+  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
+  continuityPlannerContext: Record<string, unknown>
+  storyboardBlock: Record<string, unknown>
+  fallbackReason?: string
+}) {
+  const blockId = readText(input.storyboardBlock.id) || readText(input.storyboardBlock.storyboardBlockId) || 'storyboard_block'
+  const blockTitle = readText(input.storyboardBlock.title) || readText(input.storyboardBlock.summary) || blockId
+  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
+  const locationSets: Array<z.infer<typeof sequenceAnimaticContinuityGraphSetSchema>> = []
+  const zones: Array<z.infer<typeof sequenceAnimaticContinuityGraphZoneSchema>> = []
+  const spots: Array<z.infer<typeof sequenceAnimaticContinuityGraphSpotSchema>> = []
+  const angles: Array<z.infer<typeof sequenceAnimaticContinuityGraphAngleSchema>> = []
+  const edges: Array<z.infer<typeof sequenceAnimaticContinuityGraphEdgeSchema>> = []
+  const shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>> = {}
+  const assetAnchors: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[] = []
+  const rejectedCandidates: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
+  const worldLocationRefs = [...input.graph.worldLocationRefs]
+
+  for (const shot of shots) {
+    const shotId = readText(shot.id)
+    if (!shotId) continue
+    const spatial = sequenceAnimaticSpatialRecord(shot)
+    const camera = compactSequenceAnimaticCamera(shot)
+    const worldLocationRefId = sequenceAnimaticShotWorldLocationRefId(shot, input.graph)
+    if (worldLocationRefId && !worldLocationRefs.some((entry) => entry.id === worldLocationRefId)) {
+      const resolvedLocation = asRecord(asRecord(shot.resolvedRefs).location)
+      worldLocationRefs.push({
+        id: worldLocationRefId,
+        name: readText(resolvedLocation.name) || titleFromRefLike(worldLocationRefId),
+        summary: compactSequenceAnimaticText(resolvedLocation.summary, 360),
+        visualSummary: compactSequenceAnimaticText(resolvedLocation.visualSummary, 420),
+      })
+    }
+    const setId = sequenceAnimaticGraphSetId(shot, worldLocationRefId)
+    const zoneId = sequenceAnimaticGraphZoneId(shot, worldLocationRefId, setId)
+    const spotIds = sequenceAnimaticGraphSpotIds(shot, zoneId)
+    const angleId = sequenceAnimaticGraphAngleId(shot, setId, zoneId)
+    const shotIds = [shotId]
+    const storyboardBlockIds = [blockId].filter(Boolean)
+    locationSets.push({
+      id: setId,
+      worldLocationRefId,
+      name: `${titleFromRefLike(worldLocationRefId)} primary set`,
+      visualBrief: compactSequenceAnimaticText(readText(asRecord(asRecord(shot.resolvedRefs).location).visualSummary) || readText(shot.action), 700),
+      shotIds,
+      storyboardBlockIds,
+    })
+    zones.push({
+      id: zoneId,
+      setId,
+      worldLocationRefId,
+      name: readText(shot.title) ? `${readText(shot.title)} zone` : `${titleFromRefLike(worldLocationRefId)} action zone`,
+      visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 700),
+      shotIds,
+      storyboardBlockIds,
+    })
+    for (const spotId of spotIds) {
+      spots.push({
+        id: spotId,
+        zoneId,
+        setId,
+        worldLocationRefId,
+        name: spotId.includes('primary') ? `${readText(shot.title) || 'Primary'} spot` : titleFromRefLike(spotId.replace(/^spot_/, '')),
+        visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 520),
+        landmarks: readStringArray(spatial.visibleLandmarks),
+        shotIds,
+        storyboardBlockIds,
+      })
+      edges.push({ sourceId: zoneId, targetId: spotId, relationship: 'contains', evidence: `Shot ${shotId} occurs at this spot.` })
+    }
+    angles.push({
+      id: angleId,
+      setId,
+      zoneId,
+      spotIds,
+      worldLocationRefId,
+      name: `${readText(shot.title) || shotId} angle`,
+      visualBrief: compactSequenceAnimaticText([readText(shot.action), camera.framing, camera.angle, camera.movement].filter(Boolean).join(' '), 700),
+      framing: camera.framing,
+      cameraPosition: readText(spatial.cameraPosition),
+      facingDirection: readText(spatial.facingDirection) || camera.angle,
+      subjectPosition: readText(spatial.subjectPosition),
+      visibleLandmarks: readStringArray(spatial.visibleLandmarks),
+      lightingDirection: readText(spatial.lightSourceDirection) || sequenceAnimaticPersistentLightingCue(shot.lighting),
+      shotIds,
+      storyboardBlockIds,
+    })
+    edges.push(
+      { sourceId: setId, targetId: zoneId, relationship: 'contains', evidence: `Block ${blockId} uses this zone.` },
+      { sourceId: angleId, targetId: zoneId, relationship: 'same_space_angle', evidence: `Shot ${shotId} camera coverage.` },
+      { sourceId: angleId, targetId: spotIds[0] ?? zoneId, relationship: 'camera_faces', evidence: `Shot ${shotId} framing faces this spot.` },
+    )
+
+    const anchorIds = sequenceAnimaticGraphShotBindingAnchorIds(input.graph, shotId)
+    shotBindings[shotId] = {
+      shotId,
+      storyboardBlockId: blockId,
+      worldLocationRefId,
+      setId,
+      zoneId,
+      spotIds,
+      angleId,
+      characterAnchorIds: anchorIds.characterAnchorIds,
+      propAnchorIds: anchorIds.propAnchorIds,
+      continuityAnchorIds: [...new Set([...anchorIds.characterAnchorIds, ...anchorIds.propAnchorIds, ...spotIds, angleId])],
+    }
+  }
+
+  return sequenceAnimaticContinuityBlockDeltaSchema.parse({
+    blockId,
+    blockSummary: `${blockTitle}: ${shots.length} shot${shots.length === 1 ? '' : 's'} spatially bound.`,
+    worldLocationRefs,
+    locationSets,
+    zones,
+    spots,
+    angles,
+    edges,
+    shotBindings,
+    assetAnchors,
+    rejectedCandidates,
+    warnings: input.fallbackReason ? [`Block continuity fallback used: ${input.fallbackReason}`] : [],
+    diagnostics: [`Planned continuity scene graph delta for ${blockId}.`],
+  })
+}
+
+function sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes(input: {
+  delta: z.infer<typeof sequenceAnimaticContinuityBlockDeltaSchema>
+  continuityPlannerContext: Record<string, unknown>
+  storyboardBlock: Record<string, unknown>
+}) {
+  const delta = sequenceAnimaticContinuityBlockDeltaSchema.parse(input.delta)
+  const lookup = sequenceAnimaticReferenceLookupFromPlannerContext(input.continuityPlannerContext)
+  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
+  const invalidNodeIds = new Set<string>()
+  const rejectedCandidates: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
+
+  const markInvalid = (entry: Record<string, unknown>, type: 'location_spot' | 'location_set' | 'location_angle', reason: string) => {
+    const id = readText(entry.id)
+    if (id) invalidNodeIds.add(id)
+    rejectedCandidates.push(sequenceAnimaticRejectedCandidate({
+      name: readText(entry.name) || titleFromRefLike(id),
+      type,
+      reason: 'too_generic',
+      sourceEvidence: [reason],
+      shotIds: readStringArray(entry.shotIds),
+    }))
+  }
+
+  const isBadLocationNode = (entry: Record<string, unknown>) => (
+    sequenceAnimaticContinuityLocationNodeLooksCharacterDerived(entry, lookup)
+    || sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived(entry, shots)
+  )
+
+  const zones = delta.zones.filter((entry) => {
+    if (!isBadLocationNode(entry)) return true
+    markInvalid(entry, 'location_spot', 'Continuity location node looked like a character/action label instead of a physical zone.')
+    return false
+  })
+  const spots = delta.spots.filter((entry) => {
+    if (invalidNodeIds.has(entry.zoneId) || isBadLocationNode(entry)) {
+      markInvalid(entry, 'location_spot', 'Continuity spot depended on a rejected character/action-derived zone.')
+      return false
+    }
+    return true
+  })
+  const angles = delta.angles.filter((entry) => {
+    if (invalidNodeIds.has(entry.zoneId) || entry.spotIds.some((spotId) => invalidNodeIds.has(spotId)) || isBadLocationNode(entry)) {
+      markInvalid(entry, 'location_angle', 'Continuity angle depended on a rejected character/action-derived zone or spot.')
+      return false
+    }
+    return true
+  })
+
+  if (invalidNodeIds.size === 0) return delta
+
+  const shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>> = {}
+  for (const [shotId, bindingValue] of Object.entries(delta.shotBindings)) {
+    const binding = sequenceAnimaticContinuityShotBindingSchema.parse(bindingValue)
+    const spotIds = binding.spotIds.filter((spotId) => !invalidNodeIds.has(spotId))
+    shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
+      ...binding,
+      zoneId: invalidNodeIds.has(binding.zoneId) ? '' : binding.zoneId,
+      spotIds,
+      angleId: invalidNodeIds.has(binding.angleId) ? '' : binding.angleId,
+      continuityAnchorIds: binding.continuityAnchorIds.filter((anchorId) => !invalidNodeIds.has(anchorId)),
+    })
+  }
+
+  return sequenceAnimaticContinuityBlockDeltaSchema.parse({
+    ...delta,
+    zones,
+    spots,
+    angles,
+    edges: delta.edges.filter((edge) => !invalidNodeIds.has(edge.sourceId) && !invalidNodeIds.has(edge.targetId)),
+    shotBindings,
+    rejectedCandidates: [...delta.rejectedCandidates, ...rejectedCandidates]
+      .filter((entry, index, values) => values.findIndex((candidate) => `${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}` === `${entry.name}:${entry.reason}:${entry.shotIds.join(',')}`) === index),
+    warnings: [
+      ...delta.warnings,
+      `Rejected ${invalidNodeIds.size} continuity spatial node${invalidNodeIds.size === 1 ? '' : 's'} that looked like character/action labels instead of physical locations.`,
+    ],
+  })
+}
+
+function repairSequenceAnimaticContinuityBlockDelta(input: {
+  delta: z.infer<typeof sequenceAnimaticContinuityBlockDeltaSchema>
+  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
+  continuityPlannerContext: Record<string, unknown>
+  storyboardBlock: Record<string, unknown>
+}) {
+  const delta = sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes({
+    delta: sequenceAnimaticContinuityBlockDeltaSchema.parse(input.delta),
+    continuityPlannerContext: input.continuityPlannerContext,
+    storyboardBlock: input.storyboardBlock,
+  })
+  const fallback = buildDeterministicSequenceAnimaticBlockDelta({
+    graph: input.graph,
+    continuityPlannerContext: input.continuityPlannerContext,
+    storyboardBlock: input.storyboardBlock,
+    fallbackReason: 'missing_shot_bindings_repair',
+  })
+  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
+  const shotBindings = { ...delta.shotBindings }
+  let repairedCount = 0
+  const referenceLookup = sequenceAnimaticReferenceLookupFromPlannerContext(input.continuityPlannerContext)
+  const rejectedCanonicalAnchors: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
+  const removedCanonicalAnchorIds = new Set<string>()
+  const assetAnchors = delta.assetAnchors.filter((anchor) => {
+    const match = sequenceAnimaticCanonicalReferenceMatchForAnchor(anchor, referenceLookup)
+    if (!match) return true
+    const anchorId = readText(anchor.id)
+    if (anchorId) removedCanonicalAnchorIds.add(anchorId)
+    const matchKey = readText(match.key) || readText(match.name)
+    rejectedCanonicalAnchors.push(sequenceAnimaticRejectedCandidate({
+      name: readText(anchor.name),
+      type: readText(anchor.type),
+      reason: 'existing_world_entity',
+      sourceEvidence: readStringArray(anchor.sourceEvidence),
+      shotIds: readStringArray(anchor.shotIds),
+      existingWorldEntityMatch: matchKey || null,
+    }))
+    return false
+  })
+
+  for (const shot of shots) {
+    const shotId = readText(shot.id)
+    if (!shotId) continue
+    const existing = asRecord(shotBindings[shotId])
+    if (readText(existing.setId) && readText(existing.zoneId) && readText(existing.angleId)) continue
+
+    const fallbackBinding = asRecord(fallback.shotBindings[shotId])
+    const zone = delta.zones.find((entry) => entry.shotIds.includes(shotId))
+    const set = delta.locationSets.find((entry) => entry.shotIds.includes(shotId) || entry.id === zone?.setId)
+      ?? input.graph.locationSets.find((entry) => entry.id === zone?.setId)
+    const spots = delta.spots.filter((entry) => entry.shotIds.includes(shotId))
+    const angle = delta.angles.find((entry) => entry.shotIds.includes(shotId))
+    const characterAnchorIds = assetAnchors
+      .filter((anchor) => anchor.shotIds.includes(shotId) && readText(anchor.type) === 'character')
+      .map((anchor) => readText(anchor.id))
+      .filter(Boolean)
+    const propAnchorIds = assetAnchors
+      .filter((anchor) => anchor.shotIds.includes(shotId) && readText(anchor.type) === 'prop')
+      .map((anchor) => readText(anchor.id))
+      .filter(Boolean)
+    const setId = readText(set?.id) || readText(zone?.setId) || readText(angle?.setId) || readText(fallbackBinding.setId)
+    const zoneId = readText(zone?.id) || readText(angle?.zoneId) || readText(fallbackBinding.zoneId)
+    const spotIds = spots.map((entry) => readText(entry.id)).filter(Boolean)
+    const angleId = readText(angle?.id) || readText(fallbackBinding.angleId)
+    shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
+      shotId,
+      storyboardBlockId: delta.blockId || readText(input.storyboardBlock.id),
+      worldLocationRefId: readText(zone?.worldLocationRefId) || readText(set?.worldLocationRefId) || readText(angle?.worldLocationRefId) || readText(fallbackBinding.worldLocationRefId),
+      setId,
+      zoneId,
+      spotIds: spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds),
+      angleId,
+      characterAnchorIds,
+      propAnchorIds,
+      continuityAnchorIds: [...new Set([...characterAnchorIds, ...propAnchorIds, ...(spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds)), angleId].filter(Boolean))],
+    })
+    repairedCount += 1
+  }
+
+  if (removedCanonicalAnchorIds.size > 0) {
+    for (const [shotId, bindingValue] of Object.entries(shotBindings)) {
+      const binding = sequenceAnimaticContinuityShotBindingSchema.parse(bindingValue)
+      const characterAnchorIds = binding.characterAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
+      const propAnchorIds = binding.propAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
+      const continuityAnchorIds = binding.continuityAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
+      shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
+        ...binding,
+        characterAnchorIds,
+        propAnchorIds,
+        continuityAnchorIds,
+      })
+    }
+  }
+
+  return sequenceAnimaticContinuityBlockDeltaSchema.parse({
+    ...delta,
+    assetAnchors,
+    rejectedCandidates: [...delta.rejectedCandidates, ...rejectedCanonicalAnchors]
+      .filter((entry, index, values) => values.findIndex((candidate) => `${candidate.name}:${candidate.reason}:${candidate.existingWorldEntityMatch ?? ''}:${candidate.shotIds.join(',')}` === `${entry.name}:${entry.reason}:${entry.existingWorldEntityMatch ?? ''}:${entry.shotIds.join(',')}`) === index),
+    shotBindings,
+    warnings: [
+      ...delta.warnings,
+      ...(repairedCount > 0
+        ? [`Repaired missing shotBindings for ${repairedCount} shot${repairedCount === 1 ? '' : 's'} from planned continuity zones/spots/angles.`]
+        : []),
+      ...(rejectedCanonicalAnchors.length > 0
+        ? [`Rejected ${rejectedCanonicalAnchors.length} continuity anchor${rejectedCanonicalAnchors.length === 1 ? '' : 's'} that matched existing world entities.`]
+        : []),
+    ],
+  })
+}
+
+function mergeById<T extends { id: string; shotIds?: string[]; storyboardBlockIds?: string[] }>(existing: T[], incoming: T[]) {
+  const byId = new Map<string, T>()
+  for (const entry of existing) if (entry.id) byId.set(entry.id, entry)
+  for (const entry of incoming) {
+    if (!entry.id) continue
+    const previous = byId.get(entry.id)
+    byId.set(entry.id, previous
+      ? {
+        ...previous,
+        ...entry,
+        shotIds: [...new Set([...(previous.shotIds ?? []), ...(entry.shotIds ?? [])])],
+        storyboardBlockIds: [...new Set([...(previous.storyboardBlockIds ?? []), ...(entry.storyboardBlockIds ?? [])])],
+      }
+      : entry)
+  }
+  return [...byId.values()]
+}
+
+function sanitizeSequenceAnimaticContinuityGraphCanonicalAnchors(input: {
+  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
+  continuityPlannerContext: Record<string, unknown>
+}) {
+  const graph = parseSequenceAnimaticGraphV2(input.graph)
+  const lookup = sequenceAnimaticReferenceLookupFromPlannerContext(input.continuityPlannerContext)
+  const contextShots = readArray(input.continuityPlannerContext.shots).map(asRecord)
+  const removedAnchorIds = new Set<string>()
+  const removedLocationNodeIds = new Set<string>()
+  const rejectedCandidates: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
+  const assetAnchors = graph.assetAnchors.filter((anchor) => {
+    const match = sequenceAnimaticCanonicalReferenceMatchForAnchor(anchor, lookup)
+    if (!match) return true
+    const anchorId = readText(anchor.id)
+    if (anchorId) removedAnchorIds.add(anchorId)
+    rejectedCandidates.push(sequenceAnimaticRejectedCandidate({
+      name: readText(anchor.name),
+      type: readText(anchor.type),
+      reason: 'existing_world_entity',
+      sourceEvidence: readStringArray(anchor.sourceEvidence),
+      shotIds: readStringArray(anchor.shotIds),
+      existingWorldEntityMatch: readText(match.key) || readText(match.name) || null,
+    }))
+    return false
+  })
+  const locationSets = graph.locationSets.filter((entry) => {
+    if (!sequenceAnimaticContinuityLocationNodeLooksCharacterDerived(entry, lookup) && !sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived(entry, contextShots)) return true
+    removedLocationNodeIds.add(entry.id)
+    return false
+  })
+  const zones = graph.zones.filter((entry) => {
+    if (removedLocationNodeIds.has(entry.setId) || sequenceAnimaticContinuityLocationNodeLooksCharacterDerived(entry, lookup) || sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived(entry, contextShots)) {
+      removedLocationNodeIds.add(entry.id)
+      return false
+    }
+    return true
+  })
+  const spots = graph.spots.filter((entry) => {
+    if (removedLocationNodeIds.has(entry.zoneId) || sequenceAnimaticContinuityLocationNodeLooksCharacterDerived(entry, lookup) || sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived(entry, contextShots)) {
+      removedLocationNodeIds.add(entry.id)
+      return false
+    }
+    return true
+  })
+  const angles = graph.angles.filter((entry) => {
+    if (removedLocationNodeIds.has(entry.setId) || removedLocationNodeIds.has(entry.zoneId) || entry.spotIds.some((spotId) => removedLocationNodeIds.has(spotId)) || sequenceAnimaticContinuityLocationNodeLooksCharacterDerived(entry, lookup) || sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived(entry, contextShots)) {
+      removedLocationNodeIds.add(entry.id)
+      return false
+    }
+    return true
+  })
+
+  if (removedAnchorIds.size === 0 && removedLocationNodeIds.size === 0) return graph
+
+  const shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>> = {}
+  for (const [shotId, bindingValue] of Object.entries(graph.shotBindings)) {
+    const binding = sequenceAnimaticContinuityShotBindingSchema.parse(bindingValue)
+    shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
+      ...binding,
+      characterAnchorIds: binding.characterAnchorIds.filter((id) => !removedAnchorIds.has(id)),
+      propAnchorIds: binding.propAnchorIds.filter((id) => !removedAnchorIds.has(id)),
+      zoneId: removedLocationNodeIds.has(binding.zoneId) ? '' : binding.zoneId,
+      spotIds: binding.spotIds.filter((id) => !removedLocationNodeIds.has(id)),
+      angleId: removedLocationNodeIds.has(binding.angleId) ? '' : binding.angleId,
+      continuityAnchorIds: binding.continuityAnchorIds.filter((id) => !removedAnchorIds.has(id) && !removedLocationNodeIds.has(id)),
+    })
+  }
+
+  return sequenceAnimaticContinuityGraphV2Schema.parse({
+    ...graph,
+    locationSets,
+    zones,
+    spots,
+    angles,
+    edges: graph.edges.filter((edge) => !removedLocationNodeIds.has(edge.sourceId) && !removedLocationNodeIds.has(edge.targetId)),
+    assetAnchors,
+    rejectedCandidates: [...graph.rejectedCandidates, ...rejectedCandidates]
+      .filter((entry, index, values) => values.findIndex((candidate) => `${candidate.name}:${candidate.reason}:${candidate.existingWorldEntityMatch ?? ''}:${candidate.shotIds.join(',')}` === `${entry.name}:${entry.reason}:${entry.existingWorldEntityMatch ?? ''}:${entry.shotIds.join(',')}`) === index),
+    shotBindings,
+    warnings: [
+      ...graph.warnings,
+      ...(removedAnchorIds.size > 0 ? [`Removed ${removedAnchorIds.size} continuity anchor${removedAnchorIds.size === 1 ? '' : 's'} that duplicated existing world entities.`] : []),
+      ...(removedLocationNodeIds.size > 0 ? [`Removed ${removedLocationNodeIds.size} continuity spatial node${removedLocationNodeIds.size === 1 ? '' : 's'} that looked like character/action labels instead of physical locations.`] : []),
+    ],
+  })
+}
+
+function mergeSequenceAnimaticContinuityGraphV2(input: {
+  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
+  delta: z.infer<typeof sequenceAnimaticContinuityBlockDeltaSchema>
+  continuityPlannerContext?: Record<string, unknown>
+}) {
+  const graph = input.continuityPlannerContext
+    ? sanitizeSequenceAnimaticContinuityGraphCanonicalAnchors({
+      graph: input.graph,
+      continuityPlannerContext: input.continuityPlannerContext,
+    })
+    : parseSequenceAnimaticGraphV2(input.graph)
+  const delta = input.delta
+  const nodeIds = new Set<string>()
+  const locationSets = mergeById(graph.locationSets, delta.locationSets)
+  const zones = mergeById(graph.zones, delta.zones)
+  const spots = mergeById(graph.spots, delta.spots)
+  const angles = mergeById(graph.angles, delta.angles)
+  locationSets.forEach((entry) => nodeIds.add(entry.id))
+  zones.forEach((entry) => nodeIds.add(entry.id))
+  spots.forEach((entry) => nodeIds.add(entry.id))
+  angles.forEach((entry) => nodeIds.add(entry.id))
+  const edgeKey = (edge: z.infer<typeof sequenceAnimaticContinuityGraphEdgeSchema>) => `${edge.sourceId}:${edge.relationship}:${edge.targetId}`
+  const edges = [...graph.edges, ...delta.edges]
+    .filter((edge) => edge.sourceId !== edge.targetId && nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId))
+    .filter((edge, index, values) => values.findIndex((candidate) => edgeKey(candidate) === edgeKey(edge)) === index)
+    .slice(0, 160)
+  return sequenceAnimaticContinuityGraphV2Schema.parse({
+    ...graph,
+    worldLocationRefs: mergeById(graph.worldLocationRefs, delta.worldLocationRefs).slice(0, 24),
+    locationSets: locationSets.slice(0, 48),
+    zones: zones.slice(0, 72),
+    spots: spots.slice(0, 96),
+    angles: angles.slice(0, 96),
+    edges,
+    shotBindings: { ...graph.shotBindings, ...delta.shotBindings },
+    assetAnchors: mergeById(graph.assetAnchors.map((entry) => ({ ...entry, id: readText(entry.id) })), delta.assetAnchors.map((entry) => ({ ...entry, id: readText(entry.id) }))).filter((entry) => entry.id) as z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[],
+    rejectedCandidates: [...graph.rejectedCandidates, ...delta.rejectedCandidates]
+      .filter((entry, index, values) => values.findIndex((candidate) => `${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}` === `${entry.name}:${entry.reason}:${entry.shotIds.join(',')}`) === index)
+      .slice(0, 96),
+    blockSummaries: [
+      ...graph.blockSummaries.filter((entry) => entry.blockId !== delta.blockId),
+      { blockId: delta.blockId, summary: delta.blockSummary, status: delta.warnings.length > 0 ? 'fallback' : 'planned' },
+    ],
+    warnings: [...new Set([...graph.warnings, ...delta.warnings])],
+    diagnostics: [...graph.diagnostics, ...delta.diagnostics],
+  })
+}
+
+function finalizeSequenceAnimaticContinuityGraphV2(graphInput: unknown) {
+  const graph = parseSequenceAnimaticGraphV2(graphInput)
+  const locationSets = graph.locationSets.map((entry) => sequenceAnimaticContinuityLocationSetSchema.parse({
+    id: entry.id,
+    name: entry.name,
+    baseLocationRefId: entry.worldLocationRefId,
+    visualBrief: entry.visualBrief || entry.name,
+    persistenceReason: `Reusable continuity set inside ${entry.worldLocationRefId || 'the animatic location'}.`,
+    shotIds: entry.shotIds,
+    storyboardBlockIds: entry.storyboardBlockIds,
+    connectedSetIds: graph.edges.filter((edge) => edge.sourceId === entry.id && edge.relationship === 'connected_to').map((edge) => edge.targetId),
+    entrances: graph.edges.filter((edge) => edge.targetId === entry.id && edge.relationship === 'entrance_to').map((edge) => edge.sourceId),
+    landmarks: [],
+  }))
+  const locationAngles = graph.angles.map((entry) => sequenceAnimaticContinuityLocationAngleSchema.parse({
+    id: entry.id,
+    setId: entry.setId,
+    name: entry.name,
+    visualBrief: entry.visualBrief || entry.name,
+    framing: entry.framing,
+    screenDirectionRule: entry.facingDirection,
+    visibleLandmarks: entry.visibleLandmarks,
+    lightingDirection: entry.lightingDirection,
+    shotIds: entry.shotIds,
+    storyboardBlockIds: entry.storyboardBlockIds,
+  }))
+  const sceneGraph = {
+    nodes: [
+      ...locationSets.map((entry) => ({ id: entry.id, type: 'location_set' as const, name: entry.name })),
+      ...locationAngles.map((entry) => ({ id: entry.id, type: 'location_angle' as const, name: entry.name })),
+    ],
+    edges: graph.edges
+      .filter((edge) => ['connected_to', 'visible_from', 'entrance_to', 'adjacent_to', 'same_space_angle'].includes(edge.relationship))
+      .map((edge) => ({
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        relationship: edge.relationship === 'adjacent_to' ? 'connected_to' : edge.relationship,
+        evidence: edge.evidence,
+      }))
+      .filter((edge) => sceneGraphEdgeEndpointSafe(edge.sourceId, edge.targetId, locationSets, locationAngles))
+      .slice(0, 80),
+  }
+  const locationSpotAnchors = [
+    ...graph.zones.map((entry) => ({
+      id: `spot_${entry.id.replace(/^zone_/, '')}`,
+      type: 'location_spot' as const,
+      name: entry.name,
+      visualBrief: entry.visualBrief || entry.name,
+      persistenceReason: `Reusable zone continuity reference inside ${entry.worldLocationRefId || 'the animatic location'}.`,
+      confidence: 0.72,
+      shotIds: entry.shotIds,
+      storyboardBlockIds: entry.storyboardBlockIds,
+      sourceEvidence: entry.shotIds.map((shotId) => `${shotId}: zone binding`),
+      existingWorldEntityMatch: null,
+      rejectionRisk: 'low: output-local zone, not a world entity.',
+      baseLocationRefId: entry.worldLocationRefId,
+      setId: entry.setId,
+      angleId: null,
+      connectedTo: [],
+      visibleFrom: [],
+      entryFrom: [],
+    })),
+    ...graph.spots.map((entry) => ({
+      id: entry.id,
+      type: 'location_spot' as const,
+      name: entry.name,
+      visualBrief: entry.visualBrief || entry.name,
+      persistenceReason: `Reusable spot continuity reference inside ${entry.worldLocationRefId || 'the animatic location'}.`,
+      confidence: 0.72,
+      shotIds: entry.shotIds,
+      storyboardBlockIds: entry.storyboardBlockIds,
+      sourceEvidence: entry.shotIds.map((shotId) => `${shotId}: spot binding`),
+      existingWorldEntityMatch: null,
+      rejectionRisk: 'low: output-local spot, not a world entity.',
+      baseLocationRefId: entry.worldLocationRefId,
+      setId: entry.setId,
+      angleId: null,
+      connectedTo: [],
+      visibleFrom: [],
+      entryFrom: [],
+    })),
+    ...graph.angles.map((entry) => ({
+      id: entry.id,
+      type: 'location_spot' as const,
+      name: entry.name,
+      visualBrief: entry.visualBrief || entry.name,
+      persistenceReason: `Reusable camera angle continuity reference inside ${entry.worldLocationRefId || 'the animatic location'}.`,
+      confidence: 0.72,
+      shotIds: entry.shotIds,
+      storyboardBlockIds: entry.storyboardBlockIds,
+      sourceEvidence: entry.shotIds.map((shotId) => `${shotId}: angle binding`),
+      existingWorldEntityMatch: null,
+      rejectionRisk: 'low: output-local camera angle, not a world entity.',
+      baseLocationRefId: entry.worldLocationRefId,
+      setId: entry.setId,
+      angleId: entry.id,
+      connectedTo: [],
+      visibleFrom: entry.spotIds,
+      entryFrom: [],
+    })),
+  ].filter((entry, index, values) => values.findIndex((candidate) => candidate.id === entry.id) === index)
+  const shotContinuityMap: Record<string, string[]> = {}
+  Object.entries(graph.shotBindings).forEach(([shotId, binding]) => {
+    shotContinuityMap[shotId] = [...new Set([
+      ...binding.continuityAnchorIds,
+      binding.zoneId,
+      ...binding.spotIds,
+      binding.angleId,
+    ].filter(Boolean))]
+  })
+  const assetAnchors = [
+    ...graph.assetAnchors,
+    ...locationSpotAnchors,
+  ]
+  return {
+    continuityGraphV2: graph,
+    locationSets,
+    locationAngles,
+    sceneGraph,
+    shotContinuityMap,
+    shotBindings: graph.shotBindings,
+    assetAnchors,
+    locationSpotAnchors,
+    rejectedCandidates: graph.rejectedCandidates,
+    warnings: graph.warnings,
+    diagnostics: graph.diagnostics,
+  }
+}
+
+function sequenceAnimaticContinuityVisualDependencyEdges(graphInput: unknown) {
+  const graph = parseSequenceAnimaticGraphV2(graphInput)
+  const edges: Array<z.infer<typeof sequenceAnimaticContinuityVisualDependencyEdgeSchema>> = []
+  const push = (sourceNodeId: string, targetNodeId: string, relationship: string, required = false, evidence = '') => {
+    if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return
+    edges.push(sequenceAnimaticContinuityVisualDependencyEdgeSchema.parse({
+      sourceNodeId,
+      targetNodeId,
+      relationship,
+      required,
+      evidence,
+    }))
+  }
+  graph.locationSets.forEach((set) => push(set.worldLocationRefId, set.id, 'world_location_to_set', true, `Set ${set.name} belongs to ${set.worldLocationRefId}.`))
+  graph.zones.forEach((zone) => push(zone.setId, zone.id, 'set_to_zone', true, `Zone ${zone.name} belongs to set ${zone.setId}.`))
+  graph.spots.forEach((spot) => push(spot.zoneId, spot.id, 'zone_to_spot', true, `Spot ${spot.name} belongs to zone ${spot.zoneId}.`))
+  graph.angles.forEach((angle) => {
+    push(angle.setId, angle.id, 'set_to_angle', true, `Angle ${angle.name} belongs to set ${angle.setId}.`)
+    push(angle.zoneId, angle.id, 'zone_to_angle', true, `Angle ${angle.name} is framed inside zone ${angle.zoneId}.`)
+    angle.spotIds.forEach((spotId) => push(spotId, angle.id, 'spot_to_angle', false, `Angle ${angle.name} faces spot ${spotId}.`))
+  })
+  graph.edges.forEach((edge) => {
+    if (['adjacent_to', 'visible_from', 'entrance_to', 'connected_to', 'same_space_angle'].includes(edge.relationship)) {
+      push(edge.sourceId, edge.targetId, edge.relationship, false, edge.evidence)
+    }
+  })
+  const key = (edge: z.infer<typeof sequenceAnimaticContinuityVisualDependencyEdgeSchema>) => `${edge.sourceNodeId}:${edge.relationship}:${edge.targetNodeId}`
+  return edges.filter((edge, index, values) => values.findIndex((candidate) => key(candidate) === key(edge)) === index).slice(0, 240)
+}
+
+function sequenceAnimaticContinuityAssetTargets(graphInput: unknown) {
+  const graph = parseSequenceAnimaticGraphV2(graphInput)
+  const targets = [
+    ...graph.locationSets.map((entry) => ({ ...entry, id: entry.id, nodeKind: 'location_set', assetKind: 'location_set' })),
+    ...graph.zones.map((entry) => ({ ...entry, id: entry.id, nodeKind: 'location_zone', assetKind: 'location_zone' })),
+    ...graph.spots.map((entry) => ({ ...entry, id: entry.id, nodeKind: 'location_spot', assetKind: 'location_spot' })),
+    ...graph.angles.map((entry) => ({ ...entry, id: entry.id, nodeKind: 'location_angle', assetKind: 'location_angle' })),
+    ...graph.assetAnchors.map((entry) => ({
+      ...entry,
+      id: readText(entry.id),
+      nodeKind: entry.type === 'character' ? 'temporary_character' : entry.type === 'prop' ? 'prop' : 'location_anchor',
+      assetKind: entry.type === 'character' ? 'temporary_character' : entry.type === 'prop' ? 'prop' : 'location_spot',
+    })),
+  ].map(asRecord).filter((entry) => readText(entry.id))
+  const seen = new Set<string>()
+  return targets.filter((target) => {
+    const id = readText(target.id)
+    if (!id || seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+}
+
+function sequenceAnimaticContinuityAssetTargetInputHash(target: Record<string, unknown>) {
+  return hashOutputWorkflowValue({
+    id: readText(target.id),
+    assetKind: readText(target.assetKind) || readText(target.nodeKind),
+    name: readText(target.name),
+    visualBrief: readText(target.visualBrief),
+    shotIds: readStringArray(target.shotIds),
+    storyboardBlockIds: readStringArray(target.storyboardBlockIds),
+    worldLocationRefId: readText(target.worldLocationRefId) || readText(target.baseLocationRefId),
+    setId: readText(target.setId),
+    zoneId: readText(target.zoneId),
+    spotIds: readStringArray(target.spotIds),
+  })
+}
+
+function sequenceAnimaticContinuityAssetStates(input: {
+  graph: unknown
+  previousStates?: Record<string, unknown>
+}) {
+  const previousStates = asRecord(input.previousStates)
+  const states: Record<string, z.infer<typeof sequenceAnimaticContinuityAssetStateSchema>> = {}
+  for (const target of sequenceAnimaticContinuityAssetTargets(input.graph)) {
+    const sourceNodeId = readText(target.id)
+    const inputHash = sequenceAnimaticContinuityAssetTargetInputHash(target)
+    const previous = asRecord(previousStates[sourceNodeId])
+    const previousStatus = readText(previous.status)
+    const previousAssetKey = readText(previous.assetKey)
+    const status = previousStatus === 'ready' && previousAssetKey && readText(previous.inputHash) === inputHash
+      ? 'ready'
+      : previousStatus === 'failed' && readText(previous.inputHash) === inputHash
+        ? 'failed'
+        : previousAssetKey
+          ? 'stale'
+          : 'missing'
+    states[sourceNodeId] = sequenceAnimaticContinuityAssetStateSchema.parse({
+      status,
+      inputHash,
+      assetKey: previousAssetKey || null,
+      artifactKey: readText(previous.artifactKey) || null,
+      prompt: readText(previous.prompt),
+      referenceAssetKeys: readStringArray(previous.referenceAssetKeys),
+      sourceNodeId,
+      assetKind: readText(target.assetKind) || readText(target.nodeKind) || 'continuity_asset',
+      generatedAt: readText(previous.generatedAt) || null,
+      warnings: readStringArray(previous.warnings),
+      error: readText(previous.error),
+    })
+  }
+  return states
+}
+
+function sequenceAnimaticAssetGenerationStatus(assetStateByNodeId: Record<string, unknown>) {
+  const states = Object.values(assetStateByNodeId).map(asRecord)
+  if (states.length === 0) return 'none'
+  if (states.some((state) => readText(state.status) === 'failed')) return 'failed'
+  if (states.some((state) => readText(state.status) === 'stale')) return 'stale'
+  const readyCount = states.filter((state) => readText(state.status) === 'ready').length
+  if (readyCount === states.length) return 'ready'
+  if (readyCount > 0) return 'partial'
+  return 'none'
+}
+
+function withSequenceAnimaticContinuityAssetState(pack: Record<string, unknown>, graphInput: unknown) {
+  const graph = parseSequenceAnimaticGraphV2(graphInput)
+  const assetStateByNodeId = sequenceAnimaticContinuityAssetStates({
+    graph,
+    previousStates: asRecord(pack.assetStateByNodeId ?? pack.asset_state_by_node_id),
+  })
+  const visualDependencyEdges = sequenceAnimaticContinuityVisualDependencyEdges(graph)
+  return {
+    ...pack,
+    assetStateByNodeId,
+    asset_state_by_node_id: assetStateByNodeId,
+    visualDependencyEdges,
+    visual_dependency_edges: visualDependencyEdges,
+    assetGenerationStatus: sequenceAnimaticAssetGenerationStatus(assetStateByNodeId),
+    asset_generation_status: sequenceAnimaticAssetGenerationStatus(assetStateByNodeId),
+  }
+}
+
+function sequenceAnimaticContinuityBlockStatesFromGraph(
+  graphInput: unknown,
+  options: {
+    activeBlockId?: string
+    activeDelta?: Record<string, unknown>
+    status?: 'not_started' | 'deriving' | 'ready' | 'needs_review' | 'failed' | 'stale'
+    error?: string
+  } = {},
+) {
+  const graph = parseSequenceAnimaticGraphV2(graphInput)
+  const now = new Date().toISOString()
+  const blockIds = new Set<string>()
+  Object.values(graph.shotBindings).forEach((binding) => {
+    if (binding.storyboardBlockId) blockIds.add(binding.storyboardBlockId)
+  })
+  readStringArray(options.activeDelta?.storyboardBlockIds).forEach((id) => blockIds.add(id))
+  const activeBlockId = readText(options.activeBlockId) || readText(options.activeDelta?.blockId)
+  if (activeBlockId) blockIds.add(activeBlockId)
+  const states: Record<string, Record<string, unknown>> = {}
+  blockIds.forEach((blockId) => {
+    const shotIds = Object.values(graph.shotBindings)
+      .filter((binding) => binding.storyboardBlockId === blockId)
+      .map((binding) => binding.shotId)
+      .filter(Boolean)
+    states[blockId] = {
+      blockId,
+      status: blockId === activeBlockId ? options.status ?? 'ready' : 'ready',
+      inputHash: hashOutputWorkflowValue({
+        blockId,
+        shotIds,
+        graphVersion: graph.version,
+      }),
+      lastDeltaHash: blockId === activeBlockId && Object.keys(asRecord(options.activeDelta)).length > 0
+        ? hashOutputWorkflowValue(options.activeDelta)
+        : '',
+      shotIds,
+      warningCount: graph.warnings.length,
+      warnings: graph.warnings,
+      error: blockId === activeBlockId ? readText(options.error) : '',
+      updatedAt: now,
+    }
+  })
+  return states
+}
+
+function sequenceAnimaticContinuityGraphStatusFromBlockStates(blockStates: Record<string, unknown>) {
+  const states = Object.values(blockStates).map(asRecord)
+  if (states.some((state) => readText(state.status) === 'failed')) return 'failed'
+  if (states.some((state) => readText(state.status) === 'stale')) return 'stale'
+  if (states.some((state) => readText(state.status) === 'ready' || readText(state.status) === 'needs_review')) return 'partial'
+  return 'empty'
+}
+
+function sceneGraphEdgeEndpointSafe(
+  sourceId: string,
+  targetId: string,
+  locationSets: z.infer<typeof sequenceAnimaticContinuityLocationSetSchema>[],
+  locationAngles: z.infer<typeof sequenceAnimaticContinuityLocationAngleSchema>[],
+) {
+  const ids = new Set([...locationSets.map((entry) => entry.id), ...locationAngles.map((entry) => entry.id)])
+  return ids.has(sourceId) && ids.has(targetId) && sourceId !== targetId
+}
+
+function sequenceAnimaticPlanFromContinuityGraphV2(graphInput: unknown) {
+  const finalized = finalizeSequenceAnimaticContinuityGraphV2(graphInput)
+  const anchors = finalized.assetAnchors.map((entry) => sequenceAnimaticContinuityPlannerAnchorSchema.parse({
+    id: readText(entry.id),
+    type: readText(entry.type) === 'character' ? 'character' : readText(entry.type) === 'prop' ? 'prop' : 'location_spot',
+    name: readText(entry.name) || readText(entry.id),
+    visualBrief: readText(entry.visualBrief) || readText(entry.name) || readText(entry.id),
+    persistenceReason: readText(entry.persistenceReason) || 'Output-local continuity graph anchor.',
+    confidence: Number(entry.confidence ?? 0.72) || 0.72,
+    shotIds: readStringArray(entry.shotIds),
+    storyboardBlockIds: readStringArray(entry.storyboardBlockIds),
+    sourceEvidence: readStringArray(entry.sourceEvidence),
+    existingWorldEntityMatch: readText(entry.existingWorldEntityMatch) || null,
+    rejectionRisk: readText(entry.rejectionRisk),
+    baseLocationRefId: readText(entry.baseLocationRefId) || null,
+    setId: readText(entry.setId) || null,
+    angleId: readText(entry.angleId) || null,
+    connectedTo: readStringArray(entry.connectedTo),
+    visibleFrom: readStringArray(entry.visibleFrom),
+    entryFrom: readStringArray(entry.entryFrom),
+  }))
+  return {
+    version: 'sequence_animatic_continuity_plan_v2',
+    planningMode: 'block_graph_v2',
+    anchors,
+    characterAnchors: anchors.filter((anchor) => anchor.type === 'character').map((anchor) => ({
+      ...anchor,
+      anchorType: 'character',
+      summary: anchor.persistenceReason,
+      usageCount: Math.max(anchor.shotIds.length, 1),
+    })),
+    propAnchors: anchors.filter((anchor) => anchor.type === 'prop').map((anchor) => ({
+      ...anchor,
+      anchorType: 'prop',
+      summary: anchor.persistenceReason,
+      usageCount: Math.max(anchor.shotIds.length, 1),
+    })),
+    locationSpotAnchors: anchors.filter((anchor) => anchor.type === 'location_spot').map((anchor) => ({
+      ...anchor,
+      anchorType: 'location_spot',
+      summary: anchor.persistenceReason,
+      usageCount: Math.max(anchor.shotIds.length, 1),
+    })),
+    continuityGraphV2: finalized.continuityGraphV2,
+    locationSets: finalized.locationSets,
+    locationAngles: finalized.locationAngles,
+    sceneGraph: finalized.sceneGraph,
+    continuityAnchorIdsByShotId: finalized.shotContinuityMap,
+    shotContinuityMap: finalized.shotContinuityMap,
+    shotBindings: finalized.shotBindings,
+    rejectedCandidates: finalized.rejectedCandidates,
+    warnings: finalized.warnings,
+    diagnostics: [
+      ...finalized.diagnostics,
+      `Block graph continuity planner emitted ${anchors.length} output-local anchor${anchors.length === 1 ? '' : 's'}.`,
+    ],
+  }
+}
+
 async function planSequenceAnimaticContinuityAnchors(input: {
   nodeKey: string
   prompt: string
@@ -5438,6 +6773,7 @@ async function planSequenceAnimaticContinuityAnchors(input: {
   shotBreakPlan: Record<string, unknown>
   assetPack: Record<string, unknown>
   continuityPlannerContext?: Record<string, unknown>
+  continuityGraphV2?: Record<string, unknown>
   priorProviderRequestId?: string | null
   priorProviderStartedAt?: string | null
   shouldCancel?: () => Promise<boolean>
@@ -5449,6 +6785,10 @@ async function planSequenceAnimaticContinuityAnchors(input: {
     providerStartedAt: string
   }) => Promise<void>
 }) {
+  const providedContinuityGraphV2 = asRecord(input.continuityGraphV2)
+  if (Object.keys(providedContinuityGraphV2).length > 0) {
+    return sequenceAnimaticPlanFromContinuityGraphV2(providedContinuityGraphV2)
+  }
   const fallbackPlan = collectSequenceAnimaticContinuityAnchors({
     shotPlan: input.shotPlan,
     shotBreakPlan: input.shotBreakPlan,
@@ -5597,6 +6937,43 @@ function buildSequenceAnimaticAnchorAtlasPrompt(input: {
     '',
     ...cellLines,
   ].filter(Boolean).join('\n')
+}
+
+function buildSequenceAnimaticContinuityAssetPrompt(input: {
+  targetNode: Record<string, unknown>
+  assetKind: string
+  relevantShots: Record<string, unknown>[]
+  referenceAssetKeys: string[]
+}) {
+  const targetName = readText(input.targetNode.name) || titleFromRefLike(readText(input.targetNode.id))
+  const visualBrief = readText(input.targetNode.visualBrief) || readText(input.targetNode.summary)
+  const shotLines = input.relevantShots.slice(0, 8).map((shot) => {
+    const camera = compactSequenceAnimaticCamera(shot)
+    return [
+      readText(shot.id),
+      readText(shot.title),
+      compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 240),
+      [camera.framing, camera.angle, camera.movement].filter(Boolean).join(' / '),
+    ].filter(Boolean).join(': ')
+  })
+  const kindInstruction = input.assetKind === 'temporary_character'
+    ? 'Create one neutral temporary supporting-character continuity reference sheet. Show body shape, silhouette, wardrobe, face/species cues, and scale clearly. No action scene, no text, no captions.'
+    : input.assetKind === 'prop'
+      ? 'Create one isolated reusable prop continuity reference sheet. Show the object clearly with material, shape, wear, function, and a clean cinematic close-up. No labels, no UI, no text.'
+      : input.assetKind === 'location_angle'
+        ? 'Create one camera-facing location angle reference. Preserve set architecture, visible landmarks, screen direction, light direction, entrances, and depth cues. No people, no labels, no UI.'
+        : 'Create one reusable location/set/zone/spot continuity reference. Preserve architecture, surfaces, materials, entrances, sightlines, landmarks, palette, and lighting direction. No people, no labels, no UI.'
+  return [
+    `Continuity asset: ${targetName}`,
+    `Asset kind: ${input.assetKind || 'continuity_asset'}`,
+    visualBrief ? `Visual brief: ${visualBrief}` : '',
+    kindInstruction,
+    input.referenceAssetKeys.length > 0
+      ? 'Attached image references are continuity locks. Match their style, materials, palette, lighting logic, architecture, scale, and design language without copying visible layout artifacts.'
+      : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
+    shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
+    'Provider requirements: one finished square production reference image, clean composition, no visible text, no labels, no borders, no watermarks.',
+  ].filter(Boolean).join('\n\n')
 }
 
 function cinematicContextBrief(context: Record<string, unknown>) {
@@ -13881,6 +15258,8 @@ async function executeNode(input: {
             'Fill caption as semantic beat meaning only; it must not become visible text in generated images.',
             'Fill storyboardPanelPrompt with a concise visual panel instruction. Fill videoDirection with concise movement/action continuity for the future storyboard-group video.',
             'Use only canonical reference keys from the supplied asset pack/context. If a subject is implied but not bound, leave it in prose rather than inventing a key.',
+            'For spatial continuity, every shot must include worldLocationRefId, continuitySetId, continuityZoneId, continuitySpotIds, continuityAngleId, and spatialContinuity. Use provisional stable IDs such as set_whistlewick_primary, zone_service_lane, spot_leak_pipe, and angle_service_lane_ots. These are output-local continuity IDs, not world entity keys.',
+            'spatialContinuity must describe cameraPosition, facingDirection, subjectPosition, visibleLandmarks, entryPath, exitPath, and lightSourceDirection when inferable.',
             'For dialogue, preserve the exact script speaker label in dialogue[].speakerName. Set dialogue[].speakerRefId only when the speaker is confidently one of the supplied canonical reference keys; for minor or temporary speakers such as a shopkeeper, guard, mechanic, crowd voice, or passerby, use a stable temporary speakerRefId like temporary_vole_mechanic and keep speakerRefIds limited to canonical reference keys only.',
             'Provider durations must be 4-15 seconds; editorial durations should reflect actual timeline timing.',
             expectedShotIds.length > 0 ? `Preferred shot IDs in order: ${expectedShotIds.join(', ')}` : '',
@@ -13990,6 +15369,7 @@ async function executeNode(input: {
               'Do not invent entity/location/prop keys. Unknown subjects must remain in prose fields.',
               'Fill caption as semantic beat meaning only; it must not become visible text in generated images.',
               'Fill storyboardPanelPrompt and videoDirection for every shot.',
+              'Every shot must include provisional spatial continuity fields: worldLocationRefId, continuitySetId, continuityZoneId, continuitySpotIds, continuityAngleId, and spatialContinuity with cameraPosition, facingDirection, subjectPosition, visibleLandmarks, entryPath, exitPath, and lightSourceDirection.',
               `User brief:\n${input.run.prompt}`,
               compactForPrompt({ screenplayDraft }, 12000),
               guidanceMarkdown(guidance),
@@ -15344,14 +16724,11 @@ async function executeNode(input: {
         || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_MODEL')?.trim()
         || (provider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
       const model = provider === 'muapi' ? resolveMuapiVideoModel(configuredModel) : configuredModel
-      const isSequenceAnimaticShotVideoConfig = readText(config.purpose) === 'sequence_animatic_shot_video' || readText(config.role) === 'sequence_animatic_shot_video'
       const upstreamDurationSeconds = Number(upstreamVideoPromptRecord.durationSeconds ?? upstreamVideoPromptRecord.providerDurationSeconds ?? 0)
       const configuredDurationSeconds = Number(config.durationSeconds ?? 8) || 8
       const rawRequestedDurationSeconds = Number(upstreamDurationSeconds || configuredDurationSeconds) || 8
-      const requestedDurationSeconds = isSequenceAnimaticShotVideoConfig
-        ? Math.max(1, Math.min(15, Math.round(rawRequestedDurationSeconds)))
-        : Math.max(4, Math.min(15, rawRequestedDurationSeconds))
-      const durationSeconds = provider === 'muapi' && !isSequenceAnimaticShotVideoConfig
+      const requestedDurationSeconds = Math.max(4, Math.min(15, rawRequestedDurationSeconds))
+      const durationSeconds = provider === 'muapi'
         ? resolveMuapiVideoDurationSeconds(requestedDurationSeconds)
         : requestedDurationSeconds
       const aspectRatio = readText(config.aspectRatio) || '16:9'
@@ -15447,7 +16824,7 @@ async function executeNode(input: {
       }
       const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
       const isCinematicV3StoryboardGroupVideo = readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video'
-      const isSequenceAnimaticShotVideo = isSequenceAnimaticShotVideoConfig
+      const isSequenceAnimaticShotVideo = readText(config.purpose) === 'sequence_animatic_shot_video' || readText(config.role) === 'sequence_animatic_shot_video'
       const upstreamShotPlanForVideo = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
       const cinematicV3VideoGroupShots = isCinematicV3StoryboardGroupVideo
         ? cinematicV3StoryboardGroupShots({ shotPlan: upstreamShotPlanForVideo, storyboardGroup: asRecord(config.storyboardGroup) })
@@ -15904,12 +17281,204 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-continuity-input-v1' }
       }
+      if (purpose === 'sequence_animatic_continuity_seed_graph') {
+        const continuityPlannerContext = readFirstUpstreamRecord(input.upstream, ['continuityPlannerContext', 'continuity_planner_context'])
+        const continuityGraphV2 = sequenceAnimaticEmptyGraphV2(continuityPlannerContext)
+        const outputs = {
+          continuityGraphV2,
+          continuity_graph_v2: continuityGraphV2,
+          text: JSON.stringify(continuityGraphV2, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-graph-seed-v2' }
+      }
+      if (purpose === 'sequence_animatic_continuity_block_plan') {
+        const config = asRecord(input.node.config)
+        const continuityPlannerContext = readFirstUpstreamRecord(input.upstream, ['continuityPlannerContext', 'continuity_planner_context'])
+        const graph = parseSequenceAnimaticGraphV2(readFirstUpstreamRecord(input.upstream, ['continuityGraphV2', 'continuity_graph_v2']))
+        const storyboardBlock = asRecord(config.storyboardBlock)
+        const blockDeltaFallback = buildDeterministicSequenceAnimaticBlockDelta({ graph, continuityPlannerContext, storyboardBlock })
+        let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground<z.infer<typeof sequenceAnimaticContinuityBlockDeltaSchema>>>>
+        try {
+          const blockShots = sequenceAnimaticBlockShots(continuityPlannerContext, storyboardBlock)
+          result = await runCinematicV2StructuredNodeBackground({
+            nodeKey: input.node.key,
+            schemaName: 'sequence_animatic_continuity_block_delta_v2',
+            schema: sequenceAnimaticContinuityBlockDeltaSchema,
+            instructions: 'You are a film continuity scene-graph planner. Return strict JSON only. Propose an output-local graph delta for one storyboard block.',
+            prompt: [
+              'Plan continuity for exactly one storyboard block against the current evolving scene graph.',
+              'Reuse existing graph IDs whenever the shot remains in the same set, zone, spot, or angle. Add new zones/spots/angles only when the shot needs distinct spatial continuity.',
+              'Do not create world entities. Existing world refs are canonical; only create output-local graph nodes and temporary asset anchors.',
+              'Every shot in the block must receive a shotBindings entry with setId, zoneId, spotIds, and angleId.',
+              'Reject abstract, atmospheric, generic, or duplicate-world candidates in rejectedCandidates.',
+              `Storyboard block:\n${compactForPrompt(storyboardBlock, 2000)}`,
+              compactForPrompt({ currentGraph: graph, blockShots, existingWorldReferences: continuityPlannerContext.existingWorldReferences }, 9000),
+            ].filter(Boolean).join('\n\n'),
+            fallback: blockDeltaFallback,
+            maxOutputTokens: 3200,
+            priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
+            providerStartedAt: readText(asRecord(input.priorStep?.metadata).providerStartedAt) || input.priorStep?.startedAt,
+            timeoutMs: outputWorkflowContinuityBlockPlannerTimeoutMs(),
+            shouldCancel: input.shouldCancel,
+            onProgress: async (progress) => {
+              await input.onProgress?.({
+                provider: 'openai',
+                model: outputWorkflowTextModel(),
+                providerRequestId: progress.providerRequestId,
+                metadata: {
+                  providerMode: progress.providerMode,
+                  providerStatus: progress.providerStatus,
+                  lastProviderPollAt: progress.lastProviderPollAt,
+                  providerStartedAt: progress.providerStartedAt,
+                  continuityBlockPlanner: true,
+                },
+              })
+            },
+          })
+        } catch (error) {
+          const fallbackReason = error instanceof Error ? error.message : 'Continuity block planner failed.'
+          result = {
+            value: buildDeterministicSequenceAnimaticBlockDelta({ graph, continuityPlannerContext, storyboardBlock, fallbackReason }),
+            response: { response: new Response(null, { status: 599, statusText: 'continuity block fallback' }), body: {}, outputText: '', id: readText(input.priorStep?.providerRequestId), status: 'failed' } as never,
+            provider: 'graphcore',
+            model: 'sequence-animatic-continuity-block-fallback-v2',
+            providerRequestId: readText(input.priorStep?.providerRequestId),
+            fallbackUsed: true,
+            fallbackReason,
+          }
+        }
+        const continuityBlockDelta = repairSequenceAnimaticContinuityBlockDelta({
+          delta: sequenceAnimaticContinuityBlockDeltaSchema.parse({
+            ...result.value,
+            warnings: [
+              ...result.value.warnings,
+              ...(result.fallbackUsed ? [`Block continuity planner fallback: ${result.fallbackReason}`] : []),
+            ],
+          }),
+          graph,
+          continuityPlannerContext,
+          storyboardBlock,
+        })
+        const outputs = {
+          continuityBlockDelta,
+          continuity_block_delta: continuityBlockDelta,
+          text: JSON.stringify(continuityBlockDelta, null, 2),
+          deterministic: result.fallbackUsed,
+          providerRequestId: result.providerRequestId,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || undefined }
+      }
+      if (purpose === 'sequence_animatic_continuity_block_merge') {
+        const config = asRecord(input.node.config)
+        const blockSuffix = continuityBlockNodeSuffix(input.node.key)
+        const continuityPlannerContext = readPreferredUpstreamRecord(input.upstream, ['continuity_input'], ['continuityPlannerContext', 'continuity_planner_context'])
+        const graph = parseSequenceAnimaticGraphV2(readPreferredUpstreamRecord(input.upstream, previousContinuityGraphNodeKeys(blockSuffix), ['continuityGraphV2', 'continuity_graph_v2']))
+        const deltaRecord = readPreferredUpstreamRecord(input.upstream, [`continuity_block_${blockSuffix}_plan`], ['continuityBlockDelta', 'continuity_block_delta'])
+        const storyboardBlock = asRecord(config.storyboardBlock)
+        const delta = repairSequenceAnimaticContinuityBlockDelta({
+          delta: Object.keys(deltaRecord).length > 0
+            ? sequenceAnimaticContinuityBlockDeltaSchema.parse(deltaRecord)
+            : buildDeterministicSequenceAnimaticBlockDelta({ graph, continuityPlannerContext, storyboardBlock, fallbackReason: 'missing_block_delta' }),
+          graph,
+          continuityPlannerContext,
+          storyboardBlock,
+        })
+        const continuityGraphV2 = mergeSequenceAnimaticContinuityGraphV2({ graph, delta, continuityPlannerContext })
+        const outputs = {
+          continuityGraphV2,
+          continuity_graph_v2: continuityGraphV2,
+          continuityBlockDelta: delta,
+          continuity_block_delta: delta,
+          text: JSON.stringify(continuityGraphV2, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-block-merge-v2' }
+      }
+      if (purpose === 'sequence_animatic_continuity_graph_finalize') {
+        const continuityGraphV2 = parseSequenceAnimaticGraphV2(readFirstUpstreamRecord(input.upstream, ['continuityGraphV2', 'continuity_graph_v2']))
+        const finalized = finalizeSequenceAnimaticContinuityGraphV2(continuityGraphV2)
+        const outputs = {
+          ...finalized,
+          continuity_graph_v2: finalized.continuityGraphV2,
+          scene_graph: finalized.sceneGraph,
+          shot_continuity_map: finalized.shotContinuityMap,
+          shot_bindings: finalized.shotBindings,
+          asset_anchors: finalized.assetAnchors,
+          rejected_candidates: finalized.rejectedCandidates,
+          text: JSON.stringify(finalized, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-graph-finalize-v2' }
+      }
+      if (purpose === 'sequence_animatic_continuity_asset_input') {
+        const config = asRecord(input.node.config)
+        const targetNode = asRecord(config.targetNode)
+        const continuityPack = asRecord(config.continuityPack)
+        const relevantShots = readArray(config.relevantShots).map(asRecord)
+        const shotBindings = asRecord(config.shotBindings)
+        const assetPack = asRecord(config.assetPack)
+        const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
+        const outputs = {
+          continuityPack,
+          continuity_pack: continuityPack,
+          targetNode,
+          target_node: targetNode,
+          relevantShots,
+          relevant_shots: relevantShots,
+          shotBindings,
+          shot_bindings: shotBindings,
+          assetPack,
+          asset_pack: assetPack,
+          referenceAssetKeys,
+          reference_asset_keys: referenceAssetKeys,
+          text: JSON.stringify({
+            targetNode,
+            relevantShotCount: relevantShots.length,
+            referenceAssetKeys,
+          }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-asset-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_continuity_asset_prompt') {
+        const config = asRecord(input.node.config)
+        const upstreamTargetNode = readFirstUpstreamRecord(input.upstream, ['targetNode', 'target_node'])
+        const targetNode = Object.keys(upstreamTargetNode).length > 0 ? upstreamTargetNode : asRecord(config.targetNode)
+        const relevantShots = readFirstUpstreamArray(input.upstream, ['relevantShots', 'relevant_shots']).map(asRecord)
+        const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
+        const upstreamReferenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys']).map(readText).filter(Boolean)
+        const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : readStringArray(config.referenceAssetKeys)
+        const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
+        const prompt = buildSequenceAnimaticContinuityAssetPrompt({
+          targetNode,
+          assetKind,
+          relevantShots,
+          referenceAssetKeys,
+        })
+        const outputs = {
+          prompt,
+          text: prompt,
+          targetNode,
+          target_node: targetNode,
+          relevantShots,
+          relevant_shots: relevantShots,
+          assetPack,
+          asset_pack: assetPack,
+          referenceAssetKeys,
+          reference_asset_keys: referenceAssetKeys,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-asset-prompt-v1' }
+      }
       if (purpose === 'sequence_animatic_continuity_anchor_plan') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
         const directShotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
         const continuityPlannerContext = readFirstUpstreamRecord(input.upstream, ['continuityPlannerContext', 'continuity_planner_context'])
+        const continuityGraphV2 = readFirstUpstreamRecord(input.upstream, ['continuityGraphV2', 'continuity_graph_v2'])
         const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
         const shotPlan = Array.isArray(directShotPlan.shots) && directShotPlan.shots.length > 0
           ? directShotPlan
@@ -15926,6 +17495,7 @@ async function executeNode(input: {
           shotBreakPlan,
           assetPack,
           continuityPlannerContext,
+          continuityGraphV2,
           priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
           priorProviderStartedAt: readText(asRecord(input.priorStep?.metadata).providerStartedAt) || input.priorStep?.startedAt,
           shouldCancel: input.shouldCancel,
@@ -15953,9 +17523,13 @@ async function executeNode(input: {
           prop_anchors: continuityAnchorPlan.propAnchors,
           locationSpotAnchors: continuityAnchorPlan.locationSpotAnchors,
           location_spot_anchors: continuityAnchorPlan.locationSpotAnchors,
+          continuityGraphV2: continuityAnchorPlan.continuityGraphV2,
+          continuity_graph_v2: continuityAnchorPlan.continuityGraphV2,
           continuityAnchorIdsByShotId: continuityAnchorPlan.continuityAnchorIdsByShotId,
           shotContinuityMap: continuityAnchorPlan.shotContinuityMap,
           shot_continuity_map: continuityAnchorPlan.shotContinuityMap,
+          shotBindings: continuityAnchorPlan.shotBindings,
+          shot_bindings: continuityAnchorPlan.shotBindings,
           locationSets: continuityAnchorPlan.locationSets,
           location_sets: continuityAnchorPlan.locationSets,
           locationAngles: continuityAnchorPlan.locationAngles,
@@ -17188,7 +18762,7 @@ async function executeNode(input: {
           entityByKey,
         })
         const editorialDurationSeconds = Math.max(1, Math.min(15, timing.editorialDurationSeconds))
-        const providerDurationSeconds = Math.max(1, Math.min(15, Math.round(editorialDurationSeconds)))
+        const providerDurationSeconds = providerSafeCinematicV2DurationSeconds(editorialDurationSeconds)
         const dialogueLines = shot.dialogue
           .map((line) => {
             const text = readText(line.text)
@@ -17218,7 +18792,7 @@ async function executeNode(input: {
           formatSeedanceShotLine({
             shot,
             startSeconds: 0,
-            endSeconds: editorialDurationSeconds,
+            endSeconds: providerDurationSeconds,
             dialogueLines,
           }),
           readText(shot.lighting) ? `Lighting: ${compactSeedanceControlText(shot.lighting, 12)}.` : '',
@@ -18192,6 +19766,147 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-manifest-artifact-v1' }
       }
+      if (purpose === 'sequence_animatic_continuity_structure_artifact') {
+        const config = asRecord(input.node.config)
+        const blockSuffix = continuityBlockNodeSuffix(input.node.key)
+        const continuityGraphV2 = parseSequenceAnimaticGraphV2(readPreferredUpstreamRecord(input.upstream, [`continuity_block_${blockSuffix}_merge`], ['continuityGraphV2', 'continuity_graph_v2']))
+        const continuityBlockDelta = readPreferredUpstreamRecord(input.upstream, [`continuity_block_${blockSuffix}_merge`, `continuity_block_${blockSuffix}_plan`], ['continuityBlockDelta', 'continuity_block_delta'])
+        const finalized = finalizeSequenceAnimaticContinuityGraphV2(continuityGraphV2)
+        const blockStates = sequenceAnimaticContinuityBlockStatesFromGraph(continuityGraphV2, {
+          activeBlockId: readText(config.storyboardBlockId),
+          activeDelta: continuityBlockDelta,
+          status: 'ready',
+        })
+        const pendingDeltas = Object.keys(continuityBlockDelta).length > 0 && readText(config.storyboardBlockId)
+          ? { [readText(config.storyboardBlockId)]: continuityBlockDelta }
+          : {}
+        const manifestHash = readText(config.manifestHash) || readText(asRecord(input.workflow.metadata).manifestHash)
+        const masterManifestArtifactKey = readText(config.masterManifestArtifactKey) || readText(asRecord(input.workflow.metadata).masterManifestArtifactKey)
+        const packBase = {
+          graphSpecVersion: 'sequence_animatic_graph_v1',
+          screenplayAnimaticRole: 'continuity_pack',
+          sequenceAnimaticRole: 'continuity_pack',
+          planningMode: 'block_graph_v2',
+          masterRequestId: readText(config.parentRequestId) || readText(asRecord(input.workflow.metadata).parentRequestId) || readText(input.run.metadata?.parentRequestId),
+          masterManifestArtifactKey,
+          manifestHash,
+          characterAnchors: finalized.assetAnchors.filter((anchor) => readText(anchor.type) === 'character'),
+          propAnchors: finalized.assetAnchors.filter((anchor) => readText(anchor.type) === 'prop'),
+          locationSpotAnchors: finalized.locationSpotAnchors,
+          continuityGraphV2,
+          continuity_graph_v2: continuityGraphV2,
+          locationSets: finalized.locationSets,
+          locationAngles: finalized.locationAngles,
+          sceneGraph: finalized.sceneGraph,
+          shotContinuityMap: finalized.shotContinuityMap,
+          shotBindings: finalized.shotBindings,
+          blockStates,
+          pendingDeltas,
+          continuityGraphStatus: sequenceAnimaticContinuityGraphStatusFromBlockStates(blockStates),
+          rejectedCandidates: finalized.rejectedCandidates,
+          plannerWarnings: finalized.warnings,
+          plannerDiagnostics: finalized.diagnostics,
+          anchorAssets: [],
+          warnings: finalized.warnings,
+          diagnostics: finalized.diagnostics,
+        }
+        const packWithAssets = withSequenceAnimaticContinuityAssetState(packBase, continuityGraphV2)
+        const continuityPack = {
+          ...packWithAssets,
+          continuityPackHash: hashOutputWorkflowValue(packWithAssets),
+        }
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(readText(config.storyboardBlockId) || input.node.key)}.sequence-animatic-continuity-structure`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${input.node.label} Structure`,
+          summary: 'Sequence animatic continuity scene graph structure for storyboard block derivation.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-continuity-structure-v1',
+            role: 'sequence_animatic_continuity_pack',
+            graphSpecVersion: 'sequence_animatic_graph_v1',
+            sequenceAnimaticRole: 'continuity_pack',
+            storyboardBlockId: readText(config.storyboardBlockId),
+            planningMode: 'block_graph_v2',
+            manifestHash,
+            masterManifestArtifactKey,
+            continuityPack,
+            continuityGraphV2,
+            continuity_graph_v2: continuityGraphV2,
+            locationSets: finalized.locationSets,
+            locationAngles: finalized.locationAngles,
+            sceneGraph: finalized.sceneGraph,
+            shotContinuityMap: finalized.shotContinuityMap,
+            shotBindings: finalized.shotBindings,
+            blockStates,
+            pendingDeltas,
+            continuityGraphStatus: continuityPack.continuityGraphStatus,
+            assetStateByNodeId: continuityPack.assetStateByNodeId,
+            asset_state_by_node_id: continuityPack.assetStateByNodeId,
+            visualDependencyEdges: continuityPack.visualDependencyEdges,
+            visual_dependency_edges: continuityPack.visualDependencyEdges,
+            assetGenerationStatus: continuityPack.assetGenerationStatus,
+            asset_generation_status: continuityPack.assetGenerationStatus,
+            rejectedCandidates: finalized.rejectedCandidates,
+            plannerWarnings: finalized.warnings,
+            plannerDiagnostics: finalized.diagnostics,
+          },
+        })
+        await persistSequenceAnimaticContinuityRequestState({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          artifactKey: artifact.key,
+          continuityPack,
+          blockStates,
+          pendingDeltas,
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: '',
+          artifact,
+          artifacts: [artifact],
+          continuityPack,
+          continuity_pack: continuityPack,
+          continuityGraphV2,
+          continuity_graph_v2: continuityGraphV2,
+          locationSets: finalized.locationSets,
+          location_sets: finalized.locationSets,
+          locationAngles: finalized.locationAngles,
+          location_angles: finalized.locationAngles,
+          sceneGraph: finalized.sceneGraph,
+          scene_graph: finalized.sceneGraph,
+          shotContinuityMap: finalized.shotContinuityMap,
+          shot_continuity_map: finalized.shotContinuityMap,
+          shotBindings: finalized.shotBindings,
+          shot_bindings: finalized.shotBindings,
+          blockStates,
+          block_states: blockStates,
+          pendingDeltas,
+          pending_deltas: pendingDeltas,
+          assetStateByNodeId: continuityPack.assetStateByNodeId,
+          asset_state_by_node_id: continuityPack.assetStateByNodeId,
+          visualDependencyEdges: continuityPack.visualDependencyEdges,
+          visual_dependency_edges: continuityPack.visualDependencyEdges,
+          assetGenerationStatus: continuityPack.assetGenerationStatus,
+          asset_generation_status: continuityPack.assetGenerationStatus,
+          rejectedCandidates: finalized.rejectedCandidates,
+          rejected_candidates: finalized.rejectedCandidates,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-structure-v1' }
+      }
       if (purpose === 'sequence_animatic_continuity_artifact') {
         const config = asRecord(input.node.config)
         const continuityAnchorPlan = readFirstUpstreamRecord(input.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
@@ -18212,6 +19927,19 @@ async function executeNode(input: {
         const locationAngles = readArray(continuityAnchorPlan.locationAngles ?? continuityAnchorPlan.location_angles).map(asRecord)
         const sceneGraph = asRecord(continuityAnchorPlan.sceneGraph ?? continuityAnchorPlan.scene_graph)
         const shotContinuityMap = asRecord(continuityAnchorPlan.shotContinuityMap ?? continuityAnchorPlan.shot_continuity_map ?? continuityAnchorPlan.continuityAnchorIdsByShotId)
+        const continuityGraphV2 = asRecord(continuityAnchorPlan.continuityGraphV2 ?? continuityAnchorPlan.continuity_graph_v2)
+        const shotBindings = asRecord(continuityAnchorPlan.shotBindings ?? continuityAnchorPlan.shot_bindings ?? asRecord(continuityGraphV2).shotBindings)
+        const continuityBlockDelta = readFirstUpstreamRecord(input.upstream, ['continuityBlockDelta', 'continuity_block_delta'])
+        const blockStates = Object.keys(continuityGraphV2).length > 0
+          ? sequenceAnimaticContinuityBlockStatesFromGraph(continuityGraphV2, {
+            activeBlockId: readText(config.storyboardBlockId),
+            activeDelta: continuityBlockDelta,
+            status: 'ready',
+          })
+          : {}
+        const pendingDeltas = Object.keys(continuityBlockDelta).length > 0 && readText(config.storyboardBlockId)
+          ? { [readText(config.storyboardBlockId)]: continuityBlockDelta }
+          : {}
         const rejectedCandidates = readArray(continuityAnchorPlan.rejectedCandidates ?? continuityAnchorPlan.rejected_candidates).map(asRecord)
         const plannerWarnings = readStringArray(continuityAnchorPlan.warnings)
         const plannerDiagnostics = readStringArray(continuityAnchorPlan.diagnostics)
@@ -18229,10 +19957,16 @@ async function executeNode(input: {
           characterAnchors,
           propAnchors,
           locationSpotAnchors,
+          continuityGraphV2,
+          continuity_graph_v2: continuityGraphV2,
           locationSets,
           locationAngles,
           sceneGraph,
           shotContinuityMap,
+          shotBindings,
+          blockStates,
+          pendingDeltas,
+          continuityGraphStatus: sequenceAnimaticContinuityGraphStatusFromBlockStates(blockStates),
           rejectedCandidates,
           plannerWarnings,
           plannerDiagnostics,
@@ -18245,9 +19979,10 @@ async function executeNode(input: {
           ],
           diagnostics: plannerDiagnostics,
         }
+        const packWithAssets = withSequenceAnimaticContinuityAssetState(packBase, continuityGraphV2)
         const continuityPack = {
-          ...packBase,
-          continuityPackHash: hashOutputWorkflowValue(packBase),
+          ...packWithAssets,
+          continuityPackHash: hashOutputWorkflowValue(packWithAssets),
         }
         const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-continuity`
         const artifact = await registerOtherOutputArtifact({
@@ -18278,15 +20013,36 @@ async function executeNode(input: {
             characterAnchors,
             propAnchors,
             locationSpotAnchors,
+            continuityGraphV2,
+            continuity_graph_v2: continuityGraphV2,
             locationSets,
             locationAngles,
             sceneGraph,
             shotContinuityMap,
+            shotBindings,
+            blockStates,
+            pendingDeltas,
+            continuityGraphStatus: continuityPack.continuityGraphStatus,
+            assetStateByNodeId: continuityPack.assetStateByNodeId,
+            asset_state_by_node_id: continuityPack.assetStateByNodeId,
+            visualDependencyEdges: continuityPack.visualDependencyEdges,
+            visual_dependency_edges: continuityPack.visualDependencyEdges,
+            assetGenerationStatus: continuityPack.assetGenerationStatus,
+            asset_generation_status: continuityPack.assetGenerationStatus,
             rejectedCandidates,
             plannerWarnings,
             plannerDiagnostics,
             anchorAssets,
           },
+        })
+        await persistSequenceAnimaticContinuityRequestState({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          artifactKey: artifact.key,
+          continuityPack,
+          blockStates,
+          pendingDeltas,
         })
         const outputs = {
           artifactKey: artifact.key,
@@ -18303,6 +20059,8 @@ async function executeNode(input: {
           prop_anchors: propAnchors,
           locationSpotAnchors,
           location_spot_anchors: locationSpotAnchors,
+          continuityGraphV2,
+          continuity_graph_v2: continuityGraphV2,
           locationSets,
           location_sets: locationSets,
           locationAngles,
@@ -18311,6 +20069,18 @@ async function executeNode(input: {
           scene_graph: sceneGraph,
           shotContinuityMap,
           shot_continuity_map: shotContinuityMap,
+          shotBindings,
+          shot_bindings: shotBindings,
+          blockStates,
+          block_states: blockStates,
+          pendingDeltas,
+          pending_deltas: pendingDeltas,
+          assetStateByNodeId: continuityPack.assetStateByNodeId,
+          asset_state_by_node_id: continuityPack.assetStateByNodeId,
+          visualDependencyEdges: continuityPack.visualDependencyEdges,
+          visual_dependency_edges: continuityPack.visualDependencyEdges,
+          assetGenerationStatus: continuityPack.assetGenerationStatus,
+          asset_generation_status: continuityPack.assetGenerationStatus,
           rejectedCandidates,
           rejected_candidates: rejectedCandidates,
           anchorAssets,
@@ -18318,6 +20088,150 @@ async function executeNode(input: {
           authoringReady: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-pack-v1' }
+      }
+      if (purpose === 'sequence_animatic_continuity_asset_artifact') {
+        const config = asRecord(input.node.config)
+        const upstreamTargetNode = readFirstUpstreamRecord(input.upstream, ['targetNode', 'target_node'])
+        const targetNode = Object.keys(upstreamTargetNode).length > 0 ? upstreamTargetNode : asRecord(config.targetNode)
+        const image = readFirstUpstreamImage(input.upstream, ['image'])
+        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        const targetNodeId = readText(config.targetNodeId) || readText(targetNode.id)
+        if (!targetNodeId) throw new Error('Continuity asset artifact requires a target node id.')
+        const assetKey = readText(image.assetKey)
+        const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
+        const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
+        const assetState = sequenceAnimaticContinuityAssetStateSchema.parse({
+          status: assetKey ? 'ready' : 'failed',
+          inputHash: readText(config.assetInputHash) || sequenceAnimaticContinuityAssetTargetInputHash(targetNode),
+          assetKey: assetKey || null,
+          artifactKey: readText(asRecord(image.artifact).key) || null,
+          prompt,
+          referenceAssetKeys,
+          sourceNodeId: targetNodeId,
+          assetKind,
+          generatedAt: new Date().toISOString(),
+          warnings: assetKey ? [] : ['Continuity asset image did not produce an asset key.'],
+          error: assetKey ? '' : 'Continuity asset image did not produce an asset key.',
+        })
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(targetNodeId)}.sequence-animatic-continuity-asset`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${readText(targetNode.name) || titleFromRefLike(targetNodeId)} Continuity Asset`,
+          summary: 'Node-scoped sequence animatic continuity asset generated from the evolving scene graph.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-continuity-asset-artifact-v1',
+            role: 'sequence_animatic_continuity_asset',
+            graphSpecVersion: 'sequence_animatic_graph_v1',
+            sequenceAnimaticRole: 'continuity_asset',
+            masterRequestId: readText(config.masterRequestId),
+            continuityRequestId: readText(config.continuityRequestId),
+            targetNodeId,
+            assetKind,
+            targetNode,
+            prompt,
+            referenceAssetKeys,
+            assetState,
+            image,
+            assetKey,
+          },
+        })
+        const continuityWorkflowId = readText(config.continuityWorkflowId)
+        if (continuityWorkflowId) {
+          const latestPackResponse = await input.client
+            .from('output_artifacts')
+            .select(outputArtifactSelect)
+            .eq('draft_id', input.run.draftId)
+            .eq('workflow_id', continuityWorkflowId)
+            .order('created_at', { ascending: false })
+            .limit(20)
+          if (!latestPackResponse.error) {
+            const packRow = (latestPackResponse.data ?? []).find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_continuity_pack') ?? null
+            if (packRow) {
+              const packMetadata = asRecord(asRecord(packRow).metadata)
+              const pack = asRecord(packMetadata.continuityPack ?? packMetadata.continuity_pack)
+              const assetStateByNodeId = {
+                ...asRecord(pack.assetStateByNodeId ?? pack.asset_state_by_node_id),
+                [targetNodeId]: assetState,
+              }
+              const assetGenerationStatus = sequenceAnimaticAssetGenerationStatus(assetStateByNodeId)
+              const nextPack = {
+                ...pack,
+                assetStateByNodeId,
+                asset_state_by_node_id: assetStateByNodeId,
+                assetGenerationStatus,
+                asset_generation_status: assetGenerationStatus,
+                anchorAssets: [
+                  ...readArray(pack.anchorAssets).map(asRecord).filter((entry) => readText(entry.id) !== targetNodeId),
+                  {
+                    ...targetNode,
+                    id: targetNodeId,
+                    anchorType: assetKind === 'temporary_character' ? 'character' : assetKind === 'prop' ? 'prop' : 'location_spot',
+                    type: assetKind === 'temporary_character' ? 'character' : assetKind === 'prop' ? 'prop' : 'location_spot',
+                    assetKey,
+                    artifactKey: artifact.key,
+                    prompt,
+                    referenceAssetKeys,
+                  },
+                ].filter((entry) => readText(entry.assetKey)),
+              }
+              await input.client
+                .from('output_artifacts')
+                .update({
+                  metadata: {
+                    ...packMetadata,
+                    continuityPack: nextPack,
+                    continuity_pack: nextPack,
+                    assetStateByNodeId,
+                    asset_state_by_node_id: assetStateByNodeId,
+                    assetGenerationStatus,
+                    asset_generation_status: assetGenerationStatus,
+                    anchorAssets: nextPack.anchorAssets,
+                  },
+                })
+                .eq('id', readText(asRecord(packRow).id))
+            }
+          }
+        }
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey,
+          artifact,
+          artifacts: [artifact],
+          continuityAsset: {
+            targetNodeId,
+            assetKind,
+            assetState,
+            image,
+          },
+          continuity_asset: {
+            targetNodeId,
+            assetKind,
+            assetState,
+            image,
+          },
+          assetState,
+          asset_state: assetState,
+          assetStateByNodeId: { [targetNodeId]: assetState },
+          asset_state_by_node_id: { [targetNodeId]: assetState },
+          targetNode,
+          target_node: targetNode,
+          image,
+          prompt,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-asset-artifact-v1' }
       }
       if (purpose === 'sequence_animatic_shot_revision_artifact') {
         const config = asRecord(input.node.config)
@@ -18649,6 +20563,8 @@ async function executeNode(input: {
 export async function processFlyOutputWorkflowRuns(input: {
   client: DatabaseClient
   workerId: string
+  workerCodeVersion?: string | null
+  workerBuildVersion?: string | null
   documentRenderer?: OutputDocumentRenderer | null
 }): Promise<{ processed: boolean; run?: Pick<OutputWorkflowRun, 'id' | 'status' | 'preset'> | null }> {
   const claimResponse = await input.client.rpc('claim_output_workflow_run', {
@@ -18659,6 +20575,8 @@ export async function processFlyOutputWorkflowRuns(input: {
   if (!runId) return { processed: false, run: null }
 
   let bundle = await loadOutputWorkflowRunBundle(input.client, runId, { includeStepOutputs: false })
+  const workerCodeVersion = readText(input.workerCodeVersion) || 'unknown'
+  const workerBuildVersion = readText(input.workerBuildVersion) || workerCodeVersion
 
   try {
     for (let dynamicPass = 0; dynamicPass < 4; dynamicPass += 1) {
@@ -18685,6 +20603,8 @@ export async function processFlyOutputWorkflowRuns(input: {
     await heartbeat(input.client, runId, input.workerId, {
       stage: 'running',
       preset: bundle.run.preset,
+      workerCodeVersion,
+      workerBuildVersion,
     })
 
     const runMetadata = asRecord(bundle.run.metadata)
@@ -18988,6 +20908,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           shouldCancel: shouldCancelRun,
           onProgress: async (progress) => {
             const priorStep = stepByNodeKey.get(node.key)
+            const progressMetadata = asRecord(progress.metadata)
             await setStepStatus(input.client, {
               runId,
               node,
@@ -19000,6 +20921,7 @@ export async function processFlyOutputWorkflowRuns(input: {
               provider: progress.provider ?? priorStep?.provider ?? null,
               model: progress.model ?? priorStep?.model ?? null,
               providerRequestId: progress.providerRequestId ?? priorStep?.providerRequestId ?? null,
+              startedAt: priorStep?.startedAt,
               metadata: {
                 ...asRecord(priorStep?.metadata),
                 stage: node.nodeType,
@@ -19007,7 +20929,7 @@ export async function processFlyOutputWorkflowRuns(input: {
                 executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
                 resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
                 groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
-                ...progress.metadata,
+                ...progressMetadata,
                 reusedNodeKeys: cachedExternalUpstream.reusedNodeKeys,
                 staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
                 sourceRunIds: cachedExternalUpstream.sourceRunIds,
@@ -19099,6 +21021,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           provider: priorStep?.provider ?? null,
           model: priorStep?.model ?? null,
           providerRequestId: priorStep?.providerRequestId ?? null,
+          startedAt: priorStep?.startedAt,
           metadata: {
             ...asRecord(priorStep?.metadata),
             stage: node.nodeType,
@@ -19111,6 +21034,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       },
       onNodeComplete: async ({ node, orderIndex, skipped }) => {
         const result = nodeResults.get(node.key)
+        const priorStep = stepByNodeKey.get(node.key)
         const guidanceMetadata = guidanceStepMetadata(result?.outputs.guidance)
         const aiUsage = buildOutputStepAiUsage({ run: bundle.run, node, result, skipped })
         const providerStepMetadata = terminalProviderStepMetadata(result ? { ...result, skipped } : null)
@@ -19126,6 +21050,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           provider: result?.provider ?? null,
           model: result?.model ?? null,
           providerRequestId: result?.providerRequestId ?? null,
+          startedAt: priorStep?.startedAt,
           metadata: {
             stage: node.nodeType,
             runScope,
@@ -19176,6 +21101,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           provider: priorStep?.provider ?? null,
           model: priorStep?.model ?? null,
           providerRequestId: priorStep?.providerRequestId ?? null,
+          startedAt: priorStep?.startedAt,
           errorMessage: message,
           metadata: {
             ...asRecord(priorStep?.metadata),
@@ -19214,6 +21140,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           provider: priorStep?.provider ?? null,
           model: priorStep?.model ?? null,
           providerRequestId: priorStep?.providerRequestId ?? null,
+          startedAt: priorStep?.startedAt,
           errorMessage: reason === 'blocked_by_failed_dependency' ? `Blocked by ${blockedBy}.` : null,
           metadata: {
             ...asRecord(priorStep?.metadata),

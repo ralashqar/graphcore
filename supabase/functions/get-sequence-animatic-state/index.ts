@@ -33,6 +33,61 @@ function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
   return readText(metadata.screenplayAnimaticRole) || readText(metadata.sequenceAnimaticRole)
 }
 
+function readContinuityState(input: {
+  requests: ReturnType<typeof mapOutputRequestRow>[]
+  artifacts: ReturnType<typeof mapOutputArtifactRow>[]
+}) {
+  const continuityRequest = input.requests.find((entry) => readScreenplayAnimaticRole(asRecord(entry.metadata)) === 'continuity_pack') ?? null
+  const packMetadata = input.artifacts
+    .map((artifact) => asRecord(artifact.metadata))
+    .find((metadata) => readText(metadata.role) === 'sequence_animatic_continuity_pack') ?? {}
+  const pack = asRecord(packMetadata.continuityPack ?? packMetadata.continuity_pack)
+  const blockStates = {
+    ...asRecord(asRecord(continuityRequest?.metadata).blockStates),
+    ...asRecord(pack.blockStates ?? pack.block_states),
+  }
+  const assetStateByNodeId = {
+    ...asRecord(pack.assetStateByNodeId ?? pack.asset_state_by_node_id),
+  }
+  input.artifacts
+    .map((artifact) => asRecord(artifact.metadata))
+    .filter((metadata) => readText(metadata.role) === 'sequence_animatic_continuity_asset')
+    .forEach((metadata) => {
+      const state = asRecord(metadata.assetState ?? metadata.asset_state)
+      const nodeId = readText(state.sourceNodeId) || readText(metadata.targetNodeId)
+      if (nodeId) assetStateByNodeId[nodeId] = state
+    })
+  const visualDependencyEdges = readArray(pack.visualDependencyEdges ?? pack.visual_dependency_edges).map(asRecord)
+  const assetStatuses = Object.values(assetStateByNodeId).map(asRecord).map((state) => readText(state.status))
+  const assetGenerationStatus = (() => {
+    const explicit = readText(pack.assetGenerationStatus ?? pack.asset_generation_status)
+    if (explicit === 'none' || explicit === 'partial' || explicit === 'ready' || explicit === 'stale' || explicit === 'failed') return explicit
+    if (assetStatuses.length === 0) return 'none'
+    if (assetStatuses.includes('failed')) return 'failed'
+    if (assetStatuses.includes('stale')) return 'stale'
+    const readyCount = assetStatuses.filter((status) => status === 'ready').length
+    if (readyCount === assetStatuses.length) return 'ready'
+    if (readyCount > 0) return 'partial'
+    return 'none'
+  })()
+  const status = readText(pack.continuityGraphStatus ?? pack.continuity_graph_status ?? asRecord(continuityRequest?.metadata).continuityGraphStatus)
+  return {
+    continuityGraphStatus: status === 'ready' || status === 'partial' || status === 'stale' || status === 'failed' || status === 'empty'
+      ? status
+      : Object.keys(blockStates).some((blockId) => readText(asRecord(blockStates[blockId]).status) === 'ready')
+        ? 'partial'
+        : 'empty',
+    continuityBlockStates: blockStates,
+    assetStateByNodeId,
+    visualDependencyEdges,
+    assetGenerationStatus,
+  }
+}
+
+function readArray(value: unknown) {
+  return Array.isArray(value) ? value : []
+}
+
 function addAssetKey(value: unknown, assetKeys: Set<string>, depth = 0) {
   if (depth > 8 || value == null) return
   if (Array.isArray(value)) {
@@ -169,14 +224,18 @@ Deno.serve(async (request) => {
     const blockRequestIds = directChildren
       .filter((child) => readScreenplayAnimaticRole(asRecord(child.metadata)) === 'storyboard_block')
       .map((child) => child.id)
+    const continuityRequestIds = directChildren
+      .filter((child) => readScreenplayAnimaticRole(asRecord(child.metadata)) === 'continuity_pack')
+      .map((child) => child.id)
     let shotChildren: ReturnType<typeof mapOutputRequestRow>[] = []
-    if (blockRequestIds.length > 0) {
+    const nestedParentRequestIds = [...blockRequestIds, ...continuityRequestIds]
+    if (nestedParentRequestIds.length > 0) {
       const shotChildrenResponse = await admin
         .from('output_requests')
         .select(outputRequestSelect)
         .eq('project_id', payload.projectId)
         .eq('draft_id', payload.draftId)
-        .in('parent_request_id', blockRequestIds)
+        .in('parent_request_id', nestedParentRequestIds)
         .order('created_at', { ascending: true })
       if (shotChildrenResponse.error) throw new Error(shotChildrenResponse.error.message)
       shotChildren = (shotChildrenResponse.data ?? []).map(mapOutputRequestRow)
@@ -227,6 +286,7 @@ Deno.serve(async (request) => {
       artifacts: hydratedArtifacts.map((entry) => ({ id: entry.id, key: entry.key, assetKey: entry.assetKey, updatedAt: entry.updatedAt })),
       projections: projections.map((entry) => ({ requestId: entry.requestId, graphRevision: entry.graphRevision, timelineRevision: entry.timelineRevision, status: entry.status, updatedAt: entry.updatedAt })),
     })
+    const continuityState = readContinuityState({ requests, artifacts: hydratedArtifacts })
     if (readText(payload.knownRevision) && readText(payload.knownRevision) === revision) {
       return json(sequenceAnimaticStateResponseSchema.parse({
         ok: true,
@@ -239,6 +299,7 @@ Deno.serve(async (request) => {
         artifacts: [],
         assets: [],
         projections: [],
+        ...continuityState,
       }))
     }
 
@@ -253,6 +314,7 @@ Deno.serve(async (request) => {
       artifacts: hydratedArtifacts,
       assets,
       projections,
+      ...continuityState,
     }))
   } catch (error) {
     return errorResponse(error, 'Failed to load sequence animatic state.')

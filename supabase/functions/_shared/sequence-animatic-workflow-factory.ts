@@ -1,5 +1,29 @@
 export const sequenceAnimaticGraphSpecVersion = 'sequence_animatic_graph_v1'
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value) ? value.map(readText).filter(Boolean) : []
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map((entry) => asRecord(entry)) : []
+}
+
+type ContinuityWorkflowBlock = {
+  id: string
+  index: number
+  title: string
+  shotIds: string[]
+  sourceText: string
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)
   if (Array.isArray(value)) return `[${value.map((entry) => stableStringify(entry)).join(',')}]`
@@ -379,6 +403,81 @@ export function buildSequenceAnimaticShotRevisionWorkflowGraph(input: {
   return { nodes, edges }
 }
 
+export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  continuityPack: Record<string, unknown>
+  targetNode: Record<string, unknown>
+  targetNodeId: string
+  assetKind: string
+  relevantShots: Record<string, unknown>[]
+  shotBindings: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  referenceAssetKeys: string[]
+  visualDependencyEdges: Record<string, unknown>[]
+  aspectRatio: string
+}) {
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    ...input.commonConfig,
+    continuityPack: input.continuityPack,
+    targetNode: input.targetNode,
+    targetNodeId: input.targetNodeId,
+    assetKind: input.assetKind,
+    relevantShots: input.relevantShots,
+    shotBindings: input.shotBindings,
+    assetPack: input.assetPack,
+    referenceAssetKeys: input.referenceAssetKeys,
+    visualDependencyEdges: input.visualDependencyEdges,
+    aspectRatio: input.aspectRatio,
+  }
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_input', 'utility_transform', 'Continuity Asset Input', 80, 120, {
+      purpose: 'sequence_animatic_continuity_asset_input',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_asset_input', maxConcurrency: 4 },
+    }, {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_prompt', 'utility_transform', 'Continuity Asset Prompt', 360, 120, {
+      purpose: 'sequence_animatic_continuity_asset_prompt',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_asset_prompt', maxConcurrency: 4 },
+    }, {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_image', 'image_generation', 'Continuity Asset Image', 640, 120, {
+      purpose: 'sequence_animatic_continuity_asset_image',
+      role: 'sequence_animatic_continuity_asset_image',
+      ...config,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'medium',
+      outputFormat: 'webp',
+      maxReferenceImages: 8,
+      imageSize: { width: 1536, height: 1536 },
+      planningOnly: false,
+      planning_only: false,
+      execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_asset_image', maxConcurrency: 2, continueOnError: true },
+    }, {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_artifact', 'output_artifact', 'Register Continuity Asset', 920, 120, {
+      purpose: 'sequence_animatic_continuity_asset_artifact',
+      artifactKind: 'other',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_asset_artifact', maxConcurrency: 4 },
+    }, {}, 'continuity_asset'),
+  ]
+  const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_target', 'continuity_asset_input', 'target_node', 'continuity_asset_prompt', 'target_node', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_pack', 'continuity_asset_input', 'continuity_pack', 'continuity_asset_prompt', 'continuity_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_shots', 'continuity_asset_input', 'relevant_shots', 'continuity_asset_prompt', 'relevant_shots', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'continuity_asset_input', 'asset_pack', 'continuity_asset_prompt', 'asset_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'continuity_asset_prompt', 'text', 'continuity_asset_image', 'prompt', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'continuity_asset_prompt', 'asset_pack', 'continuity_asset_image', 'asset_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_target', 'continuity_asset_input', 'target_node', 'continuity_asset_artifact', 'target_node', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'continuity_asset_prompt', 'text', 'continuity_asset_artifact', 'prompt', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'continuity_asset_image', 'image', 'continuity_asset_artifact', 'image', { optional: true, optionalDependency: true }, 'continuity_asset'),
+  ]
+  return { nodes, edges }
+}
+
 export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
   workflowId: string
   draftId: string
@@ -391,6 +490,53 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     ...input.commonConfig,
   }
+  const manifestBlocks = readRecordArray(input.manifest.blocks).filter((block) => readText(block.id))
+  const shotBreakGroups = readRecordArray(asRecord(input.manifest.shotBreakPlan).groups).filter((block) => readText(block.id))
+  const continuityBlocks: ContinuityWorkflowBlock[] = (manifestBlocks.length > 0 ? manifestBlocks : shotBreakGroups)
+    .map((block: Record<string, unknown>, index: number) => ({
+      id: readText(block.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`,
+      index: Number(block.index ?? index + 1) || index + 1,
+      title: readText(block.title) || readText(block.summary) || `Storyboard block ${index + 1}`,
+      shotIds: readStringArray(block.shotIds).length > 0 ? readStringArray(block.shotIds) : readStringArray(block.shotBreakIds),
+      sourceText: readText(block.sourceText) || readText(block.screenplayExcerpt),
+    }))
+  const continuityBlockNodes = continuityBlocks.flatMap((block: ContinuityWorkflowBlock, index: number) => {
+    const suffix = String(index + 1).padStart(3, '0')
+    const y = 60 + index * 170
+    return [
+      sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, `continuity_block_${suffix}_plan`, 'utility_transform', `Plan Continuity Block ${index + 1}`, 640, y, {
+        purpose: 'sequence_animatic_continuity_block_plan',
+        ...config,
+        storyboardBlock: block,
+        storyboardBlockId: block.id,
+        storyboardBlockIndex: block.index,
+        aspectRatio: input.aspectRatio,
+        execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_block_plan', maxConcurrency: 1, continueOnError: true },
+      }, {}, 'continuity_pack'),
+      sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, `continuity_block_${suffix}_merge`, 'utility_transform', `Merge Continuity Block ${index + 1}`, 920, y, {
+        purpose: 'sequence_animatic_continuity_block_merge',
+        ...config,
+        storyboardBlock: block,
+        storyboardBlockId: block.id,
+        storyboardBlockIndex: block.index,
+        aspectRatio: input.aspectRatio,
+        execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_block_merge', maxConcurrency: 1 },
+      }, {}, 'continuity_pack'),
+      sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, `continuity_block_${suffix}_structure`, 'output_artifact', `Save Continuity Block ${index + 1}`, 1200, y, {
+        purpose: 'sequence_animatic_continuity_structure_artifact',
+        artifactKind: 'other',
+        ...config,
+        storyboardBlock: block,
+        storyboardBlockId: block.id,
+        storyboardBlockIndex: block.index,
+        aspectRatio: input.aspectRatio,
+        execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_structure_artifact', maxConcurrency: 1 },
+      }, {}, 'continuity_pack'),
+    ]
+  })
+  const latestContinuityGraphNodeKey = continuityBlocks.length > 0
+    ? `continuity_block_${String(continuityBlocks.length).padStart(3, '0')}_merge`
+    : 'continuity_seed_graph'
   const nodes = [
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_input', 'utility_transform', 'Continuity Input', 80, 120, {
       purpose: 'sequence_animatic_continuity_input',
@@ -401,19 +547,32 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
       aspectRatio: input.aspectRatio,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_input', maxConcurrency: 1 },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_plan', 'utility_transform', 'Plan Continuity', 360, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_seed_graph', 'utility_transform', 'Seed Scene Graph', 360, 120, {
+      purpose: 'sequence_animatic_continuity_seed_graph',
+      ...config,
+      aspectRatio: input.aspectRatio,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_seed_graph', maxConcurrency: 1 },
+    }, {}, 'continuity_pack'),
+    ...continuityBlockNodes,
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_graph_finalize', 'utility_transform', 'Finalize Scene Graph', 1200, 120, {
+      purpose: 'sequence_animatic_continuity_graph_finalize',
+      ...config,
+      aspectRatio: input.aspectRatio,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_graph_finalize', maxConcurrency: 1 },
+    }, {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_plan', 'utility_transform', 'Plan Continuity', 1480, 120, {
       purpose: 'sequence_animatic_continuity_anchor_plan',
       ...config,
       aspectRatio: input.aspectRatio,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_plan', maxConcurrency: 1 },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'character_anchor_atlas_prompt', 'utility_transform', 'Character Atlas Prompt', 640, -120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'character_anchor_atlas_prompt', 'utility_transform', 'Character Atlas Prompt', 1760, -120, {
       purpose: 'sequence_animatic_character_anchor_atlas_prompt',
       ...config,
       aspectRatio: input.aspectRatio,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'character_anchor_atlas', 'image_generation', 'Character Atlas', 920, -120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'character_anchor_atlas', 'image_generation', 'Character Atlas', 2040, -120, {
       purpose: 'sequence_animatic_character_anchor_atlas',
       role: 'sequence_animatic_character_anchor_atlas',
       ...config,
@@ -427,18 +586,18 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
       planning_only: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_character_anchor_atlas', maxConcurrency: 1, continueOnError: true },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'character_anchor_extract', 'utility_transform', 'Extract Characters', 1200, -120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'character_anchor_extract', 'utility_transform', 'Extract Characters', 2320, -120, {
       purpose: 'sequence_animatic_character_anchor_extract',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1, continueOnError: true },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'prop_anchor_atlas_prompt', 'utility_transform', 'Prop Atlas Prompt', 640, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'prop_anchor_atlas_prompt', 'utility_transform', 'Prop Atlas Prompt', 1760, 120, {
       purpose: 'sequence_animatic_prop_anchor_atlas_prompt',
       ...config,
       aspectRatio: input.aspectRatio,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'prop_anchor_atlas', 'image_generation', 'Prop Atlas', 920, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'prop_anchor_atlas', 'image_generation', 'Prop Atlas', 2040, 120, {
       purpose: 'sequence_animatic_prop_anchor_atlas',
       role: 'sequence_animatic_prop_anchor_atlas',
       ...config,
@@ -452,18 +611,18 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
       planning_only: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_prop_anchor_atlas', maxConcurrency: 1, continueOnError: true },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'prop_anchor_extract', 'utility_transform', 'Extract Props', 1200, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'prop_anchor_extract', 'utility_transform', 'Extract Props', 2320, 120, {
       purpose: 'sequence_animatic_prop_anchor_extract',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1, continueOnError: true },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'location_anchor_atlas_prompt', 'utility_transform', 'Location Atlas Prompt', 640, 360, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'location_anchor_atlas_prompt', 'utility_transform', 'Location Atlas Prompt', 1760, 360, {
       purpose: 'sequence_animatic_location_anchor_atlas_prompt',
       ...config,
       aspectRatio: input.aspectRatio,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_atlas_prompts', maxConcurrency: 1 },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'location_anchor_atlas', 'image_generation', 'Location Atlas', 920, 360, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'location_anchor_atlas', 'image_generation', 'Location Atlas', 2040, 360, {
       purpose: 'sequence_animatic_location_anchor_atlas',
       role: 'sequence_animatic_location_anchor_atlas',
       ...config,
@@ -477,24 +636,43 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
       planning_only: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_location_anchor_atlas', maxConcurrency: 1, continueOnError: true },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'location_anchor_extract', 'utility_transform', 'Extract Locations', 1200, 360, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'location_anchor_extract', 'utility_transform', 'Extract Locations', 2320, 360, {
       purpose: 'sequence_animatic_location_anchor_extract',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_anchor_extract', maxConcurrency: 1, continueOnError: true },
     }, {}, 'continuity_pack'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_artifact', 'output_artifact', 'Register Continuity', 1480, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_artifact', 'output_artifact', 'Register Continuity', 2600, 120, {
       purpose: 'sequence_animatic_continuity_artifact',
       artifactKind: 'other',
       ...config,
       execution: { resourceClass: 'utility' },
     }, {}, 'continuity_pack'),
   ]
+  const blockEdges = continuityBlocks.flatMap((_block: ContinuityWorkflowBlock, index: number) => {
+    const suffix = String(index + 1).padStart(3, '0')
+    const previousGraphNodeKey = index === 0 ? 'continuity_seed_graph' : `continuity_block_${String(index).padStart(3, '0')}_merge`
+    const planNodeKey = `continuity_block_${suffix}_plan`
+    const mergeNodeKey = `continuity_block_${suffix}_merge`
+    const structureNodeKey = `continuity_block_${suffix}_structure`
+    return [
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${previousGraphNodeKey}__${planNodeKey}`, previousGraphNodeKey, 'continuity_graph_v2', planNodeKey, 'continuity_graph_v2', {}, 'continuity_pack'),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `input__${planNodeKey}_context`, 'continuity_input', 'continuity_planner_context', planNodeKey, 'continuity_planner_context', {}, 'continuity_pack'),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${previousGraphNodeKey}__${mergeNodeKey}`, previousGraphNodeKey, 'continuity_graph_v2', mergeNodeKey, 'continuity_graph_v2', {}, 'continuity_pack'),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${planNodeKey}__${mergeNodeKey}`, planNodeKey, 'continuity_block_delta', mergeNodeKey, 'continuity_block_delta', { requiredDependency: true }, 'continuity_pack'),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${mergeNodeKey}__${structureNodeKey}`, mergeNodeKey, 'continuity_graph_v2', structureNodeKey, 'continuity_graph_v2', {}, 'continuity_pack'),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${planNodeKey}__${structureNodeKey}_delta`, planNodeKey, 'continuity_block_delta', structureNodeKey, 'continuity_block_delta', { optional: true, optionalDependency: true }, 'continuity_pack'),
+    ]
+  })
   const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__seed_context', 'continuity_input', 'continuity_planner_context', 'continuity_seed_graph', 'continuity_planner_context', {}, 'continuity_pack'),
+    ...blockEdges,
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${latestContinuityGraphNodeKey}__finalize`, latestContinuityGraphNodeKey, 'continuity_graph_v2', 'continuity_graph_finalize', 'continuity_graph_v2', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_screenplay', 'continuity_input', 'screenplay', 'continuity_plan', 'screenplay', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_shots', 'continuity_input', 'shot_plan', 'continuity_plan', 'shot_plan', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_breaks', 'continuity_input', 'shot_break_plan', 'continuity_plan', 'shot_break_plan', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_refs', 'continuity_input', 'asset_pack', 'continuity_plan', 'asset_pack', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_context', 'continuity_input', 'continuity_planner_context', 'continuity_plan', 'continuity_planner_context', {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'finalize__plan_graph', 'continuity_graph_finalize', 'continuity_graph_v2', 'continuity_plan', 'continuity_graph_v2', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'plan__character_prompt', 'continuity_plan', 'text', 'character_anchor_atlas_prompt', 'continuity_anchor_plan', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__character_prompt_refs', 'continuity_input', 'asset_pack', 'character_anchor_atlas_prompt', 'asset_pack', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'character_prompt__atlas', 'character_anchor_atlas_prompt', 'text', 'character_anchor_atlas', 'prompt', {}, 'continuity_pack'),

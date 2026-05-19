@@ -53,7 +53,7 @@ export const sequenceAnimaticModeSchema = z.preprocess(
 )
 export const cinematicAnimaticModeSchema = z.enum(['prompt_cinematic_master'])
 export const sequenceAnimaticGraphSpecVersionSchema = z.literal('sequence_animatic_graph_v1')
-export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'continuity_pack', 'storyboard_block', 'shot_video', 'shot_revision'])
+export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'continuity_pack', 'continuity_asset', 'storyboard_block', 'shot_video', 'shot_revision'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -89,6 +89,8 @@ export type OutputWorkflowRunScope = z.infer<typeof outputWorkflowRunScopeSchema
 export const outputWorkflowRunIntentSchema = z.enum([
   'prepare_storyboard_block',
   'generate_continuity_pack',
+  'derive_continuity_block',
+  'generate_continuity_asset',
   'generate_block_video',
   'generate_shot_video',
   'revise_sequence_animatic_shot',
@@ -722,6 +724,31 @@ export const sequenceAnimaticManifestV1Schema = looseObjectSchema.extend({
   diagnostics: z.array(z.string()).default([]),
 })
 
+export const sequenceAnimaticContinuityAssetStatusSchema = z.enum(['missing', 'generating', 'ready', 'stale', 'failed'])
+export const sequenceAnimaticContinuityAssetGenerationStatusSchema = z.enum(['none', 'partial', 'ready', 'stale', 'failed'])
+
+export const continuityAssetStateSchema = looseObjectSchema.extend({
+  status: sequenceAnimaticContinuityAssetStatusSchema.default('missing'),
+  inputHash: z.string().default(''),
+  assetKey: z.string().nullable().default(null),
+  artifactKey: z.string().nullable().default(null),
+  prompt: z.string().default(''),
+  referenceAssetKeys: z.array(z.string()).default([]),
+  sourceNodeId: z.string().min(1),
+  assetKind: z.string().default('continuity_asset'),
+  generatedAt: z.string().nullable().default(null),
+  warnings: z.array(z.string()).default([]),
+  error: z.string().default(''),
+})
+
+export const continuityVisualDependencyEdgeSchema = looseObjectSchema.extend({
+  sourceNodeId: z.string().min(1),
+  targetNodeId: z.string().min(1),
+  relationship: z.string().min(1),
+  required: z.boolean().default(false),
+  evidence: z.string().default(''),
+})
+
 export const sequenceAnimaticContinuityPackV1Schema = looseObjectSchema.extend({
   graphSpecVersion: sequenceAnimaticGraphSpecVersionSchema.default('sequence_animatic_graph_v1'),
   screenplayAnimaticRole: z.literal('continuity_pack'),
@@ -730,14 +757,23 @@ export const sequenceAnimaticContinuityPackV1Schema = looseObjectSchema.extend({
   masterManifestArtifactKey: z.string().min(1),
   manifestHash: z.string().min(1),
   continuityPackHash: z.string().min(1),
-  planningMode: z.enum(['llm_structured_v2', 'deterministic_fallback', 'legacy_manifest']).optional(),
+  planningMode: z.enum(['block_graph_v2', 'llm_structured_v2', 'deterministic_fallback', 'legacy_manifest']).optional(),
   characterAnchors: z.array(looseRecordSchema).default([]),
   propAnchors: z.array(looseRecordSchema).default([]),
   locationSpotAnchors: z.array(looseRecordSchema).default([]),
+  continuityGraphV2: looseRecordSchema.default({}),
+  continuity_graph_v2: looseRecordSchema.default({}),
   locationSets: z.array(looseRecordSchema).default([]),
   locationAngles: z.array(looseRecordSchema).default([]),
   sceneGraph: looseRecordSchema.default({}),
   shotContinuityMap: looseRecordSchema.default({}),
+  shotBindings: looseRecordSchema.default({}),
+  blockStates: looseRecordSchema.default({}),
+  pendingDeltas: looseRecordSchema.default({}),
+  continuityGraphStatus: z.enum(['empty', 'partial', 'ready', 'stale', 'failed']).default('empty'),
+  assetStateByNodeId: z.record(z.string(), continuityAssetStateSchema).default({}),
+  visualDependencyEdges: z.array(continuityVisualDependencyEdgeSchema).default([]),
+  assetGenerationStatus: sequenceAnimaticContinuityAssetGenerationStatusSchema.default('none'),
   rejectedCandidates: z.array(looseRecordSchema).default([]),
   plannerWarnings: z.array(z.string()).default([]),
   plannerDiagnostics: z.array(z.string()).default([]),
@@ -811,6 +847,45 @@ export const sequenceAnimaticContinuityWorkflowEnsureResponseSchema = z.object({
   edges: z.array(outputWorkflowEdgeSchema).default([]),
 })
 
+export const sequenceAnimaticContinuityBlockDeriveRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  continuityRequestId: z.string().min(1).nullable().optional(),
+  storyboardBlockId: z.string().min(1),
+  mode: z.enum(['derive', 'regenerate']).default('derive'),
+})
+
+export const sequenceAnimaticContinuityBlockDeriveResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  continuityRequest: outputRequestSchema,
+  run: outputWorkflowRunSchema.nullable().default(null),
+  blockState: looseRecordSchema.default({}),
+  reused: z.boolean().default(false),
+})
+
+export const sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  continuityRequestId: z.string().min(1),
+  nodeId: z.string().min(1),
+  mode: z.enum(['generate', 'regenerate']).default('generate'),
+})
+
+export const sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  continuityRequest: outputRequestSchema,
+  assetRequest: outputRequestSchema.nullable().default(null),
+  workflow: outputWorkflowSchema.nullable().default(null),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+  assetState: continuityAssetStateSchema.nullable().default(null),
+  reused: z.boolean().default(false),
+})
+
 export const sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -850,6 +925,11 @@ export const sequenceAnimaticStateResponseSchema = z.object({
   artifacts: z.array(outputArtifactSchema).default([]),
   assets: z.array(looseRecordSchema).default([]),
   projections: z.array(outputRequestStatusProjectionSchema).default([]),
+  continuityGraphStatus: z.enum(['empty', 'partial', 'ready', 'stale', 'failed']).default('empty'),
+  continuityBlockStates: looseRecordSchema.default({}),
+  assetStateByNodeId: z.record(z.string(), continuityAssetStateSchema).default({}),
+  visualDependencyEdges: z.array(continuityVisualDependencyEdgeSchema).default([]),
+  assetGenerationStatus: sequenceAnimaticContinuityAssetGenerationStatusSchema.default('none'),
 })
 
 export const outputWorkflowAssetHydrationModeSchema = z.enum(['none', 'preview', 'selected', 'all'])
@@ -3817,6 +3897,8 @@ export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResp
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
 export type SequenceAnimaticBlockWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticBlockWorkflowEnsureResponseSchema>
 export type SequenceAnimaticContinuityWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityWorkflowEnsureResponseSchema>
+export type SequenceAnimaticContinuityBlockDeriveResponse = z.infer<typeof sequenceAnimaticContinuityBlockDeriveResponseSchema>
+export type SequenceAnimaticContinuityAssetWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema>
 export type SequenceAnimaticShotRevisionWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema>
 export type SequenceAnimaticStateResponse = z.infer<typeof sequenceAnimaticStateResponseSchema>
 export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphRequestSchema>

@@ -29,7 +29,13 @@ import {
   resolveCinematicStorySourceScope,
   runOutputWorkflowReadyQueue,
   selectOutputWorkflowRunSubgraph,
+  continuityAssetStateSchema,
+  continuityVisualDependencyEdgeSchema,
   sequenceAnimaticContinuityPackV1Schema,
+  sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema,
+  sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
+  sequenceAnimaticContinuityBlockDeriveRequestSchema,
+  sequenceAnimaticContinuityBlockDeriveResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
   sequenceAnimaticShotRevisionArtifactV1Schema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
@@ -41,6 +47,7 @@ import {
   hashOutputWorkflowValue,
 } from './outputWorkflow.ts'
 import {
+  buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityWorkflowGraph,
   buildSequenceAnimaticShotRevisionWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
@@ -1153,6 +1160,133 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     draftId: 'draft-1',
     masterRequestId: 'request-master',
   }).masterRequestId, 'request-master')
+  assert.equal(sequenceAnimaticContinuityBlockDeriveRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    continuityRequestId: 'request-continuity',
+    storyboardBlockId: 'block_001',
+    mode: 'derive',
+  }).storyboardBlockId, 'block_001')
+  assert.equal(sequenceAnimaticContinuityBlockDeriveResponseSchema.parse({
+    ok: true,
+    masterRequest: {
+      id: 'request-master',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      title: 'Master',
+      prompt: '',
+      sourceSurface: 'wiki_sequence_unit',
+      outputKind: 'cinematic_episode',
+      status: 'completed',
+      targetFormat: 'video',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      metadata: {},
+      progress: {},
+      createdAt: now,
+      updatedAt: now,
+    },
+    continuityRequest: {
+      id: 'request-continuity',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      parentRequestId: 'request-master',
+      title: 'Continuity',
+      prompt: '',
+      sourceSurface: 'wiki_sequence_unit',
+      outputKind: 'cinematic_episode',
+      status: 'running',
+      targetFormat: 'video',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      metadata: { sequenceAnimaticRole: 'continuity_pack' },
+      progress: {},
+      createdAt: now,
+      updatedAt: now,
+    },
+    blockState: { blockId: 'block_001', status: 'deriving' },
+    reused: false,
+  }).blockState.status, 'deriving')
+  assert.equal(sequenceAnimaticGraphRoleSchema.parse('continuity_asset'), 'continuity_asset')
+  assert.equal(sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    continuityRequestId: 'request-continuity',
+    nodeId: 'zone_console',
+    mode: 'generate',
+  }).nodeId, 'zone_console')
+  assert.equal(continuityAssetStateSchema.parse({
+    status: 'ready',
+    inputHash: 'hash-zone-console',
+    assetKey: 'asset-zone-console',
+    artifactKey: 'artifact-zone-console',
+    prompt: 'Generate the console zone.',
+    referenceAssetKeys: ['asset-set-bridge'],
+    sourceNodeId: 'zone_console',
+    assetKind: 'location_zone',
+    generatedAt: now,
+    warnings: [],
+  }).assetKind, 'location_zone')
+  assert.equal(continuityVisualDependencyEdgeSchema.parse({
+    sourceNodeId: 'set_bridge',
+    targetNodeId: 'zone_console',
+    relationship: 'contains',
+    required: true,
+    evidence: 'Zone belongs to the bridge set.',
+  }).relationship, 'contains')
+  assert.equal(sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
+    ok: true,
+    masterRequest: {
+      id: 'request-master',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      title: 'Master',
+      prompt: '',
+      sourceSurface: 'wiki_sequence_unit',
+      outputKind: 'cinematic_episode',
+      status: 'completed',
+      targetFormat: 'video',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      metadata: {},
+      progress: {},
+      createdAt: now,
+      updatedAt: now,
+    },
+    continuityRequest: {
+      id: 'request-continuity',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      parentRequestId: 'request-master',
+      title: 'Continuity',
+      prompt: '',
+      sourceSurface: 'wiki_sequence_unit',
+      outputKind: 'cinematic_episode',
+      status: 'completed',
+      targetFormat: 'video',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      metadata: { sequenceAnimaticRole: 'continuity_pack' },
+      progress: {},
+      createdAt: now,
+      updatedAt: now,
+    },
+    assetRequest: null,
+    workflow: null,
+    nodes: [],
+    edges: [],
+    assetState: {
+      status: 'ready',
+      inputHash: 'hash-zone-console',
+      assetKey: 'asset-zone-console',
+      artifactKey: 'artifact-zone-console',
+      sourceNodeId: 'zone_console',
+      assetKind: 'location_zone',
+    },
+    reused: true,
+  }).assetState?.sourceNodeId, 'zone_console')
   assert.equal(sequenceAnimaticContinuityPackV1Schema.parse({
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     screenplayAnimaticRole: 'continuity_pack',
@@ -1161,7 +1295,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     masterManifestArtifactKey: 'manifest-artifact',
     manifestHash: 'manifest-hash',
     continuityPackHash: 'pack-hash',
-    planningMode: 'llm_structured_v2',
+    planningMode: 'block_graph_v2',
     characterAnchors: [],
     propAnchors: [],
     locationSpotAnchors: [],
@@ -1169,6 +1303,36 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     locationAngles: [{ id: 'angle_bridge_wide', setId: 'set_bridge', name: 'Bridge wide angle', shotIds: ['shot_001'] }],
     sceneGraph: { nodes: [{ id: 'set_bridge', type: 'location_set', name: 'Bridge' }], edges: [] },
     shotContinuityMap: { shot_001: ['angle_bridge_wide'] },
+    continuityGraphV2: {
+      version: 'sequence_animatic_continuity_graph_v2',
+      worldLocationRefs: [{ id: 'loc_bridge', key: 'bridge', name: 'Bridge', type: 'location' }],
+      locationSets: [{ id: 'set_bridge', worldLocationRefId: 'bridge', name: 'Bridge', shotIds: ['shot_001'] }],
+      zones: [{ id: 'zone_console', setId: 'set_bridge', name: 'Console zone', shotIds: ['shot_001'] }],
+      spots: [{ id: 'spot_console', zoneId: 'zone_console', name: 'Console', shotIds: ['shot_001'] }],
+      angles: [{ id: 'angle_bridge_wide', setId: 'set_bridge', zoneId: 'zone_console', name: 'Bridge wide angle', shotIds: ['shot_001'] }],
+      edges: [{ sourceId: 'set_bridge', targetId: 'zone_console', type: 'contains' }],
+      shotBindings: { shot_001: { shotId: 'shot_001', storyboardBlockId: 'block_001', setId: 'set_bridge', zoneId: 'zone_console', spotIds: ['spot_console'], angleId: 'angle_bridge_wide', continuityAnchorIds: ['angle_bridge_wide'] } },
+      assetAnchors: [],
+      rejectedCandidates: [],
+      warnings: [],
+      diagnostics: [],
+    },
+    shotBindings: { shot_001: { shotId: 'shot_001', storyboardBlockId: 'block_001', setId: 'set_bridge', zoneId: 'zone_console', spotIds: ['spot_console'], angleId: 'angle_bridge_wide', continuityAnchorIds: ['angle_bridge_wide'] } },
+    blockStates: { block_001: { blockId: 'block_001', status: 'ready' } },
+    pendingDeltas: { block_001: { blockId: 'block_001' } },
+    continuityGraphStatus: 'partial',
+    assetStateByNodeId: {
+      zone_console: {
+        status: 'ready',
+        inputHash: 'hash-zone-console',
+        assetKey: 'asset-zone-console',
+        artifactKey: 'artifact-zone-console',
+        sourceNodeId: 'zone_console',
+        assetKind: 'location_zone',
+      },
+    },
+    visualDependencyEdges: [{ sourceNodeId: 'set_bridge', targetNodeId: 'zone_console', relationship: 'contains', required: true }],
+    assetGenerationStatus: 'partial',
     rejectedCandidates: [{ name: 'rain', reason: 'abstract_or_atmospheric' }],
     plannerWarnings: [],
     plannerDiagnostics: [],
@@ -1195,7 +1359,39 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.ok(!continuityPlanContract?.requiredInputs.includes('continuity_planner_context'))
   assert.ok(continuityPlanContract?.producedOutputs.includes('locationSets'))
   assert.ok(continuityPlanContract?.producedOutputs.includes('sceneGraph'))
+  assert.ok(continuityPlanContract?.producedOutputs.includes('continuityGraphV2'))
+  assert.ok(continuityPlanContract?.producedOutputs.includes('shotBindings'))
   assert.ok(continuityPlanContract?.producedOutputs.includes('rejectedCandidates'))
+  const continuityStructureContract = getOutputWorkflowNodeContract({
+    key: 'continuity_block_001_structure',
+    nodeType: 'output_artifact',
+    config: { purpose: 'sequence_animatic_continuity_structure_artifact' },
+  })
+  assert.ok(continuityStructureContract?.artifactRoles.includes('sequence_animatic_continuity_pack'))
+  assert.ok(continuityStructureContract?.producedOutputs.includes('blockStates'))
+  assert.ok(continuityStructureContract?.producedOutputs.includes('assetStateByNodeId'))
+  assert.ok(continuityStructureContract?.producedOutputs.includes('visualDependencyEdges'))
+  const continuityAssetInputContract = getOutputWorkflowNodeContract({
+    key: 'continuity_asset_input',
+    nodeType: 'utility_transform',
+    config: { purpose: 'sequence_animatic_continuity_asset_input' },
+  })
+  assert.ok(continuityAssetInputContract?.producedOutputs.includes('targetNode'))
+  assert.ok(continuityAssetInputContract?.producedOutputs.includes('referenceAssetKeys'))
+  const continuityAssetArtifactContract = getOutputWorkflowNodeContract({
+    key: 'continuity_asset_artifact',
+    nodeType: 'output_artifact',
+    config: { purpose: 'sequence_animatic_continuity_asset_artifact' },
+  })
+  assert.ok(continuityAssetArtifactContract?.artifactRoles.includes('sequence_animatic_continuity_asset'))
+  assert.ok(continuityAssetArtifactContract?.producedOutputs.includes('assetStateByNodeId'))
+  assert.equal(outputWorkflowRunIntentDefaults('generate_continuity_asset')?.runScope, 'upstream_to_node')
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(workerSource, /sequenceAnimaticReferenceAliasCandidates/)
+  assert.match(workerSource, /sequenceAnimaticReferenceLookupFromPlannerContext/)
+  assert.match(workerSource, /sequenceAnimaticCanonicalReferenceMatchForAnchor/)
+  assert.match(workerSource, /reason: 'existing_world_entity'/)
+  assert.match(workerSource, /Removed \$\{removedAnchorIds\.size\} continuity anchor/)
 
   const graph = buildSequenceAnimaticContinuityWorkflowGraph({
     workflowId: 'workflow-continuity',
@@ -1217,7 +1413,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
         performanceArc: [],
         audioPlan: { sfx: [] },
       },
-      blocks: [],
+      blocks: [{ id: 'block_001', index: 1, title: 'Opening block', shotIds: ['shot_001'] }],
       screenplayDraft: {},
       assetPack: { entities: [] },
     },
@@ -1226,12 +1422,25 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   })
   const purposes = graph.nodes.map((node) => readConfigPurpose({ config: node.config }))
   assert.ok(purposes.includes('sequence_animatic_continuity_input'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_seed_graph'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_block_plan'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_block_merge'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_structure_artifact'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_graph_finalize'))
   assert.ok(purposes.includes('sequence_animatic_continuity_anchor_plan'))
   assert.ok(purposes.includes('sequence_animatic_character_anchor_atlas_prompt'))
   assert.ok(purposes.includes('sequence_animatic_prop_anchor_atlas_prompt'))
   assert.ok(purposes.includes('sequence_animatic_location_anchor_extract'))
   assert.ok(purposes.includes('sequence_animatic_continuity_artifact'))
   assert.ok(graph.edges.some((edge) => edge.source_port === 'continuity_planner_context' && edge.target_port === 'continuity_planner_context'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_seed_graph' && edge.target_node_key === 'continuity_block_001_plan'))
+  const blockPlanMergeEdge = graph.edges.find((edge) => edge.source_node_key === 'continuity_block_001_plan' && edge.target_node_key === 'continuity_block_001_merge')
+  assert.ok(blockPlanMergeEdge)
+  assert.notEqual((blockPlanMergeEdge.metadata as Record<string, unknown>).optionalDependency, true)
+  assert.notEqual((blockPlanMergeEdge.metadata as Record<string, unknown>).optional, true)
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_block_001_merge' && edge.target_node_key === 'continuity_block_001_structure'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_block_001_merge' && edge.target_node_key === 'continuity_graph_finalize'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_graph_finalize' && edge.target_node_key === 'continuity_plan'))
   const validation = validateOutputWorkflowGraph({
     nodes: graph.nodes.map((node) => ({
       key: node.key,
@@ -1248,6 +1457,53 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     })),
   })
   assert.equal(validation.ok, true, validation.diagnostics.join('\n'))
+
+  const assetGraph = buildSequenceAnimaticContinuityAssetWorkflowGraph({
+    workflowId: 'workflow-continuity-asset',
+    draftId: 'draft-1',
+    commonConfig: {
+      graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+      screenplayAnimaticRole: 'continuity_asset',
+      sequenceAnimaticRole: 'continuity_asset',
+      masterRequestId: 'request-master',
+      continuityRequestId: 'request-continuity',
+      continuityWorkflowId: 'workflow-continuity',
+    },
+    continuityPack: {},
+    targetNode: { id: 'zone_console', name: 'Console zone', assetKind: 'location_zone', shotIds: ['shot_001'] },
+    targetNodeId: 'zone_console',
+    assetKind: 'location_zone',
+    relevantShots: [{ id: 'shot_001', action: 'The mechanic crosses the console zone.' }],
+    shotBindings: { shot_001: { zoneId: 'zone_console' } },
+    assetPack: { entities: [] },
+    referenceAssetKeys: ['asset-set-bridge'],
+    visualDependencyEdges: [{ sourceNodeId: 'set_bridge', targetNodeId: 'zone_console', relationship: 'contains', required: true }],
+    aspectRatio: '16:9',
+  })
+  const assetPurposes = assetGraph.nodes.map((node) => readConfigPurpose({ config: node.config }))
+  assert.deepEqual(assetPurposes, [
+    'sequence_animatic_continuity_asset_input',
+    'sequence_animatic_continuity_asset_prompt',
+    'sequence_animatic_continuity_asset_image',
+    'sequence_animatic_continuity_asset_artifact',
+  ])
+  assert.ok(assetGraph.edges.some((edge) => edge.source_node_key === 'continuity_asset_prompt' && edge.target_node_key === 'continuity_asset_image'))
+  const assetValidation = validateOutputWorkflowGraph({
+    nodes: assetGraph.nodes.map((node) => ({
+      key: node.key,
+      nodeType: node.node_type as never,
+      config: node.config,
+      inputs: node.inputs,
+    })),
+    edges: assetGraph.edges.map((edge) => ({
+      sourceNodeKey: edge.source_node_key,
+      sourcePort: edge.source_port,
+      targetNodeKey: edge.target_node_key,
+      targetPort: edge.target_port,
+      metadata: edge.metadata,
+    })),
+  })
+  assert.equal(assetValidation.ok, true, assetValidation.diagnostics.join('\n'))
 })
 
 test('prompt-created cinematics can use screenplay animatic master mode', () => {
@@ -1289,6 +1545,7 @@ test('prompt-created cinematics can use screenplay animatic master mode', () => 
 test('sequence animatic continuity anchors are planned, extracted, and passed to child workflows', () => {
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-block-workflows/index.ts'), 'utf8')
+  const deriveSource = readFileSync(resolve(repoRoot, 'supabase/functions/derive-sequence-animatic-continuity-block/index.ts'), 'utf8')
   const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
   const agentsSource = readFileSync(resolve(repoRoot, 'AGENTS.md'), 'utf8')
 
@@ -1307,6 +1564,11 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(workerSource, /specific visible one-shot incidental characters/)
   assert.match(workerSource, /sequenceAnimaticShouldKeepSingleUseTemporaryCharacter/)
   assert.match(workerSource, /Recovered \$\{acceptedRejectedCandidateKeys\.size\} visible one-shot incidental character/)
+  assert.match(workerSource, /sequenceAnimaticContinuityLocationNodeLooksCharacterDerived/)
+  assert.match(workerSource, /sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived/)
+  assert.match(workerSource, /sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes/)
+  assert.match(workerSource, /looked like character\/action labels instead of physical locations/)
+  assert.match(workerSource, /sequenceAnimaticGraphZoneSeed/)
   assert.match(workerSource, /resolvedRefs/)
   assert.match(workerSource, /unresolvedShotRefs/)
   const continuityPromptSource = workerSource.slice(
@@ -1322,6 +1584,17 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(workerSource, /'rain'/)
   assert.match(workerSource, /existing_world_entity/)
   assert.match(workerSource, /shotContinuityMap/)
+  assert.match(workerSource, /sequence_animatic_continuity_graph_v2/)
+  assert.match(workerSource, /sequence_animatic_continuity_block_plan/)
+  assert.match(workerSource, /sequence_animatic_continuity_block_merge/)
+  assert.match(workerSource, /sequence_animatic_continuity_structure_artifact/)
+  assert.match(workerSource, /sequenceAnimaticContinuityBlockStatesFromGraph/)
+  assert.match(workerSource, /worldLocationRefId/)
+  assert.match(workerSource, /continuitySetId/)
+  assert.match(workerSource, /continuityZoneId/)
+  assert.match(workerSource, /continuityAngleId/)
+  assert.match(workerSource, /spatialContinuity/)
+  assert.match(workerSource, /shotBindings/)
   assert.match(workerSource, /locationSets/)
   assert.match(workerSource, /locationAngles/)
   assert.match(workerSource, /sceneGraph/)
@@ -1339,11 +1612,22 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(workerSource, /continuityAnchorIds: anchorIds/)
   assert.match(workerSource, /readStringArray\(rawShot\.continuityAnchorIds\)\.forEach\(addKey\)/)
   assert.match(ensureSource, /assetPackWithContinuityAnchors/)
+  assert.match(ensureSource, /shotBindings/)
   assert.match(ensureSource, /readStringArray\(block\.continuityAnchorIds\)/)
   assert.match(ensureSource, /readStringArray\(shot\.continuityAnchorIds\)/)
   assert.match(worldGraphSource, /manifestContinuityAnchors/)
   assert.match(worldGraphSource, /continuityAnchors\.characters/)
   assert.match(worldGraphSource, /shot\.continuityAnchorIds/)
+  assert.match(worldGraphSource, /spatialContinuityLabel/)
+  assert.match(worldGraphSource, /Spatial binding needs review/)
+  assert.ok(worldGraphSource.indexOf('const entity = animaticRefLookupAliases(cleanRefId)') < worldGraphSource.indexOf('const anchor = animaticRefLookupAliases(cleanRefId)'))
+  assert.match(worldGraphSource, /continuityGraphV2/)
+  assert.match(worldGraphSource, /onDeriveSequenceAnimaticContinuityBlock/)
+  assert.match(worldGraphSource, /continuityBlockStatusLabel/)
+  assert.match(worldGraphSource, /Derive continuity/)
+  assert.match(deriveSource, /derive_continuity_block/)
+  assert.match(deriveSource, /sequence_animatic_continuity_structure_artifact/)
+  assert.match(deriveSource, /targetNodeKeys/)
   assert.match(agentsSource, /Sequence animatic continuity anchors are output-local references/)
   assert.match(agentsSource, /animaticReferenceCatalog/)
 })
@@ -1572,13 +1856,19 @@ test('sequence animatic shot videos use cropped panel keyframe mini graphs', () 
   const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-block-workflows/index.ts'), 'utf8')
   const factorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
   const skillsSource = readFileSync(resolve(repoRoot, 'src/domain/outputSkills.ts'), 'utf8')
+  const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const graphHostSource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputGraphOverlayHost.tsx'), 'utf8')
+  const flyWorkerSource = readFileSync(resolve(repoRoot, 'workers/world-generation/main.ts'), 'utf8')
 
   assert.match(ensureSource, /sequenceAnimaticMode === 'shot_video'/)
   assert.match(factorySource, /shot_input[\s\S]*shot_video_prompt[\s\S]*shot_video/)
   assert.match(ensureSource, /role: 'cinematic_v2_shot_keyframe'/)
   assert.match(workerSource, /purpose === 'sequence_animatic_shot_input'/)
   assert.match(workerSource, /purpose === 'sequence_animatic_shot_video_prompt'/)
-  assert.match(workerSource, /purpose\) === 'sequence_animatic_shot_video'/)
+  assert.match(workerSource, /sequence_animatic_shot_video/)
+  assert.match(workerSource, /const isSequenceAnimaticShotVideo = readText\(config\.purpose\) === 'sequence_animatic_shot_video'/)
+  assert.doesNotMatch(workerSource, /isSequenceAnimaticShotVideoConfig/)
+  assert.match(workerSource, /const requestedDurationSeconds = Math\.max\(4, Math\.min\(15, rawRequestedDurationSeconds\)\)/)
   assert.match(workerSource, /Treat @Image1 as the cropped shot keyframe reference/)
   assert.match(workerSource, /shot video generation requires the cropped shot panel as @Image1/)
   assert.match(workerSource, /includeSpeakerRefs: false/)
@@ -1598,6 +1888,22 @@ test('sequence animatic shot videos use cropped panel keyframe mini graphs', () 
   assert.match(workerSource, /MUAPI_VIDEO_PROMPT_MAX_CHARS = 4000/)
   assert.match(workerSource, /compactSeedancePromptForProvider/)
   assert.doesNotMatch(workerSource, /purpose === 'sequence_animatic_shot_video_prompt'[\s\S]{0,5000}storyboard group/)
+  assert.match(worldGraphSource, /run\?\.status === 'failed' \|\| run\?\.status === 'cancelled'/)
+  assert.doesNotMatch(worldGraphSource, /function sequenceAnimaticRequestIsActive[\s\S]{0,220}outputWorkflowRunHasFailedExecution\(run\)/)
+  assert.match(graphHostSource, /previousDisplayRunRef/)
+  assert.match(graphHostSource, /lastGoodGraphStateRef/)
+  assert.match(graphHostSource, /outputWorkflowStepHasActiveProvider/)
+  assert.match(graphHostSource, /step\.status === 'failed' && runIsActive/)
+  assert.match(graphHostSource, /workflowRuns = useMemo/)
+  assert.match(graphHostSource, /lastGoodGraphStateRef\.current = \{ request, workflow, nodes, edges, displayRun \}/)
+  const graphOverlaySource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputWorkflowGraphOverlay.tsx'), 'utf8')
+  assert.match(graphOverlaySource, /sameGraphNodesForReactFlow/)
+  assert.match(graphOverlaySource, /sameGraphEdgesForReactFlow/)
+  assert.match(graphOverlaySource, /sameGraphNodesForReactFlow\(current, nextNodes\) \? current : nextNodes/)
+  assert.match(worldGraphSource, /providerStatus = trimOptionalString\(metadata\.providerStatus\)\.toUpperCase\(\)/)
+  assert.match(worldGraphSource, /Submitting shot video request/)
+  assert.match(flyWorkerSource, /workerCodeVersion/)
+  assert.match(workerSource, /workerBuildVersion/)
   assert.match(skillsSource, /sequence_animatic_shot_video_prompt/)
   assert.match(skillsSource, /sequence_animatic_shot_video/)
 })

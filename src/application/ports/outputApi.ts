@@ -42,7 +42,7 @@ export type OutputApi = {
     draftId: string
     workflowId: string
     runId?: string | null
-    onSignal: () => void
+    onSignal: (signal: { table: string; eventType?: string }) => void
   }): { unsubscribe(): Promise<unknown> | void }
   updateOutputWorkflowNode(snapshot: ProjectSnapshot, request: {
     workflowId: string

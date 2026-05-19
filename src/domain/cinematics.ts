@@ -797,6 +797,17 @@ export const cinematicV2PerformanceBeatSchema = z.object({
   voiceEnergy: z.string().optional(),
 })
 
+export const cinematicV2ShotSpatialContinuitySchema = z.object({
+  cameraPosition: z.string().default(''),
+  facingDirection: z.string().default(''),
+  subjectPosition: z.string().default(''),
+  visibleLandmarks: z.array(z.string()).default([]),
+  entryPath: z.string().default(''),
+  exitPath: z.string().default(''),
+  lightSourceDirection: z.string().default(''),
+  notes: z.string().default(''),
+})
+
 export const cinematicV2ShotSchema = z.object({
   id: z.string(),
   sceneId: z.string().default('scene_1'),
@@ -817,8 +828,24 @@ export const cinematicV2ShotSchema = z.object({
   visibleCharacterRefIds: z.array(z.string()).default([]),
   performanceBeats: z.array(cinematicV2PerformanceBeatSchema).default([]),
   locationRefId: z.string().nullable().default(null),
+  worldLocationRefId: z.string().nullable().default(null),
+  continuitySetId: z.string().default(''),
+  continuityZoneId: z.string().default(''),
+  continuitySpotIds: z.array(z.string()).default([]),
+  continuityAngleId: z.string().default(''),
+  spatialContinuity: cinematicV2ShotSpatialContinuitySchema.default({
+    cameraPosition: '',
+    facingDirection: '',
+    subjectPosition: '',
+    visibleLandmarks: [],
+    entryPath: '',
+    exitPath: '',
+    lightSourceDirection: '',
+    notes: '',
+  }),
   propRefIds: z.array(z.string()).default([]),
   continuityInputs: z.array(z.string()).default([]),
+  continuityAnchorIds: z.array(z.string()).default([]),
   camera: z.object({
     framing: z.string().default(''),
     angle: z.string().default(''),

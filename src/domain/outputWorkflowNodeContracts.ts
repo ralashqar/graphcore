@@ -234,12 +234,120 @@ const cinematicSequenceContracts = [
     purpose: 'sequence_animatic_continuity_anchor_plan',
     label: 'Plan Continuity Anchors',
     requiredInputs: ['screenplay', 'shot_plan', 'asset_pack'],
-    producedOutputs: ['text', 'continuityAnchorPlan', 'continuity_anchor_plan', 'characterAnchors', 'propAnchors', 'locationSpotAnchors', 'locationSets', 'locationAngles', 'sceneGraph', 'shotContinuityMap', 'rejectedCandidates'],
+    producedOutputs: ['text', 'continuityAnchorPlan', 'continuity_anchor_plan', 'characterAnchors', 'propAnchors', 'locationSpotAnchors', 'continuityGraphV2', 'continuity_graph_v2', 'locationSets', 'locationAngles', 'sceneGraph', 'shotContinuityMap', 'shotBindings', 'rejectedCandidates'],
     artifactRoles: [],
     previewRoles: ['text'],
     recoveryStrategy: 'node_step',
     progressLabel: 'Finding reusable characters, props, and locations',
     providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_seed_graph',
+    label: 'Seed Continuity Scene Graph',
+    requiredInputs: ['continuity_planner_context'],
+    producedOutputs: ['text', 'continuityGraphV2', 'continuity_graph_v2'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Seeding continuity scene graph',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_block_plan',
+    label: 'Plan Continuity Block',
+    requiredInputs: ['continuity_graph_v2', 'continuity_planner_context'],
+    producedOutputs: ['text', 'continuityBlockDelta', 'continuity_block_delta'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Planning block continuity',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_block_merge',
+    label: 'Merge Continuity Block',
+    requiredInputs: ['continuity_graph_v2', 'continuity_block_delta'],
+    producedOutputs: ['text', 'continuityGraphV2', 'continuity_graph_v2'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Merging block continuity',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_graph_finalize',
+    label: 'Finalize Continuity Scene Graph',
+    requiredInputs: ['continuity_graph_v2'],
+    producedOutputs: ['text', 'continuityGraphV2', 'continuity_graph_v2', 'locationSets', 'locationAngles', 'sceneGraph', 'shotContinuityMap', 'shotBindings', 'assetAnchors', 'rejectedCandidates'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Finalizing continuity scene graph',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_structure_artifact',
+    label: 'Save Continuity Structure',
+    requiredInputs: ['continuity_graph_v2'],
+    producedOutputs: ['artifact', 'continuityPack', 'continuity_pack', 'continuityGraphV2', 'continuity_graph_v2', 'shotBindings', 'blockStates', 'pendingDeltas', 'assetStateByNodeId', 'visualDependencyEdges', 'assetGenerationStatus'],
+    artifactRoles: ['sequence_animatic_continuity_pack'],
+    previewRoles: ['artifact'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving continuity structure',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_asset_input',
+    label: 'Continuity Asset Input',
+    requiredInputs: [],
+    producedOutputs: ['text', 'continuityPack', 'continuity_pack', 'targetNode', 'target_node', 'relevantShots', 'relevant_shots', 'shotBindings', 'shot_bindings', 'assetPack', 'asset_pack', 'referenceAssetKeys', 'reference_asset_keys'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Collecting continuity asset context',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_asset_prompt',
+    label: 'Continuity Asset Prompt',
+    requiredInputs: ['target_node'],
+    producedOutputs: ['text', 'prompt', 'assetPack', 'asset_pack', 'referenceAssetKeys', 'reference_asset_keys', 'targetNode', 'target_node', 'relevantShots', 'relevant_shots'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing continuity asset prompt',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_asset_image',
+    label: 'Continuity Asset Image',
+    requiredInputs: ['prompt'],
+    producedOutputs: ['image', 'assetKey'],
+    artifactRoles: ['sequence_animatic_continuity_asset_image'],
+    previewRoles: ['image'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Generating continuity asset',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_asset_artifact',
+    label: 'Register Continuity Asset',
+    requiredInputs: ['image', 'target_node'],
+    producedOutputs: ['artifact', 'continuityAsset', 'assetState', 'assetStateByNodeId'],
+    artifactRoles: ['sequence_animatic_continuity_asset'],
+    previewRoles: ['artifact', 'image'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving continuity asset',
+    providerBacked: false,
     manualOnly: false,
   },
   {
@@ -389,6 +497,8 @@ export function getOutputWorkflowNodeContract(nodeOrConfig: Pick<OutputWorkflowN
 export type OutputWorkflowRunIntent =
   | 'prepare_storyboard_block'
   | 'generate_continuity_pack'
+  | 'derive_continuity_block'
+  | 'generate_continuity_asset'
   | 'generate_block_video'
   | 'generate_shot_video'
   | 'revise_sequence_animatic_shot'
@@ -417,6 +527,20 @@ export function outputWorkflowRunIntentDefaults(intent: string | null | undefine
         debugSkipVideoGeneration: true,
         cinematicVideoApproved: false,
         allowStaleUpstreamOutputs: false,
+      }
+    case 'derive_continuity_block':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: true,
+        cinematicVideoApproved: false,
+        allowStaleUpstreamOutputs: true,
+      }
+    case 'generate_continuity_asset':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: false,
+        cinematicVideoApproved: false,
+        allowStaleUpstreamOutputs: true,
       }
     case 'generate_block_video':
       return {

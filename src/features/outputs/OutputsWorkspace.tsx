@@ -100,7 +100,7 @@ type OutputsWorkspaceProps = {
     draftId: string
     workflowId: string
     runId?: string | null
-    onSignal: () => void
+    onSignal: (signal: { table: string; eventType?: string }) => void
   }) => { unsubscribe(): Promise<unknown> | void }
   onPlanOutputWorkflow: (request: {
     prompt: string
@@ -2007,17 +2007,20 @@ export function OutputsWorkspace({
       draftId: snapshot.draft.id,
       workflowId: activeWorkflow.id,
       runId: activeRun?.id ?? null,
-      onSignal: () => scheduleOutputGraphRefresh(500),
+      onSignal: (signal) => {
+        const runProgressOnly = signal.table === 'output_workflow_run_steps' || signal.table === 'output_workflow_runs'
+        scheduleOutputGraphRefresh(runProgressOnly ? 3500 : 650)
+      },
     })
     graphLastRefreshAtRef.current = Date.now()
     const pollActive = () => {
       if (activeRun && !isTerminalOutputWorkflowRunStatus(activeRun.status)) {
         const elapsed = Date.now() - graphLastRefreshAtRef.current
-        if (elapsed >= 1200) scheduleOutputGraphRefresh(0)
+        if (elapsed >= 12000) scheduleOutputGraphRefresh(0)
       }
-      graphWatchdogTimerRef.current = window.setTimeout(pollActive, 1500)
+      graphWatchdogTimerRef.current = window.setTimeout(pollActive, 12000)
     }
-    graphWatchdogTimerRef.current = window.setTimeout(pollActive, 1500)
+    graphWatchdogTimerRef.current = window.setTimeout(pollActive, 12000)
     void refreshOutputGraph({ quiet: true })
     return () => {
       void subscription.unsubscribe()

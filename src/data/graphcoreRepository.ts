@@ -185,6 +185,10 @@ import {
   hashOutputWorkflowValue,
   sequenceAnimaticBlockWorkflowEnsureRequestSchema,
   sequenceAnimaticBlockWorkflowEnsureResponseSchema,
+  sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema,
+  sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
+  sequenceAnimaticContinuityBlockDeriveRequestSchema,
+  sequenceAnimaticContinuityBlockDeriveResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
   sequenceAnimaticContinuityWorkflowEnsureResponseSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
@@ -211,6 +215,8 @@ import {
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
   type SequenceAnimaticBlockWorkflowEnsureResponse,
+  type SequenceAnimaticContinuityAssetWorkflowEnsureResponse,
+  type SequenceAnimaticContinuityBlockDeriveResponse,
   type SequenceAnimaticContinuityWorkflowEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
@@ -3200,6 +3206,10 @@ function readRepositoryRecord(value: unknown): Record<string, unknown> {
 
 function readRepositoryString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function readRepositoryArray(value: unknown) {
+  return Array.isArray(value) ? value : []
 }
 
 function addMissingAssetKey(candidate: unknown, knownAssetKeys: Set<string>, missing: Set<string>) {
@@ -8613,6 +8623,75 @@ export async function ensureSequenceAnimaticContinuityWorkflow(
   return parsed
 }
 
+export async function deriveSequenceAnimaticContinuityBlock(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    continuityRequestId?: string | null
+    storyboardBlockId: string
+    mode?: 'derive' | 'regenerate'
+  },
+): Promise<SequenceAnimaticContinuityBlockDeriveResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before deriving sequence animatic continuity.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic continuity derivation requires a live Supabase-backed draft.')
+  }
+  const ensured = await ensureSequenceAnimaticContinuityWorkflow(snapshot, { masterRequestId: request.masterRequestId })
+  const payload = sequenceAnimaticContinuityBlockDeriveRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    continuityRequestId: request.continuityRequestId ?? ensured.continuityRequest?.id ?? null,
+    storyboardBlockId: request.storyboardBlockId,
+    mode: request.mode ?? 'derive',
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'derive-sequence-animatic-continuity-block',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticContinuityBlockDeriveResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function ensureSequenceAnimaticContinuityAssetWorkflow(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    continuityRequestId: string
+    nodeId: string
+    mode?: 'generate' | 'regenerate'
+  },
+): Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating sequence animatic continuity assets.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic continuity assets require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    continuityRequestId: request.continuityRequestId,
+    nodeId: request.nodeId,
+    mode: request.mode ?? 'generate',
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-continuity-asset-workflow',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
 export async function ensureSequenceAnimaticShotRevisionWorkflow(
   snapshot: ProjectSnapshot,
   request: {
@@ -8883,6 +8962,58 @@ function collectSequenceAnimaticStateAssetKeys(input: {
   return [...keys]
 }
 
+function deriveSequenceAnimaticContinuityState(input: {
+  requests: OutputRequest[]
+  artifacts: OutputArtifact[]
+}) {
+  const continuityRequest = input.requests.find((request) => readOutputRequestScreenplayAnimaticRole(request) === 'continuity_pack') ?? null
+  const packMetadata = input.artifacts
+    .map((artifact) => readRepositoryRecord(artifact.metadata))
+    .find((metadata) => readRepositoryString(metadata.role) === 'sequence_animatic_continuity_pack') ?? {}
+  const pack = readRepositoryRecord(packMetadata.continuityPack ?? packMetadata.continuity_pack)
+  const blockStates = {
+    ...readRepositoryRecord(readRepositoryRecord(continuityRequest?.metadata).blockStates),
+    ...readRepositoryRecord(pack.blockStates ?? pack.block_states),
+  }
+  const assetStateByNodeId = {
+    ...readRepositoryRecord(pack.assetStateByNodeId ?? pack.asset_state_by_node_id),
+  }
+  for (const artifact of input.artifacts) {
+    const metadata = readRepositoryRecord(artifact.metadata)
+    if (readRepositoryString(metadata.role) !== 'sequence_animatic_continuity_asset') continue
+    const state = readRepositoryRecord(metadata.assetState ?? metadata.asset_state)
+    const nodeId = readRepositoryString(state.sourceNodeId) || readRepositoryString(metadata.targetNodeId)
+    if (nodeId) assetStateByNodeId[nodeId] = state
+  }
+  const assetStatuses = Object.values(assetStateByNodeId).map((state) => readRepositoryString(readRepositoryRecord(state).status))
+  const explicitAssetStatus = readRepositoryString(pack.assetGenerationStatus ?? pack.asset_generation_status)
+  const assetGenerationStatus = explicitAssetStatus === 'none' || explicitAssetStatus === 'partial' || explicitAssetStatus === 'ready' || explicitAssetStatus === 'stale' || explicitAssetStatus === 'failed'
+    ? explicitAssetStatus
+    : assetStatuses.length === 0
+      ? 'none'
+      : assetStatuses.includes('failed')
+        ? 'failed'
+        : assetStatuses.includes('stale')
+          ? 'stale'
+          : assetStatuses.every((status) => status === 'ready')
+            ? 'ready'
+            : assetStatuses.some((status) => status === 'ready')
+              ? 'partial'
+              : 'none'
+  const status = readRepositoryString(pack.continuityGraphStatus ?? pack.continuity_graph_status ?? readRepositoryRecord(continuityRequest?.metadata).continuityGraphStatus)
+  return {
+    continuityGraphStatus: status === 'ready' || status === 'partial' || status === 'stale' || status === 'failed' || status === 'empty'
+      ? status
+      : Object.values(blockStates).some((state) => readRepositoryString(readRepositoryRecord(state).status) === 'ready')
+        ? 'partial'
+        : 'empty',
+    continuityBlockStates: blockStates,
+    assetStateByNodeId,
+    visualDependencyEdges: readRepositoryArray(pack.visualDependencyEdges ?? pack.visual_dependency_edges).map(readRepositoryRecord),
+    assetGenerationStatus,
+  }
+}
+
 function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResponse): SequenceAnimaticStateResponse {
   if (parsed.unchanged) return parsed
   const assets = parsed.assets.flatMap((asset) => {
@@ -8908,6 +9039,7 @@ function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResp
     runs: hydrated.runs,
     artifacts: hydrated.artifacts,
     assets,
+    ...deriveSequenceAnimaticContinuityState({ requests: hydrated.requests, artifacts: hydrated.artifacts }),
   })
 }
 
@@ -8980,15 +9112,19 @@ async function loadSequenceAnimaticStateDirect(
   const blockRequestIds = directChildren
     .filter((child) => readOutputRequestScreenplayAnimaticRole(child) === 'storyboard_block')
     .map((child) => child.id)
+  const continuityRequestIds = directChildren
+    .filter((child) => readOutputRequestScreenplayAnimaticRole(child) === 'continuity_pack')
+    .map((child) => child.id)
 
   let shotChildren: OutputRequest[] = []
-  if (blockRequestIds.length > 0) {
+  const nestedParentRequestIds = [...blockRequestIds, ...continuityRequestIds]
+  if (nestedParentRequestIds.length > 0) {
     const shotChildrenResponse = await supabase
       .from('output_requests')
       .select(OUTPUT_REQUEST_SELECT)
       .eq('project_id', payload.projectId)
       .eq('draft_id', payload.draftId)
-      .in('parent_request_id', blockRequestIds)
+      .in('parent_request_id', nestedParentRequestIds)
       .order('created_at', { ascending: true })
     if (shotChildrenResponse.error) throw new Error(shotChildrenResponse.error.message)
     shotChildren = ((shotChildrenResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
@@ -9898,7 +10034,7 @@ export function subscribeOutputWorkflowGraphSignals(input: {
   draftId: string
   workflowId: string
   runId?: string | null
-  onSignal: () => void
+  onSignal: (signal: { table: string; eventType?: string }) => void
 }) {
   const channel = supabase
     .channel(`graphcore-output-graph-${input.workflowId}-${input.runId ?? 'latest'}`)
@@ -9907,19 +10043,19 @@ export function subscribeOutputWorkflowGraphSignals(input: {
       schema: 'public',
       table: 'output_workflow_nodes',
       filter: `workflow_id=eq.${input.workflowId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_workflow_nodes', eventType: payload.eventType }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_workflow_edges',
       filter: `workflow_id=eq.${input.workflowId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_workflow_edges', eventType: payload.eventType }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_artifacts',
       filter: `workflow_id=eq.${input.workflowId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_artifacts', eventType: payload.eventType }))
 
   if (input.runId) {
     channel.on('postgres_changes', {
@@ -9927,14 +10063,14 @@ export function subscribeOutputWorkflowGraphSignals(input: {
       schema: 'public',
       table: 'output_workflow_run_steps',
       filter: `run_id=eq.${input.runId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_workflow_run_steps', eventType: payload.eventType }))
   } else {
     channel.on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_workflow_runs',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_workflow_runs', eventType: payload.eventType }))
   }
 
   void channel.subscribe()

@@ -5,9 +5,14 @@ import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
 import { renderOutputPdf } from './ebook-pdf-renderer.ts'
 
+const workerCodeVersion = '2026-05-19-output-workflow-shot-video-config-fix'
 const workerId = Deno.env.get('FLY_MACHINE_ID')
   ?? Deno.env.get('GRAPHCORE_WORKER_ID')
   ?? crypto.randomUUID()
+const workerBuildVersion = Deno.env.get('GRAPHCORE_WORKER_BUILD_VERSION')
+  ?? Deno.env.get('FLY_IMAGE_REF')
+  ?? Deno.env.get('FLY_MACHINE_VERSION')
+  ?? workerCodeVersion
 const workerSecret = Deno.env.get('GRAPHCORE_WORKER_SECRET') ?? null
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 const pollIntervalMs = Math.max(5_000, Number(Deno.env.get('GRAPHCORE_WORKER_POLL_INTERVAL_MS') ?? 10_000))
@@ -147,6 +152,8 @@ Deno.addSignalListener('SIGINT', () => requestShutdown('SIGINT'))
 
 console.log('[world-generation-worker] started', {
   workerId,
+  workerCodeVersion,
+  workerBuildVersion,
   pollIntervalMs,
   visualWorkerConcurrency,
   runtime: 'fly',
@@ -246,6 +253,8 @@ async function runOutputWorkflowWorkerLoop() {
       const result = await processFlyOutputWorkflowRuns({
         client,
         workerId,
+        workerCodeVersion,
+        workerBuildVersion,
         documentRenderer: renderOutputPdf,
       })
       if (result.processed) {

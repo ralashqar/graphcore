@@ -46,6 +46,35 @@ function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'output'
 }
 
+function initialContinuityBlockStates(manifest: Record<string, unknown>) {
+  const blocks = Array.isArray(manifest.blocks)
+    ? manifest.blocks.map(asRecord)
+    : Array.isArray(asRecord(manifest.shotBreakPlan).groups)
+      ? asRecord(manifest.shotBreakPlan).groups.map(asRecord)
+      : []
+  const now = new Date().toISOString()
+  const states: Record<string, Record<string, unknown>> = {}
+  blocks.forEach((block, index) => {
+    const blockId = readText(block.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
+    const shotIds = Array.isArray(block.shotIds)
+      ? block.shotIds.map(readText).filter(Boolean)
+      : Array.isArray(block.shotBreakIds)
+        ? block.shotBreakIds.map(readText).filter(Boolean)
+        : []
+    states[blockId] = {
+      blockId,
+      status: 'not_started',
+      inputHash: sequenceAnimaticStableHash({ blockId, shotIds }),
+      lastDeltaHash: '',
+      warnings: [],
+      error: '',
+      createdAt: now,
+      updatedAt: now,
+    }
+  })
+  return states
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -89,6 +118,7 @@ Deno.serve(async (request) => {
     const manifest = asRecord(manifestArtifactMetadata.manifest)
     if (Object.keys(manifest).length === 0) throw new HttpError(409, 'Generate the screenplay animatic master first; no manifest is available yet.')
     const manifestHash = sequenceAnimaticStableHash(manifest)
+    const blockStates = initialContinuityBlockStates(manifest)
     const masterManifestArtifactKey = readText(asRecord(manifestArtifactRow).key)
     if (!masterManifestArtifactKey) throw new HttpError(409, 'The master manifest artifact is missing its key.')
 
@@ -134,6 +164,20 @@ Deno.serve(async (request) => {
         && readText(metadata.manifestHash) === manifestHash
     }) ?? null
     if (activeExisting?.workflowId) {
+      const activeMetadata = asRecord(activeExisting.metadata)
+      if (Object.keys(asRecord(activeMetadata.blockStates)).length === 0 && Object.keys(blockStates).length > 0) {
+        await client
+          .from('output_requests')
+          .update({
+            metadata: {
+              ...activeMetadata,
+              blockStates,
+              pendingDeltas: {},
+              continuityGraphStatus: 'empty',
+            },
+          })
+          .eq('id', activeExisting.id)
+      }
       const workflowResponse = await client
         .from('output_workflows')
         .select(outputWorkflowSelect)
@@ -182,6 +226,9 @@ Deno.serve(async (request) => {
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           sourceMasterWorkflowId: masterRequest.workflowId,
           readyToRun: true,
+          blockStates,
+          pendingDeltas: {},
+          continuityGraphStatus: 'empty',
         },
       }
     const commonConfig = {
@@ -233,6 +280,9 @@ Deno.serve(async (request) => {
           sourceMasterWorkflowId: masterRequest.workflowId,
           readyToRun: true,
           createdFromManifestAt: new Date().toISOString(),
+          blockStates,
+          pendingDeltas: {},
+          continuityGraphStatus: 'empty',
         },
       }
 

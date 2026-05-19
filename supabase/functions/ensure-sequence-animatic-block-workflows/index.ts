@@ -113,7 +113,32 @@ function assetPackWithContinuityAnchors(assetPack: Record<string, unknown>, mani
 function continuityAnchorIdsForScope(manifest: Record<string, unknown>, scopeKey: 'storyboardBlockIds' | 'shotIds', scopeId: string) {
   if (!scopeId) return []
   const shotContinuityMap = asRecord(manifest.shotContinuityMap ?? manifest.shot_continuity_map ?? manifest.continuityAnchorIdsByShotId)
-  const mappedShotIds = scopeKey === 'shotIds' ? readStringArray(shotContinuityMap[scopeId]) : []
+  const shotBindings = asRecord(manifest.shotBindings ?? manifest.shot_bindings ?? asRecord(manifest.continuityGraphV2 ?? manifest.continuity_graph_v2).shotBindings)
+  const mappedShotIds = scopeKey === 'shotIds'
+    ? [
+      ...readStringArray(shotContinuityMap[scopeId]),
+      ...readStringArray(asRecord(shotBindings[scopeId]).continuityAnchorIds),
+      ...readStringArray(asRecord(shotBindings[scopeId]).characterAnchorIds),
+      ...readStringArray(asRecord(shotBindings[scopeId]).propAnchorIds),
+      readText(asRecord(shotBindings[scopeId]).zoneId),
+      ...readStringArray(asRecord(shotBindings[scopeId]).spotIds),
+      readText(asRecord(shotBindings[scopeId]).angleId),
+    ].filter(Boolean)
+    : []
+  const blockMappedIds = scopeKey === 'storyboardBlockIds'
+    ? Object.values(shotBindings)
+      .map(asRecord)
+      .filter((binding) => readText(binding.storyboardBlockId) === scopeId)
+      .flatMap((binding) => [
+        ...readStringArray(binding.continuityAnchorIds),
+        ...readStringArray(binding.characterAnchorIds),
+        ...readStringArray(binding.propAnchorIds),
+        readText(binding.zoneId),
+        ...readStringArray(binding.spotIds),
+        readText(binding.angleId),
+      ])
+      .filter(Boolean)
+    : []
   const anchors = [
     ...readArray(manifest.characterAnchors).map(asRecord),
     ...readArray(manifest.propAnchors).map(asRecord),
@@ -124,7 +149,7 @@ function continuityAnchorIdsForScope(manifest: Record<string, unknown>, scopeKey
     .filter((anchor) => readStringArray(anchor[scopeKey]).includes(scopeId))
     .map((anchor) => readText(anchor.id))
     .filter(Boolean)
-  return [...new Set([...mappedShotIds, ...anchorScopedIds])]
+  return [...new Set([...mappedShotIds, ...blockMappedIds, ...anchorScopedIds])]
 }
 
 function mergeAnchorIds(...groups: string[][]) {

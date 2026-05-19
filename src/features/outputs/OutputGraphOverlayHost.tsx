@@ -41,7 +41,7 @@ type OutputGraphOverlayHostProps = {
     draftId: string
     workflowId: string
     runId?: string | null
-    onSignal: () => void
+    onSignal: (signal: { table: string; eventType?: string }) => void
   }) => { unsubscribe: () => Promise<unknown> | unknown }
   onUpdateOutputWorkflowNode: (request: {
     workflowId: string
@@ -66,6 +66,20 @@ function readStringArray(value: unknown) {
 function readOutputRequestGraphRevision(request: OutputRequest | null | undefined) {
   const projection = readRecord(readRecord(request?.metadata).outputStatusProjection)
   return readTrimmedString(projection.graphRevision)
+}
+
+function isActiveOutputWorkflowStepStatus(status: string) {
+  return status === 'queued' || status === 'running'
+}
+
+function outputWorkflowStepHasActiveProvider(step: OutputWorkflowRunStep | null | undefined) {
+  const metadata = readRecord(step?.metadata)
+  const providerStatus = readTrimmedString(metadata.providerStatus).toUpperCase()
+  return providerStatus === 'IN_PROGRESS'
+    || providerStatus === 'PROCESSING'
+    || providerStatus === 'QUEUED'
+    || Boolean(readTrimmedString(step?.providerRequestId))
+    || Boolean(readTrimmedString(metadata.providerRequestId))
 }
 
 function readOutputPreview(step: Pick<OutputWorkflowRunStep, 'outputs' | 'errorMessage' | 'provider' | 'model'> | null | undefined) {
@@ -99,22 +113,51 @@ function readNodeSkillKeys(node: Pick<OutputWorkflowNode, 'config' | 'metadata'>
   ])]
 }
 
-function mergeWorkflowRunsForDisplay(runs: OutputWorkflowRun[], activeRun: OutputWorkflowRun | null) {
+function mergeWorkflowRunsForDisplay(
+  runs: OutputWorkflowRun[],
+  activeRun: OutputWorkflowRun | null,
+  previousDisplayRun: OutputWorkflowRun | null,
+) {
   if (!activeRun) return null
-  const orderedRuns = runs.slice().sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+  const priorStepByNodeKey = new Map((previousDisplayRun?.id === activeRun.id ? previousDisplayRun.steps : []).map((step) => [step.nodeKey, step] as const))
   const stepByNodeKey = new Map<string, OutputWorkflowRunStep>()
   const artifactById = new Map<string, OutputWorkflowRun['artifacts'][number]>()
-  for (const run of orderedRuns) {
-    for (const step of run.steps) stepByNodeKey.set(step.nodeKey, step)
+  const runIsActive = !isTerminalOutputWorkflowRunStatus(activeRun.status)
+  for (const step of activeRun.steps) {
+    const priorStep = priorStepByNodeKey.get(step.nodeKey) ?? null
+    if (step.status === 'failed' && runIsActive && priorStep && isActiveOutputWorkflowStepStatus(priorStep.status)) {
+      stepByNodeKey.set(step.nodeKey, priorStep)
+    } else if (step.status === 'failed' && runIsActive && outputWorkflowStepHasActiveProvider(step)) {
+      stepByNodeKey.set(step.nodeKey, { ...step, status: 'running', errorMessage: null })
+    } else {
+      stepByNodeKey.set(step.nodeKey, step)
+    }
+  }
+  if (runIsActive) {
+    for (const priorStep of priorStepByNodeKey.values()) {
+      if (!stepByNodeKey.has(priorStep.nodeKey) && isActiveOutputWorkflowStepStatus(priorStep.status)) {
+        stepByNodeKey.set(priorStep.nodeKey, priorStep)
+      }
+    }
+  }
+  for (const run of runs) {
     for (const artifact of run.artifacts) artifactById.set(artifact.id, artifact)
   }
-  const hasRunningRun = orderedRuns.some((run) => !isTerminalOutputWorkflowRunStatus(run.status))
+  const hasRunningRun = runs.some((run) => !isTerminalOutputWorkflowRunStatus(run.status))
   return {
     ...activeRun,
     status: hasRunningRun ? 'running' : activeRun.status,
     steps: [...stepByNodeKey.values()].sort((left, right) => left.orderIndex - right.orderIndex),
     artifacts: [...artifactById.values()],
   } satisfies OutputWorkflowRun
+}
+
+type LastGoodGraphState = {
+  request: OutputRequest | null
+  workflow: ProjectSnapshot['outputWorkflows'][number]
+  nodes: OutputWorkflowNode[]
+  edges: ProjectSnapshot['outputWorkflowEdges']
+  displayRun: OutputWorkflowRun | null
 }
 
 export function OutputGraphOverlayHost({
@@ -137,19 +180,23 @@ export function OutputGraphOverlayHost({
   const graphRevisionRef = useRef<string | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
   const lastRefreshAtRef = useRef(0)
+  const graphRefreshInFlightRef = useRef(false)
+  const previousDisplayRunRef = useRef<OutputWorkflowRun | null>(null)
+  const lastGoodGraphStateRef = useRef<LastGoodGraphState | null>(null)
   const requestId = openIntent?.requestId ?? null
   const request = requestId ? snapshot.outputRequests.find((entry) => entry.id === requestId) ?? null : null
   const workflow = request?.workflowId
     ? snapshot.outputWorkflows.find((entry) => entry.id === request.workflowId) ?? null
     : null
-  const workflowRuns = workflow
-    ? snapshot.outputWorkflowRuns.filter((run) => run.workflowId === workflow.id)
-    : []
+  const workflowRuns = useMemo(
+    () => workflow ? snapshot.outputWorkflowRuns.filter((run) => run.workflowId === workflow.id) : [],
+    [snapshot.outputWorkflowRuns, workflow?.id],
+  )
   const activeRun = request?.latestRunId
     ? workflowRuns.find((run) => run.id === request.latestRunId) ?? workflowRuns[0] ?? null
     : workflowRuns[0] ?? null
   const displayRun = useMemo(() => {
-    const merged = mergeWorkflowRunsForDisplay(workflowRuns, activeRun)
+    const merged = mergeWorkflowRunsForDisplay(workflowRuns, activeRun, previousDisplayRunRef.current)
     if (!merged || !cancelledRunIds.has(merged.id)) return merged
     return {
       ...merged,
@@ -159,14 +206,38 @@ export function OutputGraphOverlayHost({
         : step),
     } satisfies OutputWorkflowRun
   }, [activeRun, cancelledRunIds, workflowRuns])
-  const nodes = workflow ? snapshot.outputWorkflowNodes.filter((node) => node.workflowId === workflow.id) : []
-  const edges = workflow ? snapshot.outputWorkflowEdges.filter((edge) => edge.workflowId === workflow.id) : []
+  const nodes = useMemo(
+    () => workflow ? snapshot.outputWorkflowNodes.filter((node) => node.workflowId === workflow.id) : [],
+    [snapshot.outputWorkflowNodes, workflow?.id],
+  )
+  const edges = useMemo(
+    () => workflow ? snapshot.outputWorkflowEdges.filter((edge) => edge.workflowId === workflow.id) : [],
+    [snapshot.outputWorkflowEdges, workflow?.id],
+  )
+  const displayGraphState = useMemo(
+    () => workflow && nodes.length > 0
+      ? { request, workflow, nodes, edges, displayRun }
+      : lastGoodGraphStateRef.current,
+    [displayRun, edges, nodes, request, workflow],
+  )
   const knownGraphRevision = readOutputRequestGraphRevision(request) || graphRevisionRef.current
+
+  useEffect(() => {
+    if (!displayRun) return
+    previousDisplayRunRef.current = displayRun
+  }, [displayRun])
 
   useEffect(() => {
     setSelectedNodeKey(openIntent?.selectedNodeKey ?? null)
     setSyncMessage(null)
+    previousDisplayRunRef.current = null
+    lastGoodGraphStateRef.current = null
   }, [openIntent?.nonce, openIntent?.selectedNodeKey])
+
+  useEffect(() => {
+    if (!workflow || nodes.length === 0) return
+    lastGoodGraphStateRef.current = { request, workflow, nodes, edges, displayRun }
+  }, [displayRun, edges, nodes, request, workflow])
 
   useEffect(() => {
     if (!requestId || request) return
@@ -182,18 +253,22 @@ export function OutputGraphOverlayHost({
   }, [onGetOutputRequestStatus, request, requestId])
 
   const refreshGraph = (quiet = false) => {
-    if (!workflow) return
+    const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
+    if (!targetWorkflow) return
+    if (quiet && graphRefreshInFlightRef.current) return
+    graphRefreshInFlightRef.current = true
     if (!quiet) setRefreshingGraph(true)
     lastRefreshAtRef.current = Date.now()
-    void Promise.resolve(onLoadOutputWorkflowGraph(workflow.id, activeRun?.id ?? request?.latestRunId ?? null, selectedNodeKey, {
+    void Promise.resolve(onLoadOutputWorkflowGraph(targetWorkflow.id, activeRun?.id ?? request?.latestRunId ?? displayGraphState?.displayRun?.id ?? null, selectedNodeKey, {
       knownGraphRevision,
       assetHydrationMode: selectedNodeKey ? 'selected' : 'preview',
     })).then((result) => {
       if (result?.graphRevision) graphRevisionRef.current = result.graphRevision
-      setSyncMessage(result?.unchanged ? 'Cached graph is current.' : null)
+      if (!quiet) setSyncMessage(result?.unchanged ? 'Cached graph is current.' : null)
     }).catch((error) => {
       setSyncMessage(error instanceof Error ? error.message : 'Graph sync delayed. Showing cached graph data.')
     }).finally(() => {
+      graphRefreshInFlightRef.current = false
       if (!quiet) setRefreshingGraph(false)
     })
   }
@@ -217,7 +292,8 @@ export function OutputGraphOverlayHost({
   }
 
   useEffect(() => {
-    if (!workflow) return undefined
+    const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
+    if (!targetWorkflow) return undefined
     refreshGraph(nodes.length > 0)
     const scheduleRefresh = (delayMs = 450) => {
       if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
@@ -228,30 +304,34 @@ export function OutputGraphOverlayHost({
     }
     const subscription = onSubscribeOutputWorkflowGraphSignals({
       draftId: snapshot.draft.id,
-      workflowId: workflow.id,
-      runId: activeRun?.id ?? null,
-      onSignal: () => scheduleRefresh(450),
+      workflowId: targetWorkflow.id,
+      runId: activeRun?.id ?? displayGraphState?.displayRun?.id ?? null,
+      onSignal: (signal) => {
+        const runProgressOnly = signal.table === 'output_workflow_run_steps' || signal.table === 'output_workflow_runs'
+        scheduleRefresh(runProgressOnly ? 3500 : 650)
+      },
     })
     const watchdog = window.setInterval(() => {
       if (!activeRun || isTerminalOutputWorkflowRunStatus(activeRun.status)) return
-      if (Date.now() - lastRefreshAtRef.current > 7500) scheduleRefresh(0)
-    }, 7500)
+      if (Date.now() - lastRefreshAtRef.current > 12000) scheduleRefresh(0)
+    }, 12000)
     return () => {
       void subscription.unsubscribe()
       if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
       window.clearInterval(watchdog)
     }
-  }, [activeRun?.id, activeRun?.status, workflow?.id, openIntent?.nonce])
+  }, [activeRun?.id, activeRun?.status, displayGraphState?.displayRun?.id, displayGraphState?.workflow.id, workflow?.id, openIntent?.nonce])
 
   useEffect(() => {
-    if (!workflow || !selectedNodeKey) return
-    void Promise.resolve(onLoadOutputWorkflowNodeOutput(workflow.id, activeRun?.id ?? null, selectedNodeKey, graphRevisionRef.current))
+    const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
+    if (!targetWorkflow || !selectedNodeKey) return
+    void Promise.resolve(onLoadOutputWorkflowNodeOutput(targetWorkflow.id, activeRun?.id ?? displayGraphState?.displayRun?.id ?? null, selectedNodeKey, graphRevisionRef.current))
       .catch((error) => console.warn('[GraphCore] app graph node output sync delayed.', error))
-  }, [activeRun?.id, onLoadOutputWorkflowNodeOutput, selectedNodeKey, workflow?.id])
+  }, [activeRun?.id, displayGraphState?.displayRun?.id, displayGraphState?.workflow.id, onLoadOutputWorkflowNodeOutput, selectedNodeKey, workflow?.id])
 
   if (!openIntent) return null
 
-  if (!workflow || (nodes.length === 0 && refreshingGraph)) {
+  if (!displayGraphState || (displayGraphState.nodes.length === 0 && refreshingGraph)) {
     return (
       <div className="outputs-graph-overlay" role="dialog" aria-modal="true" aria-label="Output workflow graph">
         <header className="outputs-graph-toolbar">
@@ -273,7 +353,7 @@ export function OutputGraphOverlayHost({
     )
   }
 
-  if (!workflow) {
+  if (!displayGraphState.workflow) {
     return (
       <div className="outputs-graph-overlay" role="dialog" aria-modal="true" aria-label="Output workflow graph">
         <header className="outputs-graph-toolbar">
@@ -290,11 +370,11 @@ export function OutputGraphOverlayHost({
 
   return (
     <OutputWorkflowGraphOverlay
-      activeRun={displayRun}
+      activeRun={displayGraphState.displayRun}
       assets={snapshot.assets}
       canRunOutputs={canRunOutputs && false}
-      edges={edges}
-      nodes={nodes}
+      edges={displayGraphState.edges}
+      nodes={displayGraphState.nodes}
       worldEntities={snapshot.worldEntities as unknown as Array<Record<string, unknown>>}
       worldRelationships={snapshot.worldRelationships as unknown as Array<Record<string, unknown>>}
       onCancelRun={cancelActiveRun}
@@ -312,7 +392,7 @@ export function OutputGraphOverlayHost({
       targetedNodeKey={null}
       targetedNodeKeys={[]}
       targetedRunScope={null}
-      workflow={workflow}
+      workflow={displayGraphState.workflow}
       worldWiki={readRecord(snapshot.draft.metadata).worldWiki}
     />
   )

@@ -431,6 +431,66 @@ function OutputWorkflowEdgeView(props: EdgeProps<GraphEdge>) {
 const nodeTypes = { outputWorkflow: OutputWorkflowNodeCard }
 const edgeTypes = { outputWorkflowEdge: OutputWorkflowEdgeView }
 
+function sameStringList(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function samePortList(
+  left: readonly { id: string; valueType: string }[],
+  right: readonly { id: string; valueType: string }[],
+) {
+  return left.length === right.length && left.every((value, index) => (
+    value.id === right[index]?.id && value.valueType === right[index]?.valueType
+  ))
+}
+
+function sameGraphNodeForReactFlow(left: GraphNode, right: GraphNode) {
+  const leftData = left.data
+  const rightData = right.data
+  return left.id === right.id
+    && left.type === right.type
+    && Math.round(left.position.x) === Math.round(right.position.x)
+    && Math.round(left.position.y) === Math.round(right.position.y)
+    && left.width === right.width
+    && left.height === right.height
+    && leftData.node.id === rightData.node.id
+    && leftData.node.outputHash === rightData.node.outputHash
+    && leftData.node.dirty === rightData.node.dirty
+    && leftData.step?.id === rightData.step?.id
+    && leftData.step?.status === rightData.step?.status
+    && leftData.step?.outputHash === rightData.step?.outputHash
+    && leftData.step?.errorMessage === rightData.step?.errorMessage
+    && leftData.statusKey === rightData.statusKey
+    && leftData.outputPreview === rightData.outputPreview
+    && leftData.imageUrl === rightData.imageUrl
+    && leftData.imageSize?.width === rightData.imageSize?.width
+    && leftData.imageSize?.height === rightData.imageSize?.height
+    && leftData.hasOutput === rightData.hasOutput
+    && leftData.selected === rightData.selected
+    && leftData.running === rightData.running
+    && sameStringList(leftData.skillKeys, rightData.skillKeys)
+    && samePortList(leftData.inputPorts, rightData.inputPorts)
+    && samePortList(leftData.outputPorts, rightData.outputPorts)
+}
+
+function sameGraphNodesForReactFlow(left: readonly GraphNode[], right: readonly GraphNode[]) {
+  return left.length === right.length && left.every((node, index) => sameGraphNodeForReactFlow(node, right[index]))
+}
+
+function sameGraphEdgesForReactFlow(left: readonly GraphEdge[], right: readonly GraphEdge[]) {
+  return left.length === right.length && left.every((edge, index) => {
+    const next = right[index]
+    return edge.id === next?.id
+      && edge.type === next.type
+      && edge.source === next.source
+      && edge.target === next.target
+      && edge.sourceHandle === next.sourceHandle
+      && edge.targetHandle === next.targetHandle
+      && edge.data?.valueType === next.data?.valueType
+      && edge.data?.statusKey === next.data?.statusKey
+  })
+}
+
 export function OutputWorkflowGraphOverlay({
   workflow,
   nodes,
@@ -648,7 +708,7 @@ export function OutputWorkflowGraphOverlay({
     }
     setFlowNodes((current) => {
       const localPositionByKey = new Map(current.map((node) => [node.id, node.position]))
-      return safeNodes.map((node) => {
+      const nextNodes: GraphNode[] = safeNodes.map((node) => {
         const step = stepsByNodeKey.get(node.key) ?? null
         const cachedOutputSource = { outputs: node.outputs }
         const statusKey = step
@@ -670,7 +730,7 @@ export function OutputWorkflowGraphOverlay({
         const hasOutput = Boolean(imageUrl || outputPreview || step?.errorMessage)
         return {
           id: node.key,
-          type: 'outputWorkflow',
+          type: 'outputWorkflow' as const,
           position: layoutDirty
             ? localPositionByKey.get(node.key) ?? node.position
             : derivedPositions?.get(node.key) ?? node.position,
@@ -695,14 +755,15 @@ export function OutputWorkflowGraphOverlay({
           },
         }
       })
+      return sameGraphNodesForReactFlow(current, nextNodes) ? current : nextNodes
     })
-    setFlowEdges(visibleEdges.map((edge) => {
+    const nextEdges: GraphEdge[] = visibleEdges.map((edge) => {
       const sourceNode = sourceByKey.get(edge.sourceNodeKey)
       const targetStep = stepsByNodeKey.get(edge.targetNodeKey) ?? null
       const valueType = resolveEdgeValueType(edge, sourceNode)
       return {
         id: edge.key,
-        type: 'outputWorkflowEdge',
+        type: 'outputWorkflowEdge' as const,
         source: edge.sourceNodeKey,
         target: edge.targetNodeKey,
         sourceHandle: edge.sourcePort,
@@ -712,7 +773,8 @@ export function OutputWorkflowGraphOverlay({
           statusKey: outputWorkflowStepStatusKey(targetStep),
         },
       }
-    }))
+    })
+    setFlowEdges((current) => sameGraphEdgesForReactFlow(current, nextEdges) ? current : nextEdges)
   }, [safeNodes, safeEdges, stepsByNodeKey, selectedNodeKey, targetedNodeKeySet, layoutDirty, onRunNode, onSelectNode, readNodeSkillKeys, readOutputPreview, assetByKey, artifactImageUrlByAssetKey])
 
   async function applyAutoLayout(persist = false) {

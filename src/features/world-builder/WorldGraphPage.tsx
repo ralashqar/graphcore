@@ -23,6 +23,8 @@ import {
   type OutputArtifact,
   type OutputRequest,
   type OutputRequestStatusResponse,
+  type SequenceAnimaticContinuityAssetWorkflowEnsureResponse,
+  type SequenceAnimaticContinuityBlockDeriveResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNode,
   type OutputWorkflowRun,
@@ -714,6 +716,18 @@ type WorldGraphPageProps = {
   onEnsureSequenceAnimaticContinuityWorkflow: (request: {
     masterRequestId: string
   }) => Promise<{ continuityRequest: OutputRequest | null }> | { continuityRequest: OutputRequest | null }
+  onDeriveSequenceAnimaticContinuityBlock: (request: {
+    masterRequestId: string
+    continuityRequestId?: string | null
+    storyboardBlockId: string
+    mode?: 'derive' | 'regenerate'
+  }) => Promise<SequenceAnimaticContinuityBlockDeriveResponse> | SequenceAnimaticContinuityBlockDeriveResponse
+  onEnsureSequenceAnimaticContinuityAssetWorkflow: (request: {
+    masterRequestId: string
+    continuityRequestId: string
+    nodeId: string
+    mode?: 'generate' | 'regenerate'
+  }) => Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> | SequenceAnimaticContinuityAssetWorkflowEnsureResponse
   onEnsureSequenceAnimaticShotRevisionWorkflow: (request: {
     masterRequestId: string
     storyboardBlockId: string
@@ -1207,6 +1221,8 @@ type SequenceAnimaticShotView = {
   lighting: string
   performance: string
   performanceBeats: SequenceAnimaticPerformanceBeatView[]
+  spatialContinuityLabel: string
+  spatialContinuityDetail: string
   panelStatusLabel: string
   panelError: string
   panelUrl: string | null
@@ -1293,8 +1309,25 @@ type SequenceAnimaticContinuityLocationView = {
   id: string
   name: string
   summary: string
+  kind?: 'set' | 'zone' | 'spot' | 'angle'
+  assetStatus?: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'
+  assetStatusLabel?: string
+  assetUrl?: string | null
   shotIds: string[]
   blockIds: string[]
+}
+
+type SequenceAnimaticContinuityAssetTargetView = {
+  nodeId: string
+  name: string
+  assetKind: string
+  status: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'
+  statusLabel: string
+  actionLabel: string
+  assetKey: string | null
+  assetUrl: string | null
+  blockIds: string[]
+  shotIds: string[]
 }
 
 type SequenceAnimaticContinuityRejectedView = {
@@ -1364,6 +1397,13 @@ type SequenceAnimaticBlockView = {
   continuityAnchorCountLabel: string
   continuityAnchorsPending: boolean
   continuityChanged: boolean
+  continuityBlockStatus: 'not_started' | 'deriving' | 'ready' | 'needs_review' | 'failed' | 'stale'
+  continuityBlockStatusLabel: string
+  continuityBlockActionLabel: string
+  continuityBlockWarnings: string[]
+  continuityBlockError: string
+  continuityAssetTargets: SequenceAnimaticContinuityAssetTargetView[]
+  continuityAssetCountLabel: string
   shots: SequenceAnimaticShotView[]
 }
 
@@ -1378,6 +1418,9 @@ type SequenceAnimaticViewModel = {
   continuityError: string
   continuityButtonLabel: string
   continuityStatusLabel: string
+  continuityGraphStatus: 'empty' | 'partial' | 'ready' | 'stale' | 'failed'
+  continuityAssetGenerationStatus: 'none' | 'partial' | 'ready' | 'stale' | 'failed'
+  continuityAssetTargets: SequenceAnimaticContinuityAssetTargetView[]
   title: string
   statusLabel: string
   progressLabel: string
@@ -1486,8 +1529,9 @@ function outputWorkflowRunHasFailedExecution(run: OutputWorkflowRun | null | und
 
 function sequenceAnimaticRequestIsActive(request: OutputRequest | null, run?: OutputWorkflowRun | null) {
   if (!request || sequenceAnimaticProjectionTerminal(request)) return false
-  if (outputWorkflowRunHasFailedExecution(run)) return false
+  if (run?.status === 'failed' || run?.status === 'cancelled') return false
   return ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(sequenceAnimaticEffectiveStatus(request))
+    || Boolean(run && !TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run.status))
 }
 
 function latestWikiSequenceAnimaticRequest(requests: readonly OutputRequest[], sequenceKey: string) {
@@ -1589,7 +1633,7 @@ function sequenceAnimaticVideoProgressLabel(step: ReturnType<typeof outputRunSte
   if (!step) return ''
   const metadata = readLooseRecord(step.metadata)
   const outputs = readLooseRecord(step.outputs)
-  const providerStatus = trimOptionalString(metadata.providerStatus)
+  const providerStatus = trimOptionalString(metadata.providerStatus).toUpperCase()
   if (step.status === 'queued') return 'Video queued'
   if (providerStatus) {
     if (providerStatus === 'SUBMITTED' || providerStatus === 'IN_QUEUE') return 'MUAPI queued'
@@ -1602,6 +1646,18 @@ function sequenceAnimaticVideoProgressLabel(step: ReturnType<typeof outputRunSte
   if (step.status === 'running') return 'Submitting video request'
   if (step.status === 'failed') return step.errorMessage || 'Video generation failed'
   return statusLabelForOutputRunStep(step)
+}
+
+function sequenceAnimaticShotVideoProgressLabel(step: ReturnType<typeof outputRunStepForNode>) {
+  const label = sequenceAnimaticVideoProgressLabel(step)
+  if (label === 'Generating video') return 'Generating shot video'
+  if (label === 'Submitting video request') return 'Submitting shot video request'
+  if (label === 'Finalizing video asset') return 'Finalizing shot video'
+  if (label === 'Video queued') return 'Shot video queued'
+  if (label === 'MUAPI queued') return 'Shot video queued'
+  if (label === 'Video ready') return 'Shot take ready'
+  if (label === 'Video generation failed') return 'Shot video generation failed'
+  return label
 }
 
 function sequenceAnimaticAnchorUsageLabel(anchor: Pick<SequenceAnimaticContinuityAnchorView, 'blockIds' | 'shotIds'>) {
@@ -1731,6 +1787,88 @@ function cameraLineFromShot(shot: Record<string, unknown>) {
   ].filter(Boolean).join(' / ')
 }
 
+function normalizeSequenceAnimaticSpatialText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function sequenceAnimaticSpatialTextHasPhysicalCue(value: string) {
+  const normalized = ` ${normalizeSequenceAnimaticSpatialText(value).replace(/_/g, ' ')} `
+  return /\b(row|lane|street|city|station|clock|face|pipe|rail|catwalk|walkway|chamber|room|corridor|passage|gap|hatch|ledge|platform|shaft|wall|door|gate|workshop|bay|bench|tunnel|engine|basin|bridge|stair|dock|harbor|drain|crate|lamp|lantern)\b/.test(normalized)
+}
+
+function sequenceAnimaticSpatialBindingLooksShotDerived(refId: string, shot: Record<string, unknown>) {
+  const normalizedRef = normalizeSequenceAnimaticSpatialText(refId)
+  const title = trimOptionalString(shot.title)
+  if (title) {
+    const normalizedTitle = normalizeSequenceAnimaticSpatialText(title)
+    if (normalizedTitle.length >= 8 && normalizedRef.includes(normalizedTitle) && !sequenceAnimaticSpatialTextHasPhysicalCue(title)) return true
+  }
+  const action = trimOptionalString(shot.action) || trimOptionalString(shot.description)
+  if (action) {
+    const actionWords = normalizeSequenceAnimaticSpatialText(action)
+      .split('_')
+      .filter((word) => word.length >= 4 && !['with', 'from', 'then', 'that', 'this', 'into', 'over', 'under', 'before', 'after'].includes(word))
+      .slice(0, 5)
+    const actionLike = actionWords.length >= 3 && actionWords.every((word) => normalizedRef.includes(word))
+    if (actionLike && !sequenceAnimaticSpatialTextHasPhysicalCue(actionWords.join(' '))) return true
+  }
+  return false
+}
+
+function sequenceAnimaticShotBindingLabels(binding: Record<string, unknown>, shot: Record<string, unknown>) {
+  const setId = trimOptionalString(binding.setId) || trimOptionalString(shot.continuitySetId)
+  const zoneId = trimOptionalString(binding.zoneId) || trimOptionalString(shot.continuityZoneId)
+  const angleId = trimOptionalString(binding.angleId) || trimOptionalString(shot.continuityAngleId)
+  const suspectZone = zoneId ? sequenceAnimaticSpatialBindingLooksShotDerived(zoneId, shot) : false
+  const suspectAngle = angleId ? sequenceAnimaticSpatialBindingLooksShotDerived(angleId, shot) || suspectZone : false
+  const spotIds = readLooseArray(binding.spotIds)
+    .map(trimOptionalString)
+    .filter((spotId) => spotId && !sequenceAnimaticSpatialBindingLooksShotDerived(spotId, shot) && !suspectZone)
+  const worldLocationRefId = trimOptionalString(binding.worldLocationRefId) || trimOptionalString(shot.worldLocationRefId) || trimOptionalString(shot.locationRefId)
+  if (suspectZone || suspectAngle) {
+    const detail = [
+      worldLocationRefId ? `Location ${displayNameFromRefId(worldLocationRefId)}` : '',
+      setId ? `Set ${displayNameFromRefId(setId)}` : '',
+    ].filter(Boolean).join(' / ')
+    return {
+      label: 'Spatial binding needs review',
+      detail: detail || 'Continuity zone or angle looked like a shot title/action instead of a physical set.',
+    }
+  }
+  const label = [
+    zoneId ? displayNameFromRefId(zoneId) : '',
+    angleId ? displayNameFromRefId(angleId) : '',
+  ].filter(Boolean).join(' / ')
+  const detail = [
+    worldLocationRefId ? `Location ${displayNameFromRefId(worldLocationRefId)}` : '',
+    setId ? `Set ${displayNameFromRefId(setId)}` : '',
+    spotIds.length > 0 ? `Spots ${spotIds.map(displayNameFromRefId).join(', ')}` : '',
+  ].filter(Boolean).join(' / ')
+  return {
+    label: label || detail || 'Spatial binding pending',
+    detail,
+  }
+}
+
+function sequenceAnimaticContinuityAssetStatusLabel(status: SequenceAnimaticContinuityAssetTargetView['status']) {
+  if (status === 'ready') return 'Asset ready'
+  if (status === 'generating') return 'Generating asset'
+  if (status === 'stale') return 'Asset stale'
+  if (status === 'failed') return 'Asset failed'
+  return 'Asset missing'
+}
+
+function sequenceAnimaticContinuityAssetActionLabel(status: SequenceAnimaticContinuityAssetTargetView['status']) {
+  if (status === 'ready') return 'Regenerate'
+  if (status === 'stale') return 'Regenerate stale'
+  if (status === 'failed') return 'Retry'
+  if (status === 'generating') return 'Generating'
+  return 'Generate'
+}
+
 function performanceLineFromShot(shot: Record<string, unknown>) {
   const performanceBeats = readLooseArray(shot.performanceBeats).map(readLooseRecord)
   const direct = trimOptionalString(shot.performance)
@@ -1810,37 +1948,37 @@ function buildSequenceAnimaticReferenceResolver(input: {
   return (refId: string, role = 'Reference'): SequenceAnimaticReferenceView | null => {
     const cleanRefId = trimOptionalString(refId)
     if (!cleanRefId) return null
-    const anchor = animaticRefLookupAliases(cleanRefId)
-      .map((key) => anchorByLookup.get(key) ?? null)
-      .find((entry): entry is SequenceAnimaticContinuityAnchorView => Boolean(entry)) ?? null
-    if (anchor) {
-      return {
-        entityKey: anchor.id || cleanRefId,
-        name: anchor.name || displayNameFromRefId(cleanRefId),
-        role,
-        iconId: anchor.iconId,
-        iconUrl: anchor.thumbnailUrl,
-        isContinuityAnchor: true,
-        continuityAnchorType: anchor.type,
-        statusLabel: anchor.statusLabel,
-      }
-    }
     const entity = animaticRefLookupAliases(cleanRefId)
       .map((key) => entityByLookup.get(key) ?? null)
       .find((entry): entry is WorldEntity => Boolean(entry)) ?? null
-    if (!entity) return null
-    const fallbackAssetUrl = entity.thumbnailAssetKey
-      ? resolveAssetSourceUrl(input.assetByKey.get(entity.thumbnailAssetKey) ?? null)
-      : null
+    if (entity) {
+      const fallbackAssetUrl = entity.thumbnailAssetKey
+        ? resolveAssetSourceUrl(input.assetByKey.get(entity.thumbnailAssetKey) ?? null)
+        : null
+      return {
+        entityKey: entity.key,
+        name: entity.name || cleanRefId,
+        role,
+        iconId: iconForWorldEntity(entity.nodeType),
+        iconUrl: input.referenceSheetIconUrlByEntityKey.get(entity.key)
+          ?? input.imageUrlByEntityKey.get(entity.key)
+          ?? fallbackAssetUrl
+          ?? null,
+      }
+    }
+    const anchor = animaticRefLookupAliases(cleanRefId)
+      .map((key) => anchorByLookup.get(key) ?? null)
+      .find((entry): entry is SequenceAnimaticContinuityAnchorView => Boolean(entry)) ?? null
+    if (!anchor) return null
     return {
-      entityKey: entity.key,
-      name: entity.name || cleanRefId,
+      entityKey: anchor.id || cleanRefId,
+      name: anchor.name || displayNameFromRefId(cleanRefId),
       role,
-      iconId: iconForWorldEntity(entity.nodeType),
-      iconUrl: input.referenceSheetIconUrlByEntityKey.get(entity.key)
-        ?? input.imageUrlByEntityKey.get(entity.key)
-        ?? fallbackAssetUrl
-        ?? null,
+      iconId: anchor.iconId,
+      iconUrl: anchor.thumbnailUrl,
+      isContinuityAnchor: true,
+      continuityAnchorType: anchor.type,
+      statusLabel: anchor.statusLabel,
     }
   }
 }
@@ -2049,6 +2187,8 @@ function buildSequenceAnimaticViewModel(input: {
     .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'shot_video')
   const shotRevisionRequests = input.requests
     .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'shot_revision')
+  const continuityAssetRequests = input.requests
+    .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'continuity_asset')
   const shotVideoRequestEntries: Array<[string, OutputRequest]> = shotVideoRequests
     .map((request) => {
       const metadata = readLooseRecord(request.metadata)
@@ -2068,6 +2208,20 @@ function buildSequenceAnimaticViewModel(input: {
       return [request.id, run] as const
     }))
   const shotRevisionRunByRequestId = new Map(shotRevisionRequests
+    .map((request) => {
+      const run = request.latestRunId
+        ? input.runs.find((entry) => entry.id === request.latestRunId) ?? null
+        : request.workflowId
+          ? input.runs.find((entry) => entry.workflowId === request.workflowId) ?? null
+          : null
+      return [request.id, run] as const
+    }))
+  const continuityAssetRequestByNodeId = new Map<string, OutputRequest>()
+  for (const request of [...continuityAssetRequests].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))) {
+    const nodeId = trimOptionalString(readLooseRecord(request.metadata).targetNodeId)
+    if (nodeId && !continuityAssetRequestByNodeId.has(nodeId)) continuityAssetRequestByNodeId.set(nodeId, request)
+  }
+  const continuityAssetRunByRequestId = new Map(continuityAssetRequests
     .map((request) => {
       const run = request.latestRunId
         ? input.runs.find((entry) => entry.id === request.latestRunId) ?? null
@@ -2154,13 +2308,66 @@ function buildSequenceAnimaticViewModel(input: {
     ...readLooseArray(readLooseRecord(continuityAnchorPlan).locationSpotAnchors).map(readLooseRecord),
   ]
   const continuityLocationSource = Object.keys(readLooseRecord(continuityPack)).length > 0 ? readLooseRecord(continuityPack) : readLooseRecord(continuityAnchorPlan)
+  const continuityGraphV2 = readLooseRecord(continuityLocationSource.continuityGraphV2 ?? continuityLocationSource.continuity_graph_v2)
+  const continuityShotBindings = readLooseRecord(continuityLocationSource.shotBindings ?? continuityLocationSource.shot_bindings ?? continuityGraphV2.shotBindings)
+  const continuityBlockStates = {
+    ...readLooseRecord(readLooseRecord(continuityRequest?.metadata).blockStates),
+    ...readLooseRecord(continuityLocationSource.blockStates ?? continuityLocationSource.block_states),
+  }
+  const continuityAssetStateByNodeId = {
+    ...readLooseRecord(continuityLocationSource.assetStateByNodeId ?? continuityLocationSource.asset_state_by_node_id),
+  }
+  continuityArtifacts.forEach((artifact) => {
+    const metadata = readLooseRecord(artifact.metadata)
+    if (trimOptionalString(metadata.role) !== 'sequence_animatic_continuity_asset') return
+    const state = readLooseRecord(metadata.assetState ?? metadata.asset_state)
+    const nodeId = trimOptionalString(state.sourceNodeId) || trimOptionalString(metadata.targetNodeId)
+    if (nodeId) continuityAssetStateByNodeId[nodeId] = state
+  })
+  const readContinuityAssetStatus = (nodeId: string): SequenceAnimaticContinuityAssetTargetView['status'] => {
+    const request = continuityAssetRequestByNodeId.get(nodeId) ?? null
+    const run = request ? continuityAssetRunByRequestId.get(request.id) ?? null : null
+    if (sequenceAnimaticRequestIsActive(request, run)) return 'generating'
+    const status = trimOptionalString(readLooseRecord(continuityAssetStateByNodeId[nodeId]).status)
+    return status === 'generating' || status === 'ready' || status === 'stale' || status === 'failed' || status === 'missing' ? status : 'missing'
+  }
+  const readContinuityAssetUrl = (nodeId: string) => {
+    const assetKey = trimOptionalString(readLooseRecord(continuityAssetStateByNodeId[nodeId]).assetKey)
+    return assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null
+  }
   const continuityLocationSets = readLooseArray(continuityLocationSource.locationSets ?? continuityLocationSource.location_sets).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
     id: trimOptionalString(entry.id),
     name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
     summary: trimOptionalString(entry.visualBrief) || trimOptionalString(entry.persistenceReason),
+    kind: 'set',
+    assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
+    assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
+    assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
     shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
     blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
   })).filter((entry) => entry.id || entry.name)
+    .concat(readLooseArray(continuityGraphV2.zones).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
+      id: trimOptionalString(entry.id),
+      name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
+      summary: trimOptionalString(entry.visualBrief),
+      kind: 'zone',
+      assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
+      assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
+      assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
+      shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
+      blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
+    })).filter((entry) => entry.id || entry.name))
+    .concat(readLooseArray(continuityGraphV2.spots).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
+      id: trimOptionalString(entry.id),
+      name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
+      summary: trimOptionalString(entry.visualBrief),
+      kind: 'spot',
+      assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
+      assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
+      assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
+      shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
+      blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
+    })).filter((entry) => entry.id || entry.name))
   const continuityLocationAngles = readLooseArray(continuityLocationSource.locationAngles ?? continuityLocationSource.location_angles).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
     id: trimOptionalString(entry.id),
     name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
@@ -2169,6 +2376,10 @@ function buildSequenceAnimaticViewModel(input: {
       trimOptionalString(entry.framing),
       trimOptionalString(entry.screenDirectionRule),
     ].filter(Boolean).join(' / '),
+    kind: 'angle',
+    assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
+    assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
+    assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
     shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
     blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
   })).filter((entry) => entry.id || entry.name)
@@ -2183,11 +2394,72 @@ function buildSequenceAnimaticViewModel(input: {
     assetByKey,
     run: continuityRun ?? input.run,
   })
+  const continuityAssetTargets = (() => {
+    const entries = [
+      ...continuityLocationSets.map((entry) => ({
+        nodeId: entry.id,
+        name: entry.name,
+        assetKind: entry.kind === 'set' ? 'location_set' : entry.kind === 'zone' ? 'location_zone' : entry.kind === 'angle' ? 'location_angle' : 'location_spot',
+        blockIds: entry.blockIds,
+        shotIds: entry.shotIds,
+      })),
+      ...continuityLocationAngles.map((entry) => ({
+        nodeId: entry.id,
+        name: entry.name,
+        assetKind: 'location_angle',
+        blockIds: entry.blockIds,
+        shotIds: entry.shotIds,
+      })),
+      ...continuityAnchorViews.map((anchor) => ({
+        nodeId: anchor.id,
+        name: anchor.name,
+        assetKind: anchor.type === 'character' ? 'temporary_character' : anchor.type === 'prop' ? 'prop' : 'location_spot',
+        blockIds: anchor.blockIds,
+        shotIds: anchor.shotIds,
+      })),
+    ].filter((entry) => entry.nodeId)
+    const seen = new Set<string>()
+    return entries.filter((entry) => {
+      if (seen.has(entry.nodeId)) return false
+      seen.add(entry.nodeId)
+      return true
+    }).map((entry): SequenceAnimaticContinuityAssetTargetView => {
+      const state = readLooseRecord(continuityAssetStateByNodeId[entry.nodeId])
+      const status = readContinuityAssetStatus(entry.nodeId)
+      const assetKey = trimOptionalString(state.assetKey)
+      return {
+        ...entry,
+        status,
+        statusLabel: sequenceAnimaticContinuityAssetStatusLabel(status),
+        actionLabel: sequenceAnimaticContinuityAssetActionLabel(status),
+        assetKey: assetKey || null,
+        assetUrl: assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null,
+      }
+    })
+  })()
   const continuityMetadata = readLooseRecord(continuityRequest?.metadata)
   const continuityProjection = sequenceAnimaticProjectionForRequest(continuityRequest)
   const continuityStale = continuityMetadata.sequenceAnimaticStale === true
   const continuityRunning = sequenceAnimaticRequestIsActive(continuityRequest, continuityRun)
   const continuityReady = Object.keys(readLooseRecord(continuityPack)).length > 0
+  const continuityGraphStatus = ((): SequenceAnimaticViewModel['continuityGraphStatus'] => {
+    const status = trimOptionalString(continuityLocationSource.continuityGraphStatus ?? continuityLocationSource.continuity_graph_status ?? continuityMetadata.continuityGraphStatus)
+    return status === 'empty' || status === 'partial' || status === 'ready' || status === 'stale' || status === 'failed'
+      ? status
+      : continuityReady
+        ? 'partial'
+        : 'empty'
+  })()
+  const continuityAssetGenerationStatus = ((): SequenceAnimaticViewModel['continuityAssetGenerationStatus'] => {
+    const status = trimOptionalString(continuityLocationSource.assetGenerationStatus ?? continuityLocationSource.asset_generation_status)
+    if (status === 'none' || status === 'partial' || status === 'ready' || status === 'stale' || status === 'failed') return status
+    if (continuityAssetTargets.length === 0) return 'none'
+    if (continuityAssetTargets.some((entry) => entry.status === 'failed')) return 'failed'
+    if (continuityAssetTargets.some((entry) => entry.status === 'stale')) return 'stale'
+    if (continuityAssetTargets.every((entry) => entry.status === 'ready')) return 'ready'
+    if (continuityAssetTargets.some((entry) => entry.status === 'ready')) return 'partial'
+    return 'none'
+  })()
   const continuityEffectiveStatus = sequenceAnimaticEffectiveStatus(continuityRequest)
   const continuityFailedStep = continuityRun?.steps.find((step) => step.status === 'failed') ?? null
   const continuityFailed = Boolean(
@@ -2205,13 +2477,13 @@ function buildSequenceAnimaticViewModel(input: {
     ? 'Prepare continuity'
     : continuityRunning
       ? 'Generating continuity'
-      : continuityFailed
-        ? 'Retry continuity'
-      : continuityStale
-        ? 'Regenerate stale continuity'
-        : continuityReady
-          ? 'Regenerate continuity'
-          : 'Generate continuity'
+    : continuityFailed
+      ? 'Retry continuity'
+    : continuityStale
+      ? 'Regenerate stale continuity'
+    : continuityReady
+      ? continuityAssetGenerationStatus === 'stale' ? 'Regenerate stale assets' : 'Generate missing assets'
+      : 'Prepare continuity'
   const continuityStatusLabel = continuityRunning
     ? sequenceAnimaticProjectionActiveLabel(continuityRequest) || 'Generating continuity'
     : continuityFailed
@@ -2219,7 +2491,7 @@ function buildSequenceAnimaticViewModel(input: {
     : continuityStale
       ? 'Continuity changed; regeneration recommended'
       : continuityReady
-        ? 'Continuity ready'
+        ? 'Continuity structure saved'
         : continuityRequest
           ? 'Continuity prepared'
           : 'Continuity not prepared'
@@ -2337,6 +2609,33 @@ function buildSequenceAnimaticViewModel(input: {
       const childMetadata = readLooseRecord(childRequest?.metadata)
       const blockContinuityPackHash = trimOptionalString(childMetadata.continuityPackHash)
       const blockContinuityChanged = Boolean(currentContinuityPackHash && blockContinuityPackHash && currentContinuityPackHash !== blockContinuityPackHash)
+      const rawContinuityBlockState = readLooseRecord(continuityBlockStates[groupId])
+      const continuityBlockStatus = ((): SequenceAnimaticBlockView['continuityBlockStatus'] => {
+        const status = trimOptionalString(rawContinuityBlockState.status)
+        if (status === 'not_started' || status === 'deriving' || status === 'ready' || status === 'needs_review' || status === 'failed' || status === 'stale') return status
+        if (blockContinuityAnchors.length > 0) return 'ready'
+        return 'not_started'
+      })()
+      const continuityBlockStatusLabel = continuityBlockStatus === 'deriving'
+        ? 'Deriving continuity'
+        : continuityBlockStatus === 'ready'
+          ? 'Continuity derived'
+          : continuityBlockStatus === 'needs_review'
+            ? 'Continuity needs review'
+            : continuityBlockStatus === 'failed'
+              ? 'Continuity failed'
+              : continuityBlockStatus === 'stale'
+                ? 'Continuity stale'
+                : 'Continuity not derived'
+      const continuityBlockActionLabel = continuityBlockStatus === 'deriving'
+        ? 'Deriving'
+        : continuityBlockStatus === 'ready'
+          ? 'Regenerate block continuity'
+          : continuityBlockStatus === 'needs_review'
+            ? 'Review changes'
+            : continuityBlockStatus === 'failed'
+              ? 'Retry continuity'
+              : 'Derive continuity'
       const childRun = childRequest ? childRunByRequestId.get(childRequest.id) ?? null : null
       const childPromptNodeKey = childRequest ? 'storyboard_prompt' : promptNodeKey
       const childSheetNodeKey = childRequest ? 'storyboard_sheet' : sheetNodeKey
@@ -2460,6 +2759,10 @@ function buildSequenceAnimaticViewModel(input: {
           : failedStep
             ? `Failed: ${failedStep.label}`
             : 'Ready to generate storyboard'
+      const blockContinuityAssetTargets = continuityAssetTargets.filter((target) => (
+        target.blockIds.includes(groupId)
+        || target.shotIds.some((shotId) => shotIds.includes(shotId))
+      ))
       return {
         id: groupId,
         index: typeof group.index === 'number' ? group.index : groupIndex + 1,
@@ -2500,11 +2803,25 @@ function buildSequenceAnimaticViewModel(input: {
           : 'No continuity refs',
         continuityAnchorsPending: blockContinuityAnchorsPending,
         continuityChanged: blockContinuityChanged,
+        continuityBlockStatus,
+        continuityBlockStatusLabel,
+        continuityBlockActionLabel,
+        continuityBlockWarnings: readLooseArray(rawContinuityBlockState.warnings).map(trimOptionalString).filter(Boolean),
+        continuityBlockError: trimOptionalString(rawContinuityBlockState.error),
+        continuityAssetTargets: blockContinuityAssetTargets,
+        continuityAssetCountLabel: blockContinuityAssetTargets.length > 0
+          ? `${blockContinuityAssetTargets.filter((target) => target.status === 'ready').length}/${blockContinuityAssetTargets.length} assets ready`
+          : 'No continuity assets',
         shots: groupShots.map((shot, shotIndex) => {
           const shotId = trimOptionalString(shot.id) || `${groupIndex + 1}:${shotIndex + 1}`
+          const shotBinding = readLooseRecord(continuityShotBindings[shotId])
+          const shotBindingLabels = sequenceAnimaticShotBindingLabels(shotBinding, shot)
           const shotContinuityAnchorIds = [
             ...readLooseArray(shot.continuityAnchorIds).map(trimOptionalString),
             ...readLooseArray(shot.continuityAnchorRefIds).map(trimOptionalString),
+            ...readLooseArray(shotBinding.continuityAnchorIds).map(trimOptionalString),
+            ...readLooseArray(shotBinding.characterAnchorIds).map(trimOptionalString),
+            ...readLooseArray(shotBinding.propAnchorIds).map(trimOptionalString),
             ...continuityAnchorViews
               .filter((anchor) => anchor.shotIds.includes(shotId))
               .map((anchor) => anchor.id),
@@ -2557,7 +2874,7 @@ function buildSequenceAnimaticViewModel(input: {
           const shotVideoRunning = !shotVideoReady
             && (isOutputRunStepActive(shotVideoStep) || isOutputRunStepActive(shotVideoPromptStep) || sequenceAnimaticRequestIsActive(shotVideoRequest, shotVideoRun))
           const shotVideoProgressLabel = shotVideoRunning
-            ? sequenceAnimaticVideoProgressLabel(shotVideoStep) || shotVideoPromptStep?.label || 'Generating shot video'
+            ? sequenceAnimaticShotVideoProgressLabel(shotVideoStep) || shotVideoPromptStep?.label || 'Generating shot video'
             : shotVideoReady
               ? 'Shot take ready'
               : shotVideoAssetKey
@@ -2585,6 +2902,8 @@ function buildSequenceAnimaticViewModel(input: {
             lighting: trimOptionalString(displayShot.lighting),
             performance: performanceLineFromShot(displayShot),
             performanceBeats: buildSequenceAnimaticPerformanceBeats({ ...displayShot, continuityAnchorIds: shotContinuityAnchorIds, continuityAnchorRefIds: shotContinuityAnchorIds }, resolveReference),
+            spatialContinuityLabel: shotBindingLabels.label,
+            spatialContinuityDetail: shotBindingLabels.detail,
             panelStatusLabel: previewAssetKey ? 'Panel ready' : panelExtractStep?.status === 'failed' ? 'Panel extraction failed' : storyboardRunning ? 'Panel extraction running' : 'Panel not generated',
             panelError: panelExtractStep?.status === 'failed' ? panelExtractStep.errorMessage ?? '' : '',
             panelUrl: displayPanelUrl,
@@ -2647,8 +2966,17 @@ function buildSequenceAnimaticViewModel(input: {
         continuityAnchorCountLabel: 'No continuity refs',
         continuityAnchorsPending: false,
         continuityChanged: false,
+        continuityBlockStatus: 'not_started',
+        continuityBlockStatusLabel: 'Continuity not derived',
+        continuityBlockActionLabel: 'Derive continuity',
+        continuityBlockWarnings: [],
+        continuityBlockError: '',
+        continuityAssetTargets: [],
+        continuityAssetCountLabel: 'No continuity assets',
         shots: rawShots.map((shot, shotIndex) => {
           const shotId = trimOptionalString(shot.id) || `shot_${shotIndex + 1}`
+          const shotBinding = readLooseRecord(continuityShotBindings[shotId])
+          const shotBindingLabels = sequenceAnimaticShotBindingLabels(shotBinding, shot)
           const projectionShot = projectionShotById.get(shotId)
           const preview = panelPreviewByShotId.get(shotId) ?? null
           const previewAssetKey = preview?.assetKey ?? projectionShot?.previewAssetKey ?? null
@@ -2689,6 +3017,8 @@ function buildSequenceAnimaticViewModel(input: {
             lighting: trimOptionalString(displayShot.lighting),
             performance: performanceLineFromShot(displayShot),
             performanceBeats: buildSequenceAnimaticPerformanceBeats(displayShot, resolveReference),
+            spatialContinuityLabel: shotBindingLabels.label,
+            spatialContinuityDetail: shotBindingLabels.detail,
             panelStatusLabel: previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
             panelError: panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : '',
             panelUrl: displayPanelUrl,
@@ -2729,6 +3059,9 @@ function buildSequenceAnimaticViewModel(input: {
     continuityError,
     continuityButtonLabel,
     continuityStatusLabel,
+    continuityGraphStatus,
+    continuityAssetGenerationStatus,
+    continuityAssetTargets,
     title: trimOptionalString(fallbackScreenplay?.title) || input.request.title || 'Sequence screenplay animatic',
     statusLabel: input.row?.statusLabel ?? summarizeOutputStatus(input.request.status),
     progressLabel: input.row?.progress.label ?? '',
@@ -3030,6 +3363,8 @@ export function WorldGraphPage({
   onStartOutputWorkflowRun,
   onEnsureSequenceAnimaticBlockWorkflows,
   onEnsureSequenceAnimaticContinuityWorkflow,
+  onDeriveSequenceAnimaticContinuityBlock,
+  onEnsureSequenceAnimaticContinuityAssetWorkflow,
   onEnsureSequenceAnimaticShotRevisionWorkflow,
   onLoadSequenceAnimaticState,
   onSubscribeSequenceAnimaticStateSignals,
@@ -4277,6 +4612,100 @@ export function WorldGraphPage({
       setSequenceAnimaticBlockRunKey(null)
     }
   }, [onEnsureSequenceAnimaticContinuityWorkflow, onLoadSequenceAnimaticState, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  const handleDeriveSequenceAnimaticBlockContinuity = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    block: SequenceAnimaticBlockView,
+  ) => {
+    const runKey = `${model.request.id}:${block.id}:derive_continuity`
+    if (sequenceAnimaticBlockRunKey) return
+    setSequenceAnimaticBlockRunKey(runKey)
+    try {
+      await onDeriveSequenceAnimaticContinuityBlock({
+        masterRequestId: model.request.id,
+        continuityRequestId: model.continuityRequest?.id ?? null,
+        storyboardBlockId: block.id,
+        mode: block.continuityBlockStatus === 'ready' || block.continuityBlockStatus === 'stale' ? 'regenerate' : 'derive',
+      })
+      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setSequenceAnimaticBlockRunKey(null)
+    }
+  }, [onDeriveSequenceAnimaticContinuityBlock, onLoadSequenceAnimaticState, sequenceAnimaticBlockRunKey])
+  const handleRunSequenceAnimaticContinuityAssets = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
+  ) => {
+    const runKey = `${model.request.id}:continuity_assets`
+    if (sequenceAnimaticBlockRunKey) return
+    setSequenceAnimaticBlockRunKey(runKey)
+    try {
+      if (!model.continuityRequest?.id) {
+        throw new Error('Prepare and derive continuity structure before generating continuity assets.')
+      }
+      const targets = (requestedTargets && requestedTargets.length > 0 ? [...requestedTargets] : model.continuityAssetTargets)
+        .filter((target) => target.status === 'missing' || target.status === 'stale' || target.status === 'failed')
+      if (targets.length === 0) {
+        await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+        return
+      }
+      for (const target of targets) {
+        const ensureResult = await onEnsureSequenceAnimaticContinuityAssetWorkflow({
+          masterRequestId: model.request.id,
+          continuityRequestId: model.continuityRequest.id,
+          nodeId: target.nodeId,
+          mode: target.status === 'stale' || target.status === 'ready' ? 'regenerate' : 'generate',
+        })
+        const assetRequest = ensureResult.assetRequest
+        if (!assetRequest?.workflowId) continue
+        const existingRun = assetRequest.latestRunId
+          ? outputWorkflowRuns.find((run) => run.id === assetRequest.latestRunId) ?? null
+          : outputWorkflowRuns.find((run) => run.workflowId === assetRequest.workflowId) ?? null
+        await onStartOutputWorkflowRun({
+          workflowId: assetRequest.workflowId,
+          prompt: assetRequest.prompt || `Generate continuity asset for ${target.name}.`,
+          targetFormat: 'image',
+          selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
+          input: {
+            ...readLooseRecord(existingRun?.input),
+            debugSkipVideoGeneration: false,
+            cinematicVideoApproved: false,
+          },
+          metadata: {
+            runIntent: 'generate_continuity_asset',
+            runMode: 'sequence_animatic_continuity_asset',
+            runScope: 'upstream_to_node',
+            targetNodeKeys: ['continuity_asset_artifact'],
+            forceNodeKeys: ['continuity_asset_prompt', 'continuity_asset_image', 'continuity_asset_artifact'],
+            reuseExistingUpstreamOutputs: true,
+            allowStaleUpstreamOutputs: true,
+            debugSkipVideoGeneration: false,
+            cinematicVideoApproved: false,
+            sourceRunId: existingRun?.id ?? assetRequest.latestRunId ?? model.continuityRequest.latestRunId,
+            parentRequestId: model.continuityRequest.id,
+            masterRequestId: model.request.id,
+            sequenceAnimaticRole: 'continuity_asset',
+            continuityRequestId: model.continuityRequest.id,
+            targetNodeId: target.nodeId,
+          },
+        })
+      }
+      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setSequenceAnimaticBlockRunKey(null)
+    }
+  }, [onEnsureSequenceAnimaticContinuityAssetWorkflow, onLoadSequenceAnimaticState, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
   const openSequenceAnimaticOutputGraph = useCallback((
     model: SequenceAnimaticViewModel,
     requestId: string,
@@ -9817,11 +10246,17 @@ export function WorldGraphPage({
                     <div className="world-wiki-sequence-animatic-continuity-strip-actions">
                       <button
                         className="ghost-button compact"
-                        disabled={routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack`}
-                        onClick={() => void handleRunSequenceAnimaticContinuity(routeAnimaticModel)}
+                        disabled={routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack` || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_assets`}
+                        onClick={() => {
+                          if (routeAnimaticModel.continuityReady && routeAnimaticModel.continuityAssetTargets.length > 0) {
+                            void handleRunSequenceAnimaticContinuityAssets(routeAnimaticModel)
+                            return
+                          }
+                          void handleRunSequenceAnimaticContinuity(routeAnimaticModel)
+                        }}
                         type="button"
                       >
-                        {routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack`
+                        {routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack` || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_assets`
                           ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</>
                           : routeAnimaticModel.continuityButtonLabel}
                       </button>
@@ -9845,6 +10280,26 @@ export function WorldGraphPage({
                         </span>
                       ))}
                     </div>
+                    {routeAnimaticModel.continuityAssetTargets.length > 0 ? (
+                      <div className="world-wiki-sequence-animatic-continuity-assets">
+                        {routeAnimaticModel.continuityAssetTargets.slice(0, 12).map((target) => (
+                          <span key={target.nodeId} className={`is-${target.status}`} title={`${target.name}: ${target.statusLabel}`}>
+                            {target.assetUrl ? <img src={target.assetUrl} alt="" /> : <EntityIcon id={target.assetKind.includes('location') ? 'environment' : target.assetKind === 'prop' ? 'item' : 'character'} />}
+                            <em>{target.name}</em>
+                            <small>{target.statusLabel}</small>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {routeAnimaticModel.continuityLocationSets.length + routeAnimaticModel.continuityLocationAngles.length > 0 ? (
+                      <div className="world-wiki-sequence-animatic-continuity-strip-graph">
+                        {[...routeAnimaticModel.continuityLocationSets, ...routeAnimaticModel.continuityLocationAngles].slice(0, 8).map((entry) => (
+                          <span key={entry.id || entry.name} title={entry.summary}>
+                            {entry.kind ? `${entry.kind}: ` : ''}{entry.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </section>
                   {routeAnimaticModel.blocks.map((block) => (
                     <section
@@ -9858,11 +10313,41 @@ export function WorldGraphPage({
                           <span>Block {block.index} / {block.durationLabel}</span>
                           <h3>{block.title}</h3>
                           <small>{block.shotRangeLabel} / {block.statusLabel}</small>
+                          <small className={`world-wiki-sequence-animatic-block-continuity-state is-${block.continuityBlockStatus}`}>
+                            {block.continuityBlockStatus === 'deriving' ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                            {block.continuityBlockStatusLabel}
+                            {block.continuityBlockError ? ` / ${block.continuityBlockError}` : ''}
+                          </small>
+                          <small className="world-wiki-sequence-animatic-block-asset-state">
+                            {block.continuityAssetCountLabel}
+                          </small>
                         </div>
                         <div>
-                          <button className="ghost-button compact" disabled={sequenceAnimaticGraphOpenKey === `${routeAnimaticModel.request.id}:${block.id}:block_graph`} onClick={() => void handleOpenSequenceAnimaticBlockGraph(routeAnimaticModel, block)} type="button">
-                            {sequenceAnimaticGraphOpenKey === `${routeAnimaticModel.request.id}:${block.id}:block_graph` ? <><span className="world-mini-spinner" aria-hidden="true" />Opening</> : 'Block graph'}
+                          <button
+                            className="ghost-button compact"
+                            disabled={block.continuityBlockStatus === 'deriving' || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:derive_continuity`}
+                            onClick={() => void handleDeriveSequenceAnimaticBlockContinuity(routeAnimaticModel, block)}
+                            type="button"
+                          >
+                            {block.continuityBlockStatus === 'deriving' || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:derive_continuity`
+                              ? <><span className="world-mini-spinner" aria-hidden="true" />Deriving</>
+                              : block.continuityBlockActionLabel}
                           </button>
+                          <button className="ghost-button compact world-wiki-sequence-animatic-debug-action" disabled={sequenceAnimaticGraphOpenKey === `${routeAnimaticModel.request.id}:${block.id}:block_graph`} onClick={() => void handleOpenSequenceAnimaticBlockGraph(routeAnimaticModel, block)} type="button">
+                            {sequenceAnimaticGraphOpenKey === `${routeAnimaticModel.request.id}:${block.id}:block_graph` ? <><span className="world-mini-spinner" aria-hidden="true" />Opening</> : 'Graph'}
+                          </button>
+                          {block.continuityAssetTargets.length > 0 ? (
+                            <button
+                              className="ghost-button compact"
+                              disabled={sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_assets` || block.continuityAssetTargets.every((target) => target.status === 'ready')}
+                              onClick={() => void handleRunSequenceAnimaticContinuityAssets(routeAnimaticModel, block.continuityAssetTargets)}
+                              type="button"
+                            >
+                              {sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_assets`
+                                ? <><span className="world-mini-spinner" aria-hidden="true" />Assets</>
+                                : block.continuityAssetTargets.some((target) => target.status === 'stale') ? 'Regenerate stale assets' : 'Generate block assets'}
+                            </button>
+                          ) : null}
                           <button className="ghost-button compact" disabled={block.storyboardRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:regenerate_storyboard`} onClick={() => void handleRunSequenceAnimaticBlock(routeAnimaticModel, block, 'regenerate_storyboard')} type="button">
                             {block.storyboardRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:regenerate_storyboard` ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</> : block.storyboardReady ? 'Regenerate storyboard' : 'Generate storyboard'}
                           </button>
@@ -9875,6 +10360,17 @@ export function WorldGraphPage({
                           ) : null}
                         </div>
                       </header>
+                      {block.continuityAssetTargets.length > 0 ? (
+                        <div className="world-wiki-sequence-animatic-block-assets">
+                          {block.continuityAssetTargets.slice(0, 10).map((target) => (
+                            <span key={target.nodeId} className={`is-${target.status}`} title={`${target.assetKind.replace(/_/g, ' ')}: ${target.name}`}>
+                              {target.assetUrl ? <img src={target.assetUrl} alt="" /> : <EntityIcon id={target.assetKind.includes('location') ? 'environment' : target.assetKind === 'prop' ? 'item' : 'character'} />}
+                              <strong>{target.name}</strong>
+                              <em>{target.statusLabel}</em>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="world-wiki-sequence-animatic-shot-timeline">
                         {block.shots.map((shot) => {
                           const shotRevisionRunKey = `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_revision`
@@ -9940,6 +10436,11 @@ export function WorldGraphPage({
                                     <EntityIcon id="lighting" />
                                     <strong>Lighting</strong>
                                     <span>{shot.lighting || 'No lighting instructions recorded.'}</span>
+                                  </button>
+                                  <button className="world-wiki-sequence-shot-detail-row" title={shot.spatialContinuityDetail || shot.spatialContinuityLabel} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: `${shot.title} / spatial continuity`, content: [shot.spatialContinuityLabel, shot.spatialContinuityDetail].filter(Boolean).join('\n') || 'No spatial continuity binding recorded.' })} type="button">
+                                    <EntityIcon id="environment" />
+                                    <strong>Set</strong>
+                                    <span>{shot.spatialContinuityLabel}</span>
                                   </button>
                                   {shot.performanceBeats.length > 0 ? shot.performanceBeats.map((beat) => {
                                     const performanceLine = sequenceAnimaticPerformanceBeatLine(beat)
@@ -10041,8 +10542,10 @@ export function WorldGraphPage({
                                   {shot.shotVideoReady && shot.shotVideoUrl ? (
                                     <button className="ghost-button compact" onClick={() => setSequenceAnimaticVideoPreview({ title: `${shot.title} - shot take`, url: shot.shotVideoUrl ?? '', durationLabel: shot.durationLabel, statusLabel: shot.shotVideoProgressLabel })} type="button">Play shot take</button>
                                   ) : (
-                                    <button className="ghost-button compact" disabled={!shot.panelUrl || shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_video`} onClick={() => void handleRunSequenceAnimaticShotVideo(routeAnimaticModel, block, shot)} type="button">
-                                      {shot.shotVideoRunning ? 'Generating shot video' : 'Generate shot video'}
+                                    <button className="ghost-button compact world-wiki-sequence-animatic-video-action world-wiki-sequence-animatic-shot-video-primary" disabled={!shot.panelUrl || shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_video`} onClick={() => void handleRunSequenceAnimaticShotVideo(routeAnimaticModel, block, shot)} type="button">
+                                      {shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_video`
+                                        ? <><span className="world-mini-spinner" aria-hidden="true" />{shot.shotVideoProgressLabel || 'Starting shot video'}</>
+                                        : 'Generate shot video'}
                                     </button>
                                   )}
                                   <button className="ghost-button compact" disabled={sequenceAnimaticGraphOpenKey === `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_graph` || (!shot.shotVideoRequestId && !shot.panelUrl)} onClick={() => void handleOpenSequenceAnimaticShotGraph(routeAnimaticModel, block, shot)} type="button">
@@ -13277,7 +13780,7 @@ export function WorldGraphPage({
                             <div className="world-wiki-sequence-animatic-shot-actions">
                               {shot.shotVideoReady && shot.shotVideoUrl ? (
                                 <button
-                                  className="ghost-button compact world-wiki-sequence-animatic-video-action"
+                                  className="ghost-button compact world-wiki-sequence-animatic-video-action world-wiki-sequence-animatic-shot-video-primary"
                                   onClick={() => setSequenceAnimaticVideoPreview({
                                     title: `${shot.title} - shot take`,
                                     url: shot.shotVideoUrl ?? '',
@@ -13297,7 +13800,7 @@ export function WorldGraphPage({
                                   type="button"
                                 >
                                   {shot.shotVideoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`
-                                    ? <><span className="world-mini-spinner" aria-hidden="true" />Generating shot video</>
+                                    ? <><span className="world-mini-spinner" aria-hidden="true" />{shot.shotVideoProgressLabel || 'Starting shot video'}</>
                                     : 'Generate shot video'}
                                 </button>
                               )}

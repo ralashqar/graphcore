@@ -5864,6 +5864,68 @@ export default function App() {
     return result
   }
 
+  async function deriveSequenceAnimaticContinuityBlock(request: Parameters<typeof workspaceService.deriveSequenceAnimaticContinuityBlock>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before deriving sequence animatic continuity.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic continuity derivation requires a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.deriveSequenceAnimaticContinuityBlock(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        result.masterRequest,
+        result.continuityRequest,
+        ...current.outputRequests.filter((requestRow) => (
+          requestRow.id !== result.masterRequest.id
+          && requestRow.id !== result.continuityRequest.id
+        )),
+      ],
+      outputWorkflowRuns: [
+        ...(result.run ? [result.run] : []),
+        ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id),
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
+  async function ensureSequenceAnimaticContinuityAssetWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticContinuityAssetWorkflow>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before generating sequence animatic continuity assets.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic continuity assets require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticContinuityAssetWorkflow(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const workflows = result.workflow ? [result.workflow] : []
+    const requests = [result.masterRequest, result.continuityRequest, ...(result.assetRequest ? [result.assetRequest] : [])]
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+      outputWorkflows: [
+        ...workflows,
+        ...current.outputWorkflows.filter((workflow) => !workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function ensureSequenceAnimaticShotRevisionWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticShotRevisionWorkflow>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before revising a sequence animatic shot.')
@@ -8468,6 +8530,8 @@ export default function App() {
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
                 onEnsureSequenceAnimaticBlockWorkflows={ensureSequenceAnimaticBlockWorkflows}
                 onEnsureSequenceAnimaticContinuityWorkflow={ensureSequenceAnimaticContinuityWorkflow}
+                onDeriveSequenceAnimaticContinuityBlock={deriveSequenceAnimaticContinuityBlock}
+                onEnsureSequenceAnimaticContinuityAssetWorkflow={ensureSequenceAnimaticContinuityAssetWorkflow}
                 onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}
                 onSubscribeSequenceAnimaticStateSignals={workspaceService.subscribeSequenceAnimaticStateSignals}
