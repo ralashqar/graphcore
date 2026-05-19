@@ -1210,7 +1210,6 @@ type SequenceAnimaticShotView = {
   panelStatusLabel: string
   panelError: string
   panelUrl: string | null
-  panelAspectRatio: string
   panelRunning: boolean
   isRevised: boolean
   originalAction: string
@@ -1320,6 +1319,7 @@ type SequenceAnimaticPerformanceBeatView = {
   characterName: string
   characterIconId: EntityIconId
   characterIconUrl: string | null
+  emotion: string
   toneLabel: string
   valenceLabel: string
   arousalLabel: string
@@ -1889,6 +1889,7 @@ function buildSequenceAnimaticPerformanceBeats(
       characterName: character?.name ?? fallbackName,
       characterIconId: character?.iconId ?? 'character',
       characterIconUrl: character?.iconUrl ?? null,
+      emotion: trimOptionalString(record.emotion),
       toneLabel: animaticPerformanceToneLabel(record.valence, record.arousal),
       valenceLabel: formatAnimaticPerformanceNumber(record.valence),
       arousalLabel: formatAnimaticPerformanceNumber(record.arousal),
@@ -1901,6 +1902,20 @@ function buildSequenceAnimaticPerformanceBeats(
       voiceEnergy: trimOptionalString(record.voiceEnergy),
     }
   }).filter((beat) => beat.characterRefId || beat.bodyLanguage || beat.facialExpression || beat.gesture || beat.voiceEnergy)
+}
+
+function sequenceAnimaticPerformanceBeatLine(beat: SequenceAnimaticPerformanceBeatView) {
+  return [
+    beat.emotion ? `emotion ${beat.emotion}` : '',
+    `valence ${beat.valenceLabel}`,
+    `arousal ${beat.arousalLabel}`,
+    beat.dominanceLabel ? `dominance ${beat.dominanceLabel}` : '',
+    beat.bodyLanguage ? `body ${beat.bodyLanguage}` : '',
+    beat.facialExpression ? `face ${beat.facialExpression}` : '',
+    beat.gaze ? `gaze ${beat.gaze}` : '',
+    beat.gesture ? `gesture ${beat.gesture}` : '',
+    beat.voiceEnergy ? `voice ${beat.voiceEnergy}` : '',
+  ].filter(Boolean).join('; ')
 }
 
 function inferTemporarySpeakerLabelFromShotAction(shot: Record<string, unknown>, dialogueIndex: number) {
@@ -2564,7 +2579,6 @@ function buildSequenceAnimaticViewModel(input: {
             panelStatusLabel: previewAssetKey ? 'Panel ready' : panelExtractStep?.status === 'failed' ? 'Panel extraction failed' : storyboardRunning ? 'Panel extraction running' : 'Panel not generated',
             panelError: panelExtractStep?.status === 'failed' ? panelExtractStep.errorMessage ?? '' : '',
             panelUrl: displayPanelUrl,
-            panelAspectRatio: trimOptionalString(readLooseRecord(manifest).aspectRatio) || trimOptionalString(readLooseRecord(readLooseRecord(manifest).assetPack).aspectRatio) || '16:9',
             panelRunning: storyboardRunning && !panelUrl,
             isRevised: Boolean(completedRevision),
             originalAction: trimOptionalString(shot.action) || trimOptionalString(shot.description) || trimOptionalString(shot.storyboardPanelPrompt),
@@ -2669,7 +2683,6 @@ function buildSequenceAnimaticViewModel(input: {
             panelStatusLabel: previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
             panelError: panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : '',
             panelUrl: displayPanelUrl,
-            panelAspectRatio: trimOptionalString(readLooseRecord(manifest).aspectRatio) || trimOptionalString(readLooseRecord(readLooseRecord(manifest).assetPack).aspectRatio) || '16:9',
             panelRunning: false,
             isRevised: Boolean(completedRevision),
             originalAction: trimOptionalString(shot.action) || trimOptionalString(shot.description) || trimOptionalString(shot.storyboardPanelPrompt),
@@ -3893,7 +3906,7 @@ export function WorldGraphPage({
   }>({ status: 'idle', error: null })
   const [sequenceAnimaticVideoPreview, setSequenceAnimaticVideoPreview] = useState<SequenceAnimaticVideoPreview | null>(null)
   const [sequenceAnimaticShotInspector, setSequenceAnimaticShotInspector] = useState<{
-    kind: 'camera' | 'lighting'
+    kind: 'camera' | 'lighting' | 'performance'
     blockTitle: string
     shotTitle: string
     content: string
@@ -3907,6 +3920,7 @@ export function WorldGraphPage({
     status: 'idle' | 'rewriting' | 'generating' | 'saving' | 'failed'
     error?: string | null
   } | null>(null)
+  const [sequenceAnimaticShotPromptDraftByKey, setSequenceAnimaticShotPromptDraftByKey] = useState<Record<string, string>>({})
   const [sequenceAnimaticActiveBlockId, setSequenceAnimaticActiveBlockId] = useState<string | null>(null)
   const sequenceAnimaticStateRevisionRef = useRef<string | null>(null)
   const sequenceAnimaticLookupInFlightRef = useRef<Set<string>>(new Set())
@@ -4414,13 +4428,29 @@ export function WorldGraphPage({
   ) => {
     const cleanPrompt = prompt.trim()
     if (!cleanPrompt) {
-      setSequenceAnimaticShotPrompt((current) => current ? { ...current, status: 'failed', error: 'Describe the shot change first.' } : current)
+      setSequenceAnimaticShotPrompt({
+        masterRequestId: model.request.id,
+        storyboardBlockId: block.id,
+        shotId: shot.id,
+        shotTitle: shot.title,
+        prompt,
+        status: 'failed',
+        error: 'Describe the shot change first.',
+      })
       return
     }
     const runKey = `${model.request.id}:${block.id}:${shot.id}:shot_revision`
     if (sequenceAnimaticBlockRunKey) return
     setSequenceAnimaticBlockRunKey(runKey)
-    setSequenceAnimaticShotPrompt((current) => current ? { ...current, status: 'rewriting', error: null } : current)
+    setSequenceAnimaticShotPrompt({
+      masterRequestId: model.request.id,
+      storyboardBlockId: block.id,
+      shotId: shot.id,
+      shotTitle: shot.title,
+      prompt: cleanPrompt,
+      status: 'rewriting',
+      error: null,
+    })
     try {
       let targetBlock = block
       if (!targetBlock.childRequestId) {
@@ -4477,6 +4507,12 @@ export function WorldGraphPage({
       setSequenceAnimaticShotPrompt((current) => current ? { ...current, status: 'saving', error: null } : current)
       await pollSequenceAnimaticOutputRequest(revisionRequest.id)
       await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      setSequenceAnimaticShotPromptDraftByKey((previous) => {
+        if (!previous[runKey]) return previous
+        const next = { ...previous }
+        delete next[runKey]
+        return next
+      })
       setSequenceAnimaticShotPrompt(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -9403,6 +9439,89 @@ export function WorldGraphPage({
     setWikiEntityGraphModalSelectedRelationshipKey(null)
   }
 
+  function renderWikiEntityPageNavigation() {
+    const page = activeWikiEntityPage
+    const entity = activeWikiEntity
+    if (!page?.animaticRequestId || !entity || entity.nodeType !== 'sequence_unit') return null
+    const sequence = readWorldSequenceMetadata(entity)
+    const chapterLabel = sequence.sequenceKey || entity.name
+    const routeAnimaticModel = sequenceAnimaticPreviewModel?.request.id === page.animaticRequestId
+      ? sequenceAnimaticPreviewModel
+      : null
+    const masterRequestId = page.animaticRequestId
+    const activeBlockId = sequenceAnimaticActiveBlockId || page.animaticBlockId || routeAnimaticModel?.blocks[0]?.id || null
+    const returnToChapter = () => {
+      setSequenceAnimaticPreviewRequestId(null)
+      writeWikiAnimaticRoute({
+        entityKey: entity.key,
+        sectionKind: page.sectionKind ?? 'timeline',
+        masterRequestId: null,
+      })
+    }
+    return (
+      <>
+        <button className="world-wiki-entity-nav-crumb world-wiki-sequence-animatic-nav-back" onClick={returnToChapter} type="button">
+          <EntityIcon id="close" />
+          <strong>Back to {chapterLabel}</strong>
+        </button>
+        <button
+          className="world-wiki-index-row is-active is-entity-parent world-wiki-sequence-animatic-nav-chapter"
+          onClick={returnToChapter}
+          type="button"
+        >
+          <span className="world-wiki-index-icon"><EntityIcon id="content" /></span>
+          <span className="world-wiki-index-copy">
+            <strong>{entity.name}</strong>
+            <small>Selected chapter</small>
+          </span>
+          <em>{routeAnimaticModel?.blocks.length ?? <span className="world-wiki-nav-spinner" aria-hidden="true" />}</em>
+        </button>
+        {routeAnimaticModel ? (
+          <div className="world-wiki-sequence-animatic-nav-meta" aria-label="Animatic status">
+            <span>{routeAnimaticModel.statusLabel}</span>
+            <span>{routeAnimaticModel.continuityStatusLabel}</span>
+          </div>
+        ) : null}
+        {routeAnimaticModel?.blocks.length ? (
+          <nav className="world-wiki-entity-subnav world-wiki-sequence-animatic-block-nav" aria-label="Storyboard blocks">
+            {routeAnimaticModel.blocks.map((block) => {
+              const isActive = activeBlockId === block.id
+              return (
+                <button
+                  key={block.id}
+                  className={isActive ? 'world-wiki-entity-subnav-row is-active' : 'world-wiki-entity-subnav-row'}
+                  onClick={() => {
+                    setSequenceAnimaticActiveBlockId(block.id)
+                    writeWikiAnimaticRoute({
+                      entityKey: entity.key,
+                      sectionKind: page.sectionKind ?? 'timeline',
+                      masterRequestId,
+                      blockId: block.id,
+                    })
+                    document.getElementById(`wiki-animatic-block-${block.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                  type="button"
+                >
+                  <span className="world-wiki-sequence-animatic-block-nav-index">Block {block.index}</span>
+                  <span>
+                    <strong>{block.title}</strong>
+                    <small>{block.durationLabel} / {block.shotRangeLabel}</small>
+                    <em>{block.storyboardRunning ? 'Running' : block.videoReady ? 'Video ready' : block.storyboardReady ? 'Storyboard ready' : block.shots.some((shot) => shot.isRevised) ? 'Revised' : 'Prep pending'}</em>
+                  </span>
+                </button>
+              )
+            })}
+          </nav>
+        ) : (
+          <div className="world-wiki-sequence-animatic-nav-meta is-loading" aria-live="polite">
+            <span className="world-wiki-nav-spinner" aria-hidden="true" />
+            <span>Loading storyboard blocks</span>
+          </div>
+        )}
+      </>
+    )
+  }
+
   function renderWikiEntityPage() {
     const entity = activeWikiEntity
     const section = activeWikiEntitySection
@@ -9628,77 +9747,9 @@ export function WorldGraphPage({
         ? sequenceAnimaticPreviewModel
         : null
       if (routeAnimaticRequestId) {
-        const chapterLabel = sequence.sequenceKey || entity.name
         const animaticLoading = !routeAnimaticModel && sequenceAnimaticPreviewHydration.status !== 'failed'
         return (
           <section className="world-wiki-entity-page world-wiki-sequence-animatic-page" data-world-wiki-entity-page={entity.key}>
-            <aside className="world-wiki-sequence-animatic-rail" aria-label="Animatic navigation">
-              <button
-                className="ghost-button compact world-wiki-sequence-animatic-back"
-                onClick={() => {
-                  setSequenceAnimaticPreviewRequestId(null)
-                  writeWikiAnimaticRoute({
-                    entityKey: entity.key,
-                    sectionKind: activeWikiEntityPage?.sectionKind ?? 'timeline',
-                    masterRequestId: null,
-                  })
-                }}
-                type="button"
-              >
-                Back to {chapterLabel}
-              </button>
-              <div className="world-wiki-sequence-animatic-rail-status">
-                <span className="eyebrow">Animatic</span>
-                <strong>{routeAnimaticModel?.statusLabel ?? (animaticLoading ? 'Loading' : 'Unavailable')}</strong>
-                {routeAnimaticModel?.currentStepLabel ? <small>{routeAnimaticModel.currentStepLabel}</small> : null}
-                {routeAnimaticModel?.progressLabel ? <small>{routeAnimaticModel.progressLabel}</small> : null}
-              </div>
-              {routeAnimaticModel ? (
-                <div className="world-wiki-sequence-animatic-rail-status">
-                  <span className="eyebrow">Continuity</span>
-                  <strong>{routeAnimaticModel.continuityStatusLabel}</strong>
-                  <button
-                    className="ghost-button compact"
-                    disabled={routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack`}
-                    onClick={() => void handleRunSequenceAnimaticContinuity(routeAnimaticModel)}
-                    type="button"
-                  >
-                    {routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack`
-                      ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</>
-                      : routeAnimaticModel.continuityButtonLabel}
-                  </button>
-                </div>
-              ) : null}
-              {routeAnimaticModel?.blocks.length ? (
-                <nav className="world-wiki-sequence-animatic-block-nav" aria-label="Storyboard blocks">
-                  {routeAnimaticModel.blocks.map((block) => {
-                    const isActive = (sequenceAnimaticActiveBlockId || activeWikiEntityPage?.animaticBlockId || routeAnimaticModel.blocks[0]?.id) === block.id
-                    return (
-                      <button
-                        key={block.id}
-                        className={isActive ? 'is-active' : ''}
-                        onClick={() => {
-                          setSequenceAnimaticActiveBlockId(block.id)
-                          writeWikiAnimaticRoute({
-                            entityKey: entity.key,
-                            sectionKind: activeWikiEntityPage?.sectionKind ?? 'timeline',
-                            masterRequestId: routeAnimaticRequestId,
-                            blockId: block.id,
-                          })
-                          document.getElementById(`wiki-animatic-block-${block.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                        }}
-                        type="button"
-                      >
-                        <span>Block {block.index}</span>
-                        <strong>{block.title}</strong>
-                        <small>{block.durationLabel} / {block.shotRangeLabel}</small>
-                        <em>{block.storyboardRunning ? 'Running' : block.videoReady ? 'Video ready' : block.storyboardReady ? 'Storyboard ready' : block.shots.some((shot) => shot.isRevised) ? 'Revised' : 'Prep pending'}</em>
-                      </button>
-                    )
-                  })}
-                </nav>
-              ) : null}
-            </aside>
             <main className="world-wiki-sequence-animatic-main">
               <header className="world-wiki-sequence-animatic-page-head">
                 <div>
@@ -9792,7 +9843,32 @@ export function WorldGraphPage({
                         </div>
                       </header>
                       <div className="world-wiki-sequence-animatic-shot-timeline">
-                        {block.shots.map((shot) => (
+                        {block.shots.map((shot) => {
+                          const shotRevisionRunKey = `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_revision`
+                          const activeShotPrompt = sequenceAnimaticShotPrompt?.masterRequestId === routeAnimaticModel.request.id
+                            && sequenceAnimaticShotPrompt.storyboardBlockId === block.id
+                            && sequenceAnimaticShotPrompt.shotId === shot.id
+                              ? sequenceAnimaticShotPrompt
+                              : null
+                          const shotPromptValue = activeShotPrompt?.prompt ?? sequenceAnimaticShotPromptDraftByKey[shotRevisionRunKey] ?? ''
+                          const shotPromptBusy = Boolean(activeShotPrompt && !['idle', 'failed'].includes(activeShotPrompt.status))
+                            || shot.revisionRunning
+                            || sequenceAnimaticBlockRunKey === shotRevisionRunKey
+                          const shotPromptDisabled = !shot.panelUrl || shotPromptBusy
+                          const shotPromptStatusLabel = activeShotPrompt
+                            ? activeShotPrompt.status === 'rewriting'
+                              ? 'Rewriting shot'
+                              : activeShotPrompt.status === 'generating'
+                                ? 'Generating keyframe'
+                                : activeShotPrompt.status === 'saving'
+                                  ? 'Saving revision'
+                                  : activeShotPrompt.status === 'failed'
+                                    ? activeShotPrompt.error || 'Revision failed'
+                                    : ''
+                            : !shot.panelUrl
+                              ? 'Generate the storyboard panel before revising this shot.'
+                              : ''
+                          return (
                           <article key={shot.id} className={shot.isRevised ? 'world-wiki-sequence-animatic-timeline-shot is-revised' : 'world-wiki-sequence-animatic-timeline-shot'}>
                             <div className="world-wiki-sequence-animatic-time-rail">
                               <strong>{String(shot.index).padStart(3, '0')}</strong>
@@ -9821,20 +9897,76 @@ export function WorldGraphPage({
                                   </div>
                                 ) : null}
                                 {shot.revisionError ? <small className="world-wiki-sequence-animatic-video-status is-error">{shot.revisionError}</small> : null}
-                                <div className="world-wiki-sequence-animatic-shot-icon-actions">
-                                  <button className="ghost-button compact icon-only" title="Camera instructions" disabled={!shot.camera} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: shot.title, content: shot.camera || 'No camera instructions recorded.' })} type="button">
-                                    <EntityIcon id="screen" />
+                                <div className="world-wiki-sequence-shot-detail-rows">
+                                  <button className="world-wiki-sequence-shot-detail-row" title={shot.camera || 'No camera instructions recorded.'} disabled={!shot.camera} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: shot.title, content: shot.camera || 'No camera instructions recorded.' })} type="button">
+                                    <EntityIcon id="camera" />
+                                    <strong>Camera</strong>
+                                    <span>{shot.camera || 'No camera instructions recorded.'}</span>
                                   </button>
-                                  <button className="ghost-button compact icon-only" title="Lighting instructions" disabled={!shot.lighting} onClick={() => setSequenceAnimaticShotInspector({ kind: 'lighting', blockTitle: block.title, shotTitle: shot.title, content: shot.lighting || 'No lighting instructions recorded.' })} type="button">
-                                    <EntityIcon id="activity" />
+                                  <button className="world-wiki-sequence-shot-detail-row" title={shot.lighting || 'No lighting instructions recorded.'} disabled={!shot.lighting} onClick={() => setSequenceAnimaticShotInspector({ kind: 'lighting', blockTitle: block.title, shotTitle: shot.title, content: shot.lighting || 'No lighting instructions recorded.' })} type="button">
+                                    <EntityIcon id="lighting" />
+                                    <strong>Lighting</strong>
+                                    <span>{shot.lighting || 'No lighting instructions recorded.'}</span>
                                   </button>
-                                  <button className="ghost-button compact" disabled={!shot.panelUrl || shot.revisionRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_revision`} onClick={() => setSequenceAnimaticShotPrompt({ masterRequestId: routeAnimaticModel.request.id, storyboardBlockId: block.id, shotId: shot.id, shotTitle: shot.title, prompt: '', status: 'idle', error: null })} type="button">
-                                    Prompt this
-                                  </button>
+                                  {shot.performanceBeats.length > 0 ? shot.performanceBeats.map((beat) => {
+                                    const performanceLine = sequenceAnimaticPerformanceBeatLine(beat)
+                                    return (
+                                      <button
+                                        key={beat.id}
+                                        className="world-wiki-sequence-shot-detail-row is-performance"
+                                        title={`${beat.characterName}: ${performanceLine}`}
+                                        onClick={() => setSequenceAnimaticShotInspector({ kind: 'performance', blockTitle: block.title, shotTitle: `${shot.title} / ${beat.characterName}`, content: performanceLine || 'No performance notes recorded.' })}
+                                        type="button"
+                                      >
+                                        {beat.characterIconUrl ? <img src={beat.characterIconUrl} alt="" /> : <EntityIcon id={beat.characterIconId} />}
+                                        <strong>{beat.characterName}</strong>
+                                        <span>{performanceLine || 'No performance notes recorded.'}</span>
+                                      </button>
+                                    )
+                                  }) : shot.performance ? (
+                                    <button className="world-wiki-sequence-shot-detail-row is-performance" title={shot.performance} onClick={() => setSequenceAnimaticShotInspector({ kind: 'performance', blockTitle: block.title, shotTitle: shot.title, content: shot.performance })} type="button">
+                                      <EntityIcon id="character" />
+                                      <strong>Performance</strong>
+                                      <span>{shot.performance}</span>
+                                    </button>
+                                  ) : null}
                                 </div>
+                                <form
+                                  className={activeShotPrompt?.status === 'failed' ? 'world-wiki-sequence-shot-inline-prompt is-error' : 'world-wiki-sequence-shot-inline-prompt'}
+                                  onSubmit={(event) => {
+                                    event.preventDefault()
+                                    if (shotPromptDisabled) return
+                                    void handleRunSequenceAnimaticShotRevision(routeAnimaticModel, block, shot, shotPromptValue)
+                                  }}
+                                >
+                                  <label htmlFor={`shot-revision-${shotRevisionRunKey}`}>Prompt this shot</label>
+                                  <div>
+                                    <input
+                                      id={`shot-revision-${shotRevisionRunKey}`}
+                                      value={shotPromptValue}
+                                      disabled={shotPromptDisabled}
+                                      onChange={(event) => {
+                                        const nextValue = event.target.value
+                                        setSequenceAnimaticShotPromptDraftByKey((previous) => ({ ...previous, [shotRevisionRunKey]: nextValue }))
+                                        if (activeShotPrompt) {
+                                          setSequenceAnimaticShotPrompt((current) => current ? { ...current, prompt: nextValue, status: 'idle', error: null } : current)
+                                        }
+                                      }}
+                                      placeholder="Change camera angle, expression, staging, lighting..."
+                                    />
+                                    <button
+                                      type="submit"
+                                      aria-label="Send shot revision prompt"
+                                      disabled={shotPromptDisabled}
+                                    >
+                                      {shotPromptBusy ? <span className="world-mini-spinner" aria-hidden="true" /> : <EntityIcon id="send" />}
+                                    </button>
+                                  </div>
+                                  {shotPromptStatusLabel ? <small>{shotPromptStatusLabel}</small> : null}
+                                </form>
                               </div>
                               <div className="world-wiki-sequence-animatic-panel-stack">
-                                <div className="world-wiki-sequence-animatic-frame" style={{ aspectRatio: shot.panelAspectRatio.replace(':', ' / ') }}>
+                                <div className={shot.panelUrl ? 'world-wiki-sequence-animatic-frame has-image' : 'world-wiki-sequence-animatic-frame is-empty'}>
                                   {shot.panelUrl ? <img src={shot.panelUrl} alt="" /> : (
                                     <span>
                                       {shot.panelRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
@@ -9869,7 +10001,8 @@ export function WorldGraphPage({
                               </div>
                             </div>
                           </article>
-                        ))}
+                          )
+                        })}
                       </div>
                     </section>
                   ))}
@@ -11137,6 +11270,7 @@ export function WorldGraphPage({
                   renderAppPreviewPipelinePanel={renderAppPreviewPipelinePanel}
                   renderInteractivePrototypeModal={renderInteractivePrototypeModal}
                   renderNarrativeRpgPlayablePanel={renderNarrativeRpgPlayablePanel}
+                  renderWikiEntityPageNavigation={renderWikiEntityPageNavigation}
                   renderWikiEntityPage={renderWikiEntityPage}
                   renderOutputLibraryPanel={renderOutputLibraryPanel}
                   renderOutputLibraryRail={renderOutputLibraryRail}
@@ -13045,7 +13179,7 @@ export function WorldGraphPage({
                             ) : null}
                           </div>
                           <div className="world-wiki-sequence-animatic-panel-stack">
-                            <div className="world-wiki-sequence-animatic-frame">
+                            <div className={shot.panelUrl ? 'world-wiki-sequence-animatic-frame has-image' : 'world-wiki-sequence-animatic-frame is-empty'}>
                               {shot.panelUrl ? <img src={shot.panelUrl} alt="" /> : (
                                 <span>
                                   {shot.panelRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
@@ -13207,60 +13341,11 @@ export function WorldGraphPage({
               <EntityIcon id="close" />
             </button>
             <header>
-              <span className="eyebrow">{sequenceAnimaticShotInspector.kind === 'camera' ? 'Camera' : 'Lighting'}</span>
+              <span className="eyebrow">{sequenceAnimaticShotInspector.kind === 'camera' ? 'Camera' : sequenceAnimaticShotInspector.kind === 'lighting' ? 'Lighting' : 'Performance'}</span>
               <h3>{sequenceAnimaticShotInspector.shotTitle}</h3>
               <p>{sequenceAnimaticShotInspector.blockTitle}</p>
             </header>
             <p>{sequenceAnimaticShotInspector.content}</p>
-          </section>
-        </div>
-      ) : null}
-      {sequenceAnimaticShotPrompt ? (
-        <div className="world-wiki-sequence-video-overlay" onClick={() => sequenceAnimaticShotPrompt.status === 'idle' || sequenceAnimaticShotPrompt.status === 'failed' ? setSequenceAnimaticShotPrompt(null) : null}>
-          <section className="world-wiki-sequence-shot-prompt-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Prompt this shot">
-            <button
-              className="world-wiki-sequence-animatic-close"
-              disabled={!['idle', 'failed'].includes(sequenceAnimaticShotPrompt.status)}
-              onClick={() => setSequenceAnimaticShotPrompt(null)}
-              type="button"
-              aria-label="Close shot revision"
-            >
-              <EntityIcon id="close" />
-            </button>
-            <header>
-              <span className="eyebrow">Shot revision</span>
-              <h3>{sequenceAnimaticShotPrompt.shotTitle}</h3>
-              <p>Rewrite this shot and generate a replacement keyframe without changing the master manifest.</p>
-            </header>
-            <textarea
-              value={sequenceAnimaticShotPrompt.prompt}
-              disabled={!['idle', 'failed'].includes(sequenceAnimaticShotPrompt.status)}
-              onChange={(event) => setSequenceAnimaticShotPrompt((current) => current ? { ...current, prompt: event.target.value, status: 'idle', error: null } : current)}
-              placeholder="Example: change this to a low-angle close shot with harsher side light, keeping the same characters and setting."
-            />
-            {sequenceAnimaticShotPrompt.error ? <div className="inline-note is-warning">{sequenceAnimaticShotPrompt.error}</div> : null}
-            {!['idle', 'failed'].includes(sequenceAnimaticShotPrompt.status) ? (
-              <div className="world-wiki-sequence-shot-prompt-progress">
-                <span className="world-mini-spinner" aria-hidden="true" />
-                <strong>{sequenceAnimaticShotPrompt.status === 'rewriting' ? 'Rewriting shot' : sequenceAnimaticShotPrompt.status === 'generating' ? 'Generating keyframe' : 'Saving revision'}</strong>
-              </div>
-            ) : null}
-            <div className="world-wiki-sequence-shot-prompt-actions">
-              <button className="ghost-button compact" onClick={() => setSequenceAnimaticShotPrompt(null)} disabled={!['idle', 'failed'].includes(sequenceAnimaticShotPrompt.status)} type="button">Cancel</button>
-              <button
-                className="world-wiki-sequence-animatic-primary"
-                disabled={!['idle', 'failed'].includes(sequenceAnimaticShotPrompt.status)}
-                onClick={() => {
-                  const model = sequenceAnimaticPreviewModel
-                  const block = model?.blocks.find((entry) => entry.id === sequenceAnimaticShotPrompt.storyboardBlockId) ?? null
-                  const shot = block?.shots.find((entry) => entry.id === sequenceAnimaticShotPrompt.shotId) ?? null
-                  if (model && block && shot) void handleRunSequenceAnimaticShotRevision(model, block, shot, sequenceAnimaticShotPrompt.prompt)
-                }}
-                type="button"
-              >
-                {sequenceAnimaticShotPrompt.status === 'failed' ? 'Retry revision' : 'Generate revision'}
-              </button>
-            </div>
           </section>
         </div>
       ) : null}

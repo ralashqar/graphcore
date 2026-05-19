@@ -17,6 +17,8 @@ export type EntityIconId =
   | 'asset'
   | 'activity'
   | 'cinematic'
+  | 'camera'
+  | 'lighting'
   | 'global'
   | 'release'
   | 'archetype'
@@ -229,6 +231,21 @@ function IconPath({ id }: { id: EntityIconId }) {
           <rect x="4.5" y="6.2" width="15" height="11.6" rx="2.2" {...stroke} />
           <path d="M8.5 6.2v11.6M15.5 6.2v11.6M4.5 10h15M4.5 14h15" {...stroke} />
           <path d="m10 10.2 4.2 1.8-4.2 1.8z" {...stroke} style={{ fill: 'currentColor', stroke: 'none' }} />
+        </>
+      )
+    case 'camera':
+      return (
+        <>
+          <path d="M4.8 8.2h9.4c1.1 0 2 .9 2 2v4.2c0 1.1-.9 2-2 2H4.8c-1.1 0-2-.9-2-2v-4.2c0-1.1.9-2 2-2Z" {...stroke} />
+          <path d="m16.2 11 4.9-2.8v8l-4.9-2.8V11Z" {...stroke} />
+          <path d="M6.2 6.1h5.2l1.2 2.1H5.1l1.1-2.1Z" {...stroke} />
+          <circle cx="8.3" cy="12.3" r="1.7" {...stroke} />
+        </>
+      )
+    case 'lighting':
+      return (
+        <>
+          <path d="M13.4 3.8 6.5 13h5.1l-1 7.2 6.9-9.2h-5.1l1-7.2Z" {...stroke} />
         </>
       )
     case 'global':

@@ -113,6 +113,7 @@ type WorldWikiPanelProps = {
   renderAppPreviewPipelinePanel: () => ReactNode
   renderInteractivePrototypeModal: () => ReactNode
   renderNarrativeRpgPlayablePanel: () => ReactNode
+  renderWikiEntityPageNavigation?: () => ReactNode
   renderWikiEntityPage: () => ReactNode
   renderOutputLibraryPanel: () => ReactNode
   renderOutputLibraryRail: () => ReactNode
@@ -413,6 +414,7 @@ export function WorldWikiPanel({
   renderAppPreviewPipelinePanel,
   renderInteractivePrototypeModal,
   renderNarrativeRpgPlayablePanel,
+  renderWikiEntityPageNavigation,
   renderWikiEntityPage,
   renderOutputLibraryPanel,
   renderOutputLibraryRail,
@@ -468,6 +470,9 @@ export function WorldWikiPanel({
   const activeEntitySection = activeWikiEntityPage
     ? wikiModel.sections.find((section) => section.kind === activeWikiEntityPage.sectionKind) ?? null
     : null
+  const activeEntityPageNavigation = activeWikiEntityPage
+    ? renderWikiEntityPageNavigation?.() ?? null
+    : null
   const activeEntitySectionEntities = activeEntitySection
     ? resolveEntityPageNavEntities({
       section: activeEntitySection,
@@ -484,7 +489,7 @@ export function WorldWikiPanel({
           <>
         <div className="world-wiki-index-list">
           {activeWikiEntityPage && activeEntitySection ? (
-            <>
+            activeEntityPageNavigation ?? <>
               <button className="world-wiki-entity-nav-crumb" onClick={onCloseWikiEntityPage} type="button">
                 <EntityIcon id="close" />
                 <strong>Back to world view</strong>
