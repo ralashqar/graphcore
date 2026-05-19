@@ -5864,6 +5864,40 @@ export default function App() {
     return result
   }
 
+  async function ensureSequenceAnimaticShotRevisionWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticShotRevisionWorkflow>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before revising a sequence animatic shot.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic shot revisions require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticShotRevisionWorkflow(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const workflows = result.workflow ? [result.workflow] : []
+    const requests = [result.masterRequest, ...(result.revisionRequest ? [result.revisionRequest] : [])]
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+      outputWorkflows: [
+        ...workflows,
+        ...current.outputWorkflows.filter((workflow) => !workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function loadSequenceAnimaticState(request: Parameters<typeof workspaceService.loadSequenceAnimaticState>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before loading sequence animatic state.')
@@ -8434,13 +8468,14 @@ export default function App() {
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
                 onEnsureSequenceAnimaticBlockWorkflows={ensureSequenceAnimaticBlockWorkflows}
                 onEnsureSequenceAnimaticContinuityWorkflow={ensureSequenceAnimaticContinuityWorkflow}
+                onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}
                 onSubscribeSequenceAnimaticStateSignals={workspaceService.subscribeSequenceAnimaticStateSignals}
                 onGetOutputRequestStatus={getOutputRequestStatus}
                 onCancelOutputRequest={cancelOutputRequest}
                 onRequestDeleteOutputRequest={requestDeleteOutputRequest}
                 onOpenOutputStudio={(requestId, target = 'details', selectedNodeKey = null, returnTarget = null) => {
-                  if (target === 'graph' && activeTab === 'graph') {
+                  if (target === 'graph' && (activeTab === 'graph' || returnTarget?.kind === 'wiki_sequence_animatic')) {
                     setPendingOutputGraphOverlayIntent({
                       requestId: requestId ?? null,
                       selectedNodeKey,

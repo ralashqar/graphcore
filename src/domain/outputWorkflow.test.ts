@@ -31,6 +31,9 @@ import {
   selectOutputWorkflowRunSubgraph,
   sequenceAnimaticContinuityPackV1Schema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
+  sequenceAnimaticShotRevisionArtifactV1Schema,
+  sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
+  sequenceAnimaticManifestV1Schema,
   sequenceAnimaticGraphRoleSchema,
   sequenceAnimaticModeSchema,
   topologicallySortOutputWorkflow,
@@ -39,6 +42,7 @@ import {
 } from './outputWorkflow.ts'
 import {
   buildSequenceAnimaticContinuityWorkflowGraph,
+  buildSequenceAnimaticShotRevisionWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
 } from '../../supabase/functions/_shared/sequence-animatic-workflow-factory.ts'
 import {
@@ -1122,6 +1126,28 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
 
 test('sequence animatic continuity sidecar has typed role, pack schema, and graph contracts', () => {
   assert.equal(sequenceAnimaticGraphRoleSchema.parse('continuity_pack'), 'continuity_pack')
+  assert.deepEqual(sequenceAnimaticManifestV1Schema.parse({
+    role: 'sequence_animatic_manifest',
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    screenplayAnimaticRole: 'master',
+    sequenceAnimaticRole: 'master',
+    workflowId: 'workflow-master',
+    runId: 'run-master',
+    screenplayDraft: {},
+    screenplayMarkdown: '',
+    shotBreakPlan: {},
+    shotPlan: {},
+    blocks: [],
+    assetPack: { entities: [{ key: 'hero', name: 'Hero' }] },
+    selectedVisualReferenceKeys: ['hero'],
+    animaticReferenceCatalog: [{ key: 'hero', name: 'Hero', aliases: ['Captain Hero'] }],
+    continuityAnchorPlan: {},
+    characterAnchors: [],
+    propAnchors: [],
+    locationSpotAnchors: [],
+    anchorAssets: [],
+    diagnostics: [],
+  }).animaticReferenceCatalog[0].key, 'hero')
   assert.equal(sequenceAnimaticContinuityWorkflowEnsureRequestSchema.parse({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -1151,6 +1177,14 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     diagnostics: [],
   }).sequenceAnimaticRole, 'continuity_pack')
 
+  const continuityInputContract = getOutputWorkflowNodeContract({
+    key: 'continuity_input',
+    nodeType: 'utility_transform',
+    config: { purpose: 'sequence_animatic_continuity_input' },
+  })
+  assert.ok(continuityInputContract?.producedOutputs.includes('continuityPlannerContext'))
+  assert.ok(continuityInputContract?.producedOutputs.includes('continuity_planner_context'))
+
   const continuityPlanContract = getOutputWorkflowNodeContract({
     key: 'continuity_plan',
     nodeType: 'utility_transform',
@@ -1158,6 +1192,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   })
   assert.equal(continuityPlanContract?.providerBacked, true)
   assert.ok(continuityPlanContract?.requiredInputs.includes('asset_pack'))
+  assert.ok(!continuityPlanContract?.requiredInputs.includes('continuity_planner_context'))
   assert.ok(continuityPlanContract?.producedOutputs.includes('locationSets'))
   assert.ok(continuityPlanContract?.producedOutputs.includes('sceneGraph'))
   assert.ok(continuityPlanContract?.producedOutputs.includes('rejectedCandidates'))
@@ -1196,6 +1231,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.ok(purposes.includes('sequence_animatic_prop_anchor_atlas_prompt'))
   assert.ok(purposes.includes('sequence_animatic_location_anchor_extract'))
   assert.ok(purposes.includes('sequence_animatic_continuity_artifact'))
+  assert.ok(graph.edges.some((edge) => edge.source_port === 'continuity_planner_context' && edge.target_port === 'continuity_planner_context'))
   const validation = validateOutputWorkflowGraph({
     nodes: graph.nodes.map((node) => ({
       key: node.key,
@@ -1257,6 +1293,25 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   const agentsSource = readFileSync(resolve(repoRoot, 'AGENTS.md'), 'utf8')
 
   assert.match(workerSource, /collectSequenceAnimaticContinuityAnchors/)
+  assert.match(workerSource, /function readArray\(value: unknown\): unknown\[\]/)
+  assert.ok(workerSource.indexOf('function readArray(value: unknown): unknown[]') < workerSource.indexOf('readArray(fallbackPlan.anchors)'))
+  assert.match(workerSource, /buildSequenceAnimaticContinuityPlannerContext/)
+  assert.match(workerSource, /function buildSequenceAnimaticReferenceCatalog/)
+  assert.match(workerSource, /animaticReferenceCatalog/)
+  assert.match(workerSource, /selectedVisualReferenceKeys/)
+  assert.match(workerSource, /context__sequence_manifest/)
+  assert.match(workerSource, /continuityPlannerContext/)
+  assert.match(workerSource, /continuity_planner_context/)
+  assert.match(workerSource, /Use the compact planner context as the truth source/)
+  assert.match(workerSource, /Treat existingWorldReferences and every shot\.resolvedRefs entry as canonical/)
+  assert.match(workerSource, /resolvedRefs/)
+  assert.match(workerSource, /unresolvedShotRefs/)
+  const continuityPromptSource = workerSource.slice(
+    workerSource.indexOf('const continuityPrompt = ['),
+    workerSource.indexOf('let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground'),
+  )
+  assert.doesNotMatch(continuityPromptSource, /screenplayMarkdown/)
+  assert.match(continuityPromptSource, /compactForPrompt\(\{ continuityPlannerContext \}, 16_000\)/)
   assert.match(workerSource, /runCinematicV2StructuredNode/)
   assert.match(workerSource, /planningMode: 'llm_structured_v2'/)
   assert.match(workerSource, /planningMode: 'deterministic_fallback'/)
@@ -1287,6 +1342,7 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(worldGraphSource, /continuityAnchors\.characters/)
   assert.match(worldGraphSource, /shot\.continuityAnchorIds/)
   assert.match(agentsSource, /Sequence animatic continuity anchors are output-local references/)
+  assert.match(agentsSource, /animaticReferenceCatalog/)
 })
 
 test('sequence animatic production hardening uses atomic ensures, signal refresh, and background continuity planning', () => {
@@ -1324,6 +1380,8 @@ test('sequence animatic production hardening uses atomic ensures, signal refresh
   assert.doesNotMatch(worldGraphSource, /setInterval\(refresh, 2500\)/)
 
   assert.match(workerSource, /runCinematicV2StructuredNodeBackground\({[\s\S]*schemaName: 'sequence_animatic_continuity_plan_v2'/)
+  assert.match(workerSource, /const directShotPlan = readFirstUpstreamRecord\(input\.upstream, \['shotPlan', 'shot_plan'\]\)/)
+  assert.match(workerSource, /Array\.isArray\(directShotPlan\.shots\) && directShotPlan\.shots\.length > 0/)
   assert.match(workerSource, /priorProviderRequestId: readText\(input\.priorStep\?\.providerRequestId\)/)
   assert.match(workerSource, /plannerFallbackReason/)
   assert.match(workerSource, /continuityPlanner: true/)
@@ -1539,6 +1597,95 @@ test('sequence animatic shot videos use cropped panel keyframe mini graphs', () 
   assert.doesNotMatch(workerSource, /purpose === 'sequence_animatic_shot_video_prompt'[\s\S]{0,5000}storyboard group/)
   assert.match(skillsSource, /sequence_animatic_shot_video_prompt/)
   assert.match(skillsSource, /sequence_animatic_shot_video/)
+})
+
+test('sequence animatic shot revisions have output-local graph contracts and artifacts', () => {
+  assert.equal(sequenceAnimaticGraphRoleSchema.parse('shot_revision'), 'shot_revision')
+  assert.equal(sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    storyboardBlockId: 'block-1',
+    shotId: 'shot_001',
+    prompt: 'Change to a low-angle close shot.',
+  }).shotId, 'shot_001')
+  assert.equal(sequenceAnimaticShotRevisionArtifactV1Schema.parse({
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    screenplayAnimaticRole: 'shot_revision',
+    sequenceAnimaticRole: 'shot_revision',
+    masterRequestId: 'request-master',
+    storyboardBlockId: 'block-1',
+    shotId: 'shot_001',
+    revisionId: 'revision-1',
+    sourceManifestHash: 'manifest-hash',
+    basePanelAssetKey: 'panel-asset',
+    revisedShot: { id: 'shot_001', action: 'A revised action.' },
+    keyframeAssetKey: 'keyframe-asset',
+    prompt: 'Change the angle.',
+    diagnostics: [],
+  }).keyframeAssetKey, 'keyframe-asset')
+
+  const graph = buildSequenceAnimaticShotRevisionWorkflowGraph({
+    workflowId: 'workflow-revision',
+    draftId: 'draft-1',
+    commonConfig: {
+      graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+      screenplayAnimaticRole: 'shot_revision',
+      sequenceAnimaticRole: 'shot_revision',
+      masterRequestId: 'request-master',
+      parentRequestId: 'request-block',
+      storyboardBlockId: 'block-1',
+      shotId: 'shot_001',
+      manifestHash: 'manifest-hash',
+      blockHash: 'block-hash',
+      masterManifestArtifactKey: 'manifest-artifact',
+    },
+    block: { id: 'block-1', shots: [{ id: 'shot_001' }] },
+    shot: {
+      id: 'shot_001',
+      index: 1,
+      title: 'First shot',
+      action: 'Hero looks up.',
+      dialogue: [],
+      visibleCharacterRefIds: [],
+      speakerRefIds: [],
+      propRefIds: [],
+      editorialDurationSeconds: 3,
+      providerDurationSeconds: 5,
+    },
+    panel: { assetKey: 'panel-asset', shotId: 'shot_001' },
+    assetPack: { entities: [] },
+    revisionPrompt: 'Change the camera angle.',
+    revisionId: 'revision-1',
+    aspectRatio: '16:9',
+  })
+  const purposes = graph.nodes.map((node) => readConfigPurpose({ config: node.config }))
+  assert.deepEqual(purposes, [
+    'sequence_animatic_shot_revision_input',
+    'sequence_animatic_shot_revision_plan',
+    'sequence_animatic_shot_keyframe_prompt',
+    'sequence_animatic_shot_keyframe_image',
+    'sequence_animatic_shot_revision_artifact',
+  ])
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'shot_revision_plan' && edge.source_port === 'revised_shot' && edge.target_node_key === 'shot_keyframe_prompt'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'shot_revision_input' && edge.source_port === 'base_keyframe' && edge.target_node_key === 'shot_keyframe_image'))
+  const revisionPlanContract = getOutputWorkflowNodeContract({ key: 'shot_revision_plan', nodeType: 'utility_transform', config: { purpose: 'sequence_animatic_shot_revision_plan' } })
+  assert.equal(revisionPlanContract?.providerBacked, true)
+  assert.ok(revisionPlanContract?.producedOutputs.includes('revisedShot'))
+  const artifactContract = getOutputWorkflowNodeContract({ key: 'shot_revision_artifact', nodeType: 'output_artifact', config: { purpose: 'sequence_animatic_shot_revision_artifact' } })
+  assert.ok(artifactContract?.artifactRoles.includes('sequence_animatic_shot_revision'))
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-shot-revision-workflow/index.ts'), 'utf8')
+  const wikiSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  assert.match(workerSource, /sequenceAnimaticShotRevisionPlanSchema/)
+  assert.match(workerSource, /Return a complete revised shot object/)
+  assert.match(workerSource, /sequence_animatic_shot_keyframe_image/)
+  assert.match(workerSource, /sequence_animatic_shot_revision_artifact/)
+  assert.match(ensureSource, /sequence_animatic_shot_revision/)
+  assert.match(ensureSource, /basePanelAssetKey/)
+  assert.match(wikiSource, /wikiAnimatic/)
+  assert.match(wikiSource, /Prompt this/)
 })
 
 test('cinematic output preset creates script-first dynamic take fanout placeholder', () => {

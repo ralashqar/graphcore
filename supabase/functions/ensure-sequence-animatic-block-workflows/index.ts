@@ -291,6 +291,34 @@ Deno.serve(async (request) => {
         .order('created_at', { ascending: true })
       if (shotChildrenResponse.error) throw new Error(shotChildrenResponse.error.message)
       const shotChildren = (shotChildrenResponse.data ?? []).map(mapOutputRequestRow)
+      const revisionWorkflowIds = shotChildren
+        .filter((child) => {
+          const metadata = asRecord(child.metadata)
+          return metadata.sequenceAnimaticStale !== true
+            && readScreenplayAnimaticRole(metadata) === 'shot_revision'
+            && readText(metadata.shotId) === shotId
+            && child.workflowId
+        })
+        .map((child) => child.workflowId as string)
+      let latestShotRevision: Record<string, unknown> | null = null
+      if (revisionWorkflowIds.length > 0) {
+        const revisionArtifactsResponse = await client
+          .from('output_artifacts')
+          .select(outputArtifactSelect)
+          .eq('project_id', payload.projectId)
+          .eq('draft_id', payload.draftId)
+          .in('workflow_id', revisionWorkflowIds)
+          .order('created_at', { ascending: false })
+        if (revisionArtifactsResponse.error) throw new Error(revisionArtifactsResponse.error.message)
+        latestShotRevision = (revisionArtifactsResponse.data ?? [])
+          .map(asRecord)
+          .find((row) => {
+            const metadata = asRecord(row.metadata)
+            return readText(metadata.role) === 'sequence_animatic_shot_revision'
+              && readText(metadata.shotId) === shotId
+              && (readText(metadata.keyframeAssetKey) || readText(row.asset_key))
+          }) ?? null
+      }
       const existingShotChild = shotChildren.find((child) => {
         const metadata = asRecord(child.metadata)
         return metadata.sequenceAnimaticStale !== true
@@ -326,17 +354,35 @@ Deno.serve(async (request) => {
         if (!panelArtifact) {
           throw new HttpError(409, 'Generate/extract the storyboard panel before creating a shot video workflow.')
         }
-        const panelArtifactRecord = asRecord(panelArtifact)
+        const revisionMetadata = asRecord(latestShotRevision?.metadata)
+        const revisionRecord = asRecord(revisionMetadata.revision)
+        const revisedShot = asRecord(revisionMetadata.revisedShot ?? revisionRecord.revisedShot)
+        const effectiveShot = Object.keys(revisedShot).length > 0 ? { ...shot, ...revisedShot, id: shotId } : shot
+        const basePanelArtifactRecord = asRecord(panelArtifact)
+        const panelArtifactRecord = latestShotRevision && (readText(revisionMetadata.keyframeAssetKey) || readText(latestShotRevision.asset_key))
+          ? {
+            ...basePanelArtifactRecord,
+            asset_key: readText(revisionMetadata.keyframeAssetKey) || readText(latestShotRevision.asset_key),
+            key: readText(latestShotRevision.key) || readText(basePanelArtifactRecord.key),
+            metadata: {
+              ...asRecord(basePanelArtifactRecord.metadata),
+              ...revisionMetadata,
+              role: 'sequence_animatic_shot_revision_keyframe',
+              sourcePanelAssetKey: readText(basePanelArtifactRecord.asset_key),
+              revisionArtifactKey: readText(latestShotRevision.key),
+            },
+          }
+          : basePanelArtifactRecord
         const panelMetadata = asRecord(panelArtifactRecord.metadata)
-        const editorialDurationSeconds = Math.max(0.5, Math.min(15, Number(shot.editorialDurationSeconds ?? 0) || Number(panelMetadata.editorialDurationSeconds ?? 0) || 3))
-        const providerDurationSeconds = providerSafeSequenceAnimaticVideoDurationSeconds(shot.providerDurationSeconds ?? editorialDurationSeconds)
+        const editorialDurationSeconds = Math.max(0.5, Math.min(15, Number(effectiveShot.editorialDurationSeconds ?? 0) || Number(panelMetadata.editorialDurationSeconds ?? 0) || 3))
+        const providerDurationSeconds = providerSafeSequenceAnimaticVideoDurationSeconds(effectiveShot.providerDurationSeconds ?? editorialDurationSeconds)
         const blockHash = sequenceAnimaticStableHash(block)
-        const shotHash = sequenceAnimaticStableHash({ blockId: storyboardBlockId, shot, panelAssetKey: readText(panelArtifactRecord.asset_key) })
+        const shotHash = sequenceAnimaticStableHash({ blockId: storyboardBlockId, shot: effectiveShot, panelAssetKey: readText(panelArtifactRecord.asset_key) })
         const workflowPayload = {
             project_id: payload.projectId,
             draft_id: payload.draftId,
             key: `sequence_animatic_shot_${slugify(blockRequest.id)}_${slugify(shotId)}_${shotHash.slice(0, 8)}`,
-            name: `${blockRequest.title} / Shot ${Number(shot.index ?? 0) || shots.indexOf(shot) + 1}`,
+            name: `${blockRequest.title} / Shot ${Number(effectiveShot.index ?? 0) || shots.indexOf(shot) + 1}`,
             description: 'Sequence animatic per-shot video workflow.',
             preset: 'cinematic_episode_from_sequence',
             status: 'active',
@@ -382,7 +428,7 @@ Deno.serve(async (request) => {
         const panel = {
           id: readText(panelMetadata.panelId) || `${shotId}_panel`,
           role: 'cinematic_v2_shot_keyframe',
-          name: `${readText(shot.title) || `Shot ${Number(shot.index ?? 0) || shots.indexOf(shot) + 1}`} cropped panel keyframe`,
+          name: `${readText(effectiveShot.title) || `Shot ${Number(effectiveShot.index ?? 0) || shots.indexOf(shot) + 1}`} cropped panel keyframe`,
           assetKey: readText(panelArtifactRecord.asset_key),
           artifactKey: readText(panelArtifactRecord.key),
           mimeType: readText(panelArtifactRecord.mime_type),
@@ -395,6 +441,8 @@ Deno.serve(async (request) => {
         const shotContinuityAnchorIds = mergeAnchorIds(
           readStringArray(shot.continuityAnchorIds),
           readStringArray(shot.continuityAnchorRefIds),
+          readStringArray(effectiveShot.continuityAnchorIds),
+          readStringArray(effectiveShot.continuityAnchorRefIds),
           continuityAnchorIdsForScope(continuityAnchorSource, 'shotIds', shotId),
         )
         const shotAssetPack = assetPackWithContinuityAnchors(
@@ -407,7 +455,7 @@ Deno.serve(async (request) => {
           draftId: payload.draftId,
           commonConfig,
           block,
-          shot,
+          shot: effectiveShot,
           panel,
           assetPack: shotAssetPack,
           editorialDurationSeconds,
@@ -420,8 +468,8 @@ Deno.serve(async (request) => {
             parent_request_id: blockRequest.id,
             requested_by: user.id,
             source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
-            prompt: `Generate a per-shot video take for ${readText(shot.title) || shotId}.`,
-            title: `${blockRequest.title} / Shot ${Number(shot.index ?? 0) || shots.indexOf(shot) + 1}`,
+            prompt: `Generate a per-shot video take for ${readText(effectiveShot.title) || shotId}.`,
+            title: `${blockRequest.title} / Shot ${Number(effectiveShot.index ?? 0) || shots.indexOf(shot) + 1}`,
             intent: 'output_generation',
             output_kind: 'cinematic_episode',
             status: 'awaiting_confirmation',
@@ -453,7 +501,9 @@ Deno.serve(async (request) => {
               providerDurationSeconds,
               readyToRun: true,
               createdFromManifestAt: now,
-              shot,
+              shot: effectiveShot,
+              sourceShotRevisionId: readText(revisionMetadata.revisionId) || null,
+              sourceShotRevisionArtifactKey: readText(latestShotRevision?.key) || null,
             },
           }
         const ensureResponse = await admin.rpc('ensure_sequence_animatic_child_workflow', {

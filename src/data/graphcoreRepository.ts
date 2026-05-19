@@ -187,6 +187,8 @@ import {
   sequenceAnimaticBlockWorkflowEnsureResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
   sequenceAnimaticContinuityWorkflowEnsureResponseSchema,
+  sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
+  sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema,
   sequenceAnimaticStateRequestSchema,
   sequenceAnimaticStateResponseSchema,
   type OutputArtifact,
@@ -210,6 +212,7 @@ import {
   type OutputWorkflowUpgradeResponse,
   type SequenceAnimaticBlockWorkflowEnsureResponse,
   type SequenceAnimaticContinuityWorkflowEnsureResponse,
+  type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNodeOutputResponse,
 } from '../domain/outputWorkflow'
@@ -8588,6 +8591,40 @@ export async function ensureSequenceAnimaticContinuityWorkflow(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = sequenceAnimaticContinuityWorkflowEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function ensureSequenceAnimaticShotRevisionWorkflow(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    storyboardBlockId: string
+    shotId: string
+    prompt: string
+  },
+): Promise<SequenceAnimaticShotRevisionWorkflowEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before revising a sequence animatic shot.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic shot revisions require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    storyboardBlockId: request.storyboardBlockId,
+    shotId: request.shotId,
+    prompt: request.prompt,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-shot-revision-workflow',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

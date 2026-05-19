@@ -18,7 +18,7 @@ const cinematicSequenceContracts = [
     purpose: 'sequence_animatic_manifest',
     label: 'Build Animatic Manifest',
     requiredInputs: ['screenplay', 'shot_break_plan'],
-    producedOutputs: ['text', 'manifest', 'sequenceAnimaticManifest', 'shot_plan'],
+    producedOutputs: ['text', 'manifest', 'sequenceAnimaticManifest', 'shot_plan', 'animaticReferenceCatalog', 'animatic_reference_catalog', 'selectedVisualReferenceKeys'],
     artifactRoles: [],
     previewRoles: ['text'],
     recoveryStrategy: 'node_step',
@@ -78,7 +78,7 @@ const cinematicSequenceContracts = [
     purpose: 'sequence_animatic_continuity_input',
     label: 'Continuity Input',
     requiredInputs: [],
-    producedOutputs: ['text', 'master_manifest', 'screenplay', 'shot_plan', 'shot_break_plan', 'asset_pack'],
+    producedOutputs: ['text', 'master_manifest', 'screenplay', 'shot_plan', 'shot_break_plan', 'asset_pack', 'animaticReferenceCatalog', 'animatic_reference_catalog', 'continuityPlannerContext', 'continuity_planner_context'],
     artifactRoles: [],
     previewRoles: ['text'],
     recoveryStrategy: 'node_step',
@@ -169,6 +169,66 @@ const cinematicSequenceContracts = [
     progressLabel: 'Generating shot video',
     providerBacked: true,
     manualOnly: true,
+  },
+  {
+    purpose: 'sequence_animatic_shot_revision_input',
+    label: 'Shot Revision Input',
+    requiredInputs: [],
+    producedOutputs: ['text', 'shot', 'baseShot', 'baseKeyframe', 'asset_pack', 'revisionPrompt'],
+    artifactRoles: [],
+    previewRoles: ['text', 'image'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing shot revision input',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_shot_revision_plan',
+    label: 'Revise Shot',
+    requiredInputs: ['shot', 'revision_prompt'],
+    producedOutputs: ['text', 'revisedShot', 'revisionPlan', 'diagnostics'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Rewriting shot',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_shot_keyframe_prompt',
+    label: 'Shot Keyframe Prompt',
+    requiredInputs: ['revised_shot', 'asset_pack', 'base_keyframe'],
+    producedOutputs: ['text', 'prompt', 'revisedShot', 'asset_pack'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing keyframe prompt',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_shot_keyframe_image',
+    label: 'Shot Keyframe Image',
+    requiredInputs: ['prompt', 'references'],
+    producedOutputs: ['image', 'assetKey'],
+    artifactRoles: ['sequence_animatic_shot_keyframe'],
+    previewRoles: ['image'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Generating keyframe',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_shot_revision_artifact',
+    label: 'Register Shot Revision',
+    requiredInputs: ['revised_shot'],
+    producedOutputs: ['artifact', 'revision', 'revisedShot', 'keyframe'],
+    artifactRoles: ['sequence_animatic_shot_revision'],
+    previewRoles: ['artifact', 'image'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving shot revision',
+    providerBacked: false,
+    manualOnly: false,
   },
   {
     purpose: 'sequence_animatic_continuity_anchor_plan',
@@ -331,6 +391,7 @@ export type OutputWorkflowRunIntent =
   | 'generate_continuity_pack'
   | 'generate_block_video'
   | 'generate_shot_video'
+  | 'revise_sequence_animatic_shot'
   | 'repair_upstream_cache'
   | 'rerun_node_and_dependents'
 
@@ -369,6 +430,13 @@ export function outputWorkflowRunIntentDefaults(intent: string | null | undefine
         runScope: 'upstream_to_node',
         debugSkipVideoGeneration: false,
         cinematicVideoApproved: true,
+        allowStaleUpstreamOutputs: true,
+      }
+    case 'revise_sequence_animatic_shot':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: false,
+        cinematicVideoApproved: false,
         allowStaleUpstreamOutputs: true,
       }
     case 'repair_upstream_cache':

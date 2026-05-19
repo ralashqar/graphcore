@@ -93,6 +93,7 @@ export const workspaceService = {
   startOutputWorkflowRun: graphcoreWorkspaceAdapter.startOutputWorkflowRun,
   ensureSequenceAnimaticBlockWorkflows: graphcoreWorkspaceAdapter.ensureSequenceAnimaticBlockWorkflows,
   ensureSequenceAnimaticContinuityWorkflow: graphcoreWorkspaceAdapter.ensureSequenceAnimaticContinuityWorkflow,
+  ensureSequenceAnimaticShotRevisionWorkflow: graphcoreWorkspaceAdapter.ensureSequenceAnimaticShotRevisionWorkflow,
   startVisualGenerationJob: graphcoreWorkspaceAdapter.startVisualGenerationJob,
   startWorldEntityIconBatch: graphcoreWorkspaceAdapter.startWorldEntityIconBatch,
   continueWorldSeedGeneration: graphcoreWorkspaceAdapter.continueWorldSeedGeneration,

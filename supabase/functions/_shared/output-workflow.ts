@@ -343,6 +343,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'output'
 }
@@ -5086,6 +5090,255 @@ function normalizeSequenceAnimaticContinuityPlan(input: {
   }
 }
 
+function compactSequenceAnimaticText(value: unknown, maxLength = 900) {
+  const text = readText(value).replace(/\s+/g, ' ')
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text
+}
+
+function sequenceAnimaticPersistentLightingCue(value: unknown) {
+  const text = compactSequenceAnimaticText(value, 360)
+  if (!text) return ''
+  return /\b(lantern|torch|fire|candle|window|sun|moon|neon|monitor|screen|emergency|practical|lamp|spotlight|backlight|silhouette|strobe|flicker|glow from|shafts? of light)\b/i.test(text)
+    ? text
+    : ''
+}
+
+function compactSequenceAnimaticCamera(shot: Record<string, unknown>) {
+  const camera = asRecord(shot.camera)
+  return {
+    framing: compactSequenceAnimaticText(camera.framing ?? shot.framing, 220),
+    angle: compactSequenceAnimaticText(camera.angle ?? shot.cameraAngle, 220),
+    movement: compactSequenceAnimaticText(camera.movement ?? shot.cameraMovement, 260),
+  }
+}
+
+function compactSequenceAnimaticReferenceEntry(entity: Record<string, unknown>, assets: Record<string, unknown>[], source: string) {
+  const metadata = asRecord(entity.metadata)
+  const key = readText(entity.key)
+  const type = readText(entity.type) || readText(entity.role) || readText(entity.nodeType ?? entity.node_type)
+  const selectedReferenceVariantAssetKey = selectedReferenceVariantAssetKeyForEntity(entity)
+  const packedAssetKeys = [
+    readText(entity.primaryAssetKey),
+    selectedReferenceVariantAssetKey,
+    ...readStringArray(entity.assetKeys),
+  ].filter(Boolean)
+  const worldAssetKeys = entityAssetKeys(entity, assets)
+  const visualSummary = compactSequenceAnimaticText(
+    readText(entity.visualDescription)
+      || readText(metadata.visualDescription)
+      || readOutputEntityVisualDescription(entity),
+    700,
+  )
+  return {
+    key,
+    name: readText(entity.name) || readText(entity.label) || key,
+    type,
+    aliases: [...new Set([
+      ...readStringArray(entity.aliases),
+      ...readStringArray(metadata.aliases),
+    ])].filter(Boolean),
+    summary: compactSequenceAnimaticText(readText(entity.summary) || readText(entity.context), 700),
+    visualSummary,
+    assetKeys: [...new Set([...packedAssetKeys, ...worldAssetKeys])].filter(Boolean).slice(0, 8),
+    referenceRole: type || readText(entity.referenceRole) || 'entity',
+    source,
+  }
+}
+
+function mergeSequenceAnimaticReferenceCatalogEntries(entries: Array<Record<string, unknown>>) {
+  const byKey = new Map<string, Record<string, unknown>>()
+  for (const entry of entries) {
+    const key = readText(entry.key)
+    if (!key) continue
+    const existing = byKey.get(key)
+    if (!existing) {
+      byKey.set(key, entry)
+      continue
+    }
+    byKey.set(key, {
+      ...existing,
+      ...entry,
+      name: readText(existing.name) || readText(entry.name),
+      type: readText(existing.type) || readText(entry.type),
+      summary: readText(existing.summary) || readText(entry.summary),
+      visualSummary: readText(existing.visualSummary) || readText(entry.visualSummary),
+      aliases: [...new Set([...readStringArray(existing.aliases), ...readStringArray(entry.aliases)])].filter(Boolean),
+      assetKeys: [...new Set([...readStringArray(existing.assetKeys), ...readStringArray(entry.assetKeys)])].filter(Boolean).slice(0, 8),
+      source: [...new Set([readText(existing.source), readText(entry.source)].filter(Boolean))].join('+'),
+    })
+  }
+  return [...byKey.values()]
+}
+
+function buildSequenceAnimaticReferenceCatalog(input: {
+  context?: Record<string, unknown>
+  assetPack: Record<string, unknown>
+}) {
+  const context = asRecord(input.context)
+  const assets = readArray(context.assets).map(asRecord)
+  const contextEntries = readArray(context.entities)
+    .map(asRecord)
+    .map((entity) => compactSequenceAnimaticReferenceEntry(entity, assets, 'world_context'))
+  const assetPackEntries = cinematicAssetPackEntities(input.assetPack)
+    .map((entity) => compactSequenceAnimaticReferenceEntry(entity, assets, 'selected_asset_pack'))
+  return mergeSequenceAnimaticReferenceCatalogEntries([...contextEntries, ...assetPackEntries])
+}
+
+function sequenceAnimaticReferenceCatalog(input: {
+  animaticReferenceCatalog?: unknown
+  assetPack: Record<string, unknown>
+}) {
+  const catalog = readArray(input.animaticReferenceCatalog).map(asRecord)
+  return catalog.length > 0
+    ? catalog
+    : buildSequenceAnimaticReferenceCatalog({ assetPack: input.assetPack })
+}
+
+function normalizedSequenceAnimaticReferenceKey(value: unknown) {
+  return normalizeComicReferenceText(readText(value))
+}
+
+function buildSequenceAnimaticReferenceLookup(catalog: Array<Record<string, unknown>>) {
+  const byKey = new Map<string, Record<string, unknown>>()
+  const byAlias = new Map<string, Record<string, unknown>>()
+  for (const entry of catalog) {
+    const key = readText(entry.key)
+    if (key) byKey.set(key, entry)
+    const names = [
+      key,
+      readText(entry.name),
+      ...readStringArray(entry.aliases),
+    ].filter(Boolean)
+    for (const name of names) {
+      const normalized = normalizedSequenceAnimaticReferenceKey(name)
+      if (normalized && !byAlias.has(normalized)) byAlias.set(normalized, entry)
+    }
+  }
+  return { byKey, byAlias }
+}
+
+function compactResolvedSequenceAnimaticReference(entry: Record<string, unknown>) {
+  return {
+    key: readText(entry.key),
+    name: readText(entry.name) || readText(entry.key),
+    type: readText(entry.type) || readText(entry.referenceRole),
+    aliases: readStringArray(entry.aliases).slice(0, 8),
+    summary: compactSequenceAnimaticText(readText(entry.summary), 360),
+    visualSummary: compactSequenceAnimaticText(readText(entry.visualSummary), 420),
+  }
+}
+
+function resolveSequenceAnimaticShotReference(
+  refId: string,
+  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>,
+) {
+  if (!refId) return null
+  return lookup.byKey.get(refId)
+    ?? lookup.byAlias.get(normalizedSequenceAnimaticReferenceKey(refId))
+    ?? null
+}
+
+function sequenceAnimaticShotStringArray(shot: Record<string, unknown>, fields: string[]) {
+  return [...new Set(fields.flatMap((field) => readStringArray(shot[field])).filter(Boolean))]
+}
+
+function resolveSequenceAnimaticShotRefs(input: {
+  shot: Record<string, unknown>
+  shotId: string
+  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>
+}) {
+  const resolveMany = (role: string, values: string[]) => {
+    const unresolved: Array<Record<string, unknown>> = []
+    const resolved = values.map((refId) => {
+      const entry = resolveSequenceAnimaticShotReference(refId, input.lookup)
+      if (!entry) {
+        unresolved.push({ shotId: input.shotId, role, refId })
+        return null
+      }
+      return compactResolvedSequenceAnimaticReference(entry)
+    }).filter((entry): entry is ReturnType<typeof compactResolvedSequenceAnimaticReference> => Boolean(entry))
+    return { resolved, unresolved }
+  }
+  const visibleCharacters = resolveMany('visible_character', sequenceAnimaticShotStringArray(input.shot, ['visibleCharacterRefIds', 'visible_character_ref_ids', 'characterRefIds', 'character_ref_ids']))
+  const speakers = resolveMany('speaker', sequenceAnimaticShotStringArray(input.shot, ['speakerRefIds', 'speaker_ref_ids']))
+  const props = resolveMany('prop', sequenceAnimaticShotStringArray(input.shot, ['propRefIds', 'prop_ref_ids']))
+  const locationRefId = readText(input.shot.locationRefId) || readText(input.shot.location_ref_id)
+  const location = resolveMany('location', locationRefId ? [locationRefId] : [])
+  return {
+    resolvedRefs: {
+      visibleCharacters: visibleCharacters.resolved,
+      speakers: speakers.resolved,
+      props: props.resolved,
+      location: location.resolved[0] ?? null,
+    },
+    unresolvedRefs: [
+      ...visibleCharacters.unresolved,
+      ...speakers.unresolved,
+      ...props.unresolved,
+      ...location.unresolved,
+    ],
+  }
+}
+
+function buildSequenceAnimaticContinuityPlannerContext(input: {
+  screenplayDraft: Record<string, unknown>
+  shotPlan: Record<string, unknown>
+  shotBreakPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  animaticReferenceCatalog?: unknown
+}) {
+  const sourceShots = readArray(input.shotPlan.shots).map(asRecord)
+  const sourceBlocks = readArray(input.shotBreakPlan.groups).map(asRecord)
+  const existingWorldReferences = sequenceAnimaticReferenceCatalog({
+    animaticReferenceCatalog: input.animaticReferenceCatalog,
+    assetPack: input.assetPack,
+  })
+  const referenceLookup = buildSequenceAnimaticReferenceLookup(existingWorldReferences)
+  const unresolvedShotRefs: Array<Record<string, unknown>> = []
+  return {
+    screenplayBrief: {
+      title: readText(input.screenplayDraft.title),
+      logline: compactSequenceAnimaticText(input.screenplayDraft.logline ?? input.screenplayDraft.summary ?? input.screenplayDraft.synopsis, 700),
+    },
+    blocks: sourceBlocks.map((block, index) => ({
+      id: readText(block.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`,
+      title: readText(block.title) || readText(block.summary),
+      shotBreakIds: readStringArray(block.shotBreakIds),
+      sourceText: compactSequenceAnimaticText(block.sourceText, 1000),
+    })),
+    shots: sourceShots.map((shot, index) => ({
+      ...(() => {
+        const shotId = readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`
+        const refs = resolveSequenceAnimaticShotRefs({ shot, shotId, lookup: referenceLookup })
+        unresolvedShotRefs.push(...refs.unresolvedRefs)
+        return {
+          id: shotId,
+          title: readText(shot.title),
+          action: compactSequenceAnimaticText(shot.action ?? shot.description ?? shot.caption, 900),
+          camera: compactSequenceAnimaticCamera(shot),
+          lighting: sequenceAnimaticPersistentLightingCue(shot.lighting),
+          locationRefId: readText(shot.locationRefId) || readText(shot.location_ref_id),
+          propRefIds: sequenceAnimaticShotStringArray(shot, ['propRefIds', 'prop_ref_ids']),
+          visibleCharacterRefIds: sequenceAnimaticShotStringArray(shot, ['visibleCharacterRefIds', 'visible_character_ref_ids', 'characterRefIds', 'character_ref_ids']),
+          speakerRefIds: sequenceAnimaticShotStringArray(shot, ['speakerRefIds', 'speaker_ref_ids']),
+          resolvedRefs: refs.resolvedRefs,
+          unresolvedRefs: refs.unresolvedRefs,
+          dialogue: readArray(shot.dialogue).map(asRecord).map((line) => ({
+            speakerRefId: readText(line.speakerRefId) || readText(line.characterRefId),
+            speakerName: readText(line.speakerName) || readText(line.speaker),
+            text: compactSequenceAnimaticText(line.text, 500),
+          })).filter((line) => line.speakerRefId || line.speakerName || line.text),
+        }
+      })(),
+    })),
+    existingWorldReferences,
+    unresolvedShotRefs,
+    diagnostics: unresolvedShotRefs.length > 0
+      ? [`${unresolvedShotRefs.length} shot reference${unresolvedShotRefs.length === 1 ? '' : 's'} could not be resolved against the animatic reference catalog.`]
+      : [],
+  }
+}
+
 async function planSequenceAnimaticContinuityAnchors(input: {
   nodeKey: string
   prompt: string
@@ -5093,6 +5346,7 @@ async function planSequenceAnimaticContinuityAnchors(input: {
   shotPlan: Record<string, unknown>
   shotBreakPlan: Record<string, unknown>
   assetPack: Record<string, unknown>
+  continuityPlannerContext?: Record<string, unknown>
   priorProviderRequestId?: string | null
   shouldCancel?: () => Promise<boolean>
   onProgress?: (progress: {
@@ -5107,57 +5361,31 @@ async function planSequenceAnimaticContinuityAnchors(input: {
     shotBreakPlan: input.shotBreakPlan,
     assetPack: input.assetPack,
   })
-  const sourceShots = Array.isArray(input.shotPlan.shots) ? input.shotPlan.shots.map(asRecord) : []
-  const sourceBlocks = Array.isArray(input.shotBreakPlan.groups) ? input.shotBreakPlan.groups.map(asRecord) : []
-  const assetEntities = cinematicAssetPackEntities(input.assetPack).map((entity) => ({
-    key: readText(entity.key),
-    name: readText(entity.name) || readText(entity.label) || readText(entity.key),
-    type: readText(entity.type) || readText(entity.nodeType) || readText(entity.role),
-    aliases: readStringArray(entity.aliases),
-    summary: readText(entity.summary) || readText(entity.context) || readOutputEntityVisualDescription(entity),
-  })).filter((entity) => entity.key || entity.name)
+  const providedPlannerContext = asRecord(input.continuityPlannerContext)
+  const continuityPlannerContext = Object.keys(providedPlannerContext).length > 0
+    ? providedPlannerContext
+    : buildSequenceAnimaticContinuityPlannerContext({
+      screenplayDraft: input.screenplayDraft,
+      shotPlan: input.shotPlan,
+      shotBreakPlan: input.shotBreakPlan,
+      assetPack: input.assetPack,
+      animaticReferenceCatalog: input.screenplayDraft.animaticReferenceCatalog,
+    })
   const continuityPrompt = [
       'Plan output-local continuity references for a screenplay animatic.',
+      'Use the compact planner context as the truth source; infer from shot action, camera, dialogue, resolved refs, and block membership rather than full screenplay prose.',
+      'Treat existingWorldReferences and every shot.resolvedRefs entry as canonical world entities. Never recreate those characters, locations, props, aliases, or keys as sidecar anchors.',
       'Persist only visual physical assets that need continuity and do not already have a world/entity reference.',
       'Accept: incidental speakers without world entities, recurring or story-critical props, set pieces, rooms, sub-locations, and persistent camera angles.',
       'Reject atmosphere/effects/abstracts/non-assets: rain, fog, mist, smoke, tension, silence, ambience, mood, danger, lighting/color-only cues, music, generic motion.',
-      'Reject existing world entities by key/name/alias. If a shot uses an existing character/location/prop, do not create a sidecar anchor for it.',
+      'Reject existing world entities by key/name/alias. If a shot uses an existing character/location/prop, do not create a sidecar anchor for it; include existingWorldEntityMatch on the rejected candidate.',
+      'Unresolved shot refs are diagnostics, not permission to duplicate canon. Only create an anchor from unresolved prose when the shot clearly describes a missing temporary physical visual asset.',
       'For locations, infer locationSets and locationAngles. Build sceneGraph edges for connected_to, visible_from, entrance_to, adjacent_to, or same_space_angle.',
       'Use stable IDs: char_*, prop_*, set_*, angle_* or spot_*. Group aliases across shots into one anchor.',
       'Every accepted anchor needs a persistenceReason, confidence 0-1, shotIds, storyboardBlockIds, sourceEvidence, existingWorldEntityMatch null unless rejected, and rejectionRisk.',
       'Put rejected candidates and the reason in rejectedCandidates.',
       `User brief:\n${input.prompt}`,
-      compactForPrompt({
-        screenplay: {
-          title: readText(input.screenplayDraft.title),
-          screenplayMarkdown: readText(input.screenplayDraft.screenplayMarkdown) || readText(input.screenplayDraft.markdown) || readText(input.screenplayDraft.text),
-        },
-        blocks: sourceBlocks.map((block) => ({
-          id: readText(block.id),
-          title: readText(block.title) || readText(block.summary),
-          shotBreakIds: readStringArray(block.shotBreakIds),
-          sourceText: readText(block.sourceText),
-        })),
-        shots: sourceShots.map((shot) => ({
-          id: readText(shot.id),
-          title: readText(shot.title),
-          action: readText(shot.action) || readText(shot.description),
-          locationRefId: readText(shot.locationRefId),
-          propRefIds: readStringArray(shot.propRefIds),
-          visibleCharacterRefIds: readStringArray(shot.visibleCharacterRefIds),
-          speakerRefIds: readStringArray(shot.speakerRefIds),
-          dialogue: Array.isArray(shot.dialogue) ? shot.dialogue.map((line) => ({
-            speakerRefId: readText(asRecord(line).speakerRefId),
-            speakerName: readText(asRecord(line).speakerName) || readText(asRecord(line).speaker),
-            text: readText(asRecord(line).text),
-          })) : [],
-          camera: asRecord(shot.camera),
-          lighting: readText(shot.lighting),
-          storyboardPanelPrompt: readText(shot.storyboardPanelPrompt),
-          continuityInputs: readStringArray(shot.continuityInputs),
-        })),
-        existingWorldReferences: assetEntities,
-      }, 16_000),
+      compactForPrompt({ continuityPlannerContext }, 16_000),
     ].filter(Boolean).join('\n\n')
   let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground<z.infer<typeof sequenceAnimaticContinuityPlanV2Schema>>>>
   try {
@@ -8675,6 +8903,122 @@ const sequenceAnimaticShotVideoTimingSchema = z.object({
   directedControls: seedanceDirectedControlsSchema.default({}),
 })
 
+const sequenceAnimaticShotRevisionPlanSchema = z.object({
+  revisedShot: cinematicV2ShotSchema,
+  changeSummary: z.string().max(800).default(''),
+  keyframeIntent: z.string().max(900).default(''),
+  diagnostics: z.array(z.string().max(400)).default([]),
+})
+
+function deterministicShotRevisionPlan(input: {
+  shot: Record<string, unknown>
+  revisionPrompt: string
+}) {
+  const base = cinematicV2ShotSchema.parse({
+    ...input.shot,
+    editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(input.shot.editorialDurationSeconds ?? 0) || 3)),
+    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(input.shot.editorialDurationSeconds ?? 0) || 3),
+  })
+  const prompt = readText(input.revisionPrompt)
+  const revisedShot = cinematicV2ShotSchema.parse({
+    ...base,
+    action: [base.action, prompt ? `Revision direction: ${prompt}` : ''].filter(Boolean).join(' '),
+    storyboardPanelPrompt: [
+      readText(base.storyboardPanelPrompt) || base.action || base.description || base.title,
+      prompt ? `Apply this user revision visibly: ${prompt}` : '',
+    ].filter(Boolean).join(' '),
+    videoDirection: [
+      readText(base.videoDirection),
+      prompt ? `Apply the revised staging/keyframe intent: ${prompt}` : '',
+    ].filter(Boolean).join(' '),
+  })
+  return sequenceAnimaticShotRevisionPlanSchema.parse({
+    revisedShot,
+    changeSummary: prompt ? `Applied requested shot revision: ${prompt}` : 'No revision prompt supplied; preserved the original shot.',
+    keyframeIntent: prompt,
+    diagnostics: ['Deterministic shot revision fallback used.'],
+  })
+}
+
+async function planSequenceAnimaticShotRevision(input: {
+  nodeKey: string
+  shot: Record<string, unknown>
+  revisionPrompt: string
+  assetPack: Record<string, unknown>
+  baseKeyframe: Record<string, unknown>
+  priorProviderRequestId?: string | null
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: {
+    providerRequestId: string
+    providerStatus: string
+    providerMode: string
+    lastProviderPollAt: string
+  }) => Promise<void>
+}) {
+  const fallback = deterministicShotRevisionPlan(input)
+  const shot = cinematicV2ShotSchema.parse({
+    ...input.shot,
+    editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(input.shot.editorialDurationSeconds ?? 0) || 3)),
+    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(input.shot.editorialDurationSeconds ?? 0) || 3),
+  })
+  const assetEntities = readArray(input.assetPack.entities).map(asRecord).map((entity) => ({
+    key: readText(entity.key),
+    name: readText(entity.name),
+    type: readText(entity.type),
+    summary: readText(entity.summary),
+    visualDescription: readText(entity.visualDescription),
+    selectedReferenceAssetKey: readText(entity.selectedReferenceAssetKey) || readStringArray(entity.assetKeys)[0] || '',
+    continuityAnchor: entity.continuityAnchor === true,
+  })).filter((entry) => entry.key || entry.name)
+  const dialogue = shot.dialogue.map((line) => {
+    const speaker = readText(line.speakerName) || readText(line.speakerRefId) || 'Speaker'
+    const text = readText(line.text)
+    return text ? `${speaker}: "${text}"${readText(line.emotion) ? ` (${readText(line.emotion)})` : ''}` : ''
+  }).filter(Boolean).join('\n')
+  const prompt = [
+    'Revise exactly one sequence animatic shot from a user prompt.',
+    'Return a complete revised shot object, not a patch. Preserve the same id, index, duration fields, visible/speaker/location/prop refs, continuity ids, and dialogue unless the user explicitly asks to change them.',
+    'The revision is output-local; do not mutate world canon. Make the shot internally coherent for a new single keyframe.',
+    'Keep the result compact and drawable. If the user asks for camera or lighting changes, update camera, lighting, action, storyboardPanelPrompt, and videoDirection as needed.',
+    '',
+    `User revision prompt: ${readText(input.revisionPrompt)}`,
+    '',
+    `Base shot JSON:\n${JSON.stringify(shot, null, 2)}`,
+    '',
+    `Available canonical/continuity references:\n${JSON.stringify(assetEntities.slice(0, 16), null, 2)}`,
+    '',
+    `Base keyframe asset key: ${readText(input.baseKeyframe.assetKey)}`,
+  ].join('\n')
+  const result = await runCinematicV2StructuredNodeBackground({
+    nodeKey: input.nodeKey,
+    schemaName: 'sequence_animatic_shot_revision_plan_v1',
+    schema: sequenceAnimaticShotRevisionPlanSchema,
+    instructions: 'You are a senior storyboard director revising one parsed animatic shot. Return strict JSON only.',
+    prompt,
+    fallback,
+    maxOutputTokens: 2400,
+    priorProviderRequestId: input.priorProviderRequestId,
+    shouldCancel: input.shouldCancel,
+    onProgress: input.onProgress,
+  })
+  const value = sequenceAnimaticShotRevisionPlanSchema.parse(result.value)
+  return {
+    ...value,
+    revisedShot: cinematicV2ShotSchema.parse({
+      ...value.revisedShot,
+      id: shot.id,
+      index: shot.index,
+      editorialDurationSeconds: shot.editorialDurationSeconds,
+      providerDurationSeconds: shot.providerDurationSeconds,
+    }),
+    provider: result.provider,
+    model: result.model,
+    providerRequestId: result.providerRequestId,
+    fallbackUsed: result.fallbackUsed,
+    fallbackReason: result.fallbackReason,
+  }
+}
+
 function estimateSequenceShotVideoDurationSeconds(shot: Record<string, unknown>) {
   const dialogueText = Array.isArray(shot.dialogue)
     ? shot.dialogue.map((line) => readText(asRecord(line).text)).filter(Boolean).join(' ')
@@ -10281,6 +10625,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       v3Edge({ key: 'screenplay__sequence_manifest', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'screenplay' }),
       v3Edge({ key: 'shot_break_plan__sequence_manifest', sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_break_plan' }),
       v3Edge({ key: 'references__sequence_manifest', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'context__sequence_manifest', sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'context' }),
       v3Edge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'text', targetNodeKey: 'artifact', targetPort: 'input' }),
     )
   } else {
@@ -14814,6 +15159,8 @@ async function executeNode(input: {
                 ? 'Clean cinematic keyframe generated as a Seedance visual reference.'
               : role === 'cinematic_v2_shot_keyframe'
                 ? 'Enhanced Cinematics V2 shot keyframe generated from the cropped storyboard panel and shot-scoped references.'
+              : purpose === 'sequence_animatic_shot_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
+                ? 'Revised sequence-animatic shot keyframe generated from the prior panel and shot-scoped references.'
             : role === 'comic_page'
               ? 'Comic page image generated from comic script and direct entity reference sheets.'
               : 'Generated image output from the workflow.',
@@ -15406,10 +15753,25 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_continuity_input') {
         const config = asRecord(input.node.config)
         const manifest = asRecord(config.manifest)
-        const assetPack = asRecord(config.assetPack) || asRecord(manifest.assetPack)
+        const configuredAssetPack = asRecord(config.assetPack)
+        const assetPack = Object.keys(configuredAssetPack).length > 0 ? configuredAssetPack : asRecord(manifest.assetPack)
+        const configuredCatalog = readArray(config.animaticReferenceCatalog)
+        const animaticReferenceCatalog = configuredCatalog.length > 0
+          ? configuredCatalog.map(asRecord)
+          : sequenceAnimaticReferenceCatalog({
+            animaticReferenceCatalog: manifest.animaticReferenceCatalog,
+            assetPack,
+          })
         const screenplayDraft = asRecord(manifest.screenplayDraft)
         const shotPlan = asRecord(manifest.shotPlan)
         const shotBreakPlan = asRecord(manifest.shotBreakPlan)
+        const continuityPlannerContext = buildSequenceAnimaticContinuityPlannerContext({
+          screenplayDraft,
+          shotPlan,
+          shotBreakPlan,
+          assetPack,
+          animaticReferenceCatalog,
+        })
         const outputs = {
           masterManifest: manifest,
           master_manifest: manifest,
@@ -15422,10 +15784,14 @@ async function executeNode(input: {
           shot_plan: shotPlan,
           assetPack,
           asset_pack: assetPack,
+          animaticReferenceCatalog,
+          animatic_reference_catalog: animaticReferenceCatalog,
+          continuityPlannerContext,
+          continuity_planner_context: continuityPlannerContext,
           screenplayAnimaticRole: 'continuity_pack',
           sequenceAnimaticRole: 'continuity_pack',
           text: JSON.stringify({
-            screenplayDraft,
+            continuityPlannerContext,
             shotBreakPlan,
             shotPlan,
             blockCount: Array.isArray(manifest.blocks) ? manifest.blocks.length : 0,
@@ -15436,11 +15802,16 @@ async function executeNode(input: {
       }
       if (purpose === 'sequence_animatic_continuity_anchor_plan') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
+        const directShotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
+        const continuityPlannerContext = readFirstUpstreamRecord(input.upstream, ['continuityPlannerContext', 'continuity_planner_context'])
         const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
+        const shotPlan = Array.isArray(directShotPlan.shots) && directShotPlan.shots.length > 0
+          ? directShotPlan
+          : mergeCinematicV3ShotPlansForTimeline(groupPlans)
         const mergedShotPlan = repairCinematicV2ShotPlanVisualReferences({
-          shotPlan: mergeCinematicV3ShotPlansForTimeline(groupPlans),
+          shotPlan,
           assetPack,
         })
         const continuityAnchorPlan = await planSequenceAnimaticContinuityAnchors({
@@ -15450,6 +15821,7 @@ async function executeNode(input: {
           shotPlan: mergedShotPlan,
           shotBreakPlan,
           assetPack,
+          continuityPlannerContext,
           priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
           shouldCancel: input.shouldCancel,
           onProgress: async (progress) => {
@@ -15697,6 +16069,9 @@ async function executeNode(input: {
         const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const context = readFirstUpstreamRecord(input.upstream, ['context'])
+        const animaticReferenceCatalog = buildSequenceAnimaticReferenceCatalog({ context, assetPack })
+        const selectedVisualReferenceKeys = cinematicAssetPackEntityKeys(assetPack)
         const continuityAnchorPlan = readFirstUpstreamRecord(input.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
         const readAnchorArray = (fields: string[]) => {
           const arrays = Object.values(input.upstream).flatMap((outputs) => fields.flatMap((field) => {
@@ -15772,6 +16147,8 @@ async function executeNode(input: {
           blocks,
           assetPack,
           selectedReferences: assetPack,
+          selectedVisualReferenceKeys,
+          animaticReferenceCatalog,
           continuityAnchorPlan,
           characterAnchors,
           propAnchors,
@@ -15796,6 +16173,10 @@ async function executeNode(input: {
           blocks,
           assetPack,
           asset_pack: assetPack,
+          selectedVisualReferenceKeys,
+          selected_visual_reference_keys: selectedVisualReferenceKeys,
+          animaticReferenceCatalog,
+          animatic_reference_catalog: animaticReferenceCatalog,
           continuityAnchorPlan,
           continuity_anchor_plan: continuityAnchorPlan,
           characterAnchors,
@@ -15914,6 +16295,179 @@ async function executeNode(input: {
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_shot_revision_input') {
+        const config = asRecord(input.node.config)
+        const shot = cinematicV2ShotSchema.parse({
+          ...asRecord(config.shot),
+          editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(asRecord(config.shot).editorialDurationSeconds ?? 0) || 3)),
+          providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(asRecord(config.shot).editorialDurationSeconds ?? 0) || 3),
+        })
+        const panel = asRecord(config.panel)
+        const basePanelAssetKey = readText(panel.assetKey)
+        if (!basePanelAssetKey) {
+          throw new Error('Sequence animatic shot revision requires a cropped panel asset. Generate/extract the storyboard panel before revising this shot.')
+        }
+        const rawAssetPack = asRecord(config.assetPack)
+        const assetPack = buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: [shot as unknown as Record<string, unknown>],
+          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
+          maxAssetKeysPerEntity: 1,
+          includeSpeakerRefs: true,
+          includePerformanceRefs: true,
+          includeTextMentionedRefs: false,
+        })
+        const baseKeyframe = {
+          ...panel,
+          assetKey: basePanelAssetKey,
+          role: 'sequence_animatic_shot_revision_base_keyframe',
+          name: readText(panel.name) || `${shot.title || `Shot ${shot.index}`} base keyframe`,
+          shotId: shot.id,
+          shotIndex: shot.index,
+          storyboardBlockId: readText(config.storyboardBlockId),
+          usedAsVideoReference: true,
+          metadata: {
+            ...asRecord(panel.metadata),
+            role: 'sequence_animatic_shot_revision_base_keyframe',
+            shotId: shot.id,
+            shotIndex: shot.index,
+            storyboardBlockId: readText(config.storyboardBlockId),
+          },
+        }
+        const revisionPrompt = readText(config.revisionPrompt)
+        const outputs = {
+          shot,
+          baseShot: shot,
+          base_shot: shot,
+          baseKeyframe,
+          base_keyframe: baseKeyframe,
+          image: baseKeyframe,
+          keyframe: baseKeyframe,
+          panel,
+          assetPack,
+          asset_pack: assetPack,
+          revisionPrompt,
+          revision_prompt: revisionPrompt,
+          revisionId: readText(config.revisionId),
+          revision_id: readText(config.revisionId),
+          screenplayAnimaticRole: 'shot_revision',
+          sequenceAnimaticRole: 'shot_revision',
+          text: JSON.stringify({ shot, baseKeyframe, revisionPrompt, assetPack }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-revision-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_shot_revision_plan') {
+        const config = asRecord(input.node.config)
+        const shot = readFirstUpstreamRecord(input.upstream, ['shot', 'baseShot', 'base_shot'])
+        const revisionPrompt = readFirstUpstreamText(input.upstream, ['revisionPrompt', 'revision_prompt']) || readText(config.revisionPrompt)
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const baseKeyframe = readFirstUpstreamRecord(input.upstream, ['baseKeyframe', 'base_keyframe', 'image', 'keyframe'])
+        const revision = await planSequenceAnimaticShotRevision({
+          nodeKey: input.node.key,
+          shot,
+          revisionPrompt,
+          assetPack,
+          baseKeyframe,
+          priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
+          shouldCancel: input.shouldCancel,
+          onProgress: async (progress) => {
+            await input.onProgress?.({
+              provider: 'openai',
+              model: outputWorkflowTextModel(),
+              providerRequestId: progress.providerRequestId,
+              metadata: {
+                providerMode: progress.providerMode,
+                providerStatus: progress.providerStatus,
+                lastProviderPollAt: progress.lastProviderPollAt,
+                shotRevisionPlanner: true,
+              },
+            })
+          },
+        })
+        const outputs = {
+          revisionPlan: revision,
+          revision_plan: revision,
+          revisedShot: revision.revisedShot,
+          revised_shot: revision.revisedShot,
+          baseShot: shot,
+          base_shot: shot,
+          revisionPrompt,
+          revision_prompt: revisionPrompt,
+          changeSummary: revision.changeSummary,
+          change_summary: revision.changeSummary,
+          keyframeIntent: revision.keyframeIntent,
+          keyframe_intent: revision.keyframeIntent,
+          diagnostics: [
+            ...readStringArray(revision.diagnostics),
+            ...(revision.fallbackUsed ? [`Fallback used: ${revision.fallbackReason || 'structured revision unavailable'}`] : []),
+          ],
+          text: JSON.stringify(revision, null, 2),
+          providerRequestId: revision.providerRequestId,
+          plannerProvider: revision.provider,
+          plannerModel: revision.model,
+          deterministic: revision.provider === 'graphcore',
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: revision.provider,
+          model: revision.model || 'sequence-animatic-shot-revision-plan-v1',
+          providerRequestId: revision.providerRequestId || undefined,
+        }
+      }
+      if (purpose === 'sequence_animatic_shot_keyframe_prompt') {
+        const config = asRecord(input.node.config)
+        const revisedShot = cinematicV2ShotSchema.parse(readFirstUpstreamRecord(input.upstream, ['revisedShot', 'revised_shot', 'shot']))
+        const baseKeyframe = readFirstUpstreamRecord(input.upstream, ['baseKeyframe', 'base_keyframe', 'image', 'keyframe'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const referenceEntities = readArray(assetPack.entities).map(asRecord).map((entity) => {
+          const name = readText(entity.name)
+          const visual = readText(entity.visualDescription) || readText(entity.summary)
+          return name && visual ? `${name}: ${visual}` : name || visual
+        }).filter(Boolean).slice(0, 8).join('\n')
+        const camera = asRecord(revisedShot.camera)
+        const dialogue = revisedShot.dialogue.map((line) => {
+          const text = readText(line.text)
+          if (!text) return ''
+          return `${readText(line.speakerName) || readText(line.speakerRefId) || 'Speaker'}: "${text}"`
+        }).filter(Boolean).join(' ')
+        const promptText = [
+          'Generate one revised cinematic keyframe for this exact animatic shot. Use the base keyframe reference to preserve identity, location, wardrobe, props, aspect ratio, and continuity, while applying the revised shot direction.',
+          'Do not create a storyboard grid, captions, UI, watermarks, labels, or multiple panels. Produce one finished frame only.',
+          '',
+          `Shot title: ${revisedShot.title}`,
+          `Action: ${revisedShot.action || revisedShot.description || revisedShot.storyboardPanelPrompt}`,
+          dialogue ? `Dialogue context: ${dialogue}` : '',
+          `Camera: ${[readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ')}`,
+          readText(revisedShot.lighting) ? `Lighting: ${readText(revisedShot.lighting)}` : '',
+          readText(revisedShot.mood) ? `Mood: ${readText(revisedShot.mood)}` : '',
+          readText(revisedShot.storyboardPanelPrompt) ? `Panel composition: ${readText(revisedShot.storyboardPanelPrompt)}` : '',
+          '',
+          referenceEntities ? `Relevant references:\n${referenceEntities}` : '',
+          readText(config.revisionPrompt) ? `User revision: ${readText(config.revisionPrompt)}` : '',
+          `Base keyframe asset: ${readText(baseKeyframe.assetKey)}`,
+        ].filter(Boolean).join('\n')
+        const outputs = {
+          prompt: promptText,
+          text: promptText,
+          revisedShot,
+          revised_shot: revisedShot,
+          shot: revisedShot,
+          baseKeyframe,
+          base_keyframe: baseKeyframe,
+          image: baseKeyframe,
+          assetPack,
+          asset_pack: assetPack,
+          revisionId: readText(config.revisionId),
+          revision_id: readText(config.revisionId),
+          storyboardBlockId: readText(config.storyboardBlockId),
+          shotId: readText(config.shotId),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-keyframe-prompt-v1' }
       }
       if (purpose === 'cinematic_v3_shot_plan_merge') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
@@ -17658,6 +18212,109 @@ async function executeNode(input: {
           authoringReady: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-pack-v1' }
+      }
+      if (purpose === 'sequence_animatic_shot_revision_artifact') {
+        const config = asRecord(input.node.config)
+        const revisedShot = cinematicV2ShotSchema.parse(readFirstUpstreamRecord(input.upstream, ['revisedShot', 'revised_shot', 'shot']))
+        const revisionPlan = readFirstUpstreamRecord(input.upstream, ['revisionPlan', 'revision_plan'])
+        const keyframe = readFirstUpstreamRecord(input.upstream, ['keyframe', 'image'])
+        const keyframeAssetKey = readText(keyframe.assetKey)
+        const revisionId = readText(config.revisionId) || `shot_revision_${slugify(readText(config.shotId))}_${input.run.id.slice(0, 8)}`
+        const revisionPrompt = readText(config.revisionPrompt) || readText(input.run.prompt)
+        const sourceManifestHash = readText(config.manifestHash) || readText(asRecord(input.workflow.metadata).manifestHash)
+        const basePanelAssetKey = readText(config.basePanelAssetKey) || readText(asRecord(input.workflow.metadata).basePanelAssetKey)
+        const diagnostics = [
+          ...readStringArray(revisionPlan.diagnostics),
+          ...(keyframeAssetKey ? [] : ['Shot text was revised, but no replacement keyframe image was generated.']),
+        ]
+        const revision = {
+          graphSpecVersion: 'sequence_animatic_graph_v1',
+          screenplayAnimaticRole: 'shot_revision',
+          sequenceAnimaticRole: 'shot_revision',
+          masterRequestId: readText(config.masterRequestId) || readText(asRecord(input.workflow.metadata).masterRequestId),
+          parentRequestId: readText(config.parentRequestId) || readText(asRecord(input.workflow.metadata).parentRequestId),
+          storyboardBlockId: readText(config.storyboardBlockId),
+          shotId: readText(config.shotId),
+          revisionId,
+          sourceManifestHash,
+          manifestHash: sourceManifestHash,
+          blockHash: readText(config.blockHash),
+          shotHash: readText(config.shotHash),
+          continuityPackHash: readText(config.continuityPackHash),
+          masterManifestArtifactKey: readText(config.masterManifestArtifactKey),
+          basePanelAssetKey,
+          revisedShot,
+          keyframeAssetKey,
+          keyframe,
+          prompt: revisionPrompt,
+          changeSummary: readText(revisionPlan.changeSummary),
+          keyframeIntent: readText(revisionPlan.keyframeIntent),
+          diagnostics,
+          revisionHash: hashOutputWorkflowValue({
+            revisedShot,
+            keyframeAssetKey,
+            revisionPrompt,
+            sourceManifestHash,
+          }),
+        }
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-shot-revision`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${input.node.label} Artifact`,
+          summary: 'Sequence animatic output-local single-shot revision.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-shot-revision-artifact-v1',
+            role: 'sequence_animatic_shot_revision',
+            graphSpecVersion: 'sequence_animatic_graph_v1',
+            sequenceAnimaticRole: 'shot_revision',
+            screenplayAnimaticRole: 'shot_revision',
+            masterRequestId: revision.masterRequestId,
+            parentRequestId: revision.parentRequestId,
+            storyboardBlockId: revision.storyboardBlockId,
+            shotId: revision.shotId,
+            revisionId,
+            sourceManifestHash,
+            manifestHash: sourceManifestHash,
+            blockHash: revision.blockHash,
+            shotHash: revision.shotHash,
+            basePanelAssetKey,
+            keyframeAssetKey,
+            prompt: revisionPrompt,
+            revisedShot,
+            keyframe,
+            revision,
+            diagnostics,
+          },
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: keyframeAssetKey,
+          artifact,
+          artifacts: [artifact],
+          revision,
+          shotRevision: revision,
+          shot_revision: revision,
+          revisedShot,
+          revised_shot: revisedShot,
+          keyframe,
+          image: keyframe,
+          keyframeAssetKey,
+          keyframe_asset_key: keyframeAssetKey,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-shot-revision-artifact-v1' }
       }
       if (purpose === 'sequence_animatic_block_artifact') {
         const config = asRecord(input.node.config)

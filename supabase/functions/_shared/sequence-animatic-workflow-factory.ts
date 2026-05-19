@@ -292,6 +292,93 @@ export function buildSequenceAnimaticShotVideoWorkflowGraph(input: {
   return { nodes, edges }
 }
 
+export function buildSequenceAnimaticShotRevisionWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  block: Record<string, unknown>
+  shot: Record<string, unknown>
+  panel: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  revisionPrompt: string
+  revisionId: string
+  aspectRatio: string
+}) {
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    ...input.commonConfig,
+  }
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_revision_input', 'utility_transform', 'Shot Revision Input', 80, 120, {
+      purpose: 'sequence_animatic_shot_revision_input',
+      ...config,
+      block: input.block,
+      shot: input.shot,
+      panel: input.panel,
+      assetPack: input.assetPack,
+      revisionPrompt: input.revisionPrompt,
+      revisionId: input.revisionId,
+      aspectRatio: input.aspectRatio,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_revision_input', maxConcurrency: 4 },
+    }, {}, 'shot_revision'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_revision_plan', 'utility_transform', 'Revise Shot', 360, 120, {
+      purpose: 'sequence_animatic_shot_revision_plan',
+      ...config,
+      revisionPrompt: input.revisionPrompt,
+      revisionId: input.revisionId,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_shot_revision_plan', maxConcurrency: 4 },
+    }, {}, 'shot_revision'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 640, 120, {
+      purpose: 'sequence_animatic_shot_keyframe_prompt',
+      ...config,
+      revisionId: input.revisionId,
+      aspectRatio: input.aspectRatio,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_keyframe_prompt', maxConcurrency: 4 },
+    }, {}, 'shot_revision'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_keyframe_image', 'image_generation', 'Shot Keyframe Image', 920, 120, {
+      purpose: 'sequence_animatic_shot_keyframe_image',
+      role: 'sequence_animatic_shot_keyframe',
+      ...config,
+      revisionId: input.revisionId,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'medium',
+      outputFormat: 'webp',
+      maxReferenceImages: 8,
+      imageSize: input.aspectRatio === '9:16'
+        ? { width: 864, height: 1536 }
+        : input.aspectRatio === '1:1'
+          ? { width: 1024, height: 1024 }
+          : { width: 1536, height: 864 },
+      aspectRatio: input.aspectRatio,
+      usedAsVideoReference: true,
+      used_as_video_reference: true,
+      execution: { resourceClass: 'image', groupKey: 'sequence_animatic_shot_keyframes', maxConcurrency: 4 },
+    }, {}, 'shot_revision'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_revision_artifact', 'output_artifact', 'Register Shot Revision', 1200, 120, {
+      purpose: 'sequence_animatic_shot_revision_artifact',
+      artifactKind: 'other',
+      ...config,
+      revisionPrompt: input.revisionPrompt,
+      revisionId: input.revisionId,
+      execution: { resourceClass: 'utility' },
+    }, {}, 'shot_revision'),
+  ]
+  const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_shot', 'shot_revision_input', 'shot', 'shot_revision_plan', 'shot', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_prompt', 'shot_revision_input', 'revision_prompt', 'shot_revision_plan', 'revision_prompt', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_base', 'shot_revision_input', 'base_keyframe', 'shot_keyframe_prompt', 'base_keyframe', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'shot_revision_input', 'asset_pack', 'shot_keyframe_prompt', 'asset_pack', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'plan__prompt_shot', 'shot_revision_plan', 'revised_shot', 'shot_keyframe_prompt', 'revised_shot', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'shot_keyframe_prompt', 'text', 'shot_keyframe_image', 'prompt', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__image_base', 'shot_revision_input', 'base_keyframe', 'shot_keyframe_image', 'references', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'shot_keyframe_prompt', 'asset_pack', 'shot_keyframe_image', 'asset_pack', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'plan__artifact', 'shot_revision_plan', 'revised_shot', 'shot_revision_artifact', 'revised_shot', {}, 'shot_revision'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'shot_keyframe_image', 'image', 'shot_revision_artifact', 'keyframe', { optional: true, optionalDependency: true }, 'shot_revision'),
+  ]
+  return { nodes, edges }
+}
+
 export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
   workflowId: string
   draftId: string
@@ -310,6 +397,7 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
       ...config,
       manifest: input.manifest,
       assetPack: input.assetPack,
+      animaticReferenceCatalog: Array.isArray(input.manifest.animaticReferenceCatalog) ? input.manifest.animaticReferenceCatalog : [],
       aspectRatio: input.aspectRatio,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_input', maxConcurrency: 1 },
     }, {}, 'continuity_pack'),
@@ -406,6 +494,7 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_shots', 'continuity_input', 'shot_plan', 'continuity_plan', 'shot_plan', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_breaks', 'continuity_input', 'shot_break_plan', 'continuity_plan', 'shot_break_plan', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_refs', 'continuity_input', 'asset_pack', 'continuity_plan', 'asset_pack', {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_context', 'continuity_input', 'continuity_planner_context', 'continuity_plan', 'continuity_planner_context', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'plan__character_prompt', 'continuity_plan', 'text', 'character_anchor_atlas_prompt', 'continuity_anchor_plan', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__character_prompt_refs', 'continuity_input', 'asset_pack', 'character_anchor_atlas_prompt', 'asset_pack', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'character_prompt__atlas', 'character_anchor_atlas_prompt', 'text', 'character_anchor_atlas', 'prompt', {}, 'continuity_pack'),

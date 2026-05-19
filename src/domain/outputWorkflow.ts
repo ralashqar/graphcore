@@ -53,7 +53,7 @@ export const sequenceAnimaticModeSchema = z.preprocess(
 )
 export const cinematicAnimaticModeSchema = z.enum(['prompt_cinematic_master'])
 export const sequenceAnimaticGraphSpecVersionSchema = z.literal('sequence_animatic_graph_v1')
-export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'continuity_pack', 'storyboard_block', 'shot_video'])
+export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'continuity_pack', 'storyboard_block', 'shot_video', 'shot_revision'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -91,6 +91,7 @@ export const outputWorkflowRunIntentSchema = z.enum([
   'generate_continuity_pack',
   'generate_block_video',
   'generate_shot_video',
+  'revise_sequence_animatic_shot',
   'repair_upstream_cache',
   'rerun_node_and_dependents',
 ])
@@ -711,6 +712,8 @@ export const sequenceAnimaticManifestV1Schema = looseObjectSchema.extend({
   shotPlan: looseRecordSchema.default({}),
   blocks: z.array(sequenceAnimaticStoryboardBlockV1Schema).default([]),
   assetPack: looseRecordSchema.default({}),
+  selectedVisualReferenceKeys: z.array(z.string()).default([]),
+  animaticReferenceCatalog: z.array(looseRecordSchema).default([]),
   continuityAnchorPlan: looseRecordSchema.default({}),
   characterAnchors: z.array(looseRecordSchema).default([]),
   propAnchors: z.array(looseRecordSchema).default([]),
@@ -758,6 +761,22 @@ export const sequenceAnimaticShotVideoInputV1Schema = looseObjectSchema.extend({
   providerDurationSeconds: z.number().positive(),
 })
 
+export const sequenceAnimaticShotRevisionArtifactV1Schema = looseObjectSchema.extend({
+  graphSpecVersion: sequenceAnimaticGraphSpecVersionSchema.default('sequence_animatic_graph_v1'),
+  screenplayAnimaticRole: z.literal('shot_revision'),
+  sequenceAnimaticRole: z.literal('shot_revision'),
+  masterRequestId: z.string().min(1),
+  storyboardBlockId: z.string().min(1),
+  shotId: z.string().min(1),
+  revisionId: z.string().min(1),
+  sourceManifestHash: z.string().min(1),
+  basePanelAssetKey: z.string().min(1),
+  revisedShot: looseRecordSchema,
+  keyframeAssetKey: z.string().default(''),
+  prompt: z.string().default(''),
+  diagnostics: z.array(z.string()).default([]),
+})
+
 export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -787,6 +806,24 @@ export const sequenceAnimaticContinuityWorkflowEnsureResponseSchema = z.object({
   ok: z.literal(true),
   masterRequest: outputRequestSchema,
   continuityRequest: outputRequestSchema.nullable().default(null),
+  workflow: outputWorkflowSchema.nullable().default(null),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+})
+
+export const sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  storyboardBlockId: z.string().min(1),
+  shotId: z.string().min(1),
+  prompt: z.string().min(1),
+})
+
+export const sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  revisionRequest: outputRequestSchema.nullable().default(null),
   workflow: outputWorkflowSchema.nullable().default(null),
   nodes: z.array(outputWorkflowNodeSchema).default([]),
   edges: z.array(outputWorkflowEdgeSchema).default([]),
@@ -3780,6 +3817,7 @@ export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResp
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
 export type SequenceAnimaticBlockWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticBlockWorkflowEnsureResponseSchema>
 export type SequenceAnimaticContinuityWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityWorkflowEnsureResponseSchema>
+export type SequenceAnimaticShotRevisionWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema>
 export type SequenceAnimaticStateResponse = z.infer<typeof sequenceAnimaticStateResponseSchema>
 export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphRequestSchema>
 export type OutputWorkflowGraphResponse = z.infer<typeof outputWorkflowGraphResponseSchema>
