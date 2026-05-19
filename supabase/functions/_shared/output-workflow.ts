@@ -103,6 +103,7 @@ const DEFAULT_MUAPI_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoMuapi
 const DEFAULT_FAL_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoFalModel
 const DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL = aiGenerationSettings.outputWorkflow.videoFalHighResolutionModel
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
+const DEFAULT_CONTINUITY_PLANNER_TIMEOUT_MS = 240_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
 const MUAPI_BASE_URL = 'https://api.muapi.ai/api/v1'
@@ -2026,6 +2027,14 @@ function outputWorkflowChapterTimeoutMs() {
   return Number.isFinite(parsed) && parsed > 0
     ? Math.max(60_000, Math.floor(parsed))
     : DEFAULT_CHAPTER_PROSE_TIMEOUT_MS
+}
+
+function outputWorkflowContinuityPlannerTimeoutMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_CONTINUITY_PLANNER_TIMEOUT_MS')
+  const parsed = raw ? Number(raw) : NaN
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.max(60_000, Math.floor(parsed))
+    : DEFAULT_CONTINUITY_PLANNER_TIMEOUT_MS
 }
 
 function outputWorkflowChapterAttempts() {
@@ -4663,6 +4672,29 @@ function sequenceAnimaticRejectedCandidate(input: {
   }
 }
 
+function sequenceAnimaticTemporaryCharacterLooksSpecific(name: string, visualBrief = '') {
+  const normalized = normalizeComicReferenceText(`${name} ${visualBrief}`)
+  if (!normalized || sequenceAnimaticNonCharacterSpeakerNames.has(normalized)) return false
+  if (/\b(crowd|workers|people|figures|extras|everyone|someone|anyone|voices|background)\b/i.test(normalized)) return false
+  return /\b(mechanic|worker|courier|cashier|shopkeeper|guard|watchman|attendant|scribe|clerk|messenger|apprentice|elder|old|young|vole|puffin|mouse|rat|otter|mole|badger|fox|bird)\b/i.test(normalized)
+}
+
+function sequenceAnimaticTemporaryCharacterEvidenceIsVisible(sourceEvidence: string[]) {
+  const evidenceText = sourceEvidence.join(' ')
+  return /\b(visible|nearby|beside|behind|below|above|foreground|background|passes|stands|sits|walks|crosses|looks|glances|ignores|reacts|speaks|asks|says|dialogue|worker|mechanic|courier|guard|attendant)\b/i.test(evidenceText)
+}
+
+function sequenceAnimaticShouldKeepSingleUseTemporaryCharacter(input: {
+  name: string
+  visualBrief?: string
+  sourceEvidence: string[]
+  existingWorldEntityMatch?: string | null
+}) {
+  if (readText(input.existingWorldEntityMatch)) return false
+  return sequenceAnimaticTemporaryCharacterLooksSpecific(input.name, input.visualBrief)
+    && sequenceAnimaticTemporaryCharacterEvidenceIsVisible(input.sourceEvidence)
+}
+
 function anchorUsageFromPhrase(shots: Record<string, unknown>[], phrase: string) {
   const normalizedPhrase = normalizeComicReferenceText(phrase)
   return shots.filter((shot) => normalizeComicReferenceText(sequenceShotSearchText(shot)).includes(normalizedPhrase))
@@ -4926,6 +4958,7 @@ function normalizeSequenceAnimaticContinuityPlan(input: {
     rejectedCandidates.push(entry)
   }
   const acceptedSourceIds = new Set<string>()
+  const acceptedRejectedCandidateKeys = new Set<string>()
 
   const cleanShotIds = (ids: string[]) => [...new Set(ids.map(readText).filter((id) => !knownShotIds.size || knownShotIds.has(id)))]
   const cleanBlockIds = (ids: string[], shotIds: string[]) => {
@@ -4948,6 +4981,12 @@ function normalizeSequenceAnimaticContinuityPlan(input: {
     const storyCritical = /story[-\s]?critical|hero|plot|recurring|reuse|continuity|required|persistent/i.test(rawAnchor.persistenceReason)
       || sourceEvidence.length >= 2
       || shotIds.length >= 2
+      || (type === 'character' && sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
+        name,
+        visualBrief,
+        sourceEvidence,
+        existingWorldEntityMatch,
+      }))
     const confidence = Math.max(0, Math.min(1, Number(rawAnchor.confidence) || 0))
     if (!name || !visualBrief) {
       addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'not_visual', sourceEvidence, shotIds }))
@@ -4997,6 +5036,54 @@ function normalizeSequenceAnimaticContinuityPlan(input: {
       connectedTo: rawAnchor.connectedTo.map(readText).filter(Boolean),
       visibleFrom: rawAnchor.visibleFrom.map(readText).filter(Boolean),
       entryFrom: rawAnchor.entryFrom.map(readText).filter(Boolean),
+      relationshipHints: [],
+      sourcePhrases: sourceEvidence,
+    })
+  }
+
+  for (const rejected of input.rawPlan.rejectedCandidates) {
+    const name = normalizeAnchorName(rejected.name)
+    const sourceEvidence = rejected.sourceEvidence.map(readText).filter(Boolean)
+    const shotIds = cleanShotIds(rejected.shotIds)
+    const existingWorldEntityMatch = readText(rejected.existingWorldEntityMatch)
+    if (
+      rejected.type !== 'character'
+      || rejected.reason !== 'single_use_not_story_critical'
+      || shotIds.length <= 0
+      || !sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
+        name,
+        sourceEvidence,
+        existingWorldEntityMatch,
+      })
+    ) {
+      continue
+    }
+    const id = sequenceAnchorId('char', name)
+    if (acceptedSourceIds.has(id)) continue
+    acceptedSourceIds.add(id)
+    acceptedRejectedCandidateKeys.add(`${rejected.name}:${rejected.reason}:${rejected.shotIds.join(',')}`)
+    const storyboardBlockIds = cleanBlockIds([], shotIds)
+    anchorById.set(id, {
+      id,
+      name,
+      anchorType: 'character',
+      continuitySubtype: 'character',
+      baseLocationRefId: null,
+      summary: `Visible incidental character continuity reference for ${name}.`,
+      visualBrief: `${name}, visible temporary supporting character design for storyboard continuity. Keep species, age, wardrobe, silhouette, and working-role details consistent; neutral pose, no text.`,
+      persistenceReason: 'Visible incidental character with no canonical world entity; keep design consistent for storyboard continuity.',
+      confidence: 0.72,
+      sourceEvidence,
+      existingWorldEntityMatch: null,
+      rejectionRisk: 'medium: appears in one shot, but is a specific visible character rather than an abstract or crowd cue.',
+      shotIds,
+      storyboardBlockIds,
+      usageCount: Math.max(1, shotIds.length),
+      setId: null,
+      angleId: null,
+      connectedTo: [],
+      visibleFrom: [],
+      entryFrom: [],
       relationshipHints: [],
       sourcePhrases: sourceEvidence,
     })
@@ -5069,6 +5156,7 @@ function normalizeSequenceAnimaticContinuityPlan(input: {
     ...input.rawPlan.warnings,
     ...(selectedAnchorIds.size === 0 ? ['LLM continuity planner found no physical, non-duplicative sidecar anchors worth persisting.'] : []),
   ]
+  const finalRejectedCandidates = rejectedCandidates.filter((candidate) => !acceptedRejectedCandidateKeys.has(`${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}`))
   return {
     version: 'sequence_animatic_continuity_plan_v2',
     planningMode: 'llm_structured_v2',
@@ -5081,11 +5169,14 @@ function normalizeSequenceAnimaticContinuityPlan(input: {
     sceneGraph,
     continuityAnchorIdsByShotId: shotContinuityMap,
     shotContinuityMap,
-    rejectedCandidates,
+    rejectedCandidates: finalRejectedCandidates,
     warnings,
     diagnostics: [
       ...input.rawPlan.diagnostics,
-      `LLM continuity planner accepted ${selectedAnchors.length} anchor${selectedAnchors.length === 1 ? '' : 's'} and rejected ${rejectedCandidates.length} candidate${rejectedCandidates.length === 1 ? '' : 's'}.`,
+      ...(acceptedRejectedCandidateKeys.size > 0
+        ? [`Recovered ${acceptedRejectedCandidateKeys.size} visible one-shot incidental character anchor${acceptedRejectedCandidateKeys.size === 1 ? '' : 's'} from LLM single-use rejections.`]
+        : []),
+      `LLM continuity planner accepted ${selectedAnchors.length} anchor${selectedAnchors.length === 1 ? '' : 's'} and rejected ${finalRejectedCandidates.length} candidate${finalRejectedCandidates.length === 1 ? '' : 's'}.`,
     ],
   }
 }
@@ -5348,12 +5439,14 @@ async function planSequenceAnimaticContinuityAnchors(input: {
   assetPack: Record<string, unknown>
   continuityPlannerContext?: Record<string, unknown>
   priorProviderRequestId?: string | null
+  priorProviderStartedAt?: string | null
   shouldCancel?: () => Promise<boolean>
   onProgress?: (progress: {
     providerRequestId: string
     providerStatus: string
     providerMode: string
     lastProviderPollAt: string
+    providerStartedAt: string
   }) => Promise<void>
 }) {
   const fallbackPlan = collectSequenceAnimaticContinuityAnchors({
@@ -5377,6 +5470,7 @@ async function planSequenceAnimaticContinuityAnchors(input: {
       'Treat existingWorldReferences and every shot.resolvedRefs entry as canonical world entities. Never recreate those characters, locations, props, aliases, or keys as sidecar anchors.',
       'Persist only visual physical assets that need continuity and do not already have a world/entity reference.',
       'Accept: incidental speakers without world entities, recurring or story-critical props, set pieces, rooms, sub-locations, and persistent camera angles.',
+      'Also accept specific visible one-shot incidental characters when they have a concrete role/species/identity cue, such as a vole mechanic, guard, courier, attendant, or shopkeeper; reject only generic crowds/background figures.',
       'Reject atmosphere/effects/abstracts/non-assets: rain, fog, mist, smoke, tension, silence, ambience, mood, danger, lighting/color-only cues, music, generic motion.',
       'Reject existing world entities by key/name/alias. If a shot uses an existing character/location/prop, do not create a sidecar anchor for it; include existingWorldEntityMatch on the rejected candidate.',
       'Unresolved shot refs are diagnostics, not permission to duplicate canon. Only create an anchor from unresolved prose when the shot clearly describes a missing temporary physical visual asset.',
@@ -5419,6 +5513,8 @@ async function planSequenceAnimaticContinuityAnchors(input: {
       }),
       maxOutputTokens: 5200,
       priorProviderRequestId: input.priorProviderRequestId,
+      providerStartedAt: input.priorProviderStartedAt,
+      timeoutMs: outputWorkflowContinuityPlannerTimeoutMs(),
       shouldCancel: input.shouldCancel,
       onProgress: input.onProgress,
     })
@@ -9217,16 +9313,19 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
   fallback: TValue
   maxOutputTokens?: number
   priorProviderRequestId?: string | null
+  providerStartedAt?: string | null
+  timeoutMs?: number
   shouldCancel?: () => Promise<boolean>
   onProgress?: (progress: {
     providerRequestId: string
     providerStatus: string
     providerMode: string
     lastProviderPollAt: string
+    providerStartedAt: string
   }) => Promise<void>
 }) {
   const model = outputWorkflowTextModel()
-  const timeoutMs = outputWorkflowChapterTimeoutMs()
+  const timeoutMs = input.timeoutMs ?? outputWorkflowChapterTimeoutMs()
   let result: OpenAiResponseResult
 
   if (input.priorProviderRequestId) {
@@ -9261,7 +9360,9 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
 
   let providerRequestId = result.id
   let providerStatus = result.status
-  const startedAt = Date.now()
+  const providerStartedAt = readText(input.providerStartedAt) || new Date().toISOString()
+  const parsedStartedAt = Date.parse(providerStartedAt)
+  const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now()
 
   while (!isOpenAiTerminalStatus(providerStatus)) {
     await input.onProgress?.({
@@ -9269,6 +9370,7 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
       providerStatus,
       providerMode: 'background',
       lastProviderPollAt: new Date().toISOString(),
+      providerStartedAt,
     })
     if (await input.shouldCancel?.()) {
       await cancelOpenAiResponse(providerRequestId, 30_000).catch(() => null)
@@ -9277,6 +9379,7 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
         providerStatus: 'cancelled',
         providerMode: 'background',
         lastProviderPollAt: new Date().toISOString(),
+        providerStartedAt,
       })
       throw new WorkflowCancelledError()
     }
@@ -9297,6 +9400,7 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
     providerStatus,
     providerMode: 'background',
     lastProviderPollAt: new Date().toISOString(),
+    providerStartedAt,
   })
 
   if (providerStatus !== 'completed') {
@@ -15823,6 +15927,7 @@ async function executeNode(input: {
           assetPack,
           continuityPlannerContext,
           priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
+          priorProviderStartedAt: readText(asRecord(input.priorStep?.metadata).providerStartedAt) || input.priorStep?.startedAt,
           shouldCancel: input.shouldCancel,
           onProgress: async (progress) => {
             await input.onProgress?.({
@@ -15833,6 +15938,7 @@ async function executeNode(input: {
                 providerMode: progress.providerMode,
                 providerStatus: progress.providerStatus,
                 lastProviderPollAt: progress.lastProviderPollAt,
+                providerStartedAt: progress.providerStartedAt,
                 continuityPlanner: true,
               },
             })
@@ -18738,6 +18844,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       return (cancellationResponse.data as { status?: string } | null)?.status === 'cancelled'
     }
 
+    let lastProviderProgressHeartbeatAt = 0
     const schedulerResult = await runOutputWorkflowReadyQueue({
       nodes: executionNodes,
       edges: executionEdges,
@@ -18907,6 +19014,18 @@ export async function processFlyOutputWorkflowRuns(input: {
                 staleInputAllowed: allowStaleUpstreamOutputs,
               },
             })
+            const nowMs = Date.now()
+            if (nowMs - lastProviderProgressHeartbeatAt > 15_000) {
+              lastProviderProgressHeartbeatAt = nowMs
+              await heartbeat(input.client, runId, input.workerId, {
+                runtime: 'fly_output_workflow_worker',
+                stage: 'provider_progress',
+                activeNodeKey: node.key,
+                provider: progress.provider ?? priorStep?.provider ?? null,
+                providerRequestId: progress.providerRequestId ?? priorStep?.providerRequestId ?? null,
+                providerStatus: readText(asRecord(progress.metadata).providerStatus) || null,
+              })
+            }
             if (priorStep) {
               priorStep.provider = progress.provider ?? priorStep.provider
               priorStep.model = progress.model ?? priorStep.model
@@ -19209,12 +19328,22 @@ export async function processFlyOutputWorkflowRuns(input: {
       },
     })
     if (completeResponse.error) throw new Error(completeResponse.error.message)
+    if (completeResponse.data === true) {
+      const completeRequestResponse = await input.client
+        .from('output_requests')
+        .update({
+          status: effectiveRunStatus,
+          error_message: null,
+        })
+        .eq('latest_run_id', runId)
+      if (completeRequestResponse.error) throw new Error(completeRequestResponse.error.message)
+    }
     return { processed: true, run: { id: bundle.run.id, status: effectiveRunStatus, preset: bundle.run.preset } }
     }
     throw new Error('Cinematic dynamic workflow expansion did not settle after 4 scheduler passes.')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await input.client.rpc('fail_output_workflow_run', {
+    const failResponse = await input.client.rpc('fail_output_workflow_run', {
       run_id: runId,
       worker_id: input.workerId,
       error_message: message,
@@ -19223,6 +19352,16 @@ export async function processFlyOutputWorkflowRuns(input: {
         stage: 'failed',
       },
     })
+    if (failResponse.data === true) {
+      const failRequestResponse = await input.client
+        .from('output_requests')
+        .update({
+          status: 'failed',
+          error_message: message,
+        })
+        .eq('latest_run_id', runId)
+      if (failRequestResponse.error) throw new Error(failRequestResponse.error.message)
+    }
     return { processed: true, run: { id: bundle.run.id, status: 'failed', preset: bundle.run.preset } }
   }
 }

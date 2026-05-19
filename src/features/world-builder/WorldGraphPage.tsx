@@ -1404,6 +1404,7 @@ type SequenceAnimaticVideoPreview = {
 
 const ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set(['queued', 'planning', 'awaiting_confirmation', 'running'])
 const FAILED_SEQUENCE_ANIMATIC_STATUSES = new Set(['failed', 'cancelled'])
+const TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
 
 function formatAnimaticSeconds(value: unknown) {
   const seconds = typeof value === 'number' ? value : Number(value)
@@ -1477,8 +1478,15 @@ function sequenceAnimaticProjectionActiveNodeKey(request: OutputRequest | null) 
   return trimOptionalString(projection?.activeNodeKey)
 }
 
-function sequenceAnimaticRequestIsActive(request: OutputRequest | null) {
+function outputWorkflowRunHasFailedExecution(run: OutputWorkflowRun | null | undefined) {
+  return run?.status === 'failed'
+    || run?.status === 'cancelled'
+    || run?.steps.some((step) => step.status === 'failed') === true
+}
+
+function sequenceAnimaticRequestIsActive(request: OutputRequest | null, run?: OutputWorkflowRun | null) {
   if (!request || sequenceAnimaticProjectionTerminal(request)) return false
+  if (outputWorkflowRunHasFailedExecution(run)) return false
   return ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(sequenceAnimaticEffectiveStatus(request))
 }
 
@@ -1501,11 +1509,11 @@ function sequenceAnimaticStateForRequest(
     : request.workflowId
       ? runs.find((entry) => entry.workflowId === request.workflowId) ?? null
       : null
-  if (!projectionTerminal && (ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || (run && !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(run.status)))) {
-    return 'in_progress'
-  }
-  if (FAILED_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || run?.status === 'failed' || run?.status === 'cancelled') {
+  if (FAILED_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || outputWorkflowRunHasFailedExecution(run)) {
     return 'failed'
+  }
+  if (!projectionTerminal && (ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || (run && !TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run.status)))) {
+    return 'in_progress'
   }
   const requestArtifacts = artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))
   if (requestArtifacts.some((artifact) => artifact.kind === 'video' || artifact.mimeType.startsWith('video/'))) return 'video_ready'
@@ -2176,20 +2184,21 @@ function buildSequenceAnimaticViewModel(input: {
     run: continuityRun ?? input.run,
   })
   const continuityMetadata = readLooseRecord(continuityRequest?.metadata)
+  const continuityProjection = sequenceAnimaticProjectionForRequest(continuityRequest)
   const continuityStale = continuityMetadata.sequenceAnimaticStale === true
-  const continuityRunning = sequenceAnimaticRequestIsActive(continuityRequest)
+  const continuityRunning = sequenceAnimaticRequestIsActive(continuityRequest, continuityRun)
   const continuityReady = Object.keys(readLooseRecord(continuityPack)).length > 0
   const continuityEffectiveStatus = sequenceAnimaticEffectiveStatus(continuityRequest)
   const continuityFailedStep = continuityRun?.steps.find((step) => step.status === 'failed') ?? null
-  const continuityFailed = !continuityRunning && Boolean(
-    continuityRun?.status === 'failed'
-      || continuityRun?.status === 'cancelled'
+  const continuityFailed = Boolean(
+    outputWorkflowRunHasFailedExecution(continuityRun)
       || FAILED_SEQUENCE_ANIMATIC_STATUSES.has(continuityEffectiveStatus),
   )
   const continuityError = [
     trimOptionalString(continuityFailedStep?.errorMessage),
     trimOptionalString(continuityRun?.errorMessage),
     trimOptionalString(continuityRequest?.errorMessage),
+    trimOptionalString(continuityProjection?.latestError),
   ].find(Boolean) ?? ''
   const currentContinuityPackHash = trimOptionalString(readLooseRecord(continuityPack).continuityPackHash)
   const continuityButtonLabel = !continuityRequest
@@ -2360,7 +2369,7 @@ function buildSequenceAnimaticViewModel(input: {
       const childPrepNodeKeys = new Set([childPromptNodeKey, childSheetNodeKey, childPanelExtractNodeKey, childVideoPromptNodeKey])
       const childPrepActiveFromProjection = Boolean(childRequest)
         && Boolean(childRun || childRequest?.latestRunId)
-        && sequenceAnimaticRequestIsActive(childRequest)
+        && sequenceAnimaticRequestIsActive(childRequest, childRun)
         && (!childProjectionActiveNodeKey || childPrepNodeKeys.has(childProjectionActiveNodeKey))
       const shotIds = readLooseArray(group.shotIds).map(trimOptionalString).filter(Boolean)
       const groupShots = shotIds
@@ -2514,7 +2523,7 @@ function buildSequenceAnimaticViewModel(input: {
             isOutputRunStepActive(revisionStep)
             || isOutputRunStepActive(revisionPlanStep)
             || isOutputRunStepActive(revisionImageStep)
-            || sequenceAnimaticRequestIsActive(revisionRequest)
+            || sequenceAnimaticRequestIsActive(revisionRequest, revisionRun)
           )
           const revisionError = revisionStep?.status === 'failed'
             ? revisionStep.errorMessage ?? 'Shot revision failed.'
@@ -2546,7 +2555,7 @@ function buildSequenceAnimaticViewModel(input: {
           const shotVideoError = shotVideoStep?.status === 'failed' ? shotVideoStep.errorMessage ?? 'Shot video generation failed.' : ''
           const shotVideoReady = Boolean(shotVideoUrl) && shotVideoStep?.status !== 'failed'
           const shotVideoRunning = !shotVideoReady
-            && (isOutputRunStepActive(shotVideoStep) || isOutputRunStepActive(shotVideoPromptStep) || sequenceAnimaticRequestIsActive(shotVideoRequest))
+            && (isOutputRunStepActive(shotVideoStep) || isOutputRunStepActive(shotVideoPromptStep) || sequenceAnimaticRequestIsActive(shotVideoRequest, shotVideoRun))
           const shotVideoProgressLabel = shotVideoRunning
             ? sequenceAnimaticVideoProgressLabel(shotVideoStep) || shotVideoPromptStep?.label || 'Generating shot video'
             : shotVideoReady
@@ -2655,7 +2664,7 @@ function buildSequenceAnimaticViewModel(input: {
             isOutputRunStepActive(revisionStep)
             || isOutputRunStepActive(revisionPlanStep)
             || isOutputRunStepActive(revisionImageStep)
-            || sequenceAnimaticRequestIsActive(revisionRequest)
+            || sequenceAnimaticRequestIsActive(revisionRequest, revisionRun)
           )
           const revisionError = revisionStep?.status === 'failed'
             ? revisionStep.errorMessage ?? 'Shot revision failed.'

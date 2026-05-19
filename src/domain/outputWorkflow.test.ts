@@ -1304,6 +1304,9 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(workerSource, /continuity_planner_context/)
   assert.match(workerSource, /Use the compact planner context as the truth source/)
   assert.match(workerSource, /Treat existingWorldReferences and every shot\.resolvedRefs entry as canonical/)
+  assert.match(workerSource, /specific visible one-shot incidental characters/)
+  assert.match(workerSource, /sequenceAnimaticShouldKeepSingleUseTemporaryCharacter/)
+  assert.match(workerSource, /Recovered \$\{acceptedRejectedCandidateKeys\.size\} visible one-shot incidental character/)
   assert.match(workerSource, /resolvedRefs/)
   assert.match(workerSource, /unresolvedShotRefs/)
   const continuityPromptSource = workerSource.slice(

@@ -8877,6 +8877,7 @@ export default function App() {
             onGetOutputRequestStatus={getOutputRequestStatus}
             onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
             onLoadOutputWorkflowNodeOutput={loadOutputWorkflowNodeOutput}
+            onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
             onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
             onUpdateOutputWorkflowNode={updateOutputWorkflowNode}
           />

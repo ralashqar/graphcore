@@ -2970,6 +2970,7 @@ export type SignedProjectAssetUrlEntry = SignProjectAssetUrlsResponse['urls'][nu
 const PROJECT_ASSET_SIGNING_BATCH_SIZE = 100
 const PROJECT_ASSET_SIGNING_BATCH_WINDOW_MS = 75
 const SEQUENCE_ANIMATIC_STATE_EDGE_UNAVAILABLE_TTL_MS = 5 * 60 * 1000
+const USE_SEQUENCE_ANIMATIC_STATE_EDGE_FUNCTION = false
 
 const storageAssetUrlCache = new Map<string, { storagePath: string; url: string; expiresAt: number | null }>()
 let sequenceAnimaticStateEdgeUnavailableUntil = 0
@@ -8666,10 +8667,10 @@ export async function loadSequenceAnimaticState(
     key: `sequence-animatic-state:${payload.projectId}:${payload.draftId}:${payload.masterRequestId ?? ''}:${payload.sequenceUnitKey ?? ''}:${payload.knownRevision ?? ''}`,
     ttlMs: 300,
     fn: async () => {
-      if (payload.sequenceUnitKey && !payload.masterRequestId) {
-        return loadSequenceAnimaticStateDirect(payload)
-      }
-      if (Date.now() < sequenceAnimaticStateEdgeUnavailableUntil) {
+      if (!USE_SEQUENCE_ANIMATIC_STATE_EDGE_FUNCTION
+        || (payload.sequenceUnitKey && !payload.masterRequestId)
+        || Date.now() < sequenceAnimaticStateEdgeUnavailableUntil
+      ) {
         return loadSequenceAnimaticStateDirect(payload)
       }
       const response = await invokeAuthedFunctionWithSessionRecovery(
@@ -8998,12 +8999,15 @@ async function loadSequenceAnimaticStateDirect(
   const workflowIds = [...new Set(requests.map((request) => request.workflowId).filter((id): id is string => Boolean(id)))]
   const runIds = [...new Set(requests.map((request) => request.latestRunId).filter((id): id is string => Boolean(id)))]
 
-  const [workflowResponse, runResponse, artifactResponse, projectionResponse] = await Promise.all([
+  const [workflowResponse, runResponse, stepResponse, artifactResponse, projectionResponse] = await Promise.all([
     workflowIds.length > 0
       ? supabase.from('output_workflows').select(OUTPUT_WORKFLOW_SELECT).eq('draft_id', payload.draftId).in('id', workflowIds)
       : Promise.resolve({ data: [], error: null }),
     runIds.length > 0
       ? supabase.from('output_workflow_runs').select(OUTPUT_WORKFLOW_RUN_SELECT).eq('draft_id', payload.draftId).in('id', runIds)
+      : Promise.resolve({ data: [], error: null }),
+    runIds.length > 0
+      ? supabase.from('output_workflow_run_steps').select(OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT).in('run_id', runIds).order('order_index', { ascending: true })
       : Promise.resolve({ data: [], error: null }),
     workflowIds.length > 0
       ? supabase.from('output_artifacts').select(OUTPUT_ARTIFACT_SELECT).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })
@@ -9014,15 +9018,17 @@ async function loadSequenceAnimaticStateDirect(
   ])
   if (workflowResponse.error) throw new Error(workflowResponse.error.message)
   if (runResponse.error) throw new Error(runResponse.error.message)
+  if (stepResponse.error) throw new Error(stepResponse.error.message)
   if (artifactResponse.error) throw new Error(artifactResponse.error.message)
   if (projectionResponse.error) throw new Error(projectionResponse.error.message)
 
   const workflows = ((workflowResponse.data ?? []) as OutputWorkflowRow[]).map(mapOutputWorkflowRow)
   const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
+  const steps = ((stepResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
   const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map(mapOutputRequestStatusProjectionRow)
   const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ artifacts, projections }))
   const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
-  const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, [], hydratedArtifacts))
+  const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, hydratedArtifacts))
   const revision = hashOutputWorkflowValue({
     requests: requests.map((request) => ({
       id: request.id,
@@ -9033,7 +9039,19 @@ async function loadSequenceAnimaticStateDirect(
       metadata: request.metadata,
     })),
     workflows: workflows.map((workflow) => ({ id: workflow.id, updatedAt: workflow.updatedAt, metadata: workflow.metadata })),
-    runs: runs.map((run) => ({ id: run.id, status: run.status, updatedAt: run.updatedAt, outputs: run.outputs })),
+    runs: runs.map((run) => ({
+      id: run.id,
+      status: run.status,
+      updatedAt: run.updatedAt,
+      outputs: run.outputs,
+      steps: run.steps.map((step) => ({
+        id: step.id,
+        nodeKey: step.nodeKey,
+        status: step.status,
+        errorMessage: step.errorMessage,
+        updatedAt: step.updatedAt,
+      })),
+    })),
     artifacts: hydratedArtifacts.map((artifact) => ({ id: artifact.id, key: artifact.key, assetKey: artifact.assetKey, updatedAt: artifact.updatedAt })),
     projections: projections.map((projection) => ({
       requestId: projection.requestId,
@@ -9312,6 +9330,7 @@ export async function cancelOutputWorkflowRun(runId: string): Promise<OutputWork
   const parsed = outputWorkflowCancelResponseSchema.parse(response.data)
   if (parsed.run) {
     await clearProjectCache(parsed.run.projectId, parsed.run.draftId)
+    await clearOutputInboxCache(parsed.run.projectId, parsed.run.draftId)
   }
   return parsed
 }

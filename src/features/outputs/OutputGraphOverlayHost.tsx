@@ -36,6 +36,7 @@ type OutputGraphOverlayHostProps = {
     nodeKey: string,
     graphRevision?: string | null,
   ) => Promise<unknown> | unknown
+  onCancelOutputWorkflowRun: (runId: string) => Promise<unknown> | unknown
   onSubscribeOutputWorkflowGraphSignals: (input: {
     draftId: string
     workflowId: string
@@ -124,12 +125,15 @@ export function OutputGraphOverlayHost({
   onGetOutputRequestStatus,
   onLoadOutputWorkflowGraph,
   onLoadOutputWorkflowNodeOutput,
+  onCancelOutputWorkflowRun,
   onSubscribeOutputWorkflowGraphSignals,
   onUpdateOutputWorkflowNode,
 }: OutputGraphOverlayHostProps) {
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(openIntent?.selectedNodeKey ?? null)
   const [refreshingGraph, setRefreshingGraph] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [cancelledRunIds, setCancelledRunIds] = useState<Set<string>>(() => new Set())
   const graphRevisionRef = useRef<string | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
   const lastRefreshAtRef = useRef(0)
@@ -144,7 +148,17 @@ export function OutputGraphOverlayHost({
   const activeRun = request?.latestRunId
     ? workflowRuns.find((run) => run.id === request.latestRunId) ?? workflowRuns[0] ?? null
     : workflowRuns[0] ?? null
-  const displayRun = useMemo(() => mergeWorkflowRunsForDisplay(workflowRuns, activeRun), [activeRun, workflowRuns])
+  const displayRun = useMemo(() => {
+    const merged = mergeWorkflowRunsForDisplay(workflowRuns, activeRun)
+    if (!merged || !cancelledRunIds.has(merged.id)) return merged
+    return {
+      ...merged,
+      status: 'cancelled',
+      steps: merged.steps.map((step) => ['queued', 'running'].includes(step.status)
+        ? { ...step, status: 'cancelled' as const }
+        : step),
+    } satisfies OutputWorkflowRun
+  }, [activeRun, cancelledRunIds, workflowRuns])
   const nodes = workflow ? snapshot.outputWorkflowNodes.filter((node) => node.workflowId === workflow.id) : []
   const edges = workflow ? snapshot.outputWorkflowEdges.filter((edge) => edge.workflowId === workflow.id) : []
   const knownGraphRevision = readOutputRequestGraphRevision(request) || graphRevisionRef.current
@@ -182,6 +196,24 @@ export function OutputGraphOverlayHost({
     }).finally(() => {
       if (!quiet) setRefreshingGraph(false)
     })
+  }
+
+  const cancelActiveRun = () => {
+    const runId = activeRun?.id ?? request?.latestRunId ?? null
+    if (!runId || cancelBusy) return
+    setCancelBusy(true)
+    setSyncMessage('Cancelling run...')
+    void Promise.resolve(onCancelOutputWorkflowRun(runId))
+      .then(() => {
+        setCancelledRunIds((current) => new Set([...current, runId]))
+        graphRevisionRef.current = null
+        setSyncMessage('Run cancelled.')
+        refreshGraph(false)
+      })
+      .catch((error) => {
+        setSyncMessage(error instanceof Error ? error.message : 'Could not cancel output workflow.')
+      })
+      .finally(() => setCancelBusy(false))
   }
 
   useEffect(() => {
@@ -265,7 +297,7 @@ export function OutputGraphOverlayHost({
       nodes={nodes}
       worldEntities={snapshot.worldEntities as unknown as Array<Record<string, unknown>>}
       worldRelationships={snapshot.worldRelationships as unknown as Array<Record<string, unknown>>}
-      onCancelRun={() => undefined}
+      onCancelRun={cancelActiveRun}
       onClose={onClose}
       onRefreshGraph={() => refreshGraph(false)}
       onRunNode={() => setSyncMessage('Open Output Studio to run individual graph nodes.')}
@@ -274,7 +306,7 @@ export function OutputGraphOverlayHost({
       onSelectNode={(nodeKey) => setSelectedNodeKey(nodeKey)}
       readNodeSkillKeys={readNodeSkillKeys}
       readOutputPreview={readOutputPreview}
-      runErrorMessage={syncMessage}
+      runErrorMessage={cancelBusy ? 'Cancelling run...' : syncMessage}
       refreshingGraph={refreshingGraph}
       selectedNodeKey={selectedNodeKey}
       targetedNodeKey={null}
