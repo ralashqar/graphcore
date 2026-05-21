@@ -43,6 +43,26 @@ const IMAGE_NODE_PREVIEW_HEIGHT = 380
 const IMAGE_NODE_CHROME_HEIGHT = 66
 const IMAGE_NODE_MIN_WIDTH = 440
 const IMAGE_NODE_MAX_WIDTH = 920
+const REFERENCE_STACK_WIDTH = 380
+const REFERENCE_STACK_IMAGE_HEIGHT = 138
+const REFERENCE_STACK_CHROME_HEIGHT = 76
+const REFERENCE_STACK_MAX_IMAGES = 12
+const CONTEXT_TAG_NODE_WIDTH = 380
+const CONTEXT_TAG_CHROME_HEIGHT = 88
+const CONTEXT_TAG_ROW_HEIGHT = 34
+const CONTEXT_TAG_MAX_ITEMS = 34
+
+type GraphReferenceImage = {
+  assetKey: string
+  label: string
+  url: string
+}
+
+type GraphContextTag = {
+  key: string
+  label: string
+  kind: 'world' | 'section' | 'entity' | 'sequence' | 'asset' | 'relationship' | 'source'
+}
 
 type GraphNodeData = {
   node: OutputWorkflowNode
@@ -51,6 +71,8 @@ type GraphNodeData = {
   outputPreview: string
   imageUrl: string | null
   imageSize: { width: number; height: number } | null
+  referenceImages: GraphReferenceImage[]
+  contextTags: GraphContextTag[]
   hasOutput: boolean
   skillKeys: string[]
   inputPorts: Array<{ id: string; valueType: string }>
@@ -244,12 +266,192 @@ function readImageOutputSize(source: OutputWorkflowOutputSource) {
     : null
 }
 
-function graphNodeDimensions(node: OutputWorkflowNode, imageSize: { width: number; height: number } | null) {
+function graphNodeDimensions(
+  node: OutputWorkflowNode,
+  imageSize: { width: number; height: number } | null,
+  referenceImageCount = 0,
+  contextTagCount = 0,
+) {
+  if (referenceImageCount > 0) {
+    return {
+      width: REFERENCE_STACK_WIDTH,
+      height: REFERENCE_STACK_CHROME_HEIGHT + referenceImageCount * REFERENCE_STACK_IMAGE_HEIGHT + Math.max(0, referenceImageCount - 1) * 8,
+    }
+  }
+  if (contextTagCount > 0) {
+    return {
+      width: CONTEXT_TAG_NODE_WIDTH,
+      height: CONTEXT_TAG_CHROME_HEIGHT + Math.ceil(contextTagCount / 2.35) * CONTEXT_TAG_ROW_HEIGHT,
+    }
+  }
   if (node.nodeType !== 'image_generation' || !imageSize) return { width: NODE_WIDTH, height: NODE_HEIGHT }
   const aspect = imageSize.width / imageSize.height
   const height = IMAGE_NODE_PREVIEW_HEIGHT + IMAGE_NODE_CHROME_HEIGHT
   const width = Math.max(IMAGE_NODE_MIN_WIDTH, Math.min(IMAGE_NODE_MAX_WIDTH, Math.round(IMAGE_NODE_PREVIEW_HEIGHT * aspect) + 24))
   return { width, height }
+}
+
+function isReferenceStackNode(node: OutputWorkflowNode) {
+  const config = readRecord(node.config)
+  const metadata = readRecord(node.metadata)
+  const purpose = readTrimmedString(config.purpose)
+  const role = readTrimmedString(config.role) || readTrimmedString(metadata.role)
+  const haystack = `${node.key} ${node.label} ${purpose} ${role}`.toLowerCase()
+  return haystack.includes('reference_select')
+    || haystack.includes('reference selector')
+    || haystack.includes('image_reference')
+    || haystack.includes('image reference')
+    || haystack.includes('asset_pack')
+    || haystack.includes('asset pack')
+    || haystack.includes('references')
+}
+
+function collectReferenceAssetKeys(value: unknown, assetKeys = new Set<string>(), depth = 0) {
+  if (depth > 8 || value == null) return assetKeys
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, 120)) collectReferenceAssetKeys(entry, assetKeys, depth + 1)
+    return assetKeys
+  }
+  if (typeof value !== 'object') return assetKeys
+  const record = readRecord(value)
+  const directKey = readTrimmedString(record.assetKey)
+    || readTrimmedString(record.asset_key)
+    || readTrimmedString(record.primaryAssetKey)
+    || readTrimmedString(record.primary_asset_key)
+    || readTrimmedString(record.selectedReferenceAssetKey)
+    || readTrimmedString(record.selected_reference_asset_key)
+  if (directKey) assetKeys.add(directKey)
+  for (const key of ['assetKeys', 'asset_keys', 'referenceAssetKeys', 'reference_asset_keys', 'imageAssetKeys', 'image_asset_keys']) {
+    readStringArray(record[key]).forEach((assetKey) => assetKeys.add(assetKey.trim()))
+  }
+  for (const entry of Object.values(record).slice(0, 120)) {
+    if (entry && typeof entry === 'object') collectReferenceAssetKeys(entry, assetKeys, depth + 1)
+  }
+  return assetKeys
+}
+
+function readAssetLabel(asset: AssetDefinition | null | undefined, fallback: string) {
+  return readTrimmedString(asset?.name)
+    || readTrimmedString(readRecord(asset?.metadata).title)
+    || readTrimmedString(readRecord(asset?.metadata).label)
+    || fallback
+}
+
+function referenceImagesForNode(input: {
+  node: OutputWorkflowNode
+  step: OutputWorkflowRunStep | null
+  assetByKey: Map<string, AssetDefinition>
+  artifactImageUrlByAssetKey: Map<string, string>
+}) {
+  if (!isReferenceStackNode(input.node)) return []
+  const outputPreview = readRecord(readRecord(input.node.metadata).outputPreview)
+  const keys = new Set<string>()
+  collectReferenceAssetKeys(input.step?.outputs, keys)
+  collectReferenceAssetKeys(input.node.outputs, keys)
+  readStringArray(outputPreview.assetKeys).forEach((assetKey) => keys.add(assetKey.trim()))
+  return [...keys].slice(0, REFERENCE_STACK_MAX_IMAGES).map((assetKey) => {
+    const asset = input.assetByKey.get(assetKey) ?? null
+    const url = resolveAssetSourceUrl(asset) || input.artifactImageUrlByAssetKey.get(assetKey) || (isResolvableAssetUrl(assetKey) ? assetKey : '')
+    if (!url) return null
+    return {
+      assetKey,
+      label: readAssetLabel(asset, assetKey),
+      url,
+    }
+  }).filter((entry): entry is GraphReferenceImage => Boolean(entry))
+}
+
+function pluralLabel(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function contextRecordForNode(node: OutputWorkflowNode, step: OutputWorkflowRunStep | null) {
+  const stepOutputs = readRecord(step?.outputs)
+  const nodeOutputs = readRecord(node.outputs)
+  const stepContext = readRecord(stepOutputs.context)
+  if (Object.keys(stepContext).length > 0) return stepContext
+  const nodeContext = readRecord(nodeOutputs.context)
+  if (Object.keys(nodeContext).length > 0) return nodeContext
+  if (node.nodeType === 'world_context_query' && Object.keys(stepOutputs).length > 0) return stepOutputs
+  if (node.nodeType === 'world_context_query' && Object.keys(nodeOutputs).length > 0) return nodeOutputs
+  return {}
+}
+
+function entityDisplayName(entity: Record<string, unknown>, fallbackPrefix: string, index: number) {
+  return readTrimmedString(entity.name)
+    || readTrimmedString(entity.title)
+    || readTrimmedString(entity.key)
+    || `${fallbackPrefix} ${index + 1}`
+}
+
+function contextTagsForNode(input: {
+  node: OutputWorkflowNode
+  step: OutputWorkflowRunStep | null
+  worldEntities: Array<Record<string, unknown>>
+  worldRelationships: Array<Record<string, unknown>>
+  assets: AssetDefinition[]
+}) {
+  const { node, step } = input
+  if (node.nodeType !== 'world_context_query') return []
+  const config = readRecord(node.config)
+  const context = contextRecordForNode(node, step)
+  const tags: GraphContextTag[] = []
+  const wiki = readRecord(context.wiki)
+  const sourceEntityKeys = readStringArray(context.sourceEntityKeys).length > 0
+    ? readStringArray(context.sourceEntityKeys)
+    : readStringArray(config.sourceEntityKeys)
+  const sourceSequenceUnitKeys = readStringArray(context.sourceSequenceUnitKeys).length > 0
+    ? readStringArray(context.sourceSequenceUnitKeys)
+    : readStringArray(config.sourceSequenceUnitKeys)
+  const contextEntities = Array.isArray(context.entities) ? context.entities.map(readRecord) : []
+  const contextSequenceUnits = Array.isArray(context.sequenceUnits) ? context.sequenceUnits.map(readRecord) : []
+  const fallbackEntities = input.worldEntities
+    .filter((entity) => readTrimmedString(entity.nodeType) !== 'sequence_unit' && readTrimmedString(entity.node_type) !== 'sequence_unit')
+    .filter((entity) => sourceEntityKeys.length === 0 || sourceEntityKeys.includes(readTrimmedString(entity.key)))
+  const fallbackSequenceUnits = input.worldEntities
+    .filter((entity) => readTrimmedString(entity.nodeType) === 'sequence_unit' || readTrimmedString(entity.node_type) === 'sequence_unit')
+    .filter((entity) => sourceSequenceUnitKeys.length === 0 || sourceSequenceUnitKeys.includes(readTrimmedString(entity.key)))
+  const entities = contextEntities.length > 0 ? contextEntities : fallbackEntities
+  const sequenceUnits = contextSequenceUnits.length > 0 ? contextSequenceUnits : fallbackSequenceUnits
+  const relationships = Array.isArray(context.relationships) && context.relationships.length > 0
+    ? context.relationships.map(readRecord)
+    : input.worldRelationships.filter((relationship) => {
+      if (sourceEntityKeys.length === 0 && sourceSequenceUnitKeys.length === 0) return false
+      const sourceKey = readTrimmedString(relationship.sourceEntityKey) || readTrimmedString(relationship.source_entity_key)
+      const targetKey = readTrimmedString(relationship.targetEntityKey) || readTrimmedString(relationship.target_entity_key)
+      return sourceEntityKeys.includes(sourceKey)
+        || sourceEntityKeys.includes(targetKey)
+        || sourceSequenceUnitKeys.includes(sourceKey)
+        || sourceSequenceUnitKeys.includes(targetKey)
+    })
+  const assets = Array.isArray(context.assets) && context.assets.length > 0 ? context.assets.map(readRecord) : input.assets
+  const title = readTrimmedString(wiki.title) || readTrimmedString(wiki.name)
+  if (title) tags.push({ key: 'world:title', label: title, kind: 'world' })
+  if (entities.length > 0) tags.push({ key: 'section:entities', label: pluralLabel(entities.length, 'entity', 'entities'), kind: 'section' })
+  if (sequenceUnits.length > 0) tags.push({ key: 'section:sequence', label: pluralLabel(sequenceUnits.length, 'sequence unit'), kind: 'section' })
+  if (relationships.length > 0) tags.push({ key: 'section:relationships', label: pluralLabel(relationships.length, 'relationship'), kind: 'section' })
+  if (assets.length > 0) tags.push({ key: 'section:assets', label: pluralLabel(assets.length, 'asset'), kind: 'section' })
+  if (sourceEntityKeys.length > 0) tags.push({ key: 'source:entities', label: `${sourceEntityKeys.length} selected refs`, kind: 'source' })
+  if (sourceSequenceUnitKeys.length > 0) tags.push({ key: 'source:sequence', label: `${sourceSequenceUnitKeys.length} source chapters`, kind: 'source' })
+  sequenceUnits.slice(0, 6).forEach((entry, index) => {
+    tags.push({
+      key: `sequence:${readTrimmedString(entry.key) || index}`,
+      label: entityDisplayName(entry, 'Sequence', index),
+      kind: 'sequence',
+    })
+  })
+  entities.slice(0, 18).forEach((entry, index) => {
+    const type = readTrimmedString(entry.nodeType) || readTrimmedString(entry.node_type) || readTrimmedString(entry.type)
+    const name = entityDisplayName(entry, 'Entity', index)
+    tags.push({
+      key: `entity:${readTrimmedString(entry.key) || index}`,
+      label: type ? `${name} / ${type}` : name,
+      kind: 'entity',
+    })
+  })
+  if (entities.length > 18) tags.push({ key: 'entity:more', label: `+${entities.length - 18} more entities`, kind: 'entity' })
+  if (tags.length === 0) tags.push({ key: 'context:pending', label: 'Context pending', kind: 'source' })
+  return tags.slice(0, CONTEXT_TAG_MAX_ITEMS)
 }
 
 function hasOverlappingNodePositions(nodes: OutputWorkflowNode[]) {
@@ -331,13 +533,15 @@ function localRunButtonLabel(input: {
 }
 
 function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
-  const { node, step, statusKey, outputPreview, imageUrl, hasOutput, inputPorts, outputPorts, selected, running, onSelect, onRun, onOpenOutput } = data
+  const { node, step, statusKey, outputPreview, imageUrl, referenceImages, contextTags, hasOutput, inputPorts, outputPorts, selected, running, onSelect, onRun, onOpenOutput } = data
   const hasImagePreview = node.nodeType === 'image_generation' && Boolean(imageUrl)
+  const hasReferenceStack = referenceImages.length > 0
+  const hasContextTags = contextTags.length > 0
   const bodyText = outputPreview || (step?.errorMessage ? step.errorMessage : hasOutput ? '' : 'No output yet.')
 
   return (
     <div
-      className={`outputs-graph-node is-${node.nodeType} is-${statusKey} ${selected ? 'is-selected' : ''} ${hasImagePreview ? 'has-image-output' : ''}`}
+      className={`outputs-graph-node is-${node.nodeType} is-${statusKey} ${selected ? 'is-selected' : ''} ${hasImagePreview ? 'has-image-output' : ''} ${hasReferenceStack ? 'has-reference-stack' : ''} ${hasContextTags ? 'has-context-tags' : ''}`}
       onClick={() => onSelect(node.key)}
       onDoubleClick={() => onSelect(node.key)}
       onKeyDown={(event) => {
@@ -367,6 +571,30 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
           </div>
           <div className="outputs-graph-node-body outputs-graph-node-image-body">
             <img className="outputs-graph-node-image" src={imageUrl ?? ''} alt="" loading="lazy" />
+          </div>
+        </>
+      ) : hasReferenceStack ? (
+        <>
+          <div className="outputs-graph-node-header">
+            <span className={`outputs-graph-node-type is-${node.nodeType}`} aria-hidden="true">{nodeTypeMarker(node.nodeType)}</span>
+            <strong>{node.label}</strong>
+          </div>
+          <div className="outputs-graph-node-body outputs-graph-node-reference-stack nodrag nowheel">
+            {referenceImages.map((image) => (
+              <img alt={image.label} key={image.assetKey} src={image.url} loading="lazy" />
+            ))}
+          </div>
+        </>
+      ) : hasContextTags ? (
+        <>
+          <div className="outputs-graph-node-header">
+            <span className={`outputs-graph-node-type is-${node.nodeType}`} aria-hidden="true">{nodeTypeMarker(node.nodeType)}</span>
+            <strong>{node.label}</strong>
+          </div>
+          <div className="outputs-graph-node-body outputs-graph-node-context-tags nodrag nowheel">
+            {contextTags.map((tag) => (
+              <span className={`outputs-graph-context-tag is-${tag.kind}`} key={tag.key}>{tag.label}</span>
+            ))}
           </div>
         </>
       ) : (
@@ -463,6 +691,18 @@ function sameGraphNodeForReactFlow(left: GraphNode, right: GraphNode) {
     && leftData.imageUrl === rightData.imageUrl
     && leftData.imageSize?.width === rightData.imageSize?.width
     && leftData.imageSize?.height === rightData.imageSize?.height
+    && leftData.referenceImages.length === rightData.referenceImages.length
+    && leftData.referenceImages.every((image, index) => (
+      image.assetKey === rightData.referenceImages[index]?.assetKey
+      && image.url === rightData.referenceImages[index]?.url
+      && image.label === rightData.referenceImages[index]?.label
+    ))
+    && leftData.contextTags.length === rightData.contextTags.length
+    && leftData.contextTags.every((tag, index) => (
+      tag.key === rightData.contextTags[index]?.key
+      && tag.label === rightData.contextTags[index]?.label
+      && tag.kind === rightData.contextTags[index]?.kind
+    ))
     && leftData.hasOutput === rightData.hasOutput
     && leftData.selected === rightData.selected
     && leftData.running === rightData.running
@@ -721,11 +961,19 @@ export function OutputWorkflowGraphOverlay({
           ? resolveAssetSourceUrl(assetByKey.get(imageAssetKey)) || artifactImageUrlByAssetKey.get(imageAssetKey) || artifactImage?.url || null
           : artifactImage?.url ?? null
         const imageSize = readImageOutputSize(step) ?? readImageOutputSize(cachedOutputSource) ?? artifactImage?.size ?? null
-        const dimensions = graphNodeDimensions(node, imageSize)
+        const referenceImages = referenceImagesForNode({ node, step, assetByKey, artifactImageUrlByAssetKey })
+        const contextTags = contextTagsForNode({
+          node,
+          step,
+          worldEntities: safeWorldEntities,
+          worldRelationships: safeWorldRelationships,
+          assets: safeAssets,
+        })
+        const dimensions = graphNodeDimensions(node, imageSize, referenceImages.length, contextTags.length)
         const outputPreview = readOutputPreview(step)
           || readOutputPreview({ ...cachedOutputSource, errorMessage: null, provider: null, model: null })
           || readNodeOutputPreview(node)
-        const hasOutput = Boolean(imageUrl || outputPreview || step?.errorMessage)
+        const hasOutput = Boolean(imageUrl || referenceImages.length > 0 || contextTags.length > 0 || outputPreview || step?.errorMessage)
         return {
           id: node.key,
           type: 'outputWorkflow' as const,
@@ -741,6 +989,8 @@ export function OutputWorkflowGraphOverlay({
             outputPreview,
             imageUrl,
             imageSize,
+            referenceImages,
+            contextTags,
             hasOutput,
             skillKeys: readNodeSkillKeys(node),
             inputPorts: inputPortsByNodeKey.get(node.key) ?? [],
@@ -773,7 +1023,7 @@ export function OutputWorkflowGraphOverlay({
       }
     })
     setFlowEdges((current) => sameGraphEdgesForReactFlow(current, nextEdges) ? current : nextEdges)
-  }, [safeNodes, safeEdges, stepsByNodeKey, selectedNodeKey, targetedNodeKeySet, layoutDirty, onRunNode, onSelectNode, readNodeSkillKeys, readOutputPreview, assetByKey, artifactImageUrlByAssetKey])
+  }, [safeNodes, safeEdges, stepsByNodeKey, selectedNodeKey, targetedNodeKeySet, layoutDirty, onRunNode, onSelectNode, readNodeSkillKeys, readOutputPreview, assetByKey, artifactImageUrlByAssetKey, artifactImageByNodeKeyMap, safeWorldEntities, safeWorldRelationships, safeAssets])
 
   async function applyAutoLayout(persist = false) {
     setGraphError(null)
@@ -803,7 +1053,15 @@ export function OutputWorkflowGraphOverlay({
           children: safeNodes.map((node) => {
             const step = stepsByNodeKey.get(node.key) ?? null
             const imageSize = readImageOutputSize(step) ?? readImageOutputSize({ outputs: node.outputs })
-            const dimensions = graphNodeDimensions(node, imageSize)
+            const referenceImages = referenceImagesForNode({ node, step, assetByKey, artifactImageUrlByAssetKey })
+            const contextTags = contextTagsForNode({
+              node,
+              step,
+              worldEntities: safeWorldEntities,
+              worldRelationships: safeWorldRelationships,
+              assets: safeAssets,
+            })
+            const dimensions = graphNodeDimensions(node, imageSize, referenceImages.length, contextTags.length)
             return {
               id: node.key,
               width: dimensions.width,
