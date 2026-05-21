@@ -1546,7 +1546,8 @@ test('prompt-created cinematics can use screenplay animatic master mode', () => 
   assert.match(ensureSource, /readScreenplayAnimaticRole/)
   assert.match(ensureSource, /screenplayAnimaticSource/)
   assert.match(outputsSource, /cinematicAnimaticMode: 'prompt_cinematic_master'/)
-  assert.match(outputsSource, /Open animatic/)
+  assert.match(outputsSource, /is-animatic-timeline/)
+  assert.match(outputsSource, /isScreenplayAnimaticMasterRequest\(request\)/)
 })
 
 test('sequence animatic continuity anchors are planned, extracted, and passed to child workflows', () => {

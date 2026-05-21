@@ -24,6 +24,7 @@ type CinematicTimelinePlayerProps = {
   referenceIconUrlByAssetKey?: ReadonlyMap<string, string | null>
   referenceIconUrlByEntityKey?: ReadonlyMap<string, string | null>
   referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
+  onAssetUrlError?: (assetKey: string) => void
   directorNotes?: {
     onPreview: (request: { note: string; scope: CinematicDirectorNoteScope }) => Promise<CinematicDirectorNotePreviewResponse>
     onApply: (preview: CinematicDirectorPatchPreview) => Promise<void>
@@ -238,6 +239,7 @@ export function CinematicTimelinePlayer({
   referenceIconUrlByAssetKey,
   referenceIconUrlByEntityKey,
   referenceVariantIconUrlByVariantKey,
+  onAssetUrlError,
   title = 'Cinematic Timeline',
   subtitle = 'Read-only production preview',
   emptyMessage = 'Shot planning has not produced a timeline yet.',
@@ -609,7 +611,7 @@ export function CinematicTimelinePlayer({
               src={currentMedia.url}
             />
           ) : currentMedia ? (
-            <img alt={currentMedia.asset.name} className="timeline-preview-image" src={currentMedia.url} />
+            <img alt={currentMedia.asset.name} className="timeline-preview-image" onError={() => onAssetUrlError?.(currentMedia.asset.key)} src={currentMedia.url} />
           ) : (
             <div className="timeline-preview-placeholder">
               <EntityIcon id="cinematic" />
@@ -638,7 +640,7 @@ export function CinematicTimelinePlayer({
                       title={reference.label}
                     >
                       <span className="timeline-preview-reference-thumb">
-                        {reference.url ? <img alt="" src={reference.url} /> : <EntityIcon id="asset" />}
+                        {reference.url ? <img alt="" onError={() => { if (reference.asset?.key) onAssetUrlError?.(reference.asset.key) }} src={reference.url} /> : <EntityIcon id="asset" />}
                       </span>
                       <span className="timeline-preview-reference-label">{reference.label}</span>
                     </div>
@@ -780,7 +782,7 @@ export function CinematicTimelinePlayer({
                         }}
                         type="button"
                       >
-                        {preview?.kind === 'image' ? <img alt="" className="timeline-shot-thumb" src={preview.url} /> : null}
+                        {preview?.kind === 'image' ? <img alt="" className="timeline-shot-thumb" onError={() => onAssetUrlError?.(preview.asset.key)} src={preview.url} /> : null}
                         <div className="timeline-shot-block-overlay" />
                         <div className="timeline-shot-copy">
                           <strong>{shot.title}</strong>

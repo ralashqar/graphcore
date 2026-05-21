@@ -367,6 +367,12 @@ function isCinematicOutputKind(kind: OutputRequestKind) {
   return kind.includes('cinematic') || kind === 'ugc_episode'
 }
 
+function isScreenplayAnimaticMasterRequest(request: OutputRequest) {
+  const metadata = readRecord(request.metadata)
+  const role = readTrimmedString(metadata.screenplayAnimaticRole) || readTrimmedString(metadata.sequenceAnimaticRole)
+  return !request.parentRequestId && role === 'master'
+}
+
 function collectRequestEntityCandidates(
   request: OutputRequest,
   run: OutputWorkflowRun | null,
@@ -635,7 +641,7 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
         latestRunId: projection?.latestRunId ?? request.latestRunId,
         entityRefs,
         canOpenGraph: Boolean(request.workflowId),
-        canOpenTimeline: Boolean(request.workflowId && isCinematicOutputKind(request.outputKind)),
+        canOpenTimeline: Boolean(request.workflowId && (isCinematicOutputKind(request.outputKind) || isScreenplayAnimaticMasterRequest(request))),
         primaryArtifact: artifacts[0] ?? null,
         artifacts,
         progress,

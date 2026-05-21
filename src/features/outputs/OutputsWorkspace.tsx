@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { isResolvableAssetUrl, resolveAssetSourceUrl } from '../../domain/assets'
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
@@ -534,6 +534,8 @@ type ScreenplayAnimaticShotPreview = {
   title: string
   action: string
   dialogue: string[]
+  timeLabel: string
+  durationLabel: string
   panelUrl: string
 }
 
@@ -553,6 +555,7 @@ type ScreenplayAnimaticPreviewData = {
   title: string
   statusLabel: string
   screenplayMarkdown: string
+  projection: CinematicTimelineProjection | null
   blocks: ScreenplayAnimaticBlockPreview[]
 }
 
@@ -595,6 +598,7 @@ function buildScreenplayAnimaticPreviewData(input: {
       title: input.request.title,
       statusLabel: formatStatus(input.request.status),
       screenplayMarkdown: '',
+      projection: null,
       blocks: [],
     }
   }
@@ -609,14 +613,45 @@ function buildScreenplayAnimaticPreviewData(input: {
       .flatMap((run) => run.artifacts),
   ]
   const panelUrlByShotId = new Map<string, string>()
+  const timelinePanels: Record<string, unknown>[] = []
   for (const artifact of childArtifacts) {
     const metadata = readRecord(artifact.metadata)
     const role = readTrimmedString(metadata.role)
     if (!['cinematic_v3_storyboard_panel', 'cinematic_v2_storyboard_panel', 'sequence_animatic_block_panel'].includes(role)) continue
     const shotId = readTrimmedString(metadata.shotId)
     const assetKey = artifact.assetKey
+    if (shotId && assetKey) timelinePanels.push({ shotId, assetKey, role })
     const url = assetKey ? urlsByAssetKey.get(assetKey) ?? '' : ''
     if (shotId && url && !panelUrlByShotId.has(shotId)) panelUrlByShotId.set(shotId, url)
+  }
+  const manifestShotPlan = readRecord(manifest.shotPlan)
+  const timelineShotPlan = Object.keys(manifestShotPlan).length > 0
+    ? manifestShotPlan
+    : {
+      sceneId: readTrimmedString(manifest.sequenceUnitKey) || readTrimmedString(input.request.selectedSequenceUnitKeys[0]) || 'sequence_animatic_scene',
+      totalEditorialDurationSeconds: Math.max(1, (Array.isArray(manifest.blocks) ? manifest.blocks.map(readRecord) : [])
+        .flatMap((block) => Array.isArray(block.shots) ? block.shots.map(readRecord) : [])
+        .reduce((total, shot) => total + (readNumber(shot.editorialDurationSeconds) ?? readNumber(shot.durationSeconds) ?? 3), 0)),
+      shots: (Array.isArray(manifest.blocks) ? manifest.blocks.map(readRecord) : [])
+        .flatMap((block) => Array.isArray(block.shots) ? block.shots.map(readRecord) : [])
+        .map((shot, index) => ({
+          ...shot,
+          id: readTrimmedString(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`,
+          index: Number(shot.index ?? index + 1) || index + 1,
+          title: readTrimmedString(shot.title) || `Shot ${index + 1}`,
+          purpose: readTrimmedString(shot.purpose) || 'action',
+          editorialDurationSeconds: Math.max(0.1, readNumber(shot.editorialDurationSeconds) ?? readNumber(shot.durationSeconds) ?? 3),
+        })),
+    }
+  let projection: CinematicTimelineProjection | null = null
+  try {
+    projection = buildCinematicV2TimelineProjection({
+      shotPlan: timelineShotPlan,
+      panels: timelinePanels,
+      storyboardSheets: [],
+    })
+  } catch {
+    projection = null
   }
   const blocks = (Array.isArray(manifest.blocks) ? manifest.blocks.map(readRecord) : []).map((block, blockIndex) => {
     const blockId = readTrimmedString(block.id) || `block_${blockIndex + 1}`
@@ -632,12 +667,26 @@ function buildScreenplayAnimaticPreviewData(input: {
         }).filter(Boolean)
         : []
       const shotId = readTrimmedString(shot.id) || `${blockId}_shot_${shotIndex + 1}`
+      const durationSeconds = readNumber(shot.editorialDurationSeconds)
+        ?? readNumber(shot.durationSeconds)
+        ?? readNumber(shot.providerDurationSeconds)
+        ?? 0
+      const startSeconds = readNumber(shot.startTimeSeconds)
+        ?? readNumber(shot.startSeconds)
+        ?? readNumber(shot.start)
+      const endSeconds = readNumber(shot.endTimeSeconds)
+        ?? readNumber(shot.endSeconds)
+        ?? (startSeconds !== null && durationSeconds > 0 ? startSeconds + durationSeconds : null)
       return {
         id: shotId,
         index: Number(shot.index ?? shotIndex + 1) || shotIndex + 1,
         title: readTrimmedString(shot.title) || `Shot ${shotIndex + 1}`,
         action: readTrimmedString(shot.action) || readTrimmedString(shot.description) || readTrimmedString(shot.visualAction),
         dialogue,
+        timeLabel: startSeconds !== null && endSeconds !== null
+          ? `${formatScriptSeconds(startSeconds)}-${formatScriptSeconds(endSeconds)}`
+          : durationSeconds > 0 ? formatScriptSeconds(durationSeconds) : `Shot ${shotIndex + 1}`,
+        durationLabel: durationSeconds > 0 ? formatScriptSeconds(durationSeconds) : '',
         panelUrl: panelUrlByShotId.get(shotId) ?? '',
       }
     })
@@ -657,6 +706,7 @@ function buildScreenplayAnimaticPreviewData(input: {
     title: readTrimmedString(manifest.title) || input.request.title,
     statusLabel: blocks.some((block) => block.running) ? 'Generating storyboard' : blocks.some((block) => block.storyboardReady) ? 'Animatic ready' : 'Screenplay ready',
     screenplayMarkdown: readTrimmedString(manifest.screenplayMarkdown),
+    projection,
     blocks,
   }
 }
@@ -868,20 +918,64 @@ function CinematicV2TimelineModal({
 }
 
 function ScreenplayAnimaticModal({
+  assets,
   data,
   busyKey,
+  referenceIconUrlByAssetKey,
+  referenceIconUrlByEntityKey,
+  referenceVariantIconUrlByVariantKey,
+  onSignProjectAssetUrls,
   onClose,
   onGenerateStoryboard,
   onOpenBlockGraph,
   onOpenMasterGraph,
 }: {
+  assets: ProjectSnapshot['assets']
   data: ScreenplayAnimaticPreviewData
   busyKey: string | null
+  referenceIconUrlByAssetKey?: ReadonlyMap<string, string | null>
+  referenceIconUrlByEntityKey?: ReadonlyMap<string, string | null>
+  referenceVariantIconUrlByVariantKey?: ReadonlyMap<string, string | null>
+  onSignProjectAssetUrls: (input: SignProjectAssetUrlsInput) => Promise<SignedProjectAssetUrl[]> | SignedProjectAssetUrl[]
   onClose: () => void
   onGenerateStoryboard: (block: ScreenplayAnimaticBlockPreview) => void | Promise<void>
   onOpenBlockGraph: (block: ScreenplayAnimaticBlockPreview) => void | Promise<void>
   onOpenMasterGraph: () => void
 }) {
+  const [signedUrlByAssetKey, setSignedUrlByAssetKey] = useState<ReadonlyMap<string, string>>(() => new Map())
+  const timelineAssetKeys = useMemo(() => Array.from(new Set((data.projection?.shots ?? [])
+    .flatMap((shot) => shot.previewAssetKeys)
+    .map(readTrimmedString)
+    .filter(Boolean))), [data.projection?.shots])
+  const refreshTimelineAssetUrls = useCallback(async (assetKeys: readonly string[] = timelineAssetKeys) => {
+    const cleanKeys = Array.from(new Set(assetKeys.map(readTrimmedString).filter(Boolean)))
+    if (cleanKeys.length === 0) return
+    const entries = await Promise.resolve(onSignProjectAssetUrls({
+      projectId: data.request.projectId,
+      assetKeys: cleanKeys,
+    }))
+    setSignedUrlByAssetKey((current) => {
+      const next = new Map(current)
+      entries.forEach((entry) => {
+        if (entry.assetKey && entry.signedUrl) next.set(entry.assetKey, entry.signedUrl)
+      })
+      return next
+    })
+  }, [data.request.projectId, onSignProjectAssetUrls, timelineAssetKeys])
+  const hydratedAssets = useMemo(() => assets.map((asset) => {
+    const signedUrl = signedUrlByAssetKey.get(asset.key)
+    return signedUrl
+      ? {
+        ...asset,
+        metadata: {
+          ...asset.metadata,
+          previewUrl: signedUrl,
+          sourceUrl: signedUrl,
+        },
+      }
+      : asset
+  }), [assets, signedUrlByAssetKey])
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== 'Escape') return
@@ -892,6 +986,15 @@ function ScreenplayAnimaticModal({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
+  useEffect(() => {
+    if (!data.projection || timelineAssetKeys.length === 0) return undefined
+    void refreshTimelineAssetUrls()
+    const timer = window.setInterval(() => {
+      void refreshTimelineAssetUrls()
+    }, 45 * 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [data.projection, refreshTimelineAssetUrls, timelineAssetKeys.length])
+
   return (
     <div aria-label="Screenplay animatic" aria-modal="true" className="outputs-cinematic-timeline-modal" role="dialog">
       <button aria-label="Close screenplay animatic" className="outputs-cinematic-timeline-backdrop" onClick={onClose} type="button" />
@@ -899,10 +1002,23 @@ function ScreenplayAnimaticModal({
         <button aria-label="Close screenplay animatic" className="outputs-cinematic-timeline-close" onClick={onClose} type="button">
           <span aria-hidden="true">X</span>
         </button>
-        <div className="outputs-script-preview">
+        {data.projection ? (
+          <CinematicTimelinePlayer
+            assets={hydratedAssets}
+            emptyMessage="Storyboard panels are not available yet."
+            onAssetUrlError={(assetKey) => void refreshTimelineAssetUrls([assetKey])}
+            projection={data.projection}
+            referenceIconUrlByAssetKey={referenceIconUrlByAssetKey}
+            referenceIconUrlByEntityKey={referenceIconUrlByEntityKey}
+            referenceVariantIconUrlByVariantKey={referenceVariantIconUrlByVariantKey}
+            subtitle={data.statusLabel}
+            title={data.title}
+          />
+        ) : (
+        <div className="outputs-script-preview is-animatic-timeline">
           <div className="outputs-panel-heading">
             <div>
-              <p className="outputs-eyebrow">Screenplay animatic</p>
+              <p className="outputs-eyebrow">Animatic timeline</p>
               <h3>{data.title}</h3>
             </div>
             <div className="outputs-request-actions">
@@ -941,13 +1057,18 @@ function ScreenplayAnimaticModal({
                     </div>
                   </div>
                   {block.shots.map((shot) => (
-                    <article className="outputs-script-shot" key={shot.id}>
-                      <div>
-                        <b>Shot {String(shot.index).padStart(3, '0')} / {shot.title}</b>
+                    <article className="outputs-script-shot is-animatic-timeline-shot" key={shot.id}>
+                      <div className="outputs-script-shot-time">
+                        <strong>{String(shot.index).padStart(3, '0')}</strong>
+                        <span>{shot.timeLabel}</span>
+                        {shot.durationLabel ? <small>{shot.durationLabel}</small> : null}
+                      </div>
+                      <div className="outputs-script-shot-copy">
+                        <b>{shot.title}</b>
                         {shot.action ? <p>{shot.action}</p> : null}
                         {shot.dialogue.map((line) => <p key={line}><b>Dialogue:</b> {line}</p>)}
                       </div>
-                      <div className={`outputs-request-preview ${shot.panelUrl ? 'has-image' : ''}`} style={{ width: 180, aspectRatio: '16 / 9' }}>
+                      <div className={`outputs-request-preview outputs-script-shot-panel ${shot.panelUrl ? 'has-image' : ''}`}>
                         {shot.panelUrl ? <img src={shot.panelUrl} alt="" loading="lazy" /> : <span className="outputs-status-icon is-queued" aria-hidden="true" />}
                       </div>
                     </article>
@@ -957,6 +1078,7 @@ function ScreenplayAnimaticModal({
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   )
@@ -1972,6 +2094,16 @@ export function OutputsWorkspace({
     () => buildCinematicV2TimelineModalData(activeWorkflow, displayRun),
     [activeWorkflow, displayRun],
   )
+  const selectedScreenplayAnimaticTimelineData = useMemo(() => {
+    if (!selectedOutputRequest || !isScreenplayAnimaticMasterRequest(selectedOutputRequest)) return null
+    return buildScreenplayAnimaticPreviewData({
+      request: selectedOutputRequest,
+      requests: snapshot.outputRequests,
+      runs: recentOutputRuns,
+      artifacts: snapshot.outputArtifacts,
+      assets: snapshot.assets,
+    })
+  }, [recentOutputRuns, selectedOutputRequest, snapshot.assets, snapshot.outputArtifacts, snapshot.outputRequests])
   const cinematicVideoApproved = readRecord(displayRun?.input).cinematicVideoApproved === true
     || readRecord(displayRun?.metadata).cinematicVideoApproved === true
   const workflowStages = useMemo(() => buildWorkflowStages({
@@ -2405,9 +2537,16 @@ export function OutputsWorkspace({
   }
 
   async function openCinematicTimelineForRequest(request: OutputRequest | null | undefined) {
-    if (!request?.workflowId) return
+    if (!request) return
     setSelectedRequestId(request.id)
     if (request.latestRunId) setActiveRunId(request.latestRunId)
+    if (isScreenplayAnimaticMasterRequest(request)) {
+      setScreenplayAnimaticRequestId(request.id)
+      setTimelineOpeningRequestId(null)
+      setError(null)
+      return
+    }
+    if (!request.workflowId) return
     setTimelineOpeningRequestId(request.id)
     setError(null)
     try {
@@ -2451,7 +2590,11 @@ export function OutputsWorkspace({
     }
   }
 
-  function openCinematicTimelineForActiveWorkflow() {
+  function openTimelineForActiveOutput() {
+    if (selectedOutputRequest && isScreenplayAnimaticMasterRequest(selectedOutputRequest)) {
+      setScreenplayAnimaticRequestId(selectedOutputRequest.id)
+      return
+    }
     if (!activeCinematicTimelineModalData) {
       setError('Timeline pending. Run or refresh this cinematic until the storyboard shot plan and panel extracts are available.')
       return
@@ -2479,6 +2622,15 @@ export function OutputsWorkspace({
       if (returnTarget.kind === 'outputs_screenplay_animatic') {
         setScreenplayAnimaticRequestId(returnTarget.masterRequestId)
       }
+      onReturnToSourceSurface?.(returnTarget)
+    }
+  }
+
+  function closeScreenplayAnimaticModal() {
+    const returnTarget = returnTargetOnClose
+    setScreenplayAnimaticRequestId(null)
+    setReturnTargetOnClose(null)
+    if (returnTarget) {
       onReturnToSourceSurface?.(returnTarget)
     }
   }
@@ -3232,10 +3384,10 @@ export function OutputsWorkspace({
           nodes={activeNodes}
           worldEntities={snapshot.worldEntities as unknown as Array<Record<string, unknown>>}
           worldRelationships={snapshot.worldRelationships as unknown as Array<Record<string, unknown>>}
-          canOpenTimeline={Boolean(activeCinematicTimelineModalData)}
+          canOpenTimeline={Boolean(activeCinematicTimelineModalData || selectedScreenplayAnimaticTimelineData)}
           onCancelRun={cancelActiveRun}
           onClose={closeOutputGraphOverlay}
-          onOpenTimeline={openCinematicTimelineForActiveWorkflow}
+          onOpenTimeline={openTimelineForActiveOutput}
           onRefreshGraph={() => void refreshOutputGraph({ manual: true })}
           onRunNode={(node, runScope) => void runSelectedNodeOnly(node, runScope)}
           onRunNodes={(nodes, runScope) => void runSelectedNodesOnly(nodes, runScope)}
@@ -3279,9 +3431,14 @@ export function OutputsWorkspace({
       ) : null}
       {screenplayAnimaticPreviewData ? (
         <ScreenplayAnimaticModal
+          assets={snapshot.assets}
           busyKey={screenplayAnimaticBusyKey}
           data={screenplayAnimaticPreviewData}
-          onClose={() => setScreenplayAnimaticRequestId(null)}
+          referenceIconUrlByAssetKey={timelineReferenceIconUrlByAssetKey}
+          referenceIconUrlByEntityKey={referenceSheetIconUrlByEntityKey}
+          referenceVariantIconUrlByVariantKey={referenceVariantIconUrlByVariantKey}
+          onSignProjectAssetUrls={onSignProjectAssetUrls}
+          onClose={closeScreenplayAnimaticModal}
           onGenerateStoryboard={(block) => generateScreenplayAnimaticStoryboard(screenplayAnimaticPreviewData, block)}
           onOpenBlockGraph={(block) => openScreenplayAnimaticBlockGraph(screenplayAnimaticPreviewData, block)}
           onOpenMasterGraph={() => void openOutputGraphForRequest(screenplayAnimaticPreviewData.request, null, {
@@ -3735,15 +3892,11 @@ export function OutputsWorkspace({
                               {requestIsScreenplayAnimatic ? (
                                 <button
                                   className="outputs-secondary-action outputs-compact-action"
-                                  disabled={busyRequestId === request.id}
+                                  disabled={timelineOpeningRequestId === request.id}
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedRequestId(request.id)
-                                    if (request.latestRunId) setActiveRunId(request.latestRunId)
-                                    setScreenplayAnimaticRequestId(request.id)
-                                  }}
+                                  onClick={() => void openCinematicTimelineForRequest(request)}
                                 >
-                                  Open animatic
+                                  {timelineOpeningRequestId === request.id ? 'Opening...' : 'Timeline'}
                                 </button>
                               ) : null}
                               {requestIsV2Animatic ? (
@@ -4131,7 +4284,7 @@ export function OutputsWorkspace({
                         isVideoApproved={cinematicVideoApproved}
                         onApproveVideoProduction={approveCinematicV2VideoProduction}
                         onGenerateQualityKeyframes={generateCinematicV2QualityKeyframes}
-                        onOpenTimeline={openCinematicTimelineForActiveWorkflow}
+                        onOpenTimeline={openTimelineForActiveOutput}
                       />
                     </div>
                   ) : null}
