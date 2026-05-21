@@ -536,7 +536,7 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
   })
   const latestContinuityGraphNodeKey = continuityBlocks.length > 0
     ? `continuity_block_${String(continuityBlocks.length).padStart(3, '0')}_merge`
-    : 'continuity_seed_graph'
+    : 'continuity_global_merge'
   const nodes = [
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_input', 'utility_transform', 'Continuity Input', 80, 120, {
       purpose: 'sequence_animatic_continuity_input',
@@ -552,6 +552,27 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
       ...config,
       aspectRatio: input.aspectRatio,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_seed_graph', maxConcurrency: 1 },
+    }, {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_global_plan', 'utility_transform', 'Plan Global Structure', 640, -120, {
+      purpose: 'sequence_animatic_continuity_global_plan',
+      ...config,
+      aspectRatio: input.aspectRatio,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_global_plan', maxConcurrency: 1, continueOnError: true },
+    }, {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_global_merge', 'utility_transform', 'Merge Global Structure', 920, -120, {
+      purpose: 'sequence_animatic_continuity_global_merge',
+      ...config,
+      aspectRatio: input.aspectRatio,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_global_merge', maxConcurrency: 1 },
+    }, {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_global_structure', 'output_artifact', 'Save Global Structure', 1200, -120, {
+      purpose: 'sequence_animatic_continuity_structure_artifact',
+      artifactKind: 'other',
+      ...config,
+      storyboardBlockId: 'global',
+      storyboardBlockIndex: 0,
+      aspectRatio: input.aspectRatio,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_structure_artifact', maxConcurrency: 1 },
     }, {}, 'continuity_pack'),
     ...continuityBlockNodes,
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_graph_finalize', 'utility_transform', 'Finalize Scene Graph', 1200, 120, {
@@ -650,7 +671,7 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
   ]
   const blockEdges = continuityBlocks.flatMap((_block: ContinuityWorkflowBlock, index: number) => {
     const suffix = String(index + 1).padStart(3, '0')
-    const previousGraphNodeKey = index === 0 ? 'continuity_seed_graph' : `continuity_block_${String(index).padStart(3, '0')}_merge`
+    const previousGraphNodeKey = index === 0 ? 'continuity_global_merge' : `continuity_block_${String(index).padStart(3, '0')}_merge`
     const planNodeKey = `continuity_block_${suffix}_plan`
     const mergeNodeKey = `continuity_block_${suffix}_merge`
     const structureNodeKey = `continuity_block_${suffix}_structure`
@@ -661,10 +682,18 @@ export function buildSequenceAnimaticContinuityWorkflowGraph(input: {
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${planNodeKey}__${mergeNodeKey}`, planNodeKey, 'continuity_block_delta', mergeNodeKey, 'continuity_block_delta', { requiredDependency: true }, 'continuity_pack'),
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${mergeNodeKey}__${structureNodeKey}`, mergeNodeKey, 'continuity_graph_v2', structureNodeKey, 'continuity_graph_v2', {}, 'continuity_pack'),
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${planNodeKey}__${structureNodeKey}_delta`, planNodeKey, 'continuity_block_delta', structureNodeKey, 'continuity_block_delta', { optional: true, optionalDependency: true }, 'continuity_pack'),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `input__${structureNodeKey}_context`, 'continuity_input', 'continuity_planner_context', structureNodeKey, 'continuity_planner_context', {}, 'continuity_pack'),
     ]
   })
   const edges = [
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__seed_context', 'continuity_input', 'continuity_planner_context', 'continuity_seed_graph', 'continuity_planner_context', {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'seed__global_plan', 'continuity_seed_graph', 'continuity_graph_v2', 'continuity_global_plan', 'continuity_graph_v2', {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__global_plan_context', 'continuity_input', 'continuity_planner_context', 'continuity_global_plan', 'continuity_planner_context', {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'seed__global_merge', 'continuity_seed_graph', 'continuity_graph_v2', 'continuity_global_merge', 'continuity_graph_v2', {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'global_plan__global_merge', 'continuity_global_plan', 'continuity_block_delta', 'continuity_global_merge', 'continuity_block_delta', { requiredDependency: true }, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'global_merge__global_structure', 'continuity_global_merge', 'continuity_graph_v2', 'continuity_global_structure', 'continuity_graph_v2', {}, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'global_plan__global_structure_delta', 'continuity_global_plan', 'continuity_block_delta', 'continuity_global_structure', 'continuity_block_delta', { optional: true, optionalDependency: true }, 'continuity_pack'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__global_structure_context', 'continuity_input', 'continuity_planner_context', 'continuity_global_structure', 'continuity_planner_context', {}, 'continuity_pack'),
     ...blockEdges,
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${latestContinuityGraphNodeKey}__finalize`, latestContinuityGraphNodeKey, 'continuity_graph_v2', 'continuity_graph_finalize', 'continuity_graph_v2', {}, 'continuity_pack'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__plan_screenplay', 'continuity_input', 'screenplay', 'continuity_plan', 'screenplay', {}, 'continuity_pack'),

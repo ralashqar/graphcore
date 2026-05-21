@@ -5,7 +5,7 @@ import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
 import { renderOutputPdf } from './ebook-pdf-renderer.ts'
 
-const workerCodeVersion = '2026-05-19-output-workflow-shot-video-config-fix'
+const workerCodeVersion = '2026-05-19-hybrid-continuity-structure'
 const workerId = Deno.env.get('FLY_MACHINE_ID')
   ?? Deno.env.get('GRAPHCORE_WORKER_ID')
   ?? crypto.randomUUID()

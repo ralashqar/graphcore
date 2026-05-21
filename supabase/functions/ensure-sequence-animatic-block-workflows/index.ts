@@ -57,7 +57,7 @@ function continuityAnchorAssetPackEntity(anchor: Record<string, unknown>) {
   const id = readText(anchor.id)
   const assetKey = readText(anchor.assetKey)
   if (!id || !assetKey) return null
-  const anchorType = readText(anchor.anchorType)
+  const anchorType = readText(anchor.anchorType) || readText(anchor.type)
   const name = readText(anchor.name) || id
   const isCharacter = anchorType === 'character'
   const isLocation = anchorType === 'location_spot'
@@ -90,9 +90,11 @@ function assetPackWithContinuityAnchors(assetPack: Record<string, unknown>, mani
   const anchors = [
     ...readArray(manifest.characterAnchors).map(asRecord),
     ...readArray(manifest.propAnchors).map(asRecord),
-    ...readArray(manifest.locationSpotAnchors).map(asRecord),
     ...readArray(manifest.anchorAssets).map(asRecord),
-  ]
+  ].filter((anchor) => {
+    const type = readText(anchor.type) || readText(anchor.anchorType)
+    return type === 'character' || type === 'prop'
+  })
   const anchorEntities = anchors
     .filter((anchor) => idSet.has(readText(anchor.id)))
     .map(continuityAnchorAssetPackEntity)
@@ -120,9 +122,6 @@ function continuityAnchorIdsForScope(manifest: Record<string, unknown>, scopeKey
       ...readStringArray(asRecord(shotBindings[scopeId]).continuityAnchorIds),
       ...readStringArray(asRecord(shotBindings[scopeId]).characterAnchorIds),
       ...readStringArray(asRecord(shotBindings[scopeId]).propAnchorIds),
-      readText(asRecord(shotBindings[scopeId]).zoneId),
-      ...readStringArray(asRecord(shotBindings[scopeId]).spotIds),
-      readText(asRecord(shotBindings[scopeId]).angleId),
     ].filter(Boolean)
     : []
   const blockMappedIds = scopeKey === 'storyboardBlockIds'
@@ -133,23 +132,23 @@ function continuityAnchorIdsForScope(manifest: Record<string, unknown>, scopeKey
         ...readStringArray(binding.continuityAnchorIds),
         ...readStringArray(binding.characterAnchorIds),
         ...readStringArray(binding.propAnchorIds),
-        readText(binding.zoneId),
-        ...readStringArray(binding.spotIds),
-        readText(binding.angleId),
       ])
       .filter(Boolean)
     : []
   const anchors = [
     ...readArray(manifest.characterAnchors).map(asRecord),
     ...readArray(manifest.propAnchors).map(asRecord),
-    ...readArray(manifest.locationSpotAnchors).map(asRecord),
     ...readArray(manifest.anchorAssets).map(asRecord),
-  ]
+  ].filter((anchor) => {
+    const type = readText(anchor.type) || readText(anchor.anchorType)
+    return type === 'character' || type === 'prop'
+  })
+  const validAnchorIds = new Set(anchors.map((anchor) => readText(anchor.id)).filter(Boolean))
   const anchorScopedIds = anchors
     .filter((anchor) => readStringArray(anchor[scopeKey]).includes(scopeId))
     .map((anchor) => readText(anchor.id))
     .filter(Boolean)
-  return [...new Set([...mappedShotIds, ...blockMappedIds, ...anchorScopedIds])]
+  return [...new Set([...mappedShotIds, ...blockMappedIds, ...anchorScopedIds])].filter((id) => validAnchorIds.has(id))
 }
 
 function mergeAnchorIds(...groups: string[][]) {

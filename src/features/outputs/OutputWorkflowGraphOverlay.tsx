@@ -39,9 +39,10 @@ import {
 
 const NODE_WIDTH = 306
 const NODE_HEIGHT = 220
-const IMAGE_NODE_MAX_HEIGHT = 320
-const IMAGE_NODE_MIN_WIDTH = 160
-const IMAGE_NODE_MAX_WIDTH = 360
+const IMAGE_NODE_PREVIEW_HEIGHT = 380
+const IMAGE_NODE_CHROME_HEIGHT = 66
+const IMAGE_NODE_MIN_WIDTH = 440
+const IMAGE_NODE_MAX_WIDTH = 920
 
 type GraphNodeData = {
   node: OutputWorkflowNode
@@ -246,8 +247,8 @@ function readImageOutputSize(source: OutputWorkflowOutputSource) {
 function graphNodeDimensions(node: OutputWorkflowNode, imageSize: { width: number; height: number } | null) {
   if (node.nodeType !== 'image_generation' || !imageSize) return { width: NODE_WIDTH, height: NODE_HEIGHT }
   const aspect = imageSize.width / imageSize.height
-  const height = IMAGE_NODE_MAX_HEIGHT
-  const width = Math.max(IMAGE_NODE_MIN_WIDTH, Math.min(IMAGE_NODE_MAX_WIDTH, Math.round(height * aspect)))
+  const height = IMAGE_NODE_PREVIEW_HEIGHT + IMAGE_NODE_CHROME_HEIGHT
+  const width = Math.max(IMAGE_NODE_MIN_WIDTH, Math.min(IMAGE_NODE_MAX_WIDTH, Math.round(IMAGE_NODE_PREVIEW_HEIGHT * aspect) + 24))
   return { width, height }
 }
 
@@ -330,7 +331,7 @@ function localRunButtonLabel(input: {
 }
 
 function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
-  const { node, step, statusKey, outputPreview, imageUrl, imageSize, hasOutput, inputPorts, outputPorts, selected, running, onSelect, onRun, onOpenOutput } = data
+  const { node, step, statusKey, outputPreview, imageUrl, hasOutput, inputPorts, outputPorts, selected, running, onSelect, onRun, onOpenOutput } = data
   const hasImagePreview = node.nodeType === 'image_generation' && Boolean(imageUrl)
   const bodyText = outputPreview || (step?.errorMessage ? step.errorMessage : hasOutput ? '' : 'No output yet.')
 
@@ -346,7 +347,6 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
         }
       }}
       role="button"
-      style={hasImagePreview && imageSize ? { aspectRatio: `${imageSize.width} / ${imageSize.height}` } : undefined}
       tabIndex={0}
     >
       {inputPorts.map((port, index) => (
@@ -402,9 +402,7 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
         }}
         type="button"
       >
-        <span aria-hidden="true" className={running ? 'outputs-graph-mini-spinner' : ''}>
-          {running ? '' : 'Run'}
-        </span>
+        <span aria-hidden="true" className={running ? 'outputs-graph-mini-spinner' : 'outputs-graph-play-icon'} />
       </button>
       {outputPorts.map((port, index) => (
         <Handle

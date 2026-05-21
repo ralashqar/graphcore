@@ -25,6 +25,7 @@ import {
   type OutputRequestStatusResponse,
   type SequenceAnimaticContinuityAssetWorkflowEnsureResponse,
   type SequenceAnimaticContinuityBlockDeriveResponse,
+  type SequenceAnimaticContinuityStructureDeriveResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNode,
   type OutputWorkflowRun,
@@ -722,6 +723,11 @@ type WorldGraphPageProps = {
     storyboardBlockId: string
     mode?: 'derive' | 'regenerate'
   }) => Promise<SequenceAnimaticContinuityBlockDeriveResponse> | SequenceAnimaticContinuityBlockDeriveResponse
+  onDeriveSequenceAnimaticContinuityStructure: (request: {
+    masterRequestId: string
+    continuityRequestId?: string | null
+    mode?: 'generate' | 'fill_gaps' | 'regenerate'
+  }) => Promise<SequenceAnimaticContinuityStructureDeriveResponse> | SequenceAnimaticContinuityStructureDeriveResponse
   onEnsureSequenceAnimaticContinuityAssetWorkflow: (request: {
     masterRequestId: string
     continuityRequestId: string
@@ -1310,6 +1316,10 @@ type SequenceAnimaticContinuityLocationView = {
   name: string
   summary: string
   kind?: 'set' | 'zone' | 'spot' | 'angle'
+  worldLocationRefId?: string
+  setId?: string
+  zoneId?: string
+  spotIds?: string[]
   assetStatus?: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'
   assetStatusLabel?: string
   assetUrl?: string | null
@@ -1397,7 +1407,7 @@ type SequenceAnimaticBlockView = {
   continuityAnchorCountLabel: string
   continuityAnchorsPending: boolean
   continuityChanged: boolean
-  continuityBlockStatus: 'not_started' | 'deriving' | 'ready' | 'needs_review' | 'failed' | 'stale'
+  continuityBlockStatus: 'not_started' | 'seeded' | 'deriving' | 'ready' | 'needs_review' | 'failed' | 'stale'
   continuityBlockStatusLabel: string
   continuityBlockActionLabel: string
   continuityBlockWarnings: string[]
@@ -1419,6 +1429,10 @@ type SequenceAnimaticViewModel = {
   continuityButtonLabel: string
   continuityStatusLabel: string
   continuityGraphStatus: 'empty' | 'partial' | 'ready' | 'stale' | 'failed'
+  continuityStructureActionLabel: string
+  continuityStructureStatusLabel: string
+  continuityCoverageLabel: string
+  continuityStructureRunning: boolean
   continuityAssetGenerationStatus: 'none' | 'partial' | 'ready' | 'stale' | 'failed'
   continuityAssetTargets: SequenceAnimaticContinuityAssetTargetView[]
   title: string
@@ -1443,6 +1457,174 @@ type SequenceAnimaticVideoPreview = {
   url: string
   durationLabel: string
   statusLabel: string
+}
+
+function SequenceAnimaticContinuityStructureModal({
+  model,
+  onClose,
+}: {
+  model: SequenceAnimaticViewModel
+  onClose: () => void
+}) {
+  const sets = model.continuityLocationSets.filter((entry) => entry.kind === 'set')
+  const zones = model.continuityLocationSets.filter((entry) => entry.kind === 'zone')
+  const spots = model.continuityLocationSets.filter((entry) => entry.kind === 'spot')
+  const angles = model.continuityLocationAngles
+  const tempCharacters = model.continuityAnchors.characters
+  const tempProps = model.continuityAnchors.props
+  const hasStructure = sets.length + zones.length + spots.length + angles.length > 0
+  const hasTemporaryRefs = tempCharacters.length + tempProps.length > 0
+  const nodeCountLabel = `${sets.length} set${sets.length === 1 ? '' : 's'} / ${zones.length} zone${zones.length === 1 ? '' : 's'} / ${spots.length} spot${spots.length === 1 ? '' : 's'} / ${angles.length} angle${angles.length === 1 ? '' : 's'}`
+  const temporaryRefLabel = `${tempCharacters.length} temp character${tempCharacters.length === 1 ? '' : 's'} / ${tempProps.length} prop${tempProps.length === 1 ? '' : 's'}`
+
+  const usageLabelFor = (entry: Pick<SequenceAnimaticContinuityLocationView, 'shotIds' | 'blockIds' | 'assetStatusLabel'>) => [
+    entry.blockIds.length > 0 ? `${entry.blockIds.length} block${entry.blockIds.length === 1 ? '' : 's'}` : '',
+    entry.shotIds.length > 0 ? `${entry.shotIds.length} shot${entry.shotIds.length === 1 ? '' : 's'}` : '',
+    entry.assetStatusLabel ? `Asset ${entry.assetStatusLabel.toLowerCase()}` : '',
+  ].filter(Boolean).join(' / ') || 'No shot usage yet'
+
+  const renderLocationNode = (entry: SequenceAnimaticContinuityLocationView) => (
+    <article key={entry.id || entry.name} className={`world-wiki-sequence-continuity-node is-${entry.kind ?? 'node'} is-${entry.assetStatus ?? 'missing'}`}>
+      <div className="world-wiki-sequence-continuity-node-icon">
+        {entry.assetUrl ? <img src={entry.assetUrl} alt="" /> : <EntityIcon id="environment" />}
+      </div>
+      <div>
+        <strong>{entry.name}</strong>
+        <em>{entry.kind ?? 'node'} / {usageLabelFor(entry)}</em>
+        {entry.summary ? <p>{entry.summary}</p> : null}
+      </div>
+    </article>
+  )
+
+  const renderAnchorNode = (anchor: SequenceAnimaticContinuityAnchorView) => (
+    <article key={anchor.id} className={`world-wiki-sequence-continuity-node is-${anchor.type} is-${anchor.status}`}>
+      <div className="world-wiki-sequence-continuity-node-icon">
+        {anchor.thumbnailUrl ? <img src={anchor.thumbnailUrl} alt="" /> : <EntityIcon id={anchor.iconId} />}
+      </div>
+      <div>
+        <strong>{anchor.name}</strong>
+        <em>{anchor.typeLabel} / {anchor.usageLabel} / {anchor.statusLabel}</em>
+        <p>{anchor.usageDetailLabel}</p>
+      </div>
+    </article>
+  )
+
+  const renderSet = (set: SequenceAnimaticContinuityLocationView) => {
+    const childZones = zones.filter((entry) => entry.setId === set.id)
+    const childSpots = spots.filter((entry) => entry.setId === set.id && !entry.zoneId)
+    const childAngles = angles.filter((entry) => entry.setId === set.id && !entry.zoneId)
+    return (
+      <section key={set.id || set.name} className="world-wiki-sequence-continuity-set">
+        {renderLocationNode(set)}
+        {childZones.length + childSpots.length + childAngles.length > 0 ? (
+          <div className="world-wiki-sequence-continuity-children">
+            {childZones.map((zone) => {
+              const zoneSpots = spots.filter((entry) => entry.zoneId === zone.id)
+              const zoneAngles = angles.filter((entry) => entry.zoneId === zone.id)
+              return (
+                <section key={zone.id || zone.name} className="world-wiki-sequence-continuity-zone">
+                  {renderLocationNode(zone)}
+                  {zoneSpots.length + zoneAngles.length > 0 ? (
+                    <div className="world-wiki-sequence-continuity-children is-nested">
+                      {zoneSpots.map(renderLocationNode)}
+                      {zoneAngles.map(renderLocationNode)}
+                    </div>
+                  ) : null}
+                </section>
+              )
+            })}
+            {childSpots.map(renderLocationNode)}
+            {childAngles.map(renderLocationNode)}
+          </div>
+        ) : null}
+      </section>
+    )
+  }
+
+  const orphanZones = zones.filter((entry) => !entry.setId || !sets.some((set) => set.id === entry.setId))
+  const orphanSpots = spots.filter((entry) => !entry.setId && !entry.zoneId)
+  const orphanAngles = angles.filter((entry) => !entry.setId && !entry.zoneId)
+
+  return (
+    <section className="world-wiki-sequence-continuity-structure-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Continuity structure">
+      <button className="world-wiki-sequence-animatic-close" onClick={onClose} type="button" aria-label="Close continuity structure">
+        <EntityIcon id="close" />
+      </button>
+      <header>
+        <div>
+          <span className="eyebrow">Continuity structure</span>
+          <h3>{model.title}</h3>
+          <p>{model.continuityStructureStatusLabel} / {model.continuityCoverageLabel}</p>
+        </div>
+      </header>
+      <div className="world-wiki-sequence-continuity-summary">
+        <span><EntityIcon id="environment" />{nodeCountLabel}</span>
+        <span><EntityIcon id="character" />{temporaryRefLabel}</span>
+        <span>{model.continuityAssetGenerationStatus === 'none' ? 'No assets generated' : `Assets ${model.continuityAssetGenerationStatus}`}</span>
+      </div>
+      <div className="world-wiki-sequence-continuity-structure-body">
+        {!hasStructure && !hasTemporaryRefs ? (
+          <div className="world-wiki-sequence-continuity-empty">
+            <strong>No structure generated yet.</strong>
+            <p>Generate continuity structure first, then this view will show sets, zones, spots, angles, props, and temporary characters.</p>
+          </div>
+        ) : null}
+        {hasStructure ? (
+          <section className="world-wiki-sequence-continuity-section">
+            <div className="world-wiki-sequence-continuity-section-head">
+              <strong>Locations</strong>
+              <span>Sets, zones, spots, and camera angles</span>
+            </div>
+            <div className="world-wiki-sequence-continuity-hierarchy">
+              {sets.map(renderSet)}
+              {orphanZones.length + orphanSpots.length + orphanAngles.length > 0 ? (
+                <section className="world-wiki-sequence-continuity-set is-unassigned">
+                  <div className="world-wiki-sequence-continuity-section-head">
+                    <strong>Unassigned structure</strong>
+                    <span>Generated nodes without a parent set</span>
+                  </div>
+                  <div className="world-wiki-sequence-continuity-children">
+                    {orphanZones.map(renderLocationNode)}
+                    {orphanSpots.map(renderLocationNode)}
+                    {orphanAngles.map(renderLocationNode)}
+                  </div>
+                </section>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+        {hasTemporaryRefs ? (
+          <section className="world-wiki-sequence-continuity-section">
+            <div className="world-wiki-sequence-continuity-section-head">
+              <strong>Temporary refs</strong>
+              <span>Output-local characters and props, not world entities</span>
+            </div>
+            <div className="world-wiki-sequence-continuity-temp-grid">
+              {tempCharacters.map(renderAnchorNode)}
+              {tempProps.map(renderAnchorNode)}
+            </div>
+          </section>
+        ) : null}
+        {model.continuityRejectedCandidates.length > 0 ? (
+          <section className="world-wiki-sequence-continuity-section">
+            <div className="world-wiki-sequence-continuity-section-head">
+              <strong>Rejected candidates</strong>
+              <span>Skipped canon refs, abstracts, and low-confidence items</span>
+            </div>
+            <div className="world-wiki-sequence-continuity-rejections">
+              {model.continuityRejectedCandidates.map((entry) => (
+                <article key={`${entry.name}:${entry.reason}`}>
+                  <strong>{entry.name}</strong>
+                  <em>{entry.reason}</em>
+                  {entry.evidence ? <p>{entry.evidence}</p> : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    </section>
+  )
 }
 
 const ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set(['queued', 'planning', 'awaiting_confirmation', 'running'])
@@ -1680,6 +1862,39 @@ function sequenceAnimaticAnchorUsageDetailLabel(anchor: Pick<SequenceAnimaticCon
   return `${blockLabel} / ${shotLabel}`
 }
 
+function sequenceAnimaticContinuityAnchorViewMergeKey(anchor: Record<string, unknown>) {
+  const type = trimOptionalString(anchor.anchorType) || trimOptionalString(anchor.type)
+  const name = trimOptionalString(anchor.name)
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+  return type && name ? `${type}:${name}` : trimOptionalString(anchor.id)
+}
+
+function mergeSequenceAnimaticContinuityAnchorRecords(
+  previous: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+) {
+  const previousId = trimOptionalString(previous.id)
+  const incomingId = trimOptionalString(incoming.id)
+  const type = trimOptionalString(incoming.anchorType) || trimOptionalString(incoming.type) || trimOptionalString(previous.anchorType) || trimOptionalString(previous.type)
+  const name = trimOptionalString(previous.name) || trimOptionalString(incoming.name)
+  const stableId = type && name
+    ? `${type === 'character' ? 'char' : type === 'prop' ? 'prop' : 'anchor'}_${name.toLowerCase().replace(/['’]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
+    : ''
+  const id = [previousId, incomingId].find((candidate) => candidate && candidate === stableId) || stableId || previousId || incomingId
+  return {
+    ...previous,
+    ...incoming,
+    id,
+    name,
+    shotIds: [...new Set([...readLooseArray(previous.shotIds), ...readLooseArray(incoming.shotIds)].map(trimOptionalString).filter(Boolean))],
+    storyboardBlockIds: [...new Set([...readLooseArray(previous.storyboardBlockIds), ...readLooseArray(incoming.storyboardBlockIds)].map(trimOptionalString).filter(Boolean))],
+  }
+}
+
 function stepFailedMessage(step: ReturnType<typeof outputRunStepForNode>) {
   return step?.status === 'failed' ? step.errorMessage || `${step.label || 'Step'} failed` : ''
 }
@@ -1697,23 +1912,26 @@ function buildSequenceAnimaticContinuityAnchorViews(input: {
   const propExtractStep = outputRunStepForNode(input.run, 'sequence_animatic_prop_anchor_extract')
   const locationAtlasStep = outputRunStepForNode(input.run, 'sequence_animatic_location_anchor_atlas')
   const locationExtractStep = outputRunStepForNode(input.run, 'sequence_animatic_location_anchor_extract')
-  const mergedById = new Map<string, Record<string, unknown>>()
+  const mergedByKey = new Map<string, Record<string, unknown>>()
   for (const anchor of input.plannedAnchors) {
-    const id = trimOptionalString(anchor.id)
-    if (id && !mergedById.has(id)) mergedById.set(id, anchor)
+    const key = sequenceAnimaticContinuityAnchorViewMergeKey(anchor)
+    if (!key) continue
+    const previous = mergedByKey.get(key)
+    mergedByKey.set(key, previous ? mergeSequenceAnimaticContinuityAnchorRecords(previous, anchor) : anchor)
   }
   for (const anchor of input.manifestAnchors) {
-    const id = trimOptionalString(anchor.id)
-    if (!id) continue
-    mergedById.set(id, { ...readLooseRecord(mergedById.get(id)), ...anchor })
+    const key = sequenceAnimaticContinuityAnchorViewMergeKey(anchor)
+    if (!key) continue
+    const previous = readLooseRecord(mergedByKey.get(key))
+    mergedByKey.set(key, previous ? mergeSequenceAnimaticContinuityAnchorRecords(previous, anchor) : anchor)
   }
-  return [...mergedById.values()].map((anchor): SequenceAnimaticContinuityAnchorView => {
+  return [...mergedByKey.values()].filter((anchor) => {
+    const anchorType = trimOptionalString(anchor.anchorType) || trimOptionalString(anchor.type)
+    return anchorType === 'character' || anchorType === 'prop'
+  }).map((anchor): SequenceAnimaticContinuityAnchorView => {
     const id = trimOptionalString(anchor.id)
-    const anchorType = trimOptionalString(anchor.anchorType)
-    const continuitySubtype = trimOptionalString(anchor.continuitySubtype)
-    const type: SequenceAnimaticContinuityAnchorView['type'] = anchorType === 'character'
-      ? 'character'
-      : anchorType === 'location_spot' ? 'location_spot' : 'prop'
+    const anchorType = trimOptionalString(anchor.anchorType) || trimOptionalString(anchor.type)
+    const type: SequenceAnimaticContinuityAnchorView['type'] = anchorType === 'character' ? 'character' : 'prop'
     const assetKey = trimOptionalString(anchor.assetKey)
     const thumbnailUrl = assetKey ? resolveAssetSourceUrl(input.assetByKey.get(assetKey) ?? null) : null
     const atlasStep = type === 'character' ? characterAtlasStep : type === 'prop' ? propAtlasStep : locationAtlasStep
@@ -1755,12 +1973,8 @@ function buildSequenceAnimaticContinuityAnchorViews(input: {
       id,
       name: trimOptionalString(anchor.name) || displayNameFromRefId(id),
       type,
-      typeLabel: type === 'character'
-        ? 'Temporary character'
-        : type === 'location_spot'
-          ? continuitySubtype === 'location_angle' ? 'Location angle' : continuitySubtype === 'location_set' ? 'Location set' : 'Location spot'
-          : 'Prop',
-      iconId: iconForWorldEntity(type === 'character' ? 'actor' : type === 'location_spot' ? 'place' : 'object'),
+      typeLabel: type === 'character' ? 'Temporary character' : 'Prop',
+      iconId: iconForWorldEntity(type === 'character' ? 'actor' : 'object'),
       thumbnailUrl,
       status,
       statusLabel,
@@ -1797,6 +2011,23 @@ function normalizeSequenceAnimaticSpatialText(value: string) {
 function sequenceAnimaticSpatialTextHasPhysicalCue(value: string) {
   const normalized = ` ${normalizeSequenceAnimaticSpatialText(value).replace(/_/g, ' ')} `
   return /\b(row|lane|street|city|station|clock|face|pipe|rail|catwalk|walkway|chamber|room|corridor|passage|gap|hatch|ledge|platform|shaft|wall|door|gate|workshop|bay|bench|tunnel|engine|basin|bridge|stair|dock|harbor|drain|crate|lamp|lantern)\b/.test(normalized)
+}
+
+function sequenceAnimaticSpatialTextContainsWorldCharacter(value: string, worldEntities: readonly WorldEntity[]) {
+  const normalized = normalizeSequenceAnimaticSpatialText(value)
+  if (!normalized) return false
+  return worldEntities.some((entity) => {
+    const type = normalizeSequenceAnimaticSpatialText(entity.nodeType)
+    if (!/\b(actor|character|person|creature|cast)\b/.test(type.replace(/_/g, ' '))) return false
+    const names = [entity.key, entity.name, ...entity.aliases].map(normalizeSequenceAnimaticSpatialText).filter((entry) => entry.length >= 3)
+    return names.some((name) => normalized === name || normalized.includes(`_${name}_`) || normalized.startsWith(`${name}_`) || normalized.endsWith(`_${name}`))
+  })
+}
+
+function sequenceAnimaticSpatialEntryLooksCharacterDerived(entry: SequenceAnimaticContinuityLocationView, worldEntities: readonly WorldEntity[]) {
+  const text = [entry.id, entry.name].filter(Boolean).join(' ')
+  return sequenceAnimaticSpatialTextContainsWorldCharacter(text, worldEntities)
+    && !sequenceAnimaticSpatialTextHasPhysicalCue(text)
 }
 
 function sequenceAnimaticSpatialBindingLooksShotDerived(refId: string, shot: Record<string, unknown>) {
@@ -2309,10 +2540,24 @@ function buildSequenceAnimaticViewModel(input: {
   ]
   const continuityLocationSource = Object.keys(readLooseRecord(continuityPack)).length > 0 ? readLooseRecord(continuityPack) : readLooseRecord(continuityAnchorPlan)
   const continuityGraphV2 = readLooseRecord(continuityLocationSource.continuityGraphV2 ?? continuityLocationSource.continuity_graph_v2)
+  const continuityGraphAssetAnchorIds = new Set(
+    readLooseArray(continuityGraphV2.assetAnchors ?? continuityGraphV2.asset_anchors)
+      .map(readLooseRecord)
+      .map((entry) => trimOptionalString(entry.id))
+      .filter(Boolean),
+  )
   const continuityShotBindings = readLooseRecord(continuityLocationSource.shotBindings ?? continuityLocationSource.shot_bindings ?? continuityGraphV2.shotBindings)
   const continuityBlockStates = {
     ...readLooseRecord(readLooseRecord(continuityRequest?.metadata).blockStates),
     ...readLooseRecord(continuityLocationSource.blockStates ?? continuityLocationSource.block_states),
+  }
+  const continuityGlobalStructureState = {
+    ...readLooseRecord(readLooseRecord(continuityRequest?.metadata).globalStructureState),
+    ...readLooseRecord(continuityLocationSource.globalStructureState ?? continuityLocationSource.global_structure_state),
+  }
+  const continuityCoverage = {
+    ...readLooseRecord(readLooseRecord(continuityRequest?.metadata).continuityCoverage),
+    ...readLooseRecord(continuityLocationSource.coverage),
   }
   const continuityAssetStateByNodeId = {
     ...readLooseRecord(continuityLocationSource.assetStateByNodeId ?? continuityLocationSource.asset_state_by_node_id),
@@ -2340,35 +2585,44 @@ function buildSequenceAnimaticViewModel(input: {
     name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
     summary: trimOptionalString(entry.visualBrief) || trimOptionalString(entry.persistenceReason),
     kind: 'set',
+    worldLocationRefId: trimOptionalString(entry.worldLocationRefId ?? entry.world_location_ref_id ?? entry.baseLocationRefId),
     assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
     assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
     assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
     shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
     blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
-  })).filter((entry) => entry.id || entry.name)
+  })).filter((entry) => (entry.id || entry.name) && !sequenceAnimaticSpatialEntryLooksCharacterDerived(entry, input.worldEntities))
     .concat(readLooseArray(continuityGraphV2.zones).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
       id: trimOptionalString(entry.id),
       name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
       summary: trimOptionalString(entry.visualBrief),
       kind: 'zone',
+      worldLocationRefId: trimOptionalString(entry.worldLocationRefId ?? entry.world_location_ref_id),
+      setId: trimOptionalString(entry.setId ?? entry.set_id),
       assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
       assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
       assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
       shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
       blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
-    })).filter((entry) => entry.id || entry.name))
+    })).filter((entry) => (entry.id || entry.name) && !sequenceAnimaticSpatialEntryLooksCharacterDerived(entry, input.worldEntities)))
     .concat(readLooseArray(continuityGraphV2.spots).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
       id: trimOptionalString(entry.id),
       name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
       summary: trimOptionalString(entry.visualBrief),
       kind: 'spot',
+      worldLocationRefId: trimOptionalString(entry.worldLocationRefId ?? entry.world_location_ref_id),
+      setId: trimOptionalString(entry.setId ?? entry.set_id),
+      zoneId: trimOptionalString(entry.zoneId ?? entry.zone_id),
       assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
       assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
       assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
       shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
       blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
-    })).filter((entry) => entry.id || entry.name))
-  const continuityLocationAngles = readLooseArray(continuityLocationSource.locationAngles ?? continuityLocationSource.location_angles).map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
+    })).filter((entry) => (entry.id || entry.name) && !sequenceAnimaticSpatialEntryLooksCharacterDerived(entry, input.worldEntities)))
+  const continuityAngleSourceEntries = readLooseArray(continuityGraphV2.angles).length > 0
+    ? readLooseArray(continuityGraphV2.angles)
+    : readLooseArray(continuityLocationSource.locationAngles ?? continuityLocationSource.location_angles)
+  const continuityLocationAngles = continuityAngleSourceEntries.map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
     id: trimOptionalString(entry.id),
     name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
     summary: [
@@ -2377,12 +2631,16 @@ function buildSequenceAnimaticViewModel(input: {
       trimOptionalString(entry.screenDirectionRule),
     ].filter(Boolean).join(' / '),
     kind: 'angle',
+    worldLocationRefId: trimOptionalString(entry.worldLocationRefId ?? entry.world_location_ref_id),
+    setId: trimOptionalString(entry.setId ?? entry.set_id),
+    zoneId: trimOptionalString(entry.zoneId ?? entry.zone_id),
+    spotIds: readLooseArray(entry.spotIds ?? entry.spot_ids).map(trimOptionalString).filter(Boolean),
     assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
     assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
     assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
     shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
     blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
-  })).filter((entry) => entry.id || entry.name)
+  })).filter((entry) => (entry.id || entry.name) && !sequenceAnimaticSpatialEntryLooksCharacterDerived(entry, input.worldEntities))
   const continuityRejectedCandidates = readLooseArray(continuityLocationSource.rejectedCandidates ?? continuityLocationSource.rejected_candidates).map(readLooseRecord).map((entry): SequenceAnimaticContinuityRejectedView => ({
     name: trimOptionalString(entry.name) || 'Unnamed candidate',
     reason: trimOptionalString(entry.reason).replace(/_/g, ' ') || 'rejected',
@@ -2410,7 +2668,7 @@ function buildSequenceAnimaticViewModel(input: {
         blockIds: entry.blockIds,
         shotIds: entry.shotIds,
       })),
-      ...continuityAnchorViews.map((anchor) => ({
+      ...continuityAnchorViews.filter((anchor) => continuityGraphAssetAnchorIds.has(anchor.id)).map((anchor) => ({
         nodeId: anchor.id,
         name: anchor.name,
         assetKind: anchor.type === 'character' ? 'temporary_character' : anchor.type === 'prop' ? 'prop' : 'location_spot',
@@ -2484,6 +2742,38 @@ function buildSequenceAnimaticViewModel(input: {
     : continuityReady
       ? continuityAssetGenerationStatus === 'stale' ? 'Regenerate stale assets' : 'Generate missing assets'
       : 'Prepare continuity'
+  const continuityStructureStatus = trimOptionalString(continuityGlobalStructureState.status)
+  const continuityStructureRunning = continuityStructureStatus === 'deriving'
+  const coverageTotalShots = Number(continuityCoverage.totalShots ?? 0) || 0
+  const coverageBoundShots = Number(continuityCoverage.boundShots ?? 0) || 0
+  const continuityShotBindingCount = Object.keys(continuityShotBindings).length
+  const effectiveBoundShotCount = coverageBoundShots > 0 ? coverageBoundShots : continuityShotBindingCount
+  const continuityStructureNodeCount = continuityLocationSets.length + continuityLocationAngles.length
+  const hasContinuityStructure = effectiveBoundShotCount > 0 || continuityStructureNodeCount > 0 || (continuityGraphStatus !== 'empty' && continuityReady)
+  const missingShotIds = readLooseArray(continuityCoverage.missingShotIds).map(trimOptionalString).filter(Boolean)
+  const continuityCoverageLabel = coverageTotalShots > 0
+    ? `${effectiveBoundShotCount}/${coverageTotalShots} shots bound`
+    : continuityShotBindingCount > 0
+      ? `${continuityShotBindingCount} shots bound`
+      : 'No shot bindings'
+  const continuityStructureActionLabel = continuityStale
+    ? 'Regenerate stale structure'
+    : continuityStructureRunning
+      ? 'Generating structure'
+      : !hasContinuityStructure
+        ? 'Generate continuity structure'
+      : missingShotIds.length > 0
+        ? 'Fill continuity gaps'
+        : 'Regenerate structure'
+  const continuityStructureStatusLabel = continuityStructureRunning
+    ? 'Structure generation running'
+    : missingShotIds.length > 0
+      ? `${missingShotIds.length} shot${missingShotIds.length === 1 ? '' : 's'} need binding`
+      : effectiveBoundShotCount > 0
+        ? 'Structure saved'
+      : continuityStructureNodeCount > 0
+        ? 'Structure generated'
+        : 'Structure not generated'
   const continuityStatusLabel = continuityRunning
     ? sequenceAnimaticProjectionActiveLabel(continuityRequest) || 'Generating continuity'
     : continuityFailed
@@ -2612,12 +2902,14 @@ function buildSequenceAnimaticViewModel(input: {
       const rawContinuityBlockState = readLooseRecord(continuityBlockStates[groupId])
       const continuityBlockStatus = ((): SequenceAnimaticBlockView['continuityBlockStatus'] => {
         const status = trimOptionalString(rawContinuityBlockState.status)
-        if (status === 'not_started' || status === 'deriving' || status === 'ready' || status === 'needs_review' || status === 'failed' || status === 'stale') return status
+        if (status === 'not_started' || status === 'seeded' || status === 'deriving' || status === 'ready' || status === 'needs_review' || status === 'failed' || status === 'stale') return status
         if (blockContinuityAnchors.length > 0) return 'ready'
         return 'not_started'
       })()
       const continuityBlockStatusLabel = continuityBlockStatus === 'deriving'
         ? 'Deriving continuity'
+        : continuityBlockStatus === 'seeded'
+          ? 'Continuity seeded'
         : continuityBlockStatus === 'ready'
           ? 'Continuity derived'
           : continuityBlockStatus === 'needs_review'
@@ -2629,6 +2921,8 @@ function buildSequenceAnimaticViewModel(input: {
                 : 'Continuity not derived'
       const continuityBlockActionLabel = continuityBlockStatus === 'deriving'
         ? 'Deriving'
+        : continuityBlockStatus === 'seeded'
+          ? 'Refine block continuity'
         : continuityBlockStatus === 'ready'
           ? 'Regenerate block continuity'
           : continuityBlockStatus === 'needs_review'
@@ -2825,7 +3119,9 @@ function buildSequenceAnimaticViewModel(input: {
             ...continuityAnchorViews
               .filter((anchor) => anchor.shotIds.includes(shotId))
               .map((anchor) => anchor.id),
-          ].filter(Boolean).filter((value, index, values) => values.indexOf(value) === index)
+          ].filter(Boolean)
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .filter((value) => continuityAnchorById.has(value))
           const projectionShot = projectionShotById.get(shotId)
           const preview = blockPanelPreviewByShotId.get(shotId) ?? null
           const previewAssetKey = preview?.assetKey ?? null
@@ -3060,6 +3356,10 @@ function buildSequenceAnimaticViewModel(input: {
     continuityButtonLabel,
     continuityStatusLabel,
     continuityGraphStatus,
+    continuityStructureActionLabel,
+    continuityStructureStatusLabel,
+    continuityCoverageLabel,
+    continuityStructureRunning,
     continuityAssetGenerationStatus,
     continuityAssetTargets,
     title: trimOptionalString(fallbackScreenplay?.title) || input.request.title || 'Sequence screenplay animatic',
@@ -3364,6 +3664,7 @@ export function WorldGraphPage({
   onEnsureSequenceAnimaticBlockWorkflows,
   onEnsureSequenceAnimaticContinuityWorkflow,
   onDeriveSequenceAnimaticContinuityBlock,
+  onDeriveSequenceAnimaticContinuityStructure,
   onEnsureSequenceAnimaticContinuityAssetWorkflow,
   onEnsureSequenceAnimaticShotRevisionWorkflow,
   onLoadSequenceAnimaticState,
@@ -4249,6 +4550,7 @@ export function WorldGraphPage({
     error?: string | null
   }>({ status: 'idle', error: null })
   const [sequenceAnimaticVideoPreview, setSequenceAnimaticVideoPreview] = useState<SequenceAnimaticVideoPreview | null>(null)
+  const [sequenceAnimaticContinuityInspector, setSequenceAnimaticContinuityInspector] = useState<SequenceAnimaticViewModel | null>(null)
   const [sequenceAnimaticShotInspector, setSequenceAnimaticShotInspector] = useState<{
     kind: 'camera' | 'lighting' | 'performance'
     blockTitle: string
@@ -4637,6 +4939,35 @@ export function WorldGraphPage({
       setSequenceAnimaticBlockRunKey(null)
     }
   }, [onDeriveSequenceAnimaticContinuityBlock, onLoadSequenceAnimaticState, sequenceAnimaticBlockRunKey])
+  const handleDeriveSequenceAnimaticContinuityStructure = useCallback(async (model: SequenceAnimaticViewModel) => {
+    const runKey = `${model.request.id}:derive_continuity_structure`
+    if (sequenceAnimaticBlockRunKey) return
+    setSequenceAnimaticBlockRunKey(runKey)
+    try {
+      const shouldGenerate = model.continuityGraphStatus === 'empty' || model.continuityCoverageLabel === 'No shot bindings'
+      const shouldFillGaps = /\bneed binding\b/i.test(model.continuityStructureStatusLabel)
+      await onDeriveSequenceAnimaticContinuityStructure({
+        masterRequestId: model.request.id,
+        continuityRequestId: model.continuityRequest?.id ?? null,
+        mode: model.continuityStale
+          ? 'regenerate'
+          : shouldGenerate
+            ? 'generate'
+            : shouldFillGaps
+              ? 'fill_gaps'
+              : 'regenerate',
+      })
+      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setSequenceAnimaticBlockRunKey(null)
+    }
+  }, [onDeriveSequenceAnimaticContinuityStructure, onLoadSequenceAnimaticState, sequenceAnimaticBlockRunKey])
   const handleRunSequenceAnimaticContinuityAssets = useCallback(async (
     model: SequenceAnimaticViewModel,
     requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
@@ -10240,10 +10571,21 @@ export function WorldGraphPage({
                 <div className="world-wiki-sequence-animatic-timeline">
                   <section className="world-wiki-sequence-animatic-continuity-strip" aria-label="Continuity refs">
                     <strong>{routeAnimaticModel.continuityAnchors.characters.length + routeAnimaticModel.continuityAnchors.props.length + routeAnimaticModel.continuityAnchors.locationSpots.length} temporary refs</strong>
-                    <span>{routeAnimaticModel.continuityStatusLabel}</span>
+                    <span>{routeAnimaticModel.continuityStatusLabel} / {routeAnimaticModel.continuityCoverageLabel}</span>
+                    <span>{routeAnimaticModel.continuityStructureStatusLabel}</span>
                     {routeAnimaticModel.continuityStale ? <em>Continuity changed; regeneration recommended</em> : null}
                     {routeAnimaticModel.continuityFailed ? <em>{routeAnimaticModel.continuityError || 'Continuity failed'}</em> : null}
                     <div className="world-wiki-sequence-animatic-continuity-strip-actions">
+                      <button
+                        className="primary-button compact"
+                        disabled={routeAnimaticModel.continuityStructureRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:derive_continuity_structure`}
+                        onClick={() => void handleDeriveSequenceAnimaticContinuityStructure(routeAnimaticModel)}
+                        type="button"
+                      >
+                        {routeAnimaticModel.continuityStructureRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:derive_continuity_structure`
+                          ? <><span className="world-mini-spinner" aria-hidden="true" />Generating structure</>
+                          : routeAnimaticModel.continuityStructureActionLabel}
+                      </button>
                       <button
                         className="ghost-button compact"
                         disabled={routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack` || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_assets`}
@@ -10259,6 +10601,14 @@ export function WorldGraphPage({
                         {routeAnimaticModel.continuityRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_pack` || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:continuity_assets`
                           ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</>
                           : routeAnimaticModel.continuityButtonLabel}
+                      </button>
+                      <button
+                        className="ghost-button compact"
+                        onClick={() => setSequenceAnimaticContinuityInspector(routeAnimaticModel)}
+                        type="button"
+                      >
+                        <EntityIcon id="environment" />
+                        Structure
                       </button>
                       <button
                         className="ghost-button compact"
@@ -10427,21 +10777,23 @@ export function WorldGraphPage({
                                 ) : null}
                                 {shot.revisionError ? <small className="world-wiki-sequence-animatic-video-status is-error">{shot.revisionError}</small> : null}
                                 <div className="world-wiki-sequence-shot-detail-rows">
-                                  <button className="world-wiki-sequence-shot-detail-row" title={shot.camera || 'No camera instructions recorded.'} disabled={!shot.camera} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: shot.title, content: shot.camera || 'No camera instructions recorded.' })} type="button">
-                                    <EntityIcon id="camera" />
-                                    <strong>Camera</strong>
-                                    <span>{shot.camera || 'No camera instructions recorded.'}</span>
-                                  </button>
-                                  <button className="world-wiki-sequence-shot-detail-row" title={shot.lighting || 'No lighting instructions recorded.'} disabled={!shot.lighting} onClick={() => setSequenceAnimaticShotInspector({ kind: 'lighting', blockTitle: block.title, shotTitle: shot.title, content: shot.lighting || 'No lighting instructions recorded.' })} type="button">
-                                    <EntityIcon id="lighting" />
-                                    <strong>Lighting</strong>
-                                    <span>{shot.lighting || 'No lighting instructions recorded.'}</span>
-                                  </button>
-                                  <button className="world-wiki-sequence-shot-detail-row" title={shot.spatialContinuityDetail || shot.spatialContinuityLabel} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: `${shot.title} / spatial continuity`, content: [shot.spatialContinuityLabel, shot.spatialContinuityDetail].filter(Boolean).join('\n') || 'No spatial continuity binding recorded.' })} type="button">
-                                    <EntityIcon id="environment" />
-                                    <strong>Set</strong>
-                                    <span>{shot.spatialContinuityLabel}</span>
-                                  </button>
+                                  <div className="world-wiki-sequence-shot-core-details">
+                                    <button className="world-wiki-sequence-shot-detail-row is-core-detail" title={shot.camera || 'No camera instructions recorded.'} disabled={!shot.camera} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: shot.title, content: shot.camera || 'No camera instructions recorded.' })} type="button">
+                                      <EntityIcon id="camera" />
+                                      <strong>Camera</strong>
+                                      <span>{shot.camera || 'No camera instructions recorded.'}</span>
+                                    </button>
+                                    <button className="world-wiki-sequence-shot-detail-row is-core-detail" title={shot.lighting || 'No lighting instructions recorded.'} disabled={!shot.lighting} onClick={() => setSequenceAnimaticShotInspector({ kind: 'lighting', blockTitle: block.title, shotTitle: shot.title, content: shot.lighting || 'No lighting instructions recorded.' })} type="button">
+                                      <EntityIcon id="lighting" />
+                                      <strong>Lighting</strong>
+                                      <span>{shot.lighting || 'No lighting instructions recorded.'}</span>
+                                    </button>
+                                    <button className="world-wiki-sequence-shot-detail-row is-core-detail" title={shot.spatialContinuityDetail || shot.spatialContinuityLabel} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: `${shot.title} / spatial continuity`, content: [shot.spatialContinuityLabel, shot.spatialContinuityDetail].filter(Boolean).join('\n') || 'No spatial continuity binding recorded.' })} type="button">
+                                      <EntityIcon id="environment" />
+                                      <strong>Set</strong>
+                                      <span>{shot.spatialContinuityLabel}</span>
+                                    </button>
+                                  </div>
                                   {shot.performanceBeats.length > 0 ? shot.performanceBeats.map((beat) => {
                                     const performanceLine = sequenceAnimaticPerformanceBeatLine(beat)
                                     return (
@@ -13474,8 +13826,18 @@ export function WorldGraphPage({
                 <div>
                   <span className="eyebrow">Continuity refs</span>
                   <strong>{sequenceAnimaticPreviewModel.continuityAnchors.characters.length + sequenceAnimaticPreviewModel.continuityAnchors.props.length + sequenceAnimaticPreviewModel.continuityAnchors.locationSpots.length} temporary refs</strong>
-                  <small>{sequenceAnimaticPreviewModel.continuityStatusLabel}</small>
+                  <small>{sequenceAnimaticPreviewModel.continuityStatusLabel} / {sequenceAnimaticPreviewModel.continuityCoverageLabel} / {sequenceAnimaticPreviewModel.continuityStructureStatusLabel}</small>
                 </div>
+                <button
+                  className="primary-button compact"
+                  disabled={sequenceAnimaticPreviewModel.continuityStructureRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:derive_continuity_structure`}
+                  onClick={() => void handleDeriveSequenceAnimaticContinuityStructure(sequenceAnimaticPreviewModel)}
+                  type="button"
+                >
+                  {sequenceAnimaticPreviewModel.continuityStructureRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:derive_continuity_structure`
+                    ? <><span className="world-mini-spinner" aria-hidden="true" />Generating structure</>
+                    : sequenceAnimaticPreviewModel.continuityStructureActionLabel}
+                </button>
                 <button
                   className="ghost-button compact"
                   disabled={sequenceAnimaticPreviewModel.continuityRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:continuity_pack`}
@@ -13485,6 +13847,14 @@ export function WorldGraphPage({
                   {sequenceAnimaticPreviewModel.continuityRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:continuity_pack`
                     ? <><span className="world-mini-spinner" aria-hidden="true" />Generating continuity</>
                     : sequenceAnimaticPreviewModel.continuityButtonLabel}
+                </button>
+                <button
+                  className="ghost-button compact"
+                  onClick={() => setSequenceAnimaticContinuityInspector(sequenceAnimaticPreviewModel)}
+                  type="button"
+                >
+                  <EntityIcon id="environment" />
+                  Structure
                 </button>
                 <button
                   className="ghost-button compact"
@@ -13917,6 +14287,14 @@ export function WorldGraphPage({
             </header>
             <p>{sequenceAnimaticShotInspector.content}</p>
           </section>
+        </div>
+      ) : null}
+      {sequenceAnimaticContinuityInspector ? (
+        <div className="world-wiki-sequence-video-overlay" onClick={() => setSequenceAnimaticContinuityInspector(null)}>
+          <SequenceAnimaticContinuityStructureModal
+            model={sequenceAnimaticContinuityInspector}
+            onClose={() => setSequenceAnimaticContinuityInspector(null)}
+          />
         </div>
       ) : null}
       {sequenceAnimaticVideoPreview ? (

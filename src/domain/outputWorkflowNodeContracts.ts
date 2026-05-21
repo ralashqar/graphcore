@@ -267,6 +267,30 @@ const cinematicSequenceContracts = [
     manualOnly: false,
   },
   {
+    purpose: 'sequence_animatic_continuity_global_plan',
+    label: 'Plan Continuity Structure',
+    requiredInputs: ['continuity_graph_v2', 'continuity_planner_context'],
+    producedOutputs: ['text', 'continuityBlockDelta', 'continuity_block_delta'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Planning global continuity structure',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_global_merge',
+    label: 'Merge Continuity Structure',
+    requiredInputs: ['continuity_graph_v2', 'continuity_block_delta'],
+    producedOutputs: ['text', 'continuityGraphV2', 'continuity_graph_v2', 'continuityBlockDelta', 'continuity_block_delta', 'globalStructureState', 'coverage'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Merging global continuity structure',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
     purpose: 'sequence_animatic_continuity_block_merge',
     label: 'Merge Continuity Block',
     requiredInputs: ['continuity_graph_v2', 'continuity_block_delta'],
@@ -294,7 +318,7 @@ const cinematicSequenceContracts = [
     purpose: 'sequence_animatic_continuity_structure_artifact',
     label: 'Save Continuity Structure',
     requiredInputs: ['continuity_graph_v2'],
-    producedOutputs: ['artifact', 'continuityPack', 'continuity_pack', 'continuityGraphV2', 'continuity_graph_v2', 'shotBindings', 'blockStates', 'pendingDeltas', 'assetStateByNodeId', 'visualDependencyEdges', 'assetGenerationStatus'],
+    producedOutputs: ['artifact', 'continuityPack', 'continuity_pack', 'continuityGraphV2', 'continuity_graph_v2', 'shotBindings', 'blockStates', 'pendingDeltas', 'globalStructureState', 'coverage', 'assetStateByNodeId', 'visualDependencyEdges', 'assetGenerationStatus'],
     artifactRoles: ['sequence_animatic_continuity_pack'],
     previewRoles: ['artifact'],
     recoveryStrategy: 'node_step_artifact',
@@ -497,6 +521,7 @@ export function getOutputWorkflowNodeContract(nodeOrConfig: Pick<OutputWorkflowN
 export type OutputWorkflowRunIntent =
   | 'prepare_storyboard_block'
   | 'generate_continuity_pack'
+  | 'derive_continuity_structure'
   | 'derive_continuity_block'
   | 'generate_continuity_asset'
   | 'generate_block_video'
@@ -527,6 +552,13 @@ export function outputWorkflowRunIntentDefaults(intent: string | null | undefine
         debugSkipVideoGeneration: true,
         cinematicVideoApproved: false,
         allowStaleUpstreamOutputs: false,
+      }
+    case 'derive_continuity_structure':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: true,
+        cinematicVideoApproved: false,
+        allowStaleUpstreamOutputs: true,
       }
     case 'derive_continuity_block':
       return {

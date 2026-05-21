@@ -71,6 +71,14 @@ function readContinuityState(input: {
     return 'none'
   })()
   const status = readText(pack.continuityGraphStatus ?? pack.continuity_graph_status ?? asRecord(continuityRequest?.metadata).continuityGraphStatus)
+  const globalStructureState = {
+    ...asRecord(asRecord(continuityRequest?.metadata).globalStructureState),
+    ...asRecord(pack.globalStructureState ?? pack.global_structure_state),
+  }
+  const continuityCoverage = {
+    ...asRecord(asRecord(continuityRequest?.metadata).continuityCoverage),
+    ...asRecord(pack.coverage),
+  }
   return {
     continuityGraphStatus: status === 'ready' || status === 'partial' || status === 'stale' || status === 'failed' || status === 'empty'
       ? status
@@ -78,6 +86,8 @@ function readContinuityState(input: {
         ? 'partial'
         : 'empty',
     continuityBlockStates: blockStates,
+    globalStructureState,
+    continuityCoverage,
     assetStateByNodeId,
     visualDependencyEdges,
     assetGenerationStatus,

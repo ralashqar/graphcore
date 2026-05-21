@@ -51,7 +51,7 @@ function continuityAnchorAssetPackEntity(anchor: Record<string, unknown>) {
   const id = readText(anchor.id)
   const assetKey = readText(anchor.assetKey)
   if (!id || !assetKey) return null
-  const anchorType = readText(anchor.anchorType)
+  const anchorType = readText(anchor.anchorType) || readText(anchor.type)
   const name = readText(anchor.name) || id
   const isCharacter = anchorType === 'character'
   const isLocation = anchorType === 'location_spot'
@@ -83,9 +83,11 @@ function assetPackWithContinuityAnchors(assetPack: Record<string, unknown>, cont
   const anchors = [
     ...readArray(continuitySource.characterAnchors).map(asRecord),
     ...readArray(continuitySource.propAnchors).map(asRecord),
-    ...readArray(continuitySource.locationSpotAnchors).map(asRecord),
     ...readArray(continuitySource.anchorAssets).map(asRecord),
-  ]
+  ].filter((anchor) => {
+    const type = readText(anchor.type) || readText(anchor.anchorType)
+    return type === 'character' || type === 'prop'
+  })
   const anchorEntities = anchors
     .filter((anchor) => idSet.has(readText(anchor.id)))
     .map(continuityAnchorAssetPackEntity)
@@ -109,14 +111,17 @@ function continuityAnchorIdsForShot(continuitySource: Record<string, unknown>, s
   const anchors = [
     ...readArray(continuitySource.characterAnchors).map(asRecord),
     ...readArray(continuitySource.propAnchors).map(asRecord),
-    ...readArray(continuitySource.locationSpotAnchors).map(asRecord),
     ...readArray(continuitySource.anchorAssets).map(asRecord),
-  ]
+  ].filter((anchor) => {
+    const type = readText(anchor.type) || readText(anchor.anchorType)
+    return type === 'character' || type === 'prop'
+  })
+  const validAnchorIds = new Set(anchors.map((anchor) => readText(anchor.id)).filter(Boolean))
   const scopedIds = anchors
     .filter((anchor) => readStringArray(anchor.shotIds).includes(shotId))
     .map((anchor) => readText(anchor.id))
     .filter(Boolean)
-  return [...new Set([...mappedIds, ...scopedIds])]
+  return [...new Set([...mappedIds, ...scopedIds])].filter((id) => validAnchorIds.has(id))
 }
 
 Deno.serve(async (request) => {

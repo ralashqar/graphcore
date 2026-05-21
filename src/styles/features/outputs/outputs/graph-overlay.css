@@ -215,8 +215,8 @@
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: 306px;
-  height: 220px;
+  width: 100%;
+  height: 100%;
   gap: 10px;
   overflow: hidden;
   padding: 10px;
@@ -249,12 +249,16 @@
 .outputs-graph-node.has-image-output {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: auto;
-  height: 320px;
-  min-width: 160px;
-  max-width: 360px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  max-width: none;
   padding: 10px;
   background: rgba(2, 6, 23, 0.96);
+}
+
+.outputs-graph-node.has-image-output .outputs-graph-node-header {
+  min-height: 24px;
 }
 
 .outputs-graph-node-header {
@@ -296,7 +300,7 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .outputs-graph-node-body {
@@ -321,9 +325,11 @@
 }
 
 .outputs-graph-node-image-body {
-  display: block;
+  display: grid;
+  place-items: center;
   overflow: hidden;
   padding: 0;
+  background: rgba(2, 6, 23, 0.72);
 }
 
 .outputs-graph-node.is-document_render,
@@ -381,18 +387,41 @@
   bottom: 10px;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid rgba(110, 231, 183, 0.28);
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(110, 231, 183, 0.42);
   border-radius: 50%;
-  background: rgba(6, 78, 59, 0.62);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.82), rgba(6, 95, 70, 0.88));
+  box-shadow: 0 10px 24px rgba(6, 78, 59, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.18);
   color: var(--accent);
-  font-size: 0.7rem;
   cursor: pointer;
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease, filter 150ms ease;
+}
+
+.outputs-graph-node-play:hover:not(:disabled) {
+  border-color: rgba(167, 243, 208, 0.74);
+  box-shadow: 0 14px 30px rgba(6, 78, 59, 0.44), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.outputs-graph-node-play:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
 }
 
 .outputs-graph-node-play:disabled {
   cursor: default;
+  opacity: 0.82;
+}
+
+.outputs-graph-play-icon {
+  width: 0;
+  height: 0;
+  margin-left: 3px;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 11px solid rgba(240, 253, 250, 0.96);
+  filter: drop-shadow(0 1px 2px rgba(2, 6, 23, 0.42));
 }
 
 .outputs-graph-node-expand {

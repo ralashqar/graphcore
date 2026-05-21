@@ -5892,6 +5892,34 @@ export default function App() {
     return result
   }
 
+  async function deriveSequenceAnimaticContinuityStructure(request: Parameters<typeof workspaceService.deriveSequenceAnimaticContinuityStructure>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before deriving sequence animatic continuity structure.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic continuity structure derivation requires a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.deriveSequenceAnimaticContinuityStructure(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        result.masterRequest,
+        result.continuityRequest,
+        ...current.outputRequests.filter((requestRow) => (
+          requestRow.id !== result.masterRequest.id
+          && requestRow.id !== result.continuityRequest.id
+        )),
+      ],
+      outputWorkflowRuns: [
+        ...(result.run ? [result.run] : []),
+        ...current.outputWorkflowRuns.filter((run) => run.id !== result.run?.id),
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function ensureSequenceAnimaticContinuityAssetWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticContinuityAssetWorkflow>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before generating sequence animatic continuity assets.')
@@ -8531,6 +8559,7 @@ export default function App() {
                 onEnsureSequenceAnimaticBlockWorkflows={ensureSequenceAnimaticBlockWorkflows}
                 onEnsureSequenceAnimaticContinuityWorkflow={ensureSequenceAnimaticContinuityWorkflow}
                 onDeriveSequenceAnimaticContinuityBlock={deriveSequenceAnimaticContinuityBlock}
+                onDeriveSequenceAnimaticContinuityStructure={deriveSequenceAnimaticContinuityStructure}
                 onEnsureSequenceAnimaticContinuityAssetWorkflow={ensureSequenceAnimaticContinuityAssetWorkflow}
                 onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}

@@ -189,6 +189,8 @@ import {
   sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
   sequenceAnimaticContinuityBlockDeriveRequestSchema,
   sequenceAnimaticContinuityBlockDeriveResponseSchema,
+  sequenceAnimaticContinuityStructureDeriveRequestSchema,
+  sequenceAnimaticContinuityStructureDeriveResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
   sequenceAnimaticContinuityWorkflowEnsureResponseSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
@@ -217,6 +219,7 @@ import {
   type SequenceAnimaticBlockWorkflowEnsureResponse,
   type SequenceAnimaticContinuityAssetWorkflowEnsureResponse,
   type SequenceAnimaticContinuityBlockDeriveResponse,
+  type SequenceAnimaticContinuityStructureDeriveResponse,
   type SequenceAnimaticContinuityWorkflowEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
@@ -8658,6 +8661,39 @@ export async function deriveSequenceAnimaticContinuityBlock(
   return parsed
 }
 
+export async function deriveSequenceAnimaticContinuityStructure(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    continuityRequestId?: string | null
+    mode?: 'generate' | 'fill_gaps' | 'regenerate'
+  },
+): Promise<SequenceAnimaticContinuityStructureDeriveResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before deriving sequence animatic continuity structure.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic continuity structure derivation requires a live Supabase-backed draft.')
+  }
+  const ensured = await ensureSequenceAnimaticContinuityWorkflow(snapshot, { masterRequestId: request.masterRequestId })
+  const payload = sequenceAnimaticContinuityStructureDeriveRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    continuityRequestId: request.continuityRequestId ?? ensured.continuityRequest?.id ?? null,
+    mode: request.mode ?? 'generate',
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'derive-sequence-animatic-continuity-structure',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticContinuityStructureDeriveResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
 export async function ensureSequenceAnimaticContinuityAssetWorkflow(
   snapshot: ProjectSnapshot,
   request: {
@@ -9001,6 +9037,14 @@ function deriveSequenceAnimaticContinuityState(input: {
               ? 'partial'
               : 'none'
   const status = readRepositoryString(pack.continuityGraphStatus ?? pack.continuity_graph_status ?? readRepositoryRecord(continuityRequest?.metadata).continuityGraphStatus)
+  const globalStructureState = {
+    ...readRepositoryRecord(readRepositoryRecord(continuityRequest?.metadata).globalStructureState),
+    ...readRepositoryRecord(pack.globalStructureState ?? pack.global_structure_state),
+  }
+  const continuityCoverage = {
+    ...readRepositoryRecord(readRepositoryRecord(continuityRequest?.metadata).continuityCoverage),
+    ...readRepositoryRecord(pack.coverage),
+  }
   return {
     continuityGraphStatus: status === 'ready' || status === 'partial' || status === 'stale' || status === 'failed' || status === 'empty'
       ? status
@@ -9008,6 +9052,8 @@ function deriveSequenceAnimaticContinuityState(input: {
         ? 'partial'
         : 'empty',
     continuityBlockStates: blockStates,
+    globalStructureState,
+    continuityCoverage,
     assetStateByNodeId,
     visualDependencyEdges: readRepositoryArray(pack.visualDependencyEdges ?? pack.visual_dependency_edges).map(readRepositoryRecord),
     assetGenerationStatus,

@@ -36,6 +36,8 @@ import {
   sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
   sequenceAnimaticContinuityBlockDeriveRequestSchema,
   sequenceAnimaticContinuityBlockDeriveResponseSchema,
+  sequenceAnimaticContinuityStructureDeriveRequestSchema,
+  sequenceAnimaticContinuityStructureDeriveResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
   sequenceAnimaticShotRevisionArtifactV1Schema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
@@ -1302,7 +1304,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     locationSets: [{ id: 'set_bridge', name: 'Bridge', shotIds: ['shot_001'] }],
     locationAngles: [{ id: 'angle_bridge_wide', setId: 'set_bridge', name: 'Bridge wide angle', shotIds: ['shot_001'] }],
     sceneGraph: { nodes: [{ id: 'set_bridge', type: 'location_set', name: 'Bridge' }], edges: [] },
-    shotContinuityMap: { shot_001: ['angle_bridge_wide'] },
+    shotContinuityMap: { shot_001: [] },
     continuityGraphV2: {
       version: 'sequence_animatic_continuity_graph_v2',
       worldLocationRefs: [{ id: 'loc_bridge', key: 'bridge', name: 'Bridge', type: 'location' }],
@@ -1311,13 +1313,13 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
       spots: [{ id: 'spot_console', zoneId: 'zone_console', name: 'Console', shotIds: ['shot_001'] }],
       angles: [{ id: 'angle_bridge_wide', setId: 'set_bridge', zoneId: 'zone_console', name: 'Bridge wide angle', shotIds: ['shot_001'] }],
       edges: [{ sourceId: 'set_bridge', targetId: 'zone_console', type: 'contains' }],
-      shotBindings: { shot_001: { shotId: 'shot_001', storyboardBlockId: 'block_001', setId: 'set_bridge', zoneId: 'zone_console', spotIds: ['spot_console'], angleId: 'angle_bridge_wide', continuityAnchorIds: ['angle_bridge_wide'] } },
+      shotBindings: { shot_001: { shotId: 'shot_001', storyboardBlockId: 'block_001', setId: 'set_bridge', zoneId: 'zone_console', spotIds: ['spot_console'], angleId: 'angle_bridge_wide', spatialNodeIds: ['set_bridge', 'zone_console', 'spot_console', 'angle_bridge_wide'], continuityAnchorIds: [] } },
       assetAnchors: [],
       rejectedCandidates: [],
       warnings: [],
       diagnostics: [],
     },
-    shotBindings: { shot_001: { shotId: 'shot_001', storyboardBlockId: 'block_001', setId: 'set_bridge', zoneId: 'zone_console', spotIds: ['spot_console'], angleId: 'angle_bridge_wide', continuityAnchorIds: ['angle_bridge_wide'] } },
+    shotBindings: { shot_001: { shotId: 'shot_001', storyboardBlockId: 'block_001', setId: 'set_bridge', zoneId: 'zone_console', spotIds: ['spot_console'], angleId: 'angle_bridge_wide', spatialNodeIds: ['set_bridge', 'zone_console', 'spot_console', 'angle_bridge_wide'], continuityAnchorIds: [] } },
     blockStates: { block_001: { blockId: 'block_001', status: 'ready' } },
     pendingDeltas: { block_001: { blockId: 'block_001' } },
     continuityGraphStatus: 'partial',
@@ -1423,6 +1425,8 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   const purposes = graph.nodes.map((node) => readConfigPurpose({ config: node.config }))
   assert.ok(purposes.includes('sequence_animatic_continuity_input'))
   assert.ok(purposes.includes('sequence_animatic_continuity_seed_graph'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_global_plan'))
+  assert.ok(purposes.includes('sequence_animatic_continuity_global_merge'))
   assert.ok(purposes.includes('sequence_animatic_continuity_block_plan'))
   assert.ok(purposes.includes('sequence_animatic_continuity_block_merge'))
   assert.ok(purposes.includes('sequence_animatic_continuity_structure_artifact'))
@@ -1433,7 +1437,10 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.ok(purposes.includes('sequence_animatic_location_anchor_extract'))
   assert.ok(purposes.includes('sequence_animatic_continuity_artifact'))
   assert.ok(graph.edges.some((edge) => edge.source_port === 'continuity_planner_context' && edge.target_port === 'continuity_planner_context'))
-  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_seed_graph' && edge.target_node_key === 'continuity_block_001_plan'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_seed_graph' && edge.target_node_key === 'continuity_global_plan'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_global_plan' && edge.target_node_key === 'continuity_global_merge'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_global_merge' && edge.target_node_key === 'continuity_global_structure'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_global_merge' && edge.target_node_key === 'continuity_block_001_plan'))
   const blockPlanMergeEdge = graph.edges.find((edge) => edge.source_node_key === 'continuity_block_001_plan' && edge.target_node_key === 'continuity_block_001_merge')
   assert.ok(blockPlanMergeEdge)
   assert.notEqual((blockPlanMergeEdge.metadata as Record<string, unknown>).optionalDependency, true)
@@ -1546,13 +1553,18 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-block-workflows/index.ts'), 'utf8')
   const deriveSource = readFileSync(resolve(repoRoot, 'supabase/functions/derive-sequence-animatic-continuity-block/index.ts'), 'utf8')
+  const deriveStructureSource = readFileSync(resolve(repoRoot, 'supabase/functions/derive-sequence-animatic-continuity-structure/index.ts'), 'utf8')
   const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
   const agentsSource = readFileSync(resolve(repoRoot, 'AGENTS.md'), 'utf8')
 
   assert.match(workerSource, /collectSequenceAnimaticContinuityAnchors/)
   assert.match(workerSource, /function readArray\(value: unknown\): unknown\[\]/)
-  assert.ok(workerSource.indexOf('function readArray(value: unknown): unknown[]') < workerSource.indexOf('readArray(fallbackPlan.anchors)'))
+  assert.doesNotMatch(workerSource, /readArray\(fallbackPlan\.anchors\)/)
   assert.match(workerSource, /buildSequenceAnimaticContinuityPlannerContext/)
+  assert.match(workerSource, /sequenceAnimaticContinuityPlannerSpatialRecord/)
+  assert.match(workerSource, /const shotDescription = compactSequenceAnimaticText\(shot\.description \?\? shot\.action \?\? shot\.caption, 1200\)/)
+  assert.match(workerSource, /sequenceAnimaticContinuityPropHasInteractionEvidence/)
+  assert.match(workerSource, /without multi-shot action or character-interaction evidence/)
   assert.match(workerSource, /function buildSequenceAnimaticReferenceCatalog/)
   assert.match(workerSource, /animaticReferenceCatalog/)
   assert.match(workerSource, /selectedVisualReferenceKeys/)
@@ -1562,12 +1574,17 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(workerSource, /Use the compact planner context as the truth source/)
   assert.match(workerSource, /Treat existingWorldReferences and every shot\.resolvedRefs entry as canonical/)
   assert.match(workerSource, /specific visible one-shot incidental characters/)
+  assert.match(workerSource, /Accept a prop only when it appears in at least two shots/)
+  assert.match(workerSource, /Every named object, mechanism, door\/hatch, gauge, clock part, tube, valve, lever, clamp, tool, panel, note, map, or set-piece that appears in two or more shots must appear either in assetAnchors or rejectedCandidates/)
+  assert.match(workerSource, /sequenceAnimaticContinuityAnchorFromRejectedCandidate/)
   assert.match(workerSource, /sequenceAnimaticShouldKeepSingleUseTemporaryCharacter/)
   assert.match(workerSource, /Recovered \$\{acceptedRejectedCandidateKeys\.size\} visible one-shot incidental character/)
   assert.match(workerSource, /sequenceAnimaticContinuityLocationNodeLooksCharacterDerived/)
   assert.match(workerSource, /sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived/)
   assert.match(workerSource, /sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes/)
   assert.match(workerSource, /looked like character\/action labels instead of physical locations/)
+  assert.match(workerSource, /Never put setId, zoneId, spotIds, or angleId into continuityAnchorIds/)
+  assert.match(workerSource, /sequenceAnimaticContinuitySafePhysicalLabel/)
   assert.match(workerSource, /sequenceAnimaticGraphZoneSeed/)
   assert.match(workerSource, /resolvedRefs/)
   assert.match(workerSource, /unresolvedShotRefs/)
@@ -1579,12 +1596,16 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(continuityPromptSource, /compactForPrompt\(\{ continuityPlannerContext \}, 16_000\)/)
   assert.match(workerSource, /runCinematicV2StructuredNode/)
   assert.match(workerSource, /planningMode: 'llm_structured_v2'/)
-  assert.match(workerSource, /planningMode: 'deterministic_fallback'/)
+  assert.match(workerSource, /deterministic fallback is disabled/)
   assert.match(workerSource, /sequenceAnimaticAbstractContinuityTerms/)
   assert.match(workerSource, /'rain'/)
   assert.match(workerSource, /existing_world_entity/)
   assert.match(workerSource, /shotContinuityMap/)
   assert.match(workerSource, /sequence_animatic_continuity_graph_v2/)
+  assert.match(workerSource, /sequence_animatic_continuity_global_plan/)
+  assert.match(workerSource, /sequence_animatic_continuity_global_merge/)
+  assert.match(workerSource, /sequenceAnimaticContinuityCoverage/)
+  assert.match(workerSource, /sequenceAnimaticSeededBlockStatesFromCoverage/)
   assert.match(workerSource, /sequence_animatic_continuity_block_plan/)
   assert.match(workerSource, /sequence_animatic_continuity_block_merge/)
   assert.match(workerSource, /sequence_animatic_continuity_structure_artifact/)
@@ -1615,19 +1636,76 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(ensureSource, /shotBindings/)
   assert.match(ensureSource, /readStringArray\(block\.continuityAnchorIds\)/)
   assert.match(ensureSource, /readStringArray\(shot\.continuityAnchorIds\)/)
+  assert.doesNotMatch(ensureSource, /readText\(asRecord\(shotBindings\[scopeId\]\)\.zoneId\)/)
+  assert.doesNotMatch(ensureSource, /readStringArray\(asRecord\(shotBindings\[scopeId\]\)\.spotIds\)/)
+  assert.doesNotMatch(ensureSource, /readText\(asRecord\(shotBindings\[scopeId\]\)\.angleId\)/)
   assert.match(worldGraphSource, /manifestContinuityAnchors/)
   assert.match(worldGraphSource, /continuityAnchors\.characters/)
   assert.match(worldGraphSource, /shot\.continuityAnchorIds/)
+  assert.match(worldGraphSource, /continuityAnchorById\.has\(value\)/)
   assert.match(worldGraphSource, /spatialContinuityLabel/)
   assert.match(worldGraphSource, /Spatial binding needs review/)
   assert.ok(worldGraphSource.indexOf('const entity = animaticRefLookupAliases(cleanRefId)') < worldGraphSource.indexOf('const anchor = animaticRefLookupAliases(cleanRefId)'))
   assert.match(worldGraphSource, /continuityGraphV2/)
   assert.match(worldGraphSource, /onDeriveSequenceAnimaticContinuityBlock/)
+  assert.match(worldGraphSource, /onDeriveSequenceAnimaticContinuityStructure/)
+  assert.match(worldGraphSource, /Generate continuity structure/)
+  assert.match(worldGraphSource, /Fill continuity gaps/)
+  assert.match(worldGraphSource, /Continuity seeded/)
   assert.match(worldGraphSource, /continuityBlockStatusLabel/)
   assert.match(worldGraphSource, /Derive continuity/)
   assert.match(deriveSource, /derive_continuity_block/)
   assert.match(deriveSource, /sequence_animatic_continuity_structure_artifact/)
   assert.match(deriveSource, /targetNodeKeys/)
+  assert.match(deriveSource, /forceNodeKeys: \['continuity_input', planNodeKey, mergeNodeKey, structureNodeKey\]\.filter\(Boolean\)/)
+  assert.match(deriveStructureSource, /derive_continuity_structure/)
+  assert.match(deriveStructureSource, /continuity_global_structure/)
+  assert.match(deriveStructureSource, /forceNodeKeys: \['continuity_input', 'continuity_seed_graph', 'continuity_global_plan', 'continuity_global_merge', 'continuity_global_structure'\]/)
+  assert.deepEqual(sequenceAnimaticContinuityStructureDeriveRequestSchema.parse({
+    projectId: 'project',
+    draftId: 'draft',
+    masterRequestId: 'master',
+  }).mode, 'generate')
+  assert.equal(sequenceAnimaticContinuityStructureDeriveResponseSchema.parse({
+    ok: true,
+    masterRequest: {
+      id: 'master',
+      projectId: 'project',
+      draftId: 'draft',
+      prompt: '',
+      sourceSurface: 'wiki',
+      targetFormat: 'video',
+      status: 'completed',
+      workflowId: null,
+      latestRunId: null,
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      metadata: {},
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      errorMessage: null,
+    },
+    continuityRequest: {
+      id: 'continuity',
+      projectId: 'project',
+      draftId: 'draft',
+      prompt: '',
+      sourceSurface: 'wiki',
+      targetFormat: 'video',
+      status: 'running',
+      workflowId: 'workflow',
+      latestRunId: null,
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      metadata: {},
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      errorMessage: null,
+    },
+    run: null,
+    globalStructureState: { status: 'deriving' },
+    coverage: { totalShots: 2, boundShots: 1 },
+  }).coverage.boundShots, 1)
   assert.match(agentsSource, /Sequence animatic continuity anchors are output-local references/)
   assert.match(agentsSource, /animaticReferenceCatalog/)
 })

@@ -3,15 +3,15 @@ import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/h
 import {
   mapOutputRequestRow,
   outputArtifactSelect,
-  outputWorkflowEdgeSelect,
   outputRequestSelect,
+  outputWorkflowEdgeSelect,
   outputWorkflowNodeSelect,
   outputWorkflowRunSelect,
 } from '../_shared/output-workflow.ts'
 import {
   outputWorkflowRunStatusResponseSchema,
-  sequenceAnimaticContinuityBlockDeriveRequestSchema,
-  sequenceAnimaticContinuityBlockDeriveResponseSchema,
+  sequenceAnimaticContinuityStructureDeriveRequestSchema,
+  sequenceAnimaticContinuityStructureDeriveResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
 import {
   buildSequenceAnimaticContinuityWorkflowGraph,
@@ -44,10 +44,6 @@ function isTerminalStatus(value: unknown) {
   return ['completed', 'failed', 'cancelled'].includes(status)
 }
 
-function blockStateFromMetadata(metadata: Record<string, unknown>, storyboardBlockId: string) {
-  return asRecord(asRecord(metadata.blockStates)[storyboardBlockId])
-}
-
 function initialContinuityBlockStates(manifest: Record<string, unknown>) {
   const blocks = readArray(manifest.blocks).map(asRecord).length > 0
     ? readArray(manifest.blocks).map(asRecord)
@@ -71,39 +67,12 @@ function initialContinuityBlockStates(manifest: Record<string, unknown>) {
   return states
 }
 
-async function repairContinuityPlanMergeEdges(admin: ReturnType<typeof createAdminClient>, workflowId: string) {
-  const edgeResponse = await admin
-    .from('output_workflow_edges')
-    .select(outputWorkflowEdgeSelect)
-    .eq('workflow_id', workflowId)
-    .like('source_node_key', 'continuity_block_%_plan')
-    .like('target_node_key', 'continuity_block_%_merge')
-  if (edgeResponse.error) throw new Error(edgeResponse.error.message)
-
-  const repairs = ((edgeResponse.data ?? []) as Record<string, unknown>[])
-    .map((edge) => ({
-      id: readText(edge.id),
-      metadata: asRecord(edge.metadata),
-    }))
-    .filter((edge) => edge.id && (edge.metadata.optional === true || edge.metadata.optionalDependency === true))
-
-  await Promise.all(repairs.map(async (edge) => {
-    const updateResponse = await admin
-      .from('output_workflow_edges')
-      .update({
-        metadata: {
-          ...edge.metadata,
-          optional: false,
-          optionalDependency: false,
-          requiredDependency: true,
-          repairedRequiredDependencyAt: new Date().toISOString(),
-        },
-      })
-      .eq('id', edge.id)
-    if (updateResponse.error) throw new Error(updateResponse.error.message)
-  }))
-
-  return repairs.length
+function activeGlobalState(metadata: Record<string, unknown>, fallbackStatus = '') {
+  const state = asRecord(metadata.globalStructureState)
+  return {
+    ...state,
+    status: readText(state.status) || fallbackStatus,
+  }
 }
 
 Deno.serve(async (request) => {
@@ -112,9 +81,9 @@ Deno.serve(async (request) => {
 
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
-    const { client } = await requireUserClient(request, 'derive-sequence-animatic-continuity-block')
-    const admin = createAdminClient('derive-sequence-animatic-continuity-block')
-    const payload = sequenceAnimaticContinuityBlockDeriveRequestSchema.parse(await request.json())
+    const { client } = await requireUserClient(request, 'derive-sequence-animatic-continuity-structure')
+    const admin = createAdminClient('derive-sequence-animatic-continuity-structure')
+    const payload = sequenceAnimaticContinuityStructureDeriveRequestSchema.parse(await request.json())
 
     const masterResponse = await client
       .from('output_requests')
@@ -157,34 +126,9 @@ Deno.serve(async (request) => {
           return metadata.sequenceAnimaticStale !== true && readScreenplayAnimaticRole(metadata) === 'continuity_pack'
         }) ?? null
     }
-    if (!continuityRequestRow) throw new HttpError(409, 'Prepare continuity before deriving a block.')
+    if (!continuityRequestRow) throw new HttpError(409, 'Prepare continuity before deriving continuity structure.')
     const continuityRequest = mapOutputRequestRow(continuityRequestRow as never)
     if (!continuityRequest.workflowId) throw new HttpError(409, 'Continuity request has no workflow.')
-
-    const artifactResponse = await admin
-      .from('output_artifacts')
-      .select(outputArtifactSelect)
-      .eq('project_id', payload.projectId)
-      .eq('draft_id', payload.draftId)
-      .eq('workflow_id', continuityRequest.workflowId)
-      .order('created_at', { ascending: false })
-      .limit(20)
-    if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-    const latestPackMetadata = ((artifactResponse.data ?? []) as Record<string, unknown>[])
-      .map((row) => asRecord(row.metadata))
-      .find((metadata) => readText(metadata.role) === 'sequence_animatic_continuity_pack') ?? {}
-    const latestPack = asRecord(latestPackMetadata.continuityPack ?? latestPackMetadata.continuity_pack)
-    const latestBlockState = blockStateFromMetadata(latestPack, payload.storyboardBlockId)
-    if (payload.mode === 'derive' && readText(latestBlockState.status) === 'ready') {
-      return json(sequenceAnimaticContinuityBlockDeriveResponseSchema.parse({
-        ok: true,
-        masterRequest,
-        continuityRequest,
-        run: null,
-        blockState: latestBlockState,
-        reused: true,
-      }))
-    }
 
     const runningResponse = await admin
       .from('output_workflow_runs')
@@ -199,17 +143,16 @@ Deno.serve(async (request) => {
       .find((row) => {
         const metadata = asRecord(row.metadata)
         return !isTerminalStatus(row.status)
-          && readText(metadata.runIntent) === 'derive_continuity_block'
-          && readText(metadata.storyboardBlockId) === payload.storyboardBlockId
+          && readText(metadata.runIntent) === 'derive_continuity_structure'
       }) ?? null
     if (activeRun) {
-      const metadata = asRecord(continuityRequest.metadata)
-      return json(sequenceAnimaticContinuityBlockDeriveResponseSchema.parse({
+      return json(sequenceAnimaticContinuityStructureDeriveResponseSchema.parse({
         ok: true,
         masterRequest,
         continuityRequest,
         run: null,
-        blockState: blockStateFromMetadata(metadata, payload.storyboardBlockId),
+        globalStructureState: activeGlobalState(asRecord(continuityRequest.metadata), 'deriving'),
+        coverage: asRecord(asRecord(continuityRequest.metadata).continuityCoverage),
         reused: true,
       }))
     }
@@ -221,12 +164,7 @@ Deno.serve(async (request) => {
       .order('created_at', { ascending: true })
     if (nodeResponse.error) throw new Error(nodeResponse.error.message)
     let workflowNodes = ((nodeResponse.data ?? []) as Record<string, unknown>[])
-    let structureNode = workflowNodes
-      .find((node) => {
-        const config = asRecord(node.config)
-        return readText(config.purpose) === 'sequence_animatic_continuity_structure_artifact'
-          && readText(config.storyboardBlockId) === payload.storyboardBlockId
-      }) ?? null
+    let structureNode = workflowNodes.find((node) => readText(node.key) === 'continuity_global_structure') ?? null
     if (!structureNode) {
       const [masterArtifactResponse, edgeResponse] = await Promise.all([
         admin
@@ -298,19 +236,10 @@ Deno.serve(async (request) => {
               blockStates: Object.keys(asRecord(continuityMetadata.blockStates)).length > 0 ? asRecord(continuityMetadata.blockStates) : initialContinuityBlockStates(manifest),
               pendingDeltas: asRecord(continuityMetadata.pendingDeltas),
               continuityGraphStatus: readText(continuityMetadata.continuityGraphStatus) || 'empty',
-              repairedContinuityStructureGraphAt: new Date().toISOString(),
+              repairedContinuityGlobalStructureGraphAt: new Date().toISOString(),
             },
           })
           .eq('id', continuityRequest.id)
-      }
-      if (missingNodes.length > 0 || missingEdges.length > 0) {
-        console.info('[GraphCore] repaired legacy sequence animatic continuity workflow with missing block structure nodes.', {
-          masterRequestId: masterRequest.id,
-          continuityRequestId: continuityRequest.id,
-          workflowId: continuityRequest.workflowId,
-          insertedNodes: missingNodes.length,
-          insertedEdges: missingEdges.length,
-        })
       }
       const repairedNodeResponse = await admin
         .from('output_workflow_nodes')
@@ -319,41 +248,17 @@ Deno.serve(async (request) => {
         .order('created_at', { ascending: true })
       if (repairedNodeResponse.error) throw new Error(repairedNodeResponse.error.message)
       workflowNodes = ((repairedNodeResponse.data ?? []) as Record<string, unknown>[])
-      structureNode = workflowNodes
-        .find((node) => {
-          const config = asRecord(node.config)
-          return readText(config.purpose) === 'sequence_animatic_continuity_structure_artifact'
-            && readText(config.storyboardBlockId) === payload.storyboardBlockId
-        }) ?? null
+      structureNode = workflowNodes.find((node) => readText(node.key) === 'continuity_global_structure') ?? null
     }
-    if (!structureNode) throw new HttpError(404, 'Continuity structure node for this block was not found after automatic workflow repair. Prepare continuity again to rebuild this sidecar.')
-    const structureNodeKey = readText(structureNode.key)
-    const blockIndex = Number(asRecord(structureNode.config).storyboardBlockIndex) || Number(readText(structureNodeKey).match(/continuity_block_(\d+)_structure/)?.[1]) || 0
-    const blockSuffix = blockIndex > 0 ? String(blockIndex).padStart(3, '0') : readText(structureNodeKey).match(/continuity_block_(\d+)_structure/)?.[1] ?? ''
-    const planNodeKey = blockSuffix ? `continuity_block_${blockSuffix}_plan` : ''
-    const mergeNodeKey = blockSuffix ? `continuity_block_${blockSuffix}_merge` : ''
-
-    const repairedPlanMergeEdgeCount = await repairContinuityPlanMergeEdges(admin, continuityRequest.workflowId)
-    if (repairedPlanMergeEdgeCount > 0) {
-      console.info('[GraphCore] repaired sequence animatic continuity block plan-to-merge dependencies.', {
-        masterRequestId: masterRequest.id,
-        continuityRequestId: continuityRequest.id,
-        workflowId: continuityRequest.workflowId,
-        repairedEdges: repairedPlanMergeEdgeCount,
-      })
-    }
+    if (!structureNode) throw new HttpError(404, 'Global continuity structure node was not found after automatic workflow repair. Prepare continuity again to rebuild this sidecar.')
 
     const now = new Date().toISOString()
     const metadata = asRecord(continuityRequest.metadata)
-    const blockStates = {
-      ...asRecord(metadata.blockStates),
-      [payload.storyboardBlockId]: {
-        ...blockStateFromMetadata(metadata, payload.storyboardBlockId),
-        blockId: payload.storyboardBlockId,
-        status: 'deriving',
-        error: '',
-        updatedAt: now,
-      },
+    const globalStructureState = {
+      ...asRecord(metadata.globalStructureState),
+      status: 'deriving',
+      error: '',
+      updatedAt: now,
     }
     const updateResponse = await admin
       .from('output_requests')
@@ -362,9 +267,9 @@ Deno.serve(async (request) => {
         error_message: null,
         metadata: {
           ...metadata,
-          blockStates,
+          globalStructureState,
           continuityGraphStatus: metadata.continuityGraphStatus ?? 'partial',
-          lastContinuityBlockDeriveStartedAt: now,
+          lastContinuityStructureDeriveStartedAt: now,
         },
       })
       .eq('id', continuityRequest.id)
@@ -383,29 +288,51 @@ Deno.serve(async (request) => {
         projectId: payload.projectId,
         draftId: payload.draftId,
         workflowId: continuityRequest.workflowId,
-        prompt: continuityRequest.prompt || `Derive continuity for storyboard block ${payload.storyboardBlockId}.`,
+        prompt: continuityRequest.prompt || `Derive global continuity structure for ${masterRequest.title || 'sequence animatic'}.`,
         targetFormat: 'video',
         input: {
           sourceEntityKeys: masterRequest.selectedEntityKeys,
           sourceSequenceUnitKeys: masterRequest.selectedSequenceUnitKeys,
         },
         metadata: {
-          runIntent: 'derive_continuity_block',
-          runMode: 'sequence_animatic_continuity_block',
+          runIntent: 'derive_continuity_structure',
+          runMode: 'sequence_animatic_continuity_structure',
           runScope: 'upstream_to_node',
           allowStaleUpstreamOutputs: true,
-          targetNodeKeys: [structureNodeKey],
-          forceNodeKeys: ['continuity_input', planNodeKey, mergeNodeKey, structureNodeKey].filter(Boolean),
+          targetNodeKeys: ['continuity_global_structure'],
+          forceNodeKeys: ['continuity_input', 'continuity_seed_graph', 'continuity_global_plan', 'continuity_global_merge', 'continuity_global_structure'],
           parentRequestId: masterRequest.id,
           continuityRequestId: continuityRequest.id,
-          storyboardBlockId: payload.storyboardBlockId,
           deriveMode: payload.mode,
         },
       }),
     })
     const startPayload = await startResponse.json().catch(() => ({}))
     if (!startResponse.ok) {
-      throw new HttpError(startResponse.status, readText(asRecord(startPayload).message) || 'Failed to start block continuity derivation.')
+      const startError = readText(asRecord(startPayload).error)
+        || readText(asRecord(startPayload).message)
+        || 'Failed to start continuity structure derivation.'
+      const failedGlobalStructureState = {
+        ...globalStructureState,
+        status: 'failed',
+        error: startError,
+        failedAt: new Date().toISOString(),
+      }
+      await admin
+        .from('output_requests')
+        .update({
+          status: 'awaiting_confirmation',
+          error_message: startError,
+          metadata: {
+            ...metadata,
+            globalStructureState: failedGlobalStructureState,
+            continuityGraphStatus: readText(metadata.continuityGraphStatus) || 'failed',
+            lastContinuityStructureDeriveFailedAt: failedGlobalStructureState.failedAt,
+          },
+        })
+        .eq('id', continuityRequest.id)
+      await admin.rpc('refresh_output_request_status_projection', { p_request_id: continuityRequest.id })
+      throw new HttpError(startResponse.status >= 500 ? 502 : startResponse.status, startError)
     }
     const started = outputWorkflowRunStatusResponseSchema.parse(startPayload)
     const updatedRequest = {
@@ -414,18 +341,19 @@ Deno.serve(async (request) => {
       latestRunId: started.run.id,
       metadata: {
         ...metadata,
-        blockStates,
+        globalStructureState,
       },
     }
-    return json(sequenceAnimaticContinuityBlockDeriveResponseSchema.parse({
+    return json(sequenceAnimaticContinuityStructureDeriveResponseSchema.parse({
       ok: true,
       masterRequest,
       continuityRequest: updatedRequest,
       run: started.run,
-      blockState: asRecord(blockStates[payload.storyboardBlockId]),
+      globalStructureState,
+      coverage: asRecord(metadata.continuityCoverage),
       reused: false,
     }))
   } catch (error) {
-    return errorResponse(error, 'Failed to derive sequence animatic continuity block.')
+    return errorResponse(error, 'Failed to derive sequence animatic continuity structure.')
   }
 })

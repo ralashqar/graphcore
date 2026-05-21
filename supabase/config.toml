@@ -179,6 +179,9 @@ verify_jwt = false
 [functions.ensure-sequence-animatic-continuity-workflow]
 verify_jwt = false
 
+[functions.derive-sequence-animatic-continuity-structure]
+verify_jwt = false
+
 [functions.get-sequence-animatic-state]
 verify_jwt = false
 

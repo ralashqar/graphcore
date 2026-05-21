@@ -45,11 +45,11 @@ function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
 
 function continuityNodeCollections(graph: Record<string, unknown>) {
   return [
-    ...readArray(graph.locationSets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_set' })),
+    ...readArray(graph.locationSets ?? graph.location_sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_set' })),
     ...readArray(graph.zones).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_zone', assetKind: 'location_zone' })),
     ...readArray(graph.spots).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_spot', assetKind: 'location_spot' })),
     ...readArray(graph.angles).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_angle', assetKind: 'location_angle' })),
-    ...readArray(graph.assetAnchors).map((entry) => {
+    ...readArray(graph.assetAnchors ?? graph.asset_anchors).map((entry) => {
       const record = asRecord(entry)
       const type = readText(record.type) || readText(record.anchorType)
       return {

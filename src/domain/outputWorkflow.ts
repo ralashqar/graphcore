@@ -89,6 +89,7 @@ export type OutputWorkflowRunScope = z.infer<typeof outputWorkflowRunScopeSchema
 export const outputWorkflowRunIntentSchema = z.enum([
   'prepare_storyboard_block',
   'generate_continuity_pack',
+  'derive_continuity_structure',
   'derive_continuity_block',
   'generate_continuity_asset',
   'generate_block_video',
@@ -771,6 +772,8 @@ export const sequenceAnimaticContinuityPackV1Schema = looseObjectSchema.extend({
   blockStates: looseRecordSchema.default({}),
   pendingDeltas: looseRecordSchema.default({}),
   continuityGraphStatus: z.enum(['empty', 'partial', 'ready', 'stale', 'failed']).default('empty'),
+  globalStructureState: looseRecordSchema.default({}),
+  coverage: looseRecordSchema.default({}),
   assetStateByNodeId: z.record(z.string(), continuityAssetStateSchema).default({}),
   visualDependencyEdges: z.array(continuityVisualDependencyEdgeSchema).default([]),
   assetGenerationStatus: sequenceAnimaticContinuityAssetGenerationStatusSchema.default('none'),
@@ -865,6 +868,24 @@ export const sequenceAnimaticContinuityBlockDeriveResponseSchema = z.object({
   reused: z.boolean().default(false),
 })
 
+export const sequenceAnimaticContinuityStructureDeriveRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  continuityRequestId: z.string().min(1).nullable().optional(),
+  mode: z.enum(['generate', 'fill_gaps', 'regenerate']).default('generate'),
+})
+
+export const sequenceAnimaticContinuityStructureDeriveResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  continuityRequest: outputRequestSchema,
+  run: outputWorkflowRunSchema.nullable().default(null),
+  globalStructureState: looseRecordSchema.default({}),
+  coverage: looseRecordSchema.default({}),
+  reused: z.boolean().default(false),
+})
+
 export const sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -927,6 +948,8 @@ export const sequenceAnimaticStateResponseSchema = z.object({
   projections: z.array(outputRequestStatusProjectionSchema).default([]),
   continuityGraphStatus: z.enum(['empty', 'partial', 'ready', 'stale', 'failed']).default('empty'),
   continuityBlockStates: looseRecordSchema.default({}),
+  globalStructureState: looseRecordSchema.default({}),
+  continuityCoverage: looseRecordSchema.default({}),
   assetStateByNodeId: z.record(z.string(), continuityAssetStateSchema).default({}),
   visualDependencyEdges: z.array(continuityVisualDependencyEdgeSchema).default([]),
   assetGenerationStatus: sequenceAnimaticContinuityAssetGenerationStatusSchema.default('none'),
@@ -3898,6 +3921,7 @@ export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunSt
 export type SequenceAnimaticBlockWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticBlockWorkflowEnsureResponseSchema>
 export type SequenceAnimaticContinuityWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityWorkflowEnsureResponseSchema>
 export type SequenceAnimaticContinuityBlockDeriveResponse = z.infer<typeof sequenceAnimaticContinuityBlockDeriveResponseSchema>
+export type SequenceAnimaticContinuityStructureDeriveResponse = z.infer<typeof sequenceAnimaticContinuityStructureDeriveResponseSchema>
 export type SequenceAnimaticContinuityAssetWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema>
 export type SequenceAnimaticShotRevisionWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema>
 export type SequenceAnimaticStateResponse = z.infer<typeof sequenceAnimaticStateResponseSchema>
