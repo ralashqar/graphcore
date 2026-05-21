@@ -43,6 +43,7 @@ const IMAGE_NODE_PREVIEW_HEIGHT = 380
 const IMAGE_NODE_CHROME_HEIGHT = 66
 const IMAGE_NODE_MIN_WIDTH = 440
 const IMAGE_NODE_MAX_WIDTH = 920
+const IMAGE_NODE_MAX_PREVIEW_HEIGHT = 900
 const REFERENCE_STACK_WIDTH = 380
 const REFERENCE_STACK_IMAGE_HEIGHT = 138
 const REFERENCE_STACK_CHROME_HEIGHT = 76
@@ -286,9 +287,15 @@ function graphNodeDimensions(
   }
   if (node.nodeType !== 'image_generation' || !imageSize) return { width: NODE_WIDTH, height: NODE_HEIGHT }
   const aspect = imageSize.width / imageSize.height
-  const height = IMAGE_NODE_PREVIEW_HEIGHT + IMAGE_NODE_CHROME_HEIGHT
-  const width = Math.max(IMAGE_NODE_MIN_WIDTH, Math.min(IMAGE_NODE_MAX_WIDTH, Math.round(IMAGE_NODE_PREVIEW_HEIGHT * aspect) + 24))
-  return { width, height }
+  const targetContentWidth = aspect >= 1
+    ? Math.round(IMAGE_NODE_PREVIEW_HEIGHT * aspect)
+    : IMAGE_NODE_MIN_WIDTH - 24
+  const contentWidth = Math.max(IMAGE_NODE_MIN_WIDTH - 24, Math.min(IMAGE_NODE_MAX_WIDTH - 24, targetContentWidth))
+  const previewHeight = Math.max(IMAGE_NODE_PREVIEW_HEIGHT, Math.min(IMAGE_NODE_MAX_PREVIEW_HEIGHT, Math.round(contentWidth / aspect)))
+  return {
+    width: contentWidth + 24,
+    height: previewHeight + IMAGE_NODE_CHROME_HEIGHT,
+  }
 }
 
 function isReferenceStackNode(node: OutputWorkflowNode) {
