@@ -134,11 +134,11 @@ export const orbitNodes: LandingOrbitNode[] = [
   },
 ]
 
-const productSystemPoints = [
-  'Create characters, places, items and lore',
-  'Evolve canon, relationships and visual references',
-  'Retrieve world context for every output workflow',
-  'Generate prose, art, comics, animatics and cinematics',
+const productSystemPoints: Array<{ copy: string; icon: LandingIconId }> = [
+  { copy: 'Create characters, places, items and lore', icon: 'characters' },
+  { copy: 'Evolve canon, relationships and visual references', icon: 'graph' },
+  { copy: 'Retrieve world context for every output workflow', icon: 'lore' },
+  { copy: 'Generate prose, art, comics, animatics and cinematics', icon: 'cinematic' },
 ]
 
 const featureShowcase: LandingFeatureShowcase[] = [
@@ -507,14 +507,6 @@ export function LandingPage({
   onOpenAuth,
 }: LandingPageProps) {
   const rootRef = useRef<HTMLElement | null>(null)
-  const heroSectionRef = useRef<HTMLElement | null>(null)
-  const heroPromptRef = useRef<HTMLElement | null>(null)
-  const outputFrameRef = useRef<HTMLDivElement | null>(null)
-  const [heroConnector, setHeroConnector] = useState<{
-    d: string
-    width: number
-    height: number
-  } | null>(null)
   const outputVideoGroups = landingVideoGroups.groups
   const [activeOutputGroupIndex, setActiveOutputGroupIndex] = useState(0)
   const outputVideoGroup = outputVideoGroups[activeOutputGroupIndex] ?? outputVideoGroups[0]
@@ -555,69 +547,11 @@ export function LandingPage({
     setActiveOutputVideoIndex(0)
   }
 
-  useEffect(() => {
-    const heroSection = heroSectionRef.current
-    const heroPromptElement = heroPromptRef.current
-    const outputFrameElement = outputFrameRef.current
-
-    if (!heroSection || !heroPromptElement || !outputFrameElement) return
-
-    let animationFrameId = 0
-
-    const updateConnector = () => {
-      window.cancelAnimationFrame(animationFrameId)
-
-      animationFrameId = window.requestAnimationFrame(() => {
-        const sectionRect = heroSection.getBoundingClientRect()
-        const promptRect = heroPromptElement.getBoundingClientRect()
-        const outputRect = outputFrameElement.getBoundingClientRect()
-
-        if (sectionRect.width <= 0 || sectionRect.height <= 0) {
-          setHeroConnector(null)
-          return
-        }
-
-        const startX = promptRect.right - sectionRect.left - 4
-        const startY = promptRect.top - sectionRect.top + promptRect.height * 0.58
-        const endX = outputRect.left - sectionRect.left + 4
-        const endY = outputRect.top - sectionRect.top + outputRect.height * 0.42
-        const distance = Math.max(24, endX - startX)
-        const controlOffset = Math.min(180, distance * 0.5)
-        const d = [
-          `M ${startX.toFixed(1)} ${startY.toFixed(1)}`,
-          `C ${(startX + controlOffset).toFixed(1)} ${startY.toFixed(1)}`,
-          `${(endX - controlOffset).toFixed(1)} ${endY.toFixed(1)}`,
-          `${endX.toFixed(1)} ${endY.toFixed(1)}`,
-        ].join(' ')
-
-        setHeroConnector({
-          d,
-          width: Math.round(sectionRect.width),
-          height: Math.round(sectionRect.height),
-        })
-      })
-    }
-
-    const resizeObserver = new ResizeObserver(updateConnector)
-    resizeObserver.observe(heroSection)
-    resizeObserver.observe(heroPromptElement)
-    resizeObserver.observe(outputFrameElement)
-
-    updateConnector()
-    window.addEventListener('resize', updateConnector)
-
-    return () => {
-      window.cancelAnimationFrame(animationFrameId)
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', updateConnector)
-    }
-  }, [activeOutputGroupIndex, activeOutputVideoIndex, heroPrompt.visibleText])
-
   useGSAP(() => {
     if (!rootRef.current) return
 
     gsap.fromTo(
-      '.landing-nav, .landing-hero-copy > *, .landing-hero-visual, .landing-market-copy, .landing-system-intro, .landing-continuity-visual',
+      '.landing-nav, .landing-hero-copy > *, .landing-hero-proof, .landing-system-intro, .landing-system-visual, .landing-market-copy, .landing-continuity-visual',
       { y: 18 },
       { y: 0, stagger: 0.055, duration: 0.85, ease: 'power3.out' },
     )
@@ -672,13 +606,13 @@ export function LandingPage({
         </nav>
       </header>
 
-      <section className="landing-hero-section landing-studio-hero" id="product" ref={heroSectionRef}>
+      <section className="landing-hero-section landing-studio-hero" id="product">
         <div className="landing-hero-copy">
           <div className="landing-kicker-row">
             <span className="landing-chip">Persistent creative operating system</span>
           </div>
           <h1>
-            Create a world once.
+            Create a world.
             <span>Direct everything</span>
             from it.
           </h1>
@@ -701,10 +635,9 @@ export function LandingPage({
           </p>
         </div>
 
-        <div className="landing-hero-visual" aria-label="World Studio prompt to output diagram">
+        <div className="landing-hero-proof" aria-label="Prompt to world-aware output example">
           <article
             className={`landing-studio-prompt-card landing-hero-prompt-card${heroPrompt.isClearing ? ' is-clearing' : ''}`}
-            ref={heroPromptRef}
           >
             <div className="landing-prompt-simple-label">Persistent world. Structured context. Living memory.</div>
             <div className="landing-prompt-simple-input" aria-label={heroPrompt.activePrompt.text}>
@@ -716,72 +649,74 @@ export function LandingPage({
               <LandingPromptMockIcon kind="send" />
             </div>
           </article>
-          <figure className="landing-studio-graphic-frame">
-            <img
-              className="landing-studio-hero-image"
-              src="/landing/worldStudio.png"
-              alt="SynArc world studio diagram connecting creator prompts, world context and outputs"
-            />
-          </figure>
+          <div className="landing-hero-proof-flow" aria-hidden="true">
+            <span>World context applied</span>
+            <i />
+            <span>Output generated</span>
+          </div>
+          <aside className="landing-hero-output-preview" aria-label="Example generated output placeholder">
+            <div className="landing-output-preview-frame">
+              {activeOutputVideo ? (
+                <video
+                  key={activeOutputVideo.src}
+                  className="landing-output-preview-video"
+                  src={activeOutputVideo.src}
+                  autoPlay
+                  loop={shouldLoopOutputVideo}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  aria-label={activeOutputVideo.label}
+                  onEnded={handleOutputVideoEnded}
+                />
+              ) : null}
+            </div>
+            <div className="landing-output-preview-controls" aria-label="Cycle example prompts">
+              <button
+                type="button"
+                onClick={() => handleOutputGroupNavigation('previous')}
+                aria-label="Previous example prompt"
+              >
+                <LandingArrowIcon direction="left" />
+              </button>
+              <span>
+                Example {activeOutputGroupIndex + 1} / {outputVideoGroups.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleOutputGroupNavigation('next')}
+                aria-label="Next example prompt"
+              >
+                <LandingArrowIcon direction="right" />
+              </button>
+            </div>
+          </aside>
         </div>
+      </section>
 
-        {heroConnector ? (
-          <svg
-            className="landing-hero-output-connector"
-            viewBox={`0 0 ${heroConnector.width} ${heroConnector.height}`}
-            preserveAspectRatio="none"
-            aria-hidden="true"
-          >
-            <path className="landing-hero-output-connector-glow" d={heroConnector.d} />
-            <path d={heroConnector.d} />
-            <path className="landing-hero-output-connector-signal" d={heroConnector.d} />
-          </svg>
-        ) : null}
-
-        <aside className="landing-hero-output-preview" aria-label="Example generated output placeholder">
-          <div className="landing-output-preview-label">
-            <span>Generated from the world</span>
-            <strong>Prompt-linked output examples</strong>
-          </div>
-          <div className="landing-output-preview-frame" ref={outputFrameRef}>
-            {activeOutputVideo ? (
-              <video
-                key={activeOutputVideo.src}
-                className="landing-output-preview-video"
-                src={activeOutputVideo.src}
-                autoPlay
-                loop={shouldLoopOutputVideo}
-                muted
-                playsInline
-                preload="metadata"
-                aria-label={activeOutputVideo.label}
-                onEnded={handleOutputVideoEnded}
-              />
-            ) : null}
-          </div>
-          <div className="landing-output-preview-controls" aria-label="Cycle example prompts">
-            <button
-              type="button"
-              onClick={() => handleOutputGroupNavigation('previous')}
-              aria-label="Previous example prompt"
-            >
-              <LandingArrowIcon direction="left" />
-            </button>
-            <span>
-              Example {activeOutputGroupIndex + 1} / {outputVideoGroups.length}
-            </span>
-            <button
-              type="button"
-              onClick={() => handleOutputGroupNavigation('next')}
-              aria-label="Next example prompt"
-            >
-              <LandingArrowIcon direction="right" />
-            </button>
-          </div>
+      <section className="landing-system-intro-section" id="outputs">
+        <figure className="landing-system-visual">
+          <img
+            src="/landing/worldStudio.png"
+            alt="SynArc world studio diagram connecting creator prompts, world context and outputs"
+          />
+        </figure>
+        <div className="landing-system-intro">
+          <span className="landing-chip">World-native studio</span>
+          <h2>SynArc turns prompts into a structured creative system.</h2>
           <p>
-            A canon-aware output generated from the world: characters, location, style and story context stay connected.
+            Build characters, places, lore, relationships and visual references once,
+            then reuse them across every output.
           </p>
-        </aside>
+          <div className="landing-system-proof-list">
+            {productSystemPoints.map((point) => (
+              <span key={point.copy}>
+                <LandingIcon id={point.icon} />
+                <em>{point.copy}</em>
+              </span>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="landing-market-section" id="market-pain">
@@ -820,22 +755,6 @@ export function LandingPage({
             alt="Digital archaeology diagram showing fragmented AI creative workflows across tools, files and references"
           />
         </figure>
-      </section>
-
-      <section className="landing-system-intro-section" id="outputs">
-        <div className="landing-system-intro">
-          <span className="landing-chip">World-native studio</span>
-          <h2>SynArc turns prompts into a structured creative system.</h2>
-          <p>
-            Build characters, places, lore, relationships and visual references once,
-            then reuse them across every output.
-          </p>
-        </div>
-        <div className="landing-system-proof-list">
-          {productSystemPoints.map((point) => (
-            <span key={point}>{point}</span>
-          ))}
-        </div>
       </section>
 
       <section className="landing-feature-showcase" aria-label="SynArc product features">
