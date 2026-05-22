@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
+import landingVideoGroups from './landingVideoGroups.json'
 
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
@@ -40,11 +41,6 @@ type LandingWorkflowStep = {
   label: string
   title: string
   copy: string
-}
-
-type LandingAnimatedPrompt = {
-  label: string
-  text: string
 }
 
 const navLinks = [
@@ -205,55 +201,35 @@ const continuityPillars = [
   'Visual references',
 ]
 
-const heroPromptExamples: LandingAnimatedPrompt[] = [
-  {
-    label: 'World prompt',
-    text: 'Have Aric and Mira fight in the ruined observatory.',
-  },
-  {
-    label: 'Cinematic prompt',
-    text: 'Turn chapter three into a tense cinematic chase sequence.',
-  },
-  {
-    label: 'Comic prompt',
-    text: 'Create a six-panel comic page where the heir reveals the hidden map.',
-  },
-]
-
 type LandingPageProps = {
   isSignedIn: boolean
   onEnterApp: () => void
   onOpenAuth: () => void
 }
 
-function useAnimatedHeroPrompt() {
-  const [activeIndex, setActiveIndex] = useState(0)
+function useAnimatedHeroPrompt(promptText: string) {
   const [visibleText, setVisibleText] = useState('')
   const [isClearing, setIsClearing] = useState(false)
-  const activePrompt = heroPromptExamples[activeIndex] ?? heroPromptExamples[0]
+
+  useEffect(() => {
+    setVisibleText('')
+    setIsClearing(false)
+  }, [promptText])
 
   useEffect(() => {
     let timeoutId = 0
 
-    if (!isClearing && visibleText.length < activePrompt.text.length) {
+    if (!isClearing && visibleText.length < promptText.length) {
       timeoutId = window.setTimeout(() => {
-        setVisibleText(activePrompt.text.slice(0, visibleText.length + 1))
+        setVisibleText(promptText.slice(0, visibleText.length + 1))
       }, 24)
-    } else if (!isClearing) {
-      timeoutId = window.setTimeout(() => setIsClearing(true), 4200)
-    } else {
-      timeoutId = window.setTimeout(() => {
-        setActiveIndex((current) => (current + 1) % heroPromptExamples.length)
-        setVisibleText('')
-        setIsClearing(false)
-      }, 360)
     }
 
     return () => window.clearTimeout(timeoutId)
-  }, [activePrompt.text, isClearing, visibleText])
+  }, [isClearing, promptText, visibleText])
 
   return {
-    activePrompt,
+    activePrompt: { text: promptText },
     visibleText,
     isClearing,
   }
@@ -274,6 +250,24 @@ function LandingPromptMockIcon({ kind }: { kind: 'spark' | 'send' }) {
           <path d="m24 28 17-20" />
         </>
       ) : null}
+    </svg>
+  )
+}
+
+function LandingArrowIcon({ direction }: { direction: 'left' | 'right' }) {
+  return (
+    <svg aria-hidden="true" className="landing-arrow-icon" viewBox="0 0 24 24">
+      {direction === 'left' ? (
+        <>
+          <path d="M15 18 9 12l6-6" />
+          <path d="M20 12H9" />
+        </>
+      ) : (
+        <>
+          <path d="m9 18 6-6-6-6" />
+          <path d="M4 12h11" />
+        </>
+      )}
     </svg>
   )
 }
@@ -367,7 +361,111 @@ export function LandingPage({
   onOpenAuth,
 }: LandingPageProps) {
   const rootRef = useRef<HTMLElement | null>(null)
-  const heroPrompt = useAnimatedHeroPrompt()
+  const heroSectionRef = useRef<HTMLElement | null>(null)
+  const heroPromptRef = useRef<HTMLElement | null>(null)
+  const outputFrameRef = useRef<HTMLDivElement | null>(null)
+  const [heroConnector, setHeroConnector] = useState<{
+    d: string
+    width: number
+    height: number
+  } | null>(null)
+  const outputVideoGroups = landingVideoGroups.groups
+  const [activeOutputGroupIndex, setActiveOutputGroupIndex] = useState(0)
+  const outputVideoGroup = outputVideoGroups[activeOutputGroupIndex] ?? outputVideoGroups[0]
+  const outputVideos = outputVideoGroup?.videos ?? []
+  const [activeOutputVideoIndex, setActiveOutputVideoIndex] = useState(0)
+  const activeOutputVideo = outputVideos[activeOutputVideoIndex] ?? outputVideos[0]
+  const shouldLoopOutputVideo = outputVideoGroups.length <= 1 && outputVideos.length <= 1
+  const heroPrompt = useAnimatedHeroPrompt(outputVideoGroup?.prompt ?? '')
+
+  useEffect(() => {
+    setActiveOutputVideoIndex(0)
+  }, [outputVideoGroup?.id])
+
+  const handleOutputVideoEnded = () => {
+    if (outputVideos.length > 1 && activeOutputVideoIndex < outputVideos.length - 1) {
+      setActiveOutputVideoIndex((current) => current + 1)
+      return
+    }
+
+    if (outputVideoGroups.length > 1) {
+      setActiveOutputGroupIndex((current) => (current + 1) % outputVideoGroups.length)
+      return
+    }
+
+    setActiveOutputVideoIndex(0)
+  }
+
+  const handleOutputGroupNavigation = (direction: 'previous' | 'next') => {
+    if (outputVideoGroups.length <= 1) {
+      setActiveOutputVideoIndex(0)
+      return
+    }
+
+    setActiveOutputGroupIndex((current) => {
+      const delta = direction === 'next' ? 1 : -1
+      return (current + delta + outputVideoGroups.length) % outputVideoGroups.length
+    })
+    setActiveOutputVideoIndex(0)
+  }
+
+  useEffect(() => {
+    const heroSection = heroSectionRef.current
+    const heroPromptElement = heroPromptRef.current
+    const outputFrameElement = outputFrameRef.current
+
+    if (!heroSection || !heroPromptElement || !outputFrameElement) return
+
+    let animationFrameId = 0
+
+    const updateConnector = () => {
+      window.cancelAnimationFrame(animationFrameId)
+
+      animationFrameId = window.requestAnimationFrame(() => {
+        const sectionRect = heroSection.getBoundingClientRect()
+        const promptRect = heroPromptElement.getBoundingClientRect()
+        const outputRect = outputFrameElement.getBoundingClientRect()
+
+        if (sectionRect.width <= 0 || sectionRect.height <= 0) {
+          setHeroConnector(null)
+          return
+        }
+
+        const startX = promptRect.right - sectionRect.left - 4
+        const startY = promptRect.top - sectionRect.top + promptRect.height * 0.58
+        const endX = outputRect.left - sectionRect.left + 4
+        const endY = outputRect.top - sectionRect.top + outputRect.height * 0.42
+        const distance = Math.max(24, endX - startX)
+        const controlOffset = Math.min(180, distance * 0.5)
+        const d = [
+          `M ${startX.toFixed(1)} ${startY.toFixed(1)}`,
+          `C ${(startX + controlOffset).toFixed(1)} ${startY.toFixed(1)}`,
+          `${(endX - controlOffset).toFixed(1)} ${endY.toFixed(1)}`,
+          `${endX.toFixed(1)} ${endY.toFixed(1)}`,
+        ].join(' ')
+
+        setHeroConnector({
+          d,
+          width: Math.round(sectionRect.width),
+          height: Math.round(sectionRect.height),
+        })
+      })
+    }
+
+    const resizeObserver = new ResizeObserver(updateConnector)
+    resizeObserver.observe(heroSection)
+    resizeObserver.observe(heroPromptElement)
+    resizeObserver.observe(outputFrameElement)
+
+    updateConnector()
+    window.addEventListener('resize', updateConnector)
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId)
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', updateConnector)
+    }
+  }, [activeOutputGroupIndex, activeOutputVideoIndex, heroPrompt.visibleText])
 
   useGSAP(() => {
     if (!rootRef.current) return
@@ -428,7 +526,7 @@ export function LandingPage({
         </nav>
       </header>
 
-      <section className="landing-hero-section landing-studio-hero" id="product">
+      <section className="landing-hero-section landing-studio-hero" id="product" ref={heroSectionRef}>
         <div className="landing-hero-copy">
           <div className="landing-kicker-row">
             <span className="landing-chip">Persistent creative operating system</span>
@@ -456,7 +554,10 @@ export function LandingPage({
         </div>
 
         <div className="landing-hero-visual" aria-label="World Studio prompt to output diagram">
-          <article className={`landing-studio-prompt-card landing-hero-prompt-card${heroPrompt.isClearing ? ' is-clearing' : ''}`}>
+          <article
+            className={`landing-studio-prompt-card landing-hero-prompt-card${heroPrompt.isClearing ? ' is-clearing' : ''}`}
+            ref={heroPromptRef}
+          >
             <div className="landing-prompt-simple-label">Start with a single idea</div>
             <div className="landing-prompt-simple-input" aria-label={heroPrompt.activePrompt.text}>
               <LandingPromptMockIcon kind="spark" />
@@ -476,18 +577,54 @@ export function LandingPage({
           </figure>
         </div>
 
+        {heroConnector ? (
+          <svg
+            className="landing-hero-output-connector"
+            viewBox={`0 0 ${heroConnector.width} ${heroConnector.height}`}
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path className="landing-hero-output-connector-glow" d={heroConnector.d} />
+            <path d={heroConnector.d} />
+            <path className="landing-hero-output-connector-signal" d={heroConnector.d} />
+          </svg>
+        ) : null}
+
         <aside className="landing-hero-output-preview" aria-label="Example generated output placeholder">
-          <div className="landing-output-preview-frame">
-            <video
-              className="landing-output-preview-video"
-              src="/landing/SynarcDemoVid1.optimized.webm"
-              autoPlay
-              loop
-              muted
-              playsInline
-              preload="metadata"
-              aria-label="SynArc generated output preview"
-            />
+          <div className="landing-output-preview-frame" ref={outputFrameRef}>
+            {activeOutputVideo ? (
+              <video
+                key={activeOutputVideo.src}
+                className="landing-output-preview-video"
+                src={activeOutputVideo.src}
+                autoPlay
+                loop={shouldLoopOutputVideo}
+                muted
+                playsInline
+                preload="metadata"
+                aria-label={activeOutputVideo.label}
+                onEnded={handleOutputVideoEnded}
+              />
+            ) : null}
+          </div>
+          <div className="landing-output-preview-controls" aria-label="Cycle example prompts">
+            <button
+              type="button"
+              onClick={() => handleOutputGroupNavigation('previous')}
+              aria-label="Previous example prompt"
+            >
+              <LandingArrowIcon direction="left" />
+            </button>
+            <span>
+              {activeOutputGroupIndex + 1} / {outputVideoGroups.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => handleOutputGroupNavigation('next')}
+              aria-label="Next example prompt"
+            >
+              <LandingArrowIcon direction="right" />
+            </button>
           </div>
           <p>
             A canon-aware output generated from the world: characters, location, style and story context stay connected.

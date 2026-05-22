@@ -1,0 +1,63 @@
+{
+  "groups": [
+    {
+      "id": "world-output-sequence",
+      "label": "World output sequence",
+      "prompt": "Create a cinematic episode from the first chapter of 'Whistlewick and the Clock of Tides'",
+      "cycle": true,
+      "videos": [
+        {
+          "id": "synarc-demo-1",
+          "label": "World studio output one",
+          "src": "/landing/Demo1/SynarcDemoVid1.optimized.webm"
+        },
+        {
+          "id": "synarc-demo-2",
+          "label": "World studio output two",
+          "src": "/landing/Demo1/SynarcDemoVid2.optimized.webm"
+        },
+        {
+          "id": "synarc-demo-3",
+          "label": "World studio output three",
+          "src": "/landing/Demo1/SynarcDemoVid3.optimized.webm"
+        }
+      ]
+    },
+    {
+      "id": "arena-fight-sequence",
+      "label": "Arena fight sequence",
+      "prompt": "Create a cinematic where Kharzag fights Brakk in the arena",
+      "cycle": true,
+      "videos": [
+        {
+          "id": "synarc-demo-orc-arena",
+          "label": "Kharzag and Brakk arena fight",
+          "src": "/landing/Demo2/SynarcDemoVidOrc.optimized.webm"
+        }
+      ]
+    },
+    {
+      "id": "cafe-banter-sequence",
+      "label": "Cafe banter sequence",
+      "prompt": "Create a scene where Ilya banters with Eva-9 in a cafe",
+      "cycle": true,
+      "videos": [
+        {
+          "id": "synarc-demo-cafe",
+          "label": "Ilya and Eva-9 cafe scene",
+          "src": "/landing/Demo3/SynarcDemoVidCafe.optimized.webm"
+        },
+        {
+          "id": "synarc-demo-eva",
+          "label": "Eva-9 cafe closeup",
+          "src": "/landing/Demo3/SynarcDemoVidEva.optimized.webm"
+        },
+        {
+          "id": "synarc-demo-human-override",
+          "label": "Cafe scene human override",
+          "src": "/landing/Demo3/SynarcDemoVidHumanOverride.optimized.webm"
+        }
+      ]
+    }
+  ]
+}

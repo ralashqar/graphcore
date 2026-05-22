@@ -32,3 +32,7 @@ dist-ssr
 
 # Generated pitch deck workspaces and exports
 tmp/presentations/
+
+# Local runtime scratch directories
+tmp/chrome-landing-profile/
+tmp/ffmpeg-static-runtime/

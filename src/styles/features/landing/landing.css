@@ -1863,6 +1863,7 @@
 }
 
 .landing-studio-hero {
+  position: relative;
   min-height: min(860px, calc(100svh - 112px));
   grid-template-columns: minmax(280px, 0.72fr) minmax(560px, 1.36fr) minmax(250px, 0.68fr);
   gap: clamp(22px, 2.4vw, 44px);
@@ -1966,7 +1967,7 @@
   position: absolute;
   top: 0;
   left: 50%;
-  z-index: 3;
+  z-index: 5;
   box-sizing: border-box;
   width: min(760px, calc(100% - 48px));
   justify-self: auto;
@@ -2070,9 +2071,11 @@
 
 .landing-hero-output-preview {
   position: relative;
+  z-index: 4;
   display: grid;
-  gap: 14px;
-  margin-top: var(--landing-hero-visual-offset-y);
+  gap: 12px;
+  width: 100%;
+  margin-top: calc(var(--landing-hero-visual-offset-y) + 96px);
   min-width: 0;
 }
 
@@ -2101,11 +2104,76 @@
     inset 0 0 46px rgba(139, 60, 255, 0.07);
 }
 
+.landing-output-preview-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
 .landing-output-preview-video {
   width: 100%;
   height: 100%;
   display: block;
   object-fit: cover;
+}
+
+.landing-output-preview-controls {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.landing-output-preview-controls button {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(169, 118, 255, 0.32);
+  border-radius: 50%;
+  background:
+    linear-gradient(145deg, rgba(18, 26, 48, 0.92), rgba(5, 9, 20, 0.84)),
+    rgba(6, 13, 24, 0.86);
+  color: rgba(248, 251, 255, 0.9);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.landing-output-preview-controls button:hover {
+  border-color: rgba(169, 118, 255, 0.72);
+  color: #ffffff;
+  box-shadow: 0 0 20px rgba(139, 60, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.landing-output-preview-controls span {
+  min-width: 38px;
+  color: rgba(225, 235, 248, 0.62);
+  font-family: var(--font-display);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.landing-arrow-icon {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
 }
 
 .landing-hero-output-preview p {
@@ -2115,6 +2183,68 @@
   color: rgba(225, 235, 248, 0.74);
   font-size: 0.92rem;
   line-height: 1.5;
+}
+
+.landing-hero-output-connector {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.landing-hero-output-connector path {
+  fill: none;
+  stroke: rgba(169, 118, 255, 0.72);
+  stroke-linecap: round;
+  stroke-width: 1.6;
+  stroke-dasharray: 8 10;
+  animation: landing-connector-dash-flow 1.35s linear infinite;
+  filter: drop-shadow(0 0 8px rgba(139, 60, 255, 0.42));
+}
+
+.landing-hero-output-connector .landing-hero-output-connector-glow {
+  stroke: rgba(34, 119, 255, 0.18);
+  stroke-width: 8;
+  stroke-dasharray: none;
+  animation: none;
+  filter: blur(2px);
+}
+
+.landing-hero-output-connector .landing-hero-output-connector-signal {
+  stroke: rgba(248, 251, 255, 0.88);
+  stroke-width: 2.3;
+  stroke-dasharray: 1 260;
+  stroke-dashoffset: 0;
+  animation: landing-connector-signal-travel 2.15s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+  filter:
+    drop-shadow(0 0 7px rgba(255, 255, 255, 0.75))
+    drop-shadow(0 0 14px rgba(139, 60, 255, 0.7));
+}
+
+@keyframes landing-connector-dash-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+@keyframes landing-connector-signal-travel {
+  0% {
+    stroke-dashoffset: 34;
+    opacity: 0;
+  }
+
+  14%,
+  72% {
+    opacity: 1;
+  }
+
+  100% {
+    stroke-dashoffset: -260;
+    opacity: 0;
+  }
 }
 
 @keyframes landing-prompt-caret-blink {
@@ -2362,6 +2492,11 @@
   .landing-hero-output-preview {
     width: min(100%, 620px);
     margin: 12px auto 0;
+    transform: none;
+  }
+
+  .landing-hero-output-connector {
+    display: none;
   }
 
   .landing-hero-visual::after {
