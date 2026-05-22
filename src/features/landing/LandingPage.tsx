@@ -43,6 +43,12 @@ type LandingWorkflowStep = {
   copy: string
 }
 
+type LandingPainPoint = {
+  title: string
+  copy: string
+  icon: 'context' | 'continuity' | 'workflow' | 'manual'
+}
+
 const navLinks = [
   { label: 'Product', href: '#product' },
   { label: 'Shift', href: '#shift' },
@@ -201,6 +207,29 @@ const continuityPillars = [
   'Visual references',
 ]
 
+const marketPainPoints: LandingPainPoint[] = [
+  {
+    title: 'Rebuilding context',
+    copy: 'Every new scene starts by re-explaining the world.',
+    icon: 'context',
+  },
+  {
+    title: 'Maintaining continuity',
+    copy: 'Characters, relationships and timelines drift across tools.',
+    icon: 'continuity',
+  },
+  {
+    title: 'Stitching tools together',
+    copy: 'Images, videos, docs and references move manually between systems.',
+    icon: 'workflow',
+  },
+  {
+    title: 'Losing creative time',
+    copy: 'More time managing fragments. Less time directing the story.',
+    icon: 'manual',
+  },
+]
+
 type LandingPageProps = {
   isSignedIn: boolean
   onEnterApp: () => void
@@ -268,6 +297,38 @@ function LandingArrowIcon({ direction }: { direction: 'left' | 'right' }) {
           <path d="M4 12h11" />
         </>
       )}
+    </svg>
+  )
+}
+
+function LandingPainIcon({ icon }: { icon: LandingPainPoint['icon'] }) {
+  return (
+    <svg aria-hidden="true" className="landing-market-pain-icon" viewBox="0 0 48 48">
+      {icon === 'context' ? (
+        <>
+          <circle cx="24" cy="24" r="15" />
+          <path d="M24 13v12l8 5" />
+        </>
+      ) : null}
+      {icon === 'continuity' ? (
+        <>
+          <circle cx="18" cy="18" r="6" />
+          <path d="M8 38c1.5-7 5-10.5 10-10.5S26.5 31 28 38" />
+          <circle cx="32" cy="19" r="5" />
+          <path d="M29 29c4.8 0 8.3 3 10 9" />
+        </>
+      ) : null}
+      {icon === 'workflow' ? (
+        <>
+          <path d="M8 15h13l4 5h15v18H8V15Z" />
+          <path d="M8 20h32" />
+        </>
+      ) : null}
+      {icon === 'manual' ? (
+        <>
+          <path d="M15 7h18M15 41h18M18 7c0 9 12 9 12 17S18 32 18 41M30 7c0 9-12 9-12 17s12 8 12 17" />
+        </>
+      ) : null}
     </svg>
   )
 }
@@ -477,7 +538,7 @@ export function LandingPage({
     )
 
     gsap.fromTo(
-      '.landing-workflow-step, .landing-output-card, .landing-continuity-pill',
+      '.landing-workflow-step, .landing-market-pain-row, .landing-output-card, .landing-continuity-pill',
       { opacity: 0, y: 24, scale: 0.98 },
       {
         opacity: 1,
@@ -558,7 +619,7 @@ export function LandingPage({
             className={`landing-studio-prompt-card landing-hero-prompt-card${heroPrompt.isClearing ? ' is-clearing' : ''}`}
             ref={heroPromptRef}
           >
-            <div className="landing-prompt-simple-label">Start with a single idea</div>
+            <div className="landing-prompt-simple-label">Persistent world. Structured context. Living memory.</div>
             <div className="landing-prompt-simple-input" aria-label={heroPrompt.activePrompt.text}>
               <LandingPromptMockIcon kind="spark" />
               <div className="landing-prompt-simple-text">
@@ -650,6 +711,39 @@ export function LandingPage({
             </article>
           ))}
         </div>
+      </section>
+
+      <section className="landing-market-section" id="market-pain">
+        <div className="landing-market-copy">
+          <span className="landing-chip">Creator pain</span>
+          <h2>Your story is scattered across tools.</h2>
+          <p>
+            AI creators are not blocked by generation quality anymore. They are blocked by continuity:
+            prompts, references, lore, timelines, character sheets and outputs living in different places.
+          </p>
+          <div className="landing-market-pain-list">
+            {marketPainPoints.map((point) => (
+              <article className="landing-market-pain-row" key={point.title}>
+                <span className="landing-market-pain-icon-frame">
+                  <LandingPainIcon icon={point.icon} />
+                </span>
+                <div>
+                  <strong>{point.title}</strong>
+                  <p>{point.copy}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="landing-market-callout">
+            SynArc replaces digital archaeology with <span>one persistent creative world.</span>
+          </div>
+        </div>
+        <figure className="landing-market-visual">
+          <img
+            src="/landing/Infographics/digitalArchaeology.png"
+            alt="Digital archaeology diagram showing fragmented AI creative workflows across tools, files and references"
+          />
+        </figure>
       </section>
 
       <section className="landing-continuity-section" id="world-memory">
