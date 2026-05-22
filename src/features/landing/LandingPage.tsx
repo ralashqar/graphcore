@@ -30,11 +30,19 @@ export type LandingOrbitNode = {
   alternates?: LandingOrbitVariant[]
 }
 
-type LandingOutputCard = {
+type LandingFeatureShowcase = {
   title: string
+  eyebrow: string
   copy: string
-  icon: LandingIconId
-  chips: string[]
+  bullets: string[]
+  image?: string
+  alt?: string
+  mediaShape?: 'square' | 'standard' | 'wide' | 'ultrawide'
+  mediaLabel?: string
+  secondaryImage?: string
+  secondaryAlt?: string
+  secondaryMediaShape?: 'square' | 'standard' | 'wide' | 'ultrawide'
+  secondaryMediaLabel?: string
 }
 
 type LandingWorkflowStep = {
@@ -51,9 +59,9 @@ type LandingPainPoint = {
 
 const navLinks = [
   { label: 'Product', href: '#product' },
-  { label: 'Shift', href: '#shift' },
+  { label: 'Creator Pain', href: '#market-pain' },
+  { label: 'Studio', href: '#outputs' },
   { label: 'World Memory', href: '#world-memory' },
-  { label: 'Outputs', href: '#outputs' },
 ]
 
 export const orbitEdgePairs: Array<[string, string]> = [
@@ -126,42 +134,110 @@ export const orbitNodes: LandingOrbitNode[] = [
   },
 ]
 
-const outputCards: LandingOutputCard[] = [
+const productSystemPoints = [
+  'Create characters, places, items and lore',
+  'Evolve canon, relationships and visual references',
+  'Retrieve world context for every output workflow',
+  'Generate prose, art, comics, animatics and cinematics',
+]
+
+const featureShowcase: LandingFeatureShowcase[] = [
   {
-    title: 'Character reference sheets',
-    copy: 'Stable visual identity, traits, costumes, turnarounds and production references for every key character.',
-    icon: 'characters',
-    chips: ['Identity', 'Traits', 'Visual refs'],
+    title: 'Evolving Wiki / Codex',
+    eyebrow: 'Prompt -> world',
+    copy: 'Characters, locations, lore, relationships and canon become browsable, editable world memory.',
+    bullets: [
+      'World entities stay connected',
+      'Canon is editable after generation',
+      'Every output can pull from the same source',
+    ],
+    image: '/landing/Infographics/wiki.png',
+    alt: 'SynArc wiki and codex interface showing world entities and canon structure',
+    mediaShape: 'square',
   },
   {
-    title: 'Storyboards and comics',
-    copy: 'Panels and sequences generated from the same cast, location history, art direction and canon.',
-    icon: 'stories',
-    chips: ['Panels', 'Sequences', 'Canon-aware'],
+    title: 'Character Variants',
+    eyebrow: 'One character, many usable looks',
+    copy: 'Keep a character anchored to one identity while exploring alternate costumes, archetypes and production-ready looks.',
+    bullets: [
+      'Variants stay tied to the same canonical character',
+      'Alternate looks remain reusable across outputs',
+      'Visual identity can evolve without losing continuity',
+    ],
+    image: '/landing/Infographics/samuraiCat.webp',
+    alt: 'Samurai cat character variant reference art',
+    mediaShape: 'standard',
+    mediaLabel: 'Variant / Samurai',
+    secondaryImage: '/landing/Infographics/wizardCat.webp',
+    secondaryAlt: 'Wizard cat character variant reference art',
+    secondaryMediaShape: 'standard',
+    secondaryMediaLabel: 'Variant / Wizard',
   },
   {
-    title: 'Cinematic shot plans',
-    copy: 'Shot logic, camera language, scene beats and continuity maps grounded in the persistent world.',
-    icon: 'cinematic',
-    chips: ['Shots', 'Beats', 'Continuity'],
+    title: 'Factions',
+    eyebrow: 'Groups with persistent identity',
+    copy: 'Define factions as reusable world entities with symbols, roles, culture and visual language that can appear across stories and scenes.',
+    bullets: [
+      'Faction identity persists across outputs',
+      'Symbols, uniforms and roles remain consistent',
+      'Relationships connect groups to characters and lore',
+    ],
+    image: '/landing/Infographics/faction.webp',
+    alt: 'Faction reference art generated as a reusable world entity',
+    mediaShape: 'square',
+    mediaLabel: 'Faction identity',
   },
   {
-    title: 'Movie-style scenes',
-    copy: 'Prompt a scene and SynArc pulls the right people, place, mood, history and visual truth before generation.',
-    icon: 'game',
-    chips: ['Scene', 'Video', 'Final output'],
+    title: 'Scene Graph',
+    eyebrow: 'Scripts become shot-aware structure',
+    copy: 'Scripts and world state evolve into a scene graph where characters, locations, props and continuity are assigned per shot.',
+    bullets: [
+      'Shots inherit the right cast and setting',
+      'Continuity bindings stay inspectable',
+      'Scene context is ready before generation',
+    ],
+    image: '/landing/Infographics/sceneGraph.png',
+    alt: 'Scene graph interface assigning characters, locations, props and continuity to cinematic shots',
+    mediaShape: 'standard',
   },
   {
-    title: 'World wiki and canon',
-    copy: 'A living source of truth for characters, factions, lore, relationships, timelines and locations.',
-    icon: 'lore',
-    chips: ['Wiki', 'Canon', 'Memory'],
+    title: 'Workflow Graph',
+    eyebrow: 'Context -> workflow',
+    copy: 'SynArc retrieves world context, applies the right workflow, and generates the steps needed for the output.',
+    bullets: [
+      'World context is gathered automatically',
+      'Generation steps are visible and reusable',
+      'Workflows adapt to the requested output',
+    ],
+    image: '/landing/Infographics/workflowGraph.png',
+    alt: 'Workflow graph showing connected generation steps for creating outputs from world context',
+    mediaShape: 'ultrawide',
   },
   {
-    title: 'Updated continuity',
-    copy: 'New events feed back into the world so future prompts inherit what just happened.',
-    icon: 'timelines',
-    chips: ['Events', 'Timeline', 'State'],
+    title: 'Animatic Direction',
+    eyebrow: 'Fix the keyframe first',
+    copy: 'Direct shot by shot with keyframes before spending time and cost on final video generation.',
+    bullets: [
+      'Prompt changes to keyframes before video',
+      'Video prompts are assembled from canon and references',
+      'Workflow harnesses apply cinematic skills for you',
+    ],
+    image: '/landing/Infographics/animatic.png',
+    alt: 'Animatic view showing cinematic shots, keyframes and shot controls',
+    mediaShape: 'wide',
+  },
+  {
+    title: 'Timeline View',
+    eyebrow: 'Scrub the cinematic',
+    copy: 'Scrub shots, dialogue, captions, action beats and timing in one coherent cinematic timeline.',
+    bullets: [
+      'See keyframes and timing together',
+      'Dialogue and action stay time-bound',
+      'Shot plans can move from outline to edit',
+    ],
+    image: '/landing/Infographics/timeline.png',
+    alt: 'Timeline view with keyframes, shots, dialogue, captions and cinematic timing',
+    mediaShape: 'standard',
   },
 ]
 
@@ -532,13 +608,13 @@ export function LandingPage({
     if (!rootRef.current) return
 
     gsap.fromTo(
-      '.landing-nav, .landing-hero-copy > *, .landing-hero-visual, .landing-shift-copy, .landing-continuity-visual',
+      '.landing-nav, .landing-hero-copy > *, .landing-hero-visual, .landing-market-copy, .landing-system-intro, .landing-continuity-visual',
       { y: 18 },
       { y: 0, stagger: 0.055, duration: 0.85, ease: 'power3.out' },
     )
 
     gsap.fromTo(
-      '.landing-workflow-step, .landing-market-pain-row, .landing-output-card, .landing-continuity-pill',
+      '.landing-workflow-step, .landing-market-pain-row, .landing-feature-row, .landing-continuity-pill',
       { opacity: 0, y: 24, scale: 0.98 },
       {
         opacity: 1,
@@ -598,9 +674,8 @@ export function LandingPage({
             from it.
           </h1>
           <p>
-            SynArc is a world-native creative studio for AI storytelling. Build persistent characters,
-            locations, lore, timelines and visual references, then generate scenes, comics,
-            storyboards and cinematics from the same living world.
+            SynArc keeps characters, locations, lore, timelines and visual references connected,
+            so every scene, comic or cinematic comes from the same living world.
           </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={onOpenAuth} type="button">
@@ -612,6 +687,9 @@ export function LandingPage({
               Watch Demo
             </button>
           </div>
+          <p className="landing-hero-access-note">
+            Early access for AI filmmakers, storytellers and worldbuilders.
+          </p>
         </div>
 
         <div className="landing-hero-visual" aria-label="World Studio prompt to output diagram">
@@ -652,6 +730,10 @@ export function LandingPage({
         ) : null}
 
         <aside className="landing-hero-output-preview" aria-label="Example generated output placeholder">
+          <div className="landing-output-preview-label">
+            <span>Generated from the world</span>
+            <strong>Prompt-linked output examples</strong>
+          </div>
           <div className="landing-output-preview-frame" ref={outputFrameRef}>
             {activeOutputVideo ? (
               <video
@@ -677,7 +759,7 @@ export function LandingPage({
               <LandingArrowIcon direction="left" />
             </button>
             <span>
-              {activeOutputGroupIndex + 1} / {outputVideoGroups.length}
+              Example {activeOutputGroupIndex + 1} / {outputVideoGroups.length}
             </span>
             <button
               type="button"
@@ -693,33 +775,18 @@ export function LandingPage({
         </aside>
       </section>
 
-      <section className="landing-shift-section" id="shift">
-        <div className="landing-shift-copy">
-          <span className="landing-chip">The shift</span>
-          <h2>Generation is solved. Continuity isn't.</h2>
-          <p>
-            AI tools can create fragments. Creative universes need characters, locations,
-            timelines, lore, visual references and outputs to stay connected as the project grows.
-          </p>
-        </div>
-        <div className="landing-workflow-strip" aria-label="Prompt to final media workflow">
-          {workflowSteps.map((step) => (
-            <article className="landing-workflow-step" key={step.label}>
-              <span>{step.label}</span>
-              <strong>{step.title}</strong>
-              <p>{step.copy}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
       <section className="landing-market-section" id="market-pain">
         <div className="landing-market-copy">
           <span className="landing-chip">Creator pain</span>
-          <h2>Your story is scattered across tools.</h2>
+          <h2>
+            Generation is solved.
+            <br />
+            Continuity isn't.
+          </h2>
           <p>
-            AI creators are not blocked by generation quality anymore. They are blocked by continuity:
-            prompts, references, lore, timelines, character sheets and outputs living in different places.
+            Your story is scattered across tools. Prompts, references, lore, timelines,
+            character sheets and outputs live in different places, so every new scene starts
+            by rebuilding the world.
           </p>
           <div className="landing-market-pain-list">
             {marketPainPoints.map((point) => (
@@ -746,6 +813,62 @@ export function LandingPage({
         </figure>
       </section>
 
+      <section className="landing-system-intro-section" id="outputs">
+        <div className="landing-system-intro">
+          <span className="landing-chip">World-native studio</span>
+          <h2>SynArc turns prompts into a structured creative system.</h2>
+          <p>
+            Build characters, places, lore, relationships and visual references once,
+            then reuse them across every output.
+          </p>
+        </div>
+        <div className="landing-system-proof-list">
+          {productSystemPoints.map((point) => (
+            <span key={point}>{point}</span>
+          ))}
+        </div>
+      </section>
+
+      <section className="landing-feature-showcase" aria-label="SynArc product features">
+        <div className="landing-feature-section-heading">
+          <span className="landing-chip">Product depth</span>
+          <h2>One world graph. Every creative surface connected.</h2>
+          <p>
+            SynArc keeps the underlying context structured while creators work casually:
+            prompt, direct, refine and generate without rebuilding continuity.
+          </p>
+        </div>
+        <div className="landing-feature-list">
+          {featureShowcase.map((feature, index) => (
+            <article
+              className={`landing-feature-row${feature.secondaryImage ? ' has-secondary-media' : ''}`}
+              key={feature.title}
+            >
+              <div className="landing-feature-row-copy">
+                <span>{String(index + 1).padStart(2, '0')} / {feature.eyebrow}</span>
+                <h3>{feature.title}</h3>
+                <p>{feature.copy}</p>
+                <ul>
+                  {feature.bullets.map((bullet) => (
+                    <li key={bullet}>{bullet}</li>
+                  ))}
+                </ul>
+              </div>
+              <figure className={`landing-feature-row-media is-${feature.mediaShape ?? 'standard'}`}>
+                {feature.mediaLabel ? <figcaption>{feature.mediaLabel}</figcaption> : null}
+                <img src={feature.image} alt={feature.alt} />
+              </figure>
+              {feature.secondaryImage ? (
+                <figure className={`landing-feature-row-media is-${feature.secondaryMediaShape ?? 'standard'}`}>
+                  {feature.secondaryMediaLabel ? <figcaption>{feature.secondaryMediaLabel}</figcaption> : null}
+                  <img src={feature.secondaryImage} alt={feature.secondaryAlt} />
+                </figure>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="landing-continuity-section" id="world-memory">
         <div className="landing-continuity-visual">
           <img
@@ -767,37 +890,6 @@ export function LandingPage({
               </span>
             ))}
           </div>
-        </div>
-      </section>
-
-      <section className="landing-output-section" id="outputs">
-        <div className="landing-section-heading">
-          <span className="landing-chip">Production paths</span>
-          <h2>One world. Many production paths.</h2>
-          <p>
-            Outputs are no longer disconnected files. They are generated from shared world state,
-            then folded back into the system as new continuity.
-          </p>
-        </div>
-        <div className="landing-output-grid">
-          {outputCards.map((card) => (
-            <article className="landing-output-card" key={card.title}>
-              <header>
-                <span className="landing-icon-frame">
-                  <LandingIcon id={card.icon} />
-                </span>
-                <div>
-                  <strong>{card.title}</strong>
-                  <p>{card.copy}</p>
-                </div>
-              </header>
-              <div className="landing-card-chips">
-                {card.chips.map((chip) => (
-                  <span key={chip}>{chip}</span>
-                ))}
-              </div>
-            </article>
-          ))}
         </div>
       </section>
 
