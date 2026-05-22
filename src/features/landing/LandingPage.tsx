@@ -434,7 +434,7 @@ export function LandingPage({
             <span className="landing-chip">Persistent creative operating system</span>
           </div>
           <h1>
-            Create a world.
+            Create a world once.
             <span>Direct everything</span>
             from it.
           </h1>
@@ -475,6 +475,24 @@ export function LandingPage({
             />
           </figure>
         </div>
+
+        <aside className="landing-hero-output-preview" aria-label="Example generated output placeholder">
+          <div className="landing-output-preview-frame">
+            <video
+              className="landing-output-preview-video"
+              src="/landing/SynarcDemoVid1.optimized.webm"
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="metadata"
+              aria-label="SynArc generated output preview"
+            />
+          </div>
+          <p>
+            A canon-aware output generated from the world: characters, location, style and story context stay connected.
+          </p>
+        </aside>
       </section>
 
       <section className="landing-shift-section" id="shift">
