@@ -37,11 +37,11 @@ type LandingFeatureShowcase = {
   bullets: string[]
   image?: string
   alt?: string
-  mediaShape?: 'square' | 'standard' | 'wide' | 'ultrawide'
+  mediaShape?: 'square' | 'threeTwo' | 'standard' | 'wide' | 'ultrawide'
   mediaLabel?: string
   secondaryImage?: string
   secondaryAlt?: string
-  secondaryMediaShape?: 'square' | 'standard' | 'wide' | 'ultrawide'
+  secondaryMediaShape?: 'square' | 'threeTwo' | 'standard' | 'wide' | 'ultrawide'
   secondaryMediaLabel?: string
 }
 
@@ -55,6 +55,28 @@ type LandingPainPoint = {
   title: string
   copy: string
   icon: 'context' | 'continuity' | 'workflow' | 'manual'
+}
+
+type LandingOutputVideo = {
+  id: string
+  label: string
+  src: string
+}
+
+type LandingOutputComic = {
+  artifactType: string
+  pdfSrc: string
+  pages: string[]
+  pageHoldMs?: number
+}
+
+type LandingOutputGroup = {
+  id: string
+  label: string
+  prompt: string
+  cycle?: boolean
+  videos?: LandingOutputVideo[]
+  comic?: LandingOutputComic
 }
 
 const navLinks = [
@@ -207,7 +229,7 @@ const featureShowcase: LandingFeatureShowcase[] = [
     ],
     image: '/landing/Infographics/sceneGraph.png',
     alt: 'Scene graph interface assigning characters, locations, props and continuity to cinematic shots',
-    mediaShape: 'standard',
+    mediaShape: 'threeTwo',
   },
   {
     title: 'Workflow Graph',
@@ -319,6 +341,22 @@ type LandingPageProps = {
   isSignedIn: boolean
   onEnterApp: () => void
   onOpenAuth: () => void
+}
+
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches)
+
+    updatePreference()
+    mediaQuery.addEventListener('change', updatePreference)
+
+    return () => mediaQuery.removeEventListener('change', updatePreference)
+  }, [])
+
+  return prefersReducedMotion
 }
 
 function useAnimatedHeroPrompt(promptText: string) {
@@ -507,18 +545,46 @@ export function LandingPage({
   onOpenAuth,
 }: LandingPageProps) {
   const rootRef = useRef<HTMLElement | null>(null)
-  const outputVideoGroups = landingVideoGroups.groups
+  const outputVideoGroups = landingVideoGroups.groups as LandingOutputGroup[]
   const [activeOutputGroupIndex, setActiveOutputGroupIndex] = useState(0)
   const outputVideoGroup = outputVideoGroups[activeOutputGroupIndex] ?? outputVideoGroups[0]
   const outputVideos = outputVideoGroup?.videos ?? []
   const [activeOutputVideoIndex, setActiveOutputVideoIndex] = useState(0)
   const activeOutputVideo = outputVideos[activeOutputVideoIndex] ?? outputVideos[0]
+  const activeOutputComic = outputVideoGroup?.comic
+  const activeComicPages = activeOutputComic?.pages ?? []
+  const isComicOutputActive = Boolean(activeOutputComic)
   const shouldLoopOutputVideo = outputVideoGroups.length <= 1 && outputVideos.length <= 1
   const heroPrompt = useAnimatedHeroPrompt(outputVideoGroup?.prompt ?? '')
+  const prefersReducedMotion = usePrefersReducedMotion()
+  const [activeComicPageIndex, setActiveComicPageIndex] = useState(0)
 
   useEffect(() => {
     setActiveOutputVideoIndex(0)
+    setActiveComicPageIndex(0)
   }, [outputVideoGroup?.id])
+
+  useEffect(() => {
+    if (!activeOutputComic || activeComicPages.length <= 0) return
+
+    const timeoutId = window.setTimeout(() => {
+      if (prefersReducedMotion || activeComicPageIndex >= activeComicPages.length - 1) {
+        setActiveOutputGroupIndex((activeOutputGroupIndex + 1) % outputVideoGroups.length)
+        return
+      }
+
+      setActiveComicPageIndex(activeComicPageIndex + 1)
+    }, activeOutputComic.pageHoldMs ?? 2200)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [
+    activeComicPageIndex,
+    activeComicPages.length,
+    activeOutputComic,
+    activeOutputGroupIndex,
+    outputVideoGroups.length,
+    prefersReducedMotion,
+  ])
 
   const handleOutputVideoEnded = () => {
     if (outputVideos.length > 1 && activeOutputVideoIndex < outputVideos.length - 1) {
@@ -545,6 +611,16 @@ export function LandingPage({
       return (current + delta + outputVideoGroups.length) % outputVideoGroups.length
     })
     setActiveOutputVideoIndex(0)
+  }
+
+  const getComicPageState = (index: number) => {
+    const previousIndex = (activeComicPageIndex - 1 + activeComicPages.length) % activeComicPages.length
+    const nextIndex = (activeComicPageIndex + 1) % activeComicPages.length
+
+    if (index === activeComicPageIndex) return 'is-active'
+    if (index === previousIndex) return 'is-previous'
+    if (index === nextIndex) return 'is-next'
+    return 'is-hidden'
   }
 
   useGSAP(() => {
@@ -617,8 +693,8 @@ export function LandingPage({
             from it.
           </h1>
           <p>
-            SynArc keeps characters, locations, lore, timelines and visual references connected,
-            so every scene, comic or cinematic comes from the same living world.
+            Build a persistent creative world once, then generate scenes, comics, animatics and
+            cinematic outputs from the same characters, locations, lore, timelines and visual references.
           </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={onOpenAuth} type="button">
@@ -656,7 +732,32 @@ export function LandingPage({
           </div>
           <aside className="landing-hero-output-preview" aria-label="Example generated output placeholder">
             <div className="landing-output-preview-frame">
-              {activeOutputVideo ? (
+              {isComicOutputActive && activeOutputComic ? (
+                <div className="landing-output-comic-preview" aria-label="Comic PDF page preview">
+                  <div className="landing-output-comic-topbar">
+                    <span>{activeOutputComic.artifactType}</span>
+                    <strong>
+                      Page {activeComicPageIndex + 1} / {activeComicPages.length}
+                    </strong>
+                  </div>
+                  <div className="landing-output-comic-stage">
+                    {activeComicPages.map((page, index) => {
+                      const pageState = getComicPageState(index)
+
+                      return (
+                        <img
+                          alt={index === activeComicPageIndex ? `Comic preview page ${index + 1}` : ''}
+                          aria-hidden={index !== activeComicPageIndex}
+                          className={`landing-output-comic-page ${pageState}`}
+                          key={page}
+                          loading={index === 0 ? 'eager' : 'lazy'}
+                          src={page}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : activeOutputVideo ? (
                 <video
                   key={activeOutputVideo.src}
                   className="landing-output-preview-video"
@@ -705,8 +806,9 @@ export function LandingPage({
           <span className="landing-chip">World-native studio</span>
           <h2>SynArc turns prompts into a structured creative system.</h2>
           <p>
-            Build characters, places, lore, relationships and visual references once,
-            then reuse them across every output.
+            AI agents should not generate from empty context windows. SynArc gives them persistent
+            worlds, continuity-aware scene graphs and evolving creative memory, so every workflow
+            starts from canon instead of fragments.
           </p>
           <div className="landing-system-proof-list">
             {productSystemPoints.map((point) => (
@@ -760,11 +862,6 @@ export function LandingPage({
       <section className="landing-feature-showcase" aria-label="SynArc product features">
         <div className="landing-feature-section-heading">
           <span className="landing-chip">Product depth</span>
-          <h2>One world graph. Every creative surface connected.</h2>
-          <p>
-            SynArc keeps the underlying context structured while creators work casually:
-            prompt, direct, refine and generate without rebuilding continuity.
-          </p>
         </div>
         <div className="landing-feature-list">
           {featureShowcase.map((feature, index) => (

@@ -58,6 +58,27 @@
           "src": "/landing/Demo3/SynarcDemoVidHumanOverride.optimized.webm"
         }
       ]
+    },
+    {
+      "id": "comic-first-chapter",
+      "label": "Comic PDF output",
+      "prompt": "Make a comic from the first chapter.",
+      "cycle": true,
+      "comic": {
+        "artifactType": "Comic PDF",
+        "pdfSrc": "/landing/comic.pdf",
+        "pageHoldMs": 2200,
+        "pages": [
+          "/landing/Comic/comic-page-01.webp",
+          "/landing/Comic/comic-page-02.webp",
+          "/landing/Comic/comic-page-03.webp",
+          "/landing/Comic/comic-page-04.webp",
+          "/landing/Comic/comic-page-05.webp",
+          "/landing/Comic/comic-page-06.webp",
+          "/landing/Comic/comic-page-07.webp",
+          "/landing/Comic/comic-page-08.webp"
+        ]
+      }
     }
   ]
 }
