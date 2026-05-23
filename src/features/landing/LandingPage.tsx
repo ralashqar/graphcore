@@ -47,16 +47,9 @@ type LandingFeatureShowcase = {
   secondaryMediaLabel?: string
 }
 
-type LandingWorkflowStep = {
-  label: string
-  title: string
-  copy: string
-}
-
 type LandingPainPoint = {
   title: string
   copy: string
-  icon: 'context' | 'continuity' | 'workflow' | 'manual'
 }
 
 type LandingAgentIconId =
@@ -98,7 +91,6 @@ type LandingOutputGroup = {
 const navLinks = [
   { label: 'Product', href: '#product' },
   { label: 'Agents', href: '#orchestration' },
-  { label: 'Creator Pain', href: '#market-pain' },
   { label: 'Studio', href: '#outputs' },
 ]
 
@@ -326,59 +318,18 @@ const featureShowcase: LandingFeatureShowcase[] = [
   },
 ]
 
-const workflowSteps: LandingWorkflowStep[] = [
-  {
-    label: '01',
-    title: 'Prompt',
-    copy: 'Ask for a scene, episode, comic beat or cinematic moment.',
-  },
-  {
-    label: '02',
-    title: 'World context',
-    copy: 'SynArc resolves canon, relationships, timeline placement and location history.',
-  },
-  {
-    label: '03',
-    title: 'Reference truth',
-    copy: 'Characters, traits, costumes, style guides and visual sheets are pulled into the run.',
-  },
-  {
-    label: '04',
-    title: 'Scene direction',
-    copy: 'The system plans beats, dialogue, shots and continuity before generation.',
-  },
-  {
-    label: '05',
-    title: 'Output',
-    copy: 'Generate storyboards, comics, cinematics and movie-style scenes from the same world.',
-  },
-  {
-    label: '06',
-    title: 'Updated canon',
-    copy: 'The new event becomes memory for the next creative prompt.',
-  },
-]
-
 const marketPainPoints: LandingPainPoint[] = [
   {
-    title: 'Rebuilding context',
-    copy: 'Every new scene starts by re-explaining the world.',
-    icon: 'context',
+    title: 'Context drift',
+    copy: 'Every scene starts by re-explaining characters, places and canon.',
   },
   {
-    title: 'Maintaining continuity',
-    copy: 'Characters, relationships and timelines drift across tools.',
-    icon: 'continuity',
+    title: 'Reference sprawl',
+    copy: 'Scripts, images, sheets and videos scatter across separate tools.',
   },
   {
-    title: 'Stitching tools together',
-    copy: 'Images, videos, docs and references move manually between systems.',
-    icon: 'workflow',
-  },
-  {
-    title: 'Losing creative time',
-    copy: 'More time managing fragments. Less time directing the story.',
-    icon: 'manual',
+    title: 'Continuity loss',
+    copy: 'Outputs look impressive, but do not reliably belong to the same world.',
   },
 ]
 
@@ -499,38 +450,6 @@ function LandingArrowIcon({ direction }: { direction: 'left' | 'right' }) {
           <path d="M4 12h11" />
         </>
       )}
-    </svg>
-  )
-}
-
-function LandingPainIcon({ icon }: { icon: LandingPainPoint['icon'] }) {
-  return (
-    <svg aria-hidden="true" className="landing-market-pain-icon" viewBox="0 0 48 48">
-      {icon === 'context' ? (
-        <>
-          <circle cx="24" cy="24" r="15" />
-          <path d="M24 13v12l8 5" />
-        </>
-      ) : null}
-      {icon === 'continuity' ? (
-        <>
-          <circle cx="18" cy="18" r="6" />
-          <path d="M8 38c1.5-7 5-10.5 10-10.5S26.5 31 28 38" />
-          <circle cx="32" cy="19" r="5" />
-          <path d="M29 29c4.8 0 8.3 3 10 9" />
-        </>
-      ) : null}
-      {icon === 'workflow' ? (
-        <>
-          <path d="M8 15h13l4 5h15v18H8V15Z" />
-          <path d="M8 20h32" />
-        </>
-      ) : null}
-      {icon === 'manual' ? (
-        <>
-          <path d="M15 7h18M15 41h18M18 7c0 9 12 9 12 17S18 32 18 41M30 7c0 9-12 9-12 17s12 8 12 17" />
-        </>
-      ) : null}
     </svg>
   )
 }
@@ -945,13 +864,13 @@ export function LandingPage({
     if (!rootRef.current) return
 
     gsap.fromTo(
-      '.landing-nav, .landing-hero-copy > *, .landing-hero-proof, .landing-system-intro, .landing-system-visual, .landing-market-copy',
+      '.landing-nav, .landing-hero-copy > *, .landing-hero-proof, .landing-problem-strip, .landing-system-intro, .landing-system-visual',
       { y: 18 },
       { y: 0, stagger: 0.055, duration: 0.85, ease: 'power3.out' },
     )
 
     gsap.fromTo(
-      '.landing-workflow-step, .landing-market-pain-row, .landing-feature-row',
+      '.landing-workflow-step, .landing-problem-strip-card, .landing-feature-row',
       { opacity: 0, y: 24, scale: 0.98 },
       {
         opacity: 1,
@@ -1114,6 +1033,21 @@ export function LandingPage({
         </div>
       </section>
 
+      <section className="landing-problem-strip" id="problem" aria-label="Why isolated prompts break production continuity">
+        <div className="landing-problem-strip-heading">
+          <span className="landing-chip">Why it matters</span>
+          <h2>Most AI tools generate from isolated prompts. SynArc generates from a living world.</h2>
+        </div>
+        <div className="landing-problem-strip-list">
+          {marketPainPoints.map((point) => (
+            <article className="landing-problem-strip-card" key={point.title}>
+              <strong>{point.title}</strong>
+              <p>{point.copy}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="landing-system-intro-section" id="outputs">
         <figure className="landing-system-visual">
           <img
@@ -1206,44 +1140,6 @@ export function LandingPage({
         </p>
       </section>
 
-      <section className="landing-market-section" id="market-pain">
-        <div className="landing-market-copy">
-          <span className="landing-chip">Creator pain</span>
-          <h2>
-            Generation is solved.
-            <br />
-            Continuity isn't.
-          </h2>
-          <p>
-            Your story is scattered across tools. Prompts, references, lore, timelines,
-            character sheets and outputs live in different places, so every new scene starts
-            by rebuilding the world.
-          </p>
-          <div className="landing-market-pain-list">
-            {marketPainPoints.map((point) => (
-              <article className="landing-market-pain-row" key={point.title}>
-                <span className="landing-market-pain-icon-frame">
-                  <LandingPainIcon icon={point.icon} />
-                </span>
-                <div>
-                  <strong>{point.title}</strong>
-                  <p>{point.copy}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-          <div className="landing-market-callout">
-            SynArc replaces digital archaeology with <span>one persistent creative world.</span>
-          </div>
-        </div>
-        <figure className="landing-market-visual">
-          <img
-            src="/landing/Infographics/digitalArchaeology.png"
-            alt="Digital archaeology diagram showing fragmented AI creative workflows across tools, files and references"
-          />
-        </figure>
-      </section>
-
       <section className="landing-feature-showcase" aria-label="SynArc product features">
         <div className="landing-feature-section-heading">
           <span className="landing-chip">Product depth</span>
@@ -1279,30 +1175,18 @@ export function LandingPage({
         </div>
       </section>
 
-      <section className="landing-proof-strip" id="proof" aria-label="World-grounded production loop">
-        {workflowSteps.map((step) => (
-          <article className="landing-proof-card landing-workflow-proof-card" key={step.label}>
-            <span>{step.label}</span>
-            <strong>{step.title}</strong>
-            <p>{step.copy}</p>
-          </article>
-        ))}
-      </section>
-
       <section className="landing-final-section" id="examples">
         <div className="landing-final-panel">
-          <span className="landing-chip">World-native studio</span>
-          <h2>Build the world once. Create from it forever.</h2>
+          <span className="landing-chip">Early access</span>
+          <h2>Direct cinematic worlds without rebuilding context every time.</h2>
           <p>
-            Turn persistent worlds into scenes, comics, cinematic plans and movie-style outputs without losing the thread.
+            Join the waitlist for a production workspace where agents keep your canon, references and output harnesses
+            aligned across scenes, comics, animatics and cinematic runs.
           </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
               {landingOnly ? 'Request Early Access' : isSignedIn ? 'Open Workspace' : 'Request Early Access'}
               <span aria-hidden="true">-&gt;</span>
-            </button>
-            <button className="landing-secondary-button" onClick={onEnterApp} type="button">
-              {landingOnly ? 'View examples' : 'Open Workspace'}
             </button>
           </div>
         </div>
