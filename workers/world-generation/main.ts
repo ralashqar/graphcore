@@ -5,7 +5,7 @@ import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
 import { renderOutputPdf } from './ebook-pdf-renderer.ts'
 
-const workerCodeVersion = '2026-05-19-hybrid-continuity-structure'
+const workerCodeVersion = '2026-05-23-output-workflow-parallel-shot-video'
 const workerId = Deno.env.get('FLY_MACHINE_ID')
   ?? Deno.env.get('GRAPHCORE_WORKER_ID')
   ?? crypto.randomUUID()
@@ -20,6 +20,10 @@ const idleLogIntervalMs = Math.max(30_000, Number(Deno.env.get('GRAPHCORE_WORKER
 const visualWorkerConcurrency = readPositiveInt(
   Deno.env.get('VISUAL_GENERATION_WORKER_CONCURRENCY') ?? Deno.env.get('VISUAL_GENERATION_OPENAI_CONCURRENCY'),
   8,
+)
+const outputWorkflowWorkerConcurrency = readPositiveInt(
+  Deno.env.get('OUTPUT_WORKFLOW_WORKER_CONCURRENCY'),
+  3,
 )
 const dbCircuitBackoffMs = [10_000, 30_000, 120_000, 300_000, 900_000]
 const dbCircuitProbeLogIntervalMs = Math.max(
@@ -156,6 +160,7 @@ console.log('[world-generation-worker] started', {
   workerBuildVersion,
   pollIntervalMs,
   visualWorkerConcurrency,
+  outputWorkflowWorkerConcurrency,
   runtime: 'fly',
 })
 
@@ -246,20 +251,22 @@ async function runAppGenerationWorkerLoop() {
   }
 }
 
-async function runOutputWorkflowWorkerLoop() {
+async function runOutputWorkflowWorkerLoop(laneIndex: number) {
+  const outputWorkerId = `${workerId}:output:${laneIndex + 1}`
   while (!shuttingDown) {
     try {
       await waitForDatabaseCircuit('output_workflow')
       const result = await processFlyOutputWorkflowRuns({
         client,
-        workerId,
+        workerId: outputWorkerId,
         workerCodeVersion,
         workerBuildVersion,
         documentRenderer: renderOutputPdf,
       })
       if (result.processed) {
         console.log('[world-generation-worker] processed output workflow run', {
-          workerId,
+          workerId: outputWorkerId,
+          laneIndex,
           runId: result.run?.id ?? null,
           status: result.run?.status ?? null,
           preset: result.run?.preset ?? null,
@@ -277,7 +284,7 @@ await Promise.all([
   ...Array.from({ length: visualWorkerConcurrency }, (_, index) => runVisualWorkerLoop(index)),
   runGenerationWorkerLoop(),
   runAppGenerationWorkerLoop(),
-  runOutputWorkflowWorkerLoop(),
+  ...Array.from({ length: outputWorkflowWorkerConcurrency }, (_, index) => runOutputWorkflowWorkerLoop(index)),
 ])
 
 console.log('[world-generation-worker] stopped', { workerId })

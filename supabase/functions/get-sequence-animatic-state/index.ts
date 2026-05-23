@@ -6,11 +6,13 @@ import {
   mapOutputRequestRow,
   mapOutputRequestStatusProjectionRow,
   mapOutputWorkflowRunRow,
+  mapOutputWorkflowRunStepRow,
   mapOutputWorkflowRow,
   outputArtifactSelect,
   outputRequestSelect,
   outputRequestStatusProjectionSelect,
   outputWorkflowRunSelect,
+  outputWorkflowRunStepSelect,
   outputWorkflowSelect,
 } from '../_shared/output-workflow.ts'
 import {
@@ -254,12 +256,15 @@ Deno.serve(async (request) => {
     const workflowIds = [...new Set(requests.map((entry) => entry.workflowId).filter((id): id is string => Boolean(id)))]
     const runIds = [...new Set(requests.map((entry) => entry.latestRunId).filter((id): id is string => Boolean(id)))]
 
-    const [workflowResponse, runResponse, artifactResponse, projectionResponse] = await Promise.all([
+    const [workflowResponse, runResponse, stepResponse, artifactResponse, projectionResponse] = await Promise.all([
       workflowIds.length > 0
         ? admin.from('output_workflows').select(outputWorkflowSelect).eq('draft_id', payload.draftId).in('id', workflowIds)
         : { data: [], error: null },
       runIds.length > 0
         ? admin.from('output_workflow_runs').select(outputWorkflowRunSelect).eq('draft_id', payload.draftId).in('id', runIds)
+        : { data: [], error: null },
+      runIds.length > 0
+        ? admin.from('output_workflow_run_steps').select(outputWorkflowRunStepSelect).in('run_id', runIds).order('order_index', { ascending: true })
         : { data: [], error: null },
       workflowIds.length > 0
         ? admin.from('output_artifacts').select(outputArtifactSelect).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })
@@ -268,15 +273,23 @@ Deno.serve(async (request) => {
     ])
     if (workflowResponse.error) throw new Error(workflowResponse.error.message)
     if (runResponse.error) throw new Error(runResponse.error.message)
+    if (stepResponse.error) throw new Error(stepResponse.error.message)
     if (artifactResponse.error) throw new Error(artifactResponse.error.message)
     if (projectionResponse.error) throw new Error(projectionResponse.error.message)
 
     const artifacts = (artifactResponse.data ?? []).map(mapOutputArtifactRow)
     const hydratedArtifacts = await hydrateOutputArtifactSignedUrls(admin, artifacts)
+    const steps = (stepResponse.data ?? []).map((row) => mapOutputWorkflowRunStepRow(row as never))
     const assetKeys = new Set<string>()
     for (const artifact of hydratedArtifacts) {
       if (artifact.assetKey) assetKeys.add(artifact.assetKey)
       addAssetKey(artifact.metadata, assetKeys)
+    }
+    for (const row of runResponse.data ?? []) {
+      addAssetKey(asRecord((row as Record<string, unknown>).outputs), assetKeys)
+    }
+    for (const step of steps) {
+      addAssetKey(step.outputs, assetKeys)
     }
     for (const projection of (projectionResponse.data ?? []) as Record<string, unknown>[]) {
       addAssetKey(asRecord(projection.progress), assetKeys)
@@ -287,12 +300,25 @@ Deno.serve(async (request) => {
     }
     const assets = await loadSignedAssets(admin, payload.projectId, [...assetKeys])
     const workflows = (workflowResponse.data ?? []).map(mapOutputWorkflowRow)
-    const runs = (runResponse.data ?? []).map((row) => mapOutputWorkflowRunRow(row as never, [], hydratedArtifacts.filter((artifact) => artifact.runId === readText((row as Record<string, unknown>).id))))
+    const runs = (runResponse.data ?? []).map((row) => {
+      const runId = readText((row as Record<string, unknown>).id)
+      return mapOutputWorkflowRunRow(
+        row as never,
+        steps.filter((step) => step.runId === runId),
+        hydratedArtifacts.filter((artifact) => artifact.runId === runId),
+      )
+    })
     const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputRequestStatusProjectionRow(row as never))
     const revision = hashOutputWorkflowValue({
       requests: requests.map((entry) => ({ id: entry.id, status: entry.status, workflowId: entry.workflowId, latestRunId: entry.latestRunId, updatedAt: entry.updatedAt, metadata: entry.metadata })),
       workflows: workflows.map((entry) => ({ id: entry.id, updatedAt: entry.updatedAt, metadata: entry.metadata })),
-      runs: runs.map((entry) => ({ id: entry.id, status: entry.status, updatedAt: entry.updatedAt, outputHash: entry.outputHash ?? '' })),
+      runs: runs.map((entry) => ({
+        id: entry.id,
+        status: entry.status,
+        updatedAt: entry.updatedAt,
+        outputHash: entry.outputHash ?? '',
+        steps: entry.steps.map((step) => ({ id: step.id, nodeKey: step.nodeKey, status: step.status, outputHash: step.outputHash, updatedAt: step.updatedAt })),
+      })),
       artifacts: hydratedArtifacts.map((entry) => ({ id: entry.id, key: entry.key, assetKey: entry.assetKey, updatedAt: entry.updatedAt })),
       projections: projections.map((entry) => ({ requestId: entry.requestId, graphRevision: entry.graphRevision, timelineRevision: entry.timelineRevision, status: entry.status, updatedAt: entry.updatedAt })),
     })

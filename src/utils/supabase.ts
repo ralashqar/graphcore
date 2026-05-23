@@ -1,5 +1,13 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { supabasePublishableKey, supabaseUrl } from '../config/supabaseConfig'
+
+type SupabaseLockFunction = <R>(name: string, acquireTimeout: number, fn: () => Promise<R>) => Promise<R>
+type GraphCoreGlobal = typeof globalThis & {
+  __graphcoreSupabaseClient?: SupabaseClient
+}
+
+const AUTH_FETCH_TIMEOUT_MS = 45_000
+const authProcessLocks = new Map<string, Promise<void>>()
 
 function supabaseProjectRef() {
   try {
@@ -11,14 +19,67 @@ function supabaseProjectRef() {
 
 export const supabaseAuthStoragePrefix = `sb-${supabaseProjectRef()}-auth-token`
 
-export const supabase = createClient(supabaseUrl, supabasePublishableKey, {
+const supabaseAuthProcessLock: SupabaseLockFunction = async (name, _acquireTimeout, fn) => {
+  const previous = authProcessLocks.get(name) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(fn)
+  authProcessLocks.set(name, next.then(() => undefined, () => undefined))
+  return next
+}
+
+const supabaseFetchWithTimeout: typeof fetch = async (input, init) => {
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), AUTH_FETCH_TIMEOUT_MS)
+  const upstreamSignal = init?.signal
+
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) controller.abort()
+    else upstreamSignal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    })
+  } finally {
+    globalThis.clearTimeout(timeoutId)
+  }
+}
+
+const graphCoreGlobal = globalThis as GraphCoreGlobal
+
+export const supabase = graphCoreGlobal.__graphcoreSupabaseClient ?? createClient(supabaseUrl, supabasePublishableKey, {
+  db: {
+    timeout: 30_000,
+  },
+  global: {
+    fetch: supabaseFetchWithTimeout,
+  },
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
     flowType: 'pkce',
+    lock: supabaseAuthProcessLock,
   },
 })
+
+graphCoreGlobal.__graphcoreSupabaseClient = supabase
+
+export function isSupabaseAuthLockError(error: unknown) {
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : {}
+  const message = [
+    typeof record.message === 'string' ? record.message : '',
+    typeof record.name === 'string' ? record.name : '',
+    error instanceof Error ? error.message : '',
+  ].join(' ').toLowerCase()
+
+  return message.includes('lockacquiretimeouterror')
+    || message.includes('navigatorlockacquiretimeouterror')
+    || message.includes('auth-token')
+    || message.includes('another request stole it')
+    || message.includes('lock was released')
+}
 
 export function isSupabaseAuthNetworkError(error: unknown) {
   const record = error && typeof error === 'object' ? error as Record<string, unknown> : {}
@@ -32,6 +93,7 @@ export function isSupabaseAuthNetworkError(error: unknown) {
     || message.includes('networkerror')
     || message.includes('network request failed')
     || message.includes('load failed')
+    || message.includes('aborterror')
     || message.includes('authretryablefetcherror')
 }
 

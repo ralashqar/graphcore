@@ -4,6 +4,7 @@ import { appRedirectUrl } from '../shared/appRoutes'
 import {
   clearLocalSupabaseSession,
   completeSupabaseAuthRedirectFromUrl,
+  isSupabaseAuthLockError,
   isSupabaseAuthNetworkError,
   supabase,
 } from '../utils/supabase'
@@ -20,27 +21,47 @@ async function completeAuthRedirectOnce() {
   }
 }
 
+function waitForAuthRetry(attempt: number) {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 150 + attempt * 250)
+  })
+}
+
 export async function getCurrentSession() {
   await completeAuthRedirectOnce()
 
   let session: Session | null = null
   let error: Error | null = null
 
-  try {
-    const result = await supabase.auth.getSession()
-    session = result.data.session
-    error = result.error
-  } catch (sessionError) {
-    if (!isSupabaseAuthNetworkError(sessionError)) {
-      throw sessionError
-    }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = await supabase.auth.getSession()
+      session = result.data.session
+      error = result.error
+      break
+    } catch (sessionError) {
+      if (isSupabaseAuthLockError(sessionError) && attempt < 2) {
+        console.warn('[GraphCore] Supabase auth session lock was busy during bootstrap; retrying.', sessionError)
+        await waitForAuthRetry(attempt)
+        continue
+      }
 
-    console.warn('[GraphCore] Supabase auth session refresh failed during bootstrap; clearing local session.', sessionError)
-    await clearLocalSupabaseSession()
-    return null
+      if (!isSupabaseAuthNetworkError(sessionError)) {
+        throw sessionError
+      }
+
+      console.warn('[GraphCore] Supabase auth session refresh failed during bootstrap; clearing local session.', sessionError)
+      await clearLocalSupabaseSession()
+      return null
+    }
   }
 
   if (error) {
+    if (isSupabaseAuthLockError(error)) {
+      console.warn('[GraphCore] Supabase auth session lock failed during bootstrap; treating session as temporarily unavailable.', error)
+      return null
+    }
+
     if (isSupabaseAuthNetworkError(error)) {
       console.warn('[GraphCore] Supabase auth session refresh failed during bootstrap; clearing local session.', error)
       await clearLocalSupabaseSession()

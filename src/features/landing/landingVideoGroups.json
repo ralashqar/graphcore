@@ -60,6 +60,29 @@
       ]
     },
     {
+      "id": "anime-chapter-sequence",
+      "label": "Anime chapter sequence",
+      "prompt": "Create an anime cinematic sequence from a story chapter.",
+      "cycle": true,
+      "videos": [
+        {
+          "id": "anime-demo-1",
+          "label": "Anime sequence shot one",
+          "src": "/landing/Demo4/anime1.optimized.webm"
+        },
+        {
+          "id": "anime-demo-2",
+          "label": "Anime sequence shot two",
+          "src": "/landing/Demo4/anime2.optimized.webm"
+        },
+        {
+          "id": "anime-demo-3",
+          "label": "Anime sequence shot three",
+          "src": "/landing/Demo4/anime3.optimized.webm"
+        }
+      ]
+    },
+    {
       "id": "comic-first-chapter",
       "label": "Comic PDF output",
       "prompt": "Make a comic from the first chapter.",

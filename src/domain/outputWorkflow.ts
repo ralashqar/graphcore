@@ -824,6 +824,7 @@ export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
   blockRequestId: z.string().min(1).optional(),
   storyboardBlockId: z.string().min(1).optional(),
   shotId: z.string().min(1).optional(),
+  panelAssetKey: z.string().min(1).optional(),
 })
 
 export const sequenceAnimaticBlockWorkflowEnsureResponseSchema = z.object({

@@ -1817,6 +1817,73 @@
   align-self: start;
 }
 
+.world-wiki-sequence-animatic-node-strip {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: min(340px, 42vw);
+  max-width: min(720px, 52vw);
+}
+
+.world-wiki-sequence-animatic-node-strip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  min-height: 32px;
+  padding: 0 9px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.56);
+  color: rgba(203, 213, 225, 0.92);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.world-wiki-sequence-animatic-node-strip span b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-node-strip span > i:not(.world-mini-spinner) {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.72);
+}
+
+.world-wiki-sequence-animatic-node-strip .world-mini-spinner {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  margin-right: 0;
+}
+
+.world-wiki-sequence-animatic-node-strip .is-running,
+.world-wiki-sequence-animatic-node-strip .is-queued {
+  border-color: rgba(56, 189, 248, 0.28);
+  background: rgba(14, 116, 144, 0.14);
+  color: rgba(224, 242, 254, 0.96);
+}
+
+.world-wiki-sequence-animatic-node-strip .is-failed,
+.world-wiki-sequence-animatic-node-strip .is-blocked {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.18);
+  color: rgba(254, 202, 202, 0.96);
+}
+
+.world-wiki-sequence-animatic-node-strip .is-failed > i,
+.world-wiki-sequence-animatic-node-strip .is-blocked > i {
+  background: rgba(248, 113, 113, 0.94);
+}
+
 .world-wiki-sequence-animatic-block-continuity-state {
   display: inline-flex;
   align-items: center;

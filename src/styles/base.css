@@ -179,6 +179,15 @@ code {
 .loading-shell {
   display: grid;
   place-items: center;
+  align-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.loading-shell-detail {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
 }
 
 .workspace-frame {

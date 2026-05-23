@@ -2217,9 +2217,11 @@ const OUTPUT_WORKFLOW_NODE_SELECT =
 const OUTPUT_WORKFLOW_EDGE_SELECT =
   'id, workflow_id, key, source_node_key, source_port, target_node_key, target_port, metadata, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_SELECT =
-  'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
+  'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT =
   'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
+const OUTPUT_WORKFLOW_RUN_STEP_SELECT =
+  'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_ARTIFACT_SELECT =
   'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const OUTPUT_REQUEST_SELECT =
@@ -8572,6 +8574,7 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     blockRequestId?: string
     storyboardBlockId?: string
     shotId?: string
+    panelAssetKey?: string
   },
 ): Promise<SequenceAnimaticBlockWorkflowEnsureResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic block workflows.')
@@ -8586,6 +8589,7 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     blockRequestId: request.blockRequestId,
     storyboardBlockId: request.storyboardBlockId,
     shotId: request.shotId,
+    panelAssetKey: request.panelAssetKey,
   })
   const response = await invokeAuthedFunctionWithSessionRecovery(
     'ensure-sequence-animatic-block-workflows',
@@ -8978,6 +8982,7 @@ function readOutputRequestScreenplayAnimaticRole(request: OutputRequest) {
 
 function collectSequenceAnimaticStateAssetKeys(input: {
   artifacts: OutputArtifact[]
+  runs?: OutputWorkflowRun[]
   projections: OutputFeedResponse['projections']
 }) {
   const keys = new Set<string>()
@@ -8986,6 +8991,12 @@ function collectSequenceAnimaticStateAssetKeys(input: {
     const artifactKey = readRepositoryString(artifact.assetKey)
     if (artifactKey) keys.add(artifactKey)
     collectOutputAssetReferences(artifact.metadata, known, keys)
+  }
+  for (const run of input.runs ?? []) {
+    collectOutputAssetReferences(run.outputs, known, keys)
+    for (const step of run.steps) {
+      collectOutputAssetReferences(step.outputs, known, keys)
+    }
   }
   for (const projection of input.projections) {
     for (const key of projection.previewAssetKeys) {
@@ -9189,7 +9200,7 @@ async function loadSequenceAnimaticStateDirect(
       ? supabase.from('output_workflow_runs').select(OUTPUT_WORKFLOW_RUN_SELECT).eq('draft_id', payload.draftId).in('id', runIds)
       : Promise.resolve({ data: [], error: null }),
     runIds.length > 0
-      ? supabase.from('output_workflow_run_steps').select(OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT).in('run_id', runIds).order('order_index', { ascending: true })
+      ? supabase.from('output_workflow_run_steps').select(OUTPUT_WORKFLOW_RUN_STEP_SELECT).in('run_id', runIds).order('order_index', { ascending: true })
       : Promise.resolve({ data: [], error: null }),
     workflowIds.length > 0
       ? supabase.from('output_artifacts').select(OUTPUT_ARTIFACT_SELECT).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })
@@ -9208,7 +9219,8 @@ async function loadSequenceAnimaticStateDirect(
   const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
   const steps = ((stepResponse.data ?? []) as OutputWorkflowRunStepRow[]).map(mapOutputWorkflowRunStepRow)
   const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map(mapOutputRequestStatusProjectionRow)
-  const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ artifacts, projections }))
+  const runsBeforeAssetHydration = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, artifacts))
+  const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ artifacts, runs: runsBeforeAssetHydration, projections }))
   const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
   const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, hydratedArtifacts))
   const revision = hashOutputWorkflowValue({

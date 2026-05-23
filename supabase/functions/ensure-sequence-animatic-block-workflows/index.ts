@@ -9,6 +9,8 @@ import {
   outputRequestSelect,
   outputWorkflowEdgeSelect,
   outputWorkflowNodeSelect,
+  outputWorkflowRunSelect,
+  outputWorkflowRunStepSelect,
   outputWorkflowSelect,
 } from '../_shared/output-workflow.ts'
 import {
@@ -164,6 +166,83 @@ function mergeAnchorIds(...groups: string[][]) {
   return merged
 }
 
+function isStoryboardPanelRole(role: string) {
+  return role === 'cinematic_v3_storyboard_panel'
+    || role === 'cinematic_v2_storyboard_panel'
+    || role === 'sequence_animatic_block_panel'
+}
+
+function storyboardPanelCandidateForShot(value: unknown, shotId: string) {
+  const record = asRecord(value)
+  const metadata = asRecord(record.metadata)
+  const role = readText(metadata.role) || readText(record.role) || readText(metadata.sequenceAnimaticArtifactRole)
+  const sequenceRole = readText(metadata.sequenceAnimaticArtifactRole) || readText(record.sequenceAnimaticArtifactRole)
+  const candidateShotId = readText(metadata.shotId) || readText(record.shotId)
+  const assetKey = readText(record.asset_key) || readText(record.assetKey) || readText(metadata.assetKey)
+  return Boolean(assetKey)
+    && candidateShotId === shotId
+    && (isStoryboardPanelRole(role) || isStoryboardPanelRole(sequenceRole))
+}
+
+function normalizeStoryboardPanelRecord(value: unknown, shotId: string) {
+  const record = asRecord(value)
+  const metadata = asRecord(record.metadata)
+  const artifact = asRecord(record.artifact)
+  const role = readText(metadata.role) || readText(record.role) || 'cinematic_v3_storyboard_panel'
+  const assetKey = readText(record.asset_key) || readText(record.assetKey) || readText(metadata.assetKey)
+  const storagePath = readText(record.storage_path) || readText(record.storagePath) || readText(metadata.storagePath)
+  const mimeType = readText(record.mime_type) || readText(record.mimeType) || readText(metadata.mimeType) || 'image/webp'
+  return {
+    ...record,
+    key: readText(record.key) || readText(artifact.key),
+    asset_key: assetKey,
+    storage_path: storagePath,
+    mime_type: mimeType,
+    metadata: {
+      ...metadata,
+      ...record,
+      role,
+      shotId,
+      assetKey,
+      storagePath,
+      mimeType,
+    },
+  }
+}
+
+function collectStoryboardPanelCandidatesFromOutputs(outputs: unknown) {
+  const record = asRecord(outputs)
+  return [
+    ...readArray(record.panels),
+    ...readArray(record.images),
+    record.image,
+  ].filter((entry) => Object.keys(asRecord(entry)).length > 0)
+}
+
+function storyboardPanelRecordFromAsset(row: unknown, shotId: string) {
+  const record = asRecord(row)
+  const metadata = asRecord(record.metadata)
+  const assetKey = readText(record.key)
+  const storagePath = readText(record.storage_path)
+  const mimeType = readText(record.mime_type) || 'image/webp'
+  return {
+    key: '',
+    asset_key: assetKey,
+    storage_path: storagePath,
+    mime_type: mimeType,
+    metadata: {
+      ...metadata,
+      role: 'cinematic_v3_storyboard_panel',
+      sequenceAnimaticArtifactRole: 'sequence_animatic_block_panel',
+      shotId,
+      assetKey,
+      storagePath,
+      mimeType,
+      source: 'explicit_panel_asset_key',
+    },
+  }
+}
+
 Deno.serve(async (request) => {
   const preflight = maybeHandleOptions(request)
   if (preflight) return preflight
@@ -287,18 +366,25 @@ Deno.serve(async (request) => {
     if (payload.sequenceAnimaticMode === 'shot_video') {
       const blockRequestId = readText(payload.blockRequestId)
       const shotId = readText(payload.shotId)
-      if (!blockRequestId) throw new HttpError(400, 'blockRequestId is required when preparing a shot video workflow.')
+      const requestedStoryboardBlockId = readText(payload.storyboardBlockId)
+      const requestedPanelAssetKey = readText(payload.panelAssetKey)
+      if (!blockRequestId && !requestedStoryboardBlockId) {
+        throw new HttpError(400, 'blockRequestId or storyboardBlockId is required when preparing a shot video workflow.')
+      }
       if (!shotId) throw new HttpError(400, 'shotId is required when preparing a shot video workflow.')
 
-      const blockRequest = activeExistingChildren.find((child) => child.id === blockRequestId) ?? null
-      if (!blockRequest) throw new HttpError(404, 'Storyboard block request was not found under this sequence animatic master.')
+      const blockRequest = activeExistingChildren.find((child) => child.id === blockRequestId)
+        ?? (requestedStoryboardBlockId ? existingByBlockId.get(requestedStoryboardBlockId) ?? null : null)
+      if (!blockRequest) {
+        throw new HttpError(404, 'Storyboard block request was not found under this sequence animatic master. Refresh the animatic state or regenerate the storyboard block workflow.')
+      }
       const blockMetadata = asRecord(blockRequest.metadata)
       if (readScreenplayAnimaticRole(blockMetadata) !== 'storyboard_block') {
         throw new HttpError(409, 'The selected parent request is not a storyboard block workflow.')
       }
       if (!blockRequest.workflowId) throw new HttpError(409, 'Storyboard block request has no workflow yet.')
 
-      const storyboardBlockId = readText(blockMetadata.storyboardBlockId) || readText(payload.storyboardBlockId)
+      const storyboardBlockId = readText(blockMetadata.storyboardBlockId) || requestedStoryboardBlockId
       const block = blocks.find((entry) => readText(entry.id) === storyboardBlockId) ?? null
       if (!block) throw new HttpError(404, 'Storyboard block was not found in the sequence animatic manifest.')
       const shots = readArray(block.shots).map(asRecord)
@@ -354,6 +440,27 @@ Deno.serve(async (request) => {
 
       let shotChild = existingShotChild
       const now = new Date().toISOString()
+      if (shotChild && requestedPanelAssetKey) {
+        const existingMetadata = asRecord(shotChild.metadata)
+        const existingPanelAssetKey = readText(existingMetadata.panelAssetKey)
+        if (existingPanelAssetKey && existingPanelAssetKey !== requestedPanelAssetKey) {
+          const staleResponse = await admin
+            .from('output_requests')
+            .update({
+              metadata: {
+                ...existingMetadata,
+                sequenceAnimaticStale: true,
+                staleReason: 'shot_panel_asset_changed',
+                staleMarkedAt: now,
+                replacementPanelAssetKey: requestedPanelAssetKey,
+              },
+            })
+            .eq('id', shotChild.id)
+          if (staleResponse.error) throw new Error(staleResponse.error.message)
+          await admin.rpc('refresh_output_request_status_projection', { p_request_id: shotChild.id })
+          shotChild = null
+        }
+      }
       if (!shotChild) {
         const panelArtifactsResponse = await client
           .from('output_artifacts')
@@ -363,20 +470,57 @@ Deno.serve(async (request) => {
           .eq('workflow_id', blockRequest.workflowId)
           .order('created_at', { ascending: false })
         if (panelArtifactsResponse.error) throw new Error(panelArtifactsResponse.error.message)
-        const panelArtifact = (panelArtifactsResponse.data ?? []).find((row) => {
-          const rowRecord = asRecord(row)
-          const metadata = asRecord(rowRecord.metadata)
-          const role = readText(metadata.role)
-          return readText(rowRecord.asset_key)
-            && readText(metadata.shotId) === shotId
-            && (
-              role === 'cinematic_v3_storyboard_panel'
-              || role === 'cinematic_v2_storyboard_panel'
-              || role === 'sequence_animatic_block_panel'
-            )
-        })
+        let panelArtifact = (panelArtifactsResponse.data ?? []).find((row) => storyboardPanelCandidateForShot(row, shotId)) ?? null
+        const availableArtifactPanelShotIds = new Set((panelArtifactsResponse.data ?? [])
+          .map((row) => readText(asRecord(asRecord(row).metadata).shotId))
+          .filter(Boolean))
         if (!panelArtifact) {
-          throw new HttpError(409, 'Generate/extract the storyboard panel before creating a shot video workflow.')
+          const [runRows, stepRows] = await Promise.all([
+            client
+              .from('output_workflow_runs')
+              .select(outputWorkflowRunSelect)
+              .eq('project_id', payload.projectId)
+              .eq('draft_id', payload.draftId)
+              .eq('workflow_id', blockRequest.workflowId)
+              .order('updated_at', { ascending: false })
+              .limit(5),
+            client
+              .from('output_workflow_run_steps')
+              .select(outputWorkflowRunStepSelect)
+              .eq('workflow_id', blockRequest.workflowId)
+              .eq('node_key', 'panel_extract')
+              .order('updated_at', { ascending: false })
+              .limit(5),
+          ])
+          if (runRows.error) throw new Error(runRows.error.message)
+          if (stepRows.error) throw new Error(stepRows.error.message)
+          const outputPanelCandidates = [
+            ...(stepRows.data ?? []).flatMap((row) => collectStoryboardPanelCandidatesFromOutputs(asRecord(row).outputs)),
+            ...(runRows.data ?? []).flatMap((row) => collectStoryboardPanelCandidatesFromOutputs(asRecord(row).outputs)),
+          ]
+          for (const candidate of outputPanelCandidates) {
+            const candidateShotId = readText(asRecord(candidate).shotId) || readText(asRecord(asRecord(candidate).metadata).shotId)
+            if (candidateShotId) availableArtifactPanelShotIds.add(candidateShotId)
+          }
+          const outputPanel = outputPanelCandidates.find((candidate) => storyboardPanelCandidateForShot(candidate, shotId)) ?? null
+          if (outputPanel) panelArtifact = normalizeStoryboardPanelRecord(outputPanel, shotId)
+        }
+        if (!panelArtifact && requestedPanelAssetKey) {
+          const panelAssetResponse = await admin
+            .from('project_assets')
+            .select('key, storage_path, mime_type, metadata')
+            .eq('project_id', payload.projectId)
+            .eq('key', requestedPanelAssetKey)
+            .maybeSingle()
+          if (panelAssetResponse.error) throw new Error(panelAssetResponse.error.message)
+          if (panelAssetResponse.data) panelArtifact = storyboardPanelRecordFromAsset(panelAssetResponse.data, shotId)
+        }
+        if (!panelArtifact) {
+          const availableShotSummary = Array.from(availableArtifactPanelShotIds).slice(0, 12).join(', ')
+          throw new HttpError(
+            409,
+            `Generate/extract the storyboard panel before creating a shot video workflow. No panel asset was found for shot "${shotId}" on this block${requestedPanelAssetKey ? `, and the requested panel asset "${requestedPanelAssetKey}" was not found` : ''}${availableShotSummary ? `; available panel shots: ${availableShotSummary}` : ''}.`,
+          )
         }
         const revisionMetadata = asRecord(latestShotRevision?.metadata)
         const revisionRecord = asRecord(revisionMetadata.revision)

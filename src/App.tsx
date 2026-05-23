@@ -152,6 +152,22 @@ const PromptDock = lazy(() =>
 
 const LIVE_SUPABASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const BACKEND_HEALTH_BACKOFF_MS = [1500, 3000, 6000, 10000]
+const BOOT_AUTH_TIMEOUT_MS = 12_000
+const BOOT_WORKSPACE_TIMEOUT_MS = 30_000
+const BOOT_GAMES_TIMEOUT_MS = 15_000
+
+function withAppTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = globalThis.setTimeout(() => reject(new Error(message)), timeoutMs)
+  })
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId !== null) {
+      globalThis.clearTimeout(timeoutId)
+    }
+  })
+}
 
 function isLiveSupabaseId(value: string | null | undefined) {
   return typeof value === 'string' && LIVE_SUPABASE_ID_PATTERN.test(value)
@@ -1524,6 +1540,7 @@ export default function App() {
   const [games, setGames] = useState<GameSummary[]>([])
   const [snapshot, setSnapshot] = useState<ProjectSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
+  const [bootStatus, setBootStatus] = useState('Starting SynArc workspace...')
   const [error, setError] = useState<string | null>(null)
   const [bundle, setBundle] = useState<GameSystemBundle | null>(null)
   const [patchPreview, setPatchPreview] = useState<(PromptPatchResponse & { id: string; prompt: string; status: string }) | null>(null)
@@ -1938,8 +1955,13 @@ export default function App() {
     let active = true
     async function bootstrap() {
       setLoading(appRoute === 'app' || appRoute === 'billing')
+      setBootStatus('Checking Supabase auth session...')
       try {
-        const currentSession = await authService.getCurrentSession()
+        const currentSession = await withAppTimeout(
+          authService.getCurrentSession(),
+          BOOT_AUTH_TIMEOUT_MS,
+          'Timed out while reading the Supabase auth session. Try refreshing once; if it persists, sign out locally and sign in again.',
+        )
         if (!active) return
         sessionRef.current = currentSession
         authenticatedUserIdRef.current = currentSession?.user.id ?? null
@@ -1947,7 +1969,12 @@ export default function App() {
         if (appRoute === 'billing') {
           if (currentSession) {
             try {
-              const data = await billingService.fetchBillingData(currentSession)
+              setBootStatus('Loading billing data...')
+              const data = await withAppTimeout(
+                billingService.fetchBillingData(currentSession),
+                BOOT_WORKSPACE_TIMEOUT_MS,
+                'Timed out while loading billing data.',
+              )
               if (!active) return
               setCreditBalance(data.creditBalance)
               setCreditPackages(data.creditPackages)
@@ -1975,15 +2002,31 @@ export default function App() {
           setLoading(false)
           return
         }
-        const state = await workspaceService.ensureLiveWorkspace()
+        setBootStatus('Loading SynArc workspace shell...')
+        const state = await withAppTimeout(
+          workspaceService.ensureLiveWorkspace(),
+          BOOT_WORKSPACE_TIMEOUT_MS,
+          'Timed out while loading the SynArc workspace shell.',
+        )
         if (!active) return
-        const nextGames = state.source === 'supabase' ? state.games ?? await workspaceService.listGames() : []
+        setBootStatus('Loading project list...')
+        const nextGames = state.source === 'supabase'
+          ? state.games ?? await withAppTimeout(
+            workspaceService.listGames(),
+            BOOT_GAMES_TIMEOUT_MS,
+            'Timed out while loading project list.',
+          )
+          : []
         if (!active) return
         setGames(nextGames)
+        setBootStatus('Preparing workspace UI...')
         setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
         hydrateLoadedProject(state)
       } catch (loadError) {
-        if (active) setError(loadError instanceof Error ? loadError.message : 'Failed to load GraphCore.')
+        if (active) {
+          console.error('[GraphCore] workspace bootstrap failed.', loadError)
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load GraphCore.')
+        }
       } finally {
         if (active) setLoading(false)
       }
@@ -2141,9 +2184,21 @@ export default function App() {
       setSession(nextSession)
 
       try {
-        const state = await workspaceService.ensureLiveWorkspace()
+        setBootStatus('Refreshing SynArc workspace after auth change...')
+        const state = await withAppTimeout(
+          workspaceService.ensureLiveWorkspace(),
+          BOOT_WORKSPACE_TIMEOUT_MS,
+          'Timed out while refreshing the SynArc workspace after auth changed.',
+        )
         if (cancelled) return
-        const nextGames = state.source === 'supabase' ? state.games ?? await workspaceService.listGames() : []
+        setBootStatus('Refreshing project list...')
+        const nextGames = state.source === 'supabase'
+          ? state.games ?? await withAppTimeout(
+            workspaceService.listGames(),
+            BOOT_GAMES_TIMEOUT_MS,
+            'Timed out while refreshing project list after auth changed.',
+          )
+          : []
         if (cancelled) return
         setGames(nextGames)
         setWorkspaceBootstrapError(state.source === 'supabase' ? null : state.reason ?? null)
@@ -2157,6 +2212,7 @@ export default function App() {
         }
       } catch (loadError) {
         if (!cancelled) {
+          console.error('[GraphCore] auth-change workspace refresh failed.', loadError)
           setError(loadError instanceof Error ? loadError.message : 'Failed to refresh GraphCore after auth change.')
         }
       }
@@ -8423,7 +8479,14 @@ export default function App() {
     ? workspaceHydrationState[activeHydrationKey]?.status ?? 'idle'
     : 'idle'
 
-  if (loading) return <main className="app-shell loading-shell"><p>Booting SynArc workspace...</p></main>
+  if (loading) {
+    return (
+      <main className="app-shell loading-shell">
+        <p>Booting SynArc workspace...</p>
+        <p className="loading-shell-detail">{bootStatus}</p>
+      </main>
+    )
+  }
   if (error || !snapshot || !bundle) return <main className="app-shell loading-shell"><p>{error ?? 'SynArc could not load a project snapshot.'}</p></main>
 
   return (
