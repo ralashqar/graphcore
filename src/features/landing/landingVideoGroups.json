@@ -7,14 +7,24 @@
       "cycle": true,
       "videos": [
         {
-          "id": "synarc-demo-1",
-          "label": "World studio output one",
-          "src": "/landing/Demo1/SynarcDemoVid1.optimized.webm"
+          "id": "synarc-demo-opening",
+          "label": "World studio opening",
+          "src": "/landing/Demo1/SynacrDemoOpening.optimized.webm"
         },
         {
           "id": "synarc-demo-2",
           "label": "World studio output two",
           "src": "/landing/Demo1/SynarcDemoVid2.optimized.webm"
+        },
+        {
+          "id": "synarc-demo-run",
+          "label": "World studio run",
+          "src": "/landing/Demo1/SynarcRun.optimized.webm"
+        },
+        {
+          "id": "synarc-demo-1",
+          "label": "World studio output one",
+          "src": "/landing/Demo1/SynarcDemoVid1.optimized.webm"
         },
         {
           "id": "synarc-demo-3",
@@ -51,10 +61,18 @@
           "id": "synarc-demo-eva",
           "label": "Eva-9 cafe closeup",
           "src": "/landing/Demo3/SynarcDemoVidEva.optimized.webm"
-        },
+        }
+      ]
+    },
+    {
+      "id": "ilya-anya-cinematic-shot",
+      "label": "Ilya finds Anya",
+      "prompt": "Create cinematic shot of Ilya finally finding Anya",
+      "cycle": true,
+      "videos": [
         {
           "id": "synarc-demo-human-override",
-          "label": "Cafe scene human override",
+          "label": "Ilya finds Anya cinematic shot",
           "src": "/landing/Demo3/SynarcDemoVidHumanOverride.optimized.webm"
         }
       ]

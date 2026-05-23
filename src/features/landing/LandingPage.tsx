@@ -59,6 +59,21 @@ type LandingPainPoint = {
   icon: 'context' | 'continuity' | 'workflow' | 'manual'
 }
 
+type LandingAgentIconId =
+  | 'context'
+  | 'script'
+  | 'shots'
+  | 'references'
+  | 'sceneGraph'
+  | 'prompt'
+  | 'output'
+
+type LandingOrchestrationStep = {
+  title: string
+  icon: LandingAgentIconId
+  bullets: string[]
+}
+
 type LandingOutputVideo = {
   id: string
   label: string
@@ -82,9 +97,9 @@ type LandingOutputGroup = {
 
 const navLinks = [
   { label: 'Product', href: '#product' },
+  { label: 'Agents', href: '#orchestration' },
   { label: 'Creator Pain', href: '#market-pain' },
   { label: 'Studio', href: '#outputs' },
-  { label: 'World Memory', href: '#world-memory' },
 ]
 
 export const orbitEdgePairs: Array<[string, string]> = [
@@ -162,6 +177,44 @@ const productSystemPoints: Array<{ copy: string; icon: LandingIconId }> = [
   { copy: 'Evolve canon, relationships and visual references', icon: 'graph' },
   { copy: 'Retrieve world context for every output workflow', icon: 'lore' },
   { copy: 'Generate prose, art, comics, animatics and cinematics', icon: 'cinematic' },
+]
+
+const orchestrationSteps: LandingOrchestrationStep[] = [
+  {
+    title: 'Retrieve world context',
+    icon: 'context',
+    bullets: ['Characters', 'Locations', 'Lore and canon', 'Timelines'],
+  },
+  {
+    title: 'Write script',
+    icon: 'script',
+    bullets: ['Scene description', 'Dialogue', 'Action', 'Tone and mood'],
+  },
+  {
+    title: 'Arrange as shots',
+    icon: 'shots',
+    bullets: ['Shot breakdown', 'Order and pacing', 'Transitions', 'Shot types'],
+  },
+  {
+    title: 'Assign references',
+    icon: 'references',
+    bullets: ['Characters', 'Locations', 'Props', 'Visual references'],
+  },
+  {
+    title: 'Scene graph assignment',
+    icon: 'sceneGraph',
+    bullets: ['Continuity links', 'Spatial relations', 'Time and state', 'Scene graph update'],
+  },
+  {
+    title: 'Prompt assignment',
+    icon: 'prompt',
+    bullets: ['Camera and framing', 'Lighting and style', 'Movement', 'Structured prompts'],
+  },
+  {
+    title: 'Cinematic output',
+    icon: 'output',
+    bullets: ['Cinematic video', 'Consistent shots', 'Production ready'],
+  },
 ]
 
 const featureShowcase: LandingFeatureShowcase[] = [
@@ -304,15 +357,6 @@ const workflowSteps: LandingWorkflowStep[] = [
     title: 'Updated canon',
     copy: 'The new event becomes memory for the next creative prompt.',
   },
-]
-
-const continuityPillars = [
-  'Characters',
-  'Locations',
-  'Lore + canon',
-  'Relationships',
-  'Timelines',
-  'Visual references',
 ]
 
 const marketPainPoints: LandingPainPoint[] = [
@@ -491,6 +535,71 @@ function LandingPainIcon({ icon }: { icon: LandingPainPoint['icon'] }) {
   )
 }
 
+function LandingAgentFlowIcon({ icon }: { icon: LandingAgentIconId }) {
+  return (
+    <svg aria-hidden="true" className="landing-agent-flow-icon" viewBox="0 0 64 64">
+      {icon === 'context' ? (
+        <>
+          <ellipse cx="32" cy="16" rx="19" ry="7" />
+          <path d="M13 16v28c0 3.9 8.5 7 19 7s19-3.1 19-7V16" />
+          <path d="M13 30c0 3.9 8.5 7 19 7s19-3.1 19-7" />
+          <circle cx="32" cy="31" r="8" />
+          <path d="M32 22v18M23 31h18M26.5 25.5l11 11M37.5 25.5l-11 11" />
+        </>
+      ) : null}
+      {icon === 'script' ? (
+        <>
+          <path d="M20 8h18l10 10v38H20V8Z" />
+          <path d="M38 8v12h10M27 29h14M27 37h14M27 45h9" />
+          <path d="M16 14h4M16 22h4M16 30h4M16 38h4M16 46h4" />
+        </>
+      ) : null}
+      {icon === 'shots' ? (
+        <>
+          <rect x="14" y="12" width="36" height="40" rx="5" />
+          <path d="M22 22h10M22 32h10M22 42h10M38 20h5M38 30h5M38 40h5" />
+          <rect x="20" y="19" width="8" height="6" rx="1" />
+          <rect x="20" y="29" width="8" height="6" rx="1" />
+          <rect x="20" y="39" width="8" height="6" rx="1" />
+        </>
+      ) : null}
+      {icon === 'references' ? (
+        <>
+          <rect x="13" y="22" width="22" height="18" rx="3" transform="rotate(-8 24 31)" />
+          <rect x="29" y="18" width="22" height="18" rx="3" transform="rotate(6 40 27)" />
+          <circle cx="41" cy="27" r="5" />
+          <path d="M32 47c1.8-7.2 6.2-11 11-11s9.2 3.8 11 11" />
+          <path d="M18 34l5-5 6 7" />
+        </>
+      ) : null}
+      {icon === 'sceneGraph' ? (
+        <>
+          <circle cx="32" cy="16" r="5" />
+          <circle cx="18" cy="39" r="5" />
+          <circle cx="46" cy="39" r="5" />
+          <circle cx="32" cy="49" r="5" />
+          <path d="M29.4 20.5 20.6 34.5M34.6 20.5l8.8 14M23 40.8l14 5.4M41 40.8l-14 5.4M23 39h18" />
+          <path d="M32 28v8" />
+        </>
+      ) : null}
+      {icon === 'prompt' ? (
+        <>
+          <rect x="11" y="16" width="42" height="32" rx="5" />
+          <path d="m20 27 6 5-6 5M31 38h13M18 22h2M24 22h2M30 22h2" />
+          <path d="M17 47h30" />
+        </>
+      ) : null}
+      {icon === 'output' ? (
+        <>
+          <path d="M13 23h38v27H13V23Z" />
+          <path d="M15 23 22 12M26 23l7-11M37 23l7-11M16 12h35v11" />
+          <path d="m28 31 12 7-12 7V31Z" />
+        </>
+      ) : null}
+    </svg>
+  )
+}
+
 export function LandingIcon({ id }: { id: LandingIconId }) {
   return (
     <svg aria-hidden="true" className="landing-icon-glyph" viewBox="0 0 48 48">
@@ -643,6 +752,10 @@ export function LandingPage({
     }
 
     onOpenAuth()
+  }
+
+  const handleLandingLearnMore = () => {
+    document.getElementById('outputs')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   const handleWaitlistFormChange = (field: keyof WaitlistFormState, value: string) => {
@@ -832,13 +945,13 @@ export function LandingPage({
     if (!rootRef.current) return
 
     gsap.fromTo(
-      '.landing-nav, .landing-hero-copy > *, .landing-hero-proof, .landing-system-intro, .landing-system-visual, .landing-market-copy, .landing-continuity-visual',
+      '.landing-nav, .landing-hero-copy > *, .landing-hero-proof, .landing-system-intro, .landing-system-visual, .landing-market-copy',
       { y: 18 },
       { y: 0, stagger: 0.055, duration: 0.85, ease: 'power3.out' },
     )
 
     gsap.fromTo(
-      '.landing-workflow-step, .landing-market-pain-row, .landing-feature-row, .landing-continuity-pill',
+      '.landing-workflow-step, .landing-market-pain-row, .landing-feature-row',
       { opacity: 0, y: 24, scale: 0.98 },
       {
         opacity: 1,
@@ -898,17 +1011,18 @@ export function LandingPage({
             from it.
           </h1>
           <p>
-            Build a persistent creative world once, then generate scenes, comics, animatics and
-            cinematic outputs from the same characters, locations, lore, timelines and visual references.
+            Create a living world once. SynArc keeps its canon, characters, locations, timelines and visual memory active
+            underneath every workflow, so every scene, comic, animatic and cinematic stays consistent from the first
+            prompt to the final output.
           </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
               {landingOnly ? 'Request Early Access' : isSignedIn ? 'Open Workspace' : 'Request Early Access'}
               <span aria-hidden="true">-&gt;</span>
             </button>
-            <button className="landing-secondary-button" onClick={onEnterApp} type="button">
+            <button className="landing-secondary-button" onClick={handleLandingLearnMore} type="button">
               <span className="landing-play-icon" aria-hidden="true" />
-              Watch Demo
+              Learn more
             </button>
           </div>
           <p className="landing-hero-access-note">
@@ -1011,9 +1125,9 @@ export function LandingPage({
           <span className="landing-chip">World-native studio</span>
           <h2>SynArc turns prompts into a structured creative system.</h2>
           <p>
-            AI agents should not generate from empty context windows. SynArc gives them persistent
-            worlds, continuity-aware scene graphs and evolving creative memory, so every workflow
-            starts from canon instead of fragments.
+            Instead of sending a blank prompt to a model, SynArc routes your intent through a living
+            world: canon, scene structure, references, continuity and output-specific harnesses are
+            assembled before generation begins.
           </p>
           <div className="landing-system-proof-list">
             {productSystemPoints.map((point) => (
@@ -1024,6 +1138,72 @@ export function LandingPage({
             ))}
           </div>
         </div>
+      </section>
+
+      <section className="landing-orchestration-section" id="orchestration" aria-labelledby="landing-orchestration-title">
+        <div className="landing-orchestration-heading">
+          <span className="landing-chip">Orchestration agents</span>
+          <h2 id="landing-orchestration-title">
+            Agents create from <span>worlds, not isolated</span> prompts.
+          </h2>
+          <p>SynArc orchestration flow: from creative intent to cinematic output.</p>
+        </div>
+
+        <div className="landing-orchestration-intent-card">
+          <span className="landing-agent-icon-frame">
+            <LandingIcon id="characters" />
+          </span>
+          <div>
+            <strong>Creative intent</strong>
+            <p>"Generate trailer scene from Chapter 3"</p>
+          </div>
+        </div>
+
+        <div className="landing-orchestration-rail" aria-hidden="true">
+          <span />
+          <strong>Orchestration agents</strong>
+          <span />
+        </div>
+
+        <ol className="landing-agent-flow">
+          {orchestrationSteps.map((step, index) => (
+            <li className="landing-agent-step" key={step.title}>
+              <span className="landing-agent-step-number">{index + 1}</span>
+              <span className="landing-agent-icon-frame">
+                <LandingAgentFlowIcon icon={step.icon} />
+              </span>
+              <h3>{step.title}</h3>
+              <ul>
+                {step.bullets.map((bullet) => (
+                  <li key={bullet}>{bullet}</li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ol>
+
+        <p className="landing-orchestration-quality-note">
+          Strong cinematic output depends on the structure behind the prompt. SynArc lets you stay focused on intent while agents carry the world context, continuity, references, camera, lighting and motion harnesses into the final generation.
+        </p>
+
+        <div className="landing-orchestration-feedback">
+          <div>
+            <span className="landing-orchestration-refresh-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M20 6v5h-5" />
+                <path d="M4 18v-5h5" />
+                <path d="M18.2 9A7 7 0 0 0 6.8 6.7L4 9.3" />
+                <path d="M5.8 15A7 7 0 0 0 17.2 17.3L20 14.7" />
+              </svg>
+            </span>
+            <strong>World state updated</strong>
+            <p>Continuity is maintained for the next output.</p>
+          </div>
+        </div>
+
+        <p className="landing-orchestration-tagline">
+          Persistent <span>world context.</span> Structured <span>orchestration.</span> Cinematic <span>consistency.</span>
+        </p>
       </section>
 
       <section className="landing-market-section" id="market-pain">
@@ -1096,30 +1276,6 @@ export function LandingPage({
               ) : null}
             </article>
           ))}
-        </div>
-      </section>
-
-      <section className="landing-continuity-section" id="world-memory">
-        <div className="landing-continuity-visual">
-          <img
-            src="/landing/synarcHeroGraphic.png"
-            alt="SynArc persistent world graph connecting characters, lore, scripts, timelines, factions and locations"
-          />
-        </div>
-        <div className="landing-continuity-copy">
-          <span className="landing-chip">World memory</span>
-          <h2>Everything comes from the same world.</h2>
-          <p>
-            SynArc keeps the creative source of truth alive underneath every workflow, so a fight scene,
-            comic page, storyboard block or cinematic run can draw from the same canon and visual memory.
-          </p>
-          <div className="landing-continuity-pill-grid">
-            {continuityPillars.map((pillar) => (
-              <span className="landing-continuity-pill" key={pillar}>
-                {pillar}
-              </span>
-            ))}
-          </div>
         </div>
       </section>
 

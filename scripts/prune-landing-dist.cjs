@@ -3,6 +3,7 @@ const path = require('node:path')
 
 const root = process.cwd()
 const distDir = path.join(root, 'dist')
+const publicLandingDir = path.join(root, 'public', 'landing')
 const landingDir = path.join(distDir, 'landing')
 const brandDir = path.join(distDir, 'brand')
 const assetsDir = path.join(distDir, 'assets')
@@ -23,6 +24,16 @@ function walkFiles(directory) {
     if (entry.isFile()) files.push(fullPath)
   }
   return files
+}
+
+function removeEmptyDirs(directory) {
+  if (!fs.existsSync(directory)) return
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) removeEmptyDirs(path.join(directory, entry.name))
+  }
+  if (directory !== landingDir && fs.readdirSync(directory).length === 0) {
+    fs.rmdirSync(directory)
+  }
 }
 
 for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
@@ -49,6 +60,21 @@ if (fs.existsSync(assetsDir)) {
       removePath(file)
     }
   }
+}
+
+if (fs.existsSync(landingDir)) {
+  const publicLandingFiles = new Set(
+    walkFiles(publicLandingDir).map((file) => path.relative(publicLandingDir, file)),
+  )
+
+  for (const file of walkFiles(landingDir)) {
+    const relativeFile = path.relative(landingDir, file)
+    if (!publicLandingFiles.has(relativeFile)) {
+      removePath(file)
+    }
+  }
+
+  removeEmptyDirs(landingDir)
 }
 
 const landingBytes = walkFiles(landingDir).reduce((sum, file) => sum + fs.statSync(file).size, 0)
