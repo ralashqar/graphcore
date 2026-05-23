@@ -89,7 +89,6 @@
       "cycle": true,
       "comic": {
         "artifactType": "Comic PDF",
-        "pdfSrc": "/landing/comic.pdf",
         "pageHoldMs": 2200,
         "pages": [
           "/landing/Comic/comic-page-01.webp",

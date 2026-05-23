@@ -105,15 +105,41 @@ npm run supabase:functions:serve
 
 #### Local Development (`.env.local`)
 ```bash
+VITE_APP_PROFILE=full
 VITE_SUPABASE_URL=http://127.0.0.1:54321
 VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your-local-anon-key
 ```
 
 #### Hosted Development (`.env`)
 ```bash
+VITE_APP_PROFILE=full
 VITE_SUPABASE_URL=https://znwdatidqdkzidempvkt.supabase.co
 VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=sb_publishable_5EkU5knI16oAgqxPMYPxnw_Sb8QOgdS
 ```
+
+#### Landing-Only Profile
+```bash
+VITE_APP_PROFILE=landing
+VITE_WAITLIST_SUPABASE_URL=https://znwdatidqdkzidempvkt.supabase.co
+VITE_WAITLIST_SUPABASE_PUBLISHABLE_KEY=sb_publishable_5EkU5knI16oAgqxPMYPxnw_Sb8QOgdS
+VITE_WAITLIST_FUNCTION_NAME=join-waitlist
+VITE_WAITLIST_TURNSTILE_SITE_KEY=
+```
+
+Use `npm run dev:landing` or `npm run build:landing` to render the public landing
+page without importing the full GraphCore app, auth boot, workspace loading, output
+polling, or project routes. Use `npm run dev:full`, `npm run build:full`, or the
+default `npm run dev` / `npm run build` for the complete app.
+
+The landing waitlist path is intentionally separate from the regular GraphCore
+repository/client. It calls only `VITE_WAITLIST_SUPABASE_URL/functions/v1/join-waitlist`
+with the waitlist publishable key. For now these variables can point at the
+shared GraphCore Supabase project; later they can point at a dedicated waitlist
+project without changing the frontend. Set the Edge Function secret
+`WAITLIST_ALLOWED_ORIGINS` to a comma-separated allowlist for development and
+production hosts. Optional hardening secrets are `WAITLIST_RATE_LIMIT_SALT` for
+stable hashed throttling and `WAITLIST_TURNSTILE_SECRET_KEY` when
+`VITE_WAITLIST_TURNSTILE_SITE_KEY` is enabled.
 
 ### AI Provider Setup
 

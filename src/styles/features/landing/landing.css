@@ -1138,6 +1138,150 @@
   font-size: 1.05rem;
 }
 
+.landing-waitlist-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 6, 13, 0.72);
+  backdrop-filter: blur(18px);
+}
+
+.landing-waitlist-panel {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  overflow: auto;
+  display: grid;
+  gap: 16px;
+  padding: clamp(24px, 4vw, 36px);
+  border: 1px solid rgba(95, 157, 255, 0.3);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(5, 12, 24, 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 28px 110px rgba(0, 0, 0, 0.54),
+    0 0 54px rgba(34, 119, 255, 0.16);
+}
+
+.landing-waitlist-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(151, 174, 220, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(248, 251, 255, 0.88);
+  cursor: pointer;
+}
+
+.landing-waitlist-panel h2 {
+  max-width: 460px;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 1;
+}
+
+.landing-waitlist-panel p {
+  max-width: 470px;
+  color: rgba(231, 239, 251, 0.78);
+  line-height: 1.55;
+}
+
+.landing-waitlist-form {
+  display: grid;
+  gap: 12px;
+}
+
+.landing-waitlist-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.landing-waitlist-form label span {
+  color: rgba(231, 239, 251, 0.78);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.landing-waitlist-form input,
+.landing-waitlist-form textarea {
+  width: 100%;
+  border: 1px solid rgba(151, 174, 220, 0.24);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #ffffff;
+  padding: 13px 14px;
+  font: inherit;
+  outline: none;
+  resize: vertical;
+}
+
+.landing-waitlist-form input:focus,
+.landing-waitlist-form textarea:focus {
+  border-color: rgba(57, 216, 255, 0.62);
+  box-shadow: 0 0 0 3px rgba(57, 216, 255, 0.12);
+}
+
+.landing-waitlist-honeypot {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.landing-waitlist-message {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(151, 174, 220, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(231, 239, 251, 0.86);
+  font-size: 0.92rem;
+}
+
+.landing-waitlist-message.is-joined,
+.landing-waitlist-message.is-existing {
+  border-color: rgba(57, 216, 255, 0.3);
+  color: #c6f6ff;
+}
+
+.landing-waitlist-message.is-error {
+  border-color: rgba(255, 118, 118, 0.36);
+  color: #ffd5d5;
+}
+
+.landing-waitlist-turnstile {
+  min-height: 65px;
+}
+
+.landing-waitlist-privacy {
+  margin: 0;
+  color: rgba(231, 239, 251, 0.62);
+  font-size: 0.86rem;
+}
+
+.landing-waitlist-submit {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.landing-waitlist-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+}
+
 @media (max-width: 1260px) {
   .landing-hero-section {
     grid-template-columns: minmax(310px, 0.78fr) minmax(510px, 1.26fr) minmax(310px, 0.78fr);
@@ -1869,25 +2013,27 @@
 .landing-studio-hero {
   position: relative;
   min-height: min(760px, calc(100svh - 112px));
-  grid-template-columns: minmax(420px, 0.92fr) minmax(520px, 1.08fr);
-  gap: clamp(36px, 5vw, 96px);
+  grid-template-columns: minmax(0, 0.92fr) minmax(min(520px, 100%), 1.08fr);
+  gap: clamp(28px, 4vw, 78px);
   align-items: center;
   padding: clamp(58px, 7vw, 108px) 0 clamp(16px, 2.2vw, 34px);
 }
 
 .landing-studio-hero .landing-hero-copy {
+  min-width: 0;
   max-width: 760px;
   gap: 22px;
 }
 
 .landing-studio-hero .landing-hero-copy h1 {
-  max-width: 760px;
-  font-size: clamp(3.3rem, 6.2vw, 7rem);
-  line-height: 0.92;
+  max-width: min(100%, 720px);
+  font-size: clamp(3.05rem, 5.35vw, 6.35rem);
+  line-height: 0.94;
+  text-wrap: balance;
 }
 
 .landing-studio-hero .landing-hero-copy h1 span {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .landing-studio-hero .landing-hero-copy > p {
@@ -3207,6 +3353,29 @@
   max-width: 980px;
 }
 
+@media (min-width: 1500px) {
+  .landing-studio-hero .landing-hero-copy h1 span {
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 1380px) {
+  .landing-studio-hero {
+    grid-template-columns: minmax(0, 0.88fr) minmax(min(480px, 100%), 1.12fr);
+    gap: clamp(24px, 3.2vw, 50px);
+  }
+
+  .landing-studio-hero .landing-hero-copy h1 {
+    max-width: 620px;
+    font-size: clamp(2.8rem, 4.8vw, 5.45rem);
+    line-height: 0.97;
+  }
+
+  .landing-studio-hero .landing-hero-copy > p {
+    max-width: 560px;
+  }
+}
+
 @media (max-width: 1180px) {
   .landing-studio-hero,
   .landing-market-section,
@@ -3277,8 +3446,8 @@
   }
 
   .landing-studio-hero .landing-hero-copy h1 {
-    font-size: clamp(2.9rem, 14vw, 4.8rem);
-    line-height: 0.95;
+    font-size: clamp(2.65rem, 12vw, 4.2rem);
+    line-height: 0.98;
   }
 
   .landing-prompt-simple-label {

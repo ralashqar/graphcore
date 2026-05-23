@@ -33,6 +33,17 @@ GraphCore employs multiple specialized AI agents working in concert to transform
 ### Supabase Edge Functions
 GraphCore runs AI workloads through protected Supabase Edge Functions that provide secure, authenticated access to external AI providers.
 
+#### Public Landing Waitlist Function
+**Purpose**: Captures unauthenticated landing-page early-access requests without booting the full GraphCore app, auth flow, workspace loader, or regular output/project Edge Function clients.
+
+**Capabilities**:
+- `join-waitlist` is the only public landing-mode Edge Function called by the landing-only frontend profile
+- Stores submissions in `public.waitlist_signups` through the service-role Edge Function path; browser roles have no direct table read/write grants
+- Records throttling/audit decisions in `public.waitlist_submission_events`, also service-role only
+- Enforces `WAITLIST_ALLOWED_ORIGINS` when configured, DB-backed IP/email throttling, honeypot blocking, and optional Cloudflare Turnstile verification through `WAITLIST_TURNSTILE_SECRET_KEY`
+- Landing builds use `VITE_APP_PROFILE=landing` plus `VITE_WAITLIST_*` variables and must not import the full GraphCore app bundle or regular Supabase repository/client
+- Shared-backend waitlist mode is for testing and near-public staging; complete backend isolation still requires deploying the same waitlist migration/function to a dedicated Supabase project and pointing `VITE_WAITLIST_SUPABASE_URL` / `VITE_WAITLIST_SUPABASE_PUBLISHABLE_KEY` there
+
 #### Shared AI Provider Gateway
 **Purpose**: Centralizes server-side AI provider execution, normalized usage accounting, cost estimates, and ledger writes for Supabase Edge Functions and Fly workers.
 

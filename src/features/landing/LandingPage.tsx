@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import landingVideoGroups from './landingVideoGroups.json'
+import { waitlistTurnstileSiteKey } from '../../config/appProfile'
+import { submitWaitlistSignup, waitlistIsConfigured } from './waitlistClient'
 
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
@@ -65,7 +67,6 @@ type LandingOutputVideo = {
 
 type LandingOutputComic = {
   artifactType: string
-  pdfSrc: string
   pages: string[]
   pageHoldMs?: number
 }
@@ -341,6 +342,40 @@ type LandingPageProps = {
   isSignedIn: boolean
   onEnterApp: () => void
   onOpenAuth: () => void
+  appAccessMode?: 'full' | 'landing'
+}
+
+type WaitlistFormState = {
+  email: string
+  name: string
+  role: string
+  useCase: string
+  referralSource: string
+  honeypot: string
+  turnstileToken: string
+}
+
+type WaitlistSubmitState =
+  | { status: 'idle'; message: string }
+  | { status: 'submitting'; message: string }
+  | { status: 'joined' | 'existing' | 'error'; message: string }
+
+type TurnstileApi = {
+  render: (container: HTMLElement, options: {
+    sitekey: string
+    callback?: (token: string) => void
+    'expired-callback'?: () => void
+    'error-callback'?: () => void
+    theme?: 'light' | 'dark' | 'auto'
+  }) => string
+  reset: (widgetId?: string) => void
+  remove?: (widgetId: string) => void
+}
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi
+  }
 }
 
 function usePrefersReducedMotion() {
@@ -543,6 +578,7 @@ export function LandingPage({
   isSignedIn,
   onEnterApp,
   onOpenAuth,
+  appAccessMode = 'full',
 }: LandingPageProps) {
   const rootRef = useRef<HTMLElement | null>(null)
   const outputVideoGroups = landingVideoGroups.groups as LandingOutputGroup[]
@@ -558,11 +594,180 @@ export function LandingPage({
   const heroPrompt = useAnimatedHeroPrompt(outputVideoGroup?.prompt ?? '')
   const prefersReducedMotion = usePrefersReducedMotion()
   const [activeComicPageIndex, setActiveComicPageIndex] = useState(0)
+  const landingOnly = appAccessMode === 'landing'
+  const waitlistPanelRef = useRef<HTMLElement | null>(null)
+  const waitlistEmailRef = useRef<HTMLInputElement | null>(null)
+  const waitlistTriggerRef = useRef<HTMLElement | null>(null)
+  const waitlistTurnstileRef = useRef<HTMLDivElement | null>(null)
+  const waitlistTurnstileWidgetRef = useRef<string | null>(null)
+  const [waitlistOpen, setWaitlistOpen] = useState(false)
+  const [waitlistForm, setWaitlistForm] = useState<WaitlistFormState>({
+    email: '',
+    name: '',
+    role: '',
+    useCase: '',
+    referralSource: '',
+    honeypot: '',
+    turnstileToken: '',
+  })
+  const [waitlistSubmitState, setWaitlistSubmitState] = useState<WaitlistSubmitState>({
+    status: 'idle',
+    message: '',
+  })
+  const waitlistConfigured = waitlistIsConfigured()
+  const waitlistTurnstileEnabled = Boolean(waitlistTurnstileSiteKey)
 
   useEffect(() => {
     setActiveOutputVideoIndex(0)
     setActiveComicPageIndex(0)
   }, [outputVideoGroup?.id])
+
+  const closeWaitlist = () => {
+    setWaitlistOpen(false)
+    window.setTimeout(() => waitlistTriggerRef.current?.focus(), 0)
+  }
+
+  const openWaitlist = (trigger?: HTMLElement | null) => {
+    waitlistTriggerRef.current = trigger ?? (document.activeElement as HTMLElement | null)
+    setWaitlistOpen(true)
+    setWaitlistSubmitState({
+      status: 'idle',
+      message: waitlistConfigured ? '' : 'Waitlist is not configured for this build.',
+    })
+  }
+
+  const handleLandingPrimaryAction = (trigger?: HTMLElement | null) => {
+    if (landingOnly) {
+      openWaitlist(trigger)
+      return
+    }
+
+    onOpenAuth()
+  }
+
+  const handleWaitlistFormChange = (field: keyof WaitlistFormState, value: string) => {
+    setWaitlistForm((current) => ({ ...current, [field]: value }))
+    if (waitlistSubmitState.status === 'error') {
+      setWaitlistSubmitState({ status: 'idle', message: '' })
+    }
+  }
+
+  const handleWaitlistSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (!waitlistForm.email.trim()) {
+      setWaitlistSubmitState({ status: 'error', message: 'Enter an email address to join the waitlist.' })
+      return
+    }
+
+    setWaitlistSubmitState({ status: 'submitting', message: 'Joining waitlist...' })
+
+    try {
+      const result = await submitWaitlistSignup(waitlistForm)
+      setWaitlistSubmitState({
+        status: result.status,
+        message: result.status === 'existing'
+          ? "You're already on the waitlist. We refreshed your details."
+          : "You're on the waitlist. We'll be in touch soon.",
+      })
+      if (waitlistTurnstileWidgetRef.current) {
+        window.turnstile?.reset(waitlistTurnstileWidgetRef.current)
+        setWaitlistForm((current) => ({ ...current, turnstileToken: '' }))
+      }
+    } catch (error) {
+      setWaitlistSubmitState({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unable to join the waitlist right now.',
+      })
+    }
+  }
+
+  useEffect(() => {
+    if (!waitlistOpen) return
+
+    window.setTimeout(() => waitlistEmailRef.current?.focus(), 0)
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeWaitlist()
+        return
+      }
+
+      if (event.key !== 'Tab' || !waitlistPanelRef.current) return
+
+      const focusableElements = Array.from(
+        waitlistPanelRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null)
+
+      if (focusableElements.length === 0) return
+
+      const firstElement = focusableElements[0]
+      const lastElement = focusableElements[focusableElements.length - 1]
+
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault()
+        lastElement?.focus()
+        return
+      }
+
+      if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault()
+        firstElement?.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [waitlistOpen])
+
+  useEffect(() => {
+    if (!waitlistOpen || !waitlistTurnstileEnabled || !waitlistTurnstileRef.current) return
+
+    let cancelled = false
+    const renderTurnstile = () => {
+      if (cancelled || !waitlistTurnstileRef.current || !window.turnstile || waitlistTurnstileWidgetRef.current) return
+      waitlistTurnstileWidgetRef.current = window.turnstile.render(waitlistTurnstileRef.current, {
+        sitekey: waitlistTurnstileSiteKey,
+        theme: 'dark',
+        callback: (token) => setWaitlistForm((current) => ({ ...current, turnstileToken: token })),
+        'expired-callback': () => setWaitlistForm((current) => ({ ...current, turnstileToken: '' })),
+        'error-callback': () => setWaitlistForm((current) => ({ ...current, turnstileToken: '' })),
+      })
+    }
+
+    if (!window.turnstile) {
+      const existingScript = document.querySelector<HTMLScriptElement>('script[data-graphcore-turnstile="true"]')
+      const script = existingScript ?? document.createElement('script')
+      if (!existingScript) {
+        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+        script.async = true
+        script.defer = true
+        script.dataset.graphcoreTurnstile = 'true'
+        document.head.appendChild(script)
+      }
+      script.addEventListener('load', renderTurnstile, { once: true })
+      return () => {
+        cancelled = true
+        script.removeEventListener('load', renderTurnstile)
+      }
+    }
+
+    renderTurnstile()
+    return () => {
+      cancelled = true
+    }
+  }, [waitlistOpen, waitlistTurnstileEnabled])
+
+  useEffect(() => {
+    if (waitlistOpen) return
+    if (waitlistTurnstileWidgetRef.current) {
+      window.turnstile?.remove?.(waitlistTurnstileWidgetRef.current)
+      waitlistTurnstileWidgetRef.current = null
+    }
+  }, [waitlistOpen])
 
   useEffect(() => {
     if (!activeOutputComic || activeComicPages.length <= 0) return
@@ -672,10 +877,10 @@ export function LandingPage({
 
           <div className="landing-nav-actions">
             <button className="landing-login-button" onClick={onEnterApp} type="button">
-              {isSignedIn ? 'Open app' : 'Log in'}
+              {landingOnly ? 'View examples' : isSignedIn ? 'Open app' : 'Log in'}
             </button>
-            <button className="landing-cta-button" onClick={onOpenAuth} type="button">
-              {isSignedIn ? 'Open Workspace' : 'Join Waitlist'}
+            <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
+              {landingOnly ? 'Join Waitlist' : isSignedIn ? 'Open Workspace' : 'Join Waitlist'}
               <span aria-hidden="true">-&gt;</span>
             </button>
           </div>
@@ -697,8 +902,8 @@ export function LandingPage({
             cinematic outputs from the same characters, locations, lore, timelines and visual references.
           </p>
           <div className="landing-hero-actions">
-            <button className="landing-cta-button" onClick={onOpenAuth} type="button">
-              {isSignedIn ? 'Open Workspace' : 'Request Early Access'}
+            <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
+              {landingOnly ? 'Request Early Access' : isSignedIn ? 'Open Workspace' : 'Request Early Access'}
               <span aria-hidden="true">-&gt;</span>
             </button>
             <button className="landing-secondary-button" onClick={onEnterApp} type="button">
@@ -936,16 +1141,122 @@ export function LandingPage({
             Turn persistent worlds into scenes, comics, cinematic plans and movie-style outputs without losing the thread.
           </p>
           <div className="landing-hero-actions">
-            <button className="landing-cta-button" onClick={onOpenAuth} type="button">
-              {isSignedIn ? 'Open Workspace' : 'Request Early Access'}
+            <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
+              {landingOnly ? 'Request Early Access' : isSignedIn ? 'Open Workspace' : 'Request Early Access'}
               <span aria-hidden="true">-&gt;</span>
             </button>
             <button className="landing-secondary-button" onClick={onEnterApp} type="button">
-              Open Workspace
+              {landingOnly ? 'View examples' : 'Open Workspace'}
             </button>
           </div>
         </div>
       </section>
+
+      {landingOnly && waitlistOpen ? (
+        <div
+          className="landing-waitlist-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeWaitlist()
+          }}
+        >
+          <section className="landing-waitlist-panel" role="dialog" aria-modal="true" aria-labelledby="landing-waitlist-title" ref={waitlistPanelRef}>
+            <button
+              className="landing-waitlist-close"
+              type="button"
+              aria-label="Close waitlist form"
+              onClick={closeWaitlist}
+            >
+              x
+            </button>
+            <span className="landing-chip">Early access</span>
+            <h2 id="landing-waitlist-title">Join the SynArc waitlist.</h2>
+            <p>
+              Tell us where SynArc fits into your creative workflow. We use this only to prioritize early access.
+            </p>
+            <form className="landing-waitlist-form" onSubmit={handleWaitlistSubmit}>
+              <input
+                aria-label="Leave this field empty"
+                className="landing-waitlist-honeypot"
+                autoComplete="off"
+                tabIndex={-1}
+                value={waitlistForm.honeypot}
+                onChange={(event) => handleWaitlistFormChange('honeypot', event.target.value)}
+              />
+              <label>
+                <span>Email</span>
+                <input
+                  ref={waitlistEmailRef}
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  value={waitlistForm.email}
+                  onChange={(event) => handleWaitlistFormChange('email', event.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                <span>Name</span>
+                <input
+                  type="text"
+                  autoComplete="name"
+                  placeholder="Optional"
+                  value={waitlistForm.name}
+                  onChange={(event) => handleWaitlistFormChange('name', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Creator role</span>
+                <input
+                  type="text"
+                  placeholder="Filmmaker, writer, studio, game team..."
+                  value={waitlistForm.role}
+                  onChange={(event) => handleWaitlistFormChange('role', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Use case</span>
+                <textarea
+                  rows={3}
+                  placeholder="What would you want SynArc to help you create?"
+                  value={waitlistForm.useCase}
+                  onChange={(event) => handleWaitlistFormChange('useCase', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>How did you hear about us?</span>
+                <input
+                  type="text"
+                  placeholder="Optional"
+                  value={waitlistForm.referralSource}
+                  onChange={(event) => handleWaitlistFormChange('referralSource', event.target.value)}
+                />
+              </label>
+              {waitlistSubmitState.message ? (
+                <p className={`landing-waitlist-message is-${waitlistSubmitState.status}`}>
+                  {waitlistSubmitState.message}
+                </p>
+              ) : null}
+              {waitlistTurnstileEnabled ? (
+                <div className="landing-waitlist-turnstile" ref={waitlistTurnstileRef} />
+              ) : null}
+              <p className="landing-waitlist-privacy">No spam. Early access only.</p>
+              <button
+                className="landing-cta-button landing-waitlist-submit"
+                type="submit"
+                disabled={
+                  waitlistSubmitState.status === 'submitting'
+                  || !waitlistConfigured
+                  || (waitlistTurnstileEnabled && !waitlistForm.turnstileToken)
+                }
+              >
+                {waitlistSubmitState.status === 'submitting' ? 'Joining...' : 'Join Waitlist'}
+                <span aria-hidden="true">-&gt;</span>
+              </button>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </main>
   )
 }

@@ -152,6 +152,9 @@ verify_jwt = false
 [functions.muapi-webhook]
 verify_jwt = false
 
+[functions.join-waitlist]
+verify_jwt = false
+
 [functions.cleanup-active-generation]
 verify_jwt = false
 
