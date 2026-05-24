@@ -1017,35 +1017,6 @@
   font-size: 0.72rem;
 }
 
-.landing-proof-strip {
-  display: grid;
-  grid-template-columns: minmax(260px, 0.95fr) minmax(420px, 1.15fr) minmax(260px, 0.95fr);
-  gap: 22px;
-  align-items: stretch;
-  padding-top: 18px;
-}
-
-.landing-proof-card {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: 14px;
-  align-items: center;
-  padding: 18px 22px;
-  border-radius: 12px;
-}
-
-.landing-proof-card blockquote {
-  margin: 0;
-  color: #ffffff;
-  line-height: 1.42;
-}
-
-.landing-proof-card > span:last-child {
-  grid-column: 2;
-  color: rgba(231, 239, 251, 0.72);
-  font-size: 0.84rem;
-}
-
 .landing-avatar {
   width: 64px;
   height: 64px;
@@ -1367,9 +1338,6 @@
     grid-column: 1 / -1;
   }
 
-  .landing-proof-strip {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 820px) {
@@ -2004,7 +1972,6 @@
 .landing-orchestration-section,
 .landing-feature-showcase,
 .landing-output-section,
-.landing-proof-strip,
 .landing-final-section {
   width: min(1830px, 100%);
   margin: 0 auto;
@@ -3470,8 +3437,7 @@
 }
 
 .landing-workflow-step,
-.landing-output-card,
-.landing-workflow-proof-card {
+.landing-output-card {
   border: 1px solid rgba(95, 138, 255, 0.16);
   background:
     linear-gradient(145deg, rgba(16, 25, 41, 0.82), rgba(5, 10, 18, 0.64)),
@@ -3488,8 +3454,7 @@
   border-radius: 12px;
 }
 
-.landing-workflow-step span,
-.landing-workflow-proof-card > span {
+.landing-workflow-step span {
   color: #a976ff;
   font-family: var(--font-display);
   font-size: 0.82rem;
@@ -3497,16 +3462,14 @@
   letter-spacing: 0.12em;
 }
 
-.landing-workflow-step strong,
-.landing-workflow-proof-card strong {
+.landing-workflow-step strong {
   color: #ffffff;
   font-family: var(--font-display);
   font-size: 1.32rem;
   line-height: 1.18;
 }
 
-.landing-workflow-step p,
-.landing-workflow-proof-card p {
+.landing-workflow-step p {
   margin: 0;
   color: rgba(225, 235, 248, 0.76);
   font-size: 0.94rem;
@@ -3645,8 +3608,7 @@
   }
 
   .landing-workflow-strip,
-  .landing-output-grid,
-  .landing-proof-strip {
+  .landing-output-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -3721,8 +3683,7 @@
   .landing-workflow-strip,
   .landing-output-grid,
   .landing-system-proof-list,
-  .landing-feature-row-copy ul,
-  .landing-proof-strip {
+  .landing-feature-row-copy ul {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -3823,8 +3784,7 @@
   }
 
   .landing-output-card,
-  .landing-workflow-step,
-  .landing-workflow-proof-card {
+  .landing-workflow-step {
     min-height: 0;
   }
 
