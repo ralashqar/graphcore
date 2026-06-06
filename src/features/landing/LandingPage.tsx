@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, type RefObject, useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -212,7 +212,7 @@ const orchestrationSteps: LandingOrchestrationStep[] = [
 const featureShowcase: LandingFeatureShowcase[] = [
   {
     title: 'Evolving Wiki / Codex',
-    eyebrow: 'Prompt -> world',
+    eyebrow: 'Canon stays reusable',
     copy: 'Characters, locations, lore, relationships and canon become browsable, editable world memory.',
     bullets: [
       'World entities stay connected',
@@ -230,7 +230,7 @@ const featureShowcase: LandingFeatureShowcase[] = [
   },
   {
     title: 'Character Variants',
-    eyebrow: 'One character, many usable looks',
+    eyebrow: 'Identity stays anchored',
     copy: 'Keep a character anchored to one identity while exploring alternate costumes, archetypes and production-ready looks.',
     bullets: [
       'Variants stay tied to the same canonical character',
@@ -248,7 +248,7 @@ const featureShowcase: LandingFeatureShowcase[] = [
   },
   {
     title: 'World Entities',
-    eyebrow: 'Factions, items and reusable canon',
+    eyebrow: 'References stay connected',
     copy: 'Define factions, items and other world entities with persistent identity, visual references and relationships that carry across stories and scenes.',
     bullets: [
       'Factions preserve symbols, roles and culture',
@@ -266,7 +266,7 @@ const featureShowcase: LandingFeatureShowcase[] = [
   },
   {
     title: 'Scene Graph',
-    eyebrow: 'Scripts become shot-aware structure',
+    eyebrow: 'Scenes stay shot-aware',
     copy: 'Scripts and world state evolve into a scene graph where characters, locations, props and continuity are assigned per shot.',
     bullets: [
       'Shots inherit the right cast and setting',
@@ -279,7 +279,7 @@ const featureShowcase: LandingFeatureShowcase[] = [
   },
   {
     title: 'Workflow Graph',
-    eyebrow: 'Context -> workflow',
+    eyebrow: 'Workflows inherit context',
     copy: 'SynArc retrieves world context, applies the right workflow, and generates the steps needed for the output.',
     bullets: [
       'World context is gathered automatically',
@@ -292,7 +292,7 @@ const featureShowcase: LandingFeatureShowcase[] = [
   },
   {
     title: 'Animatic Direction',
-    eyebrow: 'Fix the keyframe first',
+    eyebrow: 'Direction before spend',
     copy: 'Direct shot by shot with keyframes before spending time and cost on final video generation.',
     bullets: [
       'Prompt changes to keyframes before video',
@@ -305,7 +305,7 @@ const featureShowcase: LandingFeatureShowcase[] = [
   },
   {
     title: 'Timeline View',
-    eyebrow: 'Scrub the cinematic',
+    eyebrow: 'Timing stays editable',
     copy: 'Scrub shots, dialogue, captions, action beats and timing in one coherent cinematic timeline.',
     bullets: [
       'See keyframes and timing together',
@@ -321,15 +321,15 @@ const featureShowcase: LandingFeatureShowcase[] = [
 const marketPainPoints: LandingPainPoint[] = [
   {
     title: 'Context drift',
-    copy: 'Every scene starts by re-explaining characters, places and canon.',
+    copy: 'In isolated-prompt workflows, every scene starts by re-explaining characters, places and canon.',
   },
   {
     title: 'Reference sprawl',
-    copy: 'Scripts, images, sheets and videos scatter across separate tools.',
+    copy: 'In fragmented toolchains, scripts, images, sheets and videos scatter across separate workspaces.',
   },
   {
     title: 'Continuity loss',
-    copy: 'Outputs look impressive, but do not reliably belong to the same world.',
+    copy: 'When outputs are disconnected, impressive shots stop belonging to the same world.',
   },
 ]
 
@@ -415,6 +415,23 @@ function useAnimatedHeroPrompt(promptText: string) {
     visibleText,
     isClearing,
   }
+}
+
+function useAutoGrowTextarea(
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+  value: string,
+  enabled: boolean,
+) {
+  useEffect(() => {
+    if (!enabled) return
+
+    const textarea = textareaRef.current
+    if (!textarea) return
+
+    textarea.style.height = 'auto'
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 112), 260)
+    textarea.style.height = `${nextHeight}px`
+  }, [enabled, textareaRef, value])
 }
 
 function LandingPromptMockIcon({ kind }: { kind: 'spark' | 'send' }) {
@@ -625,6 +642,7 @@ export function LandingPage({
   const landingOnly = appAccessMode === 'landing'
   const waitlistPanelRef = useRef<HTMLElement | null>(null)
   const waitlistEmailRef = useRef<HTMLInputElement | null>(null)
+  const waitlistUseCaseRef = useRef<HTMLTextAreaElement | null>(null)
   const waitlistTriggerRef = useRef<HTMLElement | null>(null)
   const waitlistTurnstileRef = useRef<HTMLDivElement | null>(null)
   const waitlistTurnstileWidgetRef = useRef<string | null>(null)
@@ -644,6 +662,8 @@ export function LandingPage({
   })
   const waitlistConfigured = waitlistIsConfigured()
   const waitlistTurnstileEnabled = Boolean(waitlistTurnstileSiteKey)
+
+  useAutoGrowTextarea(waitlistUseCaseRef, waitlistForm.useCase, waitlistOpen)
 
   useEffect(() => {
     setActiveOutputVideoIndex(0)
@@ -929,10 +949,15 @@ export function LandingPage({
             <span>Direct everything</span>
             from it.
           </h1>
-          <p>
-            Create a living world once. SynArc keeps its canon, characters, locations, timelines and visual memory active
-            underneath every workflow, so every scene, comic, animatic and cinematic stays consistent from the first
-            prompt to the final output.
+          <p className="landing-hero-summary">
+            <span className="landing-copy-desktop">
+              Create a living world once. SynArc keeps its canon, characters, locations, timelines and visual memory active
+              underneath every workflow, so every scene, comic, animatic and cinematic stays consistent from the first
+              prompt to the final output.
+            </span>
+            <span className="landing-copy-mobile">
+              SynArc keeps canon, characters, references and timelines active under every output.
+            </span>
           </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
@@ -1035,8 +1060,9 @@ export function LandingPage({
 
       <section className="landing-problem-strip" id="problem" aria-label="Why isolated prompts break production continuity">
         <div className="landing-problem-strip-heading">
-          <span className="landing-chip">Why it matters</span>
-          <h2>Most AI tools generate from isolated prompts. SynArc generates from a living world.</h2>
+          <span className="landing-chip">What breaks elsewhere</span>
+          <h2>Existing AI tools generate from isolated prompts. SynArc generates from a living world.</h2>
+          <p>These are the production failures SynArc is built to remove.</p>
         </div>
         <div className="landing-problem-strip-list">
           {marketPainPoints.map((point) => (
@@ -1142,7 +1168,7 @@ export function LandingPage({
 
       <section className="landing-feature-showcase" aria-label="SynArc product features">
         <div className="landing-feature-section-heading">
-          <span className="landing-chip">Product depth</span>
+          <span className="landing-chip">What SynArc keeps connected</span>
         </div>
         <div className="landing-feature-list">
           {featureShowcase.map((feature, index) => (
@@ -1257,6 +1283,7 @@ export function LandingPage({
               <label>
                 <span>Use case</span>
                 <textarea
+                  ref={waitlistUseCaseRef}
                   rows={3}
                   placeholder="What would you want SynArc to help you create?"
                   value={waitlistForm.useCase}
