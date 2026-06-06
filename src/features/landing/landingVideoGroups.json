@@ -7,29 +7,9 @@
       "cycle": true,
       "videos": [
         {
-          "id": "synarc-demo-opening",
-          "label": "World studio opening",
-          "src": "/landing/Demo1/SynacrDemoOpening.optimized.webm"
-        },
-        {
-          "id": "synarc-demo-2",
-          "label": "World studio output two",
-          "src": "/landing/Demo1/SynarcDemoVid2.optimized.webm"
-        },
-        {
-          "id": "synarc-demo-run",
-          "label": "World studio run",
-          "src": "/landing/Demo1/SynarcRun.optimized.webm"
-        },
-        {
-          "id": "synarc-demo-1",
-          "label": "World studio output one",
-          "src": "/landing/Demo1/SynarcDemoVid1.optimized.webm"
-        },
-        {
-          "id": "synarc-demo-3",
-          "label": "World studio output three",
-          "src": "/landing/Demo1/SynarcDemoVid3.optimized.webm"
+          "id": "world-output-sequence-combined",
+          "label": "World output sequence",
+          "src": "/landing/Demo1/world-output-sequence.combined.webm"
         }
       ]
     },
@@ -53,14 +33,9 @@
       "cycle": true,
       "videos": [
         {
-          "id": "synarc-demo-cafe",
-          "label": "Ilya and Eva-9 cafe scene",
-          "src": "/landing/Demo3/SynarcDemoVidCafe.optimized.webm"
-        },
-        {
-          "id": "synarc-demo-eva",
-          "label": "Eva-9 cafe closeup",
-          "src": "/landing/Demo3/SynarcDemoVidEva.optimized.webm"
+          "id": "cafe-banter-sequence-combined",
+          "label": "Cafe banter sequence",
+          "src": "/landing/Demo3/cafe-banter-sequence.combined.webm"
         }
       ]
     },
@@ -80,23 +55,13 @@
     {
       "id": "anime-chapter-sequence",
       "label": "Anime chapter sequence",
-      "prompt": "Create an anime cinematic sequence from a story chapter.",
+      "prompt": "Create the cinematic where Miyo steals the Sky Sutra Disc and flees through Kurohama Port.",
       "cycle": true,
       "videos": [
         {
-          "id": "anime-demo-1",
-          "label": "Anime sequence shot one",
-          "src": "/landing/Demo4/anime1.optimized.webm"
-        },
-        {
-          "id": "anime-demo-2",
-          "label": "Anime sequence shot two",
-          "src": "/landing/Demo4/anime2.optimized.webm"
-        },
-        {
-          "id": "anime-demo-3",
-          "label": "Anime sequence shot three",
-          "src": "/landing/Demo4/anime3.optimized.webm"
+          "id": "anime-chapter-sequence-combined",
+          "label": "Anime chapter sequence",
+          "src": "/landing/Demo4/anime-chapter-sequence.combined.webm"
         }
       ]
     },

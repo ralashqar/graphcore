@@ -4042,14 +4042,6 @@
   }
 
   .landing-hero-proof-flow {
-    grid-template-columns: auto auto;
-    gap: 7px;
-    padding: 0;
-    font-size: 0.54rem;
-    letter-spacing: 0.07em;
-  }
-
-  .landing-hero-proof-flow i {
     display: none;
   }
 
