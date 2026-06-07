@@ -3431,9 +3431,123 @@ export default function App() {
     },
     options?: { replaceWorkflowGraphId?: string },
   ) {
-    const mergeById = <TEntry extends { id: string }>(existing: TEntry[], incoming: TEntry[] = []) => {
+    const entryUpdatedAtMs = (entry: { updatedAt?: string; createdAt?: string }) => {
+      const updatedAt = Date.parse(entry.updatedAt ?? '')
+      if (Number.isFinite(updatedAt)) return updatedAt
+      const createdAt = Date.parse(entry.createdAt ?? '')
+      return Number.isFinite(createdAt) ? createdAt : 0
+    }
+    const mergeById = <TEntry extends { id: string; updatedAt?: string; createdAt?: string }>(existing: TEntry[], incoming: TEntry[] = []) => {
       const byId = new Map(existing.map((entry) => [entry.id, entry]))
-      for (const entry of incoming) byId.set(entry.id, entry)
+      for (const entry of incoming) {
+        const current = byId.get(entry.id)
+        if (current && entryUpdatedAtMs(current) > entryUpdatedAtMs(entry)) continue
+        byId.set(entry.id, entry)
+      }
+      return [...byId.values()]
+    }
+    const projectionUpdatedAtMs = (entry: ProjectSnapshot['outputRequests'][number]) => {
+      const projection = readOutputStatusProjectionMetadata(entry)
+      const updatedAt = Date.parse(trimOptionalString(projection.updatedAt))
+      if (Number.isFinite(updatedAt)) return updatedAt
+      const createdAt = Date.parse(trimOptionalString(projection.createdAt))
+      return Number.isFinite(createdAt) ? createdAt : 0
+    }
+    const projectionIsInformative = (entry: ProjectSnapshot['outputRequests'][number]) => {
+      const projection = readOutputStatusProjectionMetadata(entry)
+      return Boolean(
+        trimOptionalString(projection.status)
+        || trimOptionalString(projection.activeNodeKey)
+        || trimOptionalString(projection.activeNodeLabel)
+        || trimOptionalString(projection.graphRevision)
+        || trimOptionalString(projection.timelineRevision),
+      )
+    }
+    const mergeOutputRequestsById = (
+      existing: ProjectSnapshot['outputRequests'],
+      incoming: ProjectSnapshot['outputRequests'] = [],
+    ) => {
+      const byId = new Map(existing.map((entry) => [entry.id, entry]))
+      for (const entry of incoming) {
+        const current = byId.get(entry.id)
+        const currentProjectionUpdatedAt = current ? projectionUpdatedAtMs(current) : 0
+        const incomingProjectionUpdatedAt = projectionUpdatedAtMs(entry)
+        if (current && entryUpdatedAtMs(current) > entryUpdatedAtMs(entry)) {
+          if (
+            projectionIsInformative(entry)
+            && (!projectionIsInformative(current) || incomingProjectionUpdatedAt >= currentProjectionUpdatedAt)
+          ) {
+            byId.set(entry.id, {
+              ...current,
+              latestRunId: current.latestRunId ?? entry.latestRunId,
+              metadata: {
+                ...current.metadata,
+                outputStatusProjection: readOutputStatusProjectionMetadata(entry),
+              },
+            })
+          }
+          continue
+        }
+        if (
+          current
+          && projectionIsInformative(current)
+          && (!projectionIsInformative(entry) || currentProjectionUpdatedAt > incomingProjectionUpdatedAt)
+        ) {
+          byId.set(entry.id, {
+            ...entry,
+            latestRunId: entry.latestRunId ?? current.latestRunId,
+            metadata: {
+              ...entry.metadata,
+              outputStatusProjection: readOutputStatusProjectionMetadata(current),
+            },
+          })
+          continue
+        }
+        byId.set(entry.id, entry)
+      }
+      return [...byId.values()]
+    }
+    const mergeRunSteps = (
+      existing: ProjectSnapshot['outputWorkflowRuns'][number]['steps'],
+      incoming: ProjectSnapshot['outputWorkflowRuns'][number]['steps'] = [],
+    ) => {
+      if (incoming.length === 0) return existing
+      const byKey = new Map<string, ProjectSnapshot['outputWorkflowRuns'][number]['steps'][number]>(
+        existing.map((step) => [`${step.nodeKey}:${step.id || step.orderIndex}`, step] as const),
+      )
+      for (const step of incoming) {
+        const key = `${step.nodeKey}:${step.id || step.orderIndex}`
+        const current = byKey.get(key)
+        if (current && entryUpdatedAtMs(current) > entryUpdatedAtMs(step)) continue
+        byKey.set(key, step)
+      }
+      return [...byKey.values()].sort((left, right) => left.orderIndex - right.orderIndex)
+    }
+    const mergeOutputWorkflowRunsById = (
+      existing: ProjectSnapshot['outputWorkflowRuns'],
+      incoming: ProjectSnapshot['outputWorkflowRuns'] = [],
+    ) => {
+      const byId = new Map(existing.map((entry) => [entry.id, entry]))
+      for (const entry of incoming) {
+        const current = byId.get(entry.id)
+        if (current && entryUpdatedAtMs(current) > entryUpdatedAtMs(entry)) {
+          if (entry.steps.length > 0) {
+            byId.set(entry.id, {
+              ...current,
+              steps: mergeRunSteps(current.steps, entry.steps),
+              artifacts: entry.artifacts.length > 0 ? mergeById(current.artifacts, entry.artifacts) : current.artifacts,
+            })
+          }
+          continue
+        }
+        byId.set(entry.id, current
+          ? {
+            ...entry,
+            steps: mergeRunSteps(current.steps, entry.steps),
+            artifacts: entry.artifacts.length > 0 ? mergeById(current.artifacts, entry.artifacts) : current.artifacts,
+          }
+          : entry)
+      }
       return [...byId.values()]
     }
     const mergeAssets = (existing: ProjectSnapshot['assets'], incoming: ProjectSnapshot['assets'] = []) => {
@@ -3449,7 +3563,7 @@ export default function App() {
     return {
       ...current,
       assets: mergeAssets(current.assets, slice.assets),
-      outputRequests: mergeById(current.outputRequests, slice.requests),
+      outputRequests: mergeOutputRequestsById(current.outputRequests, slice.requests),
       outputWorkflows: mergeById(current.outputWorkflows, slice.workflows),
       outputWorkflowNodes: workflowId
         ? mergeById(current.outputWorkflowNodes.filter((node) => node.workflowId !== workflowId), slice.nodes)
@@ -3457,7 +3571,7 @@ export default function App() {
       outputWorkflowEdges: workflowId
         ? mergeById(current.outputWorkflowEdges.filter((edge) => edge.workflowId !== workflowId), slice.edges)
         : mergeById(current.outputWorkflowEdges, slice.edges),
-      outputWorkflowRuns: mergeById(current.outputWorkflowRuns, slice.runs),
+      outputWorkflowRuns: mergeOutputWorkflowRunsById(current.outputWorkflowRuns, slice.runs),
       outputArtifacts: mergeById(current.outputArtifacts, slice.artifacts),
     }
   }

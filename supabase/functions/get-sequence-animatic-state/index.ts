@@ -53,8 +53,14 @@ function readContinuityState(input: {
   }
   input.artifacts
     .map((artifact) => asRecord(artifact.metadata))
-    .filter((metadata) => readText(metadata.role) === 'sequence_animatic_continuity_asset')
+    .filter((metadata) => readText(metadata.role) === 'sequence_animatic_continuity_asset' || readText(metadata.role) === 'sequence_animatic_continuity_asset_batch')
     .forEach((metadata) => {
+      if (readText(metadata.role) === 'sequence_animatic_continuity_asset_batch') {
+        Object.entries(asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+          if (nodeId) assetStateByNodeId[nodeId] = state
+        })
+        return
+      }
       const state = asRecord(metadata.assetState ?? metadata.asset_state)
       const nodeId = readText(state.sourceNodeId) || readText(metadata.targetNodeId)
       if (nodeId) assetStateByNodeId[nodeId] = state
@@ -96,8 +102,181 @@ function readContinuityState(input: {
   }
 }
 
+function readDirectorState(input: {
+  masterRequest: ReturnType<typeof mapOutputRequestRow>
+  artifacts: ReturnType<typeof mapOutputArtifactRow>[]
+}) {
+  const metadata = asRecord(input.masterRequest.metadata)
+  const planMetadata = input.artifacts
+    .map((artifact) => asRecord(artifact.metadata))
+    .find((entry) => readText(entry.role) === 'sequence_animatic_director_plan') ?? {}
+  const directorPlan = asRecord(planMetadata.shotContinuityPlan ?? planMetadata.shot_continuity_plan ?? planMetadata.directorPlan ?? planMetadata.director_plan)
+  const explicitStatus = readText(metadata.shotContinuityPlanStatus) || readText(metadata.directorPlanStatus)
+  const directorPlanStatus = Object.keys(directorPlan).length > 0
+    ? 'ready'
+    : explicitStatus === 'planning' || explicitStatus === 'failed'
+      ? explicitStatus
+      : 'missing'
+  return {
+    directorPlan: Object.keys(directorPlan).length > 0 ? directorPlan : null,
+    directorPlanStatus,
+    shotContinuityPlan: Object.keys(directorPlan).length > 0 ? directorPlan : null,
+    shotContinuityPlanStatus: directorPlanStatus,
+  }
+}
+
+function readOrchestratorState(input: {
+  masterRequest: ReturnType<typeof mapOutputRequestRow>
+  events: Array<{ eventType: string; payload: Record<string, unknown> }>
+}) {
+  const metadata = asRecord(input.masterRequest.metadata)
+  const explicitStatus = readText(metadata.orchestrationStatus)
+  const queuedBlocks = input.events.filter((event) => event.eventType === 'block_queued')
+  const readyBlocks = input.events.filter((event) => event.eventType === 'block_ready')
+  const failedBlocks = input.events.filter((event) => event.eventType === 'block_failed')
+  const startedBlocks = input.events.filter((event) => event.eventType === 'block_started')
+  const activeStarted = [...startedBlocks].reverse().find((event) => {
+    const blockId = readText(event.payload.storyboardBlockId)
+    return blockId
+      && !readyBlocks.some((ready) => readText(ready.payload.storyboardBlockId) === blockId)
+      && !failedBlocks.some((failed) => readText(failed.payload.storyboardBlockId) === blockId)
+  })
+  const referenceQueued = input.events.filter((event) => event.eventType === 'reference_asset_queued').length
+  const referenceReady = input.events.filter((event) => event.eventType === 'reference_asset_ready').length
+  const referenceFailed = input.events.filter((event) => event.eventType === 'reference_asset_failed').length
+  const hasOrchestratorEvent = input.events.some((event) => event.eventType === 'orchestrator_started')
+  const orchestratorStatus = failedBlocks.length > 0 && readyBlocks.length + failedBlocks.length >= queuedBlocks.length && queuedBlocks.length > 0
+    ? 'failed'
+    : queuedBlocks.length > 0 && readyBlocks.length >= queuedBlocks.length
+      ? 'ready'
+      : explicitStatus === 'partial' || explicitStatus === 'queued' || explicitStatus === 'ready' || explicitStatus === 'failed'
+        ? explicitStatus
+        : hasOrchestratorEvent
+          ? 'running'
+          : 'missing'
+  return {
+    orchestratorStatus,
+    queuedBlockCount: queuedBlocks.length,
+    activeBlockId: activeStarted ? readText(activeStarted.payload.storyboardBlockId) || null : null,
+    referenceAssetProgress: {
+      queued: referenceQueued,
+      ready: referenceReady,
+      failed: referenceFailed,
+      pending: Math.max(0, referenceQueued - referenceReady - referenceFailed),
+    },
+  }
+}
+
 function readArray(value: unknown) {
   return Array.isArray(value) ? value : []
+}
+
+function readScriptShotProjectionFromOutput(outputInput: unknown) {
+  const outputs = asRecord(outputInput)
+  const screenplayDraft = asRecord(outputs.screenplayDraft ?? outputs.screenplay_draft)
+  const scriptContract = readText(asRecord(screenplayDraft.metadata).scriptContract) || readText(outputs.scriptContract ?? outputs.script_contract)
+  if (scriptContract === 'creative_screenplay_v1') {
+    return { scriptShotStatus: 'missing' as const, scriptShots: [], scriptBlocks: [] }
+  }
+  const rawScriptShots = readArray(outputs.scriptShots ?? outputs.script_shots)
+  const rawShotBreaks = rawScriptShots.length > 0
+    ? rawScriptShots
+    : readArray(outputs.shotBreaks ?? outputs.shot_breaks ?? asRecord(outputs.shotBreakPlan ?? outputs.shot_break_plan).shotBreaks)
+  const scriptShots = rawShotBreaks.map(asRecord).map((shot, index) => {
+    const shotIndex = Number(shot.index ?? 0) || index + 1
+    const id = readText(shot.id) || `shot_${String(shotIndex).padStart(3, '0')}`
+    const approximateDurationSeconds = Math.max(1, Math.min(12, Number(shot.approximateDurationSeconds ?? shot.durationSeconds ?? 0) || 3))
+    return {
+      id,
+      index: shotIndex,
+      title: readText(shot.title) || `Shot ${shotIndex}`,
+      approximateDurationSeconds,
+      screenplayText: readText(shot.screenplayText) || readText(shot.screenplay_text) || readText(shot.text),
+      startOffset: Number.isFinite(Number(shot.startOffset)) ? Number(shot.startOffset) : undefined,
+      endOffset: Number.isFinite(Number(shot.endOffset)) ? Number(shot.endOffset) : undefined,
+    }
+  })
+  const shotById = new Map(scriptShots.map((shot) => [shot.id, shot] as const))
+  const rawScriptBlocks = readArray(outputs.scriptBlocks ?? outputs.script_blocks)
+  const rawGroups = rawScriptBlocks.length > 0
+    ? rawScriptBlocks
+    : readArray(asRecord(outputs.shotBreakPlan ?? outputs.shot_break_plan).groups)
+  const scriptBlocks = rawGroups.map(asRecord).map((block, index) => {
+    const blockIndex = Number(block.index ?? 0) || index + 1
+    const shotIds = readArray(block.shotIds ?? block.shot_ids ?? block.shotBreakIds ?? block.shot_break_ids)
+      .map(readText)
+      .filter((shotId) => shotById.has(shotId))
+    const approximateDurationSeconds = Number(block.approximateDurationSeconds ?? block.durationSeconds ?? 0)
+      || shotIds.reduce((total, shotId) => total + (shotById.get(shotId)?.approximateDurationSeconds ?? 0), 0)
+    return {
+      id: readText(block.id) || `script_block_${String(blockIndex).padStart(3, '0')}`,
+      index: blockIndex,
+      title: readText(block.title) || readText(block.summary) || `Screenplay block ${blockIndex}`,
+      shotIds,
+      approximateDurationSeconds,
+    }
+  }).filter((block) => block.shotIds.length > 0)
+  if (scriptShots.length > 0 && scriptBlocks.length === 0) {
+    scriptBlocks.push({
+      id: 'script_block_001',
+      index: 1,
+      title: 'Screenplay shots',
+      shotIds: scriptShots.map((shot) => shot.id),
+      approximateDurationSeconds: scriptShots.reduce((total, shot) => total + (shot.approximateDurationSeconds ?? 0), 0),
+    })
+  }
+  return {
+    scriptShotStatus: scriptShots.length > 0 ? 'ready' as const : 'missing' as const,
+    scriptShots,
+    scriptBlocks,
+  }
+}
+
+function readScreenplayState(input: {
+  steps: ReturnType<typeof mapOutputWorkflowRunStepRow>[]
+}) {
+  const screenplayStep = input.steps
+    .filter((step) => step.nodeKey === 'cinematic_v3_screenplay_author' && step.status === 'completed')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+  const outputs = asRecord(screenplayStep?.outputs)
+  const screenplayDraft = asRecord(outputs.screenplayDraft ?? outputs.screenplay_draft)
+  const screenplayMarkdown = readText(outputs.text) || readText(screenplayDraft.screenplayMarkdown)
+  return {
+    screenplayStatus: screenplayMarkdown ? 'ready' as const : 'missing' as const,
+    screenplayMarkdown,
+  }
+}
+
+function readScriptShotState(input: {
+  runs: ReturnType<typeof mapOutputWorkflowRunRow>[]
+  steps: ReturnType<typeof mapOutputWorkflowRunStepRow>[]
+  artifacts: ReturnType<typeof mapOutputArtifactRow>[]
+}) {
+  const screenplaySteps = input.steps
+    .filter((step) => step.nodeKey === 'cinematic_v3_screenplay_author')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  for (const step of screenplaySteps) {
+    const projection = readScriptShotProjectionFromOutput(step.outputs)
+    if (projection.scriptShots.length > 0) return projection
+  }
+  const screenplayRuns = input.runs
+    .filter((run) => Object.keys(asRecord(run.outputs)).length > 0)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  for (const run of screenplayRuns) {
+    const projection = readScriptShotProjectionFromOutput(run.outputs)
+    if (projection.scriptShots.length > 0) return projection
+  }
+  const manifestMetadata = input.artifacts
+    .map((artifact) => asRecord(artifact.metadata))
+    .find((metadata) => readText(metadata.role) === 'sequence_animatic_manifest') ?? {}
+  const manifest = asRecord(manifestMetadata.manifest)
+  const manifestProjection = readScriptShotProjectionFromOutput({
+    shotBreakPlan: manifest.shotBreakPlan,
+    screenplayDraft: manifest.screenplayDraft,
+  })
+  return manifestProjection.scriptShots.length > 0
+    ? manifestProjection
+    : { scriptShotStatus: 'missing' as const, scriptShots: [], scriptBlocks: [] }
 }
 
 function addAssetKey(value: unknown, assetKeys: Set<string>, depth = 0) {
@@ -256,7 +435,7 @@ Deno.serve(async (request) => {
     const workflowIds = [...new Set(requests.map((entry) => entry.workflowId).filter((id): id is string => Boolean(id)))]
     const runIds = [...new Set(requests.map((entry) => entry.latestRunId).filter((id): id is string => Boolean(id)))]
 
-    const [workflowResponse, runResponse, stepResponse, artifactResponse, projectionResponse] = await Promise.all([
+    const [workflowResponse, runResponse, stepResponse, artifactResponse, projectionResponse, eventResponse] = await Promise.all([
       workflowIds.length > 0
         ? admin.from('output_workflows').select(outputWorkflowSelect).eq('draft_id', payload.draftId).in('id', workflowIds)
         : { data: [], error: null },
@@ -270,12 +449,14 @@ Deno.serve(async (request) => {
         ? admin.from('output_artifacts').select(outputArtifactSelect).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })
         : { data: [], error: null },
       admin.from('output_request_status_projections').select(outputRequestStatusProjectionSelect).eq('draft_id', payload.draftId).in('request_id', requests.map((entry) => entry.id)),
+      admin.from('output_request_events').select('id, project_id, draft_id, request_id, sequence, event_type, payload, created_at').eq('draft_id', payload.draftId).eq('request_id', masterRequest.id).order('sequence', { ascending: true }).limit(500),
     ])
     if (workflowResponse.error) throw new Error(workflowResponse.error.message)
     if (runResponse.error) throw new Error(runResponse.error.message)
     if (stepResponse.error) throw new Error(stepResponse.error.message)
     if (artifactResponse.error) throw new Error(artifactResponse.error.message)
     if (projectionResponse.error) throw new Error(projectionResponse.error.message)
+    if (eventResponse.error) throw new Error(eventResponse.error.message)
 
     const artifacts = (artifactResponse.data ?? []).map(mapOutputArtifactRow)
     const hydratedArtifacts = await hydrateOutputArtifactSignedUrls(admin, artifacts)
@@ -309,6 +490,18 @@ Deno.serve(async (request) => {
       )
     })
     const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map((row) => mapOutputRequestStatusProjectionRow(row as never))
+    const events = ((eventResponse.data ?? []) as Record<string, unknown>[]).map((row) => ({
+      id: readText(row.id),
+      requestId: readText(row.request_id),
+      projectId: readText(row.project_id),
+      draftId: readText(row.draft_id),
+      sequence: Number(row.sequence ?? 0) || 0,
+      eventType: readText(row.event_type),
+      payload: asRecord(row.payload),
+      createdAt: readText(row.created_at),
+    }))
+    const scriptShotState = readScriptShotState({ runs, steps, artifacts: hydratedArtifacts })
+    const screenplayState = readScreenplayState({ steps })
     const revision = hashOutputWorkflowValue({
       requests: requests.map((entry) => ({ id: entry.id, status: entry.status, workflowId: entry.workflowId, latestRunId: entry.latestRunId, updatedAt: entry.updatedAt, metadata: entry.metadata })),
       workflows: workflows.map((entry) => ({ id: entry.id, updatedAt: entry.updatedAt, metadata: entry.metadata })),
@@ -321,8 +514,15 @@ Deno.serve(async (request) => {
       })),
       artifacts: hydratedArtifacts.map((entry) => ({ id: entry.id, key: entry.key, assetKey: entry.assetKey, updatedAt: entry.updatedAt })),
       projections: projections.map((entry) => ({ requestId: entry.requestId, graphRevision: entry.graphRevision, timelineRevision: entry.timelineRevision, status: entry.status, updatedAt: entry.updatedAt })),
+      events: events.map((entry) => ({ id: entry.id, sequence: entry.sequence, eventType: entry.eventType, createdAt: entry.createdAt })),
+      screenplayStatus: screenplayState.screenplayStatus,
+      screenplayHash: hashOutputWorkflowValue({ screenplay: screenplayState.screenplayMarkdown }),
+      scriptShots: scriptShotState.scriptShots.map((shot) => ({ id: shot.id, index: shot.index, title: shot.title, approximateDurationSeconds: shot.approximateDurationSeconds })),
+      scriptBlocks: scriptShotState.scriptBlocks.map((block) => ({ id: block.id, index: block.index, title: block.title, shotIds: block.shotIds })),
     })
     const continuityState = readContinuityState({ requests, artifacts: hydratedArtifacts })
+    const directorState = readDirectorState({ masterRequest, artifacts: hydratedArtifacts })
+    const orchestratorState = readOrchestratorState({ masterRequest, events })
     if (readText(payload.knownRevision) && readText(payload.knownRevision) === revision) {
       return json(sequenceAnimaticStateResponseSchema.parse({
         ok: true,
@@ -335,6 +535,11 @@ Deno.serve(async (request) => {
         artifacts: [],
         assets: [],
         projections: [],
+        events: [],
+        ...screenplayState,
+        ...scriptShotState,
+        ...directorState,
+        ...orchestratorState,
         ...continuityState,
       }))
     }
@@ -350,6 +555,11 @@ Deno.serve(async (request) => {
       artifacts: hydratedArtifacts,
       assets,
       projections,
+      events,
+      ...screenplayState,
+      ...scriptShotState,
+      ...directorState,
+      ...orchestratorState,
       ...continuityState,
     }))
   } catch (error) {

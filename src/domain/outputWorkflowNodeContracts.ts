@@ -17,8 +17,8 @@ const cinematicSequenceContracts = [
   {
     purpose: 'sequence_animatic_manifest',
     label: 'Build Animatic Manifest',
-    requiredInputs: ['screenplay', 'shot_break_plan'],
-    producedOutputs: ['text', 'manifest', 'sequenceAnimaticManifest', 'shot_plan', 'animaticReferenceCatalog', 'animatic_reference_catalog', 'selectedVisualReferenceKeys'],
+    requiredInputs: ['director_plan'],
+    producedOutputs: ['text', 'manifest', 'sequenceAnimaticManifest', 'shot_plan', 'animaticReferenceCatalog', 'animatic_reference_catalog', 'selectedVisualReferenceKeys', 'director_plan', 'shotContinuityPlan', 'shot_continuity_plan'],
     artifactRoles: [],
     previewRoles: ['text'],
     recoveryStrategy: 'node_step',
@@ -35,6 +35,102 @@ const cinematicSequenceContracts = [
     previewRoles: ['artifact'],
     recoveryStrategy: 'node_step_artifact',
     progressLabel: 'Registering animatic manifest',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_director_plan',
+    label: 'Shot Continuity Plan',
+    requiredInputs: ['screenplay', 'asset_pack', 'context'],
+    producedOutputs: ['text', 'directorPlan', 'director_plan', 'shotContinuityPlan', 'shot_continuity_plan', 'shot_plan', 'continuityGraphV2', 'continuity_graph_v2', 'shotBindings', 'shot_bindings'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Building shots, refs, and continuity',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_director_plan_artifact',
+    label: 'Register Shot Continuity Plan',
+    requiredInputs: ['director_plan'],
+    producedOutputs: ['artifact', 'directorPlan', 'director_plan', 'shotContinuityPlan', 'shot_continuity_plan'],
+    artifactRoles: ['sequence_animatic_director_plan'],
+    previewRoles: ['artifact'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving shot continuity plan',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_orchestrator',
+    label: 'Queue Animatic Blocks',
+    requiredInputs: ['director_plan'],
+    producedOutputs: ['orchestration', 'childRequests', 'startedRunIds'],
+    artifactRoles: [],
+    previewRoles: ['orchestration'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Queueing storyboard blocks',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_batch_input',
+    label: 'Continuity Batch Input',
+    requiredInputs: [],
+    producedOutputs: ['text', 'batch', 'target_nodes', 'asset_pack', 'referenceAssetKeys'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing continuity reference batch',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_batch_prompt',
+    label: 'Continuity Batch Prompt',
+    requiredInputs: ['batch', 'target_nodes', 'asset_pack'],
+    producedOutputs: ['text', 'prompt', 'asset_pack', 'referenceAssetKeys'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Writing continuity reference prompt',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_batch_image',
+    label: 'Continuity Batch Image',
+    requiredInputs: ['prompt'],
+    producedOutputs: ['image', 'assetKey', 'storagePath'],
+    artifactRoles: ['sequence_animatic_continuity_batch_image'],
+    previewRoles: ['image'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Generating continuity reference grid',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_batch_extract',
+    label: 'Extract Continuity Batch',
+    requiredInputs: ['batch', 'target_nodes', 'image'],
+    producedOutputs: ['assets', 'assetStateByNodeId', 'asset_state_by_node_id'],
+    artifactRoles: ['sequence_animatic_continuity_asset'],
+    previewRoles: ['assets'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Extracting continuity reference crops',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_continuity_batch_artifact',
+    label: 'Register Continuity Batch',
+    requiredInputs: ['batch'],
+    producedOutputs: ['artifact', 'assets', 'assetStateByNodeId', 'asset_state_by_node_id'],
+    artifactRoles: ['sequence_animatic_continuity_asset_batch'],
+    previewRoles: ['artifact'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving continuity reference batch',
     providerBacked: false,
     manualOnly: false,
   },
@@ -519,6 +615,7 @@ export function getOutputWorkflowNodeContract(nodeOrConfig: Pick<OutputWorkflowN
 }
 
 export type OutputWorkflowRunIntent =
+  | 'generate_director_plan'
   | 'prepare_storyboard_block'
   | 'generate_continuity_pack'
   | 'derive_continuity_structure'
@@ -539,6 +636,13 @@ export type OutputWorkflowRunIntentDefaults = {
 
 export function outputWorkflowRunIntentDefaults(intent: string | null | undefined): OutputWorkflowRunIntentDefaults | null {
   switch (intent) {
+    case 'generate_director_plan':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: true,
+        cinematicVideoApproved: false,
+        allowStaleUpstreamOutputs: false,
+      }
     case 'prepare_storyboard_block':
       return {
         runScope: 'upstream_to_node',

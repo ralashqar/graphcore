@@ -16,7 +16,7 @@ function readRecord(value: unknown): Record<string, unknown> {
 }
 
 export function outputWorkflowStepStatusKey(step: Pick<OutputWorkflowRunStep, 'status' | 'metadata'> | null | undefined) {
-  if (!step) return 'queued'
+  if (!step) return 'idle'
   const metadata = readRecord(step.metadata)
   if (metadata.blocked) return 'blocked'
   if (metadata.skipped) return 'skipped'

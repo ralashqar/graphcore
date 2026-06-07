@@ -655,7 +655,7 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
 
 function OutputWorkflowEdgeView(props: EdgeProps<GraphEdge>) {
   const [edgePath] = getBezierPath(props)
-  const data = props.data ?? { valueType: 'text', statusKey: 'queued' }
+  const data = props.data ?? { valueType: 'text', statusKey: 'idle' }
   return (
     <BaseEdge className={`outputs-graph-edge is-${data.valueType} is-${data.statusKey}`} path={edgePath} markerEnd={props.markerEnd} />
   )
@@ -960,7 +960,8 @@ export function OutputWorkflowGraphOverlay({
           ? outputWorkflowStepStatusKey(step)
           : hasCachedNodeOutput(node) && !node.dirty
             ? 'completed'
-            : outputWorkflowStepStatusKey(step)
+            : 'idle'
+        const nodeIsRunning = statusKey === 'running' || statusKey === 'queued'
         const artifactImage = artifactImageByNodeKeyMap.get(node.key) ?? null
         const previewAssetKey = readStringArray(readRecord(readRecord(node.metadata).outputPreview).assetKeys)[0]
         const imageAssetKey = imageOutputAssetKey(step) || imageOutputAssetKey(cachedOutputSource) || previewAssetKey || artifactImage?.assetKey
@@ -1003,7 +1004,7 @@ export function OutputWorkflowGraphOverlay({
             inputPorts: inputPortsByNodeKey.get(node.key) ?? [],
             outputPorts: outputPortsByNodeKey.get(node.key) ?? [],
             selected: selectedNodeKey === node.key,
-            running: targetedNodeKeySet.has(node.key) || statusKey === 'running',
+            running: nodeIsRunning,
             onSelect: onSelectNode,
             onRun: onRunNode,
             onOpenOutput: setExpandedOutputNodeKey,

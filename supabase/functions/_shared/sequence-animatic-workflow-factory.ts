@@ -1,4 +1,5 @@
 export const sequenceAnimaticGraphSpecVersion = 'sequence_animatic_graph_v1'
+export const sequenceAnimaticGraphSpecVersionV2 = 'sequence_animatic_graph_v2'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -474,6 +475,91 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_target', 'continuity_asset_input', 'target_node', 'continuity_asset_artifact', 'target_node', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'continuity_asset_prompt', 'text', 'continuity_asset_artifact', 'prompt', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'continuity_asset_image', 'image', 'continuity_asset_artifact', 'image', { optional: true, optionalDependency: true }, 'continuity_asset'),
+  ]
+  return { nodes, edges }
+}
+
+export function buildSequenceAnimaticContinuityBatchWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  batch: Record<string, unknown>
+  targetNodes: Record<string, unknown>[]
+  continuityGraphV2: Record<string, unknown>
+  relevantShots: Record<string, unknown>[]
+  shotBindings: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  referenceAssetKeys: string[]
+  visualDependencyEdges: Record<string, unknown>[]
+  aspectRatio: string
+}) {
+  const layout = asRecord(input.batch.layout)
+  const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
+  const columns = Math.max(1, Number(layout.columns ?? (input.targetNodes.length || 1)) || 1)
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    ...input.commonConfig,
+    batch: input.batch,
+    targetNodes: input.targetNodes,
+    continuityGraphV2: input.continuityGraphV2,
+    continuity_graph_v2: input.continuityGraphV2,
+    relevantShots: input.relevantShots,
+    shotBindings: input.shotBindings,
+    assetPack: input.assetPack,
+    referenceAssetKeys: input.referenceAssetKeys,
+    visualDependencyEdges: input.visualDependencyEdges,
+    aspectRatio: input.aspectRatio,
+    gridLayout: { rows, columns, cellCount: Math.max(1, Number(layout.cellCount ?? input.targetNodes.length) || input.targetNodes.length || 1) },
+  }
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_batch_input', 'utility_transform', 'Continuity Batch Input', 80, 120, {
+      purpose: 'sequence_animatic_continuity_batch_input',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_batch_input', maxConcurrency: 4 },
+    }, {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_batch_prompt', 'utility_transform', 'Continuity Batch Prompt', 360, 120, {
+      purpose: 'sequence_animatic_continuity_batch_prompt',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_batch_prompt', maxConcurrency: 4 },
+    }, {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_batch_image', 'image_generation', 'Continuity Batch Image', 640, 120, {
+      purpose: 'sequence_animatic_continuity_batch_image',
+      role: 'sequence_animatic_continuity_batch_image',
+      ...config,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'medium',
+      outputFormat: 'webp',
+      maxReferenceImages: 8,
+      imageSize: { width: Math.max(1024, Math.min(4096, columns * 1024)), height: Math.max(1024, Math.min(4096, rows * 1024)) },
+      planningOnly: false,
+      planning_only: false,
+      execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_batch_image', maxConcurrency: 2, continueOnError: true },
+    }, {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_batch_extract', 'utility_transform', 'Extract Continuity Batch', 920, 120, {
+      purpose: 'sequence_animatic_continuity_batch_extract',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_batch_extract', maxConcurrency: 4 },
+    }, {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_batch_artifact', 'output_artifact', 'Register Continuity Batch', 1200, 120, {
+      purpose: 'sequence_animatic_continuity_batch_artifact',
+      artifactKind: 'other',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_batch_artifact', maxConcurrency: 4 },
+    }, {}, 'continuity_asset_batch'),
+  ]
+  const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_batch', 'continuity_batch_input', 'batch', 'continuity_batch_prompt', 'batch', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_targets', 'continuity_batch_input', 'target_nodes', 'continuity_batch_prompt', 'target_nodes', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'continuity_batch_input', 'asset_pack', 'continuity_batch_prompt', 'asset_pack', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'continuity_batch_prompt', 'text', 'continuity_batch_image', 'prompt', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'continuity_batch_prompt', 'asset_pack', 'continuity_batch_image', 'asset_pack', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__extract_batch', 'continuity_batch_input', 'batch', 'continuity_batch_extract', 'batch', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__extract_targets', 'continuity_batch_input', 'target_nodes', 'continuity_batch_extract', 'target_nodes', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__extract', 'continuity_batch_image', 'image', 'continuity_batch_extract', 'image', { optional: true, optionalDependency: true }, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'continuity_batch_prompt', 'text', 'continuity_batch_artifact', 'prompt', {}, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'extract__artifact_assets', 'continuity_batch_extract', 'assets', 'continuity_batch_artifact', 'assets', { optional: true, optionalDependency: true }, 'continuity_asset_batch'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_batch', 'continuity_batch_input', 'batch', 'continuity_batch_artifact', 'batch', {}, 'continuity_asset_batch'),
   ]
   return { nodes, edges }
 }

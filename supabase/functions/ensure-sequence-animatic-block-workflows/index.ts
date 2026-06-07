@@ -284,9 +284,37 @@ Deno.serve(async (request) => {
       .find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_manifest') ?? null
     const manifestArtifactMetadata = asRecord(asRecord(manifestArtifactRow).metadata)
     const manifest = asRecord(manifestArtifactMetadata.manifest)
+    const directorPlanArtifactRow = (artifactsResponse.data ?? [])
+      .find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_director_plan') ?? null
+    const directorPlanMetadata = asRecord(asRecord(directorPlanArtifactRow).metadata)
+    const directorPlan = asRecord(directorPlanMetadata.directorPlan ?? directorPlanMetadata.director_plan)
+    const directorShots = readArray(directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
+    const directorShotById = new Map(directorShots.map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+    const directorBlocks = readArray(directorPlan.blocks).map(asRecord).filter((block) => readText(block.id))
+    const directorBlockById = new Map(directorBlocks.map((block) => [readText(block.id), block] as const).filter(([id]) => id))
     const manifestHash = sequenceAnimaticStableHash(manifest)
     const masterManifestArtifactKey = readText(asRecord(manifestArtifactRow).key)
-    const blocks = readArray(manifest.blocks).map(asRecord).filter((block) => readText(block.id))
+    const blocks = readArray(manifest.blocks).map(asRecord).filter((block) => readText(block.id)).map((block) => {
+      const blockId = readText(block.id)
+      const directorBlock = directorBlockById.get(blockId) ?? {}
+      const manifestShotIds = readStringArray(block.shotIds)
+      const directorShotIds = readStringArray(directorBlock.shotIds)
+      const shotIds = directorShotIds.length > 0 ? directorShotIds : manifestShotIds
+      const manifestShotsById = new Map(readArray(block.shots).map(asRecord).map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+      const shots = shotIds
+        .map((shotId) => ({ ...asRecord(manifestShotsById.get(shotId)), ...asRecord(directorShotById.get(shotId)), id: shotId }))
+        .filter((shot) => readText(shot.id))
+      return {
+        ...block,
+        ...directorBlock,
+        id: blockId,
+        shotIds: shotIds.length > 0 ? shotIds : readStringArray(block.shotIds),
+        shots: shots.length > 0 ? shots : readArray(block.shots).map(asRecord),
+        storyboardGroup: asRecord(block.storyboardGroup),
+        storyboardLayout: asRecord(block.storyboardLayout),
+        durationSeconds: Number(directorBlock.durationSeconds ?? block.durationSeconds ?? 0) || Number(block.durationSeconds ?? 0) || undefined,
+      }
+    })
     if (blocks.length === 0) throw new HttpError(409, 'Generate the screenplay animatic master first; no parsed storyboard blocks are available yet.')
 
     const existingChildrenResponse = await client
@@ -361,6 +389,15 @@ Deno.serve(async (request) => {
         continuityAnchorSource = continuityPack
         continuityPackHash = readText(continuityMetadata.continuityPackHash) || sequenceAnimaticStableHash(continuityPack)
       }
+    }
+    if (Object.keys(directorPlan).length > 0) {
+      continuityAnchorSource = {
+        ...continuityAnchorSource,
+        ...directorPlan,
+        continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+        shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+      }
+      continuityPackHash = continuityPackHash || readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
     }
 
     if (payload.sequenceAnimaticMode === 'shot_video') {

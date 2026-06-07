@@ -780,6 +780,8 @@ export const cinematicV2DialogueLineSchema = z.object({
   speakerName: z.string().default(''),
   text: z.string().default(''),
   emotion: z.string().default(''),
+  delivery: z.string().default(''),
+  subtext: z.string().default(''),
   startSeconds: z.number().nonnegative().nullable().default(null),
   endSeconds: z.number().nonnegative().nullable().default(null),
 })

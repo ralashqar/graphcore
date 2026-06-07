@@ -43,6 +43,13 @@ import {
   getOutputWorkflowNodeContract,
   outputWorkflowRunIntentDefaults,
 } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import {
+  buildSequenceAnimaticBlockWorkflowGraph,
+  buildSequenceAnimaticContinuityBatchWorkflowGraph,
+  sequenceAnimaticGraphSpecVersion,
+  sequenceAnimaticStoryboardImageSize,
+  sequenceAnimaticStableHash,
+} from './sequence-animatic-workflow-factory.ts'
 import type {
   SeedanceReferenceManifestEntry,
 } from '../../../src/domain/seedanceReferenceManifest.ts'
@@ -62,6 +69,7 @@ import {
   cinematicV2SceneStateSchema,
   cinematicV2ScreenplayDraftSchema,
   cinematicV2ShotSchema,
+  cinematicV2ShotPurposeSchema,
   cinematicV2ShotPlanSchema,
   cinematicV2StoryboardGroupPlanSchema,
   cinematicV2StoryboardLayoutSchema,
@@ -1066,6 +1074,16 @@ async function setStepStatus(
 
 function readText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeStatusToken(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/['"]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_{2,}/g, '_')
 }
 
 function buildOutputStepAiUsage(input: {
@@ -2098,6 +2116,23 @@ function isRetryableOpenAiError(error: unknown) {
 
 function retryDelayMs(attempt: number) {
   return Math.min(10_000, 1_500 * attempt)
+}
+
+function isTransientOpenAiResponseStatus(status: number) {
+  return [408, 409, 425, 429, 500, 502, 503, 504].includes(status)
+}
+
+function openAiResponseRetryDelayMs(result: OpenAiResponseResult | null, attempt: number) {
+  const retryAfter = result?.response.headers.get('Retry-After') ?? ''
+  const retryAfterSeconds = Number(retryAfter)
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.min(30_000, Math.max(1_000, Math.floor(retryAfterSeconds * 1000)))
+  }
+  const retryAfterDate = Date.parse(retryAfter)
+  if (Number.isFinite(retryAfterDate)) {
+    return Math.min(30_000, Math.max(1_000, retryAfterDate - Date.now()))
+  }
+  return Math.min(30_000, retryDelayMs(attempt))
 }
 
 function sleep(ms: number) {
@@ -3837,6 +3872,1360 @@ async function persistSequenceAnimaticContinuityRequestState(input: {
   await input.client.rpc('refresh_output_request_status_projection', { p_request_id: requestId })
 }
 
+async function persistSequenceAnimaticDirectorPlanRequestState(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  artifactKey: string
+  directorPlan: Record<string, unknown>
+}) {
+  const requestResponse = await input.client
+    .from('output_requests')
+    .select('id, project_id, draft_id, metadata')
+    .eq('draft_id', input.run.draftId)
+    .eq('workflow_id', input.workflow.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (requestResponse.error) throw new Error(requestResponse.error.message)
+  if (!requestResponse.data) return
+
+  const requestRow = asRecord(requestResponse.data)
+  const requestId = readText(requestRow.id)
+  if (!requestId) return
+
+  const metadata = asRecord(requestRow.metadata)
+  const updateResponse = await input.client
+    .from('output_requests')
+    .update({
+      metadata: {
+        ...metadata,
+        screenplayAnimaticRole: readText(metadata.screenplayAnimaticRole) || 'master',
+        sequenceAnimaticRole: readText(metadata.sequenceAnimaticRole) || 'master',
+        graphSpecVersion: 'sequence_animatic_graph_v2',
+        directorPlanStatus: 'ready',
+        shotContinuityPlanStatus: 'ready',
+        directorPlanHash: readText(input.directorPlan.shotPlanHash) || hashOutputWorkflowValue(input.directorPlan),
+        shotContinuityPlanHash: readText(input.directorPlan.shotPlanHash) || hashOutputWorkflowValue(input.directorPlan),
+        directorPlanArtifactKey: input.artifactKey,
+        shotContinuityPlanArtifactKey: input.artifactKey,
+        directorPlanUpdatedAt: new Date().toISOString(),
+        shotContinuityPlanUpdatedAt: new Date().toISOString(),
+      },
+    })
+    .eq('id', requestId)
+  if (updateResponse.error) throw new Error(updateResponse.error.message)
+
+  const events: Record<string, unknown>[] = []
+  let sequence = 1
+  events.push({
+    project_id: input.run.projectId,
+    draft_id: input.run.draftId,
+    request_id: requestId,
+    workflow_id: input.workflow.id,
+    run_id: input.run.id,
+    sequence: sequence++,
+      event_type: 'director_plan_ready',
+      payload: {
+        shotCount: readArray(input.directorPlan.shots).length,
+        blockCount: readArray(input.directorPlan.blocks).length,
+        assetRequirementCount: readArray(input.directorPlan.assetRequirements).length,
+        shotPlanHash: readText(input.directorPlan.shotPlanHash),
+        shotContinuityPlanHash: readText(input.directorPlan.shotPlanHash),
+      },
+    metadata: { source: 'sequence_animatic_director_plan' },
+  })
+  for (const block of readArray(input.directorPlan.blocks).map(asRecord)) {
+    events.push({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      request_id: requestId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      sequence: sequence++,
+      event_type: 'block_planned',
+      payload: {
+        blockId: readText(block.id),
+        index: Number(block.index ?? 0) || null,
+        title: readText(block.title),
+        summary: readText(block.summary),
+        shotIds: readStringArray(block.shotIds),
+        status: readText(block.status) || 'planned',
+      },
+      metadata: { source: 'sequence_animatic_director_plan' },
+    })
+  }
+  for (const shot of readArray(input.directorPlan.shots).map(asRecord)) {
+    const shotId = readText(shot.id)
+    events.push({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      request_id: requestId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      sequence: sequence++,
+      event_type: 'shot_registered',
+      payload: {
+        shotId,
+        index: Number(shot.index ?? 0) || null,
+        storyboardBlockId: readText(shot.storyboardBlockId),
+        title: readText(shot.title),
+        action: compactSequenceAnimaticText(shot.action ?? shot.description, 600),
+        visibleCharacterRefIds: readStringArray(shot.visibleCharacterRefIds ?? shot.visible_character_ref_ids),
+        speakerRefIds: readStringArray(shot.speakerRefIds ?? shot.speaker_ref_ids),
+        propRefIds: readStringArray(shot.propRefIds ?? shot.prop_ref_ids),
+        locationRefIds: readStringArray(shot.locationRefIds ?? shot.location_ref_ids),
+        sceneGraphBinding: asRecord(shot.sceneGraphBinding ?? shot.scene_graph_binding),
+        assetRequirements: readArray(shot.assetRequirements ?? shot.asset_requirements).map(asRecord),
+      },
+      metadata: { source: 'sequence_animatic_director_plan' },
+    })
+  }
+  const graph = asRecord(input.directorPlan.continuityGraphV2 ?? input.directorPlan.continuity_graph_v2)
+  const graphNodes = [
+    ...readArray(graph.locationSets).map(asRecord).map((entry) => ({ ...entry, graphNodeKind: 'location_set' })),
+    ...readArray(graph.zones).map(asRecord).map((entry) => ({ ...entry, graphNodeKind: 'zone' })),
+    ...readArray(graph.spots).map(asRecord).map((entry) => ({ ...entry, graphNodeKind: 'spot' })),
+    ...readArray(graph.angles).map(asRecord).map((entry) => ({ ...entry, graphNodeKind: 'angle' })),
+    ...readArray(graph.assetAnchors).map(asRecord).map((entry) => ({ ...entry, graphNodeKind: readText(entry.type) || 'asset_anchor' })),
+  ]
+  for (const node of graphNodes.slice(0, 200)) {
+    events.push({
+      project_id: input.run.projectId,
+      draft_id: input.run.draftId,
+      request_id: requestId,
+      workflow_id: input.workflow.id,
+      run_id: input.run.id,
+      sequence: sequence++,
+      event_type: 'scene_graph_node_registered',
+      payload: {
+        nodeId: readText(node.id),
+        nodeKind: readText(node.graphNodeKind),
+        name: readText(node.name),
+        visualBrief: readText(node.visualBrief),
+        shotIds: readStringArray(node.shotIds),
+        storyboardBlockIds: readStringArray(node.storyboardBlockIds),
+      },
+      metadata: { source: 'sequence_animatic_director_plan' },
+    })
+  }
+  const eventTypes = ['director_plan_ready', 'block_planned', 'shot_registered', 'scene_graph_node_registered']
+  const deleteEvents = await input.client
+    .from('output_request_events')
+    .delete()
+    .eq('request_id', requestId)
+    .in('event_type', eventTypes)
+  if (deleteEvents.error) throw new Error(deleteEvents.error.message)
+  if (events.length > 0) {
+    const sequenceResponse = await input.client
+      .from('output_request_events')
+      .select('sequence')
+      .eq('request_id', requestId)
+      .order('sequence', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (sequenceResponse.error) throw new Error(sequenceResponse.error.message)
+    const sequenceOffset = Number(asRecord(sequenceResponse.data).sequence ?? 0) || 0
+    const sequencedEvents = events.map((event, index) => ({
+      ...event,
+      sequence: sequenceOffset + index + 1,
+    }))
+    const insertEvents = await input.client
+      .from('output_request_events')
+      .insert(sequencedEvents)
+    if (insertEvents.error) throw new Error(insertEvents.error.message)
+  }
+  await input.client.rpc('refresh_output_request_status_projection', { p_request_id: requestId })
+}
+
+async function insertSequenceAnimaticEvent(input: {
+  client: DatabaseClient
+  projectId: string
+  draftId: string
+  requestId: string
+  workflowId?: string | null
+  runId?: string | null
+  eventType: string
+  payload?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+  dedupe?: Record<string, string>
+}) {
+  if (!input.requestId || !input.eventType) return
+  if (input.dedupe && Object.keys(input.dedupe).length > 0) {
+    let query = input.client
+      .from('output_request_events')
+      .delete()
+      .eq('request_id', input.requestId)
+      .eq('event_type', input.eventType)
+    for (const [key, value] of Object.entries(input.dedupe)) {
+      if (!value) continue
+      query = query.eq(`payload->>${key}`, value)
+    }
+    const deleteResponse = await query
+    if (deleteResponse.error) throw new Error(deleteResponse.error.message)
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const latestResponse = await input.client
+      .from('output_request_events')
+      .select('sequence')
+      .eq('request_id', input.requestId)
+      .order('sequence', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (latestResponse.error) throw new Error(latestResponse.error.message)
+    const sequence = (Number(asRecord(latestResponse.data).sequence ?? 0) || 0) + 1
+    const insertResponse = await input.client
+      .from('output_request_events')
+      .insert({
+        project_id: input.projectId,
+        draft_id: input.draftId,
+        request_id: input.requestId,
+        workflow_id: input.workflowId ?? null,
+        run_id: input.runId ?? null,
+        sequence,
+        event_type: input.eventType,
+        payload: input.payload ?? {},
+        metadata: input.metadata ?? {},
+      })
+    if (!insertResponse.error) return
+    if (!String(insertResponse.error.message ?? '').includes('output_request_events_request_id_sequence_key') && !String(insertResponse.error.message ?? '').includes('duplicate key')) {
+      throw new Error(insertResponse.error.message)
+    }
+  }
+}
+
+async function persistSequenceAnimaticNodeProgressEvent(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  node: OutputWorkflowNode
+  status: 'running' | 'completed' | 'failed'
+  outputs?: Record<string, unknown>
+  errorMessage?: string | null
+}) {
+  const config = asRecord(input.node.config)
+  const runMetadata = asRecord(input.run.metadata)
+  const role = readText(runMetadata.screenplayAnimaticRole) || readText(runMetadata.sequenceAnimaticRole) || readText(config.screenplayAnimaticRole) || readText(config.sequenceAnimaticRole)
+  const masterRequestId = readText(runMetadata.masterRequestId) || readText(config.masterRequestId) || readText(runMetadata.parentRequestId) || readText(config.parentRequestId)
+  const outputRequestId = readText(runMetadata.outputRequestId) || readText(config.outputRequestId)
+  const purpose = readText(config.purpose)
+  if (role === 'master' && input.status === 'completed' && (input.node.key === 'cinematic_v3_screenplay_author' || purpose === 'cinematic_v3_screenplay_author')) {
+    const requestId = outputRequestId || masterRequestId
+    if (!requestId) return
+    const outputs = asRecord(input.outputs)
+    const screenplayDraft = asRecord(outputs.screenplayDraft ?? outputs.screenplay_draft)
+    const scriptContract = readText(asRecord(screenplayDraft.metadata).scriptContract) || readText(outputs.scriptContract ?? outputs.script_contract)
+    const scriptShots = readArray(outputs.scriptShots ?? outputs.script_shots)
+    const scriptBlocks = readArray(outputs.scriptBlocks ?? outputs.script_blocks)
+    if (scriptContract === 'creative_screenplay_v1') {
+      const screenplayText = readText(outputs.text) || readText(screenplayDraft.screenplayMarkdown)
+      const scriptHash = hashOutputWorkflowValue({
+        screenplay: screenplayText,
+        scriptContract,
+      })
+      await insertSequenceAnimaticEvent({
+        client: input.client,
+        projectId: input.run.projectId,
+        draftId: input.run.draftId,
+        requestId,
+        workflowId: input.workflow.id,
+        runId: input.run.id,
+        eventType: 'screenplay_ready',
+        payload: {
+          scriptHash,
+          scriptContract,
+          screenplayLength: screenplayText.length,
+          nodeKey: input.node.key,
+          status: input.status,
+        },
+        metadata: { source: 'cinematic_v3_screenplay_author' },
+        dedupe: { scriptHash },
+      })
+      return
+    }
+    if (scriptShots.length === 0) return
+    const scriptHash = hashOutputWorkflowValue({
+      screenplay: readText(outputs.text) || readText(screenplayDraft.screenplayMarkdown),
+      scriptShots,
+      scriptBlocks,
+    })
+    await insertSequenceAnimaticEvent({
+      client: input.client,
+      projectId: input.run.projectId,
+      draftId: input.run.draftId,
+      requestId,
+      workflowId: input.workflow.id,
+      runId: input.run.id,
+      eventType: 'screenplay_shots_ready',
+      payload: {
+        shotCount: scriptShots.length,
+        blockCount: scriptBlocks.length,
+        scriptHash,
+        nodeKey: input.node.key,
+        status: input.status,
+      },
+      metadata: { source: 'cinematic_v3_screenplay_author' },
+      dedupe: { scriptHash },
+    })
+    return
+  }
+  if (role === 'continuity_asset_batch') {
+    const batchId = readText(runMetadata.continuityBatchId) || readText(config.continuityBatchId)
+    if (!masterRequestId || !batchId) return
+    const eventType = input.status === 'completed' && (input.node.key === 'continuity_batch_artifact' || purpose === 'sequence_animatic_continuity_batch_artifact')
+      ? 'reference_asset_ready'
+      : input.status === 'failed'
+        ? 'reference_asset_failed'
+        : ''
+    if (!eventType) return
+    const outputs = asRecord(input.outputs)
+    const batch = asRecord(outputs.batch ?? config.batch)
+    await insertSequenceAnimaticEvent({
+      client: input.client,
+      projectId: input.run.projectId,
+      draftId: input.run.draftId,
+      requestId: masterRequestId,
+      workflowId: input.workflow.id,
+      runId: input.run.id,
+      eventType,
+      payload: {
+        batchRequestId: readText(runMetadata.outputRequestId),
+        batchId,
+        batchKind: readText(batch.batchKind) || readText(runMetadata.continuityBatchKind),
+        targetNodeIds: readStringArray(batch.targetNodeIds),
+        required: runMetadata.continuityBatchRequired === true || batch.required === true,
+        readyCount: Object.keys(asRecord(outputs.assetStateByNodeId ?? outputs.asset_state_by_node_id)).length,
+        nodeKey: input.node.key,
+        status: input.status,
+        error: input.errorMessage ?? null,
+      },
+      metadata: { source: 'sequence_animatic_continuity_batch_workflow' },
+      dedupe: { batchId, nodeKey: input.node.key, status: input.status },
+    })
+    return
+  }
+  if (role !== 'storyboard_block') return
+  const storyboardBlockId = readText(runMetadata.storyboardBlockId) || readText(config.storyboardBlockId)
+  if (!masterRequestId || !storyboardBlockId) return
+  const eventType = input.status === 'running' && input.node.key === 'block_input'
+    ? 'block_started'
+    : input.status === 'completed' && (input.node.key === 'storyboard_prompt' || purpose === 'cinematic_v3_storyboard_prompt')
+      ? 'storyboard_prompt_ready'
+      : input.status === 'completed' && (input.node.key === 'storyboard_sheet' || purpose === 'cinematic_v3_storyboard_sheet')
+        ? 'storyboard_sheet_ready'
+        : input.status === 'completed' && (input.node.key === 'panel_extract' || purpose === 'cinematic_v3_panel_extract')
+          ? 'panels_extracted'
+          : input.status === 'completed' && (input.node.key === 'artifact' || purpose === 'sequence_animatic_block_artifact')
+            ? 'block_ready'
+            : input.status === 'failed'
+              ? 'block_failed'
+              : ''
+  if (!eventType) return
+  const outputs = asRecord(input.outputs)
+  await insertSequenceAnimaticEvent({
+    client: input.client,
+    projectId: input.run.projectId,
+    draftId: input.run.draftId,
+    requestId: masterRequestId,
+    workflowId: input.workflow.id,
+    runId: input.run.id,
+    eventType,
+    payload: {
+      blockRequestId: readText(runMetadata.outputRequestId),
+      storyboardBlockId,
+      nodeKey: input.node.key,
+      nodeLabel: input.node.label,
+      status: input.status,
+      panelCount: readArray(outputs.panels).length || readArray(outputs.artifacts).length || null,
+      artifactKey: readText(asRecord(outputs.artifact).key) || readText(outputs.artifactKey),
+      error: input.errorMessage ?? null,
+    },
+    metadata: { source: 'sequence_animatic_block_workflow' },
+    dedupe: { storyboardBlockId, nodeKey: input.node.key, status: input.status },
+  })
+}
+
+function readScreenplayAnimaticRoleFromMetadata(metadata: Record<string, unknown>) {
+  return readText(metadata.screenplayAnimaticRole) || readText(metadata.sequenceAnimaticRole)
+}
+
+function readScreenplayAnimaticSourceFromMetadata(metadata: Record<string, unknown>, fallback: 'wiki_sequence_unit' | 'prompt_cinematic' = 'wiki_sequence_unit') {
+  const source = readText(metadata.screenplayAnimaticSource)
+  return source === 'prompt_cinematic' || source === 'wiki_sequence_unit' ? source : fallback
+}
+
+function sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest: Record<string, unknown>, directorPlan: Record<string, unknown>) {
+  const directorShots = readArray(directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
+  const directorShotById = new Map(directorShots.map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+  const directorBlocks = readArray(directorPlan.blocks).map(asRecord).filter((block) => readText(block.id))
+  const directorBlockById = new Map(directorBlocks.map((block) => [readText(block.id), block] as const).filter(([id]) => id))
+  return readArray(manifest.blocks).map(asRecord).filter((block) => readText(block.id)).map((block) => {
+    const blockId = readText(block.id)
+    const directorBlock = directorBlockById.get(blockId) ?? {}
+    const manifestShotIds = readStringArray(block.shotIds)
+    const directorShotIds = readStringArray(directorBlock.shotIds)
+    const shotIds = directorShotIds.length > 0 ? directorShotIds : manifestShotIds
+    const manifestShotsById = new Map(readArray(block.shots).map(asRecord).map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+    const shots = shotIds
+      .map((shotId) => ({ ...asRecord(manifestShotsById.get(shotId)), ...asRecord(directorShotById.get(shotId)), id: shotId }))
+      .filter((shot) => readText(shot.id))
+    return {
+      ...block,
+      ...directorBlock,
+      id: blockId,
+      shotIds: shotIds.length > 0 ? shotIds : readStringArray(block.shotIds),
+      shots: shots.length > 0 ? shots : readArray(block.shots).map(asRecord),
+      storyboardGroup: asRecord(block.storyboardGroup),
+      storyboardLayout: asRecord(block.storyboardLayout),
+      durationSeconds: Number(directorBlock.durationSeconds ?? block.durationSeconds ?? 0) || Number(block.durationSeconds ?? 0) || undefined,
+    }
+  })
+}
+
+function sequenceAnimaticBatchLayout(count: number) {
+  const safeCount = Math.max(1, Math.min(9, Math.floor(count) || 1))
+  if (safeCount <= 1) return { rows: 1, columns: 1, cellCount: 1 }
+  if (safeCount <= 2) return { rows: 1, columns: 2, cellCount: safeCount }
+  if (safeCount <= 4) return { rows: 2, columns: 2, cellCount: safeCount }
+  if (safeCount <= 6) return { rows: 2, columns: 3, cellCount: safeCount }
+  return { rows: 3, columns: 3, cellCount: safeCount }
+}
+
+function sequenceAnimaticContinuityNodeCollections(graphInput: unknown) {
+  const graph = asRecord(graphInput)
+  return [
+    ...readArray(graph.locationSets ?? graph.location_sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_zone' })),
+    ...readArray(graph.zones).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_zone', assetKind: 'location_zone' })),
+    ...readArray(graph.spots).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_spot', assetKind: 'location_spot' })),
+    ...readArray(graph.angles).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_angle', assetKind: 'location_angle' })),
+    ...readArray(graph.assetAnchors ?? graph.asset_anchors).map((entry) => {
+      const record = asRecord(entry)
+      const type = readText(record.type) || readText(record.anchorType)
+      return {
+        ...record,
+        nodeKind: type === 'character' ? 'temporary_character' : type === 'prop' ? 'prop' : readText(record.nodeKind) || 'location_anchor',
+        assetKind: type === 'character' ? 'temporary_character' : type === 'prop' ? 'prop' : 'location_spot',
+      }
+    }),
+  ].filter((entry) => readText(entry.id))
+}
+
+function sequenceAnimaticNodeRequiredMap(requirementsInput: unknown) {
+  const map = new Map<string, { required: boolean; assetType: string; priority: string; worldReferenceAssetKeys: string[] }>()
+  for (const requirement of readArray(requirementsInput).map(asRecord)) {
+    const nodeId = readText(requirement.sceneGraphNodeId ?? requirement.nodeId ?? requirement.id)
+    if (!nodeId) continue
+    const previous = map.get(nodeId)
+    map.set(nodeId, {
+      required: previous?.required === true || requirement.required === true || readText(requirement.priority) === 'required',
+      assetType: readText(requirement.assetType ?? requirement.type) || previous?.assetType || '',
+      priority: readText(requirement.priority) || previous?.priority || '',
+      worldReferenceAssetKeys: [...new Set([
+        ...(previous?.worldReferenceAssetKeys ?? []),
+        ...readStringArray(requirement.worldReferenceAssetKeys ?? requirement.referenceAssetKeys),
+      ])],
+    })
+  }
+  return map
+}
+
+function sequenceAnimaticNodeBlockIds(node: Record<string, unknown>, shotBindings: Record<string, unknown>) {
+  const ids = new Set(readStringArray(node.blockIds))
+  for (const shotId of readStringArray(node.shotIds)) {
+    const binding = asRecord(shotBindings[shotId])
+    const blockId = readText(binding.storyboardBlockId)
+    if (blockId) ids.add(blockId)
+  }
+  return [...ids]
+}
+
+function sequenceAnimaticWorldReferenceAssetKeysForNode(node: Record<string, unknown>, assetPack: Record<string, unknown>) {
+  const worldKey = readText(node.worldLocationRefId) || readText(node.baseLocationRefId) || readText(node.worldRefId) || readText(node.worldEntityKey)
+  if (!worldKey) return []
+  const entity = readArray(assetPack.entities).map(asRecord).find((entry) => readText(entry.key) === worldKey) ?? null
+  if (!entity) return []
+  return [...new Set([
+    readText(entity.primaryAssetKey),
+    readText(entity.selectedReferenceAssetKey),
+    ...readStringArray(entity.assetKeys),
+  ].filter(Boolean))].slice(0, 3)
+}
+
+function sequenceAnimaticContinuityAssetBatches(input: {
+  directorPlan: Record<string, unknown>
+  manifest: Record<string, unknown>
+}) {
+  const graph = asRecord(input.directorPlan.continuityGraphV2 ?? input.directorPlan.continuity_graph_v2)
+  const assetPack = asRecord(input.manifest.assetPack)
+  const shotBindings = asRecord(input.directorPlan.shotBindings ?? input.directorPlan.shot_bindings ?? graph.shotBindings)
+  const requiredByNode = sequenceAnimaticNodeRequiredMap(input.directorPlan.assetRequirements ?? input.directorPlan.asset_requirements)
+  const targets = sequenceAnimaticContinuityNodeCollections(graph)
+    .filter((node) => requiredByNode.has(readText(node.id)) || readText(node.assetRequired) === 'true' || node.assetRequired === true || node.required === true)
+  const byId = new Map(targets.map((node) => [readText(node.id), node] as const).filter(([id]) => id))
+  const batches: Record<string, unknown>[] = []
+  const pushBatch = (kind: string, nodes: Record<string, unknown>[], sourceReferenceNodeIds: string[] = []) => {
+    const cleanNodes = nodes.filter((node) => readText(node.id))
+    if (cleanNodes.length === 0) return
+    const targetNodeIds = cleanNodes.map((node) => readText(node.id)).filter(Boolean)
+    const requirementInfo = targetNodeIds.map((id) => requiredByNode.get(id)).filter(Boolean)
+    const required = requirementInfo.some((entry) => entry?.required === true)
+    const blockIds = [...new Set(cleanNodes.flatMap((node) => sequenceAnimaticNodeBlockIds(node, shotBindings)))]
+    const worldReferenceAssetKeys = [...new Set([
+      ...cleanNodes.flatMap((node) => sequenceAnimaticWorldReferenceAssetKeysForNode(node, assetPack)),
+      ...requirementInfo.flatMap((entry) => entry?.worldReferenceAssetKeys ?? []),
+    ])].slice(0, 8)
+    batches.push({
+      batchId: `batch_${slugify(kind)}_${sequenceAnimaticStableHash({ kind, targetNodeIds }).slice(0, 8)}`,
+      batchKind: kind,
+      targetNodeIds,
+      sourceReferenceNodeIds: [...new Set(sourceReferenceNodeIds.filter(Boolean))],
+      worldReferenceAssetKeys,
+      blockIds,
+      layout: sequenceAnimaticBatchLayout(kind === 'single_hero_ref' || kind === 'location_zone_board' ? 1 : cleanNodes.length),
+      required,
+      targetNodes: cleanNodes,
+    })
+  }
+  const setsAndZones = targets.filter((node) => ['location_set', 'location_zone'].includes(readText(node.nodeKind)))
+  for (const node of setsAndZones) pushBatch('location_zone_board', [node], [readText(node.worldLocationRefId)].filter(Boolean))
+  const anglesByZone = new Map<string, Record<string, unknown>[]>()
+  targets.filter((node) => readText(node.nodeKind) === 'location_angle').forEach((node) => {
+    const zoneId = readText(node.zoneId) || readText(node.setId) || 'global'
+    anglesByZone.set(zoneId, [...(anglesByZone.get(zoneId) ?? []), node])
+  })
+  anglesByZone.forEach((nodes, zoneId) => {
+    nodes.length === 1 ? pushBatch('single_hero_ref', nodes, [zoneId]) : pushBatch('angle_grid', nodes, [zoneId])
+  })
+  const spotsByZone = new Map<string, Record<string, unknown>[]>()
+  targets.filter((node) => readText(node.nodeKind) === 'location_spot').forEach((node) => {
+    const zoneId = readText(node.zoneId) || 'global'
+    spotsByZone.set(zoneId, [...(spotsByZone.get(zoneId) ?? []), node])
+  })
+  spotsByZone.forEach((nodes, zoneId) => {
+    nodes.length === 1 ? pushBatch('single_hero_ref', nodes, [zoneId]) : pushBatch('spot_grid', nodes, [zoneId])
+  })
+  const anchors = targets.filter((node) => ['temporary_character', 'prop'].includes(readText(node.nodeKind)) || ['temporary_character', 'prop'].includes(readText(node.assetKind)))
+  const groupedAnchors = new Map<string, Record<string, unknown>[]>()
+  anchors.forEach((node) => {
+    const kind = readText(node.assetKind) === 'temporary_character' || readText(node.nodeKind) === 'temporary_character' ? 'temp_character_grid' : 'prop_grid'
+    const blockKey = sequenceAnimaticNodeBlockIds(node, shotBindings).join('_') || 'global'
+    const key = `${kind}:${blockKey}`
+    groupedAnchors.set(key, [...(groupedAnchors.get(key) ?? []), node])
+  })
+  groupedAnchors.forEach((nodes, key) => {
+    const kind = key.startsWith('temp_character_grid:') ? 'temp_character_grid' : 'prop_grid'
+    const heroNodes = nodes.filter((node) => readStringArray(node.shotIds).length >= 3 || readText(node.importance) === 'hero' || readText(node.priority) === 'hero')
+    heroNodes.forEach((node) => pushBatch('single_hero_ref', [node]))
+    const incidental = nodes.filter((node) => !heroNodes.includes(node))
+    for (let index = 0; index < incidental.length; index += 6) {
+      const slice = incidental.slice(index, index + 6)
+      slice.length === 1 ? pushBatch('single_hero_ref', slice) : pushBatch(kind, slice)
+    }
+  })
+  return batches.filter((batch, index, list) => {
+    const ids = readStringArray(batch.targetNodeIds).join('|')
+    return list.findIndex((candidate) => readStringArray(candidate.targetNodeIds).join('|') === ids) === index
+  })
+}
+
+function sequenceAnimaticContinuityAssetEntityFromState(stateInput: unknown) {
+  const state = asRecord(stateInput)
+  const assetKey = readText(state.assetKey)
+  const sourceNodeId = readText(state.sourceNodeId)
+  if (!assetKey || !sourceNodeId || readText(state.status) !== 'ready') return null
+  const assetKind = readText(state.assetKind) || 'continuity_asset'
+  return {
+    key: `continuity_ref_${slugify(sourceNodeId)}`,
+    name: readText(state.name) || titleFromRefLike(sourceNodeId),
+    type: assetKind === 'location_angle' || assetKind === 'location_zone' || assetKind === 'location_spot' ? 'location_spot' : assetKind === 'temporary_character' ? 'character' : assetKind === 'prop' ? 'prop' : 'continuity_asset',
+    role: 'continuity_reference',
+    summary: readText(state.summary) || 'Animatic-specific scene graph reference generated for continuity.',
+    visualDescription: 'Use this generated animatic scene-graph reference to preserve spatial layout, materials, camera setup, identity, and prop design.',
+    assetKeys: [assetKey],
+    primaryAssetKey: assetKey,
+    selectedReferenceAssetKey: assetKey,
+    selectedReferenceVariantKey: 'continuity_asset',
+    selectedReferenceVariantLabel: readText(state.name) || titleFromRefLike(sourceNodeId),
+    selectedReferenceVariantType: 'continuity_asset',
+    referenceSelectionReason: `Ready continuity asset for scene graph node ${sourceNodeId}.`,
+    continuitySourceNodeId: sourceNodeId,
+  }
+}
+
+async function augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets(input: {
+  client: DatabaseClient
+  request: OutputRequest
+  workflowId: string
+}) {
+  const requestMetadata = asRecord(input.request.metadata)
+  if (readScreenplayAnimaticRoleFromMetadata(requestMetadata) !== 'storyboard_block') return
+  const masterRequestId = readText(requestMetadata.masterRequestId) || readText(requestMetadata.parentRequestId) || input.request.parentRequestId
+  if (!masterRequestId) return
+  const artifactResponse = await input.client
+    .from('output_artifacts')
+    .select(outputArtifactSelect)
+    .eq('project_id', input.request.projectId)
+    .eq('draft_id', input.request.draftId)
+    .order('created_at', { ascending: false })
+    .limit(500)
+  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
+  const continuityEntities = (artifactResponse.data ?? [])
+    .map((row) => asRecord(asRecord(row).metadata))
+    .filter((metadata) => (readText(metadata.role) === 'sequence_animatic_continuity_asset' || readText(metadata.role) === 'sequence_animatic_continuity_asset_batch') && readText(metadata.masterRequestId) === masterRequestId)
+    .flatMap((metadata) => {
+      if (readText(metadata.role) === 'sequence_animatic_continuity_asset_batch') {
+        return Object.values(asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).map((state) => sequenceAnimaticContinuityAssetEntityFromState(state))
+      }
+      return [sequenceAnimaticContinuityAssetEntityFromState(metadata.assetState ?? metadata.asset_state)]
+    })
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+  if (continuityEntities.length === 0) return
+  const nodeResponse = await input.client
+    .from('output_workflow_nodes')
+    .select(outputWorkflowNodeSelect)
+    .eq('workflow_id', input.workflowId)
+    .eq('key', 'block_input')
+    .maybeSingle()
+  if (nodeResponse.error) throw new Error(nodeResponse.error.message)
+  if (!nodeResponse.data) return
+  const node = mapOutputWorkflowNodeRow(nodeResponse.data)
+  const config = asRecord(node.config)
+  const assetPack = asRecord(config.assetPack)
+  const existingEntities = readArray(assetPack.entities).map(asRecord)
+  const existingKeys = new Set(existingEntities.map((entity) => readText(entity.key)).filter(Boolean))
+  const mergedContinuityEntities = continuityEntities.filter((entity) => {
+    const key = readText(entity.key)
+    if (!key || existingKeys.has(key)) return false
+    existingKeys.add(key)
+    return true
+  })
+  if (mergedContinuityEntities.length === 0) return
+  const nextAssetPack = {
+    ...assetPack,
+    entities: [...existingEntities, ...mergedContinuityEntities].slice(0, 32),
+    continuityReferenceAssetKeys: [...new Set([
+      ...readStringArray(assetPack.continuityReferenceAssetKeys),
+      ...mergedContinuityEntities.map((entity) => readText(entity.primaryAssetKey)).filter(Boolean),
+    ])],
+  }
+  await input.client
+    .from('output_workflow_nodes')
+    .update({
+      config: {
+        ...config,
+        assetPack: nextAssetPack,
+        asset_pack: nextAssetPack,
+      },
+    })
+    .eq('id', node.id)
+}
+
+async function startSequenceAnimaticChildRun(input: {
+  client: DatabaseClient
+  request: OutputRequest
+  workflowId: string
+  runIntent: 'prepare_storyboard_block' | 'generate_continuity_asset'
+  targetNodeKeys: string[]
+}) {
+  await augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets({
+    client: input.client,
+    request: input.request,
+    workflowId: input.workflowId,
+  })
+  const existingRunId = readText(input.request.latestRunId)
+  if (existingRunId) {
+    const existingRunResponse = await input.client
+      .from('output_workflow_runs')
+      .select('id,status')
+      .eq('id', existingRunId)
+      .maybeSingle()
+    if (existingRunResponse.error) throw new Error(existingRunResponse.error.message)
+    const status = readText(asRecord(existingRunResponse.data).status)
+    if (status === 'queued' || status === 'running' || status === 'completed') {
+      return { started: false, runId: existingRunId, status }
+    }
+  }
+  const [workflowResponse, nodeResponse, edgeResponse] = await Promise.all([
+    input.client
+      .from('output_workflows')
+      .select(outputWorkflowSelect)
+      .eq('id', input.workflowId)
+      .single(),
+    input.client
+      .from('output_workflow_nodes')
+      .select(outputWorkflowNodeSelect)
+      .eq('workflow_id', input.workflowId)
+      .order('created_at', { ascending: true }),
+    input.client
+      .from('output_workflow_edges')
+      .select(outputWorkflowEdgeSelect)
+      .eq('workflow_id', input.workflowId)
+      .order('created_at', { ascending: true }),
+  ])
+  if (workflowResponse.error || !workflowResponse.data) throw new Error(workflowResponse.error?.message ?? 'Child workflow not found.')
+  if (nodeResponse.error) throw new Error(nodeResponse.error.message)
+  if (edgeResponse.error) throw new Error(edgeResponse.error.message)
+  const workflow = mapOutputWorkflowRow(workflowResponse.data)
+  const nodes = (nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow)
+  const edges = (edgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow)
+  const nodeKeySet = new Set(nodes.map((node) => node.key))
+  const activeEdges = edges.filter((edge) => nodeKeySet.has(edge.sourceNodeKey) && nodeKeySet.has(edge.targetNodeKey))
+  const validation = validateOutputWorkflowGraph({ nodes, edges: activeEdges })
+  if (!validation.ok) throw new Error(validation.diagnostics.join(' '))
+  const intentDefaults = outputWorkflowRunIntentDefaults(input.runIntent)
+  const requestMetadata = asRecord(input.request.metadata)
+  const metadata = {
+    runIntent: input.runIntent,
+    runScope: intentDefaults?.runScope ?? 'upstream_to_node',
+    debugSkipVideoGeneration: intentDefaults?.debugSkipVideoGeneration ?? true,
+    cinematicVideoApproved: intentDefaults?.cinematicVideoApproved ?? false,
+    allowStaleUpstreamOutputs: intentDefaults?.allowStaleUpstreamOutputs ?? false,
+    targetNodeKeys: input.targetNodeKeys,
+    parentRequestId: readText(requestMetadata.parentRequestId) || input.request.parentRequestId,
+    masterRequestId: readText(requestMetadata.masterRequestId) || readText(requestMetadata.parentRequestId) || input.request.parentRequestId,
+    storyboardBlockId: readText(requestMetadata.storyboardBlockId),
+    outputRequestId: input.request.id,
+    queuedAt: new Date().toISOString(),
+    startedBy: 'sequence_animatic_orchestrator',
+  }
+  const selectedSubgraph = selectOutputWorkflowRunSubgraph({
+    nodes,
+    edges: activeEdges,
+    targetNodeKeys: input.targetNodeKeys,
+    runScope: 'upstream_to_node',
+  })
+  if (selectedSubgraph.diagnostics.length > 0) throw new Error(selectedSubgraph.diagnostics.join(' '))
+  const executionPlan = buildOutputWorkflowExecutionPlan(selectedSubgraph.nodes, selectedSubgraph.edges)
+  const nodeOrder = new Map(executionPlan.orderedNodeKeys.map((key, index) => [key, index]))
+  const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
+  const runInput = {
+    sourceEntityKeys: input.request.selectedEntityKeys,
+    sourceSequenceUnitKeys: input.request.selectedSequenceUnitKeys,
+    masterRequestId: readText(metadata.masterRequestId),
+    storyboardBlockId: readText(metadata.storyboardBlockId),
+  }
+  const now = new Date().toISOString()
+  const runResponse = await input.client
+    .from('output_workflow_runs')
+    .insert({
+      project_id: input.request.projectId,
+      draft_id: input.request.draftId,
+      workflow_id: input.workflowId,
+      requested_by: input.request.requestedBy,
+      status: 'queued',
+      preset: workflow.preset,
+      prompt: input.request.prompt,
+      target_format: input.request.targetFormat,
+      world_snapshot_fingerprint: buildOutputWorkflowInputFingerprint(runInput),
+      input: runInput,
+      metadata,
+      heartbeat_at: now,
+    })
+    .select(outputWorkflowRunSelect)
+    .single()
+  if (runResponse.error || !runResponse.data) throw new Error(runResponse.error?.message ?? 'Failed to queue child output workflow run.')
+  const runRow = runResponse.data
+  const stepResponse = await input.client
+    .from('output_workflow_run_steps')
+    .insert(selectedSubgraph.nodes
+      .slice()
+      .sort((left, right) => (nodeOrder.get(left.key) ?? 999) - (nodeOrder.get(right.key) ?? 999))
+      .map((node, index) => ({
+        run_id: runRow.id,
+        workflow_id: input.workflowId,
+        node_id: node.id,
+        draft_id: input.request.draftId,
+        node_key: node.key,
+        node_type: node.nodeType,
+        status: 'queued',
+        order_index: index,
+        label: node.label,
+        metadata: {
+          executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
+          resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
+          groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
+          runScope: metadata.runScope,
+          outputRequestId: input.request.id,
+        },
+      })))
+    .select(outputWorkflowRunStepSelect)
+  if (stepResponse.error) throw new Error(stepResponse.error.message)
+  const updateRequest = await input.client
+    .from('output_requests')
+    .update({
+      latest_run_id: runRow.id,
+      status: 'running',
+      error_message: null,
+      metadata: {
+        ...requestMetadata,
+        readyToRun: false,
+        latestRunId: runRow.id,
+        lastRunStartedAt: now,
+        startedBy: 'sequence_animatic_orchestrator',
+      },
+    })
+    .eq('id', input.request.id)
+  if (updateRequest.error) throw new Error(updateRequest.error.message)
+  await input.client.rpc('refresh_output_request_status_projection', { p_request_id: input.request.id })
+  return { started: true, runId: readText(runRow.id), status: 'queued' }
+}
+
+async function maybeStartNextSequenceAnimaticStoryboardBlock(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+}) {
+  const metadata = asRecord(input.run.metadata)
+  const runRole = readText(metadata.screenplayAnimaticRole) || readText(metadata.sequenceAnimaticRole)
+  if (runRole !== 'storyboard_block' && runRole !== 'continuity_asset_batch') return null
+  const masterRequestId = readText(metadata.masterRequestId) || readText(metadata.parentRequestId)
+  if (!masterRequestId) return null
+  const childrenResponse = await input.client
+    .from('output_requests')
+    .select(outputRequestSelect)
+    .eq('project_id', input.run.projectId)
+    .eq('draft_id', input.run.draftId)
+    .eq('parent_request_id', masterRequestId)
+    .order('created_at', { ascending: true })
+  if (childrenResponse.error) throw new Error(childrenResponse.error.message)
+  const allChildren = (childrenResponse.data ?? []).map(mapOutputRequestRow)
+    .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true)
+  const activeRequiredBatches = allChildren.filter((child) => {
+    const childMetadata = asRecord(child.metadata)
+    return readScreenplayAnimaticRoleFromMetadata(childMetadata) === 'continuity_asset_batch'
+      && childMetadata.continuityBatchRequired === true
+      && (child.status === 'running' || child.status === 'queued' || child.status === 'planning')
+  })
+  if (activeRequiredBatches.length > 0) return null
+  const children = allChildren
+    .filter((child) => readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'storyboard_block')
+  const activeChildren = children.filter((child) => child.status === 'running' || child.status === 'queued' || child.status === 'planning')
+  if (activeChildren.length > 0) return null
+  const nextChild = children
+    .filter((child) => child.workflowId)
+    .filter((child) => child.status !== 'completed')
+    .sort((left, right) => (Number(asRecord(left.metadata).storyboardBlockIndex ?? 0) || 999) - (Number(asRecord(right.metadata).storyboardBlockIndex ?? 0) || 999))[0] ?? null
+  if (!nextChild?.workflowId) {
+    const masterResponse = await input.client
+      .from('output_requests')
+      .select('id,metadata')
+      .eq('id', masterRequestId)
+      .maybeSingle()
+    if (masterResponse.error) throw new Error(masterResponse.error.message)
+    const masterMetadata = asRecord(asRecord(masterResponse.data).metadata)
+    const updateMaster = await input.client
+      .from('output_requests')
+      .update({
+        metadata: {
+          ...masterMetadata,
+          orchestrationStatus: 'ready',
+          orchestrationCompletedAt: new Date().toISOString(),
+        },
+      })
+      .eq('id', masterRequestId)
+    if (updateMaster.error) throw new Error(updateMaster.error.message)
+    await input.client.rpc('refresh_output_request_status_projection', { p_request_id: masterRequestId })
+    return null
+  }
+  const startResult = await startSequenceAnimaticChildRun({
+    client: input.client,
+    request: nextChild,
+    workflowId: nextChild.workflowId,
+    runIntent: 'prepare_storyboard_block',
+    targetNodeKeys: ['artifact'],
+  })
+  if (startResult.started) {
+    await insertSequenceAnimaticEvent({
+      client: input.client,
+      projectId: input.run.projectId,
+      draftId: input.run.draftId,
+      requestId: masterRequestId,
+      workflowId: nextChild.workflowId,
+      runId: startResult.runId,
+      eventType: 'block_started',
+      payload: {
+        blockRequestId: nextChild.id,
+        workflowId: nextChild.workflowId,
+        storyboardBlockId: readText(asRecord(nextChild.metadata).storyboardBlockId),
+        runId: startResult.runId,
+        status: startResult.status,
+      },
+      metadata: { source: 'sequence_animatic_orchestrator_continuation' },
+      dedupe: { storyboardBlockId: readText(asRecord(nextChild.metadata).storyboardBlockId), runId: startResult.runId },
+    })
+  }
+  return startResult
+}
+
+async function runSequenceAnimaticOrchestrator(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  node: OutputWorkflowNode
+  upstream: Record<string, unknown>
+}) {
+  const requestResponse = await input.client
+    .from('output_requests')
+    .select(outputRequestSelect)
+    .eq('draft_id', input.run.draftId)
+    .eq('workflow_id', input.workflow.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (requestResponse.error) throw new Error(requestResponse.error.message)
+  if (!requestResponse.data) throw new Error('Sequence animatic orchestrator could not find the master output request.')
+  const masterRequest = mapOutputRequestRow(requestResponse.data)
+  const masterMetadata = asRecord(masterRequest.metadata)
+  if (readScreenplayAnimaticRoleFromMetadata(masterMetadata) !== 'master') {
+    throw new Error('Sequence animatic orchestrator requires a master animatic request.')
+  }
+  const directorPlan = asRecord(input.upstream.shotContinuityPlan ?? input.upstream.shot_continuity_plan ?? input.upstream.directorPlan ?? input.upstream.director_plan)
+  const manifest = asRecord(input.upstream.manifest ?? input.upstream.sequenceAnimaticManifest ?? input.upstream.sequence_animatic_manifest)
+  if (Object.keys(directorPlan).length === 0) throw new Error('Sequence animatic orchestrator requires a shot continuity plan.')
+  if (Object.keys(manifest).length === 0) throw new Error('Sequence animatic orchestrator requires the master manifest.')
+  const blocks = sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest, directorPlan)
+  if (blocks.length === 0) throw new Error('Sequence animatic orchestrator found no storyboard blocks to queue.')
+  const screenplayAnimaticSource = readScreenplayAnimaticSourceFromMetadata(
+    masterMetadata,
+    masterRequest.sourceSurface === 'wiki_sequence_unit' ? 'wiki_sequence_unit' : 'prompt_cinematic',
+  )
+  const manifestHash = sequenceAnimaticStableHash(manifest)
+  const directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
+  const masterManifestArtifactKey = readText(masterMetadata.masterManifestArtifactKey) || `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-manifest`
+  const existingChildrenResponse = await input.client
+    .from('output_requests')
+    .select(outputRequestSelect)
+    .eq('project_id', input.run.projectId)
+    .eq('draft_id', input.run.draftId)
+    .eq('parent_request_id', masterRequest.id)
+    .order('created_at', { ascending: true })
+  if (existingChildrenResponse.error) throw new Error(existingChildrenResponse.error.message)
+  const existingChildren = (existingChildrenResponse.data ?? []).map(mapOutputRequestRow)
+  const existingByBlockId = new Map(existingChildren
+    .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'storyboard_block')
+    .map((child) => [readText(asRecord(child.metadata).storyboardBlockId), child] as const)
+    .filter(([id]) => id))
+  const childRequests: OutputRequest[] = [...existingChildren]
+  const now = new Date().toISOString()
+  await insertSequenceAnimaticEvent({
+    client: input.client,
+    projectId: input.run.projectId,
+    draftId: input.run.draftId,
+    requestId: masterRequest.id,
+    workflowId: input.workflow.id,
+    runId: input.run.id,
+    eventType: 'orchestrator_started',
+    payload: { blockCount: blocks.length, directorPlanHash, manifestHash },
+    metadata: { source: 'sequence_animatic_orchestrator' },
+    dedupe: { directorPlanHash },
+  })
+  for (const requirement of readArray(directorPlan.assetRequirements ?? directorPlan.asset_requirements).map(asRecord)) {
+    await insertSequenceAnimaticEvent({
+      client: input.client,
+      projectId: input.run.projectId,
+      draftId: input.run.draftId,
+      requestId: masterRequest.id,
+      workflowId: input.workflow.id,
+      runId: input.run.id,
+      eventType: 'reference_asset_queued',
+      payload: {
+        sceneGraphNodeId: readText(requirement.sceneGraphNodeId ?? requirement.nodeId ?? requirement.id),
+        assetType: readText(requirement.assetType ?? requirement.type),
+        priority: readText(requirement.priority),
+        required: requirement.required === true,
+        reason: readText(requirement.reason),
+      },
+      metadata: { source: 'sequence_animatic_orchestrator' },
+      dedupe: { sceneGraphNodeId: readText(requirement.sceneGraphNodeId ?? requirement.nodeId ?? requirement.id) },
+    })
+  }
+  const continuityAssetBatches = sequenceAnimaticContinuityAssetBatches({ directorPlan, manifest })
+  const existingBatchChildren = existingChildren
+    .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'continuity_asset_batch')
+  const existingBatchById = new Map(existingBatchChildren
+    .map((child) => [readText(asRecord(child.metadata).continuityBatchId), child] as const)
+    .filter(([id]) => id))
+  const batchRequestIds: string[] = []
+  const startedBatchRunIds: string[] = []
+  for (const batch of continuityAssetBatches) {
+    const batchId = readText(batch.batchId)
+    if (!batchId) continue
+    let child = existingBatchById.get(batchId) ?? null
+    const batchHash = sequenceAnimaticStableHash(batch)
+    if (!child) {
+      const targetNodeIds = readStringArray(batch.targetNodeIds)
+      const targetNodes = readArray(batch.targetNodes).map(asRecord).filter((node) => targetNodeIds.includes(readText(node.id)))
+      const workflowId = crypto.randomUUID()
+      const commonConfig = {
+        cinematicPipelineVersion: 'v3_script_storyboards',
+        graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+        screenplayAnimaticRole: 'continuity_asset_batch',
+        screenplayAnimaticSource,
+        sequenceAnimaticRole: 'continuity_asset_batch',
+        parentRequestId: masterRequest.id,
+        masterRequestId: masterRequest.id,
+        continuityBatchId: batchId,
+        continuityBatchHash: batchHash,
+        manifestHash,
+        directorPlanHash,
+        masterManifestArtifactKey,
+        sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+      }
+      const { nodes, edges } = buildSequenceAnimaticContinuityBatchWorkflowGraph({
+        workflowId,
+        draftId: input.run.draftId,
+        commonConfig,
+        batch,
+        targetNodes,
+        continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+        relevantShots: readArray(directorPlan.shots).map(asRecord).filter((shot) => readStringArray(batch.blockIds).length === 0 || readStringArray(batch.blockIds).includes(readText(shot.storyboardBlockId))),
+        shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+        assetPack: asRecord(manifest.assetPack),
+        referenceAssetKeys: readStringArray(batch.worldReferenceAssetKeys),
+        visualDependencyEdges: sequenceAnimaticContinuityVisualDependencyEdges(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+        aspectRatio: readText(asRecord(manifest.assetPack).aspectRatio) || '16:9',
+      })
+      const workflowPayload = {
+        project_id: input.run.projectId,
+        draft_id: input.run.draftId,
+        key: `sequence_animatic_${slugify(masterRequest.id)}_${slugify(batchId)}_${manifestHash.slice(0, 8)}`,
+        name: `${masterRequest.title} / ${readText(batch.batchKind) || 'Continuity refs'}`,
+        description: 'Sequence animatic continuity reference batch workflow.',
+        preset: 'cinematic_episode_from_sequence',
+        status: 'active',
+        created_by: masterRequest.requestedBy ?? input.run.requestedBy,
+        metadata: { ...commonConfig, readyToRun: true },
+      }
+      const requestPayload = {
+        project_id: input.run.projectId,
+        draft_id: input.run.draftId,
+        parent_request_id: masterRequest.id,
+        requested_by: masterRequest.requestedBy ?? input.run.requestedBy,
+        source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
+        prompt: `${masterRequest.prompt}\n\nGenerate continuity reference batch ${batchId}.`,
+        title: `${masterRequest.title} / ${readText(batch.batchKind) || 'Continuity refs'}`,
+        intent: 'output_generation',
+        output_kind: 'cinematic_episode',
+        status: 'awaiting_confirmation',
+        selected_entity_keys: masterRequest.selectedEntityKeys,
+        selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
+        page_count: null,
+        target_format: 'image',
+        planner_notes: 'Continuity reference batch prepared by the sequence animatic Fly orchestrator.',
+        metadata: {
+          ...commonConfig,
+          continuityBatchId: batchId,
+          continuityBatchHash: batchHash,
+          continuityBatchKind: readText(batch.batchKind),
+          continuityBatchRequired: batch.required === true,
+          targetNodeIds: readStringArray(batch.targetNodeIds),
+          blockIds: readStringArray(batch.blockIds),
+          batch,
+          readyToRun: true,
+          createdFromDirectorPlanAt: now,
+        },
+      }
+      const ensureResponse = await input.client.rpc('ensure_sequence_animatic_child_workflow', {
+        p_project_id: input.run.projectId,
+        p_draft_id: input.run.draftId,
+        p_parent_request_id: masterRequest.id,
+        p_role: 'continuity_asset_batch',
+        p_identity_key: 'continuityBatchId',
+        p_identity_value: batchId,
+        p_workflow: workflowPayload,
+        p_nodes: nodes,
+        p_edges: edges,
+        p_request: requestPayload,
+      })
+      if (ensureResponse.error || !ensureResponse.data) throw new Error(ensureResponse.error?.message ?? 'Failed to ensure continuity batch workflow.')
+      const ensured = asRecord(ensureResponse.data)
+      child = mapOutputRequestRow(asRecord(ensured.request) as never)
+      childRequests.push(child)
+      existingBatchById.set(batchId, child)
+    }
+    if (!child) continue
+    batchRequestIds.push(child.id)
+    await insertSequenceAnimaticEvent({
+      client: input.client,
+      projectId: input.run.projectId,
+      draftId: input.run.draftId,
+      requestId: masterRequest.id,
+      workflowId: child.workflowId,
+      runId: null,
+      eventType: 'reference_asset_queued',
+      payload: {
+        batchId,
+        batchKind: readText(batch.batchKind),
+        targetNodeIds: readStringArray(batch.targetNodeIds),
+        blockIds: readStringArray(batch.blockIds),
+        required: batch.required === true,
+      },
+      metadata: { source: 'sequence_animatic_orchestrator_batch' },
+      dedupe: { batchId },
+    })
+    if (child.workflowId && child.status !== 'running' && child.status !== 'queued' && child.status !== 'completed') {
+      const startResult = await startSequenceAnimaticChildRun({
+        client: input.client,
+        request: child,
+        workflowId: child.workflowId,
+        runIntent: 'generate_continuity_asset',
+        targetNodeKeys: ['continuity_batch_artifact'],
+      })
+      if (startResult.runId) startedBatchRunIds.push(startResult.runId)
+    }
+  }
+  const queuedBlockRequestIds: string[] = []
+  const createdBlockRequestIds: string[] = []
+  for (const block of blocks) {
+    const blockId = readText(block.id)
+    if (!blockId) continue
+    let child = existingByBlockId.get(blockId) ?? null
+    const blockHash = sequenceAnimaticStableHash(block)
+    if (!child) {
+      const storyboardGroup = asRecord(block.storyboardGroup)
+      const layout = asRecord(block.storyboardLayout)
+      const rows = Math.max(1, Number(layout.rows ?? storyboardGroup.rows ?? 1) || 1)
+      const columns = Math.max(1, Number(layout.columns ?? storyboardGroup.columns ?? 1) || 1)
+      const panelCount = Math.max(1, Number(layout.panelCount ?? storyboardGroup.panelCount ?? readArray(block.shots).length) || 1)
+      const aspectRatio = readText(asRecord(manifest.assetPack).aspectRatio) || '16:9'
+      const imageSize = sequenceAnimaticStoryboardImageSize(columns, rows, aspectRatio)
+      const workflowId = crypto.randomUUID()
+      const workflowPayload = {
+        project_id: input.run.projectId,
+        draft_id: input.run.draftId,
+        key: `sequence_animatic_${slugify(masterRequest.id)}_${slugify(blockId)}_${manifestHash.slice(0, 8)}`,
+        name: `${masterRequest.title} / Block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}`,
+        description: 'Sequence animatic storyboard block workflow.',
+        preset: 'cinematic_episode_from_sequence',
+        status: 'active',
+        created_by: masterRequest.requestedBy ?? input.run.requestedBy,
+        metadata: {
+          parentRequestId: masterRequest.id,
+          masterRequestId: masterRequest.id,
+          graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+          directorPlanHash,
+          screenplayAnimaticRole: 'storyboard_block',
+          screenplayAnimaticSource,
+          sequenceAnimaticRole: 'storyboard_block',
+          storyboardBlockId: blockId,
+          manifestHash,
+          blockHash,
+          masterManifestArtifactKey,
+          sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+          sourceMasterWorkflowId: input.workflow.id,
+          readyToRun: true,
+        },
+      }
+      const blockShotPlan = {
+        ...asRecord(manifest.shotPlan),
+        totalEditorialDurationSeconds: Number(block.durationSeconds ?? storyboardGroup.editorialDurationSeconds ?? 0) || readArray(block.shots).reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds ?? 0) || 0), 0),
+        shots: readArray(block.shots).map(asRecord),
+      }
+      const commonConfig = {
+        cinematicPipelineVersion: 'v3_script_storyboards',
+        graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+        screenplayAnimaticRole: 'storyboard_block',
+        screenplayAnimaticSource,
+        sequenceAnimaticRole: 'storyboard_block',
+        parentRequestId: masterRequest.id,
+        masterRequestId: masterRequest.id,
+        sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+        storyboardBlockId: blockId,
+        manifestHash,
+        blockHash,
+        directorPlanHash,
+        masterManifestArtifactKey,
+      }
+      const durationSeconds = Math.max(4, Math.min(15, Number(block.durationSeconds ?? storyboardGroup.providerDurationSeconds ?? 0) || 8))
+      const { nodes, edges } = buildSequenceAnimaticBlockWorkflowGraph({
+        workflowId,
+        draftId: input.run.draftId,
+        commonConfig,
+        block,
+        manifestSummary: {
+          title: readText(manifest.title) || masterRequest.title,
+          screenplayMarkdown: readText(manifest.screenplayMarkdown),
+        },
+        shotPlan: blockShotPlan,
+        storyboardGroup,
+        storyboardLayout: { rows, columns, panelCount },
+        assetPack: asRecord(manifest.assetPack),
+        aspectRatio,
+        imageSize,
+        durationSeconds,
+      })
+      const requestPayload = {
+        project_id: input.run.projectId,
+        draft_id: input.run.draftId,
+        parent_request_id: masterRequest.id,
+        requested_by: masterRequest.requestedBy ?? input.run.requestedBy,
+        source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
+        prompt: `${masterRequest.prompt}\n\nStoryboard block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}: ${readText(block.title) || blockId}`,
+        title: `${masterRequest.title} / Block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}`,
+        intent: 'output_generation',
+        output_kind: 'cinematic_episode',
+        status: 'awaiting_confirmation',
+        selected_entity_keys: masterRequest.selectedEntityKeys,
+        selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
+        page_count: null,
+        target_format: 'video',
+        planner_notes: 'Storyboard block graph prepared by the sequence animatic Fly orchestrator.',
+        metadata: {
+          graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+          directorPlanHash,
+          screenplayAnimaticRole: 'storyboard_block',
+          screenplayAnimaticSource,
+          sequenceAnimaticRole: 'storyboard_block',
+          parentRequestId: masterRequest.id,
+          masterRequestId: masterRequest.id,
+          storyboardBlockId: blockId,
+          storyboardBlockIndex: Number(block.index ?? 0) || queuedBlockRequestIds.length + 1,
+          manifestHash,
+          blockHash,
+          masterManifestArtifactKey,
+          sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+          sourceMasterWorkflowId: input.workflow.id,
+          readyToRun: true,
+          createdFromManifestAt: now,
+          block,
+        },
+      }
+      const ensureResponse = await input.client.rpc('ensure_sequence_animatic_child_workflow', {
+        p_project_id: input.run.projectId,
+        p_draft_id: input.run.draftId,
+        p_parent_request_id: masterRequest.id,
+        p_role: 'storyboard_block',
+        p_identity_key: 'storyboardBlockId',
+        p_identity_value: blockId,
+        p_workflow: workflowPayload,
+        p_nodes: nodes,
+        p_edges: edges,
+        p_request: requestPayload,
+      })
+      if (ensureResponse.error || !ensureResponse.data) throw new Error(ensureResponse.error?.message ?? 'Failed to ensure storyboard block workflow.')
+      const ensured = asRecord(ensureResponse.data)
+      child = mapOutputRequestRow(asRecord(ensured.request) as never)
+      childRequests.push(child)
+      existingByBlockId.set(blockId, child)
+      if (ensured.created === true) createdBlockRequestIds.push(child.id)
+    }
+    if (!child) continue
+    queuedBlockRequestIds.push(child.id)
+    await insertSequenceAnimaticEvent({
+      client: input.client,
+      projectId: input.run.projectId,
+      draftId: input.run.draftId,
+      requestId: masterRequest.id,
+      workflowId: child.workflowId,
+      runId: null,
+      eventType: 'block_queued',
+      payload: {
+        blockRequestId: child.id,
+        workflowId: child.workflowId,
+        storyboardBlockId: blockId,
+        blockHash,
+        directorPlanHash,
+        title: readText(block.title) || child.title,
+        shotIds: readStringArray(block.shotIds),
+        created: createdBlockRequestIds.includes(child.id),
+      },
+      metadata: { source: 'sequence_animatic_orchestrator' },
+      dedupe: { storyboardBlockId: blockId },
+    })
+  }
+  const activeBlockRuns = childRequests.filter((child) => {
+    const role = readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata))
+    return role === 'storyboard_block' && (child.status === 'running' || child.status === 'queued' || child.status === 'planning')
+  })
+  const activeRequiredBatchRuns = childRequests.filter((child) => {
+    const metadata = asRecord(child.metadata)
+    const role = readScreenplayAnimaticRoleFromMetadata(metadata)
+    return role === 'continuity_asset_batch' && metadata.continuityBatchRequired === true && (child.status === 'running' || child.status === 'queued' || child.status === 'planning')
+  })
+  const blockConcurrency = Math.max(1, Number(asRecord(input.node.config).blockConcurrency ?? 1) || 1)
+  const startableChildren = childRequests
+    .filter((child) => readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'storyboard_block')
+    .filter((child) => child.workflowId)
+    .filter((child) => child.status !== 'running' && child.status !== 'queued' && child.status !== 'completed')
+    .sort((left, right) => (Number(asRecord(left.metadata).storyboardBlockIndex ?? 0) || 999) - (Number(asRecord(right.metadata).storyboardBlockIndex ?? 0) || 999))
+  const startedRunIds: string[] = []
+  const startSlots = activeRequiredBatchRuns.length > 0 || startedBatchRunIds.length > 0 ? 0 : Math.max(0, blockConcurrency - activeBlockRuns.length)
+  for (const child of startableChildren.slice(0, startSlots)) {
+    if (!child.workflowId) continue
+    const startResult = await startSequenceAnimaticChildRun({
+      client: input.client,
+      request: child,
+      workflowId: child.workflowId,
+      runIntent: 'prepare_storyboard_block',
+      targetNodeKeys: ['artifact'],
+    })
+    if (startResult.runId) startedRunIds.push(startResult.runId)
+    if (startResult.started) {
+      await insertSequenceAnimaticEvent({
+        client: input.client,
+        projectId: input.run.projectId,
+        draftId: input.run.draftId,
+        requestId: masterRequest.id,
+        workflowId: child.workflowId,
+        runId: startResult.runId,
+        eventType: 'block_started',
+        payload: {
+          blockRequestId: child.id,
+          workflowId: child.workflowId,
+          storyboardBlockId: readText(asRecord(child.metadata).storyboardBlockId),
+          runId: startResult.runId,
+          status: startResult.status,
+        },
+        metadata: { source: 'sequence_animatic_orchestrator' },
+        dedupe: { storyboardBlockId: readText(asRecord(child.metadata).storyboardBlockId), runId: startResult.runId },
+      })
+    }
+  }
+  const updateMaster = await input.client
+    .from('output_requests')
+    .update({
+      metadata: {
+        ...masterMetadata,
+        screenplayAnimaticRole: 'master',
+        sequenceAnimaticRole: 'master',
+        graphSpecVersion: 'sequence_animatic_graph_v2',
+        directorPlanHash,
+        orchestrationStatus: startableChildren.length > startSlots ? 'partial' : 'queued',
+        orchestrationUpdatedAt: new Date().toISOString(),
+        childBlockRequestIds: queuedBlockRequestIds,
+        continuityBatchRequestIds: batchRequestIds,
+        childBlockWorkflowIds: childRequests.map((child) => child.workflowId).filter(Boolean),
+        activeStoryboardBlockRunIds: startedRunIds,
+        activeContinuityBatchRunIds: startedBatchRunIds,
+      },
+    })
+    .eq('id', masterRequest.id)
+  if (updateMaster.error) throw new Error(updateMaster.error.message)
+  await input.client.rpc('refresh_output_request_status_projection', { p_request_id: masterRequest.id })
+  return {
+    orchestration: {
+      status: startableChildren.length > startSlots ? 'partial' : 'queued',
+      blockCount: blocks.length,
+      queuedBlockCount: queuedBlockRequestIds.length,
+      startedRunCount: startedRunIds.length,
+      startedBatchRunCount: startedBatchRunIds.length,
+      activeBlockRunCount: activeBlockRuns.length + startedRunIds.length,
+      activeRequiredBatchRunCount: activeRequiredBatchRuns.length + startedBatchRunIds.length,
+      blockConcurrency,
+      directorPlanHash,
+      manifestHash,
+      continuityAssetBatchCount: continuityAssetBatches.length,
+    },
+    childRequests: childRequests.map((child) => ({
+      id: child.id,
+      workflowId: child.workflowId,
+      status: child.status,
+      storyboardBlockId: readText(asRecord(child.metadata).storyboardBlockId),
+      title: child.title,
+    })),
+    startedRunIds,
+  }
+}
+
 function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<string, unknown>>, fallbackPack: Record<string, unknown>) {
   const fallbackEntities = Array.isArray(fallbackPack.entities) ? fallbackPack.entities.map(asRecord) : []
   const fallbackByKey = new Map(fallbackEntities.map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
@@ -4583,6 +5972,128 @@ const sequenceAnimaticContinuityGraphV2Schema = z.object({
   diagnostics: z.array(z.string()).default([]),
 })
 
+const sequenceAnimaticShotContinuityDialogueLineV2Schema = z.object({
+  speakerRefId: z.string().min(1),
+  speakerName: z.string().default(''),
+  text: z.string().min(1),
+  emotion: z.string().default(''),
+  delivery: z.string().default(''),
+  subtext: z.string().default(''),
+  startSeconds: z.number().nonnegative().nullable().default(null),
+  endSeconds: z.number().nonnegative().nullable().default(null),
+})
+
+const sequenceAnimaticShotContinuityPerformanceBeatV2Schema = z.object({
+  characterRefId: z.string().min(1),
+  emotion: z.string().default(''),
+  valence: z.number().min(-1).max(1).default(0),
+  arousal: z.number().min(0).max(1).default(0.5),
+  confidence: z.number().min(0).max(1).default(0.5),
+  dominance: z.number().min(0).max(1).default(0.5),
+  bodyLanguage: z.string().default(''),
+  facialExpression: z.string().default(''),
+  gaze: z.string().default(''),
+  gesture: z.string().default(''),
+  voiceEnergy: z.string().default(''),
+})
+
+const sequenceAnimaticShotContinuityRefsV2Schema = z.object({
+  visibleCharacterRefIds: z.array(z.string()).default([]),
+  speakerRefIds: z.array(z.string()).default([]),
+  propRefIds: z.array(z.string()).default([]),
+  locationRefIds: z.array(z.string()).default([]),
+  localReferenceIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticShotContinuitySceneBindingV2Schema = z.object({
+  worldLocationRefId: z.string().default(''),
+  setId: z.string().default(''),
+  zoneId: z.string().default(''),
+  spotIds: z.array(z.string()).default([]),
+  angleId: z.string().default(''),
+  characterAnchorIds: z.array(z.string()).default([]),
+  propAnchorIds: z.array(z.string()).default([]),
+  assetAnchorIds: z.array(z.string()).default([]),
+  localReferenceIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticShotContinuityShotV2Schema = z.object({
+  id: z.string().min(1),
+  index: z.number().int().positive(),
+  blockId: z.string().min(1),
+  title: z.string().default(''),
+  durationSeconds: z.number().positive().max(8).default(3),
+  action: z.string().min(1),
+  camera: z.object({
+    framing: z.string().default(''),
+    angle: z.string().default(''),
+    lens: z.string().default(''),
+    movement: z.string().default(''),
+    screenDirectionRule: z.string().default(''),
+  }).default({ framing: '', angle: '', lens: '', movement: '', screenDirectionRule: '' }),
+  lighting: z.string().default(''),
+  dialogue: z.array(sequenceAnimaticShotContinuityDialogueLineV2Schema).default([]),
+  performance: z.array(sequenceAnimaticShotContinuityPerformanceBeatV2Schema).default([]),
+  refs: sequenceAnimaticShotContinuityRefsV2Schema.default({
+    visibleCharacterRefIds: [],
+    speakerRefIds: [],
+    propRefIds: [],
+    locationRefIds: [],
+    localReferenceIds: [],
+  }),
+  sceneBinding: sequenceAnimaticShotContinuitySceneBindingV2Schema,
+})
+
+const sequenceAnimaticShotContinuityBlockV2Schema = z.object({
+  id: z.string().min(1),
+  index: z.number().int().positive(),
+  title: z.string().default(''),
+  summary: z.string().default(''),
+  shotIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticShotContinuitySceneGraphAdditionsV2Schema = z.object({
+  sets: z.array(sequenceAnimaticContinuityGraphSetSchema).default([]),
+  zones: z.array(sequenceAnimaticContinuityGraphZoneSchema).default([]),
+  spots: z.array(sequenceAnimaticContinuityGraphSpotSchema).default([]),
+  angles: z.array(sequenceAnimaticContinuityGraphAngleSchema).default([]),
+  edges: z.array(sequenceAnimaticContinuityGraphEdgeSchema).default([]),
+})
+
+const sequenceAnimaticShotContinuityLocalReferenceV2Schema = z.object({
+  id: z.string().min(1),
+  type: z.enum(['temp_character', 'prop', 'item', 'faction', 'crowd', 'vehicle', 'location_spot']),
+  name: z.string().min(1),
+  visualBrief: z.string().min(1),
+  usedShotIds: z.array(z.string()).default([]),
+  blockIds: z.array(z.string()).default([]),
+  required: z.boolean().default(false),
+  importance: z.enum(['hero', 'supporting', 'incidental']).default('supporting'),
+  parentNodeId: z.string().default(''),
+  sourceReferenceIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticShotContinuityPlanV2Schema = z.object({
+  role: z.literal('sequence_animatic_director_plan').default('sequence_animatic_director_plan'),
+  contractVersion: z.literal('shot_continuity_plan_v2').default('shot_continuity_plan_v2'),
+  graphSpecVersion: z.literal('sequence_animatic_graph_v2').default('sequence_animatic_graph_v2'),
+  screenplayAnimaticRole: z.literal('director_plan').default('director_plan'),
+  sequenceAnimaticRole: z.literal('director_plan').default('director_plan'),
+  planningMode: z.literal('single_director_pass').default('single_director_pass'),
+  screenplaySummary: z.string().default(''),
+  shots: z.array(sequenceAnimaticShotContinuityShotV2Schema).default([]),
+  blocks: z.array(sequenceAnimaticShotContinuityBlockV2Schema).default([]),
+  sceneGraphAdditions: sequenceAnimaticShotContinuitySceneGraphAdditionsV2Schema.default({
+    sets: [],
+    zones: [],
+    spots: [],
+    angles: [],
+    edges: [],
+  }),
+  localReferences: z.array(sequenceAnimaticShotContinuityLocalReferenceV2Schema).default([]),
+  notes: z.array(z.string()).default([]),
+})
+
 const sequenceAnimaticContinuityBlockDeltaSchema = z.object({
   blockId: z.string(),
   blockSummary: z.string().default(''),
@@ -4612,6 +6123,65 @@ const sequenceAnimaticContinuityPlanV2Schema = z.object({
   warnings: z.array(z.string()).default([]),
   diagnostics: z.array(z.string()).default([]),
 })
+
+const sequenceAnimaticDirectorPlanShotSchema = z.object({
+  id: z.string(),
+  index: z.number().optional(),
+  sourceAnchorIds: z.array(z.string()).default([]),
+  sourceScriptShotIds: z.array(z.string()).default([]),
+  blockId: z.string().default(''),
+  storyboardBlockId: z.string().default(''),
+  title: z.string().default(''),
+  action: z.string().default(''),
+  description: z.string().default(''),
+  camera: z.record(z.string(), z.unknown()).default({}),
+  lighting: z.string().default(''),
+  dialogue: z.array(z.record(z.string(), z.unknown())).default([]),
+  performance: z.array(z.record(z.string(), z.unknown())).default([]),
+  refs: z.record(z.string(), z.unknown()).default({}),
+  visibleCharacterRefIds: z.array(z.string()).default([]),
+  speakerRefIds: z.array(z.string()).default([]),
+  propRefIds: z.array(z.string()).default([]),
+  locationRefIds: z.array(z.string()).default([]),
+  continuityAnchorIds: z.array(z.string()).default([]),
+  sceneBinding: z.record(z.string(), z.unknown()).default({}),
+  sceneGraphBinding: z.record(z.string(), z.unknown()).default({}),
+  assetRequirements: z.array(z.record(z.string(), z.unknown())).default([]),
+  warnings: z.array(z.string()).default([]),
+}).catchall(z.unknown())
+
+const sequenceAnimaticDirectorPlanBlockSchema = z.object({
+  id: z.string(),
+  index: z.number().optional(),
+  title: z.string().default(''),
+  summary: z.string().default(''),
+  shotIds: z.array(z.string()).default([]),
+  status: z.enum(['planned', 'needs_review', 'failed']).default('planned'),
+  warnings: z.array(z.string()).default([]),
+}).catchall(z.unknown())
+
+const sequenceAnimaticDirectorPlanSchema = z.object({
+  role: z.literal('sequence_animatic_director_plan').default('sequence_animatic_director_plan'),
+  graphSpecVersion: z.literal('sequence_animatic_graph_v2').default('sequence_animatic_graph_v2'),
+  screenplayAnimaticRole: z.literal('director_plan').default('director_plan'),
+  sequenceAnimaticRole: z.literal('director_plan').default('director_plan'),
+  planningMode: z.enum(['single_director_pass', 'deterministic_fallback']).default('single_director_pass'),
+  contractVersion: z.string().default(''),
+  screenplaySummary: z.string().default(''),
+  shots: z.array(sequenceAnimaticDirectorPlanShotSchema).default([]),
+  blocks: z.array(sequenceAnimaticDirectorPlanBlockSchema).default([]),
+  sceneGraphAdditions: z.record(z.string(), z.unknown()).default({}),
+  localReferences: z.array(z.record(z.string(), z.unknown())).default([]),
+  notes: z.array(z.string()).default([]),
+  continuityGraphV2: sequenceAnimaticContinuityGraphV2Schema.optional(),
+  shotBindings: z.record(z.string(), sequenceAnimaticContinuityShotBindingSchema).default({}),
+  assetRequirements: z.array(z.record(z.string(), z.unknown())).default([]),
+  canonicalReferenceAssignments: z.record(z.string(), z.unknown()).default({}),
+  outputLocalReferences: z.array(z.record(z.string(), z.unknown())).default([]),
+  rejectedCandidates: z.array(sequenceAnimaticContinuityRejectedCandidateSchema).default([]),
+  warnings: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+}).catchall(z.unknown())
 
 const sequenceAnimaticContinuityAssetStateSchema = z.object({
   status: z.enum(['missing', 'generating', 'ready', 'stale', 'failed']).default('missing'),
@@ -5917,6 +7487,645 @@ function sequenceAnimaticEmptyGraphV2(context: Record<string, unknown> = {}) {
 function parseSequenceAnimaticGraphV2(value: unknown) {
   const parsed = sequenceAnimaticContinuityGraphV2Schema.safeParse(value)
   return parsed.success ? parsed.data : sequenceAnimaticEmptyGraphV2()
+}
+
+function sequenceAnimaticManifestBlockIdByShotId(manifest: Record<string, unknown>) {
+  const map = new Map<string, string>()
+  readArray(manifest.blocks).map(asRecord).forEach((block) => {
+    const blockId = readText(block.id)
+    readStringArray(block.shotIds).forEach((shotId) => {
+      if (shotId && blockId) map.set(shotId, blockId)
+    })
+    readArray(block.shots).map(asRecord).forEach((shot) => {
+      const shotId = readText(shot.id)
+      if (shotId && blockId) map.set(shotId, blockId)
+    })
+  })
+  return map
+}
+
+function sequenceAnimaticDirectorBlockIdByShotId(blocksInput: unknown) {
+  const map = new Map<string, string>()
+  readArray(blocksInput).map(asRecord).forEach((block) => {
+    const blockId = readText(block.id)
+    if (!blockId) return
+    readStringArray(block.shotIds ?? block.shot_ids).forEach((shotId) => {
+      if (shotId) map.set(shotId, blockId)
+    })
+  })
+  return map
+}
+
+function normalizeCinematicV2ShotPurpose(value: unknown, fallback: unknown, index: number): z.infer<typeof cinematicV2ShotPurposeSchema> {
+  const text = normalizeStatusToken(readText(value) || readText(fallback))
+  if (cinematicV2ShotPurposeSchema.safeParse(text).success) return text as z.infer<typeof cinematicV2ShotPurposeSchema>
+  if (/\b(establish|wide|location|setting|arrival)\b/.test(text)) return 'establishing'
+  if (/\b(intro|introduce|entrance|character)\b/.test(text)) return 'character_intro'
+  if (/\b(dialogue|conversation|speak|speech|line|exchange|argue|argument)\b/.test(text)) return 'dialogue'
+  if (/\b(reaction|react|response|realization|recognition|discover|discovery|reveal)\b/.test(text)) return 'reaction'
+  if (/\b(impact|hit|collision|strike|explosion|crash|shock|climax)\b/.test(text)) return 'impact'
+  if (/\b(insert|detail|prop|object|closeup|close-up|cutaway)\b/.test(text)) return 'insert'
+  if (/\b(transition|bridge|move|travel|passage|montage)\b/.test(text)) return 'transition'
+  if (/\b(close|closing|resolution|ending|final|aftermath)\b/.test(text)) return 'closing'
+  return index === 1 ? 'establishing' : 'action'
+}
+
+function sequenceAnimaticUniqueTexts(values: unknown[]) {
+  return [...new Set(values.flatMap((value) => readStringArray(value)).map(readText).filter(Boolean))]
+}
+
+function sequenceAnimaticShotRefs(shot: Record<string, unknown>, fallback: Record<string, unknown> = {}) {
+  const refs = asRecord(shot.refs ?? shot.referenceAssignments ?? shot.reference_assignments)
+  const fallbackRefs = asRecord(fallback.refs ?? fallback.referenceAssignments ?? fallback.reference_assignments)
+  return {
+    visibleCharacterRefIds: sequenceAnimaticUniqueTexts([
+      shot.visibleCharacterRefIds,
+      shot.visible_character_ref_ids,
+      refs.visibleCharacterRefIds,
+      refs.visible_character_ref_ids,
+      fallback.visibleCharacterRefIds,
+      fallback.visible_character_ref_ids,
+      fallbackRefs.visibleCharacterRefIds,
+      fallbackRefs.visible_character_ref_ids,
+    ]),
+    speakerRefIds: sequenceAnimaticUniqueTexts([
+      shot.speakerRefIds,
+      shot.speaker_ref_ids,
+      refs.speakerRefIds,
+      refs.speaker_ref_ids,
+      fallback.speakerRefIds,
+      fallback.speaker_ref_ids,
+      fallbackRefs.speakerRefIds,
+      fallbackRefs.speaker_ref_ids,
+    ]),
+    propRefIds: sequenceAnimaticUniqueTexts([
+      shot.propRefIds,
+      shot.prop_ref_ids,
+      refs.propRefIds,
+      refs.prop_ref_ids,
+      fallback.propRefIds,
+      fallback.prop_ref_ids,
+      fallbackRefs.propRefIds,
+      fallbackRefs.prop_ref_ids,
+    ]),
+    locationRefIds: sequenceAnimaticUniqueTexts([
+      shot.locationRefIds,
+      shot.location_ref_ids,
+      refs.locationRefIds,
+      refs.location_ref_ids,
+      fallback.locationRefIds,
+      fallback.location_ref_ids,
+      fallbackRefs.locationRefIds,
+      fallbackRefs.location_ref_ids,
+      [readText(shot.locationRefId), readText(shot.location_ref_id), readText(fallback.locationRefId), readText(fallback.location_ref_id)].filter(Boolean),
+    ]),
+    localReferenceIds: sequenceAnimaticUniqueTexts([
+      shot.localReferenceIds,
+      shot.local_reference_ids,
+      refs.localReferenceIds,
+      refs.local_reference_ids,
+      fallback.localReferenceIds,
+      fallback.local_reference_ids,
+      fallbackRefs.localReferenceIds,
+      fallbackRefs.local_reference_ids,
+    ]),
+  }
+}
+
+function sequenceAnimaticShotBindingFromSceneBinding(input: {
+  shotId: string
+  storyboardBlockId: string
+  sceneBinding: Record<string, unknown>
+  refs: ReturnType<typeof sequenceAnimaticShotRefs>
+}) {
+  const sceneBinding = input.sceneBinding
+  const localReferenceIds = sequenceAnimaticUniqueTexts([
+    sceneBinding.localReferenceIds,
+    sceneBinding.local_reference_ids,
+    input.refs.localReferenceIds,
+  ])
+  const characterAnchorIds = sequenceAnimaticUniqueTexts([
+    sceneBinding.characterAnchorIds,
+    sceneBinding.character_anchor_ids,
+  ])
+  const propAnchorIds = sequenceAnimaticUniqueTexts([
+    sceneBinding.propAnchorIds,
+    sceneBinding.prop_anchor_ids,
+  ])
+  const explicitAssetAnchorIds = sequenceAnimaticUniqueTexts([
+    sceneBinding.assetAnchorIds,
+    sceneBinding.asset_anchor_ids,
+  ])
+  const assetAnchorIds = [...new Set([...explicitAssetAnchorIds, ...localReferenceIds, ...characterAnchorIds, ...propAnchorIds])]
+  const worldLocationRefId = readText(sceneBinding.worldLocationRefId)
+    || readText(sceneBinding.world_location_ref_id)
+    || input.refs.locationRefIds[0]
+    || null
+  const setId = readText(sceneBinding.setId) || readText(sceneBinding.set_id)
+  if (!setId && !worldLocationRefId) {
+    throw new Error(`Sequence animatic shot continuity plan returned ${input.shotId} without a usable sceneBinding.setId or sceneBinding.worldLocationRefId.`)
+  }
+  const zoneId = readText(sceneBinding.zoneId) || readText(sceneBinding.zone_id)
+  const spotIds = sequenceAnimaticUniqueTexts([sceneBinding.spotIds, sceneBinding.spot_ids])
+  const angleId = readText(sceneBinding.angleId) || readText(sceneBinding.angle_id)
+  return sequenceAnimaticContinuityShotBindingSchema.parse({
+    shotId: input.shotId,
+    storyboardBlockId: input.storyboardBlockId,
+    worldLocationRefId,
+    setId,
+    zoneId,
+    spotIds,
+    angleId,
+    characterAnchorIds,
+    propAnchorIds,
+    assetAnchorIds,
+    spatialNodeIds: [...new Set([setId, zoneId, ...spotIds, angleId].filter(Boolean))],
+    continuityAnchorIds: assetAnchorIds,
+  })
+}
+
+function sequenceAnimaticNodeUsageFromBindings(nodeId: string, shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>>) {
+  const shotIds: string[] = []
+  const blockIds: string[] = []
+  for (const [shotId, binding] of Object.entries(shotBindings)) {
+    if (binding.setId === nodeId || binding.zoneId === nodeId || binding.spotIds.includes(nodeId) || binding.angleId === nodeId || binding.assetAnchorIds.includes(nodeId)) {
+      shotIds.push(shotId)
+      if (binding.storyboardBlockId) blockIds.push(binding.storyboardBlockId)
+    }
+  }
+  return {
+    shotIds: [...new Set(shotIds)],
+    storyboardBlockIds: [...new Set(blockIds)],
+  }
+}
+
+function sequenceAnimaticEnrichGraphNodeUsage<T extends Record<string, unknown>>(
+  node: T,
+  shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>>,
+): T {
+  const nodeId = readText(node.id)
+  const usage = nodeId ? sequenceAnimaticNodeUsageFromBindings(nodeId, shotBindings) : { shotIds: [], storyboardBlockIds: [] }
+  return {
+    ...node,
+    shotIds: [...new Set([...readStringArray(node.shotIds), ...usage.shotIds])],
+    storyboardBlockIds: [...new Set([...readStringArray(node.storyboardBlockIds), ...readStringArray(node.blockIds), ...usage.storyboardBlockIds])],
+  }
+}
+
+function sequenceAnimaticPlannerAnchorTypeFromLocalReference(typeInput: unknown): z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>['type'] {
+  const type = readText(typeInput)
+  if (type === 'temp_character' || type === 'faction' || type === 'crowd') return 'character'
+  if (type === 'location_spot') return 'location_spot'
+  return 'prop'
+}
+
+function sequenceAnimaticLocalReferencesToAssetAnchors(input: {
+  localReferences: Record<string, unknown>[]
+  shots: Record<string, unknown>[]
+  shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>>
+}) {
+  const usageById = new Map<string, { shotIds: Set<string>; blockIds: Set<string> }>()
+  const touch = (id: string, shotId: string, blockId: string) => {
+    if (!id) return
+    const usage = usageById.get(id) ?? { shotIds: new Set<string>(), blockIds: new Set<string>() }
+    if (shotId) usage.shotIds.add(shotId)
+    if (blockId) usage.blockIds.add(blockId)
+    usageById.set(id, usage)
+  }
+  for (const shot of input.shots) {
+    const shotId = readText(shot.id)
+    const binding = input.shotBindings[shotId]
+    const blockId = readText(shot.storyboardBlockId) || readText(shot.blockId) || readText(binding?.storyboardBlockId)
+    const refs = sequenceAnimaticShotRefs(shot)
+    refs.localReferenceIds.forEach((id) => touch(id, shotId, blockId))
+    readStringArray(asRecord(shot.sceneBinding).localReferenceIds ?? asRecord(shot.scene_binding).local_reference_ids).forEach((id) => touch(id, shotId, blockId))
+    binding?.assetAnchorIds.forEach((id) => touch(id, shotId, blockId))
+  }
+  return input.localReferences.map((reference) => {
+    const id = readText(reference.id)
+    const usage = usageById.get(id)
+    const shotIds = [...new Set([...readStringArray(reference.usedShotIds ?? reference.shotIds), ...(usage ? [...usage.shotIds] : [])])]
+    const storyboardBlockIds = [...new Set([...readStringArray(reference.blockIds ?? reference.storyboardBlockIds), ...(usage ? [...usage.blockIds] : [])])]
+    return sequenceAnimaticContinuityPlannerAnchorSchema.parse({
+      id,
+      type: sequenceAnimaticPlannerAnchorTypeFromLocalReference(reference.type),
+      name: readText(reference.name) || titleFromRefLike(id),
+      visualBrief: readText(reference.visualBrief) || readText(reference.summary) || `Animatic local reference ${titleFromRefLike(id)}.`,
+      persistenceReason: readText(reference.persistenceReason) || readText(reference.reason) || 'Needed as an animatic-specific continuity reference.',
+      confidence: Number.isFinite(Number(reference.confidence)) ? Number(reference.confidence) : 0.8,
+      shotIds,
+      storyboardBlockIds,
+      sourceEvidence: readStringArray(reference.sourceEvidence ?? reference.sourceReferenceIds),
+      baseLocationRefId: readText(reference.baseLocationRefId ?? reference.parentNodeId) || null,
+      setId: readText(reference.setId) || null,
+      angleId: readText(reference.angleId) || null,
+      rejectionRisk: readText(reference.importance) === 'incidental' ? 'single_use_not_story_critical' : '',
+    })
+  }).filter((anchor) => readText(anchor.id))
+}
+
+function sequenceAnimaticAssetRequirementsFromGraph(input: {
+  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
+  localReferences: Record<string, unknown>[]
+}) {
+  const nodeRequirements = [
+    ...input.graph.locationSets.map((node) => ({ node, assetType: 'location_zone' })),
+    ...input.graph.zones.map((node) => ({ node, assetType: 'location_zone' })),
+    ...input.graph.spots.map((node) => ({ node, assetType: 'location_spot' })),
+    ...input.graph.angles.map((node) => ({ node, assetType: 'location_angle' })),
+    ...input.graph.assetAnchors.map((node) => ({
+      node,
+      assetType: node.type === 'character' ? 'temporary_character' : node.type === 'prop' ? 'prop' : 'location_spot',
+    })),
+  ]
+  const localRequiredById = new Map(input.localReferences.map((reference) => [readText(reference.id), reference.required === true || readText(reference.importance) === 'hero'] as const))
+  return nodeRequirements
+    .filter(({ node }) => readText(node.id) && (readText(node.visualBrief) || readText(asRecord(node).name)))
+    .map(({ node, assetType }) => ({
+      id: `asset_req_${slugify(readText(node.id))}`,
+      sceneGraphNodeId: readText(node.id),
+      nodeId: readText(node.id),
+      type: assetType,
+      assetType,
+      required: localRequiredById.get(readText(node.id)) === true || readStringArray(asRecord(node).shotIds).length >= 2,
+      priority: localRequiredById.get(readText(node.id)) === true ? 'required' : 'supporting',
+      visualBrief: readText(node.visualBrief),
+      shotIds: readStringArray(asRecord(node).shotIds),
+      blockIds: readStringArray(asRecord(node).storyboardBlockIds),
+    }))
+}
+
+function projectShotContinuityPlanV2ToDirectorPlan(value: z.infer<typeof sequenceAnimaticShotContinuityPlanV2Schema>) {
+  const blockIdByShotId = new Map<string, string>()
+  for (const block of value.blocks) {
+    for (const shotId of block.shotIds) blockIdByShotId.set(shotId, block.id)
+  }
+  const shots = value.shots.map((shot) => {
+    const blockId = shot.blockId || blockIdByShotId.get(shot.id) || ''
+    const refs = {
+      ...shot.refs,
+      speakerRefIds: [...new Set([...shot.refs.speakerRefIds, ...shot.dialogue.map((line) => line.speakerRefId)])],
+      visibleCharacterRefIds: [...new Set([...shot.refs.visibleCharacterRefIds, ...shot.performance.map((beat) => beat.characterRefId)])],
+    }
+    return {
+      ...shot,
+      blockId,
+      storyboardBlockId: blockId,
+      editorialDurationSeconds: shot.durationSeconds,
+      visibleCharacterRefIds: refs.visibleCharacterRefIds,
+      speakerRefIds: refs.speakerRefIds,
+      propRefIds: refs.propRefIds,
+      locationRefIds: refs.locationRefIds,
+      continuityAnchorIds: [...new Set([...refs.localReferenceIds, ...shot.sceneBinding.localReferenceIds, ...shot.sceneBinding.assetAnchorIds])],
+      refs,
+      sceneGraphBinding: shot.sceneBinding,
+      performanceBeats: shot.performance,
+      assetRequirements: [],
+      warnings: [],
+    }
+  })
+  const shotBindings = Object.fromEntries(shots.map((shot) => {
+    const refs = sequenceAnimaticShotRefs(shot)
+    const binding = sequenceAnimaticShotBindingFromSceneBinding({
+      shotId: readText(shot.id),
+      storyboardBlockId: readText(shot.storyboardBlockId),
+      sceneBinding: asRecord(shot.sceneBinding),
+      refs,
+    })
+    return [binding.shotId, binding]
+  }))
+  const graphInput = value.sceneGraphAdditions
+  const locationSets = graphInput.sets.map((node) => sequenceAnimaticContinuityGraphSetSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
+  const zones = graphInput.zones.map((node) => sequenceAnimaticContinuityGraphZoneSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
+  const spots = graphInput.spots.map((node) => sequenceAnimaticContinuityGraphSpotSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
+  const angles = graphInput.angles.map((node) => sequenceAnimaticContinuityGraphAngleSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
+  const assetAnchors = sequenceAnimaticLocalReferencesToAssetAnchors({
+    localReferences: value.localReferences.map(asRecord),
+    shots,
+    shotBindings,
+  })
+  const continuityGraphV2 = sequenceAnimaticContinuityGraphV2Schema.parse({
+    version: 'sequence_animatic_continuity_graph_v2',
+    planningMode: 'block_graph_v2',
+    worldLocationRefs: [],
+    locationSets,
+    zones,
+    spots,
+    angles,
+    edges: graphInput.edges,
+    shotBindings,
+    assetAnchors,
+    rejectedCandidates: [],
+    blockSummaries: value.blocks.map((block) => ({
+      blockId: block.id,
+      summary: block.summary,
+      status: 'planned',
+    })),
+    warnings: [],
+    diagnostics: ['Projected shot_continuity_plan_v2 into compatibility continuityGraphV2.'],
+  })
+  const assetRequirements = sequenceAnimaticAssetRequirementsFromGraph({
+    graph: continuityGraphV2,
+    localReferences: value.localReferences.map(asRecord),
+  })
+  return {
+    ...value,
+    shots,
+    blocks: value.blocks.map((block) => ({
+      ...block,
+      status: 'planned',
+      warnings: [],
+    })),
+    continuityGraphV2,
+    continuity_graph_v2: continuityGraphV2,
+    shotBindings,
+    shot_bindings: shotBindings,
+    assetRequirements,
+    asset_requirements: assetRequirements,
+    outputLocalReferences: value.localReferences,
+    output_local_references: value.localReferences,
+    warnings: [],
+    diagnostics: [
+      ...value.notes.map((note) => `Note: ${note}`),
+      'Shot continuity v2 used shot-level sceneBinding as source of truth.',
+    ],
+  }
+}
+
+function normalizeSequenceAnimaticDialogueLines(input: {
+  rawDialogue: unknown
+  fallbackDialogue: unknown
+  shotId: string
+  speakerRefIds: string[]
+}) {
+  const rawLines = readArray(input.rawDialogue).length > 0
+    ? readArray(input.rawDialogue).map(asRecord)
+    : readArray(input.fallbackDialogue).map(asRecord)
+  return rawLines.map((line, index) => {
+    const speakerName = readText(line.speakerName) || readText(line.speaker_name) || readText(line.speaker) || readText(line.characterName) || readText(line.character_name)
+    const explicitSpeakerRefId = readText(line.speakerRefId) || readText(line.speaker_ref_id) || readText(line.characterRefId) || readText(line.character_ref_id)
+    const speakerRefId = explicitSpeakerRefId
+      || input.speakerRefIds[index]
+      || (speakerName ? `temporary_${slugify(speakerName)}` : `temporary_speaker_${String(index + 1).padStart(2, '0')}`)
+    return {
+      id: readText(line.id) || `${input.shotId}_dialogue_${String(index + 1).padStart(2, '0')}`,
+      speakerRefId,
+      speakerName,
+      text: readText(line.text) || readText(line.line) || readText(line.dialogue) || readText(line.caption),
+      emotion: readText(line.emotion) || readText(line.tone),
+      delivery: readText(line.delivery),
+      subtext: readText(line.subtext),
+      startSeconds: Number.isFinite(Number(line.startSeconds ?? line.start_seconds)) ? Number(line.startSeconds ?? line.start_seconds) : null,
+      endSeconds: Number.isFinite(Number(line.endSeconds ?? line.end_seconds)) ? Number(line.endSeconds ?? line.end_seconds) : null,
+    }
+  }).filter((line) => line.text)
+}
+
+function normalizeSequenceAnimaticPerformanceBeats(input: {
+  rawBeats: unknown
+  fallbackBeats: unknown
+  visibleCharacterRefIds: string[]
+  speakerRefIds: string[]
+}) {
+  const fallbackCharacterRefId = input.visibleCharacterRefIds[0] || input.speakerRefIds[0] || 'temporary_performer'
+  const rawBeats = readArray(input.rawBeats).length > 0
+    ? readArray(input.rawBeats).map(asRecord)
+    : readArray(input.fallbackBeats).map(asRecord)
+  return rawBeats.map((beat, index) => ({
+    ...beat,
+    characterRefId: readText(beat.characterRefId)
+      || readText(beat.character_ref_id)
+      || readText(beat.speakerRefId)
+      || readText(beat.speaker_ref_id)
+      || input.visibleCharacterRefIds[index]
+      || fallbackCharacterRefId,
+  }))
+}
+
+function normalizeSequenceAnimaticDirectorShot(input: {
+  shot: Record<string, unknown>
+  fallbackShot?: Record<string, unknown>
+  index: number
+  blockIdByShotId: Map<string, string>
+  shotBindings: Record<string, unknown>
+}) {
+  const shot = input.shot
+  const fallback = input.fallbackShot ?? {}
+  const index = Number(shot.index ?? fallback.index ?? input.index + 1) || input.index + 1
+  const shotId = readText(shot.id) || readText(fallback.id) || `shot_${String(index).padStart(3, '0')}`
+  const shotRefs = sequenceAnimaticShotRefs(shot, fallback)
+  const sceneGraphBinding = asRecord(shot.sceneBinding ?? shot.scene_binding ?? shot.sceneGraphBinding ?? shot.scene_graph_binding ?? input.shotBindings[shotId])
+  const binding = asRecord(input.shotBindings[shotId])
+  const storyboardBlockId = readText(shot.storyboardBlockId)
+    || readText(shot.storyboard_block_id)
+    || readText(shot.blockId)
+    || readText(shot.block_id)
+    || readText(binding.storyboardBlockId)
+    || input.blockIdByShotId.get(shotId)
+    || ''
+  if (Object.keys(sceneGraphBinding).length > 0 && !input.shotBindings[shotId]) {
+    input.shotBindings[shotId] = sequenceAnimaticShotBindingFromSceneBinding({
+      shotId,
+      storyboardBlockId,
+      sceneBinding: sceneGraphBinding,
+      refs: shotRefs,
+    })
+  }
+  const effectiveBinding = asRecord(input.shotBindings[shotId])
+  const continuityAnchorIds = [
+    ...readStringArray(shot.continuityAnchorIds ?? shot.continuity_anchor_ids),
+    ...shotRefs.localReferenceIds,
+    ...readStringArray(effectiveBinding.continuityAnchorIds ?? effectiveBinding.continuity_anchor_ids),
+    ...readStringArray(effectiveBinding.characterAnchorIds ?? effectiveBinding.character_anchor_ids),
+    ...readStringArray(effectiveBinding.propAnchorIds ?? effectiveBinding.prop_anchor_ids),
+    ...readStringArray(effectiveBinding.assetAnchorIds ?? effectiveBinding.asset_anchor_ids),
+  ].filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const duration = Math.max(1, Math.min(8, Number(shot.editorialDurationSeconds ?? shot.durationSeconds ?? shot.approximateDurationSeconds ?? fallback.editorialDurationSeconds ?? 0) || 3))
+  const action = readText(shot.action) || readText(shot.description) || readText(fallback.action) || readText(fallback.description) || readText(shot.title) || `Shot ${index}`
+  const description = readText(shot.description) || readText(shot.action) || readText(fallback.description) || readText(fallback.action) || action
+  const camera = asRecord(shot.camera ?? fallback.camera)
+  const sourceScriptShotIds = [
+    ...readStringArray(shot.sourceScriptShotIds ?? shot.source_script_shot_ids),
+    ...readStringArray(shot.sourceAnchorIds ?? shot.source_anchor_ids),
+    ...readStringArray(fallback.sourceScriptShotIds ?? fallback.source_script_shot_ids),
+  ].filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const sourceAnchorIds = [
+    ...readStringArray(shot.sourceAnchorIds ?? shot.source_anchor_ids),
+    ...sourceScriptShotIds,
+    ...readStringArray(fallback.sourceAnchorIds ?? fallback.source_anchor_ids),
+  ].filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const speakerRefIds = readStringArray(shot.speakerRefIds ?? shot.speaker_ref_ids).length > 0
+    ? readStringArray(shot.speakerRefIds ?? shot.speaker_ref_ids)
+    : shotRefs.speakerRefIds.length > 0
+      ? shotRefs.speakerRefIds
+      : readStringArray(fallback.speakerRefIds ?? fallback.speaker_ref_ids)
+  const dialogue = normalizeSequenceAnimaticDialogueLines({
+    rawDialogue: shot.dialogue,
+    fallbackDialogue: fallback.dialogue,
+    shotId,
+    speakerRefIds,
+  })
+  const allSpeakerRefIds = [
+    ...speakerRefIds,
+    ...dialogue.map((line) => line.speakerRefId),
+  ].filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const visibleCharacterRefIds = readStringArray(shot.visibleCharacterRefIds ?? shot.visible_character_ref_ids).length > 0
+    ? readStringArray(shot.visibleCharacterRefIds ?? shot.visible_character_ref_ids)
+    : shotRefs.visibleCharacterRefIds.length > 0
+      ? shotRefs.visibleCharacterRefIds
+      : readStringArray(fallback.visibleCharacterRefIds ?? fallback.visible_character_ref_ids)
+  const performanceBeats = normalizeSequenceAnimaticPerformanceBeats({
+    rawBeats: shot.performanceBeats ?? shot.performance_beats ?? (Array.isArray(shot.performance) ? shot.performance : []),
+    fallbackBeats: fallback.performanceBeats ?? fallback.performance_beats,
+    visibleCharacterRefIds,
+    speakerRefIds: allSpeakerRefIds,
+  })
+  const parsedShot = cinematicV2ShotSchema.parse({
+    ...fallback,
+    ...shot,
+    id: shotId,
+    sceneId: readText(shot.sceneId) || readText(fallback.sceneId) || 'sequence_animatic_master',
+    index,
+    storyboardBlockId,
+    title: readText(shot.title) || readText(fallback.title) || `Shot ${index}`,
+    purpose: normalizeCinematicV2ShotPurpose(shot.purpose, fallback.purpose, index),
+    editorialDurationSeconds: duration,
+    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
+    description,
+    action,
+    caption: readText(shot.caption) || readText(fallback.caption) || readText(shot.title) || action,
+    lighting: readText(shot.lighting) || readText(fallback.lighting),
+    mood: readText(shot.mood) || readText(fallback.mood),
+    storyboardPanelPrompt: readText(shot.storyboardPanelPrompt) || readText(shot.storyboard_panel_prompt) || readText(fallback.storyboardPanelPrompt) || `Storyboard ${shotId}: ${action}`,
+    videoDirection: readText(shot.videoDirection) || readText(shot.video_direction) || readText(fallback.videoDirection) || action,
+    dialogue,
+    speakerRefIds: allSpeakerRefIds,
+    visibleCharacterRefIds,
+    performanceBeats,
+    locationRefId: readText(shot.locationRefId) || readText(shot.location_ref_id) || readText(fallback.locationRefId) || readText(fallback.location_ref_id),
+    worldLocationRefId: readText(shot.worldLocationRefId) || readText(shot.world_location_ref_id) || readText(effectiveBinding.worldLocationRefId) || shotRefs.locationRefIds[0] || readText(shot.locationRefId) || readText(shot.location_ref_id) || readText(fallback.worldLocationRefId) || readText(fallback.world_location_ref_id),
+    continuitySetId: readText(effectiveBinding.setId),
+    continuityZoneId: readText(effectiveBinding.zoneId),
+    continuitySpotIds: readStringArray(effectiveBinding.spotIds),
+    continuityAngleId: readText(effectiveBinding.angleId),
+    propRefIds: readStringArray(shot.propRefIds ?? shot.prop_ref_ids).length > 0
+      ? readStringArray(shot.propRefIds ?? shot.prop_ref_ids)
+      : shotRefs.propRefIds.length > 0
+        ? shotRefs.propRefIds
+        : readStringArray(fallback.propRefIds ?? fallback.prop_ref_ids),
+    continuityInputs: readArray(shot.continuityInputs ?? shot.continuity_inputs).length > 0
+      ? readArray(shot.continuityInputs ?? shot.continuity_inputs).map(asRecord)
+      : readArray(fallback.continuityInputs ?? fallback.continuity_inputs).map(asRecord),
+    camera: {
+      framing: readText(camera.framing) || (index === 1 ? 'wide establishing frame' : 'readable cinematic frame'),
+      angle: readText(camera.angle) || 'eye level',
+      lens: readText(camera.lens),
+      movement: readText(camera.movement) || (index === 1 ? 'controlled establishing movement' : 'motivated shot movement'),
+      screenDirectionRule: readText(camera.screenDirectionRule) || readText(camera.screen_direction_rule),
+    },
+    requiresLipSync: shot.requiresLipSync === true || fallback.requiresLipSync === true,
+    status: readText(shot.status) || 'planned',
+    continuityAnchorIds,
+    continuityAnchorRefIds: continuityAnchorIds,
+    sceneGraphBinding: Object.keys(effectiveBinding).length > 0 ? effectiveBinding : sceneGraphBinding,
+  })
+  return {
+    ...parsedShot,
+    sourceScriptShotIds,
+    sourceAnchorIds,
+  }
+}
+
+function normalizeSequenceAnimaticDirectorPlan(input: {
+  rawPlan: unknown
+  manifest: Record<string, unknown>
+  manifestHash: string
+  masterManifestArtifactKey: string
+  continuityPlannerContext: Record<string, unknown>
+}) {
+  const parsedV2 = sequenceAnimaticShotContinuityPlanV2Schema.safeParse(input.rawPlan)
+  const parsed = sequenceAnimaticDirectorPlanSchema.parse(
+    parsedV2.success ? projectShotContinuityPlanV2ToDirectorPlan(parsedV2.data) : input.rawPlan,
+  )
+  const manifestShotPlan = asRecord(input.manifest.shotPlan)
+  const manifestShots = readArray(manifestShotPlan.shots).map(asRecord)
+  const rawShots = parsed.shots.map(asRecord).filter((shot) => readText(shot.id) || readText(shot.action) || readText(shot.description))
+  if (rawShots.length === 0) {
+    throw new Error('Sequence animatic shot continuity plan must return final shots.')
+  }
+  if (parsed.blocks.length === 0) {
+    throw new Error('Sequence animatic shot continuity plan must return final storyboard blocks.')
+  }
+  const manifestShotById = new Map(manifestShots.map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+  const blockIdByShotId = sequenceAnimaticDirectorBlockIdByShotId(parsed.blocks)
+  const rawGraph = parsed.continuityGraphV2
+    ? parseSequenceAnimaticGraphV2(parsed.continuityGraphV2)
+    : sequenceAnimaticEmptyGraphV2(input.continuityPlannerContext)
+  const shotBindings = { ...rawGraph.shotBindings, ...parsed.shotBindings }
+  const normalizedShots = rawShots.map((shot, index) => normalizeSequenceAnimaticDirectorShot({
+    shot,
+    fallbackShot: manifestShotById.get(readText(shot.id)) ?? manifestShots[index],
+    index,
+    blockIdByShotId,
+    shotBindings,
+  }))
+  const missingBindings = normalizedShots
+    .map((shot) => readText(shot.id))
+    .filter((shotId) => !readText(asRecord(shotBindings[shotId]).setId) && !readText(asRecord(shotBindings[shotId]).worldLocationRefId))
+  if (missingBindings.length > 0) {
+    throw new Error(`Sequence animatic shot continuity plan did not bind ${missingBindings.length} shot${missingBindings.length === 1 ? '' : 's'} to a scene set or world location: ${missingBindings.slice(0, 5).join(', ')}.`)
+  }
+  const continuityGraphV2 = sequenceAnimaticContinuityGraphV2Schema.parse({
+    ...rawGraph,
+    version: 'sequence_animatic_continuity_graph_v2',
+    planningMode: 'block_graph_v2',
+    shotBindings: {
+      ...rawGraph.shotBindings,
+      ...shotBindings,
+    },
+    warnings: [...readStringArray(rawGraph.warnings), ...parsed.warnings],
+    diagnostics: [...readStringArray(rawGraph.diagnostics), ...parsed.diagnostics],
+  })
+  const normalizedShotIds = new Set(normalizedShots.map((shot) => shot.id))
+  const blocks = parsed.blocks.map((block, index) => ({
+    ...block,
+    id: readText(block.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`,
+    index: Number(block.index ?? index + 1) || index + 1,
+    title: readText(block.title) || readText(block.summary) || `Storyboard block ${index + 1}`,
+    summary: readText(block.summary),
+    shotIds: readStringArray(block.shotIds ?? block.shot_ids).filter((shotId) => normalizedShotIds.has(shotId)),
+    status: readText(block.status) === 'needs_review' || readText(block.status) === 'failed' ? readText(block.status) : 'planned',
+    warnings: readStringArray(block.warnings),
+  }))
+  if (blocks.some((block) => block.shotIds.length === 0)) {
+    throw new Error('Sequence animatic shot continuity plan returned a storyboard block without valid shotIds.')
+  }
+  const scriptHash = hashOutputWorkflowValue(input.manifest.screenplayDraft ?? input.manifest.screenplayMarkdown ?? {})
+  const shotPlanHash = hashOutputWorkflowValue({ shots: normalizedShots, blocks })
+  return sequenceAnimaticDirectorPlanSchema.parse({
+    ...parsed,
+    role: 'sequence_animatic_director_plan',
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    screenplayAnimaticRole: 'director_plan',
+    sequenceAnimaticRole: 'director_plan',
+    contractVersion: parsed.contractVersion || (parsedV2.success ? 'shot_continuity_plan_v2' : ''),
+    masterRequestId: readText(input.manifest.requestId) || null,
+    masterManifestArtifactKey: input.masterManifestArtifactKey,
+    manifestHash: input.manifestHash,
+    scriptHash,
+    shotPlanHash,
+    planningMode: parsed.planningMode,
+    shots: normalizedShots,
+    blocks,
+    continuityGraphV2,
+    continuity_graph_v2: continuityGraphV2,
+    shotBindings: continuityGraphV2.shotBindings,
+    shot_bindings: continuityGraphV2.shotBindings,
+    diagnostics: [
+      ...parsed.diagnostics,
+      `Director plan normalized ${normalizedShots.length} shot${normalizedShots.length === 1 ? '' : 's'} across ${blocks.length} block${blocks.length === 1 ? '' : 's'}.`,
+    ],
+  })
 }
 
 function sequenceAnimaticBlockShots(context: Record<string, unknown>, block: Record<string, unknown>) {
@@ -7470,6 +9679,8 @@ async function planSequenceAnimaticContinuityAnchors(input: {
     providerMode: string
     lastProviderPollAt: string
     providerStartedAt: string
+    providerIncompleteReason?: string
+    providerIncompleteDetails?: Record<string, unknown> | null
   }) => Promise<void>
 }) {
   const providedContinuityGraphV2 = asRecord(input.continuityGraphV2)
@@ -7619,6 +9830,55 @@ function buildSequenceAnimaticContinuityAssetPrompt(input: {
       : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
     'Provider requirements: one finished square production reference image, clean composition, no visible text, no labels, no borders, no watermarks.',
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildSequenceAnimaticContinuityBatchPrompt(input: {
+  batch: Record<string, unknown>
+  targetNodes: Record<string, unknown>[]
+  relevantShots: Record<string, unknown>[]
+  referenceAssetKeys: string[]
+}) {
+  const batchKind = readText(input.batch.batchKind) || 'single_hero_ref'
+  const layout = asRecord(input.batch.layout)
+  const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
+  const columns = Math.max(1, Number(layout.columns ?? 1) || 1)
+  const cellLines = input.targetNodes.slice(0, rows * columns).map((node, index) => {
+    const row = Math.floor(index / columns) + 1
+    const column = (index % columns) + 1
+    return [
+      `Cell ${index + 1} (row ${row}, column ${column}):`,
+      readText(node.name) || titleFromRefLike(readText(node.id)),
+      readText(node.assetKind) || readText(node.nodeKind),
+      readText(node.visualBrief) || readText(node.summary),
+    ].filter(Boolean).join(' ')
+  })
+  const shotLines = input.relevantShots.slice(0, 8).map((shot) => [
+    readText(shot.id),
+    readText(shot.title),
+    compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 220),
+  ].filter(Boolean).join(': '))
+  const kindInstruction = batchKind === 'angle_grid'
+    ? 'Each populated cell must show a distinct reusable camera-facing angle from the same set or zone. Preserve architecture, landmarks, light direction, screen direction, entrances, materials, and depth. No characters, no labels, no UI.'
+    : batchKind === 'spot_grid'
+      ? 'Each populated cell must show one reusable sub-location or action spot inside the same zone. Preserve local surfaces, landmarks, entrances, sightlines, material continuity, and lighting. No characters, no labels, no UI.'
+      : batchKind === 'temp_character_grid'
+        ? 'Each populated cell must show one temporary supporting character or crowd/faction member in neutral pose. Make silhouettes, wardrobe, body shape, face/species cues, and scale readable. No action scene, no labels.'
+        : batchKind === 'prop_grid'
+          ? 'Each populated cell must show one reusable prop or item in clean cinematic lighting. Make material, shape, wear, function, and scale readable. No labels, no UI.'
+          : batchKind === 'location_zone_board'
+            ? 'Create one clean environment production board for a specific set or zone. Show usable cinematic spatial information: architecture, entrances, landmarks, light direction, material palette, and camera-friendly surfaces. No characters, no labels, no maps, no UI.'
+            : 'Create one high-detail hero continuity reference. It must be reusable across storyboard and shot-video generation. No labels, no borders, no UI, no watermarks.'
+  return [
+    `Continuity reference batch: ${batchKind}`,
+    `Grid: ${rows} rows x ${columns} columns. Fill cells left-to-right, top-to-bottom. Leave unused cells clean and empty.`,
+    kindInstruction,
+    input.referenceAssetKeys.length > 0
+      ? 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
+      : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
+    cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
+    shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
+    'Provider requirements: one finished image only, no visible text, no captions, no borders between cells except clean spacing, no arrows, no labels, no watermarks.',
   ].filter(Boolean).join('\n\n')
 }
 
@@ -10108,6 +12368,8 @@ function buildFallbackCinematicV2ScreenplayDraft(input: {
       return `SHOT ${index + 1} - VISIBLE ACTION\n${line}`
     }).join('\n\n'),
   ].join('\n')
+    .replace(/^SHOT\s+\d+\s+-\s+DIALOGUE COVERAGE$/gim, '#shot dialogue coverage | ~3s')
+    .replace(/^SHOT\s+\d+\s+-\s+VISIBLE ACTION$/gim, '#shot visible action | ~3s')
   const fallbackShots = storyLines.slice(0, 12).map((line, index) => {
     const visible = characterRefIds.map((refId) => nameForCinematicRef(input.assetPack, refId) || refId).join(', ') || 'selected character refs'
     const location = locationRefId ? nameForCinematicRef(input.assetPack, locationRefId) || locationRefId : 'selected story location'
@@ -10200,12 +12462,22 @@ type CinematicV3ShotBreakGroup = {
 }
 
 function parseCinematicV3ShotMarker(line: string) {
+  const anchor = line.match(/^\s*#shot\b\s*:?\s*([^|(\n]+?)(?:\s*(?:\||\()\s*~?\s*(\d+(?:\.\d+)?)\s*s?\)?)?\s*$/i)
+  if (anchor) {
+    return {
+      index: 0,
+      title: anchor[1]?.trim() || '',
+      durationSeconds: Number(anchor[2] ?? 0) || null,
+      deterministicIndex: true,
+    }
+  }
   const html = line.match(/<!--\s*SHOT\s+(\d{1,3})\s*:\s*([^|>-]+?)(?:\s*\|\s*~?\s*(\d+(?:\.\d+)?)\s*s?)?\s*-->/i)
   if (html) {
     return {
       index: Number(html[1]) || 0,
       title: html[2]?.trim() || '',
       durationSeconds: Number(html[3] ?? 0) || null,
+      deterministicIndex: false,
     }
   }
   const markdown = line.match(/^\s*(?:#{2,4}\s*)?SHOT\s+(\d{1,3})\s*[:\-]\s*([^|(\n]+?)(?:\s*(?:\||\()\s*~?\s*(\d+(?:\.\d+)?)\s*s?\)?)?\s*$/i)
@@ -10214,6 +12486,7 @@ function parseCinematicV3ShotMarker(line: string) {
       index: Number(markdown[1]) || 0,
       title: markdown[2]?.trim() || '',
       durationSeconds: Number(markdown[3] ?? 0) || null,
+      deterministicIndex: false,
     }
   }
   return null
@@ -10274,7 +12547,7 @@ function buildCinematicV3ShotBreakPlan(input: {
   const maxPanels = Math.max(1, Math.min(9, Math.floor(input.maxPanelsPerSheet ?? 9) || 9))
   const maxDuration = Math.max(1, Math.min(15, Number(input.maxDurationPerGroupSeconds ?? 15) || 15))
   const markerMatches: Array<{ marker: NonNullable<ReturnType<typeof parseCinematicV3ShotMarker>>, offset: number, markerText: string }> = []
-  const markerPattern = /<!--\s*SHOT\s+\d{1,3}\s*:[\s\S]*?-->|^\s*(?:#{2,4}\s*)?SHOT\s+\d{1,3}\s*[:\-].*$/gim
+  const markerPattern = /<!--\s*SHOT\s+\d{1,3}\s*:[\s\S]*?-->|^\s*#shot\b.*$|^\s*(?:#{2,4}\s*)?SHOT\s+\d{1,3}\s*[:\-].*$/gim
   for (const match of markdown.matchAll(markerPattern)) {
     const markerText = match[0] ?? ''
     const marker = parseCinematicV3ShotMarker(markerText)
@@ -10286,7 +12559,7 @@ function buildCinematicV3ShotBreakPlan(input: {
     const textStart = match.offset + match.markerText.length
     const text = markdown.slice(textStart, nextOffset).trim()
     const duration = match.marker.durationSeconds || estimateCinematicV3ShotDurationSeconds(text, 3)
-    const markerIndex = match.marker.index || index + 1
+    const markerIndex = index + 1
     return {
       id: `shot_${String(markerIndex).padStart(3, '0')}`,
       index: markerIndex,
@@ -10348,6 +12621,114 @@ function buildCinematicV3ShotBreakPlan(input: {
     maxDurationPerGroupSeconds: maxDuration,
     diagnostics,
   }
+}
+
+function buildSequenceAnimaticScriptShotProjection(shotBreakPlan: Record<string, unknown>) {
+  const rawShots = readArray(shotBreakPlan.shotBreaks ?? shotBreakPlan.shot_breaks).map(asRecord)
+  const scriptShots = rawShots.map((shot, index) => {
+    const shotIndex = Number(shot.index ?? 0) || index + 1
+    const id = readText(shot.id) || `shot_${String(shotIndex).padStart(3, '0')}`
+    const approximateDurationSeconds = Math.max(1, Math.min(12, Number(shot.approximateDurationSeconds ?? shot.durationSeconds ?? 0) || 3))
+    return {
+      id,
+      index: shotIndex,
+      title: truncateStatusText(readText(shot.title) || `Shot ${shotIndex}`, 80),
+      approximateDurationSeconds,
+      screenplayText: readText(shot.screenplayText) || readText(shot.screenplay_text) || readText(shot.text),
+      startOffset: Number.isFinite(Number(shot.startOffset)) ? Number(shot.startOffset) : undefined,
+      endOffset: Number.isFinite(Number(shot.endOffset)) ? Number(shot.endOffset) : undefined,
+    }
+  })
+  const shotById = new Map(scriptShots.map((shot) => [shot.id, shot] as const))
+  const scriptBlocks = readArray(shotBreakPlan.groups).map(asRecord).map((group, index) => {
+    const blockIndex = Number(group.index ?? 0) || index + 1
+    const shotIds = readStringArray(group.shotBreakIds ?? group.shot_break_ids)
+      .filter((shotId) => shotById.has(shotId))
+    const approximateDurationSeconds = Number(group.approximateDurationSeconds ?? 0)
+      || shotIds.reduce((total, shotId) => total + (shotById.get(shotId)?.approximateDurationSeconds ?? 0), 0)
+    return {
+      id: readText(group.id) || `script_block_${String(blockIndex).padStart(3, '0')}`,
+      index: blockIndex,
+      title: truncateStatusText(readText(group.title) || readText(group.summary) || `Screenplay block ${blockIndex}`, 96),
+      shotIds,
+      approximateDurationSeconds,
+    }
+  }).filter((block) => block.shotIds.length > 0)
+  if (scriptShots.length > 0 && scriptBlocks.length === 0) {
+    scriptBlocks.push({
+      id: 'script_block_001',
+      index: 1,
+      title: 'Screenplay shots',
+      shotIds: scriptShots.map((shot) => shot.id),
+      approximateDurationSeconds: scriptShots.reduce((total, shot) => total + shot.approximateDurationSeconds, 0),
+    })
+  }
+  return {
+    scriptShotStatus: scriptShots.length > 0 ? 'ready' : 'missing',
+    scriptShots,
+    scriptBlocks,
+  }
+}
+
+function buildSequenceAnimaticShotPlanFromBreaks(input: {
+  shotBreakPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  context: Record<string, unknown>
+}) {
+  const shotBreaks = Array.isArray(input.shotBreakPlan.shotBreaks)
+    ? input.shotBreakPlan.shotBreaks.map(asRecord)
+    : []
+  const fallbackLocationRefId = cinematicV2LocationRefId(input.assetPack, input.context)
+  const shots = shotBreaks.map((shotBreak, index) => {
+    const shotId = readText(shotBreak.id) || `shot_${String(index + 1).padStart(3, '0')}`
+    const duration = Math.max(1, Math.min(8, Number(shotBreak.approximateDurationSeconds ?? 0) || 3))
+    const title = truncateStatusText(readText(shotBreak.title) || `Shot ${index + 1}`, 80)
+    const action = readText(shotBreak.text) || title
+    const purpose = index === 0
+      ? 'establishing'
+      : index === shotBreaks.length - 1 ? 'closing' : 'action'
+    return cinematicV2ShotSchema.parse({
+      id: shotId,
+      sceneId: 'sequence_animatic_master',
+      index: index + 1,
+      title,
+      purpose,
+      editorialDurationSeconds: duration,
+      providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
+      description: action,
+      action,
+      caption: title,
+      lighting: '',
+      mood: '',
+      storyboardPanelPrompt: `Storyboard ${shotId}: ${action}`,
+      videoDirection: action,
+      dialogue: [],
+      speakerRefIds: [],
+      visibleCharacterRefIds: [],
+      performanceBeats: [],
+      locationRefId: fallbackLocationRefId,
+      worldLocationRefId: fallbackLocationRefId,
+      propRefIds: [],
+      continuityInputs: [],
+      camera: {
+        framing: index === 0 ? 'wide establishing frame' : 'readable cinematic frame',
+        angle: 'eye level',
+        lens: '',
+        movement: index === 0 ? 'controlled establishing movement' : 'motivated shot movement',
+        screenDirectionRule: '',
+      },
+      requiresLipSync: false,
+      status: 'planned',
+    })
+  })
+  return cinematicV2ShotPlanSchema.parse({
+    sceneId: 'sequence_animatic_master',
+    totalEditorialDurationSeconds: Math.max(1, shots.reduce((total, shot) => total + shot.editorialDurationSeconds, 0)),
+    shots,
+    performanceArc: [],
+    audioPlan: { ambience: '', music: '', sfx: [], dialogueTrackCount: 0, placeholderOnly: true },
+    diagnostics: ['Derived initial sequence animatic shot plan from screenplay shot breaks; shot continuity plan will assign final references and continuity graph bindings.'],
+  })
 }
 
 function buildCinematicV3StoryboardGroupFromShotBreakGroup(
@@ -11386,6 +13767,7 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
   const providerStartedAt = readText(input.providerStartedAt) || new Date().toISOString()
   const parsedStartedAt = Date.parse(providerStartedAt)
   const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now()
+  let transientPollAttempt = 0
 
   while (!isOpenAiTerminalStatus(providerStatus)) {
     await input.onProgress?.({
@@ -11410,10 +13792,37 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
       throw new Error(`OpenAI background structured response did not complete after ${timeoutMs}ms. Response id: ${providerRequestId}.`)
     }
     await sleep(3_000)
-    result = await retrieveOpenAiResponse(providerRequestId, 45_000)
+    try {
+      result = await retrieveOpenAiResponse(providerRequestId, 45_000)
+    } catch (error) {
+      transientPollAttempt += 1
+      if (!isRetryableOpenAiError(error) || Date.now() - startedAt > timeoutMs) throw error
+      await input.onProgress?.({
+        providerRequestId,
+        providerStatus: `${providerStatus}:poll_retry`,
+        providerMode: 'background',
+        lastProviderPollAt: new Date().toISOString(),
+        providerStartedAt,
+      })
+      await sleep(openAiResponseRetryDelayMs(null, transientPollAttempt))
+      continue
+    }
     if (!result.response.ok) {
+      if (isTransientOpenAiResponseStatus(result.response.status) && Date.now() - startedAt <= timeoutMs) {
+        transientPollAttempt += 1
+        await input.onProgress?.({
+          providerRequestId,
+          providerStatus: `${providerStatus}:poll_retry_${result.response.status}`,
+          providerMode: 'background',
+          lastProviderPollAt: new Date().toISOString(),
+          providerStartedAt,
+        })
+        await sleep(openAiResponseRetryDelayMs(result, transientPollAttempt))
+        continue
+      }
       throw new Error(openAiErrorMessage(result, `OpenAI background structured response poll failed with status ${result.response.status}.`))
     }
+    transientPollAttempt = 0
     providerRequestId = result.id ?? providerRequestId
     providerStatus = result.status
   }
@@ -11424,6 +13833,8 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
     providerMode: 'background',
     lastProviderPollAt: new Date().toISOString(),
     providerStartedAt,
+    providerIncompleteReason: openAiIncompleteReason(result),
+    providerIncompleteDetails: openAiIncompleteDetails(result),
   })
 
   if (providerStatus !== 'completed') {
@@ -12556,7 +14967,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   const screenplayAnimaticSource = readText(workflowMetadata.screenplayAnimaticSource)
     || (cinematicAnimaticMode === 'prompt_cinematic_master' ? 'prompt_cinematic' : '')
   const dynamicV3ParsePersistenceVersion = screenplayAnimaticMasterMode
-    ? 'v3_sequence_master_parse_groups_continuity_1'
+    ? 'v3_sequence_master_director_first_2'
     : 'v3_parse_groups_direct_storyboards_1'
   const storyboardGroups = groups.map((group, index) => buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index))
 
@@ -12581,7 +14992,9 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   if (existingStepResponse.error) throw new Error(existingStepResponse.error.message)
   const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
     .map((row) => [readText(row.node_key), row] as const))
-  const groupParseKeys = groups.map((group) => `${readText(group.id)}_shot_parse`)
+  const groupParseKeys = screenplayAnimaticMasterMode
+    ? []
+    : groups.map((group) => `${readText(group.id)}_shot_parse`)
   const directStoryboardKeys = screenplayAnimaticMasterMode
     ? []
     : storyboardGroups.flatMap((group) => [
@@ -12593,8 +15006,10 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     ])
   const expectedDynamicKeys = screenplayAnimaticMasterMode
     ? [
-      ...groupParseKeys,
       'sequence_animatic_manifest',
+      'sequence_animatic_director_plan',
+      'sequence_animatic_director_plan_artifact',
+      'sequence_animatic_orchestrator',
       'artifact',
     ]
     : [...groupParseKeys, ...directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact']
@@ -12608,7 +15023,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3ParsePersistenceVersion) === dynamicV3ParsePersistenceVersion)
     && expectedDynamicKeys.every((key) => existingDynamicNodes.some((row) => row.key === key))
   if (existingSameHash && !hasRecoverableStepOutput) {
-    return { expanded: false, compileHash, parseGroupCount: groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
+    return { expanded: false, compileHash, parseGroupCount: screenplayAnimaticMasterMode ? 0 : groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
   }
 
   const existingEdgeResponse = await input.client
@@ -12669,6 +15084,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   const edgeRows: Record<string, unknown>[] = []
   const assetPackSourceNodeKey = 'cinematic_v3_reference_select'
   groups.forEach((group, index) => {
+    if (screenplayAnimaticMasterMode) return
     const groupId = readText(group.id)
     const storyboardGroup = storyboardGroups[index]
     const storyboardLayout = { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
@@ -12745,15 +15161,25 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   })
   if (screenplayAnimaticMasterMode) {
     nodeRows.push(
-      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 2240, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
-      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 2520, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+      v3Node({ key: 'sequence_animatic_director_plan', nodeType: 'utility_transform', label: 'Shot Continuity Plan', x: 1960, y: 120, config: { purpose: 'sequence_animatic_director_plan', role: 'sequence_animatic_director_plan', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', maxShotCount, aspectRatio, resolution, execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_director_plan', maxConcurrency: 1 } } }),
+      v3Node({ key: 'sequence_animatic_director_plan_artifact', nodeType: 'output_artifact', label: 'Register Shot Continuity Plan', x: 2240, y: 120, config: { purpose: 'sequence_animatic_director_plan_artifact', artifactKind: 'other', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 2520, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
+      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 2800, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
+      v3Node({ key: 'sequence_animatic_orchestrator', nodeType: 'utility_transform', label: 'Queue Animatic Blocks', x: 3080, y: 120, config: { purpose: 'sequence_animatic_orchestrator', role: 'sequence_animatic_orchestrator', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', blockConcurrency: 1, autoStartStoryboards: true, autoStartVideos: false, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_orchestrator', maxConcurrency: 1 } } }),
     )
     edgeRows.push(
+      v3Edge({ key: 'context__sequence_director_plan', sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'context' }),
+      v3Edge({ key: 'guidance__sequence_director_plan', sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'guidance' }),
+      v3Edge({ key: 'references__sequence_director_plan', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'asset_pack' }),
+      v3Edge({ key: 'screenplay__sequence_director_plan', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'screenplay' }),
+      v3Edge({ key: 'director_plan__director_plan_artifact', sourceNodeKey: 'sequence_animatic_director_plan', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_director_plan_artifact', targetPort: 'director_plan' }),
+      v3Edge({ key: 'director_plan__sequence_manifest', sourceNodeKey: 'sequence_animatic_director_plan', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'director_plan' }),
       v3Edge({ key: 'screenplay__sequence_manifest', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'screenplay' }),
-      v3Edge({ key: 'shot_break_plan__sequence_manifest', sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_break_plan' }),
       v3Edge({ key: 'references__sequence_manifest', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'asset_pack' }),
       v3Edge({ key: 'context__sequence_manifest', sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'context' }),
-      v3Edge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'text', targetNodeKey: 'artifact', targetPort: 'input' }),
+      v3Edge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'manifest', targetNodeKey: 'artifact', targetPort: 'input' }),
+      v3Edge({ key: 'director_plan__orchestrator', sourceNodeKey: 'sequence_animatic_director_plan_artifact', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_orchestrator', targetPort: 'director_plan' }),
+      v3Edge({ key: 'sequence_manifest__orchestrator', sourceNodeKey: 'artifact', sourcePort: 'manifest', targetNodeKey: 'sequence_animatic_orchestrator', targetPort: 'manifest' }),
     )
   } else {
     nodeRows.push(
@@ -12810,7 +15236,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     },
   }).eq('id', input.workflow.id)
   if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
-  return { expanded: true, compileHash, parseGroupCount: groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
+  return { expanded: true, compileHash, parseGroupCount: screenplayAnimaticMasterMode ? 0 : groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
 }
 
 async function materializeDynamicCinematicV2ShotFanout(input: {
@@ -13865,7 +16291,24 @@ function openAiErrorMessage(result: OpenAiResponseResult, fallback: string) {
     if (message) return message
   }
   if (typeof error === 'string' && error.trim()) return error.trim()
+  const incompleteReason = openAiIncompleteReason(result)
+  if (incompleteReason) return `${fallback} Incomplete reason: ${incompleteReason}.`
   return fallback
+}
+
+function openAiIncompleteDetails(result: OpenAiResponseResult): Record<string, unknown> | null {
+  const body = asRecord(result.body)
+  const details = asRecord(body.incomplete_details)
+  if (Object.keys(details).length > 0) return details
+  const camelDetails = asRecord(body.incompleteDetails)
+  if (Object.keys(camelDetails).length > 0) return camelDetails
+  return null
+}
+
+function openAiIncompleteReason(result: OpenAiResponseResult) {
+  const details = openAiIncompleteDetails(result)
+  if (!details) return ''
+  return readText(details.reason) || readText(details.code) || readText(details.type)
 }
 
 function isOpenAiTerminalStatus(status: string) {
@@ -13911,6 +16354,7 @@ async function generateBackgroundMarkdown(input: {
   let providerRequestId = result.id
   let providerStatus = result.status
   const startedAt = Date.now()
+  let transientPollAttempt = 0
 
   while (!isOpenAiTerminalStatus(providerStatus)) {
     await input.onProgress?.({
@@ -13936,10 +16380,35 @@ async function generateBackgroundMarkdown(input: {
     }
 
     await sleep(3_000)
-    result = await retrieveOpenAiResponse(providerRequestId, 45_000)
+    try {
+      result = await retrieveOpenAiResponse(providerRequestId, 45_000)
+    } catch (error) {
+      transientPollAttempt += 1
+      if (!isRetryableOpenAiError(error) || Date.now() - startedAt > timeoutMs) throw error
+      await input.onProgress?.({
+        providerRequestId,
+        providerStatus: `${providerStatus}:poll_retry`,
+        providerMode: 'background',
+        lastProviderPollAt: new Date().toISOString(),
+      })
+      await sleep(openAiResponseRetryDelayMs(null, transientPollAttempt))
+      continue
+    }
     if (!result.response.ok) {
+      if (isTransientOpenAiResponseStatus(result.response.status) && Date.now() - startedAt <= timeoutMs) {
+        transientPollAttempt += 1
+        await input.onProgress?.({
+          providerRequestId,
+          providerStatus: `${providerStatus}:poll_retry_${result.response.status}`,
+          providerMode: 'background',
+          lastProviderPollAt: new Date().toISOString(),
+        })
+        await sleep(openAiResponseRetryDelayMs(result, transientPollAttempt))
+        continue
+      }
       throw new Error(openAiErrorMessage(result, `OpenAI background response poll failed with status ${result.response.status}.`))
     }
+    transientPollAttempt = 0
     providerRequestId = result.id ?? providerRequestId
     providerStatus = result.status
   }
@@ -15742,9 +18211,12 @@ async function executeNode(input: {
         const config = asRecord(input.node.config)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const fallback = buildFallbackCinematicV2ScreenplayDraft({ context, assetPack, prompt: input.run.prompt })
-        const v3ShotMarkedScreenplay = purpose === 'cinematic_v3_screenplay_author'
+        const v3Screenplay = purpose === 'cinematic_v3_screenplay_author'
         const sequenceAnimaticMode = readText(config.sequenceAnimaticMode)
-        const fullSequenceUnitAnimatic = v3ShotMarkedScreenplay && sequenceAnimaticMode === 'master_script_only'
+        const cinematicAnimaticMode = readText(config.cinematicAnimaticMode)
+        const screenplayAnimaticMaster = v3Screenplay && (sequenceAnimaticMode === 'master_script_only' || cinematicAnimaticMode === 'prompt_cinematic_master')
+        const v3ShotMarkedScreenplay = v3Screenplay && !screenplayAnimaticMaster
+        const fullSequenceUnitAnimatic = v3Screenplay && sequenceAnimaticMode === 'master_script_only'
         const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
         const selectedSequenceUnitBrief = fullSequenceUnitAnimatic
           ? buildSelectedSequenceUnitScreenplayBrief(context)
@@ -15755,18 +18227,14 @@ async function executeNode(input: {
             'You are a senior screenwriter and cinematic story artist.',
             'Return plain Markdown screenplay/treatment text only. Do not return JSON.',
           ].join('\n'),
-          prompt: v3ShotMarkedScreenplay
+          prompt: screenplayAnimaticMaster
             ? [
               fullSequenceUnitAnimatic
-                ? 'Write a full sequence-unit screenplay animatic for the selected chapter/sequence unit before technical parsing happens.'
-                : 'Write the cinematic source screenplay before technical parsing happens.',
-              'Keep it creative and readable: scene heading, concise visible action lines, dialogue blocks, performance notes, and visual motifs.',
-              'Insert one lightweight HTML shot marker immediately before every intended storyboard/video shot beat using this exact form:',
-              '<!-- SHOT 001: short visual beat title | ~3s -->',
-              'Shot markers are structural anchors only. Do not turn the script into JSON, a rigid field list, image prompts, or provider instructions.',
-              fullSequenceUnitAnimatic
-                ? 'This is not a short teaser. Use 24-36 shot markers when the selected sequence unit has enough material, expanding the whole chapter spine into storyboard-ready screenplay beats.'
-                : 'Use 6-18 shot markers depending on the requested scene duration. Each marked shot should be a coherent storyboard panel and future short-video beat.',
+                ? 'Write a full sequence-unit creative screenplay for the selected chapter/sequence unit. This pass is creative only; technical shot planning happens in the next workflow node.'
+                : 'Write the creative screenplay for the requested cinematic. This pass is creative only; technical shot planning happens in the next workflow node.',
+              'Keep it readable as screenplay/treatment prose: scene headings, concise visible action, dialogue blocks, emotional performance, concrete visual motifs, and clear chapter/outcome fidelity.',
+              'Do not write shot markers, #shot anchors, SHOT headings, numbered shot lists, storyboard panel lists, camera breakdowns, lighting breakdowns, scene graph assignments, temporary asset declarations, image prompts, video prompts, JSON, schema fields, provider instructions, model names, resolution, aspect ratio, or workflow metadata.',
+              'The next node will convert this script into shots, refs, scene graph bindings, storyboard blocks, and continuity assets. Do not pre-structure this screenplay for that node beyond clear cinematic action and dialogue.',
               fullSequenceUnitAnimatic
                 ? 'Treat the selected sequence unit fields as authoritative: synopsis, dramatic question, outcome, POV notes, character arc deltas, consequences, open loops, context, summary, and visual identity all need to shape the screenplay.'
                 : '',
@@ -15775,15 +18243,48 @@ async function executeNode(input: {
                 : '',
               'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
               'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
+              'Keep performance direction compact and visible. Describe what an actor would do, what the camera could see, and what changes emotionally in the scene.',
+              'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
+              'Recommended shape:',
+              '## Scene: [short title]',
+              'EXT./INT. LOCATION - TIME',
+              'Action lines and dialogue.',
+              '## Performance Notes',
+              '- Character: visible acting direction.',
+              '## Visual Motifs',
+              '- concrete recurring image.',
+              `User brief:\n${input.run.prompt}`,
+              selectedSequenceUnitBrief
+                ? `Selected sequence unit to adapt fully:\n${JSON.stringify(selectedSequenceUnitBrief, null, 2)}`
+                : '',
+              guidanceMarkdown(guidance),
+              compactForPrompt({
+                world: asRecord(context.wiki ?? context.worldWiki),
+                selectedSequenceUnit: selectedSequenceUnitBrief,
+                assetPack,
+                entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [],
+              }, fullSequenceUnitAnimatic ? 14000 : 11000),
+            ].filter(Boolean).join('\n\n')
+            : v3ShotMarkedScreenplay
+            ? [
+              'Write the cinematic source screenplay before technical parsing happens.',
+              'Keep it creative and readable: scene heading, concise visible action lines, dialogue blocks, performance notes, and visual motifs.',
+              'Insert one lightweight shot anchor immediately before every intended storyboard/video shot beat using this exact form:',
+              '#shot short visual beat title | ~3s',
+              'Do not number shot anchors. The system assigns stable shot_001, shot_002, etc. IDs deterministically after screenplay authoring.',
+              'Shot markers are structural anchors only. Do not turn the script into JSON, a rigid field list, image prompts, or provider instructions.',
+              'Use 6-18 shot markers depending on the requested scene duration. Each marked shot should be a coherent storyboard panel and future short-video beat.',
+              'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
+              'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
               'Keep performance direction compact: valence/arousal-style emotional movement may be described in plain language, but do not emit numeric JSON.',
               'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
               'Do not write graph operations, provider instructions, image prompts, video prompts, model names, @Image labels, resolution, aspect-ratio instructions, schema fields, visible subtitles, or workflow metadata.',
               'Recommended shape:',
               '## Scene: [short title]',
               'EXT./INT. LOCATION - TIME',
-              '<!-- SHOT 001: threshold reveal | ~3s -->',
+              '#shot threshold reveal | ~3s',
               'Action lines and dialogue.',
-              '<!-- SHOT 002: reaction closeup | ~2s -->',
+              '#shot reaction closeup | ~2s',
               'Action lines and dialogue.',
               '## Performance Notes',
               '- Character: visible acting direction.',
@@ -15824,8 +18325,13 @@ async function executeNode(input: {
               compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 11000),
             ].filter(Boolean).join('\n\n'),
           fallback,
-          maxOutputTokens: fullSequenceUnitAnimatic ? 9000 : v3ShotMarkedScreenplay ? 5200 : 4200,
+          maxOutputTokens: screenplayAnimaticMaster ? 9000 : v3ShotMarkedScreenplay ? 5200 : 4200,
         })
+        const scriptContract = screenplayAnimaticMaster
+          ? 'creative_screenplay_v1'
+          : v3ShotMarkedScreenplay
+            ? 'screenplay_with_shot_markers_v1'
+            : readText(asRecord(result.value.metadata).scriptContract)
         const screenplayDraft = result.fallbackUsed
           ? cinematicV2ScreenplayDraftSchema.parse({
             ...result.value,
@@ -15835,14 +18341,14 @@ async function executeNode(input: {
             ],
             metadata: {
               ...asRecord(result.value.metadata),
-              scriptContract: v3ShotMarkedScreenplay ? 'screenplay_with_shot_markers_v1' : readText(asRecord(result.value.metadata).scriptContract),
+              scriptContract,
             },
           })
           : cinematicV2ScreenplayDraftSchema.parse({
             ...result.value,
             metadata: {
               ...asRecord(result.value.metadata),
-              ...(v3ShotMarkedScreenplay ? { scriptContract: 'screenplay_with_shot_markers_v1' } : {}),
+              ...(scriptContract ? { scriptContract } : {}),
             },
           })
         const v3ShotBreakPlan = v3ShotMarkedScreenplay
@@ -15865,11 +18371,22 @@ async function executeNode(input: {
             },
           })
           : screenplayDraft
+        const scriptShotProjection = v3ShotBreakPlan
+          ? buildSequenceAnimaticScriptShotProjection(v3ShotBreakPlan)
+          : { scriptShotStatus: 'missing', scriptShots: [], scriptBlocks: [] }
         const outputs = {
           screenplayDraft: screenplayDraftWithMarkers,
           screenplay_draft: screenplayDraftWithMarkers,
+          shotBreakPlan: v3ShotBreakPlan ?? {},
+          shot_break_plan: v3ShotBreakPlan ?? {},
           shotBreaks: v3ShotBreakPlan?.shotBreaks ?? [],
           shot_breaks: v3ShotBreakPlan?.shotBreaks ?? [],
+          scriptShotStatus: scriptShotProjection.scriptShotStatus,
+          script_shot_status: scriptShotProjection.scriptShotStatus,
+          scriptShots: scriptShotProjection.scriptShots,
+          script_shots: scriptShotProjection.scriptShots,
+          scriptBlocks: scriptShotProjection.scriptBlocks,
+          script_blocks: scriptShotProjection.scriptBlocks,
           text: screenplayDraftWithMarkers.screenplayMarkdown,
           fallbackUsed: result.fallbackUsed,
           fallbackReason: result.fallbackReason,
@@ -18210,6 +20727,198 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-asset-input-v1' }
       }
+      if (purpose === 'sequence_animatic_continuity_batch_input') {
+        const config = asRecord(input.node.config)
+        const batch = asRecord(config.batch)
+        const targetNodes = readArray(config.targetNodes).map(asRecord)
+        const relevantShots = readArray(config.relevantShots).map(asRecord)
+        const shotBindings = asRecord(config.shotBindings)
+        const assetPack = asRecord(config.assetPack)
+        const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
+        const outputs = {
+          batch,
+          targetNodes,
+          target_nodes: targetNodes,
+          relevantShots,
+          relevant_shots: relevantShots,
+          shotBindings,
+          shot_bindings: shotBindings,
+          assetPack,
+          asset_pack: assetPack,
+          referenceAssetKeys,
+          reference_asset_keys: referenceAssetKeys,
+          text: JSON.stringify({
+            batchId: readText(batch.batchId),
+            batchKind: readText(batch.batchKind),
+            targetNodeIds: readStringArray(batch.targetNodeIds),
+            referenceAssetKeys,
+          }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_continuity_batch_prompt') {
+        const config = asRecord(input.node.config)
+        const batch = readFirstUpstreamRecord(input.upstream, ['batch'])
+        const targetNodes = readFirstUpstreamArray(input.upstream, ['targetNodes', 'target_nodes']).map(asRecord)
+        const relevantShots = readFirstUpstreamArray(input.upstream, ['relevantShots', 'relevant_shots']).map(asRecord)
+        const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
+        const referenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys']).map(readText).filter(Boolean)
+        const prompt = buildSequenceAnimaticContinuityBatchPrompt({
+          batch: Object.keys(batch).length > 0 ? batch : asRecord(config.batch),
+          targetNodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
+          relevantShots,
+          referenceAssetKeys,
+        })
+        const outputs = {
+          prompt,
+          text: prompt,
+          batch: Object.keys(batch).length > 0 ? batch : asRecord(config.batch),
+          targetNodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
+          target_nodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
+          relevantShots,
+          relevant_shots: relevantShots,
+          assetPack,
+          asset_pack: assetPack,
+          referenceAssetKeys,
+          reference_asset_keys: referenceAssetKeys,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-prompt-v1' }
+      }
+      if (purpose === 'sequence_animatic_continuity_batch_extract') {
+        const config = asRecord(input.node.config)
+        const batch = readFirstUpstreamRecord(input.upstream, ['batch'])
+        const targetNodes = readFirstUpstreamArray(input.upstream, ['targetNodes', 'target_nodes']).map(asRecord)
+        const image = readFirstUpstreamImage(input.upstream, ['image'])
+        const assetKey = readText(image.assetKey)
+        const storagePath = readText(image.storagePath) || readText(image.storage_path)
+        if (!assetKey || !storagePath) throw new Error('Continuity batch extraction requires a generated batch image.')
+        const layout = asRecord((Object.keys(batch).length > 0 ? batch : asRecord(config.batch)).layout)
+        const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
+        const columns = Math.max(1, Number(layout.columns ?? 1) || 1)
+        const mimeType = readText(image.mimeType) || readText(image.mime_type) || 'image/webp'
+        const sourceBytes = await downloadProjectAssetBytes(input.client, storagePath)
+        const tempDir = await Deno.makeTempDir({ prefix: 'graphcore-continuity-batch-' })
+        const sourceExt = mimeType.includes('png') ? 'png' : mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'webp'
+        const sourcePath = `${tempDir}/source.${sourceExt}`
+        const extractedAssets: Record<string, unknown>[] = []
+        const assetStateByNodeId: Record<string, unknown> = {}
+        try {
+          await Deno.writeFile(sourcePath, sourceBytes)
+          const size = await probeImageSize(sourcePath)
+          if (!size) throw new Error('Continuity batch extraction could not read generated image dimensions.')
+          for (let index = 0; index < targetNodes.length; index += 1) {
+            const targetNode = targetNodes[index]
+            const targetNodeId = readText(targetNode.id)
+            if (!targetNodeId) continue
+            const row = Math.floor(index / columns)
+            const column = index % columns
+            if (row >= rows) break
+            const cropX = Math.floor((size.width * column) / columns)
+            const cropY = Math.floor((size.height * row) / rows)
+            const nextX = Math.floor((size.width * (column + 1)) / columns)
+            const nextY = Math.floor((size.height * (row + 1)) / rows)
+            const cellWidth = Math.max(1, Math.min(size.width - cropX, nextX - cropX))
+            const cellHeight = Math.max(1, Math.min(size.height - cropY, nextY - cropY))
+            const outputPath = `${tempDir}/${slugify(targetNodeId)}.webp`
+            const crop = await runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${cellWidth}:${cellHeight}:${cropX}:${cropY}`, outputPath])
+            if (!crop.ok) throw new Error(`Continuity batch crop failed for ${targetNodeId}: ${crop.stderr.slice(0, 1200)}`)
+            const cropVerification = await verifySequenceAnimaticAnchorCrop({
+              outputPath,
+              anchorId: targetNodeId,
+              expectedWidth: cellWidth,
+              expectedHeight: cellHeight,
+              row,
+              column,
+            })
+            const bytes = await Deno.readFile(outputPath)
+            const targetAssetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(targetNodeId)}.sequence-animatic-continuity-asset`
+            const targetStoragePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/continuity-${slugify(targetNodeId)}.webp`
+            await uploadBytes(input.client, targetStoragePath, bytes, 'image/webp')
+            const artifact = await registerImageArtifact({
+              client: input.client,
+              run: input.run,
+              workflow: input.workflow,
+              node: input.node,
+              assetKey: targetAssetKey,
+              storagePath: targetStoragePath,
+              name: `${readText(targetNode.name) || titleFromRefLike(targetNodeId)} Continuity Reference`,
+              summary: 'Cropped continuity reference generated from an animatic scene-graph batch.',
+              mimeType: 'image/webp',
+              metadata: {
+                generatedBy: 'output_workflow',
+                workflowId: input.workflow.id,
+                workflowKey: input.workflow.key,
+                runId: input.run.id,
+                nodeId: input.node.id,
+                nodeKey: input.node.key,
+                provider: 'graphcore',
+                model: 'ffmpeg-sequence-animatic-continuity-batch-extract-v1',
+                role: 'sequence_animatic_continuity_asset_image',
+                sequenceAnimaticRole: 'continuity_asset_batch',
+                masterRequestId: readText(config.masterRequestId),
+                continuityBatchId: readText(asRecord(config.batch).batchId),
+                targetNodeId,
+                targetNode,
+                sourceBatchAssetKey: assetKey,
+                sourceBatchStoragePath: storagePath,
+                row,
+                column,
+                cropRect: { x: cropX, y: cropY, width: cellWidth, height: cellHeight },
+                cropVerification,
+                storageBucket: 'project-assets',
+                storagePath: targetStoragePath,
+              },
+            })
+            const state = sequenceAnimaticContinuityAssetStateSchema.parse({
+              status: 'ready',
+              inputHash: readText(config.continuityBatchHash) || readText(config.assetInputHash) || hashOutputWorkflowValue({ targetNode, assetKey }),
+              assetKey: targetAssetKey,
+              artifactKey: artifact.key,
+              prompt: readFirstUpstreamText(input.upstream, ['prompt', 'text']),
+              referenceAssetKeys: readStringArray(config.referenceAssetKeys),
+              sourceNodeId: targetNodeId,
+              assetKind: readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset',
+              generatedAt: new Date().toISOString(),
+              warnings: [],
+              error: '',
+              name: readText(targetNode.name),
+              summary: readText(targetNode.summary) || readText(targetNode.visualBrief),
+            })
+            assetStateByNodeId[targetNodeId] = state
+            extractedAssets.push({
+              targetNodeId,
+              targetNode,
+              assetKey: targetAssetKey,
+              storagePath: targetStoragePath,
+              artifactKey: artifact.key,
+              image: { assetKey: targetAssetKey, storagePath: targetStoragePath, mimeType: 'image/webp', artifact },
+              assetState: state,
+              cropRect: { x: cropX, y: cropY, width: cellWidth, height: cellHeight },
+              cropVerification,
+            })
+          }
+        } finally {
+          await Deno.remove(tempDir, { recursive: true }).catch(() => {})
+        }
+        const outputs = {
+          assets: extractedAssets,
+          extractedAssets,
+          extracted_assets: extractedAssets,
+          assetStateByNodeId,
+          asset_state_by_node_id: assetStateByNodeId,
+          batch: Object.keys(batch).length > 0 ? batch : asRecord(config.batch),
+          targetNodes,
+          target_nodes: targetNodes,
+          sourceImage: image,
+          source_image: image,
+          text: `Extracted ${extractedAssets.length} continuity reference crop${extractedAssets.length === 1 ? '' : 's'}.`,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-extract-v1' }
+      }
       if (purpose === 'sequence_animatic_continuity_asset_prompt') {
         const config = asRecord(input.node.config)
         const upstreamTargetNode = readFirstUpstreamRecord(input.upstream, ['targetNode', 'target_node'])
@@ -18515,6 +21224,141 @@ async function executeNode(input: {
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-sequence-animatic-anchor-extract-v1' }
       }
       if (purpose === 'sequence_animatic_manifest') {
+        const directorPlan = readFirstUpstreamRecord(input.upstream, ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+        if (Object.keys(directorPlan).length > 0) {
+          const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
+          const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+          const context = readFirstUpstreamRecord(input.upstream, ['context'])
+          if (!Object.keys(screenplayDraft).length) throw new Error('Sequence animatic manifest requires the authored screenplay.')
+          if (!Object.keys(assetPack).length) throw new Error('Sequence animatic manifest requires the visual reference asset pack.')
+          const selectedVisualReferenceKeys = cinematicAssetPackEntityKeys(assetPack)
+          const animaticReferenceCatalog = buildSequenceAnimaticReferenceCatalog({ context, assetPack })
+          const rawShotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
+          const directorShots = readArray(directorPlan.shots).map(asRecord)
+          if (directorShots.length === 0) throw new Error('Sequence animatic manifest requires shot-continuity-owned shots.')
+          const parsedShotPlan = cinematicV2ShotPlanSchema.safeParse(rawShotPlan)
+          const shotPlan = parsedShotPlan.success
+            ? parsedShotPlan.data
+            : cinematicV2ShotPlanSchema.parse({
+              sceneId: 'sequence_animatic_master',
+              totalEditorialDurationSeconds: directorShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds) || 0), 0),
+              shots: directorShots,
+              performanceArc: [],
+              audioPlan: { ambience: '', music: '', sfx: [], dialogueTrackCount: 0, placeholderOnly: true },
+              diagnostics: ['Built shot plan from authoritative shot continuity plan shots.'],
+            })
+          const shotById = new Map(shotPlan.shots.map((shot) => [shot.id, shot] as const))
+          let cursor = 0
+          const blocks = readArray(directorPlan.blocks).map(asRecord).map((block, index) => {
+            const blockId = readText(block.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
+            const shotIds = readStringArray(block.shotIds ?? block.shot_ids).filter((shotId) => shotById.has(shotId))
+            const blockShots = shotIds.map((shotId) => shotById.get(shotId)).filter((shot): shot is z.infer<typeof cinematicV2ShotSchema> => Boolean(shot))
+            if (blockShots.length === 0) throw new Error(`Sequence animatic shot continuity block ${blockId} has no valid shots.`)
+            const layout = buildCinematicV3StoryboardLayout(blockShots.length)
+            const duration = blockShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds) || 0), 0)
+            const startSeconds = cursor
+            const endSeconds = startSeconds + duration
+            cursor = endSeconds
+            const summary = readText(block.summary) || blockShots.map((shot) => shot.title).join(' / ')
+            const storyboardGroup = {
+              id: blockId,
+              index: Number(block.index ?? index + 1) || index + 1,
+              shotIds,
+              summary,
+              rows: layout.rows,
+              columns: layout.columns,
+              panelCount: layout.panelCount,
+              startSeconds,
+              endSeconds,
+              editorialDurationSeconds: duration,
+              providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
+              continuityNotes: [
+                ...readStringArray(block.continuityNotes ?? block.continuity_notes),
+                readText(block.summary),
+              ].filter(Boolean),
+            }
+            return {
+              ...block,
+              id: blockId,
+              index: Number(block.index ?? index + 1) || index + 1,
+              title: readText(block.title) || summary || `Storyboard block ${index + 1}`,
+              summary,
+              sourceText: readText(block.sourceText ?? block.source_text),
+              shotIds,
+              shots: blockShots,
+              continuityAnchorIds: [...new Set(blockShots.flatMap((shot) => readStringArray(asRecord(shot).continuityAnchorIds)))],
+              storyboardGroup,
+              storyboardLayout: { rows: layout.rows, columns: layout.columns, panelCount: layout.panelCount },
+              durationSeconds: duration,
+              startSeconds,
+              endSeconds,
+              childRequestId: null,
+              childWorkflowId: null,
+            }
+          })
+          if (blocks.length === 0) throw new Error('Sequence animatic manifest requires shot-continuity-owned storyboard blocks.')
+          const roughShotBreakPlan = readFirstUpstreamRecord(input.upstream, ['roughShotBreakPlan', 'rough_shot_break_plan', 'shotBreakPlan', 'shot_break_plan'])
+          const manifest = {
+            role: 'sequence_animatic_manifest',
+            graphSpecVersion: 'sequence_animatic_graph_v2',
+            screenplayAnimaticRole: 'master',
+            screenplayAnimaticSource: readText(asRecord(input.workflow.metadata).screenplayAnimaticSource)
+              || (readText(asRecord(input.workflow.metadata).cinematicAnimaticMode) === 'prompt_cinematic_master' ? 'prompt_cinematic' : 'wiki_sequence_unit'),
+            sequenceAnimaticRole: 'master',
+            requestId: input.run.metadata?.outputRequestId ?? null,
+            workflowId: input.workflow.id,
+            runId: input.run.id,
+            screenplayDraft,
+            screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
+            shotBreakPlan: roughShotBreakPlan,
+            roughShotBreakPlan,
+            shotPlan,
+            blocks,
+            assetPack,
+            selectedReferences: assetPack,
+            selectedVisualReferenceKeys,
+            animaticReferenceCatalog,
+            directorPlan,
+            directorPlanHash: readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan),
+            shotContinuityPlan: directorPlan,
+            shotContinuityPlanHash: readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan),
+            continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+            shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+            diagnostics: [
+              ...readStringArray(directorPlan.diagnostics),
+              `Built final sequence animatic manifest from shot continuity plan with ${blocks.length} storyboard block${blocks.length === 1 ? '' : 's'} and ${shotPlan.shots.length} shot${shotPlan.shots.length === 1 ? '' : 's'}.`,
+            ],
+          }
+          const outputs = {
+            manifest,
+            sequenceAnimaticManifest: manifest,
+            sequence_animatic_manifest: manifest,
+            screenplayDraft,
+            screenplay_draft: screenplayDraft,
+            shotBreakPlan: roughShotBreakPlan,
+            shot_break_plan: roughShotBreakPlan,
+            shotPlan,
+            shot_plan: shotPlan,
+            blocks,
+            assetPack,
+            asset_pack: assetPack,
+            selectedVisualReferenceKeys,
+            selected_visual_reference_keys: selectedVisualReferenceKeys,
+            animaticReferenceCatalog,
+            animatic_reference_catalog: animaticReferenceCatalog,
+            directorPlan,
+            director_plan: directorPlan,
+            shotContinuityPlan: directorPlan,
+            shot_continuity_plan: directorPlan,
+            continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+            continuity_graph_v2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+            shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+            shot_bindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+            text: JSON.stringify(manifest, null, 2),
+            deterministic: true,
+          }
+          return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-director-manifest-v1' }
+        }
         const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
@@ -18537,8 +21381,11 @@ async function executeNode(input: {
         const anchorAssets = [...characterAnchors, ...propAnchors, ...locationSpotAnchors].map(asRecord).filter((anchor) => readText(anchor.id))
         const continuityAnchorIdsByShotId = asRecord(continuityAnchorPlan.continuityAnchorIdsByShotId ?? continuityAnchorPlan.shotContinuityAnchorIds)
         const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
+        const rawMergedShotPlan = groupPlans.length > 0
+          ? mergeCinematicV3ShotPlansForTimeline(groupPlans)
+          : buildSequenceAnimaticShotPlanFromBreaks({ shotBreakPlan, assetPack, context })
         const baseMergedShotPlan = repairCinematicV2ShotPlanVisualReferences({
-          shotPlan: mergeCinematicV3ShotPlansForTimeline(groupPlans),
+          shotPlan: rawMergedShotPlan,
           assetPack,
         })
         const mergedShotPlan = {
@@ -18606,6 +21453,7 @@ async function executeNode(input: {
           diagnostics: [
             ...readStringArray(shotBreakPlan.diagnostics),
             ...readStringArray(continuityAnchorPlan.diagnostics),
+            ...(groupPlans.length === 0 ? ['Skipped parse-group LLM shot planning for sequence animatic master; shot continuity plan will assign shot references and scene graph continuity in one coherent pass.'] : []),
             `Built sequence animatic manifest with ${blocks.length} storyboard block${blocks.length === 1 ? '' : 's'} and ${mergedShotPlan.shots.length} shot${mergedShotPlan.shots.length === 1 ? '' : 's'}.`,
           ],
         }
@@ -18640,6 +21488,210 @@ async function executeNode(input: {
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-manifest-v1' }
+      }
+      if (purpose === 'sequence_animatic_director_plan') {
+        const upstreamManifest = readFirstUpstreamRecord(input.upstream, ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
+        const context = readFirstUpstreamRecord(input.upstream, ['context'])
+        const assetPack = Object.keys(asRecord(upstreamManifest.assetPack)).length > 0
+          ? asRecord(upstreamManifest.assetPack)
+          : readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const screenplayDraft = Object.keys(asRecord(upstreamManifest.screenplayDraft)).length > 0
+          ? asRecord(upstreamManifest.screenplayDraft)
+          : readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
+        if (!Object.keys(screenplayDraft).length) throw new Error('Sequence animatic shot continuity plan requires the authored screenplay.')
+        if (!Object.keys(assetPack).length) throw new Error('Sequence animatic shot continuity plan requires the visual reference asset pack.')
+        const suggestedDurationSeconds = Number(asRecord(screenplayDraft).suggestedDurationSeconds ?? 0) || null
+        const configuredMaxShotCount = Number(asRecord(input.node.config).maxShotCount ?? 0) || 0
+        const screenplayMetadata = asRecord(asRecord(screenplayDraft).metadata)
+        const scriptContract = readText(screenplayMetadata.scriptContract)
+        const creativeScreenplayContract = scriptContract === 'creative_screenplay_v1'
+        const legacyMarkerContract = scriptContract === 'screenplay_with_shot_markers_v1'
+        const upstreamShotBreakPlan = asRecord(upstreamManifest.shotBreakPlan)
+        const shotBreakPlan = Object.keys(upstreamShotBreakPlan).length > 0
+          ? upstreamShotBreakPlan
+          : legacyMarkerContract
+            ? buildCinematicV3ShotBreakPlan({
+            screenplayDraft,
+            maxShotCount: configuredMaxShotCount > 0 ? configuredMaxShotCount : deriveCinematicV2MaxShotCount(suggestedDurationSeconds),
+            maxPanelsPerSheet: 9,
+            maxDurationPerGroupSeconds: 15,
+          })
+            : {}
+        const shotPlan = Object.keys(asRecord(upstreamManifest.shotPlan)).length > 0
+          ? asRecord(upstreamManifest.shotPlan)
+          : Object.keys(shotBreakPlan).length > 0
+            ? buildSequenceAnimaticShotPlanFromBreaks({ shotBreakPlan, assetPack, context })
+            : {}
+        const scriptShotProjection = Object.keys(shotBreakPlan).length > 0
+          ? buildSequenceAnimaticScriptShotProjection(shotBreakPlan)
+          : { scriptShotStatus: 'missing', scriptShots: [], scriptBlocks: [] }
+        const roughBlocks = readArray(shotBreakPlan.groups).map(asRecord).map((group, index) => {
+          const storyboardGroup = buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index)
+          return {
+            id: storyboardGroup.id,
+            index: storyboardGroup.index,
+            title: readText(group.title) || readText(group.summary) || storyboardGroup.summary,
+            summary: storyboardGroup.summary,
+            shotIds: storyboardGroup.shotIds,
+            storyboardGroup,
+          }
+        })
+        const animaticReferenceCatalog = sequenceAnimaticReferenceCatalog({
+          animaticReferenceCatalog: upstreamManifest.animaticReferenceCatalog,
+          assetPack,
+        })
+        const continuityPlannerContext = buildSequenceAnimaticContinuityPlannerContext({
+          screenplayDraft,
+          shotPlan,
+          shotBreakPlan,
+          assetPack,
+          animaticReferenceCatalog,
+        })
+        const manifest = Object.keys(upstreamManifest).length > 0
+          ? upstreamManifest
+          : {
+            role: 'sequence_animatic_director_source',
+            requestId: input.run.metadata?.outputRequestId ?? null,
+            workflowId: input.workflow.id,
+            runId: input.run.id,
+            screenplayDraft,
+            screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
+            shotBreakPlan,
+            shotPlan,
+            blocks: roughBlocks,
+            assetPack,
+            animaticReferenceCatalog,
+          }
+        const manifestHash = hashOutputWorkflowValue(manifest)
+        const masterManifestArtifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-manifest`
+        const legacyAnchorPrompt = legacyMarkerContract || scriptShotProjection.scriptShots.length > 0
+          ? [
+            'Legacy screenplay shot anchors are included as optional source references. Preserve sourceScriptShotIds/sourceAnchorIds when useful, but do not let them override better final shot structure.',
+            'For one-to-one legacy shots preserve the source script shot ID. For merges include multiple IDs. For splits reuse the same source ID on each split. For planner-added shots, return empty arrays.',
+          ].join('\n')
+          : 'This creative screenplay has no screenplay shot anchors. sourceScriptShotIds and sourceAnchorIds may be empty arrays; do not invent fake screenplay anchor IDs.'
+        let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground<z.infer<typeof sequenceAnimaticShotContinuityPlanV2Schema>>>>
+        const priorStepMetadata = asRecord(input.priorStep?.metadata)
+        const priorProviderRequestId = readText(input.priorStep?.providerRequestId) || readText(priorStepMetadata.providerRequestId)
+        const priorProviderStatus = readText(priorStepMetadata.providerStatus)
+        const priorStepStatus = readText(input.priorStep?.status)
+        const resumablePriorProviderRequestId = priorProviderRequestId
+          && !isOpenAiTerminalStatus(priorProviderStatus)
+          && !['completed', 'failed', 'cancelled'].includes(priorStepStatus)
+          ? priorProviderRequestId
+          : ''
+        try {
+          result = await runCinematicV2StructuredNodeBackground({
+            nodeKey: input.node.key,
+            schemaName: 'sequence_animatic_shot_continuity_plan_v2',
+            schema: sequenceAnimaticShotContinuityPlanV2Schema,
+            instructions: 'You are a senior animation shot planner and continuity supervisor. Return strict JSON only.',
+            prompt: [
+              'Convert the creative screenplay into one compact shot continuity plan for the entire animatic in a single coherent pass.',
+              'The screenplay is the creative source. Your returned shots are the source of truth; do not spend tokens duplicating top-level shotBindings, assetRequirements, warnings, diagnostics, or compatibility fields.',
+              'Create final shots from the script in story order. Preserve action, spoken dialogue, emotional beats, cause/effect, chapter outcome, and open loops, but choose shot boundaries that make the animatic filmable and continuous.',
+              'The output must cover every final shot exactly once across blocks.',
+              'Keep action, camera, lighting, performance, visual briefs, summaries, and notes concise. Prefer one strong sentence per field unless the shot requires more.',
+              legacyAnchorPrompt,
+              'For every shot, fill refs.visibleCharacterRefIds, refs.speakerRefIds, refs.propRefIds, and refs.locationRefIds when matching world refs exist.',
+              'For every spoken line in the screenplay, put one dialogue row on the shot where it is spoken. Every dialogue row must have speakerRefId and non-empty text. Do not create speaker-only dialogue rows.',
+              'For visible/speaking characters, add concise performance rows with emotion, valence, arousal, confidence, dominance, body language, facial expression, gaze, gesture, and voice energy when meaningful.',
+              'Do not invent duplicate canonical characters, locations, factions, or props. If a world ref matches, use its key.',
+              'Create output-local scene graph additions only when needed for the animatic: physical sets, zones, spots, and reusable camera angles.',
+              'Scene graph nodes must be filmable physical things. Never create nodes for themes, emotions, fog/rain/lighting-only cues, shot titles, action phrases, or character names used as places.',
+              'Every shot must include sceneBinding with at least setId or worldLocationRefId. Use zoneId, spotIds, and angleId when useful. Reuse the same set/zone/spot/angle IDs across shots for repeated spaces and camera setups.',
+              'Define animatic-only temp characters, props/items, factions/crowds, vehicles, or other local refs in localReferences. Then attach their IDs to refs.localReferenceIds or sceneBinding.localReferenceIds on the shots that use them.',
+              'For each block, include shotIds in order and a concise continuity summary. Keep notes short and only for important ambiguity.',
+              compactForPrompt({
+                screenplay: screenplayDraft,
+                scriptContract: creativeScreenplayContract ? 'creative_screenplay_v1' : scriptContract,
+                legacyScreenplayShotAnchors: scriptShotProjection.scriptShots.length > 0 ? scriptShotProjection : undefined,
+                legacyRoughShotCandidates: Object.keys(shotPlan).length > 0 ? shotPlan : undefined,
+                legacyRoughBlockCandidates: roughBlocks.length > 0 ? roughBlocks : undefined,
+                continuityPlannerContext,
+                existingWorldReferences: animaticReferenceCatalog,
+                assetPack,
+              }, 26000),
+            ].filter(Boolean).join('\n\n'),
+            fallback: sequenceAnimaticShotContinuityPlanV2Schema.parse({
+              role: 'sequence_animatic_director_plan',
+              contractVersion: 'shot_continuity_plan_v2',
+              graphSpecVersion: 'sequence_animatic_graph_v2',
+              screenplayAnimaticRole: 'director_plan',
+              sequenceAnimaticRole: 'director_plan',
+              planningMode: 'single_director_pass',
+              shots: [],
+              blocks: [],
+              sceneGraphAdditions: { sets: [], zones: [], spots: [], angles: [], edges: [] },
+              localReferences: [],
+              notes: ['Shot continuity plan fallback should not be used for production animatics.'],
+            }),
+            maxOutputTokens: 64000,
+            priorProviderRequestId: resumablePriorProviderRequestId,
+            providerStartedAt: resumablePriorProviderRequestId ? readText(priorStepMetadata.providerStartedAt) || input.priorStep?.startedAt : null,
+            timeoutMs: outputWorkflowChapterTimeoutMs(),
+            shouldCancel: input.shouldCancel,
+            onProgress: async (progress) => {
+              await input.onProgress?.({
+                provider: 'openai',
+                model: outputWorkflowTextModel(),
+                providerRequestId: progress.providerRequestId,
+                metadata: {
+                  providerMode: progress.providerMode,
+                  providerStatus: progress.providerStatus,
+                  providerIncompleteReason: progress.providerIncompleteReason,
+                  providerIncompleteDetails: progress.providerIncompleteDetails,
+                  lastProviderPollAt: progress.lastProviderPollAt,
+                  providerStartedAt: progress.providerStartedAt,
+                  sequenceAnimaticDirectorPlan: true,
+                  sequenceAnimaticShotContinuityPlan: true,
+                },
+              })
+            },
+          })
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : 'Shot continuity plan generation failed.'
+          throw new Error(`Sequence animatic shot continuity plan failed: ${reason}`)
+        }
+        if (result.fallbackUsed) {
+          throw new Error(`Sequence animatic shot continuity plan returned fallback output: ${result.fallbackReason || 'structured output unavailable'}`)
+        }
+        const directorPlan = normalizeSequenceAnimaticDirectorPlan({
+          rawPlan: result.value,
+          manifest,
+          manifestHash,
+          masterManifestArtifactKey,
+          continuityPlannerContext,
+        })
+        const outputs = {
+          directorPlan,
+          director_plan: directorPlan,
+          shotContinuityPlan: directorPlan,
+          shot_continuity_plan: directorPlan,
+          shotPlan: {
+            ...shotPlan,
+            shots: directorPlan.shots,
+            totalEditorialDurationSeconds: directorPlan.shots.reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds) || 0), 0),
+          },
+          shot_plan: {
+            ...shotPlan,
+            shots: directorPlan.shots,
+            totalEditorialDurationSeconds: directorPlan.shots.reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds) || 0), 0),
+          },
+          blocks: directorPlan.blocks,
+          continuityGraphV2: directorPlan.continuityGraphV2,
+          continuity_graph_v2: directorPlan.continuityGraphV2,
+          shotBindings: directorPlan.shotBindings,
+          shot_bindings: directorPlan.shotBindings,
+          roughShotBreakPlan: shotBreakPlan,
+          rough_shot_break_plan: shotBreakPlan,
+          roughShotPlan: shotPlan,
+          rough_shot_plan: shotPlan,
+          text: JSON.stringify(directorPlan, null, 2),
+          deterministic: false,
+          providerRequestId: result.providerRequestId,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || undefined }
       }
       if (purpose === 'sequence_animatic_block_input') {
         const config = asRecord(input.node.config)
@@ -19018,6 +22070,9 @@ async function executeNode(input: {
           compileOutputs,
           config,
         })
+        const isSequenceAnimaticMasterFanout = readText(config.sequenceAnimaticMode) === 'master_script_only'
+          || readText(asRecord(input.workflow.metadata).screenplayAnimaticRole) === 'master'
+          || readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'master'
         const outputs = {
           dynamicGraphExpanded: result.expanded,
           graphExpanded: result.expanded,
@@ -19025,7 +22080,9 @@ async function executeNode(input: {
           parseGroupCount: result.parseGroupCount,
           storyboardSheetCount: result.storyboardSheetCount,
           text: result.expanded
-            ? `Materialized ${result.parseGroupCount} Cinematics V3 screenplay parse group node(s) and ${result.storyboardSheetCount} direct storyboard workflow(s).`
+            ? (isSequenceAnimaticMasterFanout
+              ? 'Materialized sequence animatic master manifest, shot continuity plan, and orchestrator nodes without parse-group LLM dependencies.'
+              : `Materialized ${result.parseGroupCount} Cinematics V3 screenplay parse group node(s) and ${result.storyboardSheetCount} direct storyboard workflow(s).`)
             : `Cinematics V3 parse groups and storyboard workflows already materialized (${result.parseGroupCount} group(s), ${result.storyboardSheetCount} sheet(s)).`,
           deterministic: true,
         }
@@ -20502,7 +23559,7 @@ async function executeNode(input: {
           node: input.node,
           key: artifactKey,
           name: `${input.node.label} Manifest`,
-          summary: 'Sequence-unit screenplay animatic manifest with parsed storyboard blocks and shot data.',
+          summary: 'Sequence-unit screenplay animatic manifest with shot-continuity storyboard blocks and shot data.',
           metadata: {
             generatedBy: 'output_workflow',
             workflowId: input.workflow.id,
@@ -20514,11 +23571,12 @@ async function executeNode(input: {
             provider: 'graphcore',
             model: 'sequence-animatic-manifest-artifact-v1',
             role: 'sequence_animatic_manifest',
-            graphSpecVersion: 'sequence_animatic_graph_v1',
+            graphSpecVersion: readText(manifest.graphSpecVersion) || 'sequence_animatic_graph_v2',
             sequenceAnimaticRole: 'master',
             manifest,
             screenplayDraft: asRecord(manifest.screenplayDraft),
             shotBreakPlan: asRecord(manifest.shotBreakPlan),
+            directorPlan: asRecord(manifest.directorPlan),
             shotPlan: asRecord(manifest.shotPlan),
             blocks: Array.isArray(manifest.blocks) ? manifest.blocks : [],
             blockCount: Array.isArray(manifest.blocks) ? manifest.blocks.length : 0,
@@ -20534,6 +23592,85 @@ async function executeNode(input: {
           authoringReady: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-manifest-artifact-v1' }
+      }
+      if (purpose === 'sequence_animatic_director_plan_artifact') {
+        const directorPlan = readFirstUpstreamRecord(input.upstream, ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+        if (!Object.keys(directorPlan).length) throw new Error('Sequence animatic shot continuity plan artifact requires a shot continuity plan input.')
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-director-plan`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${input.node.label} Shot Continuity Plan`,
+          summary: 'Sequence-unit animatic shot continuity plan with all shots, canonical references, output-local scene graph bindings, and asset requirements.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-director-plan-artifact-v1',
+            role: 'sequence_animatic_director_plan',
+            graphSpecVersion: 'sequence_animatic_graph_v2',
+            sequenceAnimaticRole: 'director_plan',
+            screenplayAnimaticRole: 'director_plan',
+            directorPlan,
+            director_plan: directorPlan,
+            shotContinuityPlan: directorPlan,
+            shot_continuity_plan: directorPlan,
+            shots: readArray(directorPlan.shots).map(asRecord),
+            blocks: readArray(directorPlan.blocks).map(asRecord),
+            continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+            continuity_graph_v2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+            shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+            shot_bindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+            assetRequirements: readArray(directorPlan.assetRequirements ?? directorPlan.asset_requirements).map(asRecord),
+            asset_requirements: readArray(directorPlan.assetRequirements ?? directorPlan.asset_requirements).map(asRecord),
+            outputLocalReferences: readArray(directorPlan.outputLocalReferences ?? directorPlan.output_local_references).map(asRecord),
+            output_local_references: readArray(directorPlan.outputLocalReferences ?? directorPlan.output_local_references).map(asRecord),
+            rejectedCandidates: readArray(directorPlan.rejectedCandidates ?? directorPlan.rejected_candidates).map(asRecord),
+            warnings: readStringArray(directorPlan.warnings),
+            diagnostics: readStringArray(directorPlan.diagnostics),
+            shotCount: readArray(directorPlan.shots).length,
+            blockCount: readArray(directorPlan.blocks).length,
+            manifestHash: readText(directorPlan.manifestHash),
+            shotPlanHash: readText(directorPlan.shotPlanHash),
+          },
+        })
+        await persistSequenceAnimaticDirectorPlanRequestState({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          artifactKey: artifact.key,
+          directorPlan,
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: '',
+          artifact,
+          artifacts: [artifact],
+          directorPlan,
+          director_plan: directorPlan,
+          shotContinuityPlan: directorPlan,
+          shot_continuity_plan: directorPlan,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-director-plan-artifact-v1' }
+      }
+      if (purpose === 'sequence_animatic_orchestrator') {
+        const outputs = await runSequenceAnimaticOrchestrator({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          upstream: input.upstream,
+        })
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-orchestrator-v1' }
       }
       if (purpose === 'sequence_animatic_continuity_structure_artifact') {
         const config = asRecord(input.node.config)
@@ -21038,6 +24175,61 @@ async function executeNode(input: {
           authoringReady: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-asset-artifact-v1' }
+      }
+      if (purpose === 'sequence_animatic_continuity_batch_artifact') {
+        const config = asRecord(input.node.config)
+        const batch = readFirstUpstreamRecord(input.upstream, ['batch'])
+        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        const assets = readFirstUpstreamArray(input.upstream, ['assets', 'extractedAssets', 'extracted_assets']).map(asRecord)
+        const upstreamState = readFirstUpstreamRecord(input.upstream, ['assetStateByNodeId', 'asset_state_by_node_id'])
+        const batchId = readText(batch.batchId) || readText(config.continuityBatchId) || readText(asRecord(config.batch).batchId)
+        if (!batchId) throw new Error('Continuity batch artifact requires a batch id.')
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(batchId)}.sequence-animatic-continuity-batch`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${readText(batch.batchKind) || 'Continuity'} Reference Batch`,
+          summary: 'Batch of animatic scene-graph continuity references generated and cropped for downstream storyboard use.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-continuity-batch-artifact-v1',
+            role: 'sequence_animatic_continuity_asset_batch',
+            graphSpecVersion: 'sequence_animatic_graph_v1',
+            sequenceAnimaticRole: 'continuity_asset_batch',
+            masterRequestId: readText(config.masterRequestId),
+            continuityBatchId: batchId,
+            batch,
+            prompt,
+            assets,
+            assetStateByNodeId: upstreamState,
+            asset_state_by_node_id: upstreamState,
+          },
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: '',
+          artifact,
+          artifacts: [artifact],
+          batch,
+          prompt,
+          assets,
+          extractedAssets: assets,
+          extracted_assets: assets,
+          assetStateByNodeId: upstreamState,
+          asset_state_by_node_id: upstreamState,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-artifact-v1' }
       }
       if (purpose === 'sequence_animatic_shot_revision_artifact') {
         const config = asRecord(input.node.config)
@@ -21837,6 +25029,13 @@ export async function processFlyOutputWorkflowRuns(input: {
             groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
           },
         })
+        await persistSequenceAnimaticNodeProgressEvent({
+          client: input.client,
+          run: bundle.run,
+          workflow: bundle.workflow,
+          node,
+          status: 'running',
+        })
       },
       onNodeComplete: async ({ node, orderIndex, skipped }) => {
         const result = nodeResults.get(node.key)
@@ -21880,6 +25079,14 @@ export async function processFlyOutputWorkflowRuns(input: {
         } catch (error) {
           console.warn('[GraphCore][output-worker] failed to persist compact output reference selection.', error)
         }
+        await persistSequenceAnimaticNodeProgressEvent({
+          client: input.client,
+          run: bundle.run,
+          workflow: bundle.workflow,
+          node,
+          status: 'completed',
+          outputs: result?.outputs ?? {},
+        })
         if (aiUsage.line) {
           await recordAiUsageEvent(input.client, {
             line: aiUsage.line,
@@ -21934,6 +25141,14 @@ export async function processFlyOutputWorkflowRuns(input: {
           })
           .eq('id', node.id)
         if (updateNodeFailurePreview.error) throw new Error(updateNodeFailurePreview.error.message)
+        await persistSequenceAnimaticNodeProgressEvent({
+          client: input.client,
+          run: bundle.run,
+          workflow: bundle.workflow,
+          node,
+          status: 'failed',
+          errorMessage: message,
+        })
       },
       onNodeCancelled: async ({ node, orderIndex, reason, blockedBy }) => {
         const priorStep = stepByNodeKey.get(node.key)
@@ -21983,6 +25198,14 @@ export async function processFlyOutputWorkflowRuns(input: {
     })
 
     if (schedulerResult.status === 'cancelled') {
+      const cancelRequestResponse = await input.client
+        .from('output_requests')
+        .update({
+          status: 'cancelled',
+          error_message: null,
+        })
+        .eq('latest_run_id', runId)
+      if (cancelRequestResponse.error) throw new Error(cancelRequestResponse.error.message)
       return { processed: true, run: { id: bundle.run.id, status: 'cancelled', preset: bundle.run.preset } }
     }
     if (schedulerResult.status === 'failed') {
@@ -22071,6 +25294,16 @@ export async function processFlyOutputWorkflowRuns(input: {
         .eq('latest_run_id', runId)
       if (completeRequestResponse.error) throw new Error(completeRequestResponse.error.message)
     }
+    if (effectiveRunStatus === 'completed') {
+      try {
+        await maybeStartNextSequenceAnimaticStoryboardBlock({
+          client: input.client,
+          run: bundle.run,
+        })
+      } catch (error) {
+        console.warn('[GraphCore][output-worker] failed to start next sequence animatic storyboard block.', error)
+      }
+    }
     return { processed: true, run: { id: bundle.run.id, status: effectiveRunStatus, preset: bundle.run.preset } }
     }
     throw new Error('Cinematic dynamic workflow expansion did not settle after 4 scheduler passes.')
@@ -22085,15 +25318,24 @@ export async function processFlyOutputWorkflowRuns(input: {
         stage: 'failed',
       },
     })
-    if (failResponse.data === true) {
-      const failRequestResponse = await input.client
-        .from('output_requests')
-        .update({
-          status: 'failed',
-          error_message: message,
-        })
-        .eq('latest_run_id', runId)
-      if (failRequestResponse.error) throw new Error(failRequestResponse.error.message)
+    if (failResponse.error) {
+      console.warn('[GraphCore][output-worker] failed to mark output workflow run failed.', {
+        runId,
+        error: failResponse.error.message,
+      })
+    }
+    const failRequestResponse = await input.client
+      .from('output_requests')
+      .update({
+        status: 'failed',
+        error_message: message,
+      })
+      .eq('latest_run_id', runId)
+    if (failRequestResponse.error) {
+      console.warn('[GraphCore][output-worker] failed to mark output request failed.', {
+        runId,
+        error: failRequestResponse.error.message,
+      })
     }
     return { processed: true, run: { id: bundle.run.id, status: 'failed', preset: bundle.run.preset } }
   }

@@ -580,6 +580,104 @@ function findScreenplayAnimaticManifest(request: OutputRequest, runs: readonly O
   return null
 }
 
+function deriveScreenplayAnimaticScriptProjection(request: OutputRequest, runs: readonly OutputWorkflowRun[]) {
+  const requestRuns = runs
+    .filter((run) => run.workflowId === request.workflowId || run.id === request.latestRunId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  for (const run of requestRuns) {
+    const screenplaySteps = run.steps
+      .filter((step) => step.nodeKey === 'cinematic_v3_screenplay_author')
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    for (const step of screenplaySteps) {
+      const projection = deriveScreenplayAnimaticScriptProjectionFromOutput(step.outputs)
+      if (projection.shots.length > 0) return projection
+    }
+    const projection = deriveScreenplayAnimaticScriptProjectionFromOutput(run.outputs)
+    if (projection.shots.length > 0) return projection
+  }
+  return { status: 'missing' as const, shots: [], blocks: [], screenplayMarkdown: '' }
+}
+
+function deriveScreenplayAnimaticScriptProjectionFromOutput(outputInput: unknown) {
+  const outputs = readRecord(outputInput)
+  const screenplay = readRecord(outputs.screenplayDraft ?? outputs.screenplay_draft)
+  const scriptContract = readTrimmedString(readRecord(screenplay.metadata).scriptContract) || readTrimmedString(outputs.scriptContract ?? outputs.script_contract)
+  if (scriptContract === 'creative_screenplay_v1') {
+    return {
+      status: 'missing' as const,
+      shots: [],
+      blocks: [],
+      screenplayMarkdown: readTrimmedString(outputs.text) || readTrimmedString(screenplay.screenplayMarkdown),
+    }
+  }
+  const rawScriptShots = Array.isArray(outputs.scriptShots ?? outputs.script_shots) ? (outputs.scriptShots ?? outputs.script_shots) as unknown[] : []
+  const rawShotBreaks = rawScriptShots.length > 0
+    ? rawScriptShots
+    : Array.isArray(outputs.shotBreaks ?? outputs.shot_breaks)
+      ? (outputs.shotBreaks ?? outputs.shot_breaks) as unknown[]
+      : Array.isArray(readRecord(outputs.shotBreakPlan ?? outputs.shot_break_plan).shotBreaks)
+        ? readRecord(outputs.shotBreakPlan ?? outputs.shot_break_plan).shotBreaks as unknown[]
+        : []
+  const shots = rawShotBreaks.map(readRecord).map((shot, index) => {
+    const shotIndex = Number(shot.index ?? 0) || index + 1
+    const id = readTrimmedString(shot.id) || `shot_${String(shotIndex).padStart(3, '0')}`
+    const durationSeconds = Math.max(1, Math.min(12, readNumber(shot.approximateDurationSeconds) ?? readNumber(shot.durationSeconds) ?? 3))
+    return {
+      id,
+      index: shotIndex,
+      title: readTrimmedString(shot.title) || `Shot ${shotIndex}`,
+      action: readTrimmedString(shot.screenplayText) || readTrimmedString(shot.screenplay_text) || readTrimmedString(shot.text),
+      dialogue: [] as string[],
+      timeLabel: `~${formatScriptSeconds(durationSeconds)}`,
+      durationLabel: formatScriptSeconds(durationSeconds),
+      panelUrl: '',
+      durationSeconds,
+    }
+  })
+  const shotById = new Map(shots.map((shot) => [shot.id, shot] as const))
+  const rawScriptBlocks = Array.isArray(outputs.scriptBlocks ?? outputs.script_blocks) ? (outputs.scriptBlocks ?? outputs.script_blocks) as unknown[] : []
+  const rawGroups = rawScriptBlocks.length > 0
+    ? rawScriptBlocks
+    : Array.isArray(readRecord(outputs.shotBreakPlan ?? outputs.shot_break_plan).groups)
+      ? readRecord(outputs.shotBreakPlan ?? outputs.shot_break_plan).groups as unknown[]
+      : []
+  const blocks = rawGroups.map(readRecord).map((block, index) => {
+    const blockIndex = Number(block.index ?? 0) || index + 1
+    const shotIds = (Array.isArray(block.shotIds ?? block.shot_ids ?? block.shotBreakIds ?? block.shot_break_ids)
+      ? block.shotIds ?? block.shot_ids ?? block.shotBreakIds ?? block.shot_break_ids
+      : []) as unknown[]
+    const blockShots = shotIds.map(readTrimmedString).map((shotId) => shotById.get(shotId)).filter((shot): shot is typeof shots[number] => Boolean(shot))
+    return {
+      id: readTrimmedString(block.id) || `script_block_${String(blockIndex).padStart(3, '0')}`,
+      index: blockIndex,
+      title: readTrimmedString(block.title) || readTrimmedString(block.summary) || `Screenplay block ${blockIndex}`,
+      durationLabel: formatScriptSeconds(blockShots.reduce((total, shot) => total + shot.durationSeconds, 0)),
+      childRequest: null,
+      storyboardReady: false,
+      running: false,
+      shots: blockShots,
+    }
+  }).filter((block) => block.shots.length > 0)
+  if (shots.length > 0 && blocks.length === 0) {
+    blocks.push({
+      id: 'script_block_001',
+      index: 1,
+      title: 'Screenplay shots',
+      durationLabel: formatScriptSeconds(shots.reduce((total, shot) => total + shot.durationSeconds, 0)),
+      childRequest: null,
+      storyboardReady: false,
+      running: false,
+      shots,
+    })
+  }
+  return {
+    status: shots.length > 0 ? 'ready' as const : 'missing' as const,
+    shots,
+    blocks,
+    screenplayMarkdown: readTrimmedString(screenplay.screenplayMarkdown) || readTrimmedString(outputs.text),
+  }
+}
+
 function assetUrlByKey(assets: readonly ProjectSnapshot['assets'][number][]) {
   return new Map(assets.map((asset) => [asset.key, resolveAssetSourceUrl(asset)] as const))
 }
@@ -593,13 +691,14 @@ function buildScreenplayAnimaticPreviewData(input: {
 }): ScreenplayAnimaticPreviewData | null {
   const manifest = findScreenplayAnimaticManifest(input.request, input.runs, input.artifacts)
   if (!manifest) {
+    const scriptProjection = deriveScreenplayAnimaticScriptProjection(input.request, input.runs)
     return {
       request: input.request,
       title: input.request.title,
-      statusLabel: formatStatus(input.request.status),
-      screenplayMarkdown: '',
+      statusLabel: scriptProjection.status === 'ready' ? 'Building shot continuity plan' : formatStatus(input.request.status),
+      screenplayMarkdown: scriptProjection.screenplayMarkdown,
       projection: null,
-      blocks: [],
+      blocks: scriptProjection.blocks,
     }
   }
   const urlsByAssetKey = assetUrlByKey(input.assets)

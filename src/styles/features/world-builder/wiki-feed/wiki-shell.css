@@ -3286,6 +3286,15 @@
   line-height: 1.5;
 }
 
+.world-wiki-sequence-animatic-dialogue-line p small {
+  display: block;
+  margin-top: 3px;
+  color: rgba(153, 246, 228, 0.64);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
 .world-wiki-sequence-animatic-dialogue-speaker {
   display: inline-flex;
   align-items: center;
@@ -3295,6 +3304,16 @@
   font-size: 0.75rem;
   font-weight: 850;
   white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-dialogue-speaker em {
+  max-width: 120px;
+  overflow: hidden;
+  color: rgba(153, 246, 228, 0.58);
+  font-size: 0.66rem;
+  font-style: normal;
+  font-weight: 750;
+  text-overflow: ellipsis;
 }
 
 .world-wiki-sequence-animatic-dialogue-speaker img,
@@ -3322,6 +3341,64 @@
   min-width: 0;
   align-self: start;
   justify-self: stretch;
+}
+
+.world-wiki-sequence-animatic-new-refs {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.world-wiki-sequence-animatic-new-refs h3 {
+  margin: 2px 0 12px;
+  color: rgba(248, 250, 252, 0.95);
+  font-size: 1rem;
+}
+
+.world-wiki-sequence-animatic-new-ref-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.world-wiki-sequence-animatic-new-ref-grid article {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.44);
+}
+
+.world-wiki-sequence-animatic-new-ref-grid img,
+.world-wiki-sequence-animatic-new-ref-grid svg,
+.world-wiki-sequence-animatic-new-ref-grid .entity-icon-image {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  object-fit: cover;
+}
+
+.world-wiki-sequence-animatic-new-ref-grid strong,
+.world-wiki-sequence-animatic-new-ref-grid em {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-new-ref-grid strong {
+  color: rgba(248, 250, 252, 0.92);
+  font-size: 0.78rem;
+}
+
+.world-wiki-sequence-animatic-new-ref-grid em {
+  color: rgba(203, 213, 225, 0.66);
+  font-size: 0.68rem;
+  font-style: normal;
 }
 
 .world-wiki-sequence-animatic-ref-strip {
