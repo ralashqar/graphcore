@@ -4113,6 +4113,7 @@ async function clearSequenceAnimaticShotContinuityStreamEvents(input: {
       'shot_continuity_stream_failed',
       'block_planned',
       'scene_graph_node_registered',
+      'scene_graph_relation_registered',
     ])
   if (response.error) throw new Error(response.error.message)
 }
@@ -4247,6 +4248,20 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
         streamed: true,
         node: parsed.record,
       }, { nodeId: parsed.record.id })
+      return
+    }
+    if (parsed.record.kind === 'spot_relation') {
+      await emitEvent('scene_graph_relation_registered', {
+        sourceId: parsed.record.sourceId,
+        targetId: parsed.record.targetId,
+        relationship: parsed.record.relationship,
+        evidence: parsed.record.evidence,
+        direction: parsed.record.direction,
+        screenDirection: parsed.record.screenDirection,
+        status: 'planning',
+        streamed: true,
+        relation: parsed.record,
+      }, { sourceId: parsed.record.sourceId, targetId: parsed.record.targetId, relationship: parsed.record.relationship })
       return
     }
     if (parsed.record.kind === 'local_reference') {
@@ -4577,6 +4592,7 @@ function sequenceAnimaticContinuityNodeCollections(graphInput: unknown) {
     ...readArray(graph.locationSets ?? graph.location_sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_zone' })),
     ...readArray(graph.zones).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_zone', assetKind: 'location_zone' })),
     ...readArray(graph.spots).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_spot', assetKind: 'location_spot' })),
+    ...readArray(graph.viewpoints).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_viewpoint', assetKind: 'location_angle' })),
     ...readArray(graph.angles).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_angle', assetKind: 'location_angle' })),
     ...readArray(graph.assetAnchors ?? graph.asset_anchors).map((entry) => {
       const record = asRecord(entry)
@@ -4669,7 +4685,7 @@ function sequenceAnimaticContinuityAssetBatches(input: {
   const setsAndZones = targets.filter((node) => ['location_set', 'location_zone'].includes(readText(node.nodeKind)))
   for (const node of setsAndZones) pushBatch('location_zone_board', [node], [readText(node.worldLocationRefId)].filter(Boolean))
   const anglesByZone = new Map<string, Record<string, unknown>[]>()
-  targets.filter((node) => readText(node.nodeKind) === 'location_angle').forEach((node) => {
+  targets.filter((node) => readText(node.nodeKind) === 'location_angle' || readText(node.nodeKind) === 'location_viewpoint').forEach((node) => {
     const zoneId = readText(node.zoneId) || readText(node.setId) || 'global'
     anglesByZone.set(zoneId, [...(anglesByZone.get(zoneId) ?? []), node])
   })
@@ -6147,8 +6163,28 @@ const sequenceAnimaticContinuitySceneGraphSchema = z.object({
 const sequenceAnimaticContinuityGraphEdgeSchema = z.object({
   sourceId: z.string(),
   targetId: z.string(),
-  relationship: z.enum(['connected_to', 'adjacent_to', 'entrance_to', 'visible_from', 'same_space_angle', 'contains', 'camera_faces']),
+  relationship: z.enum([
+    'connected_to',
+    'adjacent_to',
+    'entrance_to',
+    'visible_from',
+    'same_space_angle',
+    'contains',
+    'camera_faces',
+    'faces',
+    'opposes',
+    'above_below',
+    'left_of',
+    'right_of',
+    'near',
+    'occludes',
+    'spot_to_viewpoint',
+    'zone_to_viewpoint',
+    'set_to_viewpoint',
+  ]),
   evidence: z.string().default(''),
+  direction: z.string().default(''),
+  screenDirection: z.string().default(''),
 })
 
 const sequenceAnimaticContinuityWorldLocationRefSchema = z.object({
@@ -6213,7 +6249,9 @@ const sequenceAnimaticContinuityShotBindingSchema = z.object({
   worldLocationRefId: z.string().nullable().default(null),
   setId: z.string().default(''),
   zoneId: z.string().default(''),
+  primarySpotId: z.string().default(''),
   spotIds: z.array(z.string()).default([]),
+  viewpointId: z.string().default(''),
   angleId: z.string().default(''),
   characterAnchorIds: z.array(z.string()).default([]),
   propAnchorIds: z.array(z.string()).default([]),
@@ -6238,6 +6276,7 @@ const sequenceAnimaticContinuityGraphV2Schema = z.object({
   locationSets: z.array(sequenceAnimaticContinuityGraphSetSchema).default([]),
   zones: z.array(sequenceAnimaticContinuityGraphZoneSchema).default([]),
   spots: z.array(sequenceAnimaticContinuityGraphSpotSchema).default([]),
+  viewpoints: z.array(sequenceAnimaticContinuityGraphAngleSchema).default([]),
   angles: z.array(sequenceAnimaticContinuityGraphAngleSchema).default([]),
   edges: z.array(sequenceAnimaticContinuityGraphEdgeSchema).default([]),
   shotBindings: z.record(z.string(), sequenceAnimaticContinuityShotBindingSchema).default({}),
@@ -6295,7 +6334,9 @@ const sequenceAnimaticShotContinuitySceneBindingV2Schema = z.object({
   worldLocationRefId: z.string().default(''),
   setId: z.string().default(''),
   zoneId: z.string().default(''),
+  primarySpotId: z.string().default(''),
   spotIds: z.array(z.string()).default([]),
+  viewpointId: z.string().default(''),
   angleId: z.string().default(''),
   characterAnchorIds: z.array(z.string()).default([]),
   propAnchorIds: z.array(z.string()).default([]),
@@ -6369,6 +6410,7 @@ const sequenceAnimaticShotContinuitySceneGraphAdditionsV2Schema = z.object({
   sets: z.array(sequenceAnimaticContinuityGraphSetSchema).default([]),
   zones: z.array(sequenceAnimaticContinuityGraphZoneSchema).default([]),
   spots: z.array(sequenceAnimaticContinuityGraphSpotSchema).default([]),
+  viewpoints: z.array(sequenceAnimaticContinuityGraphAngleSchema).default([]),
   angles: z.array(sequenceAnimaticContinuityGraphAngleSchema).default([]),
   edges: z.array(sequenceAnimaticContinuityGraphEdgeSchema).default([]),
 })
@@ -6400,6 +6442,7 @@ const sequenceAnimaticShotContinuityPlanV2Schema = z.object({
     sets: [],
     zones: [],
     spots: [],
+    viewpoints: [],
     angles: [],
     edges: [],
   }),
@@ -6424,7 +6467,7 @@ const sequenceAnimaticShotContinuityStreamShotRecordSchema = sequenceAnimaticSho
 
 const sequenceAnimaticShotContinuityStreamSceneGraphRecordSchema = z.object({
   kind: z.literal('scene_graph_addition'),
-  nodeKind: z.enum(['set', 'zone', 'spot', 'angle']),
+  nodeKind: z.enum(['set', 'zone', 'spot', 'viewpoint', 'angle']),
   id: z.string().min(1),
   name: z.string().min(1),
   visualBrief: z.string().min(1),
@@ -6442,6 +6485,16 @@ const sequenceAnimaticShotContinuityStreamSceneGraphRecordSchema = z.object({
   shotIds: z.array(z.string()).default([]),
   storyboardBlockIds: z.array(z.string()).default([]),
   blockIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticShotContinuityStreamSpotRelationRecordSchema = z.object({
+  kind: z.literal('spot_relation'),
+  sourceId: z.string().min(1),
+  targetId: z.string().min(1),
+  relationship: sequenceAnimaticContinuityGraphEdgeSchema.shape.relationship,
+  evidence: z.string().default(''),
+  direction: z.string().default(''),
+  screenDirection: z.string().default(''),
 })
 
 const sequenceAnimaticShotContinuityStreamLocalReferenceRecordSchema = sequenceAnimaticShotContinuityLocalReferenceV2Schema.extend({
@@ -6463,6 +6516,7 @@ const sequenceAnimaticShotContinuityStreamRecordSchema = z.discriminatedUnion('k
   sequenceAnimaticShotContinuityStreamBlockRecordSchema,
   sequenceAnimaticShotContinuityStreamShotRecordSchema,
   sequenceAnimaticShotContinuityStreamSceneGraphRecordSchema,
+  sequenceAnimaticShotContinuityStreamSpotRelationRecordSchema,
   sequenceAnimaticShotContinuityStreamLocalReferenceRecordSchema,
   sequenceAnimaticShotContinuityStreamPlanDoneRecordSchema,
 ])
@@ -7848,6 +7902,7 @@ function sequenceAnimaticEmptyGraphV2(context: Record<string, unknown> = {}) {
     locationSets: [],
     zones: [],
     spots: [],
+    viewpoints: [],
     angles: [],
     edges: [],
     shotBindings: {},
@@ -7861,7 +7916,14 @@ function sequenceAnimaticEmptyGraphV2(context: Record<string, unknown> = {}) {
 
 function parseSequenceAnimaticGraphV2(value: unknown) {
   const parsed = sequenceAnimaticContinuityGraphV2Schema.safeParse(value)
-  return parsed.success ? parsed.data : sequenceAnimaticEmptyGraphV2()
+  if (!parsed.success) return sequenceAnimaticEmptyGraphV2()
+  const viewpoints = parsed.data.viewpoints.length > 0 ? parsed.data.viewpoints : parsed.data.angles
+  const angles = parsed.data.angles.length > 0 ? parsed.data.angles : viewpoints
+  return sequenceAnimaticContinuityGraphV2Schema.parse({
+    ...parsed.data,
+    viewpoints,
+    angles,
+  })
 }
 
 function sequenceAnimaticManifestBlockIdByShotId(manifest: Record<string, unknown>) {
@@ -8001,20 +8063,24 @@ function sequenceAnimaticShotBindingFromSceneBinding(input: {
     throw new Error(`Sequence animatic shot continuity plan returned ${input.shotId} without a usable sceneBinding.setId or sceneBinding.worldLocationRefId.`)
   }
   const zoneId = readText(sceneBinding.zoneId) || readText(sceneBinding.zone_id)
-  const spotIds = sequenceAnimaticUniqueTexts([sceneBinding.spotIds, sceneBinding.spot_ids])
-  const angleId = readText(sceneBinding.angleId) || readText(sceneBinding.angle_id)
+  const primarySpotId = readText(sceneBinding.primarySpotId) || readText(sceneBinding.primary_spot_id)
+  const spotIds = sequenceAnimaticUniqueTexts([sceneBinding.spotIds, sceneBinding.spot_ids, primarySpotId ? [primarySpotId] : []])
+  const viewpointId = readText(sceneBinding.viewpointId) || readText(sceneBinding.viewpoint_id) || readText(sceneBinding.angleId) || readText(sceneBinding.angle_id)
+  const angleId = readText(sceneBinding.angleId) || readText(sceneBinding.angle_id) || viewpointId
   return sequenceAnimaticContinuityShotBindingSchema.parse({
     shotId: input.shotId,
     storyboardBlockId: input.storyboardBlockId,
     worldLocationRefId,
     setId,
     zoneId,
+    primarySpotId: primarySpotId || spotIds[0] || '',
     spotIds,
+    viewpointId,
     angleId,
     characterAnchorIds,
     propAnchorIds,
     assetAnchorIds,
-    spatialNodeIds: [...new Set([setId, zoneId, ...spotIds, angleId].filter(Boolean))],
+    spatialNodeIds: [...new Set([setId, zoneId, primarySpotId, ...spotIds, viewpointId, angleId].filter(Boolean))],
     continuityAnchorIds: assetAnchorIds,
   })
 }
@@ -8023,7 +8089,7 @@ function sequenceAnimaticNodeUsageFromBindings(nodeId: string, shotBindings: Rec
   const shotIds: string[] = []
   const blockIds: string[] = []
   for (const [shotId, binding] of Object.entries(shotBindings)) {
-    if (binding.setId === nodeId || binding.zoneId === nodeId || binding.spotIds.includes(nodeId) || binding.angleId === nodeId || binding.assetAnchorIds.includes(nodeId)) {
+    if (binding.setId === nodeId || binding.zoneId === nodeId || binding.primarySpotId === nodeId || binding.spotIds.includes(nodeId) || binding.viewpointId === nodeId || binding.angleId === nodeId || binding.assetAnchorIds.includes(nodeId)) {
       shotIds.push(shotId)
       if (binding.storyboardBlockId) blockIds.push(binding.storyboardBlockId)
     }
@@ -8238,7 +8304,9 @@ type SequenceAnimaticShotContinuityStreamAccumulator = {
   setsById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphSetSchema>>
   zonesById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphZoneSchema>>
   spotsById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphSpotSchema>>
+  viewpointsById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphAngleSchema>>
   anglesById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphAngleSchema>>
+  edgesById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphEdgeSchema>>
   localReferencesById: Map<string, z.infer<typeof sequenceAnimaticShotContinuityLocalReferenceV2Schema>>
   notes: string[]
 }
@@ -8252,7 +8320,9 @@ function createSequenceAnimaticShotContinuityStreamAccumulator(): SequenceAnimat
     setsById: new Map(),
     zonesById: new Map(),
     spotsById: new Map(),
+    viewpointsById: new Map(),
     anglesById: new Map(),
+    edgesById: new Map(),
     localReferencesById: new Map(),
     notes: [],
   }
@@ -8339,7 +8409,7 @@ function sequenceAnimaticSceneGraphRecordToNode(record: z.infer<typeof sequenceA
     }
   }
   return {
-    nodeKind: 'angle' as const,
+    nodeKind: record.nodeKind === 'viewpoint' ? 'viewpoint' as const : 'angle' as const,
     node: sequenceAnimaticContinuityGraphAngleSchema.parse({
       id: record.id,
       setId: record.setId,
@@ -8391,7 +8461,20 @@ function applySequenceAnimaticShotContinuityStreamRecord(
     if (projected.nodeKind === 'set') accumulator.setsById.set(projected.node.id, projected.node)
     else if (projected.nodeKind === 'zone') accumulator.zonesById.set(projected.node.id, projected.node)
     else if (projected.nodeKind === 'spot') accumulator.spotsById.set(projected.node.id, projected.node)
+    else if (projected.nodeKind === 'viewpoint') accumulator.viewpointsById.set(projected.node.id, projected.node)
     else accumulator.anglesById.set(projected.node.id, projected.node)
+    return
+  }
+  if (record.kind === 'spot_relation') {
+    const edge = sequenceAnimaticContinuityGraphEdgeSchema.parse({
+      sourceId: record.sourceId,
+      targetId: record.targetId,
+      relationship: record.relationship,
+      evidence: record.evidence,
+      direction: record.direction,
+      screenDirection: record.screenDirection,
+    })
+    accumulator.edgesById.set(`${edge.sourceId}:${edge.relationship}:${edge.targetId}`, edge)
     return
   }
   if (record.kind === 'local_reference') {
@@ -8457,8 +8540,9 @@ function finalizeSequenceAnimaticShotContinuityStreamPlan(accumulator: SequenceA
       sets: [...accumulator.setsById.values()],
       zones: [...accumulator.zonesById.values()],
       spots: [...accumulator.spotsById.values()],
+      viewpoints: [...accumulator.viewpointsById.values()],
       angles: [...accumulator.anglesById.values()],
-      edges: [],
+      edges: [...accumulator.edgesById.values()],
     },
     localReferences: [...accumulator.localReferencesById.values()],
     notes: [...new Set(accumulator.notes.map(readText).filter(Boolean))],
@@ -8508,7 +8592,8 @@ function projectShotContinuityPlanV2ToDirectorPlan(value: z.infer<typeof sequenc
   const locationSets = graphInput.sets.map((node) => sequenceAnimaticContinuityGraphSetSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
   const zones = graphInput.zones.map((node) => sequenceAnimaticContinuityGraphZoneSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
   const spots = graphInput.spots.map((node) => sequenceAnimaticContinuityGraphSpotSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
-  const angles = graphInput.angles.map((node) => sequenceAnimaticContinuityGraphAngleSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
+  const viewpoints = mergeById(graphInput.viewpoints, graphInput.angles).map((node) => sequenceAnimaticContinuityGraphAngleSchema.parse(sequenceAnimaticEnrichGraphNodeUsage(node, shotBindings)))
+  const angles = viewpoints
   const assetAnchors = sequenceAnimaticLocalReferencesToAssetAnchors({
     localReferences: value.localReferences.map(asRecord),
     shots,
@@ -8521,6 +8606,7 @@ function projectShotContinuityPlanV2ToDirectorPlan(value: z.infer<typeof sequenc
     locationSets,
     zones,
     spots,
+    viewpoints,
     angles,
     edges: graphInput.edges,
     shotBindings,
@@ -9135,12 +9221,14 @@ function buildDeterministicSequenceAnimaticBlockDelta(input: {
       worldLocationRefId,
       setId,
       zoneId,
+      primarySpotId: spotIds[0] ?? '',
       spotIds,
+      viewpointId: angleId,
       angleId,
       characterAnchorIds: [...new Set(characterAnchorIds)],
       propAnchorIds: [...new Set(propAnchorIds)],
       assetAnchorIds: [...new Set([...characterAnchorIds, ...propAnchorIds])],
-      spatialNodeIds: [...new Set([setId, zoneId, ...spotIds, angleId].filter(Boolean))],
+      spatialNodeIds: [...new Set([setId, zoneId, spotIds[0] ?? '', ...spotIds, angleId].filter(Boolean))],
       continuityAnchorIds: [...new Set([...characterAnchorIds, ...propAnchorIds])],
     }
   }
@@ -9331,7 +9419,7 @@ function repairSequenceAnimaticContinuityBlockDelta(input: {
     const shotId = readText(shot.id)
     if (!shotId) continue
     const existing = asRecord(shotBindings[shotId])
-    if (readText(existing.setId) && readText(existing.zoneId) && readText(existing.angleId)) continue
+    if ((readText(existing.setId) || readText(existing.worldLocationRefId)) && (readText(existing.zoneId) || readText(existing.primarySpotId) || readStringArray(existing.spotIds).length > 0 || readText(existing.viewpointId) || readText(existing.angleId))) continue
 
     const fallbackBinding = asRecord(fallback?.shotBindings[shotId])
     const zone = delta.zones.find((entry) => entry.shotIds.includes(shotId))
@@ -9350,7 +9438,7 @@ function repairSequenceAnimaticContinuityBlockDelta(input: {
     const setId = readText(set?.id) || readText(zone?.setId) || readText(angle?.setId) || readText(fallbackBinding.setId)
     const zoneId = readText(zone?.id) || readText(angle?.zoneId) || readText(fallbackBinding.zoneId)
     const spotIds = spots.map((entry) => readText(entry.id)).filter(Boolean)
-    const angleId = readText(angle?.id) || readText(fallbackBinding.angleId)
+    const angleId = readText(angle?.id) || readText(fallbackBinding.angleId) || readText(fallbackBinding.viewpointId)
     if (!setId && !zoneId && !angleId) continue
     const assetAnchorIds = [...new Set([...characterAnchorIds, ...propAnchorIds].filter(Boolean))]
     shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
@@ -9359,12 +9447,14 @@ function repairSequenceAnimaticContinuityBlockDelta(input: {
       worldLocationRefId: readText(zone?.worldLocationRefId) || readText(set?.worldLocationRefId) || readText(angle?.worldLocationRefId) || readText(fallbackBinding.worldLocationRefId),
       setId,
       zoneId,
+      primarySpotId: spotIds[0] || readText(fallbackBinding.primarySpotId),
       spotIds: spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds),
+      viewpointId: angleId,
       angleId,
       characterAnchorIds,
       propAnchorIds,
       assetAnchorIds,
-      spatialNodeIds: [...new Set([setId, zoneId, ...(spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds)), angleId].filter(Boolean))],
+      spatialNodeIds: [...new Set([setId, zoneId, spotIds[0] || readText(fallbackBinding.primarySpotId), ...(spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds)), angleId].filter(Boolean))],
       continuityAnchorIds: assetAnchorIds,
     })
     repairedCount += 1
@@ -9409,7 +9499,7 @@ function repairSequenceAnimaticContinuityBlockDelta(input: {
       characterAnchorIds,
       propAnchorIds,
       assetAnchorIds,
-      spatialNodeIds: [...new Set([binding.setId, binding.zoneId, ...binding.spotIds, binding.angleId, ...binding.spatialNodeIds].filter(Boolean))],
+      spatialNodeIds: [...new Set([binding.setId, binding.zoneId, binding.primarySpotId, ...binding.spotIds, binding.viewpointId, binding.angleId, ...binding.spatialNodeIds].filter(Boolean))],
       continuityAnchorIds: assetAnchorIds,
     })
   }
@@ -9809,7 +9899,9 @@ function sanitizeSequenceAnimaticContinuityGraphCanonicalAnchors(input: {
     const propAnchorIds = binding.propAnchorIds.filter((id) => validPropAnchorIds.has(id))
     const assetAnchorIds = [...new Set([...characterAnchorIds, ...propAnchorIds].filter(Boolean))]
     const zoneId = removedLocationNodeIds.has(binding.zoneId) ? '' : binding.zoneId
+    const primarySpotId = removedLocationNodeIds.has(binding.primarySpotId) ? '' : binding.primarySpotId
     const spotIds = binding.spotIds.filter((id) => !removedLocationNodeIds.has(id))
+    const viewpointId = removedLocationNodeIds.has(binding.viewpointId) ? '' : binding.viewpointId
     const angleId = removedLocationNodeIds.has(binding.angleId) ? '' : binding.angleId
     shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
       ...binding,
@@ -9817,9 +9909,11 @@ function sanitizeSequenceAnimaticContinuityGraphCanonicalAnchors(input: {
       propAnchorIds,
       assetAnchorIds,
       zoneId,
+      primarySpotId,
       spotIds,
+      viewpointId,
       angleId,
-      spatialNodeIds: [...new Set([binding.setId, zoneId, ...spotIds, angleId, ...binding.spatialNodeIds].filter((id) => id && !removedLocationNodeIds.has(id)))],
+      spatialNodeIds: [...new Set([binding.setId, zoneId, primarySpotId, ...spotIds, viewpointId, angleId, ...binding.spatialNodeIds].filter((id) => id && !removedLocationNodeIds.has(id)))],
       continuityAnchorIds: assetAnchorIds,
     })
   }
@@ -10044,7 +10138,7 @@ function sequenceAnimaticContinuityVisualDependencyEdges(graphInput: unknown) {
     angle.spotIds.forEach((spotId) => push(spotId, angle.id, 'spot_to_angle', false, `Angle ${angle.name} faces spot ${spotId}.`))
   })
   graph.edges.forEach((edge) => {
-    if (['adjacent_to', 'visible_from', 'entrance_to', 'connected_to', 'same_space_angle'].includes(edge.relationship)) {
+    if (['adjacent_to', 'visible_from', 'entrance_to', 'connected_to', 'same_space_angle', 'faces', 'opposes', 'above_below', 'left_of', 'right_of', 'near', 'occludes'].includes(edge.relationship)) {
       push(edge.sourceId, edge.targetId, edge.relationship, false, edge.evidence)
     }
   })
@@ -10232,7 +10326,15 @@ function sequenceAnimaticContinuityCoverage(
   const effectiveShotIds = totalShotIds.length > 0 ? totalShotIds : bindingShotIds
   const effectiveBoundShotIds = effectiveShotIds.filter((shotId) => {
     const binding = asRecord(graph.shotBindings[shotId])
-    return Boolean(readText(binding.setId) && readText(binding.zoneId) && readText(binding.angleId))
+    const hasLocation = Boolean(readText(binding.setId) || readText(binding.worldLocationRefId))
+    const hasSpecificSpatialNode = Boolean(
+      readText(binding.zoneId)
+      || readText(binding.primarySpotId)
+      || readStringArray(binding.spotIds).length > 0
+      || readText(binding.viewpointId)
+      || readText(binding.angleId)
+    )
+    return hasLocation && hasSpecificSpatialNode
   })
   const inferredBlockIds = [...new Set(Object.values(graph.shotBindings)
     .map((binding) => readText(asRecord(binding).storyboardBlockId))
@@ -21190,7 +21292,7 @@ async function executeNode(input: {
               'Assign preliminary shotBindings for every shot you can confidently bind. Missing/ambiguous shots may be left for block refinement and noted in warnings.',
               'Do not create world entities. Existing world refs and per-shot resolvedRefs are canonical and must be rejected as existing_world_entity if proposed as anchors.',
               'Never use a character name, speaker name, shot title, mood, action phrase, weather, fog, rain, lighting-only cue, or emotion as a set/zone/spot/angle name.',
-              'continuityAnchorIds are only temporary character/prop asset anchor IDs. Spatial IDs must stay in setId, zoneId, spotIds, angleId, and spatialNodeIds.',
+              'continuityAnchorIds are only temporary character/prop asset anchor IDs. Spatial IDs must stay in setId, zoneId, primarySpotId, spotIds, viewpointId/angleId, and spatialNodeIds.',
               'Accept temporary characters/props only when they are physical, drawable, output-local, continuity-critical, and not existing world refs.',
               'assetAnchors must include specific visible incidental characters without canonical refs, even one-shot concrete roles such as vole mechanic, guard, courier, attendant, or shopkeeper.',
               'For props, use shot.description as the primary evidence. assetAnchors may include physical props without canonical refs only when the same prop appears in at least two shots and is the subject of action, character gaze, diagnosis, manipulation, failure, or repeated comparison.',
@@ -21311,8 +21413,8 @@ async function executeNode(input: {
               'Reuse existing graph IDs whenever the shot remains in the same set, zone, spot, or angle. Add new zones/spots/angles only when the shot needs distinct spatial continuity.',
               'Do not create world entities. Existing world refs are canonical; only create output-local graph nodes and temporary asset anchors.',
               'Never use a character name, speaker name, shot title, emotion, action phrase, or task phrase as a set/zone/spot/angle name. Spatial nodes must be physical spaces, camera positions, landmarks, thresholds, rooms, zones, or reusable set pieces.',
-              'Never put setId, zoneId, spotIds, or angleId into continuityAnchorIds. continuityAnchorIds are only temporary character/prop asset anchor IDs.',
-              'Every shot in the block must receive a shotBindings entry with setId, zoneId, spotIds, and angleId.',
+              'Never put setId, zoneId, primarySpotId, spotIds, viewpointId, or angleId into continuityAnchorIds. continuityAnchorIds are only temporary character/prop asset anchor IDs.',
+              'Every shot in the block must receive a shotBindings entry with setId or worldLocationRefId, preferably zoneId, and primarySpotId/spotIds whenever a concrete physical point of interest matters. viewpointId/angleId is optional camera setup metadata.',
               'assetAnchors must include specific visible incidental characters without canonical refs, even one-shot concrete roles such as vole mechanic, guard, courier, attendant, or shopkeeper.',
               'For props, use shot.description as the primary evidence. assetAnchors may include physical props without canonical refs only when the same prop appears in at least two shots and is the subject of action, character gaze, diagnosis, manipulation, failure, or repeated comparison.',
               'Audit every shot.description for physical object candidates. Every named object, mechanism, door/hatch, gauge, clock part, tube, valve, lever, clamp, tool, panel, note, map, or set-piece that appears in two or more shots must appear either in assetAnchors or rejectedCandidates; do not silently omit it.',
@@ -22309,10 +22411,10 @@ async function executeNode(input: {
             instructions: [
               'You are a senior animation shot planner and continuity supervisor.',
               'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
-              'Allowed record kinds: plan_start, block, shot, scene_graph_addition, local_reference, plan_done.',
+              'Allowed record kinds: plan_start, block, shot, scene_graph_addition, spot_relation, local_reference, plan_done.',
               'Emit records in live-usable order: plan_start, then shot records in story order as soon as each shot is complete. Do not wait for a whole block to be finished before emitting shots.',
               'Block records are optional during streaming and may arrive before, between, or after related shots. If unsure, assign each shot a stable blockId and keep streaming shots.',
-              'After all shots, emit scene_graph_addition records, local_reference records, optional block records, then plan_done.',
+              'After all shots, emit scene_graph_addition records, spot_relation records, local_reference records, optional block records, then plan_done.',
             ].join('\n'),
             prompt: [
               'Convert the creative screenplay into one compact streamed shot continuity plan for the entire animatic in a single coherent pass.',
@@ -22327,8 +22429,9 @@ async function executeNode(input: {
               'Record contracts:',
               'plan_start: {"kind":"plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
               'block: {"kind":"block","id":"block_001","index":1,"title":"...","summary":"...","shotIds":["shot_001"]} // optional during streaming; can be emitted after its shots',
-              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"action":"...","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line","emotion":"...","delivery":"...","subtext":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"confidence":0.5,"dominance":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"...","gesture":"...","voiceEnergy":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"worldLocationRefId":"","setId":"set_...","zoneId":"","spotIds":[],"angleId":"","localReferenceIds":[]}}',
-              'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|angle","id":"set_or_zone_or_spot_or_angle_id","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set_for_zone_spot_angle","zoneId":"parent_zone_for_spot_angle","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
+              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"action":"...","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line","emotion":"...","delivery":"...","subtext":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"confidence":0.5,"dominance":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"...","gesture":"...","voiceEnergy":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"worldLocationRefId":"","setId":"set_...","zoneId":"","primarySpotId":"","spotIds":[],"viewpointId":"","localReferenceIds":[]}}',
+              'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|viewpoint","id":"set_or_zone_or_spot_or_viewpoint_id","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set_for_zone_spot_viewpoint","zoneId":"parent_zone_for_spot_viewpoint","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
+              'spot_relation: {"kind":"spot_relation","sourceId":"spot_a","targetId":"spot_b","relationship":"adjacent_to|connected_to|visible_from|entrance_to|faces|opposes|above_below|left_of|right_of|near|occludes","evidence":"short reason","direction":"optional world-space direction","screenDirection":"optional screen-space direction"}',
               'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
               'plan_done: {"kind":"plan_done","shotCount":0,"blockCount":0,"orderedShotIds":[],"orderedBlockIds":[],"screenplaySummary":"...","notes":[]}',
               legacyAnchorPrompt,
@@ -22337,9 +22440,13 @@ async function executeNode(input: {
               'Never merge multiple screenplay dialogue turns into one dialogue row. Split dense dialogue across multiple shots rather than summarizing or packing it.',
               'For visible/speaking characters, add concise performance rows with emotion, valence, arousal, confidence, dominance, body language, facial expression, gaze, gesture, and voice energy when meaningful.',
               'Do not invent duplicate canonical characters, locations, factions, or props. If a world ref matches, use its key.',
-              'Create output-local scene graph additions only when needed for the animatic: physical sets, zones, spots, and reusable camera angles.',
+              'Create output-local scene graph additions only when needed for the animatic: physical sets, zones, spots, and optional reusable viewpoints/camera setups.',
               'Scene graph nodes must be filmable physical things. Never create nodes for themes, emotions, fog/rain/lighting-only cues, shot titles, action phrases, or character names used as places.',
-              'Every shot must include sceneBinding with at least setId or worldLocationRefId. Use zoneId, spotIds, and angleId when useful. Reuse the same set/zone/spot/angle IDs across shots for repeated spaces and camera setups.',
+              'Spot-first rule: when a shot action is anchored to a concrete point of interest such as a bridge edge, door, custody table, crane hook, skiff prow, pier railing, checkpoint gate, shrine steps, or alley mouth, create or reuse a spot and set primarySpotId. Put the primary spot first in spotIds.',
+              'Zone-only bindings are allowed only when the location is intentionally broad/non-descript and no reusable physical point matters.',
+              'Use viewpointId only for reusable camera setups or important camera-reference continuity. Do not create a viewpoint for every shot just to satisfy structure.',
+              'When two spots matter spatially, emit spot_relation records such as adjacent_to, connected_to, visible_from, entrance_to, faces, opposes, above_below, left_of, right_of, near, or occludes.',
+              'Every shot must include sceneBinding with at least setId or worldLocationRefId. Prefer zoneId, use primarySpotId/spotIds whenever a concrete physical point matters, and use viewpointId only when useful. Reuse the same set/zone/spot/viewpoint IDs across shots.',
               'Define animatic-only temp characters, props/items, factions/crowds, vehicles, or other local refs in localReferences. Then attach their IDs to refs.localReferenceIds or sceneBinding.localReferenceIds on the shots that use them.',
               'For each shot, set blockId immediately even if the block record will be emitted later. Use stable block IDs such as block_001, block_002. Keep notes short and only for important ambiguity.',
               compactForPrompt({

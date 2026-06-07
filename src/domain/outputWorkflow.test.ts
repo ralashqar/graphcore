@@ -47,6 +47,7 @@ import {
   sequenceAnimaticManifestV1Schema,
   sequenceAnimaticGraphRoleSchema,
   sequenceAnimaticModeSchema,
+  cinematicAnimaticModeSchema,
   topologicallySortOutputWorkflow,
   validateOutputWorkflowGraph,
   hashOutputWorkflowValue,
@@ -200,6 +201,8 @@ test('workflow node contracts and run intents expose cinematic sequence defaults
   assert.equal(outputWorkflowRunIntentDefaults('prepare_storyboard_block')?.debugSkipVideoGeneration, true)
   assert.equal(getOutputWorkflowNodeContract({ purpose: 'sequence_animatic_manifest_artifact' })?.recoveryStrategy, 'node_step_artifact')
   assert.equal(sequenceAnimaticModeSchema.parse('full_sequence_unit'), 'master_script_only')
+  assert.equal(sequenceAnimaticModeSchema.parse(null), undefined)
+  assert.equal(cinematicAnimaticModeSchema.parse(null), undefined)
   const startRunSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-workflow-run/index.ts'), 'utf8')
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   assert.match(startRunSource, /outputWorkflowRunIntentDefaults/)
@@ -1798,7 +1801,7 @@ test('sequence animatic continuity anchors are planned, extracted, and passed to
   assert.match(workerSource, /sequenceAnimaticContinuityLocationNodeLooksShotTitleDerived/)
   assert.match(workerSource, /sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes/)
   assert.match(workerSource, /looked like character\/action labels instead of physical locations/)
-  assert.match(workerSource, /Never put setId, zoneId, spotIds, or angleId into continuityAnchorIds/)
+  assert.match(workerSource, /Never put setId, zoneId, primarySpotId, spotIds, viewpointId, or angleId into continuityAnchorIds/)
   assert.match(workerSource, /sequenceAnimaticContinuitySafePhysicalLabel/)
   assert.match(workerSource, /sequenceAnimaticGraphZoneSeed/)
   assert.match(workerSource, /resolvedRefs/)

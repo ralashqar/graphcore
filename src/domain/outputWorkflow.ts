@@ -48,10 +48,16 @@ export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'w
 export const cinematicPipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration', 'v3_script_storyboards'])
 export const cinematicV2AnimaticModeSchema = z.enum(['fast_panels', 'quality_keyframes'])
 export const sequenceAnimaticModeSchema = z.preprocess(
-  (value) => value === 'full_sequence_unit' ? 'master_script_only' : value,
-  z.enum(['master_script_only']),
+  (value) => {
+    if (value == null || value === '') return undefined
+    return value === 'full_sequence_unit' ? 'master_script_only' : value
+  },
+  z.enum(['master_script_only']).optional(),
 )
-export const cinematicAnimaticModeSchema = z.enum(['prompt_cinematic_master'])
+export const cinematicAnimaticModeSchema = z.preprocess(
+  (value) => value == null || value === '' ? undefined : value,
+  z.enum(['prompt_cinematic_master']).optional(),
+)
 
 const sequenceAnimaticMasterMaxShotCount = 150
 export const sequenceAnimaticGraphSpecVersionSchema = z.enum(['sequence_animatic_graph_v1', 'sequence_animatic_graph_v2'])
