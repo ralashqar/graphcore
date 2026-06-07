@@ -8,6 +8,7 @@ import {
   setCachedSignedAssetUrl,
 } from '../../../domain/assetUrlCache'
 import type { AssetDefinition, DefinitionBase } from '../../../domain/graphcore'
+import { readEntityReferenceSheetAssetKey } from '../../../domain/initialSeedReferenceSheets'
 import { buildReferenceSheetIconCacheKey, loadReferenceSheetIconCrop } from '../../../domain/referenceSheetIconCrop'
 import type { WorldEntity, WorldResult } from '../../../domain/worldGraph'
 import type { WorldEntityVisualVariant } from '../../../domain/visualGeneration'
@@ -60,14 +61,6 @@ function isWorldGraphSignableAsset(asset: AssetDefinition | null | undefined) {
   if (!storagePath || storagePath.startsWith('external/') || storagePath.startsWith('local-upload/')) return false
   const storageBucket = typeof asset.metadata.storageBucket === 'string' ? asset.metadata.storageBucket.trim() : ''
   return Boolean(storageBucket) || storagePath.startsWith('generated/')
-}
-
-function readEntityReferenceSheetAssetKey(entity: WorldEntity | null | undefined) {
-  const metadata = entity?.metadata && typeof entity.metadata === 'object' && !Array.isArray(entity.metadata)
-    ? entity.metadata as Record<string, unknown>
-    : {}
-  const value = metadata.referenceSheetAssetKey
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
 function readAssetVisualJobId(asset: AssetDefinition | null | undefined) {
