@@ -9100,6 +9100,160 @@ function deriveSequenceAnimaticDirectorState(input: {
   }
 }
 
+function deriveSequenceAnimaticShotContinuityStreamState(input: {
+  masterRequest: OutputRequest | null
+  events: SequenceAnimaticStateResponse['events']
+}) {
+  const blocksById = new Map<string, Record<string, unknown>>()
+  const shotsById = new Map<string, Record<string, unknown>>()
+  const setNodes: Record<string, unknown>[] = []
+  const zoneNodes: Record<string, unknown>[] = []
+  const spotNodes: Record<string, unknown>[] = []
+  const angleNodes: Record<string, unknown>[] = []
+  const localReferences: Record<string, unknown>[] = []
+  const doneEvents: Record<string, unknown>[] = []
+  let sawStarted = false
+  let failedPayload: Record<string, unknown> | null = null
+
+  for (const event of input.events) {
+    const payload = readRepositoryRecord(event.payload)
+    if (event.eventType === 'shot_continuity_stream_started') sawStarted = true
+    if (event.eventType === 'shot_continuity_stream_failed') failedPayload = payload
+    if (event.eventType === 'shot_continuity_stream_done') doneEvents.push(payload)
+    if (event.eventType === 'block_planned') {
+      const block = readRepositoryRecord(payload.block)
+      const blockId = readRepositoryString(block.id) || readRepositoryString(payload.blockId)
+      if (!blockId) continue
+      blocksById.set(blockId, {
+        id: blockId,
+        index: Number(block.index ?? payload.index ?? 0) || blocksById.size + 1,
+        title: readRepositoryString(block.title) || readRepositoryString(payload.title) || `Block ${blocksById.size + 1}`,
+        summary: readRepositoryString(block.summary) || readRepositoryString(payload.summary),
+        shotIds: readRepositoryArray(block.shotIds ?? payload.shotIds).map(readRepositoryString).filter(Boolean),
+        status: 'planned',
+        streamed: true,
+      })
+    }
+    if (event.eventType === 'shot_streamed') {
+      const shot = readRepositoryRecord(payload.shot)
+      const shotId = readRepositoryString(shot.id) || readRepositoryString(payload.shotId)
+      if (!shotId) continue
+      const blockId = readRepositoryString(shot.blockId) || readRepositoryString(payload.blockId) || readRepositoryString(payload.storyboardBlockId)
+      shotsById.set(shotId, {
+        ...shot,
+        id: shotId,
+        index: Number(shot.index ?? payload.index ?? 0) || shotsById.size + 1,
+        blockId,
+        storyboardBlockId: readRepositoryString(shot.storyboardBlockId) || blockId,
+        title: readRepositoryString(shot.title) || readRepositoryString(payload.title) || `Shot ${shotsById.size + 1}`,
+        action: readRepositoryString(shot.action) || readRepositoryString(payload.action),
+        planningStatus: 'streaming',
+        streamed: true,
+      })
+    }
+    if (event.eventType === 'scene_graph_node_registered') {
+      const node = readRepositoryRecord(payload.node)
+      const nodeKind = readRepositoryString(node.nodeKind) || readRepositoryString(payload.nodeKind)
+      const entry = {
+        ...node,
+        id: readRepositoryString(node.id) || readRepositoryString(payload.nodeId),
+        nodeKind,
+        name: readRepositoryString(node.name) || readRepositoryString(payload.name),
+        visualBrief: readRepositoryString(node.visualBrief) || readRepositoryString(payload.visualBrief),
+        shotIds: readRepositoryArray(node.shotIds ?? payload.shotIds).map(readRepositoryString).filter(Boolean),
+        storyboardBlockIds: readRepositoryArray(node.storyboardBlockIds ?? payload.storyboardBlockIds).map(readRepositoryString).filter(Boolean),
+        streamed: true,
+      }
+      if (!readRepositoryString(entry.id)) continue
+      if (nodeKind === 'set') setNodes.push(entry)
+      else if (nodeKind === 'zone') zoneNodes.push(entry)
+      else if (nodeKind === 'spot') spotNodes.push(entry)
+      else if (nodeKind === 'angle') angleNodes.push(entry)
+    }
+    if (event.eventType === 'local_reference_registered') {
+      const localReference = readRepositoryRecord(payload.localReference)
+      const referenceId = readRepositoryString(localReference.id) || readRepositoryString(payload.referenceId)
+      if (!referenceId) continue
+      localReferences.push({
+        ...localReference,
+        id: referenceId,
+        type: readRepositoryString(localReference.type) || readRepositoryString(payload.referenceType),
+        name: readRepositoryString(localReference.name) || readRepositoryString(payload.name),
+        visualBrief: readRepositoryString(localReference.visualBrief) || readRepositoryString(payload.visualBrief),
+        usedShotIds: readRepositoryArray(localReference.usedShotIds ?? payload.shotIds).map(readRepositoryString).filter(Boolean),
+        blockIds: readRepositoryArray(localReference.blockIds ?? payload.blockIds).map(readRepositoryString).filter(Boolean),
+        streamed: true,
+      })
+    }
+  }
+
+  const shots = [...shotsById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+  let blocks = [...blocksById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+  if (shots.length > 0 && blocks.length === 0) {
+    const blockIds: string[] = []
+    const shotIdsByBlockId = new Map<string, string[]>()
+    for (const shot of shots) {
+      const blockId = readRepositoryString(shot.blockId) || readRepositoryString(shot.storyboardBlockId) || 'block_001'
+      if (!shotIdsByBlockId.has(blockId)) {
+        shotIdsByBlockId.set(blockId, [])
+        blockIds.push(blockId)
+      }
+      const shotId = readRepositoryString(shot.id)
+      if (shotId) shotIdsByBlockId.get(blockId)?.push(shotId)
+    }
+    blocks = blockIds.map((blockId, index) => ({
+      id: blockId,
+      index: index + 1,
+      title: `Block ${index + 1}`,
+      summary: 'Streamed shot continuity records.',
+      shotIds: shotIdsByBlockId.get(blockId) ?? [],
+      status: 'planned',
+      streamed: true,
+    }))
+  }
+  const latestDone = doneEvents[doneEvents.length - 1] ?? {}
+  const shotContinuityStreamStatus = failedPayload
+    ? 'failed'
+    : shots.length > 0 || blocks.length > 0
+      ? readRepositoryString(latestDone.status) === 'ready'
+        ? 'ready'
+        : 'streaming'
+      : sawStarted
+        ? 'streaming'
+        : 'missing'
+  const streamedShotContinuityPlan = shots.length > 0 || blocks.length > 0 || localReferences.length > 0 || setNodes.length > 0 || zoneNodes.length > 0 || spotNodes.length > 0 || angleNodes.length > 0
+    ? {
+      role: 'sequence_animatic_director_plan',
+      graphSpecVersion: 'sequence_animatic_graph_v2',
+      screenplayAnimaticRole: 'director_plan',
+      sequenceAnimaticRole: 'director_plan',
+      masterRequestId: input.masterRequest?.id ?? null,
+      planningMode: 'single_director_pass',
+      contractVersion: 'shot_continuity_plan_v2',
+      screenplaySummary: readRepositoryString(latestDone.screenplaySummary),
+      shots,
+      blocks,
+      sceneGraphAdditions: {
+        sets: setNodes,
+        zones: zoneNodes,
+        spots: spotNodes,
+        angles: angleNodes,
+      },
+      localReferences,
+      outputLocalReferences: localReferences,
+      notes: readRepositoryArray(latestDone.notes).map(readRepositoryString).filter(Boolean),
+      warnings: failedPayload ? [readRepositoryString(failedPayload.error) || 'Shot continuity stream failed.'] : [],
+      streamed: true,
+    }
+    : null
+  return {
+    shotContinuityStreamStatus,
+    streamedShotContinuityPlan,
+    streamedShotCount: shots.length,
+    streamedBlockCount: blocks.length,
+  }
+}
+
 function deriveSequenceAnimaticScriptShotProjection(outputInput: unknown) {
   const outputs = readRepositoryRecord(outputInput)
   const screenplayDraft = readRepositoryRecord(outputs.screenplayDraft ?? outputs.screenplay_draft)
@@ -9215,6 +9369,7 @@ function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResp
     assets,
     ...deriveSequenceAnimaticScriptShotState({ runs: hydrated.runs, artifacts: hydrated.artifacts }),
     ...deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydrated.artifacts }),
+    ...deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events: parsed.events }),
     ...deriveSequenceAnimaticContinuityState({ requests: hydrated.requests, artifacts: hydrated.artifacts }),
   })
 }
@@ -9360,6 +9515,7 @@ async function loadSequenceAnimaticStateDirect(
   const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ artifacts, runs: runsBeforeAssetHydration, projections }))
   const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
   const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, hydratedArtifacts))
+  const shotContinuityStreamState = deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events })
   const revision = hashOutputWorkflowValue({
     requests: requests.map((request) => ({
       id: request.id,
@@ -9397,6 +9553,12 @@ async function loadSequenceAnimaticStateDirect(
       eventType: event.eventType,
       createdAt: event.createdAt,
     })),
+    shotContinuityStream: {
+      status: shotContinuityStreamState.shotContinuityStreamStatus,
+      shotCount: shotContinuityStreamState.streamedShotCount,
+      blockCount: shotContinuityStreamState.streamedBlockCount,
+      planHash: hashOutputWorkflowValue(shotContinuityStreamState.streamedShotContinuityPlan ?? {}),
+    },
   })
   if (readRepositoryString(payload.knownRevision) === revision) {
     const scriptShotState = deriveSequenceAnimaticScriptShotState({ runs, artifacts: hydratedArtifacts })
@@ -9414,6 +9576,7 @@ async function loadSequenceAnimaticStateDirect(
       events: [],
       ...scriptShotState,
       ...deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydratedArtifacts }),
+      ...shotContinuityStreamState,
       ...deriveSequenceAnimaticContinuityState({ requests, artifacts: hydratedArtifacts }),
     })
   }
@@ -9430,6 +9593,7 @@ async function loadSequenceAnimaticStateDirect(
     assets,
     projections,
     events,
+    ...shotContinuityStreamState,
   }))
 }
 
@@ -10301,7 +10465,7 @@ export function subscribeOutputWorkflowGraphSignals(input: {
 export function subscribeSequenceAnimaticStateSignals(input: {
   draftId: string
   masterRequestId: string
-  onSignal: () => void
+  onSignal: (signal: { table: string; eventType?: string; row?: Record<string, unknown> }) => void
 }) {
   const channel = supabase
     .channel(`graphcore-sequence-animatic-state-${input.masterRequestId}`)
@@ -10310,37 +10474,37 @@ export function subscribeSequenceAnimaticStateSignals(input: {
       schema: 'public',
       table: 'output_requests',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_requests', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_workflow_runs',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_workflow_runs', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_workflow_run_steps',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_workflow_run_steps', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_artifacts',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_artifacts', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_request_events',
-      filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+      filter: `request_id=eq.${input.masterRequestId}`,
+    }, (payload) => input.onSignal({ table: 'output_request_events', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_request_status_projections',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_request_status_projections', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
 
   void channel.subscribe()
   return {

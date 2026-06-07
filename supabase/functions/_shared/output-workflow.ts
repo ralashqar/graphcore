@@ -94,6 +94,7 @@ import {
   createOpenAiBackgroundResponse,
   retrieveOpenAiResponse,
   runOpenAiResponses,
+  runOpenAiResponsesStream,
   type OpenAiResponseResult,
 } from './openai.ts'
 import { aiGenerationSettings } from '../../../src/config/aiGenerationSettings.ts'
@@ -4094,6 +4095,285 @@ async function insertSequenceAnimaticEvent(input: {
   }
 }
 
+async function clearSequenceAnimaticShotContinuityStreamEvents(input: {
+  client: DatabaseClient
+  requestId: string
+}) {
+  if (!input.requestId) return
+  const response = await input.client
+    .from('output_request_events')
+    .delete()
+    .eq('request_id', input.requestId)
+    .in('event_type', [
+      'shot_continuity_stream_started',
+      'shot_continuity_stream_warning',
+      'shot_streamed',
+      'local_reference_registered',
+      'shot_continuity_stream_done',
+      'shot_continuity_stream_failed',
+      'block_planned',
+      'scene_graph_node_registered',
+    ])
+  if (response.error) throw new Error(response.error.message)
+}
+
+async function runSequenceAnimaticShotContinuityPlanStream(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  workflow: OutputWorkflow
+  node: OutputWorkflowNode
+  requestId: string
+  prompt: string
+  instructions: string
+  maxOutputTokens: number
+  shouldCancel?: () => Promise<boolean>
+  onProgress?: (progress: {
+    providerRequestId: string
+    providerStatus: string
+    providerMode: string
+    lastProviderPollAt: string
+    providerStartedAt: string
+  }) => Promise<void>
+}) {
+  const model = outputWorkflowTextModel()
+  const providerStartedAt = new Date().toISOString()
+  const accumulator = createSequenceAnimaticShotContinuityStreamAccumulator()
+  let streamRecordBuffer = ''
+  let providerRequestId = ''
+  let acceptedRecordCount = 0
+  let warningCount = 0
+  let lastProgressAt = 0
+
+  const progress = async (providerStatus: string, force = false) => {
+    const now = Date.now()
+    if (!force && now - lastProgressAt < 15_000) return
+    lastProgressAt = now
+    await input.onProgress?.({
+      providerRequestId,
+      providerStatus,
+      providerMode: 'stream',
+      lastProviderPollAt: new Date().toISOString(),
+      providerStartedAt,
+    })
+  }
+
+  const emitEvent = async (
+    eventType: string,
+    payload: Record<string, unknown> = {},
+    dedupe?: Record<string, string>,
+  ) => {
+    await insertSequenceAnimaticEvent({
+      client: input.client,
+      projectId: input.run.projectId,
+      draftId: input.run.draftId,
+      requestId: input.requestId,
+      workflowId: input.workflow.id,
+      runId: input.run.id,
+      eventType,
+      payload,
+      metadata: {
+        source: 'sequence_animatic_shot_continuity_stream',
+        nodeKey: input.node.key,
+        providerRequestId: providerRequestId || null,
+      },
+      dedupe,
+    })
+  }
+
+  const processRecordText = async (recordText: string) => {
+    const parsed = parseSequenceAnimaticStreamRecord(recordText)
+    if (!parsed.record) {
+      warningCount += 1
+      await emitEvent('shot_continuity_stream_warning', {
+        warning: parsed.error instanceof z.ZodError
+          ? compactSchemaDiagnostics(parsed.error).join('; ')
+          : parsed.error instanceof Error
+            ? parsed.error.message
+            : parsed.error
+              ? String(parsed.error)
+              : 'Malformed shot continuity stream record.',
+        sample: recordText.slice(0, 700),
+        warningCount,
+      })
+      return
+    }
+
+    applySequenceAnimaticShotContinuityStreamRecord(accumulator, parsed.record)
+    acceptedRecordCount += 1
+
+    if (parsed.record.kind === 'plan_start') {
+      await emitEvent('shot_continuity_stream_started', {
+        contractVersion: parsed.record.contractVersion,
+        graphSpecVersion: parsed.record.graphSpecVersion,
+        note: parsed.record.note,
+      })
+      return
+    }
+    if (parsed.record.kind === 'block') {
+      await emitEvent('block_planned', {
+        blockId: parsed.record.id,
+        index: parsed.record.index,
+        title: parsed.record.title,
+        summary: parsed.record.summary,
+        shotIds: parsed.record.shotIds,
+        status: 'planning',
+        streamed: true,
+        block: parsed.record,
+      }, { blockId: parsed.record.id })
+      return
+    }
+    if (parsed.record.kind === 'shot') {
+      await emitEvent('shot_streamed', {
+        shotId: parsed.record.id,
+        index: parsed.record.index,
+        storyboardBlockId: parsed.record.blockId,
+        blockId: parsed.record.blockId,
+        title: parsed.record.title,
+        action: compactSequenceAnimaticText(parsed.record.action, 800),
+        status: 'planning',
+        shot: parsed.record,
+      }, { shotId: parsed.record.id })
+      return
+    }
+    if (parsed.record.kind === 'scene_graph_addition') {
+      await emitEvent('scene_graph_node_registered', {
+        nodeId: parsed.record.id,
+        nodeKind: parsed.record.nodeKind,
+        name: parsed.record.name,
+        visualBrief: parsed.record.visualBrief,
+        shotIds: parsed.record.shotIds,
+        storyboardBlockIds: [...new Set([...parsed.record.storyboardBlockIds, ...parsed.record.blockIds])],
+        status: 'planning',
+        streamed: true,
+        node: parsed.record,
+      }, { nodeId: parsed.record.id })
+      return
+    }
+    if (parsed.record.kind === 'local_reference') {
+      await emitEvent('local_reference_registered', {
+        referenceId: parsed.record.id,
+        referenceType: parsed.record.type,
+        name: parsed.record.name,
+        visualBrief: parsed.record.visualBrief,
+        shotIds: parsed.record.usedShotIds,
+        blockIds: parsed.record.blockIds,
+        required: parsed.record.required,
+        importance: parsed.record.importance,
+        status: 'planning',
+        localReference: parsed.record,
+      }, { referenceId: parsed.record.id })
+      return
+    }
+    if (parsed.record.kind === 'plan_done') {
+      await emitEvent('shot_continuity_stream_done', {
+        shotCount: parsed.record.shotCount,
+        blockCount: parsed.record.blockCount,
+        orderedShotIds: parsed.record.orderedShotIds,
+        orderedBlockIds: parsed.record.orderedBlockIds,
+        notes: parsed.record.notes,
+        acceptedRecordCount,
+        warningCount,
+      })
+    }
+  }
+
+  await clearSequenceAnimaticShotContinuityStreamEvents({
+    client: input.client,
+    requestId: input.requestId,
+  })
+  await emitEvent('shot_continuity_stream_started', {
+    contractVersion: 'shot_continuity_plan_v2',
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    status: 'streaming',
+  })
+  await progress('streaming', true)
+
+  let response: OpenAiResponseResult
+  try {
+    response = await runOpenAiResponsesStream({
+      model,
+      input: input.prompt,
+      instructions: input.instructions,
+      maxOutputTokens: input.maxOutputTokens,
+      reasoning: { effort: 'medium' },
+      store: false,
+      timeoutMs: outputWorkflowChapterTimeoutMs(),
+      metadata: {
+        graphcore_task: 'sequence_animatic_shot_continuity_jsonl_stream',
+        graphcore_node_key: input.node.key,
+        graphcore_provider_mode: 'stream',
+        outputRequestId: input.requestId,
+        workflowRunId: input.run.id,
+      },
+    }, {
+      onEvent: async (event) => {
+        const responseRecord = asRecord(event.data.response)
+        providerRequestId = readText(responseRecord.id) || readText(event.data.response_id) || readText(event.data.id) || providerRequestId
+        await progress(event.type)
+        if (await input.shouldCancel?.()) throw new WorkflowCancelledError()
+      },
+      onTextDelta: async (delta) => {
+        streamRecordBuffer += delta
+        const extracted = extractCompleteSequenceAnimaticJsonRecords(streamRecordBuffer)
+        streamRecordBuffer = extracted.rest
+        for (const record of extracted.records) await processRecordText(record)
+      },
+    })
+    providerRequestId = response.id || providerRequestId
+    if (streamRecordBuffer.trim().startsWith('{')) {
+      await processRecordText(streamRecordBuffer)
+      streamRecordBuffer = ''
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Shot continuity stream failed.'
+    await emitEvent('shot_continuity_stream_failed', {
+      error: message,
+      acceptedRecordCount,
+      warningCount,
+    }).catch(() => null)
+    throw error
+  }
+
+  if (!response.response.ok) {
+    throw new Error(openAiErrorMessage(response, `OpenAI shot continuity stream failed with status ${response.response.status}.`))
+  }
+  if (response.status !== 'completed') {
+    throw new Error(openAiErrorMessage(response, `OpenAI shot continuity stream ended with status ${response.status}.`))
+  }
+
+  try {
+    const value = finalizeSequenceAnimaticShotContinuityStreamPlan(accumulator)
+    await emitEvent('shot_continuity_stream_done', {
+      shotCount: value.shots.length,
+      blockCount: value.blocks.length,
+      orderedShotIds: value.shots.map((shot) => shot.id),
+      orderedBlockIds: value.blocks.map((block) => block.id),
+      notes: value.notes,
+      acceptedRecordCount,
+      warningCount,
+      status: 'ready',
+    })
+    await progress('completed', true)
+    return {
+      value,
+      response,
+      provider: 'openai',
+      model,
+      providerRequestId,
+      acceptedRecordCount,
+      warningCount,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Shot continuity stream finalization failed.'
+    await emitEvent('shot_continuity_stream_failed', {
+      error: message,
+      acceptedRecordCount,
+      warningCount,
+    }).catch(() => null)
+    throw error
+  }
+}
+
 async function persistSequenceAnimaticNodeProgressEvent(input: {
   client: DatabaseClient
   run: OutputWorkflowRun
@@ -5975,13 +6255,19 @@ const sequenceAnimaticContinuityGraphV2Schema = z.object({
 const sequenceAnimaticShotContinuityDialogueLineV2Schema = z.object({
   speakerRefId: z.string().min(1),
   speakerName: z.string().default(''),
-  text: z.string().min(1),
+  text: z.string().min(1).max(140),
   emotion: z.string().default(''),
   delivery: z.string().default(''),
   subtext: z.string().default(''),
   startSeconds: z.number().nonnegative().nullable().default(null),
   endSeconds: z.number().nonnegative().nullable().default(null),
 })
+
+const sequenceAnimaticShotContinuityMaxDurationSeconds = 10
+const sequenceAnimaticShotContinuityPreferredDurationSeconds = 6
+const sequenceAnimaticShotContinuityMaxDialogueLines = 2
+const sequenceAnimaticShotContinuityMaxDialogueCharacters = 220
+const sequenceAnimaticShotContinuityMaxShotCount = 150
 
 const sequenceAnimaticShotContinuityPerformanceBeatV2Schema = z.object({
   characterRefId: z.string().min(1),
@@ -6022,7 +6308,7 @@ const sequenceAnimaticShotContinuityShotV2Schema = z.object({
   index: z.number().int().positive(),
   blockId: z.string().min(1),
   title: z.string().default(''),
-  durationSeconds: z.number().positive().max(8).default(3),
+  durationSeconds: z.number().positive().max(sequenceAnimaticShotContinuityMaxDurationSeconds).default(3),
   action: z.string().min(1),
   camera: z.object({
     framing: z.string().default(''),
@@ -6032,7 +6318,7 @@ const sequenceAnimaticShotContinuityShotV2Schema = z.object({
     screenDirectionRule: z.string().default(''),
   }).default({ framing: '', angle: '', lens: '', movement: '', screenDirectionRule: '' }),
   lighting: z.string().default(''),
-  dialogue: z.array(sequenceAnimaticShotContinuityDialogueLineV2Schema).default([]),
+  dialogue: z.array(sequenceAnimaticShotContinuityDialogueLineV2Schema).max(sequenceAnimaticShotContinuityMaxDialogueLines).default([]),
   performance: z.array(sequenceAnimaticShotContinuityPerformanceBeatV2Schema).default([]),
   refs: sequenceAnimaticShotContinuityRefsV2Schema.default({
     visibleCharacterRefIds: [],
@@ -6042,6 +6328,33 @@ const sequenceAnimaticShotContinuityShotV2Schema = z.object({
     localReferenceIds: [],
   }),
   sceneBinding: sequenceAnimaticShotContinuitySceneBindingV2Schema,
+}).superRefine((shot, context) => {
+  const dialogueCharacterCount = shot.dialogue.reduce((total, line) => total + line.text.trim().length, 0)
+  if (dialogueCharacterCount > sequenceAnimaticShotContinuityMaxDialogueCharacters) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dialogue'],
+      message: `Shot dialogue is too dense (${dialogueCharacterCount} chars); split the exchange into more shots.`,
+    })
+  }
+  for (const [index, line] of shot.dialogue.entries()) {
+    const startSeconds = typeof line.startSeconds === 'number' ? line.startSeconds : null
+    const endSeconds = typeof line.endSeconds === 'number' ? line.endSeconds : null
+    if (endSeconds !== null && endSeconds > shot.durationSeconds) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dialogue', index, 'endSeconds'],
+        message: 'Dialogue timing cannot exceed shot durationSeconds.',
+      })
+    }
+    if (startSeconds !== null && endSeconds !== null && endSeconds < startSeconds) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dialogue', index, 'endSeconds'],
+        message: 'Dialogue endSeconds must be greater than or equal to startSeconds.',
+      })
+    }
+  }
 })
 
 const sequenceAnimaticShotContinuityBlockV2Schema = z.object({
@@ -6093,6 +6406,68 @@ const sequenceAnimaticShotContinuityPlanV2Schema = z.object({
   localReferences: z.array(sequenceAnimaticShotContinuityLocalReferenceV2Schema).default([]),
   notes: z.array(z.string()).default([]),
 })
+
+const sequenceAnimaticShotContinuityStreamPlanStartRecordSchema = z.object({
+  kind: z.literal('plan_start'),
+  contractVersion: z.literal('shot_continuity_plan_v2').default('shot_continuity_plan_v2'),
+  graphSpecVersion: z.literal('sequence_animatic_graph_v2').default('sequence_animatic_graph_v2'),
+  note: z.string().default(''),
+})
+
+const sequenceAnimaticShotContinuityStreamBlockRecordSchema = sequenceAnimaticShotContinuityBlockV2Schema.extend({
+  kind: z.literal('block'),
+})
+
+const sequenceAnimaticShotContinuityStreamShotRecordSchema = sequenceAnimaticShotContinuityShotV2Schema.extend({
+  kind: z.literal('shot'),
+})
+
+const sequenceAnimaticShotContinuityStreamSceneGraphRecordSchema = z.object({
+  kind: z.literal('scene_graph_addition'),
+  nodeKind: z.enum(['set', 'zone', 'spot', 'angle']),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  visualBrief: z.string().min(1),
+  worldLocationRefId: z.string().nullable().default(null),
+  setId: z.string().default(''),
+  zoneId: z.string().default(''),
+  spotIds: z.array(z.string()).default([]),
+  landmarks: z.array(z.string()).default([]),
+  framing: z.string().default(''),
+  cameraPosition: z.string().default(''),
+  facingDirection: z.string().default(''),
+  subjectPosition: z.string().default(''),
+  visibleLandmarks: z.array(z.string()).default([]),
+  lightingDirection: z.string().default(''),
+  shotIds: z.array(z.string()).default([]),
+  storyboardBlockIds: z.array(z.string()).default([]),
+  blockIds: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticShotContinuityStreamLocalReferenceRecordSchema = sequenceAnimaticShotContinuityLocalReferenceV2Schema.extend({
+  kind: z.literal('local_reference'),
+})
+
+const sequenceAnimaticShotContinuityStreamPlanDoneRecordSchema = z.object({
+  kind: z.literal('plan_done'),
+  shotCount: z.number().int().nonnegative().default(0),
+  blockCount: z.number().int().nonnegative().default(0),
+  orderedShotIds: z.array(z.string()).default([]),
+  orderedBlockIds: z.array(z.string()).default([]),
+  screenplaySummary: z.string().default(''),
+  notes: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticShotContinuityStreamRecordSchema = z.discriminatedUnion('kind', [
+  sequenceAnimaticShotContinuityStreamPlanStartRecordSchema,
+  sequenceAnimaticShotContinuityStreamBlockRecordSchema,
+  sequenceAnimaticShotContinuityStreamShotRecordSchema,
+  sequenceAnimaticShotContinuityStreamSceneGraphRecordSchema,
+  sequenceAnimaticShotContinuityStreamLocalReferenceRecordSchema,
+  sequenceAnimaticShotContinuityStreamPlanDoneRecordSchema,
+])
+
+type SequenceAnimaticShotContinuityStreamRecord = z.infer<typeof sequenceAnimaticShotContinuityStreamRecordSchema>
 
 const sequenceAnimaticContinuityBlockDeltaSchema = z.object({
   blockId: z.string(),
@@ -7753,6 +8128,341 @@ function sequenceAnimaticAssetRequirementsFromGraph(input: {
       shotIds: readStringArray(asRecord(node).shotIds),
       blockIds: readStringArray(asRecord(node).storyboardBlockIds),
     }))
+}
+
+function extractCompleteSequenceAnimaticJsonRecords(buffer: string) {
+  const records: string[] = []
+  let current = ''
+  let started = false
+  let inString = false
+  let escaped = false
+  let depth = 0
+  let lastConsumedIndex = 0
+
+  for (let index = 0; index < buffer.length; index += 1) {
+    const char = buffer[index]
+    if (!started) {
+      if (char === '{') {
+        started = true
+        inString = false
+        escaped = false
+        depth = 1
+        current = '{'
+        lastConsumedIndex = index + 1
+      }
+      continue
+    }
+
+    if (inString) {
+      if (escaped) {
+        current += char
+        escaped = false
+      } else if (char === '\\') {
+        current += char
+        escaped = true
+      } else if (char === '"') {
+        current += char
+        inString = false
+      } else if (char === '\n') {
+        current += '\\n'
+      } else if (char !== '\r') {
+        current += char
+      }
+      continue
+    }
+
+    current += char
+    if (char === '"') {
+      inString = true
+    } else if (char === '{' || char === '[') {
+      depth += 1
+    } else if (char === '}' || char === ']') {
+      depth -= 1
+      if (depth === 0) {
+        records.push(current.trim())
+        current = ''
+        started = false
+        inString = false
+        escaped = false
+        lastConsumedIndex = index + 1
+      }
+    }
+  }
+
+  return {
+    records,
+    rest: started ? current : buffer.slice(lastConsumedIndex),
+  }
+}
+
+function deterministicSequenceAnimaticJsonCandidates(record: string) {
+  const base = record.trim()
+  const candidates = new Set<string>()
+  const addCandidate = (value: string) => {
+    const trimmed = value.trim()
+    if (trimmed) candidates.add(trimmed)
+  }
+  addCandidate(base)
+  const firstBrace = base.indexOf('{')
+  const lastBrace = base.lastIndexOf('}')
+  if (firstBrace >= 0 && lastBrace > firstBrace) addCandidate(base.slice(firstBrace, lastBrace + 1))
+  for (const candidate of [...candidates]) {
+    addCandidate(candidate
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/,\s*([}\]])/g, '$1'))
+  }
+  return [...candidates]
+}
+
+function parseSequenceAnimaticStreamRecord(record: string) {
+  let firstError: unknown = null
+  for (const candidate of deterministicSequenceAnimaticJsonCandidates(record)) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown
+      const validated = sequenceAnimaticShotContinuityStreamRecordSchema.safeParse(parsed)
+      if (validated.success) return { record: validated.data, error: null as unknown }
+      firstError ??= validated.error
+    } catch (error) {
+      firstError ??= error
+    }
+  }
+  return { record: null as SequenceAnimaticShotContinuityStreamRecord | null, error: firstError }
+}
+
+type SequenceAnimaticShotContinuityStreamAccumulator = {
+  planStarted: boolean
+  planDone: z.infer<typeof sequenceAnimaticShotContinuityStreamPlanDoneRecordSchema> | null
+  blocksById: Map<string, z.infer<typeof sequenceAnimaticShotContinuityBlockV2Schema>>
+  shotsById: Map<string, z.infer<typeof sequenceAnimaticShotContinuityShotV2Schema>>
+  setsById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphSetSchema>>
+  zonesById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphZoneSchema>>
+  spotsById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphSpotSchema>>
+  anglesById: Map<string, z.infer<typeof sequenceAnimaticContinuityGraphAngleSchema>>
+  localReferencesById: Map<string, z.infer<typeof sequenceAnimaticShotContinuityLocalReferenceV2Schema>>
+  notes: string[]
+}
+
+function createSequenceAnimaticShotContinuityStreamAccumulator(): SequenceAnimaticShotContinuityStreamAccumulator {
+  return {
+    planStarted: false,
+    planDone: null,
+    blocksById: new Map(),
+    shotsById: new Map(),
+    setsById: new Map(),
+    zonesById: new Map(),
+    spotsById: new Map(),
+    anglesById: new Map(),
+    localReferencesById: new Map(),
+    notes: [],
+  }
+}
+
+function sequenceAnimaticStreamBlockIdsFromShotIds(
+  blocks: z.infer<typeof sequenceAnimaticShotContinuityBlockV2Schema>[],
+  shots: z.infer<typeof sequenceAnimaticShotContinuityShotV2Schema>[],
+) {
+  const byShotId = new Map(shots.map((shot) => [shot.id, shot.blockId] as const))
+  return blocks.map((block) => ({
+    ...block,
+    shotIds: block.shotIds.length > 0
+      ? block.shotIds
+      : shots.filter((shot) => shot.blockId === block.id).sort((left, right) => left.index - right.index).map((shot) => shot.id),
+  })).filter((block) => block.shotIds.some((shotId) => byShotId.has(shotId)))
+}
+
+function sequenceAnimaticSyntheticStreamBlocksFromShots(
+  shots: z.infer<typeof sequenceAnimaticShotContinuityShotV2Schema>[],
+) {
+  const blockIds: string[] = []
+  const shotIdsByBlockId = new Map<string, string[]>()
+  for (const shot of shots) {
+    const blockId = shot.blockId || 'block_001'
+    if (!shotIdsByBlockId.has(blockId)) {
+      shotIdsByBlockId.set(blockId, [])
+      blockIds.push(blockId)
+    }
+    shotIdsByBlockId.get(blockId)?.push(shot.id)
+  }
+  return blockIds.map((blockId, index) => sequenceAnimaticShotContinuityBlockV2Schema.parse({
+    id: blockId,
+    index: index + 1,
+    title: `Block ${index + 1}`,
+    summary: 'Synthesized from streamed shot records.',
+    shotIds: shotIdsByBlockId.get(blockId) ?? [],
+  }))
+}
+
+function sequenceAnimaticSceneGraphRecordToNode(record: z.infer<typeof sequenceAnimaticShotContinuityStreamSceneGraphRecordSchema>) {
+  const storyboardBlockIds = [...new Set([...record.storyboardBlockIds, ...record.blockIds].filter(Boolean))]
+  if (record.nodeKind === 'set') {
+    return {
+      nodeKind: 'set' as const,
+      node: sequenceAnimaticContinuityGraphSetSchema.parse({
+        id: record.id,
+        worldLocationRefId: record.worldLocationRefId || null,
+        name: record.name,
+        visualBrief: record.visualBrief,
+        shotIds: record.shotIds,
+        storyboardBlockIds,
+      }),
+    }
+  }
+  if (record.nodeKind === 'zone') {
+    return {
+      nodeKind: 'zone' as const,
+      node: sequenceAnimaticContinuityGraphZoneSchema.parse({
+        id: record.id,
+        setId: record.setId,
+        worldLocationRefId: record.worldLocationRefId || null,
+        name: record.name,
+        visualBrief: record.visualBrief,
+        shotIds: record.shotIds,
+        storyboardBlockIds,
+      }),
+    }
+  }
+  if (record.nodeKind === 'spot') {
+    return {
+      nodeKind: 'spot' as const,
+      node: sequenceAnimaticContinuityGraphSpotSchema.parse({
+        id: record.id,
+        setId: record.setId,
+        zoneId: record.zoneId,
+        worldLocationRefId: record.worldLocationRefId || null,
+        name: record.name,
+        visualBrief: record.visualBrief,
+        landmarks: record.landmarks,
+        shotIds: record.shotIds,
+        storyboardBlockIds,
+      }),
+    }
+  }
+  return {
+    nodeKind: 'angle' as const,
+    node: sequenceAnimaticContinuityGraphAngleSchema.parse({
+      id: record.id,
+      setId: record.setId,
+      zoneId: record.zoneId,
+      spotIds: record.spotIds,
+      worldLocationRefId: record.worldLocationRefId || null,
+      name: record.name,
+      visualBrief: record.visualBrief,
+      framing: record.framing,
+      cameraPosition: record.cameraPosition,
+      facingDirection: record.facingDirection,
+      subjectPosition: record.subjectPosition,
+      visibleLandmarks: record.visibleLandmarks,
+      lightingDirection: record.lightingDirection,
+      shotIds: record.shotIds,
+      storyboardBlockIds,
+    }),
+  }
+}
+
+function applySequenceAnimaticShotContinuityStreamRecord(
+  accumulator: SequenceAnimaticShotContinuityStreamAccumulator,
+  record: SequenceAnimaticShotContinuityStreamRecord,
+) {
+  if (record.kind === 'plan_start') {
+    accumulator.planStarted = true
+    if (record.note) accumulator.notes.push(record.note)
+    return
+  }
+  if (record.kind === 'block') {
+    const { kind: _kind, ...block } = record
+    accumulator.blocksById.set(block.id, sequenceAnimaticShotContinuityBlockV2Schema.parse(block))
+    return
+  }
+  if (record.kind === 'shot') {
+    const { kind: _kind, ...shot } = record
+    const refs = sequenceAnimaticShotRefs(shot)
+    sequenceAnimaticShotBindingFromSceneBinding({
+      shotId: shot.id,
+      storyboardBlockId: shot.blockId,
+      sceneBinding: asRecord(shot.sceneBinding),
+      refs,
+    })
+    accumulator.shotsById.set(shot.id, sequenceAnimaticShotContinuityShotV2Schema.parse(shot))
+    return
+  }
+  if (record.kind === 'scene_graph_addition') {
+    const projected = sequenceAnimaticSceneGraphRecordToNode(record)
+    if (projected.nodeKind === 'set') accumulator.setsById.set(projected.node.id, projected.node)
+    else if (projected.nodeKind === 'zone') accumulator.zonesById.set(projected.node.id, projected.node)
+    else if (projected.nodeKind === 'spot') accumulator.spotsById.set(projected.node.id, projected.node)
+    else accumulator.anglesById.set(projected.node.id, projected.node)
+    return
+  }
+  if (record.kind === 'local_reference') {
+    const { kind: _kind, ...reference } = record
+    accumulator.localReferencesById.set(reference.id, sequenceAnimaticShotContinuityLocalReferenceV2Schema.parse(reference))
+    return
+  }
+  if (record.kind === 'plan_done') {
+    accumulator.planDone = record
+    accumulator.notes.push(...record.notes)
+  }
+}
+
+function finalizeSequenceAnimaticShotContinuityStreamPlan(accumulator: SequenceAnimaticShotContinuityStreamAccumulator) {
+  if (!accumulator.planDone) {
+    throw new Error('Sequence animatic shot continuity stream ended before plan_done.')
+  }
+  const done = accumulator.planDone
+  const unorderedShots = [...accumulator.shotsById.values()]
+  const orderedShotIds = done.orderedShotIds.filter((shotId) => accumulator.shotsById.has(shotId))
+  const missingOrderedShotIds = done.orderedShotIds.filter((shotId) => !accumulator.shotsById.has(shotId))
+  if (missingOrderedShotIds.length > 0) {
+    throw new Error(`Sequence animatic shot continuity stream referenced ${missingOrderedShotIds.length} shot(s) that were not accepted: ${missingOrderedShotIds.slice(0, 8).join(', ')}.`)
+  }
+  const shots = [
+    ...orderedShotIds.map((shotId) => accumulator.shotsById.get(shotId)).filter((shot): shot is z.infer<typeof sequenceAnimaticShotContinuityShotV2Schema> => Boolean(shot)),
+    ...unorderedShots.filter((shot) => !orderedShotIds.includes(shot.id)).sort((left, right) => left.index - right.index || left.id.localeCompare(right.id)),
+  ]
+  const unorderedBlocks = [...accumulator.blocksById.values()]
+  const orderedBlockIds = done.orderedBlockIds.filter((blockId) => accumulator.blocksById.has(blockId))
+  const missingOrderedBlockIds = done.orderedBlockIds.filter((blockId) => !accumulator.blocksById.has(blockId))
+  if (missingOrderedBlockIds.length > 0) {
+    throw new Error(`Sequence animatic shot continuity stream referenced ${missingOrderedBlockIds.length} block(s) that were not accepted: ${missingOrderedBlockIds.slice(0, 8).join(', ')}.`)
+  }
+  const streamedBlocks = [
+    ...orderedBlockIds.map((blockId) => accumulator.blocksById.get(blockId)).filter((block): block is z.infer<typeof sequenceAnimaticShotContinuityBlockV2Schema> => Boolean(block)),
+    ...unorderedBlocks.filter((block) => !orderedBlockIds.includes(block.id)).sort((left, right) => left.index - right.index || left.id.localeCompare(right.id)),
+  ]
+  const blocks = sequenceAnimaticStreamBlockIdsFromShotIds(
+    streamedBlocks.length > 0 ? streamedBlocks : sequenceAnimaticSyntheticStreamBlocksFromShots(shots),
+    shots,
+  )
+  const acceptedShotIds = new Set(shots.map((shot) => shot.id))
+  const missingBlockShotIds = blocks
+    .flatMap((block) => block.shotIds.map((shotId) => ({ blockId: block.id, shotId })))
+    .filter((entry) => !acceptedShotIds.has(entry.shotId))
+  if (missingBlockShotIds.length > 0) {
+    throw new Error(`Sequence animatic shot continuity stream block list references ${missingBlockShotIds.length} missing shot(s): ${missingBlockShotIds.slice(0, 8).map((entry) => `${entry.blockId}/${entry.shotId}`).join(', ')}.`)
+  }
+  if (shots.length === 0) throw new Error('Sequence animatic shot continuity stream returned no shot records.')
+  if (blocks.length === 0) throw new Error('Sequence animatic shot continuity stream returned no block records.')
+  return sequenceAnimaticShotContinuityPlanV2Schema.parse({
+    role: 'sequence_animatic_director_plan',
+    contractVersion: 'shot_continuity_plan_v2',
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    screenplayAnimaticRole: 'director_plan',
+    sequenceAnimaticRole: 'director_plan',
+    planningMode: 'single_director_pass',
+    screenplaySummary: done.screenplaySummary,
+    shots,
+    blocks,
+    sceneGraphAdditions: {
+      sets: [...accumulator.setsById.values()],
+      zones: [...accumulator.zonesById.values()],
+      spots: [...accumulator.spotsById.values()],
+      angles: [...accumulator.anglesById.values()],
+      edges: [],
+    },
+    localReferences: [...accumulator.localReferencesById.values()],
+    notes: [...new Set(accumulator.notes.map(readText).filter(Boolean))],
+  })
 }
 
 function projectShotContinuityPlanV2ToDirectorPlan(value: z.infer<typeof sequenceAnimaticShotContinuityPlanV2Schema>) {
@@ -18212,11 +18922,13 @@ async function executeNode(input: {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const fallback = buildFallbackCinematicV2ScreenplayDraft({ context, assetPack, prompt: input.run.prompt })
         const v3Screenplay = purpose === 'cinematic_v3_screenplay_author'
+        const presetFamily = readText(config.presetFamily) || 'story_movie_tv'
         const sequenceAnimaticMode = readText(config.sequenceAnimaticMode)
         const cinematicAnimaticMode = readText(config.cinematicAnimaticMode)
         const screenplayAnimaticMaster = v3Screenplay && (sequenceAnimaticMode === 'master_script_only' || cinematicAnimaticMode === 'prompt_cinematic_master')
         const v3ShotMarkedScreenplay = v3Screenplay && !screenplayAnimaticMaster
         const fullSequenceUnitAnimatic = v3Screenplay && sequenceAnimaticMode === 'master_script_only'
+        const ugcScreenplayMaster = screenplayAnimaticMaster && presetFamily.toLowerCase().startsWith('ugc')
         const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
         const selectedSequenceUnitBrief = fullSequenceUnitAnimatic
           ? buildSelectedSequenceUnitScreenplayBrief(context)
@@ -18231,8 +18943,13 @@ async function executeNode(input: {
             ? [
               fullSequenceUnitAnimatic
                 ? 'Write a full sequence-unit creative screenplay for the selected chapter/sequence unit. This pass is creative only; technical shot planning happens in the next workflow node.'
-                : 'Write the creative screenplay for the requested cinematic. This pass is creative only; technical shot planning happens in the next workflow node.',
+                : ugcScreenplayMaster
+                  ? 'Write a creator/UGC-style creative screenplay for the requested cinematic. This pass is creative only; technical shot planning happens in the next workflow node.'
+                  : 'Write the creative screenplay for the requested cinematic. This pass is creative only; technical shot planning happens in the next workflow node.',
               'Keep it readable as screenplay/treatment prose: scene headings, concise visible action, dialogue blocks, emotional performance, concrete visual motifs, and clear chapter/outcome fidelity.',
+              ugcScreenplayMaster
+                ? 'Shape the script around a strong hook, product/story proof, natural creator delivery, visual demonstration beats, and a clear end beat. Keep it cinematic, not a marketing outline.'
+                : '',
               'Do not write shot markers, #shot anchors, SHOT headings, numbered shot lists, storyboard panel lists, camera breakdowns, lighting breakdowns, scene graph assignments, temporary asset declarations, image prompts, video prompts, JSON, schema fields, provider instructions, model names, resolution, aspect ratio, or workflow metadata.',
               'The next node will convert this script into shots, refs, scene graph bindings, storyboard blocks, and continuity assets. Do not pre-structure this screenplay for that node beyond clear cinematic action and dialogue.',
               fullSequenceUnitAnimatic
@@ -21564,44 +22281,67 @@ async function executeNode(input: {
           }
         const manifestHash = hashOutputWorkflowValue(manifest)
         const masterManifestArtifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-manifest`
+        const shotContinuityPlannerMaxShotCount = Math.max(
+          36,
+          Math.min(
+            sequenceAnimaticShotContinuityMaxShotCount,
+            configuredMaxShotCount > 0
+              ? Math.max(configuredMaxShotCount, sequenceAnimaticShotContinuityMaxShotCount)
+              : Math.ceil((suggestedDurationSeconds && suggestedDurationSeconds > 0 ? suggestedDurationSeconds : 180) / 4),
+          ),
+        )
         const legacyAnchorPrompt = legacyMarkerContract || scriptShotProjection.scriptShots.length > 0
           ? [
             'Legacy screenplay shot anchors are included as optional source references. Preserve sourceScriptShotIds/sourceAnchorIds when useful, but do not let them override better final shot structure.',
             'For one-to-one legacy shots preserve the source script shot ID. For merges include multiple IDs. For splits reuse the same source ID on each split. For planner-added shots, return empty arrays.',
           ].join('\n')
           : 'This creative screenplay has no screenplay shot anchors. sourceScriptShotIds and sourceAnchorIds may be empty arrays; do not invent fake screenplay anchor IDs.'
-        let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground<z.infer<typeof sequenceAnimaticShotContinuityPlanV2Schema>>>>
-        const priorStepMetadata = asRecord(input.priorStep?.metadata)
-        const priorProviderRequestId = readText(input.priorStep?.providerRequestId) || readText(priorStepMetadata.providerRequestId)
-        const priorProviderStatus = readText(priorStepMetadata.providerStatus)
-        const priorStepStatus = readText(input.priorStep?.status)
-        const resumablePriorProviderRequestId = priorProviderRequestId
-          && !isOpenAiTerminalStatus(priorProviderStatus)
-          && !['completed', 'failed', 'cancelled'].includes(priorStepStatus)
-          ? priorProviderRequestId
-          : ''
+        let result: Awaited<ReturnType<typeof runSequenceAnimaticShotContinuityPlanStream>>
+        const outputRequestId = readText(input.run.metadata?.outputRequestId) || readText(input.run.metadata?.masterRequestId)
+        if (!outputRequestId) throw new Error('Sequence animatic shot continuity stream requires an output request id.')
         try {
-          result = await runCinematicV2StructuredNodeBackground({
-            nodeKey: input.node.key,
-            schemaName: 'sequence_animatic_shot_continuity_plan_v2',
-            schema: sequenceAnimaticShotContinuityPlanV2Schema,
-            instructions: 'You are a senior animation shot planner and continuity supervisor. Return strict JSON only.',
+          result = await runSequenceAnimaticShotContinuityPlanStream({
+            client: input.client,
+            run: input.run,
+            workflow: input.workflow,
+            node: input.node,
+            requestId: outputRequestId,
+            instructions: [
+              'You are a senior animation shot planner and continuity supervisor.',
+              'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
+              'Allowed record kinds: plan_start, block, shot, scene_graph_addition, local_reference, plan_done.',
+              'Emit records in live-usable order: plan_start, then shot records in story order as soon as each shot is complete. Do not wait for a whole block to be finished before emitting shots.',
+              'Block records are optional during streaming and may arrive before, between, or after related shots. If unsure, assign each shot a stable blockId and keep streaming shots.',
+              'After all shots, emit scene_graph_addition records, local_reference records, optional block records, then plan_done.',
+            ].join('\n'),
             prompt: [
-              'Convert the creative screenplay into one compact shot continuity plan for the entire animatic in a single coherent pass.',
+              'Convert the creative screenplay into one compact streamed shot continuity plan for the entire animatic in a single coherent pass.',
               'The screenplay is the creative source. Your returned shots are the source of truth; do not spend tokens duplicating top-level shotBindings, assetRequirements, warnings, diagnostics, or compatibility fields.',
               'Create final shots from the script in story order. Preserve action, spoken dialogue, emotional beats, cause/effect, chapter outcome, and open loops, but choose shot boundaries that make the animatic filmable and continuous.',
-              'The output must cover every final shot exactly once across blocks.',
+              'The output must cover every final shot exactly once. Blocks are editorial grouping metadata; they must never delay shot records.',
+              `Use as many shots as the screenplay needs, up to ${shotContinuityPlannerMaxShotCount}. Do not compress dialogue or multi-beat action to fit an old shot-count budget.`,
+              `Hard shot boundary rules: durationSeconds must be <= ${sequenceAnimaticShotContinuityMaxDurationSeconds}; preferred duration is 3-${sequenceAnimaticShotContinuityPreferredDurationSeconds} seconds; each shot should contain one camera setup and one visible story beat.`,
+              `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. If a conversation exchange has more than that, split it into alternating dialogue/reaction/action shots.`,
+              'Use reaction shots, inserts, movement beats, and silent performance shots to keep dialogue readable. Do not put a whole conversation paragraph into one shot.',
               'Keep action, camera, lighting, performance, visual briefs, summaries, and notes concise. Prefer one strong sentence per field unless the shot requires more.',
+              'Record contracts:',
+              'plan_start: {"kind":"plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
+              'block: {"kind":"block","id":"block_001","index":1,"title":"...","summary":"...","shotIds":["shot_001"]} // optional during streaming; can be emitted after its shots',
+              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"action":"...","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line","emotion":"...","delivery":"...","subtext":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"confidence":0.5,"dominance":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"...","gesture":"...","voiceEnergy":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"worldLocationRefId":"","setId":"set_...","zoneId":"","spotIds":[],"angleId":"","localReferenceIds":[]}}',
+              'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|angle","id":"set_or_zone_or_spot_or_angle_id","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set_for_zone_spot_angle","zoneId":"parent_zone_for_spot_angle","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
+              'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
+              'plan_done: {"kind":"plan_done","shotCount":0,"blockCount":0,"orderedShotIds":[],"orderedBlockIds":[],"screenplaySummary":"...","notes":[]}',
               legacyAnchorPrompt,
               'For every shot, fill refs.visibleCharacterRefIds, refs.speakerRefIds, refs.propRefIds, and refs.locationRefIds when matching world refs exist.',
               'For every spoken line in the screenplay, put one dialogue row on the shot where it is spoken. Every dialogue row must have speakerRefId and non-empty text. Do not create speaker-only dialogue rows.',
+              'Never merge multiple screenplay dialogue turns into one dialogue row. Split dense dialogue across multiple shots rather than summarizing or packing it.',
               'For visible/speaking characters, add concise performance rows with emotion, valence, arousal, confidence, dominance, body language, facial expression, gaze, gesture, and voice energy when meaningful.',
               'Do not invent duplicate canonical characters, locations, factions, or props. If a world ref matches, use its key.',
               'Create output-local scene graph additions only when needed for the animatic: physical sets, zones, spots, and reusable camera angles.',
               'Scene graph nodes must be filmable physical things. Never create nodes for themes, emotions, fog/rain/lighting-only cues, shot titles, action phrases, or character names used as places.',
               'Every shot must include sceneBinding with at least setId or worldLocationRefId. Use zoneId, spotIds, and angleId when useful. Reuse the same set/zone/spot/angle IDs across shots for repeated spaces and camera setups.',
               'Define animatic-only temp characters, props/items, factions/crowds, vehicles, or other local refs in localReferences. Then attach their IDs to refs.localReferenceIds or sceneBinding.localReferenceIds on the shots that use them.',
-              'For each block, include shotIds in order and a concise continuity summary. Keep notes short and only for important ambiguity.',
+              'For each shot, set blockId immediately even if the block record will be emitted later. Use stable block IDs such as block_001, block_002. Keep notes short and only for important ambiguity.',
               compactForPrompt({
                 screenplay: screenplayDraft,
                 scriptContract: creativeScreenplayContract ? 'creative_screenplay_v1' : scriptContract,
@@ -21613,23 +22353,7 @@ async function executeNode(input: {
                 assetPack,
               }, 26000),
             ].filter(Boolean).join('\n\n'),
-            fallback: sequenceAnimaticShotContinuityPlanV2Schema.parse({
-              role: 'sequence_animatic_director_plan',
-              contractVersion: 'shot_continuity_plan_v2',
-              graphSpecVersion: 'sequence_animatic_graph_v2',
-              screenplayAnimaticRole: 'director_plan',
-              sequenceAnimaticRole: 'director_plan',
-              planningMode: 'single_director_pass',
-              shots: [],
-              blocks: [],
-              sceneGraphAdditions: { sets: [], zones: [], spots: [], angles: [], edges: [] },
-              localReferences: [],
-              notes: ['Shot continuity plan fallback should not be used for production animatics.'],
-            }),
             maxOutputTokens: 64000,
-            priorProviderRequestId: resumablePriorProviderRequestId,
-            providerStartedAt: resumablePriorProviderRequestId ? readText(priorStepMetadata.providerStartedAt) || input.priorStep?.startedAt : null,
-            timeoutMs: outputWorkflowChapterTimeoutMs(),
             shouldCancel: input.shouldCancel,
             onProgress: async (progress) => {
               await input.onProgress?.({
@@ -21639,12 +22363,11 @@ async function executeNode(input: {
                 metadata: {
                   providerMode: progress.providerMode,
                   providerStatus: progress.providerStatus,
-                  providerIncompleteReason: progress.providerIncompleteReason,
-                  providerIncompleteDetails: progress.providerIncompleteDetails,
                   lastProviderPollAt: progress.lastProviderPollAt,
                   providerStartedAt: progress.providerStartedAt,
                   sequenceAnimaticDirectorPlan: true,
                   sequenceAnimaticShotContinuityPlan: true,
+                  sequenceAnimaticShotContinuityStream: true,
                 },
               })
             },
@@ -21652,9 +22375,6 @@ async function executeNode(input: {
         } catch (error) {
           const reason = error instanceof Error ? error.message : 'Shot continuity plan generation failed.'
           throw new Error(`Sequence animatic shot continuity plan failed: ${reason}`)
-        }
-        if (result.fallbackUsed) {
-          throw new Error(`Sequence animatic shot continuity plan returned fallback output: ${result.fallbackReason || 'structured output unavailable'}`)
         }
         const directorPlan = normalizeSequenceAnimaticDirectorPlan({
           rawPlan: result.value,
@@ -21690,6 +22410,9 @@ async function executeNode(input: {
           text: JSON.stringify(directorPlan, null, 2),
           deterministic: false,
           providerRequestId: result.providerRequestId,
+          acceptedStreamRecordCount: result.acceptedRecordCount,
+          streamWarningCount: result.warningCount,
+          usage: asRecord(result.response.body.usage),
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || undefined }
       }

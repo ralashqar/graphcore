@@ -52,6 +52,8 @@ export const sequenceAnimaticModeSchema = z.preprocess(
   z.enum(['master_script_only']),
 )
 export const cinematicAnimaticModeSchema = z.enum(['prompt_cinematic_master'])
+
+const sequenceAnimaticMasterMaxShotCount = 150
 export const sequenceAnimaticGraphSpecVersionSchema = z.enum(['sequence_animatic_graph_v1', 'sequence_animatic_graph_v2'])
 export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'director_plan', 'continuity_pack', 'continuity_asset', 'continuity_asset_batch', 'storyboard_block', 'shot_video', 'shot_revision'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
@@ -1077,6 +1079,10 @@ export const sequenceAnimaticStateResponseSchema = z.object({
   directorPlanStatus: z.enum(['missing', 'planning', 'ready', 'failed']).default('missing'),
   shotContinuityPlan: sequenceAnimaticDirectorPlanV1Schema.nullable().default(null),
   shotContinuityPlanStatus: z.enum(['missing', 'planning', 'ready', 'failed']).default('missing'),
+  shotContinuityStreamStatus: z.enum(['missing', 'streaming', 'ready', 'failed']).default('missing'),
+  streamedShotContinuityPlan: sequenceAnimaticDirectorPlanV1Schema.nullable().default(null),
+  streamedShotCount: z.number().int().nonnegative().default(0),
+  streamedBlockCount: z.number().int().nonnegative().default(0),
   orchestratorStatus: z.enum(['missing', 'running', 'partial', 'queued', 'ready', 'failed']).default('missing'),
   queuedBlockCount: z.number().int().nonnegative().default(0),
   activeBlockId: z.string().nullable().default(null),
@@ -2974,6 +2980,15 @@ function inferCinematicPresetFromKind(outputKind: z.infer<typeof outputRequestKi
   return 'cinematic_episode_from_sequence'
 }
 
+function inferCinematicPresetFromRequest(
+  request: z.infer<typeof outputWorkflowPlanRequestSchema>,
+  outputKind: z.infer<typeof outputRequestKindSchema> | undefined,
+  prompt: string,
+): z.infer<typeof outputWorkflowPresetSchema> {
+  if (request.sequenceAnimaticMode === 'master_script_only') return 'cinematic_episode_from_sequence'
+  return inferCinematicPresetFromKind(outputKind, prompt)
+}
+
 function resolveSeedance2Model(resolution: CinematicResolution) {
   return resolution === '1080p'
     ? aiGenerationSettings.outputWorkflow.videoFalHighResolutionModel
@@ -3066,9 +3081,11 @@ function shouldUseCinematicV3(input: {
   presetFamily: CinematicPresetFamily
   outputKind?: z.infer<typeof outputRequestKindSchema>
 }) {
+  if (input.request.sequenceAnimaticMode === 'master_script_only') return true
+  if (input.request.cinematicAnimaticMode === 'prompt_cinematic_master') return true
   if (input.request.cinematicPipelineVersion === 'v1_take_blocks') return false
   if (input.request.cinematicPipelineVersion === 'v2_shot_orchestration') return false
-  if (input.request.cinematicPipelineVersion === 'v3_script_storyboards') return input.presetFamily === 'story_movie_tv'
+  if (input.request.cinematicPipelineVersion === 'v3_script_storyboards') return true
   if (input.presetFamily !== 'story_movie_tv') return false
   return input.outputKind === 'cinematic_episode' || input.outputKind === 'cinematic_trailer'
 }
@@ -3093,7 +3110,7 @@ export function buildCinematicV2ShotOrchestrationPlan(
     worldRelationships: request.snapshot.worldRelationships,
   })
   const prompt = request.prompt.trim() || 'Create a directed cinematic scene from this world context.'
-  const preset = inferCinematicPresetFromKind(outputKind, prompt)
+  const preset = inferCinematicPresetFromRequest(request, outputKind, prompt)
   const aspectRatio: CinematicAspectRatio = request.aspectRatio ?? '16:9'
   const resolution: CinematicResolution = request.videoResolution ?? '720p'
   const generateAudio = false
@@ -3376,7 +3393,8 @@ export function buildCinematicV3ScriptStoryboardPlan(
     worldRelationships: request.snapshot.worldRelationships,
   })
   const prompt = request.prompt.trim() || 'Create a directed cinematic storyboard sequence from this world context.'
-  const preset = inferCinematicPresetFromKind(outputKind, prompt)
+  const presetFamily = request.cinematicPresetFamily ?? inferCinematicPresetFamily(prompt, outputKind)
+  const preset = inferCinematicPresetFromRequest(request, outputKind, prompt)
   const aspectRatio: CinematicAspectRatio = request.aspectRatio ?? '16:9'
   const resolution: CinematicResolution = request.videoResolution ?? '720p'
   const cinematicReferenceMode: CinematicReferenceMode = request.cinematicReferenceMode ?? 'storyboard_sheet'
@@ -3392,10 +3410,12 @@ export function buildCinematicV3ScriptStoryboardPlan(
   const sequenceTitle = selectedSequenceUnit?.name || ''
   const name = preset === 'cinematic_trailer'
     ? `${title} Cinematic Trailer`
+    : preset === 'ugc_episode'
+      ? `${title} UGC Cinematic`
     : sequenceTitle
       ? `${title} - ${sequenceTitle} Cinematic`
       : `${title} Cinematic`
-  const maxShotCount = screenplayAnimaticMaster ? 36 : deriveCinematicV2MaxShotCount(null)
+  const maxShotCount = screenplayAnimaticMaster ? sequenceAnimaticMasterMaxShotCount : deriveCinematicV2MaxShotCount(null)
   const nodes = [
     nodeBase({
       key: 'world_context',
@@ -3479,6 +3499,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
       config: {
         purpose: 'cinematic_v3_screenplay_author',
         cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        presetFamily,
         sequenceAnimaticMode,
         cinematicAnimaticMode,
         maxShotCount,
@@ -3501,6 +3522,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
             role: 'sequence_animatic_director_plan',
             graphSpecVersion: 'sequence_animatic_graph_v2',
             cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+            presetFamily,
             maxShotCount,
             sequenceAnimaticMode,
             cinematicAnimaticMode,
@@ -3691,6 +3713,24 @@ export function buildCinematicSequencePlan(
   const sequenceUnits = sortedSequenceUnits(request.snapshot.worldEntities)
   const requestedSequenceKeys = request.selectedSequenceUnitKeys.filter(Boolean)
   const selectedSequenceUnitKey = requestedSequenceKeys[0] ?? ''
+  const legacyPipelineExplicit = request.cinematicPipelineVersion === 'v1_take_blocks'
+    || request.cinematicPipelineVersion === 'v2_shot_orchestration'
+  if (!legacyPipelineExplicit) {
+    if (!request.sequenceAnimaticMode && selectedSequenceUnitKey) {
+      request = {
+        ...request,
+        cinematicPipelineVersion: request.cinematicPipelineVersion ?? 'v3_script_storyboards',
+        sequenceAnimaticMode: 'master_script_only',
+        cinematicAnimaticMode: undefined,
+      }
+    } else if (!request.sequenceAnimaticMode && !request.cinematicAnimaticMode) {
+      request = {
+        ...request,
+        cinematicPipelineVersion: request.cinematicPipelineVersion ?? 'v3_script_storyboards',
+        cinematicAnimaticMode: 'prompt_cinematic_master',
+      }
+    }
+  }
   const selectedSequenceUnit = selectedSequenceUnitKey
     ? sequenceUnits.find((entity) => entity.key === selectedSequenceUnitKey) ?? null
     : null

@@ -1931,6 +1931,14 @@
   height: 14px;
 }
 
+.world-wiki-sequence-animatic-follow {
+  border-color: rgba(45, 212, 191, 0.22);
+}
+
+.world-wiki-sequence-animatic-follow.is-following {
+  color: rgba(204, 251, 241, 0.94);
+}
+
 .world-wiki-sequence-animatic-skeleton,
 .world-wiki-sequence-animatic-continuity-strip,
 .world-wiki-sequence-animatic-block-section {
@@ -2154,6 +2162,69 @@
   display: grid;
   grid-template-columns: 84px minmax(0, 1fr);
   gap: 12px;
+}
+
+.world-wiki-sequence-animatic-timeline-shot.is-streaming-new,
+.world-wiki-sequence-animatic-shot.is-streaming-new {
+  animation: sequenceAnimaticShotReveal 0.72s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.world-wiki-sequence-animatic-timeline-shot.is-streaming .world-wiki-sequence-animatic-shot-body,
+.world-wiki-sequence-animatic-shot.is-streaming {
+  border-color: rgba(45, 212, 191, 0.18);
+}
+
+.world-wiki-sequence-animatic-timeline-shot.is-streaming-new .world-wiki-sequence-animatic-shot-body,
+.world-wiki-sequence-animatic-shot.is-streaming-new {
+  border-color: rgba(94, 234, 212, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 16px 34px rgba(8, 47, 73, 0.2);
+}
+
+.world-wiki-sequence-animatic-timeline-shot.is-pending-shot .world-wiki-sequence-animatic-shot-body,
+.world-wiki-sequence-animatic-shot.is-pending-shot {
+  border-style: dashed;
+  border-color: rgba(148, 163, 184, 0.18);
+  background:
+    linear-gradient(110deg, rgba(15, 23, 42, 0.18), rgba(45, 212, 191, 0.08), rgba(15, 23, 42, 0.18)),
+    rgba(2, 6, 23, 0.18);
+  background-size: 220% 100%;
+  animation: sequenceAnimaticPendingSweep 1.8s ease-in-out infinite;
+}
+
+.world-wiki-sequence-animatic-timeline-shot.is-pending-shot .world-wiki-sequence-animatic-time-rail strong {
+  border-color: rgba(148, 163, 184, 0.24);
+  color: rgba(203, 213, 225, 0.86);
+}
+
+@keyframes sequenceAnimaticShotReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sequenceAnimaticPendingSweep {
+  0% {
+    background-position: 160% 0;
+  }
+  100% {
+    background-position: -60% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-wiki-sequence-animatic-timeline-shot.is-streaming-new,
+  .world-wiki-sequence-animatic-shot.is-streaming-new,
+  .world-wiki-sequence-animatic-timeline-shot.is-pending-shot .world-wiki-sequence-animatic-shot-body,
+  .world-wiki-sequence-animatic-shot.is-pending-shot {
+    animation: none;
+  }
 }
 
 .world-wiki-sequence-animatic-time-rail {

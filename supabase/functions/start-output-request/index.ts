@@ -387,8 +387,8 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client, user } = await requireUserClient(request, 'start-output-request')
     const payload = outputRequestStartRequestSchema.parse(await request.json())
-    const sequenceAnimaticMode = payload.sequenceAnimaticMode ?? null
-    const cinematicAnimaticMode = payload.cinematicAnimaticMode ?? null
+    let sequenceAnimaticMode = payload.sequenceAnimaticMode ?? null
+    let cinematicAnimaticMode = payload.cinematicAnimaticMode ?? null
 
     const draftResponse = await client
       .from('project_drafts')
@@ -506,9 +506,25 @@ Deno.serve(async (request) => {
     const cinematicReferenceMode = payload.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
     const cinematicV2AnimaticMode = payload.cinematicV2AnimaticMode ?? 'fast_panels'
     const cinematicPipelineVersion = payload.cinematicPipelineVersion
-      ?? (planner.outputKind === 'cinematic_episode' || planner.outputKind === 'cinematic_trailer' ? 'v3_script_storyboards' : 'v1_take_blocks')
-    const sequenceAnimaticMasterRequest = payload.sourceSurface === 'wiki_sequence_unit'
-      && sequenceAnimaticMode === 'master_script_only'
+      ?? (cinematicOutput ? 'v3_script_storyboards' : 'v1_take_blocks')
+    if (
+      !sequenceAnimaticMode
+      && cinematicOutput
+      && cinematicPipelineVersion === 'v3_script_storyboards'
+      && payload.selectedSequenceUnitKeys.length > 0
+    ) {
+      sequenceAnimaticMode = 'master_script_only'
+    }
+    if (
+      !sequenceAnimaticMode
+      && !cinematicAnimaticMode
+      && cinematicOutput
+      && cinematicPipelineVersion === 'v3_script_storyboards'
+    ) {
+      cinematicAnimaticMode = 'prompt_cinematic_master'
+    }
+    const sequenceAnimaticMasterRequest = sequenceAnimaticMode === 'master_script_only'
+      && payload.selectedSequenceUnitKeys.length > 0
     const promptCinematicAnimaticMasterRequest = cinematicOutput
       && cinematicPipelineVersion === 'v3_script_storyboards'
       && cinematicAnimaticMode === 'prompt_cinematic_master'
@@ -617,8 +633,8 @@ Deno.serve(async (request) => {
       cinematicPipelineVersion,
       debugCinematicStoryboardStyleSafeMode,
       cinematicStoryboardStyleOverride,
-      sequenceAnimaticMode: payload.sequenceAnimaticMode,
-      cinematicAnimaticMode: payload.cinematicAnimaticMode,
+      sequenceAnimaticMode,
+      cinematicAnimaticMode,
       debugSkipVideoGeneration,
       snapshot: payload.snapshot,
     }, planner.outputKind)

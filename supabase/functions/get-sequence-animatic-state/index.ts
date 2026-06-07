@@ -125,6 +125,163 @@ function readDirectorState(input: {
   }
 }
 
+function readShotContinuityStreamState(input: {
+  masterRequest: ReturnType<typeof mapOutputRequestRow>
+  events: Array<{ eventType: string; payload: Record<string, unknown> }>
+}) {
+  const blocksById = new Map<string, Record<string, unknown>>()
+  const shotsById = new Map<string, Record<string, unknown>>()
+  const setNodes: Record<string, unknown>[] = []
+  const zoneNodes: Record<string, unknown>[] = []
+  const spotNodes: Record<string, unknown>[] = []
+  const angleNodes: Record<string, unknown>[] = []
+  const localReferences: Record<string, unknown>[] = []
+  const doneEvents: Record<string, unknown>[] = []
+  let sawStarted = false
+  let failedPayload: Record<string, unknown> | null = null
+
+  for (const event of input.events) {
+    const payload = asRecord(event.payload)
+    if (event.eventType === 'shot_continuity_stream_started') sawStarted = true
+    if (event.eventType === 'shot_continuity_stream_failed') failedPayload = payload
+    if (event.eventType === 'shot_continuity_stream_done') doneEvents.push(payload)
+    if (event.eventType === 'block_planned') {
+      const block = asRecord(payload.block)
+      const blockId = readText(block.id) || readText(payload.blockId)
+      if (blockId) {
+        blocksById.set(blockId, {
+          id: blockId,
+          index: Number(block.index ?? payload.index ?? 0) || blocksById.size + 1,
+          title: readText(block.title) || readText(payload.title) || `Block ${blocksById.size + 1}`,
+          summary: readText(block.summary) || readText(payload.summary),
+          shotIds: readArray(block.shotIds ?? payload.shotIds).map(readText).filter(Boolean),
+          status: 'planned',
+          streamed: true,
+        })
+      }
+    }
+    if (event.eventType === 'shot_streamed') {
+      const shot = asRecord(payload.shot)
+      const shotId = readText(shot.id) || readText(payload.shotId)
+      if (shotId) {
+        const blockId = readText(shot.blockId) || readText(payload.blockId) || readText(payload.storyboardBlockId)
+        shotsById.set(shotId, {
+          ...shot,
+          id: shotId,
+          index: Number(shot.index ?? payload.index ?? 0) || shotsById.size + 1,
+          blockId,
+          storyboardBlockId: readText(shot.storyboardBlockId) || blockId,
+          title: readText(shot.title) || readText(payload.title) || `Shot ${shotsById.size + 1}`,
+          action: readText(shot.action) || readText(payload.action),
+          planningStatus: 'streaming',
+          streamed: true,
+        })
+      }
+    }
+    if (event.eventType === 'scene_graph_node_registered') {
+      const node = asRecord(payload.node)
+      const nodeKind = readText(node.nodeKind) || readText(payload.nodeKind)
+      const entry = {
+        ...node,
+        id: readText(node.id) || readText(payload.nodeId),
+        nodeKind,
+        name: readText(node.name) || readText(payload.name),
+        visualBrief: readText(node.visualBrief) || readText(payload.visualBrief),
+        shotIds: readArray(node.shotIds ?? payload.shotIds).map(readText).filter(Boolean),
+        storyboardBlockIds: readArray(node.storyboardBlockIds ?? payload.storyboardBlockIds).map(readText).filter(Boolean),
+        streamed: true,
+      }
+      if (!readText(entry.id)) continue
+      if (nodeKind === 'set') setNodes.push(entry)
+      else if (nodeKind === 'zone') zoneNodes.push(entry)
+      else if (nodeKind === 'spot') spotNodes.push(entry)
+      else if (nodeKind === 'angle') angleNodes.push(entry)
+    }
+    if (event.eventType === 'local_reference_registered') {
+      const localReference = asRecord(payload.localReference)
+      const referenceId = readText(localReference.id) || readText(payload.referenceId)
+      if (referenceId) {
+        localReferences.push({
+          ...localReference,
+          id: referenceId,
+          type: readText(localReference.type) || readText(payload.referenceType),
+          name: readText(localReference.name) || readText(payload.name),
+          visualBrief: readText(localReference.visualBrief) || readText(payload.visualBrief),
+          usedShotIds: readArray(localReference.usedShotIds ?? payload.shotIds).map(readText).filter(Boolean),
+          blockIds: readArray(localReference.blockIds ?? payload.blockIds).map(readText).filter(Boolean),
+          streamed: true,
+        })
+      }
+    }
+  }
+
+  const shots = [...shotsById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+  let blocks = [...blocksById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+  if (shots.length > 0 && blocks.length === 0) {
+    const blockIds: string[] = []
+    const shotIdsByBlockId = new Map<string, string[]>()
+    for (const shot of shots) {
+      const blockId = readText(shot.blockId) || readText(shot.storyboardBlockId) || 'block_001'
+      if (!shotIdsByBlockId.has(blockId)) {
+        shotIdsByBlockId.set(blockId, [])
+        blockIds.push(blockId)
+      }
+      const shotId = readText(shot.id)
+      if (shotId) shotIdsByBlockId.get(blockId)?.push(shotId)
+    }
+    blocks = blockIds.map((blockId, index) => ({
+      id: blockId,
+      index: index + 1,
+      title: `Block ${index + 1}`,
+      summary: 'Streamed shot continuity records.',
+      shotIds: shotIdsByBlockId.get(blockId) ?? [],
+      status: 'planned',
+      streamed: true,
+    }))
+  }
+  const latestDone = doneEvents[doneEvents.length - 1] ?? {}
+  const status = failedPayload
+    ? 'failed'
+    : shots.length > 0 || blocks.length > 0
+      ? readText(latestDone.status) === 'ready'
+        ? 'ready'
+        : 'streaming'
+      : sawStarted
+        ? 'streaming'
+        : 'missing'
+  const plan = shots.length > 0 || blocks.length > 0 || localReferences.length > 0 || setNodes.length > 0 || zoneNodes.length > 0 || spotNodes.length > 0 || angleNodes.length > 0
+    ? {
+      role: 'sequence_animatic_director_plan',
+      graphSpecVersion: 'sequence_animatic_graph_v2',
+      screenplayAnimaticRole: 'director_plan',
+      sequenceAnimaticRole: 'director_plan',
+      masterRequestId: input.masterRequest.id,
+      planningMode: 'single_director_pass',
+      contractVersion: 'shot_continuity_plan_v2',
+      screenplaySummary: readText(latestDone.screenplaySummary),
+      shots,
+      blocks,
+      sceneGraphAdditions: {
+        sets: setNodes,
+        zones: zoneNodes,
+        spots: spotNodes,
+        angles: angleNodes,
+      },
+      localReferences,
+      outputLocalReferences: localReferences,
+      notes: readArray(latestDone.notes).map(readText).filter(Boolean),
+      warnings: failedPayload ? [readText(failedPayload.error) || 'Shot continuity stream failed.'] : [],
+      streamed: true,
+    }
+    : null
+  return {
+    shotContinuityStreamStatus: status,
+    streamedShotContinuityPlan: plan,
+    streamedShotCount: shots.length,
+    streamedBlockCount: blocks.length,
+  }
+}
+
 function readOrchestratorState(input: {
   masterRequest: ReturnType<typeof mapOutputRequestRow>
   events: Array<{ eventType: string; payload: Record<string, unknown> }>
@@ -502,6 +659,7 @@ Deno.serve(async (request) => {
     }))
     const scriptShotState = readScriptShotState({ runs, steps, artifacts: hydratedArtifacts })
     const screenplayState = readScreenplayState({ steps })
+    const shotContinuityStreamState = readShotContinuityStreamState({ masterRequest, events })
     const revision = hashOutputWorkflowValue({
       requests: requests.map((entry) => ({ id: entry.id, status: entry.status, workflowId: entry.workflowId, latestRunId: entry.latestRunId, updatedAt: entry.updatedAt, metadata: entry.metadata })),
       workflows: workflows.map((entry) => ({ id: entry.id, updatedAt: entry.updatedAt, metadata: entry.metadata })),
@@ -515,6 +673,12 @@ Deno.serve(async (request) => {
       artifacts: hydratedArtifacts.map((entry) => ({ id: entry.id, key: entry.key, assetKey: entry.assetKey, updatedAt: entry.updatedAt })),
       projections: projections.map((entry) => ({ requestId: entry.requestId, graphRevision: entry.graphRevision, timelineRevision: entry.timelineRevision, status: entry.status, updatedAt: entry.updatedAt })),
       events: events.map((entry) => ({ id: entry.id, sequence: entry.sequence, eventType: entry.eventType, createdAt: entry.createdAt })),
+      shotContinuityStream: {
+        status: shotContinuityStreamState.shotContinuityStreamStatus,
+        shotCount: shotContinuityStreamState.streamedShotCount,
+        blockCount: shotContinuityStreamState.streamedBlockCount,
+        planHash: hashOutputWorkflowValue(shotContinuityStreamState.streamedShotContinuityPlan ?? {}),
+      },
       screenplayStatus: screenplayState.screenplayStatus,
       screenplayHash: hashOutputWorkflowValue({ screenplay: screenplayState.screenplayMarkdown }),
       scriptShots: scriptShotState.scriptShots.map((shot) => ({ id: shot.id, index: shot.index, title: shot.title, approximateDurationSeconds: shot.approximateDurationSeconds })),
@@ -539,6 +703,7 @@ Deno.serve(async (request) => {
         ...screenplayState,
         ...scriptShotState,
         ...directorState,
+        ...shotContinuityStreamState,
         ...orchestratorState,
         ...continuityState,
       }))
@@ -559,6 +724,7 @@ Deno.serve(async (request) => {
       ...screenplayState,
       ...scriptShotState,
       ...directorState,
+      ...shotContinuityStreamState,
       ...orchestratorState,
       ...continuityState,
     }))

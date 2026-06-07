@@ -20,6 +20,7 @@ import { getArtStylePresetLabel, getArtStylePresetPromptDirectives } from '../..
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../../domain/graphcore'
 import {
   isTerminalOutputWorkflowRunStatus,
+  sequenceAnimaticDirectorPlanV1Schema,
   type OutputArtifact,
   type OutputRequest,
   type OutputRequestStatusResponse,
@@ -786,7 +787,7 @@ type WorldGraphPageProps = {
   onSubscribeSequenceAnimaticStateSignals: (input: {
     draftId: string
     masterRequestId: string
-    onSignal: () => void
+    onSignal: (signal: { table: string; eventType?: string; row?: Record<string, unknown> }) => void
   }) => { unsubscribe: () => Promise<unknown> | unknown }
   onGetOutputRequestStatus: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
   onCancelOutputRequest: (requestId: string) => Promise<OutputRequestStatusResponse> | OutputRequestStatusResponse
@@ -1423,6 +1424,7 @@ type SequenceAnimaticBlockView = {
   index: number
   title: string
   isProvisional: boolean
+  plannedShotIds: string[]
   durationLabel: string
   statusLabel: string
   shotRangeLabel: string
@@ -2539,6 +2541,7 @@ function buildSequenceAnimaticViewModel(input: {
   request: OutputRequest
   run: OutputWorkflowRun | null
   row: { statusLabel: string; progress: { label: string }; currentStepLabel: string } | null
+  sequenceState: SequenceAnimaticStateResponse | null
   requests: readonly OutputRequest[]
   runs: readonly OutputWorkflowRun[]
   nodes: readonly OutputWorkflowNode[]
@@ -2701,7 +2704,12 @@ function buildSequenceAnimaticViewModel(input: {
     })
   }
   const manifest = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
-  const directorPlan = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+  const artifactDirectorPlan = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+  const streamedDirectorPlan = readLooseRecord(input.sequenceState?.streamedShotContinuityPlan)
+  const directorPlanFinalReady = Object.keys(readLooseRecord(artifactDirectorPlan)).length > 0
+  const directorPlan = directorPlanFinalReady ? artifactDirectorPlan : streamedDirectorPlan
+  const directorPlanStreamingPreview = !directorPlanFinalReady && Object.keys(streamedDirectorPlan).length > 0
+  const directorPlanStreamStatus = input.sequenceState?.shotContinuityStreamStatus ?? 'missing'
   const continuityArtifacts = continuityRequest
     ? input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, continuityRequest))
     : []
@@ -3016,7 +3024,7 @@ function buildSequenceAnimaticViewModel(input: {
     ? {
       ...manifestShotPlan,
       shots: directorShots,
-      totalEditorialDurationSeconds: directorShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds) || 0), 0),
+      totalEditorialDurationSeconds: directorShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds ?? shot.durationSeconds) || 0), 0),
     }
     : Object.keys(manifestShotPlan).length > 0
       ? manifestShotPlan
@@ -3044,7 +3052,12 @@ function buildSequenceAnimaticViewModel(input: {
     ...readArtifactMediaRecords(childArtifacts, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet']),
     ...readArtifactMediaRecords(requestArtifacts, ['cinematic_v3_storyboard_sheet', 'cinematic_v2_storyboard_sheet']),
   ]
-  const groups = readLooseArray(readLooseRecord(storyboardGroupPlan).groups).map(readLooseRecord)
+  const directorPlanBlocks = readLooseArray(readLooseRecord(directorPlan).blocks).map(readLooseRecord)
+  const groups = (() => {
+    const storyboardGroups = readLooseArray(readLooseRecord(storyboardGroupPlan).groups).map(readLooseRecord)
+    if (storyboardGroups.length > 0) return storyboardGroups
+    return directorPlanBlocks
+  })()
   const timelineShotPlan = Object.keys(readLooseRecord(shotPlan)).length > 0
     ? normalizeSequenceAnimaticShotPlanForTimeline(readLooseRecord(shotPlan), groups)
     : shotPlan
@@ -3280,21 +3293,24 @@ function buildSequenceAnimaticViewModel(input: {
       return {
         id: groupId,
         index: typeof group.index === 'number' ? group.index : groupIndex + 1,
-        title: trimOptionalString(group.summary) || `Storyboard block ${groupIndex + 1}`,
-        isProvisional: false,
-        durationLabel: formatAnimaticSeconds(group.editorialDurationSeconds),
+        title: trimOptionalString(group.title) || trimOptionalString(group.summary) || `Storyboard block ${groupIndex + 1}`,
+        isProvisional: directorPlanStreamingPreview,
+        plannedShotIds: shotIds,
+        durationLabel: formatAnimaticSeconds(group.editorialDurationSeconds ?? group.durationSeconds),
         statusLabel: failedStep
           ? `Failed: ${failedStep.label}`
           : runningStep
             ? `${statusLabelForOutputRunStep(runningStep)}: ${runningStep.label}`
             : childPrepActiveFromProjection
               ? `Running: ${childProjectionActiveLabel || 'Storyboard prep'}`
-              : groupShots.every((shot) => blockPanelPreviewByShotId.has(trimOptionalString(shot.id))) ? 'Panels ready' : childRequest ? 'Ready to generate' : 'Preparing block graph',
+              : directorPlanStreamingPreview
+                ? `${groupShots.length}/${shotIds.length || groupShots.length} shots planned`
+                : groupShots.every((shot) => blockPanelPreviewByShotId.has(trimOptionalString(shot.id))) ? 'Panels ready' : childRequest ? 'Ready to generate' : 'Preparing block graph',
         shotRangeLabel: shotIds.length > 0 ? `Shots ${shotIds[0]}-${shotIds[shotIds.length - 1]}` : 'Shots pending',
         childRequestId: childRequest?.id ?? null,
         childWorkflowId: childRequest?.workflowId ?? null,
         childRunId: childRun?.id ?? null,
-        readyToRun: childRequest ? readLooseRecord(childRequest.metadata).readyToRun !== false : false,
+        readyToRun: directorPlanStreamingPreview ? false : childRequest ? readLooseRecord(childRequest.metadata).readyToRun !== false : false,
         promptNodeKey: childPromptNodeKey,
         sheetNodeKey: childSheetNodeKey,
         panelExtractNodeKey: childPanelExtractNodeKey,
@@ -3409,12 +3425,12 @@ function buildSequenceAnimaticViewModel(input: {
             id: shotId,
             index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
             title: trimOptionalString(shot.title) || `Shot ${shotIndex + 1}`,
-            isProvisional: false,
+            isProvisional: directorPlanStreamingPreview,
             sourceScriptShotIds: readLooseArray(shot.sourceScriptShotIds ?? shot.source_script_shot_ids ?? shot.sourceAnchorIds ?? shot.source_anchor_ids).map(trimOptionalString).filter(Boolean),
             timeLabel: projectionShot
               ? formatAnimaticTimeRange(projectionShot.startSeconds, projectionShot.endSeconds)
               : 'Timing pending',
-            durationLabel: formatAnimaticSeconds(shot.editorialDurationSeconds),
+            durationLabel: formatAnimaticSeconds(shot.editorialDurationSeconds ?? shot.durationSeconds),
             action: trimOptionalString(displayShot.action) || trimOptionalString(displayShot.description) || trimOptionalString(displayShot.storyboardPanelPrompt),
             dialogue: buildSequenceAnimaticDialogueLines({ ...displayShot, continuityAnchorIds: shotContinuityAnchorIds, continuityAnchorRefIds: shotContinuityAnchorIds }, resolveReference),
             camera: cameraLineFromShot(displayShot),
@@ -3457,10 +3473,11 @@ function buildSequenceAnimaticViewModel(input: {
       ? [{
         id: 'storyboard_group_1',
         index: 1,
-        title: 'Storyboard block 1',
-        isProvisional: false,
+        title: directorPlanStreamingPreview ? 'Shot continuity plan' : 'Storyboard block 1',
+        isProvisional: directorPlanStreamingPreview,
+        plannedShotIds: rawShots.map((shot, shotIndex) => trimOptionalString(shot.id) || `shot_${shotIndex + 1}`),
         durationLabel: formatAnimaticSeconds(readLooseRecord(shotPlan).totalEditorialDurationSeconds),
-        statusLabel: panels.length > 0 ? 'Panels ready' : 'Generating panels',
+        statusLabel: directorPlanStreamingPreview ? 'Planning shots' : panels.length > 0 ? 'Panels ready' : 'Generating panels',
         shotRangeLabel: `Shots 1-${rawShots.length}`,
         childRequestId: null,
         childWorkflowId: null,
@@ -3475,25 +3492,29 @@ function buildSequenceAnimaticViewModel(input: {
         hasPanels: panels.length > 0,
         storyboardReady: rawShots.length > 0 && rawShots.every((shot) => panelPreviewByShotId.has(trimOptionalString(shot.id))),
         storyboardRunning: false,
-        storyboardProgressLabel: panels.length > 0 ? 'Storyboard panels ready' : 'Ready to generate storyboard',
+        storyboardProgressLabel: directorPlanStreamingPreview
+          ? 'Final shot continuity artifact required'
+          : panels.length > 0 ? 'Storyboard panels ready' : 'Ready to generate storyboard',
         videoPromptReady: false,
         videoReady: false,
         videoRunning: false,
         videoAssetKey: null,
         videoUrl: null,
-        videoProgressLabel: panels.length > 0 ? 'Storyboard generated; video prompt pending' : 'Ready to generate storyboard',
+        videoProgressLabel: directorPlanStreamingPreview
+          ? 'Final shot continuity artifact required'
+          : panels.length > 0 ? 'Storyboard generated; video prompt pending' : 'Ready to generate storyboard',
         videoError: '',
         continuityAnchors: [],
         continuityAnchorCountLabel: 'No continuity refs',
-        continuityAnchorsPending: false,
+        continuityAnchorsPending: directorPlanStreamingPreview,
         continuityChanged: false,
         continuityBlockStatus: 'not_started',
-        continuityBlockStatusLabel: 'Continuity not derived',
-        continuityBlockActionLabel: 'Derive continuity',
+        continuityBlockStatusLabel: directorPlanStreamingPreview ? 'Planning continuity bindings' : 'Continuity not derived',
+        continuityBlockActionLabel: directorPlanStreamingPreview ? 'Plan still streaming' : 'Derive continuity',
         continuityBlockWarnings: [],
         continuityBlockError: '',
         continuityAssetTargets: [],
-        continuityAssetCountLabel: 'No continuity assets',
+        continuityAssetCountLabel: directorPlanStreamingPreview ? 'Assets pending' : 'No continuity assets',
         shots: rawShots.map((shot, shotIndex) => {
           const shotId = trimOptionalString(shot.id) || `shot_${shotIndex + 1}`
           const shotBinding = readLooseRecord(continuityShotBindings[shotId])
@@ -3528,12 +3549,12 @@ function buildSequenceAnimaticViewModel(input: {
             id: shotId,
             index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
             title: trimOptionalString(shot.title) || `Shot ${shotIndex + 1}`,
-            isProvisional: false,
+            isProvisional: directorPlanStreamingPreview,
             sourceScriptShotIds: readLooseArray(shot.sourceScriptShotIds ?? shot.source_script_shot_ids ?? shot.sourceAnchorIds ?? shot.source_anchor_ids).map(trimOptionalString).filter(Boolean),
             timeLabel: projectionShot
               ? formatAnimaticTimeRange(projectionShot.startSeconds, projectionShot.endSeconds)
               : 'Timing pending',
-            durationLabel: formatAnimaticSeconds(shot.editorialDurationSeconds),
+            durationLabel: formatAnimaticSeconds(shot.editorialDurationSeconds ?? shot.durationSeconds),
             action: trimOptionalString(displayShot.action) || trimOptionalString(displayShot.description) || trimOptionalString(displayShot.storyboardPanelPrompt),
             dialogue: buildSequenceAnimaticDialogueLines(displayShot, resolveReference),
             camera: cameraLineFromShot(displayShot),
@@ -3542,7 +3563,9 @@ function buildSequenceAnimaticViewModel(input: {
             performanceBeats: buildSequenceAnimaticPerformanceBeats(displayShot, resolveReference),
             spatialContinuityLabel: shotBindingLabels.label,
             spatialContinuityDetail: shotBindingLabels.detail,
-            panelStatusLabel: previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
+            panelStatusLabel: directorPlanStreamingPreview
+              ? 'Planning'
+              : previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
             panelError: panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : '',
             panelAssetKey: completedRevision?.keyframeAssetKey ?? previewAssetKey,
             panelUrl: displayPanelUrl,
@@ -3566,7 +3589,9 @@ function buildSequenceAnimaticViewModel(input: {
             shotVideoReady: false,
             shotVideoRunning: false,
             shotVideoUrl: null,
-            shotVideoProgressLabel: previewAssetKey ? 'Ready for shot video' : 'Panel required',
+            shotVideoProgressLabel: directorPlanStreamingPreview
+              ? 'Final shot continuity artifact required'
+              : previewAssetKey ? 'Ready for shot video' : 'Panel required',
             shotVideoError: '',
           }
         }),
@@ -3581,6 +3606,7 @@ function buildSequenceAnimaticViewModel(input: {
             index: scriptBlock.index ?? blockIndex + 1,
             title: scriptBlock.title || `Screenplay block ${blockIndex + 1}`,
             isProvisional: true,
+            plannedShotIds: scriptBlock.shotIds,
             durationLabel: formatAnimaticSeconds(scriptBlock.approximateDurationSeconds),
             statusLabel: directorPlanRunning ? 'Building shot continuity plan' : 'Screenplay shots ready',
             shotRangeLabel: blockShots.length > 0 ? `Shots ${blockShots[0]?.id}-${blockShots[blockShots.length - 1]?.id}` : 'Shots pending',
@@ -3686,9 +3712,11 @@ function buildSequenceAnimaticViewModel(input: {
     currentStepLabel: isActive
       ? activeMasterStepLabel || sequenceAnimaticFriendlyProgressLabel(input.row?.currentStepLabel ?? '', masterProjectionActiveNodeKey)
       : '',
-    directorPlanReady: Object.keys(readLooseRecord(directorPlan)).length > 0,
-    directorPlanStatusLabel: Object.keys(readLooseRecord(directorPlan)).length > 0
+    directorPlanReady: directorPlanFinalReady,
+    directorPlanStatusLabel: directorPlanFinalReady
       ? `${directorShots.length} shot-continuity shot${directorShots.length === 1 ? '' : 's'}`
+      : directorPlanStreamingPreview
+        ? `${directorShots.length} shot${directorShots.length === 1 ? '' : 's'} streamed; planning continues`
       : outputRunStepForNode(input.run, 'sequence_animatic_director_plan')?.status === 'failed'
         ? 'Shot continuity plan failed'
         : scriptShotProjection.scriptShotStatus === 'ready' && (isActive || directorPlanRunning)
@@ -3705,8 +3733,10 @@ function buildSequenceAnimaticViewModel(input: {
         ? `${childRequests.length} storyboard block${childRequests.length === 1 ? '' : 's'} ready`
         : childRequests.length > 0
           ? `${readyStoryboardChildCount}/${childRequests.length} storyboard blocks ready`
-          : Object.keys(readLooseRecord(directorPlan)).length > 0
+          : directorPlanFinalReady
             ? 'Storyboard blocks queueing'
+            : directorPlanStreamingPreview || directorPlanStreamStatus === 'streaming'
+              ? 'Waiting for final shot continuity plan'
             : scriptShotProjection.scriptShotStatus === 'ready'
               ? 'Waiting for shot continuity plan'
             : 'Storyboard orchestration pending',
@@ -4916,7 +4946,143 @@ export function WorldGraphPage({
   } | null>(null)
   const [sequenceAnimaticShotPromptDraftByKey, setSequenceAnimaticShotPromptDraftByKey] = useState<Record<string, string>>({})
   const [sequenceAnimaticActiveBlockId, setSequenceAnimaticActiveBlockId] = useState<string | null>(null)
+  const [sequenceAnimaticStateByRequestId, setSequenceAnimaticStateByRequestId] = useState<Record<string, SequenceAnimaticStateResponse>>({})
+  const [sequenceAnimaticFollowLatest, setSequenceAnimaticFollowLatest] = useState(true)
+  const [sequenceAnimaticRecentlyStreamedShotIds, setSequenceAnimaticRecentlyStreamedShotIds] = useState<Record<string, number>>({})
+  const sequenceAnimaticViewerRef = useRef<HTMLElement | null>(null)
+  const sequenceAnimaticShotElementRefs = useRef<Record<string, HTMLElement | null>>({})
+  const sequenceAnimaticKnownStreamedShotKeysRef = useRef<Set<string>>(new Set())
   const sequenceAnimaticStateRevisionRef = useRef<string | null>(null)
+  const loadAndStoreSequenceAnimaticState = useCallback(async (request: {
+    masterRequestId?: string | null
+    sequenceUnitKey?: string | null
+    knownRevision?: string | null
+  }) => {
+    const result = await Promise.resolve(onLoadSequenceAnimaticState(request))
+    const masterRequestId = result.masterRequest?.id || request.masterRequestId || null
+    if (masterRequestId && !result.unchanged) {
+      setSequenceAnimaticStateByRequestId((current) => ({
+        ...current,
+        [masterRequestId]: result,
+      }))
+    }
+    return result
+  }, [onLoadSequenceAnimaticState])
+  const applyLiveSequenceAnimaticStreamEvent = useCallback((input: {
+    masterRequestId: string
+    row?: Record<string, unknown>
+  }) => {
+    const row = readLooseRecord(input.row)
+    const requestId = trimOptionalString(row.request_id) || trimOptionalString(row.requestId)
+    if (requestId && requestId !== input.masterRequestId) return false
+    const eventType = trimOptionalString(row.event_type) || trimOptionalString(row.eventType)
+    if (!['shot_continuity_stream_started', 'block_planned', 'shot_streamed', 'shot_continuity_stream_done', 'shot_continuity_stream_failed'].includes(eventType)) return false
+    const payload = readLooseRecord(row.payload)
+    setSequenceAnimaticStateByRequestId((current) => {
+      const existing = current[input.masterRequestId]
+      if (!existing) return current
+      const currentPlan = readLooseRecord(existing.streamedShotContinuityPlan)
+      const currentBlocks = readLooseArray(currentPlan.blocks).map(readLooseRecord)
+      const currentShots = readLooseArray(currentPlan.shots).map(readLooseRecord)
+      const blockById = new Map(currentBlocks
+        .map((block) => [trimOptionalString(block.id), { ...block }] as const)
+        .filter(([blockId]) => Boolean(blockId)))
+      const shotById = new Map(currentShots
+        .map((shot) => [trimOptionalString(shot.id), { ...shot }] as const)
+        .filter(([shotId]) => Boolean(shotId)))
+
+      if (eventType === 'block_planned') {
+        const block = readLooseRecord(payload.block)
+        const blockId = trimOptionalString(block.id) || trimOptionalString(payload.blockId)
+        if (!blockId) return current
+        const existingBlock = readLooseRecord(blockById.get(blockId))
+        blockById.set(blockId, {
+          ...existingBlock,
+          ...block,
+          id: blockId,
+          index: Number(block.index ?? payload.index ?? existingBlock.index ?? blockById.size + 1) || blockById.size + 1,
+          title: trimOptionalString(block.title) || trimOptionalString(payload.title) || trimOptionalString(existingBlock.title) || `Block ${blockById.size + 1}`,
+          summary: trimOptionalString(block.summary) || trimOptionalString(payload.summary) || trimOptionalString(existingBlock.summary),
+          shotIds: readLooseArray(block.shotIds ?? payload.shotIds ?? existingBlock.shotIds).map(trimOptionalString).filter(Boolean),
+          streamed: true,
+        })
+      }
+
+      if (eventType === 'shot_streamed') {
+        const shot = readLooseRecord(payload.shot)
+        const shotId = trimOptionalString(shot.id) || trimOptionalString(payload.shotId)
+        if (!shotId) return current
+        const blockId = trimOptionalString(shot.blockId) || trimOptionalString(payload.blockId) || trimOptionalString(payload.storyboardBlockId) || 'block_001'
+        const existingShot = readLooseRecord(shotById.get(shotId))
+        shotById.set(shotId, {
+          ...existingShot,
+          ...shot,
+          id: shotId,
+          index: Number(shot.index ?? payload.index ?? existingShot.index ?? shotById.size + 1) || shotById.size + 1,
+          blockId,
+          storyboardBlockId: trimOptionalString(shot.storyboardBlockId) || blockId,
+          title: trimOptionalString(shot.title) || trimOptionalString(payload.title) || trimOptionalString(existingShot.title) || `Shot ${shotById.size + 1}`,
+          action: trimOptionalString(shot.action) || trimOptionalString(payload.action) || trimOptionalString(existingShot.action),
+          planningStatus: 'streaming',
+          streamed: true,
+        })
+        const existingBlock = readLooseRecord(blockById.get(blockId))
+        const shotIds = readLooseArray(existingBlock.shotIds).map(trimOptionalString).filter(Boolean)
+        if (!shotIds.includes(shotId)) shotIds.push(shotId)
+        blockById.set(blockId, {
+          ...existingBlock,
+          id: blockId,
+          index: Number(existingBlock.index ?? blockById.size + 1) || blockById.size + 1,
+          title: trimOptionalString(existingBlock.title) || `Block ${blockById.size + 1}`,
+          summary: trimOptionalString(existingBlock.summary) || 'Streaming shots.',
+          shotIds,
+          streamed: true,
+        })
+      }
+
+      const shots = [...shotById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+      const blocks = [...blockById.values()]
+        .map((block, index) => {
+          const blockId = trimOptionalString(block.id) || `block_${String(index + 1).padStart(3, '0')}`
+          const shotIds = readLooseArray(block.shotIds).map(trimOptionalString).filter(Boolean)
+          return {
+            ...block,
+            id: blockId,
+            index: Number(block.index ?? index + 1) || index + 1,
+            shotIds: shotIds.length > 0 ? shotIds : shots.filter((shot) => trimOptionalString(shot.blockId) === blockId).map((shot) => trimOptionalString(shot.id)).filter(Boolean),
+          }
+        })
+        .filter((block) => readLooseArray(block.shotIds).length > 0)
+        .sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+      const nextPlan = sequenceAnimaticDirectorPlanV1Schema.parse({
+        ...currentPlan,
+        role: 'sequence_animatic_director_plan',
+        graphSpecVersion: 'sequence_animatic_graph_v2',
+        screenplayAnimaticRole: 'director_plan',
+        sequenceAnimaticRole: 'director_plan',
+        contractVersion: 'shot_continuity_plan_v2',
+        planningMode: 'single_director_pass',
+        masterRequestId: input.masterRequestId,
+        shots,
+        blocks,
+        streamed: true,
+      })
+      const failed = eventType === 'shot_continuity_stream_failed'
+      const ready = eventType === 'shot_continuity_stream_done' && trimOptionalString(payload.status) === 'ready'
+      return {
+        ...current,
+        [input.masterRequestId]: {
+          ...existing,
+          revision: `${existing.revision || 'live'}:event:${trimOptionalString(row.id) || trimOptionalString(row.sequence) || Date.now()}`,
+          shotContinuityStreamStatus: failed ? 'failed' : ready ? 'ready' : 'streaming',
+          streamedShotContinuityPlan: shots.length > 0 || blocks.length > 0 ? nextPlan : existing.streamedShotContinuityPlan,
+          streamedShotCount: shots.length,
+          streamedBlockCount: blocks.length,
+        },
+      }
+    })
+    return true
+  }, [])
   const sequenceAnimaticLookupInFlightRef = useRef<Set<string>>(new Set())
   const markSequenceAnimaticShotVideoRunKey = useCallback((runKey: string) => {
     setSequenceAnimaticShotVideoRunKeys((previous) => ({ ...previous, [runKey]: Date.now() }))
@@ -4964,7 +5130,7 @@ export function WorldGraphPage({
     }
     let cancelled = false
     setSequenceAnimaticPreviewHydration({ status: 'checking', error: null })
-    void Promise.resolve(onLoadSequenceAnimaticState({
+    void Promise.resolve(loadAndStoreSequenceAnimaticState({
       masterRequestId: sequenceAnimaticPreviewRequestId,
       knownRevision: null,
     })).then(() => {
@@ -4980,7 +5146,7 @@ export function WorldGraphPage({
     return () => {
       cancelled = true
     }
-  }, [onLoadSequenceAnimaticState, outputRequests, sequenceAnimaticPreviewRequestId])
+  }, [loadAndStoreSequenceAnimaticState, outputRequests, sequenceAnimaticPreviewRequestId])
   const sequenceAnimaticPreviewModel = useMemo(() => {
     const request = sequenceAnimaticPreviewRequestId
       ? outputRequests.find((entry) => entry.id === sequenceAnimaticPreviewRequestId) ?? null
@@ -4995,6 +5161,7 @@ export function WorldGraphPage({
       request,
       run,
       row: outputLibraryRowByRequestId.get(request.id) ?? null,
+      sequenceState: sequenceAnimaticStateByRequestId[request.id] ?? null,
       requests: outputRequests,
       runs: outputWorkflowRuns,
       nodes: outputWorkflowNodes,
@@ -5004,7 +5171,85 @@ export function WorldGraphPage({
       imageUrlByEntityKey: wikiImageUrlByEntityKey,
       referenceSheetIconUrlByEntityKey,
     })
-  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticPreviewRequestId, wikiImageUrlByEntityKey, worldEntities])
+  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticPreviewRequestId, sequenceAnimaticStateByRequestId, wikiImageUrlByEntityKey, worldEntities])
+  const sequenceAnimaticStreamedShotKeys = useMemo(() => {
+    if (!sequenceAnimaticPreviewModel) return []
+    return sequenceAnimaticPreviewModel.blocks.flatMap((block) => (
+      block.shots
+        .filter((shot) => shot.isProvisional)
+        .map((shot) => `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}`)
+    ))
+  }, [sequenceAnimaticPreviewModel])
+  const sequenceAnimaticNextPendingShot = useMemo(() => {
+    if (!sequenceAnimaticPreviewModel) return null
+    for (const block of sequenceAnimaticPreviewModel.blocks) {
+      if (!block.isProvisional || block.plannedShotIds.length === 0) continue
+      const existingShotIds = new Set(block.shots.map((shot) => shot.id))
+      const nextShotId = block.plannedShotIds.find((shotId) => !existingShotIds.has(shotId))
+      if (nextShotId) {
+        const ordinal = block.plannedShotIds.indexOf(nextShotId) + 1
+        return {
+          blockId: block.id,
+          shotId: nextShotId,
+          index: ordinal > 0 ? ordinal : block.shots.length + 1,
+        }
+      }
+    }
+    return null
+  }, [sequenceAnimaticPreviewModel])
+  const sequenceAnimaticLatestStreamedShotKey = sequenceAnimaticStreamedShotKeys[sequenceAnimaticStreamedShotKeys.length - 1] ?? null
+  const handleSequenceAnimaticViewerScroll = useCallback(() => {
+    const element = sequenceAnimaticViewerRef.current
+    if (!element) return
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+    setSequenceAnimaticFollowLatest(distanceFromBottom < 220)
+  }, [])
+  const jumpToLatestSequenceAnimaticShot = useCallback(() => {
+    const key = sequenceAnimaticLatestStreamedShotKey
+    const element = key ? sequenceAnimaticShotElementRefs.current[key] : null
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setSequenceAnimaticFollowLatest(true)
+    }
+  }, [sequenceAnimaticLatestStreamedShotKey])
+  useEffect(() => {
+    sequenceAnimaticKnownStreamedShotKeysRef.current = new Set()
+    setSequenceAnimaticRecentlyStreamedShotIds({})
+    setSequenceAnimaticFollowLatest(true)
+  }, [sequenceAnimaticPreviewRequestId])
+  useEffect(() => {
+    const previous = sequenceAnimaticKnownStreamedShotKeysRef.current
+    const current = new Set(sequenceAnimaticStreamedShotKeys)
+    const newKeys = sequenceAnimaticStreamedShotKeys.filter((key) => !previous.has(key))
+    sequenceAnimaticKnownStreamedShotKeysRef.current = current
+    if (!sequenceAnimaticPreviewModel || newKeys.length === 0) return undefined
+    const now = Date.now()
+    setSequenceAnimaticRecentlyStreamedShotIds((existing) => {
+      const next = { ...existing }
+      for (const key of newKeys) next[key] = now
+      return next
+    })
+    const newestKey = newKeys[newKeys.length - 1]
+    if (sequenceAnimaticFollowLatest) {
+      window.setTimeout(() => {
+        sequenceAnimaticShotElementRefs.current[newestKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 80)
+    }
+    const timeoutId = window.setTimeout(() => {
+      setSequenceAnimaticRecentlyStreamedShotIds((existing) => {
+        let changed = false
+        const next = { ...existing }
+        for (const key of newKeys) {
+          if (next[key]) {
+            delete next[key]
+            changed = true
+          }
+        }
+        return changed ? next : existing
+      })
+    }, 1200)
+    return () => window.clearTimeout(timeoutId)
+  }, [sequenceAnimaticFollowLatest, sequenceAnimaticPreviewModel, sequenceAnimaticStreamedShotKeys])
   useEffect(() => {
     if (!sequenceAnimaticPreviewModel) return
     setSequenceAnimaticShotVideoRunKeys((previous) => {
@@ -5033,7 +5278,7 @@ export function WorldGraphPage({
     let lastRefreshAt = 0
     const refresh = () => {
       lastRefreshAt = Date.now()
-      void Promise.resolve(onLoadSequenceAnimaticState({
+      void Promise.resolve(loadAndStoreSequenceAnimaticState({
         masterRequestId: previewRequestId,
         knownRevision: sequenceAnimaticStateRevisionRef.current,
       })).then((result) => {
@@ -5053,7 +5298,17 @@ export function WorldGraphPage({
     const subscription = onSubscribeSequenceAnimaticStateSignals({
       draftId: projectDraftId,
       masterRequestId: previewRequestId,
-      onSignal: () => scheduleRefresh(400),
+      onSignal: (signal) => {
+        const eventType = trimOptionalString(readLooseRecord(signal.row).event_type) || trimOptionalString(readLooseRecord(signal.row).eventType)
+        const appliedLive = signal.table === 'output_request_events'
+          ? applyLiveSequenceAnimaticStreamEvent({ masterRequestId: previewRequestId, row: signal.row })
+          : false
+        if (appliedLive && eventType === 'shot_streamed') {
+          scheduleRefresh(2200)
+          return
+        }
+        scheduleRefresh(appliedLive ? 900 : 400)
+      },
     })
     refresh()
     const timer = window.setInterval(() => {
@@ -5069,7 +5324,8 @@ export function WorldGraphPage({
       window.clearInterval(timer)
     }
   }, [
-    onLoadSequenceAnimaticState,
+    loadAndStoreSequenceAnimaticState,
+    applyLiveSequenceAnimaticStreamEvent,
     onSubscribeSequenceAnimaticStateSignals,
     projectDraftId,
     sequenceAnimaticPreviewRequestId,
@@ -5286,7 +5542,7 @@ export function WorldGraphPage({
           sequenceAnimaticRole: 'continuity_pack',
         },
       })
-      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       setSequenceAnimaticErrorByKey((previous) => ({
@@ -5296,7 +5552,7 @@ export function WorldGraphPage({
     } finally {
       setSequenceAnimaticBlockRunKey(null)
     }
-  }, [onEnsureSequenceAnimaticContinuityWorkflow, onLoadSequenceAnimaticState, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityWorkflow, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
   const handleDeriveSequenceAnimaticBlockContinuity = useCallback(async (
     model: SequenceAnimaticViewModel,
     block: SequenceAnimaticBlockView,
@@ -5311,7 +5567,7 @@ export function WorldGraphPage({
         storyboardBlockId: block.id,
         mode: block.continuityBlockStatus === 'ready' || block.continuityBlockStatus === 'stale' ? 'regenerate' : 'derive',
       })
-      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       setSequenceAnimaticErrorByKey((previous) => ({
@@ -5321,7 +5577,7 @@ export function WorldGraphPage({
     } finally {
       setSequenceAnimaticBlockRunKey(null)
     }
-  }, [onDeriveSequenceAnimaticContinuityBlock, onLoadSequenceAnimaticState, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onDeriveSequenceAnimaticContinuityBlock, sequenceAnimaticBlockRunKey])
   const handleDeriveSequenceAnimaticContinuityStructure = useCallback(async (model: SequenceAnimaticViewModel) => {
     const runKey = `${model.request.id}:derive_continuity_structure`
     if (sequenceAnimaticBlockRunKey) return
@@ -5340,7 +5596,7 @@ export function WorldGraphPage({
               ? 'fill_gaps'
               : 'regenerate',
       })
-      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       setSequenceAnimaticErrorByKey((previous) => ({
@@ -5350,7 +5606,7 @@ export function WorldGraphPage({
     } finally {
       setSequenceAnimaticBlockRunKey(null)
     }
-  }, [onDeriveSequenceAnimaticContinuityStructure, onLoadSequenceAnimaticState, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onDeriveSequenceAnimaticContinuityStructure, sequenceAnimaticBlockRunKey])
   const handleRunSequenceAnimaticContinuityAssets = useCallback(async (
     model: SequenceAnimaticViewModel,
     requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
@@ -5365,7 +5621,7 @@ export function WorldGraphPage({
       const targets = (requestedTargets && requestedTargets.length > 0 ? [...requestedTargets] : model.continuityAssetTargets)
         .filter((target) => target.status === 'missing' || target.status === 'stale' || target.status === 'failed')
       if (targets.length === 0) {
-        await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+        await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
         return
       }
       for (const target of targets) {
@@ -5409,7 +5665,7 @@ export function WorldGraphPage({
           },
         })
       }
-      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       setSequenceAnimaticErrorByKey((previous) => ({
@@ -5419,7 +5675,7 @@ export function WorldGraphPage({
     } finally {
       setSequenceAnimaticBlockRunKey(null)
     }
-  }, [onEnsureSequenceAnimaticContinuityAssetWorkflow, onLoadSequenceAnimaticState, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityAssetWorkflow, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
   const openSequenceAnimaticOutputGraph = useCallback((
     model: SequenceAnimaticViewModel,
     requestId: string,
@@ -5550,7 +5806,7 @@ export function WorldGraphPage({
       void Promise.resolve(pollSequenceAnimaticOutputRequest(shotRequest.id)).catch((pollError) => {
         console.warn('[GraphCore] sequence animatic shot-video background poll failed.', pollError)
       })
-      void Promise.resolve(onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })).catch((stateError) => {
+      void Promise.resolve(loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })).catch((stateError) => {
         console.warn('[GraphCore] sequence animatic state refresh after shot-video start failed.', stateError)
       })
     } catch (error) {
@@ -5563,7 +5819,7 @@ export function WorldGraphPage({
     } finally {
       window.setTimeout(() => clearSequenceAnimaticShotVideoRunKey(runKey), 5000)
     }
-  }, [clearSequenceAnimaticShotVideoRunKey, ensureSequenceAnimaticShotVideoRequest, markSequenceAnimaticShotVideoRunKey, onGetOutputRequestStatus, onLoadSequenceAnimaticState, onStartOutputWorkflowRun, outputWorkflowRuns, pollSequenceAnimaticOutputRequest, sequenceAnimaticShotVideoRunKeyActive])
+  }, [clearSequenceAnimaticShotVideoRunKey, ensureSequenceAnimaticShotVideoRequest, loadAndStoreSequenceAnimaticState, markSequenceAnimaticShotVideoRunKey, onGetOutputRequestStatus, onStartOutputWorkflowRun, outputWorkflowRuns, pollSequenceAnimaticOutputRequest, sequenceAnimaticShotVideoRunKeyActive])
   const handleOpenSequenceAnimaticShotGraph = useCallback(async (
     model: SequenceAnimaticViewModel,
     block: SequenceAnimaticBlockView,
@@ -5674,7 +5930,7 @@ export function WorldGraphPage({
       })
       setSequenceAnimaticShotPrompt((current) => current ? { ...current, status: 'saving', error: null } : current)
       await pollSequenceAnimaticOutputRequest(revisionRequest.id)
-      await onLoadSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
       setSequenceAnimaticShotPromptDraftByKey((previous) => {
         if (!previous[runKey]) return previous
         const next = { ...previous }
@@ -5690,7 +5946,7 @@ export function WorldGraphPage({
     } finally {
       setSequenceAnimaticBlockRunKey(null)
     }
-  }, [onEnsureSequenceAnimaticBlockWorkflows, onEnsureSequenceAnimaticShotRevisionWorkflow, onLoadSequenceAnimaticState, onStartOutputWorkflowRun, outputWorkflowRuns, pollSequenceAnimaticOutputRequest, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticBlockWorkflows, onEnsureSequenceAnimaticShotRevisionWorkflow, onStartOutputWorkflowRun, outputWorkflowRuns, pollSequenceAnimaticOutputRequest, sequenceAnimaticBlockRunKey])
   const shouldRunLiveWikiHeaderRecovery = useMemo(() => {
     const worldWiki = readLooseRecord(projectDraftMetadata.worldWiki)
     const title = trimOptionalString(worldWiki.title)
@@ -5843,7 +6099,7 @@ export function WorldGraphPage({
         error: null,
       },
     }))
-    void Promise.resolve(onLoadSequenceAnimaticState({
+    void Promise.resolve(loadAndStoreSequenceAnimaticState({
       sequenceUnitKey: sequenceKey,
       knownRevision: currentLookup?.revision ?? null,
     })).then((result) => {
@@ -5876,7 +6132,7 @@ export function WorldGraphPage({
     }).finally(() => {
       sequenceAnimaticLookupInFlightRef.current.delete(sequenceKey)
     })
-  }, [activeWikiEntity, canRunOutputs, onLoadSequenceAnimaticState, outputRequests, sequenceAnimaticLookupByKey, viewMode, wikiSubView])
+  }, [activeWikiEntity, canRunOutputs, loadAndStoreSequenceAnimaticState, outputRequests, sequenceAnimaticLookupByKey, viewMode, wikiSubView])
   useEffect(() => {
     if (viewMode === 'wiki' && wikiSubView === 'wiki') return
     if (!activeWikiEntityPage && !readWikiEntityPageRoute()) return
@@ -10984,7 +11240,7 @@ export function WorldGraphPage({
                   <p>{sequenceAnimaticPreviewHydration.error || 'The linked output may have been deleted or is not available in this workspace.'}</p>
                   <button className="ghost-button compact" onClick={() => {
                     setSequenceAnimaticPreviewHydration({ status: 'checking', error: null })
-                    void Promise.resolve(onLoadSequenceAnimaticState({ masterRequestId: routeAnimaticRequestId, knownRevision: null }))
+                    void Promise.resolve(loadAndStoreSequenceAnimaticState({ masterRequestId: routeAnimaticRequestId, knownRevision: null }))
                       .then(() => setSequenceAnimaticPreviewHydration({ status: 'idle', error: null }))
                       .catch((error) => setSequenceAnimaticPreviewHydration({
                         status: 'failed',
@@ -11182,8 +11438,19 @@ export function WorldGraphPage({
                             : !shot.panelUrl
                               ? 'Generate the storyboard panel before revising this shot.'
                               : ''
+                          const shotElementKey = `${routeAnimaticModel.request.id}:${block.id}:${shot.id}`
+                          const timelineShotClassName = [
+                            'world-wiki-sequence-animatic-timeline-shot',
+                            shot.isRevised ? 'is-revised' : '',
+                            shot.isProvisional ? 'is-streaming' : '',
+                            sequenceAnimaticRecentlyStreamedShotIds[shotElementKey] ? 'is-streaming-new' : '',
+                          ].filter(Boolean).join(' ')
                           return (
-                          <article key={shot.id} className={shot.isRevised ? 'world-wiki-sequence-animatic-timeline-shot is-revised' : 'world-wiki-sequence-animatic-timeline-shot'}>
+                          <article
+                            key={shot.id}
+                            ref={(node) => { sequenceAnimaticShotElementRefs.current[shotElementKey] = node }}
+                            className={timelineShotClassName}
+                          >
                             <div className="world-wiki-sequence-animatic-time-rail">
                               <strong>{String(shot.index).padStart(3, '0')}</strong>
                               <span>{shot.timeLabel}</span>
@@ -11351,6 +11618,32 @@ export function WorldGraphPage({
                           </article>
                           )
                         })}
+                        {sequenceAnimaticNextPendingShot?.blockId === block.id ? (
+                          <article className="world-wiki-sequence-animatic-timeline-shot is-pending-shot" aria-live="polite">
+                            <div className="world-wiki-sequence-animatic-time-rail">
+                              <strong>{String(sequenceAnimaticNextPendingShot.index).padStart(3, '0')}</strong>
+                              <span>Planning</span>
+                              <small>Pending</small>
+                            </div>
+                            <div className="world-wiki-sequence-animatic-shot-body">
+                              <div className="world-wiki-sequence-animatic-shot-text">
+                                <div className="world-wiki-sequence-animatic-shot-title-row">
+                                  <h4>{sequenceAnimaticNextPendingShot.shotId.replace(/_/g, ' ')}</h4>
+                                  <span>Next</span>
+                                </div>
+                                <p>Building action, dialogue, references, and scene binding for the next streamed shot.</p>
+                              </div>
+                              <div className="world-wiki-sequence-animatic-panel-stack">
+                                <div className="world-wiki-sequence-animatic-frame is-empty">
+                                  <span>
+                                    <span className="world-mini-spinner" aria-hidden="true" />
+                                    Planning next shot
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </article>
+                        ) : null}
                       </div>
                     </section>
                   ))}
@@ -14247,6 +14540,15 @@ export function WorldGraphPage({
                 <button className="ghost-button compact" onClick={() => openSequenceAnimaticOutputGraph(sequenceAnimaticPreviewModel, sequenceAnimaticPreviewModel.request.id)} type="button">
                   Open graph
                 </button>
+                {sequenceAnimaticLatestStreamedShotKey ? (
+                  <button
+                    className={sequenceAnimaticFollowLatest ? 'ghost-button compact world-wiki-sequence-animatic-follow is-following' : 'ghost-button compact world-wiki-sequence-animatic-follow'}
+                    onClick={jumpToLatestSequenceAnimaticShot}
+                    type="button"
+                  >
+                    {sequenceAnimaticFollowLatest ? 'Following latest' : 'Jump to latest'}
+                  </button>
+                ) : null}
                 <button className="ghost-button compact" onClick={() => onOpenOutputStudio(sequenceAnimaticPreviewModel.request.id, 'timeline', null, {
                   kind: 'wiki_sequence_animatic',
                   masterRequestId: sequenceAnimaticPreviewModel.request.id,
@@ -14492,8 +14794,18 @@ export function WorldGraphPage({
                       {block.shots.map((shot) => {
                         const shotVideoRunKey = `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`
                         const shotVideoStarting = sequenceAnimaticShotVideoRunKeyActive(shotVideoRunKey)
+                        const shotElementKey = `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}`
+                        const shotClassName = [
+                          'world-wiki-sequence-animatic-shot',
+                          shot.isProvisional ? 'is-streaming' : '',
+                          sequenceAnimaticRecentlyStreamedShotIds[shotElementKey] ? 'is-streaming-new' : '',
+                        ].filter(Boolean).join(' ')
                         return (
-                        <article key={shot.id} className="world-wiki-sequence-animatic-shot">
+                        <article
+                          key={shot.id}
+                          ref={(node) => { sequenceAnimaticShotElementRefs.current[shotElementKey] = node }}
+                          className={shotClassName}
+                        >
                           <div className="world-wiki-sequence-animatic-shot-copy">
                             <div className="world-wiki-sequence-animatic-shot-kicker">
                               <span>Shot {String(shot.index).padStart(3, '0')}</span>
@@ -14664,6 +14976,27 @@ export function WorldGraphPage({
                           </div>
                         </article>
                       )})}
+                      {sequenceAnimaticNextPendingShot?.blockId === block.id ? (
+                        <article className="world-wiki-sequence-animatic-shot is-pending-shot" aria-live="polite">
+                          <div className="world-wiki-sequence-animatic-shot-copy">
+                            <div className="world-wiki-sequence-animatic-shot-kicker">
+                              <span>Shot {String(sequenceAnimaticNextPendingShot.index).padStart(3, '0')}</span>
+                              <span>Planning</span>
+                            </div>
+                            <h4>{sequenceAnimaticNextPendingShot.shotId.replace(/_/g, ' ')}</h4>
+                            <p>Building action, dialogue, references, and scene binding for the next shot.</p>
+                          </div>
+                          <div className="world-wiki-sequence-animatic-panel-stack">
+                            <div className="world-wiki-sequence-animatic-frame is-empty">
+                              <span>
+                                <span className="world-mini-spinner" aria-hidden="true" />
+                                Planning next shot
+                                <small>Waiting for the next streamed shot record.</small>
+                              </span>
+                            </div>
+                          </div>
+                        </article>
+                      ) : null}
                     </div>
                   </section>
                 ))}
@@ -14705,6 +15038,8 @@ export function WorldGraphPage({
         !activeWikiEntityPage?.animaticRequestId ? <div className="world-wiki-sequence-animatic-overlay" onClick={() => setSequenceAnimaticPreviewRequestId(null)}>
           <section
             className="world-wiki-sequence-animatic-viewer"
+            ref={(node) => { sequenceAnimaticViewerRef.current = node }}
+            onScroll={handleSequenceAnimaticViewerScroll}
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -14736,7 +15071,7 @@ export function WorldGraphPage({
                     className="ghost-button compact"
                     onClick={() => {
                       setSequenceAnimaticPreviewHydration({ status: 'checking', error: null })
-                      void Promise.resolve(onLoadSequenceAnimaticState({ masterRequestId: sequenceAnimaticPreviewRequestId, knownRevision: null }))
+                      void Promise.resolve(loadAndStoreSequenceAnimaticState({ masterRequestId: sequenceAnimaticPreviewRequestId, knownRevision: null }))
                         .then(() => setSequenceAnimaticPreviewHydration({ status: 'idle', error: null }))
                         .catch((error) => setSequenceAnimaticPreviewHydration({
                           status: 'failed',
