@@ -7473,6 +7473,12 @@ function compactSequenceAnimaticText(value: unknown, maxLength = 900) {
   return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text
 }
 
+function compactSchemaDiagnostics(error: z.ZodError) {
+  return error.issues
+    .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+    .slice(0, 6)
+}
+
 function sequenceAnimaticPersistentLightingCue(value: unknown) {
   const text = compactSequenceAnimaticText(value, 360)
   if (!text) return ''
