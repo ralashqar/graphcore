@@ -8495,42 +8495,63 @@ function applySequenceAnimaticShotContinuityStreamRecord(
 }
 
 function finalizeSequenceAnimaticShotContinuityStreamPlan(accumulator: SequenceAnimaticShotContinuityStreamAccumulator) {
-  if (!accumulator.planDone) {
-    throw new Error('Sequence animatic shot continuity stream ended before plan_done.')
-  }
-  const done = accumulator.planDone
   const unorderedShots = [...accumulator.shotsById.values()]
+  if (unorderedShots.length === 0) throw new Error('Sequence animatic shot continuity stream returned no shot records.')
+  const unorderedBlocks = [...accumulator.blocksById.values()]
+  const recoveryNotes: string[] = []
+  const sortedShotIds = unorderedShots
+    .slice()
+    .sort((left, right) => left.index - right.index || left.id.localeCompare(right.id))
+    .map((shot) => shot.id)
+  const sortedBlockIds = (unorderedBlocks.length > 0 ? unorderedBlocks : sequenceAnimaticSyntheticStreamBlocksFromShots(unorderedShots))
+    .slice()
+    .sort((left, right) => left.index - right.index || left.id.localeCompare(right.id))
+    .map((block) => block.id)
+  const done = accumulator.planDone ?? {
+    kind: 'plan_done' as const,
+    shotCount: unorderedShots.length,
+    blockCount: sortedBlockIds.length,
+    orderedShotIds: sortedShotIds,
+    orderedBlockIds: sortedBlockIds,
+    screenplaySummary: '',
+    notes: ['Recovered from accepted streamed shot records because plan_done was missing.'],
+  }
+  if (!accumulator.planDone) {
+    recoveryNotes.push('Recovered from accepted streamed shot records because plan_done was missing.')
+  }
   const orderedShotIds = done.orderedShotIds.filter((shotId) => accumulator.shotsById.has(shotId))
   const missingOrderedShotIds = done.orderedShotIds.filter((shotId) => !accumulator.shotsById.has(shotId))
   if (missingOrderedShotIds.length > 0) {
-    throw new Error(`Sequence animatic shot continuity stream referenced ${missingOrderedShotIds.length} shot(s) that were not accepted: ${missingOrderedShotIds.slice(0, 8).join(', ')}.`)
+    recoveryNotes.push(`Dropped ${missingOrderedShotIds.length} ordered shot reference(s) that were not accepted: ${missingOrderedShotIds.slice(0, 8).join(', ')}.`)
   }
   const shots = [
     ...orderedShotIds.map((shotId) => accumulator.shotsById.get(shotId)).filter((shot): shot is z.infer<typeof sequenceAnimaticShotContinuityShotV2Schema> => Boolean(shot)),
     ...unorderedShots.filter((shot) => !orderedShotIds.includes(shot.id)).sort((left, right) => left.index - right.index || left.id.localeCompare(right.id)),
   ]
-  const unorderedBlocks = [...accumulator.blocksById.values()]
   const orderedBlockIds = done.orderedBlockIds.filter((blockId) => accumulator.blocksById.has(blockId))
   const missingOrderedBlockIds = done.orderedBlockIds.filter((blockId) => !accumulator.blocksById.has(blockId))
   if (missingOrderedBlockIds.length > 0) {
-    throw new Error(`Sequence animatic shot continuity stream referenced ${missingOrderedBlockIds.length} block(s) that were not accepted: ${missingOrderedBlockIds.slice(0, 8).join(', ')}.`)
+    recoveryNotes.push(`Dropped ${missingOrderedBlockIds.length} ordered block reference(s) that were not accepted: ${missingOrderedBlockIds.slice(0, 8).join(', ')}.`)
   }
   const streamedBlocks = [
     ...orderedBlockIds.map((blockId) => accumulator.blocksById.get(blockId)).filter((block): block is z.infer<typeof sequenceAnimaticShotContinuityBlockV2Schema> => Boolean(block)),
     ...unorderedBlocks.filter((block) => !orderedBlockIds.includes(block.id)).sort((left, right) => left.index - right.index || left.id.localeCompare(right.id)),
   ]
-  const blocks = sequenceAnimaticStreamBlockIdsFromShotIds(
+  const acceptedShotIds = new Set(shots.map((shot) => shot.id))
+  const blocksWithAcceptedShots = sequenceAnimaticStreamBlockIdsFromShotIds(
     streamedBlocks.length > 0 ? streamedBlocks : sequenceAnimaticSyntheticStreamBlocksFromShots(shots),
     shots,
-  )
-  const acceptedShotIds = new Set(shots.map((shot) => shot.id))
-  const missingBlockShotIds = blocks
+  ).map((block) => ({
+    ...block,
+    shotIds: block.shotIds.filter((shotId) => acceptedShotIds.has(shotId)),
+  })).filter((block) => block.shotIds.length > 0)
+  const missingBlockShotIds = (streamedBlocks.length > 0 ? streamedBlocks : blocksWithAcceptedShots)
     .flatMap((block) => block.shotIds.map((shotId) => ({ blockId: block.id, shotId })))
     .filter((entry) => !acceptedShotIds.has(entry.shotId))
   if (missingBlockShotIds.length > 0) {
-    throw new Error(`Sequence animatic shot continuity stream block list references ${missingBlockShotIds.length} missing shot(s): ${missingBlockShotIds.slice(0, 8).map((entry) => `${entry.blockId}/${entry.shotId}`).join(', ')}.`)
+    recoveryNotes.push(`Dropped ${missingBlockShotIds.length} block shot reference(s) that were not accepted: ${missingBlockShotIds.slice(0, 8).map((entry) => `${entry.blockId}/${entry.shotId}`).join(', ')}.`)
   }
-  if (shots.length === 0) throw new Error('Sequence animatic shot continuity stream returned no shot records.')
+  const blocks = blocksWithAcceptedShots.length > 0 ? blocksWithAcceptedShots : sequenceAnimaticSyntheticStreamBlocksFromShots(shots)
   if (blocks.length === 0) throw new Error('Sequence animatic shot continuity stream returned no block records.')
   return sequenceAnimaticShotContinuityPlanV2Schema.parse({
     role: 'sequence_animatic_director_plan',
@@ -8551,7 +8572,7 @@ function finalizeSequenceAnimaticShotContinuityStreamPlan(accumulator: SequenceA
       edges: [...accumulator.edgesById.values()],
     },
     localReferences: [...accumulator.localReferencesById.values()],
-    notes: [...new Set(accumulator.notes.map(readText).filter(Boolean))],
+    notes: [...new Set([...accumulator.notes, ...done.notes, ...recoveryNotes].map(readText).filter(Boolean))],
   })
 }
 

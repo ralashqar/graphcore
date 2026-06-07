@@ -708,11 +708,11 @@ export function LandingPage({
     event.preventDefault()
 
     if (!waitlistForm.email.trim()) {
-      setWaitlistSubmitState({ status: 'error', message: 'Enter an email address to join the waitlist.' })
+      setWaitlistSubmitState({ status: 'error', message: 'Enter an email address to request early access.' })
       return
     }
 
-    setWaitlistSubmitState({ status: 'submitting', message: 'Joining waitlist...' })
+    setWaitlistSubmitState({ status: 'submitting', message: 'Requesting early access...' })
 
     try {
       const result = await submitWaitlistSignup(waitlistForm)
@@ -729,7 +729,7 @@ export function LandingPage({
     } catch (error) {
       setWaitlistSubmitState({
         status: 'error',
-        message: error instanceof Error ? error.message : 'Unable to join the waitlist right now.',
+        message: error instanceof Error ? error.message : 'Unable to request early access right now.',
       })
     }
   }
@@ -928,11 +928,13 @@ export function LandingPage({
           </div>
 
           <div className="landing-nav-actions">
-            <button className="landing-login-button" onClick={onEnterApp} type="button">
-              {landingOnly ? 'View examples' : isSignedIn ? 'Open app' : 'Log in'}
-            </button>
+            {!landingOnly ? (
+              <button className="landing-login-button" onClick={onEnterApp} type="button">
+                {isSignedIn ? 'Open app' : 'Log in'}
+              </button>
+            ) : null}
             <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
-              {landingOnly ? 'Join Waitlist' : isSignedIn ? 'Open Workspace' : 'Join Waitlist'}
+              {landingOnly ? 'Request early access' : isSignedIn ? 'Open Workspace' : 'Request early access'}
               <span aria-hidden="true">-&gt;</span>
             </button>
           </div>
@@ -942,7 +944,7 @@ export function LandingPage({
       <section className="landing-hero-section landing-studio-hero" id="product">
         <div className="landing-hero-copy">
           <div className="landing-kicker-row">
-            <span className="landing-chip">Persistent creative operating system</span>
+            <span className="landing-chip">For filmmakers, storytellers and worldbuilders</span>
           </div>
           <h1>
             Create a world.
@@ -951,17 +953,15 @@ export function LandingPage({
           </h1>
           <p className="landing-hero-summary">
             <span className="landing-copy-desktop">
-              Create a living world once. SynArc keeps its canon, characters, locations, timelines and visual memory active
-              underneath every workflow, so every scene, comic, animatic and cinematic stays consistent from the first
-              prompt to the final output.
+              Build and evolve a living world with prompts, then generate cinematics, comics, scenes and more from the same canon, with continuity already handled.
             </span>
             <span className="landing-copy-mobile">
-              SynArc keeps canon, characters, references and timelines active under every output.
+              Generate every output from one living world's canon, with continuity already handled.
             </span>
           </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
-              {landingOnly ? 'Request Early Access' : isSignedIn ? 'Open Workspace' : 'Request Early Access'}
+              {landingOnly ? 'Request early access' : isSignedIn ? 'Open Workspace' : 'Request early access'}
               <span aria-hidden="true">-&gt;</span>
             </button>
             <button className="landing-secondary-button" onClick={handleLandingLearnMore} type="button">
@@ -1211,7 +1211,7 @@ export function LandingPage({
           </p>
           <div className="landing-hero-actions">
             <button className="landing-cta-button" onClick={(event) => handleLandingPrimaryAction(event.currentTarget)} type="button">
-              {landingOnly ? 'Request Early Access' : isSignedIn ? 'Open Workspace' : 'Request Early Access'}
+              {landingOnly ? 'Request early access' : isSignedIn ? 'Open Workspace' : 'Request early access'}
               <span aria-hidden="true">-&gt;</span>
             </button>
           </div>
@@ -1235,10 +1235,9 @@ export function LandingPage({
             >
               x
             </button>
-            <span className="landing-chip">Early access</span>
-            <h2 id="landing-waitlist-title">Join the SynArc waitlist.</h2>
+            <h2 id="landing-waitlist-title">Request early access</h2>
             <p>
-              Tell us where SynArc fits into your creative workflow. We use this only to prioritize early access.
+              Tell us where SynArc fits into your creative workflow.
             </p>
             <form className="landing-waitlist-form" onSubmit={handleWaitlistSubmit}>
               <input
@@ -1284,19 +1283,10 @@ export function LandingPage({
                 <span>Use case</span>
                 <textarea
                   ref={waitlistUseCaseRef}
-                  rows={3}
-                  placeholder="What would you want SynArc to help you create?"
+                  rows={2}
+                  placeholder="What would you want to create?"
                   value={waitlistForm.useCase}
                   onChange={(event) => handleWaitlistFormChange('useCase', event.target.value)}
-                />
-              </label>
-              <label>
-                <span>How did you hear about us?</span>
-                <input
-                  type="text"
-                  placeholder="Optional"
-                  value={waitlistForm.referralSource}
-                  onChange={(event) => handleWaitlistFormChange('referralSource', event.target.value)}
                 />
               </label>
               {waitlistSubmitState.message ? (
@@ -1317,7 +1307,7 @@ export function LandingPage({
                   || (waitlistTurnstileEnabled && !waitlistForm.turnstileToken)
                 }
               >
-                {waitlistSubmitState.status === 'submitting' ? 'Joining...' : 'Join Waitlist'}
+                {waitlistSubmitState.status === 'submitting' ? 'Requesting...' : 'Request early access'}
                 <span aria-hidden="true">-&gt;</span>
               </button>
             </form>
