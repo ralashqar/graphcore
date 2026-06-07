@@ -2812,6 +2812,11 @@
   line-height: 1.46;
 }
 
+.landing-problem-strip-heading .landing-problem-continuity-note {
+  max-width: 700px;
+  color: rgba(225, 235, 248, 0.84);
+}
+
 .landing-problem-strip-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

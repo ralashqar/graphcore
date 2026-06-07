@@ -36,4 +36,5 @@ run('npx', ['vite', 'build'])
 
 if (profile === 'landing') {
   run('node', ['scripts/prune-landing-dist.cjs'])
+  run('node', ['scripts/write-landing-seo-assets.cjs'])
 }

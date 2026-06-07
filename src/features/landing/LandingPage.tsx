@@ -993,7 +993,7 @@ export function LandingPage({
             <i />
             <span>Output generated</span>
           </div>
-          <aside className="landing-hero-output-preview" aria-label="Example generated output placeholder">
+          <aside className="landing-hero-output-preview" aria-label="Example SynArc-generated cinematic and comic output">
             <div className="landing-output-preview-frame">
               {isComicOutputActive && activeOutputComic ? (
                 <div className="landing-output-comic-preview" aria-label="Comic PDF page preview">
@@ -1063,6 +1063,10 @@ export function LandingPage({
           <span className="landing-chip">What breaks elsewhere</span>
           <h2>Existing AI tools generate from isolated prompts. SynArc generates from a living world.</h2>
           <p>These are the production failures SynArc is built to remove.</p>
+          <p className="landing-problem-continuity-note">
+            SynArc gives AI filmmakers and storytellers a continuity layer where canon, character memory, locations and
+            visual references evolve once, then carry into every cinematic, comic, animatic and scene.
+          </p>
         </div>
         <div className="landing-problem-strip-list">
           {marketPainPoints.map((point) => (

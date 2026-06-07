@@ -120,6 +120,7 @@ VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=sb_publishable_5EkU5knI16oAgqxPMYPxnw_Sb8Q
 #### Landing-Only Profile
 ```bash
 VITE_APP_PROFILE=landing
+VITE_PUBLIC_SITE_URL=https://synarc.ai
 VITE_WAITLIST_SUPABASE_URL=https://znwdatidqdkzidempvkt.supabase.co
 VITE_WAITLIST_SUPABASE_PUBLISHABLE_KEY=sb_publishable_5EkU5knI16oAgqxPMYPxnw_Sb8QOgdS
 VITE_WAITLIST_FUNCTION_NAME=join-waitlist
@@ -130,6 +131,8 @@ Use `npm run dev:landing` or `npm run build:landing` to render the public landin
 page without importing the full GraphCore app, auth boot, workspace loading, output
 polling, or project routes. Use `npm run dev:full`, `npm run build:full`, or the
 default `npm run dev` / `npm run build` for the complete app.
+Set `VITE_PUBLIC_SITE_URL` to the deployed landing origin so canonical URLs,
+social share metadata, `robots.txt`, and `sitemap.xml` point at production.
 
 The landing waitlist path is intentionally separate from the regular GraphCore
 repository/client. It calls only `VITE_WAITLIST_SUPABASE_URL/functions/v1/join-waitlist`

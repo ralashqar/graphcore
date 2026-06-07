@@ -46,8 +46,9 @@ for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
 }
 
 if (fs.existsSync(brandDir)) {
+  const allowedBrandFiles = new Set(['synarc-logo.png', 'synarc-og.png'])
   for (const entry of fs.readdirSync(brandDir, { withFileTypes: true })) {
-    if (entry.name !== 'synarc-logo.png') {
+    if (!allowedBrandFiles.has(entry.name)) {
       removePath(path.join(brandDir, entry.name))
     }
   }
