@@ -2210,16 +2210,27 @@ function summarizeOutputStatus(value: string) {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+function sequenceAnimaticRelevantWorkflowSteps(run: OutputWorkflowRun | null | undefined) {
+  const steps = (run?.steps ?? []).slice().sort((left, right) => {
+    const leftOrder = Number(left.orderIndex ?? 0) || 0
+    const rightOrder = Number(right.orderIndex ?? 0) || 0
+    return leftOrder - rightOrder || left.updatedAt.localeCompare(right.updatedAt)
+  })
+  const runningSteps = steps.filter((step) => step.status === 'running')
+  if (runningSteps.length > 0) return runningSteps
+  const runFailed = run?.status === 'failed' || run?.status === 'cancelled'
+  if (runFailed) return steps.filter((step) => step.status === 'failed')
+  const firstQueued = steps.find((step) => step.status === 'queued') ?? null
+  if (!firstQueued) return []
+  const queuedOrder = Number(firstQueued.orderIndex ?? 0) || 0
+  return steps.filter((step) => step.status === 'queued' && (Number(step.orderIndex ?? 0) || 0) === queuedOrder)
+}
+
 function sequenceAnimaticWorkflowStepChips(input: {
   run: OutputWorkflowRun | null | undefined
   fallbackLabels?: readonly string[]
 }) {
-  const steps = input.run?.steps ?? []
-  const selectedSteps = [
-    ...steps.filter((step) => step.status === 'running'),
-    ...steps.filter((step) => step.status === 'failed'),
-    ...steps.filter((step) => step.status === 'queued'),
-  ]
+  const selectedSteps = sequenceAnimaticRelevantWorkflowSteps(input.run)
   const seen = new Set<string>()
   const chips = selectedSteps.flatMap((step) => {
     const label = trimOptionalString(step.label) || trimOptionalString(step.nodeKey) || summarizeOutputStatus(step.status)
@@ -2234,6 +2245,7 @@ function sequenceAnimaticWorkflowStepChips(input: {
   }).slice(0, 4)
   if (chips.length > 0) return chips
   return (input.fallbackLabels ?? []).flatMap((label, index) => {
+    if (index > 0) return []
     const cleanLabel = trimOptionalString(label)
     return cleanLabel ? [{
       key: `fallback:${index}:${cleanLabel}`,
@@ -2241,6 +2253,49 @@ function sequenceAnimaticWorkflowStepChips(input: {
       status: 'running',
     }] : []
   }).slice(0, 4)
+}
+
+const SEQUENCE_ANIMATIC_THINKING_PHRASES = [
+  'Authoring screenplay',
+  'Finding the scene spine',
+  'Planning shots',
+  'Binding continuity',
+] as const
+
+function sequenceAnimaticHasAnyShots(model: Pick<SequenceAnimaticViewModel, 'blocks'>) {
+  return model.blocks.some((block) => block.shots.length > 0)
+}
+
+function sequenceAnimaticShouldShowThinking(model: Pick<SequenceAnimaticViewModel, 'request' | 'blocks' | 'currentStepLabel'>) {
+  if (sequenceAnimaticHasAnyShots(model)) return false
+  if (FAILED_SEQUENCE_ANIMATIC_STATUSES.has(sequenceAnimaticEffectiveStatus(model.request))) return false
+  return Boolean(model.currentStepLabel)
+    || model.request.status === 'queued'
+    || model.request.status === 'planning'
+    || model.request.status === 'running'
+}
+
+function SequenceAnimaticThinkingState() {
+  const [phraseIndex, setPhraseIndex] = useState(0)
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setPhraseIndex((current) => (current + 1) % SEQUENCE_ANIMATIC_THINKING_PHRASES.length)
+    }, 1600)
+    return () => window.clearInterval(intervalId)
+  }, [])
+  return (
+    <section className="world-wiki-sequence-animatic-thinking" role="status" aria-live="polite">
+      <div className="world-wiki-sequence-animatic-thinking-brain-stage" aria-hidden="true">
+        <img className="world-wiki-sequence-animatic-thinking-brain" src="/landing/hero-world-core-v4.png" alt="" />
+      </div>
+      <div>
+        <span className="eyebrow">Animatic generation</span>
+        <strong>Thinking</strong>
+        <small key={SEQUENCE_ANIMATIC_THINKING_PHRASES[phraseIndex]}>{SEQUENCE_ANIMATIC_THINKING_PHRASES[phraseIndex]}</small>
+      </div>
+      <span className="world-wiki-sequence-animatic-thinking-spinner" aria-hidden="true" />
+    </section>
+  )
 }
 
 function requestUpdatedAtMs(request: OutputRequest) {
@@ -3875,8 +3930,7 @@ function buildSequenceAnimaticViewModel(input: {
     || (isActive && masterProjectionActiveNodeKey === 'sequence_animatic_director_plan')
   const activeMasterStep = directorPlanRunning && directorPlanStep
     ? directorPlanStep
-    : input.run?.steps.find((step) => step.status === 'running')
-    ?? input.run?.steps.find((step) => step.status === 'queued')
+    : sequenceAnimaticRelevantWorkflowSteps(input.run)[0]
     ?? null
   const activeMasterStepLabel = activeMasterStep
     ? sequenceAnimaticFriendlyProgressLabel(trimOptionalString(activeMasterStep.label) || trimOptionalString(activeMasterStep.nodeKey), activeMasterStep.nodeKey)
@@ -12212,19 +12266,13 @@ export function WorldGraphPage({
               ) : null}
               {routeAnimaticModel ? (
                 <div className="world-wiki-sequence-animatic-timeline">
-                  <section className="world-wiki-sequence-animatic-continuity-strip" aria-label="Continuity refs">
-                    <strong>Continuity</strong>
-                    <div className="world-wiki-sequence-animatic-continuity-summary-button" aria-label="Continuity asset summary">
-                      <span><EntityIcon id="environment" />{routeAnimaticModel.continuityGraphView.sceneNodeCount} scene nodes</span>
-                      <span><EntityIcon id="character" />{routeAnimaticModel.continuityGraphView.tempRefCount} temp refs</span>
-                      <span><EntityIcon id="asset" />{routeAnimaticModel.continuityGraphView.readyAssetCount} ready / {routeAnimaticModel.continuityGraphView.missingAssetCount} missing</span>
-                    </div>
-                    <button className="ghost-button compact is-continuity-graph-action" onClick={() => setSequenceAnimaticContinuityGraphRequestId(routeAnimaticModel.request.id)} type="button">
-                      <EntityIcon id="graph" />
-                      Continuity Graph
-                    </button>
-                    {routeAnimaticModel.continuityFailed ? <em>{routeAnimaticModel.continuityError || 'Continuity failed'}</em> : null}
-                  </section>
+                  {sequenceAnimaticShouldShowThinking(routeAnimaticModel) ? <SequenceAnimaticThinkingState /> : null}
+                  {!sequenceAnimaticShouldShowThinking(routeAnimaticModel) && routeAnimaticModel.blocks.length === 0 ? (
+                    <section className="world-wiki-sequence-animatic-empty">
+                      <strong>No storyboard blocks yet.</strong>
+                      <p>Shot blocks will appear here once the animatic planner saves them.</p>
+                    </section>
+                  ) : null}
                   {routeAnimaticModel.blocks.map((block) => (
                     <section
                       key={block.id}
@@ -15409,27 +15457,6 @@ export function WorldGraphPage({
                 <strong>{sequenceAnimaticPreviewModel.currentStepLabel}</strong>
               </div>
             ) : null}
-            <div className={`world-wiki-sequence-animatic-live ${sequenceAnimaticPreviewModel.directorPlanReady ? 'is-ready' : 'is-pending'}`}>
-              {sequenceAnimaticPreviewModel.directorPlanReady ? <EntityIcon id="cinematic" /> : <span className="world-mini-spinner" aria-hidden="true" />}
-              <strong>{sequenceAnimaticPreviewModel.directorPlanStatusLabel}</strong>
-            </div>
-            <div className={`world-wiki-sequence-animatic-live ${sequenceAnimaticPreviewModel.blocks.length > 0 ? 'is-ready' : 'is-pending'}`}>
-              {sequenceAnimaticPreviewModel.blocks.length > 0 ? <EntityIcon id="cinematic" /> : <span className="world-mini-spinner" aria-hidden="true" />}
-              <strong>{sequenceAnimaticPreviewModel.orchestrationStatusLabel}</strong>
-            </div>
-            <section className="world-wiki-sequence-animatic-continuity-strip" aria-label="Continuity refs">
-              <strong>Continuity</strong>
-              <div className="world-wiki-sequence-animatic-continuity-summary-button" aria-label="Continuity asset summary">
-                <span><EntityIcon id="environment" />{sequenceAnimaticPreviewModel.continuityGraphView.sceneNodeCount} scene nodes</span>
-                <span><EntityIcon id="character" />{sequenceAnimaticPreviewModel.continuityGraphView.tempRefCount} temp refs</span>
-                <span><EntityIcon id="asset" />{sequenceAnimaticPreviewModel.continuityGraphView.readyAssetCount} ready / {sequenceAnimaticPreviewModel.continuityGraphView.missingAssetCount} missing</span>
-              </div>
-              <button className="ghost-button compact is-continuity-graph-action" onClick={() => setSequenceAnimaticContinuityGraphRequestId(sequenceAnimaticPreviewModel.request.id)} type="button">
-                <EntityIcon id="graph" />
-                Continuity Graph
-              </button>
-              {sequenceAnimaticPreviewModel.continuityFailed ? <em>{sequenceAnimaticPreviewModel.continuityError || 'Continuity failed'}</em> : null}
-            </section>
             {sequenceAnimaticPreviewModel.blocks.length > 0 ? (
               <div className="world-wiki-sequence-animatic-document">
                 {sequenceAnimaticPreviewModel.blocks.map((block) => (
@@ -15707,26 +15734,15 @@ export function WorldGraphPage({
                     </div>
                   </section>
                 ))}
-                {sequenceAnimaticPreviewModel.continuityLocationSets.length + sequenceAnimaticPreviewModel.continuityLocationAngles.length + sequenceAnimaticPreviewModel.continuityAnchors.characters.length + sequenceAnimaticPreviewModel.continuityAnchors.props.length + sequenceAnimaticPreviewModel.continuityAnchors.locationSpots.length > 0 ? (
-                  <section className="world-wiki-sequence-animatic-new-refs">
-                    <div>
-                      <span className="eyebrow">New animatic refs</span>
-                      <h3>Scene graph and local references</h3>
-                    </div>
-                    <div className="world-wiki-sequence-animatic-continuity-summary-button" aria-label="Continuity asset summary">
-                      <span><EntityIcon id="environment" />{sequenceAnimaticPreviewModel.continuityGraphView.sceneNodeCount} scene nodes</span>
-                      <span><EntityIcon id="character" />{sequenceAnimaticPreviewModel.continuityGraphView.tempRefCount} temp refs</span>
-                      <span><EntityIcon id="asset" />{sequenceAnimaticPreviewModel.continuityGraphView.readyAssetCount} ready / {sequenceAnimaticPreviewModel.continuityGraphView.missingAssetCount} missing</span>
-                    </div>
-                  </section>
-                ) : null}
               </div>
             ) : (
-              <div className="world-wiki-sequence-animatic-empty">
-                <strong>Screenplay generation has started.</strong>
-                <p>Shot blocks and storyboard panels will appear here as the output graph saves them.</p>
-                {sequenceAnimaticPreviewModel.screenplayMarkdown ? <pre>{sequenceAnimaticPreviewModel.screenplayMarkdown}</pre> : null}
-              </div>
+              sequenceAnimaticShouldShowThinking(sequenceAnimaticPreviewModel) ? <SequenceAnimaticThinkingState /> : (
+                <div className="world-wiki-sequence-animatic-empty">
+                  <strong>Screenplay generation has started.</strong>
+                  <p>Shot blocks and storyboard panels will appear here as the output graph saves them.</p>
+                  {sequenceAnimaticPreviewModel.screenplayMarkdown ? <pre>{sequenceAnimaticPreviewModel.screenplayMarkdown}</pre> : null}
+                </div>
+              )
             )}
           </section>
         </div>

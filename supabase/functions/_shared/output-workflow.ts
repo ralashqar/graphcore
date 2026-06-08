@@ -112,6 +112,7 @@ const DEFAULT_MUAPI_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoMuapi
 const DEFAULT_FAL_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoFalModel
 const DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL = aiGenerationSettings.outputWorkflow.videoFalHighResolutionModel
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
+const DEFAULT_SCREENPLAY_AUTHOR_TIMEOUT_MS = 900_000
 const DEFAULT_CONTINUITY_PLANNER_TIMEOUT_MS = 240_000
 const DEFAULT_CONTINUITY_BLOCK_PLANNER_TIMEOUT_MS = 90_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
@@ -2072,6 +2073,17 @@ function outputWorkflowChapterTimeoutMs() {
   return Number.isFinite(parsed) && parsed > 0
     ? Math.max(60_000, Math.floor(parsed))
     : DEFAULT_CHAPTER_PROSE_TIMEOUT_MS
+}
+
+function outputWorkflowScreenplayAuthorTimeoutMs() {
+  const raw = Deno.env.get('OUTPUT_WORKFLOW_SCREENPLAY_AUTHOR_TIMEOUT_MS')
+  const parsed = raw ? Number(raw) : NaN
+  if (Number.isFinite(parsed) && parsed > 0) return Math.max(60_000, Math.floor(parsed))
+  const chapterRaw = Deno.env.get('OUTPUT_WORKFLOW_CHAPTER_TIMEOUT_MS')
+  const chapterParsed = chapterRaw ? Number(chapterRaw) : NaN
+  return Number.isFinite(chapterParsed) && chapterParsed > 0
+    ? Math.max(60_000, Math.floor(chapterParsed))
+    : DEFAULT_SCREENPLAY_AUTHOR_TIMEOUT_MS
 }
 
 function outputWorkflowContinuityPlannerTimeoutMs() {
@@ -6307,6 +6319,8 @@ const sequenceAnimaticShotContinuityPreferredDurationSeconds = 6
 const sequenceAnimaticShotContinuityMaxDialogueLines = 2
 const sequenceAnimaticShotContinuityMaxDialogueCharacters = 220
 const sequenceAnimaticShotContinuityMaxShotCount = 150
+const sequenceAnimaticShotContinuityMaxTotalDurationSeconds =
+  sequenceAnimaticShotContinuityMaxShotCount * sequenceAnimaticShotContinuityMaxDurationSeconds
 
 const sequenceAnimaticShotContinuityPerformanceBeatV2Schema = z.object({
   characterRefId: z.string().min(1),
@@ -6396,6 +6410,26 @@ const sequenceAnimaticShotContinuityShotV2Schema = z.object({
       })
     }
   }
+})
+
+const sequenceAnimaticShotPlanSchema = z.object({
+  sceneId: z.string().default('sequence_animatic_master'),
+  totalEditorialDurationSeconds: z.number().positive().max(sequenceAnimaticShotContinuityMaxTotalDurationSeconds),
+  shots: z.array(cinematicV2ShotSchema).min(1).max(sequenceAnimaticShotContinuityMaxShotCount),
+  performanceArc: z.array(z.object({
+    characterRefId: z.string(),
+    startState: z.string().default(''),
+    endState: z.string().default(''),
+    arc: z.string().default(''),
+  })).default([]),
+  audioPlan: z.object({
+    ambience: z.string().default(''),
+    music: z.string().default(''),
+    sfx: z.array(z.string()).default([]),
+    dialogueTrackCount: z.number().int().nonnegative().default(0),
+    placeholderOnly: z.boolean().default(true),
+  }).default({ ambience: '', music: '', sfx: [], dialogueTrackCount: 0, placeholderOnly: true }),
+  diagnostics: z.array(z.string()).default([]),
 })
 
 const sequenceAnimaticShotContinuityBlockV2Schema = z.object({
@@ -13955,7 +13989,7 @@ async function runCinematicV2ScreenplayAuthor(input: {
       graphcore_task: 'output_workflow_cinematic_v2_screenplay_author_markdown',
       graphcore_node_key: input.nodeKey,
     },
-    timeoutMs: 120_000,
+    timeoutMs: outputWorkflowScreenplayAuthorTimeoutMs(),
   })
   if (!response.response.ok) {
     const fallbackReason = `Provider request failed: ${response.response.status ?? 'unknown'} ${response.response.statusText ?? ''}`.trim()
@@ -22082,10 +22116,10 @@ async function executeNode(input: {
           const rawShotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
           const directorShots = readArray(directorPlan.shots).map(asRecord)
           if (directorShots.length === 0) throw new Error('Sequence animatic manifest requires shot-continuity-owned shots.')
-          const parsedShotPlan = cinematicV2ShotPlanSchema.safeParse(rawShotPlan)
+          const parsedShotPlan = sequenceAnimaticShotPlanSchema.safeParse(rawShotPlan)
           const shotPlan = parsedShotPlan.success
             ? parsedShotPlan.data
-            : cinematicV2ShotPlanSchema.parse({
+            : sequenceAnimaticShotPlanSchema.parse({
               sceneId: 'sequence_animatic_master',
               totalEditorialDurationSeconds: directorShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds) || 0), 0),
               shots: directorShots,

@@ -3708,6 +3708,76 @@
   font-weight: 850;
 }
 
+.world-wiki-sequence-animatic-thinking {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 22px;
+  min-height: 260px;
+  margin: 0 22px 22px;
+  padding: 30px clamp(20px, 4vw, 44px);
+  border: 1px solid rgba(125, 211, 252, 0.16);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 14% 50%, rgba(45, 212, 191, 0.14), transparent 34%),
+    linear-gradient(135deg, rgba(14, 165, 233, 0.1), rgba(126, 58, 242, 0.08)),
+    rgba(2, 6, 23, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 22px 60px rgba(0, 0, 0, 0.22);
+}
+
+.world-wiki-sequence-animatic-thinking-brain-stage {
+  position: relative;
+  width: 118px;
+  height: 118px;
+  display: grid;
+  place-items: center;
+}
+
+.world-wiki-sequence-animatic-thinking-brain-stage::before {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.2);
+  filter: blur(20px);
+  animation: worldWikiBrainGlow 1.5s ease-in-out infinite;
+}
+
+.world-wiki-sequence-animatic-thinking-brain {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  object-fit: contain;
+  opacity: 0.9;
+  animation: worldWikiBrainThink 1.28s ease-in-out infinite;
+}
+
+.world-wiki-sequence-animatic-thinking strong {
+  display: block;
+  margin: 4px 0 2px;
+  color: rgba(248, 250, 252, 0.98);
+  font-size: clamp(2.6rem, 6vw, 5rem);
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+
+.world-wiki-sequence-animatic-thinking small {
+  display: block;
+  color: rgba(186, 230, 253, 0.86);
+  font-size: 0.96rem;
+  line-height: 1.35;
+  animation: worldWikiStatusStripIn 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.world-wiki-sequence-animatic-thinking-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid rgba(148, 163, 184, 0.22);
+  border-top-color: rgba(125, 211, 252, 0.96);
+  animation: worldWikiSpin 860ms linear infinite;
+}
+
 .world-wiki-sequence-animatic-document {
   min-height: 0;
   overflow: auto;
@@ -4474,6 +4544,11 @@
   .world-wiki-continuity-graph-inspector {
     min-height: 260px;
   }
+
+  .world-wiki-sequence-animatic-thinking {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
 }
 
 @media (max-width: 640px) {
@@ -4522,6 +4597,22 @@
   .world-wiki-sequence-set-inspector-content dl div {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .world-wiki-sequence-animatic-thinking {
+    margin-inline: 12px;
+    min-height: 220px;
+    padding: 22px;
+  }
+
+  .world-wiki-sequence-animatic-thinking-brain-stage {
+    width: 86px;
+    height: 86px;
+  }
+
+  .world-wiki-sequence-animatic-thinking-brain {
+    width: 78px;
+    height: 78px;
+  }
 }
 
 @keyframes worldWikiNavSpin {
@@ -4533,6 +4624,9 @@
 @media (prefers-reduced-motion: reduce) {
   .world-wiki-create-entry.is-generating .world-wiki-create-icon svg,
   .world-wiki-create-entry.is-generating .world-wiki-create-icon .entity-icon-image,
+  .world-wiki-sequence-animatic-thinking-brain,
+  .world-wiki-sequence-animatic-thinking-brain-stage::before,
+  .world-wiki-sequence-animatic-thinking-spinner,
   .world-wiki-nav-spinner,
   .world-wiki-entity-page,
   .world-wiki-entity-subnav,

@@ -1176,6 +1176,9 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   assert.match(workerSource, /maxOutputTokens: 64000/)
   assert.match(workerSource, /sequenceAnimaticShotContinuityMaxDurationSeconds = 10/)
   assert.match(workerSource, /sequenceAnimaticShotContinuityMaxShotCount = 150/)
+  assert.match(workerSource, /sequenceAnimaticShotContinuityMaxTotalDurationSeconds/)
+  assert.match(workerSource, /const parsedShotPlan = sequenceAnimaticShotPlanSchema\.safeParse\(rawShotPlan\)/)
+  assert.match(workerSource, /: sequenceAnimaticShotPlanSchema\.parse\(\{/)
   assert.match(workerSource, /sequenceAnimaticShotContinuityMaxDialogueLines = 2/)
   assert.match(workerSource, /sequenceAnimaticShotContinuityMaxDialogueCharacters = 220/)
   assert.match(workerSource, /Use as many shots as the screenplay needs, up to/)
@@ -1269,6 +1272,21 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
     refs: { visibleCharacterRefIds: ['rin_uzuki'] },
     sceneBinding: { setId: 'set_glass_reed_flats' },
   }).sourceScriptShotIds, [])
+})
+
+test('screenplay author uses a dedicated long timeout helper', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(workerSource, /DEFAULT_SCREENPLAY_AUTHOR_TIMEOUT_MS = 900_000/)
+  assert.match(workerSource, /OUTPUT_WORKFLOW_SCREENPLAY_AUTHOR_TIMEOUT_MS/)
+  assert.match(workerSource, /OUTPUT_WORKFLOW_CHAPTER_TIMEOUT_MS/)
+  assert.match(workerSource, /function outputWorkflowScreenplayAuthorTimeoutMs\(\)/)
+
+  const screenplayAuthorSource = workerSource.slice(
+    workerSource.indexOf('async function runCinematicV2ScreenplayAuthor'),
+    workerSource.indexOf('function buildFallbackCinematicV2ParsedScript'),
+  )
+  assert.match(screenplayAuthorSource, /timeoutMs: outputWorkflowScreenplayAuthorTimeoutMs\(\)/)
+  assert.doesNotMatch(screenplayAuthorSource, /timeoutMs: 120_000/)
 })
 
 test('sequence animatic continuity sidecar has typed role, pack schema, and graph contracts', () => {
