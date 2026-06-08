@@ -9,6 +9,8 @@ const IP_LIMIT_WINDOW_MINUTES = 10
 const IP_LIMIT_MAX_SUBMISSIONS = 5
 const EMAIL_LIMIT_WINDOW_MINUTES = 60
 const EMAIL_LIMIT_MAX_SUBMISSIONS = 3
+const RESEND_EMAIL_ENDPOINT = 'https://api.resend.com/emails'
+const WAITLIST_CONFIRMATION_SUBJECT = "You're on the SynArc early access list"
 
 const waitlistRequestSchema = z.object({
   email: z.string().trim().email().max(320),
@@ -100,6 +102,91 @@ function optionalString(value: string | null | undefined) {
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
+}
+
+function envFlagEnabled(name: string) {
+  const value = Deno.env.get(name)?.trim().toLowerCase()
+  return value === 'true' || value === '1' || value === 'yes'
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function waitlistConfirmationText() {
+  return [
+    'Thanks for requesting early access to SynArc.',
+    '',
+    'SynArc helps filmmakers, storytellers and worldbuilders build a living world with prompts, then generate cinematics, comics, scenes and more from the same canon, with continuity already handled.',
+    '',
+    "We'll review early access requests and follow up when we're ready to bring you in.",
+    '',
+    '- SynArc',
+  ].join('\n')
+}
+
+function waitlistConfirmationHtml(input: { name?: string | null }) {
+  const greetingName = optionalString(input.name)
+  const greeting = greetingName
+    ? `Thanks for requesting early access to SynArc, ${escapeHtml(greetingName)}.`
+    : 'Thanks for requesting early access to SynArc.'
+
+  return [
+    '<!doctype html>',
+    '<html>',
+    '<body style="margin:0;background:#050c18;color:#f8fbff;font-family:Inter,Arial,sans-serif;">',
+    '<main style="max-width:640px;margin:0 auto;padding:36px 24px;">',
+    '<p style="margin:0 0 18px;color:#7ee7ff;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">SynArc early access</p>',
+    '<h1 style="margin:0 0 18px;font-size:28px;line-height:1.12;">You are on the SynArc early access list.</h1>',
+    `<p style="margin:0 0 18px;color:#d7e5f8;font-size:16px;line-height:1.55;">${greeting}</p>`,
+    '<p style="margin:0 0 18px;color:#d7e5f8;font-size:16px;line-height:1.55;">SynArc helps filmmakers, storytellers and worldbuilders build a living world with prompts, then generate cinematics, comics, scenes and more from the same canon, with continuity already handled.</p>',
+    '<p style="margin:0;color:#d7e5f8;font-size:16px;line-height:1.55;">We will review early access requests and follow up when we are ready to bring you in.</p>',
+    '<p style="margin:28px 0 0;color:#97aedc;font-size:14px;">- SynArc</p>',
+    '</main>',
+    '</body>',
+    '</html>',
+  ].join('')
+}
+
+async function sendWaitlistConfirmationEmail(input: {
+  email: string
+  name?: string | null
+}) {
+  if (!envFlagEnabled('WAITLIST_CONFIRMATION_ENABLED')) return
+
+  const apiKey = Deno.env.get('RESEND_API_KEY')?.trim()
+  const from = Deno.env.get('WAITLIST_CONFIRMATION_FROM')?.trim()
+  const replyTo = Deno.env.get('WAITLIST_REPLY_TO')?.trim()
+  if (!apiKey || !from) {
+    console.warn('[join-waitlist] waitlist confirmation email skipped because Resend is not configured')
+    return
+  }
+
+  const response = await fetch(RESEND_EMAIL_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: input.email,
+      ...(replyTo ? { reply_to: replyTo } : {}),
+      subject: WAITLIST_CONFIRMATION_SUBJECT,
+      text: waitlistConfirmationText(),
+      html: waitlistConfirmationHtml({ name: input.name }),
+    }),
+  })
+
+  if (!response.ok) {
+    const diagnostic = await response.text().catch(() => '')
+    throw new Error(`Resend returned ${response.status}${diagnostic ? `: ${diagnostic.slice(0, 500)}` : ''}`)
+  }
 }
 
 function requestMetadata(request: Request, payload: WaitlistRequest) {
@@ -389,6 +476,14 @@ Deno.serve(async (request) => {
         reason: 'joined',
         metadata: { emailHash: identity.emailHash },
       })
+      try {
+        await sendWaitlistConfirmationEmail({
+          email: payload.email.trim(),
+          name: optionalString(payload.name),
+        })
+      } catch (error) {
+        console.error('[join-waitlist] confirmation email failed', error)
+      }
       return waitlistJson(request, { ok: true, status: 'joined' })
     }
 

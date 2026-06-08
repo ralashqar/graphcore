@@ -144,6 +144,19 @@ production hosts. Optional hardening secrets are `WAITLIST_RATE_LIMIT_SALT` for
 stable hashed throttling and `WAITLIST_TURNSTILE_SECRET_KEY` when
 `VITE_WAITLIST_TURNSTILE_SITE_KEY` is enabled.
 
+Waitlist confirmation email is sent by the `join-waitlist` Edge Function through
+Resend after a brand-new signup is stored. Configure it with Supabase secrets:
+
+```bash
+npx supabase secrets set RESEND_API_KEY=replace-with-resend-api-key
+npx supabase secrets set WAITLIST_CONFIRMATION_FROM="SynArc <hello@synarc.dev>"
+npx supabase secrets set WAITLIST_REPLY_TO="hello@synarc.dev"
+npx supabase secrets set WAITLIST_CONFIRMATION_ENABLED=true
+```
+
+Confirmation email is best-effort and only sent for new signups, not duplicate
+waitlist refreshes.
+
 ### AI Provider Setup
 
 To enable AI-powered features, set up the following secrets:

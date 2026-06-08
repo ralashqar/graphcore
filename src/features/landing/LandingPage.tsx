@@ -720,7 +720,7 @@ export function LandingPage({
         status: result.status,
         message: result.status === 'existing'
           ? "You're already on the waitlist. We refreshed your details."
-          : "You're on the waitlist. We'll be in touch soon.",
+          : "You're on the waitlist. We sent a confirmation email.",
       })
       if (waitlistTurnstileWidgetRef.current) {
         window.turnstile?.reset(waitlistTurnstileWidgetRef.current)
