@@ -1070,19 +1070,17 @@ export function LandingPage({
         <div className="landing-problem-strip-heading">
           <span className="landing-chip">What breaks elsewhere</span>
           <h2>Existing AI tools generate from isolated prompts. SynArc generates from a living world.</h2>
-          <p>These are the production failures SynArc is built to remove.</p>
-          <p className="landing-problem-continuity-note">
-            SynArc gives AI filmmakers and storytellers a continuity layer where canon, character memory, locations and
-            visual references evolve once, then carry into every cinematic, comic, animatic and scene.
-          </p>
         </div>
-        <div className="landing-problem-strip-list">
-          {marketPainPoints.map((point) => (
-            <article className="landing-problem-strip-card" key={point.title}>
-              <strong>{point.title}</strong>
-              <p>{point.copy}</p>
-            </article>
-          ))}
+        <div className="landing-problem-strip-body">
+          <p>These are the production failures SynArc is built to remove:</p>
+          <div className="landing-problem-strip-list">
+            {marketPainPoints.map((point) => (
+              <article className="landing-problem-strip-card" key={point.title}>
+                <strong>{point.title}</strong>
+                <p>{point.copy}</p>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
 
