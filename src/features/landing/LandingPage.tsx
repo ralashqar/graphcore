@@ -644,6 +644,7 @@ export function LandingPage({
   const waitlistEmailRef = useRef<HTMLInputElement | null>(null)
   const waitlistUseCaseRef = useRef<HTMLTextAreaElement | null>(null)
   const waitlistTriggerRef = useRef<HTMLElement | null>(null)
+  const waitlistCloseRef = useRef<HTMLButtonElement | null>(null)
   const waitlistTurnstileRef = useRef<HTMLDivElement | null>(null)
   const waitlistTurnstileWidgetRef = useRef<string | null>(null)
   const [waitlistOpen, setWaitlistOpen] = useState(false)
@@ -662,6 +663,7 @@ export function LandingPage({
   })
   const waitlistConfigured = waitlistIsConfigured()
   const waitlistTurnstileEnabled = Boolean(waitlistTurnstileSiteKey)
+  const waitlistSucceeded = waitlistSubmitState.status === 'joined' || waitlistSubmitState.status === 'existing'
 
   useAutoGrowTextarea(waitlistUseCaseRef, waitlistForm.useCase, waitlistOpen)
 
@@ -719,8 +721,8 @@ export function LandingPage({
       setWaitlistSubmitState({
         status: result.status,
         message: result.status === 'existing'
-          ? "You're already on the waitlist. We refreshed your details."
-          : "You're on the waitlist. We sent a confirmation email.",
+          ? "You're already on the early access list. We refreshed your details. If you requested access before, check your inbox or spam folder for the original confirmation."
+          : "You're on the early access list. We sent a confirmation email. If it does not arrive in a few minutes, check your spam or junk folder.",
       })
       if (waitlistTurnstileWidgetRef.current) {
         window.turnstile?.reset(waitlistTurnstileWidgetRef.current)
@@ -737,7 +739,13 @@ export function LandingPage({
   useEffect(() => {
     if (!waitlistOpen) return
 
-    window.setTimeout(() => waitlistEmailRef.current?.focus(), 0)
+    window.setTimeout(() => {
+      if (waitlistSucceeded) {
+        waitlistCloseRef.current?.focus()
+        return
+      }
+      waitlistEmailRef.current?.focus()
+    }, 0)
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -773,7 +781,7 @@ export function LandingPage({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [waitlistOpen])
+  }, [waitlistOpen, waitlistSucceeded])
 
   useEffect(() => {
     if (!waitlistOpen || !waitlistTurnstileEnabled || !waitlistTurnstileRef.current) return
@@ -1232,6 +1240,7 @@ export function LandingPage({
         >
           <section className="landing-waitlist-panel" role="dialog" aria-modal="true" aria-labelledby="landing-waitlist-title" ref={waitlistPanelRef}>
             <button
+              ref={waitlistCloseRef}
               className="landing-waitlist-close"
               type="button"
               aria-label="Close waitlist form"
@@ -1243,78 +1252,89 @@ export function LandingPage({
             <p>
               Tell us where SynArc fits into your creative workflow.
             </p>
-            <form className="landing-waitlist-form" onSubmit={handleWaitlistSubmit}>
-              <input
-                aria-label="Leave this field empty"
-                className="landing-waitlist-honeypot"
-                autoComplete="off"
-                tabIndex={-1}
-                value={waitlistForm.honeypot}
-                onChange={(event) => handleWaitlistFormChange('honeypot', event.target.value)}
-              />
-              <label>
-                <span>Email</span>
-                <input
-                  ref={waitlistEmailRef}
-                  type="email"
-                  autoComplete="email"
-                  placeholder="you@example.com"
-                  value={waitlistForm.email}
-                  onChange={(event) => handleWaitlistFormChange('email', event.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                <span>Name</span>
-                <input
-                  type="text"
-                  autoComplete="name"
-                  placeholder="Optional"
-                  value={waitlistForm.name}
-                  onChange={(event) => handleWaitlistFormChange('name', event.target.value)}
-                />
-              </label>
-              <label>
-                <span>Creator role</span>
-                <input
-                  type="text"
-                  placeholder="Filmmaker, writer, studio, game team..."
-                  value={waitlistForm.role}
-                  onChange={(event) => handleWaitlistFormChange('role', event.target.value)}
-                />
-              </label>
-              <label>
-                <span>Use case</span>
-                <textarea
-                  ref={waitlistUseCaseRef}
-                  rows={2}
-                  placeholder="What would you want to create?"
-                  value={waitlistForm.useCase}
-                  onChange={(event) => handleWaitlistFormChange('useCase', event.target.value)}
-                />
-              </label>
-              {waitlistSubmitState.message ? (
+            {waitlistSucceeded ? (
+              <div className="landing-waitlist-success" role="status" aria-live="polite">
                 <p className={`landing-waitlist-message is-${waitlistSubmitState.status}`}>
                   {waitlistSubmitState.message}
                 </p>
-              ) : null}
-              {waitlistTurnstileEnabled ? (
-                <div className="landing-waitlist-turnstile" ref={waitlistTurnstileRef} />
-              ) : null}
-              <p className="landing-waitlist-privacy">No spam. Early access only.</p>
-              <button
-                className="landing-cta-button landing-waitlist-submit"
-                type="submit"
-                disabled={
-                  waitlistSubmitState.status === 'submitting'
-                  || !waitlistConfigured
-                  || (waitlistTurnstileEnabled && !waitlistForm.turnstileToken)
-                }
-              >
-                {waitlistSubmitState.status === 'submitting' ? 'Requesting...' : 'Request early access'}
-                <span aria-hidden="true">-&gt;</span>
-              </button>
-            </form>
+                <button className="landing-cta-button landing-waitlist-submit" type="button" onClick={closeWaitlist}>
+                  Close
+                </button>
+              </div>
+            ) : (
+              <form className="landing-waitlist-form" onSubmit={handleWaitlistSubmit}>
+                <input
+                  aria-label="Leave this field empty"
+                  className="landing-waitlist-honeypot"
+                  autoComplete="off"
+                  tabIndex={-1}
+                  value={waitlistForm.honeypot}
+                  onChange={(event) => handleWaitlistFormChange('honeypot', event.target.value)}
+                />
+                <label>
+                  <span>Email</span>
+                  <input
+                    ref={waitlistEmailRef}
+                    type="email"
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    value={waitlistForm.email}
+                    onChange={(event) => handleWaitlistFormChange('email', event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Name</span>
+                  <input
+                    type="text"
+                    autoComplete="name"
+                    placeholder="Optional"
+                    value={waitlistForm.name}
+                    onChange={(event) => handleWaitlistFormChange('name', event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Creator role</span>
+                  <input
+                    type="text"
+                    placeholder="Filmmaker, writer, studio, game team..."
+                    value={waitlistForm.role}
+                    onChange={(event) => handleWaitlistFormChange('role', event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Use case</span>
+                  <textarea
+                    ref={waitlistUseCaseRef}
+                    rows={2}
+                    placeholder="What would you want to create?"
+                    value={waitlistForm.useCase}
+                    onChange={(event) => handleWaitlistFormChange('useCase', event.target.value)}
+                  />
+                </label>
+                {waitlistSubmitState.message ? (
+                  <p className={`landing-waitlist-message is-${waitlistSubmitState.status}`}>
+                    {waitlistSubmitState.message}
+                  </p>
+                ) : null}
+                {waitlistTurnstileEnabled ? (
+                  <div className="landing-waitlist-turnstile" ref={waitlistTurnstileRef} />
+                ) : null}
+                <p className="landing-waitlist-privacy">No spam. Early access only.</p>
+                <button
+                  className="landing-cta-button landing-waitlist-submit"
+                  type="submit"
+                  disabled={
+                    waitlistSubmitState.status === 'submitting'
+                    || !waitlistConfigured
+                    || (waitlistTurnstileEnabled && !waitlistForm.turnstileToken)
+                  }
+                >
+                  {waitlistSubmitState.status === 'submitting' ? 'Requesting...' : 'Request early access'}
+                  <span aria-hidden="true">-&gt;</span>
+                </button>
+              </form>
+            )}
           </section>
         </div>
       ) : null}
