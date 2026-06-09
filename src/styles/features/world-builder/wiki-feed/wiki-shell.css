@@ -4015,6 +4015,25 @@
   line-height: 1.42;
 }
 
+.world-wiki-sequence-shot-note-button {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.world-wiki-sequence-shot-note-button:hover {
+  color: rgba(125, 211, 252, 0.96);
+}
+
 .world-wiki-sequence-animatic-performance-list {
   display: grid;
   gap: 7px;

@@ -1395,11 +1395,20 @@ type SequenceAnimaticCoverageAnchorView = {
   viewpointId: string
   characterRefIds: string[]
   screenDirection: string
+  camera: string
+  lighting: string
   stagingBrief: string
   continuityFromSetupId: string
   continuityMode: string
   shotIds: string[]
   blockIds: string[]
+}
+
+type SequenceAnimaticCoverageInspectorView = {
+  masterRequestId: string
+  blockTitle: string
+  shotTitle: string
+  anchor: SequenceAnimaticCoverageAnchorView
 }
 
 function writeWikiAnimaticRoute(input: {
@@ -2315,6 +2324,119 @@ function SequenceAnimaticSceneBindingModal({
                   : assetTarget.actionLabel}
               </button>
             ) : null}
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function SequenceAnimaticCoverageAnchorModal({
+  inspector,
+  generationBusy,
+  onClose,
+  onOpenGraph,
+  onGenerateAnchor,
+}: {
+  inspector: SequenceAnimaticCoverageInspectorView
+  generationBusy: boolean
+  onClose: () => void
+  onOpenGraph: () => void
+  onGenerateAnchor: () => void
+}) {
+  const anchor = inspector.anchor
+  const usageLabel = [
+    anchor.shotIds.length > 0 ? `${anchor.shotIds.length} linked shot${anchor.shotIds.length === 1 ? '' : 's'}` : '',
+    anchor.blockIds.length > 0 ? `${anchor.blockIds.length} block${anchor.blockIds.length === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' / ') || 'Used by this shot'
+  const spatialPath = [
+    anchor.setId ? `Set ${displayNameFromRefId(anchor.setId)}` : '',
+    anchor.zoneId ? `Zone ${displayNameFromRefId(anchor.zoneId)}` : '',
+    anchor.primarySpotId ? `Spot ${displayNameFromRefId(anchor.primarySpotId)}` : '',
+    anchor.viewpointId ? `Viewpoint ${displayNameFromRefId(anchor.viewpointId)}` : '',
+  ].filter(Boolean).join(' / ')
+  return (
+    <section className="world-wiki-sequence-set-inspector-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Coverage anchor">
+      <button className="world-wiki-sequence-animatic-close" onClick={onClose} type="button" aria-label="Close coverage anchor inspector">
+        <EntityIcon id="close" />
+      </button>
+      <header>
+        <span className="eyebrow">Coverage anchor</span>
+        <h3>{anchor.title}</h3>
+        <p>{inspector.shotTitle} / {inspector.blockTitle}</p>
+      </header>
+      <div className="world-wiki-sequence-set-inspector-body">
+        <div className={anchor.assetUrl ? 'world-wiki-sequence-set-inspector-preview has-image' : 'world-wiki-sequence-set-inspector-preview'}>
+          {anchor.assetUrl ? <img src={anchor.assetUrl} alt="" /> : <EntityIcon id="camera" />}
+          <span>{anchor.statusLabel}</span>
+        </div>
+        <div className="world-wiki-sequence-set-inspector-content">
+          <dl>
+            <div>
+              <dt>Setup type</dt>
+              <dd>{anchor.setupKindLabel}</dd>
+            </div>
+            <div>
+              <dt>Usage</dt>
+              <dd>{usageLabel}</dd>
+            </div>
+            {spatialPath ? (
+              <div>
+                <dt>Scene binding</dt>
+                <dd>{spatialPath}</dd>
+              </div>
+            ) : null}
+            {anchor.screenDirection ? (
+              <div>
+                <dt>Screen direction</dt>
+                <dd>{anchor.screenDirection}</dd>
+              </div>
+            ) : null}
+            {anchor.camera ? (
+              <div>
+                <dt>Camera</dt>
+                <dd>{anchor.camera}</dd>
+              </div>
+            ) : null}
+            {anchor.lighting ? (
+              <div>
+                <dt>Lighting</dt>
+                <dd>{anchor.lighting}</dd>
+              </div>
+            ) : null}
+            {anchor.characterRefIds.length > 0 ? (
+              <div>
+                <dt>Characters</dt>
+                <dd>{anchor.characterRefIds.map(displayNameFromRefId).join(', ')}</dd>
+              </div>
+            ) : null}
+            {anchor.continuityMode ? (
+              <div>
+                <dt>Continuity mode</dt>
+                <dd>{anchor.continuityMode.replace(/_/g, ' ')}</dd>
+              </div>
+            ) : null}
+          </dl>
+          {anchor.stagingBrief ? <p>{anchor.stagingBrief}</p> : null}
+          <div className="world-wiki-sequence-set-inspector-actions">
+            <button className="ghost-button compact" onClick={onOpenGraph} type="button">
+              <EntityIcon id="graph" />
+              Open Continuity Graph
+            </button>
+            <button
+              className="primary-button compact"
+              disabled={generationBusy || anchor.running}
+              onClick={onGenerateAnchor}
+              type="button"
+            >
+              {generationBusy || anchor.running
+                ? <><span className="world-mini-spinner" aria-hidden="true" />Generating anchor</>
+                : anchor.status === 'ready'
+                  ? 'Regenerate anchor'
+                  : anchor.status === 'failed'
+                    ? 'Retry anchor'
+                    : 'Generate anchor'}
+            </button>
           </div>
         </div>
       </div>
@@ -4141,6 +4263,14 @@ function buildSequenceAnimaticViewModel(input: {
             : 'Anchor missing'
     const setupKind = trimOptionalString(setup.setupKind ?? setup.setup_kind)
     const shotIds = readLooseArray(setup.usedShotIds ?? setup.used_shot_ids ?? setup.shotIds ?? setup.shot_ids).map(trimOptionalString).filter(Boolean)
+    const setupCamera = readLooseRecord(setup.camera)
+    const cameraLabel = [
+      trimOptionalString(setupCamera.framing),
+      trimOptionalString(setupCamera.angle),
+      trimOptionalString(setupCamera.lens),
+      trimOptionalString(setupCamera.movement),
+      trimOptionalString(setupCamera.screenDirectionRule ?? setupCamera.screen_direction_rule),
+    ].filter(Boolean).join(' / ')
     return {
       id: setupId,
       title: trimOptionalString(setup.title) || displayNameFromRefId(setupId),
@@ -4160,6 +4290,8 @@ function buildSequenceAnimaticViewModel(input: {
       viewpointId: trimOptionalString(setup.viewpointId ?? setup.viewpoint_id),
       characterRefIds: readLooseArray(setup.characterRefIds ?? setup.character_ref_ids).map(trimOptionalString).filter(Boolean),
       screenDirection: trimOptionalString(setup.screenDirection ?? setup.screen_direction),
+      camera: cameraLabel,
+      lighting: trimOptionalString(setup.lighting),
       stagingBrief: trimOptionalString(setup.stagingBrief ?? setup.staging_brief),
       continuityFromSetupId: trimOptionalString(setup.continuityFromSetupId ?? setup.continuity_from_setup_id),
       continuityMode: trimOptionalString(setup.continuityMode ?? setup.continuity_mode),
@@ -6588,6 +6720,7 @@ export function WorldGraphPage({
     content: string
   } | null>(null)
   const [sequenceAnimaticSpatialInspector, setSequenceAnimaticSpatialInspector] = useState<SequenceAnimaticSpatialInspectorView | null>(null)
+  const [sequenceAnimaticCoverageInspector, setSequenceAnimaticCoverageInspector] = useState<SequenceAnimaticCoverageInspectorView | null>(null)
   const [sequenceAnimaticShotPrompt, setSequenceAnimaticShotPrompt] = useState<{
     masterRequestId: string
     storyboardBlockId: string
@@ -7039,6 +7172,10 @@ export function WorldGraphPage({
     setSequenceAnimaticContinuityGraphScopeWorldLocationId(scopeWorldLocationId)
     setSequenceAnimaticContinuityGraphRequestId(requestId)
   }, [])
+  const sequenceAnimaticCoverageInspectorModel = sequenceAnimaticCoverageInspector
+    ? sequenceAnimaticModelByRequestId.get(sequenceAnimaticCoverageInspector.masterRequestId)
+      ?? (sequenceAnimaticPreviewModel?.request.id === sequenceAnimaticCoverageInspector.masterRequestId ? sequenceAnimaticPreviewModel : null)
+    : null
   const sequenceAnimaticSpatialInspectorModel = sequenceAnimaticSpatialInspector && sequenceAnimaticPreviewModel?.request.id === sequenceAnimaticSpatialInspector.masterRequestId
     ? sequenceAnimaticPreviewModel
     : null
@@ -13641,6 +13778,9 @@ export function WorldGraphPage({
                             : !shot.panelUrl
                               ? 'Generate the storyboard panel before revising this shot.'
                               : ''
+                          const shotCoverageAnchor = shot.coverageSetupId
+                            ? routeAnimaticModel.coverageAnchors.find((anchor) => anchor.id === shot.coverageSetupId) ?? null
+                            : null
                           const shotElementKey = `${routeAnimaticModel.request.id}:${block.id}:${shot.id}`
                           const timelineShotClassName = [
                             'world-wiki-sequence-animatic-timeline-shot',
@@ -13696,11 +13836,6 @@ export function WorldGraphPage({
                                 {shot.revisionError ? <small className="world-wiki-sequence-animatic-video-status is-error">{shot.revisionError}</small> : null}
                                 <div className="world-wiki-sequence-shot-detail-rows">
                                   <div className="world-wiki-sequence-shot-core-details">
-                                    <button className="world-wiki-sequence-shot-detail-row is-core-detail" title={shot.camera || 'No camera instructions recorded.'} disabled={!shot.camera} onClick={() => setSequenceAnimaticShotInspector({ kind: 'camera', blockTitle: block.title, shotTitle: shot.title, content: shot.camera || 'No camera instructions recorded.' })} type="button">
-                                      <EntityIcon id="camera" />
-                                      <strong>Camera</strong>
-                                      <span>{shot.camera || 'No camera instructions recorded.'}</span>
-                                    </button>
                                     <button className="world-wiki-sequence-shot-detail-row is-core-detail" title={shot.lighting || 'No lighting instructions recorded.'} disabled={!shot.lighting} onClick={() => setSequenceAnimaticShotInspector({ kind: 'lighting', blockTitle: block.title, shotTitle: shot.title, content: shot.lighting || 'No lighting instructions recorded.' })} type="button">
                                       <EntityIcon id="lighting" />
                                       <strong>Lighting</strong>
@@ -13711,6 +13846,21 @@ export function WorldGraphPage({
                                       <strong>Set</strong>
                                       <span>{shot.spatialContinuityLabel}</span>
                                     </button>
+                                    {shotCoverageAnchor ? (
+                                      <button
+                                        className="world-wiki-sequence-shot-detail-row is-core-detail"
+                                        title={shot.coverageSetupDetail || shotCoverageAnchor.stagingBrief || shot.coverageSetupLabel}
+                                        onClick={() => setSequenceAnimaticCoverageInspector({ masterRequestId: routeAnimaticModel.request.id, blockTitle: block.title, shotTitle: shot.title, anchor: shotCoverageAnchor })}
+                                        type="button"
+                                      >
+                                        <EntityIcon id="camera" />
+                                        <strong>Coverage</strong>
+                                        <span>
+                                          {shotCoverageAnchor.running ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                                          {shot.coverageSetupLabel || shotCoverageAnchor.title}
+                                        </span>
+                                      </button>
+                                    ) : null}
                                   </div>
                                   {shot.performanceBeats.length > 0 ? shot.performanceBeats.map((beat) => {
                                     const performanceLine = sequenceAnimaticPerformanceBeatLine(beat)
@@ -16900,6 +17050,9 @@ export function WorldGraphPage({
                         const shotKeyframeStarting = sequenceAnimaticBlockRunKey === shotKeyframeRunKey
                         const shotKeyframeBusy = shotKeyframeStarting || shot.keyframeRunning || shot.keyframeDependencyRunning
                         const shotKeyframeReady = shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready'
+                        const shotCoverageAnchor = shot.coverageSetupId
+                          ? sequenceAnimaticPreviewModel.coverageAnchors.find((anchor) => anchor.id === shot.coverageSetupId) ?? null
+                          : null
                         const shotElementKey = `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}`
                         const shotClassName = [
                           'world-wiki-sequence-animatic-shot',
@@ -16927,11 +17080,26 @@ export function WorldGraphPage({
                             </div>
                             <h4>{shot.title}</h4>
                             <p>{shot.action || 'Shot action is still being parsed.'}</p>
-                            {shot.camera || shot.lighting || shot.spatialContinuityLabel || (shot.performance && shot.performanceBeats.length === 0) ? (
+                            {shot.lighting || shot.spatialContinuityLabel || shotCoverageAnchor || (shot.performance && shot.performanceBeats.length === 0) ? (
                               <dl className="world-wiki-sequence-animatic-shot-notes">
-                                {shot.camera ? <div><dt>Camera</dt><dd>{shot.camera}</dd></div> : null}
                                 {shot.lighting ? <div><dt>Lighting</dt><dd>{shot.lighting}</dd></div> : null}
                                 {shot.spatialContinuityLabel ? <div><dt>Set</dt><dd title={shot.spatialContinuityDetail || shot.spatialContinuityLabel}>{shot.spatialContinuityLabel}</dd></div> : null}
+                                {shotCoverageAnchor ? (
+                                  <div>
+                                    <dt>Coverage</dt>
+                                    <dd>
+                                      <button
+                                        className="world-wiki-sequence-shot-note-button"
+                                        title={shot.coverageSetupDetail || shotCoverageAnchor.stagingBrief || shotCoverageAnchor.title}
+                                        onClick={() => setSequenceAnimaticCoverageInspector({ masterRequestId: sequenceAnimaticPreviewModel.request.id, blockTitle: block.title, shotTitle: shot.title, anchor: shotCoverageAnchor })}
+                                        type="button"
+                                      >
+                                        {shotCoverageAnchor.running ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                                        {shot.coverageSetupLabel || shotCoverageAnchor.title}
+                                      </button>
+                                    </dd>
+                                  </div>
+                                ) : null}
                                 {shot.performance && shot.performanceBeats.length === 0 ? <div><dt>Performance</dt><dd>{shot.performance}</dd></div> : null}
                               </dl>
                             ) : null}
@@ -17228,6 +17396,30 @@ export function WorldGraphPage({
             </header>
             <p>{sequenceAnimaticShotInspector.content}</p>
           </section>
+        </div>
+      ) : null}
+      {sequenceAnimaticCoverageInspector ? (
+        <div className="world-wiki-sequence-video-overlay" onClick={() => setSequenceAnimaticCoverageInspector(null)}>
+          <SequenceAnimaticCoverageAnchorModal
+            inspector={sequenceAnimaticCoverageInspector}
+            generationBusy={Boolean(
+              sequenceAnimaticCoverageInspectorModel
+              && sequenceAnimaticBlockRunKey === `${sequenceAnimaticCoverageInspectorModel.request.id}:${sequenceAnimaticCoverageInspector.anchor.id}:coverage_anchor`
+            )}
+            onClose={() => setSequenceAnimaticCoverageInspector(null)}
+            onOpenGraph={() => {
+              openSequenceAnimaticContinuityGraph(sequenceAnimaticCoverageInspector.masterRequestId)
+              setSequenceAnimaticCoverageInspector(null)
+            }}
+            onGenerateAnchor={() => {
+              if (!sequenceAnimaticCoverageInspectorModel) return
+              void handleRunSequenceAnimaticCoverageAnchor(
+                sequenceAnimaticCoverageInspectorModel,
+                sequenceAnimaticCoverageInspector.anchor,
+                sequenceAnimaticCoverageInspector.anchor.status === 'ready' ? 'regenerate' : 'generate',
+              )
+            }}
+          />
         </div>
       ) : null}
       {sequenceAnimaticContinuityGraphModel ? (
