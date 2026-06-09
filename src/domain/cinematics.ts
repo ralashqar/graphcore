@@ -848,6 +848,10 @@ export const cinematicV2ShotSchema = z.object({
   propRefIds: z.array(z.string()).default([]),
   continuityInputs: z.array(z.string()).default([]),
   continuityAnchorIds: z.array(z.string()).default([]),
+  coverageSetupId: z.string().default(''),
+  coverage_setup_id: z.string().default(''),
+  continuityLink: z.record(z.string(), z.unknown()).default({}),
+  continuity_link: z.record(z.string(), z.unknown()).default({}),
   camera: z.object({
     framing: z.string().default(''),
     angle: z.string().default(''),
@@ -897,6 +901,8 @@ export const cinematicV2StoryboardGroupSchema = z.object({
   endSeconds: z.number().nonnegative().default(0),
   editorialDurationSeconds: z.number().nonnegative().max(180).default(0),
   providerDurationSeconds: z.number().int().min(4).max(15).default(4),
+  coverageSetupIds: z.array(z.string()).default([]),
+  coverageSetups: z.array(z.record(z.string(), z.unknown())).default([]),
   continuityNotes: z.array(z.string()).default([]),
 })
 
@@ -1059,6 +1065,8 @@ export function buildCinematicV2StoryboardGroupPlan(shotPlan: CinematicV2ShotPla
       endSeconds,
       editorialDurationSeconds,
       providerDurationSeconds: providerSafeCinematicV2DurationSeconds(editorialDurationSeconds),
+      coverageSetupIds: [],
+      coverageSetups: [],
       continuityNotes: [],
     })
   }
@@ -1101,6 +1109,8 @@ export function buildCinematicV3StoryboardGroupPlan(
       endSeconds,
       editorialDurationSeconds: currentDurationSeconds,
       providerDurationSeconds: providerSafeCinematicV2DurationSeconds(currentDurationSeconds),
+      coverageSetupIds: [],
+      coverageSetups: [],
       continuityNotes: [
         `Storyboard/video block ${groupIndex}: ${currentDurationSeconds.toFixed(1).replace(/\.0$/, '')}s across ${currentShots.length} shot${currentShots.length === 1 ? '' : 's'}.`,
       ],

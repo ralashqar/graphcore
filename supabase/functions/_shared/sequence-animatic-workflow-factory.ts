@@ -367,7 +367,7 @@ export function buildSequenceAnimaticShotRevisionWorkflowGraph(input: {
       revisionId: input.revisionId,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'medium',
+      quality: 'low',
       outputFormat: 'webp',
       maxReferenceImages: 8,
       imageSize: input.aspectRatio === '9:16'
@@ -450,7 +450,7 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
       ...config,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'medium',
+      quality: 'low',
       outputFormat: 'webp',
       maxReferenceImages: 8,
       imageSize: { width: 1536, height: 1536 },
@@ -475,6 +475,163 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_target', 'continuity_asset_input', 'target_node', 'continuity_asset_artifact', 'target_node', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'continuity_asset_prompt', 'text', 'continuity_asset_artifact', 'prompt', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'continuity_asset_image', 'image', 'continuity_asset_artifact', 'image', { optional: true, optionalDependency: true }, 'continuity_asset'),
+  ]
+  return { nodes, edges }
+}
+
+export function buildSequenceAnimaticCoverageAnchorWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  coverageSetup: Record<string, unknown>
+  shots: Record<string, unknown>[]
+  assetPack: Record<string, unknown>
+  referenceAssetKeys: string[]
+  aspectRatio: string
+}) {
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    ...input.commonConfig,
+    coverageSetup: input.coverageSetup,
+    coverage_setup: input.coverageSetup,
+    shots: input.shots,
+    assetPack: input.assetPack,
+    asset_pack: input.assetPack,
+    referenceAssetKeys: input.referenceAssetKeys,
+    reference_asset_keys: input.referenceAssetKeys,
+    aspectRatio: input.aspectRatio,
+  }
+  const imageSize = input.aspectRatio === '9:16'
+    ? { width: 864, height: 1536 }
+    : input.aspectRatio === '1:1'
+      ? { width: 1024, height: 1024 }
+      : { width: 1536, height: 864 }
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_input', 'utility_transform', 'Coverage Anchor Input', 80, 120, {
+      purpose: 'sequence_animatic_coverage_anchor_input',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_input', maxConcurrency: 4 },
+    }, {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_prompt', 'utility_transform', 'Coverage Anchor Prompt', 360, 120, {
+      purpose: 'sequence_animatic_coverage_anchor_prompt',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_prompt', maxConcurrency: 4 },
+    }, {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_image', 'image_generation', 'Coverage Anchor Image', 640, 120, {
+      purpose: 'sequence_animatic_coverage_anchor_image',
+      role: 'sequence_animatic_coverage_anchor_image',
+      ...config,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'medium',
+      outputFormat: 'webp',
+      maxReferenceImages: 8,
+      imageSize,
+      aspectRatio: input.aspectRatio,
+      usedAsVideoReference: true,
+      used_as_video_reference: true,
+      execution: { resourceClass: 'image', groupKey: 'sequence_animatic_coverage_anchors', maxConcurrency: 2 },
+    }, {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_artifact', 'output_artifact', 'Register Coverage Anchor', 920, 120, {
+      purpose: 'sequence_animatic_coverage_anchor_artifact',
+      artifactKind: 'other',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_artifact', maxConcurrency: 4 },
+    }, {}, 'coverage_anchor'),
+  ]
+  const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_prompt', 'coverage_setup', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_shots', 'coverage_anchor_input', 'shots', 'coverage_anchor_prompt', 'shots', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'coverage_anchor_input', 'asset_pack', 'coverage_anchor_prompt', 'asset_pack', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'coverage_anchor_prompt', 'text', 'coverage_anchor_image', 'prompt', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'coverage_anchor_prompt', 'asset_pack', 'coverage_anchor_image', 'asset_pack', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_artifact', 'coverage_setup', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'coverage_anchor_image', 'image', 'coverage_anchor_artifact', 'image', { optional: true, optionalDependency: true }, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'coverage_anchor_prompt', 'text', 'coverage_anchor_artifact', 'prompt', {}, 'coverage_anchor'),
+  ]
+  return { nodes, edges }
+}
+
+export function buildSequenceAnimaticPlannedKeyframeWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  block: Record<string, unknown>
+  shot: Record<string, unknown>
+  coverageSetup: Record<string, unknown>
+  coverageAnchor: Record<string, unknown>
+  previousKeyframe: Record<string, unknown>
+  storyboardPanel: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  aspectRatio: string
+}) {
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    ...input.commonConfig,
+    block: input.block,
+    shot: input.shot,
+    coverageSetup: input.coverageSetup,
+    coverage_setup: input.coverageSetup,
+    coverageAnchor: input.coverageAnchor,
+    coverage_anchor: input.coverageAnchor,
+    previousKeyframe: input.previousKeyframe,
+    previous_keyframe: input.previousKeyframe,
+    storyboardPanel: input.storyboardPanel,
+    storyboard_panel: input.storyboardPanel,
+    assetPack: input.assetPack,
+    asset_pack: input.assetPack,
+    aspectRatio: input.aspectRatio,
+  }
+  const imageSize = input.aspectRatio === '9:16'
+    ? { width: 864, height: 1536 }
+    : input.aspectRatio === '1:1'
+      ? { width: 1024, height: 1024 }
+      : { width: 1536, height: 864 }
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_input', 'utility_transform', 'Shot Keyframe Input', 80, 120, {
+      purpose: 'sequence_animatic_planned_keyframe_input',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_input', maxConcurrency: 8 },
+    }, {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 360, 120, {
+      purpose: 'sequence_animatic_planned_keyframe_prompt',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_prompt', maxConcurrency: 8 },
+    }, {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 640, 120, {
+      purpose: 'sequence_animatic_planned_keyframe_image',
+      role: 'sequence_animatic_shot_keyframe',
+      ...config,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'medium',
+      outputFormat: 'webp',
+      maxReferenceImages: 8,
+      imageSize,
+      aspectRatio: input.aspectRatio,
+      usedAsVideoReference: true,
+      used_as_video_reference: true,
+      execution: { resourceClass: 'image', groupKey: 'sequence_animatic_shot_keyframes', maxConcurrency: 3 },
+    }, {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 920, 120, {
+      purpose: 'sequence_animatic_planned_keyframe_artifact',
+      artifactKind: 'other',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_artifact', maxConcurrency: 8 },
+    }, {}, 'shot_keyframe'),
+  ]
+  const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_shot', 'planned_keyframe_input', 'shot', 'planned_keyframe_prompt', 'shot', {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_setup', 'planned_keyframe_input', 'coverage_setup', 'planned_keyframe_prompt', 'coverage_setup', { optional: true, optionalDependency: true }, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_anchor', 'planned_keyframe_input', 'coverage_anchor', 'planned_keyframe_prompt', 'coverage_anchor', { optional: true, optionalDependency: true }, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_previous', 'planned_keyframe_input', 'previous_keyframe', 'planned_keyframe_prompt', 'previous_keyframe', { optional: true, optionalDependency: true }, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_panel', 'planned_keyframe_input', 'storyboard_panel', 'planned_keyframe_prompt', 'storyboard_panel', { optional: true, optionalDependency: true }, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'planned_keyframe_input', 'asset_pack', 'planned_keyframe_prompt', 'asset_pack', {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'planned_keyframe_prompt', 'text', 'planned_keyframe_image', 'prompt', {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'planned_keyframe_prompt', 'asset_pack', 'planned_keyframe_image', 'asset_pack', {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_shot', 'planned_keyframe_input', 'shot', 'planned_keyframe_artifact', 'shot', {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'planned_keyframe_image', 'image', 'planned_keyframe_artifact', 'image', { optional: true, optionalDependency: true }, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'planned_keyframe_prompt', 'text', 'planned_keyframe_artifact', 'prompt', {}, 'shot_keyframe'),
   ]
   return { nodes, edges }
 }

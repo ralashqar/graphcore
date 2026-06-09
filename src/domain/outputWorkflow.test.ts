@@ -996,7 +996,7 @@ test('prompt-first entity binding is typo-tolerant and does not fall back to unr
   assert.equal((contextNode?.config as Record<string, unknown> | undefined)?.strictSourceEntityFilter, true)
 })
 
-test('story cinematic requests build shot-continuity master graph by default while explicit legacy modes stay available', () => {
+test('story cinematic requests build scene-graph-assigned parallel animatic graph by default while explicit legacy modes stay available', () => {
   const plan = planOutputRequestWorkflow({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -1011,9 +1011,12 @@ test('story cinematic requests build shot-continuity master graph by default whi
   assert.ok(plan.sourceEntityKeys.length < snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').length + 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_reference_select').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_director_plan').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_manifest').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_orchestrator').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_graph_assignment').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_package').length, 0)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_plan_fanout').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_director_plan').length, 0)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_manifest').length, 0)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_orchestrator').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_shot_break_plan').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_shot_parse_fanout').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_storyboard_fanout').length, 0)
@@ -1022,20 +1025,26 @@ test('story cinematic requests build shot-continuity master graph by default whi
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 0)
   assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
   assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'sequence_animatic_director_plan'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'sequence_animatic_director_plan' && edge.targetNodeKey === 'sequence_animatic_manifest'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'artifact' && edge.targetNodeKey === 'sequence_animatic_orchestrator'))
-  assert.ok(plan.diagnostics.some((line) => line.includes('shot-continuity mode')))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'sequence_animatic_scene_graph_assignment'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'sequence_animatic_scene_graph_assignment' && edge.targetNodeKey === 'sequence_animatic_scene_plan_fanout'))
+  assert.ok(plan.diagnostics.some((line) => line.includes('scene-graph assignment mode')))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 
-  const directorNode = plan.nodes.find((node) => node.key === 'sequence_animatic_director_plan')
-  assert.equal(directorNode?.config.cinematicPipelineVersion, 'v3_script_storyboards')
-  assert.equal(directorNode?.config.sequenceAnimaticMode, 'master_script_only')
+  const packageNode = plan.nodes.find((node) => node.key === 'sequence_animatic_scene_graph_assignment')
+  const sceneFanoutNode = plan.nodes.find((node) => node.key === 'sequence_animatic_scene_plan_fanout')
+  assert.equal(packageNode?.config.cinematicPipelineVersion, 'v3_script_storyboards')
+  assert.equal(packageNode?.config.sequenceAnimaticMode, 'master_script_only')
+  assert.equal(packageNode?.config.purpose, 'sequence_animatic_scene_graph_assignment')
+  assert.equal(sceneFanoutNode?.config.scenePlannerConcurrency, 4)
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const v3ParseMaterializer = workerSource.slice(
     workerSource.indexOf('async function materializeDynamicCinematicV3ShotParseFanout'),
     workerSource.indexOf('async function materializeDynamicCinematicV2ShotFanout'),
+  )
+  const scenePlanMaterializer = workerSource.slice(
+    workerSource.indexOf('async function materializeSequenceAnimaticScenePlanFanout'),
+    workerSource.indexOf('async function materializeDynamicCinematicV3ShotParseFanout'),
   )
   assert.match(workerSource, /cinematicVideoApprovedEnabled/)
   assert.match(workerSource, /cinematic_video_approval_required/)
@@ -1056,6 +1065,26 @@ test('story cinematic requests build shot-continuity master graph by default whi
   assert.match(workerSource, /cinematic_v3_panel_extract/)
   assert.match(workerSource, /Return plain Markdown screenplay/)
   assert.match(v3ParseMaterializer, /storyboardGroups/)
+  assert.match(scenePlanMaterializer, /sequence_animatic_scene_shot_plan/)
+  assert.match(scenePlanMaterializer, /sequence_animatic_scene_plan_merge/)
+  assert.match(scenePlanMaterializer, /sourcePort: 'scene_plan'/)
+  assert.match(workerSource, /scene_plan: directorPlan/)
+  const sceneShotPlanContract = getOutputWorkflowNodeContract({
+    key: 'sequence_animatic_scene_shot_plan_scene_001',
+    nodeType: 'utility_transform',
+    config: { purpose: 'sequence_animatic_scene_shot_plan' },
+  })
+  assert.ok(sceneShotPlanContract?.producedOutputs.includes('scene_plan'))
+  assert.match(scenePlanMaterializer, /scenePlannerConcurrency/)
+  assert.match(scenePlanMaterializer, /sequence_animatic_director_plan_artifact/)
+  assert.match(workerSource, /creative_scene_screenplay_v3/)
+  assert.match(workerSource, /scene_graph_assignment_v1/)
+  assert.match(workerSource, /sequence_animatic_scene_graph_assignment/)
+  assert.match(workerSource, /#Scene scene_001/)
+  assert.match(workerSource, /#Location canonical_world_location_ref/)
+  assert.match(workerSource, /CHARACTER NAME \[ref:canonical_or_local_ref\]/)
+  assert.match(workerSource, /Do not use #Set, #Zone, #Spot, #Viewpoint/)
+  assert.match(workerSource, /Assign each screenplay scene to a usable scene graph package/)
   assert.match(workerSource, /fixed \$\{layout\.rows\}x\$\{layout\.columns\} rectangular grid/)
   assert.match(workerSource, /single full-image panel, not a multi-cell grid/)
   assert.match(workerSource, /buildCinematicV3StoryboardLayout/)
@@ -1103,7 +1132,10 @@ test('story cinematic requests build shot-continuity master graph by default whi
     snapshot,
   }, 'ugc_episode')
   assert.equal(ugcPlan.preset, 'cinematic_episode_from_sequence')
-  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_director_plan').length, 1)
+  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_graph_assignment').length, 1)
+  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_package').length, 0)
+  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_plan_fanout').length, 1)
+  assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_director_plan').length, 0)
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 0)
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 0)
   assert.equal(ugcPlan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_storyboard_fanout').length, 0)
@@ -1124,6 +1156,8 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   const screenplayNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author')
   const shotBreakNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_shot_break_plan')
   const fanoutNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_shot_parse_fanout')
+  const scenePackageNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_scene_graph_assignment')
+  const sceneFanoutNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_scene_plan_fanout')
   const directorNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_director_plan')
   const manifestNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_manifest')
   const orchestratorNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_orchestrator')
@@ -1132,15 +1166,17 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   assert.equal(screenplayNode?.config.maxShotCount, 150)
   assert.equal(shotBreakNode, undefined)
   assert.equal(fanoutNode, undefined)
-  assert.equal(directorNode?.label, 'Shot Continuity Plan')
-  assert.equal(directorNode?.config.maxShotCount, 150)
-  assert.equal(manifestNode?.config.graphSpecVersion, 'sequence_animatic_graph_v2')
-  assert.equal(orchestratorNode?.config.autoStartStoryboards, true)
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'sequence_animatic_director_plan'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'sequence_animatic_director_plan' && edge.targetNodeKey === 'sequence_animatic_manifest'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'artifact' && edge.targetNodeKey === 'sequence_animatic_orchestrator'))
+  assert.equal(scenePackageNode?.label, 'Scene Graph Assignment')
+  assert.equal(scenePackageNode?.config.maxShotCount, 150)
+  assert.equal(sceneFanoutNode?.label, 'Queue Scene Shot Plans')
+  assert.equal(sceneFanoutNode?.config.scenePlannerConcurrency, 4)
+  assert.equal(directorNode, undefined)
+  assert.equal(manifestNode, undefined)
+  assert.equal(orchestratorNode, undefined)
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'sequence_animatic_scene_graph_assignment'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'sequence_animatic_scene_graph_assignment' && edge.targetNodeKey === 'sequence_animatic_scene_plan_fanout'))
   assert.ok(plan.diagnostics.some((line) => line.includes('Sequence-unit screenplay animatic mode')))
-  assert.ok(plan.diagnostics.some((line) => line.includes('shot-continuity mode')))
+  assert.ok(plan.diagnostics.some((line) => line.includes('scene-graph assignment mode')))
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
@@ -1150,12 +1186,24 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   const getSequenceAnimaticStateSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-sequence-animatic-state/index.ts'), 'utf8')
   assert.match(workerSource, /Selected sequence unit to adapt fully/)
   assert.match(workerSource, /dramatic question, outcome, POV notes, character arc deltas, consequences, open loops/)
-  assert.match(workerSource, /creative_screenplay_v1/)
-  assert.match(workerSource, /This pass is creative only; technical shot planning happens in the next workflow node/)
-  assert.match(workerSource, /Do not write shot markers, #shot anchors/)
+  assert.match(workerSource, /creative_scene_screenplay_v3/)
+  assert.match(workerSource, /scene_graph_assignment_v1/)
+  assert.match(workerSource, /writing only; scene graph assignment and technical shot planning happen in later workflow nodes/)
+  assert.match(workerSource, /Do not use #Set, #Zone, #Spot, #Viewpoint/)
+  assert.match(workerSource, /#Scene scene_001/)
+  assert.match(workerSource, /Do not use #Set, #Zone, #Spot, #Viewpoint/)
+  assert.doesNotMatch(workerSource, /#Set set_or_existing_set_id/)
+  assert.match(workerSource, /inferredViewpointZoneId/)
+  assert.match(workerSource, /inferredViewpointSetId/)
+  assert.match(workerSource, /Scene graph viewpoint "\$\{addition\.id\}" has unknown parent zone/)
+  assert.match(workerSource, /Scene graph viewpoint "\$\{addition\.id\}" has unknown parent set/)
+  assert.doesNotMatch(workerSource, /spotIds: \[addition\.spotId \|\| addition\.parentId\]/)
   assert.match(workerSource, /screenplay_ready/)
   assert.match(workerSource, /screenplayAnimaticRole\) === 'master'|workflowMetadata\.screenplayAnimaticRole\) === 'master'/)
-  assert.match(workerSource, /const groupParseKeys = screenplayAnimaticMasterMode[\s\S]*\? \[\][\s\S]*: groups\.map/)
+  assert.match(workerSource, /sequence_animatic_scene_graph_assignment/)
+  assert.match(workerSource, /materializeSequenceAnimaticScenePlanFanout/)
+  assert.match(workerSource, /sequence_animatic_scene_shot_plan/)
+  assert.match(workerSource, /sequence_animatic_scene_plan_merge/)
   assert.match(workerSource, /buildSequenceAnimaticShotPlanFromBreaks/)
   assert.match(workerSource, /index === shotBreaks\.length - 1 \? 'closing' : 'action'/)
   assert.doesNotMatch(workerSource, /index === shotBreaks\.length - 1 \? 'resolution' : 'action'/)
@@ -1167,6 +1215,10 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   assert.match(workerSource, /Convert the creative screenplay into one compact streamed shot continuity plan/)
   assert.match(workerSource, /shot_continuity_stream_started/)
   assert.match(workerSource, /shot_streamed/)
+  assert.match(workerSource, /coverage_setup/)
+  assert.match(workerSource, /coverage_setup_registered/)
+  assert.match(workerSource, /coverageSetups/)
+  assert.match(workerSource, /coverageSetupByShotId/)
   assert.match(workerSource, /finalizeSequenceAnimaticShotContinuityStreamPlan/)
   assert.match(workerSource, /Emit records in live-usable order/)
   assert.match(workerSource, /Do not wait for a whole block to be finished before emitting shots/)
@@ -1378,6 +1430,16 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     layout: { rows: 1, columns: 2, cellCount: 2 },
     required: true,
   }).batchKind, 'angle_grid')
+  assert.equal(sequenceAnimaticContinuityAssetBatchSchema.parse({
+    batchId: 'batch_viewpoint_zone_console',
+    batchKind: 'viewpoint_grid',
+    targetNodeIds: ['viewpoint_console_left', 'viewpoint_console_right'],
+    sourceReferenceNodeIds: ['spot_console'],
+    worldReferenceAssetKeys: ['asset-bridge'],
+    blockIds: ['block_001'],
+    layout: { rows: 2, columns: 2, cellCount: 2 },
+    required: true,
+  }).batchKind, 'viewpoint_grid')
   assert.equal(sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -1386,6 +1448,21 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     nodeId: 'zone_console',
     mode: 'generate',
   }).nodeId, 'zone_console')
+  assert.deepEqual(sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    nodeId: 'spot_console_left',
+    nodeIds: ['spot_console_left', 'spot_console_right'],
+    mode: 'generate',
+  }).nodeIds, ['spot_console_left', 'spot_console_right'])
+  assert.equal(sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    nodeId: 'zone_console',
+    mode: 'generate',
+  }).continuityRequestId, undefined)
   assert.equal(continuityAssetStateSchema.parse({
     status: 'ready',
     inputHash: 'hash-zone-console',
@@ -1759,6 +1836,8 @@ test('prompt-created cinematics can use screenplay animatic master mode', () => 
 
   const screenplayNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author')
   const fanoutNode = plan.nodes.find((node) => readConfigPurpose(node) === 'cinematic_v3_dynamic_shot_parse_fanout')
+  const scenePackageNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_scene_graph_assignment')
+  const sceneFanoutNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_scene_plan_fanout')
   const directorNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_director_plan')
   const manifestNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_manifest')
   const orchestratorNode = plan.nodes.find((node) => readConfigPurpose(node) === 'sequence_animatic_orchestrator')
@@ -1766,12 +1845,14 @@ test('prompt-created cinematics can use screenplay animatic master mode', () => 
   assert.equal(screenplayNode?.config.cinematicAnimaticMode, 'prompt_cinematic_master')
   assert.equal(screenplayNode?.config.maxShotCount, 150)
   assert.equal(fanoutNode, undefined)
-  assert.equal(directorNode?.config.cinematicAnimaticMode, 'prompt_cinematic_master')
-  assert.equal(directorNode?.config.maxShotCount, 150)
-  assert.equal(manifestNode?.config.graphSpecVersion, 'sequence_animatic_graph_v2')
-  assert.equal(orchestratorNode?.config.autoStartStoryboards, true)
+  assert.equal(scenePackageNode?.config.cinematicAnimaticMode, 'prompt_cinematic_master')
+  assert.equal(scenePackageNode?.config.maxShotCount, 150)
+  assert.equal(sceneFanoutNode?.config.scenePlannerConcurrency, 4)
+  assert.equal(directorNode, undefined)
+  assert.equal(manifestNode, undefined)
+  assert.equal(orchestratorNode, undefined)
   assert.ok(plan.diagnostics.some((line) => line.includes('Prompt cinematic screenplay animatic mode')))
-  assert.ok(plan.diagnostics.some((line) => line.includes('shot-continuity mode')))
+  assert.ok(plan.diagnostics.some((line) => line.includes('scene-graph assignment mode')))
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
@@ -4164,7 +4245,10 @@ test('dynamic cinematic execution ignores stale materialized nodes when settling
   assert.match(workerSource, /activeWorkflowEdges = bundle\.edges\.filter/)
   assert.match(workerSource, /nodes: activeWorkflowNodes/)
   assert.match(workerSource, /edges: activeWorkflowEdges/)
+  assert.match(workerSource, /targetsSequenceAnimaticScenePlanFanout/)
+  assert.match(workerSource, /hasMaterializedDynamicFanoutDependents/)
   assert.match(workerSource, /continueDynamicFanoutDependents/)
+  assert.match(workerSource, /runScope !== 'node_only'[\s\S]*targetsSequenceAnimaticScenePlanFanout/)
   assert.match(workerSource, /targetNodeKeys: continueDynamicFanoutDependents \? \['artifact'\] : targetNodeKeys/)
   assert.match(workerSource, /runScope: continueDynamicFanoutDependents[\s\S]*'upstream_to_node'/)
   assert.doesNotMatch(workerSource, /dynamicFanoutRan/)

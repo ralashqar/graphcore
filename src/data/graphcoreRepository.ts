@@ -193,6 +193,8 @@ import {
   sequenceAnimaticContinuityStructureDeriveResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
   sequenceAnimaticContinuityWorkflowEnsureResponseSchema,
+  sequenceAnimaticKeyframeWorkflowEnsureRequestSchema,
+  sequenceAnimaticKeyframeWorkflowEnsureResponseSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema,
   sequenceAnimaticStateRequestSchema,
@@ -221,6 +223,7 @@ import {
   type SequenceAnimaticContinuityBlockDeriveResponse,
   type SequenceAnimaticContinuityStructureDeriveResponse,
   type SequenceAnimaticContinuityWorkflowEnsureResponse,
+  type SequenceAnimaticKeyframeWorkflowEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNodeOutputResponse,
@@ -8702,8 +8705,9 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
   snapshot: ProjectSnapshot,
   request: {
     masterRequestId: string
-    continuityRequestId: string
+    continuityRequestId?: string | null
     nodeId: string
+    nodeIds?: string[]
     mode?: 'generate' | 'regenerate'
   },
 ): Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> {
@@ -8711,14 +8715,16 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
   if (!hasLiveSnapshotIds(snapshot)) {
     throw new Error('Sequence animatic continuity assets require a live Supabase-backed draft.')
   }
-  const payload = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
+  const payloadInput: Record<string, unknown> = {
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     masterRequestId: request.masterRequestId,
-    continuityRequestId: request.continuityRequestId,
     nodeId: request.nodeId,
+    nodeIds: request.nodeIds,
     mode: request.mode ?? 'generate',
-  })
+  }
+  if (request.continuityRequestId) payloadInput.continuityRequestId = request.continuityRequestId
+  const payload = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse(payloadInput)
   const response = await invokeAuthedFunctionWithSessionRecovery(
     'ensure-sequence-animatic-continuity-asset-workflow',
     payload,
@@ -8728,6 +8734,40 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function ensureSequenceAnimaticKeyframeWorkflows(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    mode?: 'generate' | 'regenerate'
+    shotIds?: string[]
+    coverageSetupIds?: string[]
+  },
+): Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating sequence animatic keyframes.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic keyframes require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticKeyframeWorkflowEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    mode: request.mode ?? 'generate',
+    shotIds: request.shotIds,
+    coverageSetupIds: request.coverageSetupIds,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-keyframe-workflows',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }
@@ -9110,6 +9150,7 @@ function deriveSequenceAnimaticShotContinuityStreamState(input: {
   const zoneNodes: Record<string, unknown>[] = []
   const spotNodes: Record<string, unknown>[] = []
   const angleNodes: Record<string, unknown>[] = []
+  const coverageSetups: Record<string, unknown>[] = []
   const localReferences: Record<string, unknown>[] = []
   const doneEvents: Record<string, unknown>[] = []
   let sawStarted = false
@@ -9185,6 +9226,31 @@ function deriveSequenceAnimaticShotContinuityStreamState(input: {
         streamed: true,
       })
     }
+    if (event.eventType === 'coverage_setup_registered') {
+      const setup = readRepositoryRecord(payload.coverageSetup)
+      const setupId = readRepositoryString(setup.id) || readRepositoryString(payload.setupId)
+      if (!setupId) continue
+      coverageSetups.push({
+        ...setup,
+        id: setupId,
+        sceneId: readRepositoryString(setup.sceneId ?? setup.scene_id) || readRepositoryString(payload.sceneId),
+        setupKind: readRepositoryString(setup.setupKind ?? setup.setup_kind) || readRepositoryString(payload.setupKind),
+        title: readRepositoryString(setup.title) || readRepositoryString(payload.title) || setupId,
+        setId: readRepositoryString(setup.setId ?? setup.set_id) || readRepositoryString(payload.setId),
+        zoneId: readRepositoryString(setup.zoneId ?? setup.zone_id) || readRepositoryString(payload.zoneId),
+        primarySpotId: readRepositoryString(setup.primarySpotId ?? setup.primary_spot_id) || readRepositoryString(payload.primarySpotId),
+        spotIds: readRepositoryArray(setup.spotIds ?? setup.spot_ids ?? payload.spotIds).map(readRepositoryString).filter(Boolean),
+        viewpointId: readRepositoryString(setup.viewpointId ?? setup.viewpoint_id) || readRepositoryString(payload.viewpointId),
+        characterRefIds: readRepositoryArray(setup.characterRefIds ?? setup.character_ref_ids ?? payload.characterRefIds).map(readRepositoryString).filter(Boolean),
+        screenDirection: readRepositoryString(setup.screenDirection ?? setup.screen_direction) || readRepositoryString(payload.screenDirection),
+        stagingBrief: readRepositoryString(setup.stagingBrief ?? setup.staging_brief) || readRepositoryString(payload.stagingBrief),
+        continuityFromSetupId: readRepositoryString(setup.continuityFromSetupId ?? setup.continuity_from_setup_id) || readRepositoryString(payload.continuityFromSetupId),
+        continuityMode: readRepositoryString(setup.continuityMode ?? setup.continuity_mode) || readRepositoryString(payload.continuityMode),
+        usedShotIds: readRepositoryArray(setup.usedShotIds ?? setup.used_shot_ids ?? payload.usedShotIds).map(readRepositoryString).filter(Boolean),
+        blockIds: readRepositoryArray(setup.blockIds ?? setup.block_ids ?? payload.blockIds).map(readRepositoryString).filter(Boolean),
+        streamed: true,
+      })
+    }
   }
 
   const shots = [...shotsById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
@@ -9233,6 +9299,11 @@ function deriveSequenceAnimaticShotContinuityStreamState(input: {
       screenplaySummary: readRepositoryString(latestDone.screenplaySummary),
       shots,
       blocks,
+      coverageSetups,
+      coverage_setups: coverageSetups,
+      coverageSetupByShotId: Object.fromEntries(shots
+        .map((shot) => [readRepositoryString(shot.id), readRepositoryString(shot.coverageSetupId ?? shot.coverage_setup_id)] as const)
+        .filter(([shotId, setupId]) => Boolean(shotId && setupId))),
       sceneGraphAdditions: {
         sets: setNodes,
         zones: zoneNodes,
@@ -9404,7 +9475,10 @@ async function loadSequenceAnimaticStateDirect(
     if (lookupResponse.error) throw new Error(lookupResponse.error.message)
     masterRequest = ((lookupResponse.data ?? []) as OutputRequestRow[])
       .map(mapOutputRequestRow)
-      .find((request) => readOutputRequestScreenplayAnimaticRole(request) === 'master') ?? null
+      .find((request) => (
+        readOutputRequestScreenplayAnimaticRole(request) === 'master'
+        && readRepositoryRecord(request.metadata).sequenceAnimaticStale !== true
+      )) ?? null
     if (!masterRequest) {
       const revision = hashOutputWorkflowValue({
         projectId: payload.projectId,

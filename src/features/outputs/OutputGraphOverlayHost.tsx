@@ -6,6 +6,7 @@ import {
   type OutputRequest,
   type OutputWorkflowNode,
   type OutputWorkflowRun,
+  type OutputWorkflowRunScope,
   type OutputWorkflowRunStep,
 } from '../../domain/outputWorkflow'
 import type { OutputStudioReturnTarget } from '../world-builder/wiki/outputLibraryPresentation'
@@ -37,6 +38,16 @@ type OutputGraphOverlayHostProps = {
     graphRevision?: string | null,
   ) => Promise<unknown> | unknown
   onCancelOutputWorkflowRun: (runId: string) => Promise<unknown> | unknown
+  onStartOutputWorkflowRun?: (request: {
+    workflowId: string
+    prompt?: string
+    targetFormat?: 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video'
+    selectedEntityKeys?: string[]
+    selectedSequenceUnitKeys?: string[]
+    pageCount?: number
+    input?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+  }) => Promise<{ run: OutputWorkflowRun }> | { run: OutputWorkflowRun }
   onSubscribeOutputWorkflowGraphSignals: (input: {
     draftId: string
     workflowId: string
@@ -63,9 +74,25 @@ function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
 }
 
+function readNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 function readOutputRequestGraphRevision(request: OutputRequest | null | undefined) {
   const projection = readRecord(readRecord(request?.metadata).outputStatusProjection)
   return readTrimmedString(projection.graphRevision)
+}
+
+function readOutputTargetFormat(value: unknown): 'pdf' | 'epub' | 'docx' | 'markdown' | 'image' | 'video' {
+  const text = readTrimmedString(value)
+  return text === 'pdf'
+    || text === 'epub'
+    || text === 'docx'
+    || text === 'markdown'
+    || text === 'image'
+    || text === 'video'
+    ? text
+    : 'pdf'
 }
 
 function isActiveOutputWorkflowStepStatus(status: string) {
@@ -169,6 +196,7 @@ export function OutputGraphOverlayHost({
   onLoadOutputWorkflowGraph,
   onLoadOutputWorkflowNodeOutput,
   onCancelOutputWorkflowRun,
+  onStartOutputWorkflowRun,
   onSubscribeOutputWorkflowGraphSignals,
   onUpdateOutputWorkflowNode,
 }: OutputGraphOverlayHostProps) {
@@ -176,6 +204,9 @@ export function OutputGraphOverlayHost({
   const [refreshingGraph, setRefreshingGraph] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [cancelBusy, setCancelBusy] = useState(false)
+  const [runBusy, setRunBusy] = useState(false)
+  const [targetedNodeKeys, setTargetedNodeKeys] = useState<string[]>([])
+  const [targetedRunScope, setTargetedRunScope] = useState<OutputWorkflowRunScope | null>(null)
   const [cancelledRunIds, setCancelledRunIds] = useState<Set<string>>(() => new Set())
   const graphRevisionRef = useRef<string | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
@@ -221,6 +252,87 @@ export function OutputGraphOverlayHost({
     [displayRun, edges, nodes, request, workflow],
   )
   const knownGraphRevision = readOutputRequestGraphRevision(request) || graphRevisionRef.current
+
+  const runTargetedNodes = async (
+    targetNodes: OutputWorkflowNode[],
+    runScope: OutputWorkflowRunScope = 'node_only',
+  ) => {
+    const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
+    if (!targetWorkflow) {
+      setSyncMessage('Workflow graph is still loading.')
+      return
+    }
+    if (!canRunOutputs) {
+      setSyncMessage('Load a live GraphCore draft before running graph nodes.')
+      return
+    }
+    if (typeof onStartOutputWorkflowRun !== 'function') {
+      setSyncMessage('Graph node runner is still loading. Close and reopen the graph, then try again.')
+      return
+    }
+    const uniqueNodes = Array.from(new Map(targetNodes.map((node) => [node.key, node])).values())
+    const nodeKeys = uniqueNodes.map((node) => node.key).filter(Boolean)
+    if (nodeKeys.length === 0) return
+
+    const workflowMetadata = readRecord(targetWorkflow.metadata)
+    const previousInput = activeRun ? readRecord(activeRun.input) : {
+      sourceEntityKeys: readStringArray(workflowMetadata.sourceEntityKeys),
+      sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
+      pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
+    }
+    const targetNodeKeys = runScope === 'artifact_rebake'
+      ? ['artifact']
+      : nodeKeys
+    const forceNodeKeys = runScope === 'artifact_rebake'
+      ? Array.from(new Set([...nodeKeys, 'artifact']))
+      : nodeKeys
+
+    setRunBusy(true)
+    setTargetedRunScope(runScope)
+    setTargetedNodeKeys(nodeKeys)
+    setSyncMessage(`Starting ${nodeKeys.length === 1 ? nodeKeys[0] : `${nodeKeys.length} nodes`}...`)
+    try {
+      const runResponse = await Promise.resolve(onStartOutputWorkflowRun({
+        workflowId: targetWorkflow.id,
+        prompt: activeRun?.prompt || readTrimmedString(workflowMetadata.prompt) || request?.prompt || '',
+        targetFormat: readOutputTargetFormat(activeRun?.targetFormat || workflowMetadata.targetFormat || request?.targetFormat),
+        selectedEntityKeys: readStringArray(previousInput.sourceEntityKeys),
+        selectedSequenceUnitKeys: readStringArray(previousInput.sourceSequenceUnitKeys),
+        pageCount: readNumber(previousInput.pageCount) ?? undefined,
+        input: previousInput,
+        metadata: {
+          sourceRunId: activeRun?.id ?? null,
+          runMode: nodeKeys.length === 1 ? 'targeted_node_preview' : 'targeted_node_batch_preview',
+          requestedRunScope: runScope,
+          effectiveRunScope: runScope,
+          runScope,
+          targetNodeKeys,
+          forceNodeKeys,
+          reuseExistingUpstreamOutputs: true,
+          allowStaleUpstreamOutputs: runScope === 'node_only',
+          startedFrom: 'output_graph_overlay_host',
+        },
+      }))
+      const nextRunId = runResponse.run.id
+      graphRevisionRef.current = null
+      setSelectedNodeKey(nodeKeys[0] ?? null)
+      setSyncMessage('Node run started.')
+      void Promise.resolve(onLoadOutputWorkflowGraph(targetWorkflow.id, nextRunId, nodeKeys[0] ?? null, {
+        knownGraphRevision: null,
+        assetHydrationMode: 'selected',
+      })).catch((error) => {
+        console.warn('[GraphCore] app graph node run refresh delayed.', error)
+      })
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : 'Could not run selected graph node.')
+    } finally {
+      setRunBusy(false)
+      window.setTimeout(() => {
+        setTargetedNodeKeys([])
+        setTargetedRunScope(null)
+      }, 1200)
+    }
+  }
 
   useEffect(() => {
     if (!displayRun) return
@@ -372,7 +484,7 @@ export function OutputGraphOverlayHost({
     <OutputWorkflowGraphOverlay
       activeRun={displayGraphState.displayRun}
       assets={snapshot.assets}
-      canRunOutputs={canRunOutputs && false}
+      canRunOutputs={canRunOutputs && !runBusy}
       edges={displayGraphState.edges}
       nodes={displayGraphState.nodes}
       worldEntities={snapshot.worldEntities as unknown as Array<Record<string, unknown>>}
@@ -380,18 +492,18 @@ export function OutputGraphOverlayHost({
       onCancelRun={cancelActiveRun}
       onClose={onClose}
       onRefreshGraph={() => refreshGraph(false)}
-      onRunNode={() => setSyncMessage('Open Output Studio to run individual graph nodes.')}
-      onRunNodes={() => setSyncMessage('Open Output Studio to run individual graph nodes.')}
+      onRunNode={(node, runScope) => void runTargetedNodes([node], runScope)}
+      onRunNodes={(runNodes, runScope) => void runTargetedNodes(runNodes, runScope)}
       onSaveNode={onUpdateOutputWorkflowNode}
       onSelectNode={(nodeKey) => setSelectedNodeKey(nodeKey)}
       readNodeSkillKeys={readNodeSkillKeys}
       readOutputPreview={readOutputPreview}
-      runErrorMessage={cancelBusy ? 'Cancelling run...' : syncMessage}
+      runErrorMessage={cancelBusy ? 'Cancelling run...' : runBusy ? 'Starting node run...' : syncMessage}
       refreshingGraph={refreshingGraph}
       selectedNodeKey={selectedNodeKey}
       targetedNodeKey={null}
-      targetedNodeKeys={[]}
-      targetedRunScope={null}
+      targetedNodeKeys={targetedNodeKeys}
+      targetedRunScope={targetedRunScope}
       workflow={displayGraphState.workflow}
       worldWiki={readRecord(snapshot.draft.metadata).worldWiki}
     />

@@ -61,7 +61,7 @@ export const cinematicAnimaticModeSchema = z.preprocess(
 
 const sequenceAnimaticMasterMaxShotCount = 150
 export const sequenceAnimaticGraphSpecVersionSchema = z.enum(['sequence_animatic_graph_v1', 'sequence_animatic_graph_v2'])
-export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'director_plan', 'continuity_pack', 'continuity_asset', 'continuity_asset_batch', 'storyboard_block', 'shot_video', 'shot_revision'])
+export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'director_plan', 'continuity_pack', 'continuity_asset', 'continuity_asset_batch', 'storyboard_block', 'coverage_anchor', 'shot_keyframe', 'shot_video', 'shot_revision'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -101,6 +101,7 @@ export const outputWorkflowRunIntentSchema = z.enum([
   'derive_continuity_structure',
   'derive_continuity_block',
   'generate_continuity_asset',
+  'generate_keyframes',
   'generate_block_video',
   'generate_shot_video',
   'revise_sequence_animatic_shot',
@@ -754,6 +755,10 @@ export const sequenceAnimaticDirectorPlanShotSchema = looseObjectSchema.extend({
   propRefIds: z.array(z.string()).default([]),
   locationRefIds: z.array(z.string()).default([]),
   continuityAnchorIds: z.array(z.string()).default([]),
+  coverageSetupId: z.string().default(''),
+  coverage_setup_id: z.string().default(''),
+  continuityLink: looseRecordSchema.default({}),
+  continuity_link: looseRecordSchema.default({}),
   sceneBinding: looseRecordSchema.default({}),
   sceneGraphBinding: looseRecordSchema.default({}),
   assetRequirements: z.array(looseRecordSchema).default([]),
@@ -787,6 +792,9 @@ export const sequenceAnimaticDirectorPlanV1Schema = looseObjectSchema.extend({
   blocks: z.array(sequenceAnimaticDirectorPlanBlockSchema).default([]),
   sceneGraphAdditions: looseRecordSchema.default({}),
   localReferences: z.array(looseRecordSchema).default([]),
+  coverageSetups: z.array(looseRecordSchema).default([]),
+  coverage_setup_by_shot_id: looseRecordSchema.default({}),
+  coverageSetupByShotId: looseRecordSchema.default({}),
   notes: z.array(z.string()).default([]),
   continuityGraphV2: looseRecordSchema.default({}),
   continuity_graph_v2: looseRecordSchema.default({}),
@@ -805,6 +813,7 @@ export const sequenceAnimaticContinuityAssetGenerationStatusSchema = z.enum(['no
 export const sequenceAnimaticContinuityAssetBatchKindSchema = z.enum([
   'location_zone_board',
   'angle_grid',
+  'viewpoint_grid',
   'spot_grid',
   'temp_character_grid',
   'prop_grid',
@@ -935,6 +944,29 @@ export const sequenceAnimaticShotRevisionArtifactV1Schema = looseObjectSchema.ex
   diagnostics: z.array(z.string()).default([]),
 })
 
+export const sequenceAnimaticKeyframeWorkflowEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  mode: z.enum(['generate', 'regenerate']).default('generate'),
+  shotIds: z.array(z.string().min(1)).max(150).optional(),
+  coverageSetupIds: z.array(z.string().min(1)).max(150).optional(),
+})
+
+export const sequenceAnimaticKeyframeWorkflowEnsureResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  keyframePlan: looseRecordSchema.default({}),
+  dependencyWaves: z.array(looseRecordSchema).default([]),
+  continuityAssetRequests: z.array(outputRequestSchema).default([]),
+  coverageAnchorRequests: z.array(outputRequestSchema).default([]),
+  shotKeyframeRequests: z.array(outputRequestSchema).default([]),
+  childRequests: z.array(outputRequestSchema).default([]),
+  workflows: z.array(outputWorkflowSchema).default([]),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+})
+
 export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -1010,15 +1042,16 @@ export const sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema = z.obje
   projectId: z.string().min(1),
   draftId: z.string().min(1),
   masterRequestId: z.string().min(1),
-  continuityRequestId: z.string().min(1),
+  continuityRequestId: z.string().min(1).nullable().optional(),
   nodeId: z.string().min(1),
+  nodeIds: z.array(z.string().min(1)).max(4).optional(),
   mode: z.enum(['generate', 'regenerate']).default('generate'),
 })
 
 export const sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema = z.object({
   ok: z.literal(true),
   masterRequest: outputRequestSchema,
-  continuityRequest: outputRequestSchema,
+  continuityRequest: outputRequestSchema.nullable().default(null),
   assetRequest: outputRequestSchema.nullable().default(null),
   workflow: outputWorkflowSchema.nullable().default(null),
   nodes: z.array(outputWorkflowNodeSchema).default([]),
@@ -3517,15 +3550,15 @@ export function buildCinematicV3ScriptStoryboardPlan(
     ...(screenplayAnimaticMaster
       ? [
         nodeBase({
-          key: 'sequence_animatic_director_plan',
+          key: 'sequence_animatic_scene_graph_assignment',
           nodeType: 'utility_transform',
-          label: 'Shot Continuity Plan',
+          label: 'Scene Graph Assignment',
           x: 1320,
           y: 120,
-          inputs: { prompt: 'Convert the creative screenplay into shots, refs, scene graph bindings, and storyboard blocks.' },
+          inputs: { prompt: 'Assign screenplay scenes to world locations, output-local sets, zones, and spots.' },
           config: {
-            purpose: 'sequence_animatic_director_plan',
-            role: 'sequence_animatic_director_plan',
+            purpose: 'sequence_animatic_scene_graph_assignment',
+            role: 'sequence_animatic_scene_graph_assignment',
             graphSpecVersion: 'sequence_animatic_graph_v2',
             cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
             presetFamily,
@@ -3534,68 +3567,28 @@ export function buildCinematicV3ScriptStoryboardPlan(
             cinematicAnimaticMode,
             aspectRatio,
             resolution,
-            execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_director_plan', maxConcurrency: 1 },
+            execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_scene_graph_assignment', maxConcurrency: 1 },
           },
         }),
         nodeBase({
-          key: 'sequence_animatic_director_plan_artifact',
-          nodeType: 'output_artifact',
-          label: 'Register Shot Continuity Plan',
+          key: 'sequence_animatic_scene_plan_fanout',
+          nodeType: 'utility_transform',
+          label: 'Queue Scene Shot Plans',
           x: 1640,
           y: 120,
           config: {
-            purpose: 'sequence_animatic_director_plan_artifact',
-            artifactKind: 'other',
+            purpose: 'sequence_animatic_scene_plan_fanout',
+            role: 'sequence_animatic_scene_plan_fanout',
             graphSpecVersion: 'sequence_animatic_graph_v2',
             cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
-            execution: { resourceClass: 'utility' },
-          },
-        }),
-        nodeBase({
-          key: 'sequence_animatic_manifest',
-          nodeType: 'utility_transform',
-          label: 'Build Animatic Manifest',
-          x: 1960,
-          y: 120,
-          config: {
-            purpose: 'sequence_animatic_manifest',
-            role: 'sequence_animatic_manifest',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+            presetFamily,
+            maxShotCount,
+            sequenceAnimaticMode,
+            cinematicAnimaticMode,
             aspectRatio,
             resolution,
-            execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 },
-          },
-        }),
-        nodeBase({
-          key: 'artifact',
-          nodeType: 'output_artifact',
-          label: 'Register Animatic Manifest',
-          x: 2240,
-          y: 120,
-          config: {
-            purpose: 'sequence_animatic_manifest_artifact',
-            artifactKind: 'other',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
-            execution: { resourceClass: 'utility' },
-          },
-        }),
-        nodeBase({
-          key: 'sequence_animatic_orchestrator',
-          nodeType: 'utility_transform',
-          label: 'Queue Animatic Blocks',
-          x: 2520,
-          y: 120,
-          config: {
-            purpose: 'sequence_animatic_orchestrator',
-            role: 'sequence_animatic_orchestrator',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
-            blockConcurrency: 1,
-            autoStartStoryboards: true,
-            autoStartVideos: false,
-            execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_orchestrator', maxConcurrency: 1 },
+            scenePlannerConcurrency: 4,
+            execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_plan_fanout', maxConcurrency: 1 },
           },
         }),
       ]
@@ -3657,18 +3650,15 @@ export function buildCinematicV3ScriptStoryboardPlan(
     edgeBase('cinematic_v3_reference_select', 'asset_pack', 'cinematic_v3_screenplay_author', 'asset_pack'),
     ...(screenplayAnimaticMaster
       ? [
-        edgeBase('world_context', 'context', 'sequence_animatic_director_plan', 'context'),
-        edgeBase('skill_context', 'guidance', 'sequence_animatic_director_plan', 'guidance'),
-        edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_director_plan', 'asset_pack'),
-        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_director_plan', 'screenplay'),
-        edgeBase('sequence_animatic_director_plan', 'director_plan', 'sequence_animatic_director_plan_artifact', 'director_plan'),
-        edgeBase('sequence_animatic_director_plan', 'director_plan', 'sequence_animatic_manifest', 'director_plan'),
-        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_manifest', 'screenplay'),
-        edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_manifest', 'asset_pack'),
-        edgeBase('world_context', 'context', 'sequence_animatic_manifest', 'context'),
-        edgeBase('sequence_animatic_manifest', 'manifest', 'artifact', 'input'),
-        edgeBase('sequence_animatic_director_plan_artifact', 'director_plan', 'sequence_animatic_orchestrator', 'director_plan'),
-        edgeBase('artifact', 'manifest', 'sequence_animatic_orchestrator', 'manifest'),
+        edgeBase('world_context', 'context', 'sequence_animatic_scene_graph_assignment', 'context'),
+        edgeBase('skill_context', 'guidance', 'sequence_animatic_scene_graph_assignment', 'guidance'),
+        edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_scene_graph_assignment', 'asset_pack'),
+        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_scene_graph_assignment', 'screenplay'),
+        edgeBase('world_context', 'context', 'sequence_animatic_scene_plan_fanout', 'context'),
+        edgeBase('skill_context', 'guidance', 'sequence_animatic_scene_plan_fanout', 'guidance'),
+        edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_scene_plan_fanout', 'asset_pack'),
+        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_scene_plan_fanout', 'screenplay'),
+        edgeBase('sequence_animatic_scene_graph_assignment', 'scene_package', 'sequence_animatic_scene_plan_fanout', 'scene_package'),
       ]
       : [
         edgeBase('world_context', 'context', 'cinematic_v3_shot_break_plan', 'context'),
@@ -3696,7 +3686,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
     diagnostics: [
       ...graphValidation.diagnostics,
       ...(screenplayAnimaticMaster
-        ? ['Sequence animatic shot-continuity mode is enabled: the creative screenplay feeds one authoritative shot continuity plan before the final manifest and child storyboard orchestration.']
+        ? ['Sequence animatic scene-graph assignment mode is enabled: the creative screenplay is assigned to output-local scene graph packages, scene shot plans run in parallel, then merge into one authoritative shot continuity plan before child storyboard orchestration.']
         : ['Cinematics V3 is enabled: screenplay authors mark shot breaks, parse groups run in parallel, then merged timed shot JSON materializes grouped storyboard sheets.']),
       'V3 omits scene-state, layout, per-shot asset-pack, keyframe QA, and per-shot video nodes for a smaller graph.',
       'Storyboard sheets use deterministic V3 crop grids: 1x1 for one panel, 1x2 for two, 2x2 for three to four, 2x3 for five to six, and 3x3 for seven to nine panels.',
@@ -4210,6 +4200,7 @@ export type SequenceAnimaticContinuityWorkflowEnsureResponse = z.infer<typeof se
 export type SequenceAnimaticContinuityBlockDeriveResponse = z.infer<typeof sequenceAnimaticContinuityBlockDeriveResponseSchema>
 export type SequenceAnimaticContinuityStructureDeriveResponse = z.infer<typeof sequenceAnimaticContinuityStructureDeriveResponseSchema>
 export type SequenceAnimaticContinuityAssetWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema>
+export type SequenceAnimaticKeyframeWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticKeyframeWorkflowEnsureResponseSchema>
 export type SequenceAnimaticShotRevisionWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema>
 export type SequenceAnimaticStateResponse = z.infer<typeof sequenceAnimaticStateResponseSchema>
 export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphRequestSchema>

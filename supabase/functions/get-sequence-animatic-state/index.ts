@@ -135,6 +135,7 @@ function readShotContinuityStreamState(input: {
   const zoneNodes: Record<string, unknown>[] = []
   const spotNodes: Record<string, unknown>[] = []
   const angleNodes: Record<string, unknown>[] = []
+  const coverageSetups: Record<string, unknown>[] = []
   const localReferences: Record<string, unknown>[] = []
   const doneEvents: Record<string, unknown>[] = []
   let sawStarted = false
@@ -213,6 +214,32 @@ function readShotContinuityStreamState(input: {
         })
       }
     }
+    if (event.eventType === 'coverage_setup_registered') {
+      const setup = asRecord(payload.coverageSetup)
+      const setupId = readText(setup.id) || readText(payload.setupId)
+      if (setupId) {
+        coverageSetups.push({
+          ...setup,
+          id: setupId,
+          sceneId: readText(setup.sceneId ?? setup.scene_id) || readText(payload.sceneId),
+          setupKind: readText(setup.setupKind ?? setup.setup_kind) || readText(payload.setupKind),
+          title: readText(setup.title) || readText(payload.title) || setupId,
+          setId: readText(setup.setId ?? setup.set_id) || readText(payload.setId),
+          zoneId: readText(setup.zoneId ?? setup.zone_id) || readText(payload.zoneId),
+          primarySpotId: readText(setup.primarySpotId ?? setup.primary_spot_id) || readText(payload.primarySpotId),
+          spotIds: readArray(setup.spotIds ?? setup.spot_ids ?? payload.spotIds).map(readText).filter(Boolean),
+          viewpointId: readText(setup.viewpointId ?? setup.viewpoint_id) || readText(payload.viewpointId),
+          characterRefIds: readArray(setup.characterRefIds ?? setup.character_ref_ids ?? payload.characterRefIds).map(readText).filter(Boolean),
+          screenDirection: readText(setup.screenDirection ?? setup.screen_direction) || readText(payload.screenDirection),
+          stagingBrief: readText(setup.stagingBrief ?? setup.staging_brief) || readText(payload.stagingBrief),
+          continuityFromSetupId: readText(setup.continuityFromSetupId ?? setup.continuity_from_setup_id) || readText(payload.continuityFromSetupId),
+          continuityMode: readText(setup.continuityMode ?? setup.continuity_mode) || readText(payload.continuityMode),
+          usedShotIds: readArray(setup.usedShotIds ?? setup.used_shot_ids ?? payload.usedShotIds).map(readText).filter(Boolean),
+          blockIds: readArray(setup.blockIds ?? setup.block_ids ?? payload.blockIds).map(readText).filter(Boolean),
+          streamed: true,
+        })
+      }
+    }
   }
 
   const shots = [...shotsById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
@@ -261,6 +288,11 @@ function readShotContinuityStreamState(input: {
       screenplaySummary: readText(latestDone.screenplaySummary),
       shots,
       blocks,
+      coverageSetups,
+      coverage_setups: coverageSetups,
+      coverageSetupByShotId: Object.fromEntries(shots
+        .map((shot) => [readText(shot.id), readText(shot.coverageSetupId ?? shot.coverage_setup_id)] as const)
+        .filter(([shotId, setupId]) => Boolean(shotId && setupId))),
       sceneGraphAdditions: {
         sets: setNodes,
         zones: zoneNodes,
@@ -513,7 +545,11 @@ Deno.serve(async (request) => {
       if (lookupResponse.error) throw new Error(lookupResponse.error.message)
       const candidate = (lookupResponse.data ?? [])
         .map(mapOutputRequestRow)
-        .find((entry) => readScreenplayAnimaticRole(asRecord(entry.metadata)) === 'master') ?? null
+        .find((entry) => {
+          const metadata = asRecord(entry.metadata)
+          return readScreenplayAnimaticRole(metadata) === 'master'
+            && metadata.sequenceAnimaticStale !== true
+        }) ?? null
       if (!candidate) {
         const revision = hashOutputWorkflowValue({
           projectId: payload.projectId,

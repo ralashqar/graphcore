@@ -6100,7 +6100,41 @@ export default function App() {
     const result = await workspaceService.ensureSequenceAnimaticContinuityAssetWorkflow(snapshot, request)
     const current = snapshotRef.current ?? snapshot
     const workflows = result.workflow ? [result.workflow] : []
-    const requests = [result.masterRequest, result.continuityRequest, ...(result.assetRequest ? [result.assetRequest] : [])]
+    const requests = [result.masterRequest, ...(result.continuityRequest ? [result.continuityRequest] : []), ...(result.assetRequest ? [result.assetRequest] : [])]
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+      outputWorkflows: [
+        ...workflows,
+        ...current.outputWorkflows.filter((workflow) => !workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
+  async function ensureSequenceAnimaticKeyframeWorkflows(request: Parameters<typeof workspaceService.ensureSequenceAnimaticKeyframeWorkflows>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before generating sequence animatic keyframes.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic keyframes require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticKeyframeWorkflows(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const workflows = result.workflows
+    const requests = [result.masterRequest, ...result.childRequests]
     commitPersistedSnapshot({
       ...current,
       outputRequests: [
@@ -8738,6 +8772,7 @@ export default function App() {
                 onDeriveSequenceAnimaticContinuityBlock={deriveSequenceAnimaticContinuityBlock}
                 onDeriveSequenceAnimaticContinuityStructure={deriveSequenceAnimaticContinuityStructure}
                 onEnsureSequenceAnimaticContinuityAssetWorkflow={ensureSequenceAnimaticContinuityAssetWorkflow}
+                onEnsureSequenceAnimaticKeyframeWorkflows={ensureSequenceAnimaticKeyframeWorkflows}
                 onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}
                 onSubscribeSequenceAnimaticStateSignals={workspaceService.subscribeSequenceAnimaticStateSignals}
@@ -9148,6 +9183,7 @@ export default function App() {
             onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
             onLoadOutputWorkflowNodeOutput={loadOutputWorkflowNodeOutput}
             onCancelOutputWorkflowRun={cancelOutputWorkflowRun}
+            onStartOutputWorkflowRun={startOutputWorkflowRun}
             onSubscribeOutputWorkflowGraphSignals={workspaceService.subscribeOutputWorkflowGraphSignals}
             onUpdateOutputWorkflowNode={updateOutputWorkflowNode}
           />

@@ -77,6 +77,83 @@ function isCinematicOutputKind(outputKind: string) {
   return outputKind === 'cinematic_episode' || outputKind === 'cinematic_trailer' || outputKind === 'ugc_episode'
 }
 
+async function markPreviousSequenceAnimaticMastersStale(input: {
+  client: any
+  projectId: string
+  draftId: string
+  replacementRequestId: string
+  selectedSequenceUnitKeys: string[]
+}) {
+  const sequenceKeys = [...new Set(input.selectedSequenceUnitKeys.map((key) => key.trim()).filter(Boolean))]
+  if (sequenceKeys.length === 0) return
+
+  const previousResponse = await input.client
+    .from('output_requests')
+    .select('id, latest_run_id, status, metadata, selected_sequence_unit_keys, parent_request_id, source_surface')
+    .eq('project_id', input.projectId)
+    .eq('draft_id', input.draftId)
+    .is('parent_request_id', null)
+    .contains('selected_sequence_unit_keys', sequenceKeys)
+    .neq('id', input.replacementRequestId)
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (previousResponse.error) throw new Error(previousResponse.error.message)
+
+  const now = new Date().toISOString()
+  const activeStatuses = new Set(['planning', 'queued', 'running'])
+  for (const row of previousResponse.data ?? []) {
+    const metadata = recordFromUnknown(row.metadata)
+    const role = textFromUnknown(metadata.screenplayAnimaticRole) || textFromUnknown(metadata.sequenceAnimaticRole)
+    const selectedKeys = stringArrayFromUnknown(row.selected_sequence_unit_keys)
+    const sameSequence = sequenceKeys.every((key) => selectedKeys.includes(key))
+    if (
+      role !== 'master'
+      || metadata.sequenceAnimaticStale === true
+      || row.source_surface !== 'wiki_sequence_unit'
+      || !sameSequence
+    ) continue
+
+    const runId = textFromUnknown(row.latest_run_id)
+    let cancelWarning = ''
+    if (runId && activeStatuses.has(textFromUnknown(row.status))) {
+      try {
+        const cancelResponse = await input.client.rpc('cancel_output_workflow_run', { run_id: runId })
+        if (cancelResponse.error) {
+          cancelWarning = cancelResponse.error.message
+        }
+      } catch (error) {
+        cancelWarning = error instanceof Error ? error.message : String(error)
+      }
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      metadata: {
+        ...metadata,
+        sequenceAnimaticStale: true,
+        sequenceAnimaticStaleAt: now,
+        sequenceAnimaticReplacedByRequestId: input.replacementRequestId,
+        ...(cancelWarning ? { sequenceAnimaticCancelWarning: cancelWarning } : {}),
+      },
+    }
+    if (activeStatuses.has(textFromUnknown(row.status))) {
+      updatePayload.status = 'cancelled'
+      updatePayload.error_message = null
+    }
+
+    const updateResponse = await input.client
+      .from('output_requests')
+      .update(updatePayload)
+      .eq('id', row.id)
+    if (updateResponse.error) throw new Error(updateResponse.error.message)
+
+    try {
+      await input.client.rpc('refresh_output_request_status_projection', { p_request_id: row.id })
+    } catch {
+      // Status projection refresh is best-effort here; stale marking already persisted.
+    }
+  }
+}
+
 function buildVariantScopeCatalog(variants: Record<string, unknown>[]) {
   return variants
     .slice(0, 12)
@@ -900,6 +977,18 @@ Deno.serve(async (request) => {
       .single()
     if (requestUpdateResponse.error || !requestUpdateResponse.data) throw new Error(requestUpdateResponse.error?.message ?? 'Failed to update output request.')
     outputRequest = mapOutputRequestRow(requestUpdateResponse.data)
+
+    if (sequenceAnimaticMasterRequest) {
+      await markPreviousSequenceAnimaticMastersStale({
+        client,
+        projectId: payload.projectId,
+        draftId: payload.draftId,
+        replacementRequestId: outputRequest.id,
+        selectedSequenceUnitKeys: plan.sourceSequenceUnitKeys.length > 0
+          ? plan.sourceSequenceUnitKeys
+          : payload.selectedSequenceUnitKeys,
+      })
+    }
 
     const artifactsResponse = await client
       .from('output_artifacts')
