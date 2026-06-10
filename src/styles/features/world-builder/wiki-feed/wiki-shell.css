@@ -4414,12 +4414,34 @@
   color: rgba(226, 232, 240, 0.9);
 }
 
-/* Keep gate action buttons at their natural size instead of stretching to the
-   full grid cell (which made the inspect-scene button balloon vertically). */
-.world-wiki-sequence-animatic-scene-gate button {
+/* Match the compact toolbar buttons (Master graph / Continuity Graph): a short
+   rectangular button with a small leading icon, not a stretched grid cell. */
+.world-wiki-sequence-animatic-scene-gate .ghost-button,
+.world-wiki-sequence-animatic-scene-gate .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   width: auto;
   align-self: start;
   justify-self: start;
+  min-height: 32px;
+  height: 32px;
+  max-height: 32px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.world-wiki-sequence-animatic-scene-gate .ghost-button svg,
+.world-wiki-sequence-animatic-scene-gate .primary-button svg,
+.world-wiki-sequence-animatic-scene-gate .ghost-button .entity-icon-image,
+.world-wiki-sequence-animatic-scene-gate .primary-button .entity-icon-image {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 
 .world-wiki-sequence-animatic-empty pre {
