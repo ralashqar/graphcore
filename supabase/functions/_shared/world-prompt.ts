@@ -13503,7 +13503,7 @@ async function readWorldPromptGenerationQueueMessage(client: SupabaseClient) {
 
 async function kickWorldPromptGenerationWorker() {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const serviceRoleKey = Deno.env.get('SB_SECRET_KEY')?.trim() || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   if (!supabaseUrl || !serviceRoleKey) return
   const invoke = fetch(`${supabaseUrl.replace(/\/+$/, '')}/functions/v1/process-world-generation-jobs`, {
     method: 'POST',

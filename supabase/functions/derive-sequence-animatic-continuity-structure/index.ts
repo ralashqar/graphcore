@@ -1,4 +1,4 @@
-import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
+import { createAdminClient, requireUserClient, resolvePublishableKey } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
   mapOutputRequestRow,
@@ -282,7 +282,7 @@ Deno.serve(async (request) => {
       headers: {
         'content-type': 'application/json',
         authorization: request.headers.get('authorization') ?? '',
-        apikey: Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+        apikey: resolvePublishableKey() ?? '',
       },
       body: JSON.stringify({
         projectId: payload.projectId,

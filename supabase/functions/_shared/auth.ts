@@ -2,9 +2,20 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import { HttpError } from './http.ts'
 
+// New-style API keys (sb_secret_/sb_publishable_) are provided as custom function
+// secrets because the platform-injected SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY
+// stop working once legacy JWT-based API keys are disabled for the project.
+export function resolveServiceRoleKey() {
+  return Deno.env.get('SB_SECRET_KEY')?.trim() || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+}
+
+export function resolvePublishableKey() {
+  return Deno.env.get('SB_PUBLISHABLE_KEY')?.trim() || Deno.env.get('SUPABASE_ANON_KEY')
+}
+
 export async function requireUserClient(request: Request, functionName: string) {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
+  const anonKey = resolvePublishableKey()
   const authHeader = request.headers.get('Authorization')
 
   if (!supabaseUrl || !anonKey) {
@@ -55,7 +66,7 @@ export async function requireAuthedAdminClient(request: Request, functionName: s
 
 export function createAdminClient(functionName: string) {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const serviceRoleKey = resolveServiceRoleKey()
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new HttpError(500, `Supabase service role environment is incomplete for ${functionName}.`)
