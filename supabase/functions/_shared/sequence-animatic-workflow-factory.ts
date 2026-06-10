@@ -129,6 +129,107 @@ export function sequenceAnimaticWorkflowEdge(
   }
 }
 
+/**
+ * Per-scene shot-plan child workflow: a self-contained "mini animatic" for one
+ * screenplay scene. The scene streams its own shot continuity plan, normalizes
+ * it through the (single-entry) scene plan merge, and registers its own
+ * director-plan and manifest artifacts — no cross-scene merge exists by design;
+ * the combined animatic is simply the ordered list of scene children.
+ */
+export function buildSequenceAnimaticSceneWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  sceneId: string
+  sceneIndex: number
+  sceneTitle: string
+  scenePackageOutput: Record<string, unknown>
+  screenplayText: string
+  assetPack: Record<string, unknown>
+  context: Record<string, unknown>
+  guidance: Record<string, unknown>
+  maxShotCount: number
+  aspectRatio: string
+  resolution: string
+}) {
+  const role = 'scene_shot_plan'
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersionV2,
+    cinematicPipelineVersion: 'v3_script_storyboards',
+    ...input.commonConfig,
+    sceneId: input.sceneId,
+    sceneIndex: input.sceneIndex,
+    aspectRatio: input.aspectRatio,
+    resolution: input.resolution,
+  }
+  const shotPlanNodeKey = `sequence_animatic_scene_shot_plan_${input.sceneId}`
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'scene_input', 'utility_transform', `Scene ${input.sceneIndex} Input`, 80, 120, {
+      ...config,
+      purpose: 'sequence_animatic_scene_input',
+      scenePackage: input.scenePackageOutput,
+      screenplayText: input.screenplayText,
+      assetPack: input.assetPack,
+      context: input.context,
+      guidance: input.guidance,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_input', maxConcurrency: 1 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, shotPlanNodeKey, 'utility_transform', `Scene ${input.sceneIndex} Shot Plan`, 360, 120, {
+      ...config,
+      purpose: 'sequence_animatic_scene_shot_plan',
+      role: 'sequence_animatic_scene_shot_plan',
+      maxShotCount: input.maxShotCount,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_scene_shot_plan', maxConcurrency: 1 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_scene_plan_merge', 'utility_transform', 'Normalize Scene Shot Plan', 640, 120, {
+      ...config,
+      purpose: 'sequence_animatic_scene_plan_merge',
+      role: 'sequence_animatic_director_plan',
+      maxShotCount: input.maxShotCount,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_plan_merge', maxConcurrency: 1 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_director_plan_artifact', 'output_artifact', 'Register Scene Shot Plan', 920, 120, {
+      ...config,
+      purpose: 'sequence_animatic_director_plan_artifact',
+      artifactKind: 'other',
+      execution: { resourceClass: 'utility' },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_manifest', 'utility_transform', 'Build Scene Manifest', 1200, 120, {
+      ...config,
+      purpose: 'sequence_animatic_manifest',
+      role: 'sequence_animatic_manifest',
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'artifact', 'output_artifact', 'Register Scene Manifest', 1480, 120, {
+      ...config,
+      purpose: 'sequence_animatic_manifest_artifact',
+      artifactKind: 'other',
+      execution: { resourceClass: 'utility' },
+    }, {}, role),
+  ]
+  const edge = (key: string, sourceNodeKey: string, sourcePort: string, targetNodeKey: string, targetPort: string) =>
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, key, sourceNodeKey, sourcePort, targetNodeKey, targetPort, { graphSpecVersion: sequenceAnimaticGraphSpecVersionV2 }, role)
+  const edges = [
+    edge('scene_input__shot_plan_scene_package', 'scene_input', 'scene_package', shotPlanNodeKey, 'scene_package'),
+    edge('scene_input__shot_plan_screenplay', 'scene_input', 'screenplay', shotPlanNodeKey, 'screenplay'),
+    edge('scene_input__shot_plan_context', 'scene_input', 'context', shotPlanNodeKey, 'context'),
+    edge('scene_input__shot_plan_guidance', 'scene_input', 'guidance', shotPlanNodeKey, 'guidance'),
+    edge('scene_input__shot_plan_asset_pack', 'scene_input', 'asset_pack', shotPlanNodeKey, 'asset_pack'),
+    edge('shot_plan__scene_plan_merge', shotPlanNodeKey, 'scene_plan', 'sequence_animatic_scene_plan_merge', 'scene_plan'),
+    edge('scene_input__merge_scene_package', 'scene_input', 'scene_package', 'sequence_animatic_scene_plan_merge', 'scene_package'),
+    edge('scene_input__merge_screenplay', 'scene_input', 'screenplay', 'sequence_animatic_scene_plan_merge', 'screenplay'),
+    edge('scene_input__merge_asset_pack', 'scene_input', 'asset_pack', 'sequence_animatic_scene_plan_merge', 'asset_pack'),
+    edge('scene_input__merge_context', 'scene_input', 'context', 'sequence_animatic_scene_plan_merge', 'context'),
+    edge('scene_plan_merge__director_plan_artifact', 'sequence_animatic_scene_plan_merge', 'director_plan', 'sequence_animatic_director_plan_artifact', 'director_plan'),
+    edge('scene_plan_merge__manifest', 'sequence_animatic_scene_plan_merge', 'director_plan', 'sequence_animatic_manifest', 'director_plan'),
+    edge('scene_input__manifest_screenplay', 'scene_input', 'screenplay', 'sequence_animatic_manifest', 'screenplay'),
+    edge('scene_input__manifest_asset_pack', 'scene_input', 'asset_pack', 'sequence_animatic_manifest', 'asset_pack'),
+    edge('scene_input__manifest_context', 'scene_input', 'context', 'sequence_animatic_manifest', 'context'),
+    edge('manifest__artifact', 'sequence_animatic_manifest', 'manifest', 'artifact', 'input'),
+  ]
+  return { nodes, edges, shotPlanNodeKey }
+}
+
 export function buildSequenceAnimaticBlockWorkflowGraph(input: {
   workflowId: string
   draftId: string

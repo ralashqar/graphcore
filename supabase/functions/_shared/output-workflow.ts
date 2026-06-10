@@ -46,6 +46,7 @@ import {
 import {
   buildSequenceAnimaticBlockWorkflowGraph,
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
+  buildSequenceAnimaticSceneWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
   sequenceAnimaticStoryboardImageSize,
   sequenceAnimaticStableHash,
@@ -4963,7 +4964,7 @@ async function startSequenceAnimaticChildRun(input: {
   client: DatabaseClient
   request: OutputRequest
   workflowId: string
-  runIntent: 'prepare_storyboard_block' | 'generate_continuity_asset'
+  runIntent: 'prepare_storyboard_block' | 'generate_continuity_asset' | 'generate_scene_shot_plan'
   targetNodeKeys: string[]
 }) {
   await augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets({
@@ -5107,6 +5108,231 @@ async function startSequenceAnimaticChildRun(input: {
   if (updateRequest.error) throw new Error(updateRequest.error.message)
   await input.client.rpc('refresh_output_request_status_projection', { p_request_id: input.request.id })
   return { started: true, runId: readText(runRow.id), status: 'queued' }
+}
+
+/**
+ * Ensure one scene shot-plan child workflow per registered scene. Each scene is a
+ * self-contained mini animatic (own shot plan, director plan, and manifest); no
+ * cross-scene merge exists by design. Shared by the worker auto-start hook and
+ * the ensure-sequence-animatic-scene-workflows edge function.
+ */
+export async function ensureSequenceAnimaticSceneShotPlanWorkflows(input: {
+  client: DatabaseClient
+  masterRequest: OutputRequest
+  scenePackageOutput: Record<string, unknown>
+  screenplayText: string
+  assetPack: Record<string, unknown>
+  context: Record<string, unknown>
+  guidance: Record<string, unknown>
+  maxShotCount: number
+  aspectRatio: string
+  resolution: string
+  sceneIds?: string[]
+}): Promise<OutputRequest[]> {
+  const masterRequest = input.masterRequest
+  const masterMetadata = asRecord(masterRequest.metadata)
+  const screenplayAnimaticSource = readText(masterMetadata.screenplayAnimaticSource) === 'prompt_cinematic' ? 'prompt_cinematic' : 'wiki_sequence_unit'
+  const parsedPackage = sequenceAnimaticScenePackageOutputSchema.parse(input.scenePackageOutput)
+  const scenePackages = (parsedPackage.scenePackages.length > 0 ? parsedPackage.scenePackages : parsedPackage.screenplayScenes)
+    .slice()
+    .sort((left, right) => (left.index || 9999) - (right.index || 9999))
+  if (scenePackages.length === 0) throw new Error('Sequence animatic scene ensure requires registered screenplay scenes.')
+  if (!input.screenplayText) throw new Error('Sequence animatic scene ensure requires the authored screenplay text.')
+  const existingChildrenResponse = await input.client
+    .from('output_requests')
+    .select(outputRequestSelect)
+    .eq('project_id', masterRequest.projectId)
+    .eq('draft_id', masterRequest.draftId)
+    .eq('parent_request_id', masterRequest.id)
+    .order('created_at', { ascending: true })
+  if (existingChildrenResponse.error) throw new Error(existingChildrenResponse.error.message)
+  const existingChildren = (existingChildrenResponse.data ?? []).map(mapOutputRequestRow)
+  const existingBySceneId = new Map(existingChildren
+    .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'scene_shot_plan')
+    .map((child) => [readText(asRecord(child.metadata).sceneId), child] as const)
+    .filter(([id]) => id))
+  const selectedSceneIds = input.sceneIds && input.sceneIds.length > 0 ? new Set(input.sceneIds) : null
+  const now = new Date().toISOString()
+  const childRequests: OutputRequest[] = []
+  for (const scene of scenePackages) {
+    const sceneId = readText(scene.sceneId)
+    if (!sceneId) continue
+    if (selectedSceneIds && !selectedSceneIds.has(sceneId)) {
+      const existing = existingBySceneId.get(sceneId)
+      if (existing) childRequests.push(existing)
+      continue
+    }
+    const existing = existingBySceneId.get(sceneId)
+    if (existing) {
+      childRequests.push(existing)
+      continue
+    }
+    const sceneScopedPackageOutput = {
+      ...parsedPackage,
+      scenePackages: [scene],
+      screenplayScenes: [scene],
+      dialogueRows: scene.dialogueRows,
+    }
+    const sceneHash = sequenceAnimaticStableHash({ scene, screenplayLength: input.screenplayText.length })
+    const workflowId = crypto.randomUUID()
+    const commonConfig = {
+      cinematicPipelineVersion: 'v3_script_storyboards',
+      graphSpecVersion: 'sequence_animatic_graph_v2',
+      screenplayAnimaticRole: 'scene_shot_plan',
+      screenplayAnimaticSource,
+      sequenceAnimaticRole: 'scene_shot_plan',
+      parentRequestId: masterRequest.id,
+      masterRequestId: masterRequest.id,
+      sceneId,
+      sceneIndex: Number(scene.index) || 0,
+      sceneTitle: readText(scene.title),
+      sceneHash,
+      sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
+      sourceMasterWorkflowId: masterRequest.workflowId,
+    }
+    const { nodes, edges } = buildSequenceAnimaticSceneWorkflowGraph({
+      workflowId,
+      draftId: masterRequest.draftId,
+      commonConfig,
+      sceneId,
+      sceneIndex: Number(scene.index) || 0,
+      sceneTitle: readText(scene.title),
+      scenePackageOutput: sceneScopedPackageOutput,
+      screenplayText: input.screenplayText,
+      assetPack: input.assetPack,
+      context: input.context,
+      guidance: input.guidance,
+      maxShotCount: input.maxShotCount,
+      aspectRatio: input.aspectRatio,
+      resolution: input.resolution,
+    })
+    const workflowPayload = {
+      project_id: masterRequest.projectId,
+      draft_id: masterRequest.draftId,
+      key: `sequence_animatic_scene_${slugify(masterRequest.id)}_${slugify(sceneId)}_${sceneHash.slice(0, 8)}`,
+      name: `${masterRequest.title} / Scene ${Number(scene.index) || ''}: ${readText(scene.title) || sceneId}`.trim(),
+      description: 'Sequence animatic per-scene shot plan workflow.',
+      preset: 'cinematic_episode_from_sequence',
+      status: 'active',
+      created_by: masterRequest.requestedBy,
+      metadata: { ...commonConfig, readyToRun: true },
+    }
+    const requestPayload = {
+      project_id: masterRequest.projectId,
+      draft_id: masterRequest.draftId,
+      parent_request_id: masterRequest.id,
+      requested_by: masterRequest.requestedBy,
+      source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
+      prompt: `${masterRequest.prompt}\n\nPlan shots and continuity for ${sceneId} (${readText(scene.title) || 'scene'}).`,
+      title: `${masterRequest.title} / Scene ${Number(scene.index) || ''}: ${readText(scene.title) || sceneId}`.trim(),
+      intent: 'output_generation',
+      output_kind: 'cinematic_episode',
+      status: 'awaiting_confirmation',
+      selected_entity_keys: masterRequest.selectedEntityKeys,
+      selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
+      page_count: null,
+      target_format: 'video',
+      planner_notes: 'Per-scene shot plan workflow prepared from the registered scene index.',
+      metadata: {
+        ...commonConfig,
+        readyToRun: true,
+        createdFromSceneIndexAt: now,
+      },
+    }
+    const ensureResponse = await input.client.rpc('ensure_sequence_animatic_child_workflow', {
+      p_project_id: masterRequest.projectId,
+      p_draft_id: masterRequest.draftId,
+      p_parent_request_id: masterRequest.id,
+      p_role: 'scene_shot_plan',
+      p_identity_key: 'sceneId',
+      p_identity_value: sceneId,
+      p_workflow: workflowPayload,
+      p_nodes: nodes,
+      p_edges: edges,
+      p_request: requestPayload,
+    })
+    if (ensureResponse.error || !ensureResponse.data) {
+      throw new Error(ensureResponse.error?.message ?? `Failed to ensure scene shot plan workflow for ${sceneId}.`)
+    }
+    const ensured = asRecord(ensureResponse.data)
+    const child = mapOutputRequestRow(asRecord(ensured.request) as never)
+    existingBySceneId.set(sceneId, child)
+    childRequests.push(child)
+  }
+  return childRequests.sort((left, right) => (Number(asRecord(left.metadata).sceneIndex ?? 0) || 9999) - (Number(asRecord(right.metadata).sceneIndex ?? 0) || 9999))
+}
+
+/**
+ * After a sequence-animatic master run completes (scenes registered), ensure the
+ * per-scene child workflows exist and auto-start only the first scene; the rest
+ * are generated on demand from the UI.
+ */
+async function maybeStartFirstSequenceAnimaticScene(input: {
+  client: DatabaseClient
+  run: OutputWorkflowRun
+  outputsByNodeKey: Record<string, Record<string, unknown>>
+}) {
+  const registerOutputs = asRecord(input.outputsByNodeKey.sequence_animatic_scene_register)
+  if (Object.keys(registerOutputs).length === 0) return null
+  const runMetadata = asRecord(input.run.metadata)
+  const masterRequestId = readText(runMetadata.outputRequestId) || readText(runMetadata.masterRequestId)
+  if (!masterRequestId) return null
+  const masterResponse = await input.client
+    .from('output_requests')
+    .select(outputRequestSelect)
+    .eq('id', masterRequestId)
+    .single()
+  if (masterResponse.error || !masterResponse.data) return null
+  const masterRequest = mapOutputRequestRow(masterResponse.data)
+  const planningDefaults = asRecord(registerOutputs.planningDefaults)
+  const screenplayText = readText(asRecord(input.outputsByNodeKey.cinematic_v3_screenplay_author).text)
+  const scenePackageOutput = asRecord(registerOutputs.scenePackage ?? registerOutputs.scene_package)
+  const assetPack = asRecord(asRecord(input.outputsByNodeKey.cinematic_v3_reference_select).assetPack
+    ?? asRecord(input.outputsByNodeKey.cinematic_v3_reference_select).asset_pack)
+  const context = asRecord(asRecord(input.outputsByNodeKey.world_context).context)
+  const guidance = asRecord(asRecord(input.outputsByNodeKey.skill_context).guidance)
+  if (!screenplayText || Object.keys(scenePackageOutput).length === 0) return null
+  const children = await ensureSequenceAnimaticSceneShotPlanWorkflows({
+    client: input.client,
+    masterRequest,
+    scenePackageOutput,
+    screenplayText,
+    assetPack,
+    context,
+    guidance,
+    maxShotCount: Number(planningDefaults.maxShotCount ?? 0) || 150,
+    aspectRatio: readText(planningDefaults.aspectRatio) || '16:9',
+    resolution: readText(planningDefaults.resolution) || '720p',
+  })
+  if (planningDefaults.autoStartFirstScene !== true) return children
+  const firstScene = children[0] ?? null
+  if (!firstScene?.workflowId) return children
+  if (firstScene.status === 'running' || firstScene.status === 'queued' || firstScene.status === 'planning' || firstScene.status === 'completed') return children
+  const started = await startSequenceAnimaticChildRun({
+    client: input.client,
+    request: firstScene,
+    workflowId: firstScene.workflowId,
+    runIntent: 'generate_scene_shot_plan',
+    targetNodeKeys: ['artifact'],
+  })
+  await insertSequenceAnimaticEvent({
+    client: input.client,
+    projectId: input.run.projectId,
+    draftId: input.run.draftId,
+    requestId: masterRequest.id,
+    workflowId: firstScene.workflowId,
+    runId: readText(asRecord(started).runId) || null,
+    eventType: 'scene_started',
+    payload: {
+      sceneId: readText(asRecord(firstScene.metadata).sceneId),
+      sceneIndex: Number(asRecord(firstScene.metadata).sceneIndex ?? 0) || 1,
+      requestId: firstScene.id,
+      autoStarted: true,
+    },
+    metadata: { source: 'sequence_animatic_scene_auto_start' },
+    dedupe: { sceneId: readText(asRecord(firstScene.metadata).sceneId) },
+  }).catch(() => null)
+  return children
 }
 
 async function maybeStartNextSequenceAnimaticStoryboardBlock(input: {
@@ -23286,7 +23512,10 @@ async function executeNode(input: {
         }
         const manifestHash = hashOutputWorkflowValue(manifest)
         const masterManifestArtifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(scenePackage.sceneId)}-scene-shot-plan`
-        const outputRequestId = readText(input.run.metadata?.outputRequestId) || readText(input.run.metadata?.masterRequestId)
+        // Streamed shot/coverage events go to the MASTER request: scene child runs
+        // carry their own request id in outputRequestId, but the client's live
+        // animatic view subscribes to the master request's event stream.
+        const outputRequestId = readText(input.run.metadata?.masterRequestId) || readText(input.run.metadata?.outputRequestId)
         if (!outputRequestId) throw new Error('Scene shot continuity stream requires an output request id.')
         let result: Awaited<ReturnType<typeof runSequenceAnimaticShotContinuityPlanStream>>
         try {
@@ -23397,6 +23626,111 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || undefined }
       }
+      if (purpose === 'sequence_animatic_scene_input') {
+        const config = asRecord(input.node.config)
+        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(asRecord(config.scenePackage))
+        const screenplayText = readText(config.screenplayText)
+        if (!screenplayText) throw new Error('Sequence animatic scene input requires the authored screenplay text.')
+        const screenplayDraft = { screenplayMarkdown: screenplayText, text: screenplayText }
+        const assetPack = asRecord(config.assetPack)
+        const context = asRecord(config.context)
+        const guidance = asRecord(config.guidance)
+        const outputs = {
+          scenePackage: scenePackageOutput,
+          scene_package: scenePackageOutput,
+          screenplayDraft,
+          screenplay_draft: screenplayDraft,
+          screenplay: screenplayDraft,
+          assetPack,
+          asset_pack: assetPack,
+          context,
+          guidance,
+          sceneId: readText(config.sceneId),
+          sceneIndex: Number(config.sceneIndex ?? 0) || 0,
+          text: screenplayText,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_scene_register') {
+        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(readFirstUpstreamRecord(input.upstream, ['scenePackage', 'scene_package']))
+        const scenePackages = scenePackageOutput.scenePackages.length > 0
+          ? scenePackageOutput.scenePackages
+          : scenePackageOutput.screenplayScenes
+        if (scenePackages.length === 0) throw new Error('Sequence animatic scene registration requires at least one screenplay scene.')
+        const orderedScenes = [...scenePackages].sort((left, right) => (left.index || 9999) - (right.index || 9999))
+        const scenes = orderedScenes.map((scene, index) => ({
+          id: scene.sceneId,
+          index: Number(scene.index) || index + 1,
+          title: readText(scene.title) || `Scene ${index + 1}`,
+          summary: compactSequenceAnimaticText(scene.sourceText, 280),
+          setId: scene.setId || '',
+          zoneId: scene.zoneId || '',
+          worldLocationRefId: scene.worldLocationRefId || scene.locationRefId || '',
+          dialogueRowCount: scene.dialogueRows.length,
+          autoStart: index === 0 && input.node.config.autoStartFirstScene === true,
+        }))
+        const outputRequestId = readText(input.run.metadata?.outputRequestId) || readText(input.run.metadata?.masterRequestId)
+        if (outputRequestId) {
+          await insertSequenceAnimaticEvent({
+            client: input.client,
+            projectId: input.run.projectId,
+            draftId: input.run.draftId,
+            requestId: outputRequestId,
+            workflowId: input.workflow.id,
+            runId: input.run.id,
+            eventType: 'scenes_registered',
+            payload: { sceneCount: scenes.length, scenes },
+            metadata: { source: 'sequence_animatic_scene_register' },
+            dedupe: { source: 'sequence_animatic_scene_register' },
+          }).catch(() => null)
+          for (const scene of scenes) {
+            await insertSequenceAnimaticEvent({
+              client: input.client,
+              projectId: input.run.projectId,
+              draftId: input.run.draftId,
+              requestId: outputRequestId,
+              workflowId: input.workflow.id,
+              runId: input.run.id,
+              eventType: 'scene_registered',
+              payload: scene,
+              metadata: { source: 'sequence_animatic_scene_register' },
+              dedupe: { id: scene.id },
+            }).catch(() => null)
+          }
+        }
+        const sceneIndex = {
+          role: 'sequence_animatic_scene_index',
+          graphSpecVersion: 'sequence_animatic_graph_v2',
+          sequenceAnimaticRole: 'scene_index',
+          screenplayAnimaticRole: 'scene_index',
+          requestId: outputRequestId || null,
+          workflowId: input.workflow.id,
+          runId: input.run.id,
+          sceneCount: scenes.length,
+          scenes,
+          scenePackageOutput,
+        }
+        const registerConfig = asRecord(input.node.config)
+        const outputs = {
+          scenes,
+          sceneCount: scenes.length,
+          scene_count: scenes.length,
+          sceneIndex,
+          sequence_animatic_scene_index: sceneIndex,
+          scenePackage: scenePackageOutput,
+          scene_package: scenePackageOutput,
+          planningDefaults: {
+            maxShotCount: Number(registerConfig.maxShotCount ?? 0) || 150,
+            aspectRatio: readText(registerConfig.aspectRatio) || '16:9',
+            resolution: readText(registerConfig.resolution) || '720p',
+            autoStartFirstScene: registerConfig.autoStartFirstScene === true,
+          },
+          text: JSON.stringify({ sceneCount: scenes.length, scenes }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-register-v1' }
+      }
       if (purpose === 'sequence_animatic_scene_plan_merge') {
         const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(readFirstUpstreamRecord(input.upstream, ['scenePackage', 'scene_package']))
         const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
@@ -23456,6 +23790,7 @@ async function executeNode(input: {
               title: readText(block.title) || `Scene ${entry.sourceSceneIndex || globalBlockIndex}`,
               summary: readText(block.summary) || readText(block.title),
               shotIds: mappedShotIds,
+              sourceSceneId: sceneId,
             })
             globalBlockIndex += 1
           }
@@ -28199,6 +28534,15 @@ export async function processFlyOutputWorkflowRuns(input: {
     }
     if (effectiveRunStatus === 'completed') {
       try {
+        await maybeStartFirstSequenceAnimaticScene({
+          client: input.client,
+          run: bundle.run,
+          outputsByNodeKey: schedulerResult.outputsByNodeKey,
+        })
+      } catch (error) {
+        console.warn('[GraphCore][output-worker] failed to ensure/auto-start sequence animatic scenes.', error)
+      }
+      try {
         await maybeStartNextSequenceAnimaticStoryboardBlock({
           client: input.client,
           run: bundle.run,
@@ -28252,6 +28596,7 @@ export async function processFlyOutputWorkflowRuns(input: {
 export {
   buildOutputWorkflowExecutionPlan,
   isTerminalOutputWorkflowRunStatus,
+  startSequenceAnimaticChildRun,
   outputArtifactResponseSchema,
   outputWorkflowCancelResponseSchema,
   outputWorkflowPlanResponseSchema,

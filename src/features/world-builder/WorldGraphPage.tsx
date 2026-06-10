@@ -769,6 +769,11 @@ type WorldGraphPageProps = {
     shotId?: string
     panelAssetKey?: string
   }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
+  onEnsureSequenceAnimaticSceneWorkflows: (request: {
+    masterRequestId: string
+    sceneIds?: string[]
+    startSceneId?: string
+  }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
   onEnsureSequenceAnimaticContinuityWorkflow: (request: {
     masterRequestId: string
   }) => Promise<{ continuityRequest: OutputRequest | null }> | { continuityRequest: OutputRequest | null }
@@ -1625,8 +1630,31 @@ type SequenceAnimaticBlockView = {
   shots: SequenceAnimaticShotView[]
 }
 
+type SequenceAnimaticSceneView = {
+  id: string
+  index: number
+  title: string
+  summary: string
+  status: 'pending' | 'planning' | 'ready' | 'failed'
+  requestId: string | null
+  shotCount: number
+}
+
+function sequenceAnimaticSceneIdFromShotId(shotId: string) {
+  return /^(.+)_shot_\d+/.exec(shotId)?.[1] ?? ''
+}
+
+function sequenceAnimaticBlockSceneId(block: { id: string; shots: ReadonlyArray<{ id: string }> }) {
+  for (const shot of block.shots) {
+    const sceneId = sequenceAnimaticSceneIdFromShotId(shot.id)
+    if (sceneId) return sceneId
+  }
+  return /^(.+)_block_\d+/.exec(block.id)?.[1] ?? ''
+}
+
 type SequenceAnimaticViewModel = {
   request: OutputRequest
+  scenes: SequenceAnimaticSceneView[]
   continuityRequest: OutputRequest | null
   continuityRun: OutputWorkflowRun | null
   continuityReady: boolean
@@ -5538,12 +5566,66 @@ function buildSequenceAnimaticViewModel(input: {
     continuityLocationAngles,
     continuityRejectedCandidates,
     blocks,
+    scenes: buildSequenceAnimaticSceneViews({
+      sequenceState: input.sequenceState,
+      requests: input.requests,
+      masterRequestId: input.request.id,
+      blocks,
+    }),
     hasPanels: panels.length > 0,
     keyframeReadyCount,
     keyframeTotalCount,
     keyframeRunning,
     keyframeProgressLabel,
   }
+}
+
+function buildSequenceAnimaticSceneViews(input: {
+  sequenceState: SequenceAnimaticStateResponse | null
+  requests: readonly OutputRequest[]
+  masterRequestId: string
+  blocks: ReadonlyArray<{ id: string; shots: ReadonlyArray<{ id: string }> }>
+}): SequenceAnimaticSceneView[] {
+  const sceneChildren = input.requests.filter((request) => {
+    if (request.parentRequestId !== input.masterRequestId) return false
+    const metadata = readLooseRecord(request.metadata)
+    return (trimOptionalString(metadata.sequenceAnimaticRole) || trimOptionalString(metadata.screenplayAnimaticRole)) === 'scene_shot_plan'
+  })
+  const childBySceneId = new Map(sceneChildren
+    .map((request) => [trimOptionalString(readLooseRecord(request.metadata).sceneId), request] as const)
+    .filter(([id]) => id))
+  const shotCountBySceneId = new Map<string, number>()
+  for (const block of input.blocks) {
+    const sceneId = sequenceAnimaticBlockSceneId(block)
+    if (!sceneId) continue
+    shotCountBySceneId.set(sceneId, (shotCountBySceneId.get(sceneId) ?? 0) + block.shots.length)
+  }
+  return (input.sequenceState?.scenes ?? [])
+    .map((raw) => {
+      const record = readLooseRecord(raw)
+      const id = trimOptionalString(record.id)
+      if (!id) return null
+      const child = childBySceneId.get(id) ?? null
+      const shotCount = shotCountBySceneId.get(id) ?? 0
+      const status: SequenceAnimaticSceneView['status'] = child && (child.status === 'running' || child.status === 'queued' || child.status === 'planning')
+        ? 'planning'
+        : child?.status === 'failed'
+          ? 'failed'
+          : child?.status === 'completed' || shotCount > 0
+            ? 'ready'
+            : 'pending'
+      return {
+        id,
+        index: Number(record.index ?? 0) || 0,
+        title: trimOptionalString(record.title) || id,
+        summary: trimOptionalString(record.summary) || '',
+        status,
+        requestId: child?.id ?? null,
+        shotCount,
+      }
+    })
+    .filter((scene): scene is SequenceAnimaticSceneView => Boolean(scene))
+    .sort((left, right) => (left.index || 9999) - (right.index || 9999))
 }
 
 function hasNonEmptyMetadataValue(value: unknown) {
@@ -5826,6 +5908,7 @@ export function WorldGraphPage({
   onStartOutputRequest,
   onStartOutputWorkflowRun,
   onEnsureSequenceAnimaticBlockWorkflows,
+  onEnsureSequenceAnimaticSceneWorkflows,
   onEnsureSequenceAnimaticContinuityAssetWorkflow,
   onEnsureSequenceAnimaticKeyframeWorkflows,
   onEnsureSequenceAnimaticShotRevisionWorkflow,
@@ -6771,6 +6854,7 @@ export function WorldGraphPage({
   } | null>(null)
   const [sequenceAnimaticShotPromptDraftByKey, setSequenceAnimaticShotPromptDraftByKey] = useState<Record<string, string>>({})
   const [sequenceAnimaticActiveBlockId, setSequenceAnimaticActiveBlockId] = useState<string | null>(null)
+  const [sequenceAnimaticActiveSceneId, setSequenceAnimaticActiveSceneId] = useState<string | null>(null)
   const [sequenceAnimaticStateByRequestId, setSequenceAnimaticStateByRequestId] = useState<Record<string, SequenceAnimaticStateResponse>>({})
   const [sequenceAnimaticFollowLatest, setSequenceAnimaticFollowLatest] = useState(true)
   const [sequenceAnimaticRecentlyStreamedShotIds, setSequenceAnimaticRecentlyStreamedShotIds] = useState<Record<string, number>>({})
@@ -6804,6 +6888,9 @@ export function WorldGraphPage({
       if (![
         'shot_continuity_stream_started',
         'scene_graph_assignment_ready',
+        'scenes_registered',
+        'scene_registered',
+        'scene_started',
         'block_planned',
         'shot_streamed',
         'scene_graph_node_registered',
@@ -7549,6 +7636,29 @@ export function WorldGraphPage({
       endSequenceAnimaticRun(blockRunKey)
     }
   }, [onEnsureSequenceAnimaticBlockWorkflows, onGetOutputRequestStatus, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
+  const handleRunSequenceAnimaticScene = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    scene: SequenceAnimaticSceneView,
+  ) => {
+    const sceneRunKey = `${model.request.id}:${scene.id}:generate_scene`
+    if (sequenceAnimaticBusyRunKeys.has(sceneRunKey)) return
+    beginSequenceAnimaticRun(sceneRunKey)
+    try {
+      await onEnsureSequenceAnimaticSceneWorkflows({
+        masterRequestId: model.request.id,
+        startSceneId: scene.id,
+      })
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      endSequenceAnimaticRun(sceneRunKey)
+    }
+  }, [onEnsureSequenceAnimaticSceneWorkflows, sequenceAnimaticBusyRunKeys])
   const handleRunSequenceAnimaticContinuityAssets = useCallback(async (
     model: SequenceAnimaticViewModel,
     requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
@@ -13371,7 +13481,16 @@ export function WorldGraphPage({
       ? sequenceAnimaticPreviewModel
       : null
     const masterRequestId = page.animaticRequestId
-    const activeBlockId = sequenceAnimaticActiveBlockId || page.animaticBlockId || routeAnimaticModel?.blocks[0]?.id || null
+    const animaticScenes = routeAnimaticModel?.scenes ?? []
+    const activeSceneId = (sequenceAnimaticActiveSceneId && animaticScenes.some((scene) => scene.id === sequenceAnimaticActiveSceneId))
+      ? sequenceAnimaticActiveSceneId
+      : animaticScenes[0]?.id ?? null
+    const sceneScopedBlocks = (routeAnimaticModel?.blocks ?? []).filter((block) => {
+      if (!activeSceneId || animaticScenes.length === 0) return true
+      const blockSceneId = sequenceAnimaticBlockSceneId(block)
+      return !blockSceneId || blockSceneId === activeSceneId
+    })
+    const activeBlockId = sequenceAnimaticActiveBlockId || page.animaticBlockId || sceneScopedBlocks[0]?.id || routeAnimaticModel?.blocks[0]?.id || null
     const returnToChapter = () => {
       setSequenceAnimaticPreviewRequestId(null)
       writeWikiAnimaticRoute({
@@ -13403,9 +13522,43 @@ export function WorldGraphPage({
             <span>{routeAnimaticModel.statusLabel}</span>
           </div>
         ) : null}
+        {routeAnimaticModel && animaticScenes.length > 0 ? (
+          <nav className="world-wiki-entity-subnav world-wiki-sequence-animatic-scene-nav" aria-label="Scenes">
+            {animaticScenes.map((scene) => {
+              const isActiveScene = activeSceneId === scene.id
+              const sceneBusy = sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:${scene.id}:generate_scene`)
+              return (
+                <button
+                  key={scene.id}
+                  className={isActiveScene ? 'world-wiki-entity-subnav-row is-active' : 'world-wiki-entity-subnav-row'}
+                  onClick={() => {
+                    setSequenceAnimaticActiveSceneId(scene.id)
+                    setSequenceAnimaticActiveBlockId(null)
+                  }}
+                  type="button"
+                >
+                  <span className="world-wiki-sequence-animatic-block-nav-index">Scene {scene.index}</span>
+                  <span>
+                    <strong>{scene.title}</strong>
+                    {scene.summary ? <small>{scene.summary}</small> : null}
+                    <em>
+                      {scene.status === 'planning' || sceneBusy
+                        ? 'Planning shots'
+                        : scene.status === 'ready'
+                          ? `${scene.shotCount} shot${scene.shotCount === 1 ? '' : 's'}`
+                          : scene.status === 'failed'
+                            ? 'Failed'
+                            : 'Not generated yet'}
+                    </em>
+                  </span>
+                </button>
+              )
+            })}
+          </nav>
+        ) : null}
         {routeAnimaticModel?.blocks.length ? (
           <nav className="world-wiki-entity-subnav world-wiki-sequence-animatic-block-nav" aria-label="Storyboard blocks">
-            {routeAnimaticModel.blocks.map((block) => {
+            {sceneScopedBlocks.map((block) => {
               const isActive = activeBlockId === block.id
               return (
                 <button
@@ -13782,13 +13935,49 @@ export function WorldGraphPage({
               {routeAnimaticModel ? (
                 <div className="world-wiki-sequence-animatic-timeline">
                   {sequenceAnimaticShouldShowThinking(routeAnimaticModel) ? <SequenceAnimaticThinkingState /> : null}
-                  {!sequenceAnimaticShouldShowThinking(routeAnimaticModel) && routeAnimaticModel.blocks.length === 0 ? (
+                  {(() => {
+                    const scenes = routeAnimaticModel.scenes
+                    if (scenes.length === 0) return null
+                    const activeScene = scenes.find((scene) => scene.id === sequenceAnimaticActiveSceneId) ?? scenes[0]
+                    if (!activeScene || activeScene.status === 'ready') return null
+                    const sceneBusy = sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:${activeScene.id}:generate_scene`)
+                    return (
+                      <section className="world-wiki-sequence-animatic-empty world-wiki-sequence-animatic-scene-gate">
+                        <strong>Scene {activeScene.index}: {activeScene.title}</strong>
+                        {activeScene.status === 'planning' || sceneBusy ? (
+                          <p><span className="world-mini-spinner" aria-hidden="true" /> Planning shots and continuity for this scene...</p>
+                        ) : activeScene.status === 'failed' ? (
+                          <>
+                            <p>Shot planning for this scene failed. You can retry it.</p>
+                            <button className="ghost-button compact" onClick={() => void handleRunSequenceAnimaticScene(routeAnimaticModel, activeScene)} type="button">
+                              Retry scene shots
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <p>This scene has no shots yet. Generate its shot plan when you are ready to work on it.</p>
+                            <button className="primary-button compact" onClick={() => void handleRunSequenceAnimaticScene(routeAnimaticModel, activeScene)} type="button">
+                              Generate shots for this scene
+                            </button>
+                          </>
+                        )}
+                      </section>
+                    )
+                  })()}
+                  {!sequenceAnimaticShouldShowThinking(routeAnimaticModel) && routeAnimaticModel.blocks.length === 0 && routeAnimaticModel.scenes.length === 0 ? (
                     <section className="world-wiki-sequence-animatic-empty">
                       <strong>No storyboard blocks yet.</strong>
                       <p>Shot blocks will appear here once the animatic planner saves them.</p>
                     </section>
                   ) : null}
-                  {routeAnimaticModel.blocks.map((block) => (
+                  {routeAnimaticModel.blocks.filter((block) => {
+                    const scenes = routeAnimaticModel.scenes
+                    if (scenes.length === 0) return true
+                    const activeScene = scenes.find((scene) => scene.id === sequenceAnimaticActiveSceneId) ?? scenes[0]
+                    if (!activeScene) return true
+                    const blockSceneId = sequenceAnimaticBlockSceneId(block)
+                    return !blockSceneId || blockSceneId === activeScene.id
+                  }).map((block) => (
                     <section
                       key={block.id}
                       id={`wiki-animatic-block-${block.id}`}

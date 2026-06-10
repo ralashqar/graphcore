@@ -92,6 +92,7 @@ export const workspaceService = {
   startOutputWorkflow: graphcoreWorkspaceAdapter.startOutputWorkflow,
   startOutputWorkflowRun: graphcoreWorkspaceAdapter.startOutputWorkflowRun,
   ensureSequenceAnimaticBlockWorkflows: graphcoreWorkspaceAdapter.ensureSequenceAnimaticBlockWorkflows,
+  ensureSequenceAnimaticSceneWorkflows: graphcoreWorkspaceAdapter.ensureSequenceAnimaticSceneWorkflows,
   ensureSequenceAnimaticContinuityWorkflow: graphcoreWorkspaceAdapter.ensureSequenceAnimaticContinuityWorkflow,
   deriveSequenceAnimaticContinuityBlock: graphcoreWorkspaceAdapter.deriveSequenceAnimaticContinuityBlock,
   deriveSequenceAnimaticContinuityStructure: graphcoreWorkspaceAdapter.deriveSequenceAnimaticContinuityStructure,

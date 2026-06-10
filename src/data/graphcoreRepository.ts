@@ -185,6 +185,8 @@ import {
   hashOutputWorkflowValue,
   sequenceAnimaticBlockWorkflowEnsureRequestSchema,
   sequenceAnimaticBlockWorkflowEnsureResponseSchema,
+  sequenceAnimaticSceneWorkflowEnsureRequestSchema,
+  sequenceAnimaticSceneWorkflowEnsureResponseSchema,
   sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema,
   sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
   sequenceAnimaticContinuityBlockDeriveRequestSchema,
@@ -219,6 +221,7 @@ import {
   type OutputWorkflowStartResponse,
   type OutputWorkflowUpgradeResponse,
   type SequenceAnimaticBlockWorkflowEnsureResponse,
+  type SequenceAnimaticSceneWorkflowEnsureResponse,
   type SequenceAnimaticContinuityAssetWorkflowEnsureResponse,
   type SequenceAnimaticContinuityBlockDeriveResponse,
   type SequenceAnimaticContinuityStructureDeriveResponse,
@@ -8603,6 +8606,34 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = sequenceAnimaticBlockWorkflowEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function ensureSequenceAnimaticSceneWorkflows(
+  snapshot: ProjectSnapshot,
+  request: { masterRequestId: string; sceneIds?: string[]; startSceneId?: string },
+): Promise<SequenceAnimaticSceneWorkflowEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic scenes.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic scene workflows require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticSceneWorkflowEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    sceneIds: request.sceneIds,
+    startSceneId: request.startSceneId,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-scene-workflows',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticSceneWorkflowEnsureResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

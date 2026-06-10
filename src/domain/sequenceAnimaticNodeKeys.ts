@@ -33,6 +33,12 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   shotVideo: 'shot_video',
   // Storyboard block workflow terminal artifact node
   blockArtifact: 'artifact',
+  // Per-scene shot plan child workflow (the stream node key is per-scene so
+  // master-request event clearing stays scoped to one scene; see
+  // sequenceAnimaticSceneShotPlanNodeKey below)
+  sceneInput: 'scene_input',
+  scenePlanArtifact: 'scene_plan_artifact',
+  sceneCombinedPlanRefresh: 'scene_combined_plan_refresh',
 } as const
 
 export type SequenceAnimaticNodeKey = (typeof SEQUENCE_ANIMATIC_NODE_KEYS)[keyof typeof SEQUENCE_ANIMATIC_NODE_KEYS]
@@ -89,3 +95,27 @@ export const sequenceAnimaticShotVideoForceNodeKeys = [
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoPrompt,
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideo,
 ] as const
+
+/**
+ * The scene child workflow's stream node key embeds the scene id so that
+ * shot-continuity stream events emitted to the master request stay scoped to
+ * one scene (event clearing and UI consumers match on this node key, exactly
+ * as the old in-master fanout node keys did).
+ */
+export function sequenceAnimaticSceneShotPlanNodeKey(sceneId: string) {
+  return `sequence_animatic_scene_shot_plan_${sceneId}`
+}
+
+/** Target node list to run a scene shot-plan child workflow end to end. */
+export const sequenceAnimaticSceneTargetNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.sceneCombinedPlanRefresh,
+] as const
+
+/** Force-node list to regenerate a scene's shot plan end to end. */
+export function sequenceAnimaticSceneForceNodeKeys(sceneId: string) {
+  return [
+    sequenceAnimaticSceneShotPlanNodeKey(sceneId),
+    SEQUENCE_ANIMATIC_NODE_KEYS.scenePlanArtifact,
+    SEQUENCE_ANIMATIC_NODE_KEYS.sceneCombinedPlanRefresh,
+  ] as const
+}

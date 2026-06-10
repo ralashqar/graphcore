@@ -51,6 +51,18 @@ const cinematicSequenceContracts = [
     manualOnly: false,
   },
   {
+    purpose: 'sequence_animatic_scene_register',
+    label: 'Register Scenes',
+    requiredInputs: ['scene_package'],
+    producedOutputs: ['text', 'scenes', 'sceneCount', 'scene_count'],
+    artifactRoles: ['sequence_animatic_scene_index'],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Registering scenes',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
     purpose: 'sequence_animatic_scene_shot_plan',
     label: 'Scene Shot Plan',
     requiredInputs: ['scene_package', 'screenplay', 'asset_pack', 'context'],
@@ -801,6 +813,13 @@ export function outputWorkflowRunIntentDefaults(intent: string | null | undefine
         allowStaleUpstreamOutputs: false,
       }
     case 'prepare_storyboard_block':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: true,
+        cinematicVideoApproved: false,
+        allowStaleUpstreamOutputs: false,
+      }
+    case 'generate_scene_shot_plan':
       return {
         runScope: 'upstream_to_node',
         debugSkipVideoGeneration: true,

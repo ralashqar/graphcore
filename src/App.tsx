@@ -6000,6 +6000,42 @@ export default function App() {
     return result
   }
 
+  async function ensureSequenceAnimaticSceneWorkflows(request: Parameters<typeof workspaceService.ensureSequenceAnimaticSceneWorkflows>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before preparing sequence animatic scenes.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic scene workflows require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticSceneWorkflows(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...result.childRequests,
+        result.masterRequest,
+        ...current.outputRequests.filter((requestRow) => (
+          requestRow.id !== result.masterRequest.id
+          && !result.childRequests.some((child) => child.id === requestRow.id)
+        )),
+      ],
+      outputWorkflows: [
+        ...result.workflows,
+        ...current.outputWorkflows.filter((workflow) => !result.workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !result.workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !result.workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function ensureSequenceAnimaticContinuityWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticContinuityWorkflow>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before preparing sequence animatic continuity.')
@@ -8768,6 +8804,7 @@ export default function App() {
                 onStartOutputRequest={startOutputRequest}
                 onStartOutputWorkflowRun={startOutputWorkflowRun}
                 onEnsureSequenceAnimaticBlockWorkflows={ensureSequenceAnimaticBlockWorkflows}
+                onEnsureSequenceAnimaticSceneWorkflows={ensureSequenceAnimaticSceneWorkflows}
                 onEnsureSequenceAnimaticContinuityWorkflow={ensureSequenceAnimaticContinuityWorkflow}
                 onDeriveSequenceAnimaticContinuityBlock={deriveSequenceAnimaticContinuityBlock}
                 onDeriveSequenceAnimaticContinuityStructure={deriveSequenceAnimaticContinuityStructure}

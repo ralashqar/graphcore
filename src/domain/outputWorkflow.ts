@@ -997,6 +997,16 @@ export const sequenceAnimaticBlockWorkflowEnsureResponseSchema = z.object({
   edges: z.array(outputWorkflowEdgeSchema).default([]),
 })
 
+export const sequenceAnimaticSceneWorkflowEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  sceneIds: z.array(z.string().min(1)).optional(),
+  startSceneId: z.string().min(1).optional(),
+})
+
+export const sequenceAnimaticSceneWorkflowEnsureResponseSchema = sequenceAnimaticBlockWorkflowEnsureResponseSchema
+
 export const sequenceAnimaticContinuityWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -1132,6 +1142,7 @@ export const sequenceAnimaticStateResponseSchema = z.object({
   streamedShotContinuityPlan: sequenceAnimaticDirectorPlanV1Schema.nullable().default(null),
   streamedShotCount: z.number().int().nonnegative().default(0),
   streamedBlockCount: z.number().int().nonnegative().default(0),
+  scenes: z.array(looseRecordSchema).default([]),
   orchestratorStatus: z.enum(['missing', 'running', 'partial', 'queued', 'ready', 'failed']).default('missing'),
   queuedBlockCount: z.number().int().nonnegative().default(0),
   activeBlockId: z.string().nullable().default(null),
@@ -3581,14 +3592,14 @@ export function buildCinematicV3ScriptStoryboardPlan(
           },
         }),
         nodeBase({
-          key: 'sequence_animatic_scene_plan_fanout',
+          key: 'sequence_animatic_scene_register',
           nodeType: 'utility_transform',
-          label: 'Queue Scene Shot Plans',
+          label: 'Register Scenes',
           x: 1640,
           y: 120,
           config: {
-            purpose: 'sequence_animatic_scene_plan_fanout',
-            role: 'sequence_animatic_scene_plan_fanout',
+            purpose: 'sequence_animatic_scene_register',
+            role: 'sequence_animatic_scene_register',
             graphSpecVersion: 'sequence_animatic_graph_v2',
             cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
             presetFamily,
@@ -3597,8 +3608,8 @@ export function buildCinematicV3ScriptStoryboardPlan(
             cinematicAnimaticMode,
             aspectRatio,
             resolution,
-            scenePlannerConcurrency: 4,
-            execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_plan_fanout', maxConcurrency: 1 },
+            autoStartFirstScene: true,
+            execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_register', maxConcurrency: 1 },
           },
         }),
       ]
@@ -3664,11 +3675,11 @@ export function buildCinematicV3ScriptStoryboardPlan(
         edgeBase('skill_context', 'guidance', 'sequence_animatic_scene_graph_assignment', 'guidance'),
         edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_scene_graph_assignment', 'asset_pack'),
         edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_scene_graph_assignment', 'screenplay'),
-        edgeBase('world_context', 'context', 'sequence_animatic_scene_plan_fanout', 'context'),
-        edgeBase('skill_context', 'guidance', 'sequence_animatic_scene_plan_fanout', 'guidance'),
-        edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_scene_plan_fanout', 'asset_pack'),
-        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_scene_plan_fanout', 'screenplay'),
-        edgeBase('sequence_animatic_scene_graph_assignment', 'scene_package', 'sequence_animatic_scene_plan_fanout', 'scene_package'),
+        edgeBase('world_context', 'context', 'sequence_animatic_scene_register', 'context'),
+        edgeBase('skill_context', 'guidance', 'sequence_animatic_scene_register', 'guidance'),
+        edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_scene_register', 'asset_pack'),
+        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_scene_register', 'screenplay'),
+        edgeBase('sequence_animatic_scene_graph_assignment', 'scene_package', 'sequence_animatic_scene_register', 'scene_package'),
       ]
       : [
         edgeBase('world_context', 'context', 'cinematic_v3_shot_break_plan', 'context'),
@@ -3696,7 +3707,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
     diagnostics: [
       ...graphValidation.diagnostics,
       ...(screenplayAnimaticMaster
-        ? ['Sequence animatic scene-graph assignment mode is enabled: the creative screenplay is assigned to output-local scene graph packages, scene shot plans run in parallel, then merge into one authoritative shot continuity plan before child storyboard orchestration.']
+        ? ['Sequence animatic scene-graph assignment mode is enabled: the creative screenplay is assigned to output-local scene graph packages and scenes are registered; each scene then runs as its own child shot-plan workflow (scene-by-scene), with the combined shot continuity plan assembled incrementally as scenes complete.']
         : ['Cinematics V3 is enabled: screenplay authors mark shot breaks, parse groups run in parallel, then merged timed shot JSON materializes grouped storyboard sheets.']),
       'V3 omits scene-state, layout, per-shot asset-pack, keyframe QA, and per-shot video nodes for a smaller graph.',
       'Storyboard sheets use deterministic V3 crop grids: 1x1 for one panel, 1x2 for two, 2x2 for three to four, 2x3 for five to six, and 3x3 for seven to nine panels.',
@@ -4206,6 +4217,7 @@ export type OutputWorkflowPlanResponse = z.infer<typeof outputWorkflowPlanRespon
 export type OutputWorkflowStartResponse = z.infer<typeof outputWorkflowStartResponseSchema>
 export type OutputWorkflowRunStatusResponse = z.infer<typeof outputWorkflowRunStatusResponseSchema>
 export type SequenceAnimaticBlockWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticBlockWorkflowEnsureResponseSchema>
+export type SequenceAnimaticSceneWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticSceneWorkflowEnsureResponseSchema>
 export type SequenceAnimaticContinuityWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityWorkflowEnsureResponseSchema>
 export type SequenceAnimaticContinuityBlockDeriveResponse = z.infer<typeof sequenceAnimaticContinuityBlockDeriveResponseSchema>
 export type SequenceAnimaticContinuityStructureDeriveResponse = z.infer<typeof sequenceAnimaticContinuityStructureDeriveResponseSchema>
