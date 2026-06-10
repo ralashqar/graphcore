@@ -15,7 +15,8 @@
 
 export type OutputTextTaskClass =
   | 'director_plan' // cinematic sequence plan / shot direction (hardest planning task)
-  | 'continuity_structure' // sequence animatic shot continuity graph derivation
+  | 'continuity_structure' // sequence animatic global continuity graph derivation
+  | 'scene_shot_plan' // per-scene shot continuity stream (mechanical conversion of one scene; global structure already decided)
   | 'screenplay_author' // screenplay / script authoring
   | 'block_script' // per-block timed script
   | 'chapter_prose' // long-form prose
@@ -36,6 +37,9 @@ const DEFAULT_LIGHT_TEXT_MODEL = 'gpt-5.4-mini'
 const defaultReasoningByClass: Record<OutputTextTaskClass, ReasoningEffort | null> = {
   director_plan: 'high',
   continuity_structure: 'high',
+  // Reasoning tokens count against max_output_tokens; at 'high' a single scene burned
+  // 11-15k reasoning tokens and truncated 32k budgets in production (2026-06-10).
+  scene_shot_plan: 'medium',
   screenplay_author: 'medium',
   block_script: 'medium',
   chapter_prose: 'medium',

@@ -4183,6 +4183,7 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
   prompt: string
   instructions: string
   maxOutputTokens: number
+  taskClass?: 'continuity_structure' | 'scene_shot_plan'
   reasoningEffortOverride?: 'minimal' | 'low' | 'medium' | 'high' | null
   shouldCancel?: () => Promise<boolean>
   onProgress?: (progress: {
@@ -4390,7 +4391,7 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
 
   let response: OpenAiResponseResult
   try {
-    const continuityPolicy = resolveOutputTextModelPolicy('continuity_structure')
+    const continuityPolicy = resolveOutputTextModelPolicy(input.taskClass ?? 'continuity_structure')
     const reasoning = input.reasoningEffortOverride !== undefined
       ? (input.reasoningEffortOverride ? { effort: input.reasoningEffortOverride } : undefined)
       : reasoningPayloadFor(continuityPolicy)
@@ -6436,7 +6437,12 @@ const sequenceAnimaticContinuityGraphV2Schema = z.object({
 const sequenceAnimaticShotContinuityDialogueLineV2Schema = z.object({
   speakerRefId: z.string().min(1),
   speakerName: z.string().default(''),
-  text: z.string().min(1).max(140),
+  // Overlong lines truncate instead of rejecting the whole shot record — a rejected
+  // record loses the shot entirely, which is far worse than a clipped line.
+  text: z.preprocess(
+    (value) => typeof value === 'string' && value.length > 140 ? `${value.slice(0, 137).trimEnd()}...` : value,
+    z.string().min(1).max(140),
+  ),
   emotion: z.string().default(''),
   delivery: z.string().default(''),
   subtext: z.string().default(''),
@@ -23277,9 +23283,11 @@ async function executeNode(input: {
             workflow: input.workflow,
             node: input.node,
             requestId: outputRequestId,
+            taskClass: 'scene_shot_plan',
             instructions: [
               'You are a senior animation shot planner and continuity supervisor.',
               'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
+              'Be token-frugal: omit any field whose value would be an empty string, empty array, null, or zero-default. Never pad records with placeholder values.',
               'Allowed record kinds for this scene node: scene_plan_start, coverage_setup, shot, scene_graph_addition, spot_relation, local_reference, scene_plan_done. block is also allowed if helpful.',
               'Emit shot records as soon as each shot is complete. Do not wait for the entire scene to be complete before streaming shots.',
             ].join('\n'),
@@ -23289,7 +23297,7 @@ async function executeNode(input: {
               `Use scene-scoped IDs: shot IDs must start with "${scenePackage.sceneId}_shot_" and block IDs must start with "${scenePackage.sceneId}_block_".`,
               'Use the scene graph assignment package as first-choice sceneBinding IDs. Add missing spots or viewpoints only when the assigned package lacks a concrete point needed by the action.',
               `Hard shot boundary rules: durationSeconds must be <= ${sequenceAnimaticShotContinuityMaxDurationSeconds}; preferred duration is 3-${sequenceAnimaticShotContinuityPreferredDurationSeconds} seconds; each shot should contain one camera setup and one visible story beat.`,
-              `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. Split dialogue exchanges across reaction/action shots.`,
+              `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows, at most 140 characters per dialogue line, and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. Split dialogue exchanges across reaction/action shots.`,
               'Coverage setup rules: create reusable coverage_setup records for repeated camera/staging setups such as wide masters, over-the-shoulders, reverse angles, clean singles, inserts, and blocking changes. Reuse coverageSetupId across shots that should preserve the same camera geography, screen direction, lighting, and character positions. Create a new setup when blocking, distance, camera side, or subject arrangement changes.',
               'For every dialogue line from the scene package, put a dialogue row on the shot where it is spoken. Preserve speakerRefId exactly.',
               'Every shot must include sceneBinding with at least setId or worldLocationRefId. Prefer zoneId and primarySpotId/spotIds when present in the scene package.',
@@ -23297,7 +23305,7 @@ async function executeNode(input: {
               'Record contracts:',
               'scene_plan_start: {"kind":"scene_plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
               'coverage_setup: {"kind":"coverage_setup","id":"scene_001_setup_ots_a_to_b","sceneId":"scene_001","setupKind":"wide_master|ots_a_to_b|ots_b_to_a|clean_single|two_shot|insert|movement|blocking_change|viewpoint|other","title":"...","setId":"set_...","zoneId":"zone_...","primarySpotId":"spot_...","spotIds":[],"viewpointId":"","characterRefIds":[],"screenDirection":"A screen-left, B screen-right","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","stagingBrief":"stable visual anchor description","continuityFromSetupId":"","continuityMode":"new_setup","usedShotIds":[],"blockIds":[],"required":true}',
-              'shot: {"kind":"shot","id":"scene_001_shot_001","index":1,"blockId":"scene_001_block_001","title":"...","durationSeconds":3,"coverageSetupId":"scene_001_setup_ots_a_to_b","continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"","fromSetupId":"","description":"..."},"action":"...","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line","emotion":"...","delivery":"...","subtext":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"confidence":0.5,"dominance":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"...","gesture":"...","voiceEnergy":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"worldLocationRefId":"","setId":"set_...","zoneId":"","primarySpotId":"","spotIds":[],"viewpointId":"","localReferenceIds":[]}}',
+              'shot: {"kind":"shot","id":"scene_001_shot_001","index":1,"blockId":"scene_001_block_001","title":"...","durationSeconds":3,"coverageSetupId":"scene_001_setup_ots_a_to_b","continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
               'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|viewpoint","id":"...","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set","zoneId":"parent_zone","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
               'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
               'scene_plan_done: {"kind":"scene_plan_done","shotCount":0,"blockCount":0,"orderedShotIds":[],"orderedBlockIds":[],"screenplaySummary":"...","notes":[]}',
@@ -23993,6 +24001,7 @@ async function executeNode(input: {
             instructions: [
               'You are a senior animation shot planner and continuity supervisor.',
               'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
+              'Be token-frugal: omit any field whose value would be an empty string, empty array, null, or zero-default. Never pad records with placeholder values.',
               'Allowed record kinds: plan_start, block, coverage_setup, shot, scene_graph_addition, spot_relation, local_reference, plan_done.',
               'Emit records in live-usable order: plan_start, then shot records in story order as soon as each shot is complete. Do not wait for a whole block to be finished before emitting shots.',
               'Block records are optional during streaming and may arrive before, between, or after related shots. If unsure, assign each shot a stable blockId and keep streaming shots.',
@@ -24005,7 +24014,7 @@ async function executeNode(input: {
               'The output must cover every final shot exactly once. Blocks are editorial grouping metadata; they must never delay shot records.',
               `Use as many shots as the screenplay needs, up to ${shotContinuityPlannerMaxShotCount}. Do not compress dialogue or multi-beat action to fit an old shot-count budget.`,
               `Hard shot boundary rules: durationSeconds must be <= ${sequenceAnimaticShotContinuityMaxDurationSeconds}; preferred duration is 3-${sequenceAnimaticShotContinuityPreferredDurationSeconds} seconds; each shot should contain one camera setup and one visible story beat.`,
-              `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. If a conversation exchange has more than that, split it into alternating dialogue/reaction/action shots.`,
+              `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows, at most 140 characters per dialogue line, and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. If a conversation exchange has more than that, split it into alternating dialogue/reaction/action shots.`,
               'Use reaction shots, inserts, movement beats, and silent performance shots to keep dialogue readable. Do not put a whole conversation paragraph into one shot.',
               'Coverage setup rules: create reusable coverage_setup records for repeated camera/staging setups such as wide masters, over-the-shoulders, reverse angles, clean singles, inserts, and blocking changes. Reuse coverageSetupId across shots that should preserve the same camera geography, screen direction, lighting, and character positions. Create a new setup when blocking, distance, camera side, or subject arrangement changes.',
               'Keep action, camera, lighting, performance, visual briefs, summaries, and notes concise. Prefer one strong sentence per field unless the shot requires more.',
@@ -24013,7 +24022,7 @@ async function executeNode(input: {
               'plan_start: {"kind":"plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
               'block: {"kind":"block","id":"block_001","index":1,"title":"...","summary":"...","shotIds":["shot_001"]} // optional during streaming; can be emitted after its shots',
               'coverage_setup: {"kind":"coverage_setup","id":"setup_ots_a_to_b","sceneId":"scene_001","setupKind":"wide_master|ots_a_to_b|ots_b_to_a|clean_single|two_shot|insert|movement|blocking_change|viewpoint|other","title":"...","setId":"set_...","zoneId":"zone_...","primarySpotId":"spot_...","spotIds":[],"viewpointId":"","characterRefIds":[],"screenDirection":"A screen-left, B screen-right","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","stagingBrief":"stable visual anchor description","continuityFromSetupId":"","continuityMode":"new_setup","usedShotIds":[],"blockIds":[],"required":true}',
-              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"coverageSetupId":"setup_ots_a_to_b","continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"","fromSetupId":"","description":"..."},"action":"...","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line","emotion":"...","delivery":"...","subtext":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"confidence":0.5,"dominance":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"...","gesture":"...","voiceEnergy":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"worldLocationRefId":"","setId":"set_...","zoneId":"","primarySpotId":"","spotIds":[],"viewpointId":"","localReferenceIds":[]}}',
+              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"coverageSetupId":"setup_ots_a_to_b","continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
               'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|viewpoint","id":"set_or_zone_or_spot_or_viewpoint_id","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set_for_zone_spot_viewpoint","zoneId":"parent_zone_for_spot_viewpoint","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
               'spot_relation: {"kind":"spot_relation","sourceId":"spot_a","targetId":"spot_b","relationship":"adjacent_to|connected_to|visible_from|entrance_to|faces|opposes|above_below|left_of|right_of|near|occludes","evidence":"short reason","direction":"optional world-space direction","screenDirection":"optional screen-space direction"}',
               'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
