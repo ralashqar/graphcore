@@ -4407,10 +4407,19 @@
   display: grid;
   gap: 10px;
   align-content: start;
+  justify-items: start;
   min-height: 0;
   overflow: auto;
   padding: 22px;
   color: rgba(226, 232, 240, 0.9);
+}
+
+/* Keep gate action buttons at their natural size instead of stretching to the
+   full grid cell (which made the inspect-scene button balloon vertically). */
+.world-wiki-sequence-animatic-scene-gate button {
+  width: auto;
+  align-self: start;
+  justify-self: start;
 }
 
 .world-wiki-sequence-animatic-empty pre {
