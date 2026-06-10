@@ -101,7 +101,7 @@ Deno.serve(async (request) => {
           request: sceneChild,
           workflowId: sceneChild.workflowId,
           runIntent: 'generate_scene_shot_plan',
-          targetNodeKeys: ['artifact'],
+          targetNodeKeys: ['sequence_animatic_director_plan_artifact', 'artifact'],
         })
       }
     }

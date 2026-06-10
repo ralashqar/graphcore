@@ -5475,7 +5475,9 @@ async function maybeStartFirstSequenceAnimaticScene(input: {
     request: firstScene,
     workflowId: firstScene.workflowId,
     runIntent: 'generate_scene_shot_plan',
-    targetNodeKeys: ['artifact'],
+    // Both terminal artifacts: the director-plan artifact is a sibling branch of
+    // the manifest artifact and would be excluded by an upstream-only selection.
+    targetNodeKeys: ['sequence_animatic_director_plan_artifact', 'artifact'],
   })
   await insertSequenceAnimaticEvent({
     client: input.client,
@@ -28665,26 +28667,36 @@ export async function processFlyOutputWorkflowRuns(input: {
     // snapshot was taken, leaving it with valid edges but invisible to the
     // scheduler — the run would otherwise complete silently missing that node.
     if (targetNodeKeys.length === 0 && dynamicPass < 3) {
-      const reconcileBundle = await loadOutputWorkflowRunBundle(input.client, runId, { includeStepOutputs: false })
-      const strandedDynamicNodes = reconcileBundle.nodes.filter((node) => {
-        if (isStaleDynamicCinematicNode(node)) return false
-        const metadata = asRecord(node.metadata)
-        if (metadata.dynamicCinematicGenerated !== true) return false
-        return !activeWorkflowNodeKeys.has(node.key)
-      })
-      if (strandedDynamicNodes.length > 0) {
-        console.warn('[GraphCore][output-worker] dynamic nodes were materialized after the pass snapshot; running another pass.', {
+      // Non-fatal: a transient DB/gateway error here must not fail a run whose
+      // nodes all completed — skip reconciliation and proceed to finalization.
+      try {
+        const reconcileBundle = await loadOutputWorkflowRunBundle(input.client, runId, { includeStepOutputs: false })
+        const strandedDynamicNodes = reconcileBundle.nodes.filter((node) => {
+          if (isStaleDynamicCinematicNode(node)) return false
+          const metadata = asRecord(node.metadata)
+          if (metadata.dynamicCinematicGenerated !== true) return false
+          return !activeWorkflowNodeKeys.has(node.key)
+        })
+        if (strandedDynamicNodes.length > 0) {
+          console.warn('[GraphCore][output-worker] dynamic nodes were materialized after the pass snapshot; running another pass.', {
+            runId,
+            strandedNodeKeys: strandedDynamicNodes.map((node) => node.key),
+            dynamicPass,
+          })
+          await heartbeat(input.client, runId, input.workerId, {
+            runtime: 'fly_output_workflow_worker',
+            stage: 'dynamic_nodes_reconciled',
+            strandedNodeKeys: strandedDynamicNodes.map((node) => node.key),
+          })
+          bundle = reconcileBundle
+          continue
+        }
+      } catch (error) {
+        if (!isTransientWorkerDbError(error)) throw error
+        console.warn('[GraphCore][output-worker] skipping dynamic-node reconciliation after transient error.', {
           runId,
-          strandedNodeKeys: strandedDynamicNodes.map((node) => node.key),
-          dynamicPass,
+          error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
         })
-        await heartbeat(input.client, runId, input.workerId, {
-          runtime: 'fly_output_workflow_worker',
-          stage: 'dynamic_nodes_reconciled',
-          strandedNodeKeys: strandedDynamicNodes.map((node) => node.key),
-        })
-        bundle = reconcileBundle
-        continue
       }
     }
 
@@ -28775,6 +28787,28 @@ export async function processFlyOutputWorkflowRuns(input: {
     throw new Error('Cinematic dynamic workflow expansion did not settle after 4 scheduler passes.')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    if (isTransientWorkerDbError(error) && (bundle.run.attemptCount ?? 0) < 5) {
+      // Infra blip (DB statement timeout, gateway 5xx): completed node work is
+      // cached, so requeue for a cheap resume instead of terminally failing.
+      // Attempt cap prevents a persistent error from looping forever.
+      const requeueResponse = await input.client
+        .from('output_workflow_runs')
+        .update({ status: 'queued', worker_id: null, heartbeat_at: null })
+        .eq('id', runId)
+        .eq('status', 'running')
+        .eq('worker_id', input.workerId)
+      if (!requeueResponse.error) {
+        console.warn('[GraphCore][output-worker] requeued run after transient infrastructure error.', {
+          runId,
+          error: message.slice(0, 200),
+        })
+        return { processed: true, run: { id: bundle.run.id, status: 'queued', preset: bundle.run.preset } }
+      }
+      console.warn('[GraphCore][output-worker] failed to requeue run after transient error; falling through to fail.', {
+        runId,
+        requeueError: requeueResponse.error.message,
+      })
+    }
     const failResponse = await input.client.rpc('fail_output_workflow_run', {
       run_id: runId,
       worker_id: input.workerId,
