@@ -5609,10 +5609,10 @@ function buildSequenceAnimaticSceneViews(input: {
       const shotCount = shotCountBySceneId.get(id) ?? 0
       const status: SequenceAnimaticSceneView['status'] = child && (child.status === 'running' || child.status === 'queued' || child.status === 'planning')
         ? 'planning'
-        : child?.status === 'failed'
-          ? 'failed'
-          : child?.status === 'completed' || shotCount > 0
-            ? 'ready'
+        : child?.status === 'completed'
+          ? 'ready'
+          : child?.status === 'failed'
+            ? 'failed'
             : 'pending'
       return {
         id,

@@ -2163,6 +2163,25 @@ function retryDelayMs(attempt: number) {
   return Math.min(10_000, 1_500 * attempt)
 }
 
+function isTransientWorkerDbError(error: unknown) {
+  const message = (error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error ? String((error as { message: unknown }).message) : String(error)).toLowerCase()
+  return message.includes('statement timeout')
+    || message.includes('canceling statement')
+    || message.includes('timeout')
+    || message.includes('timed out')
+    || message.includes('fetch failed')
+    || message.includes('connection')
+    || message.includes('econnreset')
+    || message.includes('520')
+    || message.includes('521')
+    || message.includes('522')
+    || message.includes('523')
+    || message.includes('524')
+    || message.includes('service unavailable')
+    || message.includes('bad gateway')
+    || message.includes('gateway timeout')
+}
+
 function isOpenAiTruncationError(error: unknown) {
   if (error instanceof WorkflowCancelledError) return false
   const message = error instanceof Error ? error.message : String(error)
@@ -28535,7 +28554,10 @@ export async function processFlyOutputWorkflowRuns(input: {
     const effectiveRunStatus = schedulerResult.status === 'completed_with_errors' && v3AuthoringReady
       ? 'completed'
       : schedulerResult.status
-    const completeResponse = await input.client.rpc('complete_output_workflow_run', {
+    // Finalization runs after every required node already succeeded. A transient
+    // DB hiccup here (statement timeout, Cloudflare 5xx) must NOT throw into the
+    // outer catch and fail an otherwise-complete run, so retry it a few times.
+    let completeResponse = await input.client.rpc('complete_output_workflow_run', {
       run_id: runId,
       worker_id: input.workerId,
       outputs: finalOutputs,
@@ -28557,15 +28579,29 @@ export async function processFlyOutputWorkflowRuns(input: {
         executionLevels: executionPlan.levels,
       },
     })
+    for (let finalizeAttempt = 1; completeResponse.error && finalizeAttempt <= 4 && isTransientWorkerDbError(completeResponse.error); finalizeAttempt += 1) {
+      console.warn('[GraphCore][output-worker] transient error finalizing completed run; retrying.', { runId, attempt: finalizeAttempt, error: completeResponse.error.message })
+      await sleep(Math.min(8_000, 1_000 * finalizeAttempt))
+      completeResponse = await input.client.rpc('complete_output_workflow_run', {
+        run_id: runId,
+        worker_id: input.workerId,
+        outputs: finalOutputs,
+        metadata_patch: { runtime: 'fly_output_workflow_worker', stage: effectiveRunStatus, completedNodeKeys: schedulerResult.completed, failedNodeKeys: schedulerResult.failed, cancelledNodeKeys: schedulerResult.cancelled, skippedNodeKeys: schedulerResult.skipped, executionLevels: executionPlan.levels },
+      })
+    }
     if (completeResponse.error) throw new Error(completeResponse.error.message)
     if (completeResponse.data === true) {
-      const completeRequestResponse = await input.client
+      let completeRequestResponse = await input.client
         .from('output_requests')
-        .update({
-          status: effectiveRunStatus,
-          error_message: null,
-        })
+        .update({ status: effectiveRunStatus, error_message: null })
         .eq('latest_run_id', runId)
+      for (let reqAttempt = 1; completeRequestResponse.error && reqAttempt <= 4 && isTransientWorkerDbError(completeRequestResponse.error); reqAttempt += 1) {
+        await sleep(Math.min(8_000, 1_000 * reqAttempt))
+        completeRequestResponse = await input.client
+          .from('output_requests')
+          .update({ status: effectiveRunStatus, error_message: null })
+          .eq('latest_run_id', runId)
+      }
       if (completeRequestResponse.error) throw new Error(completeRequestResponse.error.message)
     }
     if (effectiveRunStatus === 'completed') {
