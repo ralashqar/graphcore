@@ -6853,7 +6853,7 @@ export function WorldGraphPage({
     error?: string | null
   } | null>(null)
   const [sequenceAnimaticShotPromptDraftByKey, setSequenceAnimaticShotPromptDraftByKey] = useState<Record<string, string>>({})
-  const [sequenceAnimaticActiveBlockId, setSequenceAnimaticActiveBlockId] = useState<string | null>(null)
+  const [, setSequenceAnimaticActiveBlockId] = useState<string | null>(null)
   const [sequenceAnimaticActiveSceneId, setSequenceAnimaticActiveSceneId] = useState<string | null>(null)
   const [sequenceAnimaticStateByRequestId, setSequenceAnimaticStateByRequestId] = useState<Record<string, SequenceAnimaticStateResponse>>({})
   const [sequenceAnimaticFollowLatest, setSequenceAnimaticFollowLatest] = useState(true)
@@ -13480,17 +13480,10 @@ export function WorldGraphPage({
     const routeAnimaticModel = sequenceAnimaticPreviewModel?.request.id === page.animaticRequestId
       ? sequenceAnimaticPreviewModel
       : null
-    const masterRequestId = page.animaticRequestId
     const animaticScenes = routeAnimaticModel?.scenes ?? []
     const activeSceneId = (sequenceAnimaticActiveSceneId && animaticScenes.some((scene) => scene.id === sequenceAnimaticActiveSceneId))
       ? sequenceAnimaticActiveSceneId
       : animaticScenes[0]?.id ?? null
-    const sceneScopedBlocks = (routeAnimaticModel?.blocks ?? []).filter((block) => {
-      if (!activeSceneId || animaticScenes.length === 0) return true
-      const blockSceneId = sequenceAnimaticBlockSceneId(block)
-      return !blockSceneId || blockSceneId === activeSceneId
-    })
-    const activeBlockId = sequenceAnimaticActiveBlockId || page.animaticBlockId || sceneScopedBlocks[0]?.id || routeAnimaticModel?.blocks[0]?.id || null
     const returnToChapter = () => {
       setSequenceAnimaticPreviewRequestId(null)
       writeWikiAnimaticRoute({
@@ -13555,42 +13548,12 @@ export function WorldGraphPage({
             })}
           </nav>
         ) : null}
-        {routeAnimaticModel?.blocks.length ? (
-          <nav className="world-wiki-entity-subnav world-wiki-sequence-animatic-block-nav" aria-label="Storyboard blocks">
-            {sceneScopedBlocks.map((block) => {
-              const isActive = activeBlockId === block.id
-              return (
-                <button
-                  key={block.id}
-                  className={isActive ? 'world-wiki-entity-subnav-row is-active' : 'world-wiki-entity-subnav-row'}
-                  onClick={() => {
-                    setSequenceAnimaticActiveBlockId(block.id)
-                    writeWikiAnimaticRoute({
-                      entityKey: entity.key,
-                      sectionKind: page.sectionKind ?? 'timeline',
-                      masterRequestId,
-                      blockId: block.id,
-                    })
-                    document.getElementById(`wiki-animatic-block-${block.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                  }}
-                  type="button"
-                >
-                  <span className="world-wiki-sequence-animatic-block-nav-index">Block {block.index}</span>
-                  <span>
-                    <strong>{block.title}</strong>
-                    <small>{block.durationLabel} / {block.shotRangeLabel}</small>
-                    <em>{block.storyboardRunning ? 'Running' : block.videoReady ? 'Video ready' : block.storyboardReady ? 'Storyboard ready' : block.shots.some((shot) => shot.isRevised) ? 'Revised' : 'Prep pending'}</em>
-                  </span>
-                </button>
-              )
-            })}
-          </nav>
-        ) : (
+        {!routeAnimaticModel || (animaticScenes.length === 0 && routeAnimaticModel.blocks.length === 0) ? (
           <div className="world-wiki-sequence-animatic-nav-meta is-loading" aria-live="polite">
             <span className="world-wiki-nav-spinner" aria-hidden="true" />
-            <span>Loading storyboard blocks</span>
+            <span>Loading scenes</span>
           </div>
-        )}
+        ) : null}
       </>
     )
   }
