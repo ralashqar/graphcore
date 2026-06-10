@@ -23699,6 +23699,34 @@ async function executeNode(input: {
               dedupe: { id: scene.id },
             }).catch(() => null)
           }
+          // Surface the GLOBAL scene graph (set -> zone -> spot -> viewpoint) on the
+          // master request so the continuity graph view shows the full shared
+          // hierarchy. Each scene is its own animatic with no cross-scene merge, so
+          // without this the view would only see one scene's streamed additions and
+          // spots would appear orphaned from their parent zones/sets.
+          const graphAdditions = scenePackageOutput.sceneGraphDraft.additions
+          const nodePayloadByKind = (addition: typeof graphAdditions[number]) => {
+            const base = { id: addition.id, name: addition.name, visualBrief: addition.visualBrief, worldLocationRefId: addition.worldLocationRefId || '' }
+            if (addition.kind === 'set') return { ...base, nodeKind: 'set', worldLocationRefId: addition.worldLocationRefId || addition.parentId || '' }
+            if (addition.kind === 'zone') return { ...base, nodeKind: 'zone', setId: addition.setId || addition.parentId || '' }
+            if (addition.kind === 'spot') return { ...base, nodeKind: 'spot', setId: addition.setId || '', zoneId: addition.zoneId || addition.parentId || '' }
+            return { ...base, nodeKind: 'angle', setId: addition.setId || '', zoneId: addition.zoneId || '', spotIds: addition.spotId ? [addition.spotId] : [] }
+          }
+          for (const addition of graphAdditions) {
+            if (!addition.id) continue
+            await insertSequenceAnimaticEvent({
+              client: input.client,
+              projectId: input.run.projectId,
+              draftId: input.run.draftId,
+              requestId: outputRequestId,
+              workflowId: input.workflow.id,
+              runId: input.run.id,
+              eventType: 'scene_graph_node_registered',
+              payload: { nodeId: addition.id, node: nodePayloadByKind(addition) },
+              metadata: { source: 'sequence_animatic_scene_register' },
+              dedupe: { nodeId: addition.id },
+            }).catch(() => null)
+          }
         }
         const sceneIndex = {
           role: 'sequence_animatic_scene_index',
