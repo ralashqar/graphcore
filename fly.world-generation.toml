@@ -1,5 +1,8 @@
 app = "graphcore-world-generation"
 primary_region = "lhr"
+# Give in-flight LLM node executions time to finish or hand over cleanly on
+# deploys/restarts; the shutdown handler also requeues claimed runs immediately.
+kill_timeout = 300
 
 [build]
   dockerfile = "workers/world-generation/Dockerfile"

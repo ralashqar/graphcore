@@ -8942,6 +8942,17 @@ function deterministicSequenceAnimaticJsonCandidates(record: string) {
   return [...candidates]
 }
 
+function repairSequenceAnimaticStreamShotRecord(record: Record<string, unknown>) {
+  const blockId = readText(record.blockId) || readText(record.block_id)
+  if (blockId) return { ...record, blockId }
+  // Models occasionally omit blockId despite instructions; the block layer is
+  // reconciled downstream from block records and shot order, so a derived
+  // placeholder keeps the shot instead of rejecting the whole record.
+  const shotId = readText(record.id)
+  const sceneScope = /^(.+)_shot_\d+/.exec(shotId)?.[1]
+  return { ...record, blockId: sceneScope ? `${sceneScope}_block_001` : 'block_001' }
+}
+
 function parseSequenceAnimaticStreamRecord(record: string) {
   let firstError: unknown = null
   for (const candidate of deterministicSequenceAnimaticJsonCandidates(record)) {
@@ -8953,7 +8964,9 @@ function parseSequenceAnimaticStreamRecord(record: string) {
         ? { ...parsedRecord, kind: 'plan_start' }
         : kind === 'scene_plan_done'
           ? { ...parsedRecord, kind: 'plan_done' }
-          : parsed
+          : kind === 'shot'
+            ? repairSequenceAnimaticStreamShotRecord(parsedRecord)
+            : parsed
       const validated = sequenceAnimaticShotContinuityStreamRecordSchema.safeParse(parsed)
       const normalizedValidated = validated.success
         ? validated
@@ -23287,7 +23300,7 @@ async function executeNode(input: {
             instructions: [
               'You are a senior animation shot planner and continuity supervisor.',
               'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
-              'Be token-frugal: omit any field whose value would be an empty string, empty array, null, or zero-default. Never pad records with placeholder values.',
+              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; every coverage_setup must include id; never drop id fields.',
               'Allowed record kinds for this scene node: scene_plan_start, coverage_setup, shot, scene_graph_addition, spot_relation, local_reference, scene_plan_done. block is also allowed if helpful.',
               'Emit shot records as soon as each shot is complete. Do not wait for the entire scene to be complete before streaming shots.',
             ].join('\n'),
@@ -24001,7 +24014,7 @@ async function executeNode(input: {
             instructions: [
               'You are a senior animation shot planner and continuity supervisor.',
               'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
-              'Be token-frugal: omit any field whose value would be an empty string, empty array, null, or zero-default. Never pad records with placeholder values.',
+              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; every coverage_setup must include id; never drop id fields.',
               'Allowed record kinds: plan_start, block, coverage_setup, shot, scene_graph_addition, spot_relation, local_reference, plan_done.',
               'Emit records in live-usable order: plan_start, then shot records in story order as soon as each shot is complete. Do not wait for a whole block to be finished before emitting shots.',
               'Block records are optional during streaming and may arrive before, between, or after related shots. If unsure, assign each shot a stable blockId and keep streaming shots.',

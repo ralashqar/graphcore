@@ -56,7 +56,39 @@ function sleep(ms: number) {
 
 function requestShutdown(signal: string) {
   console.log(`[world-generation-worker] received ${signal}; stopping after the current job.`)
+  const firstSignal = !shuttingDown
   shuttingDown = true
+  // Hand claimed output workflow runs back to the queue immediately so the
+  // replacement machine resumes them in seconds instead of waiting for the
+  // stale-heartbeat reclaim. In-flight executors notice the lost lease via
+  // their run-status checks and stop without writing further state.
+  if (firstSignal) void releaseClaimedOutputWorkflowRunsForShutdown(signal)
+}
+
+async function releaseClaimedOutputWorkflowRunsForShutdown(signal: string) {
+  try {
+    const { data, error } = await client
+      .from('output_workflow_runs')
+      .update({ status: 'queued', worker_id: null, heartbeat_at: null })
+      .eq('status', 'running')
+      .like('worker_id', `${workerId}%`)
+      .select('id')
+    if (error) throw new Error(error.message)
+    const released = (data ?? []).length
+    if (released > 0) {
+      console.warn('[world-generation-worker] released claimed output workflow runs for shutdown.', {
+        workerId,
+        signal,
+        releasedRunIds: (data ?? []).map((row) => (row as { id: string }).id),
+      })
+    }
+  } catch (error) {
+    console.warn('[world-generation-worker] failed to release claimed runs during shutdown.', {
+      workerId,
+      signal,
+      error: describeWorkerError(error),
+    })
+  }
 }
 
 function describeWorkerError(error: unknown) {
