@@ -167,11 +167,14 @@ export function buildSequenceAnimaticSceneWorkflowGraph(input: {
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'scene_input', 'utility_transform', `Scene ${input.sceneIndex} Input`, 80, 120, {
       ...config,
       purpose: 'sequence_animatic_scene_input',
+      // Neutral key names on purpose: config.guidance/skillKeys are interpreted as
+      // the node's own skill assignment by graph validation, and the master's
+      // guidance bundle carries LLM-node skills that do not apply to a utility node.
       scenePackage: input.scenePackageOutput,
-      screenplayText: input.screenplayText,
-      assetPack: input.assetPack,
-      context: input.context,
-      guidance: input.guidance,
+      sceneScreenplayText: input.screenplayText,
+      sceneAssetPack: input.assetPack,
+      sceneContext: input.context,
+      sceneGuidance: input.guidance,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_input', maxConcurrency: 1 },
     }, {}, role),
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, shotPlanNodeKey, 'utility_transform', `Scene ${input.sceneIndex} Shot Plan`, 360, 120, {

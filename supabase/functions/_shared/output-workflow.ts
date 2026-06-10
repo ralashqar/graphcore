@@ -23629,12 +23629,12 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_scene_input') {
         const config = asRecord(input.node.config)
         const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(asRecord(config.scenePackage))
-        const screenplayText = readText(config.screenplayText)
+        const screenplayText = readText(config.sceneScreenplayText) || readText(config.screenplayText)
         if (!screenplayText) throw new Error('Sequence animatic scene input requires the authored screenplay text.')
         const screenplayDraft = { screenplayMarkdown: screenplayText, text: screenplayText }
-        const assetPack = asRecord(config.assetPack)
-        const context = asRecord(config.context)
-        const guidance = asRecord(config.guidance)
+        const assetPack = asRecord(config.sceneAssetPack ?? config.assetPack)
+        const context = asRecord(config.sceneContext ?? config.context)
+        const guidance = asRecord(config.sceneGuidance)
         const outputs = {
           scenePackage: scenePackageOutput,
           scene_package: scenePackageOutput,
