@@ -7,6 +7,7 @@
 @import './styles/features/world-builder/prompt-runtime.css';
 @import './styles/features/world-builder/graph-canvas.css';
 @import './styles/features/world-builder/wiki-feed.css';
+@import './styles/features/world-builder/animatic-pipeline.css';
 @import './styles/legacy/graph-cinematics.css';
 @import './styles/features/content/assets-editors.css';
 @import './styles/features/landing/landing.css';

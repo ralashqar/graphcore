@@ -672,7 +672,6 @@ Deno.serve(async (request) => {
         if (text) assetKeys.add(text)
       }
     }
-    const assets = await loadSignedAssets(admin, payload.projectId, [...assetKeys])
     const workflows = (workflowResponse.data ?? []).map(mapOutputWorkflowRow)
     const runs = (runResponse.data ?? []).map((row) => {
       const runId = readText((row as Record<string, unknown>).id)
@@ -724,6 +723,8 @@ Deno.serve(async (request) => {
     const directorState = readDirectorState({ masterRequest, artifacts: hydratedArtifacts })
     const orchestratorState = readOrchestratorState({ masterRequest, events })
     if (readText(payload.knownRevision) && readText(payload.knownRevision) === revision) {
+      // Unchanged fast-path: skip per-asset storage URL signing entirely
+      // (up to ~240 storage calls per poll) — the client keeps its state.
       return json(sequenceAnimaticStateResponseSchema.parse({
         ok: true,
         unchanged: true,
@@ -744,6 +745,8 @@ Deno.serve(async (request) => {
         ...continuityState,
       }))
     }
+
+    const assets = await loadSignedAssets(admin, payload.projectId, [...assetKeys])
 
     return json(sequenceAnimaticStateResponseSchema.parse({
       ok: true,

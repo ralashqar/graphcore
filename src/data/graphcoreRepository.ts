@@ -8745,6 +8745,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     mode?: 'generate' | 'regenerate'
     shotIds?: string[]
     coverageSetupIds?: string[]
+    allowProvisional?: boolean
   },
 ): Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> {
   const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating sequence animatic keyframes.')
@@ -8758,6 +8759,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     mode: request.mode ?? 'generate',
     shotIds: request.shotIds,
     coverageSetupIds: request.coverageSetupIds,
+    allowProvisional: request.allowProvisional ?? false,
   })
   const response = await invokeAuthedFunctionWithSessionRecovery(
     'ensure-sequence-animatic-keyframe-workflows',

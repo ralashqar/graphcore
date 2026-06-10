@@ -2233,3 +2233,280 @@ export function isTerminalCinematicJobStatus(status: string) {
   return ['succeeded', 'failed', 'cancelled', 'skipped'].includes(status)
 }
 
+
+// ---------------------------------------------------------------------------
+// Cinematic job reliability layer: atomic submit claims, queue-based video
+// submission, and server-side advancement of dependent jobs.
+// Shared by poll-cinematic-run (fallback polling) and fal-webhook
+// (webhook-driven advancement) so progress never depends on an open client.
+// ---------------------------------------------------------------------------
+
+import {
+  getFalErrorMessage as getFalQueueErrorMessage,
+  submitFalRequest as submitFalQueueRequest,
+} from './fal-queue.ts'
+import { buildFalWebhookUrl } from './fal-webhooks.ts'
+
+/** Grace period before a claimed-but-unsubmitted job is considered orphaned and re-queued. */
+export const CINEMATIC_SUBMIT_CLAIM_GRACE_MS = 3 * 60_000
+
+type LooseClient = ReturnType<typeof createClient>
+
+function readClaimRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {}
+}
+
+/**
+ * Atomically claims a queued cinematic job for provider submission.
+ * Returns false when another invocation (poll or webhook) already claimed it,
+ * which prevents duplicate FAL submissions for the same job.
+ */
+export async function claimQueuedCinematicJobForSubmit(
+  client: LooseClient,
+  job: { id: string; resultContext?: Record<string, unknown> | null },
+): Promise<boolean> {
+  const response = await client
+    .from('cinematic_run_jobs')
+    .update({
+      status: 'running',
+      result_context: {
+        ...readClaimRecord(job.resultContext),
+        submitClaimedAt: new Date().toISOString(),
+      },
+    })
+    .eq('id', job.id)
+    .eq('status', 'queued')
+    .is('provider_request_id', null)
+    .select('id')
+  if (response.error) throw new Error(response.error.message)
+  return (response.data ?? []).length > 0
+}
+
+/** True when a running job without a provider request id has exceeded its submit-claim grace period. */
+export function cinematicSubmitClaimExpired(resultContext: Record<string, unknown> | null | undefined) {
+  const claimedAtRaw = typeof resultContext?.submitClaimedAt === 'string' ? resultContext.submitClaimedAt : null
+  if (!claimedAtRaw) return true
+  const claimedAt = Date.parse(claimedAtRaw)
+  if (!Number.isFinite(claimedAt)) return true
+  return Date.now() - claimedAt > CINEMATIC_SUBMIT_CLAIM_GRACE_MS
+}
+
+/** Returns a claimed-but-never-submitted job to the queue so a later pass can resubmit it. */
+export async function requeueUnsubmittedCinematicJob(
+  client: LooseClient,
+  job: { id: string; resultContext?: Record<string, unknown> | null },
+): Promise<void> {
+  const resultContext = readClaimRecord(job.resultContext)
+  delete resultContext.submitClaimedAt
+  const response = await client
+    .from('cinematic_run_jobs')
+    .update({
+      status: 'queued',
+      result_context: resultContext,
+      error_message: null,
+    })
+    .eq('id', job.id)
+    .eq('status', 'running')
+    .is('provider_request_id', null)
+  if (response.error) throw new Error(response.error.message)
+}
+
+export function resolveCinematicVideoFalModel(endpoint: string) {
+  return endpoint === 'image-to-video'
+    ? (Deno.env.get('CINEMATIC_SEEDANCE_IMAGE_MODEL') ?? 'bytedance/seedance-2.0/image-to-video')
+    : (Deno.env.get('CINEMATIC_SEEDANCE_REFERENCE_MODEL') ?? 'bytedance/seedance-2.0/reference-to-video')
+}
+
+/** Builds the FAL queue payload for a cinematic video job from its stored execution plan. */
+export function buildCinematicVideoQueuePayload(input: {
+  executionPlan: Record<string, unknown>
+  prompt: string
+  fallbackImageUrl?: string | null
+}): { endpoint: string; payload: Record<string, unknown> } | { error: string } {
+  const plan = input.executionPlan
+  const endpoint = typeof plan.endpoint === 'string' ? plan.endpoint : 'reference-to-video'
+  const prompt = input.prompt
+    || (typeof plan.prompt === 'string' ? plan.prompt : '')
+  if (!prompt) return { error: 'Cinematic video job has no prompt in its execution plan.' }
+  const readStringList = (value: unknown) => Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+    : []
+  if (endpoint === 'image-to-video') {
+    const imageUrl = (typeof plan.imageUrl === 'string' && plan.imageUrl.length > 0 ? plan.imageUrl : null)
+      ?? input.fallbackImageUrl
+      ?? null
+    if (!imageUrl) {
+      return { error: 'This shot needs at least one image reference or generated still before Seedance image-to-video can run.' }
+    }
+    return {
+      endpoint,
+      payload: {
+        image_url: imageUrl,
+        ...(typeof plan.endImageUrl === 'string' && plan.endImageUrl.length > 0 ? { end_image_url: plan.endImageUrl } : {}),
+        prompt,
+        resolution: plan.resolution,
+        duration: plan.duration,
+        aspect_ratio: plan.aspectRatio,
+        generate_audio: plan.generateAudio,
+        ...(plan.seed ? { seed: plan.seed } : {}),
+      },
+    }
+  }
+  return {
+    endpoint,
+    payload: {
+      prompt,
+      image_urls: readStringList(plan.imageUrls),
+      video_urls: readStringList(plan.videoUrls),
+      audio_urls: readStringList(plan.audioUrls),
+      resolution: plan.resolution,
+      duration: plan.duration,
+      aspect_ratio: plan.aspectRatio,
+      generate_audio: plan.generateAudio,
+      ...(plan.seed ? { seed: plan.seed } : {}),
+    },
+  }
+}
+
+/**
+ * Submits a claimed cinematic video job to the FAL queue (non-blocking, webhook-completed).
+ * The job must already be claimed (status running, no provider_request_id).
+ */
+export async function submitClaimedCinematicVideoJob(input: {
+  client: LooseClient
+  falApiKey: string
+  job: { id: string; prompt: string; resultContext?: Record<string, unknown> | null }
+  executionPlan: Record<string, unknown>
+  fallbackImageUrl?: string | null
+}): Promise<{ ok: true; requestId: string; model: string } | { ok: false; errorMessage: string }> {
+  const built = buildCinematicVideoQueuePayload({
+    executionPlan: input.executionPlan,
+    prompt: input.job.prompt,
+    fallbackImageUrl: input.fallbackImageUrl ?? null,
+  })
+  if ('error' in built) {
+    await input.client.from('cinematic_run_jobs').update({
+      status: 'failed',
+      error_message: built.error,
+    }).eq('id', input.job.id)
+    return { ok: false, errorMessage: built.error }
+  }
+  const videoModel = resolveCinematicVideoFalModel(built.endpoint)
+  const submitResult = await submitFalQueueRequest({
+    apiKey: input.falApiKey,
+    model: videoModel,
+    payload: built.payload,
+    webhookUrl: buildFalWebhookUrl(),
+  })
+  const requestId = typeof submitResult.body.request_id === 'string' ? submitResult.body.request_id : null
+  if (!submitResult.response.ok || !requestId) {
+    const message = getFalQueueErrorMessage(
+      submitResult.body,
+      `Fal video submission failed with HTTP ${submitResult.response.status}.`,
+    )
+    await input.client.from('cinematic_run_jobs').update({
+      status: 'failed',
+      provider: 'fal',
+      model: videoModel,
+      error_message: message,
+    }).eq('id', input.job.id)
+    return { ok: false, errorMessage: message }
+  }
+  const updateResponse = await input.client.from('cinematic_run_jobs').update({
+    status: 'running',
+    provider: 'fal',
+    model: videoModel,
+    provider_request_id: requestId,
+    result_context: {
+      ...readClaimRecord(input.job.resultContext),
+      executionPlan: input.executionPlan,
+      submittedAt: new Date().toISOString(),
+      statusUrl: typeof submitResult.body.status_url === 'string' ? submitResult.body.status_url : null,
+      responseUrl: typeof submitResult.body.response_url === 'string' ? submitResult.body.response_url : null,
+    },
+    error_message: null,
+  }).eq('id', input.job.id)
+  if (updateResponse.error) throw new Error(updateResponse.error.message)
+  return { ok: true, requestId, model: videoModel }
+}
+
+/**
+ * Server-side advancement: after a cinematic job reaches a terminal status,
+ * submit any queued dependents whose dependencies have all succeeded and that
+ * carry a stored execution plan. Called from fal-webhook so still→video chains
+ * progress without any client polling. Jobs without a stored plan are left for
+ * the polling path, which can rebuild plans from the snapshot.
+ */
+export async function advanceDependentCinematicJobs(input: {
+  client: LooseClient
+  falApiKey: string
+  runId: string
+  completedJobId: string
+  completedStillUrl?: string | null
+}): Promise<{ submitted: number; skipped: number; failed: number }> {
+  const jobsResponse = await input.client
+    .from('cinematic_run_jobs')
+    .select('id, run_id, kind, status, depends_on_job_ids, provider_request_id, prompt, result_context, still_asset_key')
+    .eq('run_id', input.runId)
+  if (jobsResponse.error) throw new Error(jobsResponse.error.message)
+  const rows = (jobsResponse.data ?? []) as Array<Record<string, unknown>>
+  const statusById = new Map(rows.map((row) => [String(row.id), String(row.status ?? 'queued')]))
+  const summary = { submitted: 0, skipped: 0, failed: 0 }
+
+  for (const row of rows) {
+    const status = String(row.status ?? 'queued')
+    if (status !== 'queued') continue
+    const dependsOn = Array.isArray(row.depends_on_job_ids)
+      ? row.depends_on_job_ids.map((value) => String(value))
+      : []
+    if (!dependsOn.includes(input.completedJobId)) continue
+
+    const failedDependency = dependsOn.some((id) => ['failed', 'cancelled', 'skipped'].includes(statusById.get(id) ?? ''))
+    if (failedDependency) {
+      await input.client.from('cinematic_run_jobs').update({
+        status: 'skipped',
+        error_message: 'Skipped because a dependency job failed.',
+      }).eq('id', String(row.id)).eq('status', 'queued')
+      summary.skipped += 1
+      continue
+    }
+    const ready = dependsOn.every((id) => statusById.get(id) === 'succeeded')
+    if (!ready) continue
+
+    const kind = String(row.kind ?? '')
+    if (kind !== 'shot_video' && kind !== 'take_video') {
+      // Still-type dependents need snapshot-derived prompts; leave for polling.
+      continue
+    }
+    const resultContext = readClaimRecord(row.result_context)
+    const executionPlan = readClaimRecord(resultContext.executionPlan)
+    if (Object.keys(executionPlan).length === 0) continue
+
+    const job = {
+      id: String(row.id),
+      prompt: typeof row.prompt === 'string' ? row.prompt : '',
+      resultContext,
+    }
+    const claimed = await claimQueuedCinematicJobForSubmit(input.client, job)
+    if (!claimed) continue
+    try {
+      const result = await submitClaimedCinematicVideoJob({
+        client: input.client,
+        falApiKey: input.falApiKey,
+        job,
+        executionPlan,
+        fallbackImageUrl: input.completedStillUrl ?? null,
+      })
+      if (result.ok) summary.submitted += 1
+      else summary.failed += 1
+    } catch (error) {
+      console.error('[cinematics] failed to advance dependent cinematic job.', {
+        runId: input.runId,
+        jobId: job.id,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      summary.failed += 1
+    }
+  }
+  return summary
+}

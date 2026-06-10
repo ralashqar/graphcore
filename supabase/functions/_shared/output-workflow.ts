@@ -97,6 +97,8 @@ import {
   runOpenAiResponsesStream,
   type OpenAiResponseResult,
 } from './openai.ts'
+import { resolveOutputTextModelPolicy, reasoningPayloadFor } from './model-policy.ts'
+import { formatSequenceAnimaticSceneStateForPrompt } from '../../../src/domain/sequenceAnimaticSceneState.ts'
 import { aiGenerationSettings } from '../../../src/config/aiGenerationSettings.ts'
 import { normalizeStrictJsonSchema } from './structured-output.ts'
 import { z } from 'npm:zod@4'
@@ -4380,12 +4382,13 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
 
   let response: OpenAiResponseResult
   try {
+    const continuityPolicy = resolveOutputTextModelPolicy('continuity_structure')
     response = await runOpenAiResponsesStream({
-      model,
+      model: continuityPolicy.model,
       input: input.prompt,
       instructions: input.instructions,
       maxOutputTokens: input.maxOutputTokens,
-      reasoning: { effort: 'medium' },
+      reasoning: reasoningPayloadFor(continuityPolicy) ?? { effort: 'medium' },
       store: false,
       timeoutMs: outputWorkflowChapterTimeoutMs(),
       metadata: {
@@ -8691,9 +8694,6 @@ function sequenceAnimaticShotBindingFromSceneBinding(input: {
     || input.refs.locationRefIds[0]
     || null
   const setId = readText(sceneBinding.setId) || readText(sceneBinding.set_id)
-  if (!setId && !worldLocationRefId) {
-    throw new Error(`Sequence animatic shot continuity plan returned ${input.shotId} without a usable sceneBinding.setId or sceneBinding.worldLocationRefId.`)
-  }
   const zoneId = readText(sceneBinding.zoneId) || readText(sceneBinding.zone_id)
   const primarySpotId = readText(sceneBinding.primarySpotId) || readText(sceneBinding.primary_spot_id)
   const spotIds = sequenceAnimaticUniqueTexts([sceneBinding.spotIds, sceneBinding.spot_ids, primarySpotId ? [primarySpotId] : []])
@@ -9577,9 +9577,9 @@ function normalizeSequenceAnimaticDirectorPlan(input: {
   const missingBindings = normalizedShots
     .map((shot) => readText(shot.id))
     .filter((shotId) => !readText(asRecord(shotBindings[shotId]).setId) && !readText(asRecord(shotBindings[shotId]).worldLocationRefId))
-  if (missingBindings.length > 0) {
-    throw new Error(`Sequence animatic shot continuity plan did not bind ${missingBindings.length} shot${missingBindings.length === 1 ? '' : 's'} to a scene set or world location: ${missingBindings.slice(0, 5).join(', ')}.`)
-  }
+  const missingBindingWarnings = missingBindings.length > 0
+    ? [`Repaired shot continuity plan non-blockingly: ${missingBindings.length} shot${missingBindings.length === 1 ? '' : 's'} still lack a set/location binding after deterministic repair (${missingBindings.slice(0, 8).join(', ')}).`]
+    : []
   const continuityGraphV2 = sequenceAnimaticContinuityGraphV2Schema.parse({
     ...rawGraph,
     version: 'sequence_animatic_continuity_graph_v2',
@@ -9588,7 +9588,7 @@ function normalizeSequenceAnimaticDirectorPlan(input: {
       ...rawGraph.shotBindings,
       ...shotBindings,
     },
-    warnings: [...readStringArray(rawGraph.warnings), ...parsed.warnings],
+    warnings: [...readStringArray(rawGraph.warnings), ...parsed.warnings, ...missingBindingWarnings],
     diagnostics: [...readStringArray(rawGraph.diagnostics), ...parsed.diagnostics],
   })
   const normalizedShotIds = new Set(normalizedShots.map((shot) => shot.id))
@@ -9628,6 +9628,7 @@ function normalizeSequenceAnimaticDirectorPlan(input: {
     shot_bindings: continuityGraphV2.shotBindings,
     diagnostics: [
       ...parsed.diagnostics,
+      ...missingBindingWarnings,
       `Director plan normalized ${normalizedShots.length} shot${normalizedShots.length === 1 ? '' : 's'} across ${blocks.length} block${blocks.length === 1 ? '' : 's'}.`,
     ],
   })
@@ -14630,9 +14631,11 @@ async function runCinematicV2ScreenplayAuthor(input: {
   fallback: z.infer<typeof cinematicV2ScreenplayDraftSchema>
   maxOutputTokens?: number
 }) {
-  const model = outputWorkflowTextModel()
+  const screenplayPolicy = resolveOutputTextModelPolicy('screenplay_author')
+  const model = screenplayPolicy.model
   const response = await runOpenAiResponses({
     model,
+    reasoning: reasoningPayloadFor(screenplayPolicy),
     instructions: input.instructions,
     input: input.prompt,
     maxOutputTokens: input.maxOutputTokens ?? 4200,
@@ -20537,9 +20540,11 @@ async function executeNode(input: {
           maxTotalDurationSeconds: Number(config.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
         }
         const fallbackScriptDoc = buildDeterministicCinematicScriptDoc(scriptInput)
-        const model = outputWorkflowTextModel()
+        const scriptAuthorPolicy = resolveOutputTextModelPolicy('screenplay_author')
+        const model = scriptAuthorPolicy.model
         const response = await runOpenAiResponses({
           model,
+          reasoning: reasoningPayloadFor(scriptAuthorPolicy),
           instructions: 'You are a cinematic script author and shot director. Return strict JSON for a directed cinematic script only.',
           input: buildCinematicScriptAuthoringInstruction(scriptInput),
           text: {
@@ -20610,9 +20615,11 @@ async function executeNode(input: {
           presetFamily: readText(config.presetFamily) || 'story_movie_tv',
         }
         const fallbackPlan = buildDeterministicCinematicSequencePlan(planInput)
-        const model = outputWorkflowTextModel()
+        const sequencePlanPolicy = resolveOutputTextModelPolicy('director_plan')
+        const model = sequencePlanPolicy.model
         const response = await runOpenAiResponses({
           model,
+          reasoning: reasoningPayloadFor(sequencePlanPolicy),
           instructions: 'You are a cinematic sequence planner. Return strict JSON for timed video block planning only.',
           input: buildCinematicSequencePlanInstruction(planInput),
           text: {
@@ -20671,9 +20678,11 @@ async function executeNode(input: {
           presetFamily: readText(config.presetFamily) || 'story_movie_tv',
         }
         const fallbackScript = buildDeterministicCinematicBlockScript(scriptInput)
-        const model = outputWorkflowTextModel()
+        const blockScriptPolicy = resolveOutputTextModelPolicy('block_script')
+        const model = blockScriptPolicy.model
         const response = await runOpenAiResponses({
           model,
+          reasoning: reasoningPayloadFor(blockScriptPolicy),
           instructions: 'You are a cinematic shot director. Return strict JSON for one timestamped video block script only.',
           input: buildCinematicBlockScriptInstruction(scriptInput),
           text: {
@@ -23341,10 +23350,12 @@ async function executeNode(input: {
         const blocks: Record<string, unknown>[] = []
         const shotIdMap = new Map<string, string>()
         const blockIdMap = new Map<string, string>()
+        const scenePackageById = new Map(scenePackageOutput.scenePackages.map((scene) => [scene.sceneId, scene] as const))
         let globalShotIndex = 1
         let globalBlockIndex = 1
         for (const entry of scenePlanEntries) {
           const sceneId = entry.sourceSceneId || readText(entry.plan.sourceSceneId) || `scene_${String(entry.sourceSceneIndex || globalBlockIndex).padStart(3, '0')}`
+          const scenePackage = scenePackageById.get(sceneId) ?? scenePackageOutput.scenePackages.find((scene) => scene.index === entry.sourceSceneIndex) ?? null
           const planBlocks = readArray(entry.plan.blocks).map(asRecord)
           const planShots = readArray(entry.plan.shots).map(asRecord)
           for (const block of planBlocks) {
@@ -23383,16 +23394,83 @@ async function executeNode(input: {
             globalBlockIndex += 1
           }
           for (const shot of planShots) {
-            const oldShotId = readText(shot.id)
+            const oldShotId = readText(shot.id) || `${sceneId}_shot_${String(globalShotIndex).padStart(3, '0')}`
             const oldBlockId = readText(shot.blockId) || readText(shot.storyboardBlockId)
+            const planShotBindings = asRecord(entry.plan.shotBindings ?? entry.plan.shot_bindings)
+            const shotBinding = asRecord(planShotBindings[oldShotId])
+            const rawSceneBinding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+            const sceneBinding = {
+              ...rawSceneBinding,
+              worldLocationRefId: readText(rawSceneBinding.worldLocationRefId ?? rawSceneBinding.world_location_ref_id)
+                || readText(shot.worldLocationRefId ?? shot.world_location_ref_id ?? shot.locationRefId ?? shot.location_ref_id)
+                || readText(shotBinding.worldLocationRefId ?? shotBinding.world_location_ref_id)
+                || scenePackage?.worldLocationRefId
+                || scenePackage?.locationRefId
+                || '',
+              setId: readText(rawSceneBinding.setId ?? rawSceneBinding.set_id)
+                || readText(shot.continuitySetId ?? shot.continuity_set_id)
+                || readText(shotBinding.setId ?? shotBinding.set_id)
+                || scenePackage?.setId
+                || '',
+              zoneId: readText(rawSceneBinding.zoneId ?? rawSceneBinding.zone_id)
+                || readText(shot.continuityZoneId ?? shot.continuity_zone_id)
+                || readText(shotBinding.zoneId ?? shotBinding.zone_id)
+                || scenePackage?.zoneId
+                || '',
+              primarySpotId: readText(rawSceneBinding.primarySpotId ?? rawSceneBinding.primary_spot_id)
+                || readText(shot.primarySpotId ?? shot.primary_spot_id)
+                || readText(shotBinding.primarySpotId ?? shotBinding.primary_spot_id)
+                || scenePackage?.spotIds[0]
+                || '',
+              spotIds: sequenceAnimaticUniqueTexts([
+                rawSceneBinding.spotIds,
+                rawSceneBinding.spot_ids,
+                shot.continuitySpotIds,
+                shot.continuity_spot_ids,
+                shotBinding.spotIds,
+                shotBinding.spot_ids,
+                scenePackage?.spotIds ?? [],
+              ]),
+              viewpointId: readText(rawSceneBinding.viewpointId ?? rawSceneBinding.viewpoint_id)
+                || readText(shot.viewpointId ?? shot.viewpoint_id ?? shot.continuityAngleId ?? shot.continuity_angle_id)
+                || readText(shotBinding.viewpointId ?? shotBinding.viewpoint_id ?? shotBinding.angleId ?? shotBinding.angle_id),
+              localReferenceIds: sequenceAnimaticUniqueTexts([
+                rawSceneBinding.localReferenceIds,
+                rawSceneBinding.local_reference_ids,
+                shot.localReferenceIds,
+                shot.local_reference_ids,
+                shotBinding.localReferenceIds,
+                shotBinding.local_reference_ids,
+              ]),
+            }
+            if (!sceneBinding.primarySpotId && sceneBinding.spotIds.length > 0) {
+              sceneBinding.primarySpotId = sceneBinding.spotIds[0]
+            }
             const newShotId = shotIdMap.get(`${sceneId}:${oldShotId}`) || `shot_${String(globalShotIndex).padStart(3, '0')}`
             const newBlockId = blockIdMap.get(`${sceneId}:${oldBlockId}`) || blocks.find((block) => readStringArray(block.shotIds).includes(newShotId))?.id || `block_${String(Math.max(1, globalBlockIndex - 1)).padStart(3, '0')}`
+            const continuityLink = asRecord(shot.continuityLink ?? shot.continuity_link)
+            const continuityLinkFromShotId = readText(continuityLink.fromShotId ?? continuityLink.from_shot_id)
+            const remappedContinuityLink = Object.keys(continuityLink).length > 0
+              ? {
+                ...continuityLink,
+                fromShotId: continuityLinkFromShotId
+                  ? shotIdMap.get(`${sceneId}:${continuityLinkFromShotId}`) || continuityLinkFromShotId
+                  : '',
+                from_shot_id: continuityLinkFromShotId
+                  ? shotIdMap.get(`${sceneId}:${continuityLinkFromShotId}`) || continuityLinkFromShotId
+                  : '',
+              }
+              : continuityLink
             shots.push({
               ...shot,
               id: newShotId,
               index: globalShotIndex,
               blockId: newBlockId,
               storyboardBlockId: newBlockId,
+              continuityLink: remappedContinuityLink,
+              continuity_link: remappedContinuityLink,
+              sceneBinding,
+              scene_binding: sceneBinding,
               sourceSceneId: sceneId,
               sourceSceneShotId: oldShotId,
             })
@@ -24296,6 +24374,8 @@ async function executeNode(input: {
       }
       if (purpose === 'sequence_animatic_planned_keyframe_prompt') {
         const config = asRecord(input.node.config)
+        const sceneState = asRecord(config.sceneState ?? config.scene_state)
+        const sceneStateText = formatSequenceAnimaticSceneStateForPrompt(sceneState as never)
         const shot = readFirstUpstreamRecord(input.upstream, ['shot'])
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
         const coverageAnchor = readFirstUpstreamRecord(input.upstream, ['coverageAnchor', 'coverage_anchor'])
@@ -24327,6 +24407,7 @@ async function executeNode(input: {
           readText(coverageSetup.title) ? `Coverage setup: ${readText(coverageSetup.title)}` : '',
           readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief) ? `Coverage staging: ${readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)}` : '',
           readText(shot.continuityLink ?? shot.continuity_link) ? `Continuity link: ${readText(shot.continuityLink ?? shot.continuity_link).replace(/_/g, ' ')}` : '',
+          sceneStateText ? `\nScene state (maintain strict continuity with these facts):\n${sceneStateText}` : '',
           readText(coverageAnchor.assetKey) ? `Use coverage anchor asset: ${readText(coverageAnchor.assetKey)}` : '',
           readText(previousKeyframe.assetKey) ? `Use previous keyframe continuity asset: ${readText(previousKeyframe.assetKey)}` : '',
           readText(storyboardPanel.assetKey) ? `Use storyboard panel composition asset: ${readText(storyboardPanel.assetKey)}` : '',
@@ -24348,9 +24429,11 @@ async function executeNode(input: {
           asset_pack: assetPack,
           shotId: readText(shot.id) || readText(config.shotId),
           shot_id: readText(shot.id) || readText(config.shotId),
+          sceneState,
+          scene_state: sceneState,
           deterministic: true,
         }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-planned-keyframe-prompt-v1' }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-planned-keyframe-prompt-v2' }
       }
       if (purpose === 'sequence_animatic_shot_revision_plan') {
         const config = asRecord(input.node.config)

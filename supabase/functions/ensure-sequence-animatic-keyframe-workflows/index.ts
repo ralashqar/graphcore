@@ -7,11 +7,14 @@ import {
   mapOutputWorkflowRow,
   outputArtifactSelect,
   outputRequestSelect,
+  outputWorkflowRunStepSelect,
 } from '../_shared/output-workflow.ts'
 import {
   sequenceAnimaticKeyframeWorkflowEnsureRequestSchema,
   sequenceAnimaticKeyframeWorkflowEnsureResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
+import { lintSequenceAnimaticContinuity } from '../../../src/domain/sequenceAnimaticContinuityLint.ts'
+import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceAnimaticSceneState.ts'
 import {
   buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
@@ -349,6 +352,15 @@ function deriveKeyframePlan(input: {
     }
   }
   const filteredShots = mergedShots.filter((shot) => includedShotIds.has(readText(shot.id)))
+  // Scene-state conditioning: explicit per-shot continuity state (location,
+  // inherited lighting, present characters, established props, screen
+  // direction) derived once for the whole plan and embedded in each keyframe
+  // job so prompts no longer depend solely on previous-keyframe pixels.
+  const sceneStates = deriveSequenceAnimaticSceneStates({ shots: mergedShots, coverageSetups })
+  // Continuity lint: text-only film-grammar validation (180° line, eyelines,
+  // reverse pairs, speaker coverage, establishing coverage) before any image
+  // generation is paid for.
+  const continuityLint = lintSequenceAnimaticContinuity({ shots: mergedShots, coverageSetups })
   const shotKeyframeJobs = filteredShots.map((shot) => {
     const setupId = readText(shot.coverageSetupId ?? shot.coverage_setup_id)
     const currentIndex = shotIndexById.get(readText(shot.id))
@@ -362,10 +374,12 @@ function deriveKeyframePlan(input: {
       requiresCoverageAnchor: Boolean(setupId && coverageAnchorJobs.some((job) => job.coverageSetupId === setupId)),
       previousShotId: shotContinuityLinkRequiresPrevious(shot) ? readText(previousShot?.id) : '',
       dependencyOnly: requestedShotSet.size > 0 && !requestedShotSet.has(readText(shot.id)),
+      sceneState: sceneStates.get(readText(shot.id)) ?? null,
     }
   })
   return {
     version: 'sequence_animatic_keyframe_plan_v1',
+    continuityLint,
     coverageAnchorJobs,
     shotKeyframeJobs,
     coverageAnchorCount: coverageAnchorJobs.length,
@@ -374,6 +388,315 @@ function deriveKeyframePlan(input: {
     shotCount: mergedShots.length,
     blockById: Object.fromEntries(blocks.map((block) => [readText(block.id), block]).filter(([id]) => id)),
   }
+}
+
+function stepOutputRecord(
+  steps: readonly Record<string, unknown>[],
+  nodeKeys: readonly string[],
+  fields: readonly string[],
+) {
+  for (const nodeKey of nodeKeys) {
+    const step = [...steps].reverse().find((entry) => readText(entry.node_key ?? entry.nodeKey) === nodeKey && readText(entry.status) === 'completed')
+    const outputs = asRecord(step?.outputs)
+    for (const field of fields) {
+      const record = asRecord(outputs[field])
+      if (Object.keys(record).length > 0) return record
+    }
+  }
+  return {}
+}
+
+function scenePackageForShot(shot: Record<string, unknown>, scenePackages: readonly Record<string, unknown>[]) {
+  const sourceSceneId = readText(shot.sourceSceneId ?? shot.source_scene_id ?? shot.sceneId ?? shot.scene_id)
+  if (sourceSceneId) {
+    const exact = scenePackages.find((scene) => readText(scene.sceneId ?? scene.scene_id) === sourceSceneId)
+    if (exact) return exact
+  }
+  const blockId = readText(shot.blockId ?? shot.block_id ?? shot.storyboardBlockId ?? shot.storyboard_block_id)
+  if (blockId) {
+    const byBlock = scenePackages.find((scene) => readStringArray(scene.graphAdditionIds ?? scene.graph_addition_ids).includes(blockId))
+    if (byBlock) return byBlock
+  }
+  return scenePackages[0] ?? {}
+}
+
+function repairedShotSceneBinding(input: {
+  shot: Record<string, unknown>
+  scenePackage: Record<string, unknown>
+}) {
+  const shot = input.shot
+  const scenePackage = input.scenePackage
+  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+  const spotIds = [
+    ...readStringArray(binding.spotIds ?? binding.spot_ids),
+    ...readStringArray(shot.continuitySpotIds ?? shot.continuity_spot_ids),
+    ...readStringArray(scenePackage.spotIds ?? scenePackage.spot_ids),
+  ].filter((value, index, values) => value && values.indexOf(value) === index)
+  const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id)
+    || readText(shot.primarySpotId ?? shot.primary_spot_id)
+    || spotIds[0]
+    || ''
+  return {
+    ...binding,
+    worldLocationRefId: readText(binding.worldLocationRefId ?? binding.world_location_ref_id)
+      || readText(shot.worldLocationRefId ?? shot.world_location_ref_id ?? shot.locationRefId ?? shot.location_ref_id)
+      || readText(scenePackage.worldLocationRefId ?? scenePackage.world_location_ref_id ?? scenePackage.locationRefId ?? scenePackage.location_ref_id),
+    setId: readText(binding.setId ?? binding.set_id)
+      || readText(shot.continuitySetId ?? shot.continuity_set_id)
+      || readText(scenePackage.setId ?? scenePackage.set_id),
+    zoneId: readText(binding.zoneId ?? binding.zone_id)
+      || readText(shot.continuityZoneId ?? shot.continuity_zone_id)
+      || readText(scenePackage.zoneId ?? scenePackage.zone_id),
+    primarySpotId,
+    spotIds,
+    viewpointId: readText(binding.viewpointId ?? binding.viewpoint_id)
+      || readText(shot.viewpointId ?? shot.viewpoint_id ?? shot.continuityAngleId ?? shot.continuity_angle_id),
+    localReferenceIds: readStringArray(binding.localReferenceIds ?? binding.local_reference_ids),
+  }
+}
+
+function shotBindingFromShot(shot: Record<string, unknown>, blockId: string) {
+  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+  const worldLocationRefId = readText(binding.worldLocationRefId ?? binding.world_location_ref_id) || null
+  const setId = readText(binding.setId ?? binding.set_id)
+  const zoneId = readText(binding.zoneId ?? binding.zone_id)
+  const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id)
+  const spotIds = readStringArray(binding.spotIds ?? binding.spot_ids)
+  const viewpointId = readText(binding.viewpointId ?? binding.viewpoint_id)
+  const localReferenceIds = readStringArray(binding.localReferenceIds ?? binding.local_reference_ids)
+  return {
+    shotId: readText(shot.id),
+    storyboardBlockId: blockId,
+    worldLocationRefId,
+    setId,
+    zoneId,
+    primarySpotId,
+    spotIds,
+    viewpointId,
+    angleId: viewpointId,
+    characterAnchorIds: [],
+    propAnchorIds: [],
+    assetAnchorIds: localReferenceIds,
+    spatialNodeIds: [...new Set([setId, zoneId, primarySpotId, ...spotIds, viewpointId].filter(Boolean))],
+    continuityAnchorIds: localReferenceIds,
+  }
+}
+
+function graphNodesFromScenePackage(scenePackage: Record<string, unknown>) {
+  const additions = readArray(asRecord(scenePackage.sceneGraphDraft ?? scenePackage.scene_graph_draft).additions).map(asRecord)
+  return {
+    locationSets: additions
+      .filter((entry) => readText(entry.kind) === 'set')
+      .map((entry) => ({ ...entry, id: readText(entry.id), worldLocationRefId: readText(entry.worldLocationRefId ?? entry.world_location_ref_id ?? entry.parentId ?? entry.parent_id), nodeKind: 'location_set' })),
+    zones: additions
+      .filter((entry) => readText(entry.kind) === 'zone')
+      .map((entry) => ({ ...entry, id: readText(entry.id), setId: readText(entry.setId ?? entry.set_id ?? entry.parentId ?? entry.parent_id), worldLocationRefId: readText(entry.worldLocationRefId ?? entry.world_location_ref_id), nodeKind: 'location_zone' })),
+    spots: additions
+      .filter((entry) => readText(entry.kind) === 'spot')
+      .map((entry) => ({ ...entry, id: readText(entry.id), setId: readText(entry.setId ?? entry.set_id), zoneId: readText(entry.zoneId ?? entry.zone_id ?? entry.parentId ?? entry.parent_id), worldLocationRefId: readText(entry.worldLocationRefId ?? entry.world_location_ref_id), nodeKind: 'location_spot' })),
+    viewpoints: additions
+      .filter((entry) => readText(entry.kind) === 'viewpoint')
+      .map((entry) => ({ ...entry, id: readText(entry.id), setId: readText(entry.setId ?? entry.set_id), zoneId: readText(entry.zoneId ?? entry.zone_id), spotIds: [readText(entry.spotId ?? entry.spot_id)].filter(Boolean), worldLocationRefId: readText(entry.worldLocationRefId ?? entry.world_location_ref_id), nodeKind: 'location_viewpoint' })),
+  }
+}
+
+function mergeById(records: readonly Record<string, unknown>[]) {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const record of records) {
+    const id = readText(record.id)
+    if (!id) continue
+    byId.set(id, { ...byId.get(id), ...record, id })
+  }
+  return [...byId.values()]
+}
+
+function buildProvisionalKeyframeContext(input: {
+  masterRequest: ReturnType<typeof mapOutputRequestRow>
+  events: readonly Record<string, unknown>[]
+  steps: readonly Record<string, unknown>[]
+  requestedShotIds: readonly string[]
+}) {
+  if (input.requestedShotIds.length === 0) {
+    throw new HttpError(409, 'Choose a streamed shot before generating an early keyframe.')
+  }
+  const scenePackage = stepOutputRecord(input.steps, ['sequence_animatic_scene_graph_assignment', 'sequence_animatic_scene_package'], ['scenePackage', 'scene_package'])
+  const assetPack = stepOutputRecord(input.steps, ['cinematic_v3_reference_select', 'cinematic_v2_reference_select'], ['assetPack', 'asset_pack'])
+  if (Object.keys(assetPack).length === 0) throw new HttpError(409, 'Reference selection is not ready yet.')
+  const scenePackages = readArray(scenePackage.scenePackages ?? scenePackage.scene_packages).map(asRecord)
+  const shotsById = new Map<string, Record<string, unknown>>()
+  const blocksById = new Map<string, Record<string, unknown>>()
+  const coverageSetups: Record<string, unknown>[] = []
+  const localReferences: Record<string, unknown>[] = []
+  const streamedSets: Record<string, unknown>[] = []
+  const streamedZones: Record<string, unknown>[] = []
+  const streamedSpots: Record<string, unknown>[] = []
+  const streamedViewpoints: Record<string, unknown>[] = []
+
+  for (const event of input.events) {
+    const eventType = readText(event.event_type ?? event.eventType)
+    const payload = asRecord(event.payload)
+    if (eventType === 'block_planned') {
+      const block = asRecord(payload.block)
+      const blockId = readText(block.id) || readText(payload.blockId)
+      if (blockId) {
+        blocksById.set(blockId, {
+          ...block,
+          id: blockId,
+          index: Number(block.index ?? payload.index ?? 0) || blocksById.size + 1,
+          title: readText(block.title) || readText(payload.title) || `Block ${blocksById.size + 1}`,
+          summary: readText(block.summary) || readText(payload.summary),
+          shotIds: readStringArray(block.shotIds ?? block.shot_ids ?? payload.shotIds),
+          status: 'planned',
+          provisional: true,
+        })
+      }
+    }
+    if (eventType === 'shot_streamed') {
+      const rawShot = asRecord(payload.shot)
+      const shotId = readText(rawShot.id) || readText(payload.shotId)
+      if (!shotId) continue
+      const blockId = readText(rawShot.blockId ?? rawShot.block_id) || readText(payload.blockId) || readText(payload.storyboardBlockId) || 'block_001'
+      const scenePackageForThisShot = scenePackageForShot(rawShot, scenePackages)
+      const sceneBinding = repairedShotSceneBinding({ shot: rawShot, scenePackage: scenePackageForThisShot })
+      shotsById.set(shotId, {
+        ...rawShot,
+        id: shotId,
+        index: Number(rawShot.index ?? payload.index ?? 0) || shotsById.size + 1,
+        blockId,
+        storyboardBlockId: readText(rawShot.storyboardBlockId ?? rawShot.storyboard_block_id) || blockId,
+        sceneBinding,
+        scene_binding: sceneBinding,
+        title: readText(rawShot.title) || readText(payload.title) || `Shot ${shotsById.size + 1}`,
+        provisional: true,
+      })
+    }
+    if (eventType === 'coverage_setup_registered') {
+      const setup = asRecord(payload.coverageSetup)
+      const setupId = readText(setup.id) || readText(payload.setupId)
+      if (setupId) coverageSetups.push({ ...setup, id: setupId, provisional: true })
+    }
+    if (eventType === 'local_reference_registered') {
+      const localReference = asRecord(payload.localReference)
+      const id = readText(localReference.id) || readText(payload.referenceId)
+      if (id) localReferences.push({ ...localReference, id, provisional: true })
+    }
+    if (eventType === 'scene_graph_node_registered') {
+      const node = asRecord(payload.node)
+      const id = readText(node.id) || readText(payload.nodeId)
+      const nodeKind = readText(node.nodeKind) || readText(payload.nodeKind)
+      if (!id) continue
+      const entry = { ...node, id, nodeKind, provisional: true }
+      if (nodeKind === 'set') streamedSets.push({ ...entry, nodeKind: 'location_set' })
+      else if (nodeKind === 'zone') streamedZones.push({ ...entry, nodeKind: 'location_zone' })
+      else if (nodeKind === 'spot') streamedSpots.push({ ...entry, nodeKind: 'location_spot' })
+      else if (nodeKind === 'viewpoint' || nodeKind === 'angle') streamedViewpoints.push({ ...entry, nodeKind: 'location_viewpoint' })
+    }
+  }
+
+  const requestedShotSet = new Set(input.requestedShotIds)
+  const selectedShots = [...shotsById.values()].filter((shot) => requestedShotSet.has(readText(shot.id)))
+  if (selectedShots.length === 0) throw new HttpError(409, 'That streamed shot is not ready yet.')
+  const missingBindingShot = selectedShots.find((shot) => {
+    const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+    return !readText(binding.setId ?? binding.set_id) && !readText(binding.worldLocationRefId ?? binding.world_location_ref_id)
+  })
+  if (missingBindingShot) {
+    throw new HttpError(409, `Shot ${readText(missingBindingShot.id)} binding is not ready yet.`)
+  }
+
+  if (blocksById.size === 0) {
+    for (const shot of shotsById.values()) {
+      const blockId = readText(shot.blockId ?? shot.storyboardBlockId) || 'block_001'
+      const block = blocksById.get(blockId) ?? { id: blockId, index: blocksById.size + 1, title: `Block ${blocksById.size + 1}`, summary: 'Streamed shot continuity records.', shotIds: [], status: 'planned', provisional: true }
+      const shotIds = readStringArray(asRecord(block).shotIds)
+      if (!shotIds.includes(readText(shot.id))) shotIds.push(readText(shot.id))
+      blocksById.set(blockId, { ...asRecord(block), shotIds })
+    }
+  }
+  for (const shot of shotsById.values()) {
+    const blockId = readText(shot.blockId ?? shot.storyboardBlockId) || 'block_001'
+    const block = blocksById.get(blockId)
+    if (!block) continue
+    const shotIds = readStringArray(block.shotIds)
+    if (!shotIds.includes(readText(shot.id))) blocksById.set(blockId, { ...block, shotIds: [...shotIds, readText(shot.id)] })
+  }
+
+  const packageGraph = graphNodesFromScenePackage(scenePackage)
+  const shotBindings: Record<string, Record<string, unknown>> = {}
+  for (const shot of shotsById.values()) {
+    const blockId = readText(shot.storyboardBlockId ?? shot.blockId) || 'block_001'
+    shotBindings[readText(shot.id)] = shotBindingFromShot(shot, blockId)
+  }
+  const graph = {
+    version: 'sequence_animatic_continuity_graph_v2',
+    planningMode: 'block_graph_v2',
+    worldLocationRefs: [],
+    locationSets: mergeById([...packageGraph.locationSets, ...streamedSets]),
+    zones: mergeById([...packageGraph.zones, ...streamedZones]),
+    spots: mergeById([...packageGraph.spots, ...streamedSpots]),
+    viewpoints: mergeById([...packageGraph.viewpoints, ...streamedViewpoints]),
+    angles: mergeById([...packageGraph.viewpoints, ...streamedViewpoints]),
+    edges: readArray(scenePackage.spotRelations ?? scenePackage.spot_relations).map(asRecord),
+    shotBindings,
+    assetAnchors: localReferences.map((reference) => ({
+      ...reference,
+      id: readText(reference.id),
+      type: readText(reference.type) || 'prop',
+      shotIds: readStringArray(reference.usedShotIds ?? reference.used_shot_ids),
+    })),
+    rejectedCandidates: [],
+    blockSummaries: [...blocksById.values()].map((block) => ({ blockId: readText(block.id), summary: readText(block.summary), status: 'planned' })),
+    warnings: ['Provisional keyframe context built from streamed shot-continuity events.'],
+    diagnostics: [],
+  }
+  const blocks = [...blocksById.values()]
+    .map((block) => {
+      const shotIds = readStringArray(block.shotIds)
+      return {
+        ...block,
+        shotIds,
+        shots: shotIds.map((shotId) => shotsById.get(shotId)).filter(Boolean),
+      }
+    })
+    .filter((block) => readArray(block.shots).length > 0)
+  const shots = [...shotsById.values()].sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+  const directorPlan = {
+    role: 'sequence_animatic_director_plan',
+    contractVersion: 'shot_continuity_plan_v2',
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    screenplayAnimaticRole: 'director_plan',
+    sequenceAnimaticRole: 'director_plan',
+    masterRequestId: input.masterRequest.id,
+    shots,
+    blocks: blocks.map((block) => ({ ...block, shots: undefined })),
+    coverageSetups,
+    coverage_setups: coverageSetups,
+    coverageSetupByShotId: Object.fromEntries(shots.map((shot) => [readText(shot.id), readText(shot.coverageSetupId ?? shot.coverage_setup_id)] as const).filter(([, setupId]) => setupId)),
+    continuityGraphV2: graph,
+    continuity_graph_v2: graph,
+    shotBindings,
+    shot_bindings: shotBindings,
+    outputLocalReferences: localReferences,
+    output_local_references: localReferences,
+    provisional: true,
+  }
+  const manifest = {
+    role: 'sequence_animatic_manifest',
+    masterRequestId: input.masterRequest.id,
+    assetPack,
+    blocks,
+    shotPlan: {
+      sceneId: 'sequence_animatic_master',
+      shots,
+      totalEditorialDurationSeconds: shots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds ?? shot.durationSeconds) || 0), 0),
+    },
+    continuityGraphV2: graph,
+    continuity_graph_v2: graph,
+    shotBindings,
+    shot_bindings: shotBindings,
+    provisional: true,
+  }
+  return { manifest, directorPlan, assetPack, provisional: true }
 }
 
 Deno.serve(async (request) => {
@@ -412,9 +735,38 @@ Deno.serve(async (request) => {
       .order('created_at', { ascending: false })
     if (masterArtifactsResponse.error) throw new Error(masterArtifactsResponse.error.message)
     const masterArtifacts = (masterArtifactsResponse.data ?? []).map(asRecord)
-    const manifest = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
+    let manifest = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
+    let directorPlan = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+    let provisionalContext = false
+    if ((Object.keys(manifest).length === 0 || Object.keys(directorPlan).length === 0) && payload.allowProvisional) {
+      const runId = masterRequest.latestRunId
+      const stepsResponse = runId
+        ? await admin
+          .from('output_workflow_run_steps')
+          .select(outputWorkflowRunStepSelect)
+          .eq('run_id', runId)
+          .order('order_index', { ascending: true })
+        : { data: [], error: null }
+      if (stepsResponse.error) throw new Error(stepsResponse.error.message)
+      const eventsResponse = await admin
+        .from('output_request_events')
+        .select('id, project_id, draft_id, request_id, sequence, event_type, payload, created_at')
+        .eq('draft_id', payload.draftId)
+        .eq('request_id', masterRequest.id)
+        .order('sequence', { ascending: true })
+        .limit(1000)
+      if (eventsResponse.error) throw new Error(eventsResponse.error.message)
+      const provisional = buildProvisionalKeyframeContext({
+        masterRequest,
+        events: (eventsResponse.data ?? []).map(asRecord),
+        steps: (stepsResponse.data ?? []).map(asRecord),
+        requestedShotIds: payload.shotIds ?? [],
+      })
+      manifest = provisional.manifest
+      directorPlan = provisional.directorPlan
+      provisionalContext = true
+    }
     if (Object.keys(manifest).length === 0) throw new HttpError(409, 'Generate the screenplay animatic manifest first.')
-    const directorPlan = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
     if (Object.keys(directorPlan).length === 0) throw new HttpError(409, 'Generate the shot continuity plan first.')
     const manifestHash = sequenceAnimaticStableHash(manifest)
     const directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
@@ -427,6 +779,26 @@ Deno.serve(async (request) => {
       requestedShotIds: payload.shotIds ?? [],
       requestedCoverageSetupIds: payload.coverageSetupIds ?? [],
     })
+    const continuityLintReport = asRecord(keyframePlan.continuityLint)
+    const continuityLintFindings = readArray(continuityLintReport.findings)
+    if (continuityLintFindings.length > 0) {
+      // Surface film-grammar findings as a deduped event so the client can
+      // show "continuity review" details; lint never blocks generation.
+      await insertSequenceAnimaticEvent({
+        admin,
+        projectId: payload.projectId,
+        draftId: payload.draftId,
+        requestId: masterRequest.id,
+        workflowId: masterRequest.workflowId,
+        eventType: 'continuity_lint',
+        payload: {
+          report: continuityLintReport,
+          masterRequestId: masterRequest.id,
+        },
+        dedupeKey: 'masterRequestId',
+        dedupeValue: masterRequest.id,
+      })
+    }
 
     const childResponse = await client
       .from('output_requests')
@@ -706,6 +1078,7 @@ Deno.serve(async (request) => {
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           worldLocationRefId,
           parentNodeIds: readStringArray(batch.sourceReferenceNodeIds),
+          provisional: provisionalContext,
         }
         const graphParts = buildSequenceAnimaticContinuityBatchWorkflowGraph({
           workflowId,
@@ -804,6 +1177,7 @@ Deno.serve(async (request) => {
         sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
         worldLocationRefId,
         parentNodeIds: dependencyEdges.filter((edge) => readText(edge.targetNodeId) === targetNodeId).map((edge) => readText(edge.sourceNodeId)).filter(Boolean),
+        provisional: provisionalContext,
       }
       const graphParts = buildSequenceAnimaticContinuityAssetWorkflowGraph({
         workflowId,
@@ -940,6 +1314,7 @@ Deno.serve(async (request) => {
           masterManifestArtifactKey,
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           readyToRun: true,
+          provisional: provisionalContext,
         }
         const { nodes, edges } = buildSequenceAnimaticCoverageAnchorWorkflowGraph({
           workflowId,
@@ -1014,25 +1389,93 @@ Deno.serve(async (request) => {
       })
     }
 
+    const blockedShotKeyframes: Array<{
+      shotId: string
+      storyboardBlockId: string | null
+      reason: 'missing_coverage_anchor' | 'missing_previous_keyframe'
+      coverageSetupId: string | null
+      previousShotId: string | null
+    }> = []
     for (const job of readArray(keyframePlan.shotKeyframeJobs).map(asRecord)) {
       const shotId = readText(job.shotId)
       if (!shotId) continue
       if (payload.mode === 'generate' && readText(shotKeyframeImageByShotId.get(shotId)?.assetKey)) continue
       const coverageSetupIdForReadiness = readText(job.coverageSetupId)
       if (job.requiresCoverageAnchor === true && coverageSetupIdForReadiness && !readText(coverageAnchorImageBySetupId.get(coverageSetupIdForReadiness)?.assetKey)) {
+        // Coverage validation gate: never silently drop a shot — report why it
+        // is blocked so the client can offer "generate missing anchors" instead
+        // of appearing stuck.
+        blockedShotKeyframes.push({
+          shotId,
+          storyboardBlockId: readText(job.storyboardBlockId) || null,
+          reason: 'missing_coverage_anchor',
+          coverageSetupId: coverageSetupIdForReadiness,
+          previousShotId: null,
+        })
         continue
       }
       const previousShotIdForReadiness = readText(job.previousShotId)
       if (previousShotIdForReadiness && !readText(shotKeyframeImageByShotId.get(previousShotIdForReadiness)?.assetKey)) {
+        blockedShotKeyframes.push({
+          shotId,
+          storyboardBlockId: readText(job.storyboardBlockId) || null,
+          reason: 'missing_previous_keyframe',
+          coverageSetupId: null,
+          previousShotId: previousShotIdForReadiness,
+        })
         continue
       }
       let child = existingByShotId.get(shotId) ?? null
+      const shot = asRecord(job.shot)
+      const coverageSetupId = readText(job.coverageSetupId)
+      const sourceShotHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId })
+      if (child && !provisionalContext) {
+        const childMetadata = asRecord(child.metadata)
+        const childWasProvisional = childMetadata.provisional === true
+        const childSourceShotHash = readText(childMetadata.sourceShotHash)
+        if (childWasProvisional && childSourceShotHash && childSourceShotHash !== sourceShotHash) {
+          const staleResponse = await admin
+            .from('output_requests')
+            .update({
+              metadata: {
+                ...childMetadata,
+                sequenceAnimaticStale: true,
+                staleReason: 'Final shot continuity plan changed after early keyframe generation.',
+                staleAt: now,
+              },
+            })
+            .eq('id', child.id)
+          if (staleResponse.error) throw new Error(staleResponse.error.message)
+          child = null
+          existingByShotId.delete(shotId)
+        } else if (!childWasProvisional && childMetadata.sequenceAnimaticStale !== true) {
+          // Staleness cascade: when the shot's source plan changed since this
+          // keyframe was created (manifest or director plan revision), flag the
+          // child as stale so the UI can surface "regenerate impacted shots"
+          // instead of silently reusing outdated keyframes.
+          const childSourceHashForCascade = readText(childMetadata.sourceShotHash)
+          if (childSourceHashForCascade && childSourceHashForCascade !== sourceShotHash) {
+            const cascadeResponse = await admin
+              .from('output_requests')
+              .update({
+                metadata: {
+                  ...childMetadata,
+                  sequenceAnimaticStale: true,
+                  staleReason: 'Shot continuity plan changed after this keyframe was generated.',
+                  staleAt: now,
+                },
+              })
+              .eq('id', child.id)
+            if (cascadeResponse.error) throw new Error(cascadeResponse.error.message)
+            child = { ...child, metadata: { ...childMetadata, sequenceAnimaticStale: true } }
+            existingByShotId.set(shotId, child)
+          }
+        }
+      }
       if (!child) {
         const workflowId = crypto.randomUUID()
-        const shot = asRecord(job.shot)
         const blockId = readText(job.storyboardBlockId)
         const block = asRecord(asRecord(keyframePlan.blockById)[blockId])
-        const coverageSetupId = readText(job.coverageSetupId)
         const coverageSetup = coverageSetupId
           ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
           : {}
@@ -1049,16 +1492,18 @@ Deno.serve(async (request) => {
           shotId,
           coverageSetupId,
           keyframeHash,
+          sourceShotHash,
           manifestHash,
           directorPlanHash,
           masterManifestArtifactKey,
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           readyToRun: true,
+          provisional: provisionalContext,
         }
         const { nodes, edges } = buildSequenceAnimaticPlannedKeyframeWorkflowGraph({
           workflowId,
           draftId: payload.draftId,
-          commonConfig,
+          commonConfig: { ...commonConfig, sceneState: asRecord(job.sceneState), scene_state: asRecord(job.sceneState) },
           block,
           shot,
           coverageSetup,
@@ -1142,6 +1587,7 @@ Deno.serve(async (request) => {
     return json(sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse({
       ok: true,
       masterRequest,
+      blockedShotKeyframes,
       keyframePlan: {
         ...asRecord(keyframePlan),
         dependencyReadiness: {

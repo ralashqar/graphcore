@@ -14,6 +14,11 @@ import {
   buildTakeStoryboardStillPrompt,
   buildTakeStillPrompt,
   applyStoryboardBindingToGraph,
+  claimQueuedCinematicJobForSubmit,
+  cinematicSubmitClaimExpired,
+  requeueUnsubmittedCinematicJob,
+  resolveCinematicVideoFalModel,
+  submitClaimedCinematicVideoJob,
   applyTakeBindingToGraph,
   applyShotBindingToGraph,
   buildVirtualShotNode,
@@ -43,10 +48,18 @@ import {
   toCinematicRun,
   toCinematicRunJob,
 } from '../_shared/cinematics.ts'
+import {
+  getFalErrorMessage,
+  getFalResult,
+  getFalStatus,
+  isNonTerminalFalProgressMessage,
+  submitFalRequest,
+} from '../_shared/fal-queue.ts'
 import { buildFalWebhookUrl } from '../_shared/fal-webhooks.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 
-const falQueueBaseUrl = 'https://queue.fal.run'
+/** Wall-clock budget for a single poll invocation; remaining jobs are picked up by the next poll or the webhook advancement path. */
+const POLL_TIME_BUDGET_MS = 25_000
 
 const requestSchema = z.object({
   runId: z.string(),
@@ -73,65 +86,6 @@ const requestSchema = z.object({
   shotId: z.string().nullable().optional(),
 })
 
-function buildFalHeaders(apiKey: string) {
-  return new Headers({
-    Authorization: `Key ${apiKey}`,
-    'Content-Type': 'application/json',
-  })
-}
-
-async function fetchFalJson(url: string, init: RequestInit) {
-  const response = await fetch(url, init)
-  const rawText = await response.text().catch(() => '')
-  let body: Record<string, unknown> = {}
-  if (rawText.trim().length > 0) {
-    try {
-      body = JSON.parse(rawText) as Record<string, unknown>
-    } catch {
-      body = {}
-    }
-  }
-  return { response, body, rawText }
-}
-
-async function submitFalRequest(input: {
-  apiKey: string
-  model: string
-  payload: Record<string, unknown>
-  webhookUrl?: string | null
-}) {
-  const body = input.webhookUrl
-    ? {
-        ...input.payload,
-        webhook_url: input.webhookUrl,
-      }
-    : input.payload
-  return fetchFalJson(`${falQueueBaseUrl}/${input.model}`, {
-    method: 'POST',
-    headers: buildFalHeaders(input.apiKey),
-    body: JSON.stringify(body),
-  })
-}
-
-async function getFalStatus(input: {
-  apiKey: string
-  model: string
-  requestId: string
-  logs?: boolean
-  statusUrl?: string | null
-}) {
-  const url = input.statusUrl
-    ? new URL(input.statusUrl)
-    : new URL(`${falQueueBaseUrl}/${input.model}/requests/${input.requestId}/status`)
-  if (input.logs) {
-    url.searchParams.set('logs', '1')
-  }
-  return fetchFalJson(url.toString(), {
-    method: 'GET',
-    headers: buildFalHeaders(input.apiKey),
-  })
-}
-
 function resolveStoryboardStillFalModel(hasImageReferences: boolean) {
   if (hasImageReferences) {
     return Deno.env.get('CINEMATIC_STORYBOARD_EDIT_FAL_MODEL')
@@ -146,54 +100,6 @@ function resolveStoryboardStillFalModel(hasImageReferences: boolean) {
 
 function isFalEditModel(model: string) {
   return model.includes('/edit')
-}
-
-async function getFalResult(input: {
-  apiKey: string
-  model: string
-  requestId: string
-  responseUrl?: string | null
-}) {
-  let { response, body, rawText } = await fetchFalJson(input.responseUrl || `${falQueueBaseUrl}/${input.model}/requests/${input.requestId}/response`, {
-    method: 'GET',
-    headers: buildFalHeaders(input.apiKey),
-  })
-  if (!input.responseUrl && (response.status === 404 || response.status === 405)) {
-    ({ response, body, rawText } = await fetchFalJson(`${falQueueBaseUrl}/${input.model}/requests/${input.requestId}`, {
-      method: 'GET',
-      headers: buildFalHeaders(input.apiKey),
-    }))
-  }
-  const normalizedData =
-    body && typeof body.response === 'object' && body.response !== null
-      ? body.response as Record<string, unknown>
-      : body
-
-  return {
-    response,
-    body,
-    rawText,
-    normalizedData,
-  }
-}
-
-function getFalErrorMessage(body: Record<string, unknown>, fallback: string) {
-  if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim()
-  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
-  if (typeof body.message === 'string' && body.message.trim()) return body.message.trim()
-  return fallback
-}
-
-function isNonTerminalFalProgressMessage(body: Record<string, unknown>, providerStatus: string | null) {
-  const errorMessage = typeof body.error === 'string' ? body.error.trim().toLowerCase() : ''
-  const detailMessage = typeof body.detail === 'string' ? body.detail.trim().toLowerCase() : ''
-  const message = errorMessage || detailMessage
-  const status = providerStatus?.trim().toUpperCase() ?? null
-  const indicatesProgressMessage = message === 'request is still in progress'
-    || message === 'still in progress'
-    || message === 'request in progress'
-  const indicatesProgressStatus = status === 'IN_PROGRESS' || status === 'IN_QUEUE' || status === 'QUEUED'
-  return indicatesProgressMessage && indicatesProgressStatus
 }
 
 function resolveStillSourceAssetUrl(
@@ -457,11 +363,24 @@ Deno.serve(async (request) => {
     let updatedGraph = graph
     const createdAssets: Array<Record<string, unknown>> = []
 
+    // Drain every runnable job per invocation (instead of one job per poll),
+    // tracking in-pass status changes so dependency chains can advance within
+    // a single invocation. A wall-clock budget bounds the invocation.
+    const invocationDeadline = Date.now() + POLL_TIME_BUDGET_MS
+    const liveJobStatus = new Map(initialState.jobs.map((entry) => [entry.id, entry.status]))
+    const noteJobStatus = (jobId: string, status: string) => {
+      liveJobStatus.set(jobId, status)
+    }
+    /** Latest still asset url produced in this pass per job id, used to feed dependent video jobs. */
+    const stillUrlByJobId = new Map<string, string>()
+
     for (const job of initialState.jobs) {
-      if (job.status !== 'queued' && job.status !== 'running') continue
+      if (Date.now() > invocationDeadline) break
+      const currentStatus = liveJobStatus.get(job.id) ?? job.status
+      if (currentStatus !== 'queued' && currentStatus !== 'running') continue
       const hasFailedDependency = job.dependsOnJobIds.some((dependencyId) => {
-        const dependency = initialState.jobs.find((candidate) => candidate.id === dependencyId)
-        return dependency ? dependency.status !== 'succeeded' && isTerminalCinematicJobStatus(dependency.status) : false
+        const dependencyStatus = liveJobStatus.get(dependencyId)
+        return dependencyStatus ? dependencyStatus !== 'succeeded' && isTerminalCinematicJobStatus(dependencyStatus) : false
       })
       if (hasFailedDependency) {
         await client
@@ -471,13 +390,11 @@ Deno.serve(async (request) => {
             error_message: 'Skipped because a dependency job failed.',
           })
           .eq('id', job.id)
+        noteJobStatus(job.id, 'skipped')
         continue
       }
 
-      const allDependenciesSucceeded = job.dependsOnJobIds.every((dependencyId) => {
-        const dependency = initialState.jobs.find((candidate) => candidate.id === dependencyId)
-        return dependency?.status === 'succeeded'
-      })
+      const allDependenciesSucceeded = job.dependsOnJobIds.every((dependencyId) => liveJobStatus.get(dependencyId) === 'succeeded')
       if (!allDependenciesSucceeded) continue
 
       const targetNode = findNode(updatedGraph, job.shotNodeKey)
@@ -489,7 +406,8 @@ Deno.serve(async (request) => {
             ? `Cinematic shot "${job.shotId}" or target node "${job.shotNodeKey}" was not found.`
             : `Cinematic node "${job.shotNodeKey}" was not found.`,
         }).eq('id', job.id)
-        break
+        noteJobStatus(job.id, 'failed')
+        continue
       }
       const isTakeJob = job.kind === 'take_video' || job.kind === 'take_still'
       const isStoryboardJob = job.kind === 'storyboard_still'
@@ -515,14 +433,16 @@ Deno.serve(async (request) => {
             status: 'failed',
             error_message: 'Still jobs require a cinematic shot target.',
           }).eq('id', job.id)
-          break
+          noteJobStatus(job.id, 'failed')
+          continue
         }
         if (job.kind === 'take_still' && !takeNode) {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: 'Take still jobs require a cinematic take node.',
           }).eq('id', job.id)
-          break
+          noteJobStatus(job.id, 'failed')
+          continue
         }
         if (job.kind === 'storyboard_still' && !storyboardNode) {
           if (!isTakeStoryboardJob) {
@@ -530,7 +450,8 @@ Deno.serve(async (request) => {
               status: 'failed',
               error_message: 'Storyboard still jobs require a storyboard ref node or cinematic take node.',
             }).eq('id', job.id)
-            break
+            noteJobStatus(job.id, 'failed')
+            continue
           }
         }
         const imageUrls = job.kind === 'take_still'
@@ -558,7 +479,8 @@ Deno.serve(async (request) => {
               },
             })
           }
-          break
+          noteJobStatus(job.id, 'failed')
+          continue
         }
         const stillModel = job.kind === 'storyboard_still'
           ? resolveStoryboardStillFalModel(imageUrls.length > 0)
@@ -615,7 +537,8 @@ Deno.serve(async (request) => {
               },
             })
           }
-          break
+          noteJobStatus(job.id, 'failed')
+          continue
         }
         const reservedStillAssetKey =
           job.stillAssetKey
@@ -637,7 +560,12 @@ Deno.serve(async (request) => {
           ? resultContextRecord.responseUrl.trim()
           : null
 
-        if (job.status === 'queued') {
+        if (currentStatus === 'queued') {
+          // Atomically claim the job before submitting so concurrent polls or
+          // webhook advancement never submit the same job to FAL twice.
+          const claimed = await claimQueuedCinematicJobForSubmit(client, job)
+          if (!claimed) continue
+          noteJobStatus(job.id, 'running')
           const submitResult = await submitFalRequest({
             apiKey: falApiKey,
             model: stillModel,
@@ -691,7 +619,8 @@ Deno.serve(async (request) => {
                 },
               })
             }
-            break
+            noteJobStatus(job.id, 'failed')
+            continue
           }
 
           if (!requestId) {
@@ -715,7 +644,8 @@ Deno.serve(async (request) => {
                 },
               })
             }
-            break
+            noteJobStatus(job.id, 'failed')
+            continue
           }
 
           await client.from('cinematic_run_jobs').update({
@@ -734,29 +664,18 @@ Deno.serve(async (request) => {
             },
             error_message: null,
           }).eq('id', job.id)
-          break
+          continue
         }
 
         const providerRequestId = job.providerRequestId
         if (!providerRequestId) {
-          await client.from('cinematic_run_jobs').update({
-            status: 'failed',
-            error_message: 'Still-generation job is missing a provider request id.',
-          }).eq('id', job.id)
-          if (reservedStillAssetKey) {
-            await markGeneratedImageAssetFailed({
-              client,
-              projectId: payload.snapshot.project.id,
-              assetKey: reservedStillAssetKey,
-              errorMessage: 'Still-generation job is missing a provider request id.',
-              metadata: {
-                provider: 'fal',
-                model: job.model ?? stillModel,
-                prompt: job.prompt ?? stillPrompt,
-              },
-            })
-          }
-          break
+          // The job was claimed for submission (here or elsewhere) but never got a
+          // provider request id. Within the grace period, treat it as in-flight;
+          // afterwards, re-queue it so a later pass can resubmit instead of failing it.
+          if (!cinematicSubmitClaimExpired(resultContextRecord)) continue
+          await requeueUnsubmittedCinematicJob(client, job)
+          noteJobStatus(job.id, 'queued')
+          continue
         }
 
         if (!reservedStillAssetKey) {
@@ -764,7 +683,8 @@ Deno.serve(async (request) => {
             status: 'failed',
             error_message: 'Still-generation job is missing a reserved asset key.',
           }).eq('id', job.id)
-          break
+          noteJobStatus(job.id, 'failed')
+          continue
         }
 
         const falResult = await getFalResult({
@@ -829,7 +749,7 @@ Deno.serve(async (request) => {
                 },
                 error_message: null,
               }).eq('id', job.id)
-              break
+              continue
             }
 
             await client.from('cinematic_run_jobs').update({
@@ -848,7 +768,8 @@ Deno.serve(async (request) => {
                 prompt: job.prompt ?? stillPrompt,
               },
             })
-            break
+            noteJobStatus(job.id, 'failed')
+            continue
           }
 
           if (imageUrl) {
@@ -874,7 +795,8 @@ Deno.serve(async (request) => {
                 prompt: job.prompt ?? stillPrompt,
               },
             })
-            break
+            noteJobStatus(job.id, 'failed')
+            continue
           } else {
             await client.from('cinematic_run_jobs').update({
               status: 'running',
@@ -888,7 +810,7 @@ Deno.serve(async (request) => {
               },
               error_message: null,
             }).eq('id', job.id)
-            break
+            continue
           }
         }
 
@@ -921,7 +843,8 @@ Deno.serve(async (request) => {
               prompt: job.prompt ?? stillPrompt,
             },
             })
-            break
+            noteJobStatus(job.id, 'failed')
+            continue
           }
 
           if (isNonTerminalFalProgressMessage(statusResult.body, providerStatus)) {
@@ -937,7 +860,7 @@ Deno.serve(async (request) => {
               },
               error_message: null,
             }).eq('id', job.id)
-            break
+            continue
           }
 
         let storedAsset
@@ -988,7 +911,8 @@ Deno.serve(async (request) => {
               prompt: job.prompt ?? stillPrompt,
             },
           })
-          break
+          noteJobStatus(job.id, 'failed')
+          continue
         }
 
         createdAssets.push(storedAsset)
@@ -1099,10 +1023,15 @@ Deno.serve(async (request) => {
             },
           })
         }
-        break
+        noteJobStatus(job.id, 'succeeded')
+        if (imageUrl) stillUrlByJobId.set(job.id, imageUrl)
+        continue
       }
 
-      const executionPlan =
+      // --- Video jobs (shot_video / take_video) ---
+      // Videos are submitted to the FAL queue (non-blocking) and completed by
+      // fal-webhook; this path is the polling fallback when webhooks are late.
+      const executionPlan = (
         job.resultContext && typeof job.resultContext === 'object' && job.resultContext.executionPlan && typeof job.resultContext.executionPlan === 'object'
           ? job.resultContext.executionPlan
           : isTakeJob
@@ -1118,75 +1047,94 @@ Deno.serve(async (request) => {
                 shotNode: shotNode!,
                 sourceInputs: sourceInputs as ReturnType<typeof resolveShotSources>,
               })
+      ) as Record<string, unknown>
+      const dependencyStillUrl = job.dependsOnJobIds
+        .map((dependencyId) => stillUrlByJobId.get(dependencyId))
+        .find((url): url is string => Boolean(url)) ?? null
       const fallbackStillUrl = resolveStillSourceAssetUrl({
         ...payload.snapshot,
         assets: [...payload.snapshot.assets, ...createdAssets],
-      }, updatedGraph, job.shotNodeKey, job.shotId)
-      if (executionPlan.endpoint === 'image-to-video' && !executionPlan.imageUrl && !fallbackStillUrl && !isTakeJob) {
-        await client.from('cinematic_run_jobs').update({
-          status: 'failed',
-          error_message: 'This shot needs at least one image reference or generated still before Seedance image-to-video can run.',
-        }).eq('id', job.id)
-        break
-      }
-      if (executionPlan.endpoint === 'image-to-video' && !executionPlan.imageUrl && isTakeJob) {
-        await client.from('cinematic_run_jobs').update({
-          status: 'failed',
-          error_message: 'This compiled take needs at least one primary image reference before image-to-video can run.',
-        }).eq('id', job.id)
-        break
+      }, updatedGraph, job.shotNodeKey, job.shotId) ?? dependencyStillUrl
+
+      if (currentStatus === 'queued') {
+        const claimed = await claimQueuedCinematicJobForSubmit(client, job)
+        if (!claimed) continue
+        noteJobStatus(job.id, 'running')
+        const submitResult = await submitClaimedCinematicVideoJob({
+          client,
+          falApiKey,
+          job,
+          executionPlan,
+          fallbackImageUrl: isTakeJob ? null : fallbackStillUrl,
+        })
+        if (!submitResult.ok) noteJobStatus(job.id, 'failed')
+        continue
       }
 
-      const videoModel = executionPlan.endpoint === 'image-to-video'
-        ? (Deno.env.get('CINEMATIC_SEEDANCE_IMAGE_MODEL') ?? 'bytedance/seedance-2.0/image-to-video')
-        : (Deno.env.get('CINEMATIC_SEEDANCE_REFERENCE_MODEL') ?? 'bytedance/seedance-2.0/reference-to-video')
-      const falResponse = await client.functions.invoke('ai-fal', {
-        body: {
-          action: 'subscribe',
-          model: videoModel,
-          input: executionPlan.endpoint === 'image-to-video'
-            ? {
-                image_url: executionPlan.imageUrl ?? fallbackStillUrl,
-                ...(executionPlan.endImageUrl ? { end_image_url: executionPlan.endImageUrl } : {}),
-                prompt: job.prompt || executionPlan.prompt,
-                resolution: executionPlan.resolution,
-                duration: executionPlan.duration,
-                aspect_ratio: executionPlan.aspectRatio,
-                generate_audio: executionPlan.generateAudio,
-                ...(executionPlan.seed ? { seed: executionPlan.seed } : {}),
-              }
-            : {
-                prompt: job.prompt || executionPlan.prompt,
-                image_urls: executionPlan.imageUrls,
-                video_urls: executionPlan.videoUrls,
-                audio_urls: executionPlan.audioUrls,
-                resolution: executionPlan.resolution,
-                duration: executionPlan.duration,
-                aspect_ratio: executionPlan.aspectRatio,
-                generate_audio: executionPlan.generateAudio,
-                ...(executionPlan.seed ? { seed: executionPlan.seed } : {}),
-              },
-          logs: true,
-          timeoutMs: 180000,
-        },
+      const videoProviderRequestId = job.providerRequestId
+      const videoResultContext = job.resultContext && typeof job.resultContext === 'object'
+        ? job.resultContext as Record<string, unknown>
+        : {}
+      if (!videoProviderRequestId) {
+        if (!cinematicSubmitClaimExpired(videoResultContext)) continue
+        await requeueUnsubmittedCinematicJob(client, job)
+        noteJobStatus(job.id, 'queued')
+        continue
+      }
+
+      const videoModel = job.model
+        ?? resolveCinematicVideoFalModel(typeof executionPlan.endpoint === 'string' ? executionPlan.endpoint : 'reference-to-video')
+      const videoStatusUrl = typeof videoResultContext.statusUrl === 'string' && videoResultContext.statusUrl.trim().length > 0
+        ? videoResultContext.statusUrl.trim()
+        : null
+      const videoResponseUrl = typeof videoResultContext.responseUrl === 'string' && videoResultContext.responseUrl.trim().length > 0
+        ? videoResultContext.responseUrl.trim()
+        : null
+      const videoResult = await getFalResult({
+        apiKey: falApiKey,
+        model: videoModel,
+        requestId: videoProviderRequestId,
+        responseUrl: videoResponseUrl,
       })
-
-      if (falResponse.error) {
-        await client.from('cinematic_run_jobs').update({
-          status: 'failed',
-          error_message: falResponse.error.message,
-        }).eq('id', job.id)
-        break
-      }
-
-      const resultData = ((falResponse.data as { data?: unknown } | null)?.data ?? {}) as Record<string, unknown>
-      const videoUrl = extractFalVideoUrl(resultData)
+      let videoUrl = extractFalVideoUrl(videoResult.normalizedData) ?? extractFalVideoUrl(videoResult.body)
       if (!videoUrl) {
-        await client.from('cinematic_run_jobs').update({
-          status: 'failed',
-          error_message: 'The video-generation provider returned no video URL.',
-        }).eq('id', job.id)
-        break
+        const statusResult = await getFalStatus({
+          apiKey: falApiKey,
+          model: videoModel,
+          requestId: videoProviderRequestId,
+          logs: true,
+          statusUrl: videoStatusUrl,
+        })
+        const providerStatus = typeof statusResult.body.status === 'string' ? statusResult.body.status : null
+        videoUrl = extractFalVideoUrl(statusResult.body)
+        if (!videoUrl) {
+          if (typeof statusResult.body.error === 'string' && !isNonTerminalFalProgressMessage(statusResult.body, providerStatus)) {
+            await client.from('cinematic_run_jobs').update({
+              status: 'failed',
+              error_message: getFalErrorMessage(statusResult.body, 'The video-generation provider returned an error.'),
+            }).eq('id', job.id)
+            noteJobStatus(job.id, 'failed')
+            continue
+          }
+          if (providerStatus === 'COMPLETED') {
+            await client.from('cinematic_run_jobs').update({
+              status: 'failed',
+              error_message: 'The video-generation provider reported completion but returned no video URL.',
+            }).eq('id', job.id)
+            noteJobStatus(job.id, 'failed')
+            continue
+          }
+          await client.from('cinematic_run_jobs').update({
+            status: 'running',
+            result_context: {
+              ...videoResultContext,
+              lastObservedProviderStatus: providerStatus,
+              lastStatusCheckAt: new Date().toISOString(),
+            },
+            error_message: null,
+          }).eq('id', job.id)
+          continue
+        }
       }
 
       let storedAsset
@@ -1210,7 +1158,7 @@ Deno.serve(async (request) => {
             generatedBy: isTakeJob ? 'cinematic_take_video' : 'cinematic_video',
             provider: 'fal',
             model: videoModel,
-            requestId: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
+            requestId: videoProviderRequestId,
             prompt: job.prompt,
             previewUrl: videoUrl,
           },
@@ -1228,7 +1176,8 @@ Deno.serve(async (request) => {
           status: 'failed',
           error_message: message,
         }).eq('id', job.id)
-        break
+        noteJobStatus(job.id, 'failed')
+        continue
       }
 
       createdAssets.push(storedAsset)
@@ -1237,14 +1186,16 @@ Deno.serve(async (request) => {
         video_asset_key: storedAsset.key,
         provider: 'fal',
         model: videoModel,
-        provider_request_id: (falResponse.data as { requestId?: unknown } | null)?.requestId ?? null,
+        provider_request_id: videoProviderRequestId,
         result_context: {
+          ...videoResultContext,
           videoUrl,
           videoAssetKey: storedAsset.key,
           effectiveVideoResolution: executionPlan.resolution,
           executionPlan,
         },
       }).eq('id', job.id)
+      noteJobStatus(job.id, 'succeeded')
 
       if (isTakeJob) {
         updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
@@ -1252,7 +1203,7 @@ Deno.serve(async (request) => {
             outputVideoAssetKey: storedAsset.key,
             provider: 'fal',
             providerModel: videoModel,
-            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            providerRequestId: String(videoProviderRequestId),
             executionPlan,
           },
         })
@@ -1261,7 +1212,7 @@ Deno.serve(async (request) => {
             outputVideoAssetKey: storedAsset.key,
             provider: 'fal',
             providerModel: videoModel,
-            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            providerRequestId: String(videoProviderRequestId),
             executionPlan,
           },
         })
@@ -1271,7 +1222,7 @@ Deno.serve(async (request) => {
             videoAssetKey: storedAsset.key,
             provider: 'fal',
             providerModel: videoModel,
-            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            providerRequestId: String(videoProviderRequestId),
             executionPlan,
           },
         })
@@ -1280,12 +1231,12 @@ Deno.serve(async (request) => {
             videoAssetKey: storedAsset.key,
             provider: 'fal',
             providerModel: videoModel,
-            providerRequestId: String((falResponse.data as { requestId?: unknown } | null)?.requestId ?? ''),
+            providerRequestId: String(videoProviderRequestId),
             executionPlan,
           },
         })
       }
-      break
+      continue
     }
 
     const nextState = await loadRunState(client, payload.runId)
@@ -1330,3 +1281,4 @@ Deno.serve(async (request) => {
     return errorResponse(error, 'Failed to poll cinematic run.')
   }
 })
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     

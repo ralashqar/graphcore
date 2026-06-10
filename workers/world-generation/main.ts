@@ -251,6 +251,47 @@ async function runAppGenerationWorkerLoop() {
   }
 }
 
+const maintenanceIntervalMs = Math.max(
+  60_000,
+  Number(Deno.env.get('GRAPHCORE_WORKER_MAINTENANCE_INTERVAL_MS') ?? 180_000),
+)
+
+/**
+ * Periodic reliability sweep:
+ * - terminally fails output workflow runs whose worker heartbeat went stale
+ *   after exhausting their claim attempts (no more silent zombie runs), and
+ * - re-queues cinematic jobs that were claimed for provider submission but
+ *   never received a provider request id (crashed mid-submit).
+ */
+async function runMaintenanceLoop() {
+  while (!shuttingDown) {
+    try {
+      await waitForDatabaseCircuit('maintenance')
+      const orphanResponse = await client.rpc('fail_orphaned_output_workflow_runs', {
+        stale_minutes: 15,
+        max_attempts: 4,
+      })
+      if (orphanResponse.error) throw new Error(orphanResponse.error.message)
+      const requeueResponse = await client.rpc('requeue_unsubmitted_cinematic_jobs', {
+        grace_minutes: 3,
+      })
+      if (requeueResponse.error) throw new Error(requeueResponse.error.message)
+      const failedRuns = Number(orphanResponse.data ?? 0)
+      const requeuedJobs = Number(requeueResponse.data ?? 0)
+      if (failedRuns > 0 || requeuedJobs > 0) {
+        console.warn('[world-generation-worker] maintenance sweep acted.', {
+          workerId,
+          orphanedRunsFailed: failedRuns,
+          cinematicJobsRequeued: requeuedJobs,
+        })
+      }
+    } catch (error) {
+      await handleWorkerLoopError('maintenance', error)
+    }
+    await sleep(maintenanceIntervalMs)
+  }
+}
+
 async function runOutputWorkflowWorkerLoop(laneIndex: number) {
   const outputWorkerId = `${workerId}:output:${laneIndex + 1}`
   while (!shuttingDown) {
@@ -285,6 +326,7 @@ await Promise.all([
   runGenerationWorkerLoop(),
   runAppGenerationWorkerLoop(),
   ...Array.from({ length: outputWorkflowWorkerConcurrency }, (_, index) => runOutputWorkflowWorkerLoop(index)),
+  runMaintenanceLoop(),
 ])
 
 console.log('[world-generation-worker] stopped', { workerId })

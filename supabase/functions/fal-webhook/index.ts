@@ -5,6 +5,7 @@ import { z } from 'npm:zod@4'
 import { normalizeProviderQueueHandle } from '../../../src/core/providerQueue.ts'
 import { extractFalImageUrls } from '../../../src/domain/visualAssetGeneration.ts'
 import {
+  advanceDependentCinematicJobs,
   completeReservedGeneratedImageAsset,
   createStoredGeneratedAsset,
   extractFalVideoUrl,
@@ -235,6 +236,39 @@ async function recomputeWorldBuildBatchStatus(
   if (updateResponse.error) throw new Error(updateResponse.error.message)
 }
 
+/**
+ * Server-side advancement: once a cinematic job reaches a terminal status via
+ * webhook, submit any dependent queued jobs (e.g. shot_video waiting on its
+ * still) so chains progress without an open client tab polling.
+ */
+async function advanceCinematicDependents(
+  admin: ReturnType<typeof createAdminClient>,
+  runId: string,
+  completedJobId: string,
+  completedStillUrl?: string | null,
+) {
+  const falApiKey = Deno.env.get('FAL_KEY')
+  if (!falApiKey) return
+  try {
+    const summary = await advanceDependentCinematicJobs({
+      client: admin,
+      falApiKey,
+      runId,
+      completedJobId,
+      completedStillUrl: completedStillUrl ?? null,
+    })
+    if (summary.submitted > 0 || summary.skipped > 0 || summary.failed > 0) {
+      console.info('[fal-webhook] advanced dependent cinematic jobs.', { runId, completedJobId, ...summary })
+    }
+  } catch (error) {
+    console.error('[fal-webhook] failed to advance dependent cinematic jobs.', {
+      runId,
+      completedJobId,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 async function recomputeCinematicRunStatus(
   admin: ReturnType<typeof createAdminClient>,
   runId: string,
@@ -448,6 +482,10 @@ async function handleCinematicStillWebhook(
   job: CinematicRunJobRow,
   payload: z.infer<typeof falWebhookPayloadOnlySchema>,
 ) {
+  if (['succeeded', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
+    // Already finalized by a concurrent poll; never double-process.
+    return
+  }
   const assetKey = job.still_asset_key
     ?? (typeof asRecord(job.result_context).assetKey === 'string' ? String(asRecord(job.result_context).assetKey) : null)
   const targetShotId = typeof asRecord(job.result_context).shotId === 'string'
@@ -486,6 +524,7 @@ async function handleCinematicStillWebhook(
         },
       })
     }
+    await advanceCinematicDependents(admin, run.id, job.id)
     await recomputeCinematicRunStatus(admin, run.id)
     return
   }
@@ -592,6 +631,7 @@ async function handleCinematicStillWebhook(
     })
   }
 
+  await advanceCinematicDependents(admin, run.id, job.id, imageUrl)
   await recomputeCinematicRunStatus(admin, run.id)
 }
 
@@ -601,6 +641,10 @@ async function handleCinematicVideoWebhook(
   job: CinematicRunJobRow,
   payload: z.infer<typeof falWebhookPayloadOnlySchema>,
 ) {
+  if (['succeeded', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
+    // Already finalized by a concurrent poll; never double-process.
+    return
+  }
   const targetShotId = typeof asRecord(job.result_context).shotId === 'string'
     ? String(asRecord(job.result_context).shotId)
     : null
@@ -621,6 +665,7 @@ async function handleCinematicVideoWebhook(
       })
       .eq('id', job.id)
     if (updateResponse.error) throw new Error(updateResponse.error.message)
+    await advanceCinematicDependents(admin, run.id, job.id)
     await recomputeCinematicRunStatus(admin, run.id)
     return
   }
@@ -699,6 +744,7 @@ async function handleCinematicVideoWebhook(
     })
   }
 
+  await advanceCinematicDependents(admin, run.id, job.id)
   await recomputeCinematicRunStatus(admin, run.id)
 }
 

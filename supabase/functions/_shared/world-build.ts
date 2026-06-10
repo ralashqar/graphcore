@@ -71,6 +71,7 @@ export async function runStructuredWorldBuildModel<TPayload>({
   promptContext,
   schema,
   maxOutputTokens,
+  reasoningEffort,
 }: {
   model: string
   passLabel: string
@@ -78,6 +79,8 @@ export async function runStructuredWorldBuildModel<TPayload>({
   promptContext: Record<string, unknown>
   schema: z.ZodType<TPayload>
   maxOutputTokens: number
+  /** Task-complexity-aware reasoning effort; defaults to 'low' (previous hardcoded behavior). */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | null
 }) {
   const debugEnabled = shouldDebugWorldBuildOpenAi()
 
@@ -102,7 +105,7 @@ export async function runStructuredWorldBuildModel<TPayload>({
         type: 'json_object',
       },
     },
-    reasoning: { effort: 'low' },
+    reasoning: { effort: reasoningEffort ?? 'low' },
     metadata: {
       feature: 'world-build',
       pass: passLabel,

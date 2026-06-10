@@ -951,12 +951,22 @@ export const sequenceAnimaticKeyframeWorkflowEnsureRequestSchema = z.object({
   mode: z.enum(['generate', 'regenerate']).default('generate'),
   shotIds: z.array(z.string().min(1)).max(150).optional(),
   coverageSetupIds: z.array(z.string().min(1)).max(150).optional(),
+  allowProvisional: z.boolean().default(false),
+})
+
+export const sequenceAnimaticBlockedShotKeyframeSchema = z.object({
+  shotId: z.string(),
+  storyboardBlockId: z.string().nullable().default(null),
+  reason: z.enum(['missing_coverage_anchor', 'missing_previous_keyframe']),
+  coverageSetupId: z.string().nullable().default(null),
+  previousShotId: z.string().nullable().default(null),
 })
 
 export const sequenceAnimaticKeyframeWorkflowEnsureResponseSchema = z.object({
   ok: z.literal(true),
   masterRequest: outputRequestSchema,
   keyframePlan: looseRecordSchema.default({}),
+  blockedShotKeyframes: z.array(sequenceAnimaticBlockedShotKeyframeSchema).default([]),
   dependencyWaves: z.array(looseRecordSchema).default([]),
   continuityAssetRequests: z.array(outputRequestSchema).default([]),
   coverageAnchorRequests: z.array(outputRequestSchema).default([]),

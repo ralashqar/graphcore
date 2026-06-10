@@ -4,6 +4,7 @@ import { z } from 'npm:zod@4'
 
 import { mergeWorldBuildJobContext, readWorldBuildAttemptCount } from '../../../src/core/generationWorkflow.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import { resolveOutputTextModelPolicy } from '../_shared/model-policy.ts'
 import {
   type WorldBuildBatchRow as BatchRow,
   type WorldBuildJobRow as JobRow,
@@ -106,6 +107,7 @@ function buildStoryPromptContext(input: {
 
 function selectAuthorshipModel(requestedModel: string, presetFamily: string | null | undefined) {
   const normalized = requestedModel.trim().toLowerCase()
+  const authorshipPolicy = resolveOutputTextModelPolicy('screenplay_author')
   const shouldUpgradeForUgc =
     presetFamily && presetFamily !== 'story_movie_tv' && (
       normalized === 'gpt-5.4-mini'
@@ -115,7 +117,8 @@ function selectAuthorshipModel(requestedModel: string, presetFamily: string | nu
   if (shouldUpgradeForUgc) {
     return {
       requestedModel,
-      model: 'gpt-5.4',
+      model: authorshipPolicy.model,
+      reasoningEffort: authorshipPolicy.reasoningEffort,
       qualityTier: 'upgraded_for_authorship' as const,
     }
   }
@@ -123,6 +126,7 @@ function selectAuthorshipModel(requestedModel: string, presetFamily: string | nu
   return {
     requestedModel,
     model: requestedModel,
+    reasoningEffort: authorshipPolicy.reasoningEffort,
     qualityTier: 'requested' as const,
   }
 }
@@ -461,6 +465,7 @@ Deno.serve(async (request) => {
     const authoredRaw = useCreativeScriptPipeline
       ? await runStructuredWorldBuildModel({
           model: authorshipModel.model,
+          reasoningEffort: authorshipModel.reasoningEffort,
           passLabel: useStoryScriptIngestPipeline ? 'Story creative script authorship' : 'Cinematic creative script authorship',
           systemText: useStoryScriptIngestPipeline
             ? buildStoryCreativeScriptPrompt({
@@ -506,6 +511,7 @@ Deno.serve(async (request) => {
         })
       : await runStructuredWorldBuildModel({
           model: authorshipModel.model,
+          reasoningEffort: authorshipModel.reasoningEffort,
           passLabel: 'Cinematic shot authorship',
           systemText: cinematicShotAuthorshipSystemPrompt({
             presetFamily: effectiveSettings.presetFamily,

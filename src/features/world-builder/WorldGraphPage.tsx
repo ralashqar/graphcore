@@ -196,6 +196,19 @@ import { WorldFeedPanel } from './feed/WorldFeedPanel'
 import { WorldPromptChatPanel } from './prompt/WorldPromptPanels'
 import { WorldOutputCreateRail, WorldOutputLibraryPanel, useWorldOutputLibraryController } from './wiki/WorldOutputLibraryPanel'
 import { buildOutputLibraryModel, type OutputLibraryOpenTarget, type OutputStudioReturnTarget } from './wiki/outputLibraryPresentation'
+import { SequenceAnimaticPipelineRail } from './animatic/SequenceAnimaticPipelineRail'
+import {
+  sequenceAnimaticContinuityAssetForceNodeKeys,
+  sequenceAnimaticContinuityAssetTargetNodeKeys,
+  sequenceAnimaticContinuityBatchForceNodeKeys,
+  sequenceAnimaticContinuityBatchTargetNodeKeys,
+  sequenceAnimaticCoverageAnchorForceNodeKeys,
+  sequenceAnimaticCoverageAnchorTargetNodeKeys,
+  sequenceAnimaticPlannedKeyframeForceNodeKeys,
+  sequenceAnimaticPlannedKeyframeTargetNodeKeys,
+  sequenceAnimaticShotVideoForceNodeKeys,
+  sequenceAnimaticShotVideoTargetNodeKeys,
+} from '../../domain/sequenceAnimaticNodeKeys'
 import { sequenceAnimaticFriendlyProgressLabel } from './sequenceAnimaticViewModel'
 import { WorldWikiPanel, WorldWikiSubViewToggle } from './wiki/WorldWikiPanel'
 import {
@@ -782,6 +795,7 @@ type WorldGraphPageProps = {
     mode?: 'generate' | 'regenerate'
     shotIds?: string[]
     coverageSetupIds?: string[]
+    allowProvisional?: boolean
   }) => Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> | SequenceAnimaticKeyframeWorkflowEnsureResponse
   onEnsureSequenceAnimaticShotRevisionWorkflow: (request: {
     masterRequestId: string
@@ -1346,6 +1360,13 @@ type SequenceAnimaticShotView = {
   shotVideoUrl: string | null
   shotVideoProgressLabel: string
   shotVideoError: string
+}
+
+function sequenceAnimaticShotCanGenerateEarlyKeyframe(shot: SequenceAnimaticShotView) {
+  if (!shot.isProvisional || !shot.id) return false
+  if (shot.coverageSetupId) return true
+  if (shot.spatialBindingView.hierarchy.length > 0) return true
+  return Boolean(shot.spatialContinuityLabel && shot.spatialContinuityLabel !== 'Spatial binding pending')
 }
 
 type SequenceAnimaticReferenceView = {
@@ -6681,7 +6702,25 @@ export function WorldGraphPage({
     [outputLibraryModel.rows],
   )
   const [sequenceAnimaticBusyKey, setSequenceAnimaticBusyKey] = useState<string | null>(null)
-  const [sequenceAnimaticBlockRunKey, setSequenceAnimaticBlockRunKey] = useState<string | null>(null)
+  // Per-target busy keys: multiple animatic actions (different blocks, assets,
+  // keyframes) may run in parallel; only the same target is serialized.
+  const [sequenceAnimaticBusyRunKeys, setSequenceAnimaticBusyRunKeys] = useState<ReadonlySet<string>>(() => new Set())
+  const beginSequenceAnimaticRun = useCallback((runKey: string) => {
+    setSequenceAnimaticBusyRunKeys((previous) => {
+      if (previous.has(runKey)) return previous
+      const next = new Set(previous)
+      next.add(runKey)
+      return next
+    })
+  }, [])
+  const endSequenceAnimaticRun = useCallback((runKey: string) => {
+    setSequenceAnimaticBusyRunKeys((previous) => {
+      if (!previous.has(runKey)) return previous
+      const next = new Set(previous)
+      next.delete(runKey)
+      return next
+    })
+  }, [])
   const [sequenceAnimaticPendingShotKeyframe, setSequenceAnimaticPendingShotKeyframe] = useState<{
     masterRequestId: string
     blockId: string
@@ -7368,10 +7407,16 @@ export function WorldGraphPage({
     return () => observer.disconnect()
   }, [activeWikiEntityPage?.animaticRequestId, activeWikiEntityPage?.entityKey, activeWikiEntityPage?.sectionKind, sequenceAnimaticPreviewModel?.blocks])
   const pollSequenceAnimaticOutputRequest = useCallback(async (requestId: string) => {
+    // Poll with gentle exponential backoff (1.5s -> 10s cap, ~15 min budget)
+    // instead of a fixed cadence, to reduce load on long-running steps while
+    // staying responsive for short ones.
     let status = await Promise.resolve(onGetOutputRequestStatus(requestId))
-    for (let attempt = 0; attempt < 240; attempt += 1) {
+    const deadline = Date.now() + 15 * 60_000
+    let delayMs = 1_500
+    while (Date.now() < deadline) {
       if (status.terminal || (status.run && isTerminalOutputWorkflowRunStatus(status.run.status))) return status
-      await new Promise((resolve) => window.setTimeout(resolve, 2500))
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs))
+      delayMs = Math.min(10_000, Math.round(delayMs * 1.25))
       status = await Promise.resolve(onGetOutputRequestStatus(requestId))
     }
     return status
@@ -7425,9 +7470,9 @@ export function WorldGraphPage({
     block: SequenceAnimaticBlockView,
     mode: 'regenerate_storyboard' | 'generate_video',
   ) => {
-    if (sequenceAnimaticBlockRunKey) return
     const blockRunKey = `${model.request.id}:${block.id}:${mode}`
-    setSequenceAnimaticBlockRunKey(blockRunKey)
+    if (sequenceAnimaticBusyRunKeys.has(blockRunKey)) return
+    beginSequenceAnimaticRun(blockRunKey)
     setSequenceAnimaticErrorByKey((previous) => {
       const next = { ...previous }
       for (const key of model.request.selectedSequenceUnitKeys) delete next[key]
@@ -7501,16 +7546,16 @@ export function WorldGraphPage({
         [sequenceKey]: error instanceof Error ? error.message : String(error),
       }))
     } finally {
-      setSequenceAnimaticBlockRunKey(null)
+      endSequenceAnimaticRun(blockRunKey)
     }
-  }, [onEnsureSequenceAnimaticBlockWorkflows, onGetOutputRequestStatus, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  }, [onEnsureSequenceAnimaticBlockWorkflows, onGetOutputRequestStatus, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
   const handleRunSequenceAnimaticContinuityAssets = useCallback(async (
     model: SequenceAnimaticViewModel,
     requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
   ) => {
     const runKey = `${model.request.id}:continuity_assets`
-    if (sequenceAnimaticBlockRunKey) return
-    setSequenceAnimaticBlockRunKey(runKey)
+    if (sequenceAnimaticBusyRunKeys.has(runKey)) return
+    beginSequenceAnimaticRun(runKey)
     try {
       if (model.continuityGraphView.nodes.length === 0 || model.continuityAssetTargets.length === 0) {
         throw new Error('Generate the shot continuity plan first.')
@@ -7556,10 +7601,12 @@ export function WorldGraphPage({
             runIntent: 'generate_continuity_asset',
             runMode: isBatchRun ? 'sequence_animatic_continuity_asset_batch' : 'sequence_animatic_continuity_asset',
             runScope: 'upstream_to_node',
-            targetNodeKeys: isBatchRun ? ['continuity_batch_artifact'] : ['continuity_asset_artifact'],
+            targetNodeKeys: isBatchRun
+              ? [...sequenceAnimaticContinuityBatchTargetNodeKeys]
+              : [...sequenceAnimaticContinuityAssetTargetNodeKeys],
             forceNodeKeys: isBatchRun
-              ? ['continuity_batch_prompt', 'continuity_batch_image', 'continuity_batch_extract', 'continuity_batch_artifact']
-              : ['continuity_asset_prompt', 'continuity_asset_image', 'continuity_asset_artifact'],
+              ? [...sequenceAnimaticContinuityBatchForceNodeKeys]
+              : [...sequenceAnimaticContinuityAssetForceNodeKeys],
             reuseExistingUpstreamOutputs: true,
             allowStaleUpstreamOutputs: true,
             debugSkipVideoGeneration: false,
@@ -7583,16 +7630,16 @@ export function WorldGraphPage({
         [sequenceKey]: error instanceof Error ? error.message : String(error),
       }))
     } finally {
-      setSequenceAnimaticBlockRunKey(null)
+      endSequenceAnimaticRun(runKey)
     }
-  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityAssetWorkflow, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityAssetWorkflow, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
   const handleRunSequenceAnimaticKeyframes = useCallback(async (
     model: SequenceAnimaticViewModel,
     mode: 'generate' | 'regenerate' = 'generate',
   ) => {
     const runKey = `${model.request.id}:keyframes`
-    if (sequenceAnimaticBlockRunKey) return
-    setSequenceAnimaticBlockRunKey(runKey)
+    if (sequenceAnimaticBusyRunKeys.has(runKey)) return
+    beginSequenceAnimaticRun(runKey)
     try {
       if (!model.directorPlanReady || model.blocks.every((block) => block.shots.length === 0)) {
         throw new Error('Generate the shot continuity plan first.')
@@ -7641,11 +7688,11 @@ export function WorldGraphPage({
               : 'sequence_animatic_shot_keyframe',
             runScope: 'upstream_to_node',
             targetNodeKeys: kind === 'coverage_anchor'
-              ? ['coverage_anchor_artifact']
-              : ['planned_keyframe_artifact'],
+              ? [...sequenceAnimaticCoverageAnchorTargetNodeKeys]
+              : [...sequenceAnimaticPlannedKeyframeTargetNodeKeys],
             forceNodeKeys: kind === 'coverage_anchor'
-              ? ['coverage_anchor_prompt', 'coverage_anchor_image', 'coverage_anchor_artifact']
-              : ['planned_keyframe_prompt', 'planned_keyframe_image', 'planned_keyframe_artifact'],
+              ? [...sequenceAnimaticCoverageAnchorForceNodeKeys]
+              : [...sequenceAnimaticPlannedKeyframeForceNodeKeys],
             reuseExistingUpstreamOutputs: true,
             allowStaleUpstreamOutputs: true,
             debugSkipVideoGeneration: false,
@@ -7683,10 +7730,12 @@ export function WorldGraphPage({
             runIntent: 'generate_keyframe_dependencies',
             runMode: isBatchRun ? 'sequence_animatic_continuity_asset_batch' : 'sequence_animatic_continuity_asset',
             runScope: 'upstream_to_node',
-            targetNodeKeys: isBatchRun ? ['continuity_batch_artifact'] : ['continuity_asset_artifact'],
+            targetNodeKeys: isBatchRun
+              ? [...sequenceAnimaticContinuityBatchTargetNodeKeys]
+              : [...sequenceAnimaticContinuityAssetTargetNodeKeys],
             forceNodeKeys: isBatchRun
-              ? ['continuity_batch_prompt', 'continuity_batch_image', 'continuity_batch_extract', 'continuity_batch_artifact']
-              : ['continuity_asset_prompt', 'continuity_asset_image', 'continuity_asset_artifact'],
+              ? [...sequenceAnimaticContinuityBatchForceNodeKeys]
+              : [...sequenceAnimaticContinuityAssetForceNodeKeys],
             reuseExistingUpstreamOutputs: true,
             allowStaleUpstreamOutputs: true,
             debugSkipVideoGeneration: false,
@@ -7715,6 +7764,18 @@ export function WorldGraphPage({
         if (shot && (shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready') && mode === 'generate') continue
         await startRequestRun(request, 'shot_keyframe')
       }
+      // Surface blocked shots instead of appearing stuck: when the server gated
+      // shots on missing coverage anchors / previous keyframes, tell the user
+      // what is missing and what was queued to unblock them.
+      const blockedShots = ensureResult.blockedShotKeyframes ?? []
+      if (blockedShots.length > 0 && shotRequests.length === 0 && coverageRequests.length === 0 && continuityRequests.length === 0) {
+        const missingAnchors = blockedShots.filter((entry) => entry.reason === 'missing_coverage_anchor').length
+        const waitingOnPrevious = blockedShots.length - missingAnchors
+        const parts: string[] = []
+        if (missingAnchors > 0) parts.push(`${missingAnchors} shot${missingAnchors === 1 ? '' : 's'} waiting on coverage anchors`)
+        if (waitingOnPrevious > 0) parts.push(`${waitingOnPrevious} shot${waitingOnPrevious === 1 ? '' : 's'} waiting on earlier keyframes`)
+        throw new Error(`No keyframes could start yet: ${parts.join(', ')}. Generate the missing dependencies first, then retry.`)
+      }
       await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
@@ -7723,17 +7784,17 @@ export function WorldGraphPage({
         [sequenceKey]: error instanceof Error ? error.message : String(error),
       }))
     } finally {
-      setSequenceAnimaticBlockRunKey(null)
+      endSequenceAnimaticRun(runKey)
     }
-  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
   const handleRunSequenceAnimaticCoverageAnchor = useCallback(async (
     model: SequenceAnimaticViewModel,
     anchor: SequenceAnimaticCoverageAnchorView,
     mode: 'generate' | 'regenerate' = 'generate',
   ) => {
     const runKey = `${model.request.id}:${anchor.id}:coverage_anchor`
-    if (sequenceAnimaticBlockRunKey && sequenceAnimaticBlockRunKey !== runKey) return
-    setSequenceAnimaticBlockRunKey(runKey)
+    if (sequenceAnimaticBusyRunKeys.has(runKey)) return
+    beginSequenceAnimaticRun(runKey)
     let keepPending = true
     setSequenceAnimaticPendingCoverageAnchor((current) => (
       current?.masterRequestId === model.request.id && current.anchorId === anchor.id && current.mode === mode
@@ -7797,10 +7858,12 @@ export function WorldGraphPage({
               runIntent: 'generate_continuity_asset',
               runMode: isBatchRun ? 'sequence_animatic_continuity_asset_batch' : 'sequence_animatic_continuity_asset',
               runScope: 'upstream_to_node',
-              targetNodeKeys: isBatchRun ? ['continuity_batch_artifact'] : ['continuity_asset_artifact'],
+              targetNodeKeys: isBatchRun
+                ? [...sequenceAnimaticContinuityBatchTargetNodeKeys]
+                : [...sequenceAnimaticContinuityAssetTargetNodeKeys],
               forceNodeKeys: isBatchRun
-                ? ['continuity_batch_prompt', 'continuity_batch_image', 'continuity_batch_extract', 'continuity_batch_artifact']
-                : ['continuity_asset_prompt', 'continuity_asset_image', 'continuity_asset_artifact'],
+                ? [...sequenceAnimaticContinuityBatchForceNodeKeys]
+                : [...sequenceAnimaticContinuityAssetForceNodeKeys],
               reuseExistingUpstreamOutputs: true,
               allowStaleUpstreamOutputs: true,
               debugSkipVideoGeneration: false,
@@ -7850,8 +7913,8 @@ export function WorldGraphPage({
             runIntent: 'generate_keyframes',
             runMode: 'sequence_animatic_coverage_anchor',
             runScope: 'upstream_to_node',
-            targetNodeKeys: ['coverage_anchor_artifact'],
-            forceNodeKeys: ['coverage_anchor_prompt', 'coverage_anchor_image', 'coverage_anchor_artifact'],
+            targetNodeKeys: [...sequenceAnimaticCoverageAnchorTargetNodeKeys],
+            forceNodeKeys: [...sequenceAnimaticCoverageAnchorForceNodeKeys],
             reuseExistingUpstreamOutputs: true,
             allowStaleUpstreamOutputs: true,
             debugSkipVideoGeneration: false,
@@ -7877,11 +7940,11 @@ export function WorldGraphPage({
       }))
     } finally {
       if (!keepPending) setSequenceAnimaticPendingCoverageAnchor(null)
-      setSequenceAnimaticBlockRunKey(null)
+      endSequenceAnimaticRun(runKey)
     }
-  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityAssetWorkflow, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityAssetWorkflow, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
   useEffect(() => {
-    if (!sequenceAnimaticPendingCoverageAnchor || sequenceAnimaticBlockRunKey) return undefined
+    if (!sequenceAnimaticPendingCoverageAnchor || sequenceAnimaticBusyRunKeys.size > 0) return undefined
     const model = sequenceAnimaticPreviewModel?.request.id === sequenceAnimaticPendingCoverageAnchor.masterRequestId
       ? sequenceAnimaticPreviewModel
       : sequenceAnimaticModelByRequestId.get(sequenceAnimaticPendingCoverageAnchor.masterRequestId) ?? null
@@ -7919,7 +7982,7 @@ export function WorldGraphPage({
     return () => window.clearTimeout(timeoutId)
   }, [
     handleRunSequenceAnimaticCoverageAnchor,
-    sequenceAnimaticBlockRunKey,
+    sequenceAnimaticBusyRunKeys,
     sequenceAnimaticModelByRequestId,
     sequenceAnimaticPendingCoverageAnchor,
     sequenceAnimaticPreviewModel,
@@ -7931,8 +7994,8 @@ export function WorldGraphPage({
     mode: 'generate' | 'regenerate' = 'generate',
   ) => {
     const runKey = `${model.request.id}:${block.id}:${shot.id}:keyframe`
-    if (sequenceAnimaticBlockRunKey && sequenceAnimaticBlockRunKey !== runKey) return
-    setSequenceAnimaticBlockRunKey(runKey)
+    if (sequenceAnimaticBusyRunKeys.has(runKey)) return
+    beginSequenceAnimaticRun(runKey)
     let keepPending = true
     setSequenceAnimaticPendingShotKeyframe({
       masterRequestId: model.request.id,
@@ -7942,8 +8005,9 @@ export function WorldGraphPage({
       startedAt: Date.now(),
     })
     try {
-      if (!model.directorPlanReady || shot.isProvisional) {
-        throw new Error('Generate the shot continuity plan first.')
+      const allowProvisional = !model.directorPlanReady && sequenceAnimaticShotCanGenerateEarlyKeyframe(shot)
+      if (!model.directorPlanReady && !allowProvisional) {
+        throw new Error(shot.isProvisional ? 'Shot binding is not ready for early keyframe generation yet.' : 'Generate the shot continuity plan first.')
       }
       if (mode === 'generate' && (shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready')) {
         keepPending = false
@@ -7994,10 +8058,12 @@ export function WorldGraphPage({
               runIntent: 'generate_continuity_asset',
               runMode: isBatchRun ? 'sequence_animatic_continuity_asset_batch' : 'sequence_animatic_continuity_asset',
               runScope: 'upstream_to_node',
-              targetNodeKeys: isBatchRun ? ['continuity_batch_artifact'] : ['continuity_asset_artifact'],
+              targetNodeKeys: isBatchRun
+                ? [...sequenceAnimaticContinuityBatchTargetNodeKeys]
+                : [...sequenceAnimaticContinuityAssetTargetNodeKeys],
               forceNodeKeys: isBatchRun
-                ? ['continuity_batch_prompt', 'continuity_batch_image', 'continuity_batch_extract', 'continuity_batch_artifact']
-                : ['continuity_asset_prompt', 'continuity_asset_image', 'continuity_asset_artifact'],
+                ? [...sequenceAnimaticContinuityBatchForceNodeKeys]
+                : [...sequenceAnimaticContinuityAssetForceNodeKeys],
               reuseExistingUpstreamOutputs: true,
               allowStaleUpstreamOutputs: true,
               debugSkipVideoGeneration: false,
@@ -8024,6 +8090,7 @@ export function WorldGraphPage({
         mode,
         shotIds: [shot.id],
         coverageSetupIds: shot.coverageSetupId ? [shot.coverageSetupId] : undefined,
+        allowProvisional,
       })
       const jobs = readLooseArray(readLooseRecord(ensureResult.keyframePlan).shotKeyframeJobs).map(readLooseRecord)
       const relevantShotIds = new Set(jobs.map((job) => trimOptionalString(job.shotId)).filter(Boolean))
@@ -8056,11 +8123,11 @@ export function WorldGraphPage({
               : 'sequence_animatic_shot_keyframe',
             runScope: 'upstream_to_node',
             targetNodeKeys: kind === 'coverage_anchor'
-              ? ['coverage_anchor_artifact']
-              : ['planned_keyframe_artifact'],
+              ? [...sequenceAnimaticCoverageAnchorTargetNodeKeys]
+              : [...sequenceAnimaticPlannedKeyframeTargetNodeKeys],
             forceNodeKeys: kind === 'coverage_anchor'
-              ? ['coverage_anchor_prompt', 'coverage_anchor_image', 'coverage_anchor_artifact']
-              : ['planned_keyframe_prompt', 'planned_keyframe_image', 'planned_keyframe_artifact'],
+              ? [...sequenceAnimaticCoverageAnchorForceNodeKeys]
+              : [...sequenceAnimaticPlannedKeyframeForceNodeKeys],
             reuseExistingUpstreamOutputs: true,
             allowStaleUpstreamOutputs: true,
             debugSkipVideoGeneration: false,
@@ -8106,11 +8173,11 @@ export function WorldGraphPage({
       }))
     } finally {
       if (!keepPending) setSequenceAnimaticPendingShotKeyframe(null)
-      setSequenceAnimaticBlockRunKey(null)
+      endSequenceAnimaticRun(runKey)
     }
-  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityAssetWorkflow, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticContinuityAssetWorkflow, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
   useEffect(() => {
-    if (!sequenceAnimaticPendingShotKeyframe || sequenceAnimaticBlockRunKey || !sequenceAnimaticPreviewModel) return undefined
+    if (!sequenceAnimaticPendingShotKeyframe || sequenceAnimaticBusyRunKeys.size > 0 || !sequenceAnimaticPreviewModel) return undefined
     if (sequenceAnimaticPreviewModel.request.id !== sequenceAnimaticPendingShotKeyframe.masterRequestId) return undefined
     const block = sequenceAnimaticPreviewModel.blocks.find((entry) => entry.id === sequenceAnimaticPendingShotKeyframe.blockId) ?? null
     const shot = block?.shots.find((entry) => entry.id === sequenceAnimaticPendingShotKeyframe.shotId) ?? null
@@ -8131,7 +8198,7 @@ export function WorldGraphPage({
       void handleRunSequenceAnimaticShotKeyframe(sequenceAnimaticPreviewModel, block, shot, sequenceAnimaticPendingShotKeyframe.mode)
     }, 500)
     return () => window.clearTimeout(timeoutId)
-  }, [handleRunSequenceAnimaticShotKeyframe, sequenceAnimaticBlockRunKey, sequenceAnimaticPendingShotKeyframe, sequenceAnimaticPreviewModel])
+  }, [handleRunSequenceAnimaticShotKeyframe, sequenceAnimaticBusyRunKeys, sequenceAnimaticPendingShotKeyframe, sequenceAnimaticPreviewModel])
   const openSequenceAnimaticOutputGraph = useCallback((
     model: SequenceAnimaticViewModel,
     requestId: string,
@@ -8213,8 +8280,8 @@ export function WorldGraphPage({
           runIntent: 'generate_shot_video',
           runMode: 'sequence_animatic_shot_video',
           runScope: 'upstream_to_node',
-          targetNodeKeys: ['shot_video'],
-          forceNodeKeys: ['shot_video_prompt', 'shot_video'],
+          targetNodeKeys: [...sequenceAnimaticShotVideoTargetNodeKeys],
+          forceNodeKeys: [...sequenceAnimaticShotVideoForceNodeKeys],
           reuseExistingUpstreamOutputs: true,
           allowStaleUpstreamOutputs: true,
           debugSkipVideoGeneration: false,
@@ -8295,8 +8362,8 @@ export function WorldGraphPage({
       return
     }
     const runKey = `${model.request.id}:${block.id}:${shot.id}:shot_revision`
-    if (sequenceAnimaticBlockRunKey) return
-    setSequenceAnimaticBlockRunKey(runKey)
+    if (sequenceAnimaticBusyRunKeys.has(runKey)) return
+    beginSequenceAnimaticRun(runKey)
     setSequenceAnimaticShotPrompt({
       masterRequestId: model.request.id,
       storyboardBlockId: block.id,
@@ -8375,9 +8442,9 @@ export function WorldGraphPage({
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       setSequenceAnimaticErrorByKey((previous) => ({ ...previous, [sequenceKey]: message }))
     } finally {
-      setSequenceAnimaticBlockRunKey(null)
+      endSequenceAnimaticRun(runKey)
     }
-  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticBlockWorkflows, onEnsureSequenceAnimaticShotRevisionWorkflow, onStartOutputWorkflowRun, outputWorkflowRuns, pollSequenceAnimaticOutputRequest, sequenceAnimaticBlockRunKey])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticBlockWorkflows, onEnsureSequenceAnimaticShotRevisionWorkflow, onStartOutputWorkflowRun, outputWorkflowRuns, pollSequenceAnimaticOutputRequest, sequenceAnimaticBusyRunKeys])
   const shouldRunLiveWikiHeaderRecovery = useMemo(() => {
     const worldWiki = readLooseRecord(projectDraftMetadata.worldWiki)
     const title = trimOptionalString(worldWiki.title)
@@ -13634,6 +13701,7 @@ export function WorldGraphPage({
                   <span className="eyebrow">Screenplay animatic</span>
                   <h2>{routeAnimaticModel?.title ?? entity.name}</h2>
                   <p>{routeAnimaticModel ? `${routeAnimaticModel.blocks.length} storyboard block${routeAnimaticModel.blocks.length === 1 ? '' : 's'} / ${routeAnimaticModel.hasPanels ? 'panels available' : 'panels pending'}` : 'Loading linked animatic state directly from this chapter.'}</p>
+                  {routeAnimaticModel ? <SequenceAnimaticPipelineRail model={routeAnimaticModel} /> : null}
                 </div>
                 <div className="world-wiki-sequence-animatic-page-actions">
                   {routeAnimaticModel ? (
@@ -13658,7 +13726,7 @@ export function WorldGraphPage({
                           !routeAnimaticModel.directorPlanReady
                           || routeAnimaticModel.blocks.every((block) => block.shots.length === 0)
                           || routeAnimaticModel.keyframeRunning
-                          || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:keyframes`
+                          || sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:keyframes`)
                         }
                         onClick={() => void handleRunSequenceAnimaticKeyframes(
                           routeAnimaticModel,
@@ -13667,7 +13735,7 @@ export function WorldGraphPage({
                         type="button"
                         title={routeAnimaticModel.keyframeProgressLabel || 'Generate shot keyframes'}
                       >
-                        {routeAnimaticModel.keyframeRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:keyframes`
+                        {routeAnimaticModel.keyframeRunning || sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:keyframes`)
                           ? <><span className="world-mini-spinner" aria-hidden="true" />Generating keyframes</>
                           : routeAnimaticModel.keyframeReadyCount > 0
                             ? 'Regenerate keyframes'
@@ -13734,13 +13802,13 @@ export function WorldGraphPage({
                           <small>{block.shotRangeLabel}</small>
                         </div>
                         <div>
-                          <button className="ghost-button compact" disabled={block.isProvisional || block.storyboardRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:regenerate_storyboard`} onClick={() => void handleRunSequenceAnimaticBlock(routeAnimaticModel, block, 'regenerate_storyboard')} type="button">
-                            {block.storyboardRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:regenerate_storyboard` ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</> : block.storyboardReady ? 'Regenerate storyboard' : 'Generate storyboard'}
+                          <button className="ghost-button compact" disabled={block.isProvisional || block.storyboardRunning || sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:${block.id}:regenerate_storyboard`)} onClick={() => void handleRunSequenceAnimaticBlock(routeAnimaticModel, block, 'regenerate_storyboard')} type="button">
+                            {block.storyboardRunning || sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:${block.id}:regenerate_storyboard`) ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</> : block.storyboardReady ? 'Regenerate storyboard' : 'Generate storyboard'}
                           </button>
                           {block.videoReady && block.videoUrl ? (
                             <button className="ghost-button compact" onClick={() => setSequenceAnimaticVideoPreview({ title: `${block.title} - last take`, url: block.videoUrl ?? '', durationLabel: block.durationLabel, statusLabel: block.videoProgressLabel })} type="button">Play video</button>
                           ) : block.storyboardReady && block.videoPromptReady ? (
-                            <button className="ghost-button compact" disabled={block.isProvisional || block.videoRunning || sequenceAnimaticBlockRunKey === `${routeAnimaticModel.request.id}:${block.id}:generate_video`} onClick={() => void handleRunSequenceAnimaticBlock(routeAnimaticModel, block, 'generate_video')} type="button">
+                            <button className="ghost-button compact" disabled={block.isProvisional || block.videoRunning || sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:${block.id}:generate_video`)} onClick={() => void handleRunSequenceAnimaticBlock(routeAnimaticModel, block, 'generate_video')} type="button">
                               {block.videoRunning ? 'Generating video' : 'Generate video'}
                             </button>
                           ) : null}
@@ -13752,9 +13820,10 @@ export function WorldGraphPage({
                           const shotKeyframeRunKey = `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:keyframe`
                           const shotVideoRunKey = `${routeAnimaticModel.request.id}:${block.id}:${shot.id}:shot_video`
                           const shotVideoStarting = sequenceAnimaticShotVideoRunKeyActive(shotVideoRunKey)
-                          const shotKeyframeStarting = sequenceAnimaticBlockRunKey === shotKeyframeRunKey
+                          const shotKeyframeStarting = sequenceAnimaticBusyRunKeys.has(shotKeyframeRunKey)
                           const shotKeyframeBusy = shotKeyframeStarting || shot.keyframeRunning || shot.keyframeDependencyRunning
                           const shotKeyframeReady = shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready'
+                          const shotCanGenerateEarlyKeyframe = sequenceAnimaticShotCanGenerateEarlyKeyframe(shot)
                           const activeShotPrompt = sequenceAnimaticShotPrompt?.masterRequestId === routeAnimaticModel.request.id
                             && sequenceAnimaticShotPrompt.storyboardBlockId === block.id
                             && sequenceAnimaticShotPrompt.shotId === shot.id
@@ -13763,7 +13832,7 @@ export function WorldGraphPage({
                           const shotPromptValue = activeShotPrompt?.prompt ?? sequenceAnimaticShotPromptDraftByKey[shotRevisionRunKey] ?? ''
                           const shotPromptBusy = Boolean(activeShotPrompt && !['idle', 'failed'].includes(activeShotPrompt.status))
                             || shot.revisionRunning
-                            || sequenceAnimaticBlockRunKey === shotRevisionRunKey
+                            || sequenceAnimaticBusyRunKeys.has(shotRevisionRunKey)
                           const shotPromptDisabled = !shot.panelUrl || shotPromptBusy
                           const shotPromptStatusLabel = activeShotPrompt
                             ? activeShotPrompt.status === 'rewriting'
@@ -13961,7 +14030,7 @@ export function WorldGraphPage({
                                 <div className="world-wiki-sequence-animatic-shot-actions">
                                   <button
                                     className="ghost-button compact"
-                                    disabled={shot.isProvisional || shotKeyframeBusy || sequenceAnimaticBlockRunKey === shotRevisionRunKey}
+                                    disabled={(shot.isProvisional && !shotCanGenerateEarlyKeyframe) || shotKeyframeBusy || sequenceAnimaticBusyRunKeys.has(shotRevisionRunKey)}
                                     onClick={() => void handleRunSequenceAnimaticShotKeyframe(routeAnimaticModel, block, shot, shotKeyframeReady ? 'regenerate' : 'generate')}
                                     type="button"
                                     title={shot.keyframeDependencyStatusLabel}
@@ -13970,7 +14039,9 @@ export function WorldGraphPage({
                                       ? <><span className="world-mini-spinner" aria-hidden="true" />{shot.keyframeDependencyRunning ? 'Generating refs' : shot.keyframeRunning ? 'Generating keyframe' : 'Starting keyframe'}</>
                                       : shotKeyframeReady
                                         ? 'Regenerate keyframe'
-                                        : 'Generate keyframe'}
+                                        : shot.isProvisional
+                                          ? 'Generate early keyframe'
+                                          : 'Generate keyframe'}
                                   </button>
                                   {shot.shotVideoReady && shot.shotVideoUrl ? (
                                     <button className="ghost-button compact" onClick={() => setSequenceAnimaticVideoPreview({ title: `${shot.title} - shot take`, url: shot.shotVideoUrl ?? '', durationLabel: shot.durationLabel, statusLabel: shot.shotVideoProgressLabel })} type="button">Play shot take</button>
@@ -16919,6 +16990,7 @@ export function WorldGraphPage({
               <div>
                 <span className="eyebrow">Screenplay animatic</span>
                 <h2>{sequenceAnimaticPreviewModel.title}</h2>
+                <SequenceAnimaticPipelineRail model={sequenceAnimaticPreviewModel} />
               </div>
               <div className="world-wiki-sequence-animatic-head-actions">
                 <span>{sequenceAnimaticPreviewModel.statusLabel}</span>
@@ -16933,7 +17005,7 @@ export function WorldGraphPage({
                     !sequenceAnimaticPreviewModel.directorPlanReady
                     || sequenceAnimaticPreviewModel.blocks.every((block) => block.shots.length === 0)
                     || sequenceAnimaticPreviewModel.keyframeRunning
-                    || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:keyframes`
+                    || sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:keyframes`)
                   }
                   onClick={() => void handleRunSequenceAnimaticKeyframes(
                     sequenceAnimaticPreviewModel,
@@ -16942,7 +17014,7 @@ export function WorldGraphPage({
                   type="button"
                   title={sequenceAnimaticPreviewModel.keyframeProgressLabel || 'Generate shot keyframes'}
                 >
-                  {sequenceAnimaticPreviewModel.keyframeRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:keyframes`
+                  {sequenceAnimaticPreviewModel.keyframeRunning || sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:keyframes`)
                     ? <><span className="world-mini-spinner" aria-hidden="true" />Generating keyframes</>
                     : sequenceAnimaticPreviewModel.keyframeReadyCount > 0
                       ? 'Regenerate keyframes'
@@ -16988,11 +17060,11 @@ export function WorldGraphPage({
                       <div>
                         <button
                           className="ghost-button compact"
-                          disabled={block.isProvisional || block.storyboardRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`}
+                          disabled={block.isProvisional || block.storyboardRunning || sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`)}
                           onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'regenerate_storyboard')}
                           type="button"
                         >
-                          {block.storyboardRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`
+                          {block.storyboardRunning || sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:${block.id}:regenerate_storyboard`)
                             ? <><span className="world-mini-spinner" aria-hidden="true" />{block.storyboardProgressLabel || 'Generating storyboard'}</>
                             : block.storyboardReady && block.videoPromptReady
                               ? 'Regenerate storyboard'
@@ -17017,11 +17089,11 @@ export function WorldGraphPage({
                         ) : block.storyboardReady && block.videoPromptReady ? (
                           <button
                             className="ghost-button compact world-wiki-sequence-animatic-video-action"
-                            disabled={block.isProvisional || block.videoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`}
+                            disabled={block.isProvisional || block.videoRunning || sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`)}
                             onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'generate_video')}
                             type="button"
                           >
-                            {block.videoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`
+                            {block.videoRunning || sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`)
                               ? <><span className="world-mini-spinner" aria-hidden="true" />Generating video</>
                               : 'Generate video'}
                           </button>
@@ -17029,11 +17101,11 @@ export function WorldGraphPage({
                         {block.videoReady && block.videoUrl && block.storyboardReady && block.videoPromptReady ? (
                           <button
                             className="ghost-button compact"
-                            disabled={block.isProvisional || block.videoRunning || sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`}
+                            disabled={block.isProvisional || block.videoRunning || sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`)}
                             onClick={() => void handleRunSequenceAnimaticBlock(sequenceAnimaticPreviewModel, block, 'generate_video')}
                             type="button"
                           >
-                            {sequenceAnimaticBlockRunKey === `${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video` ? 'Starting...' : 'Regenerate video'}
+                            {sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:${block.id}:generate_video`) ? 'Starting...' : 'Regenerate video'}
                           </button>
                         ) : null}
                         <small className={block.videoError ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
@@ -17047,9 +17119,10 @@ export function WorldGraphPage({
                         const shotKeyframeRunKey = `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:keyframe`
                         const shotVideoRunKey = `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}:shot_video`
                         const shotVideoStarting = sequenceAnimaticShotVideoRunKeyActive(shotVideoRunKey)
-                        const shotKeyframeStarting = sequenceAnimaticBlockRunKey === shotKeyframeRunKey
+                        const shotKeyframeStarting = sequenceAnimaticBusyRunKeys.has(shotKeyframeRunKey)
                         const shotKeyframeBusy = shotKeyframeStarting || shot.keyframeRunning || shot.keyframeDependencyRunning
                         const shotKeyframeReady = shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready'
+                        const shotCanGenerateEarlyKeyframe = sequenceAnimaticShotCanGenerateEarlyKeyframe(shot)
                         const shotCoverageAnchor = shot.coverageSetupId
                           ? sequenceAnimaticPreviewModel.coverageAnchors.find((anchor) => anchor.id === shot.coverageSetupId) ?? null
                           : null
@@ -17202,7 +17275,7 @@ export function WorldGraphPage({
                             <div className="world-wiki-sequence-animatic-shot-actions">
                               <button
                                 className="ghost-button compact"
-                                disabled={shot.isProvisional || shotKeyframeBusy}
+                                disabled={(shot.isProvisional && !shotCanGenerateEarlyKeyframe) || shotKeyframeBusy}
                                 onClick={() => void handleRunSequenceAnimaticShotKeyframe(sequenceAnimaticPreviewModel, block, shot, shotKeyframeReady ? 'regenerate' : 'generate')}
                                 type="button"
                                 title={shot.keyframeDependencyStatusLabel}
@@ -17211,7 +17284,9 @@ export function WorldGraphPage({
                                   ? <><span className="world-mini-spinner" aria-hidden="true" />{shot.keyframeDependencyRunning ? 'Generating refs' : shot.keyframeRunning ? 'Generating keyframe' : 'Starting keyframe'}</>
                                   : shotKeyframeReady
                                     ? 'Regenerate keyframe'
-                                    : 'Generate keyframe'}
+                                    : shot.isProvisional
+                                      ? 'Generate early keyframe'
+                                      : 'Generate keyframe'}
                               </button>
                               {shot.shotVideoReady && shot.shotVideoUrl ? (
                                 <button
@@ -17369,7 +17444,7 @@ export function WorldGraphPage({
           <SequenceAnimaticSceneBindingModal
             inspector={sequenceAnimaticSpatialInspector}
             assetTarget={sequenceAnimaticSpatialInspectorAssetTarget}
-            assetGenerationBusy={Boolean(sequenceAnimaticSpatialInspectorModel && sequenceAnimaticBlockRunKey === `${sequenceAnimaticSpatialInspectorModel.request.id}:continuity_assets`)}
+            assetGenerationBusy={Boolean(sequenceAnimaticSpatialInspectorModel && sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticSpatialInspectorModel.request.id}:continuity_assets`))}
             onClose={() => setSequenceAnimaticSpatialInspector(null)}
             onOpenGraph={() => {
               openSequenceAnimaticContinuityGraph(sequenceAnimaticSpatialInspector.masterRequestId)
@@ -17404,7 +17479,7 @@ export function WorldGraphPage({
             inspector={sequenceAnimaticCoverageInspector}
             generationBusy={Boolean(
               sequenceAnimaticCoverageInspectorModel
-              && sequenceAnimaticBlockRunKey === `${sequenceAnimaticCoverageInspectorModel.request.id}:${sequenceAnimaticCoverageInspector.anchor.id}:coverage_anchor`
+              && sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticCoverageInspectorModel.request.id}:${sequenceAnimaticCoverageInspector.anchor.id}:coverage_anchor`)
             )}
             onClose={() => setSequenceAnimaticCoverageInspector(null)}
             onOpenGraph={() => {
@@ -17430,9 +17505,9 @@ export function WorldGraphPage({
           <SequenceAnimaticContinuityGraphModal
             model={sequenceAnimaticContinuityGraphModel}
             scopeWorldLocationRefId={sequenceAnimaticContinuityGraphScopeWorldLocationId}
-            assetGenerationBusy={sequenceAnimaticBlockRunKey === `${sequenceAnimaticContinuityGraphModel.request.id}:continuity_assets`}
+            assetGenerationBusy={sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticContinuityGraphModel.request.id}:continuity_assets`)}
             anchorGenerationBusy={Boolean(
-              (sequenceAnimaticBlockRunKey?.startsWith(`${sequenceAnimaticContinuityGraphModel.request.id}:`) && sequenceAnimaticBlockRunKey.endsWith(':coverage_anchor'))
+              [...sequenceAnimaticBusyRunKeys].some((key) => key.startsWith(`${sequenceAnimaticContinuityGraphModel.request.id}:`) && key.endsWith(':coverage_anchor'))
               || sequenceAnimaticPendingCoverageAnchor?.masterRequestId === sequenceAnimaticContinuityGraphModel.request.id
             )}
             onClose={() => {
