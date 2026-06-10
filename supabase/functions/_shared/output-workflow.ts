@@ -28123,6 +28123,34 @@ export async function processFlyOutputWorkflowRuns(input: {
       continue
     }
 
+    // Reconcile plan vs DB before completing: incremental dynamic-node persistence
+    // can land a node (e.g. the last scene of a fanout) after this pass's bundle
+    // snapshot was taken, leaving it with valid edges but invisible to the
+    // scheduler — the run would otherwise complete silently missing that node.
+    if (targetNodeKeys.length === 0 && dynamicPass < 3) {
+      const reconcileBundle = await loadOutputWorkflowRunBundle(input.client, runId, { includeStepOutputs: false })
+      const strandedDynamicNodes = reconcileBundle.nodes.filter((node) => {
+        if (isStaleDynamicCinematicNode(node)) return false
+        const metadata = asRecord(node.metadata)
+        if (metadata.dynamicCinematicGenerated !== true) return false
+        return !activeWorkflowNodeKeys.has(node.key)
+      })
+      if (strandedDynamicNodes.length > 0) {
+        console.warn('[GraphCore][output-worker] dynamic nodes were materialized after the pass snapshot; running another pass.', {
+          runId,
+          strandedNodeKeys: strandedDynamicNodes.map((node) => node.key),
+          dynamicPass,
+        })
+        await heartbeat(input.client, runId, input.workerId, {
+          runtime: 'fly_output_workflow_worker',
+          stage: 'dynamic_nodes_reconciled',
+          strandedNodeKeys: strandedDynamicNodes.map((node) => node.key),
+        })
+        bundle = reconcileBundle
+        continue
+      }
+    }
+
     const finalOutputs = {
       nodes: schedulerResult.outputsByNodeKey,
       artifact: schedulerResult.outputsByNodeKey.artifact ?? null,
