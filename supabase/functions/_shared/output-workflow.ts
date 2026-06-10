@@ -23733,7 +23733,12 @@ async function executeNode(input: {
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-register-v1' }
       }
       if (purpose === 'sequence_animatic_scene_plan_merge') {
-        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(readFirstUpstreamRecord(input.upstream, ['scenePackage', 'scene_package']))
+        // Prefer the scene_input/master node's full scene-package output: the
+        // scene shot-plan node also emits a `scenePackage` key, but that one is a
+        // single tagged scene, not the {scenePackages:[...]} wrapper this merge needs.
+        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(
+          readPreferredUpstreamRecord(input.upstream, ['scene_input'], ['scenePackage', 'scene_package']),
+        )
         const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const contextRecord = readFirstUpstreamRecord(input.upstream, ['context'])
@@ -23776,6 +23781,7 @@ async function executeNode(input: {
         globalBlockIndex = 1
         for (const entry of scenePlanEntries) {
           const sceneId = entry.sourceSceneId || readText(entry.plan.sourceSceneId) || `scene_${String(entry.sourceSceneIndex || globalBlockIndex).padStart(3, '0')}`
+          const scenePackage = scenePackageById.get(sceneId) ?? scenePackageOutput.scenePackages.find((scene) => scene.index === entry.sourceSceneIndex) ?? null
           const planBlocks = readArray(entry.plan.blocks).map(asRecord)
           const planShots = readArray(entry.plan.shots).map(asRecord)
           for (const block of planBlocks) {
