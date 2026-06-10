@@ -7,6 +7,7 @@ import {
   mapOutputWorkflowRow,
   outputArtifactSelect,
   outputRequestSelect,
+  resolveSequenceAnimaticCombinedManifest,
 } from '../_shared/output-workflow.ts'
 import {
   continuityAssetStateSchema,
@@ -301,18 +302,28 @@ Deno.serve(async (request) => {
     if (continuityArtifactsResponse.error) throw new Error(continuityArtifactsResponse.error.message)
 
     const manifestArtifact = (masterArtifactsResponse.data ?? []).find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_manifest') ?? null
-    const manifest = asRecord(asRecord(asRecord(manifestArtifact).metadata).manifest)
-    if (Object.keys(manifest).length === 0) throw new HttpError(409, 'Generate the screenplay animatic master first; no manifest is available yet.')
-    const manifestHash = sequenceAnimaticStableHash(manifest)
-    const masterManifestArtifactKey = readText(asRecord(manifestArtifact).key)
-
-    const continuityArtifact = (continuityArtifactsResponse.data ?? []).find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_continuity_pack') ?? null
-    const existingPack = asRecord(asRecord(asRecord(continuityArtifact).metadata).continuityPack)
-    const directorPlan = readArtifactMetadataRecord(
+    let manifest = asRecord(asRecord(asRecord(manifestArtifact).metadata).manifest)
+    let masterManifestArtifactKey = readText(asRecord(manifestArtifact).key)
+    let directorPlan = readArtifactMetadataRecord(
       (masterArtifactsResponse.data ?? []).map(asRecord),
       ['sequence_animatic_director_plan'],
       ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'],
     )
+    if (Object.keys(manifest).length === 0) {
+      // Per-scene architecture: the master has no manifest artifact; combine the
+      // ready scene children's manifests at read time instead.
+      const combined = await resolveSequenceAnimaticCombinedManifest({ client, masterRequest })
+      if (combined) {
+        manifest = combined.manifest
+        directorPlan = combined.directorPlan
+        masterManifestArtifactKey = combined.manifestArtifactKey
+      }
+    }
+    if (Object.keys(manifest).length === 0) throw new HttpError(409, 'Generate shots for at least one scene first; no scene manifest is available yet.')
+    const manifestHash = sequenceAnimaticStableHash(manifest)
+
+    const continuityArtifact = (continuityArtifactsResponse.data ?? []).find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_continuity_pack') ?? null
+    const existingPack = asRecord(asRecord(asRecord(continuityArtifact).metadata).continuityPack)
     const continuityPack = continuityPackFromMasterArtifacts({
       masterRequestId: masterRequest.id,
       manifest,

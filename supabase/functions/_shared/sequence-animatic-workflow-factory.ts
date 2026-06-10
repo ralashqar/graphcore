@@ -189,6 +189,10 @@ export function buildSequenceAnimaticSceneWorkflowGraph(input: {
       purpose: 'sequence_animatic_scene_plan_merge',
       role: 'sequence_animatic_director_plan',
       maxShotCount: input.maxShotCount,
+      // Keep scene-scoped shot/block ids (scene_001_shot_001) instead of remapping
+      // to shot_001: ids stay globally unique across sibling scenes and match the
+      // streamed events the UI accumulated.
+      preserveSceneScopedIds: true,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_plan_merge', maxConcurrency: 1 },
     }, {}, role),
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_director_plan_artifact', 'output_artifact', 'Register Scene Shot Plan', 920, 120, {

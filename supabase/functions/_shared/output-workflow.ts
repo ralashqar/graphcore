@@ -5282,6 +5282,149 @@ export async function ensureSequenceAnimaticSceneShotPlanWorkflows(input: {
 }
 
 /**
+ * Resolve the manifest + director plan for a sequence-animatic master.
+ *
+ * Old-style runs registered both on the master workflow. In the per-scene
+ * architecture each completed scene child owns its manifest/plan instead, so
+ * when the master has none this combines the ready scenes' artifacts at read
+ * time (ordered by scene index, ids are scene-scoped and collision-free).
+ * Downstream stages (continuity assets, keyframes, storyboards) therefore work
+ * over whatever scenes are ready — partial chapters included — without any
+ * stored merge step.
+ */
+export async function resolveSequenceAnimaticCombinedManifest(input: {
+  client: DatabaseClient
+  masterRequest: OutputRequest
+}): Promise<{ manifest: Record<string, unknown>; directorPlan: Record<string, unknown>; manifestArtifactKey: string; readySceneIds: string[] } | null> {
+  const childrenResponse = await input.client
+    .from('output_requests')
+    .select(outputRequestSelect)
+    .eq('project_id', input.masterRequest.projectId)
+    .eq('draft_id', input.masterRequest.draftId)
+    .eq('parent_request_id', input.masterRequest.id)
+    .order('created_at', { ascending: true })
+  if (childrenResponse.error) throw new Error(childrenResponse.error.message)
+  const sceneChildren = (childrenResponse.data ?? []).map(mapOutputRequestRow)
+    .filter((child) => readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'scene_shot_plan')
+    .filter((child) => child.status === 'completed' && child.workflowId)
+    .sort((left, right) => (Number(asRecord(left.metadata).sceneIndex ?? 0) || 9999) - (Number(asRecord(right.metadata).sceneIndex ?? 0) || 9999))
+  if (sceneChildren.length === 0) return null
+  const workflowIds = sceneChildren.map((child) => child.workflowId).filter((id): id is string => Boolean(id))
+  const artifactsResponse = await input.client
+    .from('output_artifacts')
+    .select(outputArtifactSelect)
+    .in('workflow_id', workflowIds)
+    .order('created_at', { ascending: false })
+  if (artifactsResponse.error) throw new Error(artifactsResponse.error.message)
+  const artifactRows = (artifactsResponse.data ?? []).map(asRecord)
+  const latestByWorkflowAndRole = new Map<string, Record<string, unknown>>()
+  for (const row of artifactRows) {
+    const role = readText(asRecord(row.metadata).role)
+    const key = `${readText(row.workflow_id)}:${role}`
+    if (!latestByWorkflowAndRole.has(key)) latestByWorkflowAndRole.set(key, row)
+  }
+  const mergeRecordsById = (entries: Record<string, unknown>[]) => {
+    const byId = new Map<string, Record<string, unknown>>()
+    for (const entry of entries) {
+      const id = readText(entry.id)
+      if (!id) continue
+      byId.set(id, { ...byId.get(id), ...entry })
+    }
+    return [...byId.values()]
+  }
+  const blocks: Record<string, unknown>[] = []
+  const shots: Record<string, unknown>[] = []
+  const planShots: Record<string, unknown>[] = []
+  const planBlocks: Record<string, unknown>[] = []
+  const coverageSetups: Record<string, unknown>[] = []
+  const localReferences: Record<string, unknown>[] = []
+  const shotBindings: Record<string, unknown> = {}
+  const graphArrays: Record<string, Record<string, unknown>[]> = { sets: [], zones: [], spots: [], viewpoints: [], angles: [], edges: [] }
+  const readySceneIds: string[] = []
+  const manifestKeys: string[] = []
+  let assetPack: Record<string, unknown> = {}
+  let blockIndex = 1
+  let shotIndex = 1
+  for (const child of sceneChildren) {
+    const manifestRow = latestByWorkflowAndRole.get(`${child.workflowId}:sequence_animatic_manifest`)
+    const planRow = latestByWorkflowAndRole.get(`${child.workflowId}:sequence_animatic_director_plan`)
+    const sceneManifest = asRecord(asRecord(manifestRow?.metadata).manifest)
+    const scenePlan = asRecord(asRecord(planRow?.metadata).shotContinuityPlan ?? asRecord(planRow?.metadata).directorPlan)
+    if (Object.keys(sceneManifest).length === 0) continue
+    readySceneIds.push(readText(asRecord(child.metadata).sceneId))
+    if (manifestRow) manifestKeys.push(readText(manifestRow.key))
+    if (Object.keys(assetPack).length === 0) assetPack = asRecord(sceneManifest.assetPack)
+    for (const block of readArray(sceneManifest.blocks).map(asRecord)) {
+      blocks.push({ ...block, index: blockIndex })
+      blockIndex += 1
+    }
+    for (const shot of readArray(asRecord(sceneManifest.shotPlan).shots).map(asRecord)) {
+      shots.push({ ...shot, index: shotIndex })
+      shotIndex += 1
+    }
+    const planSource = Object.keys(scenePlan).length > 0 ? scenePlan : asRecord(sceneManifest.directorPlan)
+    for (const shot of readArray(planSource.shots).map(asRecord)) planShots.push(shot)
+    for (const block of readArray(planSource.blocks).map(asRecord)) planBlocks.push(block)
+    for (const setup of readArray(planSource.coverageSetups ?? planSource.coverage_setups).map(asRecord)) coverageSetups.push(setup)
+    for (const reference of readArray(planSource.localReferences ?? planSource.outputLocalReferences).map(asRecord)) localReferences.push(reference)
+    Object.assign(shotBindings, asRecord(planSource.shotBindings ?? planSource.shot_bindings))
+    const graph = asRecord(planSource.continuityGraphV2 ?? planSource.continuity_graph_v2 ?? sceneManifest.continuityGraphV2)
+    for (const field of Object.keys(graphArrays)) {
+      for (const node of readArray(graph[field]).map(asRecord)) graphArrays[field].push(node)
+    }
+  }
+  if (blocks.length === 0 || planShots.length === 0) return null
+  const continuityGraphV2 = Object.fromEntries(Object.entries(graphArrays).map(([field, entries]) => [field, mergeRecordsById(entries)]))
+  const directorPlan = {
+    role: 'sequence_animatic_director_plan',
+    contractVersion: 'shot_continuity_plan_v2',
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    screenplayAnimaticRole: 'director_plan',
+    sequenceAnimaticRole: 'director_plan',
+    planningMode: 'per_scene_combined',
+    combinedFromSceneIds: readySceneIds,
+    shots: planShots.map((shot, index) => ({ ...shot, index: index + 1 })),
+    blocks: planBlocks.map((block, index) => ({ ...block, index: index + 1 })),
+    coverageSetups: mergeRecordsById(coverageSetups),
+    localReferences: mergeRecordsById(localReferences),
+    shotBindings,
+    shot_bindings: shotBindings,
+    continuityGraphV2,
+    continuity_graph_v2: continuityGraphV2,
+  }
+  const manifest = {
+    role: 'sequence_animatic_manifest',
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    sequenceAnimaticRole: 'master',
+    screenplayAnimaticRole: 'master',
+    requestId: input.masterRequest.id,
+    combinedFromSceneIds: readySceneIds,
+    provisionalSceneCoverage: true,
+    assetPack,
+    selectedReferences: assetPack,
+    blocks,
+    shotPlan: {
+      sceneId: 'sequence_animatic_master',
+      shots,
+      totalEditorialDurationSeconds: shots.reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds) || 0), 0),
+    },
+    directorPlan,
+    shotContinuityPlan: directorPlan,
+    continuityGraphV2,
+    continuity_graph_v2: continuityGraphV2,
+    shotBindings,
+    shot_bindings: shotBindings,
+    diagnostics: [`Combined ${readySceneIds.length} ready scene manifest${readySceneIds.length === 1 ? '' : 's'} at read time (per-scene architecture).`],
+  }
+  return {
+    manifest,
+    directorPlan,
+    manifestArtifactKey: manifestKeys.join('+') || `combined.${input.masterRequest.id.slice(0, 8)}.scene-manifests`,
+    readySceneIds,
+  }
+}
+
+/**
  * After a sequence-animatic master run completes (scenes registered), ensure the
  * per-scene child workflows exist and auto-start only the first scene; the rest
  * are generated on demand from the UI.
@@ -23804,6 +23947,10 @@ async function executeNode(input: {
         const shotIdMap = new Map<string, string>()
         const blockIdMap = new Map<string, string>()
         const scenePackageById = new Map(scenePackageOutput.scenePackages.map((scene) => [scene.sceneId, scene] as const))
+        // Per-scene child workflows keep scene-scoped ids (globally unique across
+        // sibling scenes and identical to the streamed events); the legacy
+        // multi-scene merge remaps to a flat global sequence.
+        const preserveSceneScopedIds = asRecord(input.node.config).preserveSceneScopedIds === true
         let globalShotIndex = 1
         let globalBlockIndex = 1
         for (const entry of scenePlanEntries) {
@@ -23813,13 +23960,13 @@ async function executeNode(input: {
           const planShots = readArray(entry.plan.shots).map(asRecord)
           for (const block of planBlocks) {
             const oldBlockId = readText(block.id) || `${sceneId}_block_${String(globalBlockIndex).padStart(3, '0')}`
-            const newBlockId = `block_${String(globalBlockIndex).padStart(3, '0')}`
+            const newBlockId = preserveSceneScopedIds ? oldBlockId : `block_${String(globalBlockIndex).padStart(3, '0')}`
             blockIdMap.set(`${sceneId}:${oldBlockId}`, newBlockId)
             globalBlockIndex += 1
           }
           for (const shot of planShots) {
             const oldShotId = readText(shot.id) || `${sceneId}_shot_${String(globalShotIndex).padStart(3, '0')}`
-            const newShotId = `shot_${String(globalShotIndex).padStart(3, '0')}`
+            const newShotId = preserveSceneScopedIds ? oldShotId : `shot_${String(globalShotIndex).padStart(3, '0')}`
             shotIdMap.set(`${sceneId}:${oldShotId}`, newShotId)
             globalShotIndex += 1
           }

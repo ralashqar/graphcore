@@ -8,6 +8,7 @@ import {
   outputArtifactSelect,
   outputRequestSelect,
   outputWorkflowRunStepSelect,
+  resolveSequenceAnimaticCombinedManifest,
 } from '../_shared/output-workflow.ts'
 import {
   sequenceAnimaticKeyframeWorkflowEnsureRequestSchema,
@@ -737,6 +738,17 @@ Deno.serve(async (request) => {
     const masterArtifacts = (masterArtifactsResponse.data ?? []).map(asRecord)
     let manifest = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
     let directorPlan = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+    let combinedManifestArtifactKey = ''
+    if (Object.keys(manifest).length === 0 || Object.keys(directorPlan).length === 0) {
+      // Per-scene architecture: combine ready scene children's manifests/plans at
+      // read time so keyframes can run for whatever scenes are complete.
+      const combined = await resolveSequenceAnimaticCombinedManifest({ client: admin, masterRequest })
+      if (combined) {
+        manifest = combined.manifest
+        directorPlan = combined.directorPlan
+        combinedManifestArtifactKey = combined.manifestArtifactKey
+      }
+    }
     let provisionalContext = false
     if ((Object.keys(manifest).length === 0 || Object.keys(directorPlan).length === 0) && payload.allowProvisional) {
       const runId = masterRequest.latestRunId
@@ -770,7 +782,7 @@ Deno.serve(async (request) => {
     if (Object.keys(directorPlan).length === 0) throw new HttpError(409, 'Generate the shot continuity plan first.')
     const manifestHash = sequenceAnimaticStableHash(manifest)
     const directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
-    const masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key)
+    const masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key) || combinedManifestArtifactKey
     const assetPack = asRecord(manifest.assetPack)
     const aspectRatio = readText(assetPack.aspectRatio) || '16:9'
     const keyframePlan = deriveKeyframePlan({
