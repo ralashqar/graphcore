@@ -27840,6 +27840,13 @@ export async function processFlyOutputWorkflowRuns(input: {
       },
       onNodeStart: async ({ node, orderIndex, resourceClass }) => {
         const priorStep = stepByNodeKey.get(node.key)
+        // Dynamic-expansion replay passes re-enter every node before the cache-reuse
+        // decision is made. Re-marking an already-completed step as running makes the
+        // UI progress jump back (e.g. "Author screenplay") during ~a minute of cache
+        // replay, and doubles the replay's DB writes. Skip the running mark for
+        // completed steps unless this node is explicitly forced to re-run — genuine
+        // re-executions still surface via onProgress and onNodeComplete.
+        if (priorStep?.status === 'completed' && !forceNodeKeys.has(node.key)) return
         await setStepStatus(input.client, {
           runId,
           node,
