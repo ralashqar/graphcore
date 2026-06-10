@@ -13540,7 +13540,6 @@ export function WorldGraphPage({
                   <span className="world-wiki-sequence-animatic-block-nav-index">Scene {scene.index}</span>
                   <span>
                     <strong>{scene.title}</strong>
-                    {scene.summary ? <small>{scene.summary}</small> : null}
                     <em>
                       {scene.status === 'planning' || sceneBusy
                         ? 'Planning shots'
@@ -13898,6 +13897,19 @@ export function WorldGraphPage({
                         <EntityIcon id="graph" />
                         Master graph
                       </button>
+                      {(() => {
+                        const activeScene = routeAnimaticModel.scenes.find((scene) => scene.id === sequenceAnimaticActiveSceneId)
+                          ?? routeAnimaticModel.scenes[0]
+                          ?? null
+                        if (!activeScene?.requestId) return null
+                        const sceneRequestId = activeScene.requestId
+                        return (
+                          <button className="ghost-button compact" onClick={() => openSequenceAnimaticOutputGraph(routeAnimaticModel, sceneRequestId)} type="button">
+                            <EntityIcon id="graph" />
+                            Scene {activeScene.index} graph
+                          </button>
+                        )
+                      })()}
                       <button className="ghost-button compact" onClick={() => onOpenOutputStudio(routeAnimaticModel.request.id, 'timeline', null, {
                         kind: 'wiki_sequence_animatic',
                         masterRequestId: routeAnimaticModel.request.id,
@@ -13945,7 +13957,15 @@ export function WorldGraphPage({
                       <section className="world-wiki-sequence-animatic-empty world-wiki-sequence-animatic-scene-gate">
                         <strong>Scene {activeScene.index}: {activeScene.title}</strong>
                         {activeScene.status === 'planning' || sceneBusy ? (
-                          <p><span className="world-mini-spinner" aria-hidden="true" /> Planning shots and continuity for this scene...</p>
+                          <>
+                            <p><span className="world-mini-spinner" aria-hidden="true" /> Planning shots and continuity for this scene...</p>
+                            {activeScene.requestId ? (
+                              <button className="ghost-button compact" onClick={() => openSequenceAnimaticOutputGraph(routeAnimaticModel, activeScene.requestId!)} type="button">
+                                <EntityIcon id="graph" />
+                                Inspect scene workflow
+                              </button>
+                            ) : null}
+                          </>
                         ) : activeScene.status === 'failed' ? (
                           <>
                             <p>Shot planning for this scene failed. You can retry it.</p>
@@ -18008,4 +18028,3 @@ function CompositionComposer({
     </div>
   )
 }
-
