@@ -1743,3 +1743,58 @@ test('compiled cinematic graphs persist fully materialized story settings from p
   assert.equal(settings.storyLanguagePreset, 'tactical_combat')
   assert.equal(settings.formatSubtype, null)
 })
+
+test('cinematicV2 schemas coerce recoverable model-output drift instead of rejecting', () => {
+  const plan = cinematicV2ShotPlanSchema.parse({
+    sceneId: 'scene_1',
+    // chapter-length totals and out-of-range values clamp instead of failing
+    totalEditorialDurationSeconds: 312,
+    shots: [
+      {
+        id: 'shot_1',
+        index: 1,
+        title: 'Numeric Drift',
+        // unknown enum value falls back to the default instead of rejecting
+        purpose: 'establishing-wide',
+        // beyond the per-shot cap: clamps to 8
+        editorialDurationSeconds: 12,
+        // out of provider range: clamps to 15
+        providerDurationSeconds: 22,
+        dialogue: [{ id: 7, speakerRefId: 12, text: 'Numbers happen.' }],
+        performanceBeats: [{
+          characterRefId: 42,
+          valence: 0,
+          arousal: 0.5,
+          confidence: 0.5,
+          dominance: 0.5,
+          bodyLanguage: '',
+          facialExpression: '',
+          gaze: '',
+          gesture: '',
+        }],
+        camera: { framing: 'wide', angle: 'high', lens: '28mm', movement: 'push', screenDirectionRule: '' },
+      },
+    ],
+  })
+
+  assert.equal(plan.totalEditorialDurationSeconds, 312)
+  assert.equal(plan.shots[0].purpose, 'action')
+  assert.equal(plan.shots[0].editorialDurationSeconds, 8)
+  assert.equal(plan.shots[0].providerDurationSeconds, 15)
+  assert.equal(plan.shots[0].dialogue[0].id, '7')
+  assert.equal(plan.shots[0].dialogue[0].speakerRefId, '12')
+  assert.equal(plan.shots[0].performanceBeats[0].characterRefId, '42')
+
+  // near-miss enum casing/spacing normalizes to the canonical value
+  const normalized = cinematicV2ShotPlanSchema.parse({
+    totalEditorialDurationSeconds: 6,
+    shots: [{
+      id: 'shot_1',
+      index: 1,
+      title: 'Casing Drift',
+      purpose: 'Character Intro',
+      camera: { framing: '', angle: '', lens: '', movement: '', screenDirectionRule: '' },
+    }],
+  })
+  assert.equal(normalized.shots[0].purpose, 'character_intro')
+})

@@ -654,6 +654,28 @@ export const cinematicV2ShotPurposeSchema = z.enum([
 export const cinematicV2BeatTypeSchema = z.enum(['action', 'dialogue', 'audio', 'emotion', 'camera', 'transition', 'custom'])
 export const cinematicV2TaskStatusSchema = z.enum(['planned', 'queued', 'running', 'complete', 'failed', 'skipped'])
 
+// Model output is coerced, not rejected, for recoverable shape drift: numeric ids,
+// near-miss enum values, and out-of-range durations must never fail a whole plan.
+const cinematicLenientIdSchema = z.preprocess((value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return value
+}, z.string())
+
+const cinematicLenientShotPurposeSchema = (fallback: z.infer<typeof cinematicV2ShotPurposeSchema>) =>
+  z.preprocess((value) => {
+    if (typeof value !== 'string') return value === null || value === undefined ? undefined : value
+    const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_')
+    return (cinematicV2ShotPurposeSchema.options as readonly string[]).includes(normalized) ? normalized : undefined
+  }, cinematicV2ShotPurposeSchema.default(fallback))
+
+const cinematicClampedNumber = (options: { min: number; max: number; round?: boolean }) =>
+  (value: unknown) => {
+    const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN
+    if (!Number.isFinite(parsed)) return value
+    const clamped = Math.min(Math.max(parsed, options.min), options.max)
+    return options.round ? Math.round(clamped) : clamped
+  }
+
 export const cinematicV2ScriptBeatSchema = z.object({
   id: z.string(),
   type: cinematicV2BeatTypeSchema.default('custom'),
@@ -720,7 +742,7 @@ export const cinematicV2SceneStateSchema = z.object({
 
 export const cinematicV2CameraPlanSchema = z.object({
   id: z.string(),
-  purpose: cinematicV2ShotPurposeSchema.default('establishing'),
+  purpose: cinematicLenientShotPurposeSchema('establishing'),
   position: z.string().default(''),
   lens: z.string().default(''),
   movement: z.string().default(''),
@@ -775,8 +797,8 @@ export const cinematicV2ScreenplayDraftSchema = z.object({
 })
 
 export const cinematicV2DialogueLineSchema = z.object({
-  id: z.string(),
-  speakerRefId: z.string(),
+  id: cinematicLenientIdSchema,
+  speakerRefId: cinematicLenientIdSchema,
   speakerName: z.string().default(''),
   text: z.string().default(''),
   emotion: z.string().default(''),
@@ -787,7 +809,7 @@ export const cinematicV2DialogueLineSchema = z.object({
 })
 
 export const cinematicV2PerformanceBeatSchema = z.object({
-  characterRefId: z.string(),
+  characterRefId: cinematicLenientIdSchema,
   valence: z.number().min(-1).max(1).default(0),
   arousal: z.number().min(0).max(1).default(0.5),
   confidence: z.number().min(0).max(1).default(0.5),
@@ -815,9 +837,9 @@ export const cinematicV2ShotSchema = z.object({
   sceneId: z.string().default('scene_1'),
   index: z.number().int().positive(),
   title: z.string(),
-  purpose: cinematicV2ShotPurposeSchema.default('action'),
-  editorialDurationSeconds: z.number().positive().max(8).default(2),
-  providerDurationSeconds: z.number().int().min(4).max(15).default(4),
+  purpose: cinematicLenientShotPurposeSchema('action'),
+  editorialDurationSeconds: z.preprocess(cinematicClampedNumber({ min: 0.1, max: 8 }), z.number().positive().max(8).default(2)),
+  providerDurationSeconds: z.preprocess(cinematicClampedNumber({ min: 4, max: 15, round: true }), z.number().int().min(4).max(15).default(4)),
   description: z.string().default(''),
   action: z.string().default(''),
   caption: z.string().default(''),
@@ -865,8 +887,10 @@ export const cinematicV2ShotSchema = z.object({
 
 export const cinematicV2ShotPlanSchema = z.object({
   sceneId: z.string().default('scene_1'),
-  totalEditorialDurationSeconds: z.number().positive().max(180),
-  shots: z.array(cinematicV2ShotSchema).min(1).max(36),
+  // Chapter-length sequence animatics legitimately exceed the short-form 180s budget;
+  // out-of-range totals clamp instead of failing the whole plan.
+  totalEditorialDurationSeconds: z.preprocess(cinematicClampedNumber({ min: 0.1, max: 3600 }), z.number().positive().max(3600)),
+  shots: z.array(cinematicV2ShotSchema).min(1).max(200),
   performanceArc: z.array(z.object({
     characterRefId: z.string(),
     startState: z.string().default(''),

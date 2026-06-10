@@ -390,6 +390,7 @@ Deno.serve(async (request) => {
             error_message: 'Skipped because a dependency job failed.',
           })
           .eq('id', job.id)
+          .in('status', ['queued', 'running'])
         noteJobStatus(job.id, 'skipped')
         continue
       }
@@ -405,7 +406,7 @@ Deno.serve(async (request) => {
           error_message: job.shotId
             ? `Cinematic shot "${job.shotId}" or target node "${job.shotNodeKey}" was not found.`
             : `Cinematic node "${job.shotNodeKey}" was not found.`,
-        }).eq('id', job.id)
+        }).eq('id', job.id).in('status', ['queued', 'running'])
         noteJobStatus(job.id, 'failed')
         continue
       }
@@ -432,7 +433,7 @@ Deno.serve(async (request) => {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: 'Still jobs require a cinematic shot target.',
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           noteJobStatus(job.id, 'failed')
           continue
         }
@@ -440,7 +441,7 @@ Deno.serve(async (request) => {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: 'Take still jobs require a cinematic take node.',
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           noteJobStatus(job.id, 'failed')
           continue
         }
@@ -449,7 +450,7 @@ Deno.serve(async (request) => {
             await client.from('cinematic_run_jobs').update({
               status: 'failed',
               error_message: 'Storyboard still jobs require a storyboard ref node or cinematic take node.',
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             noteJobStatus(job.id, 'failed')
             continue
           }
@@ -466,7 +467,7 @@ Deno.serve(async (request) => {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: message,
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           if (job.stillAssetKey) {
             await markGeneratedImageAssetFailed({
               client,
@@ -524,7 +525,7 @@ Deno.serve(async (request) => {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: message,
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           if (job.stillAssetKey) {
             await markGeneratedImageAssetFailed({
               client,
@@ -604,7 +605,7 @@ Deno.serve(async (request) => {
               provider_request_id: requestId,
               prompt: stillPrompt,
               error_message: message,
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             if (reservedStillAssetKey) {
               await markGeneratedImageAssetFailed({
                 client,
@@ -630,7 +631,7 @@ Deno.serve(async (request) => {
               model: stillModel,
               prompt: stillPrompt,
               error_message: 'Fal did not return a request id for the cinematic still job.',
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             if (reservedStillAssetKey) {
               await markGeneratedImageAssetFailed({
                 client,
@@ -663,7 +664,7 @@ Deno.serve(async (request) => {
               responseUrl: typeof submitResult.body.response_url === 'string' ? submitResult.body.response_url : null,
             },
             error_message: null,
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           continue
         }
 
@@ -682,7 +683,7 @@ Deno.serve(async (request) => {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: 'Still-generation job is missing a reserved asset key.',
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           noteJobStatus(job.id, 'failed')
           continue
         }
@@ -748,14 +749,14 @@ Deno.serve(async (request) => {
                   lastStatusCheckAt: new Date().toISOString(),
                 },
                 error_message: null,
-              }).eq('id', job.id)
+              }).eq('id', job.id).in('status', ['queued', 'running'])
               continue
             }
 
             await client.from('cinematic_run_jobs').update({
               status: 'failed',
               error_message: statusResult.body.error,
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             await markGeneratedImageAssetFailed({
               client,
               projectId: payload.snapshot.project.id,
@@ -782,7 +783,7 @@ Deno.serve(async (request) => {
             await client.from('cinematic_run_jobs').update({
               status: 'failed',
               error_message: message,
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             await markGeneratedImageAssetFailed({
               client,
               projectId: payload.snapshot.project.id,
@@ -809,7 +810,7 @@ Deno.serve(async (request) => {
                 lastStatusCheckAt: new Date().toISOString(),
               },
               error_message: null,
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             continue
           }
         }
@@ -830,7 +831,7 @@ Deno.serve(async (request) => {
             await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: message,
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           await markGeneratedImageAssetFailed({
             client,
             projectId: payload.snapshot.project.id,
@@ -859,7 +860,7 @@ Deno.serve(async (request) => {
                 lastStatusCheckAt: new Date().toISOString(),
               },
               error_message: null,
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             continue
           }
 
@@ -898,7 +899,7 @@ Deno.serve(async (request) => {
           await client.from('cinematic_run_jobs').update({
             status: 'failed',
             error_message: message,
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           await markGeneratedImageAssetFailed({
             client,
             projectId: payload.snapshot.project.id,
@@ -932,7 +933,7 @@ Deno.serve(async (request) => {
             statusData: statusResult.body,
           },
           error_message: null,
-        }).eq('id', job.id)
+        }).eq('id', job.id).in('status', ['queued', 'running'])
 
         if (job.kind === 'take_still') {
           updatedGraph = applyTakeBindingToGraph(updatedGraph, job.shotNodeKey, {
@@ -1112,7 +1113,7 @@ Deno.serve(async (request) => {
             await client.from('cinematic_run_jobs').update({
               status: 'failed',
               error_message: getFalErrorMessage(statusResult.body, 'The video-generation provider returned an error.'),
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             noteJobStatus(job.id, 'failed')
             continue
           }
@@ -1120,7 +1121,7 @@ Deno.serve(async (request) => {
             await client.from('cinematic_run_jobs').update({
               status: 'failed',
               error_message: 'The video-generation provider reported completion but returned no video URL.',
-            }).eq('id', job.id)
+            }).eq('id', job.id).in('status', ['queued', 'running'])
             noteJobStatus(job.id, 'failed')
             continue
           }
@@ -1132,7 +1133,7 @@ Deno.serve(async (request) => {
               lastStatusCheckAt: new Date().toISOString(),
             },
             error_message: null,
-          }).eq('id', job.id)
+          }).eq('id', job.id).in('status', ['queued', 'running'])
           continue
         }
       }
@@ -1175,7 +1176,7 @@ Deno.serve(async (request) => {
         await client.from('cinematic_run_jobs').update({
           status: 'failed',
           error_message: message,
-        }).eq('id', job.id)
+        }).eq('id', job.id).in('status', ['queued', 'running'])
         noteJobStatus(job.id, 'failed')
         continue
       }
@@ -1194,7 +1195,7 @@ Deno.serve(async (request) => {
           effectiveVideoResolution: executionPlan.resolution,
           executionPlan,
         },
-      }).eq('id', job.id)
+      }).eq('id', job.id).in('status', ['queued', 'running'])
       noteJobStatus(job.id, 'succeeded')
 
       if (isTakeJob) {

@@ -508,6 +508,7 @@ Deno.serve(async (request) => {
               },
           schema: creativeScriptAuthorshipSchemaRuntime,
           maxOutputTokens: 9000,
+          timeoutMs: 300_000,
         })
       : await runStructuredWorldBuildModel({
           model: authorshipModel.model,
@@ -540,6 +541,7 @@ Deno.serve(async (request) => {
           },
           schema: cinematicShotAuthorshipRawSchema,
           maxOutputTokens: 9000,
+          timeoutMs: 300_000,
         })
 
     const ingestionResult = useCreativeScriptPipeline

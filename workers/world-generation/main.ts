@@ -259,9 +259,11 @@ const maintenanceIntervalMs = Math.max(
 /**
  * Periodic reliability sweep:
  * - terminally fails output workflow runs whose worker heartbeat went stale
- *   after exhausting their claim attempts (no more silent zombie runs), and
+ *   after exhausting their claim attempts (no more silent zombie runs),
  * - re-queues cinematic jobs that were claimed for provider submission but
- *   never received a provider request id (crashed mid-submit).
+ *   never received a provider request id (crashed mid-submit), and
+ * - cancels queued/running steps left behind on terminal runs (zombie
+ *   executors re-marking steps after the run already failed).
  */
 async function runMaintenanceLoop() {
   while (!shuttingDown) {
@@ -276,13 +278,19 @@ async function runMaintenanceLoop() {
         grace_minutes: 3,
       })
       if (requeueResponse.error) throw new Error(requeueResponse.error.message)
+      const orphanStepResponse = await client.rpc('cancel_orphaned_output_workflow_run_steps', {
+        grace_minutes: 10,
+      })
+      if (orphanStepResponse.error) throw new Error(orphanStepResponse.error.message)
       const failedRuns = Number(orphanResponse.data ?? 0)
       const requeuedJobs = Number(requeueResponse.data ?? 0)
-      if (failedRuns > 0 || requeuedJobs > 0) {
+      const sweptSteps = Number(orphanStepResponse.data ?? 0)
+      if (failedRuns > 0 || requeuedJobs > 0 || sweptSteps > 0) {
         console.warn('[world-generation-worker] maintenance sweep acted.', {
           workerId,
           orphanedRunsFailed: failedRuns,
           cinematicJobsRequeued: requeuedJobs,
+          orphanedStepsCancelled: sweptSteps,
         })
       }
     } catch (error) {

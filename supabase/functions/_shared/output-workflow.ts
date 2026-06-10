@@ -2162,6 +2162,13 @@ function retryDelayMs(attempt: number) {
   return Math.min(10_000, 1_500 * attempt)
 }
 
+function isOpenAiTruncationError(error: unknown) {
+  if (error instanceof WorkflowCancelledError) return false
+  const message = error instanceof Error ? error.message : String(error)
+  const lower = message.toLowerCase()
+  return lower.includes('max_output_tokens') || lower.includes('status incomplete')
+}
+
 function isTransientOpenAiResponseStatus(status: number) {
   return [408, 409, 425, 429, 500, 502, 503, 504].includes(status)
 }
@@ -4176,6 +4183,7 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
   prompt: string
   instructions: string
   maxOutputTokens: number
+  reasoningEffortOverride?: 'minimal' | 'low' | 'medium' | 'high' | null
   shouldCancel?: () => Promise<boolean>
   onProgress?: (progress: {
     providerRequestId: string
@@ -4383,12 +4391,15 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
   let response: OpenAiResponseResult
   try {
     const continuityPolicy = resolveOutputTextModelPolicy('continuity_structure')
+    const reasoning = input.reasoningEffortOverride !== undefined
+      ? (input.reasoningEffortOverride ? { effort: input.reasoningEffortOverride } : undefined)
+      : reasoningPayloadFor(continuityPolicy)
     response = await runOpenAiResponsesStream({
       model: continuityPolicy.model,
       input: input.prompt,
       instructions: input.instructions,
       maxOutputTokens: input.maxOutputTokens,
-      reasoning: reasoningPayloadFor(continuityPolicy) ?? { effort: 'medium' },
+      reasoning,
       store: false,
       timeoutMs: outputWorkflowChapterTimeoutMs(),
       metadata: {
@@ -4472,12 +4483,19 @@ async function runSequenceAnimaticShotContinuityPlanStreamWithRetry(
 ) {
   const attempts = outputWorkflowShotContinuityStreamAttempts()
   let lastError: unknown = null
+  let maxOutputTokens = input.maxOutputTokens
+  let reasoningEffortOverride: 'medium' | 'low' | undefined
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await runSequenceAnimaticShotContinuityPlanStream(input)
+      return await runSequenceAnimaticShotContinuityPlanStream({ ...input, maxOutputTokens, reasoningEffortOverride })
     } catch (error) {
       lastError = error
-      if (!isRetryableOpenAiStreamError(error) || attempt >= attempts) throw error
+      const truncated = isOpenAiTruncationError(error)
+      if ((!truncated && !isRetryableOpenAiStreamError(error)) || attempt >= attempts) throw error
+      if (truncated) {
+        maxOutputTokens = Math.min(64_000, Math.ceil(maxOutputTokens * 1.6))
+        reasoningEffortOverride = reasoningEffortOverride === undefined ? 'medium' : 'low'
+      }
       const delayMs = retryDelayMs(attempt)
       await insertSequenceAnimaticEvent({
         client: input.client,
@@ -4488,12 +4506,17 @@ async function runSequenceAnimaticShotContinuityPlanStreamWithRetry(
         runId: input.run.id,
         eventType: 'shot_continuity_stream_warning',
         payload: {
-          warning: `Transient shot continuity stream failure. Retrying attempt ${attempt + 1} of ${attempts}.`,
+          warning: truncated
+            ? `Shot continuity stream was truncated at the output token limit. Retrying attempt ${attempt + 1} of ${attempts} with a larger budget (${maxOutputTokens} tokens, ${reasoningEffortOverride} reasoning).`
+            : `Transient shot continuity stream failure. Retrying attempt ${attempt + 1} of ${attempts}.`,
           error: error instanceof Error ? error.message : String(error),
           attempt,
           nextAttempt: attempt + 1,
           maxAttempts: attempts,
           retryDelayMs: delayMs,
+          truncated,
+          maxOutputTokens,
+          reasoningEffortOverride: reasoningEffortOverride ?? null,
           nodeKey: input.node.key,
         },
         metadata: {
@@ -15235,7 +15258,7 @@ async function inferSequenceShotVideoTiming(input: {
   }
 }
 
-async function runCinematicV2StructuredNodeBackground<TValue>(input: {
+type CinematicV2StructuredNodeBackgroundInput<TValue> = {
   nodeKey: string
   schemaName: string
   schema: z.ZodType<TValue>
@@ -15254,7 +15277,29 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: {
     lastProviderPollAt: string
     providerStartedAt: string
   }) => Promise<void>
-}) {
+}
+
+async function runCinematicV2StructuredNodeBackground<TValue>(input: CinematicV2StructuredNodeBackgroundInput<TValue>) {
+  const attempts = 3
+  let maxOutputTokens = input.maxOutputTokens ?? 3200
+  let priorProviderRequestId = input.priorProviderRequestId
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await runCinematicV2StructuredNodeBackgroundOnce({ ...input, maxOutputTokens, priorProviderRequestId })
+    } catch (error) {
+      lastError = error
+      // Escalate only on output-token truncation; a fresh submit is required because
+      // the prior background response is terminal at this point.
+      if (!isOpenAiTruncationError(error) || attempt >= attempts) throw error
+      maxOutputTokens = Math.min(24_000, maxOutputTokens * 2)
+      priorProviderRequestId = null
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Background structured response failed.'))
+}
+
+async function runCinematicV2StructuredNodeBackgroundOnce<TValue>(input: CinematicV2StructuredNodeBackgroundInput<TValue>) {
   const model = outputWorkflowTextModel()
   const timeoutMs = input.timeoutMs ?? outputWorkflowChapterTimeoutMs()
   let result: OpenAiResponseResult
@@ -23274,7 +23319,7 @@ async function executeNode(input: {
                 assetPack,
               }, 22000),
             ].filter(Boolean).join('\n\n'),
-            maxOutputTokens: Math.max(12000, Math.min(32000, Math.ceil(sequenceAnimaticShotContinuityMaxShotCount / Math.max(1, scenePackageOutput.scenePackages.length)) * 1800)),
+            maxOutputTokens: Math.max(16000, Math.min(40000, Math.ceil(sequenceAnimaticShotContinuityMaxShotCount / Math.max(1, scenePackageOutput.scenePackages.length)) * 1800)),
             shouldCancel: input.shouldCancel,
             onProgress: async (progress) => {
               await input.onProgress?.({
@@ -27521,14 +27566,24 @@ export async function processFlyOutputWorkflowRuns(input: {
       staleReusedNodeKeys?: string[]
       sourceRunIds?: string[]
     }>()
+    const claimedAttemptCount = bundle.run.attemptCount ?? 0
     const shouldCancelRun = async () => {
       const cancellationResponse = await input.client
         .from('output_workflow_runs')
-        .select('status')
+        .select('status, worker_id, attempt_count')
         .eq('id', runId)
         .single()
       if (cancellationResponse.error) throw new Error(cancellationResponse.error.message)
-      return (cancellationResponse.data as { status?: string } | null)?.status === 'cancelled'
+      const row = cancellationResponse.data as { status?: string; worker_id?: string | null; attempt_count?: number | null } | null
+      if (!row) return true
+      if (row.status === 'cancelled') return true
+      // Lease check: if the run was terminally failed elsewhere (attempt cap, orphan
+      // sweep) or reclaimed by another worker/attempt after a stale heartbeat, this
+      // executor must stop so two attempts never write the same steps.
+      if (row.status !== 'running') return true
+      if ((row.worker_id ?? null) !== input.workerId) return true
+      if ((row.attempt_count ?? 0) !== claimedAttemptCount) return true
+      return false
     }
 
     let lastProviderProgressHeartbeatAt = 0
@@ -27967,6 +28022,23 @@ export async function processFlyOutputWorkflowRuns(input: {
     })
 
     if (schedulerResult.status === 'cancelled') {
+      const liveRunResponse = await input.client
+        .from('output_workflow_runs')
+        .select('status, worker_id, attempt_count')
+        .eq('id', runId)
+        .single()
+      const liveRun = liveRunResponse.error
+        ? null
+        : (liveRunResponse.data as { status?: string; worker_id?: string | null; attempt_count?: number | null } | null)
+      const lostLease = liveRun
+        ? liveRun.status !== 'cancelled'
+          && (liveRun.status !== 'running' || (liveRun.worker_id ?? null) !== input.workerId || (liveRun.attempt_count ?? 0) !== claimedAttemptCount)
+        : false
+      if (lostLease) {
+        // Execution stopped because another attempt/worker owns the run (or it was
+        // terminally failed elsewhere). Leave run/request state to the new owner.
+        return { processed: true, run: { id: bundle.run.id, status: liveRun?.status ?? 'failed', preset: bundle.run.preset } }
+      }
       const cancelRequestResponse = await input.client
         .from('output_requests')
         .update({
@@ -28098,18 +28170,23 @@ export async function processFlyOutputWorkflowRuns(input: {
         error: failResponse.error.message,
       })
     }
-    const failRequestResponse = await input.client
-      .from('output_requests')
-      .update({
-        status: 'failed',
-        error_message: message,
-      })
-      .eq('latest_run_id', runId)
-    if (failRequestResponse.error) {
-      console.warn('[GraphCore][output-worker] failed to mark output request failed.', {
-        runId,
-        error: failRequestResponse.error.message,
-      })
+    // The fail RPC is lease-guarded (status='running' and matching worker_id) and
+    // returns false when another attempt/worker owns the run now — in that case the
+    // request status belongs to the new owner and must not be stomped to failed here.
+    if (failResponse.error || failResponse.data === true) {
+      const failRequestResponse = await input.client
+        .from('output_requests')
+        .update({
+          status: 'failed',
+          error_message: message,
+        })
+        .eq('latest_run_id', runId)
+      if (failRequestResponse.error) {
+        console.warn('[GraphCore][output-worker] failed to mark output request failed.', {
+          runId,
+          error: failRequestResponse.error.message,
+        })
+      }
     }
     return { processed: true, run: { id: bundle.run.id, status: 'failed', preset: bundle.run.preset } }
   }

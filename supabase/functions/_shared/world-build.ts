@@ -72,6 +72,7 @@ export async function runStructuredWorldBuildModel<TPayload>({
   schema,
   maxOutputTokens,
   reasoningEffort,
+  timeoutMs,
 }: {
   model: string
   passLabel: string
@@ -81,6 +82,7 @@ export async function runStructuredWorldBuildModel<TPayload>({
   maxOutputTokens: number
   /** Task-complexity-aware reasoning effort; defaults to 'low' (previous hardcoded behavior). */
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | null
+  timeoutMs?: number
 }) {
   const debugEnabled = shouldDebugWorldBuildOpenAi()
 
@@ -112,6 +114,7 @@ export async function runStructuredWorldBuildModel<TPayload>({
     },
     store: false,
     maxOutputTokens,
+    timeoutMs,
   })
 
   if (debugEnabled) {

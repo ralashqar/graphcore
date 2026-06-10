@@ -36,3 +36,6 @@ tmp/presentations/
 # Local runtime scratch directories
 tmp/chrome-landing-profile/
 tmp/ffmpeg-static-runtime/
+tmp/sb-keys.json
+tmp/test-full-output.txt
+tmp/*.mjs

@@ -472,6 +472,7 @@ async function markCinematicWebhookPendingFallback(
       },
     })
     .eq('id', job.id)
+    .in('status', ['queued', 'running'])
 
   if (updateResponse.error) throw new Error(updateResponse.error.message)
 }
@@ -508,6 +509,7 @@ async function handleCinematicStillWebhook(
         },
       })
       .eq('id', job.id)
+      .in('status', ['queued', 'running'])
     if (updateResponse.error) throw new Error(updateResponse.error.message)
 
     if (assetKey) {
@@ -580,6 +582,7 @@ async function handleCinematicStillWebhook(
       },
     })
     .eq('id', job.id)
+    .in('status', ['queued', 'running'])
 
   if (updateResponse.error) throw new Error(updateResponse.error.message)
 
@@ -664,6 +667,7 @@ async function handleCinematicVideoWebhook(
         },
       })
       .eq('id', job.id)
+      .in('status', ['queued', 'running'])
     if (updateResponse.error) throw new Error(updateResponse.error.message)
     await advanceCinematicDependents(admin, run.id, job.id)
     await recomputeCinematicRunStatus(admin, run.id)
@@ -719,6 +723,7 @@ async function handleCinematicVideoWebhook(
       },
     })
     .eq('id', job.id)
+    .in('status', ['queued', 'running'])
 
   if (updateResponse.error) throw new Error(updateResponse.error.message)
 
