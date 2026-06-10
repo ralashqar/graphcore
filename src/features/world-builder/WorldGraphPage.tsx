@@ -2766,8 +2766,21 @@ function sequenceAnimaticRequestIsActive(request: OutputRequest | null, run?: Ou
   return ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(sequenceAnimaticEffectiveStatus(request))
 }
 
-function sequenceAnimaticRequestHasViewablePlan(request: OutputRequest | null, artifacts: readonly OutputArtifact[]) {
+function sequenceAnimaticRequestHasViewablePlan(
+  request: OutputRequest | null,
+  artifacts: readonly OutputArtifact[],
+  requests: readonly OutputRequest[] = [],
+) {
   if (!request) return false
+  // Per-scene architecture: once the master registered its scenes (scene child
+  // requests exist), the animatic is enterable even before any scene generated
+  // shots — entering must never require regenerating the master.
+  const hasSceneChildren = requests.some((entry) => {
+    if (entry.parentRequestId !== request.id) return false
+    const metadata = readLooseRecord(entry.metadata)
+    return (trimOptionalString(metadata.sequenceAnimaticRole) || trimOptionalString(metadata.screenplayAnimaticRole)) === 'scene_shot_plan'
+  })
+  if (hasSceneChildren) return true
   const requestArtifacts = artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))
   return requestArtifacts.some((artifact) => {
     const role = readArtifactRole(artifact)
@@ -2802,9 +2815,9 @@ function latestWikiSequenceAnimaticRequest(
     return sequenceAnimaticRequestIsActive(request, run)
   })
   if (active) return active
-  if (artifacts.length > 0) {
+  {
     const viewable = candidates.find((request) => {
-      const state = sequenceAnimaticStateForRequest(request, runs, artifacts)
+      const state = sequenceAnimaticStateForRequest(request, runs, artifacts, requests)
       return state === 'animatic_ready' || state === 'video_ready'
     })
     if (viewable) return viewable
@@ -2816,6 +2829,7 @@ function sequenceAnimaticStateForRequest(
   request: OutputRequest | null,
   runs: readonly OutputWorkflowRun[],
   artifacts: readonly OutputArtifact[],
+  requests: readonly OutputRequest[] = [],
 ): 'none' | 'in_progress' | 'animatic_ready' | 'video_ready' | 'failed' {
   if (!request) return 'none'
   const effectiveStatus = sequenceAnimaticEffectiveStatus(request)
@@ -2827,7 +2841,7 @@ function sequenceAnimaticStateForRequest(
       : null
   const requestArtifacts = artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))
   if (requestArtifacts.some((artifact) => artifact.kind === 'video' || artifact.mimeType.startsWith('video/'))) return 'video_ready'
-  const hasViewablePlan = sequenceAnimaticRequestHasViewablePlan(request, artifacts)
+  const hasViewablePlan = sequenceAnimaticRequestHasViewablePlan(request, artifacts, requests)
   if (!projectionTerminal && (ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || (run && !TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run.status)))) {
     return 'in_progress'
   }
@@ -13759,7 +13773,7 @@ export function WorldGraphPage({
       const sequenceAnimaticLookup = sequenceAnimaticLookupByKey[entity.key] ?? { status: 'idle' as const }
       const sequenceAnimaticRequestId = sequenceAnimaticRequest?.id ?? sequenceAnimaticLookup.requestId ?? null
       const sequenceAnimaticRow = sequenceAnimaticRequest ? outputLibraryRowByRequestId.get(sequenceAnimaticRequest.id) ?? null : null
-      const sequenceAnimaticState = sequenceAnimaticStateForRequest(sequenceAnimaticRequest, outputWorkflowRuns, outputArtifacts)
+      const sequenceAnimaticState = sequenceAnimaticStateForRequest(sequenceAnimaticRequest, outputWorkflowRuns, outputArtifacts, outputRequests)
       const sequenceAnimaticBusy = sequenceAnimaticBusyKey === entity.key
       const sequenceAnimaticError = sequenceAnimaticErrorByKey[entity.key] ?? sequenceAnimaticLookup.error ?? ''
       const sequenceAnimaticPrimaryLabel = sequenceAnimaticBusy
