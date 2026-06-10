@@ -9186,11 +9186,16 @@ function deriveSequenceAnimaticShotContinuityStreamState(input: {
   const coverageSetups: Record<string, unknown>[] = []
   const localReferences: Record<string, unknown>[] = []
   const doneEvents: Record<string, unknown>[] = []
+  const scenesById = new Map<string, Record<string, unknown>>()
   let sawStarted = false
   let failedPayload: Record<string, unknown> | null = null
 
   for (const event of input.events) {
     const payload = readRepositoryRecord(event.payload)
+    if (event.eventType === 'scene_registered') {
+      const sceneId = readRepositoryString(payload.id)
+      if (sceneId) scenesById.set(sceneId, payload)
+    }
     if (event.eventType === 'shot_continuity_stream_started') sawStarted = true
     if (event.eventType === 'shot_continuity_stream_failed') failedPayload = payload
     if (event.eventType === 'shot_continuity_stream_done') doneEvents.push(payload)
@@ -9355,6 +9360,7 @@ function deriveSequenceAnimaticShotContinuityStreamState(input: {
     streamedShotContinuityPlan,
     streamedShotCount: shots.length,
     streamedBlockCount: blocks.length,
+    scenes: [...scenesById.values()].sort((left, right) => (Number(left.index ?? 0) || 9999) - (Number(right.index ?? 0) || 9999)),
   }
 }
 
