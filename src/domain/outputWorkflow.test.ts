@@ -1433,6 +1433,42 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   }).sourceScriptShotIds, [])
 })
 
+test('sequence animatic UI recognizes screenplay role metadata for generated child work', () => {
+  const worldGraphPageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  assert.match(worldGraphPageSource, /function readOutputRequestScreenplayAnimaticRole\(request: OutputRequest\)/)
+  assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'storyboard_block'/)
+  assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'continuity_pack'/)
+  assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'shot_keyframe'/)
+  assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'coverage_anchor'/)
+  assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'continuity_asset'/)
+  assert.doesNotMatch(worldGraphPageSource, /const plannedKeyframeRequests = input\.requests\s+\.filter\(\(request\) => readLooseRecord\(request\.metadata\)\.sequenceAnimaticRole === 'shot_keyframe'\)/)
+})
+
+test('sequence animatic UI compacts streamed state before storing it in React', () => {
+  const worldGraphPageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  assert.match(worldGraphPageSource, /function compactSequenceAnimaticStateForUi\(state: SequenceAnimaticStateResponse\)/)
+  assert.match(worldGraphPageSource, /events: \[\]/)
+  assert.match(worldGraphPageSource, /artifacts: \[\]/)
+  assert.match(worldGraphPageSource, /outputs: compactSequenceAnimaticStepOutputsForUi\(run\.outputs\)/)
+  assert.match(worldGraphPageSource, /\[masterRequestId\]: compactResult/)
+  assert.match(worldGraphPageSource, /input\.sequenceState\?\.scriptShotStatus === 'ready'/)
+})
+
+test('sequence animatic finalizes completed scene children independently of master manifest', () => {
+  const stateFunctionSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-sequence-animatic-state/index.ts'), 'utf8')
+  const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
+  const worldGraphPageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  assert.match(stateFunctionSource, /function readSceneChildFinalState\(input:/)
+  assert.match(stateFunctionSource, /readScreenplayAnimaticRole\(asRecord\(child\.metadata\)\) === 'scene_shot_plan'/)
+  assert.match(stateFunctionSource, /source: directorPlanReady \|\| manifestReady \? 'scene_child_final' : 'streamed_scene_plan'/)
+  assert.match(repositorySource, /function deriveSequenceAnimaticSceneChildFinalState\(input:/)
+  assert.match(repositorySource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'scene_shot_plan'/)
+  assert.match(worldGraphPageSource, /function sequenceAnimaticSceneIdForShot\(shot: Record<string, unknown>\)/)
+  assert.match(worldGraphPageSource, /const finalizedSceneIds = new Set/)
+  assert.match(worldGraphPageSource, /return !sceneId \|\| !finalizedSceneIds\.has\(sceneId\)/)
+  assert.match(worldGraphPageSource, /const allowProvisional = shot\.isProvisional && sequenceAnimaticShotCanGenerateEarlyKeyframe\(shot\)/)
+})
+
 test('screenplay author uses a dedicated long timeout helper', () => {
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   assert.match(workerSource, /DEFAULT_SCREENPLAY_AUTHOR_TIMEOUT_MS = 900_000/)

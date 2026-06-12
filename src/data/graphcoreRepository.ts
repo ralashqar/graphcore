@@ -9180,6 +9180,167 @@ function deriveSequenceAnimaticDirectorState(input: {
   }
 }
 
+function deriveSequenceAnimaticPlanShots(plan: Record<string, unknown>, manifest: Record<string, unknown>) {
+  const manifestShotPlan = readRepositoryRecord(manifest.shotPlan ?? manifest.shot_plan)
+  const manifestDirectorPlan = readRepositoryRecord(manifest.directorPlan ?? manifest.director_plan ?? manifest.shotContinuityPlan ?? manifest.shot_continuity_plan)
+  return readRepositoryArray(plan.shots)
+    .concat(readRepositoryArray(manifestDirectorPlan.shots))
+    .concat(readRepositoryArray(manifestShotPlan.shots))
+    .map(readRepositoryRecord)
+    .filter((shot, index, shots) => {
+      const id = readRepositoryString(shot.id)
+      return id && shots.findIndex((candidate) => readRepositoryString(candidate.id) === id) === index
+    })
+}
+
+function deriveSequenceAnimaticPlanBlocks(plan: Record<string, unknown>, manifest: Record<string, unknown>) {
+  const manifestShotPlan = readRepositoryRecord(manifest.shotPlan ?? manifest.shot_plan)
+  const manifestDirectorPlan = readRepositoryRecord(manifest.directorPlan ?? manifest.director_plan ?? manifest.shotContinuityPlan ?? manifest.shot_continuity_plan)
+  return readRepositoryArray(plan.blocks)
+    .concat(readRepositoryArray(manifestDirectorPlan.blocks))
+    .concat(readRepositoryArray(manifestShotPlan.blocks ?? manifestShotPlan.groups))
+    .map(readRepositoryRecord)
+    .filter((block, index, blocks) => {
+      const id = readRepositoryString(block.id)
+      return id && blocks.findIndex((candidate) => readRepositoryString(candidate.id) === id) === index
+    })
+}
+
+function deriveSequenceAnimaticShotSceneId(shot: Record<string, unknown>) {
+  const binding = readRepositoryRecord(shot.sceneBinding ?? shot.scene_binding)
+  const explicit = readRepositoryString(shot.sourceSceneId ?? shot.source_scene_id ?? shot.sceneId ?? shot.scene_id ?? binding.sceneId ?? binding.scene_id)
+  if (explicit) return explicit
+  return /^scene_\d+/i.exec(readRepositoryString(shot.id))?.[0] ?? ''
+}
+
+function deriveSequenceAnimaticSceneChildFinalState(input: {
+  masterRequest: OutputRequest | null
+  sceneChildren: OutputRequest[]
+  artifacts: OutputArtifact[]
+  streamedScenes: Record<string, unknown>[]
+}) {
+  const sceneStatesById = new Map<string, Record<string, unknown>>()
+  for (const scene of input.streamedScenes) {
+    const sceneId = readRepositoryString(scene.id ?? scene.sceneId ?? scene.scene_id)
+    if (sceneId) sceneStatesById.set(sceneId, { ...scene, id: sceneId })
+  }
+  const scenePlans: Array<{
+    sceneId: string
+    request: OutputRequest
+    manifest: Record<string, unknown>
+    directorPlan: Record<string, unknown>
+    shots: Record<string, unknown>[]
+    blocks: Record<string, unknown>[]
+  }> = []
+  input.sceneChildren.forEach((request, index) => {
+    const metadata = readRepositoryRecord(request.metadata)
+    const sceneId = readRepositoryString(metadata.sceneId ?? metadata.scene_id ?? metadata.sourceSceneId ?? metadata.source_scene_id)
+      || `scene_${String(index + 1).padStart(3, '0')}`
+    const requestArtifacts = input.artifacts.filter((artifact) => artifact.workflowId === request.workflowId)
+    const manifestMetadata = requestArtifacts
+      .map((artifact) => readRepositoryRecord(artifact.metadata))
+      .find((entry) => readRepositoryString(entry.role) === 'sequence_animatic_manifest') ?? {}
+    const planMetadata = requestArtifacts
+      .map((artifact) => readRepositoryRecord(artifact.metadata))
+      .find((entry) => readRepositoryString(entry.role) === 'sequence_animatic_director_plan') ?? {}
+    const manifest = readRepositoryRecord(manifestMetadata.manifest ?? manifestMetadata.sequenceAnimaticManifest ?? manifestMetadata.sequence_animatic_manifest)
+    const manifestPlan = readRepositoryRecord(manifest.directorPlan ?? manifest.director_plan ?? manifest.shotContinuityPlan ?? manifest.shot_continuity_plan)
+    const explicitPlan = readRepositoryRecord(planMetadata.shotContinuityPlan ?? planMetadata.shot_continuity_plan ?? planMetadata.directorPlan ?? planMetadata.director_plan)
+    const directorPlan = Object.keys(explicitPlan).length > 0 ? explicitPlan : manifestPlan
+    const shots = deriveSequenceAnimaticPlanShots(directorPlan, manifest)
+    const blocks = deriveSequenceAnimaticPlanBlocks(directorPlan, manifest)
+    const manifestReady = Object.keys(manifest).length > 0
+    const directorPlanReady = Object.keys(directorPlan).length > 0 && shots.length > 0
+    const sceneState = {
+      ...readRepositoryRecord(sceneStatesById.get(sceneId)),
+      id: sceneId,
+      sceneId,
+      requestId: request.id,
+      workflowId: request.workflowId,
+      runId: request.latestRunId,
+      status: directorPlanReady || manifestReady ? 'ready' : request.status,
+      manifestReady,
+      directorPlanReady,
+      shotCount: shots.length,
+      shotIds: shots.map((shot) => readRepositoryString(shot.id)).filter(Boolean),
+      source: directorPlanReady || manifestReady ? 'scene_child_final' : 'streamed_scene_plan',
+      manifestHash: manifestReady ? hashOutputWorkflowValue(manifest) : '',
+      directorPlanHash: directorPlanReady ? hashOutputWorkflowValue(directorPlan) : '',
+      updatedAt: request.updatedAt,
+    }
+    sceneStatesById.set(sceneId, sceneState)
+    if (directorPlanReady) scenePlans.push({ sceneId, request, manifest, directorPlan, shots, blocks })
+  })
+  scenePlans.sort((left, right) => {
+    const leftIndex = Number(readRepositoryRecord(sceneStatesById.get(left.sceneId)).index ?? 0) || Number(left.sceneId.match(/\d+/)?.[0] ?? 0) || 0
+    const rightIndex = Number(readRepositoryRecord(sceneStatesById.get(right.sceneId)).index ?? 0) || Number(right.sceneId.match(/\d+/)?.[0] ?? 0) || 0
+    return leftIndex - rightIndex || left.request.createdAt.localeCompare(right.request.createdAt)
+  })
+  if (scenePlans.length === 0) return { scenes: [...sceneStatesById.values()], directorPlan: null }
+
+  const shots = scenePlans.flatMap((scenePlan) => scenePlan.shots.map((shot, index) => ({
+    ...shot,
+    sourceSceneId: deriveSequenceAnimaticShotSceneId(shot) || scenePlan.sceneId,
+    sceneId: deriveSequenceAnimaticShotSceneId(shot) || scenePlan.sceneId,
+    index: Number(shot.index ?? 0) || index + 1,
+  })))
+  const blocks = scenePlans.flatMap((scenePlan, sceneIndex) => scenePlan.blocks.length > 0
+    ? scenePlan.blocks.map((block, blockIndex) => ({
+      ...block,
+      sourceSceneId: scenePlan.sceneId,
+      sceneId: scenePlan.sceneId,
+      index: Number(block.index ?? 0) || sceneIndex + blockIndex + 1,
+    }))
+    : [{
+      id: `${scenePlan.sceneId}_block_001`,
+      index: sceneIndex + 1,
+      title: readRepositoryString(readRepositoryRecord(sceneStatesById.get(scenePlan.sceneId)).title) || `Scene ${sceneIndex + 1}`,
+      summary: readRepositoryString(readRepositoryRecord(sceneStatesById.get(scenePlan.sceneId)).summary),
+      shotIds: scenePlan.shots.map((shot) => readRepositoryString(shot.id)).filter(Boolean),
+      status: 'planned',
+      sourceSceneId: scenePlan.sceneId,
+      sceneId: scenePlan.sceneId,
+    }])
+  const firstPlan = scenePlans[0]?.directorPlan ?? {}
+  const graphNodes = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).nodes).map(readRepositoryRecord))
+  const graphEdges = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).edges).map(readRepositoryRecord))
+  const directorPlan = {
+    ...firstPlan,
+    role: 'sequence_animatic_director_plan',
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    screenplayAnimaticRole: 'director_plan',
+    sequenceAnimaticRole: 'director_plan',
+    masterRequestId: input.masterRequest?.id ?? null,
+    planningMode: readRepositoryString(firstPlan.planningMode) || 'single_director_pass',
+    contractVersion: readRepositoryString(firstPlan.contractVersion) || 'combined_scene_child_plan_v1',
+    source: 'scene_child_final',
+    shotReadySource: 'scene_child_final',
+    scenes: [...sceneStatesById.values()],
+    shots,
+    blocks,
+    coverageSetups: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.coverageSetups ?? entry.directorPlan.coverage_setups).map(readRepositoryRecord)),
+    coverageSetupByShotId: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.coverageSetupByShotId ?? entry.directorPlan.coverage_setup_by_shot_id))),
+    coverage_setup_by_shot_id: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.coverage_setup_by_shot_id ?? entry.directorPlan.coverageSetupByShotId))),
+    shotBindings: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.shotBindings ?? entry.directorPlan.shot_bindings))),
+    shot_bindings: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.shot_bindings ?? entry.directorPlan.shotBindings))),
+    continuityGraphV2: { nodes: graphNodes, edges: graphEdges },
+    continuity_graph_v2: { nodes: graphNodes, edges: graphEdges },
+    sceneGraphAdditions: {
+      sets: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).sets).map(readRepositoryRecord)),
+      zones: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).zones).map(readRepositoryRecord)),
+      spots: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).spots).map(readRepositoryRecord)),
+      viewpoints: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).viewpoints).map(readRepositoryRecord)),
+    },
+    localReferences: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.localReferences ?? entry.directorPlan.local_references).map(readRepositoryRecord)),
+    outputLocalReferences: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.outputLocalReferences ?? entry.directorPlan.output_local_references).map(readRepositoryRecord)),
+    assetRequirements: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.assetRequirements ?? entry.directorPlan.asset_requirements).map(readRepositoryRecord)),
+    notes: ['Combined from finalized scene child plans. Master manifest may still be pending.'],
+    manifestHash: hashOutputWorkflowValue(scenePlans.map((entry) => entry.manifest)),
+    shotPlanHash: hashOutputWorkflowValue({ shots, blocks }),
+  }
+  return { scenes: [...sceneStatesById.values()], directorPlan }
+}
+
 function deriveSequenceAnimaticShotContinuityStreamState(input: {
   masterRequest: OutputRequest | null
   events: SequenceAnimaticStateResponse['events']
@@ -9477,6 +9638,24 @@ function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResp
   const masterRequest = parsed.masterRequest
     ? hydrated.requests.find((request) => request.id === parsed.masterRequest?.id) ?? parsed.masterRequest
     : null
+  const shotContinuityStreamState = deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events: parsed.events })
+  const sceneChildFinalState = deriveSequenceAnimaticSceneChildFinalState({
+    masterRequest,
+    sceneChildren: hydrated.requests.filter((request) => request.parentRequestId === masterRequest?.id && readOutputRequestScreenplayAnimaticRole(request) === 'scene_shot_plan'),
+    artifacts: hydrated.artifacts,
+    streamedScenes: readRepositoryArray(shotContinuityStreamState.scenes).map(readRepositoryRecord),
+  })
+  const masterDirectorState = deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydrated.artifacts })
+  const directorState = masterDirectorState.directorPlanStatus === 'ready'
+    ? masterDirectorState
+    : sceneChildFinalState.directorPlan
+      ? {
+        directorPlan: sceneChildFinalState.directorPlan,
+        directorPlanStatus: 'ready' as const,
+        shotContinuityPlan: sceneChildFinalState.directorPlan,
+        shotContinuityPlanStatus: 'ready' as const,
+      }
+      : masterDirectorState
   return sequenceAnimaticStateResponseSchema.parse({
     ...parsed,
     masterRequest,
@@ -9485,8 +9664,9 @@ function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResp
     artifacts: hydrated.artifacts,
     assets,
     ...deriveSequenceAnimaticScriptShotState({ runs: hydrated.runs, artifacts: hydrated.artifacts }),
-    ...deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydrated.artifacts }),
-    ...deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events: parsed.events }),
+    ...directorState,
+    ...shotContinuityStreamState,
+    scenes: sceneChildFinalState.scenes,
     ...deriveSequenceAnimaticContinuityState({ requests: hydrated.requests, artifacts: hydrated.artifacts }),
   })
 }
@@ -9636,6 +9816,23 @@ async function loadSequenceAnimaticStateDirect(
   const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
   const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, hydratedArtifacts))
   const shotContinuityStreamState = deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events })
+  const sceneChildFinalState = deriveSequenceAnimaticSceneChildFinalState({
+    masterRequest,
+    sceneChildren: directChildren.filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'scene_shot_plan'),
+    artifacts: hydratedArtifacts,
+    streamedScenes: readRepositoryArray(shotContinuityStreamState.scenes).map(readRepositoryRecord),
+  })
+  const masterDirectorState = deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydratedArtifacts })
+  const directorState = masterDirectorState.directorPlanStatus === 'ready'
+    ? masterDirectorState
+    : sceneChildFinalState.directorPlan
+      ? {
+        directorPlan: sceneChildFinalState.directorPlan,
+        directorPlanStatus: 'ready' as const,
+        shotContinuityPlan: sceneChildFinalState.directorPlan,
+        shotContinuityPlanStatus: 'ready' as const,
+      }
+      : masterDirectorState
   const revision = hashOutputWorkflowValue({
     requests: requests.map((request) => ({
       id: request.id,
@@ -9678,6 +9875,8 @@ async function loadSequenceAnimaticStateDirect(
       shotCount: shotContinuityStreamState.streamedShotCount,
       blockCount: shotContinuityStreamState.streamedBlockCount,
       planHash: hashOutputWorkflowValue(shotContinuityStreamState.streamedShotContinuityPlan ?? {}),
+      sceneHash: hashOutputWorkflowValue(sceneChildFinalState.scenes),
+      sceneDirectorHash: hashOutputWorkflowValue(sceneChildFinalState.directorPlan ?? {}),
     },
   })
   if (readRepositoryString(payload.knownRevision) === revision) {
@@ -9695,8 +9894,9 @@ async function loadSequenceAnimaticStateDirect(
       projections: [],
       events: [],
       ...scriptShotState,
-      ...deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydratedArtifacts }),
+      ...directorState,
       ...shotContinuityStreamState,
+      scenes: sceneChildFinalState.scenes,
       ...deriveSequenceAnimaticContinuityState({ requests, artifacts: hydratedArtifacts }),
     })
   }
@@ -9713,7 +9913,9 @@ async function loadSequenceAnimaticStateDirect(
     assets,
     projections,
     events,
+    ...directorState,
     ...shotContinuityStreamState,
+    scenes: sceneChildFinalState.scenes,
   }))
 }
 

@@ -3986,6 +3986,79 @@ function deriveSequenceAnimaticScriptShotProjectionFromRun(run: OutputWorkflowRu
     : { scriptShotStatus: 'missing' as const, scriptShots: [], scriptBlocks: [] }
 }
 
+function compactSequenceAnimaticAssetLikeOutput(value: unknown): Record<string, unknown> {
+  const record = readLooseRecord(value)
+  const compact: Record<string, unknown> = {}
+  for (const key of ['assetKey', 'asset_key', 'url', 'mimeType', 'mime_type', 'width', 'height', 'status']) {
+    if (record[key] !== undefined && record[key] !== null && record[key] !== '') compact[key] = record[key]
+  }
+  return compact
+}
+
+function compactSequenceAnimaticStepOutputsForUi(value: unknown): Record<string, unknown> {
+  const record = readLooseRecord(value)
+  const compact: Record<string, unknown> = {}
+  for (const key of ['assetKey', 'asset_key', 'artifactKey', 'artifact_key', 'status', 'qcStatus']) {
+    if (record[key] !== undefined && record[key] !== null && record[key] !== '') compact[key] = record[key]
+  }
+  for (const key of ['image', 'video', 'artifact']) {
+    const nested = compactSequenceAnimaticAssetLikeOutput(record[key])
+    if (Object.keys(nested).length > 0) compact[key] = nested
+  }
+  const shotKeyframe = readLooseRecord(record.shotKeyframe ?? record.shot_keyframe ?? record.keyframe)
+  if (Object.keys(shotKeyframe).length > 0) {
+    compact.shotKeyframe = {
+      shotId: trimOptionalString(shotKeyframe.shotId),
+      storyboardBlockId: trimOptionalString(shotKeyframe.storyboardBlockId),
+      coverageSetupId: trimOptionalString(shotKeyframe.coverageSetupId),
+      assetKey: trimOptionalString(shotKeyframe.assetKey),
+      status: trimOptionalString(shotKeyframe.status),
+    }
+  }
+  const coverageAnchor = readLooseRecord(record.coverageAnchor ?? record.coverage_anchor)
+  if (Object.keys(coverageAnchor).length > 0) {
+    compact.coverageAnchor = {
+      coverageSetupId: trimOptionalString(coverageAnchor.coverageSetupId),
+      assetKey: trimOptionalString(coverageAnchor.assetKey),
+      status: trimOptionalString(coverageAnchor.status),
+    }
+  }
+  return compact
+}
+
+function compactSequenceAnimaticStateForUi(state: SequenceAnimaticStateResponse): SequenceAnimaticStateResponse {
+  if (state.unchanged) return state
+  return {
+    ...state,
+    // Realtime events are already folded into streamedShotContinuityPlan. Keeping
+    // hundreds of raw payloads in React state duplicates the largest live data.
+    events: [],
+    runs: state.runs.map((run) => ({
+      ...run,
+      outputs: compactSequenceAnimaticStepOutputsForUi(run.outputs),
+      artifacts: [],
+      steps: run.steps.map((step) => ({
+        ...step,
+        outputs: compactSequenceAnimaticStepOutputsForUi(step.outputs),
+      })),
+    })),
+  }
+}
+
+function sequenceAnimaticSceneIdForShot(shot: Record<string, unknown>) {
+  const binding = readLooseRecord(shot.sceneBinding ?? shot.scene_binding)
+  const explicit = trimOptionalString(
+    shot.sourceSceneId
+    ?? shot.source_scene_id
+    ?? shot.sceneId
+    ?? shot.scene_id
+    ?? binding.sceneId
+    ?? binding.scene_id,
+  )
+  if (explicit) return explicit
+  return /^scene_\d+/i.exec(trimOptionalString(shot.id))?.[0] ?? ''
+}
+
 function buildSequenceAnimaticViewModel(input: {
   request: OutputRequest
   run: OutputWorkflowRun | null
@@ -4005,10 +4078,10 @@ function buildSequenceAnimaticViewModel(input: {
   const masterProjectionActiveLabel = sequenceAnimaticProjectionActiveLabel(input.request)
   const requestArtifacts = input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, input.request))
   const childRequests = input.requests
-    .filter((request) => request.parentRequestId === input.request.id && readLooseRecord(request.metadata).sequenceAnimaticRole === 'storyboard_block')
+    .filter((request) => request.parentRequestId === input.request.id && readOutputRequestScreenplayAnimaticRole(request) === 'storyboard_block')
     .sort((left, right) => (Number(readLooseRecord(left.metadata).storyboardBlockIndex ?? 0) || 0) - (Number(readLooseRecord(right.metadata).storyboardBlockIndex ?? 0) || 0))
   const continuityRequest = input.requests
-    .filter((request) => request.parentRequestId === input.request.id && readLooseRecord(request.metadata).sequenceAnimaticRole === 'continuity_pack')
+    .filter((request) => request.parentRequestId === input.request.id && readOutputRequestScreenplayAnimaticRole(request) === 'continuity_pack')
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
   const activeStoryboardChild = childRequests.find((request) => {
     const run = request.latestRunId ? input.runs.find((entry) => entry.id === request.latestRunId) ?? null : null
@@ -4039,15 +4112,15 @@ function buildSequenceAnimaticViewModel(input: {
       return [request.id, run] as const
     }))
   const shotVideoRequests = input.requests
-    .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'shot_video')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'shot_video')
   const shotRevisionRequests = input.requests
-    .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'shot_revision')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'shot_revision')
   const plannedKeyframeRequests = input.requests
-    .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'shot_keyframe')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'shot_keyframe')
   const coverageAnchorRequests = input.requests
-    .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'coverage_anchor')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'coverage_anchor')
   const continuityAssetRequests = input.requests
-    .filter((request) => readLooseRecord(request.metadata).sequenceAnimaticRole === 'continuity_asset')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'continuity_asset')
   const readRunForRequest = (request: OutputRequest | null) => {
     if (!request) return null
     return request.latestRunId
@@ -4224,10 +4297,34 @@ function buildSequenceAnimaticViewModel(input: {
   }
   const manifest = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
   const artifactDirectorPlan = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+  const stateDirectorPlan = readLooseRecord(input.sequenceState?.directorPlan ?? input.sequenceState?.shotContinuityPlan)
   const streamedDirectorPlan = readLooseRecord(input.sequenceState?.streamedShotContinuityPlan)
-  const directorPlanFinalReady = Object.keys(readLooseRecord(artifactDirectorPlan)).length > 0
-  const directorPlan = directorPlanFinalReady ? artifactDirectorPlan : streamedDirectorPlan
-  const directorPlanStreamingPreview = !directorPlanFinalReady && Object.keys(streamedDirectorPlan).length > 0
+  const artifactDirectorPlanReady = Object.keys(readLooseRecord(artifactDirectorPlan)).length > 0
+  const stateDirectorPlanReady = input.sequenceState?.directorPlanStatus === 'ready' && Object.keys(stateDirectorPlan).length > 0
+  const directorPlanFinalReady = artifactDirectorPlanReady || stateDirectorPlanReady
+  const directorPlanStreamingPreview = !artifactDirectorPlanReady && Object.keys(streamedDirectorPlan).length > 0
+  const directorPlan = artifactDirectorPlanReady
+    ? artifactDirectorPlan
+    : directorPlanStreamingPreview
+      ? streamedDirectorPlan
+      : stateDirectorPlanReady
+        ? stateDirectorPlan
+        : streamedDirectorPlan
+  const finalizedSceneIds = new Set(readLooseArray(input.sequenceState?.scenes)
+    .map(readLooseRecord)
+    .filter((scene) => (
+      scene.manifestReady === true
+      || scene.directorPlanReady === true
+      || trimOptionalString(scene.source) === 'scene_child_final'
+      || trimOptionalString(scene.status) === 'ready'
+    ))
+    .map((scene) => trimOptionalString(scene.id ?? scene.sceneId ?? scene.scene_id))
+    .filter(Boolean))
+  const shotIsProvisional = (shot: Record<string, unknown>) => {
+    if (!directorPlanStreamingPreview) return false
+    const sceneId = sequenceAnimaticSceneIdForShot(shot)
+    return !sceneId || !finalizedSceneIds.has(sceneId)
+  }
   const directorPlanStreamStatus = input.sequenceState?.shotContinuityStreamStatus ?? 'missing'
   const continuityArtifacts = continuityRequest
     ? input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, continuityRequest))
@@ -4785,7 +4882,13 @@ function buildSequenceAnimaticViewModel(input: {
   const keyframeProgressLabel = keyframeTotalCount > 0
     ? `${keyframeReadyCount}/${keyframeTotalCount} keyframes ready`
     : 'Keyframes pending'
-  const scriptShotProjection = deriveSequenceAnimaticScriptShotProjectionFromRun(input.run)
+  const scriptShotProjection = input.sequenceState?.scriptShotStatus === 'ready'
+    ? {
+      scriptShotStatus: 'ready' as const,
+      scriptShots: input.sequenceState.scriptShots,
+      scriptBlocks: input.sequenceState.scriptBlocks,
+    }
+    : deriveSequenceAnimaticScriptShotProjectionFromRun(input.run)
   const scriptShotById = new Map(scriptShotProjection.scriptShots.map((shot) => [shot.id, shot] as const))
   const projectionShotById = new Map((projection?.shots ?? []).map((shot) => [shot.id, shot] as const))
   const blocks: SequenceAnimaticBlockView[] = groups.length > 0
@@ -4974,7 +5077,7 @@ function buildSequenceAnimaticViewModel(input: {
         id: groupId,
         index: typeof group.index === 'number' ? group.index : groupIndex + 1,
         title: trimOptionalString(group.title) || trimOptionalString(group.summary) || `Storyboard block ${groupIndex + 1}`,
-        isProvisional: directorPlanStreamingPreview,
+        isProvisional: groupShots.some((shot) => shotIsProvisional(shot)),
         plannedShotIds: shotIds,
         durationLabel: formatAnimaticSeconds(group.editorialDurationSeconds ?? group.durationSeconds),
         statusLabel: failedStep
@@ -5145,7 +5248,7 @@ function buildSequenceAnimaticViewModel(input: {
             id: shotId,
             index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
             title: trimOptionalString(shot.title) || `Shot ${shotIndex + 1}`,
-            isProvisional: directorPlanStreamingPreview,
+            isProvisional: shotIsProvisional(shot),
             sourceScriptShotIds: readLooseArray(shot.sourceScriptShotIds ?? shot.source_script_shot_ids ?? shot.sourceAnchorIds ?? shot.source_anchor_ids).map(trimOptionalString).filter(Boolean),
             timeLabel: projectionShot
               ? formatAnimaticTimeRange(projectionShot.startSeconds, projectionShot.endSeconds)
@@ -5223,7 +5326,7 @@ function buildSequenceAnimaticViewModel(input: {
         id: 'storyboard_group_1',
         index: 1,
         title: directorPlanStreamingPreview ? 'Shot continuity plan' : 'Storyboard block 1',
-        isProvisional: directorPlanStreamingPreview,
+        isProvisional: rawShots.some((shot) => shotIsProvisional(shot)),
         plannedShotIds: rawShots.map((shot, shotIndex) => trimOptionalString(shot.id) || `shot_${shotIndex + 1}`),
         durationLabel: formatAnimaticSeconds(readLooseRecord(shotPlan).totalEditorialDurationSeconds),
         statusLabel: directorPlanStreamingPreview ? 'Planning shots' : panels.length > 0 ? 'Panels ready' : 'Generating panels',
@@ -5338,7 +5441,7 @@ function buildSequenceAnimaticViewModel(input: {
             id: shotId,
             index: typeof shot.index === 'number' ? shot.index : shotIndex + 1,
             title: trimOptionalString(shot.title) || `Shot ${shotIndex + 1}`,
-            isProvisional: directorPlanStreamingPreview,
+            isProvisional: shotIsProvisional(shot),
             sourceScriptShotIds: readLooseArray(shot.sourceScriptShotIds ?? shot.source_script_shot_ids ?? shot.sourceAnchorIds ?? shot.source_anchor_ids).map(trimOptionalString).filter(Boolean),
             timeLabel: projectionShot
               ? formatAnimaticTimeRange(projectionShot.startSeconds, projectionShot.endSeconds)
@@ -6891,14 +6994,15 @@ export function WorldGraphPage({
     knownRevision?: string | null
   }) => {
     const result = await Promise.resolve(onLoadSequenceAnimaticState(request))
+    const compactResult = compactSequenceAnimaticStateForUi(result)
     const masterRequestId = result.masterRequest?.id || request.masterRequestId || null
     if (masterRequestId && !result.unchanged) {
       setSequenceAnimaticStateByRequestId((current) => ({
         ...current,
-        [masterRequestId]: result,
+        [masterRequestId]: compactResult,
       }))
     }
-    return result
+    return compactResult
   }, [onLoadSequenceAnimaticState])
   const applyLiveSequenceAnimaticStreamEvent = useCallback((input: {
     masterRequestId: string
@@ -8165,7 +8269,7 @@ export function WorldGraphPage({
       startedAt: Date.now(),
     })
     try {
-      const allowProvisional = !model.directorPlanReady && sequenceAnimaticShotCanGenerateEarlyKeyframe(shot)
+      const allowProvisional = shot.isProvisional && sequenceAnimaticShotCanGenerateEarlyKeyframe(shot)
       if (!model.directorPlanReady && !allowProvisional) {
         throw new Error(shot.isProvisional ? 'Shot binding is not ready for early keyframe generation yet.' : 'Generate the shot continuity plan first.')
       }
