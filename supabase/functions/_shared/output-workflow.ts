@@ -102,6 +102,7 @@ import { resolveOutputTextModelPolicy, reasoningPayloadFor } from './model-polic
 import { formatSequenceAnimaticSceneStateForPrompt } from '../../../src/domain/sequenceAnimaticSceneState.ts'
 import { aiGenerationSettings } from '../../../src/config/aiGenerationSettings.ts'
 import { normalizeStrictJsonSchema } from './structured-output.ts'
+import { notifyWorkerWakeBestEffort } from './worker-wake.ts'
 import { z } from 'npm:zod@4'
 
 const OUTPUT_WORKFLOW_EXECUTOR_VERSION = 'output-text-gpt54-v6'
@@ -5126,6 +5127,13 @@ async function startSequenceAnimaticChildRun(input: {
     .eq('id', input.request.id)
   if (updateRequest.error) throw new Error(updateRequest.error.message)
   await input.client.rpc('refresh_output_request_status_projection', { p_request_id: input.request.id })
+  await notifyWorkerWakeBestEffort({
+    family: 'output_workflow',
+    source: 'sequence-animatic-orchestrator',
+    runId: readText(runRow.id),
+    projectId: input.request.projectId,
+    draftId: input.request.draftId,
+  })
   return { started: true, runId: readText(runRow.id), status: 'queued' }
 }
 
@@ -24839,7 +24847,7 @@ async function executeNode(input: {
         const coverageSetup = asRecord(config.coverageSetup ?? config.coverage_setup)
         const shots = readArray(config.shots).map(asRecord)
         const rawAssetPack = asRecord(config.assetPack ?? config.asset_pack)
-        const assetPack = buildCinematicV3StoryboardGroupAssetPack({
+        const baseAssetPack = buildCinematicV3StoryboardGroupAssetPack({
           assetPack: rawAssetPack,
           shots,
           maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
@@ -24848,6 +24856,33 @@ async function executeNode(input: {
           includePerformanceRefs: true,
           includeTextMentionedRefs: false,
         })
+        const referenceAssetKeys = readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys)
+        const extraReferenceEntities = referenceAssetKeys.map((assetKey, index) => ({
+          key: `coverage_anchor_ref_${index + 1}_${slugify(assetKey)}`,
+          name: `Coverage dependency ${index + 1}`,
+          type: 'continuity_asset',
+          role: 'coverage_anchor_dependency_reference',
+          summary: 'Generated scene-graph or canonical reference used to ground this coverage anchor.',
+          visualDescription: 'Use this image to preserve spatial layout, materials, palette, lighting logic, and identity continuity.',
+          assetKeys: [assetKey],
+          primaryAssetKey: assetKey,
+          selectedReferenceAssetKey: assetKey,
+          selectedReferenceVariantKey: 'coverage_anchor_dependency',
+          selectedReferenceVariantLabel: `Coverage dependency ${index + 1}`,
+          selectedReferenceVariantType: 'continuity_asset',
+          referenceSelectionReason: 'Coverage anchor visual reference plan dependency.',
+        }))
+        const existingEntities = readArray(baseAssetPack.entities).map(asRecord)
+        const existingKeys = new Set(existingEntities.map((entity) => readText(entity.key)).filter(Boolean))
+        const assetPack = {
+          ...baseAssetPack,
+          entities: [
+            ...existingEntities,
+            ...extraReferenceEntities.filter((entity) => !existingKeys.has(readText(entity.key))),
+          ],
+          continuityReferenceAssetKeys: referenceAssetKeys,
+          coverageAnchorReferenceAssetKeys: referenceAssetKeys,
+        }
         const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
         const outputs = {
           coverageSetup,
@@ -24855,6 +24890,8 @@ async function executeNode(input: {
           shots,
           assetPack,
           asset_pack: assetPack,
+          referenceAssetKeys,
+          reference_asset_keys: referenceAssetKeys,
           coverageSetupId: setupId,
           coverage_setup_id: setupId,
           text: JSON.stringify({ coverageSetup, shots, assetPack }, null, 2),
@@ -27229,6 +27266,8 @@ async function executeNode(input: {
         const assetKey = readText(image.assetKey)
         const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
         const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
+        const qcFindings = assetKey ? [] : ['Continuity asset image did not produce an asset key.']
+        const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
         const assetState = sequenceAnimaticContinuityAssetStateSchema.parse({
           status: assetKey ? 'ready' : 'failed',
           inputHash: readText(config.assetInputHash) || sequenceAnimaticContinuityAssetTargetInputHash(targetNode),
@@ -27239,7 +27278,7 @@ async function executeNode(input: {
           sourceNodeId: targetNodeId,
           assetKind,
           generatedAt: new Date().toISOString(),
-          warnings: assetKey ? [] : ['Continuity asset image did not produce an asset key.'],
+          warnings: qcFindings,
           error: assetKey ? '' : 'Continuity asset image did not produce an asset key.',
         })
         const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(targetNodeId)}.sequence-animatic-continuity-asset`
@@ -27273,6 +27312,8 @@ async function executeNode(input: {
             targetNode,
             prompt,
             referenceAssetKeys,
+            qcStatus,
+            qcFindings,
             assetState,
             image,
             assetKey,
@@ -27372,6 +27413,12 @@ async function executeNode(input: {
         const upstreamState = readFirstUpstreamRecord(input.upstream, ['assetStateByNodeId', 'asset_state_by_node_id'])
         const batchId = readText(batch.batchId) || readText(config.continuityBatchId) || readText(asRecord(config.batch).batchId)
         if (!batchId) throw new Error('Continuity batch artifact requires a batch id.')
+        const targetNodeIds = readStringArray(batch.targetNodeIds)
+        const readyAssetCount = Object.values(upstreamState).map(asRecord).filter((state) => readText(state.assetKey)).length
+        const qcFindings = targetNodeIds.length > 0 && readyAssetCount < targetNodeIds.length
+          ? [`Continuity batch produced ${readyAssetCount} of ${targetNodeIds.length} expected crops.`]
+          : []
+        const qcStatus = qcFindings.length === 0 ? 'passed' : 'needs_review'
         const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(batchId)}.sequence-animatic-continuity-batch`
         const artifact = await registerOtherOutputArtifact({
           client: input.client,
@@ -27399,6 +27446,8 @@ async function executeNode(input: {
             batch,
             prompt,
             assets,
+            qcStatus,
+            qcFindings,
             assetStateByNodeId: upstreamState,
             asset_state_by_node_id: upstreamState,
           },
@@ -27427,6 +27476,8 @@ async function executeNode(input: {
         const coverageSetupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
         if (!coverageSetupId) throw new Error('Coverage anchor artifact requires a coverage setup id.')
         const assetKey = readText(image.assetKey)
+        const qcFindings = assetKey ? [] : ['Coverage anchor image did not produce an asset key.']
+        const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
         const anchor = {
           graphSpecVersion: 'sequence_animatic_graph_v2',
           screenplayAnimaticRole: 'coverage_anchor',
@@ -27440,6 +27491,8 @@ async function executeNode(input: {
           assetKey,
           image,
           prompt,
+          qcStatus,
+          qcFindings,
           status: assetKey ? 'ready' : 'failed',
           generatedAt: new Date().toISOString(),
         }
@@ -27473,6 +27526,12 @@ async function executeNode(input: {
             shotIds: anchor.shotIds,
             storyboardBlockIds: anchor.storyboardBlockIds,
             assetKey,
+            requiredReferenceAssetKeys: readStringArray(config.requiredReferenceAssetKeys),
+            omittedReferenceAssetKeys: readStringArray(config.omittedReferenceAssetKeys),
+            sourceReferenceHash: readText(config.sourceReferenceHash),
+            visualPlanHash: readText(config.visualPlanHash),
+            qcStatus,
+            qcFindings,
             prompt,
             image,
             anchor,
@@ -27519,6 +27578,8 @@ async function executeNode(input: {
         const shotId = readText(shot.id) || readText(config.shotId)
         if (!shotId) throw new Error('Shot keyframe artifact requires a shot id.')
         const assetKey = readText(image.assetKey)
+        const qcFindings = assetKey ? [] : ['Shot keyframe image did not produce an asset key.']
+        const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
         const keyframe = {
           graphSpecVersion: 'sequence_animatic_graph_v2',
           screenplayAnimaticRole: 'shot_keyframe',
@@ -27530,6 +27591,8 @@ async function executeNode(input: {
           assetKey,
           image,
           prompt,
+          qcStatus,
+          qcFindings,
           status: assetKey ? 'ready' : 'failed',
           generatedAt: new Date().toISOString(),
         }
@@ -27561,6 +27624,12 @@ async function executeNode(input: {
             shotId,
             coverageSetupId: keyframe.coverageSetupId,
             assetKey,
+            requiredReferenceAssetKeys: readStringArray(config.requiredReferenceAssetKeys),
+            omittedReferenceAssetKeys: readStringArray(config.omittedReferenceAssetKeys),
+            sourceReferenceHash: readText(config.sourceReferenceHash),
+            visualPlanHash: readText(config.visualPlanHash),
+            qcStatus,
+            qcFindings,
             prompt,
             image,
             shot,

@@ -151,7 +151,7 @@ function buildWorldBuildTerminalStatus(jobStatuses: string[]) {
 
 function buildCinematicRunTerminalStatus(jobStatuses: string[]) {
   if (jobStatuses.length === 0) return 'failed'
-  const terminal = jobStatuses.every((status) => ['succeeded', 'failed', 'cancelled', 'skipped'].includes(status))
+  const terminal = jobStatuses.every((status) => ['succeeded', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'skipped'].includes(status))
   if (!terminal) return 'running'
   const failedCount = jobStatuses.filter((status) => status === 'failed').length
   const succeededCount = jobStatuses.filter((status) => status === 'succeeded').length
@@ -347,7 +347,7 @@ async function handleWorldBuildJobWebhook(
   batch: WorldBuildBatchRow,
   payload: z.infer<typeof falWebhookPayloadOnlySchema>,
 ) {
-  if (['succeeded', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
+  if (['succeeded', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
     return
   }
 
@@ -483,7 +483,7 @@ async function handleCinematicStillWebhook(
   job: CinematicRunJobRow,
   payload: z.infer<typeof falWebhookPayloadOnlySchema>,
 ) {
-  if (['succeeded', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
+  if (['succeeded', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
     // Already finalized by a concurrent poll; never double-process.
     return
   }
@@ -644,7 +644,7 @@ async function handleCinematicVideoWebhook(
   job: CinematicRunJobRow,
   payload: z.infer<typeof falWebhookPayloadOnlySchema>,
 ) {
-  if (['succeeded', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
+  if (['succeeded', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'skipped'].includes(job.status)) {
     // Already finalized by a concurrent poll; never double-process.
     return
   }

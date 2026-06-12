@@ -2230,7 +2230,7 @@ export function isTerminalCinematicRunStatus(status: string) {
 }
 
 export function isTerminalCinematicJobStatus(status: string) {
-  return ['succeeded', 'failed', 'cancelled', 'skipped'].includes(status)
+  return ['succeeded', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'skipped'].includes(status)
 }
 
 

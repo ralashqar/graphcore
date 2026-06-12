@@ -20,6 +20,7 @@ import { buildCinematicV2TimelineProjection } from '../../domain/cinematicTimeli
 import { aiGenerationSettings } from '../../config/aiGenerationSettings'
 import { getArtStylePresetLabel, getArtStylePresetPromptDirectives } from '../../domain/artStylePresets'
 import type { AssetDefinition, DefinitionBase, GraphDefinition } from '../../domain/graphcore'
+import { hasActiveSequenceAnimaticWork } from '../../domain/outputActivityMonitor'
 import {
   isTerminalOutputWorkflowRunStatus,
   sequenceAnimaticDirectorPlanV1Schema,
@@ -5179,6 +5180,10 @@ function buildSequenceAnimaticViewModel(input: {
                 ? 'Keyframe ready'
                 : plannedKeyframeRunning
                   ? 'Generating keyframe'
+                  : keyframeDependencyRunning
+                    ? 'Generating keyframe refs'
+                    : keyframeDependencyMissingCount > 0
+                      ? 'Preparing keyframe refs'
                   : plannedKeyframeRequest
                     ? 'Keyframe queued'
                     : 'Keyframe not generated',
@@ -5370,6 +5375,10 @@ function buildSequenceAnimaticViewModel(input: {
                 ? 'Keyframe ready'
                 : plannedKeyframeRunning
                   ? 'Generating keyframe'
+                  : keyframeDependencyRunning
+                    ? 'Generating keyframe refs'
+                    : keyframeDependencyMissingCount > 0
+                      ? 'Preparing keyframe refs'
                   : plannedKeyframeRequest
                     ? 'Keyframe queued'
                     : 'Keyframe not generated',
@@ -7426,13 +7435,29 @@ export function WorldGraphPage({
     let refreshTimer: number | null = null
     let lastSignalAt = 0
     let lastRefreshAt = 0
-    const refresh = () => {
+    let fallbackStopped = false
+    let unchangedFallbackCount = 0
+    let fallbackTimer: number | null = null
+    const refresh = (reason: 'initial' | 'realtime' | 'fallback' = 'realtime') => {
       lastRefreshAt = Date.now()
       void Promise.resolve(loadAndStoreSequenceAnimaticState({
         masterRequestId: previewRequestId,
         knownRevision: sequenceAnimaticStateRevisionRef.current,
       })).then((result) => {
         if (!cancelled && result.revision) sequenceAnimaticStateRevisionRef.current = result.revision
+        if (cancelled) return
+        const active = hasActiveSequenceAnimaticWork(result)
+        if (result.unchanged && reason === 'fallback') {
+          unchangedFallbackCount += 1
+        } else {
+          unchangedFallbackCount = 0
+        }
+        if (!active && !result.unchanged) {
+          fallbackStopped = true
+          if (import.meta.env.DEV && import.meta.env.VITE_GRAPHCORE_OUTPUT_MONITOR_DEBUG === 'true') {
+            console.info('[GraphCore][sequence-animatic] monitor stopped_terminal.', { masterRequestId: previewRequestId })
+          }
+        }
       }).catch((error) => {
         if (!cancelled) console.warn('[GraphCore] sequence animatic state refresh failed.', error)
       })
@@ -7442,7 +7467,7 @@ export function WorldGraphPage({
       if (refreshTimer !== null) window.clearTimeout(refreshTimer)
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null
-        refresh()
+        refresh('realtime')
       }, delayMs)
     }
     const subscription = onSubscribeSequenceAnimaticStateSignals({
@@ -7460,18 +7485,25 @@ export function WorldGraphPage({
         scheduleRefresh(appliedLive ? 900 : 400)
       },
     })
-    refresh()
-    const timer = window.setInterval(() => {
-      const now = Date.now()
-      const signalRecentlyArrived = lastSignalAt > 0 && now - lastSignalAt < 6500
-      const refreshedRecently = lastRefreshAt > 0 && now - lastRefreshAt < 6500
-      if (!signalRecentlyArrived && !refreshedRecently) refresh()
-    }, 7500)
+    const scheduleFallback = (delayMs = 7500) => {
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer)
+      fallbackTimer = window.setTimeout(() => {
+        fallbackTimer = null
+        if (fallbackStopped) return
+        const now = Date.now()
+        const signalRecentlyArrived = lastSignalAt > 0 && now - lastSignalAt < 6500
+        const refreshedRecently = lastRefreshAt > 0 && now - lastRefreshAt < 6500
+        if (!signalRecentlyArrived && !refreshedRecently) refresh('fallback')
+        if (!cancelled && !fallbackStopped) scheduleFallback(unchangedFallbackCount >= 2 ? 15000 : 7500)
+      }, delayMs)
+    }
+    refresh('initial')
+    scheduleFallback(7500)
     return () => {
       cancelled = true
       void subscription.unsubscribe()
       if (refreshTimer !== null) window.clearTimeout(refreshTimer)
-      window.clearInterval(timer)
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer)
     }
   }, [
     loadAndStoreSequenceAnimaticState,
@@ -7660,9 +7692,13 @@ export function WorldGraphPage({
     try {
       await onEnsureSequenceAnimaticSceneWorkflows({
         masterRequestId: model.request.id,
+        sceneIds: [scene.id],
         startSceneId: scene.id,
       })
-      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      void Promise.resolve(loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null }))
+        .catch((error) => {
+          console.warn('[GraphCore] sequence animatic state refresh after scene start failed.', error)
+        })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       setSequenceAnimaticErrorByKey((previous) => ({
@@ -7672,7 +7708,7 @@ export function WorldGraphPage({
     } finally {
       endSequenceAnimaticRun(sceneRunKey)
     }
-  }, [onEnsureSequenceAnimaticSceneWorkflows, sequenceAnimaticBusyRunKeys])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticSceneWorkflows, sequenceAnimaticBusyRunKeys])
   const handleRunSequenceAnimaticContinuityAssets = useCallback(async (
     model: SequenceAnimaticViewModel,
     requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
@@ -8267,7 +8303,56 @@ export function WorldGraphPage({
         })
         return true
       }
+      const startContinuityRequestRun = async (request: OutputRequest) => {
+        if (!request.workflowId) return false
+        const existingRun = request.latestRunId
+          ? outputWorkflowRuns.find((run) => run.id === request.latestRunId) ?? null
+          : outputWorkflowRuns.find((run) => run.workflowId === request.workflowId) ?? null
+        if (sequenceAnimaticRequestIsActive(request, existingRun)) return false
+        const metadata = readLooseRecord(request.metadata)
+        const role = trimOptionalString(metadata.screenplayAnimaticRole ?? metadata.sequenceAnimaticRole)
+        const isBatchRun = role === 'continuity_asset_batch'
+        await onStartOutputWorkflowRun({
+          workflowId: request.workflowId,
+          prompt: request.prompt || request.title || (isBatchRun ? 'Generate continuity asset grid.' : 'Generate continuity asset.'),
+          targetFormat: 'image',
+          selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
+          input: {
+            ...readLooseRecord(existingRun?.input),
+            debugSkipVideoGeneration: false,
+            cinematicVideoApproved: false,
+          },
+          metadata: {
+            runIntent: 'generate_keyframe_dependencies',
+            runMode: isBatchRun ? 'sequence_animatic_continuity_asset_batch' : 'sequence_animatic_continuity_asset',
+            runScope: 'upstream_to_node',
+            targetNodeKeys: isBatchRun
+              ? [...sequenceAnimaticContinuityBatchTargetNodeKeys]
+              : [...sequenceAnimaticContinuityAssetTargetNodeKeys],
+            forceNodeKeys: isBatchRun
+              ? [...sequenceAnimaticContinuityBatchForceNodeKeys]
+              : [...sequenceAnimaticContinuityAssetForceNodeKeys],
+            reuseExistingUpstreamOutputs: true,
+            allowStaleUpstreamOutputs: true,
+            debugSkipVideoGeneration: false,
+            cinematicVideoApproved: false,
+            sourceRunId: existingRun?.id ?? request.latestRunId ?? model.request.latestRunId,
+            parentRequestId: request.parentRequestId ?? model.request.id,
+            masterRequestId: model.request.id,
+            sequenceAnimaticRole: role,
+            targetNodeId: trimOptionalString(metadata.targetNodeId) || null,
+            targetNodeIds: readLooseArray(metadata.targetNodeIds).map(trimOptionalString).filter(Boolean),
+            continuityBatchId: trimOptionalString(metadata.continuityBatchId) || null,
+            shotId: shot.id,
+            storyboardBlockId: block.id,
+          },
+        })
+        return true
+      }
       let startedKeyframeWork = false
+      for (const request of ensureResult.continuityAssetRequests) {
+        startedKeyframeWork = (await startContinuityRequestRun(request)) || startedKeyframeWork
+      }
       for (const request of ensureResult.childRequests) {
         const metadata = readLooseRecord(request.metadata)
         const role = trimOptionalString(metadata.screenplayAnimaticRole ?? metadata.sequenceAnimaticRole)

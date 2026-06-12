@@ -1,6 +1,7 @@
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { mapVisualGenerationJobRow, visualGenerationStartResponseSchema, visualJobSelect, type VisualGenerationJobRow } from '../_shared/visual-generation.ts'
+import { notifyWorkerWakeBestEffort } from '../_shared/worker-wake.ts'
 import { visualGenerationStartRequestSchema } from '../../../src/domain/visualGeneration.ts'
 
 type AuthedClient = Awaited<ReturnType<typeof requireUserClient>>['client']
@@ -253,6 +254,13 @@ Deno.serve(async (request) => {
       })
     }
 
+    await notifyWorkerWakeBestEffort({
+      family: 'visual',
+      source: 'start-visual-generation-job',
+      jobId: job.id,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+    })
     return json(visualGenerationStartResponseSchema.parse({
       ok: true,
       job,

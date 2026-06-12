@@ -85,6 +85,12 @@ import {
   buildOutputWorkflowLevelLayout,
   buildOutputWorkflowTargetedRunMetadata,
 } from './outputWorkflowGraphView.ts'
+import {
+  collectActiveOutputRequestIds,
+  hasActiveSequenceAnimaticWork,
+  isTerminalOutputActivityStatus,
+  outputProgressSignature,
+} from './outputActivityMonitor.ts'
 import { aiGenerationSettings } from '../config/aiGenerationSettings.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
@@ -105,6 +111,100 @@ async function importSharedOutputWorkflow<T>(t: TestContext): Promise<T | null> 
     throw error
   }
 }
+
+test('output activity monitor treats compatibility terminal statuses as inactive', () => {
+  assert.equal(isTerminalOutputActivityStatus('completed'), true)
+  assert.equal(isTerminalOutputActivityStatus('completed_with_errors'), true)
+  assert.equal(isTerminalOutputActivityStatus('failed'), true)
+  assert.equal(isTerminalOutputActivityStatus('cancelled'), true)
+  assert.equal(isTerminalOutputActivityStatus('succeeded'), true)
+
+  const baseRequest = {
+    id: 'request-1',
+    status: 'running',
+    latestRunId: 'run-1',
+    updatedAt: now,
+    metadata: {},
+  }
+  const activeSnapshot = {
+    outputRequests: [baseRequest],
+    outputWorkflowRuns: [{ id: 'run-1', status: 'running' }],
+  } as never
+  assert.deepEqual(collectActiveOutputRequestIds(activeSnapshot), ['request-1'])
+  assert.match(outputProgressSignature(activeSnapshot), /request-1:running/)
+
+  const terminalSnapshot = {
+    outputRequests: [baseRequest],
+    outputWorkflowRuns: [{ id: 'run-1', status: 'succeeded' }],
+  } as never
+  assert.deepEqual(collectActiveOutputRequestIds(terminalSnapshot), [])
+
+  const terminalProjectionSnapshot = {
+    outputRequests: [{
+      ...baseRequest,
+      metadata: {
+        outputStatusProjection: {
+          status: 'completed_with_errors',
+          terminal: true,
+          updatedAt: now,
+        },
+      },
+    }],
+    outputWorkflowRuns: [{ id: 'run-1', status: 'running' }],
+  } as never
+  assert.deepEqual(collectActiveOutputRequestIds(terminalProjectionSnapshot), [])
+})
+
+test('sequence animatic monitor reports active work only while child runs or steps are active', () => {
+  const baseState: any = {
+    ok: true,
+    unchanged: false,
+    revision: 'rev-1',
+    masterRequest: null,
+    requests: [],
+    workflows: [],
+    runs: [],
+    artifacts: [],
+    assets: [],
+    projections: [],
+    events: [],
+    scriptShotStatus: 'ready',
+    scriptShots: [],
+    scriptBlocks: [],
+    blocks: [],
+    shots: [],
+    coverageSetups: [],
+    coverageAnchors: [],
+    shotContinuityStreamState: null,
+  }
+
+  assert.equal(hasActiveSequenceAnimaticWork({
+    ...baseState,
+    requests: [{ id: 'scene-request', status: 'running', latestRunId: 'run-1', metadata: {}, updatedAt: now }],
+    runs: [{ id: 'run-1', status: 'running', steps: [] }],
+  }), true)
+
+  assert.equal(hasActiveSequenceAnimaticWork({
+    ...baseState,
+    requests: [{ id: 'scene-request', status: 'completed', latestRunId: 'run-1', metadata: {}, updatedAt: now }],
+    runs: [{ id: 'run-1', status: 'completed', steps: [{ id: 'step-1', status: 'queued' }] }],
+  }), true)
+
+  assert.equal(hasActiveSequenceAnimaticWork({
+    ...baseState,
+    requests: [{ id: 'scene-request', status: 'completed', latestRunId: 'run-1', metadata: {}, updatedAt: now }],
+    runs: [{ id: 'run-1', status: 'completed', steps: [{ id: 'step-1', status: 'completed' }] }],
+  }), false)
+})
+
+test('output refresh source uses demand-driven progress monitor instead of full inbox watchdog', () => {
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  assert.match(appSource, /loadOutputProgress/)
+  assert.match(appSource, /\[GraphCore\]\[outputs\] inbox loaded\/refreshed/)
+  assert.doesNotMatch(appSource, /refreshCompactOutputInbox/)
+  assert.doesNotMatch(appSource, /void refreshCompactOutputInbox\('watchdog'\)/)
+  assert.doesNotMatch(appSource, /loadOutputInbox\(\{ force: true \}\)\s*\n\s*failureCount = 0/)
+})
 
 test('durable workflow output resolver normalizes node, run-step, and artifact outputs', () => {
   const node = {
@@ -206,8 +306,12 @@ test('workflow node contracts and run intents expose cinematic sequence defaults
   const startRunSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-workflow-run/index.ts'), 'utf8')
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   assert.match(startRunSource, /outputWorkflowRunIntentDefaults/)
+  assert.match(startRunSource, /notifyWorkerWakeBestEffort/)
+  assert.match(startRunSource, /family:\s*'output_workflow'/)
   assert.match(workerSource, /outputWorkflowRunIntentDefaults/)
   assert.match(workerSource, /recoveredForTargetedExecution/)
+  assert.match(workerSource, /notifyWorkerWakeBestEffort/)
+  assert.match(workerSource, /source:\s*'sequence-animatic-orchestrator'/)
 })
 
 test('workflow contract validation reports missing required sequence animatic ports', () => {
@@ -600,14 +704,15 @@ test('frontend keeps active output progress live without opening the graph', () 
   assert.match(appSource, /collectActiveOutputRequestIds/)
   assert.match(appSource, /activeOutputRequestSignature/)
   assert.match(appSource, /subscribeOutputSignals/)
-  assert.match(appSource, /refreshCompactOutputInbox\('watchdog'\)/)
-  assert.match(appSource, /loadOutputInbox\(\{ force: true \}\)/)
+  assert.match(appSource, /refreshOutputProgress\('watchdog'\)/)
+  assert.match(appSource, /workspaceService\.loadOutputProgress/)
   const progressWatcherStart = appSource.indexOf('const activeOutputRequestSignature')
   const graphLoaderStart = appSource.indexOf('async function loadOutputWorkflowGraph')
   assert.notEqual(progressWatcherStart, -1)
   assert.notEqual(graphLoaderStart, -1)
   const progressWatcherBlock = appSource.slice(progressWatcherStart, graphLoaderStart)
   assert.doesNotMatch(progressWatcherBlock, /loadOutputWorkflowGraph\(/)
+  assert.doesNotMatch(progressWatcherBlock, /loadOutputInbox\(\{ force: true \}\)\s*\n\s*failureCount = 0/)
 })
 
 test('timeline shot quality keyframe materialization can regenerate missing upstream planning nodes', () => {

@@ -5,6 +5,7 @@ import { runTrackedOpenAiResponses } from '../_shared/ai-provider-gateway.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { normalizeStrictJsonSchema } from '../_shared/structured-output.ts'
 import { mapVisualGenerationJobRow, visualJobSelect, type VisualGenerationJobRow } from '../_shared/visual-generation.ts'
+import { notifyWorkerWakeBestEffort } from '../_shared/worker-wake.ts'
 import { entityReferenceVariantCreateResponseSchema } from '../../../src/domain/visualGeneration.ts'
 
 type AuthedClient = Awaited<ReturnType<typeof requireUserClient>>['client']
@@ -446,6 +447,13 @@ Deno.serve(async (request) => {
       throw new Error(variantUpdateResponse.error?.message ?? 'Failed to attach variant visual job.')
     }
 
+    await notifyWorkerWakeBestEffort({
+      family: 'visual',
+      source: 'create-entity-reference-variant',
+      jobId: job.id,
+      projectId,
+      draftId,
+    })
     return json(entityReferenceVariantCreateResponseSchema.parse({
       ok: true,
       variant: mapVariantRow(asRecord(variantUpdateResponse.data)),

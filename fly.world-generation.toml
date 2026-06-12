@@ -9,10 +9,21 @@ kill_timeout = 300
 
 [env]
   GRAPHCORE_WORKER_POLL_INTERVAL_MS = "10000"
-  OUTPUT_WORKFLOW_WORKER_CONCURRENCY = "3"
+  GRAPHCORE_WORKER_ACTIVE_POLL_INTERVAL_MS = "5000"
+  GRAPHCORE_WORKER_IDLE_POLL_INTERVAL_MS = "60000"
+  VISUAL_GENERATION_WORKER_CONCURRENCY = "2"
+  OUTPUT_WORKFLOW_WORKER_CONCURRENCY = "1"
   OPENAI_REQUEST_TIMEOUT_MS = "900000"
   WORLD_PROMPT_FLY_STREAM_TIMEOUT_MS = "900000"
   WORLD_PROMPT_GENERATION_RUNTIME = "fly"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
 
 [processes]
   app = "deno run --allow-env --allow-net --allow-read --allow-write --allow-ffi --allow-sys --allow-run --node-modules-dir=auto workers/world-generation/main.ts"

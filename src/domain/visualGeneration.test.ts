@@ -150,6 +150,8 @@ test('visual generation start endpoint preserves backend provider defaults when 
   assert.match(startEndpoint, /chooseBalancedImageProvider/)
   assert.match(startEndpoint, /normalizeVisualGenerationModel/)
   assert.match(startEndpoint, /providerDefaultSource/)
+  assert.match(startEndpoint, /notifyWorkerWakeBestEffort/)
+  assert.match(startEndpoint, /family:\s*'visual'/)
 })
 
 test('Fly visual worker can render queued visual jobs through OpenAI direct or Fal', () => {
@@ -181,6 +183,8 @@ test('brand atlas endpoint enqueues generic visual jobs instead of calling image
   const source = readFileSync(resolve(repoRoot, 'supabase/functions/start-world-brand-atlas-image/index.ts'), 'utf8')
   assert.match(source, /visual_generation_jobs/)
   assert.match(source, /kind:\s*'brand_atlas'/)
+  assert.match(source, /notifyWorkerWakeBestEffort/)
+  assert.match(source, /family:\s*'visual'/)
   assert.doesNotMatch(source, /runOpenAiImages/)
   assert.doesNotMatch(source, /waitUntil/)
 })
@@ -234,6 +238,9 @@ test('initial streamed seed queues world concept image, per-entity reference she
   assert.match(source, /nodeTypes:\s*\['concept', 'sequence_unit'\]/)
   assert.match(source, /target_keys:\s*\{\s*entityKey:\s*candidate\.key/)
   assert.match(source, /maybeQueueInitialSeedEntityReferenceSheetsForExistingEntities\('initial_seed_complete'\)/)
+  assert.match(source, /source:\s*'initial-seed-world-concept-image'/)
+  assert.match(source, /source:\s*'initial-seed-entity-reference-sheet'/)
+  assert.match(source, /source:\s*'initial-seed-lore-sequence-grid'/)
   assert.match(source, /quality:\s*'low'/)
   assert.match(source, /outputFormat:\s*'webp'/)
   assert.match(source, /imageSize:\s*\{\s*width:\s*1536,\s*height:\s*864\s*\}/)

@@ -16,6 +16,12 @@ import {
 } from '../../../src/domain/outputWorkflow.ts'
 import { lintSequenceAnimaticContinuity } from '../../../src/domain/sequenceAnimaticContinuityLint.ts'
 import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceAnimaticSceneState.ts'
+import { buildSequenceAnimaticStreamedShotReadyContext } from '../../../src/domain/sequenceAnimaticStreamedShotReady.ts'
+import {
+  buildSequenceAnimaticVisualReferencePlan,
+  sequenceAnimaticContinuityLinkRequiresPrevious,
+  sequenceAnimaticVisualReferenceHash,
+} from '../../../src/domain/sequenceAnimaticVisualReferencePlan.ts'
 import {
   buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
@@ -156,6 +162,8 @@ function continuityBatchKindForNodes(nodes: readonly Record<string, unknown>[]) 
   if (kinds.length !== 1) return ''
   if (kinds[0] === 'location_spot') return 'spot_grid'
   if (kinds[0] === 'location_viewpoint' || kinds[0] === 'location_angle') return 'viewpoint_grid'
+  if (kinds[0] === 'temporary_character') return 'temp_character_grid'
+  if (kinds[0] === 'prop') return 'prop_grid'
   return ''
 }
 
@@ -196,10 +204,20 @@ function shotSceneBindingNodeIds(shot: Record<string, unknown>) {
 }
 
 function shotReferenceNodeIds(shot: Record<string, unknown>, graphNodeIds: Set<string>) {
-  const refs = readArray(shot.refs ?? shot.references).map(asRecord)
-  return refs
+  const refsValue = shot.refs ?? shot.references
+  const refsRecord = asRecord(refsValue)
+  const refs = readArray(refsValue).map(asRecord)
+  return [
+    ...refs
     .map((ref) => readText(ref.entityKey) || readText(ref.refId) || readText(ref.id))
-    .filter((id) => id && graphNodeIds.has(id))
+    .filter((id) => id && graphNodeIds.has(id)),
+    ...readStringArray(refsRecord.localReferenceIds ?? refsRecord.local_reference_ids),
+    ...readStringArray(refsRecord.continuityAnchorIds ?? refsRecord.continuity_anchor_ids),
+    ...readStringArray(refsRecord.continuityAnchorRefIds ?? refsRecord.continuity_anchor_ref_ids),
+    ...readStringArray(shot.localReferenceIds ?? shot.local_reference_ids),
+    ...readStringArray(shot.continuityAnchorIds ?? shot.continuity_anchor_ids),
+    ...readStringArray(shot.continuityAnchorRefIds ?? shot.continuity_anchor_ref_ids),
+  ].filter((id) => id && graphNodeIds.has(id))
 }
 
 function coverageSetupNodeIds(setup: Record<string, unknown>) {
@@ -280,11 +298,6 @@ async function insertSequenceAnimaticEvent(input: {
   }
 }
 
-function shotContinuityLinkRequiresPrevious(shot: Record<string, unknown>) {
-  const link = readText(shot.continuityLink ?? shot.continuity_link).toLowerCase()
-  return ['match_action', 'blocking_change', 'continuation', 'same_motion', 'same_action'].includes(link)
-}
-
 function deriveKeyframePlan(input: {
   manifest: Record<string, unknown>
   directorPlan: Record<string, unknown>
@@ -325,7 +338,7 @@ function deriveKeyframePlan(input: {
   const coverageAnchorJobs = [...shotsBySetupId.entries()]
     .filter(([setupId, setupShots]) => {
       if (requestedSetupSet.size > 0) return requestedSetupSet.has(setupId)
-      return setupShots.length > 1 || setupShots.some(shotContinuityLinkRequiresPrevious)
+      return setupShots.length > 1 || setupShots.some(sequenceAnimaticContinuityLinkRequiresPrevious)
     })
     .map(([setupId, setupShots]) => {
       const setup = setupById.get(setupId) ?? { id: setupId, title: setupId }
@@ -345,7 +358,7 @@ function deriveKeyframePlan(input: {
       const currentIndex = shotIndexById.get(currentId)
       if (currentIndex === undefined || currentIndex <= 0) break
       const currentShot = mergedShots[currentIndex]
-      if (!shotContinuityLinkRequiresPrevious(currentShot)) break
+      if (!sequenceAnimaticContinuityLinkRequiresPrevious(currentShot)) break
       const previousShotId = readText(mergedShots[currentIndex - 1]?.id)
       if (!previousShotId) break
       includedShotIds.add(previousShotId)
@@ -373,7 +386,7 @@ function deriveKeyframePlan(input: {
       storyboardBlockId: readText(shot.storyboardBlockId ?? shot.blockId),
       coverageSetupId: setupId,
       requiresCoverageAnchor: Boolean(setupId && coverageAnchorJobs.some((job) => job.coverageSetupId === setupId)),
-      previousShotId: shotContinuityLinkRequiresPrevious(shot) ? readText(previousShot?.id) : '',
+      previousShotId: sequenceAnimaticContinuityLinkRequiresPrevious(shot) ? readText(previousShot?.id) : '',
       dependencyOnly: requestedShotSet.size > 0 && !requestedShotSet.has(readText(shot.id)),
       sceneState: sceneStates.get(readText(shot.id)) ?? null,
     }
@@ -739,6 +752,7 @@ Deno.serve(async (request) => {
     let manifest = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
     let directorPlan = artifactMetadataRecord(masterArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
     let combinedManifestArtifactKey = ''
+    let keyframePlanSource = 'final_manifest'
     if (Object.keys(manifest).length === 0 || Object.keys(directorPlan).length === 0) {
       // Per-scene architecture: combine ready scene children's manifests/plans at
       // read time so keyframes can run for whatever scenes are complete.
@@ -747,6 +761,7 @@ Deno.serve(async (request) => {
         manifest = combined.manifest
         directorPlan = combined.directorPlan
         combinedManifestArtifactKey = combined.manifestArtifactKey
+        keyframePlanSource = 'combined_scene_plan'
       }
     }
     let provisionalContext = false
@@ -768,14 +783,19 @@ Deno.serve(async (request) => {
         .order('sequence', { ascending: true })
         .limit(1000)
       if (eventsResponse.error) throw new Error(eventsResponse.error.message)
-      const provisional = buildProvisionalKeyframeContext({
-        masterRequest,
-        events: (eventsResponse.data ?? []).map(asRecord),
-        steps: (stepsResponse.data ?? []).map(asRecord),
-        requestedShotIds: payload.shotIds ?? [],
-      })
-      manifest = provisional.manifest
-      directorPlan = provisional.directorPlan
+      try {
+        const streamed = buildSequenceAnimaticStreamedShotReadyContext({
+          masterRequestId: masterRequest.id,
+          events: (eventsResponse.data ?? []).map(asRecord),
+          steps: (stepsResponse.data ?? []).map(asRecord),
+          requestedShotIds: payload.shotIds ?? [],
+        })
+        manifest = streamed.manifest
+        directorPlan = streamed.directorPlan
+        keyframePlanSource = streamed.source
+      } catch (error) {
+        throw new HttpError(409, error instanceof Error ? error.message : String(error))
+      }
       provisionalContext = true
     }
     if (Object.keys(manifest).length === 0) throw new HttpError(409, 'Generate the screenplay animatic manifest first.')
@@ -791,6 +811,12 @@ Deno.serve(async (request) => {
       requestedShotIds: payload.shotIds ?? [],
       requestedCoverageSetupIds: payload.coverageSetupIds ?? [],
     })
+    const keyframePlanWithSource = {
+      ...asRecord(keyframePlan),
+      source: keyframePlanSource,
+      shotReadySource: provisionalContext ? 'streamed_scene_plan' : keyframePlanSource,
+      provisional: provisionalContext,
+    }
     const continuityLintReport = asRecord(keyframePlan.continuityLint)
     const continuityLintFindings = readArray(continuityLintReport.findings)
     if (continuityLintFindings.length > 0) {
@@ -927,6 +953,24 @@ Deno.serve(async (request) => {
     const assetStateReady = (nodeId: string) => Boolean(readText(asRecord(continuityAssetStateByNodeId[nodeId]).assetKey))
     const dependencyTargetIds = dependencyNodeIdsForKeyframePlan({ keyframePlan: asRecord(keyframePlan), graphNodeIds })
     const missingDependencyIds = dependencyTargetIds.filter((nodeId) => !assetStateReady(nodeId))
+    const shotBlockingDependencyNodeIdsByShotId: Record<string, string[]> = {}
+    for (const job of readArray(keyframePlan.shotKeyframeJobs).map(asRecord)) {
+      const shotId = readText(job.shotId)
+      if (!shotId) continue
+      const shot = asRecord(job.shot)
+      const requiredNodeIds = [
+        ...shotSceneBindingNodeIds(shot),
+        ...shotReferenceNodeIds(shot, graphNodeIds),
+      ].filter((nodeId) => graphNodeIds.has(nodeId))
+      const missingForShot = requiredNodeIds.filter((nodeId) => !assetStateReady(nodeId))
+      if (missingForShot.length > 0) shotBlockingDependencyNodeIdsByShotId[shotId] = [...new Set(missingForShot)]
+    }
+    const coverageAnchorAssetKeysBySetupId = Object.fromEntries([...coverageAnchorImageBySetupId.entries()]
+      .map(([setupId, image]) => [setupId, readText(image.assetKey)] as const)
+      .filter(([, assetKey]) => assetKey))
+    const shotKeyframeAssetKeysByShotId = Object.fromEntries([...shotKeyframeImageByShotId.entries()]
+      .map(([shotId, image]) => [shotId, readText(image.assetKey)] as const)
+      .filter(([, assetKey]) => assetKey))
     const parentMissingIds = new Set<string>()
     for (const nodeId of missingDependencyIds) {
       const node = graphNodeById.get(nodeId)
@@ -962,13 +1006,18 @@ Deno.serve(async (request) => {
     const runGroups: { nodes: Record<string, unknown>[]; isBatch: boolean }[] = []
     for (const node of runnableNodes) {
       const kind = readText(node.nodeKind)
-      const batchable = kind === 'location_spot' || kind === 'location_viewpoint' || kind === 'location_angle'
+      const batchable = kind === 'location_spot'
+        || kind === 'location_viewpoint'
+        || kind === 'location_angle'
+        || kind === 'temporary_character'
+        || kind === 'prop'
       const parentId = continuityNodeParentId(node)
-      if (!batchable || !parentId) {
+      if (!batchable) {
         runGroups.push({ nodes: [node], isBatch: false })
         continue
       }
-      const key = `${kind}:${parentId}`
+      const blockKey = readStringArray(node.storyboardBlockIds ?? node.blockIds ?? node.shotIds).slice(0, 4).join('_') || 'global'
+      const key = `${kind}:${parentId || blockKey}`
       grouped.set(key, [...(grouped.get(key) ?? []), node])
     }
     for (const group of grouped.values()) {
@@ -1005,6 +1054,107 @@ Deno.serve(async (request) => {
       ].filter(Boolean).slice(0, 2) : []
       return [...new Set([...dependencyReferenceKeys, ...siblingReferenceKeys, ...worldReferenceKeys])].slice(0, 8)
     }
+    const assetKeysForEntityKeys = (entityKeys: readonly string[]) => {
+      const keys: string[] = []
+      for (const entityKey of entityKeys) {
+        const entity = assetPackEntities.find((entry) => readText(entry.key) === entityKey)
+        if (!entity) continue
+        keys.push(
+          readText(entity.primaryAssetKey),
+          readText(entity.selectedReferenceAssetKey),
+          ...readStringArray(entity.assetKeys),
+        )
+      }
+      return [...new Set(keys.filter(Boolean))]
+    }
+    const assetKeysForGraphNodeIds = (nodeIds: readonly string[]) => [...new Set(nodeIds
+      .map((nodeId) => readText(asRecord(continuityAssetStateByNodeId[nodeId]).assetKey))
+      .filter(Boolean))]
+    const referenceAssetKeysForCoverageSetup = (setup: Record<string, unknown>, setupShots: readonly Record<string, unknown>[]) => {
+      const setupNodeIds = coverageSetupNodeIds(setup).filter((id) => graphNodeIds.has(id))
+      const setupNodeAssetKeys = assetKeysForGraphNodeIds(setupNodeIds)
+      const setupEntityKeys = [
+        ...readStringArray(setup.characterRefIds ?? setup.character_ref_ids),
+        ...setupShots.flatMap((shot) => {
+          const refs = asRecord(shot.refs)
+          const dialogue = readArray(shot.dialogue).map(asRecord)
+          return [
+            ...readStringArray(refs.visibleCharacterRefIds ?? refs.visible_character_ref_ids),
+            ...readStringArray(refs.speakerRefIds ?? refs.speaker_ref_ids),
+            ...readStringArray(refs.propRefIds ?? refs.prop_ref_ids),
+            ...readStringArray(shot.visibleCharacterRefIds),
+            ...readStringArray(shot.speakerRefIds),
+            ...readStringArray(shot.propRefIds),
+            ...dialogue.map((line) => readText(line.speakerRefId ?? line.speaker_ref_id)),
+          ]
+        }),
+      ]
+      return [...new Set([
+        ...setupNodeAssetKeys,
+        ...assetKeysForEntityKeys(setupEntityKeys),
+      ].filter(Boolean))].slice(0, 8)
+    }
+    const rankedReferenceKeysForShot = (job: Record<string, unknown>) => {
+      const shot = asRecord(job.shot)
+      const shotId = readText(job.shotId)
+      const coverageSetupId = readText(job.coverageSetupId)
+      const previousShotId = readText(job.previousShotId)
+      const refs = asRecord(shot.refs)
+      const dialogue = readArray(shot.dialogue).map(asRecord)
+      const graphAssetKeys = assetKeysForGraphNodeIds([
+        ...shotSceneBindingNodeIds(shot),
+        ...shotReferenceNodeIds(shot, graphNodeIds),
+      ])
+      const entityAssetKeys = assetKeysForEntityKeys([
+        ...readStringArray(refs.speakerRefIds ?? refs.speaker_ref_ids),
+        ...dialogue.map((line) => readText(line.speakerRefId ?? line.speaker_ref_id)),
+        ...readStringArray(refs.visibleCharacterRefIds ?? refs.visible_character_ref_ids),
+        ...readStringArray(refs.propRefIds ?? refs.prop_ref_ids),
+        ...readStringArray(shot.speakerRefIds),
+        ...readStringArray(shot.visibleCharacterRefIds),
+        ...readStringArray(shot.propRefIds),
+        readText(shot.locationRefId),
+      ])
+      const ordered = [
+        readText(coverageAnchorImageBySetupId.get(coverageSetupId)?.assetKey),
+        readText(shotKeyframeImageByShotId.get(previousShotId)?.assetKey),
+        ...graphAssetKeys,
+        ...entityAssetKeys,
+      ].filter(Boolean)
+      const unique = [...new Set(ordered)]
+      return {
+        shotId,
+        required: unique.slice(0, 8),
+        omitted: unique.slice(8),
+      }
+    }
+    const coverageAnchorReferenceAssetKeysBySetupId = Object.fromEntries(readArray(keyframePlan.coverageAnchorJobs)
+      .map(asRecord)
+      .map((job) => {
+        const setupId = readText(job.coverageSetupId)
+        const setupShots = readArray(asRecord(keyframePlan).shotKeyframeJobs)
+          .map(asRecord)
+          .map((entry) => asRecord(entry.shot))
+          .filter((shot) => readStringArray(job.shotIds).includes(readText(shot.id)))
+        return [setupId, referenceAssetKeysForCoverageSetup(asRecord(job.coverageSetup), setupShots)] as const
+      })
+      .filter(([setupId]) => setupId))
+    const shotReferenceSelection = readArray(keyframePlan.shotKeyframeJobs)
+      .map(asRecord)
+      .map(rankedReferenceKeysForShot)
+    const shotRequiredReferenceAssetKeysByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.required]).filter(([shotId]) => shotId))
+    const shotOmittedReferenceAssetKeysByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.omitted]).filter(([shotId]) => shotId))
+    const visualReferencePlan = buildSequenceAnimaticVisualReferencePlan({
+      keyframePlan: asRecord(keyframePlan),
+      dependencyNodeIds: dependencyTargetIds,
+      missingDependencyNodeIds: missingDependencyIds,
+      coverageAnchorAssetKeysBySetupId,
+      shotKeyframeAssetKeysByShotId,
+      coverageAnchorReferenceAssetKeysBySetupId,
+      shotRequiredReferenceAssetKeysByShotId,
+      shotOmittedReferenceAssetKeysByShotId,
+      shotBlockingDependencyNodeIdsByShotId,
+    })
     const relevantShotsForNodes = (nodes: readonly Record<string, unknown>[]) => {
       const targetShotIds = new Set(nodes.flatMap((node) => readStringArray(node.shotIds)))
       const requestedNodeIds = new Set(nodes.map((node) => readText(node.id)).filter(Boolean))
@@ -1039,9 +1189,9 @@ Deno.serve(async (request) => {
       const worldLocationRefId = readText(targetNode.worldLocationRefId) || readText(targetNode.baseLocationRefId)
       if (group.isBatch) {
         const batchKind = continuityBatchKindForNodes(targetNodes)
-        if (!batchKind || !parentId) return null
+        if (!batchKind) return null
         const batch = {
-          batchId: `keyframe_${batchKind}_${slugify(parentId)}_${sequenceAnimaticStableHash(targetNodeIds).slice(0, 8)}`,
+          batchId: `keyframe_${batchKind}_${slugify(parentId || readStringArray(targetNode.storyboardBlockIds ?? targetNode.blockIds ?? targetNode.shotIds).join('_') || 'global')}_${sequenceAnimaticStableHash(targetNodeIds).slice(0, 8)}`,
           batchKind,
           targetNodeIds,
           sourceReferenceNodeIds: [
@@ -1087,6 +1237,7 @@ Deno.serve(async (request) => {
           manifestHash,
           continuityPackHash: readText(continuityPack.continuityPackHash),
           masterManifestArtifactKey,
+          shotReadySource: provisionalContext ? 'streamed_scene_plan' : keyframePlanSource,
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           worldLocationRefId,
           parentNodeIds: readStringArray(batch.sourceReferenceNodeIds),
@@ -1186,6 +1337,7 @@ Deno.serve(async (request) => {
         manifestHash,
         continuityPackHash: readText(continuityPack.continuityPackHash),
         masterManifestArtifactKey,
+        shotReadySource: provisionalContext ? 'streamed_scene_plan' : keyframePlanSource,
         sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
         worldLocationRefId,
         parentNodeIds: dependencyEdges.filter((edge) => readText(edge.targetNodeId) === targetNodeId).map((edge) => readText(edge.sourceNodeId)).filter(Boolean),
@@ -1277,13 +1429,14 @@ Deno.serve(async (request) => {
         ok: true,
         masterRequest,
         keyframePlan: {
-          ...asRecord(keyframePlan),
+          ...keyframePlanWithSource,
           dependencyReadiness: {
-            status: 'waiting_for_continuity_assets',
+            status: 'waiting_for_keyframe_refs',
             dependencyNodeIds: dependencyTargetIds,
             missingDependencyNodeIds: missingDependencyIds,
           },
         },
+        visualReferencePlan,
         dependencyWaves,
         continuityAssetRequests: ensuredContinuityAssetRequests,
         coverageAnchorRequests: [],
@@ -1304,11 +1457,13 @@ Deno.serve(async (request) => {
         const workflowId = crypto.randomUUID()
         const setup = asRecord(job.coverageSetup)
         const shotIds = readStringArray(job.shotIds)
+        const requiredReferenceAssetKeys = readStringArray(coverageAnchorReferenceAssetKeysBySetupId[coverageSetupId])
+        const sourceReferenceHash = sequenceAnimaticVisualReferenceHash({ coverageSetupId, requiredReferenceAssetKeys })
         const shots = readArray(asRecord(keyframePlan).shotKeyframeJobs)
           .map(asRecord)
           .map((entry) => asRecord(entry.shot))
           .filter((shot) => shotIds.includes(readText(shot.id)))
-        const anchorHash = sequenceAnimaticStableHash({ coverageSetupId, setup, shotIds, manifestHash, directorPlanHash })
+        const anchorHash = sequenceAnimaticStableHash({ coverageSetupId, setup, shotIds, manifestHash, directorPlanHash, sourceReferenceHash })
         const commonConfig = {
           cinematicPipelineVersion: 'v3_script_storyboards',
           graphSpecVersion: sequenceAnimaticGraphSpecVersion,
@@ -1324,6 +1479,13 @@ Deno.serve(async (request) => {
           manifestHash,
           directorPlanHash,
           masterManifestArtifactKey,
+          requiredReferenceAssetKeys,
+          omittedReferenceAssetKeys: [],
+          sourceReferenceHash,
+          visualPlanHash: readText(visualReferencePlan.visualPlanHash),
+          shotReadySource: provisionalContext ? 'streamed_scene_plan' : keyframePlanSource,
+          qcStatus: 'pending',
+          qcFindings: [],
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           readyToRun: true,
           provisional: provisionalContext,
@@ -1335,7 +1497,7 @@ Deno.serve(async (request) => {
           coverageSetup: setup,
           shots,
           assetPack,
-          referenceAssetKeys: [],
+          referenceAssetKeys: requiredReferenceAssetKeys,
           aspectRatio,
         })
         const title = readText(setup.title) || `Coverage ${coverageSetupId}`
@@ -1440,7 +1602,10 @@ Deno.serve(async (request) => {
       let child = existingByShotId.get(shotId) ?? null
       const shot = asRecord(job.shot)
       const coverageSetupId = readText(job.coverageSetupId)
-      const sourceShotHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId })
+      const requiredReferenceAssetKeys = readStringArray(shotRequiredReferenceAssetKeysByShotId[shotId])
+      const omittedReferenceAssetKeys = readStringArray(shotOmittedReferenceAssetKeysByShotId[shotId])
+      const sourceReferenceHash = sequenceAnimaticVisualReferenceHash({ shotId, coverageSetupId, requiredReferenceAssetKeys, omittedReferenceAssetKeys })
+      const sourceShotHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId, sourceReferenceHash })
       if (child && !provisionalContext) {
         const childMetadata = asRecord(child.metadata)
         const childWasProvisional = childMetadata.provisional === true
@@ -1491,7 +1656,7 @@ Deno.serve(async (request) => {
         const coverageSetup = coverageSetupId
           ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
           : {}
-        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId, manifestHash, directorPlanHash })
+        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId, manifestHash, directorPlanHash, sourceReferenceHash })
         const commonConfig = {
           cinematicPipelineVersion: 'v3_script_storyboards',
           graphSpecVersion: sequenceAnimaticGraphSpecVersion,
@@ -1508,6 +1673,13 @@ Deno.serve(async (request) => {
           manifestHash,
           directorPlanHash,
           masterManifestArtifactKey,
+          requiredReferenceAssetKeys,
+          omittedReferenceAssetKeys,
+          sourceReferenceHash,
+          visualPlanHash: readText(visualReferencePlan.visualPlanHash),
+          shotReadySource: provisionalContext ? 'streamed_scene_plan' : keyframePlanSource,
+          qcStatus: 'pending',
+          qcFindings: [],
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           readyToRun: true,
           provisional: provisionalContext,
@@ -1601,13 +1773,14 @@ Deno.serve(async (request) => {
       masterRequest,
       blockedShotKeyframes,
       keyframePlan: {
-        ...asRecord(keyframePlan),
+        ...keyframePlanWithSource,
         dependencyReadiness: {
-          status: 'ready_for_keyframes',
+          status: readText(asRecord(visualReferencePlan.dependencyReadiness).status) || 'ready_for_keyframes',
           dependencyNodeIds: dependencyTargetIds,
           missingDependencyNodeIds: missingDependencyIds,
         },
       },
+      visualReferencePlan,
       dependencyWaves,
       continuityAssetRequests,
       coverageAnchorRequests,

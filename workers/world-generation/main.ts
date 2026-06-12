@@ -2,8 +2,15 @@ import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
 import { processFlyAppGenerationJobs } from '../../supabase/functions/_shared/app-generation-worker.ts'
 import { processFlyOutputWorkflowRuns } from '../../supabase/functions/_shared/output-workflow.ts'
 import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
+import {
+  normalizeWorkerWakeFamilies,
+  setLocalWorkerWakeSink,
+  verifyWorkerWakeSignature,
+  type WorkerWakeFamily,
+} from '../../supabase/functions/_shared/worker-wake.ts'
 import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/world-prompt.ts'
 import { renderOutputPdf } from './ebook-pdf-renderer.ts'
+import { createWorkerWakeScheduler, idleDelayForEmptyPolls } from './wake-scheduler.ts'
 
 const workerCodeVersion = '2026-06-06-sequence-animatic-script-shots'
 const workerId = Deno.env.get('FLY_MACHINE_ID')
@@ -14,8 +21,12 @@ const workerBuildVersion = Deno.env.get('GRAPHCORE_WORKER_BUILD_VERSION')
   ?? Deno.env.get('FLY_MACHINE_VERSION')
   ?? workerCodeVersion
 const workerSecret = Deno.env.get('GRAPHCORE_WORKER_SECRET') ?? null
+const workerWakeSecret = Deno.env.get('GRAPHCORE_WORKER_WAKE_SECRET') ?? ''
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 const pollIntervalMs = Math.max(5_000, Number(Deno.env.get('GRAPHCORE_WORKER_POLL_INTERVAL_MS') ?? 10_000))
+const activePollIntervalMs = Math.max(1_000, Number(Deno.env.get('GRAPHCORE_WORKER_ACTIVE_POLL_INTERVAL_MS') ?? 5_000))
+const idlePollIntervalMs = Math.max(activePollIntervalMs, Number(Deno.env.get('GRAPHCORE_WORKER_IDLE_POLL_INTERVAL_MS') ?? 60_000))
+const wakePort = Math.max(1, Number(Deno.env.get('PORT') ?? 8080))
 const idleLogIntervalMs = Math.max(30_000, Number(Deno.env.get('GRAPHCORE_WORKER_IDLE_LOG_INTERVAL_MS') ?? 120_000))
 const visualWorkerConcurrency = readPositiveInt(
   Deno.env.get('VISUAL_GENERATION_WORKER_CONCURRENCY') ?? Deno.env.get('VISUAL_GENERATION_OPENAI_CONCURRENCY'),
@@ -43,6 +54,20 @@ let dbCircuitFailureCount = 0
 let dbCircuitOpenUntil = 0
 let dbCircuitLastLogAt = 0
 let dbCircuitLastReason = ''
+const wakeScheduler = createWorkerWakeScheduler()
+const wakePollJitterRatio = 0.15
+
+setLocalWorkerWakeSink((families, payload) => {
+  const releasedWaiters = wakeScheduler.signal(families)
+  if (releasedWaiters > 0) {
+    console.log('[world-generation-worker] local wake received', {
+      workerId,
+      families,
+      source: payload.source ?? null,
+      releasedWaiters,
+    })
+  }
+})
 
 function readPositiveInt(value: string | null | undefined, fallback: number) {
   const parsed = Number(value)
@@ -54,6 +79,15 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function workerIdleDelay(emptyPolls: number) {
+  return idleDelayForEmptyPolls({
+    emptyPolls,
+    activePollIntervalMs,
+    idlePollIntervalMs,
+    jitterRatio: wakePollJitterRatio,
+  })
+}
+
 function requestShutdown(signal: string) {
   console.log(`[world-generation-worker] received ${signal}; stopping after the current job.`)
   const firstSignal = !shuttingDown
@@ -63,6 +97,9 @@ function requestShutdown(signal: string) {
   // stale-heartbeat reclaim. In-flight executors notice the lost lease via
   // their run-status checks and stop without writing further state.
   if (firstSignal) void releaseClaimedOutputWorkflowRunsForShutdown(signal)
+  for (const family of ['visual', 'output_workflow', 'generation', 'app_generation'] as WorkerWakeFamily[]) {
+    wakeScheduler.signal([family])
+  }
 }
 
 async function releaseClaimedOutputWorkflowRunsForShutdown(signal: string) {
@@ -191,16 +228,77 @@ console.log('[world-generation-worker] started', {
   workerCodeVersion,
   workerBuildVersion,
   pollIntervalMs,
+  activePollIntervalMs,
+  idlePollIntervalMs,
   visualWorkerConcurrency,
   outputWorkflowWorkerConcurrency,
   runtime: 'fly',
 })
 
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+async function handleWakeRequest(request: Request) {
+  if (request.method === 'GET' && new URL(request.url).pathname === '/health') {
+    return jsonResponse({
+      ok: true,
+      workerId,
+      workerCodeVersion,
+      wakeEnabled: Boolean(workerWakeSecret),
+      shuttingDown,
+      dbCircuitOpenUntil,
+    })
+  }
+  if (request.method !== 'POST') return jsonResponse({ ok: false, error: 'Method not allowed.' }, 405)
+  const url = new URL(request.url)
+  if (url.pathname !== '/internal/wake') return jsonResponse({ ok: false, error: 'Not found.' }, 404)
+  if (!workerWakeSecret) return jsonResponse({ ok: false, error: 'Worker wake secret is not configured.' }, 503)
+
+  const rawBody = await request.text()
+  const verification = await verifyWorkerWakeSignature({
+    secret: workerWakeSecret,
+    timestamp: request.headers.get('X-GraphCore-Wake-Timestamp'),
+    signature: request.headers.get('X-GraphCore-Wake-Signature'),
+    body: rawBody,
+  })
+  if (!verification.ok) return jsonResponse({ ok: false, error: verification.reason }, 401)
+
+  let payload: Record<string, unknown>
+  try {
+    payload = JSON.parse(rawBody)
+  } catch {
+    return jsonResponse({ ok: false, error: 'Invalid JSON body.' }, 400)
+  }
+  const acceptedFamilies = normalizeWorkerWakeFamilies(
+    Array.isArray(payload.families) ? payload.families : payload.family,
+  )
+  if (acceptedFamilies.length === 0) return jsonResponse({ ok: false, error: 'No supported worker wake family was provided.' }, 400)
+
+  const releasedWaiters = wakeScheduler.signal(acceptedFamilies)
+  console.info('[world-generation-worker] wake received.', {
+    workerId,
+    acceptedFamilies,
+    source: typeof payload.source === 'string' ? payload.source : null,
+    jobId: typeof payload.jobId === 'string' ? payload.jobId : null,
+    runId: typeof payload.runId === 'string' ? payload.runId : null,
+    releasedWaiters,
+  })
+  return jsonResponse({ ok: true, acceptedFamilies, workerId, releasedWaiters })
+}
+
+const wakeServer = Deno.serve({ hostname: '0.0.0.0', port: wakePort }, handleWakeRequest)
+
 async function runVisualWorkerLoop(laneIndex: number) {
   const visualWorkerId = `${workerId}:visual:${laneIndex + 1}`
+  let emptyPolls = 0
   while (!shuttingDown) {
     try {
       await waitForDatabaseCircuit('visual')
+      const pollStartedAt = Date.now()
       const visualResult = await processFlyVisualGenerationJobs({
         client,
         workerId: visualWorkerId,
@@ -213,9 +311,11 @@ async function runVisualWorkerLoop(laneIndex: number) {
           status: visualResult.job?.status ?? null,
           kind: visualResult.job?.kind ?? null,
         })
+        emptyPolls = 0
         continue
       }
-      await sleep(pollIntervalMs)
+      emptyPolls += 1
+      await wakeScheduler.waitForWakeOrTimeout('visual', workerIdleDelay(emptyPolls), pollStartedAt)
     } catch (error) {
       await handleWorkerLoopError('visual', error)
     }
@@ -223,9 +323,11 @@ async function runVisualWorkerLoop(laneIndex: number) {
 }
 
 async function runGenerationWorkerLoop() {
+  let emptyPolls = 0
   while (!shuttingDown) {
     try {
       await waitForDatabaseCircuit('generation')
+      const pollStartedAt = Date.now()
       const result = await processFlyWorldGenerationJobs({
         client,
         authHeader,
@@ -238,6 +340,7 @@ async function runGenerationWorkerLoop() {
           jobId: result.job?.id ?? null,
           status: result.job?.status ?? null,
         })
+        emptyPolls = 0
         continue
       }
       if (result.job?.id) {
@@ -252,7 +355,8 @@ async function runGenerationWorkerLoop() {
         lastIdleLogAt = now
         console.log('[world-generation-worker] idle; waiting for queued Fly generation jobs.', { workerId })
       }
-      await sleep(pollIntervalMs)
+      emptyPolls += 1
+      await wakeScheduler.waitForWakeOrTimeout('generation', workerIdleDelay(emptyPolls), pollStartedAt)
     } catch (error) {
       await handleWorkerLoopError('generation', error)
     }
@@ -260,9 +364,11 @@ async function runGenerationWorkerLoop() {
 }
 
 async function runAppGenerationWorkerLoop() {
+  let emptyPolls = 0
   while (!shuttingDown) {
     try {
       await waitForDatabaseCircuit('app_generation')
+      const pollStartedAt = Date.now()
       const result = await processFlyAppGenerationJobs({
         client,
         workerId,
@@ -274,9 +380,11 @@ async function runAppGenerationWorkerLoop() {
           status: result.job?.status ?? null,
           kind: result.job?.kind ?? null,
         })
+        emptyPolls = 0
         continue
       }
-      await sleep(pollIntervalMs)
+      emptyPolls += 1
+      await wakeScheduler.waitForWakeOrTimeout('app_generation', workerIdleDelay(emptyPolls), pollStartedAt)
     } catch (error) {
       await handleWorkerLoopError('app_generation', error)
     }
@@ -325,6 +433,9 @@ async function runMaintenanceLoop() {
           orphanedStepsCancelled: sweptSteps,
         })
       }
+      if (requeuedJobs > 0) {
+        wakeScheduler.signal(['generation'])
+      }
     } catch (error) {
       await handleWorkerLoopError('maintenance', error)
     }
@@ -334,9 +445,11 @@ async function runMaintenanceLoop() {
 
 async function runOutputWorkflowWorkerLoop(laneIndex: number) {
   const outputWorkerId = `${workerId}:output:${laneIndex + 1}`
+  let emptyPolls = 0
   while (!shuttingDown) {
     try {
       await waitForDatabaseCircuit('output_workflow')
+      const pollStartedAt = Date.now()
       const result = await processFlyOutputWorkflowRuns({
         client,
         workerId: outputWorkerId,
@@ -352,9 +465,11 @@ async function runOutputWorkflowWorkerLoop(laneIndex: number) {
           status: result.run?.status ?? null,
           preset: result.run?.preset ?? null,
         })
+        emptyPolls = 0
         continue
       }
-      await sleep(pollIntervalMs)
+      emptyPolls += 1
+      await wakeScheduler.waitForWakeOrTimeout('output_workflow', workerIdleDelay(emptyPolls), pollStartedAt)
     } catch (error) {
       await handleWorkerLoopError('output_workflow', error)
     }
@@ -369,4 +484,5 @@ await Promise.all([
   runMaintenanceLoop(),
 ])
 
+await wakeServer.shutdown()
 console.log('[world-generation-worker] stopped', { workerId })

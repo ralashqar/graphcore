@@ -5,6 +5,7 @@ import { readWorldWikiPresentationMetadata } from '../../../src/domain/worldWiki
 import { worldBrandAtlasImageRequestSchema, worldBrandAtlasImageResponseSchema } from '../../../src/domain/worldBrandAtlasImage.ts'
 import { requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import { notifyWorkerWakeBestEffort } from '../_shared/worker-wake.ts'
 
 const assetRowSchema = z.object({
   id: z.string(),
@@ -281,6 +282,13 @@ Deno.serve(async (request) => {
       llmHints: assetRow.llm_hints ?? {},
     })
 
+    await notifyWorkerWakeBestEffort({
+      family: 'visual',
+      source: 'start-world-brand-atlas-image',
+      jobId: jobResponse.data.id,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+    })
     return json(worldBrandAtlasImageResponseSchema.parse({
       ok: true,
       status: 'queued',

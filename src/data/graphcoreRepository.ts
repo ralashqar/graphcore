@@ -9004,6 +9004,13 @@ export type OutputInboxLoadResult = {
   }
 }
 
+export type OutputProgressLoadResult = {
+  requests: OutputRequest[]
+  runs: OutputWorkflowRun[]
+  artifacts: OutputArtifact[]
+  projections: OutputFeedResponse['projections']
+}
+
 export type OutputWorkflowGraphLoadResult = {
   unchanged?: boolean
   workflow: OutputWorkflow | null
@@ -9791,6 +9798,97 @@ export async function loadOutputInbox(input: {
   return result
 }
 
+export async function loadOutputProgress(input: {
+  projectId: string
+  draftId: string
+  requestIds: string[]
+}): Promise<OutputProgressLoadResult> {
+  await getValidatedSession('Sign in and load a live GraphCore draft before loading output progress.')
+  const requestIds = [...new Set(input.requestIds.map((id) => id.trim()).filter(Boolean))].slice(0, 100)
+  if (requestIds.length === 0) {
+    return {
+      requests: [],
+      runs: [],
+      artifacts: [],
+      projections: [],
+    }
+  }
+
+  return runCoalescedRequest({
+    className: 'output-status',
+    key: `output-progress:${input.projectId}:${input.draftId}:${requestIds.join(',')}`,
+    ttlMs: 500,
+    fn: async () => {
+      const [requestResponse, projectionResponse] = await Promise.all([
+        supabase
+          .from('output_requests')
+          .select(OUTPUT_REQUEST_SELECT)
+          .eq('project_id', input.projectId)
+          .eq('draft_id', input.draftId)
+          .in('id', requestIds),
+        supabase
+          .from('output_request_status_projections')
+          .select(OUTPUT_REQUEST_STATUS_PROJECTION_SELECT)
+          .eq('project_id', input.projectId)
+          .eq('draft_id', input.draftId)
+          .in('request_id', requestIds),
+      ])
+      if (requestResponse.error) throw new Error(requestResponse.error.message)
+      if (projectionResponse.error) throw new Error(projectionResponse.error.message)
+
+      const requestsBeforeProjection = ((requestResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
+      const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map(mapOutputRequestStatusProjectionRow)
+      const runIds = [...new Set([
+        ...requestsBeforeProjection.map((request) => request.latestRunId).filter((id): id is string => Boolean(id)),
+        ...projections.map((projection) => projection.latestRunId).filter((id): id is string => Boolean(id)),
+      ])]
+      const workflowIds = [...new Set([
+        ...requestsBeforeProjection.map((request) => request.workflowId).filter((id): id is string => Boolean(id)),
+        ...projections.map((projection) => projection.workflowId).filter((id): id is string => Boolean(id)),
+      ])]
+
+      const [runResponse, artifactResponse] = await Promise.all([
+        runIds.length > 0
+          ? supabase
+            .from('output_workflow_runs')
+            .select(OUTPUT_WORKFLOW_RUN_SELECT)
+            .eq('project_id', input.projectId)
+            .eq('draft_id', input.draftId)
+            .in('id', runIds)
+          : Promise.resolve({ data: [], error: null }),
+        workflowIds.length > 0
+          ? supabase
+            .from('output_artifacts')
+            .select(OUTPUT_ARTIFACT_SELECT)
+            .eq('project_id', input.projectId)
+            .eq('draft_id', input.draftId)
+            .in('workflow_id', workflowIds)
+            .order('created_at', { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
+      ])
+      if (runResponse.error) throw new Error(runResponse.error.message)
+      if (artifactResponse.error) throw new Error(artifactResponse.error.message)
+
+      const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
+      const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, [], artifacts))
+      const hydrated = hydrateOutputStateSlice({
+        requests: requestsBeforeProjection,
+        runs,
+        artifacts,
+        assets: [],
+        projections,
+      })
+
+      return {
+        requests: hydrated.requests,
+        runs: hydrated.runs,
+        artifacts: hydrated.artifacts,
+        projections,
+      }
+    },
+  })
+}
+
 export async function loadOutputWorkflowGraph(input: {
   projectId: string
   draftId: string
@@ -10491,7 +10589,7 @@ export function subscribeCinematicRunSignals(input: {
 
 export function subscribeOutputSignals(input: {
   draftId: string
-  onSignal: () => void
+  onSignal: (signal: { table: string; eventType?: string; row?: Record<string, unknown> }) => void
 }) {
   const channel = supabase
     .channel(`graphcore-output-inbox-${input.draftId}`)
@@ -10500,19 +10598,25 @@ export function subscribeOutputSignals(input: {
       schema: 'public',
       table: 'output_requests',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_requests', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_request_status_projections',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_request_status_projections', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'output_artifacts',
+      filter: `draft_id=eq.${input.draftId}`,
+    }, (payload) => input.onSignal({ table: 'output_artifacts', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'output_request_events',
       filter: `draft_id=eq.${input.draftId}`,
-    }, () => input.onSignal())
+    }, (payload) => input.onSignal({ table: 'output_request_events', eventType: payload.eventType, row: payload.new as Record<string, unknown> }))
 
   void channel.subscribe()
   return {

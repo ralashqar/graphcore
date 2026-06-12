@@ -3,13 +3,9 @@ import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/h
 import {
   ensureSequenceAnimaticSceneShotPlanWorkflows,
   mapOutputRequestRow,
-  mapOutputWorkflowEdgeRow,
   mapOutputWorkflowNodeRow,
-  mapOutputWorkflowRow,
   outputRequestSelect,
-  outputWorkflowEdgeSelect,
   outputWorkflowNodeSelect,
-  outputWorkflowSelect,
   startSequenceAnimaticChildRun,
 } from '../_shared/output-workflow.ts'
 import {
@@ -79,6 +75,12 @@ Deno.serve(async (request) => {
     const context = asRecord(asRecord(nodeByKey.get('world_context')?.outputs).context)
     const guidance = asRecord(asRecord(nodeByKey.get('skill_context')?.outputs).guidance)
 
+    const requestedSceneIds = payload.sceneIds && payload.sceneIds.length > 0
+      ? payload.sceneIds
+      : payload.startSceneId
+        ? [payload.startSceneId]
+        : undefined
+
     const childRequests = await ensureSequenceAnimaticSceneShotPlanWorkflows({
       client: admin,
       masterRequest,
@@ -90,7 +92,7 @@ Deno.serve(async (request) => {
       maxShotCount: Number(registerConfig.maxShotCount ?? 0) || 150,
       aspectRatio: readText(registerConfig.aspectRatio) || '16:9',
       resolution: readText(registerConfig.resolution) || '720p',
-      sceneIds: payload.sceneIds,
+      sceneIds: requestedSceneIds,
     })
 
     if (payload.startSceneId) {
@@ -106,23 +108,10 @@ Deno.serve(async (request) => {
       }
     }
 
-    const workflowIds = childRequests.map((child) => child.workflowId).filter((id): id is string => Boolean(id))
-    const [workflowRows, nodeRows, edgeRows, latestMasterResponse, latestChildrenResponse] = await Promise.all([
-      workflowIds.length > 0
-        ? admin.from('output_workflows').select(outputWorkflowSelect).in('id', workflowIds)
-        : Promise.resolve({ data: [], error: null }),
-      workflowIds.length > 0
-        ? admin.from('output_workflow_nodes').select(outputWorkflowNodeSelect).in('workflow_id', workflowIds)
-        : Promise.resolve({ data: [], error: null }),
-      workflowIds.length > 0
-        ? admin.from('output_workflow_edges').select(outputWorkflowEdgeSelect).in('workflow_id', workflowIds)
-        : Promise.resolve({ data: [], error: null }),
+    const [latestMasterResponse, latestChildrenResponse] = await Promise.all([
       admin.from('output_requests').select(outputRequestSelect).eq('id', masterRequest.id).single(),
       admin.from('output_requests').select(outputRequestSelect).in('id', childRequests.map((child) => child.id)),
     ])
-    if (workflowRows.error) throw new Error(workflowRows.error.message)
-    if (nodeRows.error) throw new Error(nodeRows.error.message)
-    if (edgeRows.error) throw new Error(edgeRows.error.message)
     if (latestMasterResponse.error || !latestMasterResponse.data) throw new Error(latestMasterResponse.error?.message ?? 'Failed to reload master request.')
     if (latestChildrenResponse.error) throw new Error(latestChildrenResponse.error.message)
 
@@ -130,9 +119,9 @@ Deno.serve(async (request) => {
       ok: true,
       masterRequest: mapOutputRequestRow(latestMasterResponse.data),
       childRequests: (latestChildrenResponse.data ?? []).map(mapOutputRequestRow),
-      workflows: (workflowRows.data ?? []).map(mapOutputWorkflowRow),
-      nodes: (nodeRows.data ?? []).map(mapOutputWorkflowNodeRow),
-      edges: (edgeRows.data ?? []).map(mapOutputWorkflowEdgeRow),
+      workflows: [],
+      nodes: [],
+      edges: [],
     }))
   } catch (error) {
     return errorResponse(error)

@@ -99,6 +99,11 @@ import type { PromptPatchResponse } from './domain/prompting'
 import { normalizeNode } from './domain/nodeLibrary'
 import type { MeshGenerationStatusResponse } from './domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from './domain/meshGeneration'
+import {
+  collectActiveOutputRequestIds,
+  outputProgressSignature,
+  readOutputStatusProjectionMetadata,
+} from './domain/outputActivityMonitor'
 import type { VisualGenerationJob, VisualGenerationKind, VisualGenerationStatusResponse } from './domain/visualGeneration'
 import type { WorldBuildBatch, WorldBuildPlanItem, WorldBuildPlanResponse, WorldBuildStatusResponse } from './domain/worldBuild'
 import { getResourceGenerationMetadata, isTerminalWorldBuildBatchStatus } from './domain/worldBuild'
@@ -1286,60 +1291,6 @@ function worldWikiOverviewCompletenessScore(snapshot: ProjectSnapshot) {
 
 function hasGeneratedWorldOverviewMetadata(snapshot: ProjectSnapshot) {
   return worldWikiOverviewCompletenessScore(snapshot) > 0
-}
-
-const ACTIVE_OUTPUT_REQUEST_STATUSES = new Set(['queued', 'planning', 'running'])
-const TERMINAL_OUTPUT_REQUEST_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
-
-function readOutputStatusProjectionMetadata(request: ProjectSnapshot['outputRequests'][number]) {
-  return readMetadataRecord(readMetadataRecord(request.metadata).outputStatusProjection)
-}
-
-function outputRequestEffectiveStatus(request: ProjectSnapshot['outputRequests'][number]) {
-  const projection = readOutputStatusProjectionMetadata(request)
-  const projectionStatus = trimOptionalString(projection.status)
-  if (projectionStatus) return projectionStatus
-  return request.status
-}
-
-function isActiveOutputRequest(request: ProjectSnapshot['outputRequests'][number], runsById: Map<string, ProjectSnapshot['outputWorkflowRuns'][number]>) {
-  const projection = readOutputStatusProjectionMetadata(request)
-  if (projection.terminal === true) return false
-  const projectionStatus = trimOptionalString(projection.status)
-  if (projectionStatus) return ACTIVE_OUTPUT_REQUEST_STATUSES.has(projectionStatus)
-  const runId = trimOptionalString(projection.latestRunId) || request.latestRunId
-  const run = runId ? runsById.get(runId) ?? null : null
-  if (run && TERMINAL_OUTPUT_REQUEST_STATUSES.has(run.status)) return false
-  if (run && ACTIVE_OUTPUT_REQUEST_STATUSES.has(run.status)) return true
-  return ACTIVE_OUTPUT_REQUEST_STATUSES.has(request.status)
-}
-
-function collectActiveOutputRequestIds(snapshot: ProjectSnapshot) {
-  const runsById = new Map(snapshot.outputWorkflowRuns.map((run) => [run.id, run] as const))
-  return snapshot.outputRequests
-    .filter((request) => isActiveOutputRequest(request, runsById))
-    .map((request) => request.id)
-    .sort()
-}
-
-function outputProgressSignature(snapshot: ProjectSnapshot | null | undefined) {
-  if (!snapshot) return ''
-  const activeIds = collectActiveOutputRequestIds(snapshot)
-  if (activeIds.length === 0) return ''
-  return activeIds.map((requestId) => {
-    const request = snapshot.outputRequests.find((entry) => entry.id === requestId)
-    if (!request) return requestId
-    const projection = readOutputStatusProjectionMetadata(request)
-    return [
-      request.id,
-      outputRequestEffectiveStatus(request),
-      trimOptionalString(projection.activeNodeKey),
-      trimOptionalString(projection.activeNodeLabel),
-      trimOptionalString(projection.graphRevision),
-      trimOptionalString(projection.timelineRevision),
-      request.updatedAt,
-    ].join(':')
-  }).join('|')
 }
 
 function reconcileSparseWorldHydrationSnapshot(current: ProjectSnapshot | null | undefined, incoming: ProjectSnapshot) {
@@ -3068,16 +3019,57 @@ export default function App() {
     let refreshInFlight = false
     let cancelled = false
     let failureCount = 0
-    const refreshCompactOutputInbox = async (reason: 'realtime' | 'watchdog') => {
+    let unchangedProgressCount = 0
+    let lastProgressSignature = activeOutputRequestSignature
+    const debugOutputMonitor = (event: string, extra?: Record<string, unknown>) => {
+      if (import.meta.env.DEV && import.meta.env.VITE_GRAPHCORE_OUTPUT_MONITOR_DEBUG === 'true') {
+        console.info(`[GraphCore][outputs] monitor ${event}.`, {
+          draftId: snapshot.draft.id,
+          activeOutputRequests: collectActiveOutputRequestIds(snapshotRef.current ?? snapshot).length,
+          ...extra,
+        })
+      }
+    }
+    const commitProgressSlice = (result: Awaited<ReturnType<typeof workspaceService.loadOutputProgress>>) => {
+      const latest = snapshotRef.current ?? snapshot
+      if (cancelled || !isSameProjectDraft(latest, snapshot)) return ''
+      const merged = mergeOutputSliceIntoSnapshot(latest, {
+        requests: result.requests,
+        runs: result.runs,
+        artifacts: result.artifacts,
+      })
+      commitPersistedSnapshot(merged)
+      return outputProgressSignature(merged)
+    }
+    const refreshOutputProgress = async (reason: 'realtime' | 'watchdog' | 'started') => {
       if (refreshInFlight) return
+      const latest = snapshotRef.current ?? snapshot
+      if (!latest || latest.draft.id !== snapshot.draft.id) return
+      const requestIds = collectActiveOutputRequestIds(latest)
+      if (requestIds.length === 0) {
+        debugOutputMonitor('stopped_terminal', { reason })
+        return
+      }
       refreshInFlight = true
       try {
-        await loadOutputInbox({ force: true })
+        debugOutputMonitor(reason === 'watchdog' ? 'fallback_poll' : 'realtime_refresh', { reason, requestIds: requestIds.length })
+        const result = await workspaceService.loadOutputProgress({
+          projectId: latest.project.id,
+          draftId: latest.draft.id,
+          requestIds,
+        })
+        const nextSignature = commitProgressSlice(result)
+        if (nextSignature && nextSignature === lastProgressSignature) {
+          unchangedProgressCount += 1
+        } else {
+          unchangedProgressCount = 0
+          lastProgressSignature = nextSignature
+        }
         failureCount = 0
       } catch (loadError) {
         failureCount += 1
         if (failureCount >= 2) {
-          console.warn('[GraphCore] output progress sync delayed.', {
+          console.warn('[GraphCore][outputs] progress sync delayed.', {
             reason,
             draftId: snapshot.draft.id,
             activeOutputRequests: collectActiveOutputRequestIds(snapshotRef.current ?? snapshot).length,
@@ -3094,25 +3086,58 @@ export default function App() {
         watchdog = null
         const latest = snapshotRef.current
         if (cancelled || !latest || latest.draft.id !== snapshot.draft.id) return
-        if (collectActiveOutputRequestIds(latest).length === 0) return
-        void refreshCompactOutputInbox('watchdog').finally(() => {
+        const latestActiveIds = collectActiveOutputRequestIds(latest)
+        if (latestActiveIds.length === 0) {
+          debugOutputMonitor('stopped_terminal', { reason: 'watchdog' })
+          return
+        }
+        void refreshOutputProgress('watchdog').finally(() => {
           if (cancelled) return
-          const nextDelay = failureCount > 0 ? Math.min(10000, 2500 * (failureCount + 1)) : 2500
+          const latestAfterRefresh = snapshotRef.current
+          if (!latestAfterRefresh || collectActiveOutputRequestIds(latestAfterRefresh).length === 0) {
+            debugOutputMonitor('stopped_terminal', { reason: 'watchdog_after_refresh' })
+            return
+          }
+          const nextDelay = failureCount > 0
+            ? Math.min(15000, 2500 * (failureCount + 1))
+            : unchangedProgressCount >= 4
+              ? 15000
+              : unchangedProgressCount >= 2
+                ? 7500
+                : 2500
           scheduleWatchdog(nextDelay)
         })
       }, delayMs)
     }
     const subscription = workspaceService.subscribeOutputSignals({
       draftId: snapshot.draft.id,
-      onSignal: () => {
+      onSignal: (signal) => {
         if (timeout !== null) window.clearTimeout(timeout)
+        const shouldReloadInbox = outputSurfaceVisible
+          && (
+            signal.table === 'output_artifacts'
+            || (signal.table === 'output_requests' && (signal.eventType === 'INSERT' || signal.eventType === 'DELETE'))
+          )
+        if (shouldReloadInbox) {
+          timeout = window.setTimeout(() => {
+            timeout = null
+            void loadOutputInbox({ force: true }).catch((loadError) => {
+              console.warn('[GraphCore][outputs] inbox refresh after output signal failed.', loadError)
+            })
+          }, signal.table === 'output_artifacts' ? 900 : 350)
+          return
+        }
         timeout = window.setTimeout(() => {
           timeout = null
-          void refreshCompactOutputInbox('realtime')
+          void refreshOutputProgress('realtime')
         }, activeRequestIds.length > 0 ? 350 : 900)
       },
     })
-    if (activeRequestIds.length > 0) scheduleWatchdog(2500)
+    if (activeRequestIds.length > 0) {
+      debugOutputMonitor('started', { requestIds: activeRequestIds.length })
+      void refreshOutputProgress('started')
+      scheduleWatchdog(2500)
+    }
     return () => {
       cancelled = true
       if (timeout !== null) window.clearTimeout(timeout)
@@ -6367,7 +6392,7 @@ export default function App() {
       noteBackendHydrationSuccess(surfaceKey)
       finishSurfaceHydration(surfaceKey, requestId, 'ready')
       if (import.meta.env.DEV) {
-        console.info('[GraphCore][boot] output inbox loaded.', {
+        console.info('[GraphCore][outputs] inbox loaded/refreshed.', {
           draftId,
           ms: Math.round(performance.now() - startedAt),
           requests: result.requests.length,

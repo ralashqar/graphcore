@@ -1256,7 +1256,7 @@ export const cinematicGraphMetadataSchema = z.object({
 
 export const cinematicRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const cinematicRunModeSchema = z.enum(['graph_run', 'preview_still', 'preview_video', 'preview_take_still', 'preview_storyboard_still'])
-export const cinematicRunJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'])
+export const cinematicRunJobStatusSchema = z.enum(['queued', 'running', 'succeeded', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'skipped'])
 export const cinematicRunJobKindSchema = z.enum(['shot_still', 'shot_video', 'take_still', 'take_video', 'storyboard_still'])
 
 export const cinematicRunJobSchema = z.object({

@@ -14,6 +14,7 @@ import {
   type WorldEntityRow,
   type WorldRelationshipRow,
 } from '../_shared/app-generation.ts'
+import { notifyWorkerWakeBestEffort } from '../_shared/worker-wake.ts'
 
 const APP_NODE_TYPES = [
   'app',
@@ -160,6 +161,13 @@ Deno.serve(async (request) => {
       (stepInsertResponse.data ?? []) as AppGenerationStepRow[],
       [],
     )
+    await notifyWorkerWakeBestEffort({
+      family: 'app_generation',
+      source: 'start-app-code-generation',
+      jobId: job.id,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+    })
     return json(appGenerationStatusResponseSchema.parse({
       ok: true,
       job,

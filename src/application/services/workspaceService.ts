@@ -60,6 +60,7 @@ export const workspaceService = {
   loadGenerationJobDetails: graphcoreWorkspaceAdapter.loadGenerationJobDetails,
   loadProjectDraftMetadata: graphcoreWorkspaceAdapter.loadProjectDraftMetadata,
   loadOutputInbox: graphcoreWorkspaceAdapter.loadOutputInbox,
+  loadOutputProgress: graphcoreWorkspaceAdapter.loadOutputProgress,
   loadOutputWorkflowGraph: graphcoreWorkspaceAdapter.loadOutputWorkflowGraph,
   loadOutputWorkflowNodeOutput: graphcoreWorkspaceAdapter.loadOutputWorkflowNodeOutput,
   loadSequenceAnimaticState: graphcoreWorkspaceAdapter.loadSequenceAnimaticState,

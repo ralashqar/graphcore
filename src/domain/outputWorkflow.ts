@@ -42,7 +42,7 @@ export const outputWorkflowNodeTypeSchema = z.enum([
   'utility_transform',
   'output_artifact',
 ])
-export const outputWorkflowRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
+export const outputWorkflowRunStatusSchema = z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'succeeded'])
 export const outputImageGenerationQualitySchema = z.enum(['low', 'medium', 'high'])
 export const outputImageGenerationOutputFormatSchema = z.enum(['png', 'jpeg', 'webp'])
 export const cinematicPipelineVersionSchema = z.enum(['v1_take_blocks', 'v2_shot_orchestration', 'v3_script_storyboards'])
@@ -966,6 +966,7 @@ export const sequenceAnimaticKeyframeWorkflowEnsureResponseSchema = z.object({
   ok: z.literal(true),
   masterRequest: outputRequestSchema,
   keyframePlan: looseRecordSchema.default({}),
+  visualReferencePlan: looseRecordSchema.default({}),
   blockedShotKeyframes: z.array(sequenceAnimaticBlockedShotKeyframeSchema).default([]),
   dependencyWaves: z.array(looseRecordSchema).default([]),
   continuityAssetRequests: z.array(outputRequestSchema).default([]),
@@ -1261,7 +1262,7 @@ export const outputArtifactResponseSchema = z.object({
 })
 
 export function isTerminalOutputWorkflowRunStatus(status: z.infer<typeof outputWorkflowRunStatusSchema>) {
-  return ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(status)
+  return ['completed', 'completed_with_errors', 'failed', 'cancelled', 'succeeded'].includes(status)
 }
 
 export function isOutputWorkflowProviderBackedNodeType(nodeType: z.infer<typeof outputWorkflowNodeTypeSchema>) {

@@ -22,6 +22,7 @@ import {
 } from '../_shared/output-workflow.ts'
 import { outputWorkflowRunStartRequestSchema } from '../../../src/domain/outputWorkflow.ts'
 import { outputWorkflowRunIntentDefaults } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import { notifyWorkerWakeBestEffort } from '../_shared/worker-wake.ts'
 
 function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : []
@@ -214,6 +215,13 @@ Deno.serve(async (request) => {
       (stepResponse.data ?? []).map(mapOutputWorkflowRunStepRow),
       (artifactsResponse.data ?? []).map(mapOutputArtifactRow),
     )
+    await notifyWorkerWakeBestEffort({
+      family: 'output_workflow',
+      source: 'start-output-workflow-run',
+      runId: run.id,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+    })
     return json(outputWorkflowRunStatusResponseSchema.parse({
       ok: true,
       run,

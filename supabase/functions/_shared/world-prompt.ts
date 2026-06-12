@@ -196,6 +196,7 @@ import {
 } from './entity-icon-generation.ts'
 import { runOpenAiResponses, runOpenAiResponsesStream } from './openai.ts'
 import { normalizeStrictJsonSchema, type JsonSchema } from './structured-output.ts'
+import { notifyWorkerWakeBestEffort } from './worker-wake.ts'
 
 type SupabaseClient = any
 
@@ -8237,6 +8238,13 @@ async function enqueueInitialSeedWorldConceptImage(input: {
   if (!input.snapshot.assets.some((asset) => asset.key === assetKey)) {
     input.snapshot.assets.push({ key: assetKey, name: 'World Concept Image', kind: 'image' })
   }
+  await notifyWorkerWakeBestEffort({
+    family: 'visual',
+    source: 'initial-seed-world-concept-image',
+    jobId: visualJobId,
+    projectId: input.snapshot.project.id,
+    draftId: input.snapshot.draft.id,
+  })
 
   return {
     jobId: visualJobId,
@@ -8383,6 +8391,13 @@ async function enqueueInitialSeedEntityReferenceSheet(input: {
   if (insertResponse.error || !insertResponse.data) {
     throw new Error(insertResponse.error?.message ?? 'Failed to queue entity reference sheet.')
   }
+  await notifyWorkerWakeBestEffort({
+    family: 'visual',
+    source: 'initial-seed-entity-reference-sheet',
+    jobId: String(insertResponse.data.id),
+    projectId: input.snapshot.project.id,
+    draftId: input.snapshot.draft.id,
+  })
 
   return {
     jobId: String(insertResponse.data.id),
@@ -8505,6 +8520,13 @@ async function enqueueInitialSeedGridImagesForLoreAndSequences(input: {
   if (insertResponse.error || !insertResponse.data) {
     throw new Error(insertResponse.error?.message ?? 'Failed to queue lore/sequence grid image.')
   }
+  await notifyWorkerWakeBestEffort({
+    family: 'visual',
+    source: 'initial-seed-lore-sequence-grid',
+    jobId: String(insertResponse.data.id),
+    projectId: input.snapshot.project.id,
+    draftId: input.snapshot.draft.id,
+  })
 
   return {
     jobId: String(insertResponse.data.id),
@@ -13502,6 +13524,10 @@ async function readWorldPromptGenerationQueueMessage(client: SupabaseClient) {
 }
 
 async function kickWorldPromptGenerationWorker() {
+  await notifyWorkerWakeBestEffort({
+    family: 'generation',
+    source: 'world-prompt-generation-kick',
+  })
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceRoleKey = Deno.env.get('SB_SECRET_KEY')?.trim() || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   if (!supabaseUrl || !serviceRoleKey) return
@@ -17593,6 +17619,14 @@ export async function continueWorldSeedGeneration(input: {
     job,
     runtime: generationRuntime,
   })
+  if (generationRuntime === 'fly') {
+    await notifyWorkerWakeBestEffort({
+      family: 'generation',
+      source: 'continue-world-seed-generation',
+      jobId: job.id,
+      draftId: job.draftId,
+    })
+  }
   const firstStep = nextQueuedGenerationStep(steps)
   if (firstStep && generationRuntime !== 'fly') {
     await enqueueWorldPromptGenerationStep({
@@ -17889,6 +17923,12 @@ export async function startWorldPromptTurn(input: {
         canonIntent,
       })
       const steps = await createPromptUpdateGenerationJobSteps({ client: input.client, job })
+      await notifyWorkerWakeBestEffort({
+        family: 'generation',
+        source: 'start-world-prompt-turn',
+        jobId: job.id,
+        draftId: job.draftId,
+      })
       turn = await updateTurn(input.client, turn.id, {
         metadata: {
           ...(turn.metadata ?? {}),

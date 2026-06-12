@@ -15,6 +15,7 @@ If you are an AI agent trying to understand the codebase, start with the current
 4. [`12-prompt-bootstrap-and-edge-functions.md`](./12-prompt-bootstrap-and-edge-functions.md)
 5. [`13-supabase-edge-function-runbook.md`](./13-supabase-edge-function-runbook.md)
 6. [`14-supabase-project-operations.md`](./14-supabase-project-operations.md)
+7. [`23-supabase-db-performance-and-security-runbook.md`](./23-supabase-db-performance-and-security-runbook.md)
 
 ## Important Note
 

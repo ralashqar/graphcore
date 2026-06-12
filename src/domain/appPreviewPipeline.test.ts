@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import {
   appScreenVisualSpecSchema,
@@ -11,6 +13,8 @@ import {
   readAppNodeProperties,
 } from './appPreviewPipeline.ts'
 import type { WorldEntity, WorldRelationship } from './worldGraph.ts'
+
+const repoRoot = resolve(import.meta.dirname, '../..')
 
 function entity(input: Partial<WorldEntity> & Pick<WorldEntity, 'key' | 'name' | 'nodeType'>): WorldEntity {
   return {
@@ -144,6 +148,13 @@ test('evaluates app preview readiness with app-specific blockers', () => {
   assert.equal(readiness.categoryStatus.Components.ready, false)
   assert.ok(readiness.blockers.some((finding) => finding.category === 'Components'))
   assert.ok(readiness.blockers.every((finding) => !/threat|lore|motives|hidden truth|protagonist|sequence/i.test(finding.message)))
+})
+
+test('app code generation start wakes the Fly app-generation worker', () => {
+  const source = readFileSync(resolve(repoRoot, 'supabase/functions/start-app-code-generation/index.ts'), 'utf8')
+  assert.match(source, /notifyWorkerWakeBestEffort/)
+  assert.match(source, /family:\s*'app_generation'/)
+  assert.match(source, /source:\s*'start-app-code-generation'/)
 })
 
 test('recognizes design prototype readiness without requiring code plan approval', () => {
