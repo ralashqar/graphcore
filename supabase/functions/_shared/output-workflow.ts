@@ -5377,12 +5377,20 @@ export async function resolveSequenceAnimaticCombinedManifest(input: {
     for (const reference of readArray(planSource.localReferences ?? planSource.outputLocalReferences).map(asRecord)) localReferences.push(reference)
     Object.assign(shotBindings, asRecord(planSource.shotBindings ?? planSource.shot_bindings))
     const graph = asRecord(planSource.continuityGraphV2 ?? planSource.continuity_graph_v2 ?? sceneManifest.continuityGraphV2)
+    const sceneGraphAdditions = asRecord(planSource.sceneGraphAdditions ?? planSource.scene_graph_additions ?? sceneManifest.sceneGraphAdditions ?? sceneManifest.scene_graph_additions)
     for (const field of Object.keys(graphArrays)) {
       for (const node of readArray(graph[field]).map(asRecord)) graphArrays[field].push(node)
+      for (const node of readArray(sceneGraphAdditions[field]).map(asRecord)) graphArrays[field].push(node)
     }
   }
   if (blocks.length === 0 || planShots.length === 0) return null
   const continuityGraphV2 = Object.fromEntries(Object.entries(graphArrays).map(([field, entries]) => [field, mergeRecordsById(entries)]))
+  continuityGraphV2.locationSets = mergeRecordsById([
+    ...readArray(continuityGraphV2.locationSets).map(asRecord),
+    ...readArray(continuityGraphV2.location_sets).map(asRecord),
+    ...readArray(continuityGraphV2.sets).map(asRecord),
+  ])
+  continuityGraphV2.location_sets = continuityGraphV2.locationSets
   const directorPlan = {
     role: 'sequence_animatic_director_plan',
     contractVersion: 'shot_continuity_plan_v2',

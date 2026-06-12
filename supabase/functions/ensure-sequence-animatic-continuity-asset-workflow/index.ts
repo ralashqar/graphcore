@@ -47,7 +47,7 @@ function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
 
 function continuityNodeCollections(graph: Record<string, unknown>) {
   return [
-    ...readArray(graph.locationSets ?? graph.location_sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_set' })),
+    ...readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_set' })),
     ...readArray(graph.zones).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_zone', assetKind: 'location_zone' })),
     ...readArray(graph.spots).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_spot', assetKind: 'location_spot' })),
     ...readArray(graph.viewpoints).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_viewpoint', assetKind: 'location_angle' })),
@@ -70,7 +70,7 @@ function continuityVisualDependencyEdges(graph: Record<string, unknown>) {
     if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return
     edges.push({ sourceNodeId, targetNodeId, relationship, required, evidence })
   }
-  readArray(graph.locationSets).map(asRecord).forEach((set) => push(readText(set.worldLocationRefId), readText(set.id), 'world_location_to_set', true))
+  readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map(asRecord).forEach((set) => push(readText(set.worldLocationRefId), readText(set.id), 'world_location_to_set', true))
   readArray(graph.zones).map(asRecord).forEach((zone) => push(readText(zone.setId), readText(zone.id), 'set_to_zone', true))
   readArray(graph.spots).map(asRecord).forEach((spot) => push(readText(spot.zoneId), readText(spot.id), 'zone_to_spot', true))
   const viewpoints = readArray(graph.viewpoints).length > 0 ? readArray(graph.viewpoints) : readArray(graph.angles)
@@ -172,8 +172,8 @@ function continuityPackFromMasterArtifacts(input: {
     masterRequestId: input.masterRequestId,
     continuityGraphV2: graph,
     continuity_graph_v2: graph,
-    locationSets: readArray(graph.locationSets ?? graph.location_sets),
-    location_sets: readArray(graph.locationSets ?? graph.location_sets),
+    locationSets: readArray(graph.locationSets ?? graph.location_sets ?? graph.sets),
+    location_sets: readArray(graph.locationSets ?? graph.location_sets ?? graph.sets),
     locationAngles: readArray(graph.viewpoints).length > 0 ? readArray(graph.viewpoints) : readArray(graph.angles),
     location_angles: readArray(graph.viewpoints).length > 0 ? readArray(graph.viewpoints) : readArray(graph.angles),
     shotBindings,

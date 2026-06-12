@@ -9302,8 +9302,23 @@ function deriveSequenceAnimaticSceneChildFinalState(input: {
       sceneId: scenePlan.sceneId,
     }])
   const firstPlan = scenePlans[0]?.directorPlan ?? {}
-  const graphNodes = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).nodes).map(readRepositoryRecord))
-  const graphEdges = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).edges).map(readRepositoryRecord))
+  const sceneGraphAdditions = {
+    sets: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).sets).map(readRepositoryRecord)),
+    zones: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).zones).map(readRepositoryRecord)),
+    spots: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).spots).map(readRepositoryRecord)),
+    viewpoints: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).viewpoints).map(readRepositoryRecord)),
+    angles: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).angles).map(readRepositoryRecord)),
+    edges: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).edges).map(readRepositoryRecord)),
+  }
+  const graphSets = scenePlans.flatMap((entry) => {
+    const graph = readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2)
+    return readRepositoryArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map(readRepositoryRecord)
+  }).concat(sceneGraphAdditions.sets)
+  const graphZones = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).zones).map(readRepositoryRecord)).concat(sceneGraphAdditions.zones)
+  const graphSpots = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).spots).map(readRepositoryRecord)).concat(sceneGraphAdditions.spots)
+  const graphViewpoints = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).viewpoints).map(readRepositoryRecord)).concat(sceneGraphAdditions.viewpoints)
+  const graphAngles = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).angles).map(readRepositoryRecord)).concat(sceneGraphAdditions.angles)
+  const graphEdges = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).edges).map(readRepositoryRecord)).concat(sceneGraphAdditions.edges)
   const directorPlan = {
     ...firstPlan,
     role: 'sequence_animatic_director_plan',
@@ -9323,14 +9338,9 @@ function deriveSequenceAnimaticSceneChildFinalState(input: {
     coverage_setup_by_shot_id: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.coverage_setup_by_shot_id ?? entry.directorPlan.coverageSetupByShotId))),
     shotBindings: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.shotBindings ?? entry.directorPlan.shot_bindings))),
     shot_bindings: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.shot_bindings ?? entry.directorPlan.shotBindings))),
-    continuityGraphV2: { nodes: graphNodes, edges: graphEdges },
-    continuity_graph_v2: { nodes: graphNodes, edges: graphEdges },
-    sceneGraphAdditions: {
-      sets: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).sets).map(readRepositoryRecord)),
-      zones: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).zones).map(readRepositoryRecord)),
-      spots: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).spots).map(readRepositoryRecord)),
-      viewpoints: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).viewpoints).map(readRepositoryRecord)),
-    },
+    continuityGraphV2: { locationSets: graphSets, location_sets: graphSets, sets: graphSets, zones: graphZones, spots: graphSpots, viewpoints: graphViewpoints, angles: graphAngles, edges: graphEdges },
+    continuity_graph_v2: { locationSets: graphSets, location_sets: graphSets, sets: graphSets, zones: graphZones, spots: graphSpots, viewpoints: graphViewpoints, angles: graphAngles, edges: graphEdges },
+    sceneGraphAdditions,
     localReferences: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.localReferences ?? entry.directorPlan.local_references).map(readRepositoryRecord)),
     outputLocalReferences: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.outputLocalReferences ?? entry.directorPlan.output_local_references).map(readRepositoryRecord)),
     assetRequirements: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.assetRequirements ?? entry.directorPlan.asset_requirements).map(readRepositoryRecord)),
