@@ -158,6 +158,21 @@ function continuityNodeParentId(node: Record<string, unknown>) {
 }
 
 function continuityBatchKindForNodes(nodes: readonly Record<string, unknown>[]) {
+  if (nodes.length > 1) {
+    const parent = nodes[0] ?? {}
+    const parentId = readText(parent.id)
+    const parentKind = readText(parent.nodeKind)
+    const children = nodes.slice(1)
+    const parentChildBatch = parentId
+      && (parentKind === 'location_set' || parentKind === 'location_zone' || parentKind === 'location_spot')
+      && children.length > 0
+      && children.every((node) => {
+        const kind = readText(node.nodeKind)
+        return (kind === 'location_spot' || kind === 'location_viewpoint' || kind === 'location_angle')
+          && continuityNodeParentId(node) === parentId
+      })
+    if (parentChildBatch) return 'parent_child_scaffold_grid'
+  }
   const kinds = [...new Set(nodes.map((node) => readText(node.nodeKind)).filter(Boolean))]
   if (kinds.length !== 1) return ''
   if (kinds[0] === 'location_spot') return 'spot_grid'
@@ -165,6 +180,14 @@ function continuityBatchKindForNodes(nodes: readonly Record<string, unknown>[]) 
   if (kinds[0] === 'temporary_character') return 'temp_character_grid'
   if (kinds[0] === 'prop') return 'prop_grid'
   return ''
+}
+
+function continuityBatchLayoutForTargetCount(count: number) {
+  const cellCount = Math.max(1, Math.min(4, Math.floor(count) || 1))
+  if (cellCount === 1) return { rows: 1, columns: 1, cellCount }
+  if (cellCount === 2) return { rows: 1, columns: 2, cellCount }
+  if (cellCount === 3) return { rows: 1, columns: 3, cellCount }
+  return { rows: 2, columns: 2, cellCount }
 }
 
 function continuityNodeUsesParent(node: Record<string, unknown>, parentId: string) {
@@ -978,14 +1001,57 @@ Deno.serve(async (request) => {
       const parentId = continuityNodeParentId(node)
       if (parentId && graphNodeById.has(parentId) && !assetStateReady(parentId)) parentMissingIds.add(parentId)
     }
-    const initialRunnableIds = parentMissingIds.size > 0
-      ? [...parentMissingIds]
-      : missingDependencyIds.filter((nodeId) => {
-        const node = graphNodeById.get(nodeId)
-        if (!node) return false
-        const parentId = continuityNodeParentId(node)
-        return !parentId || !graphNodeById.has(parentId) || assetStateReady(parentId)
+    const missingChildrenByParentId = new Map<string, Record<string, unknown>[]>()
+    for (const nodeId of missingDependencyIds) {
+      const node = graphNodeById.get(nodeId)
+      if (!node) continue
+      const nodeKind = readText(node.nodeKind)
+      const parentId = continuityNodeParentId(node)
+      if (!parentId || !parentMissingIds.has(parentId)) continue
+      if (nodeKind !== 'location_spot' && nodeKind !== 'location_viewpoint' && nodeKind !== 'location_angle') continue
+      missingChildrenByParentId.set(parentId, [...(missingChildrenByParentId.get(parentId) ?? []), node])
+    }
+    const handledNodeIds = new Set<string>()
+    const runGroups: {
+      nodes: Record<string, unknown>[]
+      isBatch: boolean
+      generationPolicy?: string
+      cellRoles?: string[]
+      sourceReferenceNodeIds?: string[]
+      sourceBatchAssetKey?: string
+    }[] = []
+    for (const [parentId, children] of missingChildrenByParentId.entries()) {
+      const parentNode = graphNodeById.get(parentId)
+      if (!parentNode || assetStateReady(parentId)) continue
+      const parentKind = readText(parentNode.nodeKind)
+      if (parentKind !== 'location_set' && parentKind !== 'location_zone' && parentKind !== 'location_spot') continue
+      const orderedChildren = children
+        .filter((child, index, entries) => entries.findIndex((entry) => readText(entry.id) === readText(child.id)) === index)
+        .slice(0, 3)
+      if (orderedChildren.length === 0) continue
+      const nodes = [parentNode, ...orderedChildren]
+      nodes.forEach((node) => handledNodeIds.add(readText(node.id)))
+      runGroups.push({
+        nodes,
+        isBatch: true,
+        generationPolicy: 'parent_child_scaffold_grid',
+        cellRoles: ['parent', ...orderedChildren.map(() => 'child')],
+        sourceReferenceNodeIds: [continuityNodeParentId(parentNode)].filter(Boolean),
       })
+    }
+    const initialRunnableIds = missingDependencyIds.filter((nodeId) => {
+      if (handledNodeIds.has(nodeId)) return false
+      const node = graphNodeById.get(nodeId)
+      if (!node) return false
+      const parentId = continuityNodeParentId(node)
+      if (!parentId || !graphNodeById.has(parentId)) return true
+      if (assetStateReady(parentId)) return true
+      const kind = readText(node.nodeKind)
+      return kind !== 'location_spot' && kind !== 'location_viewpoint' && kind !== 'location_angle'
+    })
+    for (const parentId of parentMissingIds) {
+      if (!handledNodeIds.has(parentId)) initialRunnableIds.push(parentId)
+    }
     const runnableIds = new Set<string>(initialRunnableIds)
     for (const nodeId of initialRunnableIds) {
       const node = graphNodeById.get(nodeId)
@@ -999,12 +1065,15 @@ Deno.serve(async (request) => {
         .filter((candidate) => readText(candidate.nodeKind) === nodeKind)
         .filter((candidate) => continuityNodeUsesParent(candidate, parentId))
         .slice(0, 4)
-        .forEach((candidate) => runnableIds.add(readText(candidate.id)))
+        .forEach((candidate) => {
+          const candidateId = readText(candidate.id)
+          if (!handledNodeIds.has(candidateId)) runnableIds.add(candidateId)
+        })
     }
     const runnableNodes = [...runnableIds].map((nodeId) => graphNodeById.get(nodeId)).filter((node): node is Record<string, unknown> => Boolean(node))
     const grouped = new Map<string, Record<string, unknown>[]>()
-    const runGroups: { nodes: Record<string, unknown>[]; isBatch: boolean }[] = []
     for (const node of runnableNodes) {
+      if (handledNodeIds.has(readText(node.id))) continue
       const kind = readText(node.nodeKind)
       const batchable = kind === 'location_spot'
         || kind === 'location_viewpoint'
@@ -1190,24 +1259,34 @@ Deno.serve(async (request) => {
       if (group.isBatch) {
         const batchKind = continuityBatchKindForNodes(targetNodes)
         if (!batchKind) return null
+        const generationPolicy = readText((group as { generationPolicy?: string }).generationPolicy)
+          || (batchKind === 'parent_child_scaffold_grid' ? 'parent_child_scaffold_grid' : 'keyframe_dependency_sibling_grid')
+        const cellRoles = Array.isArray((group as { cellRoles?: string[] }).cellRoles)
+          ? ((group as { cellRoles?: string[] }).cellRoles ?? []).map(readText).filter(Boolean)
+          : targetNodes.map(() => 'target')
+        const layout = continuityBatchLayoutForTargetCount(targetNodeIds.length)
+        const sourceReferenceNodeIds = [
+          ...readStringArray((group as { sourceReferenceNodeIds?: string[] }).sourceReferenceNodeIds),
+          parentId,
+          ...allGraphNodes
+            .filter((node) => !targetNodeIds.includes(readText(node.id)))
+            .filter((node) => readText(node.nodeKind) === readText(targetNode.nodeKind))
+            .filter((node) => continuityNodeUsesParent(node, parentId))
+            .filter((node) => readText(asRecord(continuityAssetStateByNodeId[readText(node.id)]).assetKey))
+            .map((node) => readText(node.id)),
+        ].filter(Boolean)
         const batch = {
           batchId: `keyframe_${batchKind}_${slugify(parentId || readStringArray(targetNode.storyboardBlockIds ?? targetNode.blockIds ?? targetNode.shotIds).join('_') || 'global')}_${sequenceAnimaticStableHash(targetNodeIds).slice(0, 8)}`,
           batchKind,
           targetNodeIds,
-          sourceReferenceNodeIds: [
-            parentId,
-            ...allGraphNodes
-              .filter((node) => !targetNodeIds.includes(readText(node.id)))
-              .filter((node) => readText(node.nodeKind) === readText(targetNode.nodeKind))
-              .filter((node) => continuityNodeUsesParent(node, parentId))
-              .filter((node) => readText(asRecord(continuityAssetStateByNodeId[readText(node.id)]).assetKey))
-              .map((node) => readText(node.id)),
-          ].filter(Boolean),
+          sourceReferenceNodeIds,
           worldReferenceAssetKeys: referenceAssetKeys,
           blockIds: [...new Set(targetNodes.flatMap((node) => readStringArray(node.storyboardBlockIds ?? node.blockIds)))],
-          layout: { rows: 2, columns: 2, cellCount: targetNodeIds.length },
+          layout,
+          gridLayout: layout,
+          cellRoles,
           required: true,
-          generationPolicy: 'keyframe_dependency_sibling_grid',
+          generationPolicy,
         }
         const inputHash = sequenceAnimaticStableHash({ batch, targetNodes, referenceAssetKeys, manifestHash })
         const continuityBatchIdentity = `${readText(batch.batchId)}:${inputHash}`
@@ -1241,6 +1320,11 @@ Deno.serve(async (request) => {
           sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
           worldLocationRefId,
           parentNodeIds: readStringArray(batch.sourceReferenceNodeIds),
+          generationPolicy,
+          gridLayout: layout,
+          cellRoles,
+          sourceReferenceNodeIds,
+          sourceBatchAssetKey: readText((group as { sourceBatchAssetKey?: string }).sourceBatchAssetKey),
           provisional: provisionalContext,
         }
         const graphParts = buildSequenceAnimaticContinuityBatchWorkflowGraph({
@@ -1410,9 +1494,10 @@ Deno.serve(async (request) => {
       return child
     }
     if (runGroups.length > 0) {
+      const hasScaffoldGrid = runGroups.some((group) => readText((group as { generationPolicy?: string }).generationPolicy) === 'parent_child_scaffold_grid')
       dependencyWaves.push({
-        wave: parentMissingIds.size > 0 ? 1 : 2,
-        kind: parentMissingIds.size > 0 ? 'parent_scene_refs' : 'sibling_scene_ref_grids',
+        wave: hasScaffoldGrid || parentMissingIds.size > 0 ? 1 : 2,
+        kind: hasScaffoldGrid ? 'parent_child_scaffold_grid' : parentMissingIds.size > 0 ? 'parent_scene_refs' : 'sibling_scene_ref_grids',
         nodeIds: runGroups.flatMap((group) => group.nodes.map((node) => readText(node.id)).filter(Boolean)),
       })
       for (const group of runGroups) {

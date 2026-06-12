@@ -11816,11 +11816,13 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
   const layout = asRecord(input.batch.layout)
   const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
   const columns = Math.max(1, Number(layout.columns ?? 1) || 1)
+  const cellRoles = readStringArray(input.batch.cellRoles ?? input.batch.cell_roles)
   const cellLines = input.targetNodes.slice(0, rows * columns).map((node, index) => {
     const row = Math.floor(index / columns) + 1
     const column = (index % columns) + 1
+    const role = cellRoles[index] || 'target'
     return [
-      `Cell ${index + 1} (row ${row}, column ${column}):`,
+      `Cell ${index + 1} (row ${row}, column ${column}, ${role}):`,
       readText(node.name) || titleFromRefLike(readText(node.id)),
       readText(node.assetKind) || readText(node.nodeKind),
       readText(node.visualBrief) || readText(node.summary),
@@ -11833,6 +11835,8 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
   ].filter(Boolean).join(': '))
   const kindInstruction = batchKind === 'angle_grid' || batchKind === 'viewpoint_grid'
     ? 'Each populated cell must show a distinct reusable camera-facing viewpoint from the same set, zone, or spot. Preserve architecture, landmarks, light direction, screen direction, entrances, materials, and depth. No characters, no labels, no UI.'
+    : batchKind === 'parent_child_scaffold_grid'
+      ? 'Create a mixed parent-child spatial scaffold grid. Cell 1 is the parent set/zone/spot environment reference; following cells are child spots or viewpoints inside that exact parent. Make the children visibly inherit the parent architecture, materials, light direction, landmarks, entrances, geography, and scale. Each cell must be a clean standalone production reference for its assigned node. No characters unless explicitly part of the environment, no labels, no UI.'
     : batchKind === 'spot_grid'
       ? 'Each populated cell must show one reusable sub-location or action spot inside the same zone. Preserve local surfaces, landmarks, entrances, sightlines, material continuity, and lighting. No characters, no labels, no UI.'
       : batchKind === 'temp_character_grid'
@@ -11844,14 +11848,14 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
             : 'Create one high-detail hero continuity reference. It must be reusable across storyboard and shot-video generation. No labels, no borders, no UI, no watermarks.'
   return [
     `Continuity reference batch: ${batchKind}`,
-    `Grid: ${rows} rows x ${columns} columns. Fill cells left-to-right, top-to-bottom. Leave unused cells clean and empty.`,
+    `Grid: ${rows} rows x ${columns} columns on one square 2048x2048 image. Fill cells left-to-right, top-to-bottom. Leave unused cells clean and empty.`,
     kindInstruction,
     input.referenceAssetKeys.length > 0
       ? 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
       : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
     cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
-    'Provider requirements: one finished image only, no visible text, no captions, no borders between cells except clean spacing, no arrows, no labels, no watermarks.',
+    'Provider requirements: one finished image only, exact cell order, no visible text, no captions, no labels, no arrows, no UI, no watermarks. Use clean spacing or subtle gutters only; every populated cell must crop cleanly as its own square reference.',
   ].filter(Boolean).join('\n\n')
 }
 
@@ -22996,6 +23000,8 @@ async function executeNode(input: {
         const shotBindings = asRecord(config.shotBindings)
         const assetPack = asRecord(config.assetPack)
         const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
+        const gridLayout = asRecord(batch.gridLayout ?? batch.grid_layout ?? batch.layout)
+        const cellRoles = readStringArray(batch.cellRoles ?? batch.cell_roles)
         const outputs = {
           batch,
           targetNodes,
@@ -23008,10 +23014,17 @@ async function executeNode(input: {
           asset_pack: assetPack,
           referenceAssetKeys,
           reference_asset_keys: referenceAssetKeys,
+          gridLayout,
+          grid_layout: gridLayout,
+          cellRoles,
+          cell_roles: cellRoles,
           text: JSON.stringify({
             batchId: readText(batch.batchId),
             batchKind: readText(batch.batchKind),
             targetNodeIds: readStringArray(batch.targetNodeIds),
+            generationPolicy: readText(batch.generationPolicy),
+            gridLayout,
+            cellRoles,
             referenceAssetKeys,
           }, null, 2),
           deterministic: true,
@@ -23121,6 +23134,9 @@ async function executeNode(input: {
                 sequenceAnimaticRole: 'continuity_asset_batch',
                 masterRequestId: readText(config.masterRequestId),
                 continuityBatchId: readText(asRecord(config.batch).batchId),
+                generationPolicy: readText(asRecord(config.batch).generationPolicy),
+                gridLayout: asRecord(asRecord(config.batch).gridLayout ?? asRecord(config.batch).layout),
+                cellRole: readStringArray(asRecord(config.batch).cellRoles)[index] || '',
                 targetNodeId,
                 targetNode,
                 sourceBatchAssetKey: assetKey,
@@ -27456,6 +27472,9 @@ async function executeNode(input: {
             assets,
             qcStatus,
             qcFindings,
+            generationPolicy: readText(batch.generationPolicy),
+            gridLayout: asRecord(batch.gridLayout ?? batch.grid_layout ?? batch.layout),
+            cellRoles: readStringArray(batch.cellRoles ?? batch.cell_roles),
             assetStateByNodeId: upstreamState,
             asset_state_by_node_id: upstreamState,
           },

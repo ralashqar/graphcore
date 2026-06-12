@@ -796,7 +796,7 @@ export function buildSequenceAnimaticContinuityBatchWorkflowGraph(input: {
       quality: 'medium',
       outputFormat: 'webp',
       maxReferenceImages: 8,
-      imageSize: { width: Math.max(1024, Math.min(4096, columns * 1024)), height: Math.max(1024, Math.min(4096, rows * 1024)) },
+      imageSize: { width: 2048, height: 2048 },
       planningOnly: false,
       planning_only: false,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_batch_image', maxConcurrency: 2, continueOnError: true },

@@ -228,10 +228,30 @@ function continuityNodeParentId(node: Record<string, unknown>) {
 
 function continuityBatchKindForNodes(nodes: readonly Record<string, unknown>[]) {
   const kinds = [...new Set(nodes.map((node) => readText(node.nodeKind)).filter(Boolean))]
+  if (nodes.length > 1) {
+    const [parent, ...children] = nodes
+    const parentKind = readText(parent.nodeKind)
+    const parentId = readText(parent.id)
+    const parentChildBatch = parentId
+      && (parentKind === 'location_set' || parentKind === 'location_zone' || parentKind === 'location_spot')
+      && children.every((child) => {
+        const childKind = readText(child.nodeKind)
+        return (childKind === 'location_zone' || childKind === 'location_spot' || childKind === 'location_viewpoint' || childKind === 'location_angle')
+          && continuityNodeParentId(child) === parentId
+      })
+    if (parentChildBatch) return 'parent_child_scaffold_grid'
+  }
   if (kinds.length !== 1) return ''
   if (kinds[0] === 'location_spot') return 'spot_grid'
   if (kinds[0] === 'location_viewpoint' || kinds[0] === 'location_angle') return 'viewpoint_grid'
   return ''
+}
+
+function continuityBatchLayoutForTargetCount(count: number) {
+  if (count <= 1) return { rows: 1, columns: 1, cellCount: 1 }
+  if (count === 2) return { rows: 1, columns: 2, cellCount: 2 }
+  if (count === 3) return { rows: 1, columns: 3, cellCount: 3 }
+  return { rows: 2, columns: 2, cellCount: Math.min(4, count) }
 }
 
 function continuityNodeUsesParent(node: Record<string, unknown>, parentId: string) {
@@ -333,17 +353,24 @@ Deno.serve(async (request) => {
     const graph = asRecord(continuityPack.continuityGraphV2 ?? continuityPack.continuity_graph_v2)
     if (Object.keys(graph).length === 0) throw new HttpError(409, 'Generate the shot continuity plan first.')
     const allGraphNodes = continuityNodeCollections(graph)
-    const requestedNodeIds = [...new Set([payload.nodeId, ...readStringArray(payload.nodeIds)].map(readText).filter(Boolean))].slice(0, 4)
+    let requestedNodeIds = [...new Set([payload.nodeId, ...readStringArray(payload.nodeIds)].map(readText).filter(Boolean))].slice(0, 4)
     const targetNodes = requestedNodeIds.map((nodeId) => allGraphNodes.find((entry) => readText(entry.id) === nodeId) ?? null)
     if (targetNodes.some((node) => !node)) throw new HttpError(404, 'One or more continuity nodes were not found in the current scene graph.')
-    const resolvedTargetNodes = targetNodes as Record<string, unknown>[]
-    const targetNode = resolvedTargetNodes[0] ?? null
+    let resolvedTargetNodes = targetNodes as Record<string, unknown>[]
+    let targetNode = resolvedTargetNodes[0] ?? null
     if (!targetNode) throw new HttpError(404, 'Continuity node was not found in the current scene graph.')
-    const batchKind = resolvedTargetNodes.length > 1 ? continuityBatchKindForNodes(resolvedTargetNodes) : ''
-    const batchParentId = resolvedTargetNodes.length > 1 ? continuityNodeParentId(targetNode) : ''
+    let batchKind = resolvedTargetNodes.length > 1 ? continuityBatchKindForNodes(resolvedTargetNodes) : ''
+    let batchParentId = resolvedTargetNodes.length > 1
+      ? batchKind === 'parent_child_scaffold_grid'
+        ? readText(targetNode.id)
+        : continuityNodeParentId(targetNode)
+      : ''
     if (resolvedTargetNodes.length > 1) {
       if (!batchKind) throw new HttpError(400, 'Only sibling spots or viewpoints can be generated as a continuity asset grid.')
-      if (!batchParentId || !resolvedTargetNodes.every((node) => continuityNodeParentId(node) === batchParentId)) {
+      const validBatchParent = batchKind === 'parent_child_scaffold_grid'
+        ? batchParentId && resolvedTargetNodes.slice(1).every((node) => continuityNodeParentId(node) === batchParentId)
+        : batchParentId && resolvedTargetNodes.every((node) => continuityNodeParentId(node) === batchParentId)
+      if (!validBatchParent) {
         throw new HttpError(400, 'Continuity asset grids require sibling nodes with the same parent.')
       }
     }
@@ -453,7 +480,33 @@ Deno.serve(async (request) => {
       return !readText(asRecord(assetStates[sourceNodeId]).assetKey)
     })
     if (missingParent) {
-      throw new HttpError(409, `Generate parent continuity asset first: ${readText(missingParent.sourceNodeId)}.`)
+      const parentNodeId = readText(missingParent.sourceNodeId)
+      const parentNode = allGraphNodes.find((node) => readText(node.id) === parentNodeId) ?? null
+      const parentKind = readText(parentNode?.nodeKind)
+      const targetKind = readText(targetNode.nodeKind)
+      const canScaffold = parentNode
+        && (parentKind === 'location_set' || parentKind === 'location_zone' || parentKind === 'location_spot')
+        && (targetKind === 'location_zone' || targetKind === 'location_spot' || targetKind === 'location_viewpoint' || targetKind === 'location_angle')
+        && continuityNodeParentId(targetNode) === parentNodeId
+      if (!canScaffold) {
+        throw new HttpError(409, `Generate parent continuity asset first: ${parentNodeId}.`)
+      }
+      const siblingChildren = allGraphNodes
+        .filter((node) => readText(node.id) !== readText(targetNode.id))
+        .filter((node) => {
+          const kind = readText(node.nodeKind)
+          return kind === targetKind || (targetKind === 'location_viewpoint' && kind === 'location_angle') || (targetKind === 'location_angle' && kind === 'location_viewpoint')
+        })
+        .filter((node) => continuityNodeParentId(node) === parentNodeId)
+        .filter((node) => !readText(asRecord(assetStates[readText(node.id)]).assetKey))
+        .slice(0, 2)
+      resolvedTargetNodes = [parentNode, targetNode, ...siblingChildren].slice(0, 4)
+      requestedNodeIds = resolvedTargetNodes.map((node) => readText(node.id)).filter(Boolean)
+      requestedNodeIdSet.clear()
+      requestedNodeIds.forEach((nodeId) => requestedNodeIdSet.add(nodeId))
+      targetNode = resolvedTargetNodes[0]
+      batchKind = 'parent_child_scaffold_grid'
+      batchParentId = parentNodeId
     }
     const allReferenceAssetKeys = [...new Set([...referenceAssetKeys, ...batchSiblingReferenceAssetKeys, ...worldReferenceAssetKeys])].slice(0, 8)
     const referenceEntities = allReferenceAssetKeys.map((assetKey) => assetEntityForKey(assetKey, `${readText(targetNode.name) || payload.nodeId} dependency`))
@@ -468,25 +521,33 @@ Deno.serve(async (request) => {
     const assetKind = readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
     if (resolvedTargetNodes.length > 1 && batchKind) {
       const batchTargetIds = resolvedTargetNodes.map((node) => readText(node.id)).filter(Boolean)
-      const sourceReferenceNodeIds = [
-        batchParentId,
-        ...allGraphNodes
-          .filter((node) => !requestedNodeIdSet.has(readText(node.id)))
-          .filter((node) => readText(node.nodeKind) === readText(targetNode.nodeKind))
-          .filter((node) => continuityNodeUsesParent(node, batchParentId))
-          .filter((node) => readText(asRecord(assetStates[readText(node.id)]).assetKey))
-          .map((node) => readText(node.id)),
-      ].filter(Boolean)
+      const isParentChildScaffold = batchKind === 'parent_child_scaffold_grid'
+      const sourceReferenceNodeIds = isParentChildScaffold
+        ? [continuityNodeParentId(targetNode)].filter(Boolean)
+        : [
+            batchParentId,
+            ...allGraphNodes
+              .filter((node) => !requestedNodeIdSet.has(readText(node.id)))
+              .filter((node) => readText(node.nodeKind) === readText(targetNode.nodeKind))
+              .filter((node) => continuityNodeUsesParent(node, batchParentId))
+              .filter((node) => readText(asRecord(assetStates[readText(node.id)]).assetKey))
+              .map((node) => readText(node.id)),
+          ].filter(Boolean)
+      const generationPolicy = isParentChildScaffold ? 'parent_child_scaffold_grid' : 'manual_sibling_grid'
+      const cellRoles = isParentChildScaffold ? ['parent', ...batchTargetIds.slice(1).map(() => 'child')] : batchTargetIds.map(() => 'sibling')
+      const layout = continuityBatchLayoutForTargetCount(batchTargetIds.length)
       const batch = {
-        batchId: `manual_${batchKind}_${slugify(batchParentId)}_${sequenceAnimaticStableHash(batchTargetIds).slice(0, 8)}`,
+        batchId: `${isParentChildScaffold ? 'manual_scaffold' : 'manual'}_${batchKind}_${slugify(batchParentId)}_${sequenceAnimaticStableHash(batchTargetIds).slice(0, 8)}`,
         batchKind,
         targetNodeIds: batchTargetIds,
         sourceReferenceNodeIds,
         worldReferenceAssetKeys,
         blockIds: [...new Set(resolvedTargetNodes.flatMap((node) => readStringArray(node.storyboardBlockIds ?? node.blockIds)))],
-        layout: { rows: 2, columns: 2, cellCount: batchTargetIds.length },
+        layout,
+        gridLayout: layout,
+        cellRoles,
         required: true,
-        generationPolicy: 'manual_sibling_grid',
+        generationPolicy,
       }
       const batchInputHash = sequenceAnimaticStableHash({
         batch,
@@ -532,6 +593,9 @@ Deno.serve(async (request) => {
         targetNodeIds: batchTargetIds,
         assetKind: batchKind,
         assetInputHash: batchInputHash,
+        generationPolicy,
+        gridLayout: layout,
+        cellRoles,
         manifestHash,
         continuityPackHash: readText(continuityPack.continuityPackHash),
         masterManifestArtifactKey,

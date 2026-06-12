@@ -2494,7 +2494,7 @@ function SequenceAnimaticCoverageAnchorModal({
   )
 }
 
-const ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set(['queued', 'planning', 'awaiting_confirmation', 'running'])
+const ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set(['queued', 'planning', 'running'])
 const FAILED_SEQUENCE_ANIMATIC_STATUSES = new Set(['failed', 'cancelled'])
 const TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
 
@@ -2764,7 +2764,9 @@ function sequenceAnimaticRequestIsActive(request: OutputRequest | null, run?: Ou
   if (run && !TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run.status)) return true
   if (run?.status === 'failed' || run?.status === 'cancelled') return false
   if (sequenceAnimaticProjectionTerminal(request)) return false
-  return ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(sequenceAnimaticEffectiveStatus(request))
+  const effectiveStatus = sequenceAnimaticEffectiveStatus(request)
+  if (!run && (effectiveStatus === 'queued' || effectiveStatus === 'awaiting_confirmation')) return false
+  return ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus)
 }
 
 function sequenceAnimaticRequestHasViewablePlan(
@@ -4183,8 +4185,14 @@ function buildSequenceAnimaticViewModel(input: {
     }))
   const continuityAssetRequestByNodeId = new Map<string, OutputRequest>()
   for (const request of [...continuityAssetRequests].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))) {
-    const nodeId = trimOptionalString(readLooseRecord(request.metadata).targetNodeId)
-    if (nodeId && !continuityAssetRequestByNodeId.has(nodeId)) continuityAssetRequestByNodeId.set(nodeId, request)
+    const metadata = readLooseRecord(request.metadata)
+    const targetNodeIds = [
+      trimOptionalString(metadata.targetNodeId),
+      ...readLooseArray(metadata.targetNodeIds).map(trimOptionalString),
+    ].filter(Boolean)
+    for (const nodeId of targetNodeIds) {
+      if (!continuityAssetRequestByNodeId.has(nodeId)) continuityAssetRequestByNodeId.set(nodeId, request)
+    }
   }
   const continuityAssetRunByRequestId = new Map(continuityAssetRequests
     .map((request) => {
@@ -4504,6 +4512,12 @@ function buildSequenceAnimaticViewModel(input: {
   }
   ;[...continuityArtifacts, ...continuityAssetArtifacts].forEach((artifact) => {
     const metadata = readLooseRecord(artifact.metadata)
+    if (trimOptionalString(metadata.role) === 'sequence_animatic_continuity_asset_batch') {
+      Object.entries(readLooseRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+        if (nodeId) continuityAssetStateByNodeId[nodeId] = state
+      })
+      return
+    }
     if (trimOptionalString(metadata.role) !== 'sequence_animatic_continuity_asset') return
     const state = readLooseRecord(metadata.assetState ?? metadata.asset_state)
     const nodeId = trimOptionalString(state.sourceNodeId) || trimOptionalString(metadata.targetNodeId)
@@ -4514,6 +4528,16 @@ function buildSequenceAnimaticViewModel(input: {
     const run = request ? continuityAssetRunByRequestId.get(request.id) ?? null : null
     if (sequenceAnimaticRequestIsActive(request, run)) return 'generating'
     const status = trimOptionalString(readLooseRecord(continuityAssetStateByNodeId[nodeId]).status)
+    if (status === 'ready' || status === 'stale' || status === 'failed' || status === 'missing') return status
+    const requestTerminal = ['completed', 'succeeded', 'completed_with_errors', 'failed', 'cancelled'].includes(request?.status ?? '')
+    if (
+      outputWorkflowRunHasFailedExecution(run)
+      || request?.status === 'failed'
+      || request?.status === 'cancelled'
+      || (status === 'generating' && (requestTerminal || TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run?.status ?? '')))
+    ) {
+      return 'failed'
+    }
     return status === 'generating' || status === 'ready' || status === 'stale' || status === 'failed' || status === 'missing' ? status : 'missing'
   }
   const readContinuityAssetUrl = (nodeId: string) => {
