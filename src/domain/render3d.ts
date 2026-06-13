@@ -11,12 +11,25 @@ export type Render3dBindingConfig = Render3dBindingComponent['config']
 export type EnvironmentRenderBindingConfig = EnvironmentRenderBindingComponent['config']
 export type Definition3dBindingConfig =
   Render3dBindingConfig &
-  Partial<Pick<EnvironmentRenderBindingConfig, 'lightingProfile'>>
+  Partial<EnvironmentRenderBindingConfig>
 
 export const defaultRender3dBindingConfig: Render3dBindingConfig = {
   primaryMeshAssetKey: null,
   previewImageAssetKey: null,
   conceptPrompt: null,
+  generationPrompt: null,
+  generationStyle: null,
+}
+
+export const defaultEnvironmentRenderBindingConfig: EnvironmentRenderBindingConfig = {
+  primaryMeshAssetKey: null,
+  previewImageAssetKey: null,
+  spatialWorldVariantId: null,
+  spatialWorldAssetKey: null,
+  spatialWorldManifestAssetKey: null,
+  colliderMeshAssetKey: null,
+  spatialWorldJobId: null,
+  lightingProfile: '',
   generationPrompt: null,
   generationStyle: null,
 }
@@ -70,7 +83,7 @@ export function getResolvedDefinition3dBinding(definition: DefinitionBase): Defi
   if (definition.kind === 'environment') {
     return {
       ...defaultRender3dBindingConfig,
-      lightingProfile: '',
+      ...defaultEnvironmentRenderBindingConfig,
       ...(getEnvironmentRenderBinding(definition)?.config ?? {}),
     }
   }

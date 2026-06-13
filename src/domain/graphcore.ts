@@ -7,6 +7,11 @@ import {
 } from './worldBuild.ts'
 import { meshGenerationJobSchema } from './meshGeneration.ts'
 import {
+  spatialWorldGenerationJobSchema,
+  spatialWorldMarkerSchema,
+  spatialWorldVariantSchema,
+} from './spatialWorldGeneration.ts'
+import {
   assemblyEdgeDefinitionSchema,
   assemblyGraphDefinitionSchema,
   assemblyNodeDefinitionSchema,
@@ -79,7 +84,7 @@ export const definitionStatusSchema = z.enum([
   'archived',
 ])
 
-export const assetKindSchema = z.enum(['image', 'audio', 'json', 'document', 'mesh', 'video', 'other'])
+export const assetKindSchema = z.enum(['image', 'audio', 'json', 'document', 'mesh', 'spatial_world', 'video', 'other'])
 
 export const componentTypeSchema = z.enum([
   'inventory',
@@ -356,6 +361,11 @@ export const render3dBindingComponentSchema = z.object({
 export const environmentRenderBindingComponentSchema = z.object({
   primaryMeshAssetKey: z.string().nullable().default(null),
   previewImageAssetKey: z.string().nullable().default(null),
+  spatialWorldVariantId: z.string().nullable().default(null),
+  spatialWorldAssetKey: z.string().nullable().default(null),
+  spatialWorldManifestAssetKey: z.string().nullable().default(null),
+  colliderMeshAssetKey: z.string().nullable().default(null),
+  spatialWorldJobId: z.string().nullable().default(null),
   lightingProfile: z.string().default(''),
   generationPrompt: z.string().nullable().default(null),
   generationStyle: z.string().nullable().default(null),
@@ -393,6 +403,11 @@ export const worldEnvironmentIndexComponentSchema = z.object({
 export const worldRenderBindingComponentSchema = z.object({
   primaryMeshAssetKey: z.string().nullable().default(null),
   previewImageAssetKey: z.string().nullable().default(null),
+  spatialWorldVariantId: z.string().nullable().default(null),
+  spatialWorldAssetKey: z.string().nullable().default(null),
+  spatialWorldManifestAssetKey: z.string().nullable().default(null),
+  colliderMeshAssetKey: z.string().nullable().default(null),
+  spatialWorldJobId: z.string().nullable().default(null),
   generationPrompt: z.string().nullable().default(null),
   generationStyle: z.string().nullable().default(null),
 })
@@ -759,6 +774,9 @@ export const projectSnapshotSchema = z.object({
   worldThreads: z.array(worldThreadSchema).default([]),
   worldBuildBatches: z.array(worldBuildBatchSchema).default([]),
   meshGenerationJobs: z.array(meshGenerationJobSchema).default([]),
+  spatialWorldGenerationJobs: z.array(spatialWorldGenerationJobSchema).default([]),
+  spatialWorldVariants: z.array(spatialWorldVariantSchema).default([]),
+  spatialWorldMarkers: z.array(spatialWorldMarkerSchema).default([]),
   cinematicRuns: z.array(cinematicRunSchema).default([]),
   outputWorkflows: z.array(outputWorkflowSchema).default([]),
   outputWorkflowNodes: z.array(outputWorkflowNodeSchema).default([]),
@@ -1360,6 +1378,11 @@ export function buildDefaultDefinitionComponents(kind: DefinitionKind): Componen
           config: {
             primaryMeshAssetKey: null,
             previewImageAssetKey: null,
+            spatialWorldVariantId: null,
+            spatialWorldAssetKey: null,
+            spatialWorldManifestAssetKey: null,
+            colliderMeshAssetKey: null,
+            spatialWorldJobId: null,
             lightingProfile: '',
             generationPrompt: null,
             generationStyle: null,
@@ -1406,6 +1429,11 @@ export function buildDefaultDefinitionComponents(kind: DefinitionKind): Componen
           config: {
             primaryMeshAssetKey: null,
             previewImageAssetKey: null,
+            spatialWorldVariantId: null,
+            spatialWorldAssetKey: null,
+            spatialWorldManifestAssetKey: null,
+            colliderMeshAssetKey: null,
+            spatialWorldJobId: null,
             generationPrompt: null,
             generationStyle: null,
           },

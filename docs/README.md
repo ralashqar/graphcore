@@ -37,5 +37,7 @@ Those older docs are still useful as background, but when they disagree with the
   - Current direction for expanding art style presets, especially photoreal UGC capture profiles, camera assumptions, and realism guardrails.
 - [`21-prompt-to-app-preview-pipeline.md`](./21-prompt-to-app-preview-pipeline.md)
   - Recommended graph-first Prompt-to-App pipeline from initial app graph through readiness repair, screen designs, Expo code generation, and sandbox iframe preview.
+- [`24-spatial-world-integration.md`](./24-spatial-world-integration.md)
+  - Provider-neutral workstream for World Labs, SpAItial, Spark, PlayCanvas splat processing, collision assets, and explorable environment generation.
 - [`ugc-mastery/README.md`](./ugc-mastery/README.md)
   - Distilled GraphCore-owned knowledge base for UGC psychology, virality mechanics, script formulas, format systems, and preset integration guidance.

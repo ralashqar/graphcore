@@ -136,6 +136,26 @@ import {
   type VisualGenerationStatusResponse,
 } from '../domain/visualGeneration'
 import {
+  spatialWorldGenerationCancelResponseSchema,
+  spatialWorldGenerationConfirmedStartRequestSchema,
+  spatialWorldGenerationJobSchema,
+  spatialWorldMarkerSchema,
+  spatialWorldGenerationPreviewResponseSchema,
+  spatialWorldGenerationStartRequestSchema,
+  spatialWorldGenerationStartResponseSchema,
+  spatialWorldGenerationStatusRequestSchema,
+  spatialWorldGenerationStatusResponseSchema,
+  spatialWorldVariantActivationRequestSchema,
+  spatialWorldVariantActivationResponseSchema,
+  spatialWorldVariantSchema,
+  type SpatialWorldGenerationCancelResponse,
+  type SpatialWorldGenerationPreviewResponse,
+  type SpatialWorldGenerationStartRequest,
+  type SpatialWorldGenerationStartResponse,
+  type SpatialWorldGenerationStatusResponse,
+  type SpatialWorldVariantActivationResponse,
+} from '../domain/spatialWorldGeneration'
+import {
   appGenerationCancelResponseSchema,
   appGenerationStartRequestSchema,
   appGenerationStartResponseSchema,
@@ -2935,6 +2955,80 @@ type MeshGenerationJobRow = {
   updated_at: string
 }
 
+type SpatialWorldGenerationJobRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  requested_by: string | null
+  target_kind: string
+  target_key: string
+  variant_key: string
+  comparison_id: string | null
+  provider: string
+  model: string
+  status: string
+  provider_operation_id: string | null
+  provider_world_id: string | null
+  provider_status: string | null
+  input: Record<string, unknown> | null
+  outputs: Record<string, unknown> | null
+  estimated_usd: number | string | null
+  actual_usd: number | string | null
+  error_message: string | null
+  worker_id: string | null
+  heartbeat_at: string | null
+  attempt_count: number
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type SpatialWorldVariantRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  target_kind: string
+  target_key: string
+  key: string
+  name: string
+  status: string
+  provider: string
+  model: string
+  source_job_id: string | null
+  manifest_asset_key: string | null
+  manifest: Record<string, unknown> | null
+  alignment_transform: Record<string, unknown> | null
+  alignment_confidence: number | string | null
+  is_active: boolean
+  archived_at: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+type SpatialWorldMarkerRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  variant_id: string
+  key: string
+  kind: string
+  name: string
+  description: string
+  transform: Record<string, unknown>
+  camera: Record<string, unknown> | null
+  linked_entity_key: string | null
+  linked_location_key: string | null
+  linked_scene_id: string | null
+  linked_spot_id: string | null
+  linked_coverage_setup_id: string | null
+  screenshot_asset_key: string | null
+  visible: boolean
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
 type CinematicRunRow = {
   id: string
   draft_id: string
@@ -3739,6 +3833,9 @@ export async function loadProjectSnapshot(
   const meshGenerationJobSelect = includeFull
     ? 'id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, provider_logs, error_message, storage_path, created_at, updated_at'
     : 'id, project_id, draft_id, definition_key, source_image_asset_key, target_mesh_asset_key, provider, model, provider_request_id, status_url, response_url, cancel_url, status, provider_status, error_message, storage_path, created_at, updated_at'
+  const spatialWorldJobSelect = 'id, project_id, draft_id, requested_by, target_kind, target_key, variant_key, comparison_id, provider, model, status, provider_operation_id, provider_world_id, provider_status, input, outputs, estimated_usd, actual_usd, error_message, worker_id, heartbeat_at, attempt_count, metadata, created_at, updated_at'
+  const spatialWorldVariantSelect = 'id, project_id, draft_id, target_kind, target_key, key, name, status, provider, model, source_job_id, manifest_asset_key, manifest, alignment_transform, alignment_confidence, is_active, archived_at, metadata, created_at, updated_at'
+  const spatialWorldMarkerSelect = 'id, project_id, draft_id, variant_id, key, kind, name, description, transform, camera, linked_entity_key, linked_location_key, linked_scene_id, linked_spot_id, linked_coverage_setup_id, screenshot_asset_key, visible, metadata, created_at, updated_at'
   const cinematicRunJobSelect = includeFull
     ? 'id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, prompt, result_context, created_at, updated_at'
     : 'id, run_id, graph_key, shot_node_key, kind, status, order_index, depends_on_job_ids, still_asset_key, video_asset_key, provider, model, provider_request_id, error_message, created_at, updated_at'
@@ -3774,6 +3871,9 @@ export async function loadProjectSnapshot(
     worldPromptSuggestionsResponse,
     worldThreadsResponse,
     worldBuildBatchesResponse,
+    spatialWorldGenerationJobsResponse,
+    spatialWorldVariantsResponse,
+    spatialWorldMarkersResponse,
     meshGenerationJobsResponse,
     cinematicRunsResponse,
     outputWorkflowsResponse,
@@ -4004,6 +4104,29 @@ export async function loadProjectSnapshot(
       : Promise.resolve(emptyPostgrestResponse()),
     includeJobs
       ? supabase
+          .from('spatial_world_generation_jobs')
+          .select(spatialWorldJobSelect)
+          .eq('draft_id', draft.id)
+          .in('status', includeFull ? ['queued', 'submitting', 'running', 'completed', 'failed', 'cancelled'] : ['queued', 'submitting', 'running'])
+          .order('created_at', { ascending: false })
+          .limit(includeFull ? 100 : 20)
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeContent
+      ? supabase
+          .from('spatial_world_variants')
+          .select(spatialWorldVariantSelect)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: false })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeContent
+      ? supabase
+          .from('spatial_world_markers')
+          .select(spatialWorldMarkerSelect)
+          .eq('draft_id', draft.id)
+          .order('created_at', { ascending: true })
+      : Promise.resolve(emptyPostgrestResponse()),
+    includeJobs
+      ? supabase
           .from('mesh_generation_jobs')
           .select(meshGenerationJobSelect)
           .eq('draft_id', draft.id)
@@ -4114,6 +4237,9 @@ export async function loadProjectSnapshot(
     ['world_prompt_suggestions', worldPromptSuggestionsResponse],
     ['world_threads', worldThreadsResponse],
     ['world_build_batches', worldBuildBatchesResponse],
+    ['spatial_world_generation_jobs', spatialWorldGenerationJobsResponse],
+    ['spatial_world_variants', spatialWorldVariantsResponse],
+    ['spatial_world_markers', spatialWorldMarkersResponse],
     ['mesh_generation_jobs', meshGenerationJobsResponse],
     ['cinematic_runs', cinematicRunsResponse],
     ['output_workflows', outputWorkflowsResponse],
@@ -4184,6 +4310,13 @@ export async function loadProjectSnapshot(
   const meshGenerationSchemaMissing =
     postgrestStatus(meshGenerationJobsResponse) === 404
     || isMissingRelationError(meshGenerationJobsResponse.error, 'mesh_generation_jobs')
+  const spatialWorldSchemaMissing =
+    postgrestStatus(spatialWorldGenerationJobsResponse) === 404
+    || postgrestStatus(spatialWorldVariantsResponse) === 404
+    || postgrestStatus(spatialWorldMarkersResponse) === 404
+    || isMissingRelationError(spatialWorldGenerationJobsResponse.error, 'spatial_world_generation_jobs')
+    || isMissingRelationError(spatialWorldVariantsResponse.error, 'spatial_world_variants')
+    || isMissingRelationError(spatialWorldMarkersResponse.error, 'spatial_world_markers')
   const cinematicRunSchemaMissing =
     postgrestStatus(cinematicRunsResponse) === 404
     || isMissingRelationError(cinematicRunsResponse.error, 'cinematic_runs')
@@ -4244,6 +4377,9 @@ export async function loadProjectSnapshot(
   const worldThreads = worldThreadSchemaMissing ? [] : (worldThreadsResponse.data as WorldThreadRow[] | null) ?? []
   const worldBuildBatches = worldBuildSchemaMissing ? [] : (worldBuildBatchesResponse.data as WorldBuildBatchRow[] | null) ?? []
   const meshGenerationJobs = meshGenerationSchemaMissing ? [] : (meshGenerationJobsResponse.data as MeshGenerationJobRow[] | null) ?? []
+  const spatialWorldGenerationJobs = spatialWorldSchemaMissing ? [] : (spatialWorldGenerationJobsResponse.data as SpatialWorldGenerationJobRow[] | null) ?? []
+  const spatialWorldVariants = spatialWorldSchemaMissing ? [] : (spatialWorldVariantsResponse.data as SpatialWorldVariantRow[] | null) ?? []
+  const spatialWorldMarkers = spatialWorldSchemaMissing ? [] : (spatialWorldMarkersResponse.data as SpatialWorldMarkerRow[] | null) ?? []
   const cinematicRuns = cinematicRunSchemaMissing ? [] : (cinematicRunsResponse.data as CinematicRunRow[] | null) ?? []
   const outputWorkflows = outputWorkflowSchemaMissing ? [] : (outputWorkflowsResponse.data as OutputWorkflowRow[] | null) ?? []
   const outputWorkflowNodes = outputWorkflowSchemaMissing ? [] : (outputWorkflowNodesResponse.data as OutputWorkflowNodeRow[] | null) ?? []
@@ -4680,6 +4816,9 @@ export async function loadProjectSnapshot(
       createdAt: job.created_at,
       updatedAt: job.updated_at,
     })),
+    spatialWorldGenerationJobs: spatialWorldGenerationJobs.map(mapSpatialWorldGenerationJobRow),
+    spatialWorldVariants: spatialWorldVariants.map(mapSpatialWorldVariantRow),
+    spatialWorldMarkers: spatialWorldMarkers.map(mapSpatialWorldMarkerRow),
     cinematicRuns: cinematicRuns.map((run) => cinematicRunSchema.parse({
       id: run.id,
       draftId: run.draft_id,
@@ -5257,6 +5396,92 @@ function mapMeshGenerationDeltaRow(row: MeshGenerationJobRow) {
     providerLogs: Array.isArray(row.provider_logs) ? row.provider_logs.filter((entry): entry is string => typeof entry === 'string') : [],
     errorMessage: row.error_message,
     storagePath: row.storage_path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function nullableNumber(value: number | string | null) {
+  if (value === null) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function mapSpatialWorldGenerationJobRow(row: SpatialWorldGenerationJobRow) {
+  return spatialWorldGenerationJobSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    requestedBy: row.requested_by,
+    targetKind: row.target_kind,
+    targetKey: row.target_key,
+    variantKey: row.variant_key,
+    comparisonId: row.comparison_id,
+    provider: row.provider,
+    model: row.model,
+    status: row.status,
+    providerOperationId: row.provider_operation_id,
+    providerWorldId: row.provider_world_id,
+    providerStatus: row.provider_status,
+    input: row.input ?? {},
+    outputs: row.outputs ?? {},
+    estimatedUsd: nullableNumber(row.estimated_usd),
+    actualUsd: nullableNumber(row.actual_usd),
+    errorMessage: row.error_message,
+    workerId: row.worker_id,
+    heartbeatAt: row.heartbeat_at,
+    attemptCount: row.attempt_count,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapSpatialWorldVariantRow(row: SpatialWorldVariantRow) {
+  return spatialWorldVariantSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    targetKind: row.target_kind,
+    targetKey: row.target_key,
+    key: row.key,
+    name: row.name,
+    status: row.status,
+    provider: row.provider,
+    model: row.model,
+    sourceJobId: row.source_job_id,
+    manifestAssetKey: row.manifest_asset_key,
+    manifest: row.manifest,
+    alignmentTransform: row.alignment_transform ?? {},
+    alignmentConfidence: nullableNumber(row.alignment_confidence),
+    isActive: row.is_active,
+    archivedAt: row.archived_at,
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function mapSpatialWorldMarkerRow(row: SpatialWorldMarkerRow) {
+  return spatialWorldMarkerSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    variantId: row.variant_id,
+    key: row.key,
+    kind: row.kind,
+    name: row.name,
+    description: row.description,
+    transform: row.transform,
+    camera: row.camera,
+    linkedEntityKey: row.linked_entity_key,
+    linkedLocationKey: row.linked_location_key,
+    linkedSceneId: row.linked_scene_id,
+    linkedSpotId: row.linked_spot_id,
+    linkedCoverageSetupId: row.linked_coverage_setup_id,
+    screenshotAssetKey: row.screenshot_asset_key,
+    visible: row.visible,
+    metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })
@@ -8292,6 +8517,70 @@ export async function cancelVisualGenerationJob(jobId: string): Promise<VisualGe
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   return visualGenerationCancelResponseSchema.parse(response.data)
+}
+
+export async function previewSpatialWorldGeneration(
+  snapshot: ProjectSnapshot,
+  request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'>,
+): Promise<SpatialWorldGenerationPreviewResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before previewing spatial world generation.')
+  if (!hasLiveSnapshotIds(snapshot)) throw new Error('Load a live GraphCore draft before previewing spatial world generation.')
+  const payload = spatialWorldGenerationStartRequestSchema.parse({
+    ...request,
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery('preview-spatial-world-generation', payload, session)
+  if (response.error) throw new Error(await readFunctionsErrorMessage(response.error))
+  return spatialWorldGenerationPreviewResponseSchema.parse(response.data)
+}
+
+export async function startSpatialWorldGeneration(
+  snapshot: ProjectSnapshot,
+  request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> & { quoteToken: string },
+): Promise<SpatialWorldGenerationStartResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting spatial world generation.')
+  if (!hasLiveSnapshotIds(snapshot)) throw new Error('Load a live GraphCore draft before starting spatial world generation.')
+  const payload = spatialWorldGenerationConfirmedStartRequestSchema.parse({
+    ...request,
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery('start-spatial-world-generation', payload, session)
+  if (response.error) throw new Error(await readFunctionsErrorMessage(response.error))
+  return spatialWorldGenerationStartResponseSchema.parse(response.data)
+}
+
+export async function getSpatialWorldGenerationStatus(jobId: string): Promise<SpatialWorldGenerationStatusResponse> {
+  return runCoalescedRequest({
+    key: `spatial-world-status:${jobId}`,
+    className: 'visual-status',
+    ttlMs: 750,
+    retryPolicy: { attempts: 2 },
+    fn: async () => {
+      const session = await getValidatedSession('Sign in and load a live GraphCore draft before loading spatial world status.')
+      const payload = spatialWorldGenerationStatusRequestSchema.parse({ jobId })
+      const response = await invokeAuthedFunctionWithSessionRecovery('get-spatial-world-generation-status', payload, session)
+      if (response.error) throw new Error(await readFunctionsErrorMessage(response.error))
+      return spatialWorldGenerationStatusResponseSchema.parse(response.data)
+    },
+  })
+}
+
+export async function cancelSpatialWorldGeneration(jobId: string): Promise<SpatialWorldGenerationCancelResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before cancelling spatial world generation.')
+  const payload = spatialWorldGenerationStatusRequestSchema.parse({ jobId })
+  const response = await invokeAuthedFunctionWithSessionRecovery('cancel-spatial-world-generation', payload, session)
+  if (response.error) throw new Error(await readFunctionsErrorMessage(response.error))
+  return spatialWorldGenerationCancelResponseSchema.parse(response.data)
+}
+
+export async function activateSpatialWorldVariant(variantId: string): Promise<SpatialWorldVariantActivationResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before activating a spatial world variant.')
+  const payload = spatialWorldVariantActivationRequestSchema.parse({ variantId })
+  const response = await invokeAuthedFunctionWithSessionRecovery('activate-spatial-world-variant', payload, session)
+  if (response.error) throw new Error(await readFunctionsErrorMessage(response.error))
+  return spatialWorldVariantActivationResponseSchema.parse(response.data)
 }
 
 export async function startAppCodeGeneration(snapshot: ProjectSnapshot): Promise<AppGenerationStartResponse> {

@@ -3,7 +3,7 @@ import type { AssetDefinition } from './graphcore.ts'
 export const supportedMeshExtensions = ['.glb', '.gltf'] as const
 export const supportedMeshAccept = '.glb,.gltf,model/gltf-binary,model/gltf+json'
 
-export type AssetUrlCreationKind = 'image' | 'mesh' | 'video'
+export type AssetUrlCreationKind = 'image' | 'mesh' | 'spatial_world' | 'video'
 export type AssetUrlCreateOptions = {
   existingAssetKey?: string | null
   metadata?: Record<string, unknown>
@@ -86,6 +86,7 @@ export function inferUploadMimeType(file: File, kind: AssetDefinition['kind']) {
 }
 
 export function getAssetKeyPrefix(kind: AssetUrlCreationKind | AssetDefinition['kind']) {
+  if (kind === 'spatial_world') return 'spatial_world'
   if (kind === 'mesh') return 'mesh'
   if (kind === 'audio') return 'audio'
   if (kind === 'video') return 'video'

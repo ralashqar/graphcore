@@ -1,6 +1,6 @@
-export type WorkerWakeFamily = 'visual' | 'output_workflow' | 'generation' | 'app_generation'
+export type WorkerWakeFamily = 'visual' | 'spatial_world' | 'output_workflow' | 'generation' | 'app_generation'
 
-export const workerWakeFamilies: WorkerWakeFamily[] = ['visual', 'output_workflow', 'generation', 'app_generation']
+export const workerWakeFamilies: WorkerWakeFamily[] = ['visual', 'spatial_world', 'output_workflow', 'generation', 'app_generation']
 
 export type WorkerWakePayload = {
   families?: Array<WorkerWakeFamily | 'all'>

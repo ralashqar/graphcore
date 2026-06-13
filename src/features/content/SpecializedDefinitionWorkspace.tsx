@@ -4,6 +4,16 @@ import { getArtStylePresetLabel } from '../../domain/artStylePresets'
 import type { ArchetypeDefinition, AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1, FieldDefinition, FieldValue, GameSpec, GraphDefinition } from '../../domain/graphcore'
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import type { VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../../domain/visualGeneration'
+import type {
+  SpatialWorldGenerationJob,
+  SpatialWorldGenerationPreviewResponse,
+  SpatialWorldGenerationStartRequest,
+  SpatialWorldGenerationStartResponse,
+  SpatialWorldGenerationStatusResponse,
+  SpatialWorldProvider,
+  SpatialWorldQuality,
+  SpatialWorldVariant,
+} from '../../domain/spatialWorldGeneration'
 import type { WorldEntity, WorldEntityCreateInput, WorldRelationship } from '../../domain/worldGraph'
 import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../../domain/worldGraphHelpers'
 import {
@@ -61,6 +71,12 @@ type SpecializedDefinitionWorkspaceProps = {
   onGenerateConceptImage: (definitionKey: string) => Promise<void>
   onGenerateReferenceSheet?: (definitionKey: string) => Promise<VisualGenerationStartResponse | void>
   onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse>
+  spatialWorldVariants?: SpatialWorldVariant[]
+  onPreviewSpatialWorldGeneration?: (request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'>) => Promise<SpatialWorldGenerationPreviewResponse>
+  onStartSpatialWorldGeneration?: (request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> & { quoteToken: string }) => Promise<SpatialWorldGenerationStartResponse>
+  onGetSpatialWorldGenerationStatus?: (jobId: string) => Promise<SpatialWorldGenerationStatusResponse>
+  onCancelSpatialWorldGeneration?: (jobId: string) => Promise<unknown>
+  onActivateSpatialWorldVariant?: (variantId: string) => Promise<unknown>
   onReferenceSheetJobFinished?: () => Promise<void> | void
   onOpenCinematicGraph: (graphKey: string) => void
   onStartMeshGeneration: (definitionKey: string) => void
@@ -126,6 +142,12 @@ export function SpecializedDefinitionWorkspace({
   onGenerateConceptImage,
   onGenerateReferenceSheet,
   onGetVisualGenerationStatus,
+  spatialWorldVariants = [],
+  onPreviewSpatialWorldGeneration,
+  onStartSpatialWorldGeneration,
+  onGetSpatialWorldGenerationStatus,
+  onCancelSpatialWorldGeneration,
+  onActivateSpatialWorldVariant,
   onReferenceSheetJobFinished,
   onOpenCinematicGraph,
   onStartMeshGeneration,
@@ -155,6 +177,13 @@ export function SpecializedDefinitionWorkspace({
   const [conceptMessage, setConceptMessage] = useState<string | null>(null)
   const [conceptPending, setConceptPending] = useState(false)
   const [referenceSheetJob, setReferenceSheetJob] = useState<VisualGenerationStatusResponse['job'] | null>(null)
+  const [spatialProviders, setSpatialProviders] = useState<SpatialWorldProvider[]>(['worldlabs'])
+  const [spatialQuality, setSpatialQuality] = useState<SpatialWorldQuality>('draft')
+  const [spatialQuote, setSpatialQuote] = useState<SpatialWorldGenerationPreviewResponse | null>(null)
+  const [spatialQuotedRequest, setSpatialQuotedRequest] = useState<Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> | null>(null)
+  const [spatialJobs, setSpatialJobs] = useState<SpatialWorldGenerationJob[]>([])
+  const [spatialMessage, setSpatialMessage] = useState<string | null>(null)
+  const [spatialBusy, setSpatialBusy] = useState(false)
   const [isOpeningPreview, startOpeningPreview] = useTransition()
 
   const filteredDefinitions = useMemo(() => {
@@ -313,7 +342,26 @@ export function SpecializedDefinitionWorkspace({
     setIsSelectionIconPickerOpen(false)
     setIsSelectionPreviewOpen(false)
     setReferenceSheetJob(null)
+    setSpatialQuote(null)
+    setSpatialQuotedRequest(null)
+    setSpatialJobs([])
+    setSpatialMessage(null)
   }, [effectiveSelection?.key])
+
+  useEffect(() => {
+    if (!onGetSpatialWorldGenerationStatus || spatialJobs.every((job) => ['completed', 'failed', 'cancelled'].includes(job.status))) return
+    let disposed = false
+    const poll = async () => {
+      const next = await Promise.all(spatialJobs.map(async (job) => {
+        if (['completed', 'failed', 'cancelled'].includes(job.status)) return job
+        try { return (await onGetSpatialWorldGenerationStatus(job.id)).job } catch { return job }
+      }))
+      if (!disposed) setSpatialJobs(next)
+    }
+    const interval = window.setInterval(() => void poll(), 3000)
+    void poll()
+    return () => { disposed = true; window.clearInterval(interval) }
+  }, [onGetSpatialWorldGenerationStatus, spatialJobs])
 
   useEffect(() => {
     if (!referenceSheetJob || !['queued', 'running'].includes(referenceSheetJob.status) || !onGetVisualGenerationStatus) return
@@ -378,6 +426,11 @@ export function SpecializedDefinitionWorkspace({
   function updateEnvironmentRenderBinding(changes: Partial<NonNullable<typeof selectedEnvironmentRenderBinding>>) {
     if (effectiveSelection?.kind !== 'environment' || !selectedEnvironmentRenderBinding) return
     const nextConfig = {
+      spatialWorldVariantId: null,
+      spatialWorldAssetKey: null,
+      spatialWorldManifestAssetKey: null,
+      colliderMeshAssetKey: null,
+      spatialWorldJobId: null,
       ...selectedEnvironmentRenderBinding,
       ...changes,
     }
@@ -413,6 +466,67 @@ export function SpecializedDefinitionWorkspace({
     : effectiveSelection?.kind === 'environment'
       ? (selectedEnvironmentRenderBinding?.generationPrompt?.trim() || linkedWorldVisualDescription)
       : ''
+  const selectedSpatialVariants = useMemo(() => {
+    if (effectiveSelection?.kind !== 'environment') return []
+    return spatialWorldVariants.filter((variant) => variant.targetKind === 'environment' && variant.targetKey === effectiveSelection.key)
+  }, [effectiveSelection, spatialWorldVariants])
+
+  function toggleSpatialProvider(provider: SpatialWorldProvider) {
+    setSpatialQuote(null)
+    setSpatialQuotedRequest(null)
+    setSpatialProviders((current) => current.includes(provider)
+      ? current.length > 1 ? current.filter((entry) => entry !== provider) : current
+      : [...current, provider])
+  }
+
+  async function previewSpatialGeneration() {
+    if (!effectiveSelection || !onPreviewSpatialWorldGeneration) return
+    const prompt = selectedVisualDescription.trim() || effectiveSelection.summary.trim()
+    if (!prompt) { setSpatialMessage('Add a visual description before generating a world.'); return }
+    const request = {
+      targetKind: 'environment' as const,
+      targetKey: effectiveSelection.key,
+      variantKey: `generated-${Date.now().toString(36)}`,
+      providers: spatialProviders,
+      modelByProvider: {},
+      input: {
+        prompt,
+        negativePrompt: null,
+        quality: spatialQuality,
+        sourceImages: [],
+        sourceVideoAssetKey: null,
+        spatialDocumentSummary: projectSummary ?? null,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: { requestedFrom: 'environment_definition' },
+      },
+      metadata: { definitionName: effectiveSelection.name },
+    } satisfies Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'>
+    setSpatialBusy(true)
+    setSpatialMessage('Calculating provider cost...')
+    try {
+      const quote = await onPreviewSpatialWorldGeneration(request)
+      setSpatialQuotedRequest(request)
+      setSpatialQuote(quote)
+      setSpatialMessage('Quote ready. Confirm to reserve credits and start generation.')
+    } catch (error) {
+      setSpatialMessage(error instanceof Error ? error.message : 'Could not preview spatial world generation.')
+    } finally { setSpatialBusy(false) }
+  }
+
+  async function confirmSpatialGeneration() {
+    if (!spatialQuote || !spatialQuotedRequest || !onStartSpatialWorldGeneration) return
+    setSpatialBusy(true)
+    setSpatialMessage('Reserving credits and queueing world generation...')
+    try {
+      const result = await onStartSpatialWorldGeneration({ ...spatialQuotedRequest, quoteToken: spatialQuote.quoteToken })
+      setSpatialJobs(result.jobs)
+      setSpatialQuote(null)
+      setSpatialQuotedRequest(null)
+      setSpatialMessage(`${result.jobs.length} spatial world job${result.jobs.length === 1 ? '' : 's'} queued.`)
+    } catch (error) {
+      setSpatialMessage(error instanceof Error ? error.message : 'Could not start spatial world generation.')
+    } finally { setSpatialBusy(false) }
+  }
   const selectedVisualIdentity = useMemo(() => readWorldEntityVisualIdentity({
     summary: '',
     context: '',
@@ -788,6 +902,64 @@ export function SpecializedDefinitionWorkspace({
               {conceptMessage ? <div className="inline-note">{conceptMessage}</div> : null}
             </div>
           </div>
+          {effectiveSelection.kind === 'environment' && onPreviewSpatialWorldGeneration && onStartSpatialWorldGeneration ? (
+            <div className="editor-section compact-section">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Spatial World</span>
+                  <h3>Generate explorable 3D world</h3>
+                </div>
+                <span className="chip">{selectedSpatialVariants.filter((variant) => variant.status === 'ready').length} ready</span>
+              </div>
+              <p className="inline-note">Generate a Gaussian-splat world plus collider mesh and panorama. Choose both providers to create comparison variants.</p>
+              <div className="definition-focus-action-row">
+                <button className={spatialProviders.includes('worldlabs') ? 'ghost-button compact is-selected' : 'ghost-button compact'} onClick={() => toggleSpatialProvider('worldlabs')} type="button">World Labs</button>
+                <button className="ghost-button compact" disabled title="Awaiting a verified public API contract" type="button">SpAItial pending</button>
+                <select value={spatialQuality} onChange={(event) => { setSpatialQuality(event.target.value as SpatialWorldQuality); setSpatialQuote(null); setSpatialQuotedRequest(null) }}>
+                  <option value="draft">Draft</option>
+                  <option value="standard">Standard</option>
+                  <option value="high">High</option>
+                </select>
+                <button className={spatialBusy ? 'primary-button button-with-spinner' : 'primary-button'} disabled={spatialBusy} onClick={() => void previewSpatialGeneration()} type="button">
+                  {spatialBusy ? <><span className="button-spinner" aria-hidden="true" />Preparing...</> : 'Preview cost'}
+                </button>
+              </div>
+              {spatialQuote ? (
+                <div className="schema-card">
+                  <div className="schema-card-head">
+                    <strong>{spatialQuote.totalEstimatedCredits} credits estimated</strong>
+                    <span className="chip">${spatialQuote.totalEstimatedUsd.toFixed(2)}</span>
+                  </div>
+                  <div className="definition-world-relationship-list">
+                    {spatialQuote.quotes.map((quote) => <div key={quote.provider} className="inline-note">{quote.provider}: {quote.model} · {quote.estimatedCredits} credits</div>)}
+                  </div>
+                  <button className="primary-button" disabled={spatialBusy} onClick={() => void confirmSpatialGeneration()} type="button">Confirm and generate</button>
+                </div>
+              ) : null}
+              {spatialJobs.map((job) => (
+                <div key={job.id} className="schema-card">
+                  <div className="schema-card-head">
+                    <strong>{job.provider} · {job.variantKey}</strong>
+                    <span className="chip">{job.status}</span>
+                  </div>
+                  <div className="inline-note">{job.errorMessage || job.providerStatus || 'Waiting for provider.'}</div>
+                  {!['completed', 'failed', 'cancelled'].includes(job.status) && onCancelSpatialWorldGeneration ? (
+                    <button className="ghost-button compact danger" onClick={() => void onCancelSpatialWorldGeneration(job.id).then(() => setSpatialJobs((current) => current.map((entry) => entry.id === job.id ? { ...entry, status: 'cancelled' } : entry)))} type="button">Cancel</button>
+                  ) : null}
+                </div>
+              ))}
+              {selectedSpatialVariants.map((variant) => (
+                <div key={variant.id} className="schema-card">
+                  <div className="schema-card-head"><strong>{variant.name}</strong><span className="chip">{variant.status}</span></div>
+                  <div className="inline-note">{variant.provider} · {variant.model}{variant.manifest?.primarySplatAssetKey ? ' · splat ready' : ''}{variant.manifest?.colliderMeshAssetKey ? ' · collider ready' : ''}</div>
+                  {variant.status === 'ready' && onActivateSpatialWorldVariant ? (
+                    <button className={variant.isActive ? 'ghost-button compact is-selected' : 'ghost-button compact'} disabled={variant.isActive} onClick={() => void onActivateSpatialWorldVariant(variant.id).then(() => setSpatialMessage(`${variant.name} is now the active spatial world.`))} type="button">{variant.isActive ? 'Active world' : 'Use this world'}</button>
+                  ) : null}
+                </div>
+              ))}
+              {spatialMessage ? <div className="inline-note">{spatialMessage}</div> : null}
+            </div>
+          ) : null}
         </div>
       </div>
 

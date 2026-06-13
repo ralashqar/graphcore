@@ -1,6 +1,7 @@
 import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
 import { processFlyAppGenerationJobs } from '../../supabase/functions/_shared/app-generation-worker.ts'
 import { processFlyOutputWorkflowRuns } from '../../supabase/functions/_shared/output-workflow.ts'
+import { processFlySpatialWorldGenerationJobs } from '../../supabase/functions/_shared/spatial-world-generation-worker.ts'
 import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
 import {
   normalizeWorkerWakeFamilies,
@@ -31,6 +32,10 @@ const idleLogIntervalMs = Math.max(30_000, Number(Deno.env.get('GRAPHCORE_WORKER
 const visualWorkerConcurrency = readPositiveInt(
   Deno.env.get('VISUAL_GENERATION_WORKER_CONCURRENCY') ?? Deno.env.get('VISUAL_GENERATION_OPENAI_CONCURRENCY'),
   8,
+)
+const spatialWorldWorkerConcurrency = readPositiveInt(
+  Deno.env.get('SPATIAL_WORLD_WORKER_CONCURRENCY'),
+  2,
 )
 const outputWorkflowWorkerConcurrency = readPositiveInt(
   Deno.env.get('OUTPUT_WORKFLOW_WORKER_CONCURRENCY'),
@@ -97,7 +102,7 @@ function requestShutdown(signal: string) {
   // stale-heartbeat reclaim. In-flight executors notice the lost lease via
   // their run-status checks and stop without writing further state.
   if (firstSignal) void releaseClaimedOutputWorkflowRunsForShutdown(signal)
-  for (const family of ['visual', 'output_workflow', 'generation', 'app_generation'] as WorkerWakeFamily[]) {
+  for (const family of ['visual', 'spatial_world', 'output_workflow', 'generation', 'app_generation'] as WorkerWakeFamily[]) {
     wakeScheduler.signal([family])
   }
 }
@@ -231,6 +236,7 @@ console.log('[world-generation-worker] started', {
   activePollIntervalMs,
   idlePollIntervalMs,
   visualWorkerConcurrency,
+  spatialWorldWorkerConcurrency,
   outputWorkflowWorkerConcurrency,
   runtime: 'fly',
 })
@@ -318,6 +324,33 @@ async function runVisualWorkerLoop(laneIndex: number) {
       await wakeScheduler.waitForWakeOrTimeout('visual', workerIdleDelay(emptyPolls), pollStartedAt)
     } catch (error) {
       await handleWorkerLoopError('visual', error)
+    }
+  }
+}
+
+async function runSpatialWorldWorkerLoop(laneIndex: number) {
+  const spatialWorkerId = `${workerId}:spatial:${laneIndex + 1}`
+  let emptyPolls = 0
+  while (!shuttingDown) {
+    try {
+      await waitForDatabaseCircuit('spatial_world')
+      const pollStartedAt = Date.now()
+      const result = await processFlySpatialWorldGenerationJobs({ client, workerId: spatialWorkerId })
+      if (result.processed) {
+        console.log('[world-generation-worker] processed spatial world generation job', {
+          workerId: spatialWorkerId,
+          laneIndex,
+          jobId: result.job?.id ?? null,
+          status: result.job?.status ?? null,
+          provider: result.job?.provider ?? null,
+        })
+        emptyPolls = 0
+        continue
+      }
+      emptyPolls += 1
+      await wakeScheduler.waitForWakeOrTimeout('spatial_world', workerIdleDelay(emptyPolls), pollStartedAt)
+    } catch (error) {
+      await handleWorkerLoopError('spatial_world', error)
     }
   }
 }
@@ -478,6 +511,7 @@ async function runOutputWorkflowWorkerLoop(laneIndex: number) {
 
 await Promise.all([
   ...Array.from({ length: visualWorkerConcurrency }, (_, index) => runVisualWorkerLoop(index)),
+  ...Array.from({ length: spatialWorldWorkerConcurrency }, (_, index) => runSpatialWorldWorkerLoop(index)),
   runGenerationWorkerLoop(),
   runAppGenerationWorkerLoop(),
   ...Array.from({ length: outputWorkflowWorkerConcurrency }, (_, index) => runOutputWorkflowWorkerLoop(index)),

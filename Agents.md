@@ -691,6 +691,38 @@ Agents support dynamic model selection based on task requirements:
 - Conversion rate tracking
 - A/B test performance analysis
 
+### Spatial World Generation Workstream
+
+**Purpose**: Produces explorable spatial-world artifacts for GraphCore environments, world models, and cinematic locations without replacing GraphCore's canonical world graph or spatial semantics.
+
+**Current Contract**:
+- Provider-neutral schemas live in `src/domain/spatialWorldGeneration.ts`
+- Initial provider identifiers are `worldlabs` and `spaitial`
+- Normalized inputs support text, asset-backed reference images, panorama roles, optional source video, quality tiers, and stable idempotency keys
+- Completed jobs return a versioned manifest linking splat assets, optional LODs, collider GLB, panorama, thumbnail, provider world ID, bounds, metric scale, and ground-plane metadata
+- Spatial-world jobs are exposed in project snapshots through `spatialWorldGenerationJobs`
+- Durable Supabase state lives in `spatial_world_generation_jobs`, `spatial_world_variants`, and `spatial_world_markers`, all protected by draft-aware RLS. Privileged quote-confirmed starts and variant activation must separately verify draft edit access before invoking service-role RPCs.
+- `preview-spatial-world-generation` returns a signed, ten-minute quote bound to the complete normalized request. `start-spatial-world-generation` verifies that signature and atomically reserves credits, inserts provider jobs, and creates comparison variants through `enqueue_spatial_world_generation_jobs`.
+- The Fly world-generation worker has a dedicated `spatial_world` wake family and configurable `SPATIAL_WORLD_WORKER_CONCURRENCY`. The World Labs adapter submits Marble text jobs, polls provider operations, downloads SPZ LODs, collider GLB, panorama, and thumbnail with bounded retries, uploads them to `project-assets`, and writes a provider-neutral manifest.
+- SpAItial remains a first-class provider identifier and comparison option, but live execution must fail closed until a verified public API contract is configured. Do not invent or guess its wire payload.
+- Ready variants are activated through `activate_spatial_world_variant`, which updates only additive environment/world render-binding fields. Canonical blueprints, assembly graphs, navigation, and spawn semantics remain untouched.
+- Environment authoring exposes provider selection, quality, signed cost preview, explicit credit confirmation, progress/cancellation, stored comparison variants, and activation.
+- Generated spatial worlds are derivative visual outputs. They must not silently mutate environment blueprints, assembly graphs, rooms, anchors, connectors, navigation, spawn rules, or canon
+
+**Remaining Integration**:
+- Spark rendering in the existing React Three Fiber viewport
+- Optional PlayCanvas SplatTransform processing for conversion, optimization, LOD, and collision fallback
+- Spatial marker authoring for entry points, canon anchors, and cinematic camera viewpoints
+
+**Server Configuration**:
+- `WORLDLABS_API_KEY`
+- `SPATIAL_WORLD_QUOTE_SECRET` (falls back to `GRAPHCORE_WORKER_SECRET`)
+- `SPATIAL_WORLD_WORKER_CONCURRENCY` (default `2`)
+- `SPATIAL_WORLD_PROVIDER_POLL_INTERVAL_MS` (default `5000`)
+- `SPATIAL_WORLD_PROVIDER_MAX_POLL_MS` (default `1200000`)
+- `SPATIAL_WORLD_DOWNLOAD_TIMEOUT_MS` (default `60000`)
+- `SPAITIAL_DEFAULT_MODEL` and `SPAITIAL_ESTIMATED_WORLD_USD` are estimate/configuration placeholders only until the live adapter contract is verified
+
 ## Future Agent Developments
 
 ### Planned Enhancements
@@ -741,4 +773,3 @@ Agents support dynamic model selection based on task requirements:
 ---
 
 *This document is maintained alongside the GraphCore codebase. For implementation details, see the source code in `src/domain/`, `src/data/`, and `supabase/functions/`.*
-

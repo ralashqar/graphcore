@@ -278,6 +278,21 @@ verify_jwt = false
 [functions.poll-mesh-generation]
 verify_jwt = false
 
+[functions.preview-spatial-world-generation]
+verify_jwt = false
+
+[functions.start-spatial-world-generation]
+verify_jwt = false
+
+[functions.get-spatial-world-generation-status]
+verify_jwt = false
+
+[functions.cancel-spatial-world-generation]
+verify_jwt = false
+
+[functions.activate-spatial-world-variant]
+verify_jwt = false
+
 [functions.delete-generated-mesh]
 verify_jwt = false
 

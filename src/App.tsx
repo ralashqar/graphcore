@@ -9126,6 +9126,12 @@ export default function App() {
                 onGenerateConceptImage={(definitionKey) => handleStartDefinitionConceptGeneration(definitionKey)}
                 onGenerateReferenceSheet={(definitionKey) => handleStartDefinitionReferenceSheetGeneration(definitionKey)}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}
+                spatialWorldVariants={snapshot.spatialWorldVariants}
+                onPreviewSpatialWorldGeneration={(request) => workspaceService.previewSpatialWorldGeneration(snapshot, request)}
+                onStartSpatialWorldGeneration={(request) => workspaceService.startSpatialWorldGeneration(snapshot, request)}
+                onGetSpatialWorldGenerationStatus={(jobId) => workspaceService.getSpatialWorldGenerationStatus(jobId)}
+                onCancelSpatialWorldGeneration={(jobId) => workspaceService.cancelSpatialWorldGeneration(jobId)}
+                onActivateSpatialWorldVariant={(variantId) => workspaceService.activateSpatialWorldVariant(variantId).then(async (result) => { await refreshLiveSnapshot(); return result })}
                 onReferenceSheetJobFinished={refreshLiveSnapshot}
                 onOpenCinematicGraph={openCinematicWorkspace}
                 onOpenDefinitionLink={openDefinitionWorkspace}

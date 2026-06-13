@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { graphcoreWorkspaceAdapter } from '../../infrastructure/graphcore/graphcoreWorkspaceAdapter'
 
 export const workspaceService = {
+  activateSpatialWorldVariant: graphcoreWorkspaceAdapter.activateSpatialWorldVariant,
   applyPatchProposal: graphcoreWorkspaceAdapter.applyPatchProposal,
   applyDraftDeltaToSnapshot: graphcoreWorkspaceAdapter.applyDraftDeltaToSnapshot,
   applyWorldPromptPreview: graphcoreWorkspaceAdapter.applyWorldPromptPreview,
@@ -14,6 +15,7 @@ export const workspaceService = {
   deleteOutputRequest: graphcoreWorkspaceAdapter.deleteOutputRequest,
   repairOutputWorkflowState: graphcoreWorkspaceAdapter.repairOutputWorkflowState,
   cancelVisualGenerationJob: graphcoreWorkspaceAdapter.cancelVisualGenerationJob,
+  cancelSpatialWorldGeneration: graphcoreWorkspaceAdapter.cancelSpatialWorldGeneration,
   cancelWorldPromptTurn: graphcoreWorkspaceAdapter.cancelWorldPromptTurn,
   cancelWorldGenerationJob: graphcoreWorkspaceAdapter.cancelWorldGenerationJob,
   cancelCinematicRun: graphcoreWorkspaceAdapter.cancelCinematicRun,
@@ -43,6 +45,7 @@ export const workspaceService = {
   getOutputWorkflowStatus: graphcoreWorkspaceAdapter.getOutputWorkflowStatus,
   getWorldEntityIconBatchStatus: graphcoreWorkspaceAdapter.getWorldEntityIconBatchStatus,
   getVisualGenerationStatus: graphcoreWorkspaceAdapter.getVisualGenerationStatus,
+  getSpatialWorldGenerationStatus: graphcoreWorkspaceAdapter.getSpatialWorldGenerationStatus,
   getWorldGenerationStatus: graphcoreWorkspaceAdapter.getWorldGenerationStatus,
   generateStarterWorld: graphcoreWorkspaceAdapter.generateStarterWorld,
   generateWorldExpansion: graphcoreWorkspaceAdapter.generateWorldExpansion,
@@ -101,6 +104,8 @@ export const workspaceService = {
   ensureSequenceAnimaticKeyframeWorkflows: graphcoreWorkspaceAdapter.ensureSequenceAnimaticKeyframeWorkflows,
   ensureSequenceAnimaticShotRevisionWorkflow: graphcoreWorkspaceAdapter.ensureSequenceAnimaticShotRevisionWorkflow,
   startVisualGenerationJob: graphcoreWorkspaceAdapter.startVisualGenerationJob,
+  previewSpatialWorldGeneration: graphcoreWorkspaceAdapter.previewSpatialWorldGeneration,
+  startSpatialWorldGeneration: graphcoreWorkspaceAdapter.startSpatialWorldGeneration,
   startWorldEntityIconBatch: graphcoreWorkspaceAdapter.startWorldEntityIconBatch,
   continueWorldSeedGeneration: graphcoreWorkspaceAdapter.continueWorldSeedGeneration,
   startWorldPromptTurn: graphcoreWorkspaceAdapter.startWorldPromptTurn,

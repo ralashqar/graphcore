@@ -377,6 +377,11 @@ export function Definition3dPanel({
       const nextConfig: EnvironmentRenderBindingConfig = {
         primaryMeshAssetKey: renderBinding.primaryMeshAssetKey ?? null,
         previewImageAssetKey: renderBinding.previewImageAssetKey ?? null,
+        spatialWorldVariantId: renderBinding.spatialWorldVariantId ?? null,
+        spatialWorldAssetKey: renderBinding.spatialWorldAssetKey ?? null,
+        spatialWorldManifestAssetKey: renderBinding.spatialWorldManifestAssetKey ?? null,
+        colliderMeshAssetKey: renderBinding.colliderMeshAssetKey ?? null,
+        spatialWorldJobId: renderBinding.spatialWorldJobId ?? null,
         lightingProfile: renderBinding.lightingProfile ?? '',
         generationPrompt: renderBinding.generationPrompt ?? null,
         generationStyle: renderBinding.generationStyle ?? null,

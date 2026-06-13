@@ -21,6 +21,14 @@ import type {
   VisualGenerationStatusResponse,
 } from '../../domain/visualGeneration'
 import type {
+  SpatialWorldGenerationCancelResponse,
+  SpatialWorldGenerationPreviewResponse,
+  SpatialWorldGenerationStartRequest,
+  SpatialWorldGenerationStartResponse,
+  SpatialWorldGenerationStatusResponse,
+  SpatialWorldVariantActivationResponse,
+} from '../../domain/spatialWorldGeneration'
+import type {
   WorldBuildAuthorCinematicRequest,
   WorldBuildDeletePlaceholderRequest,
   WorldBuildDeletePlaceholderResponse,
@@ -56,6 +64,11 @@ export type GenerationApi = {
   listActiveVisualGenerationJobs(snapshot: ProjectSnapshot, kinds?: VisualGenerationKind[]): Promise<VisualGenerationJob[]>
   getVisualGenerationStatus(jobId: string): Promise<VisualGenerationStatusResponse>
   cancelVisualGenerationJob(jobId: string): Promise<VisualGenerationCancelResponse>
+  previewSpatialWorldGeneration(snapshot: ProjectSnapshot, request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'>): Promise<SpatialWorldGenerationPreviewResponse>
+  startSpatialWorldGeneration(snapshot: ProjectSnapshot, request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> & { quoteToken: string }): Promise<SpatialWorldGenerationStartResponse>
+  getSpatialWorldGenerationStatus(jobId: string): Promise<SpatialWorldGenerationStatusResponse>
+  cancelSpatialWorldGeneration(jobId: string): Promise<SpatialWorldGenerationCancelResponse>
+  activateSpatialWorldVariant(variantId: string): Promise<SpatialWorldVariantActivationResponse>
   startAppCodeGeneration(snapshot: ProjectSnapshot): Promise<AppGenerationStartResponse>
   getAppGenerationStatus(jobId: string): Promise<AppGenerationStatusResponse>
   cancelAppGenerationJob(jobId: string): Promise<AppGenerationCancelResponse>
