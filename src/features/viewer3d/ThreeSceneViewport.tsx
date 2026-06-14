@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bounds, Grid, OrbitControls, useBounds } from '@react-three/drei'
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { Box3, BufferAttribute, BufferGeometry, DoubleSide, Group, Line, LineBasicMaterial, Mesh, MeshStandardMaterial, Vector3 } from 'three'
 
@@ -20,6 +21,13 @@ function is3dDebugEnabled() {
 type ThreeSceneViewportProps = {
   compiledEnvironment?: CompiledEnvironmentModel | null
   meshSourceUrl: string | null
+  spatialWorldSourceUrl?: string | null
+  spatialWorldTransform?: {
+    position: [number, number, number]
+    rotation: [number, number, number]
+    scale: [number, number, number]
+  } | null
+  renderMode?: 'mesh' | 'spatial_world' | 'hybrid'
   modelKind: 'character' | 'environment'
   modelLabel: string
   modelSubtype: string
@@ -27,6 +35,8 @@ type ThreeSceneViewportProps = {
   showGrid: boolean
   resetSignal: number
   onMeshLoadStateChange?: ((state: LoadedSceneState) => void) | null
+  onSpatialLoadStateChange?: ((state: SpatialLoadState) => void) | null
+  onPerformanceChange?: ((sample: { fps: number; frameTimeMs: number }) => void) | null
 }
 
 type LoadedSceneState =
@@ -34,6 +44,12 @@ type LoadedSceneState =
   | { status: 'loading'; scene: null; error: null }
   | { status: 'ready'; scene: Group; error: null }
   | { status: 'error'; scene: null; error: string }
+
+export type SpatialLoadState =
+  | { status: 'idle'; progress: 0; splatCount: null; error: null }
+  | { status: 'loading'; progress: number; splatCount: null; error: null }
+  | { status: 'ready'; progress: 1; splatCount: number; error: null }
+  | { status: 'error'; progress: number; splatCount: null; error: string }
 
 const targetCharacterMeshHeight = 2.3
 
@@ -152,6 +168,80 @@ function FitBounds({ fitKey }: { fitKey: string }) {
     bounds.refresh().clip().fit()
   }, [bounds, fitKey])
 
+  return null
+}
+
+function SpatialWorldView({
+  sourceUrl,
+  transform,
+  onLoadStateChange,
+}: {
+  sourceUrl: string
+  transform: NonNullable<ThreeSceneViewportProps['spatialWorldTransform']>
+  onLoadStateChange: (state: SpatialLoadState) => void
+}) {
+  const { gl, invalidate, scene } = useThree()
+  const bounds = useBounds()
+  const splat = useMemo(() => new SplatMesh({
+    url: sourceUrl,
+    enableLod: true,
+    onProgress: (event) => {
+      const total = Number(event.total)
+      const loaded = Number(event.loaded)
+      onLoadStateChange({
+        status: 'loading',
+        progress: total > 0 ? Math.min(1, loaded / total) : 0,
+        splatCount: null,
+        error: null,
+      })
+    },
+  }), [onLoadStateChange, sourceUrl])
+
+  useEffect(() => {
+    const spark = new SparkRenderer({ renderer: gl })
+    scene.add(spark)
+    onLoadStateChange({ status: 'loading', progress: 0, splatCount: null, error: null })
+    let active = true
+    void splat.initialized.then(() => {
+      if (!active) return
+      onLoadStateChange({ status: 'ready', progress: 1, splatCount: splat.splats?.getNumSplats() ?? 0, error: null })
+      splat.updateMatrixWorld(true)
+      bounds.refresh(splat).clip().fit()
+      invalidate()
+    }).catch((error) => {
+      if (!active) return
+      onLoadStateChange({ status: 'error', progress: 0, splatCount: null, error: error instanceof Error ? error.message : 'Spatial world failed to load.' })
+    })
+    return () => {
+      active = false
+      scene.remove(spark)
+      spark.dispose()
+      splat.dispose()
+    }
+  }, [bounds, gl, invalidate, onLoadStateChange, scene, splat])
+
+  return (
+    <primitive
+      object={splat}
+      position={transform.position}
+      rotation={transform.rotation}
+      scale={transform.scale}
+    />
+  )
+}
+
+function PerformanceProbe({ onPerformanceChange }: { onPerformanceChange: (sample: { fps: number; frameTimeMs: number }) => void }) {
+  const elapsedRef = useRef(0)
+  const framesRef = useRef(0)
+  useFrame((_, delta) => {
+    elapsedRef.current += delta
+    framesRef.current += 1
+    if (elapsedRef.current < 1) return
+    const fps = framesRef.current / elapsedRef.current
+    onPerformanceChange({ fps, frameTimeMs: 1000 / Math.max(fps, 0.01) })
+    elapsedRef.current = 0
+    framesRef.current = 0
+  })
   return null
 }
 
@@ -326,6 +416,10 @@ function SceneContents({
   modelSubtype,
   showFloor,
   showGrid,
+  spatialWorldSourceUrl,
+  spatialWorldTransform,
+  renderMode,
+  onSpatialLoadStateChange,
 }: {
   compiledEnvironment: CompiledEnvironmentModel | null
   fitKey: string
@@ -334,11 +428,17 @@ function SceneContents({
   modelSubtype: string
   showFloor: boolean
   showGrid: boolean
+  spatialWorldSourceUrl: string | null
+  spatialWorldTransform: NonNullable<ThreeSceneViewportProps['spatialWorldTransform']>
+  renderMode: NonNullable<ThreeSceneViewportProps['renderMode']>
+  onSpatialLoadStateChange: (state: SpatialLoadState) => void
 }) {
   const fogArgs = modelKind === 'environment'
     ? ['#0c121b', 48, 140] as const
     : ['#0c121b', 12, 28] as const
   const maxDistance = modelKind === 'environment' ? 120 : 30
+  const showSpatialWorld = Boolean(spatialWorldSourceUrl) && (renderMode === 'spatial_world' || renderMode === 'hybrid')
+  const showMeshWorld = renderMode === 'mesh' || renderMode === 'hybrid' || !showSpatialWorld
 
   return (
     <>
@@ -370,11 +470,14 @@ function SceneContents({
       ) : null}
       <Bounds fit clip margin={1.2}>
         <FitBounds fitKey={fitKey} />
-        {compiledEnvironment
+        {showSpatialWorld && spatialWorldSourceUrl ? (
+          <SpatialWorldView sourceUrl={spatialWorldSourceUrl} transform={spatialWorldTransform} onLoadStateChange={onSpatialLoadStateChange} />
+        ) : null}
+        {showMeshWorld && (compiledEnvironment
           ? <CompiledEnvironmentView model={compiledEnvironment} />
           : loadedScene.status === 'ready'
             ? <primitive object={loadedScene.scene} />
-            : <ProxyModel kind={modelKind} subtype={modelSubtype} />}
+            : !showSpatialWorld ? <ProxyModel kind={modelKind} subtype={modelSubtype} /> : null)}
       </Bounds>
       <OrbitControls
         makeDefault
@@ -391,6 +494,9 @@ function SceneContents({
 export function ThreeSceneViewport({
   compiledEnvironment = null,
   meshSourceUrl,
+  spatialWorldSourceUrl = null,
+  spatialWorldTransform = null,
+  renderMode = 'mesh',
   modelKind,
   modelLabel,
   modelSubtype,
@@ -398,9 +504,17 @@ export function ThreeSceneViewport({
   showGrid,
   resetSignal,
   onMeshLoadStateChange = null,
+  onSpatialLoadStateChange = null,
+  onPerformanceChange = null,
 }: ThreeSceneViewportProps) {
   const loadedScene = useLoadedScene(meshSourceUrl, modelKind)
-  const fitKey = `${modelLabel}:${modelSubtype}:${compiledEnvironment?.graphKey ?? meshSourceUrl ?? 'proxy'}:${resetSignal}`
+  const [spatialState, setSpatialState] = useState<SpatialLoadState>({ status: 'idle', progress: 0, splatCount: null, error: null })
+  const fitKey = `${modelLabel}:${modelSubtype}:${renderMode}:${spatialWorldSourceUrl ?? compiledEnvironment?.graphKey ?? meshSourceUrl ?? 'proxy'}:${spatialState.status}:${spatialState.splatCount ?? 0}:${resetSignal}`
+  const resolvedSpatialTransform = spatialWorldTransform ?? { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }
+  const reportSpatialState = useCallback((state: SpatialLoadState) => {
+    setSpatialState(state)
+    onSpatialLoadStateChange?.(state)
+  }, [onSpatialLoadStateChange])
 
   useEffect(() => {
     onMeshLoadStateChange?.(loadedScene)
@@ -418,7 +532,12 @@ export function ThreeSceneViewport({
             modelSubtype={modelSubtype}
             showFloor={showFloor}
             showGrid={showGrid}
+            spatialWorldSourceUrl={spatialWorldSourceUrl}
+            spatialWorldTransform={resolvedSpatialTransform}
+            renderMode={renderMode}
+            onSpatialLoadStateChange={reportSpatialState}
           />
+          {onPerformanceChange ? <PerformanceProbe onPerformanceChange={onPerformanceChange} /> : null}
         </Canvas>
       </div>
     </div>

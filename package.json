@@ -27,6 +27,7 @@
     "@gsap/react": "^2.1.2",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
+    "@sparkjsdev/spark": "^2.1.0",
     "@supabase/supabase-js": "^2.103.3",
     "@types/three": "^0.183.1",
     "@xyflow/react": "^12.10.2",

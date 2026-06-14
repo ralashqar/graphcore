@@ -81,6 +81,7 @@ type SpecializedDefinitionWorkspaceProps = {
   onOpenCinematicGraph: (graphKey: string) => void
   onStartMeshGeneration: (definitionKey: string) => void
   onPersistDefinitionPreviewImageBinding: (definitionKey: string, assetKey: string | null) => Promise<void>
+  onResolveAssetUrls?: (assetKeys: string[]) => Promise<AssetDefinition[]>
   onSelectAsset: (key: string | null) => void
   onSelectDefinition: (key: string | null) => void
   onUpsertAssemblyGraph: (graph: AssemblyGraphDefinition) => void
@@ -152,6 +153,7 @@ export function SpecializedDefinitionWorkspace({
   onOpenCinematicGraph,
   onStartMeshGeneration,
   onPersistDefinitionPreviewImageBinding,
+  onResolveAssetUrls,
   onSelectAsset: _onSelectAsset,
   onSelectDefinition,
   onUpsertAssemblyGraph,
@@ -1013,10 +1015,12 @@ export function SpecializedDefinitionWorkspace({
               definition={effectiveSelection}
               isDeletingGeneratedMesh={effectiveSelection.kind === 'character' ? isDeletingGeneratedMesh : false}
               meshGenerationJob={effectiveSelection.kind === 'character' ? (meshJobByDefinitionKey.get(effectiveSelection.key) ?? null) : null}
+              spatialWorldVariant={effectiveSelection.kind === 'environment' ? (selectedSpatialVariants.find((variant) => variant.isActive) ?? null) : null}
               onDeleteGeneratedMesh={effectiveSelection.kind === 'character' ? () => onDeleteGeneratedMesh(effectiveSelection.key) : null}
               onRequestGenerateMesh={effectiveSelection.kind === 'character' ? () => onStartMeshGeneration(effectiveSelection.key) : null}
               onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? () => void handleGenerateConcept() : null}
               onUpdateComponents={onUpdateComponents}
+              onResolveAssetUrls={onResolveAssetUrls}
             />
           </Suspense>
           </>

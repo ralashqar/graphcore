@@ -9081,6 +9081,7 @@ export default function App() {
                 onOpenWorldNode={openWorldNodeFromRecord}
                 onStartMeshGeneration={(definitionKey) => void startMeshGenerationForDefinition(definitionKey)}
                 onPersistDefinitionPreviewImageBinding={(definitionKey, assetKey) => workspaceService.persistDefinitionPreviewImageBinding(snapshot, definitionKey, assetKey)}
+                onResolveAssetUrls={(assetKeys: string[]) => workspaceService.signProjectAssetUrls(snapshot.project.id, assetKeys)}
                 onSelectAsset={setSelectedAssetKey}
                 onSelectDefinition={setSelectedDefinitionKey}
                 onUpsertAssemblyGraph={upsertAssemblyGraph}
@@ -9133,6 +9134,7 @@ export default function App() {
                 onCancelSpatialWorldGeneration={(jobId) => workspaceService.cancelSpatialWorldGeneration(jobId)}
                 onActivateSpatialWorldVariant={(variantId) => workspaceService.activateSpatialWorldVariant(variantId).then(async (result) => { await refreshLiveSnapshot(); return result })}
                 onReferenceSheetJobFinished={refreshLiveSnapshot}
+                onResolveAssetUrls={(assetKeys: string[]) => workspaceService.signProjectAssetUrls(snapshot.project.id, assetKeys)}
                 onOpenCinematicGraph={openCinematicWorkspace}
                 onOpenDefinitionLink={openDefinitionWorkspace}
                 onOpenWorldNode={openWorldNodeFromRecord}

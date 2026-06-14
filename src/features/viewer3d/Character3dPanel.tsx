@@ -15,10 +15,11 @@ import {
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
 import type { AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1 } from '../../domain/graphcore'
+import type { SpatialWorldVariant } from '../../domain/spatialWorldGeneration'
 import { supabase } from '../../utils/supabase'
 import { runCoalescedRequest } from '../../data/requestCoordinator'
 import { MediaThumb, findAssetByKey } from '../content/shared'
-import { ThreeSceneViewport } from './ThreeSceneViewport'
+import { ThreeSceneViewport, type SpatialLoadState } from './ThreeSceneViewport'
 
 function is3dDebugEnabled() {
   if (import.meta.env.VITE_DEBUG_3D_VIEWER === 'true') return true
@@ -46,10 +47,12 @@ type Definition3dPanelProps = {
   definition: DefinitionBase
   isDeletingGeneratedMesh?: boolean
   meshGenerationJob?: MeshGenerationJob | null
+  spatialWorldVariant?: SpatialWorldVariant | null
   onDeleteGeneratedMesh?: (() => void) | null
   onRequestGenerateConceptArt?: (() => void) | null
   onRequestGenerateMesh?: (() => void) | null
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
+  onResolveAssetUrls?: (assetKeys: string[]) => Promise<AssetDefinition[]>
 }
 
 export function Definition3dPanel({
@@ -59,10 +62,12 @@ export function Definition3dPanel({
   definition,
   isDeletingGeneratedMesh = false,
   meshGenerationJob = null,
+  spatialWorldVariant = null,
   onDeleteGeneratedMesh = null,
   onRequestGenerateConceptArt = null,
   onRequestGenerateMesh = null,
   onUpdateComponents,
+  onResolveAssetUrls,
 }: Definition3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
   const [showGrid, setShowGrid] = useState(true)
@@ -71,6 +76,10 @@ export function Definition3dPanel({
   const [generationPending, setGenerationPending] = useState(false)
   const [meshViewportError, setMeshViewportError] = useState<string | null>(null)
   const [fallbackMeshSourceUrl, setFallbackMeshSourceUrl] = useState<string | null>(null)
+  const [renderMode, setRenderMode] = useState<'mesh' | 'spatial_world' | 'hybrid'>('mesh')
+  const [resolvedSpatialAssets, setResolvedSpatialAssets] = useState<Record<string, AssetDefinition>>({})
+  const [spatialLoadState, setSpatialLoadState] = useState<SpatialLoadState>({ status: 'idle', progress: 0, splatCount: null, error: null })
+  const [viewportPerformance, setViewportPerformance] = useState({ fps: 0, frameTimeMs: 0 })
 
   const isEnvironment = definition.kind === 'environment'
   const isItem = definition.kind === 'item'
@@ -86,8 +95,14 @@ export function Definition3dPanel({
   const imageAssets = useMemo(() => assets.filter(isImageAsset).sort((left, right) => left.name.localeCompare(right.name)), [assets])
   const meshAsset = findAssetByKey(assets, renderBinding.primaryMeshAssetKey)
   const previewImageAsset = findAssetByKey(assets, renderBinding.previewImageAssetKey)
+  const spatialWorldAsset = resolvedSpatialAssets[renderBinding.spatialWorldAssetKey ?? '']
+    ?? findAssetByKey(assets, renderBinding.spatialWorldAssetKey ?? null)
+  const colliderAsset = resolvedSpatialAssets[renderBinding.colliderMeshAssetKey ?? '']
+    ?? findAssetByKey(assets, renderBinding.colliderMeshAssetKey ?? null)
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
-  const effectiveMeshSourceUrl = meshSourceUrl ?? fallbackMeshSourceUrl
+  const spatialWorldSourceUrl = resolveAssetSourceUrl(spatialWorldAsset)
+  const colliderSourceUrl = resolveAssetSourceUrl(colliderAsset)
+  const viewportMeshSourceUrl = renderMode === 'hybrid' ? (colliderSourceUrl ?? meshSourceUrl ?? fallbackMeshSourceUrl) : (meshSourceUrl ?? fallbackMeshSourceUrl)
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
   const meshGenerationPending = Boolean(meshGenerationJob && !isTerminalMeshGenerationJobStatus(meshGenerationJob.status))
   const meshAssetGenerationState =
@@ -103,6 +118,28 @@ export function Definition3dPanel({
   const shouldUseConceptFallbackCta = !isEnvironment && !isItem && !previewImageAsset
   const showGeneratedMeshDelete = !isEnvironment && (meshGenerationPending || meshAsset?.metadata.generatedBy === 'trellis_mesh')
   const isProceduralEnvironment = isEnvironment && (geometryBinding?.sourceMode === 'procedural_graph' || geometryBinding?.sourceMode === 'procedural_blueprint')
+
+  useEffect(() => {
+    setRenderMode(renderBinding.spatialWorldAssetKey ? 'spatial_world' : 'mesh')
+    setSpatialLoadState({ status: 'idle', progress: 0, splatCount: null, error: null })
+  }, [definition.key, renderBinding.spatialWorldAssetKey])
+
+  useEffect(() => {
+    const keys = [renderBinding.spatialWorldAssetKey, renderBinding.colliderMeshAssetKey].filter((key): key is string => Boolean(key))
+    if (!onResolveAssetUrls || keys.length === 0) {
+      setResolvedSpatialAssets({})
+      return
+    }
+    let active = true
+    void onResolveAssetUrls(keys).then((signedAssets) => {
+      if (!active) return
+      setResolvedSpatialAssets(Object.fromEntries(signedAssets.map((asset) => [asset.key, asset])))
+    }).catch((error) => {
+      if (!active) return
+      setSpatialLoadState({ status: 'error', progress: 0, splatCount: null, error: error instanceof Error ? error.message : 'Spatial assets could not be signed.' })
+    })
+    return () => { active = false }
+  }, [onResolveAssetUrls, renderBinding.colliderMeshAssetKey, renderBinding.spatialWorldAssetKey])
   const compileCacheRef = useRef(createAssemblyCompileCache())
   const lastCompiledPreviewRef = useRef<{
     signature: string
@@ -432,7 +469,10 @@ export function Definition3dPanel({
         <div className="character-3d-stage">
           <ThreeSceneViewport
             compiledEnvironment={compiledEnvironment}
-            meshSourceUrl={effectiveMeshSourceUrl}
+            meshSourceUrl={viewportMeshSourceUrl}
+            spatialWorldSourceUrl={spatialWorldSourceUrl}
+            spatialWorldTransform={spatialWorldVariant?.alignmentTransform ?? null}
+            renderMode={renderMode}
             modelKind={isEnvironment ? 'environment' : 'character'}
             modelLabel={definition.name}
             modelSubtype={subtype}
@@ -442,6 +482,8 @@ export function Definition3dPanel({
             onMeshLoadStateChange={(state) => {
               setMeshViewportError(state.status === 'error' ? state.error : null)
             }}
+            onSpatialLoadStateChange={setSpatialLoadState}
+            onPerformanceChange={setViewportPerformance}
           />
         </div>
 
@@ -476,7 +518,7 @@ export function Definition3dPanel({
             </div>
           ) : null}
 
-          {isEnvironment && !isProceduralEnvironment ? (
+          {isEnvironment ? (
             <div className="editor-section">
               <div className="section-head">
                 <div>
@@ -486,6 +528,13 @@ export function Definition3dPanel({
                 <p className="subtle-line">Orbit with mouse drag, pan with right-drag, and dolly with scroll.</p>
               </div>
               <div className="chip-row">
+                {spatialWorldAsset ? (
+                  <>
+                    <button className={renderMode === 'mesh' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRenderMode('mesh')} type="button">Mesh</button>
+                    <button className={renderMode === 'spatial_world' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRenderMode('spatial_world')} type="button">Spatial</button>
+                    <button className={renderMode === 'hybrid' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRenderMode('hybrid')} type="button">Hybrid</button>
+                  </>
+                ) : null}
                 <button className={showFloor ? 'segment-button is-active' : 'segment-button'} onClick={() => setShowFloor((current) => !current)} type="button">
                   Floor
                 </button>
@@ -496,6 +545,13 @@ export function Definition3dPanel({
                   Reset camera
                 </button>
               </div>
+              {spatialWorldAsset ? (
+                <div className="three-scene-status">
+                  <strong>{spatialLoadState.status === 'ready' ? 'Spatial world ready' : spatialLoadState.status === 'loading' ? 'Loading spatial world' : spatialLoadState.status === 'error' ? 'Spatial world unavailable' : 'Spatial world bound'}</strong>
+                  <span>{spatialLoadState.status === 'loading' ? `${Math.round(spatialLoadState.progress * 100)}% loaded` : spatialLoadState.status === 'ready' ? `${spatialLoadState.splatCount.toLocaleString()} splats` : spatialLoadState.error ?? spatialWorldAsset.name}</span>
+                  {spatialLoadState.status === 'ready' ? <span>{Math.round(viewportPerformance.fps)} FPS · {viewportPerformance.frameTimeMs.toFixed(1)} ms frame</span> : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -600,6 +656,14 @@ export function Definition3dPanel({
                 <div className="character-3d-summary-row">
                   <strong>Concept image</strong>
                   <span>{previewImageAsset?.name ?? 'None'}</span>
+                </div>
+                <div className="character-3d-summary-row">
+                  <strong>Spatial world</strong>
+                  <span>{spatialWorldAsset?.name ?? 'None'}</span>
+                </div>
+                <div className="character-3d-summary-row">
+                  <strong>Collider</strong>
+                  <span>{colliderAsset?.name ?? 'None'}</span>
                 </div>
                 {compiledEnvironment ? (
                   <div className="character-3d-summary-row">

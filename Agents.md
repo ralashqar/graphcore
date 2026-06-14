@@ -707,10 +707,11 @@ Agents support dynamic model selection based on task requirements:
 - SpAItial remains a first-class provider identifier and comparison option, but live execution must fail closed until a verified public API contract is configured. Do not invent or guess its wire payload.
 - Ready variants are activated through `activate_spatial_world_variant`, which updates only additive environment/world render-binding fields. Canonical blueprints, assembly graphs, navigation, and spawn semantics remain untouched.
 - Environment authoring exposes provider selection, quality, signed cost preview, explicit credit confirmation, progress/cancellation, stored comparison variants, and activation.
+- The existing React Three Fiber viewport renders active SPZ worlds through `@sparkjsdev/spark` with Spark LOD enabled. Environment previews expose mesh, spatial-world, and hybrid modes; hybrid mode overlays the provider collider GLB, signed private assets are resolved through the project asset-signing path, the camera fits the initialized splat bounds, and the panel reports load progress, splat count, FPS, and frame time.
 - Generated spatial worlds are derivative visual outputs. They must not silently mutate environment blueprints, assembly graphs, rooms, anchors, connectors, navigation, spawn rules, or canon
 
 **Remaining Integration**:
-- Spark rendering in the existing React Three Fiber viewport
+- Bounded first-person walk controls and representative-device performance budgets
 - Optional PlayCanvas SplatTransform processing for conversion, optimization, LOD, and collision fallback
 - Spatial marker authoring for entry points, canon anchors, and cinematic camera viewpoints
 

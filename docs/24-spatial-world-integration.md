@@ -1,6 +1,6 @@
 # Spatial World Integration Workstream
 
-Status: durable backend and environment workflow implemented; embedded splat viewer and marker tools pending
+Status: durable backend, environment workflow, and embedded Spark viewer implemented; walk and marker tools pending
 Branch: `codex/worldapps-integration`
 
 ## Objective
@@ -252,9 +252,10 @@ Exit gate: target laptop hardware maintains an acceptable interactive frame rate
 - Dedicated Fly `spatial_world` worker lanes and wake scheduling
 - Full snapshot hydration and application service APIs
 - Environment authoring UI for provider comparison, quality, quote confirmation, progress, cancellation, and activation
+- Embedded Spark SPZ rendering in the existing React Three Fiber viewport with provider LOD, signed private-asset loading, automatic camera fitting, mesh/spatial/hybrid modes, collider overlay, load diagnostics, splat count, FPS, and frame-time telemetry
 - SpAItial fails closed until a verified live API contract is available
 
-The remaining product work is embedded Spark rendering, spatial marker/camera authoring, image/video provider input once verified, PlayCanvas optimization tooling, and benchmark telemetry.
+The remaining product work is bounded walk navigation, spatial marker/camera authoring, image/video provider input once verified, PlayCanvas optimization tooling, and representative-device performance benchmarking.
 
 ## Configuration
 

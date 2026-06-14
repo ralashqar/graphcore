@@ -168,3 +168,17 @@ test('spatial world pipeline keeps quotes, billing, storage, and activation dura
   assert.match(provider, /collider_mesh_url/)
   assert.match(provider, /SpAItial generation is not enabled/)
 })
+
+test('spatial world viewer uses Spark with signed assets and mesh hybrid controls', () => {
+  const viewport = readFileSync('src/features/viewer3d/ThreeSceneViewport.tsx', 'utf8')
+  const panel = readFileSync('src/features/viewer3d/Character3dPanel.tsx', 'utf8')
+  const app = readFileSync('src/App.tsx', 'utf8')
+  const packageJson = readFileSync('package.json', 'utf8')
+  assert.match(packageJson, /@sparkjsdev\/spark/)
+  assert.match(viewport, /new SparkRenderer/)
+  assert.match(viewport, /new SplatMesh/)
+  assert.match(viewport, /enableLod: true/)
+  assert.match(panel, /'mesh' \| 'spatial_world' \| 'hybrid'/)
+  assert.match(panel, /colliderSourceUrl/)
+  assert.match(app, /signProjectAssetUrls\(snapshot\.project\.id, assetKeys\)/)
+})
