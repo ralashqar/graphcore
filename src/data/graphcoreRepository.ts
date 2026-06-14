@@ -197,6 +197,8 @@ import {
   sequenceAnimaticContinuityWorkflowEnsureResponseSchema,
   sequenceAnimaticKeyframeWorkflowEnsureRequestSchema,
   sequenceAnimaticKeyframeWorkflowEnsureResponseSchema,
+  sequenceAnimaticShotProductionGraphEnsureRequestSchema,
+  sequenceAnimaticShotProductionGraphEnsureResponseSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema,
   sequenceAnimaticStateRequestSchema,
@@ -227,6 +229,7 @@ import {
   type SequenceAnimaticContinuityStructureDeriveResponse,
   type SequenceAnimaticContinuityWorkflowEnsureResponse,
   type SequenceAnimaticKeyframeWorkflowEnsureResponse,
+  type SequenceAnimaticShotProductionGraphEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNodeOutputResponse,
@@ -416,6 +419,7 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
   if (!(context instanceof Response)) {
     return error.message
   }
+  const fallbackHttpMessage = `Supabase Edge Function request failed with HTTP ${context.status}${context.statusText ? ` (${context.statusText})` : ''}.`
 
   try {
     const payload = await context.clone().json() as { error?: unknown }
@@ -434,14 +438,24 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
   } catch {
     try {
       const text = await context.clone().text()
+      const compactText = text.replace(/\s+/g, ' ').trim()
+      const looksLikeHtml = /<!doctype html|<html|cloudflare|web server is down/i.test(compactText)
+      const htmlTitle = compactText.match(/<title>(.*?)<\/title>/i)?.[1]
+        ?.replace(/\s+/g, ' ')
+        .trim()
       console.error('[GraphCore] edge function error text', {
         status: context.status,
         statusText: context.statusText,
-        text,
+        text: compactText.slice(0, 800),
       })
-      return text || error.message
+      if (looksLikeHtml) {
+        return htmlTitle
+          ? `${fallbackHttpMessage} ${htmlTitle}. Retry in a minute.`
+          : `${fallbackHttpMessage} Supabase returned an HTML error page. Retry in a minute.`
+      }
+      return compactText || fallbackHttpMessage || error.message
     } catch {
-      return error.message
+      return fallbackHttpMessage || error.message
     }
   }
 }
@@ -1384,6 +1398,15 @@ function isReadLikeEdgeFunction(functionName: string) {
   )
 }
 
+function isRetrySafeTransientEdgeFunction(functionName: string) {
+  return (
+    isReadLikeEdgeFunction(functionName)
+    || functionName.startsWith('ensure-sequence-animatic-')
+    || functionName.startsWith('derive-sequence-animatic-')
+    || functionName === 'repair-output-workflow-state'
+  )
+}
+
 function edgeFunctionClassName(functionName: string) {
   if (functionName === 'get-visual-generation-status') return 'visual-status'
   if (functionName === 'sign-project-asset-urls') return 'asset-signing'
@@ -1477,6 +1500,41 @@ function isUnauthorizedFunctionsError(error: FunctionsHttpError | Error) {
   return context instanceof Response && context.status === 401
 }
 
+function isTransientFunctionsError(error: FunctionsHttpError | Error) {
+  const message = error.message || ''
+  if (/failed to send a request|failed to fetch|network|timeout|temporarily unavailable/i.test(message)) {
+    return true
+  }
+  if (!('context' in error)) return false
+  const context = (error as FunctionsHttpError & { context?: unknown }).context
+  return context instanceof Response && (
+    context.status === 408
+    || context.status === 409
+    || context.status === 425
+    || context.status === 429
+    || context.status >= 500
+  )
+}
+
+async function retryTransientFunctionInvoke<TResponse>(
+  functionName: string,
+  body: Record<string, unknown>,
+  session: Session,
+  response: Awaited<ReturnType<typeof invokeAuthedFunction<TResponse>>>,
+) {
+  if (!response.error || !isRetrySafeTransientEdgeFunction(functionName) || !isTransientFunctionsError(response.error)) {
+    return response
+  }
+
+  let latest = response
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 900 + attempt * 800 + Math.round(Math.random() * 500)))
+    latest = await invokeAuthedFunction<TResponse>(functionName, body, session)
+    if (!latest.error || !isTransientFunctionsError(latest.error)) return latest
+  }
+  return latest
+}
+
 async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
   functionName: string,
   body: Record<string, unknown>,
@@ -1484,6 +1542,7 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
 ) {
   let activeSession = session
   let response = await invokeAuthedFunction<TResponse>(functionName, body, session)
+  response = await retryTransientFunctionInvoke(functionName, body, activeSession, response)
 
   if (response.error && isUnauthorizedFunctionsError(response.error)) {
     const refreshed = await supabase.auth.refreshSession()
@@ -1497,6 +1556,7 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
 
     activeSession = refreshed.data.session
     response = await invokeAuthedFunction<TResponse>(functionName, body, activeSession)
+    response = await retryTransientFunctionInvoke(functionName, body, activeSession, response)
   }
 
   if (response.error && isUnauthorizedFunctionsError(response.error)) {
@@ -1513,19 +1573,6 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
 
   if (!response.error) {
     return response
-  }
-
-  const isTransientNetworkFailure =
-    response.error.message === 'Failed to send a request to the Edge Function'
-    || ('context' in response.error && (response.error as FunctionsHttpError & { context?: unknown }).context instanceof Response
-      && ((response.error as FunctionsHttpError & { context?: Response }).context?.status ?? 0) >= 500)
-
-  if (isTransientNetworkFailure && isReadLikeEdgeFunction(functionName)) {
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 1200 + Math.round(Math.random() * 500)))
-    response = await invokeAuthedFunction<TResponse>(functionName, body, session)
-    if (!response.error) {
-      return response
-    }
   }
 
   const suppressExpectedFallbackLog = functionName === 'get-sequence-animatic-state'
@@ -8801,6 +8848,42 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function ensureSequenceAnimaticShotProductionGraph(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    shotId: string
+    coverageSetupId?: string | null
+    forceRefresh?: boolean
+    allowProvisional?: boolean
+  },
+): Promise<SequenceAnimaticShotProductionGraphEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic shot graphs.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic shot graphs require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticShotProductionGraphEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    shotId: request.shotId,
+    coverageSetupId: request.coverageSetupId || undefined,
+    forceRefresh: request.forceRefresh ?? false,
+    allowProvisional: request.allowProvisional ?? false,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-shot-production-graph',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticShotProductionGraphEnsureResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

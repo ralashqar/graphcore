@@ -7,6 +7,8 @@ type GraphCoreGlobal = typeof globalThis & {
 }
 
 const AUTH_FETCH_TIMEOUT_MS = 45_000
+const EDGE_FUNCTION_FETCH_TIMEOUT_MS = 120_000
+const DEFAULT_FETCH_TIMEOUT_MS = 60_000
 const authProcessLocks = new Map<string, Promise<void>>()
 
 function supabaseProjectRef() {
@@ -26,14 +28,42 @@ const supabaseAuthProcessLock: SupabaseLockFunction = async (name, _acquireTimeo
   return next
 }
 
+function requestUrl(input: RequestInfo | URL) {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.toString()
+  return input.url
+}
+
+function timeoutForSupabaseRequest(input: RequestInfo | URL) {
+  const url = requestUrl(input)
+  if (url.includes('/functions/v1/')) return EDGE_FUNCTION_FETCH_TIMEOUT_MS
+  if (url.includes('/auth/v1/')) return AUTH_FETCH_TIMEOUT_MS
+  return DEFAULT_FETCH_TIMEOUT_MS
+}
+
+function abortWithReason(controller: AbortController, reason: unknown) {
+  if (controller.signal.aborted) return
+  controller.abort(reason instanceof Error ? reason : new Error(String(reason || 'Supabase request was aborted.')))
+}
+
 const supabaseFetchWithTimeout: typeof fetch = async (input, init) => {
   const controller = new AbortController()
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), AUTH_FETCH_TIMEOUT_MS)
+  const timeoutMs = timeoutForSupabaseRequest(input)
+  const timeoutId = globalThis.setTimeout(
+    () => abortWithReason(controller, `Supabase request timed out after ${timeoutMs}ms.`),
+    timeoutMs,
+  )
   const upstreamSignal = init?.signal
 
   if (upstreamSignal) {
-    if (upstreamSignal.aborted) controller.abort()
-    else upstreamSignal.addEventListener('abort', () => controller.abort(), { once: true })
+    if (upstreamSignal.aborted) abortWithReason(controller, upstreamSignal.reason ?? 'Supabase request was cancelled by the caller.')
+    else {
+      upstreamSignal.addEventListener(
+        'abort',
+        () => abortWithReason(controller, upstreamSignal.reason ?? 'Supabase request was cancelled by the caller.'),
+        { once: true },
+      )
+    }
   }
 
   try {

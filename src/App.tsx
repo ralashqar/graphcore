@@ -6219,6 +6219,40 @@ export default function App() {
     return result
   }
 
+  async function ensureSequenceAnimaticShotProductionGraph(request: Parameters<typeof workspaceService.ensureSequenceAnimaticShotProductionGraph>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before preparing sequence animatic shot graphs.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic shot graphs require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticShotProductionGraph(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const workflows = result.workflow ? [result.workflow] : []
+    const requests = [result.masterRequest, result.shotRequest]
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+      outputWorkflows: [
+        ...workflows,
+        ...current.outputWorkflows.filter((workflow) => !workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function ensureSequenceAnimaticShotRevisionWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticShotRevisionWorkflow>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before revising a sequence animatic shot.')
@@ -8835,6 +8869,7 @@ export default function App() {
                 onDeriveSequenceAnimaticContinuityStructure={deriveSequenceAnimaticContinuityStructure}
                 onEnsureSequenceAnimaticContinuityAssetWorkflow={ensureSequenceAnimaticContinuityAssetWorkflow}
                 onEnsureSequenceAnimaticKeyframeWorkflows={ensureSequenceAnimaticKeyframeWorkflows}
+                onEnsureSequenceAnimaticShotProductionGraph={ensureSequenceAnimaticShotProductionGraph}
                 onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}
                 onSubscribeSequenceAnimaticStateSignals={workspaceService.subscribeSequenceAnimaticStateSignals}

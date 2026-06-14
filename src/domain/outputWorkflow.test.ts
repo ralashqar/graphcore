@@ -40,6 +40,8 @@ import {
   sequenceAnimaticContinuityStructureDeriveRequestSchema,
   sequenceAnimaticContinuityStructureDeriveResponseSchema,
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
+  sequenceAnimaticKeyframeWorkflowEnsureResponseSchema,
+  sequenceAnimaticShotProductionGraphEnsureResponseSchema,
   sequenceAnimaticShotRevisionArtifactV1Schema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
   sequenceAnimaticStateResponseSchema,
@@ -56,6 +58,7 @@ import {
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
   buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityWorkflowGraph,
+  buildSequenceAnimaticShotProductionWorkflowGraph,
   buildSequenceAnimaticShotRevisionWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
 } from '../../supabase/functions/_shared/sequence-animatic-workflow-factory.ts'
@@ -1438,7 +1441,7 @@ test('sequence animatic UI recognizes screenplay role metadata for generated chi
   assert.match(worldGraphPageSource, /function readOutputRequestScreenplayAnimaticRole\(request: OutputRequest\)/)
   assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'storyboard_block'/)
   assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'continuity_pack'/)
-  assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'shot_keyframe'/)
+  assert.match(worldGraphPageSource, /role === 'shot_keyframe' \|\| role === 'shot_production'/)
   assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'coverage_anchor'/)
   assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'continuity_asset'/)
   assert.doesNotMatch(worldGraphPageSource, /const plannedKeyframeRequests = input\.requests\s+\.filter\(\(request\) => readLooseRecord\(request\.metadata\)\.sequenceAnimaticRole === 'shot_keyframe'\)/)
@@ -1980,6 +1983,263 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(workerSource, /temp_character_grid/)
   assert.match(workerSource, /prop_grid/)
   assert.match(workerSource, /augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets/)
+  assert.match(workerSource, /scopeAssetPackToReferenceAssetKeys/)
+  assert.match(workerSource, /referenceScope: 'sequence_animatic_shot_keyframe'/)
+  assert.match(workerSource, /referenceScope: 'sequence_animatic_coverage_anchor'/)
+  assert.doesNotMatch(workerSource, /Use coverage anchor asset:/)
+  assert.doesNotMatch(workerSource, /Use previous keyframe continuity asset:/)
+})
+
+test('sequence animatic keyframe UI routes prereqs through keyframe orchestrator', () => {
+  const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const handlerMatch = pageSource.match(/const handleRunSequenceAnimaticShotKeyframe = useCallback\(async[\s\S]*?\n  \}, \[loadAndStoreSequenceAnimaticState/)
+  assert.ok(handlerMatch, 'shot keyframe handler should be discoverable')
+  const handlerSource = handlerMatch[0]
+  assert.match(handlerSource, /onEnsureSequenceAnimaticKeyframeWorkflows/)
+  assert.doesNotMatch(handlerSource, /onEnsureSequenceAnimaticContinuityAssetWorkflow/)
+  assert.match(pageSource, /function sequenceAnimaticShotProgressPreview/)
+  assert.match(pageSource, /Coverage anchor ready/)
+  assert.match(pageSource, /shotCoverageAnchor\?\.characterRefIds/)
+  assert.match(pageSource, /scaffoldGroups\.push\(\{ targets: groupTargets, isBatch: true \}\)/)
+})
+
+test('sequence animatic shot production graph resolves shared refs before keyframe and video', () => {
+  assert.equal(sequenceAnimaticGraphRoleSchema.parse('shot_production'), 'shot_production')
+  const graph = buildSequenceAnimaticShotProductionWorkflowGraph({
+    workflowId: 'workflow-shot-production',
+    draftId: 'draft-1',
+    commonConfig: {
+      masterRequestId: 'request-master',
+      parentRequestId: 'request-master',
+      storyboardBlockId: 'block_001',
+      shotId: 'shot_001',
+      coverageSetupId: 'setup_a',
+      manifestHash: 'manifest-hash',
+      directorPlanHash: 'director-hash',
+      masterManifestArtifactKey: 'artifact-manifest',
+    },
+    block: { id: 'block_001', title: 'Block' },
+    shot: {
+      id: 'shot_001',
+      index: 1,
+      title: 'Reveal',
+      action: 'Ava enters the room.',
+      dialogue: [],
+      visibleCharacterRefIds: ['ava'],
+      speakerRefIds: [],
+      propRefIds: [],
+      locationRefId: 'spot_lab',
+      editorialDurationSeconds: 4,
+    },
+    panel: { assetKey: 'panel_asset', role: 'sequence_animatic_block_panel' },
+    assetPack: { entities: [{ key: 'ava', name: 'Ava', primaryAssetKey: 'ava_sheet', assetKeys: ['ava_sheet'] }] },
+    coverageAnchor: { assetKey: 'coverage_asset' },
+    previousKeyframe: {},
+    requiredReferenceAssetKeys: ['coverage_asset', 'ava_sheet', 'spot_sheet'],
+    omittedReferenceAssetKeys: ['extra_sheet'],
+    selectedReferences: [{ assetKey: 'coverage_asset', role: 'coverage_anchor', reason: 'Coverage.' }],
+    omittedReferences: [{ assetKey: 'extra_sheet', role: 'continuity_asset', reason: 'Budget.' }],
+    sharedDependencyRequests: [{ role: 'coverage_anchor', identityKey: 'coverageSetupId', identityValue: 'setup_a', status: 'ready' }],
+    continuityDependencies: [
+      {
+        targetNodeId: 'set_lab',
+        targetNode: { id: 'set_lab', name: 'Lab Set', nodeKind: 'location_set', summary: 'A clean research lab.' },
+        assetKind: 'location_set',
+        referenceAssetKeys: [],
+        parentNodeIds: [],
+      },
+      {
+        targetNodeId: 'spot_lab',
+        targetNode: { id: 'spot_lab', name: 'Lab Door', nodeKind: 'location_spot', zoneId: 'set_lab', summary: 'The entry point into the lab.' },
+        assetKind: 'location_spot',
+        referenceAssetKeys: ['spot_sheet'],
+        parentNodeIds: ['set_lab'],
+      },
+    ],
+    coverageSetup: { id: 'setup_a', title: 'Wide reveal', stagingBrief: 'Ava enters through the lab door.' },
+    coverageShots: [{ id: 'shot_001', title: 'Reveal' }],
+    coverageReferenceAssetKeys: ['spot_sheet'],
+    dependencyMode: 'single_node_chain',
+    editorialDurationSeconds: 4,
+    providerDurationSeconds: 5,
+    aspectRatio: '16:9',
+  })
+  const nodeKeys = graph.nodes.map((node) => node.key)
+  assert.ok(nodeKeys.includes('coverage_anchor_input'))
+  assert.ok(nodeKeys.includes('coverage_anchor_artifact'))
+  assert.ok(nodeKeys.includes('continuity_set_lab_image'))
+  assert.ok(nodeKeys.includes('continuity_spot_lab_artifact'))
+  assert.ok(!nodeKeys.includes('continuity_ref_1'))
+  assert.ok(nodeKeys.includes('shot_reference_pack'))
+  assert.ok(nodeKeys.includes('world_ref_ava'))
+  assert.ok(nodeKeys.includes('planned_keyframe_artifact'))
+  assert.ok(nodeKeys.includes('shot_video_artifact'))
+  const coverageAnchorInput = graph.nodes.find((node) => node.key === 'coverage_anchor_input')
+  assert.deepEqual((coverageAnchorInput?.config.assetPack as { entities?: unknown[] } | undefined)?.entities, [])
+  const continuitySetInput = graph.nodes.find((node) => node.key === 'continuity_set_lab_input')
+  const continuitySpotInput = graph.nodes.find((node) => node.key === 'continuity_spot_lab_input')
+  assert.deepEqual((continuitySetInput?.config.assetPack as { entities?: unknown[] } | undefined)?.entities, [])
+  assert.deepEqual((continuitySpotInput?.config.assetPack as { entities?: unknown[] } | undefined)?.entities, [])
+  assert.deepEqual((continuitySetInput?.config as { selectedReferences?: unknown[] } | undefined)?.selectedReferences, [])
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'coverage_anchor_artifact' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'world_ref_ava' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_set_lab_image' && edge.target_node_key === 'continuity_spot_lab_image'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_spot_lab_artifact' && edge.target_node_key === 'coverage_anchor_image'))
+  assert.ok(!graph.edges.some((edge) => edge.source_node_key === 'continuity_set_lab_artifact' && edge.target_node_key === 'coverage_anchor_image'))
+  assert.ok(!graph.edges.some((edge) => edge.source_node_key === 'continuity_set_lab_artifact' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(!graph.edges.some((edge) => edge.source_node_key === 'continuity_spot_lab_artifact' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'planned_keyframe_artifact' && edge.target_node_key === 'shot_video_prompt'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'shot_video' && edge.target_node_key === 'shot_video_artifact'))
+  const validation = validateOutputWorkflowGraph({
+    nodes: graph.nodes.map((node) => ({
+      key: node.key,
+      nodeType: node.node_type as never,
+      config: node.config,
+      inputs: node.inputs,
+    })),
+    edges: graph.edges.map((edge) => ({
+      sourceNodeKey: edge.source_node_key,
+      sourcePort: edge.source_port,
+      targetNodeKey: edge.target_node_key,
+      targetPort: edge.target_port,
+      metadata: edge.metadata,
+    })),
+  })
+  assert.equal(validation.ok, true, validation.diagnostics.join('\n'))
+
+  const keyframeEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-keyframe-workflows/index.ts'), 'utf8')
+  const shotGraphEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-shot-production-graph/index.ts'), 'utf8')
+  const workflowFactorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const pruneMigrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260613224408_prune_obsolete_child_workflow_graph_nodes.sql'), 'utf8')
+  assert.match(keyframeEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
+  assert.match(shotGraphEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
+  assert.match(shotGraphEnsureSource, /SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v5'/)
+  assert.match(shotGraphEnsureSource, /SHOT_GRAPH_DEPENDENCY_MODE = 'single_node_chain'/)
+  assert.match(shotGraphEnsureSource, /primaryShotSpatialNodeIds/)
+  assert.match(shotGraphEnsureSource, /const primarySpotId = readText\(binding\.primarySpotId/)
+  assert.match(shotGraphEnsureSource, /coverageSetupEntityRefIds/)
+  assert.match(shotGraphEnsureSource, /Selected from shot-visible refs and coverage setup subjects/)
+  assert.match(shotGraphEnsureSource, /referencedAnimaticAssetNodeIds/)
+  assert.doesNotMatch(shotGraphEnsureSource, /continuity_asset_batch/)
+  assert.match(keyframeEnsureSource, /p_role: 'shot_production'/)
+  assert.match(keyframeEnsureSource, /shotContinuityDependenciesForGraph/)
+  assert.match(keyframeEnsureSource, /coverageSetupEntityKeys/)
+  assert.match(keyframeEnsureSource, /dependencyMode: shotGraphDependencyMode/)
+  assert.match(workerSource, /sequence_animatic_shared_asset_ref/)
+  assert.match(workflowFactorySource, /world_context_ref/)
+  assert.match(workflowFactorySource, /sequence_animatic_continuity_asset_spatial/)
+  assert.match(workflowFactorySource, /coverageSourceContinuityDependencies/)
+  assert.match(workerSource, /sequence-animatic-global-asset-reuse-v1/)
+  assert.match(workerSource, /sequence_animatic_shot_reference_pack/)
+  assert.match(workerSource, /sequence_animatic_shot_video_artifact/)
+  assert.match(workflowFactorySource, /sequence_animatic_coverage_anchor_spatial/)
+  assert.match(pageSource, /role === 'shot_keyframe' \|\| role === 'shot_production'/)
+  assert.match(pageSource, /sequenceAnimaticShotProductionKeyframeTargetNodeKeys/)
+  assert.match(pageSource, /onEnsureSequenceAnimaticShotProductionGraph/)
+  assert.match(pageSource, /forceRefresh: refresh/)
+  assert.match(pageSource, /cachedShotGraphIsCurrent/)
+  assert.match(pageSource, /shot\.keyframeDependencyMode === 'single_node_chain'/)
+  assert.match(pageSource, /shot\.keyframeGraphPolicyVersion === 'primary_chain_v5'/)
+  assert.match(pageSource, /filterSequenceAnimaticShotReferencesForShot/)
+  assert.match(pageSource, /anchor\?\.shotIds\.includes\(shotId\)/)
+  assert.match(pageSource, /openSequenceAnimaticOutputGraph\(model, shotRequest\.id, 'planned_keyframe_artifact'\)/)
+  assert.match(pruneMigrationSource, /delete from public\.output_workflow_edges/)
+  assert.match(pruneMigrationSource, /delete from public\.output_workflow_nodes/)
+})
+
+test('sequence animatic keyframe ensure supports shot-scoped next actions', () => {
+  const parsed = sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse({
+    ok: true,
+    masterRequest: {
+      id: 'request-master',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      parentRequestId: null,
+      workflowId: 'workflow-master',
+      latestRunId: null,
+      requestedBy: null,
+      sourceSurface: 'wiki_sequence_unit',
+      prompt: '',
+      title: 'Master',
+      intent: 'output_generation',
+      outputKind: 'cinematic_episode',
+      status: 'awaiting_confirmation',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      pageCount: null,
+      targetFormat: 'video',
+      plannerNotes: '',
+      errorMessage: null,
+      metadata: { screenplayAnimaticRole: 'master' },
+      createdAt: '',
+      updatedAt: '',
+    },
+    nextAction: {
+      kind: 'run_continuity_asset',
+      requestId: 'request-continuity',
+      workflowId: 'workflow-continuity',
+      role: 'continuity_asset_batch',
+      reason: 'Generating next continuity reference wave 1.',
+      shotId: 'shot_001',
+      coverageSetupId: 'setup_a',
+      dependencyNodeIds: ['set_a', 'zone_a'],
+    },
+    shotReadiness: {
+      shotId: 'shot_001',
+      status: 'waiting_for_continuity_asset',
+      missingContinuityNodeIds: ['set_a'],
+      coverageSetupReady: false,
+      previousKeyframeReady: true,
+      keyframeReady: false,
+    },
+  })
+  assert.equal(parsed.nextAction?.kind, 'run_continuity_asset')
+  assert.equal(parsed.shotReadiness?.status, 'waiting_for_continuity_asset')
+  const shotGraphParsed = sequenceAnimaticShotProductionGraphEnsureResponseSchema.parse({
+    ok: true,
+    masterRequest: parsed.masterRequest,
+    shotRequest: {
+      ...parsed.masterRequest,
+      id: 'request-shot-production',
+      parentRequestId: 'request-master',
+      workflowId: 'workflow-shot-production',
+      metadata: {
+        screenplayAnimaticRole: 'shot_production',
+        sequenceAnimaticRole: 'shot_production',
+        shotId: 'shot_001',
+        dependencyMode: 'single_node_chain',
+        shotGraphPolicyVersion: 'primary_chain_v5',
+      },
+    },
+    workflow: null,
+    nodes: [],
+    edges: [],
+    cacheStatus: 'reused',
+    shotId: 'shot_001',
+    coverageSetupId: 'setup_a',
+    dependencyNodeIds: ['set_a', 'zone_a'],
+    graphPolicyVersion: 'primary_chain_v5',
+  })
+  assert.equal(shotGraphParsed.cacheStatus, 'reused')
+  assert.deepEqual(shotGraphParsed.dependencyNodeIds, ['set_a', 'zone_a'])
+
+  const keyframeEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-keyframe-workflows/index.ts'), 'utf8')
+  const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const migrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260613110000_sequence_animatic_keyframe_child_lookup_indexes.sql'), 'utf8')
+
+  assert.match(keyframeEnsureSource, /isShotScopedEnsure/)
+  assert.match(keyframeEnsureSource, /childNextAction\('run_continuity_asset'/)
+  assert.match(keyframeEnsureSource, /childNextAction\('run_coverage_anchor'/)
+  assert.match(keyframeEnsureSource, /childNextAction\('run_shot_production_keyframe'/)
+  assert.match(pageSource, /const nextAction = readLooseRecord\(ensureResult\.nextAction\)/)
+  assert.match(pageSource, /shotIds: \[shot\.id\]/)
+  assert.doesNotMatch(pageSource, /onEnsureSequenceAnimaticKeyframeWorkflows\(\{\s*[\r\n]+\s*masterRequestId: model\.request\.id,\s*[\r\n]+\s*mode,\s*[\r\n]+\s*\}\)/)
+  assert.match(migrationSource, /output_requests_seq_anim_coverage_anchor_lookup_idx/)
+  assert.match(migrationSource, /output_requests_seq_anim_shot_production_lookup_idx/)
+  assert.match(migrationSource, /output_requests_seq_anim_continuity_asset_lookup_idx/)
+  assert.match(migrationSource, /output_requests_seq_anim_continuity_batch_lookup_idx/)
 })
 
 test('prompt-created cinematics can use screenplay animatic master mode', () => {
@@ -2470,6 +2730,9 @@ test('sequence animatic shot videos use cropped panel keyframe mini graphs', () 
   assert.match(graphHostSource, /step\.status === 'failed' && runIsActive/)
   assert.match(graphHostSource, /workflowRuns = useMemo/)
   assert.match(graphHostSource, /lastGoodGraphStateRef\.current = \{ request, workflow, nodes, edges, displayRun \}/)
+  assert.match(graphHostSource, /const targetWorkflowId = targetWorkflow\?\.id \?\? request\?\.workflowId \?\? null/)
+  assert.match(graphHostSource, /const shouldUseKnownRevision = loadedGraphNodeCount > 0/)
+  assert.match(graphHostSource, /knownGraphRevision: shouldUseKnownRevision \? knownGraphRevision : null/)
   const graphOverlaySource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputWorkflowGraphOverlay.tsx'), 'utf8')
   assert.match(graphOverlaySource, /sameGraphNodesForReactFlow/)
   assert.match(graphOverlaySource, /sameGraphEdgesForReactFlow/)

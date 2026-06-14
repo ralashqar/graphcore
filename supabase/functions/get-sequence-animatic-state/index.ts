@@ -811,9 +811,12 @@ Deno.serve(async (request) => {
       .eq('project_id', payload.projectId)
       .eq('draft_id', payload.draftId)
       .eq('parent_request_id', masterRequest.id)
+      .or('metadata->>sequenceAnimaticStale.is.null,metadata->>sequenceAnimaticStale.neq.true')
       .order('created_at', { ascending: true })
     if (directChildrenResponse.error) throw new Error(directChildrenResponse.error.message)
-    const directChildren = (directChildrenResponse.data ?? []).map(mapOutputRequestRow)
+    const directChildren = (directChildrenResponse.data ?? [])
+      .map(mapOutputRequestRow)
+      .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true)
     const blockRequestIds = directChildren
       .filter((child) => readScreenplayAnimaticRole(asRecord(child.metadata)) === 'storyboard_block')
       .map((child) => child.id)
@@ -829,9 +832,12 @@ Deno.serve(async (request) => {
         .eq('project_id', payload.projectId)
         .eq('draft_id', payload.draftId)
         .in('parent_request_id', nestedParentRequestIds)
+        .or('metadata->>sequenceAnimaticStale.is.null,metadata->>sequenceAnimaticStale.neq.true')
         .order('created_at', { ascending: true })
       if (shotChildrenResponse.error) throw new Error(shotChildrenResponse.error.message)
-      shotChildren = (shotChildrenResponse.data ?? []).map(mapOutputRequestRow)
+      shotChildren = (shotChildrenResponse.data ?? [])
+        .map(mapOutputRequestRow)
+        .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true)
     }
     const requests = [masterRequest, ...directChildren, ...shotChildren]
     const workflowIds = [...new Set(requests.map((entry) => entry.workflowId).filter((id): id is string => Boolean(id)))]

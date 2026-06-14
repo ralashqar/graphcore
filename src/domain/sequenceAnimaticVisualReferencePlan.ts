@@ -2,6 +2,12 @@ type LooseRecord = Record<string, unknown>
 
 export type SequenceAnimaticVisualReferenceStatus = 'ready' | 'missing' | 'blocked' | 'stale'
 
+export type SequenceAnimaticReferenceDiagnostic = {
+  assetKey: string
+  role: 'coverage_anchor' | 'previous_keyframe' | 'continuity_asset' | 'entity_reference' | 'selected_reference'
+  reason: string
+}
+
 export type SequenceAnimaticVisualReferencePlan = {
   version: 'sequence_animatic_visual_reference_plan_v1'
   visualPlanHash: string
@@ -25,6 +31,7 @@ export type SequenceAnimaticVisualReferencePlan = {
     status: SequenceAnimaticVisualReferenceStatus
     shotIds: string[]
     requiredReferenceAssetKeys: string[]
+    selectedReferences: SequenceAnimaticReferenceDiagnostic[]
     sourceReferenceHash: string
   }>
   shotKeyframes: Array<{
@@ -34,6 +41,8 @@ export type SequenceAnimaticVisualReferencePlan = {
     status: SequenceAnimaticVisualReferenceStatus
     requiredReferenceAssetKeys: string[]
     omittedReferenceAssetKeys: string[]
+    selectedReferences: SequenceAnimaticReferenceDiagnostic[]
+    omittedReferences: SequenceAnimaticReferenceDiagnostic[]
     blockingAssetIds: string[]
     sourceReferenceHash: string
   }>
@@ -90,6 +99,10 @@ export function sequenceAnimaticContinuityLinkRequiresPrevious(shot: LooseRecord
     .includes(readSequenceAnimaticContinuityLinkMode(shot))
 }
 
+function referenceDiagnostics(assetKeys: string[], role: SequenceAnimaticReferenceDiagnostic['role'], reason: string): SequenceAnimaticReferenceDiagnostic[] {
+  return uniqueStrings(assetKeys).map((assetKey) => ({ assetKey, role, reason }))
+}
+
 export function buildSequenceAnimaticVisualReferencePlan(input: {
   keyframePlan: LooseRecord
   dependencyNodeIds: string[]
@@ -99,6 +112,9 @@ export function buildSequenceAnimaticVisualReferencePlan(input: {
   coverageAnchorReferenceAssetKeysBySetupId?: Record<string, string[]>
   shotRequiredReferenceAssetKeysByShotId?: Record<string, string[]>
   shotOmittedReferenceAssetKeysByShotId?: Record<string, string[]>
+  coverageAnchorSelectedReferencesBySetupId?: Record<string, SequenceAnimaticReferenceDiagnostic[]>
+  shotSelectedReferencesByShotId?: Record<string, SequenceAnimaticReferenceDiagnostic[]>
+  shotOmittedReferencesByShotId?: Record<string, SequenceAnimaticReferenceDiagnostic[]>
   shotBlockingDependencyNodeIdsByShotId?: Record<string, string[]>
 }): SequenceAnimaticVisualReferencePlan {
   const dependencyNodeIds = uniqueStrings(input.dependencyNodeIds)
@@ -117,6 +133,8 @@ export function buildSequenceAnimaticVisualReferencePlan(input: {
       status: assetKey ? 'ready' as const : 'missing' as const,
       shotIds: readStringArray(job.shotIds),
       requiredReferenceAssetKeys,
+      selectedReferences: input.coverageAnchorSelectedReferencesBySetupId?.[coverageSetupId]
+        ?? referenceDiagnostics(requiredReferenceAssetKeys, 'selected_reference', 'Selected for coverage anchor generation.'),
       sourceReferenceHash: sequenceAnimaticVisualReferenceHash({ coverageSetupId, requiredReferenceAssetKeys }),
     }
   })
@@ -145,6 +163,10 @@ export function buildSequenceAnimaticVisualReferencePlan(input: {
       status: assetKey ? 'ready' as const : blockingAssetIds.length > 0 ? 'blocked' as const : 'missing' as const,
       requiredReferenceAssetKeys,
       omittedReferenceAssetKeys,
+      selectedReferences: input.shotSelectedReferencesByShotId?.[shotId]
+        ?? referenceDiagnostics(requiredReferenceAssetKeys, 'selected_reference', 'Selected for shot keyframe generation within the reference budget.'),
+      omittedReferences: input.shotOmittedReferencesByShotId?.[shotId]
+        ?? referenceDiagnostics(omittedReferenceAssetKeys, 'selected_reference', 'Omitted because the shot reference budget was full.'),
       blockingAssetIds,
       sourceReferenceHash: sequenceAnimaticVisualReferenceHash({ shotId, coverageSetupId, requiredReferenceAssetKeys, omittedReferenceAssetKeys }),
     }

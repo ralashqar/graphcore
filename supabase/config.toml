@@ -185,6 +185,9 @@ verify_jwt = false
 [functions.ensure-sequence-animatic-keyframe-workflows]
 verify_jwt = false
 
+[functions.ensure-sequence-animatic-shot-production-graph]
+verify_jwt = false
+
 [functions.derive-sequence-animatic-continuity-structure]
 verify_jwt = false
 

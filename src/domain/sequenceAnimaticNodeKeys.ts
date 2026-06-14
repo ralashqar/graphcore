@@ -28,6 +28,9 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   plannedKeyframePrompt: 'planned_keyframe_prompt',
   plannedKeyframeImage: 'planned_keyframe_image',
   plannedKeyframeArtifact: 'planned_keyframe_artifact',
+  // Graph-native shot production workflow
+  shotReferencePack: 'shot_reference_pack',
+  shotVideoArtifact: 'shot_video_artifact',
   // Shot video workflow
   shotVideoPrompt: 'shot_video_prompt',
   shotVideo: 'shot_video',
@@ -94,6 +97,27 @@ export const sequenceAnimaticShotVideoTargetNodeKeys = [
 export const sequenceAnimaticShotVideoForceNodeKeys = [
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoPrompt,
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideo,
+] as const
+
+export const sequenceAnimaticShotProductionKeyframeTargetNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeArtifact,
+] as const
+
+export const sequenceAnimaticShotProductionKeyframeForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotReferencePack,
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframePrompt,
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeImage,
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeArtifact,
+] as const
+
+export const sequenceAnimaticShotProductionVideoTargetNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoArtifact,
+] as const
+
+export const sequenceAnimaticShotProductionVideoForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoPrompt,
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideo,
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoArtifact,
 ] as const
 
 /**

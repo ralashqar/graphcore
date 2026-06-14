@@ -42,7 +42,41 @@ test('visual reference plan summarizes dependency readiness and blocked keyframe
   assert.equal(plan.counts.coverageAnchors, 1)
   assert.equal(plan.counts.blockedShotKeyframes, 2)
   assert.deepEqual(plan.coverageAnchors[0].requiredReferenceAssetKeys, ['asset_set_1'])
+  assert.deepEqual(plan.coverageAnchors[0].selectedReferences, [
+    { assetKey: 'asset_set_1', role: 'selected_reference', reason: 'Selected for coverage anchor generation.' },
+  ])
   assert.deepEqual(plan.shotKeyframes[1].blockingAssetIds, ['coverage:setup_a', 'shot:shot_1'])
+})
+
+test('visual reference plan preserves role-aware selected and omitted reference diagnostics', () => {
+  const plan = buildSequenceAnimaticVisualReferencePlan({
+    keyframePlan: {
+      coverageAnchorJobs: [],
+      shotKeyframeJobs: [{ shotId: 'shot_1', coverageSetupId: 'setup_a' }],
+    },
+    dependencyNodeIds: [],
+    missingDependencyNodeIds: [],
+    coverageAnchorAssetKeysBySetupId: {},
+    shotKeyframeAssetKeysByShotId: {},
+    shotRequiredReferenceAssetKeysByShotId: { shot_1: ['asset_anchor', 'asset_actor'] },
+    shotOmittedReferenceAssetKeysByShotId: { shot_1: ['asset_extra'] },
+    shotSelectedReferencesByShotId: {
+      shot_1: [
+        { assetKey: 'asset_anchor', role: 'coverage_anchor', reason: 'Reusable coverage anchor for this camera setup.' },
+        { assetKey: 'asset_actor', role: 'entity_reference', reason: 'Visible character reference.' },
+      ],
+    },
+    shotOmittedReferencesByShotId: {
+      shot_1: [
+        { assetKey: 'asset_extra', role: 'continuity_asset', reason: 'Omitted because the shot reference budget was full.' },
+      ],
+    },
+  })
+
+  assert.deepEqual(plan.shotKeyframes[0].selectedReferences.map((entry) => entry.role), ['coverage_anchor', 'entity_reference'])
+  assert.deepEqual(plan.shotKeyframes[0].omittedReferences, [
+    { assetKey: 'asset_extra', role: 'continuity_asset', reason: 'Omitted because the shot reference budget was full.' },
+  ])
 })
 
 test('visual reference plan includes stable source reference hashes', () => {

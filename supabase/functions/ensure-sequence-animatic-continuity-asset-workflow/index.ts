@@ -15,6 +15,14 @@ import {
   sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
 import {
+  continuityBatchKindForNodes,
+  continuityBatchLayoutForTargetCount,
+  continuityNodeCollections,
+  continuityNodeParentId,
+  continuityNodeUsesParent,
+  continuityVisualDependencyEdges,
+} from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
+import {
   buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
@@ -43,55 +51,6 @@ function slugify(value: string) {
 
 function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
   return readText(metadata.screenplayAnimaticRole) || readText(metadata.sequenceAnimaticRole)
-}
-
-function continuityNodeCollections(graph: Record<string, unknown>) {
-  return [
-    ...readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_set' })),
-    ...readArray(graph.zones).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_zone', assetKind: 'location_zone' })),
-    ...readArray(graph.spots).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_spot', assetKind: 'location_spot' })),
-    ...readArray(graph.viewpoints).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_viewpoint', assetKind: 'location_angle' })),
-    ...readArray(graph.angles).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_angle', assetKind: 'location_angle' })),
-    ...readArray(graph.assetAnchors ?? graph.asset_anchors).map((entry) => {
-      const record = asRecord(entry)
-      const type = readText(record.type) || readText(record.anchorType)
-      return {
-        ...record,
-        nodeKind: type === 'character' ? 'temporary_character' : type === 'prop' ? 'prop' : 'location_anchor',
-        assetKind: type === 'character' ? 'temporary_character' : type === 'prop' ? 'prop' : 'location_spot',
-      }
-    }),
-  ].filter((entry) => readText(entry.id))
-}
-
-function continuityVisualDependencyEdges(graph: Record<string, unknown>) {
-  const edges: Record<string, unknown>[] = []
-  const push = (sourceNodeId: string, targetNodeId: string, relationship: string, required = false, evidence = '') => {
-    if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return
-    edges.push({ sourceNodeId, targetNodeId, relationship, required, evidence })
-  }
-  readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map(asRecord).forEach((set) => push(readText(set.worldLocationRefId), readText(set.id), 'world_location_to_set', true))
-  readArray(graph.zones).map(asRecord).forEach((zone) => push(readText(zone.setId), readText(zone.id), 'set_to_zone', true))
-  readArray(graph.spots).map(asRecord).forEach((spot) => push(readText(spot.zoneId), readText(spot.id), 'zone_to_spot', true))
-  const viewpoints = readArray(graph.viewpoints).length > 0 ? readArray(graph.viewpoints) : readArray(graph.angles)
-  viewpoints.map(asRecord).forEach((angle) => {
-    push(readText(angle.setId), readText(angle.id), 'set_to_angle', true)
-    push(readText(angle.zoneId), readText(angle.id), 'zone_to_angle', true)
-    readStringArray(angle.spotIds).forEach((spotId) => push(spotId, readText(angle.id), 'spot_to_angle', false))
-  })
-  readArray(graph.edges).map(asRecord).forEach((edge) => {
-    const relationship = readText(edge.relationship)
-    if (['adjacent_to', 'visible_from', 'entrance_to', 'connected_to', 'same_space_angle'].includes(relationship)) {
-      push(readText(edge.sourceId), readText(edge.targetId), relationship, false, readText(edge.evidence))
-    }
-  })
-  const seen = new Set<string>()
-  return edges.filter((edge) => {
-    const key = `${edge.sourceNodeId}:${edge.relationship}:${edge.targetNodeId}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
 }
 
 function readArtifactMetadataRecord(
@@ -206,58 +165,6 @@ function assetEntityForKey(assetKey: string, label: string) {
     selectedReferenceVariantType: 'continuity_asset',
     referenceSelectionReason: 'Scene-graph continuity visual dependency.',
   }
-}
-
-function continuityNodeParentId(node: Record<string, unknown>) {
-  const nodeKind = readText(node.nodeKind)
-  if (nodeKind === 'location_spot') {
-    return readText(node.zoneId) || readText(node.setId) || readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
-  }
-  if (nodeKind === 'location_viewpoint' || nodeKind === 'location_angle') {
-    return readStringArray(node.spotIds)[0]
-      || readText(node.spotId)
-      || readText(node.zoneId)
-      || readText(node.setId)
-      || readText(node.worldLocationRefId)
-      || readText(node.baseLocationRefId)
-  }
-  if (nodeKind === 'location_zone') return readText(node.setId) || readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
-  if (nodeKind === 'location_set') return readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
-  return readText(node.parentId) || readText(node.parent_id)
-}
-
-function continuityBatchKindForNodes(nodes: readonly Record<string, unknown>[]) {
-  const kinds = [...new Set(nodes.map((node) => readText(node.nodeKind)).filter(Boolean))]
-  if (nodes.length > 1) {
-    const [parent, ...children] = nodes
-    const parentKind = readText(parent.nodeKind)
-    const parentId = readText(parent.id)
-    const parentChildBatch = parentId
-      && (parentKind === 'location_set' || parentKind === 'location_zone' || parentKind === 'location_spot')
-      && children.every((child) => {
-        const childKind = readText(child.nodeKind)
-        return (childKind === 'location_zone' || childKind === 'location_spot' || childKind === 'location_viewpoint' || childKind === 'location_angle')
-          && continuityNodeParentId(child) === parentId
-      })
-    if (parentChildBatch) return 'parent_child_scaffold_grid'
-  }
-  if (kinds.length !== 1) return ''
-  if (kinds[0] === 'location_spot') return 'spot_grid'
-  if (kinds[0] === 'location_viewpoint' || kinds[0] === 'location_angle') return 'viewpoint_grid'
-  return ''
-}
-
-function continuityBatchLayoutForTargetCount(count: number) {
-  if (count <= 1) return { rows: 1, columns: 1, cellCount: 1 }
-  if (count === 2) return { rows: 1, columns: 2, cellCount: 2 }
-  if (count === 3) return { rows: 1, columns: 3, cellCount: 3 }
-  return { rows: 2, columns: 2, cellCount: Math.min(4, count) }
-}
-
-function continuityNodeUsesParent(node: Record<string, unknown>, parentId: string) {
-  if (!parentId) return false
-  if (readText(node.id) === parentId) return false
-  return continuityNodeParentId(node) === parentId
 }
 
 Deno.serve(async (request) => {

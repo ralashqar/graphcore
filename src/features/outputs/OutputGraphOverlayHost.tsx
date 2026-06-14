@@ -252,6 +252,7 @@ export function OutputGraphOverlayHost({
     [displayRun, edges, nodes, request, workflow],
   )
   const knownGraphRevision = readOutputRequestGraphRevision(request) || graphRevisionRef.current
+  const loadedGraphNodeCount = displayGraphState?.nodes.length ?? nodes.length
 
   const runTargetedNodes = async (
     targetNodes: OutputWorkflowNode[],
@@ -366,13 +367,15 @@ export function OutputGraphOverlayHost({
 
   const refreshGraph = (quiet = false) => {
     const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
-    if (!targetWorkflow) return
+    const targetWorkflowId = targetWorkflow?.id ?? request?.workflowId ?? null
+    if (!targetWorkflowId) return
     if (quiet && graphRefreshInFlightRef.current) return
     graphRefreshInFlightRef.current = true
     if (!quiet) setRefreshingGraph(true)
     lastRefreshAtRef.current = Date.now()
-    void Promise.resolve(onLoadOutputWorkflowGraph(targetWorkflow.id, activeRun?.id ?? request?.latestRunId ?? displayGraphState?.displayRun?.id ?? null, selectedNodeKey, {
-      knownGraphRevision,
+    const shouldUseKnownRevision = loadedGraphNodeCount > 0
+    void Promise.resolve(onLoadOutputWorkflowGraph(targetWorkflowId, activeRun?.id ?? request?.latestRunId ?? displayGraphState?.displayRun?.id ?? null, selectedNodeKey, {
+      knownGraphRevision: shouldUseKnownRevision ? knownGraphRevision : null,
       assetHydrationMode: selectedNodeKey ? 'selected' : 'preview',
     })).then((result) => {
       if (result?.graphRevision) graphRevisionRef.current = result.graphRevision
@@ -405,8 +408,10 @@ export function OutputGraphOverlayHost({
 
   useEffect(() => {
     const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
+    const targetWorkflowId = targetWorkflow?.id ?? request?.workflowId ?? null
+    if (!targetWorkflowId) return undefined
+    refreshGraph(loadedGraphNodeCount > 0)
     if (!targetWorkflow) return undefined
-    refreshGraph(nodes.length > 0)
     const scheduleRefresh = (delayMs = 450) => {
       if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
       refreshTimerRef.current = window.setTimeout(() => {
@@ -432,7 +437,7 @@ export function OutputGraphOverlayHost({
       if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
       window.clearInterval(watchdog)
     }
-  }, [activeRun?.id, activeRun?.status, displayGraphState?.displayRun?.id, displayGraphState?.workflow.id, workflow?.id, openIntent?.nonce])
+  }, [activeRun?.id, activeRun?.status, displayGraphState?.displayRun?.id, displayGraphState?.workflow.id, loadedGraphNodeCount, request?.workflowId, workflow?.id, openIntent?.nonce])
 
   useEffect(() => {
     const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
