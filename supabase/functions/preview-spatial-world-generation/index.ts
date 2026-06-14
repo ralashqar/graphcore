@@ -8,6 +8,7 @@ import {
 import {
   spatialWorldGenerationPreviewResponseSchema,
   spatialWorldGenerationStartRequestSchema,
+  validateSpatialWorldProviderInput,
 } from '../../../src/domain/spatialWorldGeneration.ts'
 
 function quoteSecret() {
@@ -40,11 +41,9 @@ Deno.serve(async (request) => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
     const { client, user } = await requireUserClient(request, 'preview-spatial-world-generation')
     const payload = spatialWorldGenerationStartRequestSchema.parse(await request.json())
-    if (payload.providers.includes('spaitial')) {
-      throw new HttpError(503, 'SpAItial comparison is unavailable until its verified API contract is enabled.')
-    }
-    if (payload.input.sourceImages.length > 0 || payload.input.sourceVideoAssetKey) {
-      throw new HttpError(400, 'Spatial world media inputs are not enabled until the provider media contract is verified. Use text generation for now.')
+    for (const provider of payload.providers) {
+      const capabilityError = validateSpatialWorldProviderInput(provider, payload.input)
+      if (capabilityError) throw new HttpError(provider === 'spaitial' ? 503 : 400, capabilityError)
     }
     const draft = await client.from('project_drafts').select('id').eq('id', payload.draftId).eq('project_id', payload.projectId).single()
     if (draft.error || !draft.data) throw new HttpError(404, 'Editable project draft was not found.')

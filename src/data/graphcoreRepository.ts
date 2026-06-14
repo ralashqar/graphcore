@@ -145,6 +145,16 @@ import {
   spatialWorldGenerationStartResponseSchema,
   spatialWorldGenerationStatusRequestSchema,
   spatialWorldGenerationStatusResponseSchema,
+  spatialWorldMarkerCreateRequestSchema,
+  spatialWorldMarkerDeleteRequestSchema,
+  spatialWorldMarkerMutationResponseSchema,
+  spatialWorldMarkerUpdateRequestSchema,
+  spatialWorldProcessingJobSchema,
+  spatialWorldProcessingResponseSchema,
+  spatialWorldProcessingStartRequestSchema,
+  spatialWorldPerformanceEventSchema,
+  spatialWorldVariantAlignmentUpdateRequestSchema,
+  spatialWorldVariantAlignmentUpdateResponseSchema,
   spatialWorldVariantActivationRequestSchema,
   spatialWorldVariantActivationResponseSchema,
   spatialWorldVariantSchema,
@@ -153,6 +163,11 @@ import {
   type SpatialWorldGenerationStartRequest,
   type SpatialWorldGenerationStartResponse,
   type SpatialWorldGenerationStatusResponse,
+  type SpatialWorldMarkerCreateRequest,
+  type SpatialWorldMarkerUpdateRequest,
+  type SpatialWorldProcessingJob,
+  type SpatialWorldPerformanceEvent,
+  type SpatialWorldVariantAlignmentUpdateRequest,
   type SpatialWorldVariantActivationResponse,
 } from '../domain/spatialWorldGeneration'
 import {
@@ -3029,6 +3044,26 @@ type SpatialWorldMarkerRow = {
   updated_at: string
 }
 
+type SpatialWorldProcessingJobRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  variant_id: string
+  requested_by: string | null
+  status: string
+  operation: string
+  input: Record<string, unknown> | null
+  outputs: Record<string, unknown> | null
+  error_message: string | null
+  attempt_count: number
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+const spatialWorldMarkerMutationSelect = 'id, project_id, draft_id, variant_id, key, kind, name, description, transform, camera, linked_entity_key, linked_location_key, linked_scene_id, linked_spot_id, linked_coverage_setup_id, screenshot_asset_key, visible, metadata, created_at, updated_at'
+const spatialWorldVariantMutationSelect = 'id, project_id, draft_id, target_kind, target_key, key, name, status, provider, model, source_job_id, manifest_asset_key, manifest, alignment_transform, alignment_confidence, is_active, archived_at, metadata, created_at, updated_at'
+
 type CinematicRunRow = {
   id: string
   draft_id: string
@@ -5484,6 +5519,14 @@ function mapSpatialWorldMarkerRow(row: SpatialWorldMarkerRow) {
     metadata: row.metadata ?? {},
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  })
+}
+
+function mapSpatialWorldProcessingJobRow(row: SpatialWorldProcessingJobRow): SpatialWorldProcessingJob {
+  return spatialWorldProcessingJobSchema.parse({
+    id: row.id, projectId: row.project_id, draftId: row.draft_id, variantId: row.variant_id, requestedBy: row.requested_by,
+    status: row.status, operation: row.operation, input: row.input ?? {}, outputs: row.outputs ?? {}, errorMessage: row.error_message,
+    attemptCount: row.attempt_count, metadata: row.metadata ?? {}, createdAt: row.created_at, updatedAt: row.updated_at,
   })
 }
 
@@ -8581,6 +8624,123 @@ export async function activateSpatialWorldVariant(variantId: string): Promise<Sp
   const response = await invokeAuthedFunctionWithSessionRecovery('activate-spatial-world-variant', payload, session)
   if (response.error) throw new Error(await readFunctionsErrorMessage(response.error))
   return spatialWorldVariantActivationResponseSchema.parse(response.data)
+}
+
+export async function createSpatialWorldMarker(request: SpatialWorldMarkerCreateRequest) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before creating a spatial marker.')
+  const payload = spatialWorldMarkerCreateRequestSchema.parse(request)
+  return runLimitedRequest({
+    className: 'mutation', resourceKey: `spatial-marker:${payload.variantId}`,
+    fn: async () => {
+      const response = await supabase.from('spatial_world_markers').insert({
+        project_id: payload.projectId, draft_id: payload.draftId, variant_id: payload.variantId, created_by: session.user.id,
+        key: payload.key, kind: payload.kind, name: payload.name, description: payload.description, transform: payload.transform,
+        camera: payload.camera, linked_entity_key: payload.linkedEntityKey, linked_location_key: payload.linkedLocationKey,
+        linked_scene_id: payload.linkedSceneId, linked_spot_id: payload.linkedSpotId, linked_coverage_setup_id: payload.linkedCoverageSetupId,
+        screenshot_asset_key: payload.screenshotAssetKey, visible: payload.visible, metadata: payload.metadata,
+      }).select(spatialWorldMarkerMutationSelect).single()
+      if (response.error || !response.data) throw new Error(response.error?.message || 'Spatial marker could not be created.')
+      return spatialWorldMarkerMutationResponseSchema.parse({ ok: true, marker: mapSpatialWorldMarkerRow(response.data as SpatialWorldMarkerRow) })
+    },
+  })
+}
+
+export async function updateSpatialWorldMarker(request: SpatialWorldMarkerUpdateRequest) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before updating a spatial marker.')
+  const payload = spatialWorldMarkerUpdateRequestSchema.parse(request)
+  const update: Record<string, unknown> = {}
+  if (payload.key !== undefined) update.key = payload.key
+  if (payload.kind !== undefined) update.kind = payload.kind
+  if (payload.name !== undefined) update.name = payload.name
+  if (payload.description !== undefined) update.description = payload.description
+  if (payload.transform !== undefined) update.transform = payload.transform
+  if (payload.camera !== undefined) update.camera = payload.camera
+  if (payload.linkedEntityKey !== undefined) update.linked_entity_key = payload.linkedEntityKey
+  if (payload.linkedLocationKey !== undefined) update.linked_location_key = payload.linkedLocationKey
+  if (payload.linkedSceneId !== undefined) update.linked_scene_id = payload.linkedSceneId
+  if (payload.linkedSpotId !== undefined) update.linked_spot_id = payload.linkedSpotId
+  if (payload.linkedCoverageSetupId !== undefined) update.linked_coverage_setup_id = payload.linkedCoverageSetupId
+  if (payload.screenshotAssetKey !== undefined) update.screenshot_asset_key = payload.screenshotAssetKey
+  if (payload.visible !== undefined) update.visible = payload.visible
+  if (payload.metadata !== undefined) update.metadata = payload.metadata
+  return runLimitedRequest({ className: 'mutation', resourceKey: `spatial-marker:${payload.markerId}`, fn: async () => {
+    const response = await supabase.from('spatial_world_markers').update(update).eq('id', payload.markerId).select(spatialWorldMarkerMutationSelect).single()
+    if (response.error || !response.data) throw new Error(response.error?.message || 'Spatial marker could not be updated.')
+    return spatialWorldMarkerMutationResponseSchema.parse({ ok: true, marker: mapSpatialWorldMarkerRow(response.data as SpatialWorldMarkerRow) })
+  } })
+}
+
+export async function deleteSpatialWorldMarker(markerId: string) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before deleting a spatial marker.')
+  const payload = spatialWorldMarkerDeleteRequestSchema.parse({ markerId })
+  return runLimitedRequest({ className: 'mutation', resourceKey: `spatial-marker:${payload.markerId}`, fn: async () => {
+    const response = await supabase.from('spatial_world_markers').delete().eq('id', payload.markerId)
+    if (response.error) throw new Error(response.error.message)
+    return spatialWorldMarkerMutationResponseSchema.parse({ ok: true, marker: null })
+  } })
+}
+
+export async function updateSpatialWorldVariantAlignment(request: SpatialWorldVariantAlignmentUpdateRequest) {
+  await getValidatedSession('Sign in and load a live GraphCore draft before aligning a spatial world.')
+  const payload = spatialWorldVariantAlignmentUpdateRequestSchema.parse(request)
+  return runLimitedRequest({ className: 'mutation', resourceKey: `spatial-alignment:${payload.variantId}`, fn: async () => {
+    const existing = await supabase.from('spatial_world_variants').select('metadata').eq('id', payload.variantId).single()
+    if (existing.error) throw new Error(existing.error.message)
+    const metadata = existing.data?.metadata && typeof existing.data.metadata === 'object' ? existing.data.metadata as Record<string, unknown> : {}
+    const response = await supabase.from('spatial_world_variants').update({
+      alignment_transform: payload.transform, alignment_confidence: payload.confidence,
+      metadata: { ...metadata, groundPlaneOffset: payload.groundPlaneOffset, alignmentValidationNotes: payload.validationNotes },
+    }).eq('id', payload.variantId).select(spatialWorldVariantMutationSelect).single()
+    if (response.error || !response.data) throw new Error(response.error?.message || 'Spatial alignment could not be saved.')
+    return spatialWorldVariantAlignmentUpdateResponseSchema.parse({ ok: true, variant: mapSpatialWorldVariantRow(response.data as SpatialWorldVariantRow) })
+  } })
+}
+
+export async function startSpatialWorldProcessing(request: { variantId: string; operation?: 'validate' | 'optimize' | 'generate_lods' }) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before processing a spatial world.')
+  const payload = spatialWorldProcessingStartRequestSchema.parse(request)
+  const variant = await supabase.from('spatial_world_variants').select('project_id,draft_id,manifest').eq('id', payload.variantId).single()
+  if (variant.error || !variant.data) throw new Error(variant.error?.message || 'Spatial world variant was not found.')
+  return runLimitedRequest({ className: 'mutation', resourceKey: `spatial-processing:${payload.variantId}:${payload.operation}`, fn: async () => {
+    const response = await supabase.from('spatial_world_processing_jobs').insert({
+      project_id: variant.data.project_id, draft_id: variant.data.draft_id, variant_id: payload.variantId, requested_by: session.user.id,
+      operation: payload.operation, input: { manifest: variant.data.manifest ?? null }, metadata: { requestedFrom: 'spatial_viewer' },
+    }).select('id,project_id,draft_id,variant_id,requested_by,status,operation,input,outputs,error_message,attempt_count,metadata,created_at,updated_at').single()
+    if (response.error || !response.data) throw new Error(response.error?.message || 'Spatial processing could not be queued.')
+    return spatialWorldProcessingResponseSchema.parse({ ok: true, job: mapSpatialWorldProcessingJobRow(response.data as SpatialWorldProcessingJobRow) })
+  } })
+}
+
+export async function uploadSpatialWorldMarkerScreenshot(input: { markerId: string; variantId: string; blob: Blob }) {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before saving a viewpoint screenshot.')
+  const variant = await supabase.from('spatial_world_variants').select('project_id,draft_id,target_key').eq('id', input.variantId).single()
+  if (variant.error || !variant.data) throw new Error(variant.error?.message || 'Spatial world variant was not found.')
+  const assetKey = `spatial-viewpoint.${input.markerId}`
+  const storagePath = `generated/spatial-worlds/${variant.data.draft_id}/viewpoints/${input.markerId}.webp`
+  const upload = await supabase.storage.from('project-assets').upload(storagePath, input.blob, { contentType: 'image/webp', cacheControl: '31536000', upsert: true })
+  if (upload.error) throw new Error(upload.error.message)
+  const asset = await supabase.from('project_assets').upsert({
+    project_id: variant.data.project_id, key: assetKey, name: `${variant.data.target_key} viewpoint`, kind: 'image', mime_type: 'image/webp',
+    storage_path: storagePath, created_by: session.user.id,
+    metadata: { generatedBy: 'spatial_viewpoint_capture', spatialWorldVariantId: input.variantId, spatialWorldMarkerId: input.markerId },
+  }, { onConflict: 'project_id,key' })
+  if (asset.error) throw new Error(asset.error.message)
+  const marker = await updateSpatialWorldMarker({ markerId: input.markerId, screenshotAssetKey: assetKey })
+  return { ok: true as const, assetKey, marker: marker.marker }
+}
+
+export async function recordSpatialWorldPerformanceEvent(request: SpatialWorldPerformanceEvent) {
+  const session = await getValidatedSession('Sign in before recording spatial world performance.')
+  const payload = spatialWorldPerformanceEventSchema.parse(request)
+  return runLimitedRequest({ className: 'mutation', resourceKey: `spatial-telemetry:${payload.variantId}:${payload.eventType}`, fn: async () => {
+    const response = await supabase.from('spatial_world_performance_events').insert({
+      project_id: payload.projectId, draft_id: payload.draftId, variant_id: payload.variantId, user_id: session.user.id,
+      event_type: payload.eventType, fps: payload.fps, frame_time_ms: payload.frameTimeMs, load_time_ms: payload.loadTimeMs,
+      selected_lod_asset_key: payload.selectedLodAssetKey, device_memory_gb: payload.deviceMemoryGb, metadata: payload.metadata,
+    })
+    if (response.error && !isMissingRelationError(response.error, 'spatial_world_performance_events')) throw new Error(response.error.message)
+    return { ok: !response.error }
+  } })
 }
 
 export async function startAppCodeGeneration(snapshot: ProjectSnapshot): Promise<AppGenerationStartResponse> {

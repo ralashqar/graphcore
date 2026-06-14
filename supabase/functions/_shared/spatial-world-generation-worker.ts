@@ -55,7 +55,7 @@ function assetKey(job: SpatialWorldGenerationJob, role: string) {
 }
 
 async function persistProviderAssets(client: DatabaseClient, job: SpatialWorldGenerationJob, providerResult: Awaited<ReturnType<typeof pollSpatialWorldProviderJob>>) {
-  const roleKeys = new Map<string, string>()
+  const roleAssets = new Map<string, { key: string; byteSize: number }>()
   for (const asset of providerResult.assets) {
     const key = assetKey(job, asset.role)
     const storagePath = `generated/spatial-worlds/${job.draftId}/${job.id}/${asset.role}.${asset.suggestedExtension}`
@@ -75,21 +75,41 @@ async function persistProviderAssets(client: DatabaseClient, job: SpatialWorldGe
       metadata: { generatedBy: 'spatial_world_generation', spatialWorldJobId: job.id, provider: job.provider, model: job.model, role: asset.role, sourceUrl: asset.url },
     }, { onConflict: 'project_id,key' })
     if (upsert.error) throw new Error(upsert.error.message)
-    roleKeys.set(asset.role, key)
+    roleAssets.set(asset.role, { key, byteSize: payload.bytes.byteLength })
   }
 
-  const lodAssetKeys = [...roleKeys.entries()].filter(([role]) => role.startsWith('splat_')).map(([, key]) => key)
+  const splatEntries = [...roleAssets.entries()].filter(([role]) => role.startsWith('splat_'))
+  const splatRank = (role: string) => {
+    if (role.includes('100k')) return 0
+    if (role.includes('500k')) return 1
+    if (role.includes('full')) return 2
+    return 1
+  }
+  const lods = splatEntries.map(([role, asset]) => ({
+    assetKey: asset.key,
+    role,
+    estimatedSplats: Number(role.match(/(\d+)k/)?.[1] ?? 0) * 1000 || null,
+    byteSize: asset.byteSize,
+    qualityRank: splatRank(role),
+  })).sort((left, right) => left.qualityRank - right.qualityRank)
+  const lodAssetKeys = lods.map((entry) => entry.assetKey)
+  const primarySplatAssetKey = roleAssets.get('splat_full_res')?.key || roleAssets.get('splat_500k')?.key || lodAssetKeys[0] || null
+  const colliderAssetKey = roleAssets.get('collider_mesh')?.key || null
   const manifest = spatialWorldManifestSchema.parse({
     version: 1,
     provider: job.provider,
     providerWorldId: providerResult.providerWorldId,
-    visualAssetKeys: [...roleKeys.values()],
-    primarySplatAssetKey: roleKeys.get('splat_full_res') || roleKeys.get('splat_500k') || lodAssetKeys[0] || null,
+    visualAssetKeys: [...roleAssets.values()].map((asset) => asset.key),
+    primarySplatAssetKey,
     lodAssetKeys,
-    colliderMeshAssetKey: roleKeys.get('collider_mesh') || null,
-    panoramaAssetKey: roleKeys.get('panorama') || null,
-    thumbnailAssetKey: roleKeys.get('thumbnail') || null,
+    lods,
+    colliderMeshAssetKey: colliderAssetKey,
+    panoramaAssetKey: roleAssets.get('panorama')?.key || null,
+    thumbnailAssetKey: roleAssets.get('thumbnail')?.key || null,
     hostedPreviewUrl: providerResult.hostedPreviewUrl,
+    processing: { status: 'not_requested' },
+    colliderDiagnostics: { available: Boolean(colliderAssetKey), triangleCount: null, bounds: null, walkable: colliderAssetKey ? true : null, notes: colliderAssetKey ? [] : ['Provider did not return a collider mesh.'] },
+    performanceHints: { preferredLodAssetKey: primarySplatAssetKey, minimumDeviceMemoryGb: lods.length > 1 ? 4 : null, recommendedPixelRatio: 1.5, maxWalkDistance: null },
     generation: { jobId: job.id, operationId: job.providerOperationId, completedAt: new Date().toISOString() },
   })
   const manifestKey = assetKey(job, 'manifest')

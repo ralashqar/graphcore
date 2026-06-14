@@ -9003,6 +9003,8 @@ export default function App() {
                 graphKeys={snapshot.graphs.map((graph) => graph.key)}
                 items={definitionEntries}
                 meshGenerationJobs={snapshot.meshGenerationJobs}
+                spatialWorldVariants={snapshot.spatialWorldVariants}
+                spatialWorldMarkers={snapshot.spatialWorldMarkers}
                 selectedAsset={selectedAsset}
                 selectedArchetype={selectedArchetype}
                 selectedItem={selectedDefinition}
@@ -9019,6 +9021,17 @@ export default function App() {
                 onGenerateReferenceSheet={(definitionKey) => handleStartDefinitionReferenceSheetGeneration(definitionKey)}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}
                 onReferenceSheetJobFinished={refreshLiveSnapshot}
+                onPreviewSpatialWorldGeneration={(request) => workspaceService.previewSpatialWorldGeneration(snapshot, request)}
+                onStartSpatialWorldGeneration={(request) => workspaceService.startSpatialWorldGeneration(snapshot, request)}
+                onActivateSpatialWorldVariant={(variantId) => workspaceService.activateSpatialWorldVariant(variantId).then(async (result) => { await refreshLiveSnapshot(); return result })}
+                onCreateSpatialWorldMarker={(request) => workspaceService.createSpatialWorldMarker(request)}
+                onUpdateSpatialWorldMarker={(request) => workspaceService.updateSpatialWorldMarker(request)}
+                onDeleteSpatialWorldMarker={(markerId) => workspaceService.deleteSpatialWorldMarker(markerId)}
+                onUpdateSpatialWorldAlignment={(request) => workspaceService.updateSpatialWorldVariantAlignment(request).then(async (result) => { await refreshLiveSnapshot(); return result })}
+                onStartSpatialWorldProcessing={(request) => workspaceService.startSpatialWorldProcessing(request)}
+                onUploadSpatialWorldMarkerScreenshot={(input) => workspaceService.uploadSpatialWorldMarkerScreenshot(input)}
+                onRecordSpatialWorldPerformance={(event) => workspaceService.recordSpatialWorldPerformanceEvent(event)}
+                onResolveAssetUrls={(assetKeys: string[]) => workspaceService.signProjectAssetUrls(snapshot.project.id, assetKeys)}
                 isGeneratingPrompt={isGeneratingPatch}
                 onChangePromptText={setPromptText}
                 onGeneratePrompt={handleGeneratePatch}
@@ -9128,11 +9141,19 @@ export default function App() {
                 onGenerateReferenceSheet={(definitionKey) => handleStartDefinitionReferenceSheetGeneration(definitionKey)}
                 onGetVisualGenerationStatus={getVisualGenerationStatus}
                 spatialWorldVariants={snapshot.spatialWorldVariants}
+                spatialWorldMarkers={snapshot.spatialWorldMarkers}
                 onPreviewSpatialWorldGeneration={(request) => workspaceService.previewSpatialWorldGeneration(snapshot, request)}
                 onStartSpatialWorldGeneration={(request) => workspaceService.startSpatialWorldGeneration(snapshot, request)}
                 onGetSpatialWorldGenerationStatus={(jobId) => workspaceService.getSpatialWorldGenerationStatus(jobId)}
                 onCancelSpatialWorldGeneration={(jobId) => workspaceService.cancelSpatialWorldGeneration(jobId)}
                 onActivateSpatialWorldVariant={(variantId) => workspaceService.activateSpatialWorldVariant(variantId).then(async (result) => { await refreshLiveSnapshot(); return result })}
+                onCreateSpatialWorldMarker={(request) => workspaceService.createSpatialWorldMarker(request)}
+                onUpdateSpatialWorldMarker={(request) => workspaceService.updateSpatialWorldMarker(request)}
+                onDeleteSpatialWorldMarker={(markerId) => workspaceService.deleteSpatialWorldMarker(markerId)}
+                onUpdateSpatialWorldAlignment={(request) => workspaceService.updateSpatialWorldVariantAlignment(request).then(async (result) => { await refreshLiveSnapshot(); return result })}
+                onStartSpatialWorldProcessing={(request) => workspaceService.startSpatialWorldProcessing(request)}
+                onUploadSpatialWorldMarkerScreenshot={(input) => workspaceService.uploadSpatialWorldMarkerScreenshot(input)}
+                onRecordSpatialWorldPerformance={(event) => workspaceService.recordSpatialWorldPerformanceEvent(event)}
                 onReferenceSheetJobFinished={refreshLiveSnapshot}
                 onResolveAssetUrls={(assetKeys: string[]) => workspaceService.signProjectAssetUrls(snapshot.project.id, assetKeys)}
                 onOpenCinematicGraph={openCinematicWorkspace}

@@ -17,6 +17,15 @@
   min-height: 560px;
 }
 
+.three-scene-webgl-fallback {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+}
+
 .three-scene-status,
 .character-3d-summary-card {
   display: grid;
@@ -34,6 +43,67 @@
 .three-scene-status span:last-child {
   color: var(--muted);
   line-height: 1.5;
+}
+
+.spatial-marker-label {
+  max-width: 180px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(12, 18, 27, 0.88);
+  color: #eef3f8;
+  font: 600 11px/1.2 var(--font-sans);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+}
+
+.spatial-marker-label:active {
+  transform: scale(0.98);
+}
+
+.spatial-authoring-section {
+  gap: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.spatial-marker-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.spatial-vector-field {
+  display: grid;
+  grid-template-columns: 72px repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.spatial-vector-field > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: capitalize;
+}
+
+.spatial-vector-field input {
+  min-width: 0;
+}
+
+.compact-field {
+  max-width: 360px;
+}
+
+@media (max-width: 760px) {
+  .three-scene-canvas {
+    min-height: 420px;
+  }
+
+  .spatial-authoring-section .chip-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .character-3d-summary-row {
@@ -763,4 +833,3 @@
   flex: 0 0 auto;
   justify-self: start;
 }
-

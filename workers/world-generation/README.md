@@ -27,3 +27,6 @@ fly secrets set GRAPHCORE_WORKER_SECRET="..."
 The worker polls Supabase for `world_prompt_generation_jobs` with `metadata.runtime = "fly"`, claims one queued `full_stream` step at a time, streams OpenAI graph-op records, applies them through the existing world-prompt persistence path, and writes progress events for realtime/polling UI recovery. Most entity visuals flow through generic `visual_generation_jobs.kind = "entity_reference_sheet"` jobs. Lore/concept and `sequence_unit` visuals use one restricted end-of-seed `world_entity_icon_grid` job. The worker no longer drains legacy `world_entity_icon_generation_jobs`.
 
 The process runs world-generation and icon-generation loops concurrently. Initial onboarding seed generation queues the first icon-grid job as soon as the first `sequence_unit` is about to be applied, so the icon batch can run while the LLM continues generating sequence units and relationships.
+### Spatial world processing
+
+Spatial generation and post-processing share the `spatial_world` worker lanes. Manifest validation is built in. Set `SPATIAL_WORLD_SPLAT_TRANSFORM_COMMAND` only after the worker image contains a verified PlayCanvas SplatTransform command; optimization and generated-LOD jobs fail closed when it is absent.

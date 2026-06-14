@@ -6,6 +6,7 @@ import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWor
 import { getResourceGenerationMetadata, isPendingGenerationResource } from '../domain/worldBuild'
 import type { MeshGenerationJob } from '../domain/meshGeneration'
 import type { VisualGenerationStatusResponse } from '../domain/visualGeneration'
+import type { SpatialWorldGenerationPreviewResponse, SpatialWorldGenerationStartRequest } from '../domain/spatialWorldGeneration'
 import { useEditorStore } from '../state/editorStore'
 import { EntityIcon, iconForDefinitionKind } from '../shared/entityIcons'
 import { ArchetypeEditor } from './content/ArchetypeEditor'
@@ -70,6 +71,8 @@ export function ContentWorkspace({
   graphKeys: _graphKeys,
   items,
   meshGenerationJobs = [],
+  spatialWorldVariants = [],
+  spatialWorldMarkers = [],
   selectedAsset,
   selectedArchetype,
   selectedItem,
@@ -90,6 +93,17 @@ export function ContentWorkspace({
   onGenerateReferenceSheet,
   onGetVisualGenerationStatus,
   onReferenceSheetJobFinished,
+  onPreviewSpatialWorldGeneration,
+  onStartSpatialWorldGeneration,
+  onActivateSpatialWorldVariant,
+  onCreateSpatialWorldMarker,
+  onUpdateSpatialWorldMarker,
+  onDeleteSpatialWorldMarker,
+  onUpdateSpatialWorldAlignment,
+  onStartSpatialWorldProcessing,
+  onUploadSpatialWorldMarkerScreenshot,
+  onRecordSpatialWorldPerformance,
+  onResolveAssetUrls,
   isGeneratingPrompt = false,
   onChangePromptText: onChangePromptTextProp,
   onGeneratePrompt,
@@ -124,6 +138,10 @@ export function ContentWorkspace({
   const [itemReferenceSheetJob, setItemReferenceSheetJob] = useState<VisualGenerationStatusResponse['job'] | null>(null)
   const [isItemImagePickerOpen, setIsItemImagePickerOpen] = useState(false)
   const [isItemPreviewOpen, setIsItemPreviewOpen] = useState(false)
+  const [worldModelSpatialQuote, setWorldModelSpatialQuote] = useState<SpatialWorldGenerationPreviewResponse | null>(null)
+  const [worldModelQuotedRequest, setWorldModelQuotedRequest] = useState<Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> | null>(null)
+  const [worldModelSpatialBusy, setWorldModelSpatialBusy] = useState(false)
+  const [worldModelSpatialMessage, setWorldModelSpatialMessage] = useState<string | null>(null)
 
   const imageAssets = useMemo(() => assets.filter((asset) => asset.kind === 'image'), [assets])
   const contentItems = useMemo(
@@ -180,6 +198,41 @@ export function ContentWorkspace({
     () => selectedContentItem ? getWorldRelationshipsForDefinition(selectedContentItem.key, worldEntities, worldRelationships) : [],
     [selectedContentItem, worldEntities, worldRelationships],
   )
+
+  async function previewWorldModelSpatialGeneration() {
+    if (!selectedContentItem || selectedContentItem.kind !== 'world_model' || !onPreviewSpatialWorldGeneration) return
+    setWorldModelSpatialBusy(true)
+    setWorldModelSpatialMessage(null)
+    try {
+      const request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> = {
+        targetKind: 'world_model', targetKey: selectedContentItem.key, variantKey: `world-${Date.now()}`,
+        providers: ['worldlabs'], modelByProvider: {},
+        input: {
+          prompt: [selectedContentItem.name, selectedContentItem.summary, projectSummary, gameSpec?.theme?.artStyleDescription].filter(Boolean).join('. '),
+          negativePrompt: null, quality: 'standard', sourceImages: [], sourceVideoAssetKey: null, spatialDocumentSummary: null,
+          idempotencyKey: `spatial-world:world-model:${selectedContentItem.key}:${Date.now()}`, metadata: { requestedFrom: 'world_model_workspace' },
+        }, metadata: { requestedFrom: 'world_model_workspace' },
+      }
+      const quote = await onPreviewSpatialWorldGeneration(request)
+      setWorldModelSpatialQuote(quote)
+      setWorldModelQuotedRequest(request)
+    } catch (error) {
+      setWorldModelSpatialMessage(error instanceof Error ? error.message : 'Spatial generation quote failed.')
+    } finally { setWorldModelSpatialBusy(false) }
+  }
+
+  async function confirmWorldModelSpatialGeneration() {
+    if (!selectedContentItem || selectedContentItem.kind !== 'world_model' || !onStartSpatialWorldGeneration || !worldModelSpatialQuote || !worldModelQuotedRequest) return
+    setWorldModelSpatialBusy(true)
+    try {
+      await onStartSpatialWorldGeneration({ ...worldModelQuotedRequest, quoteToken: worldModelSpatialQuote.quoteToken })
+      setWorldModelSpatialQuote(null)
+      setWorldModelQuotedRequest(null)
+      setWorldModelSpatialMessage('World-model spatial generation queued.')
+    } catch (error) {
+      setWorldModelSpatialMessage(error instanceof Error ? error.message : 'Spatial generation could not start.')
+    } finally { setWorldModelSpatialBusy(false) }
+  }
   const [worldContextDraft, setWorldContextDraft] = useState('')
   useEffect(() => {
     setWorldContextDraft(linkedWorldEntity?.context ?? '')
@@ -251,7 +304,11 @@ export function ContentWorkspace({
   const isItemConceptAssetPending = isPendingGenerationResource(selectedItemPreviewAsset)
   const isItemReferenceSheetBusy = itemReferenceSheetJob ? ['queued', 'running'].includes(itemReferenceSheetJob.status) : false
   const isItemConceptBusy = itemConceptPending || isItemConceptAssetPending || isItemReferenceSheetBusy
-  const supportsItem3dPanel = selectedContentItem?.kind === 'item'
+  const supportsItem3dPanel = selectedContentItem?.kind === 'item' || selectedContentItem?.kind === 'world_model'
+  const selectedWorldModelVariants = selectedContentItem?.kind === 'world_model'
+    ? spatialWorldVariants.filter((variant) => variant.targetKind === 'world_model' && variant.targetKey === selectedContentItem.key)
+    : []
+  const activeWorldModelVariant = selectedWorldModelVariants.find((variant) => variant.isActive) ?? null
   const hasSelectedItemGenerationFailed = getResourceGenerationMetadata(selectedContentItem)?.state === 'failed'
 
   useEffect(() => {
@@ -568,6 +625,18 @@ export function ContentWorkspace({
               }
             />
           </label>
+          {selectedContentItem.kind === 'world_model' && onPreviewSpatialWorldGeneration ? (
+            <div className="editor-section compact-section">
+              <div className="section-head"><div><span className="eyebrow">Spatial World</span><h3>Explore this world model</h3></div><span className="chip">{selectedWorldModelVariants.filter((variant) => variant.status === 'ready').length} ready</span></div>
+              <p className="inline-note">Generate an explorable visual world while keeping the world model and canon graph authoritative.</p>
+              <div className="chip-row">
+                <button className={worldModelSpatialBusy ? 'primary-button button-with-spinner' : 'primary-button'} disabled={worldModelSpatialBusy} onClick={() => void previewWorldModelSpatialGeneration()} type="button">{worldModelSpatialBusy ? 'Preparing...' : 'Preview cost'}</button>
+                {worldModelSpatialQuote ? <button className="ghost-button compact" disabled={worldModelSpatialBusy} onClick={() => void confirmWorldModelSpatialGeneration()} type="button">Confirm {worldModelSpatialQuote.totalEstimatedCredits} credits</button> : null}
+              </div>
+              {selectedWorldModelVariants.map((variant) => <div className="schema-card" key={variant.id}><div className="schema-card-head"><strong>{variant.name}</strong><span className="chip">{variant.status}</span></div>{variant.status === 'ready' && onActivateSpatialWorldVariant ? <button className={variant.isActive ? 'ghost-button compact is-selected' : 'ghost-button compact'} disabled={variant.isActive} onClick={() => void onActivateSpatialWorldVariant(variant.id)} type="button">{variant.isActive ? 'Active world' : 'Use this world'}</button> : null}</div>)}
+              {worldModelSpatialMessage ? <div className="inline-note">{worldModelSpatialMessage}</div> : null}
+            </div>
+          ) : null}
           {linkedWorldEntity ? (
             <div className="editor-section compact-section definition-world-link-panel">
               <div className="section-head">
@@ -741,10 +810,20 @@ export function ContentWorkspace({
               definition={selectedContentItem}
               isDeletingGeneratedMesh={isDeletingGeneratedMesh}
               meshGenerationJob={selectedItemMeshJob}
+              spatialWorldVariant={selectedContentItem.kind === 'world_model' ? activeWorldModelVariant : null}
+              spatialWorldMarkers={spatialWorldMarkers}
               onDeleteGeneratedMesh={() => onDeleteGeneratedMesh(selectedContentItem.key)}
               onRequestGenerateConceptArt={requestItemConceptFrom3d}
               onRequestGenerateMesh={() => onStartMeshGeneration(selectedContentItem.key)}
               onUpdateComponents={onUpdateComponents}
+              onResolveAssetUrls={onResolveAssetUrls}
+              onCreateSpatialWorldMarker={onCreateSpatialWorldMarker}
+              onUpdateSpatialWorldMarker={onUpdateSpatialWorldMarker}
+              onDeleteSpatialWorldMarker={onDeleteSpatialWorldMarker}
+              onUpdateSpatialWorldAlignment={onUpdateSpatialWorldAlignment}
+              onStartSpatialWorldProcessing={onStartSpatialWorldProcessing}
+              onUploadSpatialWorldMarkerScreenshot={onUploadSpatialWorldMarkerScreenshot}
+              onRecordSpatialWorldPerformance={onRecordSpatialWorldPerformance}
             />
           </Suspense>
         </>

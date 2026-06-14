@@ -15,7 +15,16 @@ import {
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import { isTerminalMeshGenerationJobStatus } from '../../domain/meshGeneration'
 import type { AssetDefinition, AssemblyGraphDefinition, DefinitionBase, EnvironmentBlueprintV1 } from '../../domain/graphcore'
-import type { SpatialWorldVariant } from '../../domain/spatialWorldGeneration'
+import {
+  resolveSpatialWorldSpawn,
+  selectSpatialWorldLod,
+  type SpatialWorldMarker,
+  type SpatialWorldMarkerCreateRequest,
+  type SpatialWorldMarkerUpdateRequest,
+  type SpatialWorldPerformanceEvent,
+  type SpatialWorldVariant,
+  type SpatialWorldVariantAlignmentUpdateRequest,
+} from '../../domain/spatialWorldGeneration'
 import { supabase } from '../../utils/supabase'
 import { runCoalescedRequest } from '../../data/requestCoordinator'
 import { MediaThumb, findAssetByKey } from '../content/shared'
@@ -48,11 +57,19 @@ type Definition3dPanelProps = {
   isDeletingGeneratedMesh?: boolean
   meshGenerationJob?: MeshGenerationJob | null
   spatialWorldVariant?: SpatialWorldVariant | null
+  spatialWorldMarkers?: SpatialWorldMarker[]
   onDeleteGeneratedMesh?: (() => void) | null
   onRequestGenerateConceptArt?: (() => void) | null
   onRequestGenerateMesh?: (() => void) | null
   onUpdateComponents: (itemKey: string, components: DefinitionBase['components']) => void
   onResolveAssetUrls?: (assetKeys: string[]) => Promise<AssetDefinition[]>
+  onCreateSpatialWorldMarker?: (request: SpatialWorldMarkerCreateRequest) => Promise<{ marker: SpatialWorldMarker | null }>
+  onUpdateSpatialWorldMarker?: (request: SpatialWorldMarkerUpdateRequest) => Promise<{ marker: SpatialWorldMarker | null }>
+  onDeleteSpatialWorldMarker?: (markerId: string) => Promise<unknown>
+  onUpdateSpatialWorldAlignment?: (request: SpatialWorldVariantAlignmentUpdateRequest) => Promise<unknown>
+  onStartSpatialWorldProcessing?: (request: { variantId: string; operation?: 'validate' | 'optimize' | 'generate_lods' }) => Promise<unknown>
+  onUploadSpatialWorldMarkerScreenshot?: (input: { markerId: string; variantId: string; blob: Blob }) => Promise<unknown>
+  onRecordSpatialWorldPerformance?: (event: SpatialWorldPerformanceEvent) => Promise<unknown>
 }
 
 export function Definition3dPanel({
@@ -63,11 +80,19 @@ export function Definition3dPanel({
   isDeletingGeneratedMesh = false,
   meshGenerationJob = null,
   spatialWorldVariant = null,
+  spatialWorldMarkers = [],
   onDeleteGeneratedMesh = null,
   onRequestGenerateConceptArt = null,
   onRequestGenerateMesh = null,
   onUpdateComponents,
   onResolveAssetUrls,
+  onCreateSpatialWorldMarker,
+  onUpdateSpatialWorldMarker,
+  onDeleteSpatialWorldMarker,
+  onUpdateSpatialWorldAlignment,
+  onStartSpatialWorldProcessing,
+  onUploadSpatialWorldMarkerScreenshot,
+  onRecordSpatialWorldPerformance,
 }: Definition3dPanelProps) {
   const [showFloor, setShowFloor] = useState(true)
   const [showGrid, setShowGrid] = useState(true)
@@ -80,8 +105,25 @@ export function Definition3dPanel({
   const [resolvedSpatialAssets, setResolvedSpatialAssets] = useState<Record<string, AssetDefinition>>({})
   const [spatialLoadState, setSpatialLoadState] = useState<SpatialLoadState>({ status: 'idle', progress: 0, splatCount: null, error: null })
   const [viewportPerformance, setViewportPerformance] = useState({ fps: 0, frameTimeMs: 0 })
+  const [navigationMode, setNavigationMode] = useState<'orbit' | 'walk'>('orbit')
+  const [walkSpeed, setWalkSpeed] = useState(3.2)
+  const [showColliderDebug, setShowColliderDebug] = useState(false)
+  const [localMarkers, setLocalMarkers] = useState<SpatialWorldMarker[]>([])
+  const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null)
+  const [markerPlacementKind, setMarkerPlacementKind] = useState<SpatialWorldMarker['kind'] | null>(null)
+  const [cameraState, setCameraState] = useState({ position: [4.8, 3.8, 5.4] as [number, number, number], target: [0, 0, 0] as [number, number, number], fov: 48 })
+  const [cameraView, setCameraView] = useState<{ position: [number, number, number]; target: [number, number, number] | null; fov: number; signal: number } | null>(null)
+  const [captureScreenshotSignal, setCaptureScreenshotSignal] = useState(0)
+  const [pendingScreenshotMarkerId, setPendingScreenshotMarkerId] = useState<string | null>(null)
+  const [spatialAuthoringMessage, setSpatialAuthoringMessage] = useState<string | null>(null)
+  const [supportsWalkMode, setSupportsWalkMode] = useState(true)
+  const [alignmentDraft, setAlignmentDraft] = useState({ position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number], confidence: 0, groundPlaneOffset: 0 })
+  const markerMoveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastTelemetryAtRef = useRef(0)
+  const spatialLoadStartedAtRef = useRef(Date.now())
 
   const isEnvironment = definition.kind === 'environment'
+  const isSpatialEnvironment = isEnvironment || definition.kind === 'world_model'
   const isItem = definition.kind === 'item'
   const renderBinding = getResolvedDefinition3dBinding(definition)
   const geometryBinding = isEnvironment ? getResolvedEnvironmentGeometryBinding(definition) : null
@@ -90,19 +132,23 @@ export function Definition3dPanel({
     : isItem
       ? 'pickup'
       : getCharacterProfile(definition)?.config.subtype ?? 'humanoid'
-  const entityLabel = isEnvironment ? 'Environment' : isItem ? 'Item' : 'Character'
+  const entityLabel = isEnvironment ? 'Environment' : definition.kind === 'world_model' ? 'World Model' : isItem ? 'Item' : 'Character'
   const meshAssets = useMemo(() => assets.filter(isMeshAsset).sort((left, right) => left.name.localeCompare(right.name)), [assets])
   const imageAssets = useMemo(() => assets.filter(isImageAsset).sort((left, right) => left.name.localeCompare(right.name)), [assets])
   const meshAsset = findAssetByKey(assets, renderBinding.primaryMeshAssetKey)
   const previewImageAsset = findAssetByKey(assets, renderBinding.previewImageAssetKey)
-  const spatialWorldAsset = resolvedSpatialAssets[renderBinding.spatialWorldAssetKey ?? '']
-    ?? findAssetByKey(assets, renderBinding.spatialWorldAssetKey ?? null)
+  const deviceMemoryGb = typeof navigator !== 'undefined' && 'deviceMemory' in navigator ? Number((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0) || null : null
+  const selectedSplatAssetKey = spatialWorldVariant?.manifest
+    ? selectSpatialWorldLod({ manifest: spatialWorldVariant.manifest, deviceMemoryGb, fps: viewportPerformance.fps > 0 ? viewportPerformance.fps : null })
+    : renderBinding.spatialWorldAssetKey
+  const spatialWorldAsset = resolvedSpatialAssets[selectedSplatAssetKey ?? '']
+    ?? findAssetByKey(assets, selectedSplatAssetKey ?? null)
   const colliderAsset = resolvedSpatialAssets[renderBinding.colliderMeshAssetKey ?? '']
     ?? findAssetByKey(assets, renderBinding.colliderMeshAssetKey ?? null)
   const meshSourceUrl = resolveAssetSourceUrl(meshAsset)
   const spatialWorldSourceUrl = resolveAssetSourceUrl(spatialWorldAsset)
   const colliderSourceUrl = resolveAssetSourceUrl(colliderAsset)
-  const viewportMeshSourceUrl = renderMode === 'hybrid' ? (colliderSourceUrl ?? meshSourceUrl ?? fallbackMeshSourceUrl) : (meshSourceUrl ?? fallbackMeshSourceUrl)
+  const viewportMeshSourceUrl = meshSourceUrl ?? fallbackMeshSourceUrl
   const meshSourceLabel = meshSourceUrl ?? 'No mesh source bound'
   const meshGenerationPending = Boolean(meshGenerationJob && !isTerminalMeshGenerationJobStatus(meshGenerationJob.status))
   const meshAssetGenerationState =
@@ -121,11 +167,27 @@ export function Definition3dPanel({
 
   useEffect(() => {
     setRenderMode(renderBinding.spatialWorldAssetKey ? 'spatial_world' : 'mesh')
+    spatialLoadStartedAtRef.current = Date.now()
     setSpatialLoadState({ status: 'idle', progress: 0, splatCount: null, error: null })
   }, [definition.key, renderBinding.spatialWorldAssetKey])
 
   useEffect(() => {
-    const keys = [renderBinding.spatialWorldAssetKey, renderBinding.colliderMeshAssetKey].filter((key): key is string => Boolean(key))
+    setLocalMarkers(spatialWorldMarkers.filter((marker) => marker.variantId === spatialWorldVariant?.id))
+  }, [spatialWorldMarkers, spatialWorldVariant?.id])
+
+  useEffect(() => {
+    if (!spatialWorldVariant) return
+    setAlignmentDraft({
+      position: spatialWorldVariant.alignmentTransform.position,
+      rotation: spatialWorldVariant.alignmentTransform.rotation,
+      scale: spatialWorldVariant.alignmentTransform.scale,
+      confidence: spatialWorldVariant.alignmentConfidence ?? 0,
+      groundPlaneOffset: spatialWorldVariant.manifest?.groundPlaneOffset ?? 0,
+    })
+  }, [spatialWorldVariant])
+
+  useEffect(() => {
+    const keys = [selectedSplatAssetKey, renderBinding.colliderMeshAssetKey, ...(spatialWorldVariant?.manifest?.lodAssetKeys ?? [])].filter((key): key is string => Boolean(key))
     if (!onResolveAssetUrls || keys.length === 0) {
       setResolvedSpatialAssets({})
       return
@@ -139,7 +201,47 @@ export function Definition3dPanel({
       setSpatialLoadState({ status: 'error', progress: 0, splatCount: null, error: error instanceof Error ? error.message : 'Spatial assets could not be signed.' })
     })
     return () => { active = false }
-  }, [onResolveAssetUrls, renderBinding.colliderMeshAssetKey, renderBinding.spatialWorldAssetKey])
+  }, [onResolveAssetUrls, renderBinding.colliderMeshAssetKey, selectedSplatAssetKey, spatialWorldVariant?.manifest?.lodAssetKeys])
+
+  useEffect(() => () => {
+    if (markerMoveTimerRef.current) clearTimeout(markerMoveTimerRef.current)
+  }, [])
+
+  useEffect(() => {
+    const query = window.matchMedia('(pointer: coarse)')
+    const update = () => setSupportsWalkMode(!query.matches)
+    update()
+    query.addEventListener?.('change', update)
+    return () => query.removeEventListener?.('change', update)
+  }, [])
+
+  const spawnPosition = useMemo(() => resolveSpatialWorldSpawn({ markers: localMarkers, manifest: spatialWorldVariant?.manifest ?? null }), [localMarkers, spatialWorldVariant?.manifest])
+  const selectedMarker = localMarkers.find((marker) => marker.id === selectedMarkerId) ?? null
+
+  async function createMarkerAt(position: [number, number, number], kind = markerPlacementKind) {
+    if (!kind || !spatialWorldVariant || !onCreateSpatialWorldMarker) return
+    const sequence = localMarkers.filter((marker) => marker.kind === kind).length + 1
+    const camera = kind === 'camera_viewpoint' ? { fov: cameraState.fov, target: cameraState.target, projection: 'perspective' as const } : null
+    const response = await onCreateSpatialWorldMarker({
+      projectId: spatialWorldVariant.projectId, draftId: spatialWorldVariant.draftId, variantId: spatialWorldVariant.id,
+      key: `${kind}-${Date.now()}`, kind, name: `${kind.replace(/_/g, ' ')} ${sequence}`, description: '',
+      transform: { position, rotation: [0, 0, 0], scale: [1, 1, 1] }, camera,
+      linkedEntityKey: null, linkedLocationKey: definition.key, linkedSceneId: null, linkedSpotId: null, linkedCoverageSetupId: null,
+      screenshotAssetKey: null, visible: true, metadata: { authoredIn: 'spatial_viewer' },
+    })
+    if (response.marker) {
+      setLocalMarkers((current) => [...current, response.marker!])
+      setSelectedMarkerId(response.marker.id)
+      setMarkerPlacementKind(null)
+      setSpatialAuthoringMessage(`${response.marker.name} placed.`)
+    }
+  }
+
+  function moveMarker(markerId: string, position: [number, number, number]) {
+    setLocalMarkers((current) => current.map((marker) => marker.id === markerId ? { ...marker, transform: { ...marker.transform, position } } : marker))
+    if (markerMoveTimerRef.current) clearTimeout(markerMoveTimerRef.current)
+    markerMoveTimerRef.current = setTimeout(() => { void onUpdateSpatialWorldMarker?.({ markerId, transform: { ...(localMarkers.find((marker) => marker.id === markerId)?.transform ?? { rotation: [0, 0, 0], scale: [1, 1, 1] }), position } }) }, 250)
+  }
   const compileCacheRef = useRef(createAssemblyCompileCache())
   const lastCompiledPreviewRef = useRef<{
     signature: string
@@ -470,10 +572,21 @@ export function Definition3dPanel({
           <ThreeSceneViewport
             compiledEnvironment={compiledEnvironment}
             meshSourceUrl={viewportMeshSourceUrl}
+            colliderSourceUrl={colliderSourceUrl}
             spatialWorldSourceUrl={spatialWorldSourceUrl}
-            spatialWorldTransform={spatialWorldVariant?.alignmentTransform ?? null}
+            spatialWorldTransform={spatialWorldVariant ? { position: alignmentDraft.position, rotation: alignmentDraft.rotation, scale: alignmentDraft.scale } : null}
             renderMode={renderMode}
-            modelKind={isEnvironment ? 'environment' : 'character'}
+            navigationMode={navigationMode}
+            walkSpeed={walkSpeed}
+            spawnPosition={spawnPosition}
+            spatialBounds={spatialWorldVariant?.manifest?.bounds ?? null}
+            markers={localMarkers}
+            selectedMarkerId={selectedMarkerId}
+            markerPlacementKind={markerPlacementKind}
+            showColliderDebug={showColliderDebug}
+            cameraView={cameraView}
+            captureScreenshotSignal={captureScreenshotSignal}
+            modelKind={isSpatialEnvironment ? 'environment' : 'character'}
             modelLabel={definition.name}
             modelSubtype={subtype}
             showFloor={showFloor}
@@ -482,13 +595,38 @@ export function Definition3dPanel({
             onMeshLoadStateChange={(state) => {
               setMeshViewportError(state.status === 'error' ? state.error : null)
             }}
-            onSpatialLoadStateChange={setSpatialLoadState}
-            onPerformanceChange={setViewportPerformance}
+            onSpatialLoadStateChange={(state) => {
+              setSpatialLoadState(state)
+              if (state.status === 'ready' && spatialWorldVariant && onRecordSpatialWorldPerformance) {
+                void onRecordSpatialWorldPerformance({ projectId: spatialWorldVariant.projectId, draftId: spatialWorldVariant.draftId, variantId: spatialWorldVariant.id, eventType: 'load', fps: null, frameTimeMs: null, loadTimeMs: Date.now() - spatialLoadStartedAtRef.current, selectedLodAssetKey: selectedSplatAssetKey ?? null, deviceMemoryGb, metadata: { splatCount: state.splatCount } })
+              }
+            }}
+            onPerformanceChange={(sample) => {
+              setViewportPerformance(sample)
+              if (!spatialWorldVariant || !onRecordSpatialWorldPerformance || Date.now() - lastTelemetryAtRef.current < 15_000) return
+              lastTelemetryAtRef.current = Date.now()
+              void onRecordSpatialWorldPerformance({ projectId: spatialWorldVariant.projectId, draftId: spatialWorldVariant.draftId, variantId: spatialWorldVariant.id, eventType: 'frame_sample', fps: sample.fps, frameTimeMs: sample.frameTimeMs, loadTimeMs: null, selectedLodAssetKey: selectedSplatAssetKey ?? null, deviceMemoryGb, metadata: { renderMode, navigationMode } })
+            }}
+            onMarkerSelect={setSelectedMarkerId}
+            onMarkerMove={moveMarker}
+            onMarkerPlace={(position) => void createMarkerAt(position)}
+            onCameraStateChange={setCameraState}
+            onWalkRecovery={() => {
+              setSpatialAuthoringMessage('Walk position was outside the generated bounds and has been reset.')
+              if (spatialWorldVariant && onRecordSpatialWorldPerformance) void onRecordSpatialWorldPerformance({ projectId: spatialWorldVariant.projectId, draftId: spatialWorldVariant.draftId, variantId: spatialWorldVariant.id, eventType: 'walk_recovery', fps: viewportPerformance.fps || null, frameTimeMs: viewportPerformance.frameTimeMs || null, loadTimeMs: null, selectedLodAssetKey: selectedSplatAssetKey ?? null, deviceMemoryGb, metadata: {} })
+            }}
+            onScreenshotCaptured={(blob) => {
+              if (!pendingScreenshotMarkerId || !spatialWorldVariant || !onUploadSpatialWorldMarkerScreenshot) return
+              void onUploadSpatialWorldMarkerScreenshot({ markerId: pendingScreenshotMarkerId, variantId: spatialWorldVariant.id, blob })
+                .then(() => setSpatialAuthoringMessage('Viewpoint screenshot saved.'))
+                .catch((error) => setSpatialAuthoringMessage(error instanceof Error ? error.message : 'Viewpoint screenshot could not be saved.'))
+                .finally(() => setPendingScreenshotMarkerId(null))
+            }}
           />
         </div>
 
         <div className="character-3d-sidebar">
-          {!isEnvironment && !isProceduralEnvironment ? (
+          {!isSpatialEnvironment && !isProceduralEnvironment ? (
             <div className="editor-section">
               <button
                 className="primary-button compact"
@@ -518,7 +656,7 @@ export function Definition3dPanel({
             </div>
           ) : null}
 
-          {isEnvironment ? (
+          {isSpatialEnvironment ? (
             <div className="editor-section">
               <div className="section-head">
                 <div>
@@ -533,6 +671,9 @@ export function Definition3dPanel({
                     <button className={renderMode === 'mesh' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRenderMode('mesh')} type="button">Mesh</button>
                     <button className={renderMode === 'spatial_world' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRenderMode('spatial_world')} type="button">Spatial</button>
                     <button className={renderMode === 'hybrid' ? 'segment-button is-active' : 'segment-button'} onClick={() => setRenderMode('hybrid')} type="button">Hybrid</button>
+                    <button className={navigationMode === 'orbit' ? 'segment-button is-active' : 'segment-button'} onClick={() => setNavigationMode('orbit')} type="button">Orbit</button>
+                    <button className={navigationMode === 'walk' ? 'segment-button is-active' : 'segment-button'} disabled={!colliderAsset || !supportsWalkMode} onClick={() => setNavigationMode('walk')} title={!supportsWalkMode ? 'Walk mode requires a fine pointer and keyboard.' : undefined} type="button">Walk</button>
+                    <button className={showColliderDebug ? 'segment-button is-active' : 'segment-button'} disabled={!colliderAsset} onClick={() => setShowColliderDebug((current) => !current)} type="button">Collider</button>
                   </>
                 ) : null}
                 <button className={showFloor ? 'segment-button is-active' : 'segment-button'} onClick={() => setShowFloor((current) => !current)} type="button">
@@ -550,8 +691,61 @@ export function Definition3dPanel({
                   <strong>{spatialLoadState.status === 'ready' ? 'Spatial world ready' : spatialLoadState.status === 'loading' ? 'Loading spatial world' : spatialLoadState.status === 'error' ? 'Spatial world unavailable' : 'Spatial world bound'}</strong>
                   <span>{spatialLoadState.status === 'loading' ? `${Math.round(spatialLoadState.progress * 100)}% loaded` : spatialLoadState.status === 'ready' ? `${spatialLoadState.splatCount.toLocaleString()} splats` : spatialLoadState.error ?? spatialWorldAsset.name}</span>
                   {spatialLoadState.status === 'ready' ? <span>{Math.round(viewportPerformance.fps)} FPS · {viewportPerformance.frameTimeMs.toFixed(1)} ms frame</span> : null}
+                  {navigationMode === 'walk' ? <span>Click the world to lock the pointer. Use WASD or arrow keys; Escape releases it.</span> : null}
                 </div>
               ) : null}
+              {spatialWorldAsset ? (
+                <label className="field-stack compact-field">
+                  <span>Walk speed · {walkSpeed.toFixed(1)} m/s</span>
+                  <input aria-label="Walk speed" max="8" min="1" onChange={(event) => setWalkSpeed(Number(event.target.value))} step="0.2" type="range" value={walkSpeed} />
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+
+          {isSpatialEnvironment && spatialWorldVariant ? (
+            <div className="editor-section spatial-authoring-section">
+              <div className="section-head">
+                <div><span className="eyebrow">Spatial authoring</span><h3>Anchors and viewpoints</h3></div>
+                <span className="chip">{localMarkers.length} markers</span>
+              </div>
+              <p className="subtle-line">Choose a marker type, then double-click the collider surface to place it. Generated geometry remains non-canonical until you link a marker explicitly.</p>
+              <div className="chip-row">
+                {(['annotation', 'entry_point', 'canon_anchor'] as const).map((kind) => (
+                  <button className={markerPlacementKind === kind ? 'segment-button is-active' : 'segment-button'} key={kind} onClick={() => { setNavigationMode('orbit'); setShowColliderDebug(true); setMarkerPlacementKind((current) => current === kind ? null : kind) }} type="button">{kind.replace(/_/g, ' ')}</button>
+                ))}
+                <button className="segment-button" onClick={() => void createMarkerAt(cameraState.position, 'camera_viewpoint')} type="button">Save viewpoint</button>
+              </div>
+              {selectedMarker ? (
+                <div className="schema-card spatial-marker-editor">
+                  <div className="schema-card-head"><strong>{selectedMarker.name}</strong><span className="chip">{selectedMarker.kind.replace(/_/g, ' ')}</span></div>
+                  <label className="field-stack"><span>Name</span><input value={selectedMarker.name} onChange={(event) => setLocalMarkers((current) => current.map((marker) => marker.id === selectedMarker.id ? { ...marker, name: event.target.value } : marker))} onBlur={() => void onUpdateSpatialWorldMarker?.({ markerId: selectedMarker.id, name: selectedMarker.name })} /></label>
+                  <label className="field-stack"><span>Description</span><textarea value={selectedMarker.description} onChange={(event) => setLocalMarkers((current) => current.map((marker) => marker.id === selectedMarker.id ? { ...marker, description: event.target.value } : marker))} onBlur={() => void onUpdateSpatialWorldMarker?.({ markerId: selectedMarker.id, description: selectedMarker.description })} /></label>
+                  <label className="field-stack"><span>Canon/entity key</span><input placeholder="Optional existing entity key" value={selectedMarker.linkedEntityKey ?? ''} onChange={(event) => setLocalMarkers((current) => current.map((marker) => marker.id === selectedMarker.id ? { ...marker, linkedEntityKey: event.target.value || null } : marker))} onBlur={() => void onUpdateSpatialWorldMarker?.({ markerId: selectedMarker.id, linkedEntityKey: selectedMarker.linkedEntityKey })} /></label>
+                  <div className="chip-row">
+                    {selectedMarker.kind === 'camera_viewpoint' ? <button className="ghost-button compact" onClick={() => setCameraView({ position: selectedMarker.transform.position, target: selectedMarker.camera?.target ?? null, fov: selectedMarker.camera?.fov ?? 50, signal: Date.now() })} type="button">Restore camera</button> : null}
+                    {selectedMarker.kind === 'camera_viewpoint' ? <button className="ghost-button compact" onClick={() => { setPendingScreenshotMarkerId(selectedMarker.id); setCaptureScreenshotSignal((current) => current + 1) }} type="button">Capture screenshot</button> : null}
+                    <button className="ghost-button compact" onClick={() => void onUpdateSpatialWorldMarker?.({ markerId: selectedMarker.id, visible: !selectedMarker.visible }).then(() => setLocalMarkers((current) => current.map((marker) => marker.id === selectedMarker.id ? { ...marker, visible: !marker.visible } : marker)))} type="button">{selectedMarker.visible ? 'Hide' : 'Show'}</button>
+                    <button className="ghost-button compact danger" onClick={() => void onDeleteSpatialWorldMarker?.(selectedMarker.id).then(() => { setLocalMarkers((current) => current.filter((marker) => marker.id !== selectedMarker.id)); setSelectedMarkerId(null) })} type="button">Delete</button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="schema-card">
+                <div className="schema-card-head"><strong>Alignment and processing</strong><span className="chip">{Math.round((spatialWorldVariant.alignmentConfidence ?? 0) * 100)}% confidence</span></div>
+                {(['position', 'rotation', 'scale'] as const).map((field) => (
+                  <div className="spatial-vector-field" key={field}>
+                    <span>{field}</span>
+                    {alignmentDraft[field].map((value, index) => <input aria-label={`${field} ${['x', 'y', 'z'][index]}`} key={`${field}-${index}`} onChange={(event) => setAlignmentDraft((current) => ({ ...current, [field]: current[field].map((entry, itemIndex) => itemIndex === index ? Number(event.target.value) : entry) as [number, number, number] }))} step={field === 'rotation' ? 0.05 : 0.1} type="number" value={value} />)}
+                  </div>
+                ))}
+                <div className="spatial-vector-field"><span>ground</span><input aria-label="Ground plane offset" onChange={(event) => setAlignmentDraft((current) => ({ ...current, groundPlaneOffset: Number(event.target.value) }))} step="0.1" type="number" value={alignmentDraft.groundPlaneOffset} /><span>confidence</span><input aria-label="Alignment confidence" max="1" min="0" onChange={(event) => setAlignmentDraft((current) => ({ ...current, confidence: Number(event.target.value) }))} step="0.05" type="number" value={alignmentDraft.confidence} /></div>
+                <div className="chip-row">
+                  <button className="ghost-button compact" onClick={() => void onUpdateSpatialWorldAlignment?.({ variantId: spatialWorldVariant.id, transform: { position: alignmentDraft.position, rotation: alignmentDraft.rotation, scale: alignmentDraft.scale }, confidence: alignmentDraft.confidence, groundPlaneOffset: alignmentDraft.groundPlaneOffset, validationNotes: ['Reviewed in the spatial authoring viewport.'] }).then(() => setSpatialAuthoringMessage('Alignment saved.'))} type="button">Save alignment</button>
+                  <button className="ghost-button compact" onClick={() => void onStartSpatialWorldProcessing?.({ variantId: spatialWorldVariant.id, operation: 'validate' }).then(() => setSpatialAuthoringMessage('Spatial validation queued.'))} type="button">Validate assets</button>
+                  <button className="ghost-button compact" onClick={() => void onStartSpatialWorldProcessing?.({ variantId: spatialWorldVariant.id, operation: 'generate_lods' }).catch((error) => setSpatialAuthoringMessage(error instanceof Error ? error.message : 'LOD processing could not be queued.'))} type="button">Generate LODs</button>
+                </div>
+              </div>
+              {spatialAuthoringMessage ? <div aria-live="polite" className="inline-note">{spatialAuthoringMessage}</div> : null}
             </div>
           ) : null}
 

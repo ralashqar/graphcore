@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bounds, Grid, OrbitControls, useBounds } from '@react-three/drei'
+import { Bounds, Grid, Html, OrbitControls, PointerLockControls, TransformControls, useBounds } from '@react-three/drei'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { Box3, BufferAttribute, BufferGeometry, DoubleSide, Group, Line, LineBasicMaterial, Mesh, MeshStandardMaterial, Vector3 } from 'three'
+import { Box3, BufferAttribute, BufferGeometry, DoubleSide, Group, Line, LineBasicMaterial, Mesh, MeshStandardMaterial, Raycaster, Vector3 } from 'three'
 
 import type { CompiledEnvironmentModel, CompiledMeshPart } from '../../domain/environmentAssembly'
+import { isSpatialWorldPositionOutOfBounds, type SpatialWorldManifest, type SpatialWorldMarker } from '../../domain/spatialWorldGeneration'
 
 function is3dDebugEnabled() {
   if (import.meta.env.VITE_DEBUG_3D_VIEWER === 'true') return true
@@ -21,6 +22,7 @@ function is3dDebugEnabled() {
 type ThreeSceneViewportProps = {
   compiledEnvironment?: CompiledEnvironmentModel | null
   meshSourceUrl: string | null
+  colliderSourceUrl?: string | null
   spatialWorldSourceUrl?: string | null
   spatialWorldTransform?: {
     position: [number, number, number]
@@ -28,6 +30,16 @@ type ThreeSceneViewportProps = {
     scale: [number, number, number]
   } | null
   renderMode?: 'mesh' | 'spatial_world' | 'hybrid'
+  navigationMode?: 'orbit' | 'walk'
+  walkSpeed?: number
+  spawnPosition?: [number, number, number]
+  spatialBounds?: SpatialWorldManifest['bounds']
+  markers?: SpatialWorldMarker[]
+  selectedMarkerId?: string | null
+  markerPlacementKind?: SpatialWorldMarker['kind'] | null
+  showColliderDebug?: boolean
+  cameraView?: { position: [number, number, number]; target: [number, number, number] | null; fov: number; signal: number } | null
+  captureScreenshotSignal?: number
   modelKind: 'character' | 'environment'
   modelLabel: string
   modelSubtype: string
@@ -37,6 +49,12 @@ type ThreeSceneViewportProps = {
   onMeshLoadStateChange?: ((state: LoadedSceneState) => void) | null
   onSpatialLoadStateChange?: ((state: SpatialLoadState) => void) | null
   onPerformanceChange?: ((sample: { fps: number; frameTimeMs: number }) => void) | null
+  onMarkerSelect?: ((markerId: string | null) => void) | null
+  onMarkerMove?: ((markerId: string, position: [number, number, number]) => void) | null
+  onMarkerPlace?: ((position: [number, number, number]) => void) | null
+  onCameraStateChange?: ((state: { position: [number, number, number]; target: [number, number, number]; fov: number }) => void) | null
+  onWalkRecovery?: (() => void) | null
+  onScreenshotCaptured?: ((blob: Blob) => void) | null
 }
 
 type LoadedSceneState =
@@ -69,7 +87,7 @@ function configureSceneShadows(group: Group) {
   })
 }
 
-function useLoadedScene(meshSourceUrl: string | null, modelKind: 'character' | 'environment'): LoadedSceneState {
+function useLoadedScene(meshSourceUrl: string | null, modelKind: 'character' | 'environment', normalize = true): LoadedSceneState {
   const [state, setState] = useState<LoadedSceneState>({ status: 'idle', scene: null, error: null })
 
   useEffect(() => {
@@ -109,7 +127,7 @@ function useLoadedScene(meshSourceUrl: string | null, modelKind: 'character' | '
 
         configureSceneShadows(root)
         let bounds = new Box3().setFromObject(root)
-        if (modelKind === 'character') {
+        if (normalize && modelKind === 'character') {
           const height = bounds.max.y - bounds.min.y
           if (Number.isFinite(height) && height > 0.001) {
             const scale = targetCharacterMeshHeight / height
@@ -117,9 +135,11 @@ function useLoadedScene(meshSourceUrl: string | null, modelKind: 'character' | '
             bounds = new Box3().setFromObject(root)
           }
         }
-        const center = bounds.getCenter(new Vector3())
-        root.position.sub(center)
-        root.position.y -= bounds.min.y
+        if (normalize) {
+          const center = bounds.getCenter(new Vector3())
+          root.position.sub(center)
+          root.position.y -= bounds.min.y
+        }
         if (debug3dViewer) {
           console.log('[GraphCore][3D] GLB load succeeded.', {
             meshSourceUrl,
@@ -156,7 +176,7 @@ function useLoadedScene(meshSourceUrl: string | null, modelKind: 'character' | '
         })
       }
     }
-  }, [meshSourceUrl, modelKind])
+  }, [meshSourceUrl, modelKind, normalize])
 
   return state
 }
@@ -243,6 +263,173 @@ function PerformanceProbe({ onPerformanceChange }: { onPerformanceChange: (sampl
     framesRef.current = 0
   })
   return null
+}
+
+function CameraRig({
+  cameraView,
+  onCameraStateChange,
+  captureScreenshotSignal,
+  onScreenshotCaptured,
+}: {
+  cameraView: ThreeSceneViewportProps['cameraView']
+  onCameraStateChange: NonNullable<ThreeSceneViewportProps['onCameraStateChange']> | null
+  captureScreenshotSignal: number
+  onScreenshotCaptured: NonNullable<ThreeSceneViewportProps['onScreenshotCaptured']> | null
+}) {
+  const { camera, controls, gl } = useThree()
+  const reportElapsed = useRef(0)
+  useEffect(() => {
+    if (!cameraView) return
+    camera.position.fromArray(cameraView.position)
+    if ('fov' in camera) {
+      camera.fov = cameraView.fov
+      camera.updateProjectionMatrix()
+    }
+    const orbit = controls as { target?: Vector3; update?: () => void } | null
+    if (cameraView.target && orbit?.target) orbit.target.fromArray(cameraView.target)
+    orbit?.update?.()
+  }, [camera, cameraView, controls])
+  useEffect(() => {
+    if (!captureScreenshotSignal || !onScreenshotCaptured) return
+    gl.domElement.toBlob((blob) => { if (blob) onScreenshotCaptured(blob) }, 'image/webp', 0.86)
+  }, [captureScreenshotSignal, gl, onScreenshotCaptured])
+  useFrame((_, delta) => {
+    if (!onCameraStateChange) return
+    reportElapsed.current += delta
+    if (reportElapsed.current < 0.35) return
+    reportElapsed.current = 0
+    const orbit = controls as { target?: Vector3 } | null
+    const target = orbit?.target ?? camera.getWorldDirection(new Vector3()).add(camera.position)
+    onCameraStateChange({
+      position: camera.position.toArray() as [number, number, number],
+      target: target.toArray() as [number, number, number],
+      fov: 'fov' in camera ? camera.fov : 50,
+    })
+  })
+  return null
+}
+
+function WalkController({
+  active,
+  collider,
+  speed,
+  spawn,
+  bounds,
+  onRecover,
+}: {
+  active: boolean
+  collider: Group | null
+  speed: number
+  spawn: [number, number, number]
+  bounds: SpatialWorldManifest['bounds']
+  onRecover: (() => void) | null
+}) {
+  const { camera } = useThree()
+  const keys = useRef(new Set<string>())
+  const velocityY = useRef(0)
+  const raycaster = useMemo(() => new Raycaster(), [])
+  const forward = useMemo(() => new Vector3(), [])
+  const right = useMemo(() => new Vector3(), [])
+  const movement = useMemo(() => new Vector3(), [])
+  const down = useMemo(() => new Vector3(0, -1, 0), [])
+
+  useEffect(() => {
+    if (!active) return
+    const keyDown = (event: KeyboardEvent) => keys.current.add(event.code)
+    const keyUp = (event: KeyboardEvent) => keys.current.delete(event.code)
+    window.addEventListener('keydown', keyDown)
+    window.addEventListener('keyup', keyUp)
+    return () => {
+      keys.current.clear()
+      window.removeEventListener('keydown', keyDown)
+      window.removeEventListener('keyup', keyUp)
+    }
+  }, [active])
+
+  useEffect(() => {
+    if (!active) return
+    camera.position.fromArray(spawn)
+    velocityY.current = 0
+  }, [active, camera, spawn])
+
+  useFrame((_, delta) => {
+    if (!active) return
+    camera.getWorldDirection(forward)
+    forward.y = 0
+    forward.normalize()
+    right.crossVectors(forward, camera.up).normalize()
+    movement.set(0, 0, 0)
+    if (keys.current.has('KeyW') || keys.current.has('ArrowUp')) movement.add(forward)
+    if (keys.current.has('KeyS') || keys.current.has('ArrowDown')) movement.sub(forward)
+    if (keys.current.has('KeyD') || keys.current.has('ArrowRight')) movement.add(right)
+    if (keys.current.has('KeyA') || keys.current.has('ArrowLeft')) movement.sub(right)
+    if (movement.lengthSq() > 0) movement.normalize().multiplyScalar(speed * delta)
+    const candidate = camera.position.clone().add(movement)
+    if (collider && movement.lengthSq() > 0) {
+      raycaster.set(camera.position, movement.clone().normalize())
+      raycaster.far = Math.max(0.45, movement.length() + 0.35)
+      if (raycaster.intersectObject(collider, true).length === 0) camera.position.x = candidate.x, camera.position.z = candidate.z
+    } else {
+      camera.position.x = candidate.x
+      camera.position.z = candidate.z
+    }
+    velocityY.current -= 12 * delta
+    camera.position.y += velocityY.current * delta
+    if (collider) {
+      raycaster.set(camera.position, down)
+      raycaster.far = 3
+      const ground = raycaster.intersectObject(collider, true)[0]
+      if (ground && ground.distance < 1.75) {
+        camera.position.y += 1.7 - ground.distance
+        velocityY.current = 0
+      }
+    }
+    const tuple = camera.position.toArray() as [number, number, number]
+    if (isSpatialWorldPositionOutOfBounds(tuple, bounds)) {
+      camera.position.fromArray(spawn)
+      velocityY.current = 0
+      onRecover?.()
+    }
+  })
+  return active ? <PointerLockControls makeDefault /> : null
+}
+
+function SpatialMarkers({
+  markers,
+  selectedMarkerId,
+  onMarkerSelect,
+  onMarkerMove,
+}: {
+  markers: SpatialWorldMarker[]
+  selectedMarkerId: string | null
+  onMarkerSelect: NonNullable<ThreeSceneViewportProps['onMarkerSelect']> | null
+  onMarkerMove: NonNullable<ThreeSceneViewportProps['onMarkerMove']> | null
+}) {
+  return markers.filter((marker) => marker.visible).map((marker) => {
+    const color = marker.kind === 'entry_point' ? '#5eead4' : marker.kind === 'camera_viewpoint' ? '#f6c177' : marker.kind === 'canon_anchor' ? '#8fb4ff' : '#d7dee8'
+    const markerMesh = (
+      <mesh onClick={(event) => { event.stopPropagation(); onMarkerSelect?.(marker.id) }}>
+        <octahedronGeometry args={[0.18, 0]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.28} />
+        <Html center distanceFactor={10} position={[0, 0.35, 0]}><button className="spatial-marker-label" type="button" onClick={() => onMarkerSelect?.(marker.id)}>{marker.name}</button></Html>
+      </mesh>
+    )
+    if (marker.id !== selectedMarkerId || !onMarkerMove) return <group key={marker.id} position={marker.transform.position} rotation={marker.transform.rotation} scale={marker.transform.scale}>{markerMesh}</group>
+    return (
+      <TransformControls
+        key={marker.id}
+        mode="translate"
+        position={marker.transform.position}
+        rotation={marker.transform.rotation}
+        scale={marker.transform.scale}
+        onObjectChange={(event) => {
+          const object = (event?.target as unknown as { object?: { position: Vector3 } } | null)?.object
+          if (!object) return
+          onMarkerMove(marker.id, object.position.toArray() as [number, number, number])
+        }}
+      >{markerMesh}</TransformControls>
+    )
+  })
 }
 
 function FloorPlane() {
@@ -412,6 +599,7 @@ function SceneContents({
   compiledEnvironment,
   fitKey,
   loadedScene,
+  colliderScene,
   modelKind,
   modelSubtype,
   showFloor,
@@ -420,10 +608,27 @@ function SceneContents({
   spatialWorldTransform,
   renderMode,
   onSpatialLoadStateChange,
+  navigationMode,
+  walkSpeed,
+  spawnPosition,
+  spatialBounds,
+  markers,
+  selectedMarkerId,
+  markerPlacementKind,
+  showColliderDebug,
+  cameraView,
+  onMarkerSelect,
+  onMarkerMove,
+  onMarkerPlace,
+  onCameraStateChange,
+  onWalkRecovery,
+  captureScreenshotSignal,
+  onScreenshotCaptured,
 }: {
   compiledEnvironment: CompiledEnvironmentModel | null
   fitKey: string
   loadedScene: LoadedSceneState
+  colliderScene: LoadedSceneState
   modelKind: 'character' | 'environment'
   modelSubtype: string
   showFloor: boolean
@@ -432,6 +637,22 @@ function SceneContents({
   spatialWorldTransform: NonNullable<ThreeSceneViewportProps['spatialWorldTransform']>
   renderMode: NonNullable<ThreeSceneViewportProps['renderMode']>
   onSpatialLoadStateChange: (state: SpatialLoadState) => void
+  navigationMode: 'orbit' | 'walk'
+  walkSpeed: number
+  spawnPosition: [number, number, number]
+  spatialBounds: SpatialWorldManifest['bounds']
+  markers: SpatialWorldMarker[]
+  selectedMarkerId: string | null
+  markerPlacementKind: SpatialWorldMarker['kind'] | null
+  showColliderDebug: boolean
+  cameraView: ThreeSceneViewportProps['cameraView']
+  onMarkerSelect: NonNullable<ThreeSceneViewportProps['onMarkerSelect']> | null
+  onMarkerMove: NonNullable<ThreeSceneViewportProps['onMarkerMove']> | null
+  onMarkerPlace: NonNullable<ThreeSceneViewportProps['onMarkerPlace']> | null
+  onCameraStateChange: NonNullable<ThreeSceneViewportProps['onCameraStateChange']> | null
+  onWalkRecovery: (() => void) | null
+  captureScreenshotSignal: number
+  onScreenshotCaptured: NonNullable<ThreeSceneViewportProps['onScreenshotCaptured']> | null
 }) {
   const fogArgs = modelKind === 'environment'
     ? ['#0c121b', 48, 140] as const
@@ -478,15 +699,27 @@ function SceneContents({
           : loadedScene.status === 'ready'
             ? <primitive object={loadedScene.scene} />
             : !showSpatialWorld ? <ProxyModel kind={modelKind} subtype={modelSubtype} /> : null)}
+        {colliderScene.status === 'ready' ? (
+          <primitive
+            object={colliderScene.scene}
+            position={spatialWorldTransform.position}
+            rotation={spatialWorldTransform.rotation}
+            scale={spatialWorldTransform.scale}
+            visible={showColliderDebug}
+            onDoubleClick={(event: { stopPropagation: () => void; point: Vector3 }) => {
+              if (!markerPlacementKind || !onMarkerPlace) return
+              event.stopPropagation()
+              onMarkerPlace(event.point.toArray() as [number, number, number])
+            }}
+          />
+        ) : null}
+        <SpatialMarkers markers={markers} selectedMarkerId={selectedMarkerId} onMarkerSelect={onMarkerSelect} onMarkerMove={onMarkerMove} />
       </Bounds>
-      <OrbitControls
-        makeDefault
-        enableDamping
-        dampingFactor={0.08}
-        minDistance={1.8}
-        maxDistance={maxDistance}
-        maxPolarAngle={Math.PI / 2.05}
-      />
+      {navigationMode === 'orbit' ? (
+        <OrbitControls makeDefault enableDamping dampingFactor={0.08} minDistance={1.8} maxDistance={maxDistance} maxPolarAngle={Math.PI / 2.05} />
+      ) : null}
+      <WalkController active={navigationMode === 'walk'} collider={colliderScene.status === 'ready' ? colliderScene.scene : null} speed={walkSpeed} spawn={spawnPosition} bounds={spatialBounds} onRecover={onWalkRecovery} />
+      <CameraRig cameraView={cameraView} onCameraStateChange={onCameraStateChange} captureScreenshotSignal={captureScreenshotSignal} onScreenshotCaptured={onScreenshotCaptured} />
     </>
   )
 }
@@ -494,9 +727,20 @@ function SceneContents({
 export function ThreeSceneViewport({
   compiledEnvironment = null,
   meshSourceUrl,
+  colliderSourceUrl = null,
   spatialWorldSourceUrl = null,
   spatialWorldTransform = null,
   renderMode = 'mesh',
+  navigationMode = 'orbit',
+  walkSpeed = 3.2,
+  spawnPosition = [0, 1.7, 0],
+  spatialBounds = null,
+  markers = [],
+  selectedMarkerId = null,
+  markerPlacementKind = null,
+  showColliderDebug = false,
+  cameraView = null,
+  captureScreenshotSignal = 0,
   modelKind,
   modelLabel,
   modelSubtype,
@@ -506,8 +750,15 @@ export function ThreeSceneViewport({
   onMeshLoadStateChange = null,
   onSpatialLoadStateChange = null,
   onPerformanceChange = null,
+  onMarkerSelect = null,
+  onMarkerMove = null,
+  onMarkerPlace = null,
+  onCameraStateChange = null,
+  onWalkRecovery = null,
+  onScreenshotCaptured = null,
 }: ThreeSceneViewportProps) {
   const loadedScene = useLoadedScene(meshSourceUrl, modelKind)
+  const colliderScene = useLoadedScene(colliderSourceUrl, 'environment', false)
   const [spatialState, setSpatialState] = useState<SpatialLoadState>({ status: 'idle', progress: 0, splatCount: null, error: null })
   const fitKey = `${modelLabel}:${modelSubtype}:${renderMode}:${spatialWorldSourceUrl ?? compiledEnvironment?.graphKey ?? meshSourceUrl ?? 'proxy'}:${spatialState.status}:${spatialState.splatCount ?? 0}:${resetSignal}`
   const resolvedSpatialTransform = spatialWorldTransform ?? { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }
@@ -523,11 +774,12 @@ export function ThreeSceneViewport({
   return (
     <div className="three-scene-shell">
       <div className="canvas-stage three-scene-canvas">
-        <Canvas camera={{ position: [4.8, 3.8, 5.4], fov: 48 }} shadows dpr={[1, 2]}>
+        <Canvas camera={{ position: [4.8, 3.8, 5.4], fov: 48 }} fallback={<div className="three-scene-webgl-fallback" role="alert">This device could not start the WebGL spatial viewer. Mesh and metadata tools remain available.</div>} gl={{ preserveDrawingBuffer: true }} shadows dpr={[1, 2]}>
           <SceneContents
             compiledEnvironment={compiledEnvironment}
             fitKey={fitKey}
             loadedScene={loadedScene}
+            colliderScene={colliderScene}
             modelKind={modelKind}
             modelSubtype={modelSubtype}
             showFloor={showFloor}
@@ -536,6 +788,22 @@ export function ThreeSceneViewport({
             spatialWorldTransform={resolvedSpatialTransform}
             renderMode={renderMode}
             onSpatialLoadStateChange={reportSpatialState}
+            navigationMode={navigationMode}
+            walkSpeed={walkSpeed}
+            spawnPosition={spawnPosition}
+            spatialBounds={spatialBounds}
+            markers={markers}
+            selectedMarkerId={selectedMarkerId}
+            markerPlacementKind={markerPlacementKind}
+            showColliderDebug={showColliderDebug}
+            cameraView={cameraView}
+            onMarkerSelect={onMarkerSelect}
+            onMarkerMove={onMarkerMove}
+            onMarkerPlace={onMarkerPlace}
+            onCameraStateChange={onCameraStateChange}
+            onWalkRecovery={onWalkRecovery}
+            captureScreenshotSignal={captureScreenshotSignal}
+            onScreenshotCaptured={onScreenshotCaptured}
           />
           {onPerformanceChange ? <PerformanceProbe onPerformanceChange={onPerformanceChange} /> : null}
         </Canvas>

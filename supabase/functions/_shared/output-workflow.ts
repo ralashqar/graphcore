@@ -4921,6 +4921,41 @@ async function augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets(input
   if (readScreenplayAnimaticRoleFromMetadata(requestMetadata) !== 'storyboard_block') return
   const masterRequestId = readText(requestMetadata.masterRequestId) || readText(requestMetadata.parentRequestId) || input.request.parentRequestId
   if (!masterRequestId) return
+  const spatialMarkerResponse = await input.client
+    .from('spatial_world_markers')
+    .select('id,key,name,description,transform,camera,linked_entity_key,linked_location_key,linked_scene_id,linked_spot_id,linked_coverage_setup_id,screenshot_asset_key,metadata')
+    .eq('project_id', input.request.projectId)
+    .eq('draft_id', input.request.draftId)
+    .eq('kind', 'camera_viewpoint')
+    .eq('visible', true)
+    .not('screenshot_asset_key', 'is', null)
+    .limit(32)
+  if (spatialMarkerResponse.error) throw new Error(spatialMarkerResponse.error.message)
+  const spatialViewpointEntities = (spatialMarkerResponse.data ?? []).map((row) => {
+    const marker = asRecord(row)
+    const assetKey = readText(marker.screenshot_asset_key)
+    return {
+      key: `spatial_viewpoint:${readText(marker.key) || readText(marker.id)}`,
+      name: readText(marker.name) || 'Spatial viewpoint',
+      type: 'location_spot',
+      role: 'spatial_viewpoint_reference',
+      summary: readText(marker.description) || 'User-authored camera viewpoint from the generated spatial world.',
+      visualDescription: 'Preserve the authored camera position, target, field of view, visible architecture, depth, landmarks, and screen direction from this spatial viewpoint capture.',
+      assetKeys: assetKey ? [assetKey] : [],
+      primaryAssetKey: assetKey,
+      selectedReferenceAssetKey: assetKey,
+      selectedReferenceVariantKey: 'spatial_viewpoint',
+      selectedReferenceVariantLabel: readText(marker.name) || 'Spatial viewpoint',
+      selectedReferenceVariantType: 'spatial_viewpoint',
+      referenceSelectionReason: 'Explicit user-authored spatial scouting viewpoint.',
+      spatialViewpoint: {
+        markerId: readText(marker.id), transform: asRecord(marker.transform), camera: asRecord(marker.camera),
+        linkedEntityKey: readText(marker.linked_entity_key), linkedLocationKey: readText(marker.linked_location_key),
+        linkedSceneId: readText(marker.linked_scene_id), linkedSpotId: readText(marker.linked_spot_id),
+        linkedCoverageSetupId: readText(marker.linked_coverage_setup_id),
+      },
+    }
+  }).filter((entry) => entry.primaryAssetKey)
   const artifactResponse = await input.client
     .from('output_artifacts')
     .select(outputArtifactSelect)
@@ -4939,7 +4974,7 @@ async function augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets(input
       return [sequenceAnimaticContinuityAssetEntityFromState(metadata.assetState ?? metadata.asset_state)]
     })
     .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-  if (continuityEntities.length === 0) return
+  if (continuityEntities.length === 0 && spatialViewpointEntities.length === 0) return
   const nodeResponse = await input.client
     .from('output_workflow_nodes')
     .select(outputWorkflowNodeSelect)
@@ -4953,7 +4988,7 @@ async function augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets(input
   const assetPack = asRecord(config.assetPack)
   const existingEntities = readArray(assetPack.entities).map(asRecord)
   const existingKeys = new Set(existingEntities.map((entity) => readText(entity.key)).filter(Boolean))
-  const mergedContinuityEntities = continuityEntities.filter((entity) => {
+  const mergedContinuityEntities = [...continuityEntities, ...spatialViewpointEntities].filter((entity) => {
     const key = readText(entity.key)
     if (!key || existingKeys.has(key)) return false
     existingKeys.add(key)
@@ -4966,6 +5001,10 @@ async function augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets(input
     continuityReferenceAssetKeys: [...new Set([
       ...readStringArray(assetPack.continuityReferenceAssetKeys),
       ...mergedContinuityEntities.map((entity) => readText(entity.primaryAssetKey)).filter(Boolean),
+    ])],
+    spatialViewpointReferenceAssetKeys: [...new Set([
+      ...readStringArray(assetPack.spatialViewpointReferenceAssetKeys),
+      ...spatialViewpointEntities.map((entity) => readText(entity.primaryAssetKey)).filter(Boolean),
     ])],
   }
   await input.client

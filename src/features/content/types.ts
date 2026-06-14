@@ -11,6 +11,7 @@ import type { AssetUrlCreateOptions, AssetUrlCreationKind } from '../../domain/a
 import type { MeshGenerationJob } from '../../domain/meshGeneration'
 import type { VisualGenerationStartResponse, VisualGenerationStatusResponse } from '../../domain/visualGeneration'
 import type { WorldEntity, WorldRelationship, WorldEntityCreateInput } from '../../domain/worldGraph'
+import type { SpatialWorldGenerationPreviewResponse, SpatialWorldGenerationStartRequest, SpatialWorldMarker, SpatialWorldMarkerCreateRequest, SpatialWorldMarkerUpdateRequest, SpatialWorldPerformanceEvent, SpatialWorldVariant, SpatialWorldVariantAlignmentUpdateRequest } from '../../domain/spatialWorldGeneration'
 
 export type ItemIdentityChanges = Partial<
   Pick<DefinitionBase, 'name' | 'key' | 'summary' | 'iconAssetKey' | 'archetypeKey'>
@@ -41,6 +42,8 @@ export type ContentWorkspaceProps = {
   deletingItemKey?: string | null
   deletingGeneratedMeshDefinitionKey?: string | null
   meshGenerationJobs?: MeshGenerationJob[]
+  spatialWorldVariants?: SpatialWorldVariant[]
+  spatialWorldMarkers?: SpatialWorldMarker[]
   onAddArchetypeField: (archetypeKey: string, field: FieldDefinition) => void
   onAddCustomField: (itemKey: string, field: FieldDefinition) => void
   onAssignArchetypeIcon: (assetKey: string | null) => void
@@ -63,6 +66,17 @@ export type ContentWorkspaceProps = {
   onGenerateReferenceSheet?: (definitionKey: string) => Promise<VisualGenerationStartResponse | void>
   onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse>
   onReferenceSheetJobFinished?: () => Promise<void> | void
+  onPreviewSpatialWorldGeneration?: (request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'>) => Promise<SpatialWorldGenerationPreviewResponse>
+  onStartSpatialWorldGeneration?: (request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> & { quoteToken: string }) => Promise<unknown>
+  onActivateSpatialWorldVariant?: (variantId: string) => Promise<unknown>
+  onCreateSpatialWorldMarker?: (request: SpatialWorldMarkerCreateRequest) => Promise<{ marker: SpatialWorldMarker | null }>
+  onUpdateSpatialWorldMarker?: (request: SpatialWorldMarkerUpdateRequest) => Promise<{ marker: SpatialWorldMarker | null }>
+  onDeleteSpatialWorldMarker?: (markerId: string) => Promise<unknown>
+  onUpdateSpatialWorldAlignment?: (request: SpatialWorldVariantAlignmentUpdateRequest) => Promise<unknown>
+  onStartSpatialWorldProcessing?: (request: { variantId: string; operation?: 'validate' | 'optimize' | 'generate_lods' }) => Promise<unknown>
+  onUploadSpatialWorldMarkerScreenshot?: (input: { markerId: string; variantId: string; blob: Blob }) => Promise<unknown>
+  onRecordSpatialWorldPerformance?: (event: SpatialWorldPerformanceEvent) => Promise<unknown>
+  onResolveAssetUrls?: (assetKeys: string[]) => Promise<AssetDefinition[]>
   isGeneratingPrompt?: boolean
   onChangePromptText?: (value: string) => void
   onGeneratePrompt?: () => void

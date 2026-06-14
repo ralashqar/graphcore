@@ -708,12 +708,19 @@ Agents support dynamic model selection based on task requirements:
 - Ready variants are activated through `activate_spatial_world_variant`, which updates only additive environment/world render-binding fields. Canonical blueprints, assembly graphs, navigation, and spawn semantics remain untouched.
 - Environment authoring exposes provider selection, quality, signed cost preview, explicit credit confirmation, progress/cancellation, stored comparison variants, and activation.
 - The existing React Three Fiber viewport renders active SPZ worlds through `@sparkjsdev/spark` with Spark LOD enabled. Environment previews expose mesh, spatial-world, and hybrid modes; hybrid mode overlays the provider collider GLB, signed private assets are resolved through the project asset-signing path, the camera fits the initialized splat bounds, and the panel reports load progress, splat count, FPS, and frame time.
+- Spatial worlds support orbit and pointer-lock walk modes. Walk mode uses the active collider GLB for forward collision and ground rays, spawns from the first visible `entry_point` marker before falling back to manifest bounds/ground metadata, and resets safely when the camera leaves generated bounds. Coarse-pointer devices remain in orbit mode.
+- Spatial authoring uses the RLS-protected `spatial_world_markers` table for annotations, entry points, canon anchors, and camera viewpoints. The viewport renders selectable overlays and transform handles; authors can place markers against collider geometry, link them to GraphCore entity/location/scene/spot/coverage IDs, capture WebP viewpoint screenshots, restore cameras, and edit variant alignment without mutating canonical spatial documents.
+- Camera-viewpoint screenshots and camera/link metadata are injected into screenplay-animatic storyboard-block asset packs as `spatial_viewpoint_reference` entries. They are explicit visual/spatial references only and never create canon or continuity graph nodes automatically.
+- `spatial_world_processing_jobs` is a separate durable worker queue for manifest validation and optional optimization/LOD processing. Validation works without external tooling; `optimize` and `generate_lods` fail closed unless `SPATIAL_WORLD_SPLAT_TRANSFORM_COMMAND` is configured. SPZ remains the primary visual format and GLB remains collider/runtime geometry.
+- Provider capability checks run before quote signing and credit reservation. World Labs currently advertises verified text input and collider output only; image, panorama, multi-view, video, and SpAItial execution remain disabled until their contracts are verified.
+- `spatial_world_performance_events` records bounded load, frame, selected-LOD, device-memory, WebGL-error, and walk-recovery telemetry. Drafts permit at most four active generation jobs; service-role history cleanup archives old failed variants and removes old processing/performance history.
 - Generated spatial worlds are derivative visual outputs. They must not silently mutate environment blueprints, assembly graphs, rooms, anchors, connectors, navigation, spawn rules, or canon
 
-**Remaining Integration**:
-- Bounded first-person walk controls and representative-device performance budgets
-- Optional PlayCanvas SplatTransform processing for conversion, optimization, LOD, and collision fallback
-- Spatial marker authoring for entry points, canon anchors, and cinematic camera viewpoints
+**Remaining External Validation**:
+- Verify and enable World Labs image, panorama, multi-view, and video request payloads against its live contract
+- Verify and implement the SpAItial provider adapter
+- Install/configure PlayCanvas SplatTransform in the Fly worker image before enabling optimization and generated-LOD operations
+- Run representative-device benchmarks and tune the default performance budgets from production telemetry
 
 **Server Configuration**:
 - `WORLDLABS_API_KEY`
@@ -722,6 +729,8 @@ Agents support dynamic model selection based on task requirements:
 - `SPATIAL_WORLD_PROVIDER_POLL_INTERVAL_MS` (default `5000`)
 - `SPATIAL_WORLD_PROVIDER_MAX_POLL_MS` (default `1200000`)
 - `SPATIAL_WORLD_DOWNLOAD_TIMEOUT_MS` (default `60000`)
+- `SPATIAL_WORLD_SPLAT_TRANSFORM_COMMAND` (required only for optimization and generated-LOD processing)
+- `SPATIAL_WORLD_PROCESSING_TIMEOUT_MS` (default `900000`)
 - `SPAITIAL_DEFAULT_MODEL` and `SPAITIAL_ESTIMATED_WORLD_USD` are estimate/configuration placeholders only until the live adapter contract is verified
 
 ## Future Agent Developments

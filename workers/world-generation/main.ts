@@ -2,6 +2,7 @@ import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
 import { processFlyAppGenerationJobs } from '../../supabase/functions/_shared/app-generation-worker.ts'
 import { processFlyOutputWorkflowRuns } from '../../supabase/functions/_shared/output-workflow.ts'
 import { processFlySpatialWorldGenerationJobs } from '../../supabase/functions/_shared/spatial-world-generation-worker.ts'
+import { processFlySpatialWorldProcessingJobs } from '../../supabase/functions/_shared/spatial-world-processing-worker.ts'
 import { processFlyVisualGenerationJobs } from '../../supabase/functions/_shared/visual-generation-worker.ts'
 import {
   normalizeWorkerWakeFamilies,
@@ -343,6 +344,17 @@ async function runSpatialWorldWorkerLoop(laneIndex: number) {
           jobId: result.job?.id ?? null,
           status: result.job?.status ?? null,
           provider: result.job?.provider ?? null,
+        })
+        emptyPolls = 0
+        continue
+      }
+      const processingResult = await processFlySpatialWorldProcessingJobs({ client, workerId: spatialWorkerId })
+      if (processingResult.processed) {
+        console.log('[world-generation-worker] processed spatial world asset job', {
+          workerId: spatialWorkerId,
+          laneIndex,
+          jobId: processingResult.jobId,
+          status: processingResult.status,
         })
         emptyPolls = 0
         continue

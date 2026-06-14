@@ -12,8 +12,14 @@ import type {
   SpatialWorldGenerationStatusResponse,
   SpatialWorldProvider,
   SpatialWorldQuality,
+  SpatialWorldMarker,
+  SpatialWorldMarkerCreateRequest,
+  SpatialWorldMarkerUpdateRequest,
+  SpatialWorldPerformanceEvent,
+  SpatialWorldVariantAlignmentUpdateRequest,
   SpatialWorldVariant,
 } from '../../domain/spatialWorldGeneration'
+import { buildSpatialWorldComparisonReport } from '../../domain/spatialWorldGeneration'
 import type { WorldEntity, WorldEntityCreateInput, WorldRelationship } from '../../domain/worldGraph'
 import { definitionKindForWorldEntity, getLinkedWorldEntityForDefinition, getWorldRelationshipsForDefinition } from '../../domain/worldGraphHelpers'
 import {
@@ -72,11 +78,19 @@ type SpecializedDefinitionWorkspaceProps = {
   onGenerateReferenceSheet?: (definitionKey: string) => Promise<VisualGenerationStartResponse | void>
   onGetVisualGenerationStatus?: (jobId: string) => Promise<VisualGenerationStatusResponse>
   spatialWorldVariants?: SpatialWorldVariant[]
+  spatialWorldMarkers?: SpatialWorldMarker[]
   onPreviewSpatialWorldGeneration?: (request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'>) => Promise<SpatialWorldGenerationPreviewResponse>
   onStartSpatialWorldGeneration?: (request: Omit<SpatialWorldGenerationStartRequest, 'projectId' | 'draftId'> & { quoteToken: string }) => Promise<SpatialWorldGenerationStartResponse>
   onGetSpatialWorldGenerationStatus?: (jobId: string) => Promise<SpatialWorldGenerationStatusResponse>
   onCancelSpatialWorldGeneration?: (jobId: string) => Promise<unknown>
   onActivateSpatialWorldVariant?: (variantId: string) => Promise<unknown>
+  onCreateSpatialWorldMarker?: (request: SpatialWorldMarkerCreateRequest) => Promise<{ marker: SpatialWorldMarker | null }>
+  onUpdateSpatialWorldMarker?: (request: SpatialWorldMarkerUpdateRequest) => Promise<{ marker: SpatialWorldMarker | null }>
+  onDeleteSpatialWorldMarker?: (markerId: string) => Promise<unknown>
+  onUpdateSpatialWorldAlignment?: (request: SpatialWorldVariantAlignmentUpdateRequest) => Promise<unknown>
+  onStartSpatialWorldProcessing?: (request: { variantId: string; operation?: 'validate' | 'optimize' | 'generate_lods' }) => Promise<unknown>
+  onUploadSpatialWorldMarkerScreenshot?: (input: { markerId: string; variantId: string; blob: Blob }) => Promise<unknown>
+  onRecordSpatialWorldPerformance?: (event: SpatialWorldPerformanceEvent) => Promise<unknown>
   onReferenceSheetJobFinished?: () => Promise<void> | void
   onOpenCinematicGraph: (graphKey: string) => void
   onStartMeshGeneration: (definitionKey: string) => void
@@ -144,11 +158,19 @@ export function SpecializedDefinitionWorkspace({
   onGenerateReferenceSheet,
   onGetVisualGenerationStatus,
   spatialWorldVariants = [],
+  spatialWorldMarkers = [],
   onPreviewSpatialWorldGeneration,
   onStartSpatialWorldGeneration,
   onGetSpatialWorldGenerationStatus,
   onCancelSpatialWorldGeneration,
   onActivateSpatialWorldVariant,
+  onCreateSpatialWorldMarker,
+  onUpdateSpatialWorldMarker,
+  onDeleteSpatialWorldMarker,
+  onUpdateSpatialWorldAlignment,
+  onStartSpatialWorldProcessing,
+  onUploadSpatialWorldMarkerScreenshot,
+  onRecordSpatialWorldPerformance,
   onReferenceSheetJobFinished,
   onOpenCinematicGraph,
   onStartMeshGeneration,
@@ -472,6 +494,7 @@ export function SpecializedDefinitionWorkspace({
     if (effectiveSelection?.kind !== 'environment') return []
     return spatialWorldVariants.filter((variant) => variant.targetKind === 'environment' && variant.targetKey === effectiveSelection.key)
   }, [effectiveSelection, spatialWorldVariants])
+  const spatialComparisonReport = useMemo(() => buildSpatialWorldComparisonReport({ jobs: spatialJobs, variants: selectedSpatialVariants }), [selectedSpatialVariants, spatialJobs])
 
   function toggleSpatialProvider(provider: SpatialWorldProvider) {
     setSpatialQuote(null)
@@ -959,6 +982,12 @@ export function SpecializedDefinitionWorkspace({
                   ) : null}
                 </div>
               ))}
+              {spatialComparisonReport.length > 1 ? (
+                <div className="schema-card">
+                  <div className="schema-card-head"><strong>Provider comparison</strong><span className="chip">internal</span></div>
+                  {spatialComparisonReport.map((row) => <div className="character-3d-summary-row" key={row.variantId}><strong>{row.provider} · {row.model}</strong><span>{row.colliderAvailable ? 'collider' : 'no collider'} · {row.lodCount} LODs · {(row.storedBytes / 1_000_000).toFixed(1)} MB · {row.actualUsd != null ? `$${row.actualUsd.toFixed(2)}` : row.estimatedUsd != null ? `est. $${row.estimatedUsd.toFixed(2)}` : 'cost pending'}</span></div>)}
+                </div>
+              ) : null}
               {spatialMessage ? <div className="inline-note">{spatialMessage}</div> : null}
             </div>
           ) : null}
@@ -1016,11 +1045,19 @@ export function SpecializedDefinitionWorkspace({
               isDeletingGeneratedMesh={effectiveSelection.kind === 'character' ? isDeletingGeneratedMesh : false}
               meshGenerationJob={effectiveSelection.kind === 'character' ? (meshJobByDefinitionKey.get(effectiveSelection.key) ?? null) : null}
               spatialWorldVariant={effectiveSelection.kind === 'environment' ? (selectedSpatialVariants.find((variant) => variant.isActive) ?? null) : null}
+              spatialWorldMarkers={spatialWorldMarkers}
               onDeleteGeneratedMesh={effectiveSelection.kind === 'character' ? () => onDeleteGeneratedMesh(effectiveSelection.key) : null}
               onRequestGenerateMesh={effectiveSelection.kind === 'character' ? () => onStartMeshGeneration(effectiveSelection.key) : null}
               onRequestGenerateConceptArt={effectiveSelection.kind === 'character' ? () => void handleGenerateConcept() : null}
               onUpdateComponents={onUpdateComponents}
               onResolveAssetUrls={onResolveAssetUrls}
+              onCreateSpatialWorldMarker={onCreateSpatialWorldMarker}
+              onUpdateSpatialWorldMarker={onUpdateSpatialWorldMarker}
+              onDeleteSpatialWorldMarker={onDeleteSpatialWorldMarker}
+              onUpdateSpatialWorldAlignment={onUpdateSpatialWorldAlignment}
+              onStartSpatialWorldProcessing={onStartSpatialWorldProcessing}
+              onUploadSpatialWorldMarkerScreenshot={onUploadSpatialWorldMarkerScreenshot}
+              onRecordSpatialWorldPerformance={onRecordSpatialWorldPerformance}
             />
           </Suspense>
           </>

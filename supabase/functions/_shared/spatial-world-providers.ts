@@ -1,4 +1,4 @@
-import type { SpatialWorldGenerationJob } from '../../../src/domain/spatialWorldGeneration.ts'
+import { validateSpatialWorldProviderInput, type SpatialWorldGenerationJob } from '../../../src/domain/spatialWorldGeneration.ts'
 
 export type SpatialWorldProviderResult = {
   done: boolean
@@ -32,12 +32,8 @@ function worldLabsKey() {
 }
 
 export async function submitSpatialWorldProviderJob(job: SpatialWorldGenerationJob) {
-  if (job.provider === 'spaitial') {
-    throw new Error('SpAItial generation is not enabled because a verified public API contract has not been configured.')
-  }
-  if (job.input.sourceImages.length > 0 || job.input.sourceVideoAssetKey) {
-    throw new Error('World Labs source image and video submission requires an enabled verified media-input contract; text generation is currently available.')
-  }
+  const capabilityError = validateSpatialWorldProviderInput(job.provider, job.input)
+  if (capabilityError) throw new Error(capabilityError)
   const response = await fetch('https://api.worldlabs.ai/marble/v1/worlds:generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'WLT-Api-Key': worldLabsKey() },

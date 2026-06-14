@@ -1,6 +1,6 @@
 # Spatial World Integration Workstream
 
-Status: durable backend, environment workflow, and embedded Spark viewer implemented; walk and marker tools pending
+Status: complete product path implemented; external provider media contracts, SpAItial, and deployed SplatTransform remain gated
 Branch: `codex/worldapps-integration`
 
 ## Objective
@@ -255,7 +255,20 @@ Exit gate: target laptop hardware maintains an acceptable interactive frame rate
 - Embedded Spark SPZ rendering in the existing React Three Fiber viewport with provider LOD, signed private-asset loading, automatic camera fitting, mesh/spatial/hybrid modes, collider overlay, load diagnostics, splat count, FPS, and frame-time telemetry
 - SpAItial fails closed until a verified live API contract is available
 
-The remaining product work is bounded walk navigation, spatial marker/camera authoring, image/video provider input once verified, PlayCanvas optimization tooling, and representative-device performance benchmarking.
+The core product path is implemented; the remaining work depends on verified external contracts and deployment tooling.
+
+## Completed Product Layer
+
+- Orbit and collider-backed pointer-lock walk navigation with entry-marker spawning, gravity, speed control, bounds recovery, and coarse-pointer fallback
+- Marker authoring for annotations, entries, canon anchors, and camera viewpoints, including transform controls, explicit GraphCore links, camera restore, and screenshot capture
+- Editable variant alignment and validation notes without importing generated topology into canon
+- World-model generation and viewing through the same provider-neutral job path
+- Cinematic storyboard-block references sourced from linked spatial viewpoint captures
+- Provider capability checks before quote/billing, with unverified media modes and SpAItial failing closed
+- Durable processing queue with manifest validation and configuration-gated SplatTransform optimization/LOD operations
+- Durable performance telemetry, active-job quotas, retention cleanup, comparison summaries, and WebGL/accessibility fallbacks
+
+The remaining work is external validation and deployment configuration: verify provider media contracts, implement the live SpAItial adapter, install SplatTransform in the worker image, and tune budgets from representative hardware telemetry.
 
 ## Configuration
 
