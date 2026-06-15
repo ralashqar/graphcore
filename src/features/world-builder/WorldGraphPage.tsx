@@ -1350,6 +1350,7 @@ type SequenceAnimaticShotView = {
   panelRunning: boolean
   keyframeStatusLabel: string
   keyframeDependencyStatusLabel: string
+  keyframeProgressLabel: string
   keyframeDependencyRunning: boolean
   keyframeDependencyMissingCount: number
   keyframeRequestId: string | null
@@ -3025,6 +3026,56 @@ function sequenceAnimaticShotVideoProgressLabel(step: ReturnType<typeof outputRu
   if (label === 'Video ready') return 'Shot take ready'
   if (label === 'Video generation failed') return 'Shot video generation failed'
   return label
+}
+
+function continuityStepTargetLabel(step: OutputWorkflowRun['steps'][number]) {
+  const metadata = readLooseRecord(step.metadata)
+  const targetNode = readLooseRecord(metadata.targetNode ?? metadata.target_node)
+  const name = trimOptionalString(targetNode.name)
+    || trimOptionalString(metadata.targetName)
+    || trimOptionalString(metadata.target_node_name)
+    || trimOptionalString(step.label)
+      .replace(/\s+(input|prompt|ref image|ref)$/i, '')
+      .trim()
+  return name || 'continuity'
+}
+
+function sequenceAnimaticShotKeyframeProgressLabel(run: OutputWorkflowRun | null | undefined) {
+  if (!run) return ''
+  const activeStep = [...run.steps]
+    .filter(isOutputRunStepActive)
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .find((step) => {
+      const key = step.nodeKey
+      return key.startsWith('continuity_')
+        || key === 'coverage_anchor_prompt'
+        || key === 'coverage_anchor_image'
+        || key === 'coverage_anchor_artifact'
+        || key === 'shot_reference_pack'
+        || key === 'planned_keyframe_prompt'
+        || key === 'planned_keyframe_image'
+        || key === 'planned_keyframe_artifact'
+    })
+  if (!activeStep) return ''
+  const key = activeStep.nodeKey
+  if (key.startsWith('continuity_') && (key.endsWith('_image') || key.endsWith('_artifact'))) {
+    return `Generating ${continuityStepTargetLabel(activeStep)} ref`
+  }
+  if (key.startsWith('continuity_')) return `Preparing ${continuityStepTargetLabel(activeStep)} ref`
+  if (key === 'coverage_anchor_prompt' || key === 'coverage_anchor_image' || key === 'coverage_anchor_artifact') return 'Generating coverage anchor'
+  if (key === 'shot_reference_pack') return 'Preparing shot references'
+  if (key === 'planned_keyframe_prompt') return 'Writing keyframe prompt'
+  if (key === 'planned_keyframe_image') return 'Generating keyframe'
+  if (key === 'planned_keyframe_artifact') return 'Saving keyframe'
+  return ''
+}
+
+function sequenceAnimaticShotKeyframeBusyLabel(shot: Pick<SequenceAnimaticShotView, 'keyframeProgressLabel' | 'keyframeDependencyStatusLabel' | 'keyframeStatusLabel' | 'keyframeDependencyRunning' | 'keyframeRunning'>, starting = false) {
+  if (starting) return 'Starting keyframe'
+  return shot.keyframeProgressLabel
+    || (shot.keyframeDependencyRunning ? shot.keyframeDependencyStatusLabel : '')
+    || (shot.keyframeRunning ? shot.keyframeStatusLabel : '')
+    || 'Generating keyframe'
 }
 
 function sequenceAnimaticAnchorUsageLabel(anchor: Pick<SequenceAnimaticContinuityAnchorView, 'blockIds' | 'shotIds'>) {
@@ -5304,6 +5355,9 @@ function buildSequenceAnimaticViewModel(input: {
             || isOutputRunStepActive(plannedKeyframeImageStep)
             || sequenceAnimaticRequestIsActive(plannedKeyframeRequest, plannedKeyframeRun)
           )
+          const plannedKeyframeProgressLabel = plannedKeyframeRunning
+            ? sequenceAnimaticShotKeyframeProgressLabel(plannedKeyframeRun)
+            : ''
           const plannedKeyframeError = plannedKeyframeStep?.status === 'failed'
             ? plannedKeyframeStep.errorMessage ?? 'Shot keyframe failed.'
             : plannedKeyframeImageStep?.status === 'failed'
@@ -5369,13 +5423,14 @@ function buildSequenceAnimaticViewModel(input: {
           const keyframeDependencyRunning = keyframeDependencyTargets.some((target) => target.status === 'generating')
           const keyframeDependencyMissingCount = keyframeDependencyTargets.filter((target) => ['missing', 'stale', 'failed'].includes(target.status)).length
           const keyframeDependencyReadyCount = keyframeDependencyTargets.filter((target) => target.status === 'ready').length
-          const keyframeDependencyStatusLabel = keyframeDependencyRunning
+          const keyframeDependencyStatusLabel = plannedKeyframeProgressLabel
+            || (keyframeDependencyRunning
             ? 'Generating keyframe refs'
             : keyframeDependencyMissingCount > 0
               ? `${keyframeDependencyMissingCount} keyframe ref${keyframeDependencyMissingCount === 1 ? '' : 's'} missing`
               : keyframeDependencyTargets.length > 0
                 ? `${keyframeDependencyReadyCount}/${keyframeDependencyTargets.length} keyframe refs ready`
-                : 'Shot refs ready'
+                : 'Shot refs ready')
           const progressPreview = sequenceAnimaticShotProgressPreview({
             coverageAnchor: shotCoverageAnchor,
             dependencyTargets: keyframeDependencyTargets,
@@ -5417,7 +5472,7 @@ function buildSequenceAnimaticViewModel(input: {
               : completedPlannedKeyframe?.keyframeAssetKey
                 ? 'Keyframe ready'
                 : plannedKeyframeRunning
-                  ? 'Generating keyframe'
+                  ? plannedKeyframeProgressLabel || 'Generating keyframe'
                   : shotCoverageAnchor?.running
                     ? 'Generating coverage anchor'
                     : keyframeDependencyRunning
@@ -5434,7 +5489,7 @@ function buildSequenceAnimaticViewModel(input: {
               : completedPlannedKeyframe?.keyframeAssetKey
                 ? 'Keyframe ready'
                 : plannedKeyframeRunning
-                  ? 'Generating keyframe'
+                  ? plannedKeyframeProgressLabel || 'Generating keyframe'
                   : keyframeDependencyRunning
                     ? 'Generating keyframe refs'
                     : keyframeDependencyMissingCount > 0
@@ -5443,6 +5498,7 @@ function buildSequenceAnimaticViewModel(input: {
                     ? 'Keyframe queued'
                     : 'Keyframe not generated',
             keyframeDependencyStatusLabel,
+            keyframeProgressLabel: plannedKeyframeProgressLabel,
             keyframeDependencyRunning,
             keyframeDependencyMissingCount,
             keyframeRequestId: plannedKeyframeRequest?.id ?? null,
@@ -5566,6 +5622,9 @@ function buildSequenceAnimaticViewModel(input: {
             || isOutputRunStepActive(plannedKeyframeImageStep)
             || sequenceAnimaticRequestIsActive(plannedKeyframeRequest, plannedKeyframeRun)
           )
+          const plannedKeyframeProgressLabel = plannedKeyframeRunning
+            ? sequenceAnimaticShotKeyframeProgressLabel(plannedKeyframeRun)
+            : ''
           const plannedKeyframeError = plannedKeyframeStep?.status === 'failed'
             ? plannedKeyframeStep.errorMessage ?? 'Shot keyframe failed.'
             : plannedKeyframeImageStep?.status === 'failed'
@@ -5594,13 +5653,14 @@ function buildSequenceAnimaticViewModel(input: {
           const keyframeDependencyRunning = keyframeDependencyTargets.some((target) => target.status === 'generating')
           const keyframeDependencyMissingCount = keyframeDependencyTargets.filter((target) => ['missing', 'stale', 'failed'].includes(target.status)).length
           const keyframeDependencyReadyCount = keyframeDependencyTargets.filter((target) => target.status === 'ready').length
-          const keyframeDependencyStatusLabel = keyframeDependencyRunning
+          const keyframeDependencyStatusLabel = plannedKeyframeProgressLabel
+            || (keyframeDependencyRunning
             ? 'Generating keyframe refs'
             : keyframeDependencyMissingCount > 0
               ? `${keyframeDependencyMissingCount} keyframe ref${keyframeDependencyMissingCount === 1 ? '' : 's'} missing`
               : keyframeDependencyTargets.length > 0
                 ? `${keyframeDependencyReadyCount}/${keyframeDependencyTargets.length} keyframe refs ready`
-                : 'Shot refs ready'
+                : 'Shot refs ready')
           const progressPreview = sequenceAnimaticShotProgressPreview({
             coverageAnchor: shotCoverageAnchor,
             dependencyTargets: keyframeDependencyTargets,
@@ -5644,7 +5704,7 @@ function buildSequenceAnimaticViewModel(input: {
                 : completedPlannedKeyframe?.keyframeAssetKey
                   ? 'Keyframe ready'
                   : plannedKeyframeRunning
-                    ? 'Generating keyframe'
+                    ? plannedKeyframeProgressLabel || 'Generating keyframe'
                     : shotCoverageAnchor?.running
                       ? 'Generating coverage anchor'
                       : keyframeDependencyRunning
@@ -5661,7 +5721,7 @@ function buildSequenceAnimaticViewModel(input: {
               : completedPlannedKeyframe?.keyframeAssetKey
                 ? 'Keyframe ready'
                 : plannedKeyframeRunning
-                  ? 'Generating keyframe'
+                  ? plannedKeyframeProgressLabel || 'Generating keyframe'
                   : keyframeDependencyRunning
                     ? 'Generating keyframe refs'
                     : keyframeDependencyMissingCount > 0
@@ -5670,6 +5730,7 @@ function buildSequenceAnimaticViewModel(input: {
                     ? 'Keyframe queued'
                     : 'Keyframe not generated',
             keyframeDependencyStatusLabel,
+            keyframeProgressLabel: plannedKeyframeProgressLabel,
             keyframeDependencyRunning,
             keyframeDependencyMissingCount,
             keyframeRequestId: plannedKeyframeRequest?.id ?? null,
@@ -5784,6 +5845,7 @@ function buildSequenceAnimaticViewModel(input: {
               panelRunning: false,
               keyframeStatusLabel: 'Keyframe pending',
               keyframeDependencyStatusLabel: 'Shot continuity pending',
+              keyframeProgressLabel: '',
               keyframeDependencyRunning: false,
               keyframeDependencyMissingCount: 0,
               keyframeRequestId: null,
@@ -8570,12 +8632,23 @@ export function WorldGraphPage({
       } else if (nextKind === 'blocked') {
         throw new Error(trimOptionalString(nextAction.reason) || 'Shot keyframe generation is blocked.')
       } else {
-        const nextRequest = [
+        let nextRequest = [
           ...ensureResult.continuityAssetRequests,
           ...ensureResult.coverageAnchorRequests,
           ...ensureResult.shotKeyframeRequests,
           ...ensureResult.childRequests,
         ].find((request) => request.id === nextRequestId) ?? null
+        if (!nextRequest && nextKind === 'run_shot_production_keyframe') {
+          const cachedShotGraphIsCurrent = Boolean(
+            shot.keyframeRequestId
+            && shot.keyframeWorkflowId
+            && shot.keyframeDependencyMode === 'single_node_chain'
+            && shot.keyframeGraphPolicyVersion === 'primary_chain_v5',
+          )
+          nextRequest = cachedShotGraphIsCurrent
+            ? outputRequests.find((request) => request.id === shot.keyframeRequestId && request.workflowId === shot.keyframeWorkflowId) ?? null
+            : null
+        }
         if (nextKind === 'run_continuity_asset' && nextRequest) {
           startedKeyframeWork = (await startContinuityRequestRun(nextRequest)) || startedKeyframeWork
         } else if (nextKind === 'run_coverage_anchor' && nextRequest) {
@@ -8599,7 +8672,7 @@ export function WorldGraphPage({
       if (!keepPending) setSequenceAnimaticPendingShotKeyframe(null)
       endSequenceAnimaticRun(runKey)
     }
-  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
+  }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticKeyframeWorkflows, onStartOutputWorkflowRun, outputRequests, outputWorkflowRuns, sequenceAnimaticBusyRunKeys])
   useEffect(() => {
     if (!sequenceAnimaticPendingShotKeyframe || sequenceAnimaticBusyRunKeys.size > 0 || !sequenceAnimaticPreviewModel) return undefined
     if (sequenceAnimaticPreviewModel.request.id !== sequenceAnimaticPendingShotKeyframe.masterRequestId) return undefined
@@ -14334,6 +14407,7 @@ export function WorldGraphPage({
                           const shotVideoStarting = sequenceAnimaticShotVideoRunKeyActive(shotVideoRunKey)
                           const shotKeyframeStarting = sequenceAnimaticBusyRunKeys.has(shotKeyframeRunKey)
                           const shotKeyframeBusy = shotKeyframeStarting || shot.keyframeRunning || shot.keyframeDependencyRunning
+                          const shotKeyframeBusyLabel = sequenceAnimaticShotKeyframeBusyLabel(shot, shotKeyframeStarting)
                           const shotKeyframeReady = shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready'
                           const shotCanGenerateEarlyKeyframe = sequenceAnimaticShotCanGenerateEarlyKeyframe(shot)
                           const activeShotPrompt = sequenceAnimaticShotPrompt?.masterRequestId === routeAnimaticModel.request.id
@@ -14387,8 +14461,8 @@ export function WorldGraphPage({
                                   {shot.coverageSetupLabel ? <span title={shot.coverageSetupDetail || shot.coverageSetupLabel}>{shot.coverageSetupLabel}</span> : null}
                                   {shot.keyframeStatusLabel !== 'Keyframe not generated' ? (
                                     <span>
-                                      {shot.keyframeRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
-                                      {shot.keyframeStatusLabel}
+                                      {shotKeyframeBusy ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                                      {shotKeyframeBusy ? shotKeyframeBusyLabel : shot.keyframeStatusLabel}
                                     </span>
                                   ) : null}
                                   {shot.isRevised ? <span>Revised</span> : null}
@@ -14548,7 +14622,7 @@ export function WorldGraphPage({
                                     title={shot.keyframeDependencyStatusLabel}
                                   >
                                     {shotKeyframeBusy
-                                      ? <><span className="world-mini-spinner" aria-hidden="true" />{shot.keyframeDependencyRunning ? 'Generating refs' : shot.keyframeRunning ? 'Generating keyframe' : 'Starting keyframe'}</>
+                                      ? <><span className="world-mini-spinner" aria-hidden="true" />{shotKeyframeBusyLabel}</>
                                       : shotKeyframeReady
                                         ? 'Regenerate keyframe'
                                         : shot.isProvisional
@@ -14575,7 +14649,8 @@ export function WorldGraphPage({
                                       : 'Refresh graph'}
                                   </button>
                                   <small className={shot.shotVideoError ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
-                                    {shotKeyframeBusy ? `${shot.keyframeStatusLabel} / ${shot.keyframeDependencyStatusLabel}` : shot.shotVideoProgressLabel}
+                                    {shotKeyframeBusy ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                                    {shotKeyframeBusy ? shotKeyframeBusyLabel : shot.shotVideoProgressLabel}
                                   </small>
                                 </div>
                               </div>
@@ -17640,6 +17715,7 @@ export function WorldGraphPage({
                         const shotVideoStarting = sequenceAnimaticShotVideoRunKeyActive(shotVideoRunKey)
                         const shotKeyframeStarting = sequenceAnimaticBusyRunKeys.has(shotKeyframeRunKey)
                         const shotKeyframeBusy = shotKeyframeStarting || shot.keyframeRunning || shot.keyframeDependencyRunning
+                        const shotKeyframeBusyLabel = sequenceAnimaticShotKeyframeBusyLabel(shot, shotKeyframeStarting)
                         const shotKeyframeReady = shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready'
                         const shotCanGenerateEarlyKeyframe = sequenceAnimaticShotCanGenerateEarlyKeyframe(shot)
                         const shotCoverageAnchor = shot.coverageSetupId
@@ -17665,8 +17741,8 @@ export function WorldGraphPage({
                               <span>Duration {shot.durationLabel}</span>
                               {shot.keyframeStatusLabel !== 'Keyframe not generated' ? (
                                 <span>
-                                  {shot.keyframeRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
-                                  {shot.keyframeStatusLabel}
+                                  {shotKeyframeBusy ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
+                                  {shotKeyframeBusy ? shotKeyframeBusyLabel : shot.keyframeStatusLabel}
                                 </span>
                               ) : null}
                             </div>
@@ -17800,7 +17876,7 @@ export function WorldGraphPage({
                                 title={shot.keyframeDependencyStatusLabel}
                               >
                                 {shotKeyframeBusy
-                                  ? <><span className="world-mini-spinner" aria-hidden="true" />{shot.keyframeDependencyRunning ? 'Generating refs' : shot.keyframeRunning ? 'Generating keyframe' : 'Starting keyframe'}</>
+                                  ? <><span className="world-mini-spinner" aria-hidden="true" />{shotKeyframeBusyLabel}</>
                                   : shotKeyframeReady
                                     ? 'Regenerate keyframe'
                                     : shot.isProvisional
@@ -17865,7 +17941,7 @@ export function WorldGraphPage({
                               </button>
                               <small className={shot.shotVideoError ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
                                 {shotKeyframeBusy ? <span className="world-mini-spinner" aria-hidden="true" /> : shot.shotVideoRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
-                                {shotKeyframeBusy ? `${shot.keyframeStatusLabel} / ${shot.keyframeDependencyStatusLabel}` : shot.shotVideoProgressLabel}
+                                {shotKeyframeBusy ? shotKeyframeBusyLabel : shot.shotVideoProgressLabel}
                               </small>
                             </div>
                           </div>

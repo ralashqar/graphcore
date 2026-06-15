@@ -1227,6 +1227,46 @@ function hasStoredOutputs(value: unknown) {
   return Object.keys(asRecord(value)).length > 0
 }
 
+function outputWorkflowImageOutputHasAssetRef(outputs: unknown) {
+  const record = asRecord(outputs)
+  if (!hasStoredOutputs(record)) return false
+  if (
+    record.skipImageGeneration === true
+    || record.skip_image_generation === true
+    || record.skipped === true
+  ) {
+    const skippedImage = asRecord(record.image)
+    if (!readText(skippedImage.assetKey) && !readText(skippedImage.storagePath) && !readText(skippedImage.storage_path) && !readText(skippedImage.url)) {
+      return false
+    }
+  }
+  const hasImageRef = (value: unknown) => {
+    const image = asRecord(value)
+    return Boolean(
+      readText(image.assetKey)
+      || readText(image.asset_key)
+      || readText(image.storagePath)
+      || readText(image.storage_path)
+      || readText(image.url)
+      || readText(image.signedUrl)
+      || readText(image.signed_url)
+    )
+  }
+  if (hasImageRef(record) || hasImageRef(record.image) || hasImageRef(record.keyframe) || hasImageRef(record.primaryReferenceImage)) return true
+  const images = Array.isArray(record.images) ? record.images : []
+  if (images.some(hasImageRef)) return true
+  return readUpstreamImages({ value: record }, ['image', 'images', 'keyframe', 'coverImage', 'primaryReferenceImage']).length > 0
+}
+
+function outputWorkflowNodeOutputsReusableForCache(
+  node: Pick<OutputWorkflowNode, 'nodeType'> | Partial<Pick<OutputWorkflowNode, 'nodeType'>>,
+  outputs: unknown,
+) {
+  if (!hasStoredOutputs(outputs)) return false
+  if (node.nodeType === 'image_generation') return outputWorkflowImageOutputHasAssetRef(outputs)
+  return true
+}
+
 function outputContainsEdgePortValue(outputs: unknown, edge: Pick<OutputWorkflowEdge, 'sourcePort'> | Partial<Pick<OutputWorkflowEdge, 'sourcePort'>>) {
   const record = asRecord(outputs)
   if (!hasStoredOutputs(record)) return false
@@ -21838,7 +21878,8 @@ async function executeNode(input: {
         || readFirstUpstreamText(input.upstream, ['text'])
         || readText(input.node.inputs.prompt)
         || input.run.prompt
-      const skipImageGeneration = Object.values(input.upstream).some((record) => asRecord(record).skipImageGeneration === true || asRecord(record).skip_image_generation === true)
+      const skipImageGeneration = config.skipImageGeneration === true
+        || config.skip_image_generation === true
         || input.node.inputs.skipImageGeneration === true
         || input.node.inputs.skip_image_generation === true
       if (skipImageGeneration) {
@@ -21864,7 +21905,12 @@ async function executeNode(input: {
         || readText(priorImageOutput.generatedBy) === 'deterministic_panel_passthrough'
         || readText(priorImageOutput.keyframeMode) === 'storyboard_panel_crop'
       )
-      if (!priorIsCinematicV2PanelPassthrough && hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(priorImageOutput)) {
+      if (
+        !priorIsCinematicV2PanelPassthrough
+        && outputWorkflowNodeOutputsReusableForCache(input.node, priorStepOutputs)
+        && input.priorStep?.outputHash
+        && hasStoredOutputs(priorImageOutput)
+      ) {
         return {
           inputHash: input.priorStep.inputHash || input.inputHash,
           outputHash: input.priorStep.outputHash,
@@ -23224,7 +23270,7 @@ async function executeNode(input: {
         const config = asRecord(input.node.config)
         const batch = readFirstUpstreamRecord(input.upstream, ['batch'])
         const targetNodes = readFirstUpstreamArray(input.upstream, ['targetNodes', 'target_nodes']).map(asRecord)
-        const image = readFirstUpstreamImage(input.upstream, ['image'])
+        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
         const assetKey = readText(image.assetKey)
         const storagePath = readText(image.storagePath) || readText(image.storage_path)
         if (!assetKey || !storagePath) throw new Error('Continuity batch extraction requires a generated batch image.')
@@ -27594,6 +27640,7 @@ async function executeNode(input: {
         const targetNodeId = readText(config.targetNodeId) || readText(targetNode.id)
         if (!targetNodeId) throw new Error('Continuity asset artifact requires a target node id.')
         const assetKey = readText(image.assetKey)
+        if (!assetKey) throw new Error('Continuity asset image did not produce an asset key.')
         const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
         const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
         const qcFindings = assetKey ? [] : ['Continuity asset image did not produce an asset key.']
@@ -27819,11 +27866,12 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_coverage_anchor_artifact') {
         const config = asRecord(input.node.config)
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
-        const image = readFirstUpstreamImage(input.upstream, ['image'])
+        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
         const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
         const coverageSetupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
         if (!coverageSetupId) throw new Error('Coverage anchor artifact requires a coverage setup id.')
         const assetKey = readText(image.assetKey)
+        if (!assetKey) throw new Error('Coverage anchor image did not produce an asset key.')
         const qcFindings = assetKey ? [] : ['Coverage anchor image did not produce an asset key.']
         const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
         const anchor = {
@@ -27935,11 +27983,12 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_planned_keyframe_artifact') {
         const config = asRecord(input.node.config)
         const shot = readFirstUpstreamRecord(input.upstream, ['shot'])
-        const image = readFirstUpstreamImage(input.upstream, ['image'])
+        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
         const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
         const shotId = readText(shot.id) || readText(config.shotId)
         if (!shotId) throw new Error('Shot keyframe artifact requires a shot id.')
         const assetKey = readText(image.assetKey)
+        if (!assetKey) throw new Error('Shot keyframe image did not produce an asset key.')
         const qcFindings = assetKey ? [] : ['Shot keyframe image did not produce an asset key.']
         const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
         const keyframe = {
@@ -28703,10 +28752,10 @@ export async function processFlyOutputWorkflowRuns(input: {
         const inputHash = computeNodeInputHash({ run: bundle.run, node, upstream: effectiveUpstream })
         const forceNode = forceNodeKeys.has(node.key)
         const priorStep = stepByNodeKey.get(node.key) ?? null
-        const hasExistingOutputs = hasStoredOutputs(node.outputs)
+        const hasExistingOutputs = outputWorkflowNodeOutputsReusableForCache(node, node.outputs)
         const hasRecoverableStepOutputs = !forceNode
           && !hasExistingOutputs
-          && hasStoredOutputs(priorStep?.outputs)
+          && outputWorkflowNodeOutputsReusableForCache(node, priorStep?.outputs)
           && Boolean(priorStep?.outputHash)
           && ['running', 'completed'].includes(priorStep?.status ?? '')
         const canHashSkip = !forceNode && !node.dirty && node.inputHash === inputHash && hasExistingOutputs

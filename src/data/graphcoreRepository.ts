@@ -2271,10 +2271,10 @@ const OUTPUT_WORKFLOW_EDGE_SELECT =
   'id, workflow_id, key, source_node_key, source_port, target_node_key, target_port, metadata, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_SELECT =
   'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
+const OUTPUT_WORKFLOW_RUN_STATUS_SELECT =
+  'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT =
   'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
-const OUTPUT_WORKFLOW_RUN_STEP_SELECT =
-  'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_ARTIFACT_SELECT =
   'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const OUTPUT_REQUEST_SELECT =
@@ -9864,10 +9864,10 @@ async function loadSequenceAnimaticStateDirect(
       ? supabase.from('output_workflows').select(OUTPUT_WORKFLOW_SELECT).eq('draft_id', payload.draftId).in('id', workflowIds)
       : Promise.resolve({ data: [], error: null }),
     runIds.length > 0
-      ? supabase.from('output_workflow_runs').select(OUTPUT_WORKFLOW_RUN_SELECT).eq('draft_id', payload.draftId).in('id', runIds)
+      ? supabase.from('output_workflow_runs').select(OUTPUT_WORKFLOW_RUN_STATUS_SELECT).eq('draft_id', payload.draftId).in('id', runIds)
       : Promise.resolve({ data: [], error: null }),
     runIds.length > 0
-      ? supabase.from('output_workflow_run_steps').select(OUTPUT_WORKFLOW_RUN_STEP_SELECT).in('run_id', runIds).order('order_index', { ascending: true })
+      ? supabase.from('output_workflow_run_steps').select(OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT).in('run_id', runIds).order('order_index', { ascending: true })
       : Promise.resolve({ data: [], error: null }),
     workflowIds.length > 0
       ? supabase.from('output_artifacts').select(OUTPUT_ARTIFACT_SELECT).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })

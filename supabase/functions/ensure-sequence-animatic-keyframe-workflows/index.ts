@@ -2176,20 +2176,51 @@ Deno.serve(async (request) => {
       })
     }
 
-    const workflowsResponse = createdWorkflowIds.length > 0
-      ? await client.from('output_workflows').select('*').in('id', createdWorkflowIds)
-      : { data: [], error: null }
-    if (workflowsResponse.error) throw new Error(workflowsResponse.error.message)
+    const currentShotProductionRequest = (child: ReturnType<typeof mapOutputRequestRow> | null | undefined) => {
+      if (!child || staleChildIds.has(child.id)) return false
+      const metadata = asRecord(child.metadata)
+      if (metadata.sequenceAnimaticStale === true || !child.workflowId) return false
+      const role = readScreenplayAnimaticRole(metadata)
+      if (!['shot_keyframe', 'shot_production'].includes(role)) return false
+      if (isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain') {
+        return role === 'shot_production'
+          && readText(metadata.shotId) === scopedShotId
+          && readText(metadata.dependencyMode) === shotGraphDependencyMode
+          && readText(metadata.shotGraphPolicyVersion) === shotGraphPolicyVersion
+      }
+      return true
+    }
+    const dedupeRequests = (requests: Array<ReturnType<typeof mapOutputRequestRow> | null | undefined>) => {
+      const seen = new Set<string>()
+      return requests.filter((request): request is ReturnType<typeof mapOutputRequestRow> => {
+        if (!request || seen.has(request.id)) return false
+        seen.add(request.id)
+        return true
+      })
+    }
     const continuityAssetRequests = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
       ? []
       : ensuredChildren.filter((child) => !staleChildIds.has(child.id) && asRecord(child.metadata).sequenceAnimaticStale !== true && ['continuity_asset', 'continuity_asset_batch'].includes(readScreenplayAnimaticRole(asRecord(child.metadata))))
     const coverageAnchorRequests = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
       ? []
       : ensuredChildren.filter((child) => !staleChildIds.has(child.id) && asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRole(asRecord(child.metadata)) === 'coverage_anchor')
-    const shotKeyframeRequests = ensuredChildren.filter((child) => !staleChildIds.has(child.id) && asRecord(child.metadata).sequenceAnimaticStale !== true && ['shot_keyframe', 'shot_production'].includes(readScreenplayAnimaticRole(asRecord(child.metadata))))
+    const scopedExistingShotRequest = isShotScopedEnsure
+      ? existingByShotId.get(scopedShotId) ?? null
+      : null
+    const shotKeyframeRequests = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+      ? dedupeRequests([scopedExistingShotRequest, ...ensuredChildren]).filter(currentShotProductionRequest)
+      : ensuredChildren.filter(currentShotProductionRequest)
     const scopedShotRequest = isShotScopedEnsure
       ? shotKeyframeRequests.find((child) => readText(asRecord(child.metadata).shotId) === scopedShotId) ?? null
       : null
+    const responseWorkflowIds = [
+      ...createdWorkflowIds,
+      ...shotKeyframeRequests.map((child) => child.workflowId).filter((id): id is string => Boolean(id)),
+    ].filter((id, index, values) => values.indexOf(id) === index)
+    const workflowsResponse = responseWorkflowIds.length > 0
+      ? await client.from('output_workflows').select('*').in('id', responseWorkflowIds)
+      : { data: [], error: null }
+    if (workflowsResponse.error) throw new Error(workflowsResponse.error.message)
     const finalNextAction = isShotScopedEnsure
       ? scopedKeyframeReady
         ? {
@@ -2204,7 +2235,9 @@ Deno.serve(async (request) => {
         }
         : scopedShotRequest
           ? childNextAction('run_shot_production_keyframe', scopedShotRequest, 'Generating final shot keyframe.')
-          : blockedNextAction('Shot production workflow could not be prepared.')
+          : blockedNextAction(scopedShotJob
+            ? `Shot production workflow could not be prepared. Expected active ${shotGraphPolicyVersion} ${shotGraphDependencyMode} graph with workflowId for this shot.`
+            : 'Shot production workflow could not be prepared. Shot was not found in the keyframe plan.')
       : null
     if (coverageAnchorRequests.length > 0 && !dependencyWaves.some((wave) => Number(asRecord(wave).wave) === 4)) {
       dependencyWaves.push({

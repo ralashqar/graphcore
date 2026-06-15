@@ -11,8 +11,8 @@ import {
   outputArtifactSelect,
   outputRequestSelect,
   outputRequestStatusProjectionSelect,
-  outputWorkflowRunSelect,
-  outputWorkflowRunStepSelect,
+  outputWorkflowRunStatusSelect,
+  outputWorkflowRunStepStatusSelect,
   outputWorkflowSelect,
 } from '../_shared/output-workflow.ts'
 import {
@@ -632,13 +632,28 @@ function readScriptShotProjectionFromOutput(outputInput: unknown) {
 
 function readScreenplayState(input: {
   steps: ReturnType<typeof mapOutputWorkflowRunStepRow>[]
+  artifacts: MappedOutputArtifact[]
 }) {
   const screenplayStep = input.steps
     .filter((step) => step.nodeKey === 'cinematic_v3_screenplay_author' && step.status === 'completed')
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
   const outputs = asRecord(screenplayStep?.outputs)
   const screenplayDraft = asRecord(outputs.screenplayDraft ?? outputs.screenplay_draft)
-  const screenplayMarkdown = readText(outputs.text) || readText(screenplayDraft.screenplayMarkdown)
+  const manifestMetadata = input.artifacts
+    .map((artifact) => asRecord(artifact.metadata))
+    .find((metadata) => readText(metadata.role) === 'sequence_animatic_manifest') ?? {}
+  const manifest = asRecord(manifestMetadata.manifest ?? manifestMetadata.sequenceAnimaticManifest ?? manifestMetadata.sequence_animatic_manifest)
+  const artifactScreenplayDraft = asRecord(
+    manifestMetadata.screenplayDraft
+      ?? manifestMetadata.screenplay_draft
+      ?? manifest.screenplayDraft
+      ?? manifest.screenplay_draft,
+  )
+  const screenplayMarkdown = readText(outputs.text)
+    || readText(screenplayDraft.screenplayMarkdown)
+    || readText(manifestMetadata.screenplayMarkdown ?? manifestMetadata.screenplay_markdown)
+    || readText(manifest.screenplayMarkdown ?? manifest.screenplay_markdown)
+    || readText(artifactScreenplayDraft.screenplayMarkdown ?? artifactScreenplayDraft.markdown ?? artifactScreenplayDraft.text)
   return {
     screenplayStatus: screenplayMarkdown ? 'ready' as const : 'missing' as const,
     screenplayMarkdown,
@@ -848,10 +863,10 @@ Deno.serve(async (request) => {
         ? admin.from('output_workflows').select(outputWorkflowSelect).eq('draft_id', payload.draftId).in('id', workflowIds)
         : { data: [], error: null },
       runIds.length > 0
-        ? admin.from('output_workflow_runs').select(outputWorkflowRunSelect).eq('draft_id', payload.draftId).in('id', runIds)
+        ? admin.from('output_workflow_runs').select(outputWorkflowRunStatusSelect).eq('draft_id', payload.draftId).in('id', runIds)
         : { data: [], error: null },
       runIds.length > 0
-        ? admin.from('output_workflow_run_steps').select(outputWorkflowRunStepSelect).in('run_id', runIds).order('order_index', { ascending: true })
+        ? admin.from('output_workflow_run_steps').select(outputWorkflowRunStepStatusSelect).in('run_id', runIds).order('order_index', { ascending: true })
         : { data: [], error: null },
       workflowIds.length > 0
         ? admin.from('output_artifacts').select(outputArtifactSelect).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })
@@ -873,12 +888,6 @@ Deno.serve(async (request) => {
     for (const artifact of hydratedArtifacts) {
       if (artifact.assetKey) assetKeys.add(artifact.assetKey)
       addAssetKey(artifact.metadata, assetKeys)
-    }
-    for (const row of runResponse.data ?? []) {
-      addAssetKey(asRecord((row as Record<string, unknown>).outputs), assetKeys)
-    }
-    for (const step of steps) {
-      addAssetKey(step.outputs, assetKeys)
     }
     for (const projection of (projectionResponse.data ?? []) as Record<string, unknown>[]) {
       addAssetKey(asRecord(projection.progress), assetKeys)
@@ -908,7 +917,7 @@ Deno.serve(async (request) => {
       createdAt: readText(row.created_at),
     }))
     const scriptShotState = readScriptShotState({ runs, steps, artifacts: hydratedArtifacts })
-    const screenplayState = readScreenplayState({ steps })
+    const screenplayState = readScreenplayState({ steps, artifacts: hydratedArtifacts })
     const shotContinuityStreamState = readShotContinuityStreamState({ masterRequest, events })
     const sceneChildFinalState = readSceneChildFinalState({
       masterRequest,
