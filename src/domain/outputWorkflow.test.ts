@@ -2055,6 +2055,13 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
         referenceAssetKeys: ['spot_sheet'],
         parentNodeIds: ['set_lab'],
       },
+      {
+        targetNodeId: 'temp_character_monastery_attendants',
+        targetNode: { id: 'temp_character_monastery_attendants', name: 'Monastery attendants', nodeKind: 'temporary_character', summary: 'Visible attendants in this shot.' },
+        assetKind: 'temporary_character',
+        referenceAssetKeys: [],
+        parentNodeIds: [],
+      },
     ],
     coverageSetup: { id: 'setup_a', title: 'Wide reveal', stagingBrief: 'Ava enters through the lab door.' },
     coverageShots: [{ id: 'shot_001', title: 'Reveal' }],
@@ -2069,6 +2076,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.ok(nodeKeys.includes('coverage_anchor_artifact'))
   assert.ok(nodeKeys.includes('continuity_set_lab_image'))
   assert.ok(nodeKeys.includes('continuity_spot_lab_artifact'))
+  assert.ok(nodeKeys.includes('continuity_temp_character_monastery_attendants_artifact'))
   assert.ok(!nodeKeys.includes('continuity_ref_1'))
   assert.ok(nodeKeys.includes('shot_reference_pack'))
   assert.ok(nodeKeys.includes('world_ref_ava'))
@@ -2088,6 +2096,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.ok(!graph.edges.some((edge) => edge.source_node_key === 'continuity_set_lab_artifact' && edge.target_node_key === 'coverage_anchor_image'))
   assert.ok(!graph.edges.some((edge) => edge.source_node_key === 'continuity_set_lab_artifact' && edge.target_node_key === 'shot_reference_pack'))
   assert.ok(!graph.edges.some((edge) => edge.source_node_key === 'continuity_spot_lab_artifact' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'continuity_temp_character_monastery_attendants_artifact' && edge.target_node_key === 'shot_reference_pack'))
   assert.ok(graph.edges.some((edge) => edge.source_node_key === 'planned_keyframe_artifact' && edge.target_node_key === 'shot_video_prompt'))
   assert.ok(graph.edges.some((edge) => edge.source_node_key === 'shot_video' && edge.target_node_key === 'shot_video_artifact'))
   const validation = validateOutputWorkflowGraph({
@@ -2115,13 +2124,17 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   const pruneMigrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260613224408_prune_obsolete_child_workflow_graph_nodes.sql'), 'utf8')
   assert.match(keyframeEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
   assert.match(shotGraphEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
-  assert.match(shotGraphEnsureSource, /SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v5'/)
+  assert.match(shotGraphEnsureSource, /SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v6'/)
   assert.match(shotGraphEnsureSource, /SHOT_GRAPH_DEPENDENCY_MODE = 'single_node_chain'/)
   assert.match(shotGraphEnsureSource, /primaryShotSpatialNodeIds/)
   assert.match(shotGraphEnsureSource, /const primarySpotId = readText\(binding\.primarySpotId/)
   assert.match(shotGraphEnsureSource, /coverageSetupEntityRefIds/)
   assert.match(shotGraphEnsureSource, /Selected from shot-visible refs and coverage setup subjects/)
   assert.match(shotGraphEnsureSource, /referencedAnimaticAssetNodeIds/)
+  assert.match(shotGraphEnsureSource, /incidentalCharacterNodesForShot/)
+  assert.match(shotGraphEnsureSource, /temp_character_monastery_attendants/)
+  assert.match(keyframeEnsureSource, /incidentalCharacterNodesForShot/)
+  assert.match(keyframeEnsureSource, /temp_character_monastery_attendants/)
   assert.doesNotMatch(shotGraphEnsureSource, /continuity_asset_batch/)
   assert.match(keyframeEnsureSource, /p_role: 'shot_production'/)
   assert.match(keyframeEnsureSource, /shotContinuityDependenciesForGraph/)
@@ -2135,8 +2148,27 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(workflowFactorySource, /world_context_ref/)
   assert.match(workflowFactorySource, /sequence_animatic_continuity_asset_spatial/)
   assert.match(workflowFactorySource, /coverageSourceContinuityDependencies/)
+  assert.match(workflowFactorySource, /feedsShotReferencePack/)
   assert.match(workerSource, /sequence-animatic-global-asset-reuse-v1/)
   assert.match(workerSource, /sequence_animatic_shot_reference_pack/)
+  assert.match(workerSource, /SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE = 'labeled_blockout_v1'/)
+  assert.match(workerSource, /function sequenceAnimaticReferenceManifestEntries/)
+  assert.match(workerSource, /@Image\$\{index \+ 1\} = \$\{label\}: \$\{guidance\}/)
+  assert.match(workerSource, /Reference map/)
+  assert.match(workerSource, /Visible subjects/)
+  assert.match(workerSource, /Action\/blocking/)
+  assert.match(workerSource, /Camera\/framing/)
+  assert.match(workerSource, /Lighting\/environment/)
+  assert.match(workerSource, /Negative rules/)
+  assert.match(workerSource, /Attached image reference order/)
+  assert.match(workerSource, /match framing\/blocking only; do not copy labels, arrows, placeholder figures, or blockout styling/)
+  assert.match(workerSource, /Use @Image1 coverage anchor for composition, camera height\/lens feel, screen direction, and placement only/)
+  assert.match(workerSource, /Create one labeled coverage blockout plate/)
+  assert.match(workerSource, /Sparse placement labels and arrows are allowed and required/)
+  assert.match(workerSource, /Use character references only to know which named placeholders to place/)
+  assert.match(workerSource, /No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text/)
+  assert.match(workerSource, /orderSequenceAnimaticAssetPackReferences\(scopeAssetPackToReferenceAssetKeys/)
+  assert.match(workerSource, /sequenceAnimaticReferenceManifestTextFromRecords\(referenceImageRecords\)/)
   assert.match(workerSource, /sequence_animatic_shot_video_artifact/)
   assert.match(workerSource, /config\.skipImageGeneration === true/)
   assert.doesNotMatch(workerSource, /Object\.values\(input\.upstream\)\.some\(\(record\) => asRecord\(record\)\.skipImageGeneration/)
@@ -2149,6 +2181,9 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(workerSource, /Continuity asset image did not produce an asset key/)
   assert.match(workerSource, /Coverage anchor image did not produce an asset key/)
   assert.match(workerSource, /Shot keyframe image did not produce an asset key/)
+  assert.match(workerSource, /function readPreferredUpstreamImage/)
+  assert.match(workerSource, /preferredNodeKeys: \['planned_keyframe_image', 'shot_keyframe_image'\]/)
+  assert.match(workerSource, /role: 'sequence_animatic_shot_keyframe'/)
   assert.match(workflowFactorySource, /sequence_animatic_coverage_anchor_spatial/)
   assert.match(pageSource, /role === 'shot_keyframe' \|\| role === 'shot_production'/)
   assert.match(pageSource, /sequenceAnimaticShotProductionKeyframeTargetNodeKeys/)
@@ -2165,7 +2200,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(pageSource, /forceRefresh: refresh/)
   assert.match(pageSource, /cachedShotGraphIsCurrent/)
   assert.match(pageSource, /shot\.keyframeDependencyMode === 'single_node_chain'/)
-  assert.match(pageSource, /shot\.keyframeGraphPolicyVersion === 'primary_chain_v5'/)
+  assert.match(pageSource, /shot\.keyframeGraphPolicyVersion === 'primary_chain_v6'/)
   assert.match(pageSource, /filterSequenceAnimaticShotReferencesForShot/)
   assert.match(pageSource, /anchor\?\.shotIds\.includes\(shotId\)/)
   assert.match(pageSource, /openSequenceAnimaticOutputGraph\(model, shotRequest\.id, 'planned_keyframe_artifact'\)/)
@@ -2250,7 +2285,7 @@ test('sequence animatic keyframe ensure supports shot-scoped next actions', () =
         sequenceAnimaticRole: 'shot_production',
         shotId: 'shot_001',
         dependencyMode: 'single_node_chain',
-        shotGraphPolicyVersion: 'primary_chain_v5',
+        shotGraphPolicyVersion: 'primary_chain_v6',
       },
     },
     workflow: null,
@@ -2260,7 +2295,7 @@ test('sequence animatic keyframe ensure supports shot-scoped next actions', () =
     shotId: 'shot_001',
     coverageSetupId: 'setup_a',
     dependencyNodeIds: ['set_a', 'zone_a'],
-    graphPolicyVersion: 'primary_chain_v5',
+    graphPolicyVersion: 'primary_chain_v6',
   })
   assert.equal(shotGraphParsed.cacheStatus, 'reused')
   assert.deepEqual(shotGraphParsed.dependencyNodeIds, ['set_a', 'zone_a'])

@@ -680,10 +680,12 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
   const continuityEdges = continuityDependencies.flatMap((dependency) => {
     const targetNode = asRecord(dependency.targetNode)
     const targetNodeId = readText(dependency.targetNodeId) || readText(targetNode.id)
+    const assetKind = readText(dependency.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
     const inputKey = continuityKeyForNodeId(targetNodeId, 'input')
     const promptKey = continuityKeyForNodeId(targetNodeId, 'prompt')
     const imageKey = continuityKeyForNodeId(targetNodeId, 'image')
     const artifactKey = continuityKeyForNodeId(targetNodeId, 'artifact')
+    const feedsShotReferencePack = dependencyMode === 'batch_grid' || ['temporary_character', 'prop'].includes(assetKind)
     const parentEdges = readStringArray(dependency.parentNodeIds).filter((parentNodeId) => continuityDependencyNodeIds.has(parentNodeId)).flatMap((parentNodeId) => {
       const parentArtifactKey = continuityKeyForNodeId(parentNodeId, 'artifact')
       const parentImageKey = continuityKeyForNodeId(parentNodeId, 'image')
@@ -701,7 +703,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${inputKey}__${artifactKey}_target`, inputKey, 'target_node', artifactKey, 'target_node', {}, role),
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${promptKey}__${artifactKey}_prompt`, promptKey, 'text', artifactKey, 'prompt', {}, role),
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${imageKey}__${artifactKey}`, imageKey, 'image', artifactKey, 'image', { optional: true, optionalDependency: true }, role),
-      ...(dependencyMode === 'batch_grid' ? [
+      ...(feedsShotReferencePack ? [
         sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${artifactKey}__reference_pack_ref`, artifactKey, 'reference', 'shot_reference_pack', 'references', {}, role),
         sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${artifactKey}__reference_pack_image`, artifactKey, 'image', 'shot_reference_pack', 'references', { optional: true, optionalDependency: true }, role),
       ] : []),

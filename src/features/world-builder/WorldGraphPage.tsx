@@ -8643,7 +8643,7 @@ export function WorldGraphPage({
             shot.keyframeRequestId
             && shot.keyframeWorkflowId
             && shot.keyframeDependencyMode === 'single_node_chain'
-            && shot.keyframeGraphPolicyVersion === 'primary_chain_v5',
+            && shot.keyframeGraphPolicyVersion === 'primary_chain_v6',
           )
           nextRequest = cachedShotGraphIsCurrent
             ? outputRequests.find((request) => request.id === shot.keyframeRequestId && request.workflowId === shot.keyframeWorkflowId) ?? null
@@ -8833,7 +8833,7 @@ export function WorldGraphPage({
         shot.keyframeRequestId
         && shot.keyframeWorkflowId
         && shot.keyframeDependencyMode === 'single_node_chain'
-        && shot.keyframeGraphPolicyVersion === 'primary_chain_v5',
+        && shot.keyframeGraphPolicyVersion === 'primary_chain_v6',
       )
       if (!refresh && cachedShotGraphIsCurrent && shot.keyframeRequestId) {
         openSequenceAnimaticOutputGraph(model, shot.keyframeRequestId, 'planned_keyframe_artifact')

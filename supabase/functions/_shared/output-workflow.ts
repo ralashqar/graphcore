@@ -1781,6 +1781,37 @@ function readFirstUpstreamImage(upstream: Record<string, Record<string, unknown>
   return null
 }
 
+function readPreferredUpstreamImage(input: {
+  upstream: Record<string, Record<string, unknown>>
+  preferredNodeKeys: string[]
+  fields?: string[]
+  role?: string
+}) {
+  const fields = input.fields ?? ['image', 'keyframe', 'primaryReferenceImage', 'coverImage']
+  const readFromOutputs = (outputs: unknown) => {
+    const record = asRecord(outputs)
+    for (const field of fields) {
+      const value = record[field]
+      const image = asRecord(value)
+      if (readText(image.assetKey) || readText(image.storagePath) || readText(image.url)) return image
+    }
+    if (readText(record.assetKey) || readText(record.storagePath) || readText(record.url)) return record
+    return null
+  }
+  for (const key of input.preferredNodeKeys) {
+    const direct = readFromOutputs(input.upstream[key])
+    if (direct) return direct
+  }
+  if (input.role) {
+    for (const outputs of Object.values(input.upstream)) {
+      const image = readFromOutputs(outputs)
+      if (!image) continue
+      if (readText(image.role) === input.role || readText(asRecord(outputs).role) === input.role) return image
+    }
+  }
+  return readFirstUpstreamImage(input.upstream, fields)
+}
+
 function readUpstreamImages(upstream: Record<string, Record<string, unknown>>, fields = ['image', 'coverImage']) {
   const images: Record<string, unknown>[] = []
   for (const outputs of Object.values(upstream)) {
@@ -18897,37 +18928,157 @@ async function collectAssetPackReferenceUrls(client: DatabaseClient, run: Output
   return (await collectAssetPackReferenceRecords(client, run, assetPack, limit)).map((entry) => entry.url).filter(Boolean)
 }
 
+const SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE = 'labeled_blockout_v1'
+
+function sequenceAnimaticReferenceName(entity: Record<string, unknown>, fallback = 'Reference') {
+  const name = readText(entity.name) || readText(entity.title) || readText(entity.label)
+  if (name) return name
+  const variantLabel = readText(entity.selectedReferenceVariantLabel)
+  if (variantLabel) return variantLabel
+  const role = readText(entity.role) || readText(entity.type) || readText(entity.selectedReferenceVariantKey)
+  return role ? titleFromRefLike(role) : fallback
+}
+
+function sequenceAnimaticReferenceVisual(entity: Record<string, unknown>, maxWords = 18) {
+  const metadata = asRecord(entity.metadata)
+  const visual = readText(entity.visualDescription)
+    || readText(asRecord(entity.visual).description)
+    || readText(metadata.visualDescription)
+    || readText(asRecord(metadata.visual).description)
+    || readText(entity.selectedReferenceVariantSummary)
+    || readText(entity.summary)
+    || readText(entity.context)
+  const compact = compactStoryboardSentence(visual, '', maxWords)
+  return compact === 'The visual continuity stays clear.' ? '' : compact
+}
+
+function sequenceAnimaticReferenceRole(entity: Record<string, unknown>) {
+  const fields = [
+    entity.role,
+    entity.type,
+    entity.selectedReferenceVariantKey,
+    entity.selectedReferenceVariantType,
+    entity.key,
+    entity.name,
+  ].map(readText).join(' ').toLowerCase()
+  if (fields.includes('coverage_anchor') && !fields.includes('coverage_anchor_dependency')) return 'coverage_anchor'
+  if (fields.includes('previous_keyframe')) return 'previous_keyframe'
+  if (fields.includes('storyboard_panel')) return 'storyboard_panel'
+  if (fields.includes('viewpoint')) return 'viewpoint_reference'
+  if (fields.includes('location_spot') || /\bspot\b/.test(fields)) return 'spot_reference'
+  if (fields.includes('location_zone') || /\bzone\b/.test(fields)) return 'zone_reference'
+  if (fields.includes('location_set') || /\bset\b/.test(fields)) return 'set_reference'
+  if (fields.includes('temporary_character') || fields.includes('temp_character')) return 'temp_character_reference'
+  if (fields.includes('prop') || fields.includes('item')) return 'prop_reference'
+  if (fields.includes('character') || fields.includes('cast') || fields.includes('attendant')) return 'character_reference'
+  if (fields.includes('coverage_anchor_dependency') || fields.includes('location') || fields.includes('environment') || fields.includes('continuity_asset')) return 'location_reference'
+  return 'entity_reference'
+}
+
+function sequenceAnimaticReferenceGuidance(role: string) {
+  if (role === 'coverage_anchor') return 'match framing/blocking only; do not copy labels, arrows, placeholder figures, or blockout styling'
+  if (role === 'previous_keyframe') return 'same-setup motion continuity and established state only'
+  if (role === 'storyboard_panel') return 'loose composition only when it does not conflict with the coverage anchor'
+  if (role === 'spot_reference' || role === 'zone_reference' || role === 'set_reference' || role === 'viewpoint_reference' || role === 'location_reference') {
+    return 'location geometry, materials, weather, lighting logic, and geography'
+  }
+  if (role === 'prop_reference') return 'prop shape, scale, material, and visible condition'
+  if (role === 'temp_character_reference') return 'temporary character/group silhouette, wardrobe, scale, and readable role'
+  if (role === 'character_reference') return 'identity, face, wardrobe, silhouette, and scale'
+  return 'visual identity and continuity'
+}
+
+function sequenceAnimaticReferencePriority(entity: Record<string, unknown>, index: number) {
+  const role = sequenceAnimaticReferenceRole(entity)
+  const priority = role === 'coverage_anchor' ? 0
+    : role === 'previous_keyframe' ? 10
+      : role === 'spot_reference' || role === 'viewpoint_reference' ? 20
+        : role === 'zone_reference' ? 21
+          : role === 'set_reference' || role === 'location_reference' ? 22
+            : role === 'character_reference' ? 30
+              : role === 'temp_character_reference' ? 31
+                : role === 'prop_reference' ? 40
+                  : role === 'storyboard_panel' ? 90
+                    : 50
+  return priority * 1000 + index
+}
+
+function orderSequenceAnimaticAssetPackReferences(assetPack: Record<string, unknown>) {
+  const entities = readArray(assetPack.entities).map(asRecord)
+  const orderedEntities = entities
+    .map((entity, index) => ({ entity, order: sequenceAnimaticReferencePriority(entity, index) }))
+    .sort((left, right) => left.order - right.order)
+    .map((entry) => entry.entity)
+  return {
+    ...assetPack,
+    entities: orderedEntities,
+    selectedEntityKeys: orderedEntities.map((entity) => readText(entity.key)).filter(Boolean),
+  }
+}
+
+function sequenceAnimaticReferenceManifestEntries(assetPack: Record<string, unknown>) {
+  return readArray(assetPack.entities).map(asRecord).map((entity, index) => {
+    const role = sequenceAnimaticReferenceRole(entity)
+    const visual = sequenceAnimaticReferenceVisual(entity)
+    const assetKey = readText(entity.primaryAssetKey) || readText(entity.selectedReferenceAssetKey) || readStringArray(entity.assetKeys)[0] || ''
+    const label = sequenceAnimaticReferenceName(entity, `Image ${index + 1}`)
+    const guidance = sequenceAnimaticReferenceGuidance(role)
+    const line = `@Image${index + 1} = ${label}: ${guidance}${visual ? ` (${visual.replace(/\.$/, '')})` : ''}.`
+    return {
+      index: index + 1,
+      imageTag: `@Image${index + 1}`,
+      label,
+      role,
+      guidance,
+      visualDescription: visual,
+      assetKey,
+      line,
+    }
+  }).filter((entry) => entry.assetKey)
+}
+
+function sequenceAnimaticReferenceManifestText(assetPack: Record<string, unknown>) {
+  return sequenceAnimaticReferenceManifestEntries(assetPack).map((entry) => entry.line).join('\n')
+}
+
+function sequenceAnimaticReferenceManifestTextFromRecords(records: SeedanceReferenceRecord[]) {
+  return records
+    .map((record, index) => `@Image${index + 1} = ${readText(record.label) || titleFromRefLike(readText(record.role) || 'reference')}.`)
+    .join('\n')
+}
+
+function sequenceAnimaticAssetPackReferenceRecord(entity: Record<string, unknown>) {
+  const role = sequenceAnimaticReferenceRole(entity)
+  const name = sequenceAnimaticReferenceName(entity)
+  const visual = sequenceAnimaticReferenceVisual(entity, 14)
+  return {
+    label: `${name}: ${sequenceAnimaticReferenceGuidance(role)}${visual ? ` (${visual.replace(/\.$/, '')})` : ''}`,
+    role,
+  }
+}
+
 async function collectAssetPackReferenceRecords(client: DatabaseClient, run: OutputWorkflowRun, assetPack: Record<string, unknown>, limit = 3): Promise<SeedanceReferenceRecord[]> {
   const references: SeedanceReferenceRecord[] = []
   const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
   for (const entity of entities) {
     const primaryAssetKey = readText(entity.primaryAssetKey)
     const entityReferenceAssetKeys = primaryAssetKey ? [primaryAssetKey] : sortReferenceValues(readStringArray(entity.assetKeys))
-    const name = readText(entity.name) || readText(entity.key) || 'Entity reference'
-    const type = readText(entity.type) || readText(entity.role)
-    const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
-    const selectedVariantLabel = readText(entity.selectedReferenceVariantLabel)
-    const selectedVariantSummary = readText(entity.selectedReferenceVariantSummary)
-    const variantText = selectedVariantKey && selectedVariantKey !== 'default'
-      ? `${selectedVariantLabel || selectedVariantKey} variant${selectedVariantSummary ? `, ${compactBeatCaptionSentence(selectedVariantSummary, '', 16).replace(/\.$/, '')}` : ''}`
-      : 'default reference'
-    const label = `${name} ${variantText}`
-    const role = ['location', 'place', 'environment', 'location_spot'].includes(type) ? 'location_reference' : 'entity_reference'
+    const referenceRecord = sequenceAnimaticAssetPackReferenceRecord(entity)
     for (const assetKey of entityReferenceAssetKeys) {
       if (isDirectReferenceUrl(assetKey)) {
-        references.push({ url: assetKey, label, role, modality: 'image' })
+        references.push({ url: assetKey, label: referenceRecord.label, role: referenceRecord.role, modality: 'image' })
         if (references.length >= limit) return references
         continue
       }
       if (isProjectAssetStoragePath(assetKey)) {
-        references.push({ url: await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)), label, role, modality: 'image' })
+        references.push({ url: await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)), label: referenceRecord.label, role: referenceRecord.role, modality: 'image' })
         if (references.length >= limit) return references
         continue
       }
       const asset = await resolveProjectAssetByKey(client, run, assetKey)
       const storagePath = readText(asset?.storagePath) || readText(asset?.storage_path)
       if (!storagePath) continue
-      references.push({ url: await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'), label, role, modality: 'image' })
+      references.push({ url: await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'), label: referenceRecord.label, role: referenceRecord.role, modality: 'image' })
       if (references.length >= limit) return references
     }
   }
@@ -22036,6 +22187,7 @@ async function executeNode(input: {
       const upstreamImages = readUpstreamImages(input.upstream)
       const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
       const referenceLimit = referenceLimitForImageNode(config, role)
+      const isSequenceAnimaticPlannedKeyframeImage = purpose === 'sequence_animatic_planned_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
       const isCinematicV3StoryboardSheet = purpose === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_v3_storyboard_sheet'
       const storyboardSheetShotPlan = isCinematicV3StoryboardSheet ? readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']) : {}
       const storyboardSheetGroupShots = isCinematicV3StoryboardSheet
@@ -22049,10 +22201,31 @@ async function executeNode(input: {
           maxAssetKeysPerEntity: 1,
         })
         : rawAssetPack
-      const referenceImageUrls = [...new Set([
-        ...(await Promise.all(upstreamImages.map((image) => imageReferenceToFalUrl(input.client, image, input.run)))),
-        ...(await collectAssetPackReferenceUrls(input.client, input.run, assetPack, referenceLimit)),
-      ].filter(Boolean))].slice(0, referenceLimit)
+      const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
+        const url = await imageReferenceToFalUrl(input.client, image, input.run)
+        if (!url) return null
+        const imageMetadata = asRecord(image.metadata)
+        return {
+          url,
+          label: readText(image.name) || readText(image.title) || readText(image.label) || titleFromRefLike(readText(image.role) || readText(imageMetadata.role) || `upstream reference ${index + 1}`),
+          role: readText(image.role) || readText(imageMetadata.role) || 'image_reference',
+          modality: 'image' as const,
+        }
+      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
+      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, referenceLimit)
+      const seenReferenceImageKeys = new Set<string>()
+      const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
+        .filter((entry) => {
+          const url = readText(entry.url)
+          if (!url || seenReferenceImageKeys.has(url)) return false
+          seenReferenceImageKeys.add(url)
+          return true
+        })
+        .slice(0, referenceLimit)
+      const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+      const sequenceAnimaticProviderReferenceManifest = isSequenceAnimaticPlannedKeyframeImage
+        ? sequenceAnimaticReferenceManifestTextFromRecords(referenceImageRecords)
+        : ''
       const baseModel = outputWorkflowImageModel(config.model)
       const referenceModel = readText(config.referenceModel) || (baseModel.endsWith('/edit') ? baseModel : `${baseModel}/edit`)
       const model = referenceImageUrls.length > 0
@@ -22076,6 +22249,8 @@ async function executeNode(input: {
         && role !== 'cinematic_keyframe'
       const providerPrompt = [
         prompt,
+        sequenceAnimaticProviderReferenceManifest ? '' : '',
+        sequenceAnimaticProviderReferenceManifest ? `Attached image reference order:\n${sequenceAnimaticProviderReferenceManifest}` : '',
         includeProviderGuidance ? '' : '',
         includeProviderGuidance ? guidanceMarkdown(guidance) : '',
         '',
@@ -22193,6 +22368,10 @@ async function executeNode(input: {
         falStatusUrl: falResult.statusUrl,
         falResponseUrl: falResult.responseUrl,
         referenceImageCount: referenceImageUrls.length,
+        referenceImageRecords,
+        reference_image_records: referenceImageRecords,
+        referenceManifest: sequenceAnimaticProviderReferenceManifest,
+        reference_manifest: sequenceAnimaticProviderReferenceManifest,
         selectedReferenceVariants,
         selectedReferenceVariantKeys,
         selectedReferenceAssetKeys,
@@ -22235,6 +22414,10 @@ async function executeNode(input: {
         keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
         pageNumber: Number(config.pageNumber ?? 0) || null,
         referenceImageCount: referenceImageUrls.length,
+        referenceImageRecords,
+        reference_image_records: referenceImageRecords,
+        referenceManifest: sequenceAnimaticProviderReferenceManifest,
+        reference_manifest: sequenceAnimaticProviderReferenceManifest,
         selectedReferenceVariants,
         selectedReferenceVariantKeys,
         selectedReferenceAssetKeys,
@@ -22309,6 +22492,10 @@ async function executeNode(input: {
         selectedReferenceVariantKeys,
         selectedReferenceAssetKeys,
         referenceDiagnostics,
+        referenceImageRecords,
+        reference_image_records: referenceImageRecords,
+        referenceManifest: sequenceAnimaticProviderReferenceManifest,
+        reference_manifest: sequenceAnimaticProviderReferenceManifest,
         artifact,
         guidance,
       }
@@ -25120,13 +25307,13 @@ async function executeNode(input: {
             referenceSelectionReason: 'Resolved by the shot production graph.',
           }
         }).filter((entity) => readText(entity.primaryAssetKey))
-        const assetPack = scopeAssetPackToReferenceAssetKeys({
+        const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
           assetPack: rawAssetPack,
           referenceAssetKeys: readStringArray(config.requiredReferenceAssetKeys).length > 0 ? readStringArray(config.requiredReferenceAssetKeys) : referenceAssetKeys,
           fallbackEntities,
           referenceScope: 'sequence_animatic_shot_production',
           limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
-        })
+        }))
         const coverageAnchor = references.find((reference) => readText(reference.role) === 'coverage_anchor')
         const previousKeyframe = references.find((reference) => readText(reference.role) === 'previous_keyframe')
         const storyboardPanel = references.find((reference) => readText(reference.role) === 'storyboard_panel')
@@ -25134,11 +25321,17 @@ async function executeNode(input: {
         const previousKeyframeImage = previousKeyframe ? imageByAssetKey.get(readText(previousKeyframe.assetKey)) ?? null : null
         const storyboardPanelImage = storyboardPanel ? imageByAssetKey.get(readText(storyboardPanel.assetKey)) ?? null : null
         const primaryImage = coverageAnchorImage ?? storyboardPanelImage ?? previousKeyframeImage ?? upstreamImages[0] ?? null
+        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
         const outputs = {
           shot,
           shots: Object.keys(shot).length > 0 ? [shot] : [],
           assetPack,
           asset_pack: assetPack,
+          referenceManifest,
+          reference_manifest: referenceManifest,
+          referenceManifestText,
+          reference_manifest_text: referenceManifestText,
           references,
           referenceAssetKeys,
           reference_asset_keys: referenceAssetKeys,
@@ -25246,7 +25439,7 @@ async function executeNode(input: {
           selectedReferenceVariantType: 'continuity_asset',
           referenceSelectionReason: 'Coverage anchor visual reference plan dependency.',
         }))
-        const assetPack = {
+        const assetPack = orderSequenceAnimaticAssetPackReferences({
           ...scopeAssetPackToReferenceAssetKeys({
             assetPack: baseAssetPack,
             referenceAssetKeys,
@@ -25256,7 +25449,8 @@ async function executeNode(input: {
           }),
           continuityReferenceAssetKeys: referenceAssetKeys,
           coverageAnchorReferenceAssetKeys: referenceAssetKeys,
-        }
+        })
+        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
         const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
         const outputs = {
           coverageSetup,
@@ -25264,6 +25458,10 @@ async function executeNode(input: {
           shots,
           assetPack,
           asset_pack: assetPack,
+          referenceManifest,
+          reference_manifest: referenceManifest,
+          referenceManifestText: sequenceAnimaticReferenceManifestText(assetPack),
+          reference_manifest_text: sequenceAnimaticReferenceManifestText(assetPack),
           referenceAssetKeys,
           reference_asset_keys: referenceAssetKeys,
           coverageSetupId: setupId,
@@ -25278,11 +25476,14 @@ async function executeNode(input: {
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
         const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const referenceEntities = readArray(assetPack.entities).map(asRecord).map((entity) => {
-          const name = readText(entity.name)
-          const visual = readText(entity.visualDescription) || readText(entity.summary)
-          return name && visual ? `${name}: ${visual}` : name || visual
-        }).filter(Boolean).slice(0, 8).join('\n')
+        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
+        const placementLabels = [...new Set([
+          ...readArray(assetPack.entities).map(asRecord)
+            .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
+            .map((entity) => sequenceAnimaticReferenceName(entity, 'Subject')),
+          ...shots.flatMap((shot) => readStringArray(shot.visibleCharacterNames ?? shot.visible_character_names)),
+          ...shots.flatMap((shot) => readStringArray(shot.characterNames ?? shot.character_names)),
+        ].map((label) => label.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(0, 8)
         const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
         const linkedShotSummary = shots.slice(0, 8).map((shot) => {
           const camera = asRecord(shot.camera)
@@ -25293,19 +25494,24 @@ async function executeNode(input: {
           ].filter(Boolean).join(' / ')
         }).join('\n')
         const promptText = [
-          'Generate one reusable cinematic coverage anchor frame for an animatic scene. This is not a storyboard grid.',
-          'The image should lock the spatial staging, screen direction, character placement, lens feeling, lighting continuity, and environment for all linked shots.',
-          'Do not include captions, labels, UI, watermarks, borders, split panels, or text.',
+          'Create one labeled coverage blockout plate for an animatic shot setup. This is a planning reference, not final art.',
+          'Show environment framing, camera position feel, screen direction, movement arrows, and simple subject placeholders.',
+          'Use location reference images for spatial layout, materials, weather, lighting logic, and geography.',
+          'Use character references only to know which named placeholders to place; do not render detailed faces, wardrobe likeness, or final character art.',
+          'Sparse placement labels and arrows are allowed and required. Keep labels short and readable.',
+          'Ban decorative captions, paragraphs, UI panels, watermarks, borders, split panels, and polished final-frame character detail.',
           '',
-          `Coverage setup: ${readText(coverageSetup.title) || setupId}`,
+          `Coverage blockout: ${readText(coverageSetup.title) || setupId}`,
           readText(coverageSetup.setupKind ?? coverageSetup.setup_kind) ? `Setup kind: ${readText(coverageSetup.setupKind ?? coverageSetup.setup_kind).replace(/_/g, ' ')}` : '',
           readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief) ? `Staging: ${readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)}` : '',
           readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction) ? `Screen direction: ${readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)}` : '',
           readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief) ? `Camera: ${readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)}` : '',
           readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief) ? `Lighting: ${readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief)}` : '',
+          placementLabels.length > 0 ? `Placement labels: ${placementLabels.join(', ')}, camera, movement` : 'Placement labels: camera, movement, subject placeholders',
           linkedShotSummary ? `Linked shots:\n${linkedShotSummary}` : '',
-          referenceEntities ? `Reference identities and places:\n${referenceEntities}` : '',
+          referenceManifestText ? `Reference map:\n${referenceManifestText}` : '',
         ].filter(Boolean).join('\n')
+        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
         const outputs = {
           prompt: promptText,
           text: promptText,
@@ -25314,6 +25520,12 @@ async function executeNode(input: {
           shots,
           assetPack,
           asset_pack: assetPack,
+          referenceManifest,
+          reference_manifest: referenceManifest,
+          referenceManifestText: referenceManifestText,
+          reference_manifest_text: referenceManifestText,
+          coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
+          coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
           coverageSetupId: setupId,
           coverage_setup_id: setupId,
           deterministic: true,
@@ -25365,13 +25577,15 @@ async function executeNode(input: {
         const extraReferenceAssetKeys = extraReferenceEntities
           .map((entity) => readText(entity.primaryAssetKey))
           .filter(Boolean)
-        const assetPack = scopeAssetPackToReferenceAssetKeys({
+        const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
           assetPack: baseAssetPack,
           referenceAssetKeys: [...requiredReferenceAssetKeys, ...extraReferenceAssetKeys],
           fallbackEntities: extraReferenceEntities,
           referenceScope: 'sequence_animatic_shot_keyframe',
           limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
-        })
+        }))
+        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
         const outputs = {
           shot,
           coverageSetup,
@@ -25384,6 +25598,10 @@ async function executeNode(input: {
           storyboard_panel: storyboardPanel,
           assetPack,
           asset_pack: assetPack,
+          referenceManifest,
+          reference_manifest: referenceManifest,
+          referenceManifestText,
+          reference_manifest_text: referenceManifestText,
           shotId: readText(shot.id) || readText(config.shotId),
           shot_id: readText(shot.id) || readText(config.shotId),
           text: JSON.stringify({ shot, coverageSetup, coverageAnchor, previousKeyframe, storyboardPanel, assetPack }, null, 2),
@@ -25394,43 +25612,89 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_planned_keyframe_prompt') {
         const config = asRecord(input.node.config)
         const sceneState = asRecord(config.sceneState ?? config.scene_state)
-        const sceneStateText = formatSequenceAnimaticSceneStateForPrompt(sceneState as never)
+        const sceneStateText = compactStoryboardSentence(formatSequenceAnimaticSceneStateForPrompt(sceneState as never), '', 42)
         const shot = readFirstUpstreamRecord(input.upstream, ['shot'])
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
         const coverageAnchor = readFirstUpstreamRecord(input.upstream, ['coverageAnchor', 'coverage_anchor'])
         const previousKeyframe = readFirstUpstreamRecord(input.upstream, ['previousKeyframe', 'previous_keyframe'])
         const storyboardPanel = readFirstUpstreamRecord(input.upstream, ['storyboardPanel', 'storyboard_panel'])
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const referenceEntities = readArray(assetPack.entities).map(asRecord).map((entity) => {
-          const name = readText(entity.name)
-          const visual = readText(entity.visualDescription) || readText(entity.summary)
-          return name && visual ? `${name}: ${visual}` : name || visual
-        }).filter(Boolean).slice(0, 10).join('\n')
+        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+        const referenceManifestText = referenceManifest.map((entry) => entry.line).join('\n')
+        const visibleSubjects = readArray(assetPack.entities).map(asRecord)
+          .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
+          .map((entity) => {
+            const name = sequenceAnimaticReferenceName(entity, 'Subject')
+            const visual = sequenceAnimaticReferenceVisual(entity, 16)
+            return visual ? `${name} - ${visual}` : name
+          })
+          .filter(Boolean)
+          .slice(0, 8)
+          .join('\n')
+        const locationRefs = readArray(assetPack.entities).map(asRecord)
+          .filter((entity) => ['spot_reference', 'zone_reference', 'set_reference', 'viewpoint_reference', 'location_reference'].includes(sequenceAnimaticReferenceRole(entity)))
+          .map((entity) => {
+            const name = sequenceAnimaticReferenceName(entity, 'Location ref')
+            const visual = sequenceAnimaticReferenceVisual(entity, 14)
+            return visual ? `${name} - ${visual}` : name
+          })
+          .filter(Boolean)
+          .slice(0, 5)
+          .join('\n')
+        const propRefs = readArray(assetPack.entities).map(asRecord)
+          .filter((entity) => sequenceAnimaticReferenceRole(entity) === 'prop_reference')
+          .map((entity) => {
+            const name = sequenceAnimaticReferenceName(entity, 'Prop')
+            const visual = sequenceAnimaticReferenceVisual(entity, 12)
+            return visual ? `${name} - ${visual}` : name
+          })
+          .filter(Boolean)
+          .slice(0, 5)
+          .join('\n')
         const camera = asRecord(shot.camera)
         const dialogue = readArray(shot.dialogue).map(asRecord).map((line) => {
           const text = readText(line.text)
           if (!text) return ''
           return `${readText(line.speakerName) || readText(line.speakerRefId) || 'Speaker'}: "${text}"`
         }).filter(Boolean).join(' ')
+        const action = compactStoryboardSentence(readText(shot.action) || readText(shot.description) || readText(shot.storyboardPanelPrompt), '', 34)
+        const cameraBrief = [readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ') || readText(shot.camera)
+        const lighting = compactStoryboardSentence(readText(shot.lighting) || readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief), '', 26)
+        const coverageFallback = !readText(coverageAnchor.assetKey) && (
+          readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)
+          || readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)
+          || readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)
+        )
         const promptText = [
-          'Generate one finished cinematic keyframe for this exact animatic shot. This is a single frame, not a grid.',
-          'Preserve character identity, wardrobe, props, spatial layout, screen direction, and lighting from the provided references.',
-          'Do not include captions, labels, UI, watermarks, borders, split panels, or text.',
+          'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
           '',
-          `Shot title: ${readText(shot.title) || 'Untitled shot'}`,
-          `Action: ${readText(shot.action) || readText(shot.description) || readText(shot.storyboardPanelPrompt)}`,
-          dialogue ? `Dialogue context: ${dialogue}` : '',
-          `Camera: ${[readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ') || readText(shot.camera)}`,
-          readText(shot.lighting) ? `Lighting: ${readText(shot.lighting)}` : '',
-          readText(shot.performance) ? `Performance: ${readText(shot.performance)}` : '',
-          readText(coverageSetup.title) ? `Coverage setup: ${readText(coverageSetup.title)}` : '',
-          readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief) ? `Coverage staging: ${readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)}` : '',
-          readText(shot.continuityLink ?? shot.continuity_link) ? `Continuity link: ${readText(shot.continuityLink ?? shot.continuity_link).replace(/_/g, ' ')}` : '',
-          sceneStateText ? `\nScene state (maintain strict continuity with these facts):\n${sceneStateText}` : '',
-          readText(coverageAnchor.assetKey) ? 'Use the attached coverage anchor as the primary composition, staging, lens, and lighting reference.' : '',
-          readText(previousKeyframe.assetKey) ? 'Use the attached previous keyframe only for same-setup motion continuity and established state.' : '',
-          readText(storyboardPanel.assetKey) ? 'Use the attached storyboard panel as a loose composition reference when it does not conflict with the coverage anchor.' : '',
-          referenceEntities ? `References:\n${referenceEntities}` : '',
+          'Reference map',
+          referenceManifestText || 'No attached image references; use only the written visual facts.',
+          '',
+          'Frame target',
+          `${readText(shot.title) || 'Untitled shot'} - ${action || 'one clear visible moment.'}`,
+          dialogue ? `Dialogue visible cue: ${compactStoryboardSentence(dialogue, '', 26)}` : '',
+          '',
+          'Visible subjects',
+          visibleSubjects || 'Only subjects explicitly visible in the shot action.',
+          propRefs ? `Props/items\n${propRefs}` : '',
+          '',
+          'Action/blocking',
+          action || 'Hold the exact readable action from the shot.',
+          readText(coverageAnchor.assetKey)
+            ? 'Use @Image1 coverage anchor for composition, camera height/lens feel, screen direction, and placement only. Do not copy labels, arrows, placeholder figures, or blockout styling.'
+            : (coverageFallback ? `Coverage facts: ${compactStoryboardSentence(coverageFallback, '', 30)}` : ''),
+          readText(previousKeyframe.assetKey) ? 'Use the previous keyframe reference only for same-setup motion continuity and established state.' : '',
+          '',
+          'Camera/framing',
+          cameraBrief || 'Camera and framing follow the shot plan.',
+          readText(shot.performance) ? `Performance: ${compactStoryboardSentence(shot.performance, '', 20)}` : '',
+          '',
+          'Lighting/environment',
+          [lighting, locationRefs ? `Location refs\n${locationRefs}` : '', sceneStateText ? `Visual continuity facts: ${sceneStateText}` : ''].filter(Boolean).join('\n') || 'Preserve environment, weather, material, and lighting continuity.',
+          '',
+          'Negative rules',
+          'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Do not render blockout labels from the coverage anchor. Do not mention workflow, schema, IDs, or asset keys in the image.',
         ].filter(Boolean).join('\n')
         const outputs = {
           prompt: promptText,
@@ -25446,6 +25710,10 @@ async function executeNode(input: {
           storyboard_panel: storyboardPanel,
           assetPack,
           asset_pack: assetPack,
+          referenceManifest,
+          reference_manifest: referenceManifest,
+          referenceManifestText,
+          reference_manifest_text: referenceManifestText,
           shotId: readText(shot.id) || readText(config.shotId),
           shot_id: readText(shot.id) || readText(config.shotId),
           sceneState,
@@ -27643,6 +27911,11 @@ async function executeNode(input: {
         if (!assetKey) throw new Error('Continuity asset image did not produce an asset key.')
         const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
         const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
+        const referenceRole = sequenceAnimaticReferenceRole({
+          role: assetKind,
+          type: assetKind,
+          name: readText(targetNode.name) || readText(targetNode.title),
+        })
         const qcFindings = assetKey ? [] : ['Continuity asset image did not produce an asset key.']
         const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
         const assetState = sequenceAnimaticContinuityAssetStateSchema.parse({
@@ -27762,7 +28035,7 @@ async function executeNode(input: {
             status: assetKey ? 'ready' : 'missing',
             assetKey: assetKey || null,
             artifactKey: artifact.key,
-            role: assetKind === 'temporary_character' ? 'entity_reference' : assetKind === 'prop' ? 'entity_reference' : 'continuity_asset',
+            role: referenceRole,
             sourceArtifactRole: 'sequence_animatic_continuity_asset',
             identityKey: 'targetNodeId',
             identityValue: targetNodeId,
@@ -27878,6 +28151,8 @@ async function executeNode(input: {
           graphSpecVersion: 'sequence_animatic_graph_v2',
           screenplayAnimaticRole: 'coverage_anchor',
           sequenceAnimaticRole: 'coverage_anchor',
+          coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
+          coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
           masterRequestId: readText(config.masterRequestId),
           coverageSetupId,
           coverageSetup,
@@ -27912,6 +28187,8 @@ async function executeNode(input: {
             provider: 'graphcore',
             model: 'sequence-animatic-coverage-anchor-artifact-v1',
             role: 'sequence_animatic_coverage_anchor',
+            coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
+            coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
             graphSpecVersion: 'sequence_animatic_graph_v2',
             sequenceAnimaticRole: 'coverage_anchor',
             screenplayAnimaticRole: 'coverage_anchor',
@@ -27926,6 +28203,8 @@ async function executeNode(input: {
             omittedReferenceAssetKeys: readStringArray(config.omittedReferenceAssetKeys),
             sourceReferenceHash: readText(config.sourceReferenceHash),
             visualPlanHash: readText(config.visualPlanHash),
+            coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
+            coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
             qcStatus,
             qcFindings,
             prompt,
@@ -27968,6 +28247,8 @@ async function executeNode(input: {
           },
           coverageAnchor: anchor,
           coverage_anchor: anchor,
+          coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
+          coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
           coverageSetup,
           coverage_setup: coverageSetup,
           image,
@@ -27983,7 +28264,12 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_planned_keyframe_artifact') {
         const config = asRecord(input.node.config)
         const shot = readFirstUpstreamRecord(input.upstream, ['shot'])
-        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
+        const image = readPreferredUpstreamImage({
+          upstream: input.upstream,
+          preferredNodeKeys: ['planned_keyframe_image', 'shot_keyframe_image'],
+          fields: ['image', 'keyframe', 'primaryReferenceImage'],
+          role: 'sequence_animatic_shot_keyframe',
+        }) ?? {}
         const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
         const shotId = readText(shot.id) || readText(config.shotId)
         if (!shotId) throw new Error('Shot keyframe artifact requires a shot id.')

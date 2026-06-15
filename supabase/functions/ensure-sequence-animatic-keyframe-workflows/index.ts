@@ -120,6 +120,107 @@ function assetEntityForKey(assetKey: string, label: string) {
   }
 }
 
+function normalizeReferenceText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function shotEntityRefIds(shot: Record<string, unknown>) {
+  const refs = asRecord(shot.refs ?? shot.references)
+  return [...new Set([
+    ...readStringArray(refs.characterRefIds ?? refs.character_ref_ids),
+    ...readStringArray(refs.visibleCharacterRefIds ?? refs.visible_character_ref_ids),
+    ...readStringArray(refs.speakerRefIds ?? refs.speaker_ref_ids),
+    ...readStringArray(refs.propRefIds ?? refs.prop_ref_ids),
+    ...readStringArray(refs.itemRefIds ?? refs.item_ref_ids),
+    ...readStringArray(shot.characterRefIds ?? shot.character_ref_ids),
+    ...readStringArray(shot.visibleCharacterRefIds ?? shot.visible_character_ref_ids),
+    ...readStringArray(shot.speakerRefIds ?? shot.speaker_ref_ids),
+    ...readStringArray(shot.propRefIds ?? shot.prop_ref_ids),
+    ...readStringArray(shot.itemRefIds ?? shot.item_ref_ids),
+    ...readArray(shot.dialogue).map((line) => readText(asRecord(line).speakerRefId ?? asRecord(line).speaker_ref_id)),
+  ].filter(Boolean))]
+}
+
+function coverageSetupEntityRefIds(coverageSetup: Record<string, unknown>) {
+  return [...new Set([
+    ...readStringArray(coverageSetup.characterRefIds ?? coverageSetup.character_ref_ids),
+    ...readStringArray(coverageSetup.visibleCharacterRefIds ?? coverageSetup.visible_character_ref_ids),
+    ...readStringArray(coverageSetup.subjectRefIds ?? coverageSetup.subject_ref_ids),
+    ...readStringArray(coverageSetup.speakerRefIds ?? coverageSetup.speaker_ref_ids),
+    ...readStringArray(coverageSetup.propRefIds ?? coverageSetup.prop_ref_ids),
+    ...readStringArray(coverageSetup.itemRefIds ?? coverageSetup.item_ref_ids),
+  ].filter(Boolean))]
+}
+
+function shotGraphSearchText(shot: Record<string, unknown>, coverageSetup: Record<string, unknown>, contextNodes: readonly Record<string, unknown>[]) {
+  return [
+    readText(shot.title),
+    readText(shot.action),
+    readText(shot.description),
+    readText(shot.summary),
+    readText(shot.storyboardPanelPrompt ?? shot.storyboard_panel_prompt),
+    readText(asRecord(shot.camera).blocking ?? shot.blocking),
+    readText(asRecord(shot.camera).screenDirection ?? shot.screenDirection ?? shot.screen_direction),
+    readText(coverageSetup.title),
+    readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief),
+    readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction),
+    readText(coverageSetup.blockingNotes ?? coverageSetup.blocking_notes),
+    ...contextNodes.flatMap((node) => [readText(node.name), readText(node.title), readText(node.summary), readText(node.visualBrief)]),
+  ].filter(Boolean).join(' ')
+}
+
+function incidentalCharacterNodesForShot(input: {
+  shot: Record<string, unknown>
+  coverageSetup: Record<string, unknown>
+  graphNodeById: Map<string, Record<string, unknown>>
+  contextNodes: readonly Record<string, unknown>[]
+}) {
+  const text = shotGraphSearchText(input.shot, input.coverageSetup, input.contextNodes)
+  if (!normalizeReferenceText(text)) return []
+  const existingLabels = new Set([...input.graphNodeById.values()].flatMap((node) => [
+    normalizeReferenceText(readText(node.id)),
+    normalizeReferenceText(readText(node.name)),
+    normalizeReferenceText(readText(node.title)),
+  ]).filter(Boolean))
+  const explicitRefIds = new Set([
+    ...shotEntityRefIds(input.shot),
+    ...coverageSetupEntityRefIds(input.coverageSetup),
+    ...shotReferenceNodeIds(input.shot, new Set([...input.graphNodeById.keys()])),
+  ].map(normalizeReferenceText).filter(Boolean))
+  const candidates = [
+    {
+      id: 'temp_character_monastery_attendants',
+      name: 'Monastery attendants',
+      match: /\battendants?\b/i,
+      context: /\bmonastery\b/i,
+      summary: 'Visible monastery attendants who rise from the reeds during the confrontation.',
+      visualBrief: 'Monastery attendants rising from storm reeds near the marsh stilt path; anonymous temple retainers, wet layered robes, guarded posture, consistent silhouettes, no text.',
+    },
+  ]
+  return candidates
+    .filter((candidate) => candidate.match.test(text) && candidate.context.test(text))
+    .filter((candidate) => !input.graphNodeById.has(candidate.id))
+    .filter((candidate) => !existingLabels.has(normalizeReferenceText(candidate.name)) && !existingLabels.has(normalizeReferenceText(candidate.id)))
+    .filter((candidate) => !explicitRefIds.has(normalizeReferenceText(candidate.id)) && !explicitRefIds.has(normalizeReferenceText(candidate.name)))
+    .map((candidate) => ({
+      id: candidate.id,
+      name: candidate.name,
+      title: candidate.name,
+      nodeKind: 'temporary_character',
+      assetKind: 'temporary_character',
+      continuitySubtype: 'character',
+      summary: candidate.summary,
+      visualBrief: candidate.visualBrief,
+      persistenceReason: 'Recovered from concrete visible shot prose because no explicit animatic asset anchor was emitted.',
+      confidence: 0.68,
+      shotIds: [readText(input.shot.id)].filter(Boolean),
+      usedShotIds: [readText(input.shot.id)].filter(Boolean),
+      sourceEvidence: [readText(input.shot.action), readText(input.coverageSetup.stagingBrief ?? input.coverageSetup.staging_brief)].filter(Boolean),
+      recoveredReference: true,
+      recoveredReferenceReason: 'visible_incidental_character_group',
+    }))
+}
+
 async function insertSequenceAnimaticEvent(input: {
   admin: ReturnType<typeof createAdminClient>
   projectId: string
@@ -688,7 +789,7 @@ Deno.serve(async (request) => {
     const isShotScopedEnsure = requestedShotIds.length === 1
     const scopedShotId = requestedShotIds[0] ?? ''
     const shotGraphDependencyMode = 'single_node_chain' as const
-    const shotGraphPolicyVersion = 'primary_chain_v5' as const
+    const shotGraphPolicyVersion = 'primary_chain_v6' as const
     const keyframePlanWithSource = {
       ...asRecord(keyframePlan),
       source: keyframePlanSource,
@@ -1790,7 +1891,9 @@ Deno.serve(async (request) => {
         }
       }
       directNodeIds.forEach(addWithParents)
-      return orderedIds.map((nodeId) => graphNodeById.get(nodeId)).filter((node): node is Record<string, unknown> => Boolean(node))
+      const orderedNodes = orderedIds.map((nodeId) => graphNodeById.get(nodeId)).filter((node): node is Record<string, unknown> => Boolean(node))
+      const incidentalNodes = incidentalCharacterNodesForShot({ shot, coverageSetup, graphNodeById, contextNodes: orderedNodes })
+      return [...orderedNodes, ...incidentalNodes.filter((node) => !seen.has(readText(node.id)))]
     }
 
     const shotContinuityDependenciesForGraph = (shot: Record<string, unknown>, coverageSetup: Record<string, unknown>) => shotContinuityDependencyNodes(shot, coverageSetup).map((targetNode) => {
