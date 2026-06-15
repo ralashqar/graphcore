@@ -80,6 +80,7 @@ function readNumber(value: unknown) {
 
 const sequenceAnimaticCoverageAnchorOnwardForceNodeKeys = [
   'coverage_anchor_input',
+  'coverage_anchor_brief',
   'coverage_anchor_prompt',
   'coverage_anchor_image',
   'coverage_anchor_artifact',
@@ -95,6 +96,7 @@ function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
 
 function isSequenceAnimaticCoverageAnchorNodeKey(key: string) {
   return key === 'coverage_anchor_input'
+    || key === 'coverage_anchor_brief'
     || key === 'coverage_anchor_prompt'
     || key === 'coverage_anchor_image'
     || key === 'coverage_anchor_artifact'

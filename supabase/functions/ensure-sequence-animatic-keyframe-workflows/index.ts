@@ -43,6 +43,8 @@ import {
   sequenceAnimaticStableHash,
 } from '../_shared/sequence-animatic-workflow-factory.ts'
 
+const COVERAGE_REGISTRY_VERSION = 'per_shot_coverage_registry_v1'
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -61,6 +63,10 @@ function readStringArray(value: unknown) {
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'output'
+}
+
+function uniqueTexts(values: Iterable<string>) {
+  return [...new Set([...values].map(readText).filter(Boolean))]
 }
 
 function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
@@ -176,6 +182,480 @@ function sameNonEmptySet(left: Set<string>, right: Set<string>) {
     if (!right.has(value)) return false
   }
   return true
+}
+
+function sceneIdForShot(shot: Record<string, unknown>) {
+  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+  const idScene = /^scene_\d+/i.exec(readText(shot.id))?.[0] ?? ''
+  const blockScene = /^scene_\d+/i.exec(readText(shot.storyboardBlockId ?? shot.blockId ?? shot.block_id))?.[0] ?? ''
+  const explicitScene = readText(shot.sourceSceneId ?? shot.source_scene_id ?? binding.sceneId ?? binding.scene_id)
+  const genericScene = readText(shot.sceneId ?? shot.scene_id)
+  return explicitScene
+    || idScene
+    || blockScene
+    || (genericScene && genericScene !== 'sequence_animatic_master' ? genericScene : '')
+    || 'scene'
+}
+
+function coverageSpatialFields(shot: Record<string, unknown>, fallbackSetup: Record<string, unknown> = {}) {
+  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+  const bindingSpotIds = readStringArray(binding.spotIds ?? binding.spot_ids ?? shot.spotIds ?? shot.spot_ids ?? shot.continuitySpotIds ?? shot.continuity_spot_ids)
+  const setupSpotIds = readStringArray(fallbackSetup.spotIds ?? fallbackSetup.spot_ids)
+  const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id ?? shot.primarySpotId ?? shot.primary_spot_id)
+    || bindingSpotIds[0]
+    || readText(fallbackSetup.primarySpotId ?? fallbackSetup.primary_spot_id)
+    || setupSpotIds[0]
+  return {
+    setId: readText(binding.setId ?? binding.set_id ?? shot.setId ?? shot.set_id ?? shot.continuitySetId ?? shot.continuity_set_id) || readText(fallbackSetup.setId ?? fallbackSetup.set_id),
+    zoneId: readText(binding.zoneId ?? binding.zone_id ?? shot.zoneId ?? shot.zone_id ?? shot.continuityZoneId ?? shot.continuity_zone_id) || readText(fallbackSetup.zoneId ?? fallbackSetup.zone_id),
+    primarySpotId,
+    spotIds: uniqueTexts([primarySpotId]),
+    viewpointId: readText(binding.viewpointId ?? binding.viewpoint_id ?? shot.viewpointId ?? shot.viewpoint_id) || readText(fallbackSetup.viewpointId ?? fallbackSetup.viewpoint_id),
+  }
+}
+
+function coverageCameraFields(shot: Record<string, unknown>, fallbackSetup: Record<string, unknown> = {}) {
+  const shotCamera = asRecord(shot.camera)
+  const setupCamera = asRecord(fallbackSetup.camera)
+  return {
+    framing: readText(shotCamera.framing ?? shot.framing) || readText(setupCamera.framing),
+    angle: readText(shotCamera.angle ?? shot.angle) || readText(setupCamera.angle),
+    lens: readText(shotCamera.lens ?? shot.lens) || readText(setupCamera.lens),
+    movement: readText(shotCamera.movement ?? shot.movement) || readText(setupCamera.movement),
+    screenDirectionRule: readText(shotCamera.screenDirectionRule ?? shotCamera.screen_direction_rule ?? shot.screenDirection ?? shot.screen_direction)
+      || readText(setupCamera.screenDirectionRule ?? setupCamera.screen_direction_rule),
+  }
+}
+
+function normalizedCameraClass(value: string) {
+  const text = normalizeReferenceText(value)
+  if (!text) return ''
+  if (/\b(close|cu|closeup|insert|detail)\b/.test(text)) return 'close'
+  if (/\b(wide|master|establish)\b/.test(text)) return 'wide'
+  if (/\b(medium|mid)\b/.test(text)) return 'medium'
+  return text.split(' ').slice(0, 3).join(' ')
+}
+
+function displayNameFromRefId(value: string) {
+  return readText(value)
+    .replace(/^coverage_/, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .trim()
+}
+
+function coverageSubjectLabel(subjectIds: readonly string[]) {
+  if (subjectIds.length === 0) return ''
+  if (subjectIds.length === 1) return displayNameFromRefId(subjectIds[0] ?? '')
+  if (subjectIds.length === 2) return subjectIds.map(displayNameFromRefId).join(' ')
+  if (subjectIds.length === 3) return 'Trio'
+  return 'Group'
+}
+
+function coverageAxisLabel(shot: Record<string, unknown>, camera: Record<string, string>) {
+  const linkMode = normalizeReferenceText(readText(asRecord(shot.continuityLink ?? shot.continuity_link).mode))
+  const screenDirection = normalizeReferenceText(readText(camera.screenDirectionRule))
+  if (linkMode.includes('reverse') || screenDirection.includes('offscreen')) return 'Reverse'
+  if (linkMode.includes('insert') || linkMode.includes('cutaway')) return 'Insert'
+  return ''
+}
+
+function coverageBlockingIntent(shot: Record<string, unknown>, setup: Record<string, unknown>) {
+  const linkMode = readText(asRecord(shot.continuityLink ?? shot.continuity_link).mode)
+    || readText(setup.continuityMode ?? setup.continuity_mode)
+  const normalized = normalizeReferenceText(linkMode)
+  if (normalized.includes('insert') || normalized.includes('cutaway')) return 'insert'
+  if (normalized.includes('blocking change')) return 'blocking_change'
+  if (normalized.includes('reverse')) return 'reverse'
+  return ''
+}
+
+function coverageReuseSignatureForShot(input: {
+  shot: Record<string, unknown>
+  setup?: Record<string, unknown>
+}) {
+  const setup = input.setup ?? {}
+  const spatial = coverageSpatialFields(input.shot, setup)
+  const camera = coverageCameraFields(input.shot, setup)
+  return {
+    setId: spatial.setId,
+    zoneId: spatial.zoneId,
+    primarySpotId: spatial.primarySpotId,
+    viewpointId: spatial.viewpointId,
+    framingClass: normalizedCameraClass(camera.framing),
+    angle: normalizeReferenceText(camera.angle),
+    screenDirection: normalizeReferenceText(camera.screenDirectionRule),
+    subjectIds: shotEntityRefIds(input.shot).slice().sort(),
+    blockingIntent: coverageBlockingIntent(input.shot, setup),
+  }
+}
+
+function coverageReuseSignatureForSetup(setup: Record<string, unknown>) {
+  const stored = asRecord(setup.coverageReuseSignature ?? setup.coverage_reuse_signature)
+  if (Object.keys(stored).length > 0) return stored
+  const camera = coverageCameraFields({}, setup)
+  return {
+    setId: readText(setup.setId ?? setup.set_id),
+    zoneId: readText(setup.zoneId ?? setup.zone_id),
+    primarySpotId: readText(setup.primarySpotId ?? setup.primary_spot_id),
+    viewpointId: readText(setup.viewpointId ?? setup.viewpoint_id),
+    framingClass: normalizedCameraClass(camera.framing),
+    angle: normalizeReferenceText(camera.angle),
+    screenDirection: normalizeReferenceText(camera.screenDirectionRule),
+    subjectIds: coverageSetupSubjectIds(setup).slice().sort(),
+    blockingIntent: normalizeReferenceText(readText(setup.coverageBlockingIntent ?? setup.coverage_blocking_intent ?? setup.continuityMode ?? setup.continuity_mode)),
+  }
+}
+
+function coverageReuseSignaturesMatch(left: Record<string, unknown>, right: Record<string, unknown>) {
+  const scalarKeys = ['setId', 'zoneId', 'primarySpotId', 'viewpointId', 'framingClass', 'angle', 'screenDirection', 'blockingIntent']
+  for (const key of scalarKeys) {
+    if (readText(left[key]) !== readText(right[key])) return false
+  }
+  const leftSubjects = readStringArray(left.subjectIds).slice().sort()
+  const rightSubjects = readStringArray(right.subjectIds).slice().sort()
+  return leftSubjects.length === rightSubjects.length && leftSubjects.every((value, index) => value === rightSubjects[index])
+}
+
+function semanticCoverageSetupTitle(input: {
+  shot: Record<string, unknown>
+  setup?: Record<string, unknown>
+}) {
+  const setup = input.setup ?? {}
+  const spatial = coverageSpatialFields(input.shot, setup)
+  const camera = coverageCameraFields(input.shot, setup)
+  const subjectLabel = coverageSubjectLabel(shotEntityRefIds(input.shot))
+  const cameraLabel = displayNameFromRefId(normalizedCameraClass(camera.framing) || readText(camera.framing) || 'setup')
+  return uniqueTexts([
+    displayNameFromRefId(spatial.primarySpotId || spatial.zoneId || spatial.setId || 'coverage'),
+    subjectLabel,
+    cameraLabel,
+    coverageAxisLabel(input.shot, camera),
+  ]).join(' ')
+}
+
+function isShotCoverageTitle(value: unknown) {
+  return /^shot\s+\d+\s+coverage$/i.test(readText(value).trim())
+}
+
+function normalizedCoverageSetupForShot(input: {
+  setup: Record<string, unknown>
+  shot: Record<string, unknown>
+  reuseReason?: string
+}) {
+  const existingDisplayTitle = readText(input.setup.displayTitle ?? input.setup.display_title)
+  const existingTitle = readText(input.setup.title)
+  const semanticTitle = semanticCoverageSetupTitle({ shot: input.shot, setup: input.setup })
+  const displayTitle = existingDisplayTitle && !isShotCoverageTitle(existingDisplayTitle)
+    ? existingDisplayTitle
+    : existingTitle && !isShotCoverageTitle(existingTitle)
+      ? existingTitle
+      : semanticTitle
+  const signature = coverageReuseSignatureForShot({ shot: input.shot, setup: input.setup })
+  const shotId = readText(input.shot.id)
+  const createdFromShotId = readText(input.setup.createdFromShotId ?? input.setup.created_from_shot_id) || shotId
+  const firstUsedShotId = readText(input.setup.firstUsedShotId ?? input.setup.first_used_shot_id) || createdFromShotId || shotId
+  return {
+    ...input.setup,
+    title: displayTitle,
+    displayTitle,
+    display_title: displayTitle,
+    coverageReuseSignature: signature,
+    coverage_reuse_signature: signature,
+    coverageBlockingIntent: readText(signature.blockingIntent),
+    coverage_blocking_intent: readText(signature.blockingIntent),
+    createdFromShotId,
+    created_from_shot_id: createdFromShotId,
+    firstUsedShotId,
+    first_used_shot_id: firstUsedShotId,
+    reuseReason: input.reuseReason ?? readText(input.setup.reuseReason ?? input.setup.reuse_reason),
+    reuse_reason: input.reuseReason ?? readText(input.setup.reuseReason ?? input.setup.reuse_reason),
+  }
+}
+
+function coverageSetupSubjectIds(setup: Record<string, unknown>) {
+  return uniqueTexts([
+    ...coverageSetupEntityRefIds(setup),
+    ...readStringArray(setup.characterRefIds ?? setup.character_ref_ids),
+    ...readStringArray(setup.itemRefIds ?? setup.item_ref_ids),
+    ...readStringArray(setup.propRefIds ?? setup.prop_ref_ids),
+  ])
+}
+
+function coverageSetupScopeIssues(shot: Record<string, unknown>, setup: Record<string, unknown>) {
+  const sceneId = sceneIdForShot(shot)
+  const shotSpatial = coverageSpatialFields(shot, setup)
+  const setupId = readText(setup.id)
+  const setupSceneId = readText(setup.sceneId ?? setup.scene_id)
+  const setupPrimarySpotId = readText(setup.primarySpotId ?? setup.primary_spot_id)
+  const setupSpotIds = uniqueTexts(readStringArray(setup.spotIds ?? setup.spot_ids))
+  const issues: string[] = []
+  if (setupId.includes('sequence_animatic_master')) issues.push('stale_master_scoped_setup_id')
+  if (setupSceneId && setupSceneId !== sceneId) issues.push('scene_scope_mismatch')
+  if (shotSpatial.primarySpotId && setupPrimarySpotId && setupPrimarySpotId !== shotSpatial.primarySpotId) issues.push('primary_spot_mismatch')
+  if (shotSpatial.primarySpotId && (setupSpotIds.length !== 1 || setupSpotIds[0] !== shotSpatial.primarySpotId)) issues.push('spot_scope_not_primary_only')
+  return issues
+}
+
+function compatibleCoverageSetup(input: {
+  shot: Record<string, unknown>
+  setup: Record<string, unknown>
+}) {
+  const shotSpatial = coverageSpatialFields(input.shot, input.setup)
+  const setupSpatial = {
+    setId: readText(input.setup.setId ?? input.setup.set_id),
+    zoneId: readText(input.setup.zoneId ?? input.setup.zone_id),
+    primarySpotId: readText(input.setup.primarySpotId ?? input.setup.primary_spot_id),
+    viewpointId: readText(input.setup.viewpointId ?? input.setup.viewpoint_id),
+  }
+  const spatialMatches = Boolean(shotSpatial.setId && shotSpatial.zoneId && shotSpatial.primarySpotId)
+    && shotSpatial.setId === setupSpatial.setId
+    && shotSpatial.zoneId === setupSpatial.zoneId
+    && shotSpatial.primarySpotId === setupSpatial.primarySpotId
+    && (!shotSpatial.viewpointId || !setupSpatial.viewpointId || shotSpatial.viewpointId === setupSpatial.viewpointId)
+  const shotCamera = coverageCameraFields(input.shot, input.setup)
+  const setupCamera = coverageCameraFields({}, input.setup)
+  const cameraMatches = normalizedCameraClass(shotCamera.framing) === normalizedCameraClass(setupCamera.framing)
+    && (!shotCamera.angle || !setupCamera.angle || normalizeReferenceText(shotCamera.angle) === normalizeReferenceText(setupCamera.angle))
+    && (!shotCamera.screenDirectionRule || !setupCamera.screenDirectionRule || normalizeReferenceText(shotCamera.screenDirectionRule) === normalizeReferenceText(setupCamera.screenDirectionRule))
+  const shotSubjects = shotEntityRefIds(input.shot)
+  const setupSubjects = coverageSetupSubjectIds(input.setup)
+  const subjectMatches = shotSubjects.length === 0 && setupSubjects.length === 0
+    ? true
+    : sameNonEmptySet(new Set(shotSubjects), new Set(setupSubjects))
+  const signatureMatches = coverageReuseSignaturesMatch(
+    coverageReuseSignatureForShot({ shot: input.shot, setup: input.setup }),
+    coverageReuseSignatureForSetup(input.setup),
+  )
+  const scopeIssues = coverageSetupScopeIssues(input.shot, input.setup)
+  const diagnostics = [
+    spatialMatches ? 'spatial_match' : 'spatial_mismatch',
+    cameraMatches ? 'camera_match' : 'camera_mismatch',
+    subjectMatches ? 'subjects_match' : 'subjects_mismatch',
+    signatureMatches ? 'reuse_signature_match' : 'reuse_signature_mismatch',
+    ...(scopeIssues.length === 0 ? ['coverage_scope_match'] : scopeIssues),
+  ]
+  return { compatible: spatialMatches && cameraMatches && subjectMatches && signatureMatches && scopeIssues.length === 0, diagnostics }
+}
+
+function createCoverageSetupForShot(input: {
+  shot: Record<string, unknown>
+  legacySetup?: Record<string, unknown>
+}) {
+  const shotId = readText(input.shot.id)
+  const spatial = coverageSpatialFields(input.shot, input.legacySetup ?? {})
+  const camera = coverageCameraFields(input.shot, input.legacySetup ?? {})
+  const subjectIds = shotEntityRefIds(input.shot)
+  const hash = sequenceAnimaticStableHash({ shotId, spatial, camera, subjectIds }).slice(0, 8)
+  const sceneId = sceneIdForShot(input.shot)
+  const coverageReuseSignature = coverageReuseSignatureForShot({ shot: input.shot, setup: input.legacySetup })
+  const displayTitle = semanticCoverageSetupTitle({ shot: input.shot, setup: input.legacySetup })
+  return {
+    id: `coverage_${slugify(sceneId)}_${slugify(shotId)}_${hash}`,
+    sceneId,
+    title: displayTitle,
+    displayTitle,
+    display_title: displayTitle,
+    coverageReuseSignature,
+    coverage_reuse_signature: coverageReuseSignature,
+    coverageBlockingIntent: readText(coverageReuseSignature.blockingIntent),
+    coverage_blocking_intent: readText(coverageReuseSignature.blockingIntent),
+    createdFromShotId: shotId,
+    created_from_shot_id: shotId,
+    firstUsedShotId: shotId,
+    first_used_shot_id: shotId,
+    reuseReason: '',
+    reuse_reason: '',
+    setupKind: normalizedCameraClass(camera.framing) || 'shot_setup',
+    setId: spatial.setId,
+    zoneId: spatial.zoneId,
+    primarySpotId: spatial.primarySpotId,
+    spotIds: spatial.spotIds,
+    viewpointId: spatial.viewpointId,
+    characterRefIds: subjectIds,
+    subjectRefIds: subjectIds,
+    screenDirection: camera.screenDirectionRule,
+    camera,
+    lighting: readText(input.shot.lighting),
+    stagingBrief: readText(input.shot.action) || readText(input.shot.description) || readText(input.legacySetup?.stagingBrief ?? input.legacySetup?.staging_brief),
+    continuityMode: 'new_setup',
+    usedShotIds: [shotId].filter(Boolean),
+    blockIds: [readText(input.shot.storyboardBlockId ?? input.shot.blockId)].filter(Boolean),
+    required: true,
+    generatedBy: 'per_shot_coverage_resolver',
+  }
+}
+
+function coverageRegistryFromSources(input: {
+  masterMetadata: Record<string, unknown>
+  directorPlan: Record<string, unknown>
+  masterRequestId: string
+}) {
+  const stored = asRecord(input.masterMetadata.sequenceAnimaticCoverageRegistry ?? input.masterMetadata.sequence_animatic_coverage_registry)
+  const storedSetups = readArray(stored.coverageSetups ?? stored.coverage_setups).map(asRecord).filter((setup) => readText(setup.id))
+  const legacySetups = readArray(input.directorPlan.coverageSetups ?? input.directorPlan.coverage_setups).map(asRecord).filter((setup) => readText(setup.id))
+  const setupById = new Map<string, Record<string, unknown>>()
+  for (const setup of legacySetups) setupById.set(readText(setup.id), { ...setup, legacyCoverageSetup: true })
+  for (const setup of storedSetups) setupById.set(readText(setup.id), setup)
+  const storedAssignments = asRecord(stored.coverageSetupByShotId ?? stored.coverage_setup_by_shot_id)
+  return {
+    role: 'sequence_animatic_coverage_registry',
+    contractVersion: COVERAGE_REGISTRY_VERSION,
+    sourceMasterRequestId: input.masterRequestId,
+    revision: Number(stored.revision ?? 0) || 0,
+    coverageSetups: [...setupById.values()],
+    coverageSetupByShotId: Object.fromEntries(Object.entries(storedAssignments).map(([shotId, setupId]) => [shotId, readText(setupId)]).filter(([, setupId]) => setupId)),
+    updatedByShotId: asRecord(stored.updatedByShotId ?? stored.updated_by_shot_id),
+  }
+}
+
+function resolveCoverageSetupForShot(input: {
+  shot: Record<string, unknown>
+  registry: ReturnType<typeof coverageRegistryFromSources>
+  legacySetup: Record<string, unknown>
+  forceRefresh: boolean
+}) {
+  const shotId = readText(input.shot.id)
+  const existingAssignedId = !input.forceRefresh ? readText(input.registry.coverageSetupByShotId[shotId]) : ''
+  const assignedSetup = existingAssignedId ? input.registry.coverageSetups.find((setup) => readText(setup.id) === existingAssignedId) ?? null : null
+  if (assignedSetup) {
+    const compatibility = compatibleCoverageSetup({ shot: input.shot, setup: assignedSetup })
+    if (compatibility.compatible) {
+      const reason = 'Existing shot coverage registry assignment is compatible.'
+      return {
+        coverageSetup: normalizedCoverageSetupForShot({ setup: assignedSetup, shot: input.shot, reuseReason: reason }),
+        coverageSetupId: readText(assignedSetup.id),
+        coverageDecision: 'reuse',
+        coverageSetupSource: asRecord(assignedSetup).legacyCoverageSetup === true ? 'legacy_director_plan' : 'registry_reuse',
+        coverageDecisionReason: reason,
+        compatibilityDiagnostics: compatibility.diagnostics,
+      }
+    }
+  }
+  const candidates = input.registry.coverageSetups
+    .map((setup) => ({ setup, compatibility: compatibleCoverageSetup({ shot: input.shot, setup }) }))
+    .filter((entry) => entry.compatibility.compatible)
+  const candidate = candidates.find((entry) => asRecord(entry.setup).legacyCoverageSetup !== true) ?? candidates[0] ?? null
+  if (candidate) {
+    const reason = 'Found a compatible coverage setup in the registry.'
+    return {
+      coverageSetup: normalizedCoverageSetupForShot({ setup: candidate.setup, shot: input.shot, reuseReason: reason }),
+      coverageSetupId: readText(candidate.setup.id),
+      coverageDecision: 'reuse',
+      coverageSetupSource: asRecord(candidate.setup).legacyCoverageSetup === true ? 'legacy_director_plan' : 'registry_reuse',
+      coverageDecisionReason: reason,
+      compatibilityDiagnostics: candidate.compatibility.diagnostics,
+    }
+  }
+  const created = createCoverageSetupForShot({ shot: input.shot, legacySetup: input.legacySetup })
+  return {
+    coverageSetup: created,
+    coverageSetupId: readText(created.id),
+    coverageDecision: 'create',
+    coverageSetupSource: 'registry_create',
+    coverageDecisionReason: 'No compatible setup matched this shot spatial chain, camera, and visible subjects.',
+    compatibilityDiagnostics: ['created_per_shot_setup'],
+  }
+}
+
+function applyCoverageResolutionToRegistry(input: {
+  registry: ReturnType<typeof coverageRegistryFromSources>
+  shotId: string
+  setup: Record<string, unknown>
+}) {
+  const setupId = readText(input.setup.id)
+  const setups = input.registry.coverageSetups.filter((setup) => readText(setup.id) !== setupId)
+  setups.push(input.setup)
+  const coverageSetupByShotId = {
+    ...input.registry.coverageSetupByShotId,
+    [input.shotId]: setupId,
+  }
+  return {
+    role: 'sequence_animatic_coverage_registry',
+    contractVersion: COVERAGE_REGISTRY_VERSION,
+    sourceMasterRequestId: input.registry.sourceMasterRequestId,
+    revision: input.registry.revision + 1,
+    coverageSetups: setups,
+    coverage_setups: setups,
+    coverageSetupByShotId,
+    coverage_setup_by_shot_id: coverageSetupByShotId,
+    updatedByShotId: {
+      ...input.registry.updatedByShotId,
+      [input.shotId]: new Date().toISOString(),
+    },
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function shotScenePrefix(shot: Record<string, unknown>) {
+  return sceneIdForShot(shot)
+}
+
+function graphNodeRelevanceScore(node: Record<string, unknown>, shot: Record<string, unknown>) {
+  const shotId = readText(shot.id)
+  const sceneId = shotScenePrefix(shot)
+  const blockId = readText(shot.storyboardBlockId ?? shot.blockId ?? shot.block_id)
+  const nodeShotIds = readStringArray(node.shotIds ?? node.shot_ids ?? node.usedShotIds ?? node.used_shot_ids)
+  const nodeBlockIds = readStringArray(node.storyboardBlockIds ?? node.storyboard_block_ids ?? node.blockIds ?? node.block_ids)
+  let score = 0
+  if (shotId && nodeShotIds.includes(shotId)) score += 100
+  if (blockId && nodeBlockIds.includes(blockId)) score += 60
+  if (sceneId && nodeShotIds.some((id) => id.startsWith(`${sceneId}_`))) score += 35
+  if (sceneId && nodeBlockIds.some((id) => id.startsWith(`${sceneId}_`))) score += 25
+  if (sceneId && readText(node.sceneId ?? node.scene_id) === sceneId) score += 20
+  if (nodeShotIds.length > 0 && sceneId && !nodeShotIds.some((id) => id.startsWith(`${sceneId}_`))) score -= 30
+  if (nodeBlockIds.length > 0 && sceneId && !nodeBlockIds.some((id) => id.startsWith(`${sceneId}_`))) score -= 20
+  return score
+}
+
+function graphNodeMapForShot(nodes: readonly Record<string, unknown>[], shot: Record<string, unknown>) {
+  const byId = new Map<string, { node: Record<string, unknown>; score: number }>()
+  for (const node of nodes) {
+    const id = readText(node.id)
+    if (!id) continue
+    const score = graphNodeRelevanceScore(node, shot)
+    const current = byId.get(id)
+    if (!current || score > current.score) byId.set(id, { node, score })
+  }
+  return new Map([...byId.entries()].map(([id, entry]) => [id, shotScopedContinuityNode(entry.node, shot)] as const))
+}
+
+function continuityNodeMatchesShotScene(node: Record<string, unknown>, shot: Record<string, unknown>) {
+  const shotId = readText(shot.id)
+  const sceneId = shotScenePrefix(shot)
+  const blockId = readText(shot.storyboardBlockId ?? shot.blockId ?? shot.block_id)
+  const nodeSceneId = readText(node.sceneId ?? node.scene_id)
+  const nodeShotIds = readStringArray(node.shotIds ?? node.shot_ids ?? node.usedShotIds ?? node.used_shot_ids)
+  const nodeBlockIds = readStringArray(node.storyboardBlockIds ?? node.storyboard_block_ids ?? node.blockIds ?? node.block_ids)
+  if (shotId && nodeShotIds.includes(shotId)) return true
+  if (blockId && nodeBlockIds.includes(blockId)) return true
+  if (sceneId && nodeSceneId === sceneId) return true
+  if (sceneId && nodeShotIds.some((id) => id.startsWith(`${sceneId}_`))) return true
+  if (sceneId && nodeBlockIds.some((id) => id.startsWith(`${sceneId}_`))) return true
+  return nodeSceneId === '' && nodeShotIds.length === 0 && nodeBlockIds.length === 0
+}
+
+function shotScopedContinuityNode(node: Record<string, unknown>, shot: Record<string, unknown>) {
+  if (continuityNodeMatchesShotScene(node, shot)) return node
+  const shotId = readText(shot.id)
+  const blockId = readText(shot.storyboardBlockId ?? shot.blockId ?? shot.block_id)
+  const kind = readText(node.nodeKind ?? node.assetKind)
+  const name = readText(node.name ?? node.title) || readText(node.id)
+  const shotAction = readText(shot.action ?? shot.description ?? shot.videoDirection)
+  const scoped: Record<string, unknown> = {
+    ...node,
+    sceneId: shotScenePrefix(shot),
+    scene_id: shotScenePrefix(shot),
+    shotIds: shotId ? [shotId] : [],
+    shot_ids: shotId ? [shotId] : [],
+    storyboardBlockIds: blockId ? [blockId] : [],
+    storyboard_block_ids: blockId ? [blockId] : [],
+  }
+  if ((kind === 'location_spot' || kind === 'spot') && shotAction) {
+    scoped.visualBrief = `${name}: shot-specific physical point for this moment. ${shotAction}`
+    scoped.summary = scoped.visualBrief
+  }
+  return scoped
 }
 
 function scopedCoverageShotsForShot(input: {
@@ -842,7 +1322,13 @@ Deno.serve(async (request) => {
     const isShotScopedEnsure = requestedShotIds.length === 1
     const scopedShotId = requestedShotIds[0] ?? ''
     const shotGraphDependencyMode = 'single_node_chain' as const
-    const shotGraphPolicyVersion = 'primary_chain_v6' as const
+    const shotGraphPolicyVersion = 'primary_chain_v7' as const
+    let masterMetadataForWrites = masterMetadata
+    let coverageRegistry = coverageRegistryFromSources({
+      masterMetadata,
+      directorPlan,
+      masterRequestId: masterRequest.id,
+    })
     const keyframePlanWithSource = {
       ...asRecord(keyframePlan),
       source: keyframePlanSource,
@@ -1305,16 +1791,19 @@ Deno.serve(async (request) => {
       child: ReturnType<typeof mapOutputRequestRow> | null,
       reason: string,
       dependencyNodeIds: string[] = [],
-    ) => ({
-      kind,
-      requestId: child?.id ?? null,
-      workflowId: child?.workflowId ?? null,
-      role: child ? readScreenplayAnimaticRole(asRecord(child.metadata)) : null,
-      reason,
-      shotId: scopedShotId,
-      coverageSetupId: scopedCoverageSetupId || null,
-      dependencyNodeIds,
-    })
+    ) => {
+      const childMetadata = asRecord(child?.metadata)
+      return {
+        kind,
+        requestId: child?.id ?? null,
+        workflowId: child?.workflowId ?? null,
+        role: child ? readScreenplayAnimaticRole(childMetadata) : null,
+        reason,
+        shotId: scopedShotId,
+        coverageSetupId: readText(childMetadata.coverageSetupId) || scopedCoverageSetupId || null,
+        dependencyNodeIds,
+      }
+    }
     const blockedNextAction = (reason: string, dependencyNodeIds: string[] = []) => ({
       kind: 'blocked' as const,
       requestId: null,
@@ -1902,9 +2391,14 @@ Deno.serve(async (request) => {
         readText(binding.angleId ?? binding.angle_id ?? shot.angleId ?? shot.angle_id ?? shot.continuityAngleId ?? shot.continuity_angle_id),
       ].filter(Boolean)
     }
-    const referencedAnimaticAssetNodeIds = (shot: Record<string, unknown>, coverageSetup: Record<string, unknown>) => {
+    const referencedAnimaticAssetNodeIds = (
+      shot: Record<string, unknown>,
+      coverageSetup: Record<string, unknown>,
+      nodeById: Map<string, Record<string, unknown>> = graphNodeById,
+    ) => {
+      const localNodeIds = new Set([...nodeById.keys()])
       const candidateIds = new Set([
-        ...shotReferenceNodeIds(shot, graphNodeIds),
+        ...shotReferenceNodeIds(shot, localNodeIds),
         ...readStringArray(asRecord(shot.refs ?? shot.references).characterRefIds ?? asRecord(shot.refs ?? shot.references).character_ref_ids),
         ...readStringArray(asRecord(shot.refs ?? shot.references).visibleCharacterRefIds ?? asRecord(shot.refs ?? shot.references).visible_character_ref_ids),
         ...readStringArray(asRecord(shot.refs ?? shot.references).propRefIds ?? asRecord(shot.refs ?? shot.references).prop_ref_ids),
@@ -1916,28 +2410,35 @@ Deno.serve(async (request) => {
         ...readArray(shot.dialogue).map((line) => readText(asRecord(line).speakerRefId ?? asRecord(line).speaker_ref_id)),
       ].filter(Boolean))
       return [...candidateIds].filter((nodeId) => {
-        const node = graphNodeById.get(nodeId)
+        const node = nodeById.get(nodeId)
         const kind = readText(node?.nodeKind)
         const assetKind = readText(node?.assetKind)
         return kind === 'temporary_character' || kind === 'prop' || assetKind === 'temporary_character' || assetKind === 'prop'
       })
     }
+    const scopedRelevantShotsForNodes = (nodes: readonly Record<string, unknown>[], shot: Record<string, unknown>) => {
+      const currentShotId = readText(shot.id)
+      const currentShot = uniqueShots.find((entry) => readText(entry.id) === currentShotId)
+      return currentShot ? [currentShot] : [shot]
+    }
     const shotContinuityDependencyNodes = (shot: Record<string, unknown>, coverageSetup: Record<string, unknown>) => {
+      const localGraphNodeById = graphNodeMapForShot(allGraphNodes, shot)
+      const localGraphNodeIds = new Set([...localGraphNodeById.keys()])
       const directNodeIds = [
         ...primaryShotSpatialNodeIds(shot, coverageSetup),
-        ...referencedAnimaticAssetNodeIds(shot, coverageSetup),
-      ].filter((nodeId) => graphNodeIds.has(nodeId))
+        ...referencedAnimaticAssetNodeIds(shot, coverageSetup, localGraphNodeById),
+      ].filter((nodeId) => localGraphNodeIds.has(nodeId))
       const orderedIds: string[] = []
       const seen = new Set<string>()
       const addWithParents = (nodeId: string) => {
         const chain: string[] = []
         let currentId = nodeId
         const localSeen = new Set<string>()
-        while (currentId && graphNodeById.has(currentId) && !localSeen.has(currentId)) {
+        while (currentId && localGraphNodeById.has(currentId) && !localSeen.has(currentId)) {
           localSeen.add(currentId)
           chain.push(currentId)
-          const parentId = continuityNodeParentId(graphNodeById.get(currentId) ?? {})
-          if (!parentId || !graphNodeById.has(parentId)) break
+          const parentId = continuityNodeParentId(localGraphNodeById.get(currentId) ?? {})
+          if (!parentId || !localGraphNodeById.has(parentId)) break
           currentId = parentId
         }
         for (const id of chain.reverse()) {
@@ -1947,15 +2448,15 @@ Deno.serve(async (request) => {
         }
       }
       directNodeIds.forEach(addWithParents)
-      const orderedNodes = orderedIds.map((nodeId) => graphNodeById.get(nodeId)).filter((node): node is Record<string, unknown> => Boolean(node))
-      const incidentalNodes = incidentalCharacterNodesForShot({ shot, coverageSetup, graphNodeById, contextNodes: orderedNodes })
+      const orderedNodes = orderedIds.map((nodeId) => localGraphNodeById.get(nodeId)).filter((node): node is Record<string, unknown> => Boolean(node))
+      const incidentalNodes = incidentalCharacterNodesForShot({ shot, coverageSetup, graphNodeById: localGraphNodeById, contextNodes: orderedNodes })
       return [...orderedNodes, ...incidentalNodes.filter((node) => !seen.has(readText(node.id)))]
     }
 
     const shotContinuityDependenciesForGraph = (shot: Record<string, unknown>, coverageSetup: Record<string, unknown>) => shotContinuityDependencyNodes(shot, coverageSetup).map((targetNode) => {
       const targetNodeId = readText(targetNode.id)
       const referenceAssetKeys = referenceAssetKeysForTargets([targetNode])
-      const relevantShots = relevantShotsForNodes([targetNode])
+      const relevantShots = scopedRelevantShotsForNodes([targetNode], shot)
       const assetKind = readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
       const assetInputHash = sequenceAnimaticStableHash({
         targetNode,
@@ -2083,14 +2584,56 @@ Deno.serve(async (request) => {
       }
       let child = existingByShotId.get(shotId) ?? null
       const shot = asRecord(job.shot)
-      const coverageSetupId = readText(job.coverageSetupId)
-      const coverageSetup = coverageSetupId
+      let coverageSetupId = readText(job.coverageSetupId)
+      let coverageSetup = coverageSetupId
         ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
         : {}
+      const legacyCoverageSetup = coverageSetup
+      const coverageResolution = resolveCoverageSetupForShot({
+        shot,
+        registry: coverageRegistry,
+        legacySetup: legacyCoverageSetup,
+        forceRefresh: payload.mode === 'regenerate' && shotId === scopedShotId,
+      })
+      coverageSetup = coverageResolution.coverageSetup
+      coverageSetupId = coverageResolution.coverageSetupId
+      const priorSetupRecord = coverageRegistry.coverageSetups.find((setup) => readText(setup.id) === coverageSetupId) ?? null
+      const nextUsedShotIds = uniqueTexts([...readStringArray(coverageSetup.usedShotIds ?? coverageSetup.used_shot_ids), shotId])
+      const nextSetupRecord = {
+        ...coverageSetup,
+        usedShotIds: nextUsedShotIds,
+        used_shot_ids: nextUsedShotIds,
+      }
+      const coverageRegistryNext = applyCoverageResolutionToRegistry({
+        registry: coverageRegistry,
+        shotId,
+        setup: nextSetupRecord,
+      })
+      const needsRegistryUpdate = readText(coverageRegistry.coverageSetupByShotId[shotId]) !== coverageSetupId
+        || sequenceAnimaticStableHash(priorSetupRecord ?? {}) !== sequenceAnimaticStableHash(nextSetupRecord)
+      if (needsRegistryUpdate) {
+        const nextMetadata = {
+          ...masterMetadataForWrites,
+          sequenceAnimaticCoverageRegistry: coverageRegistryNext,
+          sequence_animatic_coverage_registry: coverageRegistryNext,
+        }
+        const registryResponse = await admin
+          .from('output_requests')
+          .update({ metadata: nextMetadata })
+          .eq('id', masterRequest.id)
+        if (registryResponse.error) throw new Error(registryResponse.error.message)
+        masterMetadataForWrites = nextMetadata
+        coverageRegistry = coverageRegistryNext
+      }
+      coverageSetup = nextSetupRecord
       const coverageJob = coverageSetupId
         ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId))
         : {}
-      const coverageShotIds = readStringArray(coverageJob.shotIds)
+      const coverageShotIds = uniqueTexts([
+        ...readStringArray(coverageJob.shotIds),
+        ...readStringArray(coverageSetup.usedShotIds ?? coverageSetup.used_shot_ids),
+        shotId,
+      ])
       const coverageShots = readArray(keyframePlan.shotKeyframeJobs)
         .map(asRecord)
         .map((entry) => asRecord(entry.shot))
@@ -2106,6 +2649,8 @@ Deno.serve(async (request) => {
         coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
         sourceReferenceHash,
         graphPolicyVersion: shotGraphPolicyVersion,
+        coverageRegistryRevision: coverageRegistry.revision,
+        coverageDecision: coverageResolution.coverageDecision,
       })
       const coverageAnchorScopeKey = coverageSetupId ? sequenceAnimaticStableHash({
         coverageSetupId,
@@ -2209,6 +2754,11 @@ Deno.serve(async (request) => {
           storyboardBlockId: blockId,
           shotId,
           coverageSetupId,
+          coverageDecision: coverageResolution.coverageDecision,
+          coverageDecisionReason: coverageResolution.coverageDecisionReason,
+          coverageCompatibilityDiagnostics: coverageResolution.compatibilityDiagnostics,
+          coverageRegistryRevision: coverageRegistry.revision,
+          coverageSetupSource: coverageResolution.coverageSetupSource,
           keyframeHash,
           sourceShotHash,
           manifestHash,
@@ -2348,7 +2898,7 @@ Deno.serve(async (request) => {
         requestId: masterRequest.id,
         workflowId: child.workflowId,
         eventType: 'shot_keyframe_queued',
-        payload: { shotId, storyboardBlockId: readText(job.storyboardBlockId), coverageSetupId: readText(job.coverageSetupId), requestId: child.id, workflowId: child.workflowId },
+        payload: { shotId, storyboardBlockId: readText(job.storyboardBlockId), coverageSetupId, requestId: child.id, workflowId: child.workflowId },
         dedupeKey: 'shotId',
         dedupeValue: shotId,
       })

@@ -742,7 +742,17 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       reference_asset_keys: coverageReferenceAssetKeys,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_input', maxConcurrency: 4 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_prompt', 'utility_transform', 'Coverage Anchor Prompt', 920, -220, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_brief', 'utility_transform', 'Coverage Anchor Brief', 920, -220, {
+      purpose: 'sequence_animatic_coverage_anchor_brief',
+      ...coverageConfig,
+      coverageSetup: input.coverageSetup ?? {},
+      coverage_setup: input.coverageSetup ?? {},
+      shots: input.coverageShots ?? [input.shot],
+      referenceAssetKeys: coverageReferenceAssetKeys,
+      reference_asset_keys: coverageReferenceAssetKeys,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_coverage_anchor_brief', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_prompt', 'utility_transform', 'Coverage Anchor Prompt', 1200, -220, {
       purpose: 'sequence_animatic_coverage_anchor_prompt',
       ...coverageConfig,
       coverageSetup: input.coverageSetup ?? {},
@@ -752,7 +762,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       reference_asset_keys: coverageReferenceAssetKeys,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_prompt', maxConcurrency: 4 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_image', 'image_generation', 'Coverage Anchor Image', 1200, -220, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_image', 'image_generation', 'Coverage Anchor Image', 1480, -220, {
       purpose: 'sequence_animatic_coverage_anchor_image',
       role: 'sequence_animatic_coverage_anchor_image',
       ...coverageConfig,
@@ -777,7 +787,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       planning_only: false,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_coverage_anchor_image', maxConcurrency: 4 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_artifact', 'output_artifact', 'Coverage Anchor Ref', 1480, -220, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_artifact', 'output_artifact', 'Coverage Anchor Ref', 1760, -220, {
       purpose: 'sequence_animatic_coverage_anchor_artifact',
       artifactKind: 'other',
       ...coverageConfig,
@@ -794,9 +804,14 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
     }, {}, role),
   ] : []
   const coverageEdges = includeCoverageSubgraph ? [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_input__brief_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_brief', 'coverage_setup', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_input__brief_shots', 'coverage_anchor_input', 'shots', 'coverage_anchor_brief', 'shots', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_input__brief_refs', 'coverage_anchor_input', 'asset_pack', 'coverage_anchor_brief', 'asset_pack', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_input__prompt_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_prompt', 'coverage_setup', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_input__prompt_shots', 'coverage_anchor_input', 'shots', 'coverage_anchor_prompt', 'shots', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_input__prompt_refs', 'coverage_anchor_input', 'asset_pack', 'coverage_anchor_prompt', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_brief__prompt', 'coverage_anchor_brief', 'coverage_brief', 'coverage_anchor_prompt', 'coverage_brief', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_brief__prompt_text', 'coverage_anchor_brief', 'prompt_brief', 'coverage_anchor_prompt', 'prompt_brief', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_prompt__image', 'coverage_anchor_prompt', 'text', 'coverage_anchor_image', 'prompt', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_prompt__image_refs', 'coverage_anchor_prompt', 'asset_pack', 'coverage_anchor_image', 'asset_pack', {}, role),
     ...coverageSourceContinuityDependencies.map((dependency) => {
@@ -1109,12 +1124,17 @@ export function buildSequenceAnimaticCoverageAnchorWorkflowGraph(input: {
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_input', maxConcurrency: 4 },
     }, {}, 'coverage_anchor'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_prompt', 'utility_transform', 'Coverage Anchor Prompt', 360, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_brief', 'utility_transform', 'Coverage Anchor Brief', 360, 120, {
+      purpose: 'sequence_animatic_coverage_anchor_brief',
+      ...config,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_coverage_anchor_brief', maxConcurrency: 4 },
+    }, {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_prompt', 'utility_transform', 'Coverage Anchor Prompt', 640, 120, {
       purpose: 'sequence_animatic_coverage_anchor_prompt',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_prompt', maxConcurrency: 4 },
     }, {}, 'coverage_anchor'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_image', 'image_generation', 'Coverage Anchor Image', 640, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_image', 'image_generation', 'Coverage Anchor Image', 920, 120, {
       purpose: 'sequence_animatic_coverage_anchor_image',
       role: 'sequence_animatic_coverage_anchor_image',
       ...config,
@@ -1129,7 +1149,7 @@ export function buildSequenceAnimaticCoverageAnchorWorkflowGraph(input: {
       used_as_video_reference: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_coverage_anchors', maxConcurrency: 2 },
     }, {}, 'coverage_anchor'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_artifact', 'output_artifact', 'Register Coverage Anchor', 920, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_artifact', 'output_artifact', 'Register Coverage Anchor', 1200, 120, {
       purpose: 'sequence_animatic_coverage_anchor_artifact',
       artifactKind: 'other',
       ...config,
@@ -1137,9 +1157,14 @@ export function buildSequenceAnimaticCoverageAnchorWorkflowGraph(input: {
     }, {}, 'coverage_anchor'),
   ]
   const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__brief_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_brief', 'coverage_setup', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__brief_shots', 'coverage_anchor_input', 'shots', 'coverage_anchor_brief', 'shots', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__brief_refs', 'coverage_anchor_input', 'asset_pack', 'coverage_anchor_brief', 'asset_pack', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_prompt', 'coverage_setup', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_shots', 'coverage_anchor_input', 'shots', 'coverage_anchor_prompt', 'shots', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'coverage_anchor_input', 'asset_pack', 'coverage_anchor_prompt', 'asset_pack', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'brief__prompt', 'coverage_anchor_brief', 'coverage_brief', 'coverage_anchor_prompt', 'coverage_brief', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'brief__prompt_text', 'coverage_anchor_brief', 'prompt_brief', 'coverage_anchor_prompt', 'prompt_brief', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'coverage_anchor_prompt', 'text', 'coverage_anchor_image', 'prompt', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'coverage_anchor_prompt', 'asset_pack', 'coverage_anchor_image', 'asset_pack', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_artifact', 'coverage_setup', {}, 'coverage_anchor'),

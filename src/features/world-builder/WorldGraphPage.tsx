@@ -1419,6 +1419,7 @@ type SequenceAnimaticContinuityAnchorView = {
 type SequenceAnimaticCoverageAnchorView = {
   id: string
   title: string
+  displayTitle: string
   setupKind: string
   setupKindLabel: string
   status: 'missing' | 'queued' | 'generating' | 'ready' | 'failed'
@@ -1442,6 +1443,11 @@ type SequenceAnimaticCoverageAnchorView = {
   continuityMode: string
   shotIds: string[]
   blockIds: string[]
+  createdFromShotId: string
+  firstUsedShotId: string
+  reuseReason: string
+  usageLabel: string
+  usageDetailLabel: string
 }
 
 type SequenceAnimaticCoverageInspectorView = {
@@ -1664,6 +1670,16 @@ function sequenceAnimaticBlockSceneId(block: { id: string; shots: ReadonlyArray<
     if (sceneId) return sceneId
   }
   return /^(.+)_block_\d+/.exec(block.id)?.[1] ?? ''
+}
+
+function sequenceAnimaticBlocksForScene(
+  model: Pick<SequenceAnimaticViewModel, 'blocks'>,
+  scene: SequenceAnimaticSceneView,
+) {
+  return model.blocks.filter((block) => {
+    const sceneId = sequenceAnimaticBlockSceneId(block)
+    return !sceneId || sceneId === scene.id
+  })
 }
 
 type SequenceAnimaticViewModel = {
@@ -2409,7 +2425,7 @@ function SequenceAnimaticCoverageAnchorModal({
 }) {
   const anchor = inspector.anchor
   const usageLabel = [
-    anchor.shotIds.length > 0 ? `${anchor.shotIds.length} linked shot${anchor.shotIds.length === 1 ? '' : 's'}` : '',
+    anchor.usageLabel,
     anchor.blockIds.length > 0 ? `${anchor.blockIds.length} block${anchor.blockIds.length === 1 ? '' : 's'}` : '',
   ].filter(Boolean).join(' / ') || 'Used by this shot'
   const spatialPath = [
@@ -2441,8 +2457,26 @@ function SequenceAnimaticCoverageAnchorModal({
             </div>
             <div>
               <dt>Usage</dt>
-              <dd>{usageLabel}</dd>
+              <dd title={anchor.usageDetailLabel}>{usageLabel}</dd>
             </div>
+            {anchor.shotIds.length > 0 ? (
+              <div>
+                <dt>Used by</dt>
+                <dd>{anchor.usageDetailLabel.replace(/^Used by:\s*/i, '')}</dd>
+              </div>
+            ) : null}
+            {anchor.createdFromShotId ? (
+              <div>
+                <dt>Created from</dt>
+                <dd>{sequenceAnimaticCoverageShotLabel(anchor.createdFromShotId)}</dd>
+              </div>
+            ) : null}
+            {anchor.reuseReason ? (
+              <div>
+                <dt>Reuse</dt>
+                <dd>{anchor.reuseReason}</dd>
+              </div>
+            ) : null}
             {spatialPath ? (
               <div>
                 <dt>Scene binding</dt>
@@ -2694,7 +2728,6 @@ function sequenceAnimaticShotKeyframeDependencyTargets(
       coverageAnchor?.primarySpotId,
       ...(coverageAnchor?.spotIds ?? []),
       coverageAnchor?.viewpointId,
-      ...(coverageAnchor?.characterRefIds ?? []),
     ].filter(Boolean),
   )
   return model.continuityAssetTargets.filter((target) => (
@@ -3048,6 +3081,7 @@ function sequenceAnimaticShotKeyframeProgressLabel(run: OutputWorkflowRun | null
     .find((step) => {
       const key = step.nodeKey
       return key.startsWith('continuity_')
+        || key === 'coverage_anchor_brief'
         || key === 'coverage_anchor_prompt'
         || key === 'coverage_anchor_image'
         || key === 'coverage_anchor_artifact'
@@ -3062,6 +3096,7 @@ function sequenceAnimaticShotKeyframeProgressLabel(run: OutputWorkflowRun | null
     return `Generating ${continuityStepTargetLabel(activeStep)} ref`
   }
   if (key.startsWith('continuity_')) return `Preparing ${continuityStepTargetLabel(activeStep)} ref`
+  if (key === 'coverage_anchor_brief') return 'Planning coverage anchor'
   if (key === 'coverage_anchor_prompt' || key === 'coverage_anchor_image' || key === 'coverage_anchor_artifact') return 'Generating coverage anchor'
   if (key === 'shot_reference_pack') return 'Preparing shot references'
   if (key === 'planned_keyframe_prompt') return 'Writing keyframe prompt'
@@ -3096,6 +3131,22 @@ function sequenceAnimaticAnchorUsageDetailLabel(anchor: Pick<SequenceAnimaticCon
     ? `Shots ${anchor.shotIds.slice(0, 5).map((shotId) => shotId.replace(/^shot_0*/, '')).join(', ')}${anchor.shotIds.length > 5 ? ` +${anchor.shotIds.length - 5}` : ''}`
     : 'No shot assignment'
   return `${blockLabel} / ${shotLabel}`
+}
+
+function sequenceAnimaticCoverageShotLabel(shotId: string) {
+  const match = /shot_0*(\d+)/i.exec(shotId)
+  return match ? `Shot ${match[1]}` : displayNameFromRefId(shotId)
+}
+
+function sequenceAnimaticCoverageUsageLabel(anchor: Pick<SequenceAnimaticCoverageAnchorView, 'shotIds'>) {
+  if (anchor.shotIds.length === 0) return 'No shots'
+  return anchor.shotIds.length > 1 ? `${anchor.shotIds.length} shots` : '1 shot'
+}
+
+function sequenceAnimaticCoverageUsageDetailLabel(anchor: Pick<SequenceAnimaticCoverageAnchorView, 'shotIds'>) {
+  if (anchor.shotIds.length === 0) return 'Used by this shot'
+  const shotList = anchor.shotIds.slice(0, 8).map(sequenceAnimaticCoverageShotLabel).join(', ')
+  return `Used by: ${shotList}${anchor.shotIds.length > 8 ? ` +${anchor.shotIds.length - 8}` : ''}`
 }
 
 function sequenceAnimaticContinuityAnchorViewMergeKey(anchor: Record<string, unknown>) {
@@ -4316,6 +4367,26 @@ function buildSequenceAnimaticViewModel(input: {
           : null
       return [request.id, run] as const
     }))
+  const shotProductionCoverageRunBySetupId = new Map<string, OutputWorkflowRun>()
+  const shotProductionCoverageRunByShotId = new Map<string, OutputWorkflowRun>()
+  for (const request of plannedKeyframeRequests) {
+    if (readOutputRequestScreenplayAnimaticRole(request) !== 'shot_production') continue
+    const requestMetadata = readLooseRecord(request.metadata)
+    const setupId = trimOptionalString(requestMetadata.coverageSetupId)
+    const shotId = trimOptionalString(requestMetadata.shotId)
+    const run = plannedKeyframeRunByRequestId.get(request.id) ?? null
+    if (!run) continue
+    const coverageStepActive = [
+      outputRunStepForNode(run, 'coverage_anchor_brief'),
+      outputRunStepForNode(run, 'coverage_anchor_prompt'),
+      outputRunStepForNode(run, 'coverage_anchor_image'),
+      outputRunStepForNode(run, 'coverage_anchor_artifact'),
+    ].some(isOutputRunStepActive)
+    if (coverageStepActive || sequenceAnimaticRequestIsActive(request, run)) {
+      if (setupId && !shotProductionCoverageRunBySetupId.has(setupId)) shotProductionCoverageRunBySetupId.set(setupId, run)
+      if (shotId && !shotProductionCoverageRunByShotId.has(shotId)) shotProductionCoverageRunByShotId.set(shotId, run)
+    }
+  }
   const coverageAnchorRunByRequestId = new Map(coverageAnchorRequests
     .map((request) => {
       const run = request.latestRunId
@@ -4379,6 +4450,8 @@ function buildSequenceAnimaticViewModel(input: {
   const coverageAnchorArtifactCandidates = [
     ...coverageAnchorRequests.flatMap((request) => input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))),
     ...coverageAnchorRequests.flatMap((request) => coverageAnchorRunByRequestId.get(request.id)?.artifacts ?? []),
+    ...plannedKeyframeRequests.flatMap((request) => input.artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))),
+    ...plannedKeyframeRequests.flatMap((request) => plannedKeyframeRunByRequestId.get(request.id)?.artifacts ?? []),
   ]
   const seenCoverageAnchorArtifactIds = new Set<string>()
   const coverageAnchorArtifacts = coverageAnchorArtifactCandidates.filter((artifact) => {
@@ -4523,16 +4596,30 @@ function buildSequenceAnimaticViewModel(input: {
     : Object.keys(readLooseRecord(continuityPack)).length > 0 ? readLooseRecord(continuityPack) : readLooseRecord(continuityAnchorPlan)
   const continuityGraphV2 = readLooseRecord(continuityLocationSource.continuityGraphV2 ?? continuityLocationSource.continuity_graph_v2)
   const continuitySceneGraphAdditions = readLooseRecord(continuityLocationSource.sceneGraphAdditions ?? continuityLocationSource.scene_graph_additions)
-  const coverageSetups = readLooseArray(continuityLocationSource.coverageSetups ?? continuityLocationSource.coverage_setups).map(readLooseRecord)
+  const coverageRegistry = readLooseRecord(readLooseRecord(input.request.metadata).sequenceAnimaticCoverageRegistry ?? readLooseRecord(input.request.metadata).sequence_animatic_coverage_registry)
+  const registryCoverageSetups = readLooseArray(coverageRegistry.coverageSetups ?? coverageRegistry.coverage_setups).map(readLooseRecord)
+  const legacyCoverageSetups = readLooseArray(continuityLocationSource.coverageSetups ?? continuityLocationSource.coverage_setups).map(readLooseRecord)
+  const coverageSetups = registryCoverageSetups.length > 0 ? registryCoverageSetups : legacyCoverageSetups
+  const registryCoverageSetupByShotId = readLooseRecord(coverageRegistry.coverageSetupByShotId ?? coverageRegistry.coverage_setup_by_shot_id)
   const coverageSetupById = new Map(coverageSetups
     .map((setup) => [trimOptionalString(setup.id), setup] as const)
     .filter(([setupId]) => Boolean(setupId)))
+  const coverageSetupIdForShot = (shot: Record<string, unknown>) => {
+    const shotId = trimOptionalString(shot.id)
+    return (shotId ? trimOptionalString(registryCoverageSetupByShotId[shotId]) : '')
+      || trimOptionalString(shot.coverageSetupId ?? shot.coverage_setup_id)
+  }
   const coverageAnchorRequestBySetupId = new Map<string, OutputRequest>()
   for (const request of [...coverageAnchorRequests].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))) {
     const setupId = trimOptionalString(readLooseRecord(request.metadata).coverageSetupId)
     if (setupId && !coverageAnchorRequestBySetupId.has(setupId)) coverageAnchorRequestBySetupId.set(setupId, request)
   }
   const coverageAnchorArtifactBySetupId = new Map<string, {
+    artifact: OutputArtifact
+    assetKey: string
+    assetUrl: string | null
+  }>()
+  const coverageAnchorArtifactByShotId = new Map<string, {
     artifact: OutputArtifact
     assetKey: string
     assetUrl: string | null
@@ -4544,23 +4631,43 @@ function buildSequenceAnimaticViewModel(input: {
     const setupId = trimOptionalString(metadata.coverageSetupId) || trimOptionalString(anchor.coverageSetupId)
     const image = readLooseRecord(metadata.image)
     const assetKey = trimOptionalString(metadata.assetKey) || trimOptionalString(anchor.assetKey) || trimOptionalString(image.assetKey) || trimOptionalString(artifact.assetKey)
-    if (!setupId || !assetKey || coverageAnchorArtifactBySetupId.has(setupId)) continue
+    if (!assetKey) continue
+    const assetUrl = resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null)
+    const request = plannedKeyframeRequests.find((candidate) => artifactBelongsToRequest(artifact, candidate)) ?? null
+    const shotId = trimOptionalString(metadata.shotId)
+      || trimOptionalString(anchor.shotId)
+      || trimOptionalString(readLooseRecord(request?.metadata).shotId)
+      || (readLooseArray(metadata.coverageAnchorShotIds ?? metadata.shotIds).map(trimOptionalString).filter(Boolean).length === 1
+        ? readLooseArray(metadata.coverageAnchorShotIds ?? metadata.shotIds).map(trimOptionalString).filter(Boolean)[0] ?? ''
+        : '')
+    if (shotId && !coverageAnchorArtifactByShotId.has(shotId)) {
+      coverageAnchorArtifactByShotId.set(shotId, {
+        artifact,
+        assetKey,
+        assetUrl,
+      })
+    }
+    if (!setupId || coverageAnchorArtifactBySetupId.has(setupId)) continue
     coverageAnchorArtifactBySetupId.set(setupId, {
       artifact,
       assetKey,
-      assetUrl: resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null),
+      assetUrl,
     })
   }
   const coverageAnchorViews: SequenceAnimaticCoverageAnchorView[] = coverageSetups.map((setup): SequenceAnimaticCoverageAnchorView => {
     const setupId = trimOptionalString(setup.id)
     const request = coverageAnchorRequestBySetupId.get(setupId) ?? null
     const run = request ? coverageAnchorRunByRequestId.get(request.id) ?? null : null
+    const shotProductionCoverageRun = shotProductionCoverageRunBySetupId.get(setupId) ?? null
     const artifact = coverageAnchorArtifactBySetupId.get(setupId) ?? null
-    const active = sequenceAnimaticRequestIsActive(request, run)
+    const active = Boolean(shotProductionCoverageRun) || sequenceAnimaticRequestIsActive(request, run)
     const failed = request?.status === 'failed'
       || run?.status === 'failed'
+      || shotProductionCoverageRun?.status === 'failed'
       || outputRunStepForNode(run, 'coverage_anchor_artifact')?.status === 'failed'
       || outputRunStepForNode(run, 'coverage_anchor_image')?.status === 'failed'
+      || outputRunStepForNode(shotProductionCoverageRun, 'coverage_anchor_artifact')?.status === 'failed'
+      || outputRunStepForNode(shotProductionCoverageRun, 'coverage_anchor_image')?.status === 'failed'
     const status: SequenceAnimaticCoverageAnchorView['status'] = active
       ? 'generating'
       : artifact?.assetKey
@@ -4589,9 +4696,13 @@ function buildSequenceAnimaticViewModel(input: {
       trimOptionalString(setupCamera.movement),
       trimOptionalString(setupCamera.screenDirectionRule ?? setupCamera.screen_direction_rule),
     ].filter(Boolean).join(' / ')
+    const displayTitle = trimOptionalString(setup.displayTitle ?? setup.display_title ?? setup.title) || displayNameFromRefId(setupId)
+    const usageLabel = sequenceAnimaticCoverageUsageLabel({ shotIds })
+    const usageDetailLabel = sequenceAnimaticCoverageUsageDetailLabel({ shotIds })
     return {
       id: setupId,
-      title: trimOptionalString(setup.title) || displayNameFromRefId(setupId),
+      title: displayTitle,
+      displayTitle,
       setupKind,
       setupKindLabel: setupKind ? setupKind.replace(/_/g, ' ') : 'coverage setup',
       status,
@@ -4615,23 +4726,35 @@ function buildSequenceAnimaticViewModel(input: {
       continuityMode: trimOptionalString(setup.continuityMode ?? setup.continuity_mode),
       shotIds,
       blockIds: readLooseArray(setup.blockIds ?? setup.block_ids ?? setup.storyboardBlockIds ?? setup.storyboard_block_ids).map(trimOptionalString).filter(Boolean),
+      createdFromShotId: trimOptionalString(setup.createdFromShotId ?? setup.created_from_shot_id),
+      firstUsedShotId: trimOptionalString(setup.firstUsedShotId ?? setup.first_used_shot_id),
+      reuseReason: trimOptionalString(setup.reuseReason ?? setup.reuse_reason),
+      usageLabel,
+      usageDetailLabel,
     }
   }).filter((anchor) => Boolean(anchor.id))
   const coverageSetupLabel = (shot: Record<string, unknown>) => {
-    const setupId = trimOptionalString(shot.coverageSetupId ?? shot.coverage_setup_id)
+    const setupId = coverageSetupIdForShot(shot)
     const setup = setupId ? coverageSetupById.get(setupId) ?? null : null
-    const title = trimOptionalString(setup?.title)
+    const title = trimOptionalString(setup?.displayTitle ?? setup?.display_title ?? setup?.title)
     const kind = trimOptionalString(setup?.setupKind ?? setup?.setup_kind)
-    if (title) return title
+    const shotIds = readLooseArray(setup?.usedShotIds ?? setup?.used_shot_ids ?? setup?.shotIds ?? setup?.shot_ids).map(trimOptionalString).filter(Boolean)
+    if (title) return shotIds.length > 1 ? `${title} · ${sequenceAnimaticCoverageUsageLabel({ shotIds })}` : title
     if (kind) return kind.replace(/_/g, ' ')
     return setupId ? displayNameFromRefId(setupId) : ''
   }
   const coverageSetupDetail = (shot: Record<string, unknown>) => {
-    const setupId = trimOptionalString(shot.coverageSetupId ?? shot.coverage_setup_id)
+    const setupId = coverageSetupIdForShot(shot)
     const setup = setupId ? coverageSetupById.get(setupId) ?? null : null
     if (!setupId) return ''
+    const shotIds = readLooseArray(setup?.usedShotIds ?? setup?.used_shot_ids ?? setup?.shotIds ?? setup?.shot_ids).map(trimOptionalString).filter(Boolean)
+    const createdFromShotId = trimOptionalString(setup?.createdFromShotId ?? setup?.created_from_shot_id)
+    const reuseReason = trimOptionalString(setup?.reuseReason ?? setup?.reuse_reason)
     return [
-      trimOptionalString(setup?.title) || displayNameFromRefId(setupId),
+      trimOptionalString(setup?.displayTitle ?? setup?.display_title ?? setup?.title) || displayNameFromRefId(setupId),
+      shotIds.length > 0 ? sequenceAnimaticCoverageUsageDetailLabel({ shotIds }) : '',
+      createdFromShotId ? `Created from ${sequenceAnimaticCoverageShotLabel(createdFromShotId)}` : '',
+      reuseReason,
       trimOptionalString(setup?.setupKind ?? setup?.setup_kind).replace(/_/g, ' '),
       trimOptionalString(setup?.screenDirection ?? setup?.screen_direction),
       trimOptionalString(setup?.stagingBrief ?? setup?.staging_brief),
@@ -5406,7 +5529,28 @@ function buildSequenceAnimaticViewModel(input: {
             shotId,
             continuityAnchorById,
           )
-          const shotCoverageAnchor = coverageAnchorViews.find((anchor) => anchor.id && anchor.id === trimOptionalString(displayShot.coverageSetupId ?? displayShot.coverage_setup_id)) ?? null
+          const effectiveCoverageSetupId = coverageSetupIdForShot(displayShot)
+          const setupCoverageAnchor = coverageAnchorViews.find((anchor) => anchor.id && anchor.id === effectiveCoverageSetupId) ?? null
+          const shotCoverageArtifact = coverageAnchorArtifactByShotId.get(shotId) ?? null
+          const shotCoverageRun = shotProductionCoverageRunByShotId.get(shotId) ?? null
+          const shotCoverageAnchor = setupCoverageAnchor
+            ? {
+              ...setupCoverageAnchor,
+              status: shotCoverageRun
+                ? 'generating' as const
+                : shotCoverageArtifact?.assetKey
+                  ? 'ready' as const
+                  : setupCoverageAnchor.status,
+              statusLabel: shotCoverageRun
+                ? 'Generating anchor'
+                : shotCoverageArtifact?.assetKey
+                  ? 'Anchor ready'
+                  : setupCoverageAnchor.statusLabel,
+              assetKey: shotCoverageArtifact?.assetKey ?? setupCoverageAnchor.assetKey,
+              assetUrl: shotCoverageArtifact?.assetUrl ?? setupCoverageAnchor.assetUrl,
+              running: Boolean(shotCoverageRun) || setupCoverageAnchor.running,
+            }
+            : null
           const keyframeDependencyNodeIds = new Set([
             ...spatialBindingView.hierarchy.map((node) => node.id),
             ...shotReferences.map((reference) => reference.entityKey),
@@ -5415,7 +5559,6 @@ function buildSequenceAnimaticViewModel(input: {
             shotCoverageAnchor?.primarySpotId,
             ...(shotCoverageAnchor?.spotIds ?? []),
             shotCoverageAnchor?.viewpointId,
-            ...(shotCoverageAnchor?.characterRefIds ?? []),
           ].filter(Boolean))
           const keyframeDependencyTargets = continuityAssetTargets.filter((target) => (
             target.shotIds.includes(shotId) || keyframeDependencyNodeIds.has(target.nodeId)
@@ -5461,7 +5604,7 @@ function buildSequenceAnimaticViewModel(input: {
             lighting: trimOptionalString(displayShot.lighting),
             performance: performanceLineFromShot(displayShot),
             performanceBeats: buildSequenceAnimaticPerformanceBeats({ ...displayShot, continuityAnchorIds: shotContinuityAnchorIds, continuityAnchorRefIds: shotContinuityAnchorIds }, resolveReference),
-            coverageSetupId: trimOptionalString(displayShot.coverageSetupId ?? displayShot.coverage_setup_id),
+            coverageSetupId: effectiveCoverageSetupId,
             coverageSetupLabel: coverageSetupLabel(displayShot),
             coverageSetupDetail: coverageSetupDetail(displayShot),
             spatialContinuityLabel: spatialBindingView.compactLabel || shotBindingLabels.label,
@@ -5636,7 +5779,28 @@ function buildSequenceAnimaticViewModel(input: {
             shotId,
             continuityAnchorById,
           )
-          const shotCoverageAnchor = coverageAnchorViews.find((anchor) => anchor.id && anchor.id === trimOptionalString(displayShot.coverageSetupId ?? displayShot.coverage_setup_id)) ?? null
+          const effectiveCoverageSetupId = coverageSetupIdForShot(displayShot)
+          const setupCoverageAnchor = coverageAnchorViews.find((anchor) => anchor.id && anchor.id === effectiveCoverageSetupId) ?? null
+          const shotCoverageArtifact = coverageAnchorArtifactByShotId.get(shotId) ?? null
+          const shotCoverageRun = shotProductionCoverageRunByShotId.get(shotId) ?? null
+          const shotCoverageAnchor = setupCoverageAnchor
+            ? {
+              ...setupCoverageAnchor,
+              status: shotCoverageRun
+                ? 'generating' as const
+                : shotCoverageArtifact?.assetKey
+                  ? 'ready' as const
+                  : setupCoverageAnchor.status,
+              statusLabel: shotCoverageRun
+                ? 'Generating anchor'
+                : shotCoverageArtifact?.assetKey
+                  ? 'Anchor ready'
+                  : setupCoverageAnchor.statusLabel,
+              assetKey: shotCoverageArtifact?.assetKey ?? setupCoverageAnchor.assetKey,
+              assetUrl: shotCoverageArtifact?.assetUrl ?? setupCoverageAnchor.assetUrl,
+              running: Boolean(shotCoverageRun) || setupCoverageAnchor.running,
+            }
+            : null
           const keyframeDependencyNodeIds = new Set([
             ...spatialBindingView.hierarchy.map((node) => node.id),
             ...shotReferences.map((reference) => reference.entityKey),
@@ -5645,7 +5809,6 @@ function buildSequenceAnimaticViewModel(input: {
             shotCoverageAnchor?.primarySpotId,
             ...(shotCoverageAnchor?.spotIds ?? []),
             shotCoverageAnchor?.viewpointId,
-            ...(shotCoverageAnchor?.characterRefIds ?? []),
           ].filter(Boolean))
           const keyframeDependencyTargets = continuityAssetTargets.filter((target) => (
             target.shotIds.includes(shotId) || keyframeDependencyNodeIds.has(target.nodeId)
@@ -5691,7 +5854,7 @@ function buildSequenceAnimaticViewModel(input: {
             lighting: trimOptionalString(displayShot.lighting),
             performance: performanceLineFromShot(displayShot),
             performanceBeats: buildSequenceAnimaticPerformanceBeats(displayShot, resolveReference),
-            coverageSetupId: trimOptionalString(displayShot.coverageSetupId ?? displayShot.coverage_setup_id),
+            coverageSetupId: effectiveCoverageSetupId,
             coverageSetupLabel: coverageSetupLabel(displayShot),
             coverageSetupDetail: coverageSetupDetail(displayShot),
             spatialContinuityLabel: spatialBindingView.compactLabel || shotBindingLabels.label,
@@ -8064,6 +8227,96 @@ export function WorldGraphPage({
       endSequenceAnimaticRun(sceneRunKey)
     }
   }, [loadAndStoreSequenceAnimaticState, onEnsureSequenceAnimaticSceneWorkflows, sequenceAnimaticBusyRunKeys])
+  const handleRegenerateSequenceAnimaticSceneCoverageAnchors = useCallback(async (
+    model: SequenceAnimaticViewModel,
+    scene: SequenceAnimaticSceneView,
+  ) => {
+    const runKey = `${model.request.id}:${scene.id}:coverage_anchors`
+    if (sequenceAnimaticBusyRunKeys.has(runKey)) return
+    beginSequenceAnimaticRun(runKey)
+    try {
+      if (scene.status !== 'ready') {
+        throw new Error('Generate this scene before regenerating coverage anchors.')
+      }
+      const sceneShots = sequenceAnimaticBlocksForScene(model, scene)
+        .flatMap((block) => block.shots.map((shot) => ({ block, shot })))
+        .filter(({ shot }) => !shot.isProvisional)
+      if (sceneShots.length === 0) {
+        throw new Error('This scene has no finalized shots yet.')
+      }
+      const preparedShotRuns: { block: SequenceAnimaticBlockView; shot: SequenceAnimaticShotView; workflowId: string; request: OutputRequest }[] = []
+      for (const { block, shot } of sceneShots) {
+        const ensureResult = await onEnsureSequenceAnimaticShotProductionGraph({
+          masterRequestId: model.request.id,
+          shotId: shot.id,
+          coverageSetupId: shot.coverageSetupId || undefined,
+          forceRefresh: true,
+          allowProvisional: false,
+        })
+        const workflowId = ensureResult.workflow?.id || ensureResult.shotRequest.workflowId
+        if (!workflowId) continue
+        preparedShotRuns.push({
+          block,
+          shot,
+          workflowId,
+          request: ensureResult.shotRequest,
+        })
+      }
+      if (preparedShotRuns.length === 0) {
+        throw new Error('Shot production workflows could not be prepared for this scene.')
+      }
+      for (const { block, shot, workflowId, request } of preparedShotRuns) {
+        const existingRun = request.latestRunId
+          ? outputWorkflowRuns.find((run) => run.id === request.latestRunId) ?? null
+          : outputWorkflowRuns.find((run) => run.workflowId === workflowId) ?? null
+        await onStartOutputWorkflowRun({
+          workflowId,
+          prompt: request.prompt || request.title || `Regenerate coverage anchor for ${shot.title}.`,
+          targetFormat: 'image',
+          selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
+          input: {
+            ...readLooseRecord(existingRun?.input),
+            debugSkipVideoGeneration: false,
+            cinematicVideoApproved: false,
+          },
+          metadata: {
+            runIntent: 'generate_keyframes',
+            runMode: 'sequence_animatic_shot_production_coverage_anchor',
+            runScope: 'upstream_to_node',
+            targetNodeKeys: [...sequenceAnimaticCoverageAnchorTargetNodeKeys],
+            forceNodeKeys: [...sequenceAnimaticCoverageAnchorForceNodeKeys],
+            reuseExistingUpstreamOutputs: true,
+            allowStaleUpstreamOutputs: true,
+            debugSkipVideoGeneration: false,
+            cinematicVideoApproved: false,
+            sourceRunId: existingRun?.id ?? request.latestRunId ?? model.request.latestRunId,
+            parentRequestId: request.parentRequestId ?? model.request.id,
+            masterRequestId: model.request.id,
+            sequenceAnimaticRole: 'shot_production',
+            storyboardBlockId: block.id,
+            shotId: shot.id,
+            coverageSetupId: shot.coverageSetupId || null,
+            sceneId: scene.id,
+          },
+        })
+      }
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      endSequenceAnimaticRun(runKey)
+    }
+  }, [
+    loadAndStoreSequenceAnimaticState,
+    onEnsureSequenceAnimaticShotProductionGraph,
+    onStartOutputWorkflowRun,
+    outputWorkflowRuns,
+    sequenceAnimaticBusyRunKeys,
+  ])
   const handleRunSequenceAnimaticContinuityAssets = useCallback(async (
     model: SequenceAnimaticViewModel,
     requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
@@ -8643,7 +8896,7 @@ export function WorldGraphPage({
             shot.keyframeRequestId
             && shot.keyframeWorkflowId
             && shot.keyframeDependencyMode === 'single_node_chain'
-            && shot.keyframeGraphPolicyVersion === 'primary_chain_v6',
+            && shot.keyframeGraphPolicyVersion === 'primary_chain_v7',
           )
           nextRequest = cachedShotGraphIsCurrent
             ? outputRequests.find((request) => request.id === shot.keyframeRequestId && request.workflowId === shot.keyframeWorkflowId) ?? null
@@ -8833,7 +9086,7 @@ export function WorldGraphPage({
         shot.keyframeRequestId
         && shot.keyframeWorkflowId
         && shot.keyframeDependencyMode === 'single_node_chain'
-        && shot.keyframeGraphPolicyVersion === 'primary_chain_v6',
+        && shot.keyframeGraphPolicyVersion === 'primary_chain_v7',
       )
       if (!refresh && cachedShotGraphIsCurrent && shot.keyframeRequestId) {
         openSequenceAnimaticOutputGraph(model, shot.keyframeRequestId, 'planned_keyframe_artifact')
@@ -14279,11 +14532,25 @@ export function WorldGraphPage({
                           ?? null
                         if (!activeScene?.requestId) return null
                         const sceneRequestId = activeScene.requestId
+                        const sceneCoverageBusy = sequenceAnimaticBusyRunKeys.has(`${routeAnimaticModel.request.id}:${activeScene.id}:coverage_anchors`)
+                        const sceneBlocks = sequenceAnimaticBlocksForScene(routeAnimaticModel, activeScene)
+                        const sceneHasFinalizedShots = sceneBlocks.some((block) => block.shots.some((shot) => !shot.isProvisional))
                         return (
-                          <button className="ghost-button compact" onClick={() => openSequenceAnimaticOutputGraph(routeAnimaticModel, sceneRequestId)} type="button">
-                            <EntityIcon id="graph" />
-                            Scene {activeScene.index} graph
-                          </button>
+                          <>
+                            <button className="ghost-button compact" onClick={() => openSequenceAnimaticOutputGraph(routeAnimaticModel, sceneRequestId)} type="button">
+                              <EntityIcon id="graph" />
+                              Scene {activeScene.index} graph
+                            </button>
+                            <button
+                              className="ghost-button compact"
+                              disabled={activeScene.status !== 'ready' || !sceneHasFinalizedShots || sceneCoverageBusy}
+                              onClick={() => void handleRegenerateSequenceAnimaticSceneCoverageAnchors(routeAnimaticModel, activeScene)}
+                              type="button"
+                              title={sceneHasFinalizedShots ? 'Regenerate coverage anchor blockouts for this scene only.' : 'Generate this scene before regenerating coverage anchors.'}
+                            >
+                              {sceneCoverageBusy ? <><span className="world-mini-spinner" aria-hidden="true" />Regenerating coverage</> : 'Regenerate scene coverage'}
+                            </button>
+                          </>
                         )
                       })()}
                       <button className="ghost-button compact" onClick={() => onOpenOutputStudio(routeAnimaticModel.request.id, 'timeline', null, {
@@ -17617,6 +17884,26 @@ export function WorldGraphPage({
                 <button className="ghost-button compact" onClick={() => openSequenceAnimaticOutputGraph(sequenceAnimaticPreviewModel, sequenceAnimaticPreviewModel.request.id)} type="button">
                   Workflow graph
                 </button>
+                {(() => {
+                  const activeScene = sequenceAnimaticPreviewModel.scenes.find((scene) => scene.id === sequenceAnimaticActiveSceneId)
+                    ?? sequenceAnimaticPreviewModel.scenes[0]
+                    ?? null
+                  if (!activeScene) return null
+                  const sceneCoverageBusy = sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticPreviewModel.request.id}:${activeScene.id}:coverage_anchors`)
+                  const sceneBlocks = sequenceAnimaticBlocksForScene(sequenceAnimaticPreviewModel, activeScene)
+                  const sceneHasFinalizedShots = sceneBlocks.some((block) => block.shots.some((shot) => !shot.isProvisional))
+                  return (
+                    <button
+                      className="ghost-button compact"
+                      disabled={activeScene.status !== 'ready' || !sceneHasFinalizedShots || sceneCoverageBusy}
+                      onClick={() => void handleRegenerateSequenceAnimaticSceneCoverageAnchors(sequenceAnimaticPreviewModel, activeScene)}
+                      type="button"
+                      title={sceneHasFinalizedShots ? 'Regenerate coverage anchor blockouts for this scene only.' : 'Generate this scene before regenerating coverage anchors.'}
+                    >
+                      {sceneCoverageBusy ? <><span className="world-mini-spinner" aria-hidden="true" />Regenerating coverage</> : 'Regenerate scene coverage'}
+                    </button>
+                  )
+                })()}
                 {sequenceAnimaticLatestStreamedShotKey ? (
                   <button
                     className={sequenceAnimaticFollowLatest ? 'ghost-button compact world-wiki-sequence-animatic-follow is-following' : 'ghost-button compact world-wiki-sequence-animatic-follow'}

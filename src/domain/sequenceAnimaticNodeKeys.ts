@@ -21,6 +21,7 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   continuityBatchExtract: 'continuity_batch_extract',
   continuityBatchArtifact: 'continuity_batch_artifact',
   // Coverage anchor workflow
+  coverageAnchorBrief: 'coverage_anchor_brief',
   coverageAnchorPrompt: 'coverage_anchor_prompt',
   coverageAnchorImage: 'coverage_anchor_image',
   coverageAnchorArtifact: 'coverage_anchor_artifact',
@@ -75,6 +76,7 @@ export const sequenceAnimaticCoverageAnchorTargetNodeKeys = [
 ] as const
 
 export const sequenceAnimaticCoverageAnchorForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorBrief,
   SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorPrompt,
   SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorImage,
   SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorArtifact,

@@ -4415,6 +4415,15 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
       return
     }
     if (parsed.record.kind === 'coverage_setup') {
+      if (input.taskClass === 'scene_shot_plan' || readText(asRecord(input.node.config).purpose) === 'sequence_animatic_director_plan') {
+        warningCount += 1
+        await emitEvent('shot_continuity_stream_warning', {
+          warning: 'Ignored coverage_setup record from shot planner; coverage assignments are created only by the dedicated Coverage Plan node.',
+          sample: recordText.slice(0, 700),
+          warningCount,
+        })
+        return
+      }
       await emitEvent('coverage_setup_registered', {
         setupId: parsed.record.id,
         sceneId: parsed.record.sceneId || parsed.record.scene_id,
@@ -7240,6 +7249,35 @@ const sequenceAnimaticShotContinuityPlanV2Schema = z.object({
   notes: z.array(z.string()).default([]),
 })
 
+const sequenceAnimaticCoveragePlanSchema = z.object({
+  role: z.literal('sequence_animatic_coverage_plan').default('sequence_animatic_coverage_plan'),
+  contractVersion: z.literal('coverage_plan_v1').default('coverage_plan_v1'),
+  graphSpecVersion: z.literal('sequence_animatic_graph_v2').default('sequence_animatic_graph_v2'),
+  coverageSetups: z.array(sequenceAnimaticShotContinuityCoverageSetupV2Schema).default([]),
+  coverageSetupByShotId: z.record(z.string(), z.string()).default({}),
+  diagnostics: z.array(z.string()).default([]),
+  warnings: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticCoveragePlanLlmSchema = z.object({
+  coverageSetups: z.array(sequenceAnimaticShotContinuityCoverageSetupV2Schema).default([]),
+  coverageSetupByShotId: z.record(z.string(), z.string()).default({}),
+  diagnostics: z.array(z.string()).default([]),
+  warnings: z.array(z.string()).default([]),
+})
+
+const sequenceAnimaticCoverageAnchorBriefSchema = z.object({
+  cameraPosition: z.string().default(''),
+  framing: z.string().default(''),
+  screenDirection: z.string().default(''),
+  subjectBlocking: z.string().default(''),
+  foregroundBackgroundPlan: z.string().default(''),
+  movementArrows: z.array(z.string()).default([]),
+  labels: z.array(z.string()).default([]),
+  visualNotes: z.array(z.string()).default([]),
+  mustNotInclude: z.array(z.string()).default([]),
+})
+
 const sequenceAnimaticShotContinuityStreamPlanStartRecordSchema = z.object({
   kind: z.literal('plan_start'),
   contractVersion: z.literal('shot_continuity_plan_v2').default('shot_continuity_plan_v2'),
@@ -7801,6 +7839,10 @@ const sequenceAnimaticDirectorPlanSchema = z.object({
   shots: z.array(sequenceAnimaticDirectorPlanShotSchema).default([]),
   blocks: z.array(sequenceAnimaticDirectorPlanBlockSchema).default([]),
   sceneGraphAdditions: z.record(z.string(), z.unknown()).default({}),
+  coverageSetups: z.array(sequenceAnimaticShotContinuityCoverageSetupV2Schema).default([]),
+  coverage_setups: z.array(sequenceAnimaticShotContinuityCoverageSetupV2Schema).default([]),
+  coverageSetupByShotId: z.record(z.string(), z.string()).default({}),
+  coverage_setup_by_shot_id: z.record(z.string(), z.string()).default({}),
   localReferences: z.array(z.record(z.string(), z.unknown())).default([]),
   notes: z.array(z.string()).default([]),
   continuityGraphV2: sequenceAnimaticContinuityGraphV2Schema.optional(),
@@ -9940,6 +9982,260 @@ function projectShotContinuityPlanV2ToDirectorPlan(value: z.infer<typeof sequenc
       'Shot continuity v2 used shot-level sceneBinding as source of truth.',
     ],
   }
+}
+
+function sequenceAnimaticCoverageShotRefs(shot: Record<string, unknown>) {
+  const refs = asRecord(shot.refs ?? shot.references)
+  return {
+    visibleCharacterRefIds: sequenceAnimaticUniqueTexts([
+      refs.visibleCharacterRefIds,
+      refs.visible_character_ref_ids,
+      shot.visibleCharacterRefIds,
+      shot.visible_character_ref_ids,
+      readArray(shot.performance ?? shot.performanceBeats).map((beat) => readText(asRecord(beat).characterRefId ?? asRecord(beat).character_ref_id)),
+    ]),
+    propRefIds: sequenceAnimaticUniqueTexts([
+      refs.propRefIds,
+      refs.prop_ref_ids,
+      refs.itemRefIds,
+      refs.item_ref_ids,
+      shot.propRefIds,
+      shot.prop_ref_ids,
+      shot.itemRefIds,
+      shot.item_ref_ids,
+    ]),
+    localReferenceIds: sequenceAnimaticUniqueTexts([
+      refs.localReferenceIds,
+      refs.local_reference_ids,
+      asRecord(shot.sceneBinding ?? shot.scene_binding).localReferenceIds,
+      asRecord(shot.sceneBinding ?? shot.scene_binding).local_reference_ids,
+      shot.continuityAnchorIds,
+      shot.continuity_anchor_ids,
+    ]),
+  }
+}
+
+function sequenceAnimaticCoverageSpatialFields(shot: Record<string, unknown>) {
+  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding ?? shot.sceneGraphBinding ?? shot.scene_graph_binding)
+  const spotIds = sequenceAnimaticUniqueTexts([
+    binding.spotIds,
+    binding.spot_ids,
+    shot.spotIds,
+    shot.spot_ids,
+    shot.continuitySpotIds,
+    shot.continuity_spot_ids,
+  ])
+  const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id ?? shot.primarySpotId ?? shot.primary_spot_id) || spotIds[0] || ''
+  return {
+    setId: readText(binding.setId ?? binding.set_id ?? shot.setId ?? shot.set_id ?? shot.continuitySetId ?? shot.continuity_set_id),
+    zoneId: readText(binding.zoneId ?? binding.zone_id ?? shot.zoneId ?? shot.zone_id ?? shot.continuityZoneId ?? shot.continuity_zone_id),
+    primarySpotId,
+    spotIds: sequenceAnimaticUniqueTexts([primarySpotId, spotIds]),
+    viewpointId: readText(binding.viewpointId ?? binding.viewpoint_id ?? shot.viewpointId ?? shot.viewpoint_id ?? shot.continuityAngleId ?? shot.continuity_angle_id),
+  }
+}
+
+function sequenceAnimaticCoverageCameraSignature(shot: Record<string, unknown>) {
+  const camera = asRecord(shot.camera)
+  return [
+    readText(camera.framing).toLowerCase(),
+    readText(camera.angle).toLowerCase(),
+    readText(camera.lens).toLowerCase(),
+    readText(camera.movement).toLowerCase(),
+    readText(camera.screenDirectionRule ?? camera.screen_direction_rule).toLowerCase(),
+  ].join('|')
+}
+
+function sequenceAnimaticCoverageSetupKindForShot(shot: Record<string, unknown>) {
+  const camera = asRecord(shot.camera)
+  const framing = readText(camera.framing).toLowerCase()
+  const movement = readText(camera.movement).toLowerCase()
+  const action = readText(shot.action).toLowerCase()
+  const subjects = sequenceAnimaticCoverageShotRefs(shot).visibleCharacterRefIds
+  if (/wide|master|establish|long/.test(framing)) return 'wide_master'
+  if (/insert|detail|cutaway/.test(framing) || /insert|detail|object|hand|feet|cord|bell|paper|marker/.test(action)) return 'insert'
+  if (/track|dolly|pan|tilt|drift|follow|move|push/.test(movement)) return 'movement'
+  if (subjects.length >= 2 && /two|2-shot|two shot|medium|wide/.test(framing)) return 'two_shot'
+  if (subjects.length === 1) return 'clean_single'
+  return 'other'
+}
+
+function sequenceAnimaticCoverageGroupingKey(shot: Record<string, unknown>) {
+  const spatial = sequenceAnimaticCoverageSpatialFields(shot)
+  const refs = sequenceAnimaticCoverageShotRefs(shot)
+  return sequenceAnimaticStableHash({
+    setId: spatial.setId,
+    zoneId: spatial.zoneId,
+    primarySpotId: spatial.primarySpotId,
+    viewpointId: spatial.viewpointId,
+    camera: sequenceAnimaticCoverageCameraSignature(shot),
+    subjects: [...refs.visibleCharacterRefIds, ...refs.localReferenceIds, ...refs.propRefIds].sort(),
+  }).slice(0, 10)
+}
+
+function sequenceAnimaticCoverageSetupForShotGroup(input: {
+  groupKey: string
+  shots: Record<string, unknown>[]
+  proposedSetup?: Record<string, unknown> | null
+}) {
+  const firstShot = input.shots[0] ?? {}
+  const spatial = sequenceAnimaticCoverageSpatialFields(firstShot)
+  const refs = sequenceAnimaticCoverageShotRefs(firstShot)
+  const camera = asRecord(firstShot.camera)
+  const shotIds = input.shots.map((shot) => readText(shot.id)).filter(Boolean)
+  const blockIds = sequenceAnimaticUniqueTexts(input.shots.map((shot) => readText(shot.blockId ?? shot.storyboardBlockId)).filter(Boolean))
+  const proposed = asRecord(input.proposedSetup)
+  const setupKind = normalizeSequenceAnimaticCoverageSetupKind(readText(proposed.setupKind ?? proposed.setup_kind) || sequenceAnimaticCoverageSetupKindForShot(firstShot))
+  const baseId = readText(proposed.id).replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '')
+  const id = baseId && shotIds.every((shotId) => readStringArray(proposed.usedShotIds ?? proposed.used_shot_ids).includes(shotId))
+    ? baseId
+    : `coverage_${slugify(readText(firstShot.sourceSceneId ?? firstShot.sceneId) || readText(firstShot.blockId ?? firstShot.storyboardBlockId) || 'scene')}_${input.groupKey}`
+  const screenDirection = readText(proposed.screenDirection ?? proposed.screen_direction)
+    || readText(camera.screenDirectionRule ?? camera.screen_direction_rule)
+  return sequenceAnimaticShotContinuityCoverageSetupV2Schema.parse({
+    id,
+    sceneId: readText(firstShot.sourceSceneId ?? firstShot.sceneId),
+    setupKind,
+    title: readText(proposed.title)
+      || `${setupKind.replace(/_/g, ' ')} ${shotIds.length === 1 ? readText(firstShot.title) || shotIds[0] : `${shotIds.length} shots`}`,
+    setId: spatial.setId,
+    zoneId: spatial.zoneId,
+    primarySpotId: spatial.primarySpotId,
+    spotIds: spatial.spotIds,
+    viewpointId: spatial.viewpointId,
+    characterRefIds: refs.visibleCharacterRefIds,
+    screenDirection,
+    camera: {
+      framing: readText(camera.framing),
+      angle: readText(camera.angle),
+      lens: readText(camera.lens),
+      movement: readText(camera.movement),
+      screenDirectionRule: readText(camera.screenDirectionRule ?? camera.screen_direction_rule),
+    },
+    lighting: readText(firstShot.lighting) || readText(proposed.lighting),
+    stagingBrief: readText(proposed.stagingBrief ?? proposed.staging_brief)
+      || compactStoryboardSentence(readText(firstShot.action), '', 28),
+    continuityMode: shotIds.length > 1 ? 'same_setup' : 'new_setup',
+    usedShotIds: shotIds,
+    blockIds,
+    required: true,
+  })
+}
+
+function normalizeSequenceAnimaticCoveragePlan(input: {
+  directorPlan: Record<string, unknown>
+  proposedPlan?: Record<string, unknown>
+}) {
+  const directorPlan = sequenceAnimaticDirectorPlanSchema.parse(input.directorPlan)
+  const shots = readArray(directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
+  const proposed = sequenceAnimaticCoveragePlanLlmSchema.safeParse(input.proposedPlan ?? {})
+  const proposedPlan = proposed.success ? proposed.data : { coverageSetups: [], coverageSetupByShotId: {}, diagnostics: [], warnings: [] }
+  const proposedSetupById = new Map(proposedPlan.coverageSetups.map((setup) => [readText(setup.id), setup] as const).filter(([id]) => id))
+  const groups = new Map<string, Record<string, unknown>[]>()
+  for (const shot of shots) {
+    const proposedSetupId = readText(proposedPlan.coverageSetupByShotId[readText(shot.id)])
+    const proposedSetup = proposedSetupId ? proposedSetupById.get(proposedSetupId) ?? null : null
+    const proposedCompatibleSeed = proposedSetup
+      ? sequenceAnimaticStableHash({
+        proposedSetupId,
+        spatial: sequenceAnimaticCoverageSpatialFields(shot),
+        camera: sequenceAnimaticCoverageCameraSignature(shot),
+        subjects: sequenceAnimaticCoverageShotRefs(shot),
+      }).slice(0, 10)
+      : ''
+    const groupKey = proposedCompatibleSeed || sequenceAnimaticCoverageGroupingKey(shot)
+    const list = groups.get(groupKey) ?? []
+    list.push(shot)
+    groups.set(groupKey, list)
+  }
+  const coverageSetups = [...groups.entries()].map(([groupKey, groupShots]) => {
+    const firstShot = groupShots[0] ?? {}
+    const proposedSetupId = readText(proposedPlan.coverageSetupByShotId[readText(firstShot.id)])
+    return sequenceAnimaticCoverageSetupForShotGroup({
+      groupKey,
+      shots: groupShots,
+      proposedSetup: proposedSetupId ? proposedSetupById.get(proposedSetupId) ?? null : null,
+    })
+  })
+  const coverageSetupByShotId = Object.fromEntries(coverageSetups.flatMap((setup) =>
+    readStringArray(setup.usedShotIds).map((shotId) => [shotId, setup.id] as const),
+  ))
+  const shotsWithCoverage = shots.map((shot) => {
+    const shotId = readText(shot.id)
+    const setupId = readText(coverageSetupByShotId[shotId])
+    return {
+      ...shot,
+      coverageSetupId: setupId,
+      coverage_setup_id: setupId,
+      continuityLink: {
+        ...asRecord(shot.continuityLink ?? shot.continuity_link),
+        mode: readText(asRecord(shot.continuityLink ?? shot.continuity_link).mode) || 'new_setup',
+        fromSetupId: readText(asRecord(shot.continuityLink ?? shot.continuity_link).fromSetupId ?? asRecord(shot.continuityLink ?? shot.continuity_link).from_setup_id),
+      },
+      continuity_link: {
+        ...asRecord(shot.continuityLink ?? shot.continuity_link),
+        mode: readText(asRecord(shot.continuityLink ?? shot.continuity_link).mode) || 'new_setup',
+        fromSetupId: readText(asRecord(shot.continuityLink ?? shot.continuity_link).fromSetupId ?? asRecord(shot.continuityLink ?? shot.continuity_link).from_setup_id),
+      },
+    }
+  })
+  const diagnostics = [
+    ...readStringArray(proposedPlan.diagnostics),
+    `Coverage planner finalized ${coverageSetups.length} setup${coverageSetups.length === 1 ? '' : 's'} for ${shots.length} shot${shots.length === 1 ? '' : 's'}.`,
+    proposed.success ? 'Coverage planner LLM proposal was validated and normalized.' : 'Coverage planner used deterministic fallback because no valid LLM proposal was available.',
+  ]
+  const finalized = sequenceAnimaticDirectorPlanSchema.parse({
+    ...directorPlan,
+    shots: shotsWithCoverage,
+    coverageSetups,
+    coverage_setups: coverageSetups,
+    coverageSetupByShotId,
+    coverage_setup_by_shot_id: coverageSetupByShotId,
+    diagnostics: [...readStringArray(directorPlan.diagnostics), ...diagnostics],
+    warnings: [...readStringArray(directorPlan.warnings), ...readStringArray(proposedPlan.warnings)],
+  })
+  return sequenceAnimaticCoveragePlanSchema.parse({
+    coverageSetups,
+    coverageSetupByShotId,
+    diagnostics,
+    warnings: readStringArray(finalized.warnings),
+  })
+}
+
+function applySequenceAnimaticCoveragePlanToDirectorPlan(input: {
+  directorPlan: Record<string, unknown>
+  coveragePlan: Record<string, unknown>
+}) {
+  const directorPlan = sequenceAnimaticDirectorPlanSchema.parse(input.directorPlan)
+  const coveragePlan = sequenceAnimaticCoveragePlanSchema.parse(input.coveragePlan)
+  const shots = readArray(directorPlan.shots).map(asRecord).map((shot) => {
+    const shotId = readText(shot.id)
+    const setupId = readText(coveragePlan.coverageSetupByShotId[shotId])
+    return {
+      ...shot,
+      coverageSetupId: setupId,
+      coverage_setup_id: setupId,
+    }
+  })
+  return sequenceAnimaticDirectorPlanSchema.parse({
+    ...directorPlan,
+    shots,
+    coverageSetups: coveragePlan.coverageSetups,
+    coverage_setups: coveragePlan.coverageSetups,
+    coverageSetupByShotId: coveragePlan.coverageSetupByShotId,
+    coverage_setup_by_shot_id: coveragePlan.coverageSetupByShotId,
+    shotPlanHash: sequenceAnimaticStableHash({
+      shots,
+      blocks: directorPlan.blocks,
+      coverageSetups: coveragePlan.coverageSetups,
+      coverageSetupByShotId: coveragePlan.coverageSetupByShotId,
+    }),
+    diagnostics: [
+      ...readStringArray(directorPlan.diagnostics),
+      ...coveragePlan.diagnostics.map((entry) => `Coverage plan: ${entry}`),
+    ],
+    warnings: [...readStringArray(directorPlan.warnings), ...coveragePlan.warnings],
+  })
 }
 
 function normalizeSequenceAnimaticDialogueLines(input: {
@@ -24117,9 +24413,9 @@ async function executeNode(input: {
             instructions: [
               'You are a senior animation shot planner and continuity supervisor.',
               'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
-              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; every coverage_setup must include id; never drop id fields.',
+              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; never drop id fields.',
               'Every shot must also include a concise lighting note (<=12 words: time of day, key light direction, mood) — lighting drives keyframe atmosphere and is not optional padding.',
-              'Allowed record kinds for this scene node: scene_plan_start, coverage_setup, shot, scene_graph_addition, spot_relation, local_reference, scene_plan_done. block is also allowed if helpful.',
+              'Allowed record kinds for this scene node: scene_plan_start, shot, scene_graph_addition, spot_relation, local_reference, scene_plan_done. block is also allowed if helpful.',
               'Emit shot records as soon as each shot is complete. Do not wait for the entire scene to be complete before streaming shots.',
             ].join('\n'),
             prompt: [
@@ -24129,14 +24425,13 @@ async function executeNode(input: {
               'Use the scene graph assignment package as first-choice sceneBinding IDs. Add missing spots or viewpoints only when the assigned package lacks a concrete point needed by the action.',
               `Hard shot boundary rules: durationSeconds must be <= ${sequenceAnimaticShotContinuityMaxDurationSeconds}; preferred duration is 3-${sequenceAnimaticShotContinuityPreferredDurationSeconds} seconds; each shot should contain one camera setup and one visible story beat.`,
               `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows, at most 140 characters per dialogue line, and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. Split dialogue exchanges across reaction/action shots.`,
-              'Coverage setup rules: create reusable coverage_setup records for repeated camera/staging setups such as wide masters, over-the-shoulders, reverse angles, clean singles, inserts, and blocking changes. Reuse coverageSetupId across shots that should preserve the same camera geography, screen direction, lighting, and character positions. Create a new setup when blocking, distance, camera side, or subject arrangement changes.',
+              'Coverage setup rules: do not emit coverage_setup records and do not set coverageSetupId. Capture only shot-local camera facts and optional coverageIntent text; a dedicated downstream coverage planner will assign reusable setups.',
               'For every dialogue line from the scene package, put a dialogue row on the shot where it is spoken. Preserve speakerRefId exactly.',
               'Every shot must include sceneBinding with at least setId or worldLocationRefId. Prefer zoneId and primarySpotId/spotIds when present in the scene package.',
               'The scene planner returns compact shot-first records only. Do not emit top-level shotBindings, continuityGraphV2, assetRequirements, warnings, diagnostics, image prompts, or video prompts.',
               'Record contracts:',
               'scene_plan_start: {"kind":"scene_plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
-              'coverage_setup: {"kind":"coverage_setup","id":"scene_001_setup_ots_a_to_b","sceneId":"scene_001","setupKind":"wide_master|ots_a_to_b|ots_b_to_a|clean_single|two_shot|insert|movement|blocking_change|viewpoint|other","title":"...","setId":"set_...","zoneId":"zone_...","primarySpotId":"spot_...","spotIds":[],"viewpointId":"","characterRefIds":[],"screenDirection":"A screen-left, B screen-right","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","stagingBrief":"stable visual anchor description","continuityFromSetupId":"","continuityMode":"new_setup","usedShotIds":[],"blockIds":[],"required":true}',
-              'shot: {"kind":"shot","id":"scene_001_shot_001","index":1,"blockId":"scene_001_block_001","title":"...","durationSeconds":3,"coverageSetupId":"scene_001_setup_ots_a_to_b","continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
+              'shot: {"kind":"shot","id":"scene_001_shot_001","index":1,"blockId":"scene_001_block_001","title":"...","durationSeconds":3,"continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"coverageIntent":"optional concise camera/staging intent, not an id","action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
               'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|viewpoint","id":"...","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set","zoneId":"parent_zone","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
               'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
               'scene_plan_done: {"kind":"scene_plan_done","shotCount":0,"blockCount":0,"orderedShotIds":[],"orderedBlockIds":[],"screenplaySummary":"...","notes":[]}',
@@ -24495,6 +24790,8 @@ async function executeNode(input: {
               index: globalShotIndex,
               blockId: newBlockId,
               storyboardBlockId: newBlockId,
+              coverageSetupId: '',
+              coverage_setup_id: '',
               continuityLink: remappedContinuityLink,
               continuity_link: remappedContinuityLink,
               sceneBinding,
@@ -24507,23 +24804,7 @@ async function executeNode(input: {
         }
         const mergeSceneGraphArray = (field: string) => mergeById(scenePlanEntries.flatMap((entry) => readArray(asRecord(entry.plan.sceneGraphAdditions)[field]).map(asRecord)))
         const localReferences = mergeById(scenePlanEntries.flatMap((entry) => readArray(entry.plan.localReferences ?? entry.plan.outputLocalReferences).map(asRecord)))
-        const coverageSetups = mergeById(scenePlanEntries.flatMap((entry) => {
-          const sceneId = entry.sourceSceneId || readText(entry.plan.sourceSceneId) || `scene_${String(entry.sourceSceneIndex || 1).padStart(3, '0')}`
-          return readArray(entry.plan.coverageSetups ?? entry.plan.coverage_setups).map(asRecord).map((setup) => {
-            const oldSetupId = readText(setup.id)
-            return {
-              ...setup,
-              id: oldSetupId,
-              sceneId: readText(setup.sceneId ?? setup.scene_id) || sceneId,
-              usedShotIds: readStringArray(setup.usedShotIds ?? setup.used_shot_ids)
-                .map((shotId) => shotIdMap.get(`${sceneId}:${shotId}`) || shotId)
-                .filter(Boolean),
-              blockIds: readStringArray(setup.blockIds ?? setup.block_ids)
-                .map((blockId) => blockIdMap.get(`${sceneId}:${blockId}`) || blockId)
-                .filter(Boolean),
-            }
-          })
-        }))
+        const coverageSetups: Record<string, unknown>[] = []
         const mergedV2 = sequenceAnimaticShotContinuityPlanV2Schema.parse({
           role: 'sequence_animatic_director_plan',
           contractVersion: 'shot_continuity_plan_v2',
@@ -24597,6 +24878,126 @@ async function executeNode(input: {
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-plan-merge-v1' }
+      }
+      if (purpose === 'sequence_animatic_coverage_plan') {
+        const directorPlan = readFirstUpstreamRecord(input.upstream, ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
+        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const context = readFirstUpstreamRecord(input.upstream, ['context'])
+        if (!Object.keys(directorPlan).length) throw new Error('Coverage planner requires a merged shot continuity plan.')
+        const fallbackCoveragePlan = normalizeSequenceAnimaticCoveragePlan({ directorPlan })
+        let providerRequestId: string | undefined
+        let fallbackUsed = false
+        let fallbackReason = ''
+        let proposedCoveragePlan: Record<string, unknown> = {}
+        try {
+          const result = await runCinematicV2StructuredNodeBackground({
+            nodeKey: input.node.key,
+            schemaName: 'sequence_animatic_coverage_plan',
+            schema: sequenceAnimaticCoveragePlanLlmSchema,
+            instructions: [
+              'You are a film coverage supervisor assigning reusable camera/staging setups after shots already exist.',
+              'Return strict JSON only. Do not create shots, scene graph nodes, image prompts, or coverage anchor art.',
+            ].join('\n'),
+            prompt: [
+              'Assign every shot to exactly one coverage setup.',
+              'Only group shots when they share the same set, zone, primary spot, camera side/framing intent, screen direction, and visible subject arrangement.',
+              'Never assign a setup subject that is not visible in every shot using that setup.',
+              'Never group shots across different primarySpotId values unless the setupKind is wide_master and all shots share the same set and zone.',
+              'Create a new setup when blocking, camera side, subject arrangement, or primary spot changes.',
+              'Use concise setup titles and stagingBrief fields. These are planning records, not image prompts.',
+              'Return coverageSetups plus coverageSetupByShotId. Every shot id must appear in coverageSetupByShotId exactly once.',
+              compactForPrompt({
+                shots: readArray(directorPlan.shots).map(asRecord).map((shot) => ({
+                  id: readText(shot.id),
+                  index: Number(shot.index ?? 0) || 0,
+                  blockId: readText(shot.blockId ?? shot.storyboardBlockId),
+                  title: readText(shot.title),
+                  action: readText(shot.action ?? shot.description),
+                  camera: asRecord(shot.camera),
+                  lighting: readText(shot.lighting),
+                  refs: sequenceAnimaticCoverageShotRefs(shot),
+                  sceneBinding: sequenceAnimaticCoverageSpatialFields(shot),
+                  sourceSceneId: readText(shot.sourceSceneId ?? shot.sceneId),
+                })),
+                blocks: readArray(directorPlan.blocks).map(asRecord).map((block) => ({
+                  id: readText(block.id),
+                  index: Number(block.index ?? 0) || 0,
+                  title: readText(block.title),
+                  summary: readText(block.summary),
+                  shotIds: readStringArray(block.shotIds ?? block.shot_ids),
+                })),
+                continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+                screenplay: {
+                  title: readText(screenplayDraft.title),
+                  summary: readText(screenplayDraft.summary),
+                  text: readText(screenplayDraft.screenplayMarkdown ?? screenplayDraft.markdown ?? screenplayDraft.text).slice(0, 8000),
+                },
+                assetPackSummary: {
+                  selectedEntityKeys: cinematicAssetPackEntityKeys(assetPack),
+                  entityCount: readArray(assetPack.entities).length,
+                },
+                world: asRecord(context.wiki ?? context.worldWiki),
+              }, 22000),
+            ].join('\n\n'),
+            fallback: fallbackCoveragePlan,
+            maxOutputTokens: 12000,
+            shouldCancel: input.shouldCancel,
+            onProgress: async (progress) => {
+              await input.onProgress?.({
+                provider: 'openai',
+                model: outputWorkflowTextModel(),
+                providerRequestId: progress.providerRequestId,
+                metadata: {
+                  providerMode: progress.providerMode,
+                  providerStatus: progress.providerStatus,
+                  lastProviderPollAt: progress.lastProviderPollAt,
+                  providerStartedAt: progress.providerStartedAt,
+                  sequenceAnimaticCoveragePlan: true,
+                },
+              })
+            },
+          })
+          providerRequestId = result.providerRequestId
+          fallbackUsed = result.fallbackUsed
+          fallbackReason = result.fallbackReason
+          proposedCoveragePlan = asRecord(result.value)
+        } catch (error) {
+          fallbackUsed = true
+          fallbackReason = error instanceof Error ? error.message : 'Coverage planner LLM failed.'
+          proposedCoveragePlan = fallbackCoveragePlan
+        }
+        const coveragePlan = normalizeSequenceAnimaticCoveragePlan({ directorPlan, proposedPlan: proposedCoveragePlan })
+        const finalizedDirectorPlan = applySequenceAnimaticCoveragePlanToDirectorPlan({ directorPlan, coveragePlan })
+        const outputs = {
+          coveragePlan,
+          coverage_plan: coveragePlan,
+          coverageSetups: coveragePlan.coverageSetups,
+          coverage_setups: coveragePlan.coverageSetups,
+          coverageSetupByShotId: coveragePlan.coverageSetupByShotId,
+          coverage_setup_by_shot_id: coveragePlan.coverageSetupByShotId,
+          directorPlan: finalizedDirectorPlan,
+          director_plan: finalizedDirectorPlan,
+          shotContinuityPlan: finalizedDirectorPlan,
+          shot_continuity_plan: finalizedDirectorPlan,
+          blocks: finalizedDirectorPlan.blocks,
+          continuityGraphV2: finalizedDirectorPlan.continuityGraphV2,
+          continuity_graph_v2: finalizedDirectorPlan.continuityGraphV2,
+          shotBindings: finalizedDirectorPlan.shotBindings,
+          shot_bindings: finalizedDirectorPlan.shotBindings,
+          fallbackUsed,
+          fallbackReason,
+          text: JSON.stringify({ coveragePlan, fallbackUsed, fallbackReason }, null, 2),
+          deterministic: fallbackUsed,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: fallbackUsed ? 'graphcore' : 'openai',
+          model: fallbackUsed ? 'deterministic-sequence-animatic-coverage-plan-v1' : outputWorkflowTextModel(),
+          providerRequestId,
+        }
       }
       if (purpose === 'sequence_animatic_manifest') {
         const directorPlan = readFirstUpstreamRecord(input.upstream, ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
@@ -24976,12 +25377,12 @@ async function executeNode(input: {
             instructions: [
               'You are a senior animation shot planner and continuity supervisor.',
               'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
-              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; every coverage_setup must include id; never drop id fields.',
+              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; never drop id fields.',
               'Every shot must also include a concise lighting note (<=12 words: time of day, key light direction, mood) — lighting drives keyframe atmosphere and is not optional padding.',
-              'Allowed record kinds: plan_start, block, coverage_setup, shot, scene_graph_addition, spot_relation, local_reference, plan_done.',
+              'Allowed record kinds: plan_start, block, shot, scene_graph_addition, spot_relation, local_reference, plan_done.',
               'Emit records in live-usable order: plan_start, then shot records in story order as soon as each shot is complete. Do not wait for a whole block to be finished before emitting shots.',
               'Block records are optional during streaming and may arrive before, between, or after related shots. If unsure, assign each shot a stable blockId and keep streaming shots.',
-              'Emit coverage_setup records before the shots that use them when possible. After all shots, emit remaining scene_graph_addition records, spot_relation records, local_reference records, optional block records, then plan_done.',
+              'After all shots, emit remaining scene_graph_addition records, spot_relation records, local_reference records, optional block records, then plan_done.',
             ].join('\n'),
             prompt: [
               'Convert the creative screenplay into one compact streamed shot continuity plan for the entire animatic in a single coherent pass.',
@@ -24992,13 +25393,12 @@ async function executeNode(input: {
               `Hard shot boundary rules: durationSeconds must be <= ${sequenceAnimaticShotContinuityMaxDurationSeconds}; preferred duration is 3-${sequenceAnimaticShotContinuityPreferredDurationSeconds} seconds; each shot should contain one camera setup and one visible story beat.`,
               `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows, at most 140 characters per dialogue line, and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. If a conversation exchange has more than that, split it into alternating dialogue/reaction/action shots.`,
               'Use reaction shots, inserts, movement beats, and silent performance shots to keep dialogue readable. Do not put a whole conversation paragraph into one shot.',
-              'Coverage setup rules: create reusable coverage_setup records for repeated camera/staging setups such as wide masters, over-the-shoulders, reverse angles, clean singles, inserts, and blocking changes. Reuse coverageSetupId across shots that should preserve the same camera geography, screen direction, lighting, and character positions. Create a new setup when blocking, distance, camera side, or subject arrangement changes.',
+              'Coverage setup rules: do not emit coverage_setup records and do not set coverageSetupId. Capture only shot-local camera facts and optional coverageIntent text; a dedicated downstream coverage planner will assign reusable setups.',
               'Keep action, camera, lighting, performance, visual briefs, summaries, and notes concise. Prefer one strong sentence per field unless the shot requires more.',
               'Record contracts:',
               'plan_start: {"kind":"plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
               'block: {"kind":"block","id":"block_001","index":1,"title":"...","summary":"...","shotIds":["shot_001"]} // optional during streaming; can be emitted after its shots',
-              'coverage_setup: {"kind":"coverage_setup","id":"setup_ots_a_to_b","sceneId":"scene_001","setupKind":"wide_master|ots_a_to_b|ots_b_to_a|clean_single|two_shot|insert|movement|blocking_change|viewpoint|other","title":"...","setId":"set_...","zoneId":"zone_...","primarySpotId":"spot_...","spotIds":[],"viewpointId":"","characterRefIds":[],"screenDirection":"A screen-left, B screen-right","camera":{"framing":"...","angle":"...","lens":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","stagingBrief":"stable visual anchor description","continuityFromSetupId":"","continuityMode":"new_setup","usedShotIds":[],"blockIds":[],"required":true}',
-              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"coverageSetupId":"setup_ots_a_to_b","continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
+              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"coverageIntent":"optional concise camera/staging intent, not an id","action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
               'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|viewpoint","id":"set_or_zone_or_spot_or_viewpoint_id","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set_for_zone_spot_viewpoint","zoneId":"parent_zone_for_spot_viewpoint","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
               'spot_relation: {"kind":"spot_relation","sourceId":"spot_a","targetId":"spot_b","relationship":"adjacent_to|connected_to|visible_from|entrance_to|faces|opposes|above_below|left_of|right_of|near|occludes","evidence":"short reason","direction":"optional world-space direction","screenDirection":"optional screen-space direction"}',
               'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
@@ -25291,9 +25691,16 @@ async function executeNode(input: {
         const fallbackEntities = references.map((reference, index) => {
           const assetKey = readText(reference.assetKey)
           const role = readText(reference.role) || 'continuity_asset'
+          const label = role === 'coverage_anchor'
+            ? 'Coverage anchor'
+            : role === 'previous_keyframe'
+              ? 'Previous keyframe'
+              : role === 'storyboard_panel'
+                ? 'Storyboard panel'
+                : `${titleFromRefLike(role)} ${index + 1}`
           return {
             key: `shot_ref_${index + 1}_${slugify(assetKey || role)}`,
-            name: `${titleFromRefLike(role)} ${index + 1}`,
+            name: label,
             type: role.includes('character') ? 'character' : role.includes('prop') ? 'prop' : 'continuity_asset',
             role,
             summary: 'Shot-scoped visual reference resolved from the sequence animatic graph.',
@@ -25302,14 +25709,18 @@ async function executeNode(input: {
             primaryAssetKey: assetKey,
             selectedReferenceAssetKey: assetKey,
             selectedReferenceVariantKey: role,
-            selectedReferenceVariantLabel: `${titleFromRefLike(role)} ${index + 1}`,
+            selectedReferenceVariantLabel: label,
             selectedReferenceVariantType: 'continuity_asset',
             referenceSelectionReason: 'Resolved by the shot production graph.',
           }
         }).filter((entity) => readText(entity.primaryAssetKey))
+        const scopedReferenceAssetKeys = [...new Set([
+          ...readStringArray(config.requiredReferenceAssetKeys),
+          ...referenceAssetKeys,
+        ])]
         const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
           assetPack: rawAssetPack,
-          referenceAssetKeys: readStringArray(config.requiredReferenceAssetKeys).length > 0 ? readStringArray(config.requiredReferenceAssetKeys) : referenceAssetKeys,
+          referenceAssetKeys: scopedReferenceAssetKeys.length > 0 ? scopedReferenceAssetKeys : referenceAssetKeys,
           fallbackEntities,
           referenceScope: 'sequence_animatic_shot_production',
           limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
@@ -25471,11 +25882,142 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-coverage-anchor-input-v1' }
       }
+      if (purpose === 'sequence_animatic_coverage_anchor_brief') {
+        const config = asRecord(input.node.config)
+        const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
+        const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
+        const subjectLabels = [...new Set([
+          ...readArray(assetPack.entities).map(asRecord)
+            .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
+            .map((entity) => sequenceAnimaticReferenceName(entity, 'Subject')),
+          ...shots.flatMap((shot) => readStringArray(shot.visibleCharacterNames ?? shot.visible_character_names)),
+          ...shots.flatMap((shot) => readStringArray(shot.characterNames ?? shot.character_names)),
+        ].map((label) => label.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(0, 8)
+        const fallbackBrief = sequenceAnimaticCoverageAnchorBriefSchema.parse({
+          cameraPosition: readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief) || readText(asRecord(coverageSetup.camera).framing),
+          framing: readText(asRecord(coverageSetup.camera).framing) || readText(coverageSetup.setupKind ?? coverageSetup.setup_kind).replace(/_/g, ' '),
+          screenDirection: readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction) || readText(asRecord(coverageSetup.camera).screenDirectionRule ?? asRecord(coverageSetup.camera).screen_direction_rule),
+          subjectBlocking: readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief) || shots.map((shot) => compactStoryboardSentence(readText(shot.action), '', 18)).filter(Boolean).join(' '),
+          foregroundBackgroundPlan: 'Keep the parent spot/zone geography readable with clear foreground, midground, and background depth.',
+          movementArrows: readStringArray(coverageSetup.movementArrows ?? coverageSetup.movement_arrows),
+          labels: subjectLabels.length > 0 ? [...subjectLabels, 'camera', 'movement'] : ['subject', 'camera', 'movement'],
+          visualNotes: shots.slice(0, 4).map((shot) => compactStoryboardSentence(readText(shot.action ?? shot.description), '', 20)).filter(Boolean),
+          mustNotInclude: ['final character likeness', 'wardrobe detail', 'decorative captions', 'UI panels', 'watermarks'],
+        })
+        let providerRequestId: string | undefined
+        let brief = fallbackBrief
+        let fallbackUsed = false
+        let fallbackReason = ''
+        try {
+          const result = await runCinematicV2StructuredNodeBackground({
+            nodeKey: input.node.key,
+            schemaName: 'sequence_animatic_coverage_anchor_brief',
+            schema: sequenceAnimaticCoverageAnchorBriefSchema,
+            instructions: [
+              'You are a cinematographer making a concise coverage-anchor staging brief.',
+              'Return strict JSON only. This is not final art and not an image prompt.',
+            ].join('\n'),
+            prompt: [
+              'Create a visual staging brief for one coverage anchor blockout plate.',
+              'Use only the scoped setup, shot actions, visible subjects, camera facts, and location/reference summary below.',
+              'Decide the camera position, framing, screen direction, subject placeholder positions, movement arrows, and foreground/background layout.',
+              'Do not add subjects that are not visible in the provided shots. Do not create coverage setup ids.',
+              compactForPrompt({
+                coverageSetup: {
+                  id: setupId,
+                  title: readText(coverageSetup.title),
+                  setupKind: readText(coverageSetup.setupKind ?? coverageSetup.setup_kind),
+                  setId: readText(coverageSetup.setId ?? coverageSetup.set_id),
+                  zoneId: readText(coverageSetup.zoneId ?? coverageSetup.zone_id),
+                  primarySpotId: readText(coverageSetup.primarySpotId ?? coverageSetup.primary_spot_id),
+                  viewpointId: readText(coverageSetup.viewpointId ?? coverageSetup.viewpoint_id),
+                  characterRefIds: readStringArray(coverageSetup.characterRefIds ?? coverageSetup.character_ref_ids),
+                  screenDirection: readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction),
+                  camera: asRecord(coverageSetup.camera),
+                  lighting: readText(coverageSetup.lighting),
+                  stagingBrief: readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief),
+                },
+                shots: shots.slice(0, 8).map((shot) => ({
+                  id: readText(shot.id),
+                  title: readText(shot.title),
+                  action: readText(shot.action ?? shot.description),
+                  camera: asRecord(shot.camera),
+                  lighting: readText(shot.lighting),
+                  refs: sequenceAnimaticCoverageShotRefs(shot),
+                  sceneBinding: sequenceAnimaticCoverageSpatialFields(shot),
+                })),
+                referenceSummary: sequenceAnimaticReferenceManifestText(assetPack),
+              }, 14000),
+            ].join('\n\n'),
+            fallback: fallbackBrief,
+            maxOutputTokens: 3000,
+            shouldCancel: input.shouldCancel,
+            onProgress: async (progress) => {
+              await input.onProgress?.({
+                provider: 'openai',
+                model: outputWorkflowTextModel(),
+                providerRequestId: progress.providerRequestId,
+                metadata: {
+                  providerMode: progress.providerMode,
+                  providerStatus: progress.providerStatus,
+                  sequenceAnimaticCoverageAnchorBrief: true,
+                },
+              })
+            },
+          })
+          providerRequestId = result.providerRequestId
+          brief = sequenceAnimaticCoverageAnchorBriefSchema.parse(result.value)
+          fallbackUsed = result.fallbackUsed
+          fallbackReason = result.fallbackReason
+        } catch (error) {
+          fallbackUsed = true
+          fallbackReason = error instanceof Error ? error.message : 'Coverage anchor brief LLM failed.'
+          brief = fallbackBrief
+        }
+        const text = [
+          brief.cameraPosition ? `Camera position: ${brief.cameraPosition}` : '',
+          brief.framing ? `Framing: ${brief.framing}` : '',
+          brief.screenDirection ? `Screen direction: ${brief.screenDirection}` : '',
+          brief.subjectBlocking ? `Subject blocking: ${brief.subjectBlocking}` : '',
+          brief.foregroundBackgroundPlan ? `Foreground/background: ${brief.foregroundBackgroundPlan}` : '',
+          brief.movementArrows.length > 0 ? `Movement arrows: ${brief.movementArrows.join('; ')}` : '',
+          brief.labels.length > 0 ? `Labels: ${brief.labels.join(', ')}` : '',
+          brief.visualNotes.length > 0 ? `Visual notes: ${brief.visualNotes.join('; ')}` : '',
+        ].filter(Boolean).join('\n')
+        const outputs = {
+          coverageBrief: brief,
+          coverage_brief: brief,
+          promptBrief: text,
+          prompt_brief: text,
+          coverageSetup,
+          coverage_setup: coverageSetup,
+          shots,
+          assetPack,
+          asset_pack: assetPack,
+          coverageSetupId: setupId,
+          coverage_setup_id: setupId,
+          fallbackUsed,
+          fallbackReason,
+          text,
+        }
+        return {
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: fallbackUsed ? 'graphcore' : 'openai',
+          model: fallbackUsed ? 'deterministic-sequence-animatic-coverage-anchor-brief-v1' : outputWorkflowTextModel(),
+          providerRequestId,
+        }
+      }
       if (purpose === 'sequence_animatic_coverage_anchor_prompt') {
         const config = asRecord(input.node.config)
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
         const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const coverageBrief = readFirstUpstreamRecord(input.upstream, ['coverageBrief', 'coverage_brief'])
+        const coverageBriefText = readFirstUpstreamText(input.upstream, ['promptBrief', 'prompt_brief', 'coverageBriefText', 'coverage_brief_text'])
         const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
         const coverageScope = readText(config.coverageAnchorScope ?? config.coverage_anchor_scope)
         const placementLabels = [...new Set([
@@ -25497,12 +26039,15 @@ async function executeNode(input: {
         const promptText = [
           'Create one labeled coverage blockout plate for an animatic shot setup. This is a planning reference, not final art.',
           'Show environment framing, camera position feel, screen direction, movement arrows, and simple subject placeholders.',
-          'Use location reference images for spatial layout, materials, weather, lighting logic, and geography.',
-          'Use character references only to know which named placeholders to place; do not render detailed faces, wardrobe likeness, or final character art.',
+          'Use attached set/zone/spot reference images as location references for spatial layout, materials, weather, lighting logic, and geography.',
+          'Use named character/item reference images only to know which placeholders to place, their scale, and their rough silhouette; do not render detailed faces, wardrobe likeness, or final character art.',
+          'Every subject placeholder must correspond to a visible shot subject in the reference map or linked shot summary. Do not add unrelated setup subjects.',
           'Sparse placement labels and arrows are allowed and required. Keep labels short and readable.',
           'Ban decorative captions, paragraphs, UI panels, watermarks, borders, split panels, and polished final-frame character detail.',
           '',
           `Coverage blockout: ${readText(coverageSetup.title) || setupId}`,
+          coverageBriefText ? `Creative staging brief:\n${coverageBriefText}` : '',
+          readStringArray(coverageBrief.labels).length > 0 ? `Required labels: ${readStringArray(coverageBrief.labels).join(', ')}` : '',
           readText(coverageSetup.setupKind ?? coverageSetup.setup_kind) ? `Setup kind: ${readText(coverageSetup.setupKind ?? coverageSetup.setup_kind).replace(/_/g, ' ')}` : '',
           readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief) ? `Staging: ${readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)}` : '',
           readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction) ? `Screen direction: ${readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)}` : '',
@@ -25519,6 +26064,10 @@ async function executeNode(input: {
           text: promptText,
           coverageSetup,
           coverage_setup: coverageSetup,
+          coverageBrief,
+          coverage_brief: coverageBrief,
+          promptBrief: coverageBriefText,
+          prompt_brief: coverageBriefText,
           shots,
           assetPack,
           asset_pack: assetPack,
