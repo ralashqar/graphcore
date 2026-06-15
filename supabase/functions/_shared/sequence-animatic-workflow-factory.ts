@@ -711,6 +711,8 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
     ]
   })
   const includeCoverageSubgraph = Boolean(readText(input.commonConfig.coverageSetupId))
+  const coverageAnchorIdentityKey = readText(input.commonConfig.coverageAnchorScopeKey) ? 'coverageAnchorScopeKey' : 'coverageSetupId'
+  const coverageAnchorIdentityValue = readText(input.commonConfig.coverageAnchorScopeKey) || readText(input.commonConfig.coverageSetupId)
   const coverageConfig = {
     ...config,
     assetPack: coverageAssetPack,
@@ -731,8 +733,8 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       ...coverageConfig,
       globalAsset: true,
       globalAssetRole: 'coverage_anchor',
-      globalAssetIdentityKey: 'coverageSetupId',
-      globalAssetIdentityValue: readText(input.commonConfig.coverageSetupId),
+      globalAssetIdentityKey: coverageAnchorIdentityKey,
+      globalAssetIdentityValue: coverageAnchorIdentityValue,
       coverageSetup: input.coverageSetup ?? {},
       coverage_setup: input.coverageSetup ?? {},
       shots: input.coverageShots ?? [input.shot],
@@ -756,8 +758,8 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       ...coverageConfig,
       globalAsset: true,
       globalAssetRole: 'coverage_anchor',
-      globalAssetIdentityKey: 'coverageSetupId',
-      globalAssetIdentityValue: readText(input.commonConfig.coverageSetupId),
+      globalAssetIdentityKey: coverageAnchorIdentityKey,
+      globalAssetIdentityValue: coverageAnchorIdentityValue,
       existingArtifactRole: 'sequence_animatic_coverage_anchor',
       coverageSetup: input.coverageSetup ?? {},
       coverage_setup: input.coverageSetup ?? {},
@@ -781,8 +783,8 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       ...coverageConfig,
       globalAsset: true,
       globalAssetRole: 'coverage_anchor',
-      globalAssetIdentityKey: 'coverageSetupId',
-      globalAssetIdentityValue: readText(input.commonConfig.coverageSetupId),
+      globalAssetIdentityKey: coverageAnchorIdentityKey,
+      globalAssetIdentityValue: coverageAnchorIdentityValue,
       coverageSetup: input.coverageSetup ?? {},
       coverage_setup: input.coverageSetup ?? {},
       shots: input.coverageShots ?? [input.shot],

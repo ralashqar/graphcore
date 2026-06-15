@@ -137,14 +137,61 @@ function coverageSetupEntityRefIds(coverageSetup: Record<string, unknown>) {
   ])
 }
 
+function shotSpatialFingerprint(shot: Record<string, unknown>, coverageSetup: Record<string, unknown>) {
+  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+  const bindingSpotIds = readStringArray(binding.spotIds ?? binding.spot_ids ?? shot.spotIds ?? shot.spot_ids ?? shot.continuitySpotIds ?? shot.continuity_spot_ids)
+  const setupSpotIds = readStringArray(coverageSetup.spotIds ?? coverageSetup.spot_ids)
+  const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id ?? shot.primarySpotId ?? shot.primary_spot_id)
+    || bindingSpotIds[0]
+    || readText(coverageSetup.primarySpotId ?? coverageSetup.primary_spot_id)
+    || setupSpotIds[0]
+  return uniqueTexts([
+    readText(binding.setId ?? binding.set_id ?? shot.setId ?? shot.set_id ?? shot.continuitySetId ?? shot.continuity_set_id) || readText(coverageSetup.setId ?? coverageSetup.set_id),
+    readText(binding.zoneId ?? binding.zone_id ?? shot.zoneId ?? shot.zone_id ?? shot.continuityZoneId ?? shot.continuity_zone_id) || readText(coverageSetup.zoneId ?? coverageSetup.zone_id),
+    primarySpotId,
+    readText(binding.viewpointId ?? binding.viewpoint_id ?? shot.viewpointId ?? shot.viewpoint_id) || readText(coverageSetup.viewpointId ?? coverageSetup.viewpoint_id),
+    readText(binding.angleId ?? binding.angle_id ?? shot.angleId ?? shot.angle_id ?? shot.continuityAngleId ?? shot.continuity_angle_id),
+  ]).join('>')
+}
+
+function sameNonEmptySet(left: Set<string>, right: Set<string>) {
+  if (left.size === 0 || right.size === 0) return false
+  if (left.size !== right.size) return false
+  for (const value of left) {
+    if (!right.has(value)) return false
+  }
+  return true
+}
+
+function scopedCoverageShotsForShot(input: {
+  shot: Record<string, unknown>
+  coverageSetup: Record<string, unknown>
+  coverageShots: readonly Record<string, unknown>[]
+}) {
+  const currentShotId = readText(input.shot.id)
+  const currentSpatial = shotSpatialFingerprint(input.shot, input.coverageSetup)
+  const currentSubjects = new Set(shotEntityRefIds(input.shot))
+  const scopedShots = input.coverageShots.filter((candidate) => {
+    const candidateId = readText(candidate.id)
+    if (candidateId === currentShotId) return true
+    if (currentSpatial && shotSpatialFingerprint(candidate, input.coverageSetup) !== currentSpatial) return false
+    const candidateSubjects = new Set(shotEntityRefIds(candidate))
+    return sameNonEmptySet(currentSubjects, candidateSubjects)
+  })
+  return scopedShots.some((candidate) => readText(candidate.id) === currentShotId)
+    ? scopedShots
+    : [input.shot, ...scopedShots]
+}
+
 function scopedAssetPackForShot(
   assetPack: Record<string, unknown>,
   shot: Record<string, unknown>,
   coverageSetup: Record<string, unknown>,
 ) {
+  const shotRefIds = shotEntityRefIds(shot)
   const entityIds = new Set([
-    ...shotEntityRefIds(shot),
-    ...coverageSetupEntityRefIds(coverageSetup),
+    ...shotRefIds,
+    ...(shotRefIds.length === 0 ? coverageSetupEntityRefIds(coverageSetup) : []),
   ])
   const entities = readArray(assetPack.entities).map(asRecord).filter((entity) => entityIds.has(readText(entity.key)))
   const requiredReferenceAssetKeys = uniqueTexts(entities.flatMap(entityAssetKeys)).slice(0, 8)
@@ -160,7 +207,9 @@ function scopedAssetPackForShot(
     selectedReferences: requiredReferenceAssetKeys.map((assetKey) => ({
       assetKey,
       role: 'entity_reference',
-      reason: 'Selected from shot-visible refs and coverage setup subjects.',
+      reason: shotRefIds.length === 0
+        ? 'Selected from coverage setup subjects because the shot has no explicit entity refs.'
+        : 'Selected from shot-visible refs.',
     })),
   }
 }
@@ -193,6 +242,13 @@ function incidentalCharacterNodesForShot(input: {
   contextNodes: readonly Record<string, unknown>[]
 }) {
   const text = shotGraphSearchText(input.shot, input.coverageSetup, input.contextNodes)
+  const shotText = [
+    readText(input.shot.title),
+    readText(input.shot.action),
+    readText(input.shot.description),
+    readText(input.shot.summary),
+    readText(input.shot.storyboardPanelPrompt ?? input.shot.storyboard_panel_prompt),
+  ].filter(Boolean).join(' ')
   const normalizedText = normalizeReferenceText(text)
   if (!normalizedText) return []
   const existingLabels = new Set([...input.graphNodeById.values()].flatMap((node) => [
@@ -216,7 +272,7 @@ function incidentalCharacterNodesForShot(input: {
     },
   ]
   return candidates
-    .filter((candidate) => candidate.match.test(text) && candidate.context.test(text))
+    .filter((candidate) => candidate.match.test(shotText) && candidate.context.test(text))
     .filter((candidate) => !input.graphNodeById.has(candidate.id))
     .filter((candidate) => !existingLabels.has(normalizeReferenceText(candidate.name)) && !existingLabels.has(normalizeReferenceText(candidate.id)))
     .filter((candidate) => !explicitRefIds.has(normalizeReferenceText(candidate.id)) && !explicitRefIds.has(normalizeReferenceText(candidate.name)))
@@ -361,6 +417,7 @@ Deno.serve(async (request) => {
       directorPlan,
       shotId: payload.shotId,
     })
+    const scopedCoverageShots = scopedCoverageShotsForShot({ shot, coverageSetup, coverageShots })
     const requestedCoverageSetupId = payload.coverageSetupId ? readText(payload.coverageSetupId) : ''
     if (requestedCoverageSetupId && coverageSetupId && requestedCoverageSetupId !== coverageSetupId) {
       throw new HttpError(409, `Shot ${payload.shotId} belongs to coverage setup ${coverageSetupId}, not ${requestedCoverageSetupId}.`)
@@ -532,9 +589,17 @@ Deno.serve(async (request) => {
       shotId: payload.shotId,
       shot,
       coverageSetupId,
+      coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
       sourceReferenceHash,
       graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
     })
+    const coverageAnchorScopeKey = coverageSetupId ? sequenceAnimaticStableHash({
+      coverageSetupId,
+      spatial: shotSpatialFingerprint(shot, coverageSetup),
+      shotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
+      subjectRefIds: shotEntityRefIds(shot),
+      policy: 'shot_scoped_coverage_anchor_v1',
+    }) : ''
 
     const existingResponse = await client
       .from('output_requests')
@@ -625,6 +690,9 @@ Deno.serve(async (request) => {
         requiredReferenceAssetKeys: scopedRefs.requiredReferenceAssetKeys,
         omittedReferenceAssetKeys: [],
         sourceReferenceHash,
+        coverageAnchorScopeKey,
+        coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
+        coverageAnchorScope: scopedCoverageShots.length === coverageShots.length ? 'coverage_setup' : 'shot_scoped',
         dependencyWave: 5,
         continuityDependencyNodeIds: continuityDependencies.map((entry) => readText(entry.targetNodeId)).filter(Boolean),
         missingContinuityNodeIds: [],
@@ -635,8 +703,9 @@ Deno.serve(async (request) => {
         sharedDependencyRequests: [
           ...(coverageSetupId ? [{
             role: 'coverage_anchor',
-            identityKey: 'coverageSetupId',
-            identityValue: coverageSetupId,
+            identityKey: 'coverageAnchorScopeKey',
+            identityValue: coverageAnchorScopeKey,
+            coverageSetupId,
             status: 'graph_node',
           }] : []),
           ...scopedRefs.requiredReferenceAssetKeys.map((assetKey) => ({
@@ -670,7 +739,7 @@ Deno.serve(async (request) => {
         panel: {},
         coverageAnchor: {},
         coverageSetup,
-        coverageShots: coverageShots.length > 0 ? coverageShots : [shot],
+        coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
         coverageReferenceAssetKeys: [],
         previousKeyframe: {},
         assetPack: scopedRefs.assetPack,

@@ -152,6 +152,52 @@ function coverageSetupEntityRefIds(coverageSetup: Record<string, unknown>) {
   ].filter(Boolean))]
 }
 
+function shotSpatialFingerprint(shot: Record<string, unknown>, coverageSetup: Record<string, unknown>) {
+  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+  const bindingSpotIds = readStringArray(binding.spotIds ?? binding.spot_ids ?? shot.spotIds ?? shot.spot_ids ?? shot.continuitySpotIds ?? shot.continuity_spot_ids)
+  const setupSpotIds = readStringArray(coverageSetup.spotIds ?? coverageSetup.spot_ids)
+  const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id ?? shot.primarySpotId ?? shot.primary_spot_id)
+    || bindingSpotIds[0]
+    || readText(coverageSetup.primarySpotId ?? coverageSetup.primary_spot_id)
+    || setupSpotIds[0]
+  return [...new Set([
+    readText(binding.setId ?? binding.set_id ?? shot.setId ?? shot.set_id ?? shot.continuitySetId ?? shot.continuity_set_id) || readText(coverageSetup.setId ?? coverageSetup.set_id),
+    readText(binding.zoneId ?? binding.zone_id ?? shot.zoneId ?? shot.zone_id ?? shot.continuityZoneId ?? shot.continuity_zone_id) || readText(coverageSetup.zoneId ?? coverageSetup.zone_id),
+    primarySpotId,
+    readText(binding.viewpointId ?? binding.viewpoint_id ?? shot.viewpointId ?? shot.viewpoint_id) || readText(coverageSetup.viewpointId ?? coverageSetup.viewpoint_id),
+    readText(binding.angleId ?? binding.angle_id ?? shot.angleId ?? shot.angle_id ?? shot.continuityAngleId ?? shot.continuity_angle_id),
+  ].filter(Boolean))].join('>')
+}
+
+function sameNonEmptySet(left: Set<string>, right: Set<string>) {
+  if (left.size === 0 || right.size === 0) return false
+  if (left.size !== right.size) return false
+  for (const value of left) {
+    if (!right.has(value)) return false
+  }
+  return true
+}
+
+function scopedCoverageShotsForShot(input: {
+  shot: Record<string, unknown>
+  coverageSetup: Record<string, unknown>
+  coverageShots: readonly Record<string, unknown>[]
+}) {
+  const currentShotId = readText(input.shot.id)
+  const currentSpatial = shotSpatialFingerprint(input.shot, input.coverageSetup)
+  const currentSubjects = new Set(shotEntityRefIds(input.shot))
+  const scopedShots = input.coverageShots.filter((candidate) => {
+    const candidateId = readText(candidate.id)
+    if (candidateId === currentShotId) return true
+    if (currentSpatial && shotSpatialFingerprint(candidate, input.coverageSetup) !== currentSpatial) return false
+    const candidateSubjects = new Set(shotEntityRefIds(candidate))
+    return sameNonEmptySet(currentSubjects, candidateSubjects)
+  })
+  return scopedShots.some((candidate) => readText(candidate.id) === currentShotId)
+    ? scopedShots
+    : [input.shot, ...scopedShots]
+}
+
 function shotGraphSearchText(shot: Record<string, unknown>, coverageSetup: Record<string, unknown>, contextNodes: readonly Record<string, unknown>[]) {
   return [
     readText(shot.title),
@@ -176,6 +222,13 @@ function incidentalCharacterNodesForShot(input: {
   contextNodes: readonly Record<string, unknown>[]
 }) {
   const text = shotGraphSearchText(input.shot, input.coverageSetup, input.contextNodes)
+  const shotText = [
+    readText(input.shot.title),
+    readText(input.shot.action),
+    readText(input.shot.description),
+    readText(input.shot.summary),
+    readText(input.shot.storyboardPanelPrompt ?? input.shot.storyboard_panel_prompt),
+  ].filter(Boolean).join(' ')
   if (!normalizeReferenceText(text)) return []
   const existingLabels = new Set([...input.graphNodeById.values()].flatMap((node) => [
     normalizeReferenceText(readText(node.id)),
@@ -198,7 +251,7 @@ function incidentalCharacterNodesForShot(input: {
     },
   ]
   return candidates
-    .filter((candidate) => candidate.match.test(text) && candidate.context.test(text))
+    .filter((candidate) => candidate.match.test(shotText) && candidate.context.test(text))
     .filter((candidate) => !input.graphNodeById.has(candidate.id))
     .filter((candidate) => !existingLabels.has(normalizeReferenceText(candidate.name)) && !existingLabels.has(normalizeReferenceText(candidate.id)))
     .filter((candidate) => !explicitRefIds.has(normalizeReferenceText(candidate.id)) && !explicitRefIds.has(normalizeReferenceText(candidate.name)))
@@ -1150,8 +1203,7 @@ Deno.serve(async (request) => {
         ...readStringArray(coverageSetup.propRefIds ?? coverageSetup.prop_ref_ids),
         ...readStringArray(coverageSetup.itemRefIds ?? coverageSetup.item_ref_ids),
       ]
-      const entityAssetKeys = assetKeysForEntityKeys([
-        ...coverageSetupEntityKeys,
+      const shotEntityKeys = [
         ...readStringArray(refs.speakerRefIds ?? refs.speaker_ref_ids),
         ...dialogue.map((line) => readText(line.speakerRefId ?? line.speaker_ref_id)),
         ...readStringArray(refs.visibleCharacterRefIds ?? refs.visible_character_ref_ids),
@@ -1160,12 +1212,16 @@ Deno.serve(async (request) => {
         ...readStringArray(shot.visibleCharacterRefIds),
         ...readStringArray(shot.propRefIds),
         readText(shot.locationRefId),
+      ].filter(Boolean)
+      const entityAssetKeys = assetKeysForEntityKeys([
+        ...shotEntityKeys,
+        ...(shotEntityKeys.length === 0 ? coverageSetupEntityKeys : []),
       ])
       const candidates = [
         { assetKey: readText(coverageAnchorImageBySetupId.get(coverageSetupId)?.assetKey), role: 'coverage_anchor' as const, reason: 'Reusable coverage anchor for this camera setup.' },
         { assetKey: readText(shotKeyframeImageByShotId.get(previousShotId)?.assetKey), role: 'previous_keyframe' as const, reason: 'Same-setup motion continuity reference.' },
         ...graphAssetKeys.map((assetKey) => ({ assetKey, role: 'continuity_asset' as const, reason: 'Scene-graph spatial or local continuity reference.' })),
-        ...entityAssetKeys.map((assetKey) => ({ assetKey, role: 'entity_reference' as const, reason: 'Coverage setup subject, visible character, speaker, prop, or location reference.' })),
+        ...entityAssetKeys.map((assetKey) => ({ assetKey, role: 'entity_reference' as const, reason: shotEntityKeys.length === 0 ? 'Coverage setup subject fallback reference.' : 'Shot-visible character, speaker, prop, or location reference.' })),
       ].filter((entry) => readText(entry.assetKey))
       const unique = candidates.filter((entry, index, entries) => entries.findIndex((candidate) => readText(candidate.assetKey) === readText(entry.assetKey)) === index)
       const required = unique.slice(0, 8)
@@ -2028,10 +2084,36 @@ Deno.serve(async (request) => {
       let child = existingByShotId.get(shotId) ?? null
       const shot = asRecord(job.shot)
       const coverageSetupId = readText(job.coverageSetupId)
+      const coverageSetup = coverageSetupId
+        ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
+        : {}
+      const coverageJob = coverageSetupId
+        ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId))
+        : {}
+      const coverageShotIds = readStringArray(coverageJob.shotIds)
+      const coverageShots = readArray(keyframePlan.shotKeyframeJobs)
+        .map(asRecord)
+        .map((entry) => asRecord(entry.shot))
+        .filter((entry) => coverageShotIds.includes(readText(entry.id)))
+      const scopedCoverageShots = scopedCoverageShotsForShot({ shot, coverageSetup, coverageShots })
       const requiredReferenceAssetKeys = readStringArray(shotRequiredReferenceAssetKeysByShotId[shotId])
       const omittedReferenceAssetKeys = readStringArray(shotOmittedReferenceAssetKeysByShotId[shotId])
       const sourceReferenceHash = sequenceAnimaticVisualReferenceHash({ shotId, coverageSetupId, requiredReferenceAssetKeys, omittedReferenceAssetKeys })
-      const sourceShotHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId, sourceReferenceHash, graphPolicyVersion: shotGraphPolicyVersion })
+      const sourceShotHash = sequenceAnimaticStableHash({
+        shotId,
+        shot,
+        coverageSetupId,
+        coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
+        sourceReferenceHash,
+        graphPolicyVersion: shotGraphPolicyVersion,
+      })
+      const coverageAnchorScopeKey = coverageSetupId ? sequenceAnimaticStableHash({
+        coverageSetupId,
+        spatial: shotSpatialFingerprint(shot, coverageSetup),
+        shotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
+        subjectRefIds: shotEntityRefIds(shot),
+        policy: 'shot_scoped_coverage_anchor_v1',
+      }) : ''
       if (child && isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain') {
         const childMetadata = asRecord(child.metadata)
         const staleReason = payload.mode === 'regenerate' && shotId === scopedShotId
@@ -2110,17 +2192,6 @@ Deno.serve(async (request) => {
         const workflowId = crypto.randomUUID()
         const blockId = readText(job.storyboardBlockId)
         const block = asRecord(asRecord(keyframePlan.blockById)[blockId])
-        const coverageSetup = coverageSetupId
-          ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
-          : {}
-        const coverageJob = coverageSetupId
-          ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId))
-          : {}
-        const coverageShotIds = readStringArray(coverageJob.shotIds)
-        const coverageShots = readArray(keyframePlan.shotKeyframeJobs)
-          .map(asRecord)
-          .map((entry) => asRecord(entry.shot))
-          .filter((entry) => coverageShotIds.includes(readText(entry.id)))
         const continuityDependencies = shotGraphDependencyMode === 'single_node_chain'
           ? shotContinuityDependenciesForGraph(shot, coverageSetup)
           : []
@@ -2146,6 +2217,9 @@ Deno.serve(async (request) => {
           requiredReferenceAssetKeys,
           omittedReferenceAssetKeys,
           sourceReferenceHash,
+          coverageAnchorScopeKey,
+          coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
+          coverageAnchorScope: scopedCoverageShots.length === coverageShots.length ? 'coverage_setup' : 'shot_scoped',
           visualPlanHash: readText(visualReferencePlan.visualPlanHash),
           dependencyWave: 5,
           continuityDependencyNodeIds: continuityDependencies.map((entry) => readText(entry.targetNodeId)).filter(Boolean),
@@ -2157,8 +2231,9 @@ Deno.serve(async (request) => {
           sharedDependencyRequests: [
             ...(coverageSetupId ? [{
               role: 'coverage_anchor',
-              identityKey: 'coverageSetupId',
-              identityValue: coverageSetupId,
+              identityKey: 'coverageAnchorScopeKey',
+              identityValue: coverageAnchorScopeKey,
+              coverageSetupId,
               requestId: readText(existingByCoverageSetupId.get(coverageSetupId)?.id),
               workflowId: readText(existingByCoverageSetupId.get(coverageSetupId)?.workflowId),
               status: readText(coverageAnchorImageBySetupId.get(coverageSetupId)?.assetKey) ? 'ready' : 'missing',
@@ -2201,7 +2276,7 @@ Deno.serve(async (request) => {
           panel: {},
           coverageAnchor: coverageSetupId ? coverageAnchorImageBySetupId.get(coverageSetupId) ?? {} : {},
           coverageSetup,
-          coverageShots: coverageShots.length > 0 ? coverageShots : [shot],
+          coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
           coverageReferenceAssetKeys: [],
           previousKeyframe: readText(job.previousShotId) ? shotKeyframeImageByShotId.get(readText(job.previousShotId)) ?? {} : {},
           assetPack,

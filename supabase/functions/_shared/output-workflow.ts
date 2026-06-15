@@ -18976,7 +18976,7 @@ function sequenceAnimaticReferenceRole(entity: Record<string, unknown>) {
 }
 
 function sequenceAnimaticReferenceGuidance(role: string) {
-  if (role === 'coverage_anchor') return 'match framing/blocking only; do not copy labels, arrows, placeholder figures, or blockout styling'
+  if (role === 'coverage_anchor') return 'composition lock: match camera, framing, screen direction, subject placement, horizon, and background massing; do not copy labels, arrows, placeholder figures, or blockout styling'
   if (role === 'previous_keyframe') return 'same-setup motion continuity and established state only'
   if (role === 'storyboard_panel') return 'loose composition only when it does not conflict with the coverage anchor'
   if (role === 'spot_reference' || role === 'zone_reference' || role === 'set_reference' || role === 'viewpoint_reference' || role === 'location_reference') {
@@ -25477,6 +25477,7 @@ async function executeNode(input: {
         const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
+        const coverageScope = readText(config.coverageAnchorScope ?? config.coverage_anchor_scope)
         const placementLabels = [...new Set([
           ...readArray(assetPack.entities).map(asRecord)
             .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
@@ -25507,6 +25508,7 @@ async function executeNode(input: {
           readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction) ? `Screen direction: ${readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)}` : '',
           readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief) ? `Camera: ${readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)}` : '',
           readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief) ? `Lighting: ${readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief)}` : '',
+          coverageScope === 'shot_scoped' ? 'Scope: current shot only; ignore unrelated linked setup shots.' : '',
           placementLabels.length > 0 ? `Placement labels: ${placementLabels.join(', ')}, camera, movement` : 'Placement labels: camera, movement, subject placeholders',
           linkedShotSummary ? `Linked shots:\n${linkedShotSummary}` : '',
           referenceManifestText ? `Reference map:\n${referenceManifestText}` : '',
@@ -25665,8 +25667,12 @@ async function executeNode(input: {
           || readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)
           || readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)
         )
+        const hasCoverageAnchor = Boolean(readText(coverageAnchor.assetKey))
         const promptText = [
           'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
+          hasCoverageAnchor
+            ? 'Composition lock: @Image1 is the coverage anchor. Match its camera position, framing, screen direction, horizon/ground plane, major foreground/background shapes, and subject placement. Replace blockout placeholders with final art.'
+            : '',
           '',
           'Reference map',
           referenceManifestText || 'No attached image references; use only the written visual facts.',
@@ -25681,8 +25687,8 @@ async function executeNode(input: {
           '',
           'Action/blocking',
           action || 'Hold the exact readable action from the shot.',
-          readText(coverageAnchor.assetKey)
-            ? 'Use @Image1 coverage anchor for composition, camera height/lens feel, screen direction, and placement only. Do not copy labels, arrows, placeholder figures, or blockout styling.'
+          hasCoverageAnchor
+            ? 'Use @Image1 coverage anchor as the framing/background/blocking source of truth. Do not copy labels, arrows, placeholder figures, or blockout styling.'
             : (coverageFallback ? `Coverage facts: ${compactStoryboardSentence(coverageFallback, '', 30)}` : ''),
           readText(previousKeyframe.assetKey) ? 'Use the previous keyframe reference only for same-setup motion continuity and established state.' : '',
           '',
@@ -25694,7 +25700,7 @@ async function executeNode(input: {
           [lighting, locationRefs ? `Location refs\n${locationRefs}` : '', sceneStateText ? `Visual continuity facts: ${sceneStateText}` : ''].filter(Boolean).join('\n') || 'Preserve environment, weather, material, and lighting continuity.',
           '',
           'Negative rules',
-          'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Do not render blockout labels from the coverage anchor. Do not mention workflow, schema, IDs, or asset keys in the image.',
+          'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Do not render blockout labels from the coverage anchor. Do not change the coverage-anchor camera angle, lens feel, background layout, or screen direction unless the written shot facts explicitly contradict it. Do not mention workflow, schema, IDs, or asset keys in the image.',
         ].filter(Boolean).join('\n')
         const outputs = {
           prompt: promptText,
@@ -25720,7 +25726,7 @@ async function executeNode(input: {
           scene_state: sceneState,
           deterministic: true,
         }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-planned-keyframe-prompt-v2' }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-planned-keyframe-prompt-v3' }
       }
       if (purpose === 'sequence_animatic_shot_revision_plan') {
         const config = asRecord(input.node.config)
@@ -28143,6 +28149,8 @@ async function executeNode(input: {
         const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
         const coverageSetupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
         if (!coverageSetupId) throw new Error('Coverage anchor artifact requires a coverage setup id.')
+        const coverageAnchorScopeKey = readText(config.coverageAnchorScopeKey)
+        const coverageAnchorScope = readText(config.coverageAnchorScope)
         const assetKey = readText(image.assetKey)
         if (!assetKey) throw new Error('Coverage anchor image did not produce an asset key.')
         const qcFindings = assetKey ? [] : ['Coverage anchor image did not produce an asset key.']
@@ -28155,6 +28163,8 @@ async function executeNode(input: {
           coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
           masterRequestId: readText(config.masterRequestId),
           coverageSetupId,
+          coverageAnchorScopeKey,
+          coverageAnchorScope,
           coverageSetup,
           coverage_setup: coverageSetup,
           shotIds: readStringArray(config.shotIds).length > 0 ? readStringArray(config.shotIds) : readStringArray(coverageSetup.shotIds),
@@ -28194,6 +28204,8 @@ async function executeNode(input: {
             screenplayAnimaticRole: 'coverage_anchor',
             masterRequestId: anchor.masterRequestId,
             coverageSetupId,
+            coverageAnchorScopeKey,
+            coverageAnchorScope,
             coverageSetup,
             coverage_setup: coverageSetup,
             shotIds: anchor.shotIds,
@@ -28222,14 +28234,18 @@ async function executeNode(input: {
           eventType: assetKey ? 'coverage_anchor_ready' : 'coverage_anchor_failed',
           payload: {
             coverageSetupId,
+            coverageAnchorScopeKey,
+            coverageAnchorScope,
             assetKey,
             artifactKey: artifact.key,
             status: anchor.status,
             shotIds: anchor.shotIds,
           },
           metadata: { source: 'sequence_animatic_keyframe_workflow' },
-          dedupe: { coverageSetupId },
+          dedupe: { coverageSetupId, coverageAnchorScopeKey: coverageAnchorScopeKey || null },
         })
+        const identityKey = coverageAnchorScopeKey ? 'coverageAnchorScopeKey' : 'coverageSetupId'
+        const identityValue = coverageAnchorScopeKey || coverageSetupId
         const outputs = {
           artifactKey: artifact.key,
           assetKey,
@@ -28241,8 +28257,11 @@ async function executeNode(input: {
             artifactKey: artifact.key,
             role: 'coverage_anchor',
             sourceArtifactRole: 'sequence_animatic_coverage_anchor',
-            identityKey: 'coverageSetupId',
-            identityValue: coverageSetupId,
+            identityKey,
+            identityValue,
+            coverageSetupId,
+            coverageAnchorScopeKey,
+            coverageAnchorScope,
             globalAssetStatus: assetKey ? readText(image.globalAssetStatus ?? image.global_asset_status) || 'generated' : 'missing',
           },
           coverageAnchor: anchor,

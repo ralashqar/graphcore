@@ -2014,6 +2014,8 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
       storyboardBlockId: 'block_001',
       shotId: 'shot_001',
       coverageSetupId: 'setup_a',
+      coverageAnchorScopeKey: 'setup_a_spot_lab_ava',
+      coverageAnchorScope: 'shot_scoped',
       manifestHash: 'manifest-hash',
       directorPlanHash: 'director-hash',
       masterManifestArtifactKey: 'artifact-manifest',
@@ -2084,6 +2086,8 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.ok(nodeKeys.includes('shot_video_artifact'))
   const coverageAnchorInput = graph.nodes.find((node) => node.key === 'coverage_anchor_input')
   assert.deepEqual((coverageAnchorInput?.config.assetPack as { entities?: unknown[] } | undefined)?.entities, [])
+  assert.equal((coverageAnchorInput?.config as { globalAssetIdentityKey?: string } | undefined)?.globalAssetIdentityKey, 'coverageAnchorScopeKey')
+  assert.equal((coverageAnchorInput?.config as { globalAssetIdentityValue?: string } | undefined)?.globalAssetIdentityValue, 'setup_a_spot_lab_ava')
   const continuitySetInput = graph.nodes.find((node) => node.key === 'continuity_set_lab_input')
   const continuitySpotInput = graph.nodes.find((node) => node.key === 'continuity_spot_lab_input')
   assert.deepEqual((continuitySetInput?.config.assetPack as { entities?: unknown[] } | undefined)?.entities, [])
@@ -2129,7 +2133,10 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(shotGraphEnsureSource, /primaryShotSpatialNodeIds/)
   assert.match(shotGraphEnsureSource, /const primarySpotId = readText\(binding\.primarySpotId/)
   assert.match(shotGraphEnsureSource, /coverageSetupEntityRefIds/)
-  assert.match(shotGraphEnsureSource, /Selected from shot-visible refs and coverage setup subjects/)
+  assert.match(shotGraphEnsureSource, /scopedCoverageShotsForShot/)
+  assert.match(shotGraphEnsureSource, /shotSpatialFingerprint/)
+  assert.match(shotGraphEnsureSource, /coverageAnchorScopeKey/)
+  assert.match(shotGraphEnsureSource, /Selected from shot-visible refs/)
   assert.match(shotGraphEnsureSource, /referencedAnimaticAssetNodeIds/)
   assert.match(shotGraphEnsureSource, /incidentalCharacterNodesForShot/)
   assert.match(shotGraphEnsureSource, /temp_character_monastery_attendants/)
@@ -2161,9 +2168,11 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(workerSource, /Lighting\/environment/)
   assert.match(workerSource, /Negative rules/)
   assert.match(workerSource, /Attached image reference order/)
-  assert.match(workerSource, /match framing\/blocking only; do not copy labels, arrows, placeholder figures, or blockout styling/)
-  assert.match(workerSource, /Use @Image1 coverage anchor for composition, camera height\/lens feel, screen direction, and placement only/)
+  assert.match(workerSource, /Composition lock: @Image1 is the coverage anchor/)
+  assert.match(workerSource, /framing\/background\/blocking source of truth/)
+  assert.match(workerSource, /Do not change the coverage-anchor camera angle/)
   assert.match(workerSource, /Create one labeled coverage blockout plate/)
+  assert.match(workerSource, /Scope: current shot only; ignore unrelated linked setup shots/)
   assert.match(workerSource, /Sparse placement labels and arrows are allowed and required/)
   assert.match(workerSource, /Use character references only to know which named placeholders to place/)
   assert.match(workerSource, /No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text/)
@@ -2185,6 +2194,12 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(workerSource, /preferredNodeKeys: \['planned_keyframe_image', 'shot_keyframe_image'\]/)
   assert.match(workerSource, /role: 'sequence_animatic_shot_keyframe'/)
   assert.match(workflowFactorySource, /sequence_animatic_coverage_anchor_spatial/)
+  const graphOverlayHostSource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputGraphOverlayHost.tsx'), 'utf8')
+  assert.match(graphOverlayHostSource, /sequenceAnimaticCoverageAnchorOnwardForceNodeKeys/)
+  assert.match(graphOverlayHostSource, /coverageAnchorOnwardRun/)
+  assert.match(graphOverlayHostSource, /targetNodeKeys = coverageAnchorOnwardRun[\s\S]*\['planned_keyframe_artifact'\]/)
+  assert.match(graphOverlayHostSource, /forceNodeKeys = coverageAnchorOnwardRun[\s\S]*sequenceAnimaticCoverageAnchorOnwardForceNodeKeys/)
+  assert.match(graphOverlayHostSource, /runScope: effectiveRunScope/)
   assert.match(pageSource, /role === 'shot_keyframe' \|\| role === 'shot_production'/)
   assert.match(pageSource, /sequenceAnimaticShotProductionKeyframeTargetNodeKeys/)
   assert.match(pageSource, /sequenceAnimaticShotKeyframeProgressLabel/)
