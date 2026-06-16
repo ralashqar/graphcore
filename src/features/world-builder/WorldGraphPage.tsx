@@ -201,6 +201,22 @@ import { WorldPromptChatPanel } from './prompt/WorldPromptPanels'
 import { WorldOutputCreateRail, WorldOutputLibraryPanel, useWorldOutputLibraryController } from './wiki/WorldOutputLibraryPanel'
 import { buildOutputLibraryModel, type OutputLibraryOpenTarget, type OutputStudioReturnTarget } from './wiki/outputLibraryPresentation'
 import { SequenceAnimaticPipelineRail } from './animatic/SequenceAnimaticPipelineRail'
+import { SequenceAnimaticSceneBoardCanvas } from './scene-board/SceneBoardCanvas'
+import {
+  buildSequenceAnimaticSceneBoardView,
+  sequenceAnimaticSceneBoardCoverageReferencesGenerating,
+  sequenceAnimaticSceneBoardCoverageReferencesReady,
+  sequenceAnimaticSceneBoardPrepRunForScope,
+  sequenceAnimaticSceneBoardPrepRunKey,
+  sequenceAnimaticSceneBoardPrepStageLabel,
+  sequenceAnimaticSceneBoardReferenceReady,
+  sequenceAnimaticSceneBoardReferenceRequiredForCoverage,
+  sequenceAnimaticSceneBoardShotSnapshot,
+  sequenceAnimaticSceneBoardZoneScopeForNode,
+  type SequenceAnimaticSceneBoardPrepRunState,
+  type SequenceAnimaticSceneBoardPrepStageKey,
+  type SequenceAnimaticSceneBoardPrepUnit,
+} from './scene-board/sceneBoardProjection'
 import {
   sequenceAnimaticContinuityAssetForceNodeKeys,
   sequenceAnimaticContinuityAssetTargetNodeKeys,
@@ -224,7 +240,7 @@ import {
   countWorldWikiSearchMatches,
   type WorldWikiDetailModalInput,
 } from './wiki/WorldWikiSections'
-import { createPollGroup } from '../../data/requestCoordinator'
+import { createPollGroup, isTransientRequestError } from '../../data/requestCoordinator'
 
 export { WorldPromptActivityPanel, WorldPromptThreadsPanel } from './prompt/WorldPromptPanels'
 
@@ -835,6 +851,34 @@ type WorldGraphPageProps = {
     scopedShots?: Record<string, unknown>[]
     forceRefresh?: boolean
   }) => Promise<SequenceAnimaticZoneCoverageBoardEnsureResponse> | SequenceAnimaticZoneCoverageBoardEnsureResponse
+  onPrepareSequenceAnimaticSceneBoard: (request: {
+    masterRequestId: string
+    runId?: string
+    runKey?: string
+    sceneId: string
+    setId?: string | null
+    zoneId?: string | null
+    scopeNodeId?: string | null
+    shotIds?: string[]
+    stage?: 'idle' | 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'complete' | 'failed' | 'cancelled'
+    status?: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled'
+    activeUnitId?: string | null
+    activeUnitLabel?: string
+    stageLabel?: string
+    message?: string
+    queued?: number
+    running?: number
+    ready?: number
+    failed?: number
+    activeRequestIds?: string[]
+    activeRunIds?: string[]
+    activeReferenceNodeIds?: string[]
+    activeCoverageShotIds?: string[]
+    activeRunStepKey?: string
+    error?: string
+    action?: 'start' | 'update' | 'complete' | 'fail' | 'cancel' | 'resume'
+    forceRefresh?: boolean
+  }) => Promise<{ masterRequest: OutputRequest; prepRun: Record<string, unknown>; prepRuns: Record<string, unknown> }> | { masterRequest: OutputRequest; prepRun: Record<string, unknown>; prepRuns: Record<string, unknown> }
   onEnsureSequenceAnimaticShotRevisionWorkflow: (request: {
     masterRequestId: string
     storyboardBlockId: string
@@ -999,6 +1043,7 @@ const WIKI_ENTITY_ROUTE_ENTITY_PARAM = 'wikiEntity'
 const WIKI_ENTITY_ROUTE_SECTION_PARAM = 'wikiSection'
 const WIKI_ANIMATIC_ROUTE_REQUEST_PARAM = 'wikiAnimatic'
 const WIKI_ANIMATIC_ROUTE_BLOCK_PARAM = 'animaticBlock'
+const UUID_ROUTE_VALUE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function timeValue(value: string | null | undefined) {
   if (!value) return 0
@@ -1042,7 +1087,10 @@ function readWikiEntityPageRoute(): ActiveWikiEntityPageState {
   const entityKey = params.get(WIKI_ENTITY_ROUTE_ENTITY_PARAM)?.trim()
   if (!entityKey) return null
   const sectionKind = params.get(WIKI_ENTITY_ROUTE_SECTION_PARAM)?.trim() as WorldWikiSection['kind'] | null
-  const animaticRequestId = params.get(WIKI_ANIMATIC_ROUTE_REQUEST_PARAM)?.trim() || null
+  const rawAnimaticRequestId = params.get(WIKI_ANIMATIC_ROUTE_REQUEST_PARAM)?.trim() || null
+  const animaticRequestId = rawAnimaticRequestId && UUID_ROUTE_VALUE_PATTERN.test(rawAnimaticRequestId)
+    ? rawAnimaticRequestId
+    : null
   const animaticBlockId = params.get(WIKI_ANIMATIC_ROUTE_BLOCK_PARAM)?.trim() || null
   return {
     entityKey,
@@ -1378,6 +1426,7 @@ type SequenceAnimaticShotView = {
   coverageIntentFailed: boolean
   zoneCoverageCell: SequenceAnimaticZoneCoverageCellView | null
   zoneCoverageCellRunning: boolean
+  zoneCoverageCellActiveStage: 'queued' | 'image' | 'extract' | ''
   zoneCoverageCellFailed: boolean
   spatialContinuityLabel: string
   spatialContinuityDetail: string
@@ -1525,7 +1574,7 @@ function writeWikiAnimaticRoute(input: {
   const url = new URL(window.location.href)
   url.searchParams.set(WIKI_ENTITY_ROUTE_ENTITY_PARAM, input.entityKey)
   url.searchParams.set(WIKI_ENTITY_ROUTE_SECTION_PARAM, input.sectionKind)
-  if (input.masterRequestId) {
+  if (input.masterRequestId && UUID_ROUTE_VALUE_PATTERN.test(input.masterRequestId)) {
     url.searchParams.set(WIKI_ANIMATIC_ROUTE_REQUEST_PARAM, input.masterRequestId)
   } else {
     url.searchParams.delete(WIKI_ANIMATIC_ROUTE_REQUEST_PARAM)
@@ -1801,6 +1850,13 @@ type SequenceAnimaticViewModel = {
   keyframeProgressLabel: string
 }
 
+type SequenceAnimaticVideoPreview = {
+  title: string
+  url: string
+  durationLabel: string
+  statusLabel: string
+}
+
 type SequenceAnimaticZoneCoverageCellView = {
   shotId: string
   boardId: string
@@ -1826,808 +1882,6 @@ type SequenceAnimaticZoneCoverageBoardView = {
   failed: boolean
   assetKey: string | null
   assetUrl: string | null
-}
-
-type SequenceAnimaticSceneBoardFilter = 'all' | 'needs_coverage' | 'needs_keyframe' | 'failed'
-type SequenceAnimaticSceneBoardGrouping = 'zone_spot' | 'shot_order'
-
-type SequenceAnimaticSceneBoardShotTile = {
-  id: string
-  blockId: string
-  blockTitle: string
-  block: SequenceAnimaticBlockView
-  shot: SequenceAnimaticShotView
-  coverageAnchor: SequenceAnimaticCoverageAnchorView | null
-  thumbnailUrl: string | null
-  thumbnailStatusLabel: string
-  spatialPath: string
-  setId: string
-  zoneId: string
-  spotId: string
-  spatialNodeIds: string[]
-  authoringNodeId: string | null
-  authoringNodeKind: SequenceAnimaticContinuityGraphNodeKind | null
-  coverageReady: boolean
-  coverageIntentReady: boolean
-  coverageIntentRunning: boolean
-  coverageIntentFailed: boolean
-  keyframeReady: boolean
-  running: boolean
-  failed: boolean
-  blockedReasons: string[]
-}
-
-function sequenceAnimaticSceneBoardShotSnapshot(tile: SequenceAnimaticSceneBoardShotTile, scene: SequenceAnimaticSceneView) {
-  const hierarchyByKind = new Map(tile.shot.spatialBindingView.hierarchy.map((node) => [node.kind, node] as const))
-  const setNode = hierarchyByKind.get('set') ?? null
-  const zoneNode = hierarchyByKind.get('zone') ?? null
-  const spotNode = hierarchyByKind.get('spot') ?? null
-  const viewpointNode = hierarchyByKind.get('viewpoint') ?? hierarchyByKind.get('angle') ?? null
-  const setId = trimOptionalString(tile.setId) || trimOptionalString(setNode?.id)
-  const zoneId = trimOptionalString(tile.zoneId) || trimOptionalString(zoneNode?.id)
-  const primarySpotId = trimOptionalString(tile.spotId) || trimOptionalString(spotNode?.id)
-  return {
-    id: tile.shot.id,
-    index: tile.shot.index,
-    title: tile.shot.title,
-    action: tile.shot.action,
-    camera: {
-      framing: tile.shot.camera,
-      summary: tile.shot.camera,
-    },
-    lighting: tile.shot.lighting,
-    performance: tile.shot.performance,
-    coverageIntent: tile.shot.coverageIntent?.coverageIntent || '',
-    sourceSceneId: scene.id,
-    sourceSceneTitle: scene.title,
-    sceneId: scene.id,
-    blockId: tile.blockId,
-    storyboardBlockId: tile.blockId,
-    sceneBinding: {
-      sceneId: scene.id,
-      setId,
-      setName: trimOptionalString(setNode?.label),
-      zoneId,
-      zoneName: trimOptionalString(zoneNode?.label),
-      primarySpotId,
-      primarySpotName: trimOptionalString(spotNode?.label),
-      spotIds: primarySpotId ? [primarySpotId] : [],
-      viewpointId: trimOptionalString(viewpointNode?.id),
-    },
-  }
-}
-
-type SequenceAnimaticSceneBoardReferenceStageKey = 'set_refs' | 'zone_refs' | 'spot_refs'
-type SequenceAnimaticSceneBoardPrepStageKey = 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'keyframes'
-type SequenceAnimaticSceneBoardPrepUnitStage = 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'ready' | 'blocked' | 'failed'
-
-type SequenceAnimaticSceneBoardPrepStage = {
-  key: SequenceAnimaticSceneBoardPrepStageKey
-  label: string
-  total: number
-  ready: number
-  missing: number
-  generating: number
-  failed: number
-  blocked: number
-}
-
-type SequenceAnimaticSceneBoardReferenceTile = {
-  nodeId: string
-  nodeKind: SequenceAnimaticContinuityGraphNodeKind
-  label: string
-  kindLabel: string
-  stage: SequenceAnimaticSceneBoardReferenceStageKey
-  status: SequenceAnimaticContinuityAssetTargetView['status'] | 'not_required'
-  statusLabel: string
-  assetUrl: string | null
-  usageCount: number
-  target: SequenceAnimaticContinuityAssetTargetView | null
-  blockedReasons: string[]
-}
-
-type SequenceAnimaticSceneBoardPrepUnit = {
-  id: string
-  title: string
-  subtitle: string
-  setId: string
-  zoneId: string
-  scopeNodeId: string | null
-  referenceTiles: SequenceAnimaticSceneBoardReferenceTile[]
-  shots: SequenceAnimaticSceneBoardShotTile[]
-  setTargets: SequenceAnimaticContinuityAssetTargetView[]
-  scaffoldGroups: SequenceAnimaticContinuityAssetRunGroup[]
-  coverageGridPlanCount: number
-  coverageGridShotCount: number
-  coverageIntentMissingCount: number
-  coverageIntentReadyCount: number
-  missingCoverageCount: number
-  blockedReasons: string[]
-  stage: SequenceAnimaticSceneBoardPrepUnitStage
-  stageLabel: string
-}
-
-type SequenceAnimaticSceneBoardPrepRunState = {
-  runKey: string
-  sceneId: string
-  scopeNodeId: string | null
-  activeUnitId: string | null
-  activeUnitLabel: string
-  stage: SequenceAnimaticSceneBoardPrepStageKey | 'complete' | 'failed'
-  message: string
-  queued: number
-  running: number
-  ready: number
-  failed: number
-  startedAt: number
-}
-
-type SequenceAnimaticSceneBoardGroup = {
-  id: string
-  title: string
-  subtitle: string
-  setId: string
-  zoneId: string
-  spotId: string
-  authoringNodeId: string | null
-  authoringNodeKind: SequenceAnimaticContinuityGraphNodeKind | null
-  referenceTiles: SequenceAnimaticSceneBoardReferenceTile[]
-  shots: SequenceAnimaticSceneBoardShotTile[]
-  readyCount: number
-  missingCoverageCount: number
-  missingKeyframeCount: number
-  failedCount: number
-  blockedReasons: string[]
-}
-
-type SequenceAnimaticSceneBoardView = {
-  scene: SequenceAnimaticSceneView
-  groups: SequenceAnimaticSceneBoardGroup[]
-  shots: SequenceAnimaticSceneBoardShotTile[]
-  referenceTiles: SequenceAnimaticSceneBoardReferenceTile[]
-  prepStages: SequenceAnimaticSceneBoardPrepStage[]
-  nextPrepTargets: SequenceAnimaticContinuityAssetTargetView[]
-  prepUnits: SequenceAnimaticSceneBoardPrepUnit[]
-  coverageGridPlanCount: number
-  coverageGridShotCount: number
-  canGenerateCoverageGrids: boolean
-  prepSummary: string
-  prepBlockedReasons: string[]
-  readyCount: number
-  missingCoverageCount: number
-  missingKeyframeCount: number
-  failedCount: number
-  blockedReasons: string[]
-}
-
-type SequenceAnimaticVideoPreview = {
-  title: string
-  url: string
-  durationLabel: string
-  statusLabel: string
-}
-
-function sequenceAnimaticSceneBoardNodeFromShot(
-  shot: SequenceAnimaticShotView,
-  coverageAnchor: SequenceAnimaticCoverageAnchorView | null,
-) {
-  const normalizeKind = (kind: string): SequenceAnimaticContinuityGraphNodeKind | null => {
-    if (kind === 'world_location' || kind === 'set' || kind === 'zone' || kind === 'spot' || kind === 'viewpoint' || kind === 'angle' || kind === 'coverage_anchor') return kind
-    return null
-  }
-  const hierarchy = shot.spatialBindingView.hierarchy
-  const spot = hierarchy.find((node) => node.kind === 'spot') ?? null
-  const zone = hierarchy.find((node) => node.kind === 'zone') ?? null
-  const set = hierarchy.find((node) => node.kind === 'set') ?? null
-  const selected = coverageAnchor
-    ? {
-      id: coverageAnchor.id,
-      kind: 'coverage_anchor' as SequenceAnimaticContinuityGraphNodeKind,
-    }
-    : spot
-      ? { id: spot.id, kind: normalizeKind(spot.kind) }
-      : zone
-        ? { id: zone.id, kind: normalizeKind(zone.kind) }
-        : set
-          ? { id: set.id, kind: normalizeKind(set.kind) }
-          : shot.spatialBindingView.selectedNode
-            ? { id: shot.spatialBindingView.selectedNode.id, kind: normalizeKind(shot.spatialBindingView.selectedNode.kind) }
-            : null
-  return {
-    set,
-    zone,
-    spot,
-    authoringNodeId: selected?.kind ? selected.id : null,
-    authoringNodeKind: selected?.kind ?? null,
-  }
-}
-
-function sequenceAnimaticSceneBoardShotMatchesScope(
-  shot: SequenceAnimaticShotView,
-  coverageAnchor: SequenceAnimaticCoverageAnchorView | null,
-  scopeNodeId: string | null | undefined,
-) {
-  const scope = trimOptionalString(scopeNodeId)
-  if (!scope) return true
-  if (shot.spatialBindingView.hierarchy.some((node) => node.id === scope)) return true
-  if (!coverageAnchor) return false
-  return [
-    coverageAnchor.id,
-    coverageAnchor.setId,
-    coverageAnchor.zoneId,
-    coverageAnchor.primarySpotId,
-    ...coverageAnchor.spotIds,
-    coverageAnchor.viewpointId,
-  ].includes(scope)
-}
-
-function sequenceAnimaticSceneBoardShotMatchesFilter(
-  tile: SequenceAnimaticSceneBoardShotTile,
-  filter: SequenceAnimaticSceneBoardFilter,
-) {
-  if (filter === 'needs_coverage') return !tile.coverageReady
-  if (filter === 'needs_keyframe') return !tile.keyframeReady
-  if (filter === 'failed') return tile.failed
-  return true
-}
-
-const sequenceAnimaticSceneBoardReferenceStageOrder: SequenceAnimaticSceneBoardReferenceStageKey[] = ['set_refs', 'zone_refs', 'spot_refs']
-const sequenceAnimaticSceneBoardPrepStageOrder: SequenceAnimaticSceneBoardPrepStageKey[] = ['set_refs', 'scaffold_refs', 'coverage_directions', 'coverage_grids', 'keyframes']
-
-function sequenceAnimaticSceneBoardPrepStageForNodeKind(kind: SequenceAnimaticContinuityGraphNodeKind): SequenceAnimaticSceneBoardReferenceTile['stage'] | null {
-  if (kind === 'world_location' || kind === 'set') return 'set_refs'
-  if (kind === 'zone') return 'zone_refs'
-  if (kind === 'spot' || kind === 'viewpoint' || kind === 'angle') return 'spot_refs'
-  return null
-}
-
-function sequenceAnimaticSceneBoardPrepStageLabel(stage: SequenceAnimaticSceneBoardPrepStageKey) {
-  if (stage === 'set_refs') return 'Set refs'
-  if (stage === 'scaffold_refs') return 'Zone/spot scaffold'
-  if (stage === 'coverage_directions') return 'Coverage directions'
-  if (stage === 'coverage_grids') return 'Coverage grids'
-  return 'Keyframes'
-}
-
-function sequenceAnimaticSceneBoardReferenceStageLabel(stage: SequenceAnimaticSceneBoardReferenceStageKey) {
-  if (stage === 'set_refs') return 'Set refs'
-  if (stage === 'zone_refs') return 'Zone ref'
-  return 'Spot/viewpoint ref'
-}
-
-function sequenceAnimaticSceneBoardReferenceBlockedReasons(
-  tile: Pick<SequenceAnimaticSceneBoardReferenceTile, 'status' | 'target'>,
-  node: SequenceAnimaticContinuityGraphNodeView,
-  targetByNodeId: Map<string, SequenceAnimaticContinuityAssetTargetView>,
-  graphNodeById: Map<string, SequenceAnimaticContinuityGraphNodeView>,
-) {
-  if (!tile.target) return []
-  const parentId = trimOptionalString(node.parentId)
-  if (!parentId) return []
-  const parentNode = graphNodeById.get(parentId) ?? null
-  const parentTarget = targetByNodeId.get(parentId) ?? null
-  if (!parentTarget) return []
-  if (parentTarget.status === 'ready') return []
-  const parentLabel = parentNode?.label || parentTarget.name || 'parent reference'
-  if (parentTarget.status === 'generating') return [`Waiting for ${parentLabel} to finish.`]
-  return [`Generate ${parentLabel} first.`]
-}
-
-function sequenceAnimaticSceneBoardReferenceNeedsGeneration(tile: SequenceAnimaticSceneBoardReferenceTile) {
-  return Boolean(tile.target && (tile.status === 'missing' || tile.status === 'stale' || tile.status === 'failed'))
-}
-
-function sequenceAnimaticSceneBoardReferenceReady(tile: SequenceAnimaticSceneBoardReferenceTile) {
-  return tile.status === 'ready' || tile.status === 'not_required'
-}
-
-function sequenceAnimaticSceneBoardReferenceRequiredForCoverage(tile: SequenceAnimaticSceneBoardReferenceTile) {
-  return tile.stage === 'set_refs' || tile.stage === 'zone_refs' || tile.stage === 'spot_refs'
-}
-
-function sequenceAnimaticSceneBoardCoverageReferencesReady(referenceTiles: readonly SequenceAnimaticSceneBoardReferenceTile[]) {
-  const requiredReferences = referenceTiles.filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
-  return requiredReferences.length > 0
-    && requiredReferences.every(sequenceAnimaticSceneBoardReferenceReady)
-    && requiredReferences.every((tile) => tile.blockedReasons.length === 0)
-}
-
-function sequenceAnimaticSceneBoardCoverageReferencesGenerating(referenceTiles: readonly SequenceAnimaticSceneBoardReferenceTile[]) {
-  return referenceTiles
-    .filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
-    .some((tile) => tile.status === 'generating')
-}
-
-function sequenceAnimaticSceneBoardUnitLabelForNode(
-  nodeById: ReadonlyMap<string, SequenceAnimaticContinuityGraphNodeView>,
-  setId: string,
-  zoneId: string,
-) {
-  const zoneNode = zoneId ? nodeById.get(zoneId) ?? null : null
-  const setNode = setId ? nodeById.get(setId) ?? null : null
-  return {
-    title: zoneNode?.label || setNode?.label || 'Unbound board',
-    subtitle: [setNode?.label, zoneNode?.label].filter(Boolean).join(' / ') || 'Spatial binding pending',
-  }
-}
-
-function sequenceAnimaticSceneBoardScaffoldGroupsForUnit(input: {
-  model: SequenceAnimaticViewModel
-  referenceTiles: readonly SequenceAnimaticSceneBoardReferenceTile[]
-}): SequenceAnimaticContinuityAssetRunGroup[] {
-  const graphNodeById = new Map(input.model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const targetByNodeId = new Map(
-    input.referenceTiles
-      .map((tile) => tile.target ? [tile.target.nodeId, tile.target] as const : null)
-      .filter((entry): entry is readonly [string, SequenceAnimaticContinuityAssetTargetView] => Boolean(entry)),
-  )
-  const needs = input.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceNeedsGeneration)
-  const missingByNodeId = new Map(needs.map((tile) => [tile.nodeId, tile] as const))
-  const consumedNodeIds = new Set<string>()
-  const groups: SequenceAnimaticContinuityAssetRunGroup[] = []
-  const zoneTiles = needs.filter((tile) => tile.stage === 'zone_refs' && tile.blockedReasons.length === 0)
-  for (const zoneTile of zoneTiles) {
-    if (!zoneTile.target) continue
-    const childTargets = input.referenceTiles
-      .filter((tile) => tile.stage === 'spot_refs')
-      .filter((tile) => tile.target && missingByNodeId.has(tile.nodeId) && !consumedNodeIds.has(tile.nodeId))
-      .filter((tile) => trimOptionalString(graphNodeById.get(tile.nodeId)?.parentId) === zoneTile.nodeId)
-      .filter((tile) => tile.blockedReasons.length === 0)
-      .slice(0, 3)
-      .map((tile) => tile.target)
-      .filter((target): target is SequenceAnimaticContinuityAssetTargetView => Boolean(target))
-    const targets = [zoneTile.target, ...childTargets]
-    targets.forEach((target) => consumedNodeIds.add(target.nodeId))
-    groups.push({ targets, isBatch: targets.length > 1 })
-  }
-  const siblingGroups = new Map<string, SequenceAnimaticContinuityAssetTargetView[]>()
-  for (const tile of needs) {
-    if (tile.stage !== 'spot_refs' || !tile.target || consumedNodeIds.has(tile.nodeId) || tile.blockedReasons.length > 0) continue
-    const parentId = trimOptionalString(graphNodeById.get(tile.nodeId)?.parentId)
-    if (!parentId) {
-      groups.push({ targets: [tile.target], isBatch: false })
-      consumedNodeIds.add(tile.nodeId)
-      continue
-    }
-    const parentTile = input.referenceTiles.find((candidate) => candidate.nodeId === parentId) ?? null
-    const parentTarget = targetByNodeId.get(parentId) ?? null
-    if ((parentTile && !sequenceAnimaticSceneBoardReferenceReady(parentTile)) || (parentTarget && parentTarget.status !== 'ready')) continue
-    const key = `${parentId}:${tile.nodeKind === 'viewpoint' || tile.nodeKind === 'angle' ? 'viewpoints' : 'spots'}`
-    siblingGroups.set(key, [...(siblingGroups.get(key) ?? []), tile.target])
-    consumedNodeIds.add(tile.nodeId)
-  }
-  for (const targets of siblingGroups.values()) {
-    for (let index = 0; index < targets.length; index += 4) {
-      const chunk = targets.slice(index, index + 4)
-      groups.push({ targets: chunk, isBatch: chunk.length > 1 })
-    }
-  }
-  return groups
-}
-
-function buildSequenceAnimaticSceneBoardPrepView(input: {
-  model: SequenceAnimaticViewModel
-  scene: SequenceAnimaticSceneView
-  tiles: SequenceAnimaticSceneBoardShotTile[]
-}): Pick<SequenceAnimaticSceneBoardView, 'referenceTiles' | 'prepStages' | 'nextPrepTargets' | 'prepUnits' | 'coverageGridPlanCount' | 'coverageGridShotCount' | 'canGenerateCoverageGrids' | 'prepSummary' | 'prepBlockedReasons'> {
-  const graphNodeById = new Map(input.model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const targetByNodeId = new Map(input.model.continuityAssetTargets.map((target) => [target.nodeId, target] as const))
-  const neededNodeIds = new Set(input.tiles.flatMap((tile) => tile.spatialNodeIds))
-  const referenceTiles = [...neededNodeIds]
-    .map((nodeId): SequenceAnimaticSceneBoardReferenceTile | null => {
-      const node = graphNodeById.get(nodeId) ?? null
-      if (!node) return null
-      const stage = sequenceAnimaticSceneBoardPrepStageForNodeKind(node.kind)
-      if (!stage) return null
-      const target = targetByNodeId.get(node.id) ?? null
-      const status = target?.status ?? node.assetStatus ?? 'not_required'
-      const tile: SequenceAnimaticSceneBoardReferenceTile = {
-        nodeId: node.id,
-        nodeKind: node.kind,
-        label: node.label,
-        kindLabel: node.kindLabel,
-        stage,
-        status,
-        statusLabel: target?.statusLabel || node.assetStatusLabel || (status === 'not_required' ? 'Not required' : status),
-        assetUrl: target?.assetUrl || node.assetUrl || null,
-        usageCount: input.tiles.filter((shotTile) => shotTile.spatialNodeIds.includes(node.id)).length,
-        target,
-        blockedReasons: [],
-      }
-      return {
-        ...tile,
-        blockedReasons: sequenceAnimaticSceneBoardReferenceBlockedReasons(tile, node, targetByNodeId, graphNodeById),
-      }
-    })
-    .filter((tile): tile is SequenceAnimaticSceneBoardReferenceTile => Boolean(tile))
-    .sort((left, right) => {
-      const stageDelta = sequenceAnimaticSceneBoardReferenceStageOrder.indexOf(left.stage) - sequenceAnimaticSceneBoardReferenceStageOrder.indexOf(right.stage)
-      if (stageDelta !== 0) return stageDelta
-      return left.label.localeCompare(right.label)
-    })
-
-  const unitShotsByKey = new Map<string, SequenceAnimaticSceneBoardShotTile[]>()
-  for (const tile of input.tiles) {
-    const key = [tile.setId || 'unbound_set', tile.zoneId || 'unbound_zone'].join(':')
-    unitShotsByKey.set(key, [...(unitShotsByKey.get(key) ?? []), tile])
-  }
-  const referenceTileByNodeId = new Map(referenceTiles.map((tile) => [tile.nodeId, tile] as const))
-  const prepUnits = [...unitShotsByKey.entries()].map(([key, unitShots]): SequenceAnimaticSceneBoardPrepUnit => {
-    const first = unitShots[0]
-    const setId = first?.setId ?? ''
-    const zoneId = first?.zoneId ?? ''
-    const labels = sequenceAnimaticSceneBoardUnitLabelForNode(graphNodeById, setId, zoneId)
-    const unitNodeIds = new Set(unitShots.flatMap((tile) => tile.spatialNodeIds))
-    const unitReferenceTiles = [...unitNodeIds]
-      .map((nodeId) => referenceTileByNodeId.get(nodeId) ?? null)
-      .filter((tile): tile is SequenceAnimaticSceneBoardReferenceTile => Boolean(tile))
-      .sort((left, right) => {
-        const stageDelta = sequenceAnimaticSceneBoardReferenceStageOrder.indexOf(left.stage) - sequenceAnimaticSceneBoardReferenceStageOrder.indexOf(right.stage)
-        if (stageDelta !== 0) return stageDelta
-        return left.label.localeCompare(right.label)
-      })
-    const missingSetTargets = unitReferenceTiles
-      .filter((tile) => tile.stage === 'set_refs')
-      .filter(sequenceAnimaticSceneBoardReferenceNeedsGeneration)
-      .filter((tile) => tile.blockedReasons.length === 0)
-      .map((tile) => tile.target)
-      .filter((target): target is SequenceAnimaticContinuityAssetTargetView => Boolean(target))
-    const scaffoldGroups = missingSetTargets.length === 0
-      ? sequenceAnimaticSceneBoardScaffoldGroupsForUnit({ model: input.model, referenceTiles: unitReferenceTiles })
-      : []
-    const coverageShots = unitShots.filter((tile) => !tile.shot.isProvisional)
-    const missingCoverageCount = coverageShots.filter((tile) => !tile.coverageReady).length
-    const coverageIntentShots = coverageShots.filter((tile) => !tile.coverageReady && !tile.shot.coverageSetupId && !tile.coverageAnchor)
-    const coverageIntentMissingCount = coverageIntentShots.filter((tile) => !tile.coverageIntentReady).length
-    const coverageIntentReadyCount = coverageIntentShots.filter((tile) => tile.coverageIntentReady).length
-    const referenceBlockedReasons = unitReferenceTiles
-      .filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
-      .flatMap((tile) => tile.blockedReasons)
-    const coverageReferenceGenerating = sequenceAnimaticSceneBoardCoverageReferencesGenerating(unitReferenceTiles)
-    const coverageReferencesReady = sequenceAnimaticSceneBoardCoverageReferencesReady(unitReferenceTiles)
-    const failedReferences = unitReferenceTiles
-      .filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
-      .filter((tile) => tile.status === 'failed')
-    const missingCoverageRequiredReferences = unitReferenceTiles
-      .filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
-      .filter(sequenceAnimaticSceneBoardReferenceNeedsGeneration)
-    const coverageBlockedReasons = [
-      input.scene.status !== 'ready' ? 'Generate this scene before preparing coverage grids.' : '',
-      coverageReferenceGenerating ? 'Waiting for set/zone references before coverage grids.' : '',
-      referenceBlockedReasons.find((reason) => Boolean(reason)) ?? '',
-      missingCoverageRequiredReferences.length > 0 && missingSetTargets.length === 0 && scaffoldGroups.length === 0 ? 'Waiting for set/zone references before coverage grids.' : '',
-    ].filter(Boolean)
-    const stage: SequenceAnimaticSceneBoardPrepUnitStage = missingSetTargets.length > 0
-      ? 'set_refs'
-      : scaffoldGroups.length > 0 && !coverageReferencesReady
-        ? 'scaffold_refs'
-      : failedReferences.length > 0 && missingCoverageRequiredReferences.length > 0
-          ? 'failed'
-          : coverageBlockedReasons.length > 0
-            ? 'blocked'
-            : coverageIntentMissingCount > 0
-              ? 'coverage_directions'
-            : missingCoverageCount > 0
-              ? 'coverage_grids'
-              : 'ready'
-    const stageLabel = stage === 'set_refs'
-      ? `Waiting for set image before zone scaffold.`
-      : stage === 'scaffold_refs'
-        ? `Generating ${scaffoldGroups.length} scaffold grid${scaffoldGroups.length === 1 ? '' : 's'} for this zone.`
-        : stage === 'coverage_directions'
-          ? `Coverage directions: ${coverageIntentReadyCount}/${coverageIntentShots.length} ready.`
-        : stage === 'coverage_grids'
-          ? `Coverage grid queued for ${coverageShots.length} shot${coverageShots.length === 1 ? '' : 's'}.`
-          : stage === 'ready'
-            ? 'Ready for keyframes.'
-            : coverageBlockedReasons[0] || 'Prep blocked.'
-    return {
-      id: key,
-      title: labels.title,
-      subtitle: labels.subtitle,
-      setId,
-      zoneId,
-      scopeNodeId: zoneId || setId || null,
-      referenceTiles: unitReferenceTiles,
-      shots: unitShots,
-      setTargets: missingSetTargets,
-      scaffoldGroups,
-      coverageGridPlanCount: Math.ceil(coverageShots.length / 9),
-      coverageGridShotCount: coverageShots.length,
-      coverageIntentMissingCount,
-      coverageIntentReadyCount,
-      missingCoverageCount,
-      blockedReasons: coverageBlockedReasons,
-      stage,
-      stageLabel,
-    }
-  }).sort((left, right) => {
-    const leftIndex = input.tiles.findIndex((tile) => tile.setId === left.setId && tile.zoneId === left.zoneId)
-    const rightIndex = input.tiles.findIndex((tile) => tile.setId === right.setId && tile.zoneId === right.zoneId)
-    return leftIndex - rightIndex
-  })
-
-  const referenceStageCounts = new Map<SequenceAnimaticSceneBoardReferenceStageKey, SequenceAnimaticSceneBoardReferenceTile[]>()
-  for (const tile of referenceTiles) referenceStageCounts.set(tile.stage, [...(referenceStageCounts.get(tile.stage) ?? []), tile])
-  const zoneGridKeys = new Set<string>()
-  const coverageGridShots = input.tiles.filter((tile) => !tile.shot.isProvisional)
-  for (const tile of coverageGridShots) {
-    zoneGridKeys.add([input.scene.id, tile.setId || 'unbound_set', tile.zoneId || 'unbound_zone'].join(':'))
-  }
-  const coverageGeneratingCount = input.tiles.filter((tile) => tile.coverageAnchor?.running || tile.shot.zoneCoverageCellRunning || tile.shot.keyframeDependencyRunning).length
-  const coverageIntentShots = input.tiles.filter((tile) => !tile.shot.isProvisional && !tile.coverageReady && !tile.shot.coverageSetupId && !tile.coverageAnchor)
-  const keyframeGeneratingCount = input.tiles.filter((tile) => tile.shot.keyframeRunning || tile.shot.panelRunning).length
-  const prepStages: SequenceAnimaticSceneBoardPrepStage[] = sequenceAnimaticSceneBoardPrepStageOrder.map((stage) => {
-    if (stage === 'coverage_directions') {
-      return {
-        key: stage,
-        label: sequenceAnimaticSceneBoardPrepStageLabel(stage),
-        total: coverageIntentShots.length,
-        ready: coverageIntentShots.filter((tile) => tile.coverageIntentReady).length,
-        missing: coverageIntentShots.filter((tile) => !tile.coverageIntentReady).length,
-        generating: coverageIntentShots.filter((tile) => tile.coverageIntentRunning).length,
-        failed: coverageIntentShots.filter((tile) => tile.coverageIntentFailed).length,
-        blocked: input.scene.status !== 'ready' ? coverageIntentShots.length : 0,
-      }
-    }
-    if (stage === 'coverage_grids') {
-      return {
-        key: stage,
-        label: sequenceAnimaticSceneBoardPrepStageLabel(stage),
-        total: coverageGridShots.length,
-        ready: coverageGridShots.filter((tile) => tile.coverageReady).length,
-        missing: coverageGridShots.filter((tile) => !tile.coverageReady).length,
-        generating: coverageGeneratingCount,
-        failed: coverageGridShots.filter((tile) => tile.coverageAnchor?.status === 'failed').length,
-        blocked: input.scene.status !== 'ready' ? coverageGridShots.length : 0,
-      }
-    }
-    if (stage === 'keyframes') {
-      return {
-        key: stage,
-        label: sequenceAnimaticSceneBoardPrepStageLabel(stage),
-        total: input.tiles.length,
-        ready: input.tiles.filter((tile) => tile.keyframeReady).length,
-        missing: input.tiles.filter((tile) => !tile.keyframeReady).length,
-        generating: keyframeGeneratingCount,
-        failed: input.tiles.filter((tile) => tile.failed).length,
-        blocked: input.tiles.filter((tile) => tile.blockedReasons.length > 0).length,
-      }
-    }
-    const tiles = stage === 'set_refs'
-      ? referenceStageCounts.get('set_refs') ?? []
-      : stage === 'scaffold_refs'
-        ? [...(referenceStageCounts.get('zone_refs') ?? []), ...(referenceStageCounts.get('spot_refs') ?? [])]
-        : []
-    return {
-      key: stage,
-      label: sequenceAnimaticSceneBoardPrepStageLabel(stage),
-      total: tiles.length,
-      ready: tiles.filter((tile) => tile.status === 'ready' || tile.status === 'not_required').length,
-      missing: tiles.filter((tile) => tile.status === 'missing' || tile.status === 'stale').length,
-      generating: tiles.filter((tile) => tile.status === 'generating').length,
-      failed: tiles.filter((tile) => tile.status === 'failed').length,
-      blocked: tiles.filter((tile) => tile.blockedReasons.length > 0).length,
-    }
-  })
-  const unresolvedReferencesByStage = sequenceAnimaticSceneBoardReferenceStageOrder
-    .map((stage) => referenceTiles.filter((tile) => (
-      tile.stage === stage
-      && tile.target
-      && (tile.status === 'missing' || tile.status === 'stale' || tile.status === 'failed')
-      && tile.blockedReasons.length === 0
-    )))
-  const nextPrepTargets = unresolvedReferencesByStage.find((targets) => targets.length > 0)
-    ?.map((tile) => tile.target)
-    .filter((target): target is SequenceAnimaticContinuityAssetTargetView => Boolean(target))
-    ?? []
-  const blockingReferences = referenceTiles.filter((tile) => tile.blockedReasons.length > 0)
-  const missingReferenceCount = referenceTiles.filter((tile) => tile.target && (tile.status === 'missing' || tile.status === 'stale' || tile.status === 'failed')).length
-  const missingCoverageReferenceCount = referenceTiles
-    .filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
-    .filter((tile) => tile.target && (tile.status === 'missing' || tile.status === 'stale' || tile.status === 'failed')).length
-  const canGenerateCoverageGrids = input.scene.status === 'ready'
-    && coverageGridShots.length > 0
-    && missingCoverageReferenceCount === 0
-    && !sequenceAnimaticSceneBoardCoverageReferencesGenerating(referenceTiles)
-  const prepBlockedReasons = [
-    input.scene.status !== 'ready' ? 'Generate this scene before preparing continuity.' : '',
-    blockingReferences[0]?.blockedReasons[0] ?? '',
-    referenceTiles.some((tile) => tile.status === 'generating') ? 'Reference generation is still running.' : '',
-  ].filter(Boolean)
-  const unitCoverageGridPlanCount = prepUnits.reduce((sum, unit) => sum + unit.coverageGridPlanCount, 0)
-  const prepSummary = nextPrepTargets.length > 0
-    ? `Next: generate ${nextPrepTargets.length} ${sequenceAnimaticSceneBoardReferenceStageLabel(referenceTiles.find((tile) => tile.target?.nodeId === nextPrepTargets[0]?.nodeId)?.stage ?? 'set_refs').toLowerCase()}.`
-    : missingReferenceCount > 0
-      ? 'Waiting for parent references before zone/spot scaffold.'
-      : canGenerateCoverageGrids && coverageGridShots.some((tile) => !tile.coverageReady)
-        ? `Next: generate ${unitCoverageGridPlanCount} scoped coverage grid${unitCoverageGridPlanCount === 1 ? '' : 's'} for ${coverageGridShots.length} shot${coverageGridShots.length === 1 ? '' : 's'}.`
-        : 'Continuity references are ready for this board scope.'
-  return {
-    referenceTiles,
-    prepStages,
-    nextPrepTargets,
-    prepUnits,
-    coverageGridPlanCount: unitCoverageGridPlanCount || zoneGridKeys.size,
-    coverageGridShotCount: coverageGridShots.length,
-    canGenerateCoverageGrids,
-    prepSummary,
-    prepBlockedReasons,
-  }
-}
-
-function sequenceAnimaticSceneBoardZoneScopeForNode(
-  model: SequenceAnimaticViewModel,
-  scopeNodeId?: string | null,
-) {
-  const scope = trimOptionalString(scopeNodeId)
-  if (!scope) return { setId: null, zoneId: null }
-  const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const scopeNode = graphNodeById.get(scope) ?? null
-  if (!scopeNode) return { setId: null, zoneId: null }
-  if (scopeNode.kind === 'set' || scopeNode.kind === 'world_location') return { setId: scopeNode.id, zoneId: null }
-  if (scopeNode.kind === 'zone') {
-    const parentNode = scopeNode.parentId ? graphNodeById.get(scopeNode.parentId) ?? null : null
-    return { setId: parentNode && (parentNode.kind === 'set' || parentNode.kind === 'world_location') ? parentNode.id : null, zoneId: scopeNode.id }
-  }
-  let cursor: SequenceAnimaticContinuityGraphNodeView | null = scopeNode
-  let zoneId: string | null = null
-  let setId: string | null = null
-  while (cursor?.parentId) {
-    const parent: SequenceAnimaticContinuityGraphNodeView | null = graphNodeById.get(cursor.parentId) ?? null
-    if (!parent) break
-    if (!zoneId && parent.kind === 'zone') zoneId = parent.id
-    if (!setId && (parent.kind === 'set' || parent.kind === 'world_location')) setId = parent.id
-    cursor = parent
-  }
-  return { setId, zoneId }
-}
-
-function buildSequenceAnimaticSceneBoardView(input: {
-  model: SequenceAnimaticViewModel
-  scene: SequenceAnimaticSceneView
-  scopeNodeId?: string | null
-  filter?: SequenceAnimaticSceneBoardFilter
-  grouping?: SequenceAnimaticSceneBoardGrouping
-}): SequenceAnimaticSceneBoardView {
-  const filter = input.filter ?? 'all'
-  const grouping = input.grouping ?? 'zone_spot'
-  const sceneBlocks = sequenceAnimaticBlocksForScene(input.model, input.scene)
-  const nodeById = new Map(input.model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const coverageAnchorById = new Map(input.model.coverageAnchors.map((anchor) => [anchor.id, anchor] as const))
-  const tiles = sceneBlocks
-    .flatMap((block) => block.shots.map((shot) => ({ block, shot })))
-    .filter(({ shot }) => sequenceAnimaticSceneBoardShotMatchesScope(
-      shot,
-      shot.coverageSetupId ? coverageAnchorById.get(shot.coverageSetupId) ?? null : null,
-      input.scopeNodeId,
-    ))
-    .map(({ block, shot }): SequenceAnimaticSceneBoardShotTile => {
-      const coverageAnchor = shot.coverageSetupId ? coverageAnchorById.get(shot.coverageSetupId) ?? null : null
-      const boardNode = sequenceAnimaticSceneBoardNodeFromShot(shot, coverageAnchor)
-      const continuityPreviewTarget = [...shot.spatialBindingView.hierarchy].reverse()
-        .map((node) => nodeById.get(node.id) ?? null)
-        .find((node) => node?.assetUrl) ?? null
-      const keyframeReady = shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready'
-      const coverageReady = Boolean(shot.zoneCoverageCell?.assetKey || coverageAnchor?.assetUrl || coverageAnchor?.assetKey)
-      const coverageIntentReady = Boolean(shot.coverageIntent?.coverageIntent || shot.coverageIntent?.stagingBrief)
-      const coverageThumbnailUrl = coverageAnchor?.assetUrl || shot.zoneCoverageCell?.assetUrl || null
-      const failed = Boolean(
-        shot.panelError
-        || shot.keyframeStatusLabel.toLowerCase().includes('failed')
-        || shot.zoneCoverageCellFailed
-        || shot.coverageIntentFailed
-        || coverageAnchor?.status === 'failed',
-      )
-      const blockedReasons = [
-        input.scene.status !== 'ready' ? 'Generate this scene first.' : '',
-        shot.isProvisional && !sequenceAnimaticShotCanGenerateEarlyKeyframe(shot) ? 'Shot binding is still provisional.' : '',
-        shot.keyframeDependencyMissingCount > 0 ? shot.keyframeDependencyStatusLabel : '',
-      ].filter(Boolean)
-      const spatialPath = shot.spatialBindingView.hierarchy.length > 0
-        ? shot.spatialBindingView.hierarchy
-          .filter((node) => node.kind === 'set' || node.kind === 'zone' || node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle')
-          .map((node) => node.label)
-          .join(' / ')
-        : 'Unbound'
-      return {
-        id: shot.id,
-        blockId: block.id,
-        blockTitle: block.title,
-        block,
-        shot,
-        coverageAnchor,
-        thumbnailUrl: keyframeReady && shot.panelUrl ? shot.panelUrl : coverageThumbnailUrl || shot.panelUrl || continuityPreviewTarget?.assetUrl || null,
-        thumbnailStatusLabel: keyframeReady && shot.panelUrl
-          ? shot.keyframeStatusLabel
-          : coverageAnchor?.assetUrl
-            ? coverageAnchor.statusLabel
-            : shot.zoneCoverageCell?.assetKey
-              ? 'Coverage grid cell ready'
-            : continuityPreviewTarget?.assetUrl
-              ? continuityPreviewTarget.assetStatusLabel
-              : shot.panelStatusLabel,
-        spatialPath,
-        setId: boardNode.set?.id ?? coverageAnchor?.setId ?? '',
-        zoneId: boardNode.zone?.id ?? coverageAnchor?.zoneId ?? '',
-        spotId: boardNode.spot?.id ?? coverageAnchor?.primarySpotId ?? coverageAnchor?.spotIds[0] ?? '',
-        spatialNodeIds: [...new Set([
-          ...shot.spatialBindingView.hierarchy
-            .filter((node) => node.kind === 'set' || node.kind === 'zone' || node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle')
-            .map((node) => node.id),
-          coverageAnchor?.setId ?? '',
-          coverageAnchor?.zoneId ?? '',
-          coverageAnchor?.primarySpotId ?? '',
-          coverageAnchor?.viewpointId ?? '',
-        ].filter(Boolean))],
-        authoringNodeId: boardNode.authoringNodeId,
-        authoringNodeKind: boardNode.authoringNodeKind,
-        coverageReady,
-        coverageIntentReady,
-        coverageIntentRunning: shot.coverageIntentRunning,
-        coverageIntentFailed: shot.coverageIntentFailed,
-        keyframeReady,
-        running: shot.panelRunning || shot.keyframeRunning || shot.keyframeDependencyRunning || shot.coverageIntentRunning || shot.zoneCoverageCellRunning || Boolean(coverageAnchor?.running),
-        failed,
-        blockedReasons,
-      }
-    })
-    .filter((tile) => sequenceAnimaticSceneBoardShotMatchesFilter(tile, filter))
-
-  const prep = buildSequenceAnimaticSceneBoardPrepView({ model: input.model, scene: input.scene, tiles })
-  const groupsById = new Map<string, SequenceAnimaticSceneBoardShotTile[]>()
-  for (const tile of tiles) {
-    const groupId = grouping === 'shot_order'
-      ? `${tile.blockId}:shot_order`
-      : [tile.setId || 'unbound_set', tile.zoneId || 'unbound_zone', tile.spotId || 'unbound_spot'].join(':')
-    groupsById.set(groupId, [...(groupsById.get(groupId) ?? []), tile])
-  }
-  const groups = [...groupsById.entries()].map(([id, groupShots], groupIndex): SequenceAnimaticSceneBoardGroup => {
-    const first = groupShots[0]
-    const spotNode = first?.spotId ? nodeById.get(first.spotId) ?? null : null
-    const zoneNode = first?.zoneId ? nodeById.get(first.zoneId) ?? null : null
-    const setNode = first?.setId ? nodeById.get(first.setId) ?? null : null
-    const authoringNode = spotNode ?? zoneNode ?? setNode ?? null
-    const title = grouping === 'shot_order'
-      ? first?.blockTitle || `Shot group ${groupIndex + 1}`
-      : spotNode?.label || zoneNode?.label || setNode?.label || 'Unbound shots'
-    const subtitle = grouping === 'shot_order'
-      ? `${groupShots.length} shot${groupShots.length === 1 ? '' : 's'} in screenplay order`
-      : [setNode?.label, zoneNode?.label].filter(Boolean).join(' / ') || 'Spatial binding pending'
-    const blockedReasons = [
-      input.scene.status !== 'ready' ? 'Generate this scene before generating coverage grids.' : '',
-      groupShots.every((tile) => tile.shot.isProvisional) ? 'No finalized shots in this group yet.' : '',
-    ].filter(Boolean)
-    const groupReferenceIds = new Set(groupShots.flatMap((tile) => tile.spatialNodeIds))
-    return {
-      id,
-      title,
-      subtitle,
-      setId: first?.setId ?? '',
-      zoneId: first?.zoneId ?? '',
-      spotId: first?.spotId ?? '',
-      authoringNodeId: authoringNode?.id ?? first?.authoringNodeId ?? null,
-      authoringNodeKind: authoringNode?.kind ?? first?.authoringNodeKind ?? null,
-      referenceTiles: prep.referenceTiles.filter((tile) => groupReferenceIds.has(tile.nodeId)),
-      shots: groupShots,
-      readyCount: groupShots.filter((tile) => tile.coverageReady && tile.keyframeReady).length,
-      missingCoverageCount: groupShots.filter((tile) => !tile.coverageReady).length,
-      missingKeyframeCount: groupShots.filter((tile) => !tile.keyframeReady).length,
-      failedCount: groupShots.filter((tile) => tile.failed).length,
-      blockedReasons,
-    }
-  })
-  return {
-    scene: input.scene,
-    groups,
-    shots: tiles,
-    ...prep,
-    readyCount: tiles.filter((tile) => tile.coverageReady && tile.keyframeReady).length,
-    missingCoverageCount: tiles.filter((tile) => !tile.coverageReady).length,
-    missingKeyframeCount: tiles.filter((tile) => !tile.keyframeReady).length,
-    failedCount: tiles.filter((tile) => tile.failed).length,
-    blockedReasons: input.scene.status !== 'ready' ? ['Generate this scene before generating coverage grids.'] : [],
-  }
 }
 
 function SequenceAnimaticContinuityStructureModal({
@@ -3611,491 +2865,6 @@ function SequenceAnimaticCoverageAnchorModal({
           </div>
         </div>
       </div>
-    </section>
-  )
-}
-
-function SequenceAnimaticSceneBoardCanvas({
-  model,
-  initialSceneId,
-  scopeNodeId,
-  continuityPrepBusy,
-  continuityPrepRun,
-  coverageGenerationBusy,
-  keyframeGenerationBusy,
-  onClose,
-  onOpenSceneGraph,
-  onPrepareContinuity,
-  onGenerateSceneCoverage,
-  onGenerateCoverageAnchor,
-  onGenerateShotKeyframe,
-  onSaveNodeOverride,
-}: {
-  model: SequenceAnimaticViewModel
-  initialSceneId?: string | null
-  scopeNodeId?: string | null
-  continuityPrepBusy: boolean
-  continuityPrepRun?: SequenceAnimaticSceneBoardPrepRunState | null
-  coverageGenerationBusy: boolean
-  keyframeGenerationBusy: boolean
-  onClose: () => void
-  onOpenSceneGraph: (sceneId: string, scopeNodeId?: string | null) => void
-  onPrepareContinuity: (scene: SequenceAnimaticSceneView, scopeNodeId?: string | null) => void
-  onGenerateSceneCoverage: (scene: SequenceAnimaticSceneView) => void
-  onGenerateCoverageAnchor: (anchor: SequenceAnimaticCoverageAnchorView) => Promise<unknown> | unknown
-  onGenerateShotKeyframe: (block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate') => Promise<unknown> | unknown
-  onSaveNodeOverride: (request: {
-    nodeId: string
-    nodeKind: SequenceAnimaticContinuityGraphNodeKind
-    visualBriefOverride?: string
-    extraPromptDirection?: string
-    clearOverride?: boolean
-  }) => Promise<unknown> | unknown
-}) {
-  const [sceneId, setSceneId] = useState(initialSceneId || model.scenes[0]?.id || '')
-  const [filter, setFilter] = useState<SequenceAnimaticSceneBoardFilter>('all')
-  const [grouping, setGrouping] = useState<SequenceAnimaticSceneBoardGrouping>('zone_spot')
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
-  const [selectedReferenceNodeId, setSelectedReferenceNodeId] = useState<string | null>(null)
-  const [selectedShotIds, setSelectedShotIds] = useState<Set<string>>(() => new Set())
-  const [visualBriefDraft, setVisualBriefDraft] = useState('')
-  const [extraPromptDraft, setExtraPromptDraft] = useState('')
-  const [overrideSaving, setOverrideSaving] = useState(false)
-  const [overrideError, setOverrideError] = useState('')
-  const scene = model.scenes.find((entry) => entry.id === sceneId) ?? model.scenes[0] ?? null
-  const board = useMemo(() => scene
-    ? buildSequenceAnimaticSceneBoardView({ model, scene, scopeNodeId, filter, grouping })
-    : null, [filter, grouping, model, scene, scopeNodeId])
-  useEffect(() => {
-    if (!scene && model.scenes[0]) setSceneId(model.scenes[0].id)
-  }, [model.scenes, scene])
-  useEffect(() => {
-    if (!board) return
-    setSelectedGroupId((current) => current && board.groups.some((group) => group.id === current) ? current : board.groups[0]?.id ?? null)
-    setSelectedShotIds((current) => {
-      const shotIds = new Set(board.shots.map((shot) => shot.id))
-      const next = new Set([...current].filter((shotId) => shotIds.has(shotId)))
-      return next.size === current.size ? current : next
-    })
-    setSelectedReferenceNodeId((current) => current && board.referenceTiles.some((tile) => tile.nodeId === current) ? current : null)
-  }, [board])
-  const selectedGroup = board?.groups.find((group) => group.id === selectedGroupId) ?? board?.groups[0] ?? null
-  const selectedReferenceTile = selectedReferenceNodeId ? board?.referenceTiles.find((tile) => tile.nodeId === selectedReferenceNodeId) ?? null : null
-  const selectedShots = board?.shots.filter((tile) => selectedShotIds.has(tile.id)) ?? []
-  const primaryShot = selectedShots[0] ?? null
-  const authoringNodeId = selectedReferenceTile?.nodeId ?? primaryShot?.authoringNodeId ?? selectedGroup?.authoringNodeId ?? null
-  const authoringNode = authoringNodeId ? model.continuityGraphView.nodes.find((node) => node.id === authoringNodeId) ?? null : null
-  const authoringNodeKind = authoringNode?.kind ?? selectedReferenceTile?.nodeKind ?? primaryShot?.authoringNodeKind ?? selectedGroup?.authoringNodeKind ?? null
-  useEffect(() => {
-    setVisualBriefDraft(authoringNode?.overrideVisualBrief || authoringNode?.baseVisualBrief || authoringNode?.summary || primaryShot?.coverageAnchor?.stagingBrief || '')
-    setExtraPromptDraft(authoringNode?.extraPromptDirection || '')
-    setOverrideError('')
-  }, [authoringNode?.id, primaryShot?.id, selectedReferenceTile?.nodeId])
-  const saveOverride = useCallback(async (clearOverride = false) => {
-    if (!authoringNodeId || !authoringNodeKind) return
-    setOverrideSaving(true)
-    setOverrideError('')
-    try {
-      await onSaveNodeOverride({
-        nodeId: authoringNodeId,
-        nodeKind: authoringNodeKind,
-        visualBriefOverride: clearOverride ? '' : visualBriefDraft,
-        extraPromptDirection: clearOverride ? '' : extraPromptDraft,
-        clearOverride,
-      })
-    } catch (error) {
-      setOverrideError(error instanceof Error ? error.message : 'Failed to save prompt direction.')
-    } finally {
-      setOverrideSaving(false)
-    }
-  }, [authoringNodeId, authoringNodeKind, extraPromptDraft, onSaveNodeOverride, visualBriefDraft])
-  useEffect(() => {
-    if (!authoringNodeId || !authoringNode) return
-    const currentBrief = authoringNode.overrideVisualBrief || authoringNode.baseVisualBrief || authoringNode.summary
-    const currentExtra = authoringNode.extraPromptDirection
-    if (visualBriefDraft === currentBrief && extraPromptDraft === currentExtra) return
-    const timeoutId = window.setTimeout(() => {
-      void saveOverride(false)
-    }, 1200)
-    return () => window.clearTimeout(timeoutId)
-  }, [authoringNode, authoringNodeId, extraPromptDraft, saveOverride, visualBriefDraft])
-  const selectedShotKeyframeReady = primaryShot?.keyframeReady ?? false
-  const continuityPrepRunActive = Boolean(continuityPrepRun && continuityPrepRun.stage !== 'complete' && continuityPrepRun.stage !== 'failed')
-  const continuityPrepVisualBusy = continuityPrepBusy || coverageGenerationBusy
-  const continuityPrepDisabledReason = !scene
-    ? 'No scene selected.'
-    : scene.status !== 'ready'
-      ? 'Generate this scene before preparing continuity.'
-      : continuityPrepBusy
-        ? continuityPrepRun?.message || 'Selected board prep is already running.'
-        : coverageGenerationBusy
-          ? 'Coverage grid generation is already running.'
-          : ''
-  const continuityPrepActionDisabled = !scene
-    || continuityPrepBusy
-    || coverageGenerationBusy
-    || scene.status !== 'ready'
-  const flowNodes = useMemo<Node<Record<string, unknown>>[]>(() => {
-    if (!board) return []
-    const columns = grouping === 'shot_order' ? 2 : 3
-    const nodeWidth = 360
-    const columnGap = 42
-    const rowGap = 54
-    const estimateGroupHeight = (group: SequenceAnimaticSceneBoardGroup) => {
-      const headerHeight = 46
-      const verticalPadding = 24
-      const groupGap = 10
-      const tileGap = 7
-      const refRows = Math.ceil(group.referenceTiles.length / 3)
-      const shotRows = Math.max(1, Math.ceil(group.shots.length / 3))
-      const refBlockHeight = refRows > 0 ? (refRows * 58) + ((refRows - 1) * tileGap) : 0
-      const shotBlockHeight = (shotRows * 106) + ((shotRows - 1) * tileGap)
-      const gridGap = refRows > 0 && shotRows > 0 ? tileGap : 0
-      return Math.max(186, verticalPadding + headerHeight + groupGap + refBlockHeight + gridGap + shotBlockHeight)
-    }
-    const groupMetrics = board.groups.map((group, index) => ({
-      group,
-      index,
-      row: Math.floor(index / columns),
-      height: estimateGroupHeight(group),
-    }))
-    const rowHeights = groupMetrics.reduce<number[]>((heights, metric) => {
-      heights[metric.row] = Math.max(heights[metric.row] ?? 0, metric.height)
-      return heights
-    }, [])
-    const rowOffsets = rowHeights.reduce<number[]>((offsets, _height, index) => {
-      offsets[index] = index === 0 ? 42 : offsets[index - 1] + rowHeights[index - 1] + rowGap
-      return offsets
-    }, [])
-    return groupMetrics.map(({ group, index, row, height }) => {
-      const x = 42 + (index % columns) * (nodeWidth + columnGap)
-      const y = rowOffsets[row] ?? 42
-      const isSelectedGroup = selectedGroupId === group.id && selectedShotIds.size === 0
-      return {
-        id: group.id,
-        type: 'default',
-        position: { x, y },
-        draggable: false,
-        selectable: true,
-        data: {
-          label: (
-            <div className={`world-wiki-scene-board-group is-${group.failedCount > 0 ? 'failed' : group.missingKeyframeCount > 0 || group.missingCoverageCount > 0 ? 'pending' : 'ready'}`}>
-              <header>
-                <span>{group.subtitle}</span>
-                <strong>{group.title}</strong>
-                <em>{group.readyCount}/{group.shots.length} ready</em>
-              </header>
-              <div className="world-wiki-scene-board-shot-grid">
-                {group.referenceTiles.length > 0 ? (
-                  <div className="world-wiki-scene-board-reference-row">
-                    {group.referenceTiles.map((referenceTile) => {
-                      const isSelectedReference = selectedReferenceNodeId === referenceTile.nodeId
-                      return (
-                        <button
-                          key={referenceTile.nodeId}
-                          className={[
-                            'world-wiki-scene-board-ref-tile',
-                            `is-${referenceTile.status}`,
-                            isSelectedReference ? 'is-selected' : '',
-                            referenceTile.blockedReasons.length > 0 ? 'is-blocked' : '',
-                          ].filter(Boolean).join(' ')}
-                          onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
-                            event.stopPropagation()
-                            setSelectedGroupId(group.id)
-                            setSelectedShotIds(new Set())
-                            setSelectedReferenceNodeId(referenceTile.nodeId)
-                          }}
-                          type="button"
-                        >
-                          <span className={referenceTile.assetUrl ? 'has-image' : ''}>
-                            {referenceTile.assetUrl ? <img src={referenceTile.assetUrl} alt="" /> : <EntityIcon id="environment" />}
-                          </span>
-                          <strong>{referenceTile.label}</strong>
-                          <em>{referenceTile.kindLabel} / {referenceTile.statusLabel}</em>
-                        </button>
-                      )
-                    })}
-                  </div>
-                ) : null}
-                {group.shots.map((tile) => {
-                  const isSelected = selectedShotIds.has(tile.id)
-                  return (
-                    <button
-                      key={tile.id}
-                      className={[
-                        'world-wiki-scene-board-shot-tile',
-                        isSelected ? 'is-selected' : '',
-                        tile.running ? 'is-running' : '',
-                        tile.failed ? 'is-failed' : '',
-                        tile.keyframeReady ? 'has-keyframe' : '',
-                      ].filter(Boolean).join(' ')}
-                      onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
-                        event.stopPropagation()
-                        setSelectedGroupId(group.id)
-                        setSelectedReferenceNodeId(null)
-                        setSelectedShotIds((current) => {
-                          if (event.shiftKey || event.metaKey || event.ctrlKey) {
-                            const next = new Set(current)
-                            if (next.has(tile.id)) next.delete(tile.id)
-                            else next.add(tile.id)
-                            return next
-                          }
-                          return new Set([tile.id])
-                        })
-                      }}
-                      type="button"
-                    >
-                      <span className={tile.thumbnailUrl ? 'has-image' : ''}>
-                        {tile.thumbnailUrl ? <img src={tile.thumbnailUrl} alt="" /> : <EntityIcon id="camera" />}
-                        {tile.running ? <i className="world-mini-spinner" aria-hidden="true" /> : null}
-                      </span>
-                      <strong>{String(tile.shot.index).padStart(3, '0')}</strong>
-                      <em>{tile.keyframeReady ? 'Keyframe' : tile.coverageReady ? 'Coverage' : tile.coverageIntentRunning ? 'Planning coverage' : tile.coverageIntentReady ? 'Direction ready' : tile.failed ? 'Failed' : 'Needs refs'}</em>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ),
-        },
-        style: {
-          width: nodeWidth,
-          minHeight: height,
-          borderRadius: 12,
-          border: isSelectedGroup ? '1px solid rgba(99, 179, 237, 0.76)' : '1px solid rgba(148, 163, 184, 0.16)',
-          background: 'rgba(8, 13, 28, 0.96)',
-          color: '#f8fafc',
-          padding: 0,
-          boxShadow: isSelectedGroup ? '0 18px 42px rgba(14, 116, 144, 0.24)' : '0 14px 32px rgba(0, 0, 0, 0.22)',
-        },
-      }
-    })
-  }, [board, grouping, selectedGroupId, selectedReferenceNodeId, selectedShotIds])
-  const onNodeClick = useCallback((_event: ReactMouseEvent, node: Node) => {
-    setSelectedGroupId(node.id)
-    setSelectedShotIds(new Set())
-    setSelectedReferenceNodeId(null)
-  }, [])
-  const generateSelectedKeyframes = async () => {
-    const targets = selectedShots.length > 0 ? selectedShots : selectedGroup?.shots ?? []
-    for (let index = 0; index < targets.length; index += 4) {
-      const batch = targets.slice(index, index + 4)
-      await Promise.all(batch.map((tile) => Promise.resolve(onGenerateShotKeyframe(tile.block, tile.shot, tile.keyframeReady ? 'regenerate' : 'generate'))))
-    }
-  }
-  const generateSelectedCoverageAnchors = async () => {
-    const anchors = (selectedShots.length > 0 ? selectedShots : selectedGroup?.shots ?? [])
-      .map((tile) => tile.coverageAnchor)
-      .filter((anchor): anchor is SequenceAnimaticCoverageAnchorView => Boolean(anchor))
-      .filter((anchor, index, anchors) => anchors.findIndex((entry) => entry.id === anchor.id) === index)
-    for (let index = 0; index < anchors.length; index += 4) {
-      await Promise.all(anchors.slice(index, index + 4).map((anchor) => Promise.resolve(onGenerateCoverageAnchor(anchor))))
-    }
-  }
-  return (
-    <section className="world-wiki-scene-board-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Scene Board">
-      <button className="world-wiki-sequence-animatic-close" onClick={onClose} type="button" aria-label="Close scene board">
-        <EntityIcon id="close" />
-      </button>
-      <header className="world-wiki-scene-board-head">
-        <div>
-          <span className="eyebrow">Scene Board</span>
-          <h3>{scene ? `Scene ${scene.index}: ${scene.title}` : model.title}</h3>
-          <p>{board ? `${board.shots.length} shot${board.shots.length === 1 ? '' : 's'} / ${board.missingCoverageCount} need coverage / ${board.missingKeyframeCount} need keyframes` : 'No scene selected'}</p>
-        </div>
-        <div className="world-wiki-scene-board-toolbar">
-          <select value={scene?.id ?? ''} onChange={(event) => setSceneId(event.target.value)} aria-label="Scene">
-            {model.scenes.map((entry) => (
-              <option key={entry.id} value={entry.id}>Scene {entry.index}: {entry.title}</option>
-            ))}
-          </select>
-          <div className="world-wiki-continuity-graph-mode-toggle" role="group" aria-label="Scene board grouping">
-            <button className={grouping === 'zone_spot' ? 'is-active' : ''} onClick={() => setGrouping('zone_spot')} type="button">Zone / Spot</button>
-            <button className={grouping === 'shot_order' ? 'is-active' : ''} onClick={() => setGrouping('shot_order')} type="button">Shot Order</button>
-          </div>
-          <select value={filter} onChange={(event) => setFilter(event.target.value as SequenceAnimaticSceneBoardFilter)} aria-label="Shot filter">
-            <option value="all">All</option>
-            <option value="needs_coverage">Needs coverage</option>
-            <option value="needs_keyframe">Needs keyframe</option>
-            <option value="failed">Failed</option>
-          </select>
-          <button className="ghost-button compact" disabled={!scene} onClick={() => scene && onOpenSceneGraph(scene.id, scopeNodeId)} type="button">
-            <EntityIcon id="graph" />
-            Open Scene Graph
-          </button>
-          <button
-            className="primary-button compact"
-            disabled={continuityPrepActionDisabled}
-            onClick={() => scene && onPrepareContinuity(scene, scopeNodeId)}
-            type="button"
-            title={continuityPrepDisabledReason || board?.prepSummary}
-          >
-            {continuityPrepVisualBusy ? <><span className="world-mini-spinner" aria-hidden="true" />Preparing</> : 'Prepare Selected Board'}
-          </button>
-        </div>
-      </header>
-      {!board || board.groups.length === 0 ? (
-        <div className="world-wiki-scene-board-empty">
-          <strong>No board-ready shots.</strong>
-          <p>{scene?.status === 'ready' ? 'No shots match the current scope or filter.' : 'Shot planning must generate scene bindings before this board can show coverage groups.'}</p>
-        </div>
-      ) : (
-        <div className="world-wiki-scene-board-body">
-          <div className="world-wiki-scene-board-canvas">
-            <div className="world-wiki-scene-board-prep-strip" aria-label="Continuity Prep stages">
-              <div>
-                <strong>{continuityPrepRun?.message || board.prepSummary}</strong>
-                <span>
-                  {continuityPrepRun
-                    ? `${continuityPrepRun.activeUnitLabel} / queued ${continuityPrepRun.queued} / running ${continuityPrepRun.running} / ready ${continuityPrepRun.ready} / failed ${continuityPrepRun.failed}`
-                    : `${board.prepUnits.length} zone board${board.prepUnits.length === 1 ? '' : 's'} / ${board.coverageGridPlanCount} grid${board.coverageGridPlanCount === 1 ? '' : 's'} / ${board.coverageGridShotCount} shot${board.coverageGridShotCount === 1 ? '' : 's'} in scope`}
-                </span>
-              </div>
-              <ol>
-                {board.prepStages.map((stage) => {
-                  const stageReady = stage.total > 0 && stage.ready >= stage.total
-                  const stageActive = stage.generating > 0 || (continuityPrepRunActive && continuityPrepRun?.stage === stage.key)
-                  return (
-                    <li key={stage.key} className={[stageReady ? 'is-ready' : '', stageActive ? 'is-running' : '', stage.blocked > 0 ? 'is-blocked' : ''].filter(Boolean).join(' ')}>
-                      <b>{stage.label}</b>
-                      <span>{stage.ready}/{stage.total}{stage.failed > 0 ? ` / ${stage.failed} failed` : ''}</span>
-                    </li>
-                  )
-                })}
-              </ol>
-              {board.prepUnits.length > 1 ? (
-                <div className="world-wiki-scene-board-unit-queue" aria-label="Zone board queue">
-                  {board.prepUnits.map((unit) => (
-                    <button
-                      key={unit.id}
-                      className={[
-                        continuityPrepRun?.activeUnitId === unit.id ? 'is-running' : '',
-                        unit.stage === 'ready' ? 'is-ready' : '',
-                        unit.stage === 'blocked' || unit.stage === 'failed' ? 'is-blocked' : '',
-                      ].filter(Boolean).join(' ')}
-                      onClick={() => setSelectedGroupId(unit.shots[0]?.spotId ? `${unit.setId || 'unbound_set'}:${unit.zoneId || 'unbound_zone'}:${unit.shots[0].spotId}` : selectedGroupId)}
-                      type="button"
-                    >
-                      <strong>{unit.title}</strong>
-                      <span>{unit.stageLabel}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <ReactFlow
-              nodes={flowNodes}
-              edges={[]}
-              fitView
-              fitViewOptions={{ padding: 0.16 }}
-              minZoom={0.42}
-              maxZoom={1.2}
-              nodesDraggable={false}
-              nodesConnectable={false}
-              elementsSelectable
-              onNodeClick={onNodeClick}
-            >
-              <Background color="rgba(148, 163, 184, 0.16)" gap={24} />
-              <Controls showInteractive={false} />
-            </ReactFlow>
-          </div>
-          <aside className="world-wiki-scene-board-inspector" aria-label="Selected scene board item">
-            {selectedReferenceTile ? (
-              <>
-                <div className="world-wiki-scene-board-inspector-preview">
-                  {selectedReferenceTile.assetUrl ? <img src={selectedReferenceTile.assetUrl} alt="" /> : <EntityIcon id="environment" />}
-                  <span>{selectedReferenceTile.statusLabel}</span>
-                </div>
-                <header>
-                  <span className="eyebrow">{selectedReferenceTile.kindLabel}</span>
-                  <h4>{selectedReferenceTile.label}</h4>
-                  <p>{selectedReferenceTile.usageCount} dependent shot{selectedReferenceTile.usageCount === 1 ? '' : 's'}</p>
-                </header>
-                <dl>
-                  <div><dt>Status</dt><dd>{selectedReferenceTile.statusLabel}</dd></div>
-                  <div><dt>Stage</dt><dd>{sequenceAnimaticSceneBoardReferenceStageLabel(selectedReferenceTile.stage)}</dd></div>
-                  <div><dt>Usage</dt><dd>{selectedReferenceTile.usageCount} shot{selectedReferenceTile.usageCount === 1 ? '' : 's'}</dd></div>
-                </dl>
-                {selectedReferenceTile.blockedReasons.length > 0 ? <p>{selectedReferenceTile.blockedReasons[0]}</p> : null}
-              </>
-            ) : primaryShot ? (
-              <>
-                <div className="world-wiki-scene-board-inspector-preview">
-                  {primaryShot.thumbnailUrl ? <img src={primaryShot.thumbnailUrl} alt="" /> : <EntityIcon id="camera" />}
-                  <span>{primaryShot.thumbnailStatusLabel}</span>
-                </div>
-                <header>
-                  <span className="eyebrow">{selectedShots.length > 1 ? `${selectedShots.length} selected shots` : primaryShot.blockTitle}</span>
-                  <h4>{primaryShot.shot.title}</h4>
-                  <p>{primaryShot.spatialPath}</p>
-                </header>
-                <dl>
-                  <div><dt>Coverage</dt><dd>{primaryShot.coverageReady ? 'Coverage grid cell ready' : primaryShot.coverageIntentRunning ? 'Planning coverage' : primaryShot.coverageIntentReady ? 'Coverage direction ready' : primaryShot.coverageAnchor?.statusLabel || primaryShot.shot.coverageSetupLabel || 'Coverage missing'}</dd></div>
-                  <div><dt>Keyframe</dt><dd>{primaryShot.shot.keyframeStatusLabel}</dd></div>
-                  <div><dt>Camera</dt><dd>{primaryShot.shot.camera || 'Camera pending'}</dd></div>
-                  <div><dt>Lighting</dt><dd>{primaryShot.shot.lighting || 'Lighting pending'}</dd></div>
-                </dl>
-                {primaryShot.shot.action ? <p>{primaryShot.shot.action}</p> : null}
-              </>
-            ) : selectedGroup ? (
-              <>
-                <header>
-                  <span className="eyebrow">Coverage group</span>
-                  <h4>{selectedGroup.title}</h4>
-                  <p>{selectedGroup.subtitle}</p>
-                </header>
-                <dl>
-                  <div><dt>Shots</dt><dd>{selectedGroup.shots.length}</dd></div>
-                  <div><dt>Coverage gaps</dt><dd>{selectedGroup.missingCoverageCount}</dd></div>
-                  <div><dt>Keyframe gaps</dt><dd>{selectedGroup.missingKeyframeCount}</dd></div>
-                </dl>
-              </>
-            ) : null}
-            {authoringNodeId && authoringNodeKind ? (
-              <div className="world-wiki-continuity-graph-prompt-editor">
-                <label>
-                  <span>Visual brief</span>
-                  <textarea value={visualBriefDraft} onChange={(event) => setVisualBriefDraft(event.currentTarget.value)} rows={5} />
-                </label>
-                <label>
-                  <span>Extra prompt direction</span>
-                  <textarea value={extraPromptDraft} onChange={(event) => setExtraPromptDraft(event.currentTarget.value)} rows={3} placeholder="Optional direction for the next coverage or scene graph regeneration." />
-                </label>
-                <div>
-                  <button className="ghost-button compact" disabled={overrideSaving} onClick={() => void saveOverride(false)} type="button">
-                    {overrideSaving ? <><span className="world-mini-spinner" aria-hidden="true" />Saving</> : 'Save prompt'}
-                  </button>
-                  <button className="ghost-button compact" disabled={overrideSaving || (!authoringNode?.overrideVisualBrief && !authoringNode?.extraPromptDirection)} onClick={() => void saveOverride(true)} type="button">
-                    Clear override
-                  </button>
-                </div>
-                {overrideError ? <p className="world-wiki-continuity-graph-error">{overrideError}</p> : null}
-              </div>
-            ) : null}
-            <div className="world-wiki-scene-board-actions">
-              <button
-                className="primary-button compact"
-                disabled={continuityPrepActionDisabled}
-                onClick={() => scene && onPrepareContinuity(scene, scopeNodeId)}
-                type="button"
-                title={continuityPrepDisabledReason || board.prepSummary}
-              >
-                {continuityPrepVisualBusy ? <><span className="world-mini-spinner" aria-hidden="true" />Preparing</> : 'Prepare Selected Board'}
-              </button>
-              <button className="ghost-button compact" disabled={!scene || coverageGenerationBusy || !board.canGenerateCoverageGrids} onClick={() => scene && onGenerateSceneCoverage(scene)} type="button">
-                {coverageGenerationBusy ? <><span className="world-mini-spinner" aria-hidden="true" />Generating grid</> : 'Generate zone grids'}
-              </button>
-              <button className="ghost-button compact" disabled={coverageGenerationBusy || (!primaryShot && !selectedGroup)} onClick={() => void generateSelectedCoverageAnchors()} type="button">
-                Generate selected coverage
-              </button>
-              <button className="primary-button compact" disabled={keyframeGenerationBusy || (!primaryShot && !selectedGroup)} onClick={() => void generateSelectedKeyframes()} type="button">
-                {keyframeGenerationBusy ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</> : selectedShotKeyframeReady ? 'Regenerate selected keyframes' : 'Generate selected keyframes'}
-              </button>
-              {continuityPrepDisabledReason ? <small>{continuityPrepDisabledReason}</small> : board.prepBlockedReasons.length ? <small>{board.prepBlockedReasons[0]}</small> : primaryShot?.blockedReasons.length ? <small>{primaryShot.blockedReasons[0]}</small> : selectedGroup?.blockedReasons.length ? <small>{selectedGroup.blockedReasons[0]}</small> : null}
-            </div>
-          </aside>
-        </div>
-      )}
     </section>
   )
 }
@@ -6234,16 +5003,44 @@ function buildSequenceAnimaticViewModel(input: {
   const coverageSetups = registryCoverageSetups.length > 0 ? registryCoverageSetups : legacyCoverageSetups
   const registryCoverageSetupByShotId = readLooseRecord(coverageRegistry.coverageSetupByShotId ?? coverageRegistry.coverage_setup_by_shot_id)
   const zoneCoverageCellByShotId = new Map<string, SequenceAnimaticZoneCoverageCellView>()
+  const zoneCoverageCellArtifactByShotId = new Map<string, OutputArtifact>()
+  for (const artifact of input.artifacts) {
+    const metadata = readLooseRecord(artifact.metadata)
+    const role = trimOptionalString(metadata.role)
+    const sourceArtifactRole = trimOptionalString(metadata.sourceArtifactRole ?? metadata.source_artifact_role)
+    if (role !== 'sequence_animatic_zone_coverage_cell' && sourceArtifactRole !== 'sequence_animatic_zone_coverage_cell') continue
+    const shotId = trimOptionalString(metadata.shotId ?? metadata.shot_id)
+    const assetKey = trimOptionalString(artifact.assetKey ?? metadata.assetKey ?? metadata.asset_key)
+    if (!shotId || !assetKey || zoneCoverageCellArtifactByShotId.has(shotId)) continue
+    zoneCoverageCellArtifactByShotId.set(shotId, artifact)
+  }
   Object.entries(readLooseRecord(coverageRegistry.coverageCellByShotId ?? coverageRegistry.coverage_cell_by_shot_id)).forEach(([shotId, value]) => {
     const cell = readLooseRecord(value)
+    const artifact = zoneCoverageCellArtifactByShotId.get(shotId) ?? null
+    const artifactMetadata = readLooseRecord(artifact?.metadata)
     const assetKey = trimOptionalString(cell.assetKey ?? cell.asset_key)
+      || trimOptionalString(artifact?.assetKey ?? artifactMetadata.assetKey ?? artifactMetadata.asset_key)
     zoneCoverageCellByShotId.set(shotId, {
       shotId,
-      boardId: trimOptionalString(cell.boardId ?? cell.board_id),
-      artifactKey: trimOptionalString(cell.artifactKey ?? cell.artifact_key) || null,
+      boardId: trimOptionalString(cell.boardId ?? cell.board_id ?? artifactMetadata.boardId ?? artifactMetadata.board_id),
+      artifactKey: trimOptionalString(cell.artifactKey ?? cell.artifact_key ?? artifact?.key) || null,
       assetKey: assetKey || null,
       assetUrl: assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null,
       status: assetKey ? 'ready' : trimOptionalString(cell.status) === 'failed' ? 'failed' : 'pending',
+    })
+  })
+  zoneCoverageCellArtifactByShotId.forEach((artifact, shotId) => {
+    if (zoneCoverageCellByShotId.get(shotId)?.assetKey) return
+    const metadata = readLooseRecord(artifact.metadata)
+    const assetKey = trimOptionalString(artifact.assetKey ?? metadata.assetKey ?? metadata.asset_key)
+    if (!assetKey) return
+    zoneCoverageCellByShotId.set(shotId, {
+      shotId,
+      boardId: trimOptionalString(metadata.boardId ?? metadata.board_id),
+      artifactKey: artifact.key || null,
+      assetKey,
+      assetUrl: resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null),
+      status: 'ready',
     })
   })
   const coverageIntentByShotId = new Map<string, SequenceAnimaticCoverageIntentView>()
@@ -6292,6 +5089,7 @@ function buildSequenceAnimaticViewModel(input: {
     })
   }
   const zoneCoverageActiveShotIds = new Set<string>()
+  const zoneCoverageActiveStageByShotId = new Map<string, SequenceAnimaticShotView['zoneCoverageCellActiveStage']>()
   const zoneCoverageFailedShotIds = new Set<string>()
   for (const request of [...zoneCoverageBoardRequests].sort((left, right) => requestUpdatedAtMs(right) - requestUpdatedAtMs(left))) {
     const metadata = readLooseRecord(request.metadata)
@@ -6302,10 +5100,40 @@ function buildSequenceAnimaticViewModel(input: {
     const shotIds = readLooseArray(metadata.shotIds ?? metadata.shot_ids ?? board.shotIds ?? board.shot_ids)
       .map(trimOptionalString)
       .filter(Boolean)
+    const imageStep = outputRunStepForNode(run, 'zone_coverage_board_image')
+    const extractStep = outputRunStepForNode(run, 'zone_coverage_board_extract')
+    const imageActive = isOutputRunStepActive(imageStep)
+    const extractActive = isOutputRunStepActive(extractStep)
     const active = sequenceAnimaticRequestIsActive(request, run)
+    const activeStage: SequenceAnimaticShotView['zoneCoverageCellActiveStage'] = extractActive
+      ? 'extract'
+      : imageActive
+        ? 'image'
+        : ''
     const failed = request.status === 'failed' || run?.status === 'failed' || outputWorkflowRunHasFailedExecution(run)
-    if (active) shotIds.forEach((shotId) => zoneCoverageActiveShotIds.add(shotId))
+    if (activeStage) {
+      shotIds.forEach((shotId) => {
+        zoneCoverageActiveShotIds.add(shotId)
+        zoneCoverageActiveStageByShotId.set(shotId, activeStage)
+      })
+    }
     if (failed) shotIds.forEach((shotId) => zoneCoverageFailedShotIds.add(shotId))
+    if (extractStep && (extractStep.status === 'completed' || extractStep.status === 'completed_with_errors')) {
+      Object.entries(readLooseRecord(readLooseRecord(extractStep.outputs).coverageCellByShotId ?? readLooseRecord(extractStep.outputs).coverage_cell_by_shot_id)).forEach(([shotId, value]) => {
+        if (zoneCoverageCellByShotId.get(shotId)?.assetKey) return
+        const cell = readLooseRecord(value)
+        const assetKey = trimOptionalString(cell.assetKey ?? cell.asset_key)
+        if (!assetKey) return
+        zoneCoverageCellByShotId.set(shotId, {
+          shotId,
+          boardId: trimOptionalString(cell.boardId ?? cell.board_id ?? boardId),
+          artifactKey: trimOptionalString(cell.artifactKey ?? cell.artifact_key) || null,
+          assetKey,
+          assetUrl: resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null),
+          status: 'ready',
+        })
+      })
+    }
     if (!boardId) continue
     const assetKey = trimOptionalString(board.boardAssetKey ?? board.board_asset_key ?? board.assetKey ?? board.asset_key)
     zoneCoverageBoardById.set(boardId, {
@@ -7298,7 +6126,8 @@ function buildSequenceAnimaticViewModel(input: {
           const coverageIntentFailed = coverageIntentFailedShotIds.has(shotId)
           const zoneCoverageCell = zoneCoverageCellByShotId.get(shotId) ?? null
           const zoneCoverageCellReady = Boolean(zoneCoverageCell?.assetKey)
-          const zoneCoverageCellRunning = !zoneCoverageCellReady && zoneCoverageActiveShotIds.has(shotId)
+          const zoneCoverageCellActiveStage = zoneCoverageActiveStageByShotId.get(shotId) ?? ''
+          const zoneCoverageCellRunning = !zoneCoverageCellReady && Boolean(zoneCoverageCellActiveStage)
           const zoneCoverageCellFailed = !zoneCoverageCellReady && zoneCoverageFailedShotIds.has(shotId)
           const setupCoverageAnchor = coverageAnchorViews.find((anchor) => anchor.id && anchor.id === effectiveCoverageSetupId) ?? null
           const shotCoverageArtifact = coverageAnchorArtifactByShotId.get(shotId) ?? null
@@ -7386,6 +6215,7 @@ function buildSequenceAnimaticViewModel(input: {
             coverageIntentFailed,
             zoneCoverageCell,
             zoneCoverageCellRunning,
+            zoneCoverageCellActiveStage,
             zoneCoverageCellFailed,
             spatialContinuityLabel: spatialBindingView.compactLabel || shotBindingLabels.label,
             spatialContinuityDetail: spatialBindingView.detailLabel || shotBindingLabels.detail,
@@ -7401,7 +6231,7 @@ function buildSequenceAnimaticViewModel(input: {
                     : shotCoverageAnchor?.running
                       ? 'Generating coverage anchor'
                     : zoneCoverageCellRunning
-                      ? 'Generating coverage grid cell'
+                      ? zoneCoverageCellActiveStage === 'extract' ? 'Extracting coverage grid cell' : 'Generating coverage grid'
                     : coverageIntent
                       ? 'Coverage direction ready'
                     : keyframeDependencyRunning
@@ -7573,7 +6403,8 @@ function buildSequenceAnimaticViewModel(input: {
           const coverageIntentFailed = coverageIntentFailedShotIds.has(shotId)
           const zoneCoverageCell = zoneCoverageCellByShotId.get(shotId) ?? null
           const zoneCoverageCellReady = Boolean(zoneCoverageCell?.assetKey)
-          const zoneCoverageCellRunning = !zoneCoverageCellReady && zoneCoverageActiveShotIds.has(shotId)
+          const zoneCoverageCellActiveStage = zoneCoverageActiveStageByShotId.get(shotId) ?? ''
+          const zoneCoverageCellRunning = !zoneCoverageCellReady && Boolean(zoneCoverageCellActiveStage)
           const zoneCoverageCellFailed = !zoneCoverageCellReady && zoneCoverageFailedShotIds.has(shotId)
           const setupCoverageAnchor = coverageAnchorViews.find((anchor) => anchor.id && anchor.id === effectiveCoverageSetupId) ?? null
           const shotCoverageArtifact = coverageAnchorArtifactByShotId.get(shotId) ?? null
@@ -7661,6 +6492,7 @@ function buildSequenceAnimaticViewModel(input: {
             coverageIntentFailed,
             zoneCoverageCell,
             zoneCoverageCellRunning,
+            zoneCoverageCellActiveStage,
             zoneCoverageCellFailed,
             spatialContinuityLabel: spatialBindingView.compactLabel || shotBindingLabels.label,
             spatialContinuityDetail: spatialBindingView.detailLabel || shotBindingLabels.detail,
@@ -7678,7 +6510,7 @@ function buildSequenceAnimaticViewModel(input: {
                     : shotCoverageAnchor?.running
                       ? 'Generating coverage anchor'
                     : zoneCoverageCellRunning
-                      ? 'Generating coverage grid cell'
+                      ? zoneCoverageCellActiveStage === 'extract' ? 'Extracting coverage grid cell' : 'Generating coverage grid'
                     : coverageIntent
                       ? 'Coverage direction ready'
                     : keyframeDependencyRunning
@@ -7808,6 +6640,7 @@ function buildSequenceAnimaticViewModel(input: {
               coverageIntentFailed: false,
               zoneCoverageCell: null,
               zoneCoverageCellRunning: false,
+              zoneCoverageCellActiveStage: '',
               zoneCoverageCellFailed: false,
               spatialContinuityLabel: 'Refs pending',
               spatialContinuityDetail: 'Director plan will assign world refs, scene graph nodes, and shot continuity.',
@@ -8279,6 +7112,7 @@ export function WorldGraphPage({
   onEnsureSequenceAnimaticShotProductionGraph,
   onEnsureSequenceAnimaticShotCoverageIntents,
   onEnsureSequenceAnimaticZoneCoverageBoards,
+  onPrepareSequenceAnimaticSceneBoard,
   onEnsureSequenceAnimaticShotRevisionWorkflow,
   onUpdateSequenceAnimaticSceneGraphNode,
   onLoadSequenceAnimaticState,
@@ -9727,6 +8561,47 @@ export function WorldGraphPage({
     ? sequenceAnimaticModelByRequestId.get(sequenceAnimaticSceneBoardRequestId)
       ?? (sequenceAnimaticPreviewModel?.request.id === sequenceAnimaticSceneBoardRequestId ? sequenceAnimaticPreviewModel : null)
     : null
+  const sequenceAnimaticSceneBoardPersistedPrepRun = useMemo(() => {
+    if (!sequenceAnimaticSceneBoardModel || !sequenceAnimaticSceneBoardScopeSceneId) return null
+    const runKey = sequenceAnimaticSceneBoardPrepRunKey({
+      masterRequestId: sequenceAnimaticSceneBoardModel.request.id,
+      sceneId: sequenceAnimaticSceneBoardScopeSceneId,
+      scopeNodeId: trimOptionalString(sequenceAnimaticSceneBoardScopeNodeId) || 'all',
+    })
+    return sequenceAnimaticSceneBoardPrepRunForScope({
+      request: sequenceAnimaticSceneBoardModel.request,
+      runKey,
+    })
+  }, [sequenceAnimaticSceneBoardModel, sequenceAnimaticSceneBoardScopeNodeId, sequenceAnimaticSceneBoardScopeSceneId])
+  useEffect(() => {
+    if (!sequenceAnimaticSceneBoardPersistedPrepRun) return
+    setSequenceAnimaticSceneBoardPrepRun((current) => {
+      if (current?.runId === sequenceAnimaticSceneBoardPersistedPrepRun.runId && current.updatedAt >= sequenceAnimaticSceneBoardPersistedPrepRun.updatedAt) return current
+      return sequenceAnimaticSceneBoardPersistedPrepRun
+    })
+  }, [sequenceAnimaticSceneBoardPersistedPrepRun])
+  useEffect(() => {
+    if (!sequenceAnimaticSceneBoardModel || !sequenceAnimaticSceneBoardPrepRun) return undefined
+    if (sequenceAnimaticSceneBoardPrepRun.stage === 'complete' || sequenceAnimaticSceneBoardPrepRun.stage === 'failed') return undefined
+    let cancelled = false
+    const intervalId = window.setInterval(() => {
+      if (cancelled) return
+      void Promise.resolve(loadAndStoreSequenceAnimaticState({
+        masterRequestId: sequenceAnimaticSceneBoardModel.request.id,
+        knownRevision: null,
+      })).catch((error) => {
+        if (!cancelled && !isTransientRequestError(error)) {
+          console.warn('[GraphCore] Scene Board prep fallback refresh failed.', error)
+        } else if (!cancelled && import.meta.env.DEV && import.meta.env.VITE_GRAPHCORE_OUTPUT_MONITOR_DEBUG === 'true') {
+          console.info('[GraphCore] Scene Board prep fallback refresh skipped after transient failure.', error)
+        }
+      })
+    }, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [loadAndStoreSequenceAnimaticState, sequenceAnimaticSceneBoardModel, sequenceAnimaticSceneBoardPrepRun])
   const openSequenceAnimaticContinuityGraph = useCallback((requestId: string, scopeWorldLocationId: string | null = null, scopeSceneId: string | null = null) => {
     setSequenceAnimaticContinuityGraphScopeWorldLocationId(scopeWorldLocationId)
     setSequenceAnimaticContinuityGraphScopeSceneId(scopeSceneId)
@@ -9875,7 +8750,11 @@ export function WorldGraphPage({
           }
         }
       }).catch((error) => {
-        if (!cancelled) console.warn('[GraphCore] sequence animatic state refresh failed.', error)
+        if (!cancelled && !isTransientRequestError(error)) {
+          console.warn('[GraphCore] sequence animatic state refresh failed.', error)
+        } else if (!cancelled && import.meta.env.DEV && import.meta.env.VITE_GRAPHCORE_OUTPUT_MONITOR_DEBUG === 'true') {
+          console.info('[GraphCore] sequence animatic state refresh skipped after transient failure.', error)
+        }
       })
     }
     const scheduleRefresh = (delayMs = 400) => {
@@ -9890,10 +8769,20 @@ export function WorldGraphPage({
       draftId: projectDraftId,
       masterRequestId: previewRequestId,
       onSignal: (signal) => {
-        const eventType = trimOptionalString(readLooseRecord(signal.row).event_type) || trimOptionalString(readLooseRecord(signal.row).eventType)
+        const row = readLooseRecord(signal.row)
+        const eventType = trimOptionalString(row.event_type) || trimOptionalString(row.eventType)
+        const nodeKey = trimOptionalString(row.node_key) || trimOptionalString(row.nodeKey)
+        const rowStatus = trimOptionalString(row.status)
         const appliedLive = signal.table === 'output_request_events'
           ? applyLiveSequenceAnimaticStreamEvent({ masterRequestId: previewRequestId, row: signal.row })
           : false
+        if (
+          (signal.table === 'output_workflow_run_steps' && nodeKey === 'zone_coverage_board_extract' && (rowStatus === 'completed' || rowStatus === 'completed_with_errors'))
+          || eventType === 'zone_coverage_board_ready'
+        ) {
+          scheduleRefresh(80)
+          return
+        }
         if (appliedLive && eventType === 'shot_streamed') {
           scheduleRefresh(2200)
           return
@@ -10260,16 +9149,34 @@ export function WorldGraphPage({
       if (scene.status !== 'ready') {
         throw new Error('Generate this scene before regenerating camera coverage grids.')
       }
-      const sceneShots = sequenceAnimaticBlocksForScene(model, scene)
-        .flatMap((block) => block.shots.map((shot) => ({ block, shot })))
-        .filter(({ shot }) => !shot.isProvisional)
+      const board = buildSequenceAnimaticSceneBoardView({ model, scene, scopeNodeId })
+      const blockedUnits = board.prepUnits.filter((unit) => (
+        unit.coverageGridShotCount > 0
+        && !sequenceAnimaticSceneBoardCoverageReferencesReady(unit.referenceTiles)
+      ))
+      if (blockedUnits.length > 0) {
+        const missingRefs = blockedUnits
+          .flatMap((unit) => unit.referenceTiles.filter((tile) => (
+            sequenceAnimaticSceneBoardReferenceRequiredForCoverage(tile)
+            && !sequenceAnimaticSceneBoardReferenceReady(tile)
+          )))
+        const missingLabel = missingRefs
+          .slice(0, 4)
+          .map((tile) => tile.label || tile.nodeId)
+          .join(', ')
+        throw new Error(missingLabel
+          ? `Prepare Selected Board first. Missing required continuity refs: ${missingLabel}.`
+          : 'Prepare Selected Board first. Required set, zone, and spot continuity refs are not ready.')
+      }
+      const sceneShots = board.shots.filter((tile) => !tile.shot.isProvisional)
       if (sceneShots.length === 0) {
         throw new Error('This scene has no finalized shots yet.')
       }
       await startSequenceAnimaticZoneCoverageBoardRuns(model, scene, {
         ...sequenceAnimaticSceneBoardZoneScopeForNode(model, scopeNodeId),
         scopeNodeId,
-        shotIds: sceneShots.map(({ shot }) => shot.id).filter(Boolean),
+        shotIds: sceneShots.map((tile) => tile.shot.id).filter(Boolean),
+        scopedShots: sceneShots.map((tile) => sequenceAnimaticSceneBoardShotSnapshot(tile, scene)),
       }, { forceRefresh: true })
       await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
@@ -10308,6 +9215,10 @@ export function WorldGraphPage({
       const existingRun = assetRequest.latestRunId
         ? outputWorkflowRuns.find((run) => run.id === assetRequest.latestRunId) ?? null
         : outputWorkflowRuns.find((run) => run.workflowId === assetRequest.workflowId) ?? null
+      if (sequenceAnimaticRequestIsActive(assetRequest, existingRun)) {
+        startedCount += 1
+        continue
+      }
       const requestRole = trimOptionalString(readLooseRecord(assetRequest.metadata).screenplayAnimaticRole ?? readLooseRecord(assetRequest.metadata).sequenceAnimaticRole)
       const isBatchRun = group.isBatch || requestRole === 'continuity_asset_batch'
       await onStartOutputWorkflowRun({
@@ -10385,32 +9296,86 @@ export function WorldGraphPage({
     scene: SequenceAnimaticSceneView,
     scopeNodeId?: string | null,
   ) => {
-    const scopeKey = trimOptionalString(scopeNodeId) || 'all'
-    const runKey = `${model.request.id}:${scene.id}:${scopeKey}:scene_board_prep`
+    const runKey = sequenceAnimaticSceneBoardPrepRunKey({
+      masterRequestId: model.request.id,
+      sceneId: scene.id,
+      scopeNodeId: trimOptionalString(scopeNodeId) || 'all',
+    })
+    const existingPrepRun = sequenceAnimaticSceneBoardPrepRun?.runKey === runKey ? sequenceAnimaticSceneBoardPrepRun : null
+    const prepRunId = existingPrepRun?.runId ?? crypto.randomUUID()
+    let prepShotIds: string[] = []
+    let lastPrepRunState: SequenceAnimaticSceneBoardPrepRunState | null = existingPrepRun
     const startedAt = Date.now()
     const updatePrepRun = (patch: Partial<SequenceAnimaticSceneBoardPrepRunState>) => {
-      setSequenceAnimaticSceneBoardPrepRun((current) => ({
+      const next: SequenceAnimaticSceneBoardPrepRunState = {
         runKey,
+        runId: prepRunId,
         sceneId: scene.id,
+        setId: null,
+        zoneId: null,
         scopeNodeId: trimOptionalString(scopeNodeId) || null,
         activeUnitId: null,
         activeUnitLabel: scene.title,
         stage: 'set_refs',
+        stageLabel: 'Checking set refs',
         message: 'Preparing selected board.',
         queued: 0,
         running: 0,
         ready: 0,
         failed: 0,
+        activeReferenceNodeIds: [],
+        activeCoverageShotIds: [],
+        activeRequestIds: [],
+        activeRunIds: [],
+        activeRunStepKey: '',
         startedAt,
-        ...(current?.runKey === runKey ? current : {}),
+        updatedAt: Date.now(),
+        error: '',
+        ...(lastPrepRunState?.runKey === runKey ? lastPrepRunState : {}),
         ...patch,
+      }
+      lastPrepRunState = next
+      setSequenceAnimaticSceneBoardPrepRun((current) => ({
+        ...(current?.runKey === runKey ? current : next),
+        ...next,
       }))
+      const persistedStage = next.stage === 'keyframes' ? 'complete' : next.stage
+      void Promise.resolve(onPrepareSequenceAnimaticSceneBoard({
+        masterRequestId: model.request.id,
+        runId: prepRunId,
+        runKey,
+        sceneId: scene.id,
+        setId: next.setId,
+        zoneId: next.zoneId,
+        scopeNodeId: trimOptionalString(scopeNodeId) || null,
+        shotIds: prepShotIds,
+        stage: persistedStage,
+        status: persistedStage === 'complete' ? 'complete' : persistedStage === 'failed' ? 'failed' : 'running',
+        activeUnitId: next.activeUnitId,
+        activeUnitLabel: next.activeUnitLabel,
+        stageLabel: next.stageLabel,
+        message: next.message,
+        queued: next.queued,
+        running: next.running,
+        ready: next.ready,
+        failed: next.failed,
+        activeRequestIds: next.activeRequestIds,
+        activeRunIds: next.activeRunIds,
+        activeReferenceNodeIds: next.activeReferenceNodeIds,
+        activeCoverageShotIds: next.activeCoverageShotIds,
+        activeRunStepKey: next.activeRunStepKey,
+        error: next.error,
+        action: persistedStage === 'complete' ? 'complete' : persistedStage === 'failed' ? 'fail' : 'update',
+      })).catch((stateError) => {
+        console.warn('[GraphCore] Failed to persist Scene Board prep state.', stateError)
+      })
     }
     if (sequenceAnimaticBusyRunKeys.has(runKey)) {
       updatePrepRun({
         activeUnitId: null,
         activeUnitLabel: scene.title,
         stage: 'set_refs',
+        stageLabel: 'Preparing selected board',
         message: 'Selected board prep is already running.',
       })
       return
@@ -10449,11 +9414,23 @@ export function WorldGraphPage({
           activeUnitId: latestUnit.id,
           activeUnitLabel: latestUnit.title,
           stage: input.stage,
+          stageLabel: input.stage === 'set_refs'
+            ? 'Generating set image'
+            : input.stage === 'scaffold_refs'
+              ? 'Generating zone/spot scaffold'
+              : input.stage === 'coverage_directions'
+                ? 'Planning coverage'
+                : input.stage === 'coverage_grids'
+                  ? 'Generating coverage grid'
+                  : sequenceAnimaticSceneBoardPrepStageLabel(input.stage),
           message: input.message,
           queued: latestUnit.scaffoldGroups.length,
           running: latestUnit.referenceTiles.filter((tile) => tile.status === 'generating').length + latestUnit.shots.filter((tile) => tile.running || tile.coverageIntentRunning).length,
           ready: latestUnit.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceReady).length + latestUnit.shots.filter((tile) => tile.coverageReady || tile.coverageIntentReady).length,
           failed: latestUnit.referenceTiles.filter((tile) => tile.status === 'failed').length + latestUnit.shots.filter((tile) => tile.failed || tile.coverageIntentFailed).length,
+          activeReferenceNodeIds: latestUnit.referenceTiles.filter((tile) => tile.status === 'generating').map((tile) => tile.nodeId),
+          activeCoverageShotIds: latestUnit.shots.filter((tile) => tile.shot.zoneCoverageCellRunning).map((tile) => tile.id),
+          activeRunStepKey: latestUnit.shots.find((tile) => tile.shot.zoneCoverageCellActiveStage)?.shot.zoneCoverageCellActiveStage || '',
         })
         if (failed) return { latestModel, unit: latestUnit, status: 'failed' as const }
         if (input.isReady(latestUnit)) return { latestModel, unit: latestUnit, status: 'ready' as const }
@@ -10478,6 +9455,7 @@ export function WorldGraphPage({
         activeUnitId: null,
         activeUnitLabel: scene.title,
         stage: 'set_refs',
+        stageLabel: 'Starting selected board prep',
         message: 'Starting selected board prep.',
       })
       if (scene.status !== 'ready') {
@@ -10493,6 +9471,7 @@ export function WorldGraphPage({
       if (board.shots.length === 0) {
         throw new Error('No shots match this Scene Board scope.')
       }
+      prepShotIds = board.shots.map((tile) => tile.id).filter(Boolean)
       let latestModel = model
       for (const initialUnit of board.prepUnits) {
         let latestScene = latestModel.scenes.find((entry) => entry.id === scene.id) ?? scene
@@ -10506,14 +9485,21 @@ export function WorldGraphPage({
         let unit = latestBoard.prepUnits.find((entry) => entry.id === initialUnit.id) ?? null
         if (!unit) continue
         updatePrepRun({
+          setId: unit.setId || null,
+          zoneId: unit.zoneId || null,
           activeUnitId: unit.id,
           activeUnitLabel: unit.title,
           stage: 'set_refs',
+          stageLabel: 'Checking set refs',
           message: `Preparing ${unit.title}: checking set refs.`,
           queued: unit.setTargets.length,
           running: unit.referenceTiles.filter((tile) => tile.status === 'generating').length,
           ready: unit.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceReady).length,
           failed: unit.referenceTiles.filter((tile) => tile.status === 'failed').length,
+          activeReferenceNodeIds: unit.referenceTiles.filter((tile) => tile.status === 'generating').map((tile) => tile.nodeId),
+          activeCoverageShotIds: [],
+          activeRequestIds: [],
+          activeRunStepKey: '',
         })
         if (unit.setTargets.length > 0) {
           const startedSetRefs = await startSequenceAnimaticContinuityAssetRunGroups(latestModel, unit.setTargets.map((target) => ({ targets: [target], isBatch: false })))
@@ -10536,6 +9522,7 @@ export function WorldGraphPage({
               activeUnitId: unit?.id ?? initialUnit.id,
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: result.status === 'failed' ? 'failed' : 'set_refs',
+              stageLabel: result.status === 'failed' ? 'Set ref failed' : 'Generating set image',
               message: result.status === 'failed' ? 'Set reference failed. Retry the selected board after fixing the failed ref.' : 'Still waiting for set image before zone scaffold.',
               running: 0,
             })
@@ -10549,11 +9536,17 @@ export function WorldGraphPage({
             activeUnitId: unit.id,
             activeUnitLabel: unit.title,
             stage: 'scaffold_refs',
+            stageLabel: unit.scaffoldGroups.some((group) => group.targets.some((target) => target.assetKind.includes('spot') || target.assetKind.includes('angle')))
+              ? 'Generating spot scaffold'
+              : 'Generating zone image',
             message: `Generating ${unit.scaffoldGroups.length} scaffold grid${unit.scaffoldGroups.length === 1 ? '' : 's'} for ${unit.title}.`,
             queued: unit.scaffoldGroups.length,
             running: unit.referenceTiles.filter((tile) => tile.status === 'generating').length,
             ready: unit.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceReady).length,
             failed: unit.referenceTiles.filter((tile) => tile.status === 'failed').length,
+            activeReferenceNodeIds: unit.scaffoldGroups.flatMap((group) => group.targets.map((target) => target.nodeId)),
+            activeCoverageShotIds: [],
+            activeRunStepKey: '',
           })
           const startedScaffoldRefs = await startSequenceAnimaticContinuityAssetRunGroups(latestModel, unit.scaffoldGroups)
           if (startedScaffoldRefs === 0) {
@@ -10583,6 +9576,7 @@ export function WorldGraphPage({
               activeUnitId: unit?.id ?? initialUnit.id,
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: result.status === 'failed' ? 'failed' : 'scaffold_refs',
+              stageLabel: result.status === 'failed' ? 'Scaffold failed' : 'Generating spot scaffold',
               message: result.status === 'failed' ? 'Zone/spot scaffold failed. Retry the selected board after fixing the failed ref.' : 'Still waiting for zone/spot scaffold images.',
               running: 0,
             })
@@ -10594,9 +9588,62 @@ export function WorldGraphPage({
             activeUnitId: unit.id,
             activeUnitLabel: unit.title,
             stage: 'scaffold_refs',
+            stageLabel: 'Scaffold paused',
             message: 'More scaffold batches remain. Press Prepare Selected Board again to continue this unit.',
           })
           return
+        }
+        if (!sequenceAnimaticSceneBoardCoverageReferencesReady(unit.referenceTiles)) {
+          const requiredReferences = unit.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
+          const missingRequiredReferences = requiredReferences.filter((tile) => !sequenceAnimaticSceneBoardReferenceReady(tile))
+          if (sequenceAnimaticSceneBoardCoverageReferencesGenerating(unit.referenceTiles)) {
+            const result = await waitForUnit({
+              latestModel,
+              unitId: unit.id,
+              stage: 'scaffold_refs',
+              message: `Waiting for active set/zone/spot refs for ${unit.title}.`,
+              maxAttempts: hierarchyReferencePollAttempts,
+              isReady: (candidate) => sequenceAnimaticSceneBoardCoverageReferencesReady(candidate.referenceTiles),
+              isFailed: (candidate) => candidate.referenceTiles
+                .filter(sequenceAnimaticSceneBoardReferenceRequiredForCoverage)
+                .some((tile) => tile.status === 'failed'),
+            })
+            latestModel = result.latestModel
+            unit = result.unit
+            if (result.status !== 'ready' || !unit) {
+              updatePrepRun({
+                activeUnitId: unit?.id ?? initialUnit.id,
+                activeUnitLabel: unit?.title ?? initialUnit.title,
+                stage: result.status === 'failed' ? 'failed' : 'scaffold_refs',
+                stageLabel: result.status === 'failed' ? 'Reference generation failed' : 'Waiting for refs',
+                message: result.status === 'failed'
+                  ? 'A required set, zone, or spot reference failed. Retry the selected board after fixing the failed ref.'
+                  : 'Still waiting for required set, zone, and spot references before coverage grids.',
+                running: result.status === 'failed' ? 0 : missingRequiredReferences.length,
+                activeReferenceNodeIds: unit?.referenceTiles
+                  .filter((tile) => sequenceAnimaticSceneBoardReferenceRequiredForCoverage(tile) && tile.status === 'generating')
+                  .map((tile) => tile.nodeId) ?? missingRequiredReferences.map((tile) => tile.nodeId),
+                activeCoverageShotIds: [],
+                activeRunStepKey: '',
+              })
+              return
+            }
+          } else {
+            updatePrepRun({
+              activeUnitId: unit.id,
+              activeUnitLabel: unit.title,
+              stage: 'failed',
+              stageLabel: 'Refs required',
+              message: missingRequiredReferences.length > 0
+                ? `Required set, zone, or spot refs are not ready for ${unit.title}. Retry Prepare Selected Board to generate missing refs before coverage grids.`
+                : `No required set, zone, or spot refs are ready for ${unit.title}. Generate scene bindings before coverage grids.`,
+              failed: missingRequiredReferences.filter((tile) => tile.status === 'failed').length,
+              activeReferenceNodeIds: missingRequiredReferences.map((tile) => tile.nodeId),
+              activeCoverageShotIds: [],
+              activeRunStepKey: '',
+            })
+            return
+          }
         }
         if (unit.coverageIntentMissingCount > 0) {
           const intentShotIds = unit.shots
@@ -10610,11 +9657,14 @@ export function WorldGraphPage({
             activeUnitId: unit.id,
             activeUnitLabel: unit.title,
             stage: 'coverage_directions',
+            stageLabel: 'Planning coverage',
             message: `Planning coverage directions for ${intentShotIds.length} shot${intentShotIds.length === 1 ? '' : 's'} in ${unit.title}.`,
             queued: intentShotIds.length,
             running: unit.shots.filter((tile) => tile.coverageIntentRunning).length,
             ready: unit.coverageIntentReadyCount,
             failed: unit.shots.filter((tile) => tile.coverageIntentFailed).length,
+            activeCoverageShotIds: intentShotIds,
+            activeRunStepKey: 'coverage_intent_plan',
           })
           const startedCoverageIntents = await startSequenceAnimaticCoverageIntentRuns(latestModel, latestScene, {
             setId: unit.setId || null,
@@ -10644,6 +9694,7 @@ export function WorldGraphPage({
               activeUnitId: unit?.id ?? initialUnit.id,
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: 'failed',
+              stageLabel: 'Coverage planning failed',
               message: 'Coverage direction planning failed. Retry the selected board before generating grids.',
             })
             return
@@ -10653,6 +9704,7 @@ export function WorldGraphPage({
               activeUnitId: unit?.id ?? initialUnit.id,
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: 'coverage_directions',
+              stageLabel: 'Planning coverage',
               message: 'Coverage direction planning is still running. The board will continue once the JSON batch hydrates.',
             })
             return
@@ -10663,11 +9715,14 @@ export function WorldGraphPage({
             activeUnitId: unit.id,
             activeUnitLabel: unit.title,
             stage: 'coverage_grids',
+            stageLabel: unit.coverageGridPlanCount > 1 ? `Generating coverage grid 1/${unit.coverageGridPlanCount}` : 'Generating coverage grid',
             message: `Queueing ${unit.coverageGridPlanCount} coverage grid${unit.coverageGridPlanCount === 1 ? '' : 's'} for ${unit.title}.`,
             queued: unit.coverageGridPlanCount,
             running: unit.shots.filter((tile) => tile.running).length,
             ready: unit.shots.filter((tile) => tile.coverageReady).length,
             failed: unit.shots.filter((tile) => tile.failed).length,
+            activeCoverageShotIds: unit.shots.filter((tile) => !tile.shot.isProvisional).map((tile) => tile.id),
+            activeRunStepKey: 'zone_coverage_board_image',
           })
           const startedCoverageGrids = await startSequenceAnimaticZoneCoverageBoardRuns(latestModel, latestScene, {
             setId: unit.setId || null,
@@ -10695,6 +9750,7 @@ export function WorldGraphPage({
               activeUnitId: unit?.id ?? initialUnit.id,
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: 'failed',
+              stageLabel: 'Coverage grid failed',
               message: 'Coverage grid failed. Retry the selected board after checking the failed board request.',
             })
             return
@@ -10704,6 +9760,7 @@ export function WorldGraphPage({
               activeUnitId: unit?.id ?? initialUnit.id,
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: 'coverage_grids',
+              stageLabel: unit?.shots.some((tile) => tile.shot.zoneCoverageCellActiveStage === 'extract') ? 'Extracting shot cells' : 'Generating coverage grid',
               message: 'Coverage grid is still running. The board will hydrate cells as results arrive.',
             })
             return
@@ -10715,14 +9772,21 @@ export function WorldGraphPage({
         activeUnitId: null,
         activeUnitLabel: scene.title,
         stage: 'complete',
+        stageLabel: 'Ready for keyframes',
         message: 'Selected board is ready for optional keyframes.',
+        activeReferenceNodeIds: [],
+        activeCoverageShotIds: [],
+        activeRequestIds: [],
+        activeRunStepKey: '',
       })
       await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       updatePrepRun({
         stage: 'failed',
+        stageLabel: 'Failed',
         message: error instanceof Error ? error.message : String(error),
+        error: error instanceof Error ? error.message : String(error),
       })
       setSequenceAnimaticErrorByKey((previous) => ({
         ...previous,
@@ -10734,11 +9798,57 @@ export function WorldGraphPage({
   }, [
     buildSequenceAnimaticModelFromLoadedState,
     loadAndStoreSequenceAnimaticState,
+    onPrepareSequenceAnimaticSceneBoard,
+    sequenceAnimaticSceneBoardPrepRun,
     sequenceAnimaticBusyRunKeys,
     startSequenceAnimaticContinuityAssetRunGroups,
     startSequenceAnimaticCoverageIntentRuns,
     startSequenceAnimaticZoneCoverageBoardRuns,
   ])
+  const handleCancelSequenceAnimaticSceneBoardPrep = useCallback((run: SequenceAnimaticSceneBoardPrepRunState) => {
+    const next: SequenceAnimaticSceneBoardPrepRunState = {
+      ...run,
+      stage: 'failed',
+      stageLabel: 'Stopped',
+      message: 'Auto-advance stopped. Already queued workflows can still finish and hydrate the board.',
+      running: 0,
+      activeReferenceNodeIds: [],
+      activeCoverageShotIds: [],
+      activeRequestIds: [],
+      activeRunIds: [],
+      activeRunStepKey: '',
+      updatedAt: Date.now(),
+      error: '',
+    }
+    setSequenceAnimaticSceneBoardPrepRun(next)
+    void Promise.resolve(onPrepareSequenceAnimaticSceneBoard({
+      masterRequestId: sequenceAnimaticSceneBoardModel?.request.id ?? run.runKey.split(':')[0] ?? '',
+      runId: run.runId,
+      runKey: run.runKey,
+      sceneId: run.sceneId,
+      setId: run.setId,
+      zoneId: run.zoneId,
+      scopeNodeId: run.scopeNodeId,
+      stage: 'cancelled',
+      status: 'cancelled',
+      activeUnitId: run.activeUnitId,
+      activeUnitLabel: run.activeUnitLabel,
+      stageLabel: 'Stopped',
+      message: next.message,
+      queued: run.queued,
+      running: 0,
+      ready: run.ready,
+      failed: run.failed,
+      activeRequestIds: [],
+      activeRunIds: [],
+      activeReferenceNodeIds: [],
+      activeCoverageShotIds: [],
+      activeRunStepKey: '',
+      action: 'cancel',
+    })).catch((error) => {
+      console.warn('[GraphCore] Failed to persist Scene Board prep cancellation.', error)
+    })
+  }, [onPrepareSequenceAnimaticSceneBoard, sequenceAnimaticSceneBoardModel?.request.id])
   const handleRunSequenceAnimaticKeyframes = useCallback(async (
     model: SequenceAnimaticViewModel,
     mode: 'generate' | 'regenerate' = 'generate',
@@ -20831,11 +19941,10 @@ export function WorldGraphPage({
             continuityPrepBusy={Boolean(
               [...sequenceAnimaticBusyRunKeys].some((key) => (
                 key.startsWith(`${sequenceAnimaticSceneBoardModel.request.id}:`)
-                && key.endsWith(`:${trimOptionalString(sequenceAnimaticSceneBoardScopeNodeId) || 'all'}:scene_board_prep`)
+                && key.includes(`:${trimOptionalString(sequenceAnimaticSceneBoardScopeNodeId) || 'all'}:`)
               ))
             )}
             continuityPrepRun={sequenceAnimaticSceneBoardPrepRun?.runKey.startsWith(`${sequenceAnimaticSceneBoardModel.request.id}:`)
-              && sequenceAnimaticSceneBoardPrepRun.runKey.endsWith(`:${trimOptionalString(sequenceAnimaticSceneBoardScopeNodeId) || 'all'}:scene_board_prep`)
               ? sequenceAnimaticSceneBoardPrepRun
               : null}
             coverageGenerationBusy={Boolean(
@@ -20858,7 +19967,8 @@ export function WorldGraphPage({
               setSequenceAnimaticSceneBoardScopeSceneId(null)
               setSequenceAnimaticSceneBoardScopeNodeId(null)
             }}
-            onPrepareContinuity={(scene, scopeNodeId) => void handlePrepareSequenceAnimaticSceneBoardContinuity(sequenceAnimaticSceneBoardModel, scene, scopeNodeId)}
+            onPrepareContinuity={(scene, scopeNodeId) => handlePrepareSequenceAnimaticSceneBoardContinuity(sequenceAnimaticSceneBoardModel, scene, scopeNodeId)}
+            onCancelPrep={handleCancelSequenceAnimaticSceneBoardPrep}
             onGenerateSceneCoverage={(scene) => void handleRegenerateSequenceAnimaticSceneCoverageAnchors(sequenceAnimaticSceneBoardModel, scene, sequenceAnimaticSceneBoardScopeNodeId)}
             onGenerateCoverageAnchor={(anchor) => handleRunSequenceAnimaticCoverageAnchor(
               sequenceAnimaticSceneBoardModel,

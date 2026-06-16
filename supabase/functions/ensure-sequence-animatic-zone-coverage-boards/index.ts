@@ -1,5 +1,10 @@
-import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
-import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import {
+  createAdminClient,
+  requireUserClient } from '../_shared/auth.ts'
+import { errorResponse,
+  HttpError,
+  json,
+  maybeHandleOptions } from '../_shared/http.ts'
 import {
   mapOutputRequestRow,
   mapOutputWorkflowEdgeRow,
@@ -10,19 +15,21 @@ import {
   outputWorkflowEdgeSelect,
   outputWorkflowNodeSelect,
   resolveSequenceAnimaticCombinedManifest,
-} from '../_shared/output-workflow.ts'
+  } from '../_shared/output-workflow.ts'
+import {
+  sequenceAnimaticGraphSpecVersion,
+  sequenceAnimaticStableHash
+} from '../_shared/sequence-animatic-workflow-factory.ts'
 import {
   buildSequenceAnimaticZoneCoverageBoardWorkflowGraph,
-  sequenceAnimaticGraphSpecVersion,
-  sequenceAnimaticStableHash,
-} from '../_shared/sequence-animatic-workflow-factory.ts'
+} from '../_shared/sequence-animatic-scene-board-workflows.ts'
 import {
   sequenceAnimaticZoneCoverageBoardEnsureRequestSchema,
   sequenceAnimaticZoneCoverageBoardEnsureResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
 import { continuityNodeCollections } from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
 
-const ZONE_COVERAGE_BOARD_POLICY_VERSION = 'zone_camera_coverage_grid_v3'
+const ZONE_COVERAGE_BOARD_POLICY_VERSION = 'zone_camera_coverage_grid_v6'
 const ZONE_COVERAGE_GRID_MODE = 'location_camera_plate_v1'
 const ZONE_COVERAGE_CELL_SOURCE = 'zone_camera_grid_cell'
 const ACTIVE_OUTPUT_REQUEST_STATUSES = new Set(['queued', 'planning', 'running'])
@@ -115,13 +122,19 @@ function sceneIdForShot(shot: Record<string, unknown>) {
   const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
   const idScene = /^scene_\d+/i.exec(readText(shot.id))?.[0] ?? ''
   const blockScene = /^scene_\d+/i.exec(readText(shot.storyboardBlockId ?? shot.blockId ?? shot.block_id))?.[0] ?? ''
-  const explicitScene = readText(shot.sourceSceneId ?? shot.source_scene_id ?? binding.sceneId ?? binding.scene_id)
+  const explicitScene = readText(shot.sourceSceneId ?? shot.source_scene_id)
+  const bindingScene = readText(binding.sceneId ?? binding.scene_id)
   const genericScene = readText(shot.sceneId ?? shot.scene_id)
   return explicitScene
     || idScene
     || blockScene
+    || (bindingScene && bindingScene !== 'sequence_animatic_master' ? bindingScene : '')
     || (genericScene && genericScene !== 'sequence_animatic_master' ? genericScene : '')
     || 'scene'
+}
+
+function sceneIdFromShotId(shotId: string) {
+  return /^scene_\d+/i.exec(readText(shotId))?.[0] ?? ''
 }
 
 function spatialFieldsForShot(shot: Record<string, unknown>, metadata: Record<string, unknown>) {
@@ -365,6 +378,30 @@ function locationAssetPackForShot(assetPack: Record<string, unknown>, shot: Reco
   }
 }
 
+function requiredSpatialReferenceIds(spatial: Record<string, string>) {
+  return uniqueTexts([spatial.setId, spatial.zoneId, spatial.primarySpotId, spatial.viewpointId])
+}
+
+function missingSpatialReferencesForEntry(entry: {
+  shot: Record<string, unknown>
+  spatial: Record<string, string>
+}, nodesById: Map<string, Record<string, unknown>>) {
+  const shotId = readText(entry.shot.id)
+  return requiredSpatialReferenceIds(entry.spatial)
+    .map((nodeId) => {
+      const node = nodesById.get(nodeId) ?? {}
+      const assetKeys = continuityAssetKeysForNode(node)
+      return {
+        nodeId,
+        shotId,
+        kind: readText(node.kind),
+        name: readText(node.name) || readText(node.label) || nodeId,
+        reason: Object.keys(node).length === 0 ? 'missing_graph_node' : assetKeys.length === 0 ? 'missing_asset' : '',
+      }
+    })
+    .filter((entry) => entry.reason)
+}
+
 function coverageCellScopeKey(input: {
   boardId: string
   sourceHash: string
@@ -504,11 +541,19 @@ Deno.serve(async (request) => {
 
     const requestedShotIds = readStringArray(payload.shotIds)
     const scopedShotSnapshots = readArray(payload.scopedShots).map(asRecord).filter((shot) => readText(shot.id))
-    let sceneShots = mergedShotsForScene({ manifest, directorPlan, sceneId: payload.sceneId, shotIds: requestedShotIds, fallbackShots: scopedShotSnapshots })
+    const requestedSceneId = readText(payload.sceneId)
+    const scopedSceneIds = uniqueTexts([
+      ...requestedShotIds.map(sceneIdFromShotId),
+      ...scopedShotSnapshots.map(sceneIdForShot),
+    ]).filter((sceneId) => sceneId !== 'sequence_animatic_master' && sceneId !== 'scene')
+    const effectiveSceneId = requestedSceneId === 'sequence_animatic_master' && scopedSceneIds.length === 1
+      ? scopedSceneIds[0]
+      : requestedSceneId
+    let sceneShots = mergedShotsForScene({ manifest, directorPlan, sceneId: effectiveSceneId, shotIds: requestedShotIds, fallbackShots: scopedShotSnapshots })
     if (sceneShots.length === 0) {
       const combined = await resolveSequenceAnimaticCombinedManifest({ client: admin, masterRequest })
       const combinedSceneShots = combined
-        ? mergedShotsForScene({ manifest: combined.manifest, directorPlan: combined.directorPlan, sceneId: payload.sceneId, shotIds: requestedShotIds, fallbackShots: scopedShotSnapshots })
+        ? mergedShotsForScene({ manifest: combined.manifest, directorPlan: combined.directorPlan, sceneId: effectiveSceneId, shotIds: requestedShotIds, fallbackShots: scopedShotSnapshots })
         : []
       if (combined && combinedSceneShots.length > 0) {
         manifest = combined.manifest
@@ -545,7 +590,8 @@ Deno.serve(async (request) => {
     if (sceneShots.length === 0) {
       throw new ZoneCoverageHttpError(409, 'This scene has no finalized shots available for zone camera grids.', {
         reason: 'no_finalized_scene_shots',
-        sceneId: payload.sceneId,
+        sceneId: effectiveSceneId,
+        requestedSceneId,
         setId: readText(payload.setId),
         zoneId: readText(payload.zoneId),
         readySceneIds: combinedReadySceneIds,
@@ -588,10 +634,26 @@ Deno.serve(async (request) => {
         ? 'This scene scope has no shots with zone bindings available for zone camera grids.'
         : 'This scene has no shots with zone bindings available for zone camera grids.', {
         reason: allPreparedShots.length === 0 ? 'no_zone_bound_shots' : 'scope_mismatch',
-        sceneId: payload.sceneId,
+        sceneId: effectiveSceneId,
+        requestedSceneId,
         setId: scopeSetId,
         zoneId: scopeZoneId,
         availableZoneIds,
+      })
+    }
+    const missingSpatialReferences = [...new Map(preparedShots
+      .flatMap((entry) => missingSpatialReferencesForEntry(entry, nodesById))
+      .map((entry) => [entry.nodeId, entry] as const)).values()]
+    if (missingSpatialReferences.length > 0) {
+      throw new ZoneCoverageHttpError(409, 'Generate set, zone, and spot continuity references before creating zone camera grids.', {
+        reason: 'missing_spatial_reference_assets',
+        sceneId: effectiveSceneId,
+        requestedSceneId,
+        setId: scopeSetId,
+        zoneId: scopeZoneId,
+        missingReferenceCount: missingSpatialReferences.length,
+        missingReferences: missingSpatialReferences.slice(0, 24),
+        shotIds: preparedShots.map((entry) => readText(entry.shot.id)).filter(Boolean),
       })
     }
 

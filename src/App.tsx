@@ -6321,6 +6321,27 @@ export default function App() {
     return result
   }
 
+  async function prepareSequenceAnimaticSceneBoard(request: Parameters<typeof workspaceService.prepareSequenceAnimaticSceneBoard>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before preparing sequence animatic scene boards.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic scene board prep requires a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.prepareSequenceAnimaticSceneBoard(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const requests = [result.masterRequest]
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function ensureSequenceAnimaticShotRevisionWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticShotRevisionWorkflow>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before revising a sequence animatic shot.')
@@ -8958,6 +8979,7 @@ export default function App() {
                 onEnsureSequenceAnimaticShotProductionGraph={ensureSequenceAnimaticShotProductionGraph}
                 onEnsureSequenceAnimaticShotCoverageIntents={ensureSequenceAnimaticShotCoverageIntents}
                 onEnsureSequenceAnimaticZoneCoverageBoards={ensureSequenceAnimaticZoneCoverageBoards}
+                onPrepareSequenceAnimaticSceneBoard={prepareSequenceAnimaticSceneBoard}
                 onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
                 onUpdateSequenceAnimaticSceneGraphNode={updateSequenceAnimaticSceneGraphNode}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}

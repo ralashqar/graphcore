@@ -188,6 +188,9 @@ verify_jwt = false
 [functions.ensure-sequence-animatic-shot-production-graph]
 verify_jwt = false
 
+[functions.prepare-sequence-animatic-scene-board]
+verify_jwt = false
+
 [functions.update-sequence-animatic-scene-graph-node]
 verify_jwt = false
 

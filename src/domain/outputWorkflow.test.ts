@@ -44,6 +44,8 @@ import {
   sequenceAnimaticShotProductionGraphEnsureResponseSchema,
   sequenceAnimaticShotCoverageIntentEnsureRequestSchema,
   sequenceAnimaticShotCoverageIntentEnsureResponseSchema,
+  sequenceAnimaticSceneBoardPrepRequestSchema,
+  sequenceAnimaticSceneBoardPrepResponseSchema,
   sequenceAnimaticSceneGraphNodeUpdateRequestSchema,
   sequenceAnimaticSceneGraphOverridesSchema,
   sequenceAnimaticZoneCoverageBoardEnsureRequestSchema,
@@ -65,11 +67,13 @@ import {
   buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityWorkflowGraph,
   buildSequenceAnimaticShotProductionWorkflowGraph,
-  buildSequenceAnimaticShotCoverageIntentWorkflowGraph,
-  buildSequenceAnimaticZoneCoverageBoardWorkflowGraph,
   buildSequenceAnimaticShotRevisionWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
 } from '../../supabase/functions/_shared/sequence-animatic-workflow-factory.ts'
+import {
+  buildSequenceAnimaticShotCoverageIntentWorkflowGraph,
+  buildSequenceAnimaticZoneCoverageBoardWorkflowGraph,
+} from '../../supabase/functions/_shared/sequence-animatic-scene-board-workflows.ts'
 import {
   buildRecoveredOutputFromArtifact,
   resolveDurableWorkflowNodeOutput,
@@ -82,6 +86,12 @@ import {
   buildReferenceManifestEntries,
   formatReferenceManifest,
 } from './seedanceReferenceManifest.ts'
+import {
+  buildSequenceAnimaticLocationEvidenceLines,
+  sanitizeSequenceAnimaticSpatialNodeFields,
+  sanitizeSequenceAnimaticSpatialPromptText,
+  sequenceAnimaticSpatialForbiddenNamesFromShots,
+} from './sequenceAnimaticSpatialPrompt.ts'
 import {
   OUTPUT_SKILL_REGISTRY,
   buildOutputGuidanceBundle,
@@ -102,7 +112,6 @@ import {
   isTerminalOutputActivityStatus,
   outputProgressSignature,
 } from './outputActivityMonitor.ts'
-import { aiGenerationSettings } from '../config/aiGenerationSettings.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
 const repoRoot = resolve(import.meta.dirname, '../..')
@@ -994,7 +1003,6 @@ test('cinematic prompt binding does not infer sequence units from shared names',
     targetFormat: 'video',
     selectedEntityKeys: promptPlan.selectedEntityKeys,
     selectedSequenceUnitKeys: promptPlan.selectedSequenceUnitKeys,
-    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot: localSnapshot,
   }, 'cinematic_episode')
 
@@ -1002,7 +1010,7 @@ test('cinematic prompt binding does not infer sequence units from shared names',
   assert.deepEqual(workflowPlan.sourceEntityKeys.sort(), ['eva-9', 'skybridge-garden'])
   const contextNode = workflowPlan.nodes.find((node) => node.key === 'world_context')
   assert.deepEqual((contextNode?.config as Record<string, unknown>).sourceSequenceUnitKeys, [])
-  assert.ok(workflowPlan.diagnostics.some((line) => line.includes('No sequence_unit story spine was selected')))
+  assert.ok(workflowPlan.nodes.some((node) => readConfigPurpose(node) === 'sequence_animatic_scene_graph_assignment'))
 
   const explicitEntityPlan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -1010,7 +1018,6 @@ test('cinematic prompt binding does not infer sequence units from shared names',
     prompt: 'Create a cinematic where Eva-9 sings in Skybridge Garden',
     targetFormat: 'video',
     selectedEntityKeys: ['eva-9', 'chapter-skybridge-garden', 'skybridge-garden'],
-    cinematicPipelineVersion: 'v1_take_blocks',
     snapshot: localSnapshot,
   }, 'cinematic_episode')
   assert.deepEqual(explicitEntityPlan.sourceEntityKeys.sort(), ['eva-9', 'skybridge-garden'])
@@ -1141,7 +1148,7 @@ test('prompt-first entity binding is typo-tolerant and does not fall back to unr
   assert.equal((contextNode?.config as Record<string, unknown> | undefined)?.strictSourceEntityFilter, true)
 })
 
-test('story cinematic requests build scene-graph-assigned parallel animatic graph by default while explicit legacy modes stay available', () => {
+test('story cinematic requests build scene-graph-assigned parallel animatic graph by default while explicit legacy modes are rejected', () => {
   const plan = planOutputRequestWorkflow({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -1255,7 +1262,7 @@ test('story cinematic requests build scene-graph-assigned parallel animatic grap
   assert.match(workerSource, /runCinematicV2StructuredNodeBackground/)
   assert.match(workerSource, /priorProviderRequestId/)
 
-  const explicitV2Plan = planOutputRequestWorkflow({
+  assert.throws(() => planOutputRequestWorkflow({
     projectId: 'project-1',
     draftId: 'draft-1',
     prompt: 'Create a cinematic sequence from Chapter 1 with a shot-by-shot storyboard.',
@@ -1263,11 +1270,7 @@ test('story cinematic requests build scene-graph-assigned parallel animatic grap
     selectedSequenceUnitKeys: ['chapter-1'],
     cinematicPipelineVersion: 'v2_shot_orchestration',
     snapshot,
-  }, 'cinematic_episode')
-  assert.equal(explicitV2Plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_scene_compile').length, 1)
-  assert.equal(explicitV2Plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_layout_plan').length, 1)
-  assert.equal(explicitV2Plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_dynamic_shot_fanout').length, 1)
-  assert.equal(validateOutputWorkflowGraph({ nodes: explicitV2Plan.nodes, edges: explicitV2Plan.edges }).ok, true)
+  }, 'cinematic_episode'), /Legacy cinematic pipelines/)
 
   const ugcPlan = planOutputRequestWorkflow({
     projectId: 'project-1',
@@ -1415,14 +1418,14 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   assert.match(startOutputRequestSource, /sequenceAnimaticMode === 'master_script_only'/)
   assert.match(startOutputRequestSource, /let sequenceAnimaticMode = payload\.sequenceAnimaticMode \?\? null/)
   assert.match(startOutputRequestSource, /let cinematicAnimaticMode = payload\.cinematicAnimaticMode \?\? null/)
-  assert.match(startOutputRequestSource, /\?\? \(cinematicOutput \? 'v3_script_storyboards' : 'v1_take_blocks'\)/)
+  assert.match(startOutputRequestSource, /\?\? \(cinematicOutput \? 'v3_script_storyboards' : undefined\)/)
   assert.match(startOutputRequestSource, /payload\.selectedSequenceUnitKeys\.length > 0[\s\S]*sequenceAnimaticMode = 'master_script_only'/)
   assert.match(startOutputRequestSource, /cinematicAnimaticMode = 'prompt_cinematic_master'/)
   assert.match(startOutputRequestSource, /sequenceAnimaticMode,\s*\n\s*cinematicAnimaticMode,/)
   assert.doesNotMatch(startOutputRequestSource, /sequenceAnimaticMode: payload\.sequenceAnimaticMode/)
   assert.doesNotMatch(startOutputRequestSource, /cinematicAnimaticMode: payload\.cinematicAnimaticMode/)
-  assert.match(domainWorkflowSource, /input\.request\.sequenceAnimaticMode === 'master_script_only'\) return true/)
-  assert.match(domainWorkflowSource, /input\.request\.cinematicAnimaticMode === 'prompt_cinematic_master'\) return true/)
+  assert.match(domainWorkflowSource, /const fullSequenceUnitAnimatic = sequenceAnimaticMode === 'master_script_only'/)
+  assert.match(domainWorkflowSource, /const promptCinematicAnimatic = cinematicAnimaticMode === 'prompt_cinematic_master'/)
   assert.match(domainWorkflowSource, /request = \{[\s\S]*sequenceAnimaticMode: 'master_script_only'/)
   assert.match(domainWorkflowSource, /request = \{[\s\S]*cinematicAnimaticMode: 'prompt_cinematic_master'/)
   assert.match(domainWorkflowSource, /request\.sequenceAnimaticMode === 'master_script_only'\) return 'cinematic_episode_from_sequence'/)
@@ -2016,6 +2019,11 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(workerSource, /spot_grid/)
   assert.match(workerSource, /parent_child_scaffold_grid/)
   assert.match(workerSource, /Cell 1 is the parent set\/zone\/spot environment reference/)
+  assert.match(workerSource, /sanitizeSequenceAnimaticSpatialNodeFields/)
+  assert.match(workerSource, /Location evidence/)
+  assert.match(workerSource, /promptDiagnostics/)
+  assert.match(workerSource, /physical staging position or architectural sub-location/)
+  assert.doesNotMatch(workerSource, /action spot inside the same zone/)
   const keyframeEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-keyframe-workflows/index.ts'), 'utf8')
   assert.match(keyframeEnsureSource, /parent_child_scaffold_grid/)
   assert.match(keyframeEnsureSource, /cellRoles: \['parent', \.\.\.orderedChildren\.map\(\(\) => 'child'\)\]/)
@@ -2023,6 +2031,9 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   const continuityAssetEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-continuity-asset-workflow/index.ts'), 'utf8')
   assert.match(continuityAssetEnsureSource, /parent_child_scaffold_grid/)
   assert.match(continuityAssetEnsureSource, /cellRoles = isParentChildScaffold \? \['parent', \.\.\.batchTargetIds\.slice\(1\)\.map\(\(\) => 'child'\)\]/)
+  assert.match(continuityAssetEnsureSource, /parentReferenceAssetKeys/)
+  assert.match(continuityAssetEnsureSource, /spatialPromptPolicyVersion/)
+  assert.match(continuityAssetEnsureSource, /Generate parent continuity asset first/)
   assert.doesNotMatch(continuityAssetEnsureSource, /if \(missingParent\) \{\s*throw new HttpError\(409, `Generate parent continuity asset first/)
   assert.match(workerSource, /temp_character_grid/)
   assert.match(workerSource, /prop_grid/)
@@ -2169,6 +2180,8 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   const workflowFactorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const sceneBoardCanvasSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/scene-board/SceneBoardCanvas.tsx'), 'utf8')
+  const sceneBoardProjectionSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/scene-board/sceneBoardProjection.ts'), 'utf8')
   const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
   const pruneMigrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260613224408_prune_obsolete_child_workflow_graph_nodes.sql'), 'utf8')
   assert.match(keyframeEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
@@ -2317,24 +2330,25 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(pageSource, /Regenerate scene coverage/)
   assert.match(pageSource, /SequenceAnimaticSceneBoardCanvas/)
   assert.match(pageSource, /buildSequenceAnimaticSceneBoardView/)
-  assert.match(pageSource, /buildSequenceAnimaticSceneBoardPrepView/)
-  assert.match(pageSource, /const estimateGroupHeight = \(group: SequenceAnimaticSceneBoardGroup\)/)
-  assert.match(pageSource, /const rowHeights = groupMetrics\.reduce<number\[\]>/)
-  assert.match(pageSource, /const y = rowOffsets\[row\] \?\? 42/)
-  assert.match(pageSource, /minHeight: height/)
+  assert.match(sceneBoardCanvasSource, /function SequenceAnimaticSceneBoardCanvas/)
+  assert.match(sceneBoardProjectionSource, /buildSequenceAnimaticSceneBoardView/)
+  assert.match(sceneBoardCanvasSource, /const estimateGroupHeight = \(group: SequenceAnimaticSceneBoardGroup\)/)
+  assert.match(sceneBoardCanvasSource, /const rowHeights = groupMetrics\.reduce<number\[\]>/)
+  assert.match(sceneBoardCanvasSource, /const y = rowOffsets\[row\] \?\? 42/)
+  assert.match(sceneBoardCanvasSource, /minHeight: height/)
   assert.match(pageSource, /sequenceAnimaticSceneBoardZoneScopeForNode/)
   assert.match(pageSource, /handlePrepareSequenceAnimaticSceneBoardContinuity/)
-  assert.match(pageSource, /Prepare Selected Board/)
-  assert.match(pageSource, /Continuity Prep/)
-  assert.match(pageSource, /prepUnits/)
+  assert.match(sceneBoardCanvasSource, /Prepare Selected Board/)
+  assert.match(sceneBoardCanvasSource, /Continuity Prep/)
+  assert.match(sceneBoardCanvasSource, /prepUnits/)
   assert.match(pageSource, /SequenceAnimaticSceneBoardPrepUnit/)
-  assert.match(pageSource, /sequenceAnimaticSceneBoardScaffoldGroupsForUnit/)
+  assert.match(sceneBoardProjectionSource, /sequenceAnimaticSceneBoardScaffoldGroupsForUnit/)
   assert.match(pageSource, /startSequenceAnimaticContinuityAssetRunGroups/)
   assert.match(pageSource, /startSequenceAnimaticZoneCoverageBoardRuns/)
   assert.match(pageSource, /scaffoldGroups\.length/)
-  assert.match(pageSource, /index < targets\.length; index \+= 4/)
+  assert.match(sceneBoardProjectionSource, /index < targets\.length; index \+= 4/)
   assert.match(pageSource, /index < group\.length; index \+= 9/)
-  assert.match(pageSource, /Math\.ceil\(coverageShots\.length \/ 9\)/)
+  assert.match(sceneBoardProjectionSource, /Math\.ceil\(coverageShots\.length \/ 9\)/)
   assert.match(pageSource, /Scene Board/)
   assert.match(pageSource, /Open Scene Board/)
   assert.match(repositorySource, /setId: request\.setId \?\? null/)
@@ -2360,6 +2374,36 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(pageSource, /openSequenceAnimaticOutputGraph\(model, shotRequest\.id, 'planned_keyframe_artifact'\)/)
   assert.match(pruneMigrationSource, /delete from public\.output_workflow_edges/)
   assert.match(pruneMigrationSource, /delete from public\.output_workflow_nodes/)
+})
+
+test('sequence animatic spatial prompt sanitizer removes character action while preserving location evidence', () => {
+  const shots = [{
+    id: 'scene_003_shot_001',
+    action: 'Rain threads through open screens as Miyo sings and Kaji steps away from the door near copper rails.',
+    lighting: 'cold rainlight from the doorway and copper rail reflections',
+    camera: { framing: 'wide ritual chamber angle' },
+    visibleCharacterNames: ['Miyo', 'Kaji', 'Akane'],
+    dialogue: [{ speakerName: 'Akane', text: 'Confess.' }],
+  }]
+  const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(shots)
+  assert.deepEqual(forbiddenNames.sort(), ['Akane', 'Kaji', 'Miyo'])
+
+  const node = sanitizeSequenceAnimaticSpatialNodeFields({
+    id: 'spot_kaji_close_in_position',
+    name: 'Kaji Close-In Position',
+    nodeKind: 'location_spot',
+    visualBrief: 'A step inside the ritual ring where Kaji unconsciously closes toward Miyo and the disc after the activation.',
+  }, { forbiddenNames })
+  assert.equal(node.name, 'inner approach point')
+  assert.doesNotMatch(node.brief, /Kaji|Miyo|unconsciously|activation/i)
+  assert.match(node.brief, /ritual ring|disc/i)
+
+  const evidence = buildSequenceAnimaticLocationEvidenceLines(shots, { forbiddenNames, limit: 1 })[0]
+  assert.match(evidence, /Rain|open screens|door|copper rail/i)
+  assert.doesNotMatch(evidence, /Miyo|Kaji|Akane|sings|steps/i)
+
+  const text = sanitizeSequenceAnimaticSpatialPromptText('Akane Opposite Position [ref:actor_akane]', { forbiddenNames, maxLength: 120 }).text
+  assert.doesNotMatch(text, /Akane|actor_akane/)
 })
 
 test('sequence animatic state polling avoids full workflow run-step payloads', () => {
@@ -2524,7 +2568,8 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.ok(nodeKeys.has('zone_coverage_board_extract'))
   assert.ok(nodeKeys.has('zone_coverage_board_artifact'))
   const imageNode = graph.nodes.find((node) => node.key === 'zone_coverage_board_image')
-  assert.deepEqual(imageNode?.config.imageSize, { width: 2304, height: 1296 })
+  assert.equal(imageNode?.config.quality, 'medium')
+  assert.deepEqual(imageNode?.config.imageSize, { width: 3072, height: 1728 })
   assert.equal(imageNode?.config.planningOnly, true)
   assert.deepEqual(imageNode?.config.gridLayout, { rows: 3, columns: 3, cellCount: 2 })
   assert.match(JSON.stringify(graph.edges), /zone_coverage_board_prompt/)
@@ -2581,9 +2626,16 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.match(workerSource, /location_camera_plate_v1/)
   assert.match(workerSource, /Project art style lock/)
   assert.match(workerSource, /User-edited scene graph direction/)
+  assert.match(workerSource, /sanitizeSequenceAnimaticCameraPlateText/)
+  assert.match(workerSource, /sanitizeSequenceAnimaticSpatialPromptText/)
+  assert.match(workerSource, /sequenceAnimaticVisualOnlyCameraFamily/)
+  assert.match(workerSource, /sequenceAnimaticZoneGridPromptDiagnostics/)
+  assert.match(workerSource, /Visual-only production plate grid/)
   assert.match(workerSource, /sceneGraphOverrides/)
   assert.match(workerSource, /No people, no characters, no silhouettes/)
   assert.match(workerSource, /Do not use a cartoony\/sketch\/comic\/storyboard style/)
+  assert.doesNotMatch(workerSource, /actionForCameraExtractionOnly/)
+  assert.doesNotMatch(workerSource, /Shot coverage direction:/)
   assert.doesNotMatch(workerSource, /wide storyboard-style labeled blockout plate/)
   assert.doesNotMatch(workerSource, /Labels\/placeholders/)
   assert.match(workerSource, /sequenceAnimaticZoneCoverageRegistry/)
@@ -2604,7 +2656,13 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.match(ensureSource, /matchingChildIsActive/)
   assert.match(ensureSource, /ZoneCoverageHttpError/)
   assert.match(ensureSource, /availableZoneIds/)
-  assert.match(ensureSource, /zone_camera_coverage_grid_v3/)
+  assert.match(ensureSource, /zone_camera_coverage_grid_v6/)
+  assert.match(ensureSource, /effectiveSceneId/)
+  assert.match(ensureSource, /sceneIdFromShotId/)
+  assert.match(ensureSource, /requestedSceneId === 'sequence_animatic_master'/)
+  assert.match(ensureSource, /bindingScene && bindingScene !== 'sequence_animatic_master'/)
+  assert.match(ensureSource, /missing_spatial_reference_assets/)
+  assert.match(ensureSource, /missingSpatialReferencesForEntry/)
   assert.match(ensureSource, /coverageCellScopeKey/)
   assert.match(ensureSource, /sceneGraphOverridesForSpatialScope/)
   assert.match(ensureSource, /sceneGraphOverrides/)
@@ -2616,9 +2674,12 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.match(pageSource, /runMode: 'sequence_animatic_zone_coverage_board'/)
   assert.match(pageSource, /zoneCoverageCellByShotId/)
   assert.match(pageSource, /zoneCoverageActiveShotIds/)
+  assert.match(pageSource, /zoneCoverageActiveStageByShotId/)
   assert.match(pageSource, /zoneCoverageCellRunning/)
+  assert.match(pageSource, /zone_coverage_board_extract/)
+  assert.match(pageSource, /activeReferenceNodeIds/)
   assert.match(pageSource, /const zoneCoverageCellReady = Boolean\(zoneCoverageCell\?\.assetKey\)/)
-  assert.match(pageSource, /const zoneCoverageCellRunning = !zoneCoverageCellReady && zoneCoverageActiveShotIds\.has\(shotId\)/)
+  assert.match(pageSource, /const zoneCoverageCellRunning = !zoneCoverageCellReady && Boolean\(zoneCoverageCellActiveStage\)/)
   assert.match(pageSource, /const zoneCoverageCellFailed = !zoneCoverageCellReady && zoneCoverageFailedShotIds\.has\(shotId\)/)
   assert.match(pageSource, /const coveragePanelAssetKey = zoneCoverageCell\?\.assetKey \?\? shotCoverageAnchor\?\.assetKey \?\? null/)
   assert.match(pageSource, /const coveragePanelUrl = zoneCoverageCell\?\.assetUrl \?\? shotCoverageAnchor\?\.assetUrl \?\? null/)
@@ -2634,6 +2695,102 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.match(pageSource, /slice\(0, 8\)/)
   assert.match(pageSource, /index \+= 9/)
   assert.doesNotMatch(pageSource, /runMode: 'sequence_animatic_shot_production_coverage_anchor'[\s\S]*handleRegenerateSequenceAnimaticSceneCoverageAnchors/)
+})
+
+test('sequence animatic scene board prep state persists responsive progress metadata', () => {
+  const request = sequenceAnimaticSceneBoardPrepRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    sceneId: 'scene_001',
+    setId: 'set_1',
+    zoneId: 'zone_1',
+    scopeNodeId: 'zone_1',
+    shotIds: ['shot_001', 'shot_002'],
+    stage: 'coverage_grids',
+    status: 'running',
+    activeUnitId: 'unit-zone-1',
+    activeUnitLabel: 'Zone 1',
+    stageLabel: 'Generating coverage grid 1/1',
+    activeReferenceNodeIds: ['zone_1'],
+    activeCoverageShotIds: ['shot_001', 'shot_002'],
+    activeRunStepKey: 'zone_coverage_board_image',
+  })
+  assert.equal(request.stage, 'coverage_grids')
+  assert.deepEqual(request.activeCoverageShotIds, ['shot_001', 'shot_002'])
+
+  const response = sequenceAnimaticSceneBoardPrepResponseSchema.parse({
+    ok: true,
+    masterRequest: {
+      id: 'request-master',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      parentRequestId: null,
+      workflowId: 'workflow-master',
+      latestRunId: null,
+      requestedBy: null,
+      sourceSurface: 'wiki_sequence_unit',
+      prompt: '',
+      title: 'Master',
+      intent: 'output_generation',
+      outputKind: 'cinematic_episode',
+      status: 'completed',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      pageCount: null,
+      targetFormat: 'video',
+      plannerNotes: '',
+      errorMessage: null,
+      metadata: { screenplayAnimaticRole: 'master' },
+      createdAt: '',
+      updatedAt: '',
+    },
+    prepRun: {
+      runId: 'prep-1',
+      runKey: 'request-master:scene_001:zone_1:',
+      sceneId: 'scene_001',
+      setId: 'set_1',
+      zoneId: 'zone_1',
+      scopeNodeId: 'zone_1',
+      shotIds: ['shot_001', 'shot_002'],
+      stage: 'coverage_grids',
+      status: 'running',
+      stageLabel: 'Generating coverage grid 1/1',
+      activeCoverageShotIds: ['shot_001', 'shot_002'],
+      activeRunStepKey: 'zone_coverage_board_image',
+    },
+    prepRuns: {
+      'prep-1': {
+        runId: 'prep-1',
+        runKey: 'request-master:scene_001:zone_1:',
+        sceneId: 'scene_001',
+        stage: 'coverage_grids',
+        status: 'running',
+      },
+    },
+  })
+  assert.equal(response.prepRun.status, 'running')
+  assert.equal(response.prepRuns['prep-1'].stage, 'coverage_grids')
+
+  const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const sceneBoardProjectionSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/scene-board/sceneBoardProjection.ts'), 'utf8')
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.tsx'), 'utf8')
+  const repoSource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
+  const functionSource = readFileSync(resolve(repoRoot, 'supabase/functions/prepare-sequence-animatic-scene-board/index.ts'), 'utf8')
+
+  assert.match(pageSource, /sequenceAnimaticSceneBoardPrepRunForScope/)
+  assert.match(pageSource, /onPrepareSequenceAnimaticSceneBoard/)
+  assert.match(pageSource, /Scene Board prep fallback refresh failed/)
+  assert.match(pageSource, /Still waiting for required set, zone, and spot references before coverage grids/)
+  assert.match(pageSource, /Prepare Selected Board first\. Missing required continuity refs/)
+  assert.match(sceneBoardProjectionSource, /sequenceAnimaticSceneBoardReferenceHasAsset/)
+  assert.match(sceneBoardProjectionSource, /tile\.target\?\.assetKey/)
+  assert.match(sceneBoardProjectionSource, /allCoverageUnitReferencesReady/)
+  assert.match(pageSource, /onCancelPrep/)
+  assert.match(appSource, /prepareSequenceAnimaticSceneBoard/)
+  assert.match(repoSource, /prepare-sequence-animatic-scene-board/)
+  assert.match(functionSource, /sequenceAnimaticSceneBoardPrepRuns/)
+  assert.match(functionSource, /action === 'cancel'/)
 })
 
 test('sequence animatic coverage intent batches support fresh scene board coverage grids', () => {
@@ -2749,14 +2906,15 @@ test('sequence animatic coverage intent batches support fresh scene board covera
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const workflowFactorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
+  const sceneBoardWorkflowSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-scene-board-workflows.ts'), 'utf8')
   const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-shot-coverage-intents/index.ts'), 'utf8')
   const zoneEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-zone-coverage-boards/index.ts'), 'utf8')
   const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
 
   assert.doesNotMatch(workflowFactorySource, /llm_structured/)
   assert.doesNotMatch(workflowFactorySource, /resourceClass:\s*['"]text['"]/)
-  assert.match(workflowFactorySource, /resourceClass:\s*['"]llm['"], groupKey: ['"]sequence_animatic_zone_coverage_board_brief/)
-  assert.match(workflowFactorySource, /resourceClass:\s*['"]llm['"], groupKey: ['"]sequence_animatic_coverage_intent_plan/)
+  assert.match(sceneBoardWorkflowSource, /resourceClass:\s*['"]llm['"], groupKey: ['"]sequence_animatic_zone_coverage_board_brief/)
+  assert.match(sceneBoardWorkflowSource, /resourceClass:\s*['"]llm['"], groupKey: ['"]sequence_animatic_coverage_intent_plan/)
   assert.match(workerSource, /sequence_animatic_coverage_intent_plan/)
   assert.match(workerSource, /coverageIntentByShotId/)
   assert.match(workerSource, /sequenceAnimaticZoneCoverageRegistry/)
@@ -3364,8 +3522,8 @@ test('sequence animatic shot revisions have output-local graph contracts and art
   assert.match(wikiSource, /Prompt this/)
 })
 
-test('cinematic output preset creates script-first dynamic take fanout placeholder', () => {
-  const plan = planOutputRequestWorkflow({
+test('explicit retired v1 cinematic pipeline is rejected for new workflow planning', () => {
+  assert.throws(() => planOutputRequestWorkflow({
     projectId: 'project-1',
     draftId: 'draft-1',
     prompt: 'Create a cinematic sequence from Chapter 1 with a shot-by-shot storyboard.',
@@ -3375,150 +3533,10 @@ test('cinematic output preset creates script-first dynamic take fanout placehold
     durationPerBlockSeconds: 8,
     cinematicPipelineVersion: 'v1_take_blocks',
     snapshot,
-  }, 'cinematic_episode')
+  }, 'cinematic_episode'), /Legacy cinematic pipelines/)
 
-  assert.equal(plan.preset, 'cinematic_episode_from_sequence')
-  assert.equal(plan.targetFormat, 'video')
-  assert.deepEqual(plan.sourceSequenceUnitKeys, ['chapter-1'])
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_script_authoring').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_sequence_compile').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout').length, 1)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_block_script').length, 0)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_reference_atlas').length, 0)
-  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_storyboard').length, 0)
-  assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
-  assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'video_stitch'))
-  assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_video_artifact'))
-
-  const scriptAuthoring = plan.nodes.find((node) => node.key === 'cinematic_script_authoring')
-  assert.equal(scriptAuthoring?.config.legacyVideoBlockCount, 3)
-  assert.equal(scriptAuthoring?.config.legacyDurationPerBlockSeconds, 8)
-
-  const fanout = plan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
-  assert.equal(fanout?.config.aspectRatio, '16:9')
-  assert.equal(fanout?.config.resolution, '720p')
-  assert.equal(fanout?.config.generateAudio, true)
-  assert.equal(fanout?.config.maxTotalDurationSeconds, 60)
-  assert.equal(fanout?.config.videoProvider, 'muapi')
-  assert.equal(fanout?.config.videoModel, aiGenerationSettings.outputWorkflow.videoMuapiModel)
-  assert.equal(fanout?.config.cinematicReferenceMode, 'shot_reference_sheet')
-  assert.equal(fanout?.config.debugCinematicStoryboardStyleSafeMode, aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault)
-  assert.equal(fanout?.config.cinematicStoryboardStyleOverride, aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault ? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt : '')
-  assert.equal(fanout?.config.debugSkipVideoGeneration, true)
-  assert.ok(plan.diagnostics.some((line) => line.includes('Cinematic direction-sheet reference mode')))
-  assert.ok(plan.diagnostics.some((line) => line.includes('Debug storyboard style safe mode')))
-  const skillContext = plan.nodes.find((node) => node.key === 'skill_context')
-  assert.ok(Array.isArray(skillContext?.config.skillKeys))
-  assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_beat_sheet_planning'))
-  assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_direction_sheet_planning'))
-  assert.ok((skillContext?.config.skillKeys as string[]).includes('cinematic_keyframe_prompting'))
-  assert.ok((skillContext?.config.skillKeys as string[]).includes('seedance_timeline_call_sheet'))
-
-  assert.ok(!plan.nodes.some((node) => node.key === 'cinematic_atlas_prompt'))
-  assert.ok(!plan.nodes.some((node) => node.key === 'cinematic_atlas_image'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_sequence_compile' && edge.targetNodeKey === 'cinematic_dynamic_take_fanout' && edge.targetPort === 'input'))
-  assert.ok(!plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_atlas_image' || edge.targetNodeKey === 'cinematic_atlas_image'))
-  assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'cinematic_atlas_image'))
-  assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_storyboard'))
-  assert.ok(!plan.usageEstimate?.lines.some((line) => line.nodeKey === 'block_001_video'))
-  assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
-
-  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
-  assert.doesNotMatch(workerSource, /cinematic_atlas_image__\$\{beatSheetKey\}/)
-  assert.doesNotMatch(workerSource, /cinematic_atlas_image__\$\{videoKey\}/)
-  assert.match(workerSource, /cinematic_entities__\$\{beatSheetKey\}/)
-  assert.match(workerSource, /cinematic_entities__\$\{videoKey\}/)
-  assert.match(workerSource, /metadata\.referenceSheetAssetKey/)
-  assert.match(workerSource, /quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY/)
-
-  const requestPayload = outputRequestStartRequestSchema.parse({
-    projectId: 'project-1',
-    draftId: 'draft-1',
-    prompt: 'Create a cinematic sequence from Chapter 1.',
-    targetFormat: 'video',
-    cinematicReferenceMode: 'storyboard_sheet',
-    debugSkipVideoGeneration: false,
-    snapshot,
-  })
-  assert.equal(requestPayload.cinematicReferenceMode, 'storyboard_sheet')
-  assert.equal(requestPayload.debugCinematicStoryboardStyleSafeMode, undefined)
-  assert.equal(requestPayload.debugSkipVideoGeneration, false)
-
-  const combinedReferencePayload = outputRequestStartRequestSchema.parse({
-    projectId: 'project-1',
-    draftId: 'draft-1',
-    prompt: 'Create a cinematic sequence from Chapter 1.',
-    targetFormat: 'video',
-    cinematicReferenceMode: 'keyframes_and_storyboard',
-    snapshot,
-  })
-  assert.equal(combinedReferencePayload.cinematicReferenceMode, 'keyframes_and_storyboard')
-
-  const directionSheetPayload = outputRequestStartRequestSchema.parse({
-    projectId: 'project-1',
-    draftId: 'draft-1',
-    prompt: 'Create a cinematic sequence from Chapter 1.',
-    targetFormat: 'video',
-    cinematicReferenceMode: 'shot_reference_sheet',
-    snapshot,
-  })
-  assert.equal(directionSheetPayload.cinematicReferenceMode, 'shot_reference_sheet')
-
-  const portraitPlan = planOutputRequestWorkflow({
-    projectId: 'project-1',
-    draftId: 'draft-1',
-    prompt: 'Create a vertical UGC cinematic from Chapter 1.',
-    targetFormat: 'video',
-    selectedSequenceUnitKeys: ['chapter-1'],
-    aspectRatio: '9:16',
-    cinematicPipelineVersion: 'v1_take_blocks',
-    snapshot,
-  }, 'ugc_episode')
-  const portraitFanout = portraitPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
-  assert.equal(portraitFanout?.config.aspectRatio, '9:16')
-
-  const costEnabledPlan = planOutputRequestWorkflow({
-    projectId: 'project-1',
-    draftId: 'draft-1',
-    prompt: 'Create a cinematic sequence from Chapter 1.',
-    targetFormat: 'video',
-    selectedSequenceUnitKeys: ['chapter-1'],
-    debugSkipVideoGeneration: false,
-    cinematicPipelineVersion: 'v1_take_blocks',
-    snapshot,
-  }, 'cinematic_episode')
-  const costEnabledFanout = costEnabledPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
-  assert.equal(costEnabledFanout?.config.debugSkipVideoGeneration, false)
-
-  const safeModeDisabledPlan = planOutputRequestWorkflow({
-    projectId: 'project-1',
-    draftId: 'draft-1',
-    prompt: 'Create a cinematic sequence from Chapter 1.',
-    targetFormat: 'video',
-    selectedSequenceUnitKeys: ['chapter-1'],
-    debugCinematicStoryboardStyleSafeMode: false,
-    cinematicStoryboardStyleOverride: 'charcoal animatic boards',
-    cinematicPipelineVersion: 'v1_take_blocks',
-    snapshot,
-  }, 'cinematic_episode')
-  const safeModeDisabledFanout = safeModeDisabledPlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
-  assert.equal(safeModeDisabledFanout?.config.debugCinematicStoryboardStyleSafeMode, false)
-  assert.equal(safeModeDisabledFanout?.config.cinematicStoryboardStyleOverride, '')
-  assert.ok(safeModeDisabledPlan.diagnostics.some((line) => line.includes('Debug storyboard style safe mode is disabled')))
-
-  const keyframeModePlan = planOutputRequestWorkflow({
-    projectId: 'project-1',
-    draftId: 'draft-1',
-    prompt: 'Create a cinematic sequence from Chapter 1.',
-    targetFormat: 'video',
-    selectedSequenceUnitKeys: ['chapter-1'],
-    cinematicReferenceMode: 'keyframes',
-    cinematicPipelineVersion: 'v1_take_blocks',
-    snapshot,
-  }, 'cinematic_episode')
-  const keyframeModeFanout = keyframeModePlan.nodes.find((node) => node.key === 'cinematic_dynamic_take_fanout')
-  assert.equal(keyframeModeFanout?.config.cinematicReferenceMode, 'keyframes')
-  assert.ok(keyframeModePlan.diagnostics.some((line) => line.includes('Keyframe reference mode')))
+  const startOutputRequestSource = readFileSync(resolve(repoRoot, 'supabase/functions/start-output-request/index.ts'), 'utf8')
+  assert.match(startOutputRequestSource, /Legacy cinematic pipelines v1_take_blocks and v2_shot_orchestration are retired/)
 })
 
 test('cinematic authoring uses lean director script and internal execution script', () => {

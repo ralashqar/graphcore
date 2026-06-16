@@ -3,6 +3,7 @@ import { test, beforeEach } from 'node:test'
 import {
   __resetRequestCoordinatorForTests,
   createPollGroup,
+  isTransientRequestError,
   runCoalescedRequest,
   runLimitedRequest,
 } from './requestCoordinator.ts'
@@ -73,6 +74,13 @@ test('retries transient read failures with backoff', async () => {
 
   assert.equal(result, 'ok')
   assert.equal(calls, 2)
+})
+
+test('classifies aborted and service unavailable refresh failures as transient', () => {
+  assert.equal(isTransientRequestError(new DOMException('signal is aborted without reason', 'AbortError')), true)
+  const serviceUnavailable = new Error('Service Unavailable') as Error & { status?: number }
+  serviceUnavailable.status = 503
+  assert.equal(isTransientRequestError(serviceUnavailable), true)
 })
 
 test('serializes mutation requests for the same resource key', async () => {

@@ -51,6 +51,9 @@ import {
   sequenceAnimaticStoryboardImageSize,
   sequenceAnimaticStableHash,
 } from './sequence-animatic-workflow-factory.ts'
+import {
+  isSequenceAnimaticSceneBoardWorkflowPurpose,
+} from './sequence-animatic-scene-board.ts'
 import type {
   SeedanceReferenceManifestEntry,
 } from '../../../src/domain/seedanceReferenceManifest.ts'
@@ -100,6 +103,13 @@ import {
 } from './openai.ts'
 import { resolveOutputTextModelPolicy, reasoningPayloadFor } from './model-policy.ts'
 import { formatSequenceAnimaticSceneStateForPrompt } from '../../../src/domain/sequenceAnimaticSceneState.ts'
+import {
+  buildSequenceAnimaticLocationEvidenceLines,
+  sanitizeSequenceAnimaticSpatialNodeFields,
+  sanitizeSequenceAnimaticSpatialPromptText,
+  sequenceAnimaticSpatialForbiddenNamesFromShots,
+  sequenceAnimaticSpatialPromptPolicyVersion,
+} from '../../../src/domain/sequenceAnimaticSpatialPrompt.ts'
 import { aiGenerationSettings } from '../../../src/config/aiGenerationSettings.ts'
 import { normalizeStrictJsonSchema } from './structured-output.ts'
 import { notifyWorkerWakeBestEffort } from './worker-wake.ts'
@@ -132,9 +142,21 @@ const sequenceAnimaticZoneCameraGridBriefSchema = z.object({
     column: z.number().int().min(0).max(2),
     cameraPlateBrief: z.string().max(520),
     camera: z.string().max(260).default(''),
+    framing: z.string().max(140).default(''),
+    cameraHeight: z.string().max(140).default(''),
+    cameraAngle: z.string().max(140).default(''),
+    lens: z.string().max(140).default(''),
+    movement: z.string().max(140).default(''),
+    foreground: z.string().max(220).default(''),
+    midground: z.string().max(260).default(''),
+    background: z.string().max(260).default(''),
+    landmarks: z.string().max(260).default(''),
     locationFeatures: z.string().max(360).default(''),
     lightingWeather: z.string().max(240).default(''),
+    lightDirection: z.string().max(180).default(''),
+    paletteWeather: z.string().max(180).default(''),
     screenDirection: z.string().max(180).default(''),
+    composition: z.string().max(300).default(''),
     spotId: z.string().max(160).default(''),
     spotName: z.string().max(220).default(''),
   })).min(1).max(9),
@@ -392,6 +414,158 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function readArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
+}
+
+const sequenceAnimaticCameraPlateForbiddenTermRules: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\btwo[-\s]?shot\b/gi, replacement: 'cross-axis location angle' },
+  { pattern: /\bover[-\s]?the[-\s]?shoulder\b/gi, replacement: 'foreground-framed location angle' },
+  { pattern: /\bover[-\s]?shoulder\b/gi, replacement: 'foreground-framed location angle' },
+  { pattern: /\bpoint[-\s]?of[-\s]?view\b/gi, replacement: 'subjective camera angle' },
+  { pattern: /\bcharacters?\b|\bpeople\b|\bpersons?\b|\bbodies\b|\bbody\b|\bsilhouettes?\b|\bcrowds?\b|\bextras?\b|\bfigures?\b/gi, replacement: 'empty space' },
+  { pattern: /\bfaces?\b|\beyes?\b|\bhands?\b|\bshoulders?\b|\bportrait\b|\breaction\b/gi, replacement: '' },
+  { pattern: /\bdialogue\b|\bspeech\b|\bline delivery\b|\bvoice\b|\bspoken\b/gi, replacement: '' },
+  { pattern: /\baccuses?\b|\bargues?\b|\banswers?\b|\basks?\b|\breplies?\b|\bturns?\b|\breaches?\b|\bgrabs?\b|\bholds?\b|\bplaces?\b|\bpushes?\b|\bshoves?\b|\bwalks?\b|\bruns?\b|\benters?\b|\bleaves?\b/gi, replacement: '' },
+  { pattern: /\bsacred\b|\britual\b|\bjudg(e)?ment\b|\bauthority\b|\bhonesty\b|\baccusation\b|\bsuspicion\b|\bsuspicious\b|\bdisgust(ed)?\b|\buneasy\b|\bomen[-\s]?still\b|\bomen\b|\btense\b|\bemotional\b|\bpsychological\b|\bmotive\b/gi, replacement: '' },
+]
+
+const sequenceAnimaticCameraPlateNonVisualTerms = [
+  'accusation',
+  'authority',
+  'character',
+  'characters',
+  'crowd',
+  'dialogue',
+  'disgusted',
+  'emotion',
+  'honesty',
+  'judgment',
+  'motive',
+  'omen',
+  'people',
+  'reaction',
+  'ritual',
+  'sacred',
+  'silhouette',
+  'suspicious',
+  'tense',
+]
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function cleanSequenceAnimaticCameraPlatePunctuation(value: string) {
+  return value
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:/])/g, '$1')
+    .replace(/([,.;:/]){2,}/g, '$1')
+    .replace(/\s*[,;:]\s*(?=[,;:.]|$)/g, ' ')
+    .replace(/\(\s*\)/g, '')
+    .replace(/\[\s*\]/g, '')
+    .replace(/\s+-\s+(?=[,.;:]|$)/g, ' ')
+    .trim()
+}
+
+function sanitizeSequenceAnimaticCameraPlateText(value: unknown, maxLength = 360) {
+  let text = readText(value)
+  for (const rule of sequenceAnimaticCameraPlateForbiddenTermRules) {
+    text = text.replace(rule.pattern, rule.replacement)
+  }
+  text = text.replace(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+\[(?:ref|id):[^\]]+\]/g, '')
+  text = text.replace(/\b(?:Akane|Kaji|Rin|Miyo)\b/g, '')
+  text = cleanSequenceAnimaticCameraPlatePunctuation(text)
+  if (maxLength > 0 && text.length > maxLength) {
+    text = cleanSequenceAnimaticCameraPlatePunctuation(text.slice(0, maxLength))
+  }
+  return text
+}
+
+function readSequenceAnimaticCameraPart(camera: Record<string, unknown>, key: string, maxLength = 120) {
+  return sanitizeSequenceAnimaticCameraPlateText(camera[key], maxLength)
+}
+
+function inferSequenceAnimaticCameraHeight(cameraText: string) {
+  const matches = cameraText.match(/\b(?:low|ground|waist|eye|shoulder|high|overhead|top[-\s]?down|upward|downward)\b(?:[-\s]\w+){0,3}/i)
+  return sanitizeSequenceAnimaticCameraPlateText(matches?.[0] ?? '', 90)
+}
+
+function inferSequenceAnimaticCameraAngle(cameraText: string) {
+  const matches = cameraText.match(/\b(?:front|profile|side|reverse|three[-\s]?quarter|wide|close|insert|macro|telephoto|wide[-\s]?angle)\b(?:[-\s]\w+){0,4}/i)
+  return sanitizeSequenceAnimaticCameraPlateText(matches?.[0] ?? '', 100)
+}
+
+function sequenceAnimaticBuildCameraPlateBrief(cell: Record<string, unknown>) {
+  const camera = [
+    readText(cell.framing),
+    readText(cell.cameraHeight),
+    readText(cell.cameraAngle),
+    readText(cell.lens),
+    readText(cell.movement),
+    readText(cell.camera),
+  ].filter(Boolean).join('; ')
+  const space = [
+    readText(cell.foreground) ? `foreground ${readText(cell.foreground)}` : '',
+    readText(cell.midground) ? `midground ${readText(cell.midground)}` : '',
+    readText(cell.background) ? `background ${readText(cell.background)}` : '',
+    readText(cell.landmarks) ? `landmarks ${readText(cell.landmarks)}` : '',
+  ].filter(Boolean).join('; ')
+  const light = readText(cell.lightDirection) || readText(cell.lightingWeather) || readText(cell.paletteWeather)
+  return sanitizeSequenceAnimaticCameraPlateText([
+    camera ? `Camera ${camera}` : '',
+    space || readText(cell.locationFeatures),
+    light ? `Light ${light}` : '',
+    readText(cell.screenDirection) ? `Screen direction ${readText(cell.screenDirection)}` : '',
+  ].filter(Boolean).join(' | '), 520)
+}
+
+function sequenceAnimaticVisualOnlyCameraFamily(cell: Record<string, unknown>) {
+  return [
+    readText(cell.spotId) || readText(cell.spotName) || 'zone',
+    readText(cell.framing) || readText(cell.camera),
+    readText(cell.cameraHeight),
+    readText(cell.cameraAngle),
+    readText(cell.lens),
+  ].map((part) => slugify(part || 'any')).join(':')
+}
+
+function sequenceAnimaticZoneGridPromptDiagnostics(cells: Record<string, unknown>[]) {
+  const joined = cells.map((cell) => [
+    readText(cell.cameraPlateBrief),
+    readText(cell.camera),
+    readText(cell.locationFeatures),
+    readText(cell.composition),
+  ].join(' ')).join(' ').toLowerCase()
+  const nonVisualTerms = sequenceAnimaticCameraPlateNonVisualTerms
+    .filter((term) => new RegExp(`\\b${escapeRegExp(term)}\\b`, 'i').test(joined))
+  const familyCounts = new Map<string, number>()
+  for (const cell of cells) {
+    const family = sequenceAnimaticVisualOnlyCameraFamily(cell)
+    familyCounts.set(family, (familyCounts.get(family) ?? 0) + 1)
+  }
+  const duplicateCameraFamilies = Array.from(familyCounts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([family, count]) => ({ family, count }))
+  const messages = [
+    nonVisualTerms.length > 0 ? `Sanitizer warning: remaining nonvisual terms: ${nonVisualTerms.join(', ')}` : '',
+    duplicateCameraFamilies.length > 0 ? `Camera family reuse: ${duplicateCameraFamilies.map((entry) => `${entry.family} x${entry.count}`).join('; ')}` : '',
+  ].filter(Boolean)
+  return {
+    nonVisualTerms,
+    duplicateCameraFamilies,
+    messages,
+  }
+}
+
+function sequenceAnimaticCompactZoneGridCellLine(cell: Record<string, unknown>, index: number) {
+  return [
+    `${index + 1}. r${Number(cell.row ?? Math.floor(index / 3)) + 1}c${Number(cell.column ?? index % 3) + 1}`,
+    readText(cell.spotName) ? `spot=${sanitizeSequenceAnimaticCameraPlateText(cell.spotName, 80)}` : '',
+    readText(cell.camera) ? `camera=${sanitizeSequenceAnimaticCameraPlateText(cell.camera, 140)}` : '',
+    readText(cell.cameraPlateBrief) ? `plate=${sanitizeSequenceAnimaticCameraPlateText(cell.cameraPlateBrief, 240)}` : '',
+    readText(cell.landmarks) ? `landmarks=${sanitizeSequenceAnimaticCameraPlateText(cell.landmarks, 140)}` : '',
+    readText(cell.lightDirection) || readText(cell.lightingWeather) ? `light=${sanitizeSequenceAnimaticCameraPlateText(readText(cell.lightDirection) || readText(cell.lightingWeather), 120)}` : '',
+    readText(cell.screenDirection) ? `screen=${sanitizeSequenceAnimaticCameraPlateText(cell.screenDirection, 100)}` : '',
+  ].filter(Boolean).join(' / ')
 }
 
 function slugify(value: string) {
@@ -1793,6 +1967,7 @@ function readVideoPromptRecordFromUpstream(upstream: Record<string, Record<strin
 
 function readFirstUpstreamArray(upstream: Record<string, Record<string, unknown>>, fields: string[]) {
   for (const outputs of Object.values(upstream)) {
+    if (Array.isArray(outputs)) return outputs.map(asRecord)
     for (const field of fields) {
       const value = outputs[field]
       if (Array.isArray(value)) return value.map(asRecord)
@@ -12239,9 +12414,21 @@ function buildSequenceAnimaticContinuityAssetPrompt(input: {
   relevantShots: Record<string, unknown>[]
   referenceAssetKeys: string[]
 }) {
-  const targetName = readText(input.targetNode.name) || titleFromRefLike(readText(input.targetNode.id))
-  const visualBrief = readText(input.targetNode.visualBrief) || readText(input.targetNode.summary)
-  const shotLines = input.relevantShots.slice(0, 8).map((shot) => {
+  const spatialAsset = input.assetKind === 'location_set'
+    || input.assetKind === 'location_zone'
+    || input.assetKind === 'location_spot'
+    || input.assetKind === 'location_angle'
+    || input.assetKind === 'location_viewpoint'
+  const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(input.relevantShots)
+  const sanitizedSpatialNode = spatialAsset
+    ? sanitizeSequenceAnimaticSpatialNodeFields(input.targetNode, { forbiddenNames })
+    : null
+  const targetName = sanitizedSpatialNode?.name || readText(input.targetNode.name) || titleFromRefLike(readText(input.targetNode.id))
+  const visualBrief = sanitizedSpatialNode?.brief || readText(input.targetNode.visualBrief) || readText(input.targetNode.summary)
+  const locationEvidenceLines = spatialAsset
+    ? buildSequenceAnimaticLocationEvidenceLines(input.relevantShots, { forbiddenNames, limit: 5, maxLineLength: 190 })
+    : []
+  const shotLines = spatialAsset ? [] : input.relevantShots.slice(0, 8).map((shot) => {
     const camera = compactSequenceAnimaticCamera(shot)
     return [
       readText(shot.title),
@@ -12253,20 +12440,43 @@ function buildSequenceAnimaticContinuityAssetPrompt(input: {
     ? 'Create one neutral temporary supporting-character continuity reference sheet. Show body shape, silhouette, wardrobe, face/species cues, and scale clearly. No action scene, no text, no captions.'
     : input.assetKind === 'prop'
       ? 'Create one isolated reusable prop continuity reference sheet. Show the object clearly with material, shape, wear, function, and a clean cinematic close-up. No labels, no UI, no text.'
+      : input.assetKind === 'location_set'
+        ? 'Create one broad reusable set environment continuity reference. Preserve overall layout, architecture, surfaces, entrances, landmarks, material palette, weather, and lighting logic. No people, no characters, no silhouettes, no labels, no UI.'
+      : input.assetKind === 'location_zone'
+        ? 'Create one reusable zone environment continuity reference inside the set. Preserve sub-area geography, sightlines, access paths, landmarks, surfaces, weather, and lighting continuity. No people, no characters, no silhouettes, no labels, no UI.'
       : input.assetKind === 'location_angle'
-        ? 'Create one camera-facing location angle reference. Preserve set architecture, visible landmarks, screen direction, light direction, entrances, and depth cues. No people, no labels, no UI.'
-        : 'Create one reusable location/set/zone/spot continuity reference. Preserve architecture, surfaces, materials, entrances, sightlines, landmarks, palette, and lighting direction. No people, no labels, no UI.'
-  return [
+        ? 'Create one camera-facing spatial angle reference. Preserve architecture, visible landmarks, screen direction, light direction, entrances, and depth cues. No people, no characters, no silhouettes, no labels, no UI.'
+        : 'Create one reusable physical staging position or architectural sub-location continuity reference. Preserve nearby surfaces, entrances, sightlines, landmarks, palette, set-piece placement, and lighting direction. No people, no characters, no silhouettes, no labels, no UI.'
+  const prompt = [
     `Continuity asset: ${targetName}`,
-    `Asset kind: ${input.assetKind || 'continuity_asset'}`,
+    spatialAsset ? `Asset kind: ${sanitizedSpatialNode?.kindLabel || 'spatial continuity reference'}` : `Asset kind: ${input.assetKind || 'continuity_asset'}`,
     visualBrief ? `Visual brief: ${visualBrief}` : '',
     kindInstruction,
     input.referenceAssetKeys.length > 0
       ? 'Attached image references are continuity locks. Match their style, materials, palette, lighting logic, architecture, scale, and design language without copying visible layout artifacts.'
-      : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
+      : spatialAsset
+        ? 'No prior continuity asset references are available. Ground the image only in location evidence and project visual style.'
+        : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
+    locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
     'Provider requirements: one finished square production reference image, clean composition, no visible text, no labels, no borders, no watermarks.',
   ].filter(Boolean).join('\n\n')
+  return {
+    prompt,
+    sanitizedTargetNode: sanitizedSpatialNode ? {
+      ...input.targetNode,
+      name: sanitizedSpatialNode.name,
+      visualBrief: sanitizedSpatialNode.brief || readText(input.targetNode.visualBrief),
+      summary: sanitizedSpatialNode.brief || readText(input.targetNode.summary),
+      spatialPromptKindLabel: sanitizedSpatialNode.kindLabel,
+    } : input.targetNode,
+    locationEvidenceLines,
+    promptDiagnostics: {
+      policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
+      sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
+      removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
+    },
+  }
 }
 
 function buildSequenceAnimaticContinuityBatchPrompt(input: {
@@ -12280,27 +12490,41 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
   const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
   const columns = Math.max(1, Number(layout.columns ?? 1) || 1)
   const cellRoles = readStringArray(input.batch.cellRoles ?? input.batch.cell_roles)
+  const spatialBatch = batchKind === 'angle_grid'
+    || batchKind === 'viewpoint_grid'
+    || batchKind === 'parent_child_scaffold_grid'
+    || batchKind === 'spot_grid'
+    || batchKind === 'location_zone_board'
+    || batchKind === 'single_hero_ref'
+  const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(input.relevantShots)
+  const sanitizedTargets = input.targetNodes.slice(0, rows * columns).map((node) => spatialBatch
+    ? sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames })
+    : null)
   const cellLines = input.targetNodes.slice(0, rows * columns).map((node, index) => {
     const row = Math.floor(index / columns) + 1
     const column = (index % columns) + 1
     const role = cellRoles[index] || 'target'
+    const sanitized = sanitizedTargets[index]
     return [
       `Cell ${index + 1} (row ${row}, column ${column}, ${role}):`,
-      readText(node.name) || titleFromRefLike(readText(node.id)),
-      readText(node.assetKind) || readText(node.nodeKind),
-      readText(node.visualBrief) || readText(node.summary),
+      sanitized?.name || readText(node.name) || titleFromRefLike(readText(node.id)),
+      sanitized?.kindLabel || readText(node.assetKind) || readText(node.nodeKind),
+      sanitized?.brief || readText(node.visualBrief) || readText(node.summary),
     ].filter(Boolean).join(' ')
   })
-  const shotLines = input.relevantShots.slice(0, 8).map((shot) => [
+  const locationEvidenceLines = spatialBatch
+    ? buildSequenceAnimaticLocationEvidenceLines(input.relevantShots, { forbiddenNames, limit: 5, maxLineLength: 180 })
+    : []
+  const shotLines = spatialBatch ? [] : input.relevantShots.slice(0, 8).map((shot) => [
     readText(shot.title),
     compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 220),
   ].filter(Boolean).join(': '))
   const kindInstruction = batchKind === 'angle_grid' || batchKind === 'viewpoint_grid'
     ? 'Each populated cell must show a distinct reusable camera-facing viewpoint from the same set, zone, or spot. Preserve architecture, landmarks, light direction, screen direction, entrances, materials, and depth. No characters, no labels, no UI.'
     : batchKind === 'parent_child_scaffold_grid'
-      ? 'Create a mixed parent-child spatial scaffold grid. Cell 1 is the parent set/zone/spot environment reference; following cells are child spots or viewpoints inside that exact parent. Make the children visibly inherit the parent architecture, materials, light direction, landmarks, entrances, geography, and scale. Each cell must be a clean standalone production reference for its assigned node. No characters unless explicitly part of the environment, no labels, no UI.'
+      ? 'Create a mixed parent-child spatial scaffold grid. Cell 1 is the parent set/zone/spot environment reference; following cells are child physical staging positions or viewpoints inside that exact parent. Make the children visibly inherit the parent architecture, materials, light direction, landmarks, entrances, geography, and scale. Each cell must be a clean standalone production reference for its assigned node. No people, no characters, no silhouettes, no labels, no UI.'
     : batchKind === 'spot_grid'
-      ? 'Each populated cell must show one reusable sub-location or action spot inside the same zone. Preserve local surfaces, landmarks, entrances, sightlines, material continuity, and lighting. No characters, no labels, no UI.'
+      ? 'Each populated cell must show one reusable physical staging position or architectural sub-location inside the same zone. Preserve local surfaces, landmarks, entrances, sightlines, material continuity, set-piece placement, and lighting. No people, no characters, no silhouettes, no labels, no UI.'
       : batchKind === 'temp_character_grid'
         ? 'Each populated cell must show one temporary supporting character or crowd/faction member in neutral pose. Make silhouettes, wardrobe, body shape, face/species cues, and scale readable. No action scene, no labels.'
         : batchKind === 'prop_grid'
@@ -12314,11 +12538,34 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
     kindInstruction,
     input.referenceAssetKeys.length > 0
       ? 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
-      : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
+      : spatialBatch
+        ? 'No parent image references are available. Ground the batch only in location evidence and project visual style.'
+        : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
     cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
+    locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
     'Provider requirements: one finished image only, exact cell order, no visible text, no captions, no labels, no arrows, no UI, no watermarks. Use clean spacing or subtle gutters only; every populated cell must crop cleanly as its own square reference.',
   ].filter(Boolean).join('\n\n')
+  return {
+    prompt,
+    sanitizedTargetNodes: input.targetNodes.map((node, index) => {
+      const sanitized = sanitizedTargets[index]
+      if (!sanitized) return node
+      return {
+        ...node,
+        name: sanitized.name,
+        visualBrief: sanitized.brief || readText(node.visualBrief),
+        summary: sanitized.brief || readText(node.summary),
+        spatialPromptKindLabel: sanitized.kindLabel,
+      }
+    }),
+    locationEvidenceLines,
+    promptDiagnostics: {
+      policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
+      sanitized: sanitizedTargets.some((target) => target?.changed) || locationEvidenceLines.length > 0,
+      removedTerms: [...new Set(sanitizedTargets.flatMap((target) => target?.diagnostics ?? []))],
+    },
+  }
 }
 
 function cinematicContextBrief(context: Record<string, unknown>) {
@@ -23758,18 +24005,25 @@ async function executeNode(input: {
         const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
         const referenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys']).map(readText).filter(Boolean)
-        const prompt = buildSequenceAnimaticContinuityBatchPrompt({
+        const promptResult = buildSequenceAnimaticContinuityBatchPrompt({
           batch: Object.keys(batch).length > 0 ? batch : asRecord(config.batch),
           targetNodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
           relevantShots,
           referenceAssetKeys,
         })
+        const prompt = promptResult.prompt
         const outputs = {
           prompt,
           text: prompt,
           batch: Object.keys(batch).length > 0 ? batch : asRecord(config.batch),
           targetNodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
           target_nodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
+          sanitizedTargetNodes: promptResult.sanitizedTargetNodes,
+          sanitized_target_nodes: promptResult.sanitizedTargetNodes,
+          locationEvidenceLines: promptResult.locationEvidenceLines,
+          location_evidence_lines: promptResult.locationEvidenceLines,
+          promptDiagnostics: promptResult.promptDiagnostics,
+          prompt_diagnostics: promptResult.promptDiagnostics,
           relevantShots,
           relevant_shots: relevantShots,
           assetPack,
@@ -23780,7 +24034,7 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-prompt-v1' }
       }
-      if (purpose === 'sequence_animatic_zone_coverage_board_input') {
+      if (isSequenceAnimaticSceneBoardWorkflowPurpose(purpose) && purpose === 'sequence_animatic_zone_coverage_board_input') {
         const config = asRecord(input.node.config)
         const board = asRecord(config.board ?? config.zoneCoverageBoard ?? config.zone_coverage_board)
         const shots = readArray(config.shots).map(asRecord)
@@ -23838,38 +24092,57 @@ async function executeNode(input: {
           : readArray(config.sceneGraphOverrides ?? config.scene_graph_overrides).map(asRecord)
         const artStyleDescription = readText(boardRecord.artStyleDescription ?? boardRecord.art_style_description)
           || readText(config.artStyleDescription ?? config.art_style_description)
+        const boardForbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(shots)
         const fallbackCells = coverageCells.slice(0, 9).map((cell, index) => {
           const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
           const camera = asRecord(cell.camera ?? shot.camera)
-          const cameraText = [
-            readText(camera.framing),
-            readText(camera.angle),
-            readText(camera.lens),
-            readText(camera.movement),
-          ].filter(Boolean).join('; ')
-          const spotName = readText(cell.spotName ?? cell.spot_name)
+          const framing = readSequenceAnimaticCameraPart(camera, 'framing') || sanitizeSequenceAnimaticCameraPlateText(cell.cameraFraming ?? cell.camera_framing, 120)
+          const cameraAngle = readSequenceAnimaticCameraPart(camera, 'angle') || sanitizeSequenceAnimaticCameraPlateText(cell.cameraAngle ?? cell.camera_angle, 120)
+          const lens = readSequenceAnimaticCameraPart(camera, 'lens')
+          const movement = readSequenceAnimaticCameraPart(camera, 'movement')
+          const cameraText = sanitizeSequenceAnimaticCameraPlateText([
+            framing,
+            cameraAngle,
+            lens,
+            movement,
+          ].filter(Boolean).join('; '), 220)
+          const cameraHeight = inferSequenceAnimaticCameraHeight(cameraText)
+          const inferredCameraAngle = cameraAngle || inferSequenceAnimaticCameraAngle(cameraText)
+          const spotName = sanitizeSequenceAnimaticSpatialPromptText(cell.spotName ?? cell.spot_name, { forbiddenNames: boardForbiddenNames, maxLength: 140 }).text
+          const locationContinuity = sanitizeSequenceAnimaticCameraPlateText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity, 260)
           const locationFeatures = [
             spotName ? `frame the ${spotName} area` : '',
-            readText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity),
+            locationContinuity,
           ].filter(Boolean).join('; ')
-          return {
+          const lightingWeather = sanitizeSequenceAnimaticCameraPlateText(cell.lighting ?? shot.lighting, 160)
+          const screenDirection = sanitizeSequenceAnimaticCameraPlateText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction, 140)
+          const normalizedCell = {
             shotId: readText(cell.shotId),
             cellIndex: Number(cell.cellIndex ?? index) || index,
             row: Number(cell.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
             column: Number(cell.column ?? index % 3) || index % 3,
-            cameraPlateBrief: [
-              cameraText ? `Camera: ${cameraText}` : 'Use the shot camera facts.',
-              locationFeatures || `Show the ${readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone'} geography from this shot angle.`,
-            readText(cell.lighting ?? shot.lighting) ? `Lighting/weather: ${readText(cell.lighting ?? shot.lighting)}` : '',
-            readText(cell.coverageIntentText ?? cell.coverage_intent_text) ? `Coverage intent: ${readText(cell.coverageIntentText ?? cell.coverage_intent_text)}` : '',
-            readText(cell.stagingBrief ?? cell.staging_brief) ? `Staging: ${readText(cell.stagingBrief ?? cell.staging_brief)}` : '',
-          ].filter(Boolean).join(' '),
             camera: cameraText,
+            framing,
+            cameraHeight,
+            cameraAngle: inferredCameraAngle,
+            lens,
+            movement,
+            foreground: spotName ? `${spotName} foreground geometry` : '',
+            midground: locationFeatures,
+            background: sanitizeSequenceAnimaticCameraPlateText(readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone background', 160),
+            landmarks: locationFeatures,
             locationFeatures,
-            lightingWeather: readText(cell.lighting ?? shot.lighting),
-            screenDirection: readText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction),
+            lightingWeather,
+            lightDirection: lightingWeather,
+            paletteWeather: lightingWeather,
+            screenDirection,
+            composition: sanitizeSequenceAnimaticCameraPlateText([cameraText, locationFeatures, screenDirection].filter(Boolean).join('; '), 260),
             spotId: readText(cell.spotId ?? cell.spot_id),
             spotName,
+          }
+          return {
+            ...normalizedCell,
+            cameraPlateBrief: sequenceAnimaticBuildCameraPlateBrief(normalizedCell),
           }
         }).filter((cell) => cell.shotId)
         const fallback = sequenceAnimaticZoneCameraGridBriefSchema.parse({
@@ -23884,11 +24157,11 @@ async function executeNode(input: {
           diagnostics: ['Deterministic camera-grid brief fallback.'],
         })
         const briefPrompt = [
-          'Create location-only camera plate briefs for a 3x3 zone camera coverage grid.',
-          'Your job is not to write image prompts and not to describe characters. Convert each shot into a camera/location plate only.',
-          'Use the shot camera facts, spatial binding, lighting/weather, screen direction, set/zone/spot names, and location continuity.',
+          'Create visual-only camera plate facts for a 3x3 zone camera coverage grid.',
+          'Return compact mechanical fields, not prose. Each cell is an empty location/camera plate only.',
+          'Use only camera facts, spatial binding, lighting/weather, screen direction, set/zone/spot names, and location continuity.',
           'Do not mention character names, people, bodies, silhouettes, crowds, props held by characters, action beats, dialogue, captions, labels, arrows, storyboard text, panels, UI, or internal IDs.',
-          'If a shot action contains characters, ignore the character/action content and keep only camera angle, background geography, movement direction, weather, and visible location features.',
+          'If any input implies action or emotion, drop it. Keep only camera angle, lens/height, foreground/midground/background geometry, landmarks, weather, and screen direction.',
           artStyleDescription ? `Project art style to preserve later: ${artStyleDescription}` : '',
           readText(previousBoard.assetKey ?? previousBoard.boardAssetKey) ? 'A previous zone camera grid exists. Note reusable camera angles/geography only when shots return to the same location angle.' : '',
           '',
@@ -23910,23 +24183,25 @@ async function executeNode(input: {
           'Cells and shot camera facts',
           JSON.stringify(coverageCells.slice(0, 9).map((cell, index) => {
             const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
+            const camera = asRecord(cell.camera ?? shot.camera)
             return {
               shotId: readText(cell.shotId),
               cellIndex: Number(cell.cellIndex ?? index) || index,
               row: Number(cell.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
               column: Number(cell.column ?? index % 3) || index % 3,
-              camera: asRecord(cell.camera ?? shot.camera),
-              lighting: readText(cell.lighting ?? shot.lighting),
-              screenDirection: readText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction),
-              coverageIntent: readText(cell.coverageIntentText ?? cell.coverage_intent_text ?? asRecord(cell.coverageIntent ?? cell.coverage_intent).coverageIntent),
-              cameraFraming: readText(cell.cameraFraming ?? cell.camera_framing),
-              cameraAngle: readText(cell.cameraAngle ?? cell.camera_angle),
-              subjectFocus: readText(cell.subjectFocus ?? cell.subject_focus),
-              stagingBrief: readText(cell.stagingBrief ?? cell.staging_brief),
-              locationContinuity: readText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity),
+              camera: {
+                framing: sanitizeSequenceAnimaticCameraPlateText(camera.framing, 120),
+                angle: sanitizeSequenceAnimaticCameraPlateText(camera.angle, 120),
+                lens: sanitizeSequenceAnimaticCameraPlateText(camera.lens, 120),
+                movement: sanitizeSequenceAnimaticCameraPlateText(camera.movement, 120),
+              },
+              lighting: sanitizeSequenceAnimaticCameraPlateText(cell.lighting ?? shot.lighting, 140),
+              screenDirection: sanitizeSequenceAnimaticCameraPlateText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction, 140),
+              cameraFraming: sanitizeSequenceAnimaticCameraPlateText(cell.cameraFraming ?? cell.camera_framing, 120),
+              cameraAngle: sanitizeSequenceAnimaticCameraPlateText(cell.cameraAngle ?? cell.camera_angle, 120),
+              locationContinuity: sanitizeSequenceAnimaticCameraPlateText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity, 220),
               spotId: readText(cell.spotId ?? cell.spot_id),
-              spotName: readText(cell.spotName ?? cell.spot_name),
-              actionForCameraExtractionOnly: readText(shot.action) || readText(shot.description),
+              spotName: sanitizeSequenceAnimaticSpatialPromptText(cell.spotName ?? cell.spot_name, { forbiddenNames: boardForbiddenNames, maxLength: 120 }).text,
             }
           }), null, 2),
           '',
@@ -23946,14 +24221,49 @@ async function executeNode(input: {
           fallback,
           maxOutputTokens: 4200,
         })
-        const normalizedCells = result.value.cells.map((cell) => ({
-          ...cell,
-          shotId: readText(cell.shotId),
-          cameraPlateBrief: readText(cell.cameraPlateBrief),
-        })).filter((cell) => cell.shotId && cell.cameraPlateBrief).slice(0, 9)
+        const fallbackByShotId = new Map(fallback.cells.map((cell) => [readText(cell.shotId), cell]))
+        const normalizedCells = result.value.cells.map((cell, index) => {
+          const fallbackCell = asRecord(fallbackByShotId.get(readText(cell.shotId))) || asRecord(fallback.cells[index])
+          const merged = { ...fallbackCell, ...cell }
+          const cameraText = sanitizeSequenceAnimaticCameraPlateText(readText(merged.camera) || readText(fallbackCell.camera), 180)
+          const normalizedCell = {
+            ...merged,
+            shotId: readText(merged.shotId),
+            cellIndex: Number(merged.cellIndex ?? index) || index,
+            row: Number(merged.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
+            column: Number(merged.column ?? index % 3) || index % 3,
+            camera: cameraText,
+            framing: sanitizeSequenceAnimaticCameraPlateText(readText(merged.framing) || readText(fallbackCell.framing), 120),
+            cameraHeight: sanitizeSequenceAnimaticCameraPlateText(readText(merged.cameraHeight) || readText(fallbackCell.cameraHeight) || inferSequenceAnimaticCameraHeight(cameraText), 100),
+            cameraAngle: sanitizeSequenceAnimaticCameraPlateText(readText(merged.cameraAngle) || readText(fallbackCell.cameraAngle) || inferSequenceAnimaticCameraAngle(cameraText), 120),
+            lens: sanitizeSequenceAnimaticCameraPlateText(readText(merged.lens) || readText(fallbackCell.lens), 90),
+            movement: sanitizeSequenceAnimaticCameraPlateText(readText(merged.movement) || readText(fallbackCell.movement), 100),
+            foreground: sanitizeSequenceAnimaticCameraPlateText(readText(merged.foreground) || readText(fallbackCell.foreground), 160),
+            midground: sanitizeSequenceAnimaticCameraPlateText(readText(merged.midground) || readText(fallbackCell.midground), 180),
+            background: sanitizeSequenceAnimaticCameraPlateText(readText(merged.background) || readText(fallbackCell.background), 180),
+            landmarks: sanitizeSequenceAnimaticCameraPlateText(readText(merged.landmarks) || readText(fallbackCell.landmarks) || readText(merged.locationFeatures), 200),
+            locationFeatures: sanitizeSequenceAnimaticCameraPlateText(readText(merged.locationFeatures) || readText(fallbackCell.locationFeatures), 240),
+            lightingWeather: sanitizeSequenceAnimaticCameraPlateText(readText(merged.lightingWeather) || readText(fallbackCell.lightingWeather), 160),
+            lightDirection: sanitizeSequenceAnimaticCameraPlateText(readText(merged.lightDirection) || readText(fallbackCell.lightDirection) || readText(merged.lightingWeather), 140),
+            paletteWeather: sanitizeSequenceAnimaticCameraPlateText(readText(merged.paletteWeather) || readText(fallbackCell.paletteWeather) || readText(merged.lightingWeather), 140),
+            screenDirection: sanitizeSequenceAnimaticCameraPlateText(readText(merged.screenDirection) || readText(fallbackCell.screenDirection), 140),
+            composition: sanitizeSequenceAnimaticCameraPlateText(readText(merged.composition) || readText(fallbackCell.composition), 220),
+            spotId: readText(merged.spotId),
+              spotName: sanitizeSequenceAnimaticSpatialPromptText(readText(merged.spotName) || readText(fallbackCell.spotName), { forbiddenNames: boardForbiddenNames, maxLength: 120 }).text,
+          }
+          return {
+            ...normalizedCell,
+            cameraPlateBrief: sequenceAnimaticBuildCameraPlateBrief(normalizedCell),
+          }
+        }).filter((cell) => cell.shotId && cell.cameraPlateBrief).slice(0, 9)
+        const promptDiagnostics = sequenceAnimaticZoneGridPromptDiagnostics(normalizedCells)
         const brief = sequenceAnimaticZoneCameraGridBriefSchema.parse({
           ...result.value,
           cells: normalizedCells.length > 0 ? normalizedCells : fallback.cells,
+          diagnostics: [
+            ...readStringArray(result.value.diagnostics),
+            ...promptDiagnostics.messages,
+          ].slice(0, 12),
         })
         const outputs = {
           coverageBrief: brief,
@@ -23975,6 +24285,8 @@ async function executeNode(input: {
           scene_graph_overrides: sceneGraphOverrides,
           text: JSON.stringify(brief, null, 2),
           prompt: briefPrompt,
+          promptDiagnostics,
+          prompt_diagnostics: promptDiagnostics,
           fallbackUsed: result.fallbackUsed,
           fallbackReason: result.fallbackReason,
           deterministic: result.fallbackUsed,
@@ -24001,52 +24313,51 @@ async function executeNode(input: {
         const boardRecord = Object.keys(board).length > 0 ? board : asRecord(config.board)
         const artStyleDescription = readText(boardRecord.artStyleDescription ?? boardRecord.art_style_description)
           || readText(config.artStyleDescription ?? config.art_style_description)
+        const boardForbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(shots)
         const cellLines = coverageCells.map((cell, index) => {
-          const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
-          const camera = asRecord(cell.camera ?? shot.camera)
           const brief = briefCells.find((entry) => readText(entry.shotId) === readText(cell.shotId)) ?? {}
-          return [
-            `Cell ${index + 1} (${readText(cell.rowLabel) || `row ${Math.floor(index / 3) + 1}, col ${(index % 3) + 1}`})`,
-            readText(brief.cameraPlateBrief) ? `Camera/location plate: ${readText(brief.cameraPlateBrief)}` : '',
-            [readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).length > 0
-              ? `Camera: ${[readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ')}`
-              : '',
-            readText(brief.locationFeatures) ? `Location features: ${readText(brief.locationFeatures)}` : '',
-            readText(brief.lightingWeather) || readText(cell.lighting ?? shot.lighting) ? `Lighting/weather: ${readText(brief.lightingWeather) || readText(cell.lighting ?? shot.lighting)}` : '',
-            readText(brief.screenDirection) || readText(cell.screenDirection ?? cell.screen_direction) ? `Screen direction/geography: ${readText(brief.screenDirection) || readText(cell.screenDirection ?? cell.screen_direction)}` : '',
-            readText(cell.coverageIntentText ?? cell.coverage_intent_text) ? `Shot coverage direction: ${readText(cell.coverageIntentText ?? cell.coverage_intent_text)}` : '',
-            readText(cell.stagingBrief ?? cell.staging_brief) ? `Staging: ${readText(cell.stagingBrief ?? cell.staging_brief)}` : '',
-            readText(cell.spotName) ? `Spot: ${readText(cell.spotName)}` : '',
-          ].filter(Boolean).join(' / ')
+          return sequenceAnimaticCompactZoneGridCellLine({
+            ...cell,
+            ...brief,
+            row: Number(cell.row ?? brief.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
+            column: Number(cell.column ?? brief.column ?? index % 3) || index % 3,
+            spotName: readText(brief.spotName) || readText(cell.spotName ?? cell.spot_name),
+          }, index)
         }).join('\n')
         const previousBoardAssetKey = readText(previousBoard.assetKey ?? previousBoard.boardAssetKey ?? previousBoard.board_asset_key)
+        const referenceNames = sequenceAnimaticReferenceManifestEntries(assetPack)
+          .map((entry) => [readText(entry.label), readText(entry.role)].filter(Boolean).join(' '))
+          .filter(Boolean)
+          .slice(0, 10)
+        const promptDiagnostics = sequenceAnimaticZoneGridPromptDiagnostics(briefCells)
         const prompt = [
-          'Create one wide 16:9 zone camera coverage grid divided into a clean 3x3 grid. Each filled cell is a location-only camera plate for one shot angle.',
-          'Fill cells in row-major order. Leave unused cells plain and empty. Keep the image as a production location/camera reference grid, not a storyboard page.',
+          'Visual-only production plate grid: create one wide 16:9 zone camera coverage grid divided into a clean 3x3 grid.',
+          'Each filled cell is an empty location camera plate for one shot angle. Fill cells in row-major order; leave unused cells plain and empty.',
           artStyleDescription ? `Project art style lock: ${artStyleDescription}` : '',
           'Use the attached set/zone/spot references as the visual source of truth for architecture, terrain, materials, weather, palette, lighting logic, and repeated geography.',
           'No people, no characters, no silhouettes, no crowds, no placeholder bodies, no subject labels, no arrows, no captions, no shot numbers, no speech bubbles, no UI, no watermarks, and no visible text inside the image.',
           'Do not use a cartoony/sketch/comic/storyboard style unless the project art style explicitly says so. Match the project art direction and the visual finish of the location references.',
-          'Each cell should show only the camera angle, background geography, foreground/background masses, horizon/ground plane, screen direction, lighting/weather, and the spatial landmarks needed to keep later keyframes consistent.',
+          'Each cell should show only camera angle, foreground/midground/background geometry, horizon/ground plane, screen direction, lighting/weather, and stable spatial landmarks.',
           previousBoardAssetKey ? 'A previous zone camera grid reference is attached. Reuse matching location geography, camera angles, landmarks, and lighting continuity where the new cells return to the same zone angle.' : '',
           '',
           `Grid: ${readText(boardRecord.title) || readText(boardRecord.id) || 'Zone camera grid'}`,
           `Scene: ${readText(boardRecord.sceneTitle) || readText(boardRecord.sceneId) || 'scene'} / Set: ${readText(boardRecord.setName) || readText(boardRecord.setId) || 'set'} / Zone: ${readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone'}`,
-          readText(boardRecord.zoneSummary) ? `Zone continuity: ${readText(boardRecord.zoneSummary)}` : '',
+          readText(boardRecord.zoneSummary) ? `Zone continuity: ${sanitizeSequenceAnimaticCameraPlateText(boardRecord.zoneSummary, 260)}` : '',
+          referenceNames.length > 0 ? `Attached refs: ${referenceNames.join(' / ')}` : '',
           sceneGraphOverrides.length > 0 ? [
             '',
             'User-edited scene graph direction',
             ...sceneGraphOverrides.map((override) => [
               readText(override.nodeKind) || 'node',
               readText(override.nodeId),
-              readText(override.visualBriefOverride) ? `Visual brief: ${readText(override.visualBriefOverride)}` : '',
-              readText(override.extraPromptDirection) ? `Extra direction: ${readText(override.extraPromptDirection)}` : '',
+              readText(override.visualBriefOverride) ? `Visual brief: ${sanitizeSequenceAnimaticSpatialPromptText(override.visualBriefOverride, { forbiddenNames: boardForbiddenNames, maxLength: 180 }).text}` : '',
+              readText(override.extraPromptDirection) ? `Extra direction: ${sanitizeSequenceAnimaticSpatialPromptText(override.extraPromptDirection, { forbiddenNames: boardForbiddenNames, maxLength: 180 }).text}` : '',
             ].filter(Boolean).join(' / ')),
           ].join('\n') : '',
           '',
           'Cell camera/location map',
           cellLines,
-          referenceManifestText ? `\nReference map\n${referenceManifestText}` : '',
+          promptDiagnostics.messages.length > 0 ? `\nPrompt diagnostics: ${promptDiagnostics.messages.join(' | ')}` : '',
         ].filter(Boolean).join('\n')
         const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
         const outputs = {
@@ -24070,6 +24381,8 @@ async function executeNode(input: {
           reference_manifest: referenceManifest,
           referenceManifestText,
           reference_manifest_text: referenceManifestText,
+          promptDiagnostics,
+          prompt_diagnostics: promptDiagnostics,
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-prompt-v1' }
@@ -24384,14 +24697,14 @@ async function executeNode(input: {
         const effectiveTargetNode = visualBriefOverride
           ? { ...targetNode, visualBrief: visualBriefOverride, summary: visualBriefOverride }
           : targetNode
-        const basePrompt = buildSequenceAnimaticContinuityAssetPrompt({
+        const promptResult = buildSequenceAnimaticContinuityAssetPrompt({
           targetNode: effectiveTargetNode,
           assetKind,
           relevantShots,
           referenceAssetKeys,
         })
         const prompt = [
-          basePrompt,
+          promptResult.prompt,
           visualBriefOverride ? `User-edited visual brief:\n${visualBriefOverride}` : '',
           extraPromptDirection ? `Additional user generation direction:\n${extraPromptDirection}` : '',
         ].filter(Boolean).join('\n\n')
@@ -24400,6 +24713,12 @@ async function executeNode(input: {
           text: prompt,
           targetNode: effectiveTargetNode,
           target_node: effectiveTargetNode,
+          sanitizedTargetNode: promptResult.sanitizedTargetNode,
+          sanitized_target_node: promptResult.sanitizedTargetNode,
+          locationEvidenceLines: promptResult.locationEvidenceLines,
+          location_evidence_lines: promptResult.locationEvidenceLines,
+          promptDiagnostics: promptResult.promptDiagnostics,
+          prompt_diagnostics: promptResult.promptDiagnostics,
           sceneGraphOverride,
           scene_graph_override: sceneGraphOverride,
           relevantShots,
@@ -29202,7 +29521,7 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-artifact-v1' }
       }
-      if (purpose === 'sequence_animatic_coverage_intent_input') {
+      if (isSequenceAnimaticSceneBoardWorkflowPurpose(purpose) && purpose === 'sequence_animatic_coverage_intent_input') {
         const config = asRecord(input.node.config)
         const intentBatch = asRecord(config.intentBatch ?? config.intent_batch)
         const shots = readArray(config.shots).map(asRecord)

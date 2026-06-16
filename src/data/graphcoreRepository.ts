@@ -201,6 +201,8 @@ import {
   sequenceAnimaticShotProductionGraphEnsureResponseSchema,
   sequenceAnimaticSceneGraphNodeUpdateRequestSchema,
   sequenceAnimaticSceneGraphNodeUpdateResponseSchema,
+  sequenceAnimaticSceneBoardPrepRequestSchema,
+  sequenceAnimaticSceneBoardPrepResponseSchema,
   sequenceAnimaticShotCoverageIntentEnsureRequestSchema,
   sequenceAnimaticShotCoverageIntentEnsureResponseSchema,
   sequenceAnimaticZoneCoverageBoardEnsureRequestSchema,
@@ -238,6 +240,7 @@ import {
   type SequenceAnimaticShotProductionGraphEnsureResponse,
   type SequenceAnimaticSceneGraphNodeUpdateResponse,
   type SequenceAnimaticShotCoverageIntentEnsureResponse,
+  type SequenceAnimaticSceneBoardPrepResponse,
   type SequenceAnimaticZoneCoverageBoardEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
@@ -319,6 +322,7 @@ import { supabase } from '../utils/supabase'
 import { supabasePublishableKey, supabaseUrl } from '../config/supabaseConfig'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
 import {
+  isTransientRequestError,
   logRateLimitedRequestWarning,
   runCoalescedRequest,
   runLimitedRequest,
@@ -585,10 +589,15 @@ async function getValidatedSessionInner(signInMessage: string) {
       return session
     }
 
+    const transientUserCheckError = isTransientRequestError(initialUserCheck.error)
     const warningNow = Date.now()
-    if (warningNow - lastSessionUserCheckWarningAt > 30_000) {
+    if (!transientUserCheckError && warningNow - lastSessionUserCheckWarningAt > 30_000) {
       lastSessionUserCheckWarningAt = warningNow
       console.warn('[GraphCore] Supabase session user check failed before live request; continuing with cached session token.', {
+        message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
+      })
+    } else if (transientUserCheckError && import.meta.env.DEV && import.meta.env.VITE_GRAPHCORE_OUTPUT_MONITOR_DEBUG === 'true') {
+      console.info('[GraphCore] Supabase session user check skipped after transient failure; continuing with cached session token.', {
         message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
       })
     }
@@ -3041,6 +3050,7 @@ type SignProjectAssetUrlsResponse = {
 export type SignedProjectAssetUrlEntry = SignProjectAssetUrlsResponse['urls'][number]
 
 const PROJECT_ASSET_SIGNING_BATCH_SIZE = 100
+const PROJECT_ASSET_DIRECT_LOOKUP_BATCH_SIZE = 25
 const PROJECT_ASSET_SIGNING_BATCH_WINDOW_MS = 75
 const SEQUENCE_ANIMATIC_STATE_EDGE_UNAVAILABLE_TTL_MS = 5 * 60 * 1000
 const USE_SEQUENCE_ANIMATIC_STATE_EDGE_FUNCTION = false
@@ -3273,6 +3283,20 @@ function readRepositoryRecord(value: unknown): Record<string, unknown> {
 
 function readRepositoryString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function postgrestResponseError(
+  response: { error?: { message?: string | null } | null; status?: number; statusText?: string | null },
+  fallbackMessage: string,
+) {
+  const message = readRepositoryString(response.error?.message)
+    || readRepositoryString(response.statusText)
+    || fallbackMessage
+  const error = new Error(message)
+  if (typeof response.status === 'number') {
+    ;(error as Error & { status?: number }).status = response.status
+  }
+  return error
 }
 
 function readRepositoryArray(value: unknown) {
@@ -3517,14 +3541,52 @@ export async function signProjectAssetUrls(projectId: string, assetKeys: string[
   const cleanKeys = Array.from(new Set(assetKeys.map((key) => key.trim()).filter(Boolean)))
   if (cleanKeys.length === 0) return []
 
-  const response = await supabase
-    .from('project_assets')
-    .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-    .eq('project_id', projectId)
-    .in('key', cleanKeys)
-  if (response.error) throw new Error(response.error.message)
+  const rows: AssetRow[] = []
+  const seenIds = new Set<string>()
+  for (let index = 0; index < cleanKeys.length; index += PROJECT_ASSET_DIRECT_LOOKUP_BATCH_SIZE) {
+    const batch = cleanKeys.slice(index, index + PROJECT_ASSET_DIRECT_LOOKUP_BATCH_SIZE)
+    const response = await supabase
+      .from('project_assets')
+      .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+      .eq('project_id', projectId)
+      .in('key', batch)
+    if (!response.error) {
+      for (const row of (response.data ?? []) as AssetRow[]) {
+        if (!row.id || seenIds.has(row.id)) continue
+        seenIds.add(row.id)
+        rows.push(row)
+      }
+      continue
+    }
 
-  const assets = ((response.data ?? []) as AssetRow[]).map(mapAssetRow)
+    logRateLimitedRequestWarning('asset-signing:direct-lookup-batch', '[GraphCore] project asset batch lookup failed; retrying exact key lookups.', {
+      projectId,
+      batchSize: batch.length,
+      message: response.error.message,
+    })
+    for (const key of batch) {
+      const exactResponse = await supabase
+        .from('project_assets')
+        .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+        .eq('project_id', projectId)
+        .eq('key', key)
+        .maybeSingle()
+      if (exactResponse.error) {
+        logRateLimitedRequestWarning(`asset-signing:direct-lookup-key:${key}`, '[GraphCore] project asset exact lookup failed during hydration.', {
+          projectId,
+          assetKey: key,
+          message: exactResponse.error.message,
+        })
+        continue
+      }
+      const row = exactResponse.data as AssetRow | null
+      if (!row?.id || seenIds.has(row.id)) continue
+      seenIds.add(row.id)
+      rows.push(row)
+    }
+  }
+
+  const assets = rows.map(mapAssetRow)
   return hydrateStorageAssetUrls(projectId, assets)
 }
 
@@ -8977,6 +9039,84 @@ export async function ensureSequenceAnimaticShotCoverageIntents(
   return parsed
 }
 
+export async function prepareSequenceAnimaticSceneBoard(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    runId?: string
+    runKey?: string
+    sceneId: string
+    setId?: string | null
+    zoneId?: string | null
+    scopeNodeId?: string | null
+    shotIds?: string[]
+    stage?: 'idle' | 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'complete' | 'failed' | 'cancelled'
+    status?: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled'
+    activeUnitId?: string | null
+    activeUnitLabel?: string
+    stageLabel?: string
+    message?: string
+    queued?: number
+    running?: number
+    ready?: number
+    failed?: number
+    activeRequestIds?: string[]
+    activeRunIds?: string[]
+    activeReferenceNodeIds?: string[]
+    activeCoverageShotIds?: string[]
+    activeRunStepKey?: string
+    error?: string
+    action?: 'start' | 'update' | 'complete' | 'fail' | 'cancel' | 'resume'
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticSceneBoardPrepResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic scene boards.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic scene board prep requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticSceneBoardPrepRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    runId: request.runId,
+    runKey: request.runKey,
+    sceneId: request.sceneId,
+    setId: request.setId ?? null,
+    zoneId: request.zoneId ?? null,
+    scopeNodeId: request.scopeNodeId ?? null,
+    shotIds: request.shotIds ?? [],
+    stage: request.stage,
+    status: request.status,
+    activeUnitId: request.activeUnitId,
+    activeUnitLabel: request.activeUnitLabel,
+    stageLabel: request.stageLabel,
+    message: request.message,
+    queued: request.queued,
+    running: request.running,
+    ready: request.ready,
+    failed: request.failed,
+    activeRequestIds: request.activeRequestIds,
+    activeRunIds: request.activeRunIds,
+    activeReferenceNodeIds: request.activeReferenceNodeIds,
+    activeCoverageShotIds: request.activeCoverageShotIds,
+    activeRunStepKey: request.activeRunStepKey,
+    error: request.error,
+    action: request.action ?? 'update',
+    forceRefresh: request.forceRefresh ?? false,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'prepare-sequence-animatic-scene-board',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticSceneBoardPrepResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
 export async function ensureSequenceAnimaticShotRevisionWorkflow(
   snapshot: ProjectSnapshot,
   request: {
@@ -9030,6 +9170,7 @@ export async function loadSequenceAnimaticState(
     className: 'output-graph',
     key: `sequence-animatic-state:${payload.projectId}:${payload.draftId}:${payload.masterRequestId ?? ''}:${payload.sequenceUnitKey ?? ''}:${payload.knownRevision ?? ''}`,
     ttlMs: 300,
+    retryPolicy: { attempts: 3, baseDelayMs: 900, maxDelayMs: 6000, retryTransient: true },
     fn: async () => {
       if (!USE_SEQUENCE_ANIMATIC_STATE_EDGE_FUNCTION
         || (payload.sequenceUnitKey && !payload.masterRequestId)
@@ -9866,7 +10007,7 @@ async function loadSequenceAnimaticStateDirect(
       .eq('draft_id', payload.draftId)
       .eq('id', payload.masterRequestId)
       .maybeSingle()
-    if (masterResponse.error) throw new Error(masterResponse.error.message)
+    if (masterResponse.error) throw postgrestResponseError(masterResponse, 'Failed to load screenplay animatic master request.')
     if (!masterResponse.data) throw new Error('Screenplay animatic master request not found.')
     masterRequest = mapOutputRequestRow(masterResponse.data as OutputRequestRow)
   } else {
@@ -9880,7 +10021,7 @@ async function loadSequenceAnimaticStateDirect(
       .contains('selected_sequence_unit_keys', [sequenceUnitKey])
       .order('updated_at', { ascending: false })
       .limit(25)
-    if (lookupResponse.error) throw new Error(lookupResponse.error.message)
+    if (lookupResponse.error) throw postgrestResponseError(lookupResponse, 'Failed to look up screenplay animatic master request.')
     masterRequest = ((lookupResponse.data ?? []) as OutputRequestRow[])
       .map(mapOutputRequestRow)
       .find((request) => (
@@ -9920,7 +10061,7 @@ async function loadSequenceAnimaticStateDirect(
     .eq('draft_id', payload.draftId)
     .eq('parent_request_id', masterRequest.id)
     .order('created_at', { ascending: true })
-  if (directChildrenResponse.error) throw new Error(directChildrenResponse.error.message)
+  if (directChildrenResponse.error) throw postgrestResponseError(directChildrenResponse, 'Failed to load screenplay animatic child requests.')
   const directChildren = ((directChildrenResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
   const blockRequestIds = directChildren
     .filter((child) => readOutputRequestScreenplayAnimaticRole(child) === 'storyboard_block')
@@ -9939,7 +10080,7 @@ async function loadSequenceAnimaticStateDirect(
       .eq('draft_id', payload.draftId)
       .in('parent_request_id', nestedParentRequestIds)
       .order('created_at', { ascending: true })
-    if (shotChildrenResponse.error) throw new Error(shotChildrenResponse.error.message)
+    if (shotChildrenResponse.error) throw postgrestResponseError(shotChildrenResponse, 'Failed to load screenplay animatic shot child requests.')
     shotChildren = ((shotChildrenResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
   }
 
@@ -9972,12 +10113,12 @@ async function loadSequenceAnimaticStateDirect(
       .order('sequence', { ascending: true })
       .limit(500),
   ])
-  if (workflowResponse.error) throw new Error(workflowResponse.error.message)
-  if (runResponse.error) throw new Error(runResponse.error.message)
-  if (stepResponse.error) throw new Error(stepResponse.error.message)
-  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-  if (projectionResponse.error) throw new Error(projectionResponse.error.message)
-  if (eventResponse.error) throw new Error(eventResponse.error.message)
+  if (workflowResponse.error) throw postgrestResponseError(workflowResponse, 'Failed to load screenplay animatic workflows.')
+  if (runResponse.error) throw postgrestResponseError(runResponse, 'Failed to load screenplay animatic workflow runs.')
+  if (stepResponse.error) throw postgrestResponseError(stepResponse, 'Failed to load screenplay animatic workflow steps.')
+  if (artifactResponse.error) throw postgrestResponseError(artifactResponse, 'Failed to load screenplay animatic artifacts.')
+  if (projectionResponse.error) throw postgrestResponseError(projectionResponse, 'Failed to load screenplay animatic progress projections.')
+  if (eventResponse.error) throw postgrestResponseError(eventResponse, 'Failed to load screenplay animatic events.')
 
   const workflows = ((workflowResponse.data ?? []) as OutputWorkflowRow[]).map(mapOutputWorkflowRow)
   const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
@@ -10202,6 +10343,7 @@ export async function loadOutputProgress(input: {
     className: 'output-status',
     key: `output-progress:${input.projectId}:${input.draftId}:${requestIds.join(',')}`,
     ttlMs: 500,
+    retryPolicy: { attempts: 3, baseDelayMs: 900, maxDelayMs: 6000, retryTransient: true },
     fn: async () => {
       const [requestResponse, projectionResponse] = await Promise.all([
         supabase
@@ -10217,8 +10359,8 @@ export async function loadOutputProgress(input: {
           .eq('draft_id', input.draftId)
           .in('request_id', requestIds),
       ])
-      if (requestResponse.error) throw new Error(requestResponse.error.message)
-      if (projectionResponse.error) throw new Error(projectionResponse.error.message)
+      if (requestResponse.error) throw postgrestResponseError(requestResponse, 'Failed to load output request progress.')
+      if (projectionResponse.error) throw postgrestResponseError(projectionResponse, 'Failed to load output status projections.')
 
       const requestsBeforeProjection = ((requestResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
       const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map(mapOutputRequestStatusProjectionRow)

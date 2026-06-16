@@ -28,6 +28,11 @@ import {
   sequenceAnimaticGraphSpecVersion,
   sequenceAnimaticStableHash,
 } from '../_shared/sequence-animatic-workflow-factory.ts'
+import {
+  sanitizeSequenceAnimaticSpatialNodeFields,
+  sequenceAnimaticSpatialForbiddenNamesFromShots,
+  sequenceAnimaticSpatialPromptPolicyVersion,
+} from '../../../src/domain/sequenceAnimaticSpatialPrompt.ts'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -442,7 +447,17 @@ Deno.serve(async (request) => {
       batchKind = 'parent_child_scaffold_grid'
       batchParentId = parentNodeId
     }
-    const allReferenceAssetKeys = [...new Set([...referenceAssetKeys, ...batchSiblingReferenceAssetKeys, ...worldReferenceAssetKeys])].slice(0, 8)
+    const parentReferenceAssetKeys = batchParentId
+      ? [readText(asRecord(assetStates[batchParentId]).assetKey)].filter(Boolean)
+      : []
+    if (
+      resolvedTargetNodes.length > 1
+      && (batchKind === 'spot_grid' || batchKind === 'viewpoint_grid')
+      && parentReferenceAssetKeys.length === 0
+    ) {
+      throw new HttpError(409, `Generate parent continuity asset first: ${batchParentId || 'parent spatial node'}.`)
+    }
+    const allReferenceAssetKeys = [...new Set([...referenceAssetKeys, ...parentReferenceAssetKeys, ...batchSiblingReferenceAssetKeys, ...worldReferenceAssetKeys])].slice(0, 8)
     const referenceEntities = allReferenceAssetKeys.map((assetKey) => assetEntityForKey(assetKey, `${readText(targetNode.name) || payload.nodeId} dependency`))
     const augmentedAssetPack = {
       ...assetPack,
@@ -470,6 +485,8 @@ Deno.serve(async (request) => {
       const generationPolicy = isParentChildScaffold ? 'parent_child_scaffold_grid' : 'manual_sibling_grid'
       const cellRoles = isParentChildScaffold ? ['parent', ...batchTargetIds.slice(1).map(() => 'child')] : batchTargetIds.map(() => 'sibling')
       const layout = continuityBatchLayoutForTargetCount(batchTargetIds.length)
+      const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(relevantShots)
+      const sanitizedPromptNodes = resolvedTargetNodes.map((node) => sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames }))
       const batch = {
         batchId: `${isParentChildScaffold ? 'manual_scaffold' : 'manual'}_${batchKind}_${slugify(batchParentId)}_${sequenceAnimaticStableHash(batchTargetIds).slice(0, 8)}`,
         batchKind,
@@ -484,8 +501,10 @@ Deno.serve(async (request) => {
         generationPolicy,
       }
       const batchInputHash = sequenceAnimaticStableHash({
+        spatialPromptPolicyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
         batch,
         targetNodes: resolvedTargetNodes,
+        sanitizedPromptNodes,
         relevantShotIds: relevantShots.map((shot) => readText(shot.id)),
         referenceAssetKeys: allReferenceAssetKeys,
         manifestHash,
@@ -497,7 +516,25 @@ Deno.serve(async (request) => {
           && readScreenplayAnimaticRole(metadata) === 'continuity_asset_batch'
           && readText(metadata.continuityBatchIdentity) === continuityBatchIdentity
       }) ?? null
+      let existingBatchReusable = false
       if (existingBatch?.workflowId) {
+        existingBatchReusable = existingBatch.status === 'completed'
+          || existingBatch.status === 'queued'
+          || existingBatch.status === 'running'
+          || existingBatch.status === 'planning'
+        if (existingBatch.latestRunId) {
+          const existingRunResponse = await admin
+            .from('output_workflow_runs')
+            .select('id, status')
+            .eq('id', existingBatch.latestRunId)
+            .maybeSingle()
+          const existingRunStatus = readText(existingRunResponse.data?.status)
+          if (existingRunStatus === 'failed' || existingRunStatus === 'cancelled') {
+            existingBatchReusable = false
+          }
+        }
+      }
+      if (existingBatch?.workflowId && existingBatchReusable) {
         return json(sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
           ok: true,
           masterRequest,
@@ -536,6 +573,7 @@ Deno.serve(async (request) => {
         sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
         worldLocationRefId,
         parentNodeIds: sourceReferenceNodeIds,
+        spatialPromptPolicyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
       }
       const { nodes, edges } = buildSequenceAnimaticContinuityBatchWorkflowGraph({
         workflowId,
@@ -621,8 +659,15 @@ Deno.serve(async (request) => {
       }))
     }
 
+    const targetIsSpatial = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
+    const singleForbiddenNames = targetIsSpatial ? sequenceAnimaticSpatialForbiddenNamesFromShots(relevantShots) : []
+    const sanitizedPromptNode = targetIsSpatial
+      ? sanitizeSequenceAnimaticSpatialNodeFields(targetNode, { forbiddenNames: singleForbiddenNames })
+      : null
     const inputHash = sequenceAnimaticStableHash({
+      spatialPromptPolicyVersion: targetIsSpatial ? sequenceAnimaticSpatialPromptPolicyVersion : '',
       targetNode,
+      sanitizedPromptNode,
       relevantShotIds: relevantShots.map((shot) => readText(shot.id)),
       referenceAssetKeys: allReferenceAssetKeys,
       manifestHash,
@@ -683,6 +728,7 @@ Deno.serve(async (request) => {
       sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
       worldLocationRefId,
       parentNodeIds: dependencyEdges.filter((edge) => readText(edge.targetNodeId) === payload.nodeId).map((edge) => readText(edge.sourceNodeId)).filter(Boolean),
+      spatialPromptPolicyVersion: targetIsSpatial ? sequenceAnimaticSpatialPromptPolicyVersion : '',
     }
     const { nodes, edges } = buildSequenceAnimaticContinuityAssetWorkflowGraph({
       workflowId,

@@ -1,5 +1,10 @@
-import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
-import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import {
+  createAdminClient,
+  requireUserClient } from '../_shared/auth.ts'
+import { errorResponse,
+  HttpError,
+  json,
+  maybeHandleOptions } from '../_shared/http.ts'
 import {
   mapOutputRequestRow,
   mapOutputWorkflowEdgeRow,
@@ -10,12 +15,14 @@ import {
   outputWorkflowEdgeSelect,
   outputWorkflowNodeSelect,
   resolveSequenceAnimaticCombinedManifest,
-} from '../_shared/output-workflow.ts'
+  } from '../_shared/output-workflow.ts'
+import {
+  sequenceAnimaticGraphSpecVersion,
+  sequenceAnimaticStableHash
+} from '../_shared/sequence-animatic-workflow-factory.ts'
 import {
   buildSequenceAnimaticShotCoverageIntentWorkflowGraph,
-  sequenceAnimaticGraphSpecVersion,
-  sequenceAnimaticStableHash,
-} from '../_shared/sequence-animatic-workflow-factory.ts'
+} from '../_shared/sequence-animatic-scene-board-workflows.ts'
 import {
   sequenceAnimaticShotCoverageIntentEnsureRequestSchema,
   sequenceAnimaticShotCoverageIntentEnsureResponseSchema,

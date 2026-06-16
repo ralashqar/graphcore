@@ -582,8 +582,11 @@ Deno.serve(async (request) => {
     const debugSkipVideoGeneration = payload.debugSkipVideoGeneration ?? true
     const cinematicReferenceMode = payload.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
     const cinematicV2AnimaticMode = payload.cinematicV2AnimaticMode ?? 'fast_panels'
+    if (cinematicOutput && (payload.cinematicPipelineVersion === 'v1_take_blocks' || payload.cinematicPipelineVersion === 'v2_shot_orchestration')) {
+      throw new HttpError(400, 'Legacy cinematic pipelines v1_take_blocks and v2_shot_orchestration are retired for new requests. Use the current screenplay animatic pipeline.')
+    }
     const cinematicPipelineVersion = payload.cinematicPipelineVersion
-      ?? (cinematicOutput ? 'v3_script_storyboards' : 'v1_take_blocks')
+      ?? (cinematicOutput ? 'v3_script_storyboards' : undefined)
     if (
       !sequenceAnimaticMode
       && cinematicOutput
