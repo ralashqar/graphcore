@@ -42,6 +42,12 @@ import {
   sequenceAnimaticContinuityWorkflowEnsureRequestSchema,
   sequenceAnimaticKeyframeWorkflowEnsureResponseSchema,
   sequenceAnimaticShotProductionGraphEnsureResponseSchema,
+  sequenceAnimaticShotCoverageIntentEnsureRequestSchema,
+  sequenceAnimaticShotCoverageIntentEnsureResponseSchema,
+  sequenceAnimaticSceneGraphNodeUpdateRequestSchema,
+  sequenceAnimaticSceneGraphOverridesSchema,
+  sequenceAnimaticZoneCoverageBoardEnsureRequestSchema,
+  sequenceAnimaticZoneCoverageBoardEnsureResponseSchema,
   sequenceAnimaticShotRevisionArtifactV1Schema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
   sequenceAnimaticStateResponseSchema,
@@ -59,6 +65,8 @@ import {
   buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityWorkflowGraph,
   buildSequenceAnimaticShotProductionWorkflowGraph,
+  buildSequenceAnimaticShotCoverageIntentWorkflowGraph,
+  buildSequenceAnimaticZoneCoverageBoardWorkflowGraph,
   buildSequenceAnimaticShotRevisionWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
 } from '../../supabase/functions/_shared/sequence-animatic-workflow-factory.ts'
@@ -114,6 +122,35 @@ async function importSharedOutputWorkflow<T>(t: TestContext): Promise<T | null> 
     throw error
   }
 }
+
+test('sequence animatic scene graph override schemas preserve authoring fields', () => {
+  const request = sequenceAnimaticSceneGraphNodeUpdateRequestSchema.parse({
+    projectId: 'project_1',
+    draftId: 'draft_1',
+    masterRequestId: 'request_1',
+    nodeId: 'spot_bridge',
+    nodeKind: 'spot',
+    visualBriefOverride: '  rain-slick bridge landing with lantern spill  ',
+    extraPromptDirection: 'Favor a wider usable staging plate.',
+  })
+  assert.equal(request.visualBriefOverride, 'rain-slick bridge landing with lantern spill')
+  assert.equal(request.extraPromptDirection, 'Favor a wider usable staging plate.')
+
+  const overrides = sequenceAnimaticSceneGraphOverridesSchema.parse({
+    nodes: {
+      spot_bridge: {
+        nodeId: 'spot_bridge',
+        nodeKind: 'spot',
+        visualBriefOverride: request.visualBriefOverride,
+        extraPromptDirection: request.extraPromptDirection,
+        previousAssetKeys: ['asset_old'],
+      },
+    },
+  })
+  assert.equal(overrides.version, 'sequence_animatic_scene_graph_overrides_v1')
+  assert.equal(overrides.nodes.spot_bridge?.visualBriefOverride, 'rain-slick bridge landing with lantern spill')
+  assert.deepEqual(overrides.nodes.spot_bridge?.previousAssetKeys, ['asset_old'])
+})
 
 test('output activity monitor treats compatibility terminal statuses as inactive', () => {
   assert.equal(isTerminalOutputActivityStatus('completed'), true)
@@ -1449,7 +1486,7 @@ test('sequence animatic UI recognizes screenplay role metadata for generated chi
   assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'continuity_pack'/)
   assert.match(worldGraphPageSource, /role === 'shot_keyframe' \|\| role === 'shot_production'/)
   assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'coverage_anchor'/)
-  assert.match(worldGraphPageSource, /readOutputRequestScreenplayAnimaticRole\(request\) === 'continuity_asset'/)
+  assert.match(worldGraphPageSource, /role === 'continuity_asset' \|\| role === 'continuity_asset_batch'/)
   assert.doesNotMatch(worldGraphPageSource, /const plannedKeyframeRequests = input\.requests\s+\.filter\(\(request\) => readLooseRecord\(request\.metadata\)\.sequenceAnimaticRole === 'shot_keyframe'\)/)
 })
 
@@ -1577,6 +1614,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   }).blockState.status, 'deriving')
   assert.equal(sequenceAnimaticGraphRoleSchema.parse('continuity_asset'), 'continuity_asset')
   assert.equal(sequenceAnimaticGraphRoleSchema.parse('continuity_asset_batch'), 'continuity_asset_batch')
+  assert.equal(sequenceAnimaticGraphRoleSchema.parse('coverage_intent_batch'), 'coverage_intent_batch')
   assert.equal(sequenceAnimaticContinuityAssetBatchSchema.parse({
     batchId: 'batch_angle_zone_console',
     batchKind: 'angle_grid',
@@ -2073,7 +2111,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
     ],
     coverageSetup: { id: 'setup_a', title: 'Wide reveal', stagingBrief: 'Ava enters through the lab door.' },
     coverageShots: [{ id: 'shot_001', title: 'Reveal' }],
-    coverageReferenceAssetKeys: ['spot_sheet'],
+    coverageReferenceAssetKeys: ['ava_sheet', 'spot_sheet'],
     dependencyMode: 'single_node_chain',
     editorialDurationSeconds: 4,
     providerDurationSeconds: 5,
@@ -2091,7 +2129,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.ok(nodeKeys.includes('planned_keyframe_artifact'))
   assert.ok(nodeKeys.includes('shot_video_artifact'))
   const coverageAnchorInput = graph.nodes.find((node) => node.key === 'coverage_anchor_input')
-  assert.deepEqual((coverageAnchorInput?.config.assetPack as { entities?: unknown[] } | undefined)?.entities, [])
+  assert.deepEqual((coverageAnchorInput?.config as { referenceAssetKeys?: string[] } | undefined)?.referenceAssetKeys, ['ava_sheet', 'spot_sheet'])
   assert.equal((coverageAnchorInput?.config as { globalAssetIdentityKey?: string } | undefined)?.globalAssetIdentityKey, 'coverageAnchorScopeKey')
   assert.equal((coverageAnchorInput?.config as { globalAssetIdentityValue?: string } | undefined)?.globalAssetIdentityValue, 'setup_a_spot_lab_ava')
   const continuitySetInput = graph.nodes.find((node) => node.key === 'continuity_set_lab_input')
@@ -2131,6 +2169,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   const workflowFactorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const repositorySource = readFileSync(resolve(repoRoot, 'src/data/graphcoreRepository.ts'), 'utf8')
   const pruneMigrationSource = readFileSync(resolve(repoRoot, 'supabase/migrations/20260613224408_prune_obsolete_child_workflow_graph_nodes.sql'), 'utf8')
   assert.match(keyframeEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
   assert.match(shotGraphEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
@@ -2196,6 +2235,13 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(keyframeEnsureSource, /scopedExistingShotRequest/)
   assert.match(keyframeEnsureSource, /shotKeyframeRequests = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'/)
   assert.match(keyframeEnsureSource, /responseWorkflowIds/)
+  assert.match(shotGraphEnsureSource, /function prioritizedEntityAssetKeys/)
+  assert.match(shotGraphEnsureSource, /const primaryKeys = uniqueTexts\(entities\.map\(preferredEntityAssetKey\)\)/)
+  assert.match(shotGraphEnsureSource, /coverageReferenceAssetKeys: scopedRefs\.requiredReferenceAssetKeys/)
+  assert.match(keyframeEnsureSource, /function prioritizedEntityAssetKeys/)
+  assert.match(keyframeEnsureSource, /graphLocalReferenceKeysForShotProduction/)
+  assert.match(keyframeEnsureSource, /\['entity_reference', 'continuity_asset'\]\.includes\(readText\(entry\.role\)\)/)
+  assert.match(keyframeEnsureSource, /coverageReferenceAssetKeys: requiredReferenceAssetKeys/)
   assert.match(workerSource, /sequence_animatic_shared_asset_ref/)
   assert.match(workflowFactorySource, /world_context_ref/)
   assert.match(workflowFactorySource, /sequence_animatic_continuity_asset_spatial/)
@@ -2269,13 +2315,38 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(pageSource, /forceRefresh: refresh/)
   assert.match(pageSource, /handleRegenerateSequenceAnimaticSceneCoverageAnchors/)
   assert.match(pageSource, /Regenerate scene coverage/)
+  assert.match(pageSource, /SequenceAnimaticSceneBoardCanvas/)
+  assert.match(pageSource, /buildSequenceAnimaticSceneBoardView/)
+  assert.match(pageSource, /buildSequenceAnimaticSceneBoardPrepView/)
+  assert.match(pageSource, /const estimateGroupHeight = \(group: SequenceAnimaticSceneBoardGroup\)/)
+  assert.match(pageSource, /const rowHeights = groupMetrics\.reduce<number\[\]>/)
+  assert.match(pageSource, /const y = rowOffsets\[row\] \?\? 42/)
+  assert.match(pageSource, /minHeight: height/)
+  assert.match(pageSource, /sequenceAnimaticSceneBoardZoneScopeForNode/)
+  assert.match(pageSource, /handlePrepareSequenceAnimaticSceneBoardContinuity/)
+  assert.match(pageSource, /Prepare Selected Board/)
+  assert.match(pageSource, /Continuity Prep/)
+  assert.match(pageSource, /prepUnits/)
+  assert.match(pageSource, /SequenceAnimaticSceneBoardPrepUnit/)
+  assert.match(pageSource, /sequenceAnimaticSceneBoardScaffoldGroupsForUnit/)
+  assert.match(pageSource, /startSequenceAnimaticContinuityAssetRunGroups/)
+  assert.match(pageSource, /startSequenceAnimaticZoneCoverageBoardRuns/)
+  assert.match(pageSource, /scaffoldGroups\.length/)
+  assert.match(pageSource, /index < targets\.length; index \+= 4/)
+  assert.match(pageSource, /index < group\.length; index \+= 9/)
+  assert.match(pageSource, /Math\.ceil\(coverageShots\.length \/ 9\)/)
+  assert.match(pageSource, /Scene Board/)
+  assert.match(pageSource, /Open Scene Board/)
+  assert.match(repositorySource, /setId: request\.setId \?\? null/)
+  assert.match(repositorySource, /zoneId: request\.zoneId \?\? null/)
   assert.match(pageSource, /forceRefresh: true/)
   assert.match(pageSource, /runIntent: 'generate_keyframes'/)
   assert.doesNotMatch(pageSource, /runIntent: 'regenerate_scene_coverage_anchors'/)
-  assert.match(pageSource, /runMode: 'sequence_animatic_shot_production_coverage_anchor'/)
-  assert.match(pageSource, /targetNodeKeys: \[\.\.\.sequenceAnimaticCoverageAnchorTargetNodeKeys\]/)
-  assert.match(pageSource, /forceNodeKeys: \[\.\.\.sequenceAnimaticCoverageAnchorForceNodeKeys\]/)
-  assert.match(pageSource, /const preparedShotRuns/)
+  assert.match(pageSource, /onEnsureSequenceAnimaticZoneCoverageBoards/)
+  assert.match(pageSource, /runMode: 'sequence_animatic_zone_coverage_board'/)
+  assert.match(pageSource, /targetNodeKeys: \[\.\.\.sequenceAnimaticZoneCoverageBoardTargetNodeKeys\]/)
+  assert.match(pageSource, /forceNodeKeys: \[\.\.\.sequenceAnimaticZoneCoverageBoardForceNodeKeys\]/)
+  assert.doesNotMatch(pageSource, /const preparedShotRuns/)
   assert.doesNotMatch(pageSource, /representativeByCoverageSetupId/)
   assert.match(pageSource, /shotProductionCoverageRunBySetupId/)
   assert.match(pageSource, /shotProductionCoverageRunByShotId/)
@@ -2400,6 +2471,305 @@ test('sequence animatic keyframe ensure supports shot-scoped next actions', () =
   assert.match(migrationSource, /output_requests_seq_anim_shot_production_lookup_idx/)
   assert.match(migrationSource, /output_requests_seq_anim_continuity_asset_lookup_idx/)
   assert.match(migrationSource, /output_requests_seq_anim_continuity_batch_lookup_idx/)
+})
+
+test('sequence animatic zone coverage boards generate 3x3 reusable coverage cells', () => {
+  const scopedRequest = sequenceAnimaticZoneCoverageBoardEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    sceneId: 'scene_001',
+    setId: 'set_marsh',
+    zoneId: 'zone_path',
+    forceRefresh: true,
+  })
+  assert.equal(scopedRequest.zoneId, 'zone_path')
+
+  const graph = buildSequenceAnimaticZoneCoverageBoardWorkflowGraph({
+    workflowId: 'workflow-zone-board',
+    draftId: 'draft-1',
+    commonConfig: {
+      masterRequestId: 'request-master',
+      sceneId: 'scene_001',
+      setId: 'set_marsh',
+      zoneId: 'zone_path',
+      chunkIndex: 0,
+      sourceHash: 'hash-zone-board',
+    },
+    board: {
+      id: 'board-1',
+      sceneId: 'scene_001',
+      setId: 'set_marsh',
+      zoneId: 'zone_path',
+      chunkIndex: 0,
+      shotIds: ['shot_001', 'shot_002'],
+    },
+    shots: [
+      { id: 'shot_001', title: 'Shot 1', action: 'Kaji crosses the reeds.', camera: { framing: 'wide' } },
+      { id: 'shot_002', title: 'Shot 2', action: 'Rin turns toward bells.', camera: { framing: 'medium' } },
+    ],
+    coverageCells: [
+      { shotId: 'shot_001', coverageSetupId: 'setup-1', coverageAnchorScopeKey: 'scope-1' },
+      { shotId: 'shot_002', coverageSetupId: 'setup-2', coverageAnchorScopeKey: 'scope-2' },
+    ],
+    assetPack: { entities: [] },
+    referenceAssetKeys: [],
+  })
+
+  const nodeKeys = new Set(graph.nodes.map((node) => node.key))
+  assert.ok(nodeKeys.has('zone_coverage_board_input'))
+  assert.ok(nodeKeys.has('zone_coverage_board_brief'))
+  assert.ok(nodeKeys.has('zone_coverage_board_prompt'))
+  assert.ok(nodeKeys.has('zone_coverage_board_image'))
+  assert.ok(nodeKeys.has('zone_coverage_board_extract'))
+  assert.ok(nodeKeys.has('zone_coverage_board_artifact'))
+  const imageNode = graph.nodes.find((node) => node.key === 'zone_coverage_board_image')
+  assert.deepEqual(imageNode?.config.imageSize, { width: 2304, height: 1296 })
+  assert.equal(imageNode?.config.planningOnly, true)
+  assert.deepEqual(imageNode?.config.gridLayout, { rows: 3, columns: 3, cellCount: 2 })
+  assert.match(JSON.stringify(graph.edges), /zone_coverage_board_prompt/)
+
+  const parsed = sequenceAnimaticZoneCoverageBoardEnsureResponseSchema.parse({
+    ok: true,
+    masterRequest: {
+      id: 'request-master',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      parentRequestId: null,
+      workflowId: 'workflow-master',
+      latestRunId: null,
+      requestedBy: null,
+      sourceSurface: 'wiki_sequence_unit',
+      prompt: '',
+      title: 'Master',
+      intent: 'output_generation',
+      outputKind: 'cinematic_episode',
+      status: 'awaiting_confirmation',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      pageCount: null,
+      targetFormat: 'video',
+      plannerNotes: '',
+      errorMessage: null,
+      metadata: { screenplayAnimaticRole: 'master' },
+      createdAt: '',
+      updatedAt: '',
+    },
+    boardRequests: [],
+    workflows: [],
+    nodes: [],
+    edges: [],
+    zoneCoverageBoards: [{ id: 'board-1' }],
+    coverageCellByShotId: { shot_001: { boardId: 'board-1' } },
+    cacheStatus: 'created',
+    sceneId: 'scene_001',
+  })
+  assert.equal(parsed.sceneId, 'scene_001')
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-zone-coverage-boards/index.ts'), 'utf8')
+  const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+
+  assert.match(workerSource, /sequence_animatic_zone_coverage_board_brief/)
+  assert.match(workerSource, /sequence_animatic_zone_coverage_board_prompt/)
+  assert.match(workerSource, /sequence_animatic_zone_coverage_board_extract/)
+  assert.match(workerSource, /extractedCellSet/)
+  assert.match(workerSource, /entry\.key\.includes\('extract'\)/)
+  assert.match(workerSource, /sourceArtifactRole: 'sequence_animatic_zone_coverage_cell'/)
+  assert.match(workerSource, /role: 'sequence_animatic_coverage_anchor'/)
+  assert.match(workerSource, /zone_camera_grid_cell/)
+  assert.match(workerSource, /location_camera_plate_v1/)
+  assert.match(workerSource, /Project art style lock/)
+  assert.match(workerSource, /User-edited scene graph direction/)
+  assert.match(workerSource, /sceneGraphOverrides/)
+  assert.match(workerSource, /No people, no characters, no silhouettes/)
+  assert.match(workerSource, /Do not use a cartoony\/sketch\/comic\/storyboard style/)
+  assert.doesNotMatch(workerSource, /wide storyboard-style labeled blockout plate/)
+  assert.doesNotMatch(workerSource, /Labels\/placeholders/)
+  assert.match(workerSource, /sequenceAnimaticZoneCoverageRegistry/)
+  assert.match(ensureSource, /chunk\(entries, 9\)/)
+  assert.match(ensureSource, /scopeSetId/)
+  assert.match(ensureSource, /scopeZoneId/)
+  assert.match(ensureSource, /sceneId \+ setId \+ zoneId|setId.*zoneId/s)
+  assert.match(ensureSource, /resolveSequenceAnimaticCombinedManifest/)
+  assert.match(ensureSource, /combinedSceneShots/)
+  assert.match(ensureSource, /readySceneIds: combinedReadySceneIds/)
+  assert.match(ensureSource, /requestedShotIds = readStringArray\(payload\.shotIds\)/)
+  assert.match(ensureSource, /shotIds: requestedShotIds/)
+  assert.match(ensureSource, /shotBindings = asRecord\(directorPlan\.shotBindings/)
+  assert.match(ensureSource, /rawShotBinding = asRecord\(shotBindings\[shotId\]\)/)
+  assert.match(ensureSource, /applyContinuityAssetStatesToNodes/)
+  assert.match(ensureSource, /continuityAssetArtifactsResponse/)
+  assert.match(ensureSource, /locationReferenceAssetKeys: readStringArray\(entry\.assetPack\.scopedReferenceAssetKeys\)/)
+  assert.match(ensureSource, /matchingChildIsActive/)
+  assert.match(ensureSource, /ZoneCoverageHttpError/)
+  assert.match(ensureSource, /availableZoneIds/)
+  assert.match(ensureSource, /zone_camera_coverage_grid_v3/)
+  assert.match(ensureSource, /coverageCellScopeKey/)
+  assert.match(ensureSource, /sceneGraphOverridesForSpatialScope/)
+  assert.match(ensureSource, /sceneGraphOverrides/)
+  assert.match(ensureSource, /locationAssetPackForShot/)
+  assert.doesNotMatch(ensureSource, /subjectLabelsForShot/)
+  assert.match(ensureSource, /buildSequenceAnimaticZoneCoverageBoardWorkflowGraph/)
+  assert.doesNotMatch(ensureSource, /Prepare the shot graphs for this scene before generating zone coverage boards/)
+  assert.doesNotMatch(pageSource, /preparedShotGraphCount/)
+  assert.match(pageSource, /runMode: 'sequence_animatic_zone_coverage_board'/)
+  assert.match(pageSource, /zoneCoverageCellByShotId/)
+  assert.match(pageSource, /zoneCoverageActiveShotIds/)
+  assert.match(pageSource, /zoneCoverageCellRunning/)
+  assert.match(pageSource, /const zoneCoverageCellReady = Boolean\(zoneCoverageCell\?\.assetKey\)/)
+  assert.match(pageSource, /const zoneCoverageCellRunning = !zoneCoverageCellReady && zoneCoverageActiveShotIds\.has\(shotId\)/)
+  assert.match(pageSource, /const zoneCoverageCellFailed = !zoneCoverageCellReady && zoneCoverageFailedShotIds\.has\(shotId\)/)
+  assert.match(pageSource, /const coveragePanelAssetKey = zoneCoverageCell\?\.assetKey \?\? shotCoverageAnchor\?\.assetKey \?\? null/)
+  assert.match(pageSource, /const coveragePanelUrl = zoneCoverageCell\?\.assetUrl \?\? shotCoverageAnchor\?\.assetUrl \?\? null/)
+  assert.match(pageSource, /sequenceAnimaticShotPreviewEyebrow/)
+  assert.match(pageSource, /Coverage grid cell/)
+  assert.match(pageSource, /role === 'continuity_asset' \|\| role === 'continuity_asset_batch'/)
+  assert.match(pageSource, /Coverage grid cell ready/)
+  assert.match(pageSource, /options: \{ forceRefresh\?: boolean \} = \{\}/)
+  assert.match(pageSource, /forceRefresh: options\.forceRefresh \?\? false/)
+  assert.match(pageSource, /candidate\.shots\.filter\(\(tile\) => !tile\.shot\.isProvisional\)\.every\(\(tile\) => tile\.coverageReady\)/)
+  assert.match(pageSource, /sequenceAnimaticRequestIsActive\(request, existingRun\)/)
+  assert.doesNotMatch(pageSource, /candidate\.missingCoverageCount === 0 \|\| candidate\.shots\.some\(\(tile\) => tile\.coverageReady\)/)
+  assert.match(pageSource, /slice\(0, 8\)/)
+  assert.match(pageSource, /index \+= 9/)
+  assert.doesNotMatch(pageSource, /runMode: 'sequence_animatic_shot_production_coverage_anchor'[\s\S]*handleRegenerateSequenceAnimaticSceneCoverageAnchors/)
+})
+
+test('sequence animatic coverage intent batches support fresh scene board coverage grids', () => {
+  const request = sequenceAnimaticShotCoverageIntentEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    sceneId: 'scene_001',
+    setId: 'set_marsh',
+    zoneId: 'zone_path',
+    shotIds: ['shot_001', 'shot_002'],
+  })
+  assert.deepEqual(request.shotIds, ['shot_001', 'shot_002'])
+
+  const graph = buildSequenceAnimaticShotCoverageIntentWorkflowGraph({
+    workflowId: 'workflow-coverage-intent',
+    draftId: 'draft-1',
+    commonConfig: {
+      masterRequestId: 'request-master',
+      sceneId: 'scene_001',
+      setId: 'set_marsh',
+      zoneId: 'zone_path',
+      coverageIntentBatchId: 'batch-1',
+      sourceHash: 'hash-intent',
+    },
+    intentBatch: {
+      id: 'batch-1',
+      sceneId: 'scene_001',
+      setId: 'set_marsh',
+      zoneId: 'zone_path',
+      shotIds: ['shot_001', 'shot_002'],
+      sourceHash: 'hash-intent',
+    },
+    shots: [
+      { id: 'shot_001', title: 'Shot 1', action: 'Kaji crosses the reeds.', camera: { framing: 'wide' } },
+      { id: 'shot_002', title: 'Shot 2', action: 'Rin turns toward bells.', camera: { framing: 'medium' } },
+    ],
+    assetPack: { entities: [] },
+  })
+  const nodeKeys = new Set(graph.nodes.map((node) => node.key))
+  assert.ok(nodeKeys.has('coverage_intent_input'))
+  assert.ok(nodeKeys.has('coverage_intent_plan'))
+  assert.ok(nodeKeys.has('coverage_intent_artifact'))
+  assert.match(JSON.stringify(graph.edges), /coverage_intent_plan/)
+
+  const parsed = sequenceAnimaticShotCoverageIntentEnsureResponseSchema.parse({
+    ok: true,
+    masterRequest: {
+      id: 'request-master',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      parentRequestId: null,
+      workflowId: 'workflow-master',
+      latestRunId: null,
+      requestedBy: null,
+      sourceSurface: 'wiki_sequence_unit',
+      prompt: '',
+      title: 'Master',
+      intent: 'output_generation',
+      outputKind: 'cinematic_episode',
+      status: 'awaiting_confirmation',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      pageCount: null,
+      targetFormat: 'video',
+      plannerNotes: '',
+      errorMessage: null,
+      metadata: { screenplayAnimaticRole: 'master' },
+      createdAt: '',
+      updatedAt: '',
+    },
+    intentRequest: {
+      id: 'request-intent',
+      projectId: 'project-1',
+      draftId: 'draft-1',
+      parentRequestId: 'request-master',
+      workflowId: 'workflow-coverage-intent',
+      latestRunId: null,
+      requestedBy: null,
+      sourceSurface: 'wiki_sequence_unit',
+      prompt: '',
+      title: 'Coverage Directions',
+      intent: 'output_generation',
+      outputKind: 'cinematic_episode',
+      status: 'awaiting_confirmation',
+      selectedEntityKeys: [],
+      selectedSequenceUnitKeys: [],
+      pageCount: null,
+      targetFormat: 'markdown',
+      plannerNotes: '',
+      errorMessage: null,
+      metadata: { screenplayAnimaticRole: 'coverage_intent_batch' },
+      createdAt: '',
+      updatedAt: '',
+    },
+    workflow: null,
+    nodes: [],
+    edges: [],
+    coverageIntentByShotId: {
+      shot_001: {
+        shotId: 'shot_001',
+        sceneId: 'scene_001',
+        setId: 'set_marsh',
+        zoneId: 'zone_path',
+        coverageIntent: 'Wide establishing coverage.',
+      },
+    },
+    cacheStatus: 'created',
+    sceneId: 'scene_001',
+    shotIds: ['shot_001', 'shot_002'],
+  })
+  assert.equal(parsed.coverageIntentByShotId.shot_001.coverageIntent, 'Wide establishing coverage.')
+
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const workflowFactorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
+  const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-shot-coverage-intents/index.ts'), 'utf8')
+  const zoneEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-zone-coverage-boards/index.ts'), 'utf8')
+  const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+
+  assert.doesNotMatch(workflowFactorySource, /llm_structured/)
+  assert.doesNotMatch(workflowFactorySource, /resourceClass:\s*['"]text['"]/)
+  assert.match(workflowFactorySource, /resourceClass:\s*['"]llm['"], groupKey: ['"]sequence_animatic_zone_coverage_board_brief/)
+  assert.match(workflowFactorySource, /resourceClass:\s*['"]llm['"], groupKey: ['"]sequence_animatic_coverage_intent_plan/)
+  assert.match(workerSource, /sequence_animatic_coverage_intent_plan/)
+  assert.match(workerSource, /coverageIntentByShotId/)
+  assert.match(workerSource, /sequenceAnimaticZoneCoverageRegistry/)
+  assert.match(ensureSource, /buildSequenceAnimaticShotCoverageIntentWorkflowGraph/)
+  assert.match(ensureSource, /coverageIntentBatchId/)
+  assert.match(ensureSource, /sequenceAnimaticStableHash/)
+  assert.match(zoneEnsureSource, /coverageIntentByShotId/)
+  assert.match(zoneEnsureSource, /coverageIntentText/)
+  assert.match(zoneEnsureSource, /coverageIntent: asRecord/)
+  assert.match(pageSource, /coverage_directions/)
+  assert.match(pageSource, /startSequenceAnimaticCoverageIntentRuns/)
+  assert.match(pageSource, /Planning coverage/)
+  assert.match(pageSource, /Coverage direction ready/)
 })
 
 test('prompt-created cinematics can use screenplay animatic master mode', () => {

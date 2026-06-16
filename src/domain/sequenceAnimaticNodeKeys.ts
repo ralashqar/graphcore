@@ -20,6 +20,13 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   continuityBatchImage: 'continuity_batch_image',
   continuityBatchExtract: 'continuity_batch_extract',
   continuityBatchArtifact: 'continuity_batch_artifact',
+  // Scene-level zone coverage board workflow
+  zoneCoverageBoardInput: 'zone_coverage_board_input',
+  zoneCoverageBoardBrief: 'zone_coverage_board_brief',
+  zoneCoverageBoardPrompt: 'zone_coverage_board_prompt',
+  zoneCoverageBoardImage: 'zone_coverage_board_image',
+  zoneCoverageBoardExtract: 'zone_coverage_board_extract',
+  zoneCoverageBoardArtifact: 'zone_coverage_board_artifact',
   // Coverage anchor workflow
   coverageAnchorBrief: 'coverage_anchor_brief',
   coverageAnchorPrompt: 'coverage_anchor_prompt',
@@ -68,6 +75,19 @@ export const sequenceAnimaticContinuityAssetTargetNodeKeys = [
 
 export const sequenceAnimaticContinuityBatchTargetNodeKeys = [
   SEQUENCE_ANIMATIC_NODE_KEYS.continuityBatchArtifact,
+] as const
+
+/** Force/target node lists for scene-level zone coverage boards. */
+export const sequenceAnimaticZoneCoverageBoardTargetNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardArtifact,
+] as const
+
+export const sequenceAnimaticZoneCoverageBoardForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardBrief,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardPrompt,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardImage,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardExtract,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardArtifact,
 ] as const
 
 /** Force/target node lists for coverage anchors, keyframes, and shot video runs. */

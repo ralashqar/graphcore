@@ -199,6 +199,12 @@ import {
   sequenceAnimaticKeyframeWorkflowEnsureResponseSchema,
   sequenceAnimaticShotProductionGraphEnsureRequestSchema,
   sequenceAnimaticShotProductionGraphEnsureResponseSchema,
+  sequenceAnimaticSceneGraphNodeUpdateRequestSchema,
+  sequenceAnimaticSceneGraphNodeUpdateResponseSchema,
+  sequenceAnimaticShotCoverageIntentEnsureRequestSchema,
+  sequenceAnimaticShotCoverageIntentEnsureResponseSchema,
+  sequenceAnimaticZoneCoverageBoardEnsureRequestSchema,
+  sequenceAnimaticZoneCoverageBoardEnsureResponseSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema,
   sequenceAnimaticStateRequestSchema,
@@ -230,6 +236,9 @@ import {
   type SequenceAnimaticContinuityWorkflowEnsureResponse,
   type SequenceAnimaticKeyframeWorkflowEnsureResponse,
   type SequenceAnimaticShotProductionGraphEnsureResponse,
+  type SequenceAnimaticSceneGraphNodeUpdateResponse,
+  type SequenceAnimaticShotCoverageIntentEnsureResponse,
+  type SequenceAnimaticZoneCoverageBoardEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNodeOutputResponse,
@@ -8888,6 +8897,86 @@ export async function ensureSequenceAnimaticShotProductionGraph(
   return parsed
 }
 
+export async function ensureSequenceAnimaticZoneCoverageBoards(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    sceneId: string
+    setId?: string | null
+    zoneId?: string | null
+    shotIds?: string[]
+    scopedShots?: Record<string, unknown>[]
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticZoneCoverageBoardEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic zone coverage boards.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic zone coverage boards require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticZoneCoverageBoardEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    sceneId: request.sceneId,
+    setId: request.setId ?? null,
+    zoneId: request.zoneId ?? null,
+    shotIds: request.shotIds ?? [],
+    scopedShots: request.scopedShots ?? [],
+    forceRefresh: request.forceRefresh ?? false,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-zone-coverage-boards',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticZoneCoverageBoardEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function ensureSequenceAnimaticShotCoverageIntents(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    sceneId: string
+    setId?: string | null
+    zoneId?: string | null
+    shotIds: string[]
+    scopedShots?: Record<string, unknown>[]
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticShotCoverageIntentEnsureResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic coverage directions.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic coverage directions require a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticShotCoverageIntentEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    sceneId: request.sceneId,
+    setId: request.setId ?? null,
+    zoneId: request.zoneId ?? null,
+    shotIds: request.shotIds,
+    scopedShots: request.scopedShots ?? [],
+    forceRefresh: request.forceRefresh ?? false,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'ensure-sequence-animatic-shot-coverage-intents',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticShotCoverageIntentEnsureResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
 export async function ensureSequenceAnimaticShotRevisionWorkflow(
   snapshot: ProjectSnapshot,
   request: {
@@ -10563,6 +10652,39 @@ export async function updateOutputWorkflowNode(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = outputWorkflowNodeUpdateResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function updateSequenceAnimaticSceneGraphNode(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    nodeId: string
+    nodeKind: 'world_location' | 'set' | 'zone' | 'spot' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
+    visualBriefOverride?: string
+    extraPromptDirection?: string
+    clearOverride?: boolean
+  },
+): Promise<SequenceAnimaticSceneGraphNodeUpdateResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before editing the animatic scene graph.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Animatic scene graph editing requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticSceneGraphNodeUpdateRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'update-sequence-animatic-scene-graph-node',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticSceneGraphNodeUpdateResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

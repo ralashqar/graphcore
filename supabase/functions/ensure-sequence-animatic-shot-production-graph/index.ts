@@ -63,6 +63,41 @@ function readScreenplayAnimaticSource(metadata: Record<string, unknown>, fallbac
   return source === 'prompt_cinematic' || source === 'wiki_sequence_unit' ? source : fallback
 }
 
+function sceneGraphOverrideForNode(metadata: Record<string, unknown>, nodeId: string) {
+  const overrides = asRecord(metadata.sequenceAnimaticSceneGraphOverrides ?? metadata.sequence_animatic_scene_graph_overrides)
+  const nodes = asRecord(overrides.nodes)
+  const override = asRecord(nodes[nodeId])
+  return {
+    visualBriefOverride: readText(override.visualBriefOverride),
+    extraPromptDirection: readText(override.extraPromptDirection),
+    lastGeneratedAssetKey: readText(override.lastGeneratedAssetKey),
+  }
+}
+
+function applySceneGraphOverrideToCoverageSetup(setup: Record<string, unknown>, override: ReturnType<typeof sceneGraphOverrideForNode>) {
+  if (!override.visualBriefOverride && !override.extraPromptDirection) return setup
+  return {
+    ...setup,
+    baseStagingBrief: readText(setup.stagingBrief ?? setup.staging_brief),
+    stagingBrief: override.visualBriefOverride || readText(setup.stagingBrief ?? setup.staging_brief),
+    staging_brief: override.visualBriefOverride || readText(setup.stagingBrief ?? setup.staging_brief),
+    sceneGraphOverride: override,
+    scene_graph_override: override,
+  }
+}
+
+function applySceneGraphOverrideToNode(node: Record<string, unknown>, override: ReturnType<typeof sceneGraphOverrideForNode>) {
+  if (!override.visualBriefOverride && !override.extraPromptDirection) return node
+  return {
+    ...node,
+    baseVisualBrief: readText(node.visualBrief) || readText(node.summary),
+    visualBrief: override.visualBriefOverride || readText(node.visualBrief),
+    summary: override.visualBriefOverride || readText(node.summary),
+    sceneGraphOverride: override,
+    scene_graph_override: override,
+  }
+}
+
 function artifactMetadataRecord(
   artifacts: readonly Record<string, unknown>[],
   roles: readonly string[],
@@ -108,6 +143,16 @@ function entityAssetKeys(entity: Record<string, unknown>) {
     readText(entity.selectedReferenceVariantAssetKey),
     ...readStringArray(entity.assetKeys),
   ])
+}
+
+function preferredEntityAssetKey(entity: Record<string, unknown>) {
+  return entityAssetKeys(entity)[0] ?? ''
+}
+
+function prioritizedEntityAssetKeys(entities: readonly Record<string, unknown>[], limit = 8) {
+  const primaryKeys = uniqueTexts(entities.map(preferredEntityAssetKey))
+  const extraKeys = uniqueTexts(entities.flatMap(entityAssetKeys).filter((assetKey) => !primaryKeys.includes(assetKey)))
+  return uniqueTexts([...primaryKeys, ...extraKeys]).slice(0, Math.max(1, limit))
 }
 
 function shotEntityRefIds(shot: Record<string, unknown>) {
@@ -665,7 +710,7 @@ function scopedAssetPackForShot(
   const shotRefIds = shotEntityRefIds(shot)
   const entityIds = new Set(shotRefIds)
   const entities = readArray(assetPack.entities).map(asRecord).filter((entity) => entityIds.has(readText(entity.key)))
-  const requiredReferenceAssetKeys = uniqueTexts(entities.flatMap(entityAssetKeys)).slice(0, 8)
+  const requiredReferenceAssetKeys = prioritizedEntityAssetKeys(entities, 8)
   return {
     assetPack: {
       ...assetPack,
@@ -934,7 +979,10 @@ Deno.serve(async (request) => {
         .eq('id', masterRequest.id)
       if (updateResponse.error) throw new Error(updateResponse.error.message)
     }
-    coverageSetup = nextSetupRecord
+    coverageSetup = applySceneGraphOverrideToCoverageSetup(
+      nextSetupRecord,
+      sceneGraphOverrideForNode(asRecord(masterRequest.metadata), coverageSetupId),
+    )
     sceneState = asRecord(deriveSequenceAnimaticSceneStates({ shots: mergedShots, coverageSetups: coverageRegistryNext.coverageSetups }).get(payload.shotId))
 
     const graph = asRecord(
@@ -1036,7 +1084,11 @@ Deno.serve(async (request) => {
       const worldReferenceKeys = targetWorldEntity ? entityAssetKeys(targetWorldEntity).slice(0, 2) : []
       return uniqueTexts([...siblingReferenceKeys, ...worldReferenceKeys]).slice(0, 8)
     }
-    const continuityDependencies = shotContinuityDependencyNodes().map((targetNode) => {
+    const continuityDependencies = shotContinuityDependencyNodes().map((rawTargetNode) => {
+      const targetNode = applySceneGraphOverrideToNode(
+        rawTargetNode,
+        sceneGraphOverrideForNode(asRecord(masterRequest.metadata), readText(rawTargetNode.id)),
+      )
       const targetNodeId = readText(targetNode.id)
       const referenceAssetKeys = referenceAssetKeysForTargets([targetNode])
       const relevantShots = relevantShotsForNodes([targetNode])
@@ -1081,6 +1133,15 @@ Deno.serve(async (request) => {
       }
     })
     const scopedRefs = scopedAssetPackForShot(assetPack, shot)
+    const zoneCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
+    const zoneCoverageCellByShotId = asRecord(zoneCoverageRegistry.coverageCellByShotId ?? zoneCoverageRegistry.coverage_cell_by_shot_id)
+    const zoneCoverageCell = asRecord(zoneCoverageCellByShotId[payload.shotId])
+    const zoneCoverageAnchorScopeKey = readText(zoneCoverageCell.coverageAnchorScopeKey ?? zoneCoverageCell.coverage_anchor_scope_key)
+    const zoneCoverageAnchorAssetKey = readText(zoneCoverageCell.assetKey ?? zoneCoverageCell.asset_key)
+    const zoneCoverageBoardId = readText(zoneCoverageCell.boardId ?? zoneCoverageCell.board_id)
+    const zoneCoverageAnchorSource = readText(zoneCoverageCell.coverageAnchorSource ?? zoneCoverageCell.coverage_anchor_source) || 'zone_camera_grid_cell'
+    const zoneCoverageAnchorScope = readText(zoneCoverageCell.coverageAnchorScope ?? zoneCoverageCell.coverage_anchor_scope) || zoneCoverageAnchorSource
+    const zoneCoverageRegistryRevision = Number(zoneCoverageRegistry.revision ?? 0) || 0
     const sourceReferenceHash = sequenceAnimaticVisualReferenceHash({
       shotId: payload.shotId,
       coverageSetupId,
@@ -1091,19 +1152,25 @@ Deno.serve(async (request) => {
       shotId: payload.shotId,
       shot,
       coverageSetupId,
+      sceneGraphOverride: asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override),
       coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
       sourceReferenceHash,
       coverageRegistryRevision: coverageRegistryNext.revision,
+      zoneCoverageRegistryRevision,
+      zoneCoverageAnchorScopeKey,
+      zoneCoverageAnchorAssetKey,
       coverageDecision: coverageResolution.coverageDecision,
       graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
     })
-    const coverageAnchorScopeKey = coverageSetupId ? sequenceAnimaticStableHash({
+    const fallbackCoverageAnchorScopeKey = coverageSetupId ? sequenceAnimaticStableHash({
       coverageSetupId,
       spatial: shotSpatialFingerprint(shot, coverageSetup),
       shotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
       subjectRefIds: shotEntityRefIds(shot),
       policy: 'shot_scoped_coverage_anchor_v1',
     }) : ''
+    const coverageAnchorScopeKey = zoneCoverageAnchorScopeKey || fallbackCoverageAnchorScopeKey
+    const coverageAnchorSource = zoneCoverageAnchorScopeKey ? zoneCoverageAnchorSource : 'per_shot_anchor'
 
     const existingResponse = await client
       .from('output_requests')
@@ -1168,6 +1235,9 @@ Deno.serve(async (request) => {
         shotId: payload.shotId,
         shot,
         coverageSetupId,
+        sceneGraphOverride: asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override),
+        coverageAnchorScopeKey,
+        coverageAnchorSource,
         manifestHash,
         directorPlanHash,
         sourceReferenceHash,
@@ -1195,8 +1265,13 @@ Deno.serve(async (request) => {
         omittedReferenceAssetKeys: [],
         sourceReferenceHash,
         coverageAnchorScopeKey,
+        coverageAnchorSource,
+        coverage_anchor_source: coverageAnchorSource,
+        zoneCoverageBoardId: zoneCoverageBoardId || null,
+        zoneCoverageCell: Object.keys(zoneCoverageCell).length > 0 ? zoneCoverageCell : null,
+        zoneCoverageRegistryRevision,
         coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
-        coverageAnchorScope: scopedCoverageShots.length === coverageShots.length ? 'coverage_setup' : 'shot_scoped',
+        coverageAnchorScope: zoneCoverageAnchorScopeKey ? zoneCoverageAnchorScope : scopedCoverageShots.length === coverageShots.length ? 'coverage_setup' : 'shot_scoped',
         coverageDecision: coverageResolution.coverageDecision,
         coverageDecisionReason: coverageResolution.coverageDecisionReason,
         coverageCompatibilityDiagnostics: coverageResolution.compatibilityDiagnostics,
@@ -1211,11 +1286,12 @@ Deno.serve(async (request) => {
           omittedReferences: [],
         },
         sharedDependencyRequests: [
-          ...(coverageSetupId ? [{
+          ...(coverageAnchorScopeKey ? [{
             role: 'coverage_anchor',
             identityKey: 'coverageAnchorScopeKey',
             identityValue: coverageAnchorScopeKey,
-            coverageSetupId,
+            coverageSetupId: coverageSetupId || null,
+            coverageAnchorSource,
             status: 'graph_node',
           }] : []),
           ...scopedRefs.requiredReferenceAssetKeys.map((assetKey) => ({
@@ -1250,7 +1326,7 @@ Deno.serve(async (request) => {
         coverageAnchor: {},
         coverageSetup,
         coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
-        coverageReferenceAssetKeys: [],
+        coverageReferenceAssetKeys: scopedRefs.requiredReferenceAssetKeys,
         previousKeyframe: {},
         assetPack: scopedRefs.assetPack,
         continuityDependencies,

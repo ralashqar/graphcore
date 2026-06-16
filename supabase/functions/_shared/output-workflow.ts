@@ -123,6 +123,37 @@ const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
 const MUAPI_BASE_URL = 'https://api.muapi.ai/api/v1'
 
+const sequenceAnimaticZoneCameraGridBriefSchema = z.object({
+  boardSummary: z.string().max(900).default(''),
+  cells: z.array(z.object({
+    shotId: z.string().max(120),
+    cellIndex: z.number().int().min(0).max(8),
+    row: z.number().int().min(0).max(2),
+    column: z.number().int().min(0).max(2),
+    cameraPlateBrief: z.string().max(520),
+    camera: z.string().max(260).default(''),
+    locationFeatures: z.string().max(360).default(''),
+    lightingWeather: z.string().max(240).default(''),
+    screenDirection: z.string().max(180).default(''),
+    spotId: z.string().max(160).default(''),
+    spotName: z.string().max(220).default(''),
+  })).min(1).max(9),
+  diagnostics: z.array(z.string().max(260)).default([]),
+})
+
+const sequenceAnimaticCoverageIntentBatchSchema = z.object({
+  intents: z.array(z.object({
+    shotId: z.string().max(160),
+    cameraFraming: z.string().max(220).default(''),
+    cameraAngle: z.string().max(220).default(''),
+    screenDirection: z.string().max(220).default(''),
+    subjectFocus: z.string().max(360).default(''),
+    stagingBrief: z.string().max(520).default(''),
+    coverageIntent: z.string().max(700).default(''),
+  })).min(1).max(150),
+  diagnostics: z.array(z.string().max(260)).default([]),
+})
+
 export type OutputDocumentRenderer = (input: {
   markdown: string
   title: string
@@ -23749,6 +23780,459 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-prompt-v1' }
       }
+      if (purpose === 'sequence_animatic_zone_coverage_board_input') {
+        const config = asRecord(input.node.config)
+        const board = asRecord(config.board ?? config.zoneCoverageBoard ?? config.zone_coverage_board)
+        const shots = readArray(config.shots).map(asRecord)
+        const coverageCells = readArray(config.coverageCells ?? config.coverage_cells).map(asRecord)
+        const assetPack = asRecord(config.assetPack ?? config.asset_pack)
+        const referenceAssetKeys = readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys)
+        const previousBoard = asRecord(config.previousBoard ?? config.previous_board)
+        const gridLayout = asRecord(config.gridLayout ?? config.grid_layout)
+        const sceneGraphOverrides = readArray(config.sceneGraphOverrides ?? config.scene_graph_overrides).map(asRecord)
+        const outputs = {
+          board,
+          zoneCoverageBoard: board,
+          zone_coverage_board: board,
+          shots,
+          coverageCells,
+          coverage_cells: coverageCells,
+          assetPack,
+          asset_pack: assetPack,
+          referenceAssetKeys,
+          reference_asset_keys: referenceAssetKeys,
+          previousBoard,
+          previous_board: previousBoard,
+          gridLayout,
+          grid_layout: gridLayout,
+          sceneGraphOverrides,
+          scene_graph_overrides: sceneGraphOverrides,
+          text: JSON.stringify({
+            boardId: readText(board.id),
+            sceneId: readText(board.sceneId),
+            zoneId: readText(board.zoneId),
+            chunkIndex: Number(board.chunkIndex ?? 0) || 0,
+            shotIds: readStringArray(board.shotIds),
+            referenceAssetKeys,
+            previousBoardAssetKey: readText(previousBoard.assetKey),
+            sceneGraphOverrides,
+          }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_zone_coverage_board_brief') {
+        const config = asRecord(input.node.config)
+        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
+        const boardRecord = Object.keys(board).length > 0 ? board : asRecord(config.board)
+        const upstreamShots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
+        const shots = upstreamShots.length > 0 ? upstreamShots : readArray(config.shots).map(asRecord)
+        const upstreamCoverageCells = readFirstUpstreamArray(input.upstream, ['coverageCells', 'coverage_cells']).map(asRecord)
+        const coverageCells = upstreamCoverageCells.length > 0 ? upstreamCoverageCells : readArray(config.coverageCells ?? config.coverage_cells).map(asRecord)
+        const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
+        const previousBoard = readFirstUpstreamRecord(input.upstream, ['previousBoard', 'previous_board'])
+        const upstreamSceneGraphOverrides = readFirstUpstreamArray(input.upstream, ['sceneGraphOverrides', 'scene_graph_overrides']).map(asRecord)
+        const sceneGraphOverrides = upstreamSceneGraphOverrides.length > 0
+          ? upstreamSceneGraphOverrides
+          : readArray(config.sceneGraphOverrides ?? config.scene_graph_overrides).map(asRecord)
+        const artStyleDescription = readText(boardRecord.artStyleDescription ?? boardRecord.art_style_description)
+          || readText(config.artStyleDescription ?? config.art_style_description)
+        const fallbackCells = coverageCells.slice(0, 9).map((cell, index) => {
+          const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
+          const camera = asRecord(cell.camera ?? shot.camera)
+          const cameraText = [
+            readText(camera.framing),
+            readText(camera.angle),
+            readText(camera.lens),
+            readText(camera.movement),
+          ].filter(Boolean).join('; ')
+          const spotName = readText(cell.spotName ?? cell.spot_name)
+          const locationFeatures = [
+            spotName ? `frame the ${spotName} area` : '',
+            readText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity),
+          ].filter(Boolean).join('; ')
+          return {
+            shotId: readText(cell.shotId),
+            cellIndex: Number(cell.cellIndex ?? index) || index,
+            row: Number(cell.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
+            column: Number(cell.column ?? index % 3) || index % 3,
+            cameraPlateBrief: [
+              cameraText ? `Camera: ${cameraText}` : 'Use the shot camera facts.',
+              locationFeatures || `Show the ${readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone'} geography from this shot angle.`,
+            readText(cell.lighting ?? shot.lighting) ? `Lighting/weather: ${readText(cell.lighting ?? shot.lighting)}` : '',
+            readText(cell.coverageIntentText ?? cell.coverage_intent_text) ? `Coverage intent: ${readText(cell.coverageIntentText ?? cell.coverage_intent_text)}` : '',
+            readText(cell.stagingBrief ?? cell.staging_brief) ? `Staging: ${readText(cell.stagingBrief ?? cell.staging_brief)}` : '',
+          ].filter(Boolean).join(' '),
+            camera: cameraText,
+            locationFeatures,
+            lightingWeather: readText(cell.lighting ?? shot.lighting),
+            screenDirection: readText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction),
+            spotId: readText(cell.spotId ?? cell.spot_id),
+            spotName,
+          }
+        }).filter((cell) => cell.shotId)
+        const fallback = sequenceAnimaticZoneCameraGridBriefSchema.parse({
+          boardSummary: `Location-only camera coverage grid for ${readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone'}.`,
+          cells: fallbackCells.length > 0 ? fallbackCells : [{
+            shotId: 'shot',
+            cellIndex: 0,
+            row: 0,
+            column: 0,
+            cameraPlateBrief: 'Show the zone geography from the shot camera angle, without characters or labels.',
+          }],
+          diagnostics: ['Deterministic camera-grid brief fallback.'],
+        })
+        const briefPrompt = [
+          'Create location-only camera plate briefs for a 3x3 zone camera coverage grid.',
+          'Your job is not to write image prompts and not to describe characters. Convert each shot into a camera/location plate only.',
+          'Use the shot camera facts, spatial binding, lighting/weather, screen direction, set/zone/spot names, and location continuity.',
+          'Do not mention character names, people, bodies, silhouettes, crowds, props held by characters, action beats, dialogue, captions, labels, arrows, storyboard text, panels, UI, or internal IDs.',
+          'If a shot action contains characters, ignore the character/action content and keep only camera angle, background geography, movement direction, weather, and visible location features.',
+          artStyleDescription ? `Project art style to preserve later: ${artStyleDescription}` : '',
+          readText(previousBoard.assetKey ?? previousBoard.boardAssetKey) ? 'A previous zone camera grid exists. Note reusable camera angles/geography only when shots return to the same location angle.' : '',
+          '',
+          'Board context',
+          JSON.stringify({
+            title: readText(boardRecord.title),
+            scene: readText(boardRecord.sceneTitle) || readText(boardRecord.sceneId),
+            set: readText(boardRecord.setName) || readText(boardRecord.setId),
+            zone: readText(boardRecord.zoneName) || readText(boardRecord.zoneId),
+            zoneSummary: readText(boardRecord.zoneSummary),
+            userSceneGraphOverrides: sceneGraphOverrides.map((override) => ({
+              nodeId: readText(override.nodeId),
+              nodeKind: readText(override.nodeKind),
+              visualBriefOverride: readText(override.visualBriefOverride),
+              extraPromptDirection: readText(override.extraPromptDirection),
+            })),
+          }, null, 2),
+          '',
+          'Cells and shot camera facts',
+          JSON.stringify(coverageCells.slice(0, 9).map((cell, index) => {
+            const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
+            return {
+              shotId: readText(cell.shotId),
+              cellIndex: Number(cell.cellIndex ?? index) || index,
+              row: Number(cell.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
+              column: Number(cell.column ?? index % 3) || index % 3,
+              camera: asRecord(cell.camera ?? shot.camera),
+              lighting: readText(cell.lighting ?? shot.lighting),
+              screenDirection: readText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction),
+              coverageIntent: readText(cell.coverageIntentText ?? cell.coverage_intent_text ?? asRecord(cell.coverageIntent ?? cell.coverage_intent).coverageIntent),
+              cameraFraming: readText(cell.cameraFraming ?? cell.camera_framing),
+              cameraAngle: readText(cell.cameraAngle ?? cell.camera_angle),
+              subjectFocus: readText(cell.subjectFocus ?? cell.subject_focus),
+              stagingBrief: readText(cell.stagingBrief ?? cell.staging_brief),
+              locationContinuity: readText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity),
+              spotId: readText(cell.spotId ?? cell.spot_id),
+              spotName: readText(cell.spotName ?? cell.spot_name),
+              actionForCameraExtractionOnly: readText(shot.action) || readText(shot.description),
+            }
+          }), null, 2),
+          '',
+          'Location reference names only',
+          JSON.stringify(readArray(assetPack.entities).map(asRecord).map((entity) => ({
+            name: readText(entity.name ?? entity.title ?? entity.label),
+            role: readText(entity.role),
+            summary: readText(entity.summary ?? entity.visualDescription ?? entity.visual_description),
+          })).slice(0, 16), null, 2),
+        ].filter(Boolean).join('\n')
+        const result = await runCinematicV2StructuredNode({
+          nodeKey: input.node.key,
+          schemaName: 'sequence_animatic_zone_camera_grid_brief',
+          schema: sequenceAnimaticZoneCameraGridBriefSchema,
+          instructions: 'Return strict JSON only. Produce location-only camera plate briefs. Never include characters, subject labels, storyboard text, image prompt prose, or internal workflow language.',
+          prompt: briefPrompt,
+          fallback,
+          maxOutputTokens: 4200,
+        })
+        const normalizedCells = result.value.cells.map((cell) => ({
+          ...cell,
+          shotId: readText(cell.shotId),
+          cameraPlateBrief: readText(cell.cameraPlateBrief),
+        })).filter((cell) => cell.shotId && cell.cameraPlateBrief).slice(0, 9)
+        const brief = sequenceAnimaticZoneCameraGridBriefSchema.parse({
+          ...result.value,
+          cells: normalizedCells.length > 0 ? normalizedCells : fallback.cells,
+        })
+        const outputs = {
+          coverageBrief: brief,
+          coverage_brief: brief,
+          cameraGridBrief: brief,
+          camera_grid_brief: brief,
+          cells: brief.cells,
+          board: boardRecord,
+          zoneCoverageBoard: boardRecord,
+          zone_coverage_board: boardRecord,
+          shots,
+          coverageCells,
+          coverage_cells: coverageCells,
+          assetPack,
+          asset_pack: assetPack,
+          previousBoard,
+          previous_board: previousBoard,
+          sceneGraphOverrides,
+          scene_graph_overrides: sceneGraphOverrides,
+          text: JSON.stringify(brief, null, 2),
+          prompt: briefPrompt,
+          fallbackUsed: result.fallbackUsed,
+          fallbackReason: result.fallbackReason,
+          deterministic: result.fallbackUsed,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model }
+      }
+      if (purpose === 'sequence_animatic_zone_coverage_board_prompt') {
+        const config = asRecord(input.node.config)
+        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
+        const upstreamShots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
+        const shots = upstreamShots.length > 0 ? upstreamShots : readArray(config.shots).map(asRecord)
+        const upstreamCoverageCells = readFirstUpstreamArray(input.upstream, ['coverageCells', 'coverage_cells']).map(asRecord)
+        const coverageCells = upstreamCoverageCells.length > 0 ? upstreamCoverageCells : readArray(config.coverageCells ?? config.coverage_cells).map(asRecord)
+        const coverageBrief = readFirstUpstreamRecord(input.upstream, ['coverageBrief', 'coverage_brief', 'cameraGridBrief', 'camera_grid_brief'])
+        const briefCells = readArray(coverageBrief.cells).map(asRecord)
+        const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
+        const previousBoard = readFirstUpstreamRecord(input.upstream, ['previousBoard', 'previous_board'])
+        const upstreamSceneGraphOverrides = readFirstUpstreamArray(input.upstream, ['sceneGraphOverrides', 'scene_graph_overrides']).map(asRecord)
+        const sceneGraphOverrides = upstreamSceneGraphOverrides.length > 0
+          ? upstreamSceneGraphOverrides
+          : readArray(config.sceneGraphOverrides ?? config.scene_graph_overrides).map(asRecord)
+        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
+        const boardRecord = Object.keys(board).length > 0 ? board : asRecord(config.board)
+        const artStyleDescription = readText(boardRecord.artStyleDescription ?? boardRecord.art_style_description)
+          || readText(config.artStyleDescription ?? config.art_style_description)
+        const cellLines = coverageCells.map((cell, index) => {
+          const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
+          const camera = asRecord(cell.camera ?? shot.camera)
+          const brief = briefCells.find((entry) => readText(entry.shotId) === readText(cell.shotId)) ?? {}
+          return [
+            `Cell ${index + 1} (${readText(cell.rowLabel) || `row ${Math.floor(index / 3) + 1}, col ${(index % 3) + 1}`})`,
+            readText(brief.cameraPlateBrief) ? `Camera/location plate: ${readText(brief.cameraPlateBrief)}` : '',
+            [readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).length > 0
+              ? `Camera: ${[readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ')}`
+              : '',
+            readText(brief.locationFeatures) ? `Location features: ${readText(brief.locationFeatures)}` : '',
+            readText(brief.lightingWeather) || readText(cell.lighting ?? shot.lighting) ? `Lighting/weather: ${readText(brief.lightingWeather) || readText(cell.lighting ?? shot.lighting)}` : '',
+            readText(brief.screenDirection) || readText(cell.screenDirection ?? cell.screen_direction) ? `Screen direction/geography: ${readText(brief.screenDirection) || readText(cell.screenDirection ?? cell.screen_direction)}` : '',
+            readText(cell.coverageIntentText ?? cell.coverage_intent_text) ? `Shot coverage direction: ${readText(cell.coverageIntentText ?? cell.coverage_intent_text)}` : '',
+            readText(cell.stagingBrief ?? cell.staging_brief) ? `Staging: ${readText(cell.stagingBrief ?? cell.staging_brief)}` : '',
+            readText(cell.spotName) ? `Spot: ${readText(cell.spotName)}` : '',
+          ].filter(Boolean).join(' / ')
+        }).join('\n')
+        const previousBoardAssetKey = readText(previousBoard.assetKey ?? previousBoard.boardAssetKey ?? previousBoard.board_asset_key)
+        const prompt = [
+          'Create one wide 16:9 zone camera coverage grid divided into a clean 3x3 grid. Each filled cell is a location-only camera plate for one shot angle.',
+          'Fill cells in row-major order. Leave unused cells plain and empty. Keep the image as a production location/camera reference grid, not a storyboard page.',
+          artStyleDescription ? `Project art style lock: ${artStyleDescription}` : '',
+          'Use the attached set/zone/spot references as the visual source of truth for architecture, terrain, materials, weather, palette, lighting logic, and repeated geography.',
+          'No people, no characters, no silhouettes, no crowds, no placeholder bodies, no subject labels, no arrows, no captions, no shot numbers, no speech bubbles, no UI, no watermarks, and no visible text inside the image.',
+          'Do not use a cartoony/sketch/comic/storyboard style unless the project art style explicitly says so. Match the project art direction and the visual finish of the location references.',
+          'Each cell should show only the camera angle, background geography, foreground/background masses, horizon/ground plane, screen direction, lighting/weather, and the spatial landmarks needed to keep later keyframes consistent.',
+          previousBoardAssetKey ? 'A previous zone camera grid reference is attached. Reuse matching location geography, camera angles, landmarks, and lighting continuity where the new cells return to the same zone angle.' : '',
+          '',
+          `Grid: ${readText(boardRecord.title) || readText(boardRecord.id) || 'Zone camera grid'}`,
+          `Scene: ${readText(boardRecord.sceneTitle) || readText(boardRecord.sceneId) || 'scene'} / Set: ${readText(boardRecord.setName) || readText(boardRecord.setId) || 'set'} / Zone: ${readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone'}`,
+          readText(boardRecord.zoneSummary) ? `Zone continuity: ${readText(boardRecord.zoneSummary)}` : '',
+          sceneGraphOverrides.length > 0 ? [
+            '',
+            'User-edited scene graph direction',
+            ...sceneGraphOverrides.map((override) => [
+              readText(override.nodeKind) || 'node',
+              readText(override.nodeId),
+              readText(override.visualBriefOverride) ? `Visual brief: ${readText(override.visualBriefOverride)}` : '',
+              readText(override.extraPromptDirection) ? `Extra direction: ${readText(override.extraPromptDirection)}` : '',
+            ].filter(Boolean).join(' / ')),
+          ].join('\n') : '',
+          '',
+          'Cell camera/location map',
+          cellLines,
+          referenceManifestText ? `\nReference map\n${referenceManifestText}` : '',
+        ].filter(Boolean).join('\n')
+        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+        const outputs = {
+          prompt,
+          text: prompt,
+          board: boardRecord,
+          zoneCoverageBoard: boardRecord,
+          zone_coverage_board: boardRecord,
+          shots,
+          coverageCells,
+          coverage_cells: coverageCells,
+          assetPack,
+          asset_pack: assetPack,
+          previousBoard,
+          previous_board: previousBoard,
+          coverageBrief,
+          coverage_brief: coverageBrief,
+          sceneGraphOverrides,
+          scene_graph_overrides: sceneGraphOverrides,
+          referenceManifest,
+          reference_manifest: referenceManifest,
+          referenceManifestText,
+          reference_manifest_text: referenceManifestText,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-prompt-v1' }
+      }
+      if (purpose === 'sequence_animatic_zone_coverage_board_extract') {
+        const config = asRecord(input.node.config)
+        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
+        const coverageCells = readFirstUpstreamArray(input.upstream, ['coverageCells', 'coverage_cells']).map(asRecord)
+        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
+        const assetKey = readText(image.assetKey)
+        const storagePath = readText(image.storagePath) || readText(image.storage_path)
+        if (!assetKey || !storagePath) throw new Error('Zone camera grid extraction requires a generated grid image.')
+        const mimeType = readText(image.mimeType) || readText(image.mime_type) || 'image/webp'
+        const sourceBytes = await downloadProjectAssetBytes(input.client, storagePath)
+        const tempDir = await Deno.makeTempDir({ prefix: 'graphcore-zone-coverage-board-' })
+        const sourceExt = mimeType.includes('png') ? 'png' : mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'webp'
+        const sourcePath = `${tempDir}/source.${sourceExt}`
+        const extractedCells: Record<string, unknown>[] = []
+        const cellAssetKeysByShotId: Record<string, string> = {}
+        const coverageCellByShotId: Record<string, unknown> = {}
+        try {
+          await Deno.writeFile(sourcePath, sourceBytes)
+          const size = await probeImageSize(sourcePath)
+          if (!size) throw new Error('Zone camera grid extraction could not read generated image dimensions.')
+          const rows = 3
+          const columns = 3
+          for (let index = 0; index < coverageCells.length && index < 9; index += 1) {
+            const cell = coverageCells[index]
+            const shotId = readText(cell.shotId)
+            if (!shotId) continue
+            const row = Math.floor(index / columns)
+            const column = index % columns
+            const cropX = Math.floor((size.width * column) / columns)
+            const cropY = Math.floor((size.height * row) / rows)
+            const nextX = Math.floor((size.width * (column + 1)) / columns)
+            const nextY = Math.floor((size.height * (row + 1)) / rows)
+            const cellWidth = Math.max(1, Math.min(size.width - cropX, nextX - cropX))
+            const cellHeight = Math.max(1, Math.min(size.height - cropY, nextY - cropY))
+            const outputPath = `${tempDir}/${slugify(shotId)}.webp`
+            const crop = await runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${cellWidth}:${cellHeight}:${cropX}:${cropY}`, outputPath])
+            if (!crop.ok) throw new Error(`Zone camera grid crop failed for ${shotId}: ${crop.stderr.slice(0, 1200)}`)
+            const cropVerification = await verifySequenceAnimaticAnchorCrop({
+              outputPath,
+              anchorId: shotId,
+              expectedWidth: cellWidth,
+              expectedHeight: cellHeight,
+              row,
+              column,
+            })
+            const bytes = await Deno.readFile(outputPath)
+            const targetAssetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(shotId)}.sequence-animatic-zone-coverage-cell`
+            const targetStoragePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/zone-coverage-cell-${slugify(shotId)}.webp`
+            await uploadBytes(input.client, targetStoragePath, bytes, 'image/webp')
+            const coverageSetupId = readText(cell.coverageSetupId)
+            const coverageAnchorScopeKey = readText(cell.coverageAnchorScopeKey)
+            const coverageAnchorScope = readText(cell.coverageAnchorScope) || 'shot_scoped'
+            const coverageAnchorSource = readText(cell.coverageAnchorSource ?? cell.coverage_anchor_source ?? config.coverageAnchorSource ?? config.coverage_anchor_source) || 'zone_camera_grid_cell'
+            const coverageAnchorMode = readText(cell.coverageAnchorMode ?? cell.coverage_anchor_mode ?? config.coverageAnchorMode ?? config.coverage_anchor_mode) || 'location_camera_plate_v1'
+            const cellImage = {
+              assetKey: targetAssetKey,
+              storagePath: targetStoragePath,
+              storage_path: targetStoragePath,
+              mimeType: 'image/webp',
+              mime_type: 'image/webp',
+              width: cellWidth,
+              height: cellHeight,
+              role: 'sequence_animatic_coverage_anchor_image',
+              coverageAnchorSource,
+              coverage_anchor_source: coverageAnchorSource,
+            }
+            const artifact = await registerImageArtifact({
+              client: input.client,
+              run: input.run,
+              workflow: input.workflow,
+              node: input.node,
+              assetKey: targetAssetKey,
+              storagePath: targetStoragePath,
+              name: `${readText(cell.shotTitle) || shotId} Coverage Cell`,
+              summary: 'Cropped shot coverage anchor generated from a scene-level zone camera grid.',
+              mimeType: 'image/webp',
+              metadata: {
+                generatedBy: 'output_workflow',
+                workflowId: input.workflow.id,
+                workflowKey: input.workflow.key,
+                runId: input.run.id,
+                nodeId: input.node.id,
+                nodeKey: input.node.key,
+                provider: 'graphcore',
+                model: 'ffmpeg-sequence-animatic-zone-coverage-board-extract-v1',
+                role: 'sequence_animatic_coverage_anchor',
+                sourceArtifactRole: 'sequence_animatic_zone_coverage_cell',
+                sequenceAnimaticRole: 'coverage_anchor',
+                screenplayAnimaticRole: 'coverage_anchor',
+                coverageAnchorMode,
+                coverage_anchor_mode: coverageAnchorMode,
+                coverageAnchorSource,
+                coverage_anchor_source: coverageAnchorSource,
+                masterRequestId: readText(config.masterRequestId),
+                sceneId: readText(board.sceneId ?? config.sceneId),
+                setId: readText(board.setId ?? config.setId),
+                zoneId: readText(board.zoneId ?? config.zoneId),
+                boardId: readText(board.id ?? config.boardId),
+                chunkIndex: Number(board.chunkIndex ?? config.chunkIndex ?? 0) || 0,
+                shotId,
+                shotIds: [shotId],
+                coverageSetupId,
+                coverageAnchorScopeKey,
+                coverageAnchorScope,
+                assetKey: targetAssetKey,
+                image: cellImage,
+                sourceBoardAssetKey: assetKey,
+                sourceBoardStoragePath: storagePath,
+                row,
+                column,
+                cellIndex: index,
+                cropRect: { x: cropX, y: cropY, width: cellWidth, height: cellHeight },
+                cropVerification,
+                cell,
+                storageBucket: 'project-assets',
+                storagePath: targetStoragePath,
+              },
+            })
+            const extractedCell = {
+              ...cell,
+              shotId,
+              assetKey: targetAssetKey,
+              storagePath: targetStoragePath,
+              artifactKey: artifact.key,
+              image: { ...cellImage, artifact },
+              coverageSetupId,
+              coverageAnchorScopeKey,
+              coverageAnchorScope,
+              coverageAnchorSource,
+              coverageAnchorMode,
+              row,
+              column,
+              cellIndex: index,
+              cropRect: { x: cropX, y: cropY, width: cellWidth, height: cellHeight },
+              cropVerification,
+            }
+            extractedCells.push(extractedCell)
+            cellAssetKeysByShotId[shotId] = targetAssetKey
+            coverageCellByShotId[shotId] = extractedCell
+          }
+        } finally {
+          await Deno.remove(tempDir, { recursive: true }).catch(() => {})
+        }
+        const outputs = {
+          cells: extractedCells,
+          coverageCells: extractedCells,
+          coverage_cells: extractedCells,
+          cellAssetKeysByShotId,
+          cell_asset_keys_by_shot_id: cellAssetKeysByShotId,
+          coverageCellByShotId,
+          coverage_cell_by_shot_id: coverageCellByShotId,
+          board: Object.keys(board).length > 0 ? board : asRecord(config.board),
+          sourceImage: image,
+          source_image: image,
+          text: `Extracted ${extractedCells.length} zone camera grid cell${extractedCells.length === 1 ? '' : 's'}.`,
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-extract-v1' }
+      }
       if (purpose === 'sequence_animatic_continuity_batch_extract') {
         const config = asRecord(input.node.config)
         const batch = readFirstUpstreamRecord(input.upstream, ['batch'])
@@ -23888,23 +24372,36 @@ async function executeNode(input: {
         const config = asRecord(input.node.config)
         const upstreamTargetNode = readFirstUpstreamRecord(input.upstream, ['targetNode', 'target_node'])
         const targetNode = Object.keys(upstreamTargetNode).length > 0 ? upstreamTargetNode : asRecord(config.targetNode)
+        const sceneGraphOverride = asRecord(targetNode.sceneGraphOverride ?? targetNode.scene_graph_override ?? config.sceneGraphOverride ?? config.scene_graph_override)
+        const visualBriefOverride = readText(sceneGraphOverride.visualBriefOverride)
+        const extraPromptDirection = readText(sceneGraphOverride.extraPromptDirection)
         const relevantShots = readFirstUpstreamArray(input.upstream, ['relevantShots', 'relevant_shots']).map(asRecord)
         const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
         const upstreamReferenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys']).map(readText).filter(Boolean)
         const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : readStringArray(config.referenceAssetKeys)
         const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
-        const prompt = buildSequenceAnimaticContinuityAssetPrompt({
-          targetNode,
+        const effectiveTargetNode = visualBriefOverride
+          ? { ...targetNode, visualBrief: visualBriefOverride, summary: visualBriefOverride }
+          : targetNode
+        const basePrompt = buildSequenceAnimaticContinuityAssetPrompt({
+          targetNode: effectiveTargetNode,
           assetKind,
           relevantShots,
           referenceAssetKeys,
         })
+        const prompt = [
+          basePrompt,
+          visualBriefOverride ? `User-edited visual brief:\n${visualBriefOverride}` : '',
+          extraPromptDirection ? `Additional user generation direction:\n${extraPromptDirection}` : '',
+        ].filter(Boolean).join('\n\n')
         const outputs = {
           prompt,
           text: prompt,
-          targetNode,
-          target_node: targetNode,
+          targetNode: effectiveTargetNode,
+          target_node: effectiveTargetNode,
+          sceneGraphOverride,
+          scene_graph_override: sceneGraphOverride,
           relevantShots,
           relevant_shots: relevantShots,
           assetPack,
@@ -25885,6 +26382,9 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_coverage_anchor_brief') {
         const config = asRecord(input.node.config)
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
+        const sceneGraphOverride = asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override ?? config.sceneGraphOverride ?? config.scene_graph_override)
+        const visualBriefOverride = readText(sceneGraphOverride.visualBriefOverride)
+        const extraPromptDirection = readText(sceneGraphOverride.extraPromptDirection)
         const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
@@ -25938,6 +26438,8 @@ async function executeNode(input: {
                   camera: asRecord(coverageSetup.camera),
                   lighting: readText(coverageSetup.lighting),
                   stagingBrief: readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief),
+                  visualBriefOverride,
+                  extraPromptDirection,
                 },
                 shots: shots.slice(0, 8).map((shot) => ({
                   id: readText(shot.id),
@@ -25993,6 +26495,8 @@ async function executeNode(input: {
           prompt_brief: text,
           coverageSetup,
           coverage_setup: coverageSetup,
+          sceneGraphOverride,
+          scene_graph_override: sceneGraphOverride,
           shots,
           assetPack,
           asset_pack: assetPack,
@@ -26014,6 +26518,9 @@ async function executeNode(input: {
       if (purpose === 'sequence_animatic_coverage_anchor_prompt') {
         const config = asRecord(input.node.config)
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
+        const sceneGraphOverride = asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override ?? config.sceneGraphOverride ?? config.scene_graph_override)
+        const visualBriefOverride = readText(sceneGraphOverride.visualBriefOverride)
+        const extraPromptDirection = readText(sceneGraphOverride.extraPromptDirection)
         const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const coverageBrief = readFirstUpstreamRecord(input.upstream, ['coverageBrief', 'coverage_brief'])
@@ -26057,6 +26564,8 @@ async function executeNode(input: {
           placementLabels.length > 0 ? `Placement labels: ${placementLabels.join(', ')}, camera, movement` : 'Placement labels: camera, movement, subject placeholders',
           linkedShotSummary ? `Linked shots:\n${linkedShotSummary}` : '',
           referenceManifestText ? `Reference map:\n${referenceManifestText}` : '',
+          visualBriefOverride ? `User-edited coverage visual brief:\n${visualBriefOverride}` : '',
+          extraPromptDirection ? `Additional user generation direction:\n${extraPromptDirection}` : '',
         ].filter(Boolean).join('\n')
         const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
         const outputs = {
@@ -26066,6 +26575,8 @@ async function executeNode(input: {
           coverage_setup: coverageSetup,
           coverageBrief,
           coverage_brief: coverageBrief,
+          sceneGraphOverride,
+          scene_graph_override: sceneGraphOverride,
           promptBrief: coverageBriefText,
           prompt_brief: coverageBriefText,
           shots,
@@ -28691,14 +29202,477 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-artifact-v1' }
       }
+      if (purpose === 'sequence_animatic_coverage_intent_input') {
+        const config = asRecord(input.node.config)
+        const intentBatch = asRecord(config.intentBatch ?? config.intent_batch)
+        const shots = readArray(config.shots).map(asRecord)
+        const assetPack = asRecord(config.assetPack ?? config.asset_pack)
+        const outputs = {
+          intentBatch,
+          intent_batch: intentBatch,
+          shots,
+          assetPack,
+          asset_pack: assetPack,
+          shotIds: readStringArray(intentBatch.shotIds ?? intentBatch.shot_ids),
+          shot_ids: readStringArray(intentBatch.shotIds ?? intentBatch.shot_ids),
+          text: JSON.stringify({
+            sceneId: readText(intentBatch.sceneId),
+            setId: readText(intentBatch.setId),
+            zoneId: readText(intentBatch.zoneId),
+            shotIds: readStringArray(intentBatch.shotIds ?? intentBatch.shot_ids),
+          }, null, 2),
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-coverage-intent-input-v1' }
+      }
+      if (purpose === 'sequence_animatic_coverage_intent_plan') {
+        const config = asRecord(input.node.config)
+        const intentBatch = readFirstUpstreamRecord(input.upstream, ['intentBatch', 'intent_batch'])
+        const batchRecord = Object.keys(intentBatch).length > 0 ? intentBatch : asRecord(config.intentBatch ?? config.intent_batch)
+        const upstreamShots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
+        const shots = upstreamShots.length > 0 ? upstreamShots : readArray(config.shots).map(asRecord)
+        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+        const pack = Object.keys(assetPack).length > 0 ? assetPack : asRecord(config.assetPack ?? config.asset_pack)
+        const shotById = new Map(shots.map((shot) => [readText(shot.id), shot] as const).filter(([shotId]) => Boolean(shotId)))
+        const fallbackIntents = readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids).map((shotId) => {
+          const shot = shotById.get(shotId) ?? {}
+          const camera = asRecord(shot.camera)
+          const cameraFraming = readText(camera.framing) || readText(shot.framing) || 'shot-appropriate framing'
+          const cameraAngle = [readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ')
+          const screenDirection = readText(camera.screenDirectionRule ?? camera.screen_direction_rule)
+            || readText(shot.screenDirection ?? shot.screen_direction)
+          const action = readText(shot.action) || readText(shot.description) || readText(shot.title)
+          return {
+            shotId,
+            cameraFraming,
+            cameraAngle,
+            screenDirection,
+            subjectFocus: readText(shot.subjectFocus ?? shot.subject_focus) || readStringArray(asRecord(shot.refs).visibleCharacterRefIds ?? asRecord(shot.refs).visible_character_ref_ids)[0] || 'primary story subject',
+            stagingBrief: readText(shot.stagingBrief ?? shot.staging_brief) || action,
+            coverageIntent: [
+              `Create a coverage direction for ${readText(shot.title) || shotId}.`,
+              cameraFraming ? `Framing: ${cameraFraming}.` : '',
+              cameraAngle ? `Angle/lens/movement: ${cameraAngle}.` : '',
+              screenDirection ? `Screen direction: ${screenDirection}.` : '',
+              action ? `Stage around: ${action}.` : '',
+            ].filter(Boolean).join(' '),
+          }
+        }).filter((intent) => intent.shotId)
+        const fallback = sequenceAnimaticCoverageIntentBatchSchema.parse({
+          intents: fallbackIntents.length > 0 ? fallbackIntents : [{
+            shotId: 'shot',
+            cameraFraming: 'wide',
+            coverageIntent: 'Create a clear coverage direction from the shot camera facts and spatial binding.',
+          }],
+          diagnostics: ['Deterministic coverage intent fallback.'],
+        })
+        const planningPrompt = [
+          'Plan shot coverage directions for a fresh Scene Board zone before image generation.',
+          'Return one compact JSON intent per shot. Do not create coverage setup ids, image prompts, captions, labels, or storyboard text.',
+          'Each intent should preserve camera/framing, subject focus, screen direction, staging, and the specific coverage purpose for this shot.',
+          'Use existing formal camera facts first. If a shot is sparse, infer a conservative cinematic coverage direction from title, action, dialogue, and spatial binding.',
+          '',
+          'Board scope',
+          JSON.stringify({
+            sceneId: readText(batchRecord.sceneId),
+            setId: readText(batchRecord.setId),
+            zoneId: readText(batchRecord.zoneId),
+            shotIds: readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids),
+            sceneGraphOverrides: readArray(batchRecord.sceneGraphOverrides ?? batchRecord.scene_graph_overrides).map(asRecord),
+            referenceAssetKeys: readStringArray(batchRecord.referenceAssetKeys ?? batchRecord.reference_asset_keys),
+          }, null, 2),
+          '',
+          'Shots',
+          JSON.stringify(shots.map((shot) => ({
+            id: readText(shot.id),
+            title: readText(shot.title),
+            action: readText(shot.action) || readText(shot.description),
+            camera: asRecord(shot.camera),
+            lighting: readText(shot.lighting),
+            dialogue: readArray(shot.dialogue).map(asRecord).slice(0, 5),
+            performance: readArray(shot.performance ?? shot.performanceBeats ?? shot.performance_beats).map(asRecord).slice(0, 5),
+            refs: asRecord(shot.refs),
+            sceneBinding: asRecord(shot.sceneBinding ?? shot.scene_binding ?? shot.shotBinding ?? shot.shot_binding),
+          })), null, 2),
+          '',
+          'Location references',
+          JSON.stringify(readArray(pack.entities).map(asRecord).map((entity) => ({
+            name: readText(entity.name ?? entity.title ?? entity.label),
+            role: readText(entity.role),
+            summary: readText(entity.summary ?? entity.visualDescription ?? entity.visual_description),
+          })).slice(0, 16), null, 2),
+        ].filter(Boolean).join('\n')
+        const result = await runCinematicV2StructuredNode({
+          nodeKey: input.node.key,
+          schemaName: 'sequence_animatic_coverage_intent_batch',
+          schema: sequenceAnimaticCoverageIntentBatchSchema,
+          instructions: 'Return strict JSON only. Produce coverage direction records keyed by shot id; never invent workflow ids or reusable coverage setup ids.',
+          prompt: planningPrompt,
+          fallback,
+          maxOutputTokens: 5200,
+        })
+        const requestedShotIds = new Set(readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids))
+        const intents = result.value.intents
+          .map((intent) => ({
+            ...intent,
+            shotId: readText(intent.shotId),
+            cameraFraming: readText(intent.cameraFraming),
+            cameraAngle: readText(intent.cameraAngle),
+            screenDirection: readText(intent.screenDirection),
+            subjectFocus: readText(intent.subjectFocus),
+            stagingBrief: readText(intent.stagingBrief),
+            coverageIntent: readText(intent.coverageIntent),
+          }))
+          .filter((intent) => intent.shotId && requestedShotIds.has(intent.shotId))
+        const normalized = sequenceAnimaticCoverageIntentBatchSchema.parse({
+          ...result.value,
+          intents: intents.length > 0 ? intents : fallback.intents,
+        })
+        const outputs = {
+          coverageIntents: normalized.intents,
+          coverage_intents: normalized.intents,
+          coverageIntentBatch: normalized,
+          coverage_intent_batch: normalized,
+          intentBatch: batchRecord,
+          intent_batch: batchRecord,
+          shots,
+          assetPack: pack,
+          asset_pack: pack,
+          text: JSON.stringify(normalized, null, 2),
+          prompt: planningPrompt,
+          fallbackUsed: result.fallbackUsed,
+          fallbackReason: result.fallbackReason,
+          deterministic: result.fallbackUsed,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model }
+      }
+      if (purpose === 'sequence_animatic_coverage_intent_artifact') {
+        const config = asRecord(input.node.config)
+        const intentBatch = readFirstUpstreamRecord(input.upstream, ['intentBatch', 'intent_batch'])
+        const batchRecord = Object.keys(intentBatch).length > 0 ? intentBatch : asRecord(config.intentBatch ?? config.intent_batch)
+        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        const intents = readFirstUpstreamArray(input.upstream, ['coverageIntents', 'coverage_intents']).map(asRecord)
+        const batchId = readText(batchRecord.id ?? batchRecord.batchId) || readText(config.coverageIntentBatchId)
+        if (!batchId) throw new Error('Coverage intent artifact requires a batch id.')
+        const now = new Date().toISOString()
+        const masterRequestId = readText(config.masterRequestId)
+        const sourceHash = readText(batchRecord.sourceHash ?? config.sourceHash)
+        const coverageIntentByShotId = Object.fromEntries(intents.map((intent) => {
+          const shotId = readText(intent.shotId)
+          return [shotId, {
+            shotId,
+            sceneId: readText(batchRecord.sceneId ?? config.sceneId),
+            setId: readText(batchRecord.setId ?? config.setId),
+            zoneId: readText(batchRecord.zoneId ?? config.zoneId),
+            primarySpotId: readText(intent.primarySpotId ?? intent.primary_spot_id),
+            coverageIntent: readText(intent.coverageIntent ?? intent.coverage_intent),
+            cameraFraming: readText(intent.cameraFraming ?? intent.camera_framing),
+            cameraAngle: readText(intent.cameraAngle ?? intent.camera_angle),
+            screenDirection: readText(intent.screenDirection ?? intent.screen_direction),
+            subjectFocus: readText(intent.subjectFocus ?? intent.subject_focus),
+            stagingBrief: readText(intent.stagingBrief ?? intent.staging_brief),
+            sourceHash,
+            updatedAt: now,
+            workflowRequestId: input.run.requestId,
+          }]
+        }).filter(([shotId]) => Boolean(shotId)))
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(batchId)}.sequence-animatic-coverage-intent-batch`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${readText(batchRecord.title) || titleFromRefLike(batchId)} Coverage Directions`,
+          summary: 'Shot coverage directions planned for a Scene Board zone before zone camera grid generation.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-coverage-intent-artifact-v1',
+            role: 'sequence_animatic_coverage_intent_batch',
+            graphSpecVersion: 'sequence_animatic_graph_v2',
+            sequenceAnimaticRole: 'coverage_intent_batch',
+            screenplayAnimaticRole: 'coverage_intent_batch',
+            masterRequestId,
+            sceneId: readText(batchRecord.sceneId ?? config.sceneId),
+            setId: readText(batchRecord.setId ?? config.setId),
+            zoneId: readText(batchRecord.zoneId ?? config.zoneId),
+            shotIds: readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids),
+            sourceHash,
+            intentBatch: batchRecord,
+            intent_batch: batchRecord,
+            prompt,
+            coverageIntentByShotId,
+            coverage_intent_by_shot_id: coverageIntentByShotId,
+            coverageIntents: Object.values(coverageIntentByShotId),
+            coverage_intents: Object.values(coverageIntentByShotId),
+          },
+        })
+        if (masterRequestId) {
+          const masterResponse = await input.client
+            .from('output_requests')
+            .select('metadata')
+            .eq('id', masterRequestId)
+            .maybeSingle()
+          if (!masterResponse.error && masterResponse.data) {
+            const masterMetadata = asRecord(asRecord(masterResponse.data).metadata)
+            const previousRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
+            const previousCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticCoverageRegistry ?? masterMetadata.sequence_animatic_coverage_registry)
+            const previousIntents = {
+              ...asRecord(previousCoverageRegistry.coverageIntentByShotId ?? previousCoverageRegistry.coverage_intent_by_shot_id),
+              ...asRecord(previousRegistry.coverageIntentByShotId ?? previousRegistry.coverage_intent_by_shot_id),
+            }
+            const nextIntents = { ...previousIntents, ...coverageIntentByShotId }
+            const registry = {
+              ...previousRegistry,
+              role: 'sequence_animatic_zone_coverage_registry',
+              contractVersion: readText(previousRegistry.contractVersion) || 'zone_camera_coverage_grid_registry_v1',
+              sourceMasterRequestId: masterRequestId,
+              revision: (Number(previousRegistry.revision ?? 0) || 0) + 1,
+              coverageIntentByShotId: nextIntents,
+              coverage_intent_by_shot_id: nextIntents,
+              updatedAt: now,
+              updatedByCoverageIntentBatchId: batchId,
+            }
+            const coverageRegistry = {
+              ...previousCoverageRegistry,
+              coverageIntentByShotId: nextIntents,
+              coverage_intent_by_shot_id: nextIntents,
+              updatedAt: now,
+              updatedByCoverageIntentBatchId: batchId,
+            }
+            const updateResponse = await input.client
+              .from('output_requests')
+              .update({
+                metadata: {
+                  ...masterMetadata,
+                  sequenceAnimaticZoneCoverageRegistry: registry,
+                  sequence_animatic_zone_coverage_registry: registry,
+                  sequenceAnimaticCoverageRegistry: coverageRegistry,
+                  sequence_animatic_coverage_registry: coverageRegistry,
+                },
+              })
+              .eq('id', masterRequestId)
+            if (updateResponse.error) throw new Error(updateResponse.error.message)
+          }
+        }
+        await insertSequenceAnimaticEvent({
+          client: input.client,
+          projectId: input.run.projectId,
+          draftId: input.run.draftId,
+          requestId: masterRequestId,
+          workflowId: input.workflow.id,
+          runId: input.run.id,
+          eventType: 'coverage_intent_batch_ready',
+          payload: {
+            batchId,
+            artifactKey: artifact.key,
+            shotIds: Object.keys(coverageIntentByShotId),
+          },
+          metadata: { source: 'sequence_animatic_coverage_intent_workflow' },
+          dedupe: { batchId },
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          artifact,
+          artifacts: [artifact],
+          coverageIntentByShotId,
+          coverage_intent_by_shot_id: coverageIntentByShotId,
+          coverageIntents: Object.values(coverageIntentByShotId),
+          coverage_intents: Object.values(coverageIntentByShotId),
+          intentBatch: batchRecord,
+          intent_batch: batchRecord,
+          prompt,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-coverage-intent-artifact-v1' }
+      }
+      if (purpose === 'sequence_animatic_zone_coverage_board_artifact') {
+        const config = asRecord(input.node.config)
+        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
+        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
+        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
+        const upstreamCellSets = Object.entries(input.upstream)
+          .map(([key, outputs]) => ({
+            key,
+            cells: readFirstUpstreamArray({ [key]: outputs }, ['cells', 'coverageCells', 'coverage_cells']).map(asRecord),
+          }))
+          .filter((entry) => entry.cells.length > 0)
+        const extractedCellSet = upstreamCellSets.find((entry) =>
+          entry.key.includes('extract') && entry.cells.some((cell) => readText(cell.assetKey ?? cell.asset_key)),
+        )
+        const assetBackedCellSet = upstreamCellSets.find((entry) =>
+          entry.cells.some((cell) => readText(cell.assetKey ?? cell.asset_key)),
+        )
+        const cells = (extractedCellSet ?? assetBackedCellSet ?? upstreamCellSets[0] ?? { cells: [] }).cells.map(asRecord)
+        const boardId = readText(board.id) || readText(config.boardId)
+        if (!boardId) throw new Error('Zone camera grid artifact requires a board id.')
+        const boardAssetKey = readText(image.assetKey)
+        if (!boardAssetKey) throw new Error('Zone camera grid image did not produce an asset key.')
+        const cellAssetKeysByShotId = Object.fromEntries(cells
+          .map((cell) => [readText(cell.shotId), readText(cell.assetKey)] as const)
+          .filter(([shotId, assetKey]) => shotId && assetKey))
+        const coverageCellByShotId = Object.fromEntries(cells
+          .map((cell) => [readText(cell.shotId), cell] as const)
+          .filter(([shotId]) => Boolean(shotId)))
+        const now = new Date().toISOString()
+        const boardRecord = {
+          ...board,
+          id: boardId,
+          boardId,
+          boardAssetKey,
+          image,
+          cellAssetKeysByShotId,
+          cell_asset_keys_by_shot_id: cellAssetKeysByShotId,
+          coverageCellByShotId,
+          coverage_cell_by_shot_id: coverageCellByShotId,
+          cells,
+          generatedAt: now,
+          status: 'ready',
+        }
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(boardId)}.sequence-animatic-zone-coverage-board`
+        const artifact = await registerOtherOutputArtifact({
+          client: input.client,
+          run: input.run,
+          workflow: input.workflow,
+          node: input.node,
+          key: artifactKey,
+          name: `${readText(board.title) || titleFromRefLike(boardId)} Zone Camera Grid`,
+          summary: 'Scene-level 3x3 location-only camera grid whose cells feed shot coverage anchors.',
+          metadata: {
+            generatedBy: 'output_workflow',
+            workflowId: input.workflow.id,
+            workflowKey: input.workflow.key,
+            runId: input.run.id,
+            nodeId: input.node.id,
+            nodeKey: input.node.key,
+            preset: input.run.preset,
+            provider: 'graphcore',
+            model: 'sequence-animatic-zone-coverage-board-artifact-v1',
+            role: 'sequence_animatic_zone_coverage_board',
+            zoneCoverageGridMode: readText(config.zoneCoverageGridMode ?? config.zone_coverage_grid_mode) || 'location_camera_plate_v1',
+            coverageAnchorSource: readText(config.coverageAnchorSource ?? config.coverage_anchor_source) || 'zone_camera_grid_cell',
+            graphSpecVersion: 'sequence_animatic_graph_v2',
+            sequenceAnimaticRole: 'zone_coverage_board',
+            screenplayAnimaticRole: 'zone_coverage_board',
+            masterRequestId: readText(config.masterRequestId),
+            sceneId: readText(board.sceneId ?? config.sceneId),
+            setId: readText(board.setId ?? config.setId),
+            zoneId: readText(board.zoneId ?? config.zoneId),
+            chunkIndex: Number(board.chunkIndex ?? config.chunkIndex ?? 0) || 0,
+            shotIds: readStringArray(board.shotIds),
+            sourceHash: readText(board.sourceHash ?? config.sourceHash),
+            previousBoardAssetKey: readText(board.previousBoardAssetKey ?? config.previousBoardAssetKey),
+            board: boardRecord,
+            prompt,
+            image,
+            boardAssetKey,
+            cells,
+            cellAssetKeysByShotId,
+            coverageCellByShotId,
+          },
+        })
+        const masterRequestId = readText(config.masterRequestId)
+        if (masterRequestId) {
+          const masterResponse = await input.client
+            .from('output_requests')
+            .select('metadata')
+            .eq('id', masterRequestId)
+            .maybeSingle()
+          if (!masterResponse.error && masterResponse.data) {
+            const masterMetadata = asRecord(asRecord(masterResponse.data).metadata)
+            const previousRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
+            const previousBoards = readArray(previousRegistry.zoneCoverageBoards ?? previousRegistry.zone_coverage_boards).map(asRecord)
+            const nextBoards = [
+              ...previousBoards.filter((entry) => readText(entry.id ?? entry.boardId) !== boardId),
+              { ...boardRecord, artifactKey: artifact.key },
+            ]
+            const previousCellsByShot = asRecord(previousRegistry.coverageCellByShotId ?? previousRegistry.coverage_cell_by_shot_id)
+            const nextCoverageCellByShotId = {
+              ...previousCellsByShot,
+              ...Object.fromEntries(Object.entries(coverageCellByShotId).map(([shotId, value]) => [shotId, { ...asRecord(value), boardId, artifactKey: artifact.key }])),
+            }
+            const registry = {
+              role: 'sequence_animatic_zone_coverage_registry',
+              contractVersion: 'zone_camera_coverage_grid_registry_v1',
+              sourceMasterRequestId: masterRequestId,
+              revision: (Number(previousRegistry.revision ?? 0) || 0) + 1,
+              zoneCoverageBoards: nextBoards,
+              zone_coverage_boards: nextBoards,
+              coverageCellByShotId: nextCoverageCellByShotId,
+              coverage_cell_by_shot_id: nextCoverageCellByShotId,
+              updatedAt: now,
+              updatedByBoardId: boardId,
+            }
+            const updateResponse = await input.client
+              .from('output_requests')
+              .update({
+                metadata: {
+                  ...masterMetadata,
+                  sequenceAnimaticZoneCoverageRegistry: registry,
+                  sequence_animatic_zone_coverage_registry: registry,
+                },
+              })
+              .eq('id', masterRequestId)
+            if (updateResponse.error) throw new Error(updateResponse.error.message)
+          }
+        }
+        await insertSequenceAnimaticEvent({
+          client: input.client,
+          projectId: input.run.projectId,
+          draftId: input.run.draftId,
+          requestId: masterRequestId,
+          workflowId: input.workflow.id,
+          runId: input.run.id,
+          eventType: 'zone_coverage_board_ready',
+          payload: {
+            boardId,
+            boardAssetKey,
+            artifactKey: artifact.key,
+            shotIds: readStringArray(board.shotIds),
+            cellAssetKeysByShotId,
+          },
+          metadata: { source: 'sequence_animatic_zone_coverage_board_workflow' },
+          dedupe: { boardId },
+        })
+        const outputs = {
+          artifactKey: artifact.key,
+          assetKey: boardAssetKey,
+          artifact,
+          artifacts: [artifact],
+          board: boardRecord,
+          zoneCoverageBoard: boardRecord,
+          zone_coverage_board: boardRecord,
+          cells,
+          coverageCells: cells,
+          coverage_cells: cells,
+          cellAssetKeysByShotId,
+          cell_asset_keys_by_shot_id: cellAssetKeysByShotId,
+          coverageCellByShotId,
+          coverage_cell_by_shot_id: coverageCellByShotId,
+          image,
+          keyframe: image,
+          primaryReferenceImage: image,
+          prompt,
+          authoringReady: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-artifact-v1' }
+      }
       if (purpose === 'sequence_animatic_coverage_anchor_artifact') {
         const config = asRecord(input.node.config)
         const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
         const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
         const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
-        const coverageSetupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
-        if (!coverageSetupId) throw new Error('Coverage anchor artifact requires a coverage setup id.')
         const coverageAnchorScopeKey = readText(config.coverageAnchorScopeKey)
+        const coverageSetupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
+        const coverageIdentityValue = coverageAnchorScopeKey || coverageSetupId
+        if (!coverageIdentityValue) throw new Error('Coverage anchor artifact requires a coverage scope key or setup id.')
         const coverageAnchorScope = readText(config.coverageAnchorScope)
         const assetKey = readText(image.assetKey)
         if (!assetKey) throw new Error('Coverage anchor image did not produce an asset key.')
@@ -28726,14 +29700,14 @@ async function executeNode(input: {
           status: assetKey ? 'ready' : 'failed',
           generatedAt: new Date().toISOString(),
         }
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(coverageSetupId)}.sequence-animatic-coverage-anchor`
+        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(coverageIdentityValue)}.sequence-animatic-coverage-anchor`
         const artifact = await registerOtherOutputArtifact({
           client: input.client,
           run: input.run,
           workflow: input.workflow,
           node: input.node,
           key: artifactKey,
-          name: `${readText(coverageSetup.title) || titleFromRefLike(coverageSetupId)} Coverage Anchor`,
+          name: `${readText(coverageSetup.title) || titleFromRefLike(coverageIdentityValue)} Coverage Anchor`,
           summary: 'Reusable visual keyframe anchor for a sequence animatic coverage setup.',
           metadata: {
             generatedBy: 'output_workflow',
@@ -28791,10 +29765,10 @@ async function executeNode(input: {
             shotIds: anchor.shotIds,
           },
           metadata: { source: 'sequence_animatic_keyframe_workflow' },
-          dedupe: { coverageSetupId, coverageAnchorScopeKey: coverageAnchorScopeKey || null },
+          dedupe: { coverageSetupId: coverageSetupId || null, coverageAnchorScopeKey: coverageAnchorScopeKey || null },
         })
         const identityKey = coverageAnchorScopeKey ? 'coverageAnchorScopeKey' : 'coverageSetupId'
-        const identityValue = coverageAnchorScopeKey || coverageSetupId
+        const identityValue = coverageIdentityValue
         const outputs = {
           artifactKey: artifact.key,
           assetKey,

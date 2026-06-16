@@ -126,6 +126,25 @@ function assetEntityForKey(assetKey: string, label: string) {
   }
 }
 
+function entityAssetKeys(entity: Record<string, unknown>) {
+  return uniqueTexts([
+    readText(entity.primaryAssetKey),
+    readText(entity.selectedReferenceAssetKey),
+    readText(entity.selectedReferenceVariantAssetKey),
+    ...readStringArray(entity.assetKeys),
+  ])
+}
+
+function preferredEntityAssetKey(entity: Record<string, unknown>) {
+  return entityAssetKeys(entity)[0] ?? ''
+}
+
+function prioritizedEntityAssetKeys(entities: readonly Record<string, unknown>[], limit = 8) {
+  const primaryKeys = uniqueTexts(entities.map(preferredEntityAssetKey))
+  const extraKeys = uniqueTexts(entities.flatMap(entityAssetKeys).filter((assetKey) => !primaryKeys.includes(assetKey)))
+  return uniqueTexts([...primaryKeys, ...extraKeys]).slice(0, Math.max(1, limit))
+}
+
 function normalizeReferenceText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
@@ -1628,17 +1647,13 @@ Deno.serve(async (request) => {
       return [...new Set([...dependencyReferenceKeys, ...siblingReferenceKeys, ...worldReferenceKeys])].slice(0, 8)
     }
     const assetKeysForEntityKeys = (entityKeys: readonly string[]) => {
-      const keys: string[] = []
+      const entities: Record<string, unknown>[] = []
       for (const entityKey of entityKeys) {
         const entity = assetPackEntities.find((entry) => readText(entry.key) === entityKey)
         if (!entity) continue
-        keys.push(
-          readText(entity.primaryAssetKey),
-          readText(entity.selectedReferenceAssetKey),
-          ...readStringArray(entity.assetKeys),
-        )
+        entities.push(entity)
       }
-      return [...new Set(keys.filter(Boolean))]
+      return prioritizedEntityAssetKeys(entities, 8)
     }
     const assetKeysForGraphNodeIds = (nodeIds: readonly string[]) => [...new Set(nodeIds
       .map((nodeId) => readText(asRecord(continuityAssetStateByNodeId[nodeId]).assetKey))
@@ -1740,6 +1755,11 @@ Deno.serve(async (request) => {
       .map(([setupId, assetKeys]) => [setupId, readStringArray(assetKeys).map((assetKey) => ({ assetKey, role: 'selected_reference' as const, reason: 'Selected for coverage anchor generation.' }))] as const))
     const shotSelectedReferencesByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.selectedReferences]).filter(([shotId]) => shotId))
     const shotOmittedReferencesByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.omittedReferences]).filter(([shotId]) => shotId))
+    const graphLocalReferenceKeysForShotProduction = (shotId: string) => readArray(shotSelectedReferencesByShotId[shotId])
+      .map(asRecord)
+      .filter((entry) => ['entity_reference', 'continuity_asset'].includes(readText(entry.role)))
+      .map((entry) => readText(entry.assetKey))
+      .filter(Boolean)
     const visualReferencePlan = buildSequenceAnimaticVisualReferencePlan({
       keyframePlan: asRecord(keyframePlan),
       dependencyNodeIds: dependencyTargetIds,
@@ -2639,8 +2659,23 @@ Deno.serve(async (request) => {
         .map((entry) => asRecord(entry.shot))
         .filter((entry) => coverageShotIds.includes(readText(entry.id)))
       const scopedCoverageShots = scopedCoverageShotsForShot({ shot, coverageSetup, coverageShots })
-      const requiredReferenceAssetKeys = readStringArray(shotRequiredReferenceAssetKeysByShotId[shotId])
-      const omittedReferenceAssetKeys = readStringArray(shotOmittedReferenceAssetKeysByShotId[shotId])
+      const visualPlanRequiredReferenceAssetKeys = readStringArray(shotRequiredReferenceAssetKeysByShotId[shotId])
+      const visualPlanOmittedReferenceAssetKeys = readStringArray(shotOmittedReferenceAssetKeysByShotId[shotId])
+      const requiredReferenceAssetKeys = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+        ? graphLocalReferenceKeysForShotProduction(shotId)
+        : visualPlanRequiredReferenceAssetKeys
+      const selectedReferencesForShotProduction = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+        ? readArray(shotSelectedReferencesByShotId[shotId])
+          .map(asRecord)
+          .filter((entry) => requiredReferenceAssetKeys.includes(readText(entry.assetKey)))
+        : readArray(shotSelectedReferencesByShotId[shotId]).map(asRecord)
+      const omittedReferenceAssetKeys = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+        ? readArray(shotOmittedReferencesByShotId[shotId])
+          .map(asRecord)
+          .filter((entry) => ['entity_reference', 'continuity_asset'].includes(readText(entry.role)))
+          .map((entry) => readText(entry.assetKey))
+          .filter(Boolean)
+        : visualPlanOmittedReferenceAssetKeys
       const sourceReferenceHash = sequenceAnimaticVisualReferenceHash({ shotId, coverageSetupId, requiredReferenceAssetKeys, omittedReferenceAssetKeys })
       const sourceShotHash = sequenceAnimaticStableHash({
         shotId,
@@ -2775,7 +2810,7 @@ Deno.serve(async (request) => {
           continuityDependencyNodeIds: continuityDependencies.map((entry) => readText(entry.targetNodeId)).filter(Boolean),
           missingContinuityNodeIds,
           referenceSelection: {
-            selectedReferences: readArray(shotSelectedReferencesByShotId[shotId]).map(asRecord),
+            selectedReferences: selectedReferencesForShotProduction,
             omittedReferences: readArray(shotOmittedReferencesByShotId[shotId]).map(asRecord),
           },
           sharedDependencyRequests: [
@@ -2827,14 +2862,14 @@ Deno.serve(async (request) => {
           coverageAnchor: coverageSetupId ? coverageAnchorImageBySetupId.get(coverageSetupId) ?? {} : {},
           coverageSetup,
           coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
-          coverageReferenceAssetKeys: [],
+          coverageReferenceAssetKeys: requiredReferenceAssetKeys,
           previousKeyframe: readText(job.previousShotId) ? shotKeyframeImageByShotId.get(readText(job.previousShotId)) ?? {} : {},
           assetPack,
           continuityDependencies,
           dependencyMode: shotGraphDependencyMode,
           requiredReferenceAssetKeys,
           omittedReferenceAssetKeys,
-          selectedReferences: readArray(shotSelectedReferencesByShotId[shotId]).map(asRecord),
+          selectedReferences: selectedReferencesForShotProduction,
           omittedReferences: readArray(shotOmittedReferencesByShotId[shotId]).map(asRecord),
           sharedDependencyRequests: readArray(commonConfig.sharedDependencyRequests).map(asRecord),
           editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(shot.editorialDurationSeconds ?? 0) || 3)),

@@ -53,6 +53,29 @@ function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
   return readText(metadata.screenplayAnimaticRole) || readText(metadata.sequenceAnimaticRole)
 }
 
+function sceneGraphOverrideForNode(metadata: Record<string, unknown>, nodeId: string) {
+  const overrides = asRecord(metadata.sequenceAnimaticSceneGraphOverrides ?? metadata.sequence_animatic_scene_graph_overrides)
+  const nodes = asRecord(overrides.nodes)
+  const override = asRecord(nodes[nodeId])
+  return {
+    visualBriefOverride: readText(override.visualBriefOverride),
+    extraPromptDirection: readText(override.extraPromptDirection),
+    lastGeneratedAssetKey: readText(override.lastGeneratedAssetKey),
+  }
+}
+
+function applySceneGraphOverrideToNode(node: Record<string, unknown>, override: ReturnType<typeof sceneGraphOverrideForNode>) {
+  if (!override.visualBriefOverride && !override.extraPromptDirection) return node
+  return {
+    ...node,
+    baseVisualBrief: readText(node.visualBrief) || readText(node.summary),
+    visualBrief: override.visualBriefOverride || readText(node.visualBrief),
+    summary: override.visualBriefOverride || readText(node.summary),
+    sceneGraphOverride: override,
+    scene_graph_override: override,
+  }
+}
+
 function readArtifactMetadataRecord(
   artifacts: readonly Record<string, unknown>[],
   roles: readonly string[],
@@ -263,7 +286,8 @@ Deno.serve(async (request) => {
     let requestedNodeIds = [...new Set([payload.nodeId, ...readStringArray(payload.nodeIds)].map(readText).filter(Boolean))].slice(0, 4)
     const targetNodes = requestedNodeIds.map((nodeId) => allGraphNodes.find((entry) => readText(entry.id) === nodeId) ?? null)
     if (targetNodes.some((node) => !node)) throw new HttpError(404, 'One or more continuity nodes were not found in the current scene graph.')
-    let resolvedTargetNodes = targetNodes as Record<string, unknown>[]
+    let resolvedTargetNodes = (targetNodes as Record<string, unknown>[])
+      .map((node) => applySceneGraphOverrideToNode(node, sceneGraphOverrideForNode(asRecord(masterRequest.metadata), readText(node.id))))
     let targetNode = resolvedTargetNodes[0] ?? null
     if (!targetNode) throw new HttpError(404, 'Continuity node was not found in the current scene graph.')
     let batchKind = resolvedTargetNodes.length > 1 ? continuityBatchKindForNodes(resolvedTargetNodes) : ''
@@ -388,7 +412,10 @@ Deno.serve(async (request) => {
     })
     if (missingParent) {
       const parentNodeId = readText(missingParent.sourceNodeId)
-      const parentNode = allGraphNodes.find((node) => readText(node.id) === parentNodeId) ?? null
+      const rawParentNode = allGraphNodes.find((node) => readText(node.id) === parentNodeId) ?? null
+      const parentNode = rawParentNode
+        ? applySceneGraphOverrideToNode(rawParentNode, sceneGraphOverrideForNode(asRecord(masterRequest.metadata), parentNodeId))
+        : null
       const parentKind = readText(parentNode?.nodeKind)
       const targetKind = readText(targetNode.nodeKind)
       const canScaffold = parentNode

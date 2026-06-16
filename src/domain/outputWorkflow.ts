@@ -61,7 +61,7 @@ export const cinematicAnimaticModeSchema = z.preprocess(
 
 const sequenceAnimaticMasterMaxShotCount = 150
 export const sequenceAnimaticGraphSpecVersionSchema = z.enum(['sequence_animatic_graph_v1', 'sequence_animatic_graph_v2'])
-export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'director_plan', 'continuity_pack', 'continuity_asset', 'continuity_asset_batch', 'storyboard_block', 'coverage_anchor', 'shot_keyframe', 'shot_video', 'shot_production', 'shot_revision'])
+export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'director_plan', 'continuity_pack', 'continuity_asset', 'continuity_asset_batch', 'storyboard_block', 'coverage_anchor', 'coverage_intent_batch', 'shot_keyframe', 'shot_video', 'shot_production', 'shot_revision'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -1045,6 +1045,122 @@ export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object(
   coverageSetupId: z.string().nullable().default(null),
   dependencyNodeIds: z.array(z.string()).default([]),
   graphPolicyVersion: z.string().default('primary_chain_v5'),
+})
+
+export const sequenceAnimaticZoneCoverageBoardEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  sceneId: z.string().min(1),
+  setId: z.string().optional().nullable().default(null),
+  zoneId: z.string().optional().nullable().default(null),
+  shotIds: z.array(z.string().min(1)).optional().default([]),
+  scopedShots: z.array(looseRecordSchema).optional().default([]),
+  forceRefresh: z.boolean().default(false),
+})
+
+export const sequenceAnimaticZoneCoverageBoardEnsureResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  boardRequests: z.array(outputRequestSchema).default([]),
+  workflows: z.array(outputWorkflowSchema).default([]),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+  zoneCoverageBoards: z.array(looseRecordSchema).default([]),
+  coverageCellByShotId: looseRecordSchema.default({}),
+  cacheStatus: z.enum(['reused', 'created', 'refreshed', 'mixed']).default('created'),
+  sceneId: z.string().min(1),
+})
+
+export const sequenceAnimaticCoverageIntentRecordSchema = looseObjectSchema.extend({
+  shotId: z.string().min(1),
+  sceneId: z.string().default(''),
+  setId: z.string().default(''),
+  zoneId: z.string().default(''),
+  primarySpotId: z.string().default(''),
+  coverageIntent: z.string().default(''),
+  cameraFraming: z.string().default(''),
+  cameraAngle: z.string().default(''),
+  screenDirection: z.string().default(''),
+  subjectFocus: z.string().default(''),
+  stagingBrief: z.string().default(''),
+  sourceHash: z.string().default(''),
+  updatedAt: z.string().default(''),
+  workflowRequestId: z.string().default(''),
+})
+
+export const sequenceAnimaticShotCoverageIntentEnsureRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  sceneId: z.string().min(1),
+  setId: z.string().optional().nullable().default(null),
+  zoneId: z.string().optional().nullable().default(null),
+  shotIds: z.array(z.string().min(1)).min(1).max(150),
+  scopedShots: z.array(looseRecordSchema).optional().default([]),
+  forceRefresh: z.boolean().default(false),
+})
+
+export const sequenceAnimaticShotCoverageIntentEnsureResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  intentRequest: outputRequestSchema,
+  workflow: outputWorkflowSchema.nullable().default(null),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+  coverageIntentByShotId: z.record(z.string(), sequenceAnimaticCoverageIntentRecordSchema).default({}),
+  cacheStatus: z.enum(['reused', 'created', 'refreshed']).default('created'),
+  sceneId: z.string().min(1),
+  shotIds: z.array(z.string()).default([]),
+})
+
+export const sequenceAnimaticSceneGraphNodeKindSchema = z.enum([
+  'world_location',
+  'set',
+  'zone',
+  'spot',
+  'viewpoint',
+  'angle',
+  'coverage_anchor',
+  'temp_character',
+  'prop',
+  'faction',
+  'vehicle',
+  'group',
+])
+
+export const sequenceAnimaticSceneGraphNodeOverrideSchema = z.object({
+  nodeId: z.string().min(1),
+  nodeKind: sequenceAnimaticSceneGraphNodeKindSchema,
+  visualBriefOverride: z.string().trim().max(8000).default(''),
+  extraPromptDirection: z.string().trim().max(8000).default(''),
+  updatedAt: z.string().default(''),
+  updatedBy: z.string().nullable().default(null),
+  lastGeneratedAssetKey: z.string().nullable().default(null),
+  previousAssetKeys: z.array(z.string()).default([]),
+})
+
+export const sequenceAnimaticSceneGraphOverridesSchema = z.object({
+  version: z.literal('sequence_animatic_scene_graph_overrides_v1').default('sequence_animatic_scene_graph_overrides_v1'),
+  nodes: z.record(z.string(), sequenceAnimaticSceneGraphNodeOverrideSchema).default({}),
+})
+
+export const sequenceAnimaticSceneGraphNodeUpdateRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  nodeId: z.string().min(1),
+  nodeKind: sequenceAnimaticSceneGraphNodeKindSchema,
+  visualBriefOverride: z.string().trim().max(8000).optional(),
+  extraPromptDirection: z.string().trim().max(8000).optional(),
+  clearOverride: z.boolean().default(false),
+})
+
+export const sequenceAnimaticSceneGraphNodeUpdateResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  overrides: sequenceAnimaticSceneGraphOverridesSchema,
+  nodeOverride: sequenceAnimaticSceneGraphNodeOverrideSchema.nullable().default(null),
 })
 
 export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
@@ -4294,6 +4410,14 @@ export type SequenceAnimaticContinuityStructureDeriveResponse = z.infer<typeof s
 export type SequenceAnimaticContinuityAssetWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema>
 export type SequenceAnimaticKeyframeWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticKeyframeWorkflowEnsureResponseSchema>
 export type SequenceAnimaticShotProductionGraphEnsureResponse = z.infer<typeof sequenceAnimaticShotProductionGraphEnsureResponseSchema>
+export type SequenceAnimaticZoneCoverageBoardEnsureResponse = z.infer<typeof sequenceAnimaticZoneCoverageBoardEnsureResponseSchema>
+export type SequenceAnimaticCoverageIntentRecord = z.infer<typeof sequenceAnimaticCoverageIntentRecordSchema>
+export type SequenceAnimaticShotCoverageIntentEnsureResponse = z.infer<typeof sequenceAnimaticShotCoverageIntentEnsureResponseSchema>
+export type SequenceAnimaticSceneGraphNodeKind = z.infer<typeof sequenceAnimaticSceneGraphNodeKindSchema>
+export type SequenceAnimaticSceneGraphNodeOverride = z.infer<typeof sequenceAnimaticSceneGraphNodeOverrideSchema>
+export type SequenceAnimaticSceneGraphOverrides = z.infer<typeof sequenceAnimaticSceneGraphOverridesSchema>
+export type SequenceAnimaticSceneGraphNodeUpdateRequest = z.infer<typeof sequenceAnimaticSceneGraphNodeUpdateRequestSchema>
+export type SequenceAnimaticSceneGraphNodeUpdateResponse = z.infer<typeof sequenceAnimaticSceneGraphNodeUpdateResponseSchema>
 export type SequenceAnimaticShotRevisionWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema>
 export type SequenceAnimaticStateResponse = z.infer<typeof sequenceAnimaticStateResponseSchema>
 export type OutputWorkflowGraphRequest = z.infer<typeof outputWorkflowGraphRequestSchema>

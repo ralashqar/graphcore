@@ -6253,6 +6253,74 @@ export default function App() {
     return result
   }
 
+  async function ensureSequenceAnimaticZoneCoverageBoards(request: Parameters<typeof workspaceService.ensureSequenceAnimaticZoneCoverageBoards>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before preparing sequence animatic zone coverage boards.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic zone coverage boards require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticZoneCoverageBoards(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const requests = [result.masterRequest, ...result.boardRequests]
+    const workflows = result.workflows
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+      outputWorkflows: [
+        ...workflows,
+        ...current.outputWorkflows.filter((workflow) => !workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
+  async function ensureSequenceAnimaticShotCoverageIntents(request: Parameters<typeof workspaceService.ensureSequenceAnimaticShotCoverageIntents>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before preparing sequence animatic coverage directions.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Sequence animatic coverage directions require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.ensureSequenceAnimaticShotCoverageIntents(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const workflows = result.workflow ? [result.workflow] : []
+    const requests = [result.masterRequest, result.intentRequest]
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: [
+        ...requests,
+        ...current.outputRequests.filter((requestRow) => !requests.some((entry) => entry.id === requestRow.id)),
+      ],
+      outputWorkflows: [
+        ...workflows,
+        ...current.outputWorkflows.filter((workflow) => !workflows.some((entry) => entry.id === workflow.id)),
+      ],
+      outputWorkflowNodes: [
+        ...current.outputWorkflowNodes.filter((node) => !workflows.some((workflow) => workflow.id === node.workflowId)),
+        ...result.nodes,
+      ],
+      outputWorkflowEdges: [
+        ...current.outputWorkflowEdges.filter((edge) => !workflows.some((workflow) => workflow.id === edge.workflowId)),
+        ...result.edges,
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function ensureSequenceAnimaticShotRevisionWorkflow(request: Parameters<typeof workspaceService.ensureSequenceAnimaticShotRevisionWorkflow>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before revising a sequence animatic shot.')
@@ -6698,6 +6766,24 @@ export default function App() {
         ...current.outputWorkflowNodes.filter((node) => node.workflowId !== request.workflowId),
         ...result.nodes,
       ],
+    })
+    return result
+  }
+
+  async function updateSequenceAnimaticSceneGraphNode(request: Parameters<typeof workspaceService.updateSequenceAnimaticSceneGraphNode>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before editing an animatic scene graph.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Animatic scene graphs require a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.updateSequenceAnimaticSceneGraphNode(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    commitPersistedSnapshot({
+      ...current,
+      outputRequests: current.outputRequests.map((outputRequest) => (
+        outputRequest.id === result.masterRequest.id ? result.masterRequest : outputRequest
+      )),
     })
     return result
   }
@@ -8870,7 +8956,10 @@ export default function App() {
                 onEnsureSequenceAnimaticContinuityAssetWorkflow={ensureSequenceAnimaticContinuityAssetWorkflow}
                 onEnsureSequenceAnimaticKeyframeWorkflows={ensureSequenceAnimaticKeyframeWorkflows}
                 onEnsureSequenceAnimaticShotProductionGraph={ensureSequenceAnimaticShotProductionGraph}
+                onEnsureSequenceAnimaticShotCoverageIntents={ensureSequenceAnimaticShotCoverageIntents}
+                onEnsureSequenceAnimaticZoneCoverageBoards={ensureSequenceAnimaticZoneCoverageBoards}
                 onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
+                onUpdateSequenceAnimaticSceneGraphNode={updateSequenceAnimaticSceneGraphNode}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}
                 onSubscribeSequenceAnimaticStateSignals={workspaceService.subscribeSequenceAnimaticStateSignals}
                 onGetOutputRequestStatus={getOutputRequestStatus}
