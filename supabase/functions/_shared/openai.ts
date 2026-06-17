@@ -1,3 +1,9 @@
+declare const Deno: {
+  env: {
+    get(name: string): string | undefined
+  }
+}
+
 export type OpenAiResponsesRequest = {
   model: string
   input: string | Array<Record<string, unknown>>

@@ -1,6 +1,7 @@
 import {
   childWorkflowUtilityOutputSchema,
 } from '../../../src/domain/outputWorkflowManifests.ts'
+import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import {
   ensureChildWorkflow,
   waitForChildWorkflowReadiness,
@@ -424,13 +425,24 @@ const utilityHandlers = {
   workflow_collect_child_artifacts: collectChildArtifactsNode,
 }
 
-export const workflowUtilityNodeHandlerKeys = Object.keys(utilityHandlers)
+export const workflowUtilityNodePack = defineWorkflowNodePack<
+  UtilityNodeExecutionContext,
+  UtilityNodeExecutionResult,
+  WorkflowUtilityNodePackHelpers,
+  typeof utilityHandlers
+>({
+  packKey: 'output_workflow_utility',
+  handlers: utilityHandlers,
+})
+
+export const workflowUtilityNodeHandlerKeys = workflowUtilityNodePack.handlerKeys
 
 export function registerWorkflowUtilityNodePack(input: {
   helpers: WorkflowUtilityNodePackHelpers
   register: (handlerKey: string, handler: (context: UtilityNodeExecutionContext) => Promise<UtilityNodeExecutionResult>) => void
 }) {
-  for (const [handlerKey, handler] of Object.entries(utilityHandlers)) {
-    input.register(handlerKey, (context) => handler(context, input.helpers))
-  }
+  workflowUtilityNodePack.register({
+    dependencies: input.helpers,
+    register: input.register,
+  })
 }

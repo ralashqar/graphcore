@@ -12,14 +12,24 @@ import {
 } from './workflowCommandRegistry.ts'
 import {
   assertWorkflowNodeHandlerCoverage,
+  assertWorkflowNodePackManifestCoverage,
   createWorkflowNodeHandlerRegistry,
+  defineWorkflowNodePack,
   registerWorkflowNodeHandler,
 } from './workflowNodeHandlerRegistry.ts'
+import { outputWorkflowNodeManifests } from './outputWorkflowNodeContracts.ts'
 import { buildWorkflowProgressViewModel } from './workflowProgressView.ts'
 import { createWorkflowNodeManifest, workflowProjectionMetadataSchema } from './outputWorkflowManifests.ts'
 import { createStreamingJsonlProcessor, extractCompleteJsonRecords } from '../../supabase/functions/_shared/output-workflow-streaming.ts'
-import { sceneBoardWorkflowNodeHandlerKeys } from '../../supabase/functions/_shared/output-workflow-scene-board-pack.ts'
-import { workflowUtilityNodeHandlerKeys } from '../../supabase/functions/_shared/output-workflow-utility-pack.ts'
+import { sceneBoardWorkflowNodeHandlerKeys, sceneBoardWorkflowNodePack } from '../../supabase/functions/_shared/output-workflow-scene-board-pack.ts'
+import { sequenceAnimaticWorkflowNodeHandlerKeys, sequenceAnimaticWorkflowNodePack } from '../../supabase/functions/_shared/output-workflow-sequence-animatic-pack.ts'
+import { workflowMediaNodeHandlerKeys, workflowMediaNodePack } from '../../supabase/functions/_shared/output-workflow-media-pack.ts'
+import { workflowUtilityNodeHandlerKeys, workflowUtilityNodePack } from '../../supabase/functions/_shared/output-workflow-utility-pack.ts'
+import {
+  assertLegacyMonolithWorkflowNodeHandlerDebtIsTracked,
+  legacyMonolithWorkflowNodeHandlerKeys,
+  legacyMonolithWorkflowNodeHandlerRecords,
+} from '../../supabase/functions/_shared/output-workflow-legacy-handlers.ts'
 
 test('buildWorkflowProgressViewModel derives active runtime state from projection metadata', () => {
   const model = buildWorkflowProgressViewModel({
@@ -608,7 +618,44 @@ test('workflow node handler registry enforces executable manifest coverage', () 
   assert.doesNotThrow(() => assertWorkflowNodeHandlerCoverage([manifest], registry))
 })
 
-test('scene board and utility node packs expose registered handler keys', () => {
+test('workflow node pack definitions bind handlers through one reusable registration contract', async () => {
+  const pack = defineWorkflowNodePack<
+    { value: number },
+    { outputs: { value: number } },
+    { multiplier: number },
+    {
+      test_handler: (
+        context: { value: number },
+        dependencies: { multiplier: number },
+      ) => { outputs: { value: number } }
+    }
+  >({
+    packKey: 'test_pack',
+    handlers: {
+      test_handler: (context: { value: number }, dependencies: { multiplier: number }) => ({
+        outputs: { value: context.value * dependencies.multiplier },
+      }),
+    },
+  })
+  const registry = createWorkflowNodeHandlerRegistry<{ value: number }, { outputs: { value: number } }>()
+  pack.register({
+    dependencies: { multiplier: 3 },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(registry, handlerKey, handler)
+    },
+  })
+  assert.deepEqual(pack.handlerKeys, ['test_handler'])
+  assert.equal(pack.packKey, 'test_pack')
+  const handler = registry.get('test_handler')
+  assert.ok(handler)
+  assert.deepEqual(await handler({ value: 7 }), { outputs: { value: 21 } })
+  assert.throws(
+    () => defineWorkflowNodePack({ packKey: ' ', handlers: { ignored: () => ({ outputs: {} }) } }),
+    /Workflow node pack key is required/,
+  )
+})
+
+test('scene board media utility and sequence animatic node packs expose registered handler keys', () => {
   assert.deepEqual(sceneBoardWorkflowNodeHandlerKeys, [
     'sequence_animatic_scene_board_scope_input',
     'sequence_animatic_scene_board_required_ref_plan',
@@ -617,6 +664,11 @@ test('scene board and utility node packs expose registered handler keys', () => 
     'sequence_animatic_scene_board_coverage_intent_batch',
     'sequence_animatic_scene_board_zone_coverage_grid',
     'sequence_animatic_scene_board_coverage_cell_artifact',
+    'sequence_animatic_zone_coverage_board_input',
+    'sequence_animatic_zone_coverage_board_brief',
+    'sequence_animatic_zone_coverage_board_prompt',
+    'sequence_animatic_zone_coverage_board_extract',
+    'sequence_animatic_zone_coverage_board_artifact',
   ])
   assert.deepEqual(workflowUtilityNodeHandlerKeys, [
     'workflow_ensure_child_workflow',
@@ -625,6 +677,418 @@ test('scene board and utility node packs expose registered handler keys', () => 
     'workflow_fanout_children',
     'workflow_collect_child_artifacts',
   ])
+  assert.deepEqual(workflowMediaNodeHandlerKeys, [
+    'cinematic_beat_sheet',
+    'cinematic_block_video',
+    'cinematic_keyframe',
+    'cinematic_v2_shot_keyframe',
+    'cinematic_v2_shot_video',
+    'cinematic_v2_storyboard_sheet',
+    'cinematic_v3_storyboard_group_video',
+    'cinematic_v3_storyboard_sheet',
+    'comic_page',
+    'concept_art_image',
+    'ebook_cover_image',
+    'poster_image',
+    'sequence_animatic_character_anchor_atlas',
+    'sequence_animatic_continuity_asset_image',
+    'sequence_animatic_continuity_batch_image',
+    'sequence_animatic_coverage_anchor_image',
+    'sequence_animatic_location_anchor_atlas',
+    'sequence_animatic_prop_anchor_atlas',
+    'sequence_animatic_zone_coverage_board_image',
+  ])
+  assert.deepEqual(sequenceAnimaticWorkflowNodeHandlerKeys, [
+    'sequence_animatic_shot_input',
+    'sequence_animatic_shared_asset_ref',
+    'sequence_animatic_shot_reference_pack',
+    'sequence_animatic_block_input',
+    'sequence_animatic_block_artifact',
+    'sequence_animatic_scene_plan_fanout',
+    'sequence_animatic_scene_package',
+    'sequence_animatic_scene_graph_assignment',
+    'sequence_animatic_scene_shot_plan',
+    'sequence_animatic_director_plan',
+    'sequence_animatic_scene_input',
+    'sequence_animatic_scene_register',
+    'sequence_animatic_orchestrator',
+    'sequence_animatic_scene_plan_merge',
+    'sequence_animatic_manifest',
+    'sequence_animatic_manifest_artifact',
+    'sequence_animatic_director_plan_artifact',
+    'sequence_animatic_coverage_plan',
+    'sequence_animatic_coverage_intent_input',
+    'sequence_animatic_coverage_intent_plan',
+    'sequence_animatic_coverage_intent_artifact',
+    'sequence_animatic_coverage_anchor_input',
+    'sequence_animatic_coverage_anchor_brief',
+    'sequence_animatic_coverage_anchor_prompt',
+    'sequence_animatic_coverage_anchor_artifact',
+    'sequence_animatic_continuity_asset_input',
+    'sequence_animatic_continuity_asset_artifact',
+    'sequence_animatic_planned_keyframe_prompt',
+    'sequence_animatic_planned_keyframe_input',
+    'sequence_animatic_planned_keyframe_image',
+    'sequence_animatic_planned_keyframe_artifact',
+    'sequence_animatic_shot_video_prompt',
+    'sequence_animatic_shot_video',
+    'sequence_animatic_shot_video_artifact',
+    'sequence_animatic_shot_revision_input',
+    'sequence_animatic_shot_revision_plan',
+    'sequence_animatic_shot_keyframe_prompt',
+    'sequence_animatic_shot_keyframe_image',
+    'sequence_animatic_shot_revision_artifact',
+  ])
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sceneBoardWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sceneBoardWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: workflowUtilityNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: workflowUtilityNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: workflowMediaNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: workflowMediaNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticWorkflowNodeHandlerKeys,
+  }))
+  assert.throws(
+    () => assertWorkflowNodePackManifestCoverage({
+      pack: { packKey: 'bad_pack', handlerKeys: ['missing_handler'] },
+      manifests: outputWorkflowNodeManifests,
+    }),
+    /handler key\(s\) without executable manifests/,
+  )
+})
+
+test('output workflow worker requires explicit legacy or pack node handlers', () => {
+  const repoRoot = process.cwd()
+  const handlerRegistrySource = readFileSync(resolve(repoRoot, 'src/domain/workflowNodeHandlerRegistry.ts'), 'utf8')
+  const runtimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const legacyHandlersSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-legacy-handlers.ts'), 'utf8')
+  const mediaPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-media-pack.ts'), 'utf8')
+  const sceneBoardPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-scene-board-pack.ts'), 'utf8')
+  const sequenceAnimaticPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-pack.ts'), 'utf8')
+  const sequenceAnimaticCoverageRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-coverage-runtime.ts'), 'utf8')
+  const sequenceAnimaticPlanningRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-planning-runtime.ts'), 'utf8')
+  const sequenceAnimaticOrchestratorRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-orchestrator-runtime.ts'), 'utf8')
+  const sequenceAnimaticChildRunRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-child-run-runtime.ts'), 'utf8')
+  const utilityPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-utility-pack.ts'), 'utf8')
+  const mediaRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-media-runtime.ts'), 'utf8')
+
+  assert.match(handlerRegistrySource, /export function defineWorkflowNodePack/)
+  for (const packSource of [mediaPackSource, sceneBoardPackSource, sequenceAnimaticPackSource, utilityPackSource]) {
+    assert.match(packSource, /defineWorkflowNodePack/)
+    assert.doesNotMatch(packSource, /export const \w+NodeHandlerKeys = Object\.keys\(/)
+    assert.doesNotMatch(packSource, /for \(const \[handlerKey, handler\] of Object\.entries/)
+  }
+  assert.match(runtimeSource, /from '\.\/output-workflow-legacy-handlers\.ts'/)
+  assert.match(legacyHandlersSource, /legacyMonolithWorkflowNodeHandlerKeyList = \[/)
+  assert.match(legacyHandlersSource, /migrationTargetForLegacyHandlerKey/)
+  assert.match(legacyHandlersSource, /assertLegacyMonolithWorkflowNodeHandlerDebtIsTracked/)
+  assert.doesNotThrow(() => assertLegacyMonolithWorkflowNodeHandlerDebtIsTracked())
+  assert.equal(legacyMonolithWorkflowNodeHandlerRecords.length, legacyMonolithWorkflowNodeHandlerKeys.length)
+  assert.equal(new Set(legacyMonolithWorkflowNodeHandlerKeys).size, legacyMonolithWorkflowNodeHandlerKeys.length)
+  assert.ok(legacyMonolithWorkflowNodeHandlerRecords.every((record) => record.migrationTarget.length > 0))
+  const legacyHandlerKeySet = new Set<string>(legacyMonolithWorkflowNodeHandlerKeys)
+  assert.ok(sceneBoardWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.doesNotMatch(legacyHandlersSource, /sequence_animatic_scene_board_pack/)
+  assert.doesNotMatch(legacyHandlersSource, /sequence_animatic_coverage_pack/)
+  assert.ok(legacyMonolithWorkflowNodeHandlerKeys.every((handlerKey) => !handlerKey.startsWith('sequence_animatic_coverage_')))
+  assert.ok(legacyMonolithWorkflowNodeHandlerRecords.some((record) => record.migrationTarget === 'cinematic_text_pack'))
+  assert.match(runtimeSource, /function assertNoImplicitMonolithWorkflowNodeHandlers/)
+  assert.match(runtimeSource, /Workflow node manifest\(s\) need an explicit node pack handler or legacy monolith registration/)
+  assert.match(runtimeSource, /for \(const handlerKey of legacyMonolithWorkflowNodeHandlerKeys\)/)
+  assert.match(runtimeSource, /registerWorkflowUtilityNodePack/)
+  assert.match(runtimeSource, /registerWorkflowMediaNodePack/)
+  assert.match(runtimeSource, /registerSceneBoardWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticWorkflowNodePack/)
+  assert.match(runtimeSource, /createWorkflowMediaRuntime/)
+  assert.match(runtimeSource, /const mediaRuntime = createWorkflowMediaRuntime\(/)
+  assert.match(runtimeSource, /executeImageGeneration: \(context\) => executeOutputWorkflowImageGeneration\(context as never\) as never/)
+  assert.match(runtimeSource, /executeVideoGeneration: \(context\) => executeOutputWorkflowVideoGeneration\(context as never\) as never/)
+  assert.match(runtimeSource, /registerWorkflowMediaNodePack\(\{\s*runtime: mediaRuntime/)
+  assert.match(runtimeSource, /executeImageGeneration: \(context\) => mediaRuntime\.executeImageGeneration\(context as never\) as never/)
+  assert.match(runtimeSource, /executeVideoGeneration: \(context\) => mediaRuntime\.executeVideoGeneration\(context as never\) as never/)
+  assert.doesNotMatch(runtimeSource, /executeImageGeneration: \(context\) => executeNode\(context as never\) as never/)
+  assert.doesNotMatch(runtimeSource, /executeVideoGeneration: \(context\) => executeNode\(context as never\) as never/)
+  assert.doesNotMatch(runtimeSource, /executeMediaGeneration: \(context\) => executeNode/)
+  assert.match(runtimeSource, /\.\.\.workflowMediaNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticWorkflowNodeHandlerKeys/)
+  assert.doesNotMatch(runtimeSource, /for \(const manifest of outputWorkflowNodeManifests\)[\s\S]{0,160}registerWorkflowNodeHandler\(outputWorkflowNodeHandlerRegistry, manifest\.handlerKey, executeNode/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_beat_sheet'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_block_video'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_keyframe'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v2_shot_keyframe'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v2_shot_video'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v2_storyboard_sheet'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v3_storyboard_group_video'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v3_storyboard_sheet'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'comic_page'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'concept_art_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'ebook_cover_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'poster_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_character_anchor_atlas'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_asset_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_batch_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_anchor_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_location_anchor_atlas'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_prop_anchor_atlas'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_zone_coverage_board_image'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_zone_coverage_board_input'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_zone_coverage_board_brief'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_zone_coverage_board_prompt'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_zone_coverage_board_extract'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_zone_coverage_board_artifact'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_zone_coverage_board_input'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_zone_coverage_board_brief'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_zone_coverage_board_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_zone_coverage_board_extract'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_zone_coverage_board_artifact'/)
+  assert.match(sceneBoardPackSource, /sequence_animatic_zone_coverage_board_input/)
+  assert.match(sceneBoardPackSource, /sequence_animatic_zone_coverage_board_brief/)
+  assert.match(sceneBoardPackSource, /sequence_animatic_zone_coverage_board_prompt/)
+  assert.match(sceneBoardPackSource, /sequence_animatic_zone_coverage_board_extract/)
+  assert.match(sceneBoardPackSource, /sequence_animatic_zone_coverage_board_artifact/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_block_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_block_artifact'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_package'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_graph_assignment'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_shot_plan'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_director_plan'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_package'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_graph_assignment'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_shot_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_package'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_graph_assignment'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_shot_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_director_plan'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_package/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_graph_assignment/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_shot_plan/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_director_plan/)
+  assert.match(sequenceAnimaticPackSource, /runSequenceAnimaticScenePackageAssignmentRuntime/)
+  assert.match(sequenceAnimaticPackSource, /runSequenceAnimaticSceneShotPlanRuntime/)
+  assert.match(sequenceAnimaticPackSource, /runSequenceAnimaticDirectorPlanRuntime/)
+  assert.match(sequenceAnimaticPackSource, /output-workflow-sequence-animatic-planning-runtime/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export async function runSequenceAnimaticScenePackageAssignmentRuntime/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export async function runSequenceAnimaticDirectorPlanRuntime/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export async function runSequenceAnimaticSceneShotPlanRuntime/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /runSequenceAnimaticShotContinuityPlanStreamWithRetry/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /sequenceAnimaticShotContinuityPolicy/)
+  assert.doesNotMatch(runtimeSource, /async function runSequenceAnimaticScenePackageAssignment/)
+  assert.doesNotMatch(runtimeSource, /runSequenceAnimaticScenePackageAssignment:/)
+  assert.doesNotMatch(runtimeSource, /async function runSequenceAnimaticSceneShotPlan/)
+  assert.doesNotMatch(runtimeSource, /runSequenceAnimaticSceneShotPlan:/)
+  assert.doesNotMatch(runtimeSource, /async function runSequenceAnimaticDirectorPlan/)
+  assert.doesNotMatch(runtimeSource, /runSequenceAnimaticDirectorPlan:/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_plan_fanout'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_register'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_orchestrator'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_plan_fanout'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_input'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_register'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_orchestrator'/)
+  assert.doesNotMatch(runtimeSource, /async function materializeSequenceAnimaticScenePlanFanout/)
+  assert.doesNotMatch(runtimeSource, /materializeSequenceAnimaticScenePlanFanout:/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_plan_fanout'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_input'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_register'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_orchestrator'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_plan_fanout/)
+  assert.match(sequenceAnimaticPackSource, /materializeSequenceAnimaticScenePlanFanoutRuntime/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export async function materializeSequenceAnimaticScenePlanFanoutRuntime/)
+  assert.match(sequenceAnimaticPackSource, /Materialized \$\{fanout\.sceneCount\} parallel scene shot planner/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_input/)
+  assert.match(sequenceAnimaticPackSource, /Sequence animatic scene input requires the authored screenplay text/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_register/)
+  assert.match(sequenceAnimaticPackSource, /Sequence animatic scene registration requires at least one screenplay scene/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_orchestrator/)
+  assert.match(sequenceAnimaticPackSource, /runSequenceAnimaticOrchestratorRuntime/)
+  assert.match(sequenceAnimaticPackSource, /output-workflow-sequence-animatic-orchestrator-runtime/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /export async function runSequenceAnimaticOrchestratorRuntime/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /ensureMappedChildWorkflow/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /buildSequenceAnimaticTemplateGraph/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /startSequenceAnimaticChildRun/)
+  assert.match(sequenceAnimaticChildRunRuntimeSource, /export async function startSequenceAnimaticChildRunRuntime/)
+  assert.match(sequenceAnimaticChildRunRuntimeSource, /augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets/)
+  assert.match(runtimeSource, /startSequenceAnimaticChildRunRuntime/)
+  assert.doesNotMatch(runtimeSource, /function sequenceAnimaticContinuityAssetEntityFromState/)
+  assert.doesNotMatch(runtimeSource, /async function runSequenceAnimaticOrchestrator/)
+  assert.doesNotMatch(runtimeSource, /runSequenceAnimaticOrchestrator:/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_plan_merge'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_plan_merge'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_plan_merge'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_plan_merge/)
+  assert.match(sequenceAnimaticPackSource, /Scene shot plan merge requires completed scene shot plans/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_manifest'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_manifest'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_manifest'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_manifest/)
+  assert.match(sequenceAnimaticPackSource, /Sequence animatic manifest requires the authored screenplay/)
+  assert.match(sequenceAnimaticPackSource, /deterministic-sequence-animatic-director-manifest-v1/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_manifest_artifact'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_manifest_artifact'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_manifest_artifact'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_manifest_artifact/)
+  assert.match(sequenceAnimaticPackSource, /Sequence animatic manifest artifact requires a manifest input/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_director_plan_artifact'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_director_plan_artifact'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_director_plan_artifact'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_director_plan_artifact/)
+  assert.match(sequenceAnimaticPackSource, /Sequence animatic shot continuity plan artifact requires a shot continuity plan input/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_plan'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_coverage_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_plan'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_plan/)
+  assert.match(sequenceAnimaticPackSource, /from '\.\/output-workflow-sequence-animatic-coverage-runtime\.ts'/)
+  assert.match(sequenceAnimaticPackSource, /Assign every shot to exactly one coverage setup/)
+  assert.match(sequenceAnimaticCoverageRuntimeSource, /export const sequenceAnimaticShotContinuityCoverageSetupV2Schema/)
+  assert.match(sequenceAnimaticCoverageRuntimeSource, /export const sequenceAnimaticCoveragePlanLlmSchema/)
+  assert.match(sequenceAnimaticCoverageRuntimeSource, /export function sequenceAnimaticCoverageShotRefs/)
+  assert.match(sequenceAnimaticCoverageRuntimeSource, /export function sequenceAnimaticCoverageSpatialFields/)
+  assert.match(sequenceAnimaticCoverageRuntimeSource, /export function normalizeSequenceAnimaticCoveragePlan/)
+  assert.match(sequenceAnimaticCoverageRuntimeSource, /export function applySequenceAnimaticCoveragePlanToDirectorPlan/)
+  assert.doesNotMatch(runtimeSource, /function sequenceAnimaticCoverageShotRefs/)
+  assert.doesNotMatch(runtimeSource, /function sequenceAnimaticCoverageSpatialFields/)
+  assert.doesNotMatch(runtimeSource, /function normalizeSequenceAnimaticCoveragePlan/)
+  assert.doesNotMatch(runtimeSource, /function applySequenceAnimaticCoveragePlanToDirectorPlan/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_intent_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_intent_plan'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_intent_artifact'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_coverage_intent_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_intent_plan'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_intent_plan/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_intent_batch/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_anchor_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_anchor_brief'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_anchor_prompt'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_anchor_artifact'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_coverage_anchor_brief'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_coverage_anchor_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_anchor_brief'/)
+  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_anchor_prompt'/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_anchor_brief/)
+  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_anchor_prompt/)
+  assert.match(sequenceAnimaticPackSource, /runBackgroundStructuredNode/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_asset_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_asset_artifact'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shared_asset_ref'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_reference_pack'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_prompt'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_artifact'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_video_prompt'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_video'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_video_artifact'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_revision_input'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_revision_plan'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_keyframe_prompt'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_keyframe_image'/)
+  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_revision_artifact'/)
+  assert.match(mediaPackSource, /executeImageGeneration/)
+  assert.match(mediaPackSource, /executeVideoGeneration/)
+  assert.match(mediaPackSource, /WorkflowMediaRuntime/)
+  assert.match(mediaPackSource, /runtime: WorkflowMediaRuntime/)
+  assert.doesNotMatch(mediaPackSource, /WorkflowMediaNodePackHelpers/)
+  assert.match(mediaRuntimeSource, /export type WorkflowMediaRuntime/)
+  assert.match(mediaRuntimeSource, /createWorkflowMediaRuntime/)
+  assert.match(mediaRuntimeSource, /executeImageGeneration/)
+  assert.match(mediaRuntimeSource, /executeVideoGeneration/)
+  assert.match(mediaRuntimeSource, /outputWorkflowImageModel/)
+  assert.match(mediaRuntimeSource, /normalizeImageSize/)
+  assert.match(mediaRuntimeSource, /buildFalHeaders/)
+  assert.match(mediaRuntimeSource, /buildMuapiHeaders/)
+  assert.match(mediaRuntimeSource, /buildFalImageRequestBody/)
+  assert.match(mediaRuntimeSource, /buildFalVideoRequestBody/)
+  assert.match(mediaRuntimeSource, /outputWorkflowFalStaleRequestMs/)
+  assert.match(mediaRuntimeSource, /fetchFalJson/)
+  assert.match(mediaRuntimeSource, /fetchMuapiJson/)
+  assert.match(mediaRuntimeSource, /submitFalImageRequest/)
+  assert.match(mediaRuntimeSource, /submitFalVideoRequest/)
+  assert.match(mediaRuntimeSource, /submitMuapiVideoRequest/)
+  assert.match(mediaRuntimeSource, /getFalStatus/)
+  assert.match(mediaRuntimeSource, /getFalResult/)
+  assert.match(mediaRuntimeSource, /getMuapiResult/)
+  assert.match(mediaRuntimeSource, /outputWorkflowFalTimeoutMs/)
+  assert.match(mediaRuntimeSource, /outputWorkflowFalPollIntervalMs/)
+  assert.match(mediaRuntimeSource, /outputWorkflowMuapiTimeoutMs/)
+  assert.match(mediaRuntimeSource, /buildOutputWorkflowMuapiWebhookUrl/)
+  assert.match(mediaRuntimeSource, /readFalWebhookImageResult/)
+  assert.match(mediaRuntimeSource, /waitForOutputFalImage/)
+  assert.match(mediaRuntimeSource, /waitForOutputFalVideo/)
+  assert.match(mediaRuntimeSource, /waitForOutputMuapiVideo/)
+  assert.match(mediaRuntimeSource, /falErrorMessage/)
+  assert.match(mediaRuntimeSource, /isFalReferencePolicyError/)
+  assert.match(mediaRuntimeSource, /normalizeFalResultBody/)
+  assert.match(mediaRuntimeSource, /extractFalImageRecord/)
+  assert.match(mediaRuntimeSource, /extractFalVideoRecord/)
+  assert.match(mediaRuntimeSource, /muapiErrorMessage/)
+  assert.match(mediaRuntimeSource, /readMuapiRequestId/)
+  assert.match(mediaRuntimeSource, /readMuapiProviderStatus/)
+  assert.match(mediaRuntimeSource, /muapiStatusIsComplete/)
+  assert.match(mediaRuntimeSource, /muapiStatusIsFailed/)
+  assert.match(mediaRuntimeSource, /MUAPI_VIDEO_PROMPT_MAX_CHARS/)
+  assert.match(mediaRuntimeSource, /compactSeedancePromptForProvider/)
+  assert.match(mediaRuntimeSource, /buildMuapiVideoPayload/)
+  assert.match(mediaRuntimeSource, /extractMuapiVideoUrlFromResult/)
+  assert.match(mediaRuntimeSource, /resolveOutputVideoProvider/)
+  assert.match(mediaRuntimeSource, /outputWorkflowDefaultVideoModel/)
+  assert.match(mediaRuntimeSource, /resolveMuapiVideoDurationSeconds/)
+  assert.match(mediaRuntimeSource, /referenceLimitForImageNode/)
+  assert.doesNotMatch(runtimeSource, /function outputWorkflowImageModel/)
+  assert.doesNotMatch(runtimeSource, /function normalizeImageSize/)
+  assert.doesNotMatch(runtimeSource, /function buildFalHeaders/)
+  assert.doesNotMatch(runtimeSource, /function buildMuapiHeaders/)
+  assert.doesNotMatch(runtimeSource, /function buildFalImageRequestBody/)
+  assert.doesNotMatch(runtimeSource, /function buildFalVideoRequestBody/)
+  assert.doesNotMatch(runtimeSource, /function outputWorkflowFalStaleRequestMs/)
+  assert.doesNotMatch(runtimeSource, /function fetchFalJson/)
+  assert.doesNotMatch(runtimeSource, /function fetchMuapiJson/)
+  assert.doesNotMatch(runtimeSource, /async function submitFalImageRequest/)
+  assert.doesNotMatch(runtimeSource, /async function submitFalVideoRequest/)
+  assert.doesNotMatch(runtimeSource, /async function submitMuapiVideoRequest/)
+  assert.doesNotMatch(runtimeSource, /async function getFalStatus/)
+  assert.doesNotMatch(runtimeSource, /async function getFalResult/)
+  assert.doesNotMatch(runtimeSource, /async function getMuapiResult/)
+  assert.doesNotMatch(runtimeSource, /function outputWorkflowFalTimeoutMs/)
+  assert.doesNotMatch(runtimeSource, /function outputWorkflowFalPollIntervalMs/)
+  assert.doesNotMatch(runtimeSource, /function outputWorkflowMuapiTimeoutMs/)
+  assert.doesNotMatch(runtimeSource, /function buildOutputWorkflowMuapiWebhookUrl/)
+  assert.doesNotMatch(runtimeSource, /function readFalWebhookImageResult/)
+  assert.doesNotMatch(runtimeSource, /async function waitForOutputFalImage/)
+  assert.doesNotMatch(runtimeSource, /async function waitForOutputFalVideo/)
+  assert.doesNotMatch(runtimeSource, /async function waitForOutputMuapiVideo/)
+  assert.doesNotMatch(runtimeSource, /function falErrorMessage/)
+  assert.doesNotMatch(runtimeSource, /function isFalReferencePolicyError/)
+  assert.doesNotMatch(runtimeSource, /function normalizeFalResultBody/)
+  assert.doesNotMatch(runtimeSource, /function extractFalImageRecord/)
+  assert.doesNotMatch(runtimeSource, /function extractFalVideoRecord/)
+  assert.doesNotMatch(runtimeSource, /function muapiErrorMessage/)
+  assert.doesNotMatch(runtimeSource, /function readMuapiRequestId/)
+  assert.doesNotMatch(runtimeSource, /function readMuapiProviderStatus/)
+  assert.doesNotMatch(runtimeSource, /function muapiStatusIsComplete/)
+  assert.doesNotMatch(runtimeSource, /function muapiStatusIsFailed/)
+  assert.doesNotMatch(runtimeSource, /function compactSeedancePromptForProvider/)
+  assert.doesNotMatch(runtimeSource, /function buildMuapiVideoPayload/)
+  assert.doesNotMatch(runtimeSource, /function extractMuapiVideoUrlFromResult/)
+  assert.doesNotMatch(runtimeSource, /function resolveOutputVideoProvider/)
+  assert.doesNotMatch(runtimeSource, /function referenceLimitForImageNode/)
+  assert.doesNotMatch(mediaPackSource, /executeMediaGeneration/)
+  assert.match(mediaPackSource, /cinematic_block_video: videoGeneration/)
+  assert.match(mediaPackSource, /cinematic_v3_storyboard_group_video: videoGeneration/)
+  assert.match(mediaPackSource, /cinematic_beat_sheet: imageGeneration/)
+  assert.match(mediaPackSource, /comic_page: imageGeneration/)
 })
 
 test('workflow runtime promotes child utility outputs into step metadata for projections', () => {
@@ -652,6 +1116,17 @@ test('scene board progress lookup is owned by projection helpers', () => {
 })
 
 test('streaming jsonl processor extracts partial JSON records and tracks warnings', async () => {
+  const repoRoot = process.cwd()
+  const streamingSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-streaming.ts'), 'utf8')
+  const runtimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+
+  assert.match(streamingSource, /export async function runOpenAiJsonlStream/)
+  assert.match(streamingSource, /runOpenAiResponsesStream/)
+  assert.match(streamingSource, /onProviderRequestId/)
+  assert.match(streamingSource, /providerMode: 'stream'/)
+  assert.match(runtimeSource, /runOpenAiJsonlStream<string>/)
+  assert.doesNotMatch(runtimeSource, /runOpenAiResponsesStream/)
+
   assert.deepEqual(extractCompleteJsonRecords('noise {"a":1}\n{"b":"two"} tail').records, ['{"a":1}', '{"b":"two"}'])
   const accepted: unknown[] = []
   const warnings: string[] = []

@@ -1,3 +1,9 @@
+import {
+  runOpenAiResponsesStream,
+  type OpenAiResponseResult,
+  type OpenAiResponsesRequest,
+} from './openai.ts'
+
 export type StreamingJsonRecordParseResult<TRecord> = {
   record: TRecord | null
   error: unknown
@@ -6,6 +12,16 @@ export type StreamingJsonRecordParseResult<TRecord> = {
 export type StreamingJsonlProcessorStats = {
   acceptedRecordCount: number
   warningCount: number
+}
+
+function readText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
 }
 
 export function extractCompleteJsonRecords(buffer: string) {
@@ -116,5 +132,81 @@ export function createStreamingJsonlProcessor<TRecord>(input: {
         await processRecordText(record)
       }
     },
+  }
+}
+
+export type OpenAiJsonlStreamProgress = {
+  providerRequestId: string
+  providerStatus: string
+  providerMode: string
+  lastProviderPollAt: string
+  providerStartedAt: string
+}
+
+export async function runOpenAiJsonlStream<TRecord>(input: {
+  request: OpenAiResponsesRequest
+  parseRecord: (recordText: string) => StreamingJsonRecordParseResult<TRecord>
+  onRecord: (record: TRecord, recordText: string, stats: StreamingJsonlProcessorStats) => Promise<void> | void
+  onInvalidRecord: (error: unknown, recordText: string, stats: StreamingJsonlProcessorStats) => Promise<void> | void
+  shouldCancel?: () => Promise<boolean>
+  createCancelledError?: () => Error
+  onProviderRequestId?: (providerRequestId: string) => Promise<void> | void
+  onProgress?: (progress: OpenAiJsonlStreamProgress) => Promise<void>
+  progressIntervalMs?: number
+}): Promise<{
+  response: OpenAiResponseResult
+  providerRequestId: string
+  providerStartedAt: string
+  acceptedRecordCount: number
+  warningCount: number
+}> {
+  const providerStartedAt = new Date().toISOString()
+  let providerRequestId = ''
+  let lastProgressAt = 0
+  const progressIntervalMs = Math.max(1_000, input.progressIntervalMs ?? 15_000)
+
+  const progress = async (providerStatus: string, force = false) => {
+    const now = Date.now()
+    if (!force && now - lastProgressAt < progressIntervalMs) return
+    lastProgressAt = now
+    await input.onProgress?.({
+      providerRequestId,
+      providerStatus,
+      providerMode: 'stream',
+      lastProviderPollAt: new Date().toISOString(),
+      providerStartedAt,
+    })
+  }
+
+  const streamProcessor = createStreamingJsonlProcessor<TRecord>({
+    parseRecord: input.parseRecord,
+    onRecord: input.onRecord,
+    onInvalidRecord: input.onInvalidRecord,
+  })
+
+  await progress('streaming', true)
+
+  const response = await runOpenAiResponsesStream(input.request, {
+    onEvent: async (event) => {
+      const responseRecord = asRecord(event.data.response)
+      providerRequestId = readText(responseRecord.id) || readText(event.data.response_id) || readText(event.data.id) || providerRequestId
+      if (providerRequestId) await input.onProviderRequestId?.(providerRequestId)
+      await progress(event.type)
+      if (await input.shouldCancel?.()) throw input.createCancelledError?.() ?? new Error('OpenAI JSONL stream was cancelled.')
+    },
+    onTextDelta: async (delta) => {
+      await streamProcessor.push(delta)
+    },
+  })
+  providerRequestId = response.id || providerRequestId
+  if (providerRequestId) await input.onProviderRequestId?.(providerRequestId)
+  await streamProcessor.flush()
+
+  return {
+    response,
+    providerRequestId,
+    providerStartedAt,
+    acceptedRecordCount: streamProcessor.acceptedRecordCount,
+    warningCount: streamProcessor.warningCount,
   }
 }

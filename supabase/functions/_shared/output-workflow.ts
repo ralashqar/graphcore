@@ -69,15 +69,61 @@ import {
   isSequenceAnimaticSceneBoardWorkflowPurpose,
 } from './sequence-animatic-scene-board.ts'
 import {
-  createStreamingJsonlProcessor,
   extractCompleteJsonRecords,
+  runOpenAiJsonlStream,
 } from './output-workflow-streaming.ts'
 import {
   registerSceneBoardWorkflowNodePack,
+  sceneBoardWorkflowNodeHandlerKeys,
 } from './output-workflow-scene-board-pack.ts'
 import {
+  registerSequenceAnimaticWorkflowNodePack,
+  sequenceAnimaticWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-pack.ts'
+import {
+  sequenceAnimaticShotContinuityCoverageSetupV2Schema,
+} from './output-workflow-sequence-animatic-coverage-runtime.ts'
+import {
+  startSequenceAnimaticChildRunRuntime,
+} from './output-workflow-sequence-animatic-child-run-runtime.ts'
+import {
+  registerWorkflowMediaNodePack,
+  workflowMediaNodeHandlerKeys,
+} from './output-workflow-media-pack.ts'
+import {
+  buildOutputWorkflowMuapiWebhookUrl,
+  buildMuapiVideoPayload,
+  compactSeedancePromptForProvider,
+  createWorkflowMediaRuntime,
+  extractMuapiVideoUrlFromResult,
+  isFalReferencePolicyError,
+  normalizeImageSize,
+  outputWorkflowDefaultVideoModel,
+  outputWorkflowImageModel,
+  readFalWebhookImageResult,
+  referenceLimitForImageNode,
+  resolveMuapiVideoDurationSeconds,
+  resolveMuapiVideoModel,
+  resolveMuapiVideoQuality,
+  resolveOutputVideoProvider,
+  waitForOutputFalImage,
+  waitForOutputFalVideo,
+  waitForOutputMuapiVideo,
+} from './output-workflow-media-runtime.ts'
+
+export {
+  buildOutputWorkflowMuapiWebhookUrl,
+  buildMuapiVideoPayload,
+  compactSeedancePromptForProvider,
+  extractMuapiVideoUrlFromResult,
+} from './output-workflow-media-runtime.ts'
+import {
   registerWorkflowUtilityNodePack,
+  workflowUtilityNodeHandlerKeys,
 } from './output-workflow-utility-pack.ts'
+import {
+  legacyMonolithWorkflowNodeHandlerKeys,
+} from './output-workflow-legacy-handlers.ts'
 import {
   ensureMappedChildWorkflow,
 } from './output-workflow-child-utils.ts'
@@ -121,15 +167,16 @@ import {
 import { recordAiUsageEvent } from './ai-provider-gateway.ts'
 import { buildFalWebhookUrl } from './fal-webhooks.ts'
 import {
-  cancelOpenAiResponse,
-  createOpenAiBackgroundResponse,
-  retrieveOpenAiResponse,
   runOpenAiResponses,
-  runOpenAiResponsesStream,
   type OpenAiResponseResult,
 } from './openai.ts'
+import {
+  isRetryableOpenAiError,
+  openAiErrorMessage,
+  retryDelayMs,
+  waitForOpenAiBackgroundResponse,
+} from './output-workflow-text-runtime.ts'
 import { resolveOutputTextModelPolicy, reasoningPayloadFor } from './model-policy.ts'
-import { formatSequenceAnimaticSceneStateForPrompt } from '../../../src/domain/sequenceAnimaticSceneState.ts'
 import {
   buildSequenceAnimaticLocationEvidenceLines,
   sanitizeSequenceAnimaticSpatialNodeFields,
@@ -148,60 +195,11 @@ const CINEMATIC_MAX_TOTAL_DURATION_SECONDS = 60
 const CINEMATIC_STORYBOARD_IMAGE_QUALITY = aiGenerationSettings.outputWorkflow.cinematicStoryboardImageQuality
 const DEFAULT_CINEMATIC_STORYBOARD_STYLE_SAFE_MODE = aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault
 const DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT = aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt
-const DEFAULT_OUTPUT_WORKFLOW_VIDEO_PROVIDER = aiGenerationSettings.outputWorkflow.videoProviderDefault
-const DEFAULT_MUAPI_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoMuapiModel
-const DEFAULT_FAL_VIDEO_MODEL = aiGenerationSettings.outputWorkflow.videoFalModel
-const DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL = aiGenerationSettings.outputWorkflow.videoFalHighResolutionModel
 const DEFAULT_CHAPTER_PROSE_TIMEOUT_MS = 3_600_000
 const DEFAULT_SCREENPLAY_AUTHOR_TIMEOUT_MS = 900_000
 const DEFAULT_CONTINUITY_PLANNER_TIMEOUT_MS = 240_000
 const DEFAULT_CONTINUITY_BLOCK_PLANNER_TIMEOUT_MS = 90_000
 const DEFAULT_CHAPTER_PROSE_ATTEMPTS = 2
-const FAL_QUEUE_BASE_URL = 'https://queue.fal.run'
-const MUAPI_BASE_URL = 'https://api.muapi.ai/api/v1'
-
-const sequenceAnimaticZoneCameraGridBriefSchema = z.object({
-  boardSummary: z.string().max(900).default(''),
-  cells: z.array(z.object({
-    shotId: z.string().max(120),
-    cellIndex: z.number().int().min(0).max(8),
-    row: z.number().int().min(0).max(2),
-    column: z.number().int().min(0).max(2),
-    cameraPlateBrief: z.string().max(520),
-    camera: z.string().max(260).default(''),
-    framing: z.string().max(140).default(''),
-    cameraHeight: z.string().max(140).default(''),
-    cameraAngle: z.string().max(140).default(''),
-    lens: z.string().max(140).default(''),
-    movement: z.string().max(140).default(''),
-    foreground: z.string().max(220).default(''),
-    midground: z.string().max(260).default(''),
-    background: z.string().max(260).default(''),
-    landmarks: z.string().max(260).default(''),
-    locationFeatures: z.string().max(360).default(''),
-    lightingWeather: z.string().max(240).default(''),
-    lightDirection: z.string().max(180).default(''),
-    paletteWeather: z.string().max(180).default(''),
-    screenDirection: z.string().max(180).default(''),
-    composition: z.string().max(300).default(''),
-    spotId: z.string().max(160).default(''),
-    spotName: z.string().max(220).default(''),
-  })).min(1).max(9),
-  diagnostics: z.array(z.string().max(260)).default([]),
-})
-
-const sequenceAnimaticCoverageIntentBatchSchema = z.object({
-  intents: z.array(z.object({
-    shotId: z.string().max(160),
-    cameraFraming: z.string().max(220).default(''),
-    cameraAngle: z.string().max(220).default(''),
-    screenDirection: z.string().max(220).default(''),
-    subjectFocus: z.string().max(360).default(''),
-    stagingBrief: z.string().max(520).default(''),
-    coverageIntent: z.string().max(700).default(''),
-  })).min(1).max(150),
-  diagnostics: z.array(z.string().max(260)).default([]),
-})
 
 export type OutputDocumentRenderer = (input: {
   markdown: string
@@ -505,44 +503,6 @@ function sanitizeSequenceAnimaticCameraPlateText(value: unknown, maxLength = 360
     text = cleanSequenceAnimaticCameraPlatePunctuation(text.slice(0, maxLength))
   }
   return text
-}
-
-function readSequenceAnimaticCameraPart(camera: Record<string, unknown>, key: string, maxLength = 120) {
-  return sanitizeSequenceAnimaticCameraPlateText(camera[key], maxLength)
-}
-
-function inferSequenceAnimaticCameraHeight(cameraText: string) {
-  const matches = cameraText.match(/\b(?:low|ground|waist|eye|shoulder|high|overhead|top[-\s]?down|upward|downward)\b(?:[-\s]\w+){0,3}/i)
-  return sanitizeSequenceAnimaticCameraPlateText(matches?.[0] ?? '', 90)
-}
-
-function inferSequenceAnimaticCameraAngle(cameraText: string) {
-  const matches = cameraText.match(/\b(?:front|profile|side|reverse|three[-\s]?quarter|wide|close|insert|macro|telephoto|wide[-\s]?angle)\b(?:[-\s]\w+){0,4}/i)
-  return sanitizeSequenceAnimaticCameraPlateText(matches?.[0] ?? '', 100)
-}
-
-function sequenceAnimaticBuildCameraPlateBrief(cell: Record<string, unknown>) {
-  const camera = [
-    readText(cell.framing),
-    readText(cell.cameraHeight),
-    readText(cell.cameraAngle),
-    readText(cell.lens),
-    readText(cell.movement),
-    readText(cell.camera),
-  ].filter(Boolean).join('; ')
-  const space = [
-    readText(cell.foreground) ? `foreground ${readText(cell.foreground)}` : '',
-    readText(cell.midground) ? `midground ${readText(cell.midground)}` : '',
-    readText(cell.background) ? `background ${readText(cell.background)}` : '',
-    readText(cell.landmarks) ? `landmarks ${readText(cell.landmarks)}` : '',
-  ].filter(Boolean).join('; ')
-  const light = readText(cell.lightDirection) || readText(cell.lightingWeather) || readText(cell.paletteWeather)
-  return sanitizeSequenceAnimaticCameraPlateText([
-    camera ? `Camera ${camera}` : '',
-    space || readText(cell.locationFeatures),
-    light ? `Light ${light}` : '',
-    readText(cell.screenDirection) ? `Screen direction ${readText(cell.screenDirection)}` : '',
-  ].filter(Boolean).join(' | '), 520)
 }
 
 function sequenceAnimaticVisualOnlyCameraFamily(cell: Record<string, unknown>) {
@@ -2522,23 +2482,6 @@ function outputWorkflowShotContinuityStreamAttempts() {
     : 3
 }
 
-function isRetryableOpenAiError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error)
-  const lower = message.toLowerCase()
-  return lower.includes('timed out')
-    || lower.includes('timeout')
-    || lower.includes('rate limit')
-    || lower.includes('temporarily unavailable')
-    || lower.includes('overloaded')
-    || lower.includes('status 408')
-    || lower.includes('status 409')
-    || lower.includes('status 429')
-    || lower.includes('status 500')
-    || lower.includes('status 502')
-    || lower.includes('status 503')
-    || lower.includes('status 504')
-}
-
 function isRetryableOpenAiStreamError(error: unknown) {
   if (error instanceof WorkflowCancelledError) return false
   if (isRetryableOpenAiError(error)) return true
@@ -2558,10 +2501,6 @@ function isRetryableOpenAiStreamError(error: unknown) {
     || lower.includes('econnreset')
     || lower.includes('etimedout')
     || lower.includes('und_err')
-}
-
-function retryDelayMs(attempt: number) {
-  return Math.min(10_000, 1_500 * attempt)
 }
 
 function isTransientWorkerDbError(error: unknown) {
@@ -2590,65 +2529,8 @@ function isOpenAiTruncationError(error: unknown) {
   return lower.includes('max_output_tokens') || lower.includes('status incomplete')
 }
 
-function isTransientOpenAiResponseStatus(status: number) {
-  return [408, 409, 425, 429, 500, 502, 503, 504].includes(status)
-}
-
-function openAiResponseRetryDelayMs(result: OpenAiResponseResult | null, attempt: number) {
-  const retryAfter = result?.response.headers.get('Retry-After') ?? ''
-  const retryAfterSeconds = Number(retryAfter)
-  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
-    return Math.min(30_000, Math.max(1_000, Math.floor(retryAfterSeconds * 1000)))
-  }
-  const retryAfterDate = Date.parse(retryAfter)
-  if (Number.isFinite(retryAfterDate)) {
-    return Math.min(30_000, Math.max(1_000, retryAfterDate - Date.now()))
-  }
-  return Math.min(30_000, retryDelayMs(attempt))
-}
-
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function inferUuidV7TimestampIso(value: unknown) {
-  const clean = readText(value).replace(/-/g, '').toLowerCase()
-  if (!/^[0-9a-f]{32}$/.test(clean)) return ''
-  const timestampMs = Number.parseInt(clean.slice(0, 12), 16)
-  if (!Number.isFinite(timestampMs)) return ''
-  const earliestReasonable = Date.parse('2020-01-01T00:00:00.000Z')
-  const latestReasonable = Date.now() + 24 * 60 * 60 * 1000
-  if (timestampMs < earliestReasonable || timestampMs > latestReasonable) return ''
-  return new Date(timestampMs).toISOString()
-}
-
-function outputWorkflowImageModel(configModel?: unknown) {
-  const configured = readText(configModel) || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_MODEL')?.trim() || 'openai/gpt-image-2'
-  return configured === 'gpt-image-2' ? 'openai/gpt-image-2' : configured
-}
-
-function outputWorkflowFalTimeoutMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_TIMEOUT_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 1_200_000
-}
-
-function outputWorkflowFalStaleRequestMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_STALE_REQUEST_MS') ?? Deno.env.get('OUTPUT_WORKFLOW_FAL_TIMEOUT_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 900_000
-}
-
-function outputWorkflowFalPollIntervalMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 3_000
-}
-
-function outputWorkflowFalWebhookPollIntervalMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_FAL_WEBHOOK_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_WEBHOOK_POLL_INTERVAL_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 10_000
 }
 
 function resolveFalWebhookUrl() {
@@ -2660,582 +2542,6 @@ function resolveFalWebhookUrl() {
     })
     return ''
   }
-}
-
-function outputWorkflowMuapiTimeoutMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_MUAPI_TIMEOUT_MS') ?? Deno.env.get('OUTPUT_WORKFLOW_FAL_TIMEOUT_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_TIMEOUT_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(60_000, Math.floor(parsed)) : 1_200_000
-}
-
-function outputWorkflowMuapiPollIntervalMs() {
-  const raw = Deno.env.get('OUTPUT_WORKFLOW_MUAPI_POLL_INTERVAL_MS') ?? Deno.env.get('OUTPUT_WORKFLOW_FAL_POLL_INTERVAL_MS') ?? Deno.env.get('VISUAL_GENERATION_FAL_POLL_INTERVAL_MS')
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1_000, Math.floor(parsed)) : 3_000
-}
-
-function outputWorkflowMuapiWebhookSecret() {
-  return Deno.env.get('OUTPUT_WORKFLOW_MUAPI_WEBHOOK_SECRET')?.trim()
-    || Deno.env.get('MUAPI_WEBHOOK_SECRET')?.trim()
-    || ''
-}
-
-export function buildOutputWorkflowMuapiWebhookUrl() {
-  const secret = outputWorkflowMuapiWebhookSecret()
-  if (!secret) return ''
-
-  const overrideUrl = Deno.env.get('OUTPUT_WORKFLOW_MUAPI_WEBHOOK_URL')?.trim()
-  if (overrideUrl) {
-    try {
-      const url = new URL(overrideUrl)
-      if (!url.searchParams.has('secret')) {
-        url.searchParams.set('secret', secret)
-      }
-      return url.toString()
-    } catch {
-      return ''
-    }
-  }
-
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')?.trim().replace(/\/+$/, '')
-  if (!supabaseUrl) return ''
-  const url = new URL(`${supabaseUrl}/functions/v1/muapi-webhook`)
-  url.searchParams.set('secret', secret)
-  return url.toString()
-}
-
-function normalizeOutputVideoProvider(value: unknown) {
-  const provider = readText(value).toLowerCase()
-  return provider === 'fal' || provider === 'muapi' ? provider : DEFAULT_OUTPUT_WORKFLOW_VIDEO_PROVIDER
-}
-
-function resolveOutputVideoProvider(config: Record<string, unknown>) {
-  return normalizeOutputVideoProvider(readText(config.provider) || readText(config.videoProvider) || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_PROVIDER'))
-}
-
-function resolveFalVideoModel(resolution: string) {
-  return resolution === '1080p' ? DEFAULT_FAL_VIDEO_HIGH_RESOLUTION_MODEL : DEFAULT_FAL_VIDEO_MODEL
-}
-
-export function resolveMuapiVideoModel(value: unknown) {
-  const model = readText(value) || DEFAULT_MUAPI_VIDEO_MODEL
-  const aliases: Record<string, string> = {
-    'seedance-2.0-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
-    'sd-2-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
-    'seedance-2-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
-    'sd-2-vip-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
-    'seedance-2-vip-omni-reference': DEFAULT_MUAPI_VIDEO_MODEL,
-    'sd-2-vip-omni-reference-fast': DEFAULT_MUAPI_VIDEO_MODEL,
-    'seedance-2-vip-omni-reference-fast': DEFAULT_MUAPI_VIDEO_MODEL,
-  }
-  return aliases[model] ?? model
-}
-
-export function resolveMuapiVideoQuality(value: unknown) {
-  const quality = readText(value).toLowerCase()
-  return quality === 'standard' || quality === 'high' ? quality : 'high'
-}
-
-export function resolveMuapiVideoDurationSeconds(value: unknown) {
-  const duration = Math.max(1, Math.round(Number(value) || 5))
-  if (duration <= 5) return 5
-  if (duration <= 10) return 10
-  return 15
-}
-
-function buildFalHeaders(apiKey: string) {
-  return new Headers({
-    Authorization: `Key ${apiKey}`,
-    'Content-Type': 'application/json',
-  })
-}
-
-function buildMuapiHeaders(apiKey: string) {
-  return new Headers({
-    'x-api-key': apiKey,
-    'Content-Type': 'application/json',
-  })
-}
-
-async function fetchFalJson(url: string, init: RequestInit) {
-  const response = await fetch(url, init)
-  const rawText = await response.text().catch(() => '')
-  let body: Record<string, unknown> = {}
-  if (rawText.trim()) {
-    try {
-      body = JSON.parse(rawText) as Record<string, unknown>
-    } catch {
-      body = {}
-    }
-  }
-  return { response, body, rawText }
-}
-
-async function fetchMuapiJson(url: string, init: RequestInit) {
-  const response = await fetch(url, init)
-  const rawText = await response.text().catch(() => '')
-  let body: Record<string, unknown> = {}
-  if (rawText.trim()) {
-    try {
-      body = JSON.parse(rawText) as Record<string, unknown>
-    } catch {
-      body = {}
-    }
-  }
-  return { response, body, rawText }
-}
-
-function muapiErrorMessage(body: Record<string, unknown>, fallback: string) {
-  const direct = readText(body.error_message)
-    || readText(body.error)
-    || readText(body.message)
-    || readText(body.detail)
-    || readText(asRecord(body.error).message)
-    || readText(asRecord(body.data).error_message)
-    || readText(asRecord(body.result).error_message)
-  return direct || fallback
-}
-
-function muapiErrorMessageWithRaw(body: Record<string, unknown>, rawText: string, fallback: string) {
-  const message = muapiErrorMessage(body, fallback)
-  const raw = rawText.trim()
-  if (!raw || message !== fallback) return message
-  return `${fallback} Provider response: ${raw.slice(0, 800)}`
-}
-
-const MUAPI_VIDEO_PROMPT_MAX_CHARS = 4000
-const MUAPI_VIDEO_PROMPT_SAFE_CHARS = 3900
-
-function compactSeedanceIdentitySectionForProvider(section: string) {
-  const lines = section
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-  const speakerLines = lines
-    .filter((line) => line.startsWith('- '))
-    .slice(0, 6)
-    .map((line) => {
-      const withoutRole = line
-        .replace(/; role:[^;.]*/gi, '')
-        .replace(/; visual traits:[^;.]*/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-      return withoutRole.length > 240 ? `${withoutRole.slice(0, 237).replace(/\s+\S*$/, '')}.` : withoutRole
-    })
-    .filter(Boolean)
-  return speakerLines.length > 0
-    ? ['[IDENTITY AND SPEAKER GUIDE]', ...speakerLines].join('\n')
-    : ''
-}
-
-function replaceSeedanceSection(prompt: string, header: string, replacement: string) {
-  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const pattern = new RegExp(`\\n?\\n?\\[${escaped}\\][\\s\\S]*?(?=\\n\\n\\[[A-Z][^\\]]+\\]|\\s*$)`, 'i')
-  return prompt.replace(pattern, replacement ? `\n\n${replacement}` : '')
-}
-
-function compactSeedancePromptForProvider(prompt: string, maxChars = MUAPI_VIDEO_PROMPT_SAFE_CHARS) {
-  let next = prompt.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
-  if (next.length <= maxChars) return next
-
-  const identityMatch = next.match(/\[IDENTITY AND SPEAKER GUIDE\][\s\S]*?(?=\n\n\[[A-Z][^\]]+\]|\s*$)/i)
-  if (identityMatch) {
-    next = replaceSeedanceSection(next, 'IDENTITY AND SPEAKER GUIDE', compactSeedanceIdentitySectionForProvider(identityMatch[0]))
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-    if (next.length <= maxChars) return next
-  }
-
-  next = replaceSeedanceSection(next, 'MOVEMENT LOGIC', '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-  if (next.length <= maxChars) return next
-
-  next = replaceSeedanceSection(
-    next,
-    'POSITIVE CONSTRAINTS',
-    '[POSITIVE CONSTRAINTS]\nPreserve attached reference identity, shot location, props, lighting, readable acting, natural motion, clean camera movement, and no captions/UI/watermarks.',
-  ).replace(/\n{3,}/g, '\n\n').trim()
-  if (next.length <= maxChars) return next
-
-  const hardLimit = Math.max(1000, maxChars)
-  const sliced = next.slice(0, hardLimit)
-  const boundary = Math.max(
-    sliced.lastIndexOf('\n\n'),
-    sliced.lastIndexOf('. '),
-    sliced.lastIndexOf('\n'),
-  )
-  return `${sliced.slice(0, boundary > 1200 ? boundary : hardLimit).trim()}\n\nDo not render captions, subtitles, UI, logos, watermarks, or production-board markings.`
-    .slice(0, maxChars)
-    .trim()
-}
-
-export function buildMuapiVideoPayload(input: {
-  prompt: string
-  durationSeconds: number
-  aspectRatio?: string
-  quality?: string
-  referenceImageUrls?: string[]
-  referenceVideoUrls?: string[]
-  referenceAudioUrls?: string[]
-}) {
-  return {
-    prompt: compactSeedancePromptForProvider(input.prompt, MUAPI_VIDEO_PROMPT_MAX_CHARS),
-    images_list: input.referenceImageUrls ?? [],
-    video_files: input.referenceVideoUrls ?? [],
-    audio_files: input.referenceAudioUrls ?? [],
-    aspect_ratio: input.aspectRatio ?? '16:9',
-    quality: resolveMuapiVideoQuality(input.quality),
-    duration: input.durationSeconds,
-  }
-}
-
-function extractStringUrl(value: unknown): string {
-  if (typeof value === 'string') return value.trim()
-  const record = asRecord(value)
-  return readText(record.video_url)
-    || readText(record.videoUrl)
-    || readText(record.url)
-    || readText(record.file_url)
-    || readText(record.fileUrl)
-}
-
-export function extractMuapiVideoUrlFromResult(value: unknown): string {
-  const record = asRecord(value)
-  const direct = extractStringUrl(record.video_url)
-    || extractStringUrl(record.videoUrl)
-    || extractStringUrl(record.url)
-    || extractStringUrl(record.output)
-    || extractStringUrl(record.result)
-    || extractStringUrl(record.data)
-  if (direct) return direct
-
-  for (const key of ['output', 'result', 'data']) {
-    const nested = record[key]
-    if (nested && typeof nested === 'object') {
-      const url = extractMuapiVideoUrlFromResult(nested)
-      if (url) return url
-    }
-  }
-
-  for (const key of ['videos', 'video_urls', 'videoUrls', 'response', 'outputs']) {
-    const array = Array.isArray(record[key]) ? record[key] : []
-    for (const entry of array) {
-      const url = extractStringUrl(entry) || extractMuapiVideoUrlFromResult(entry)
-      if (url) return url
-    }
-  }
-  return ''
-}
-
-function readMuapiRequestId(body: Record<string, unknown>) {
-  return readText(body.request_id)
-    || readText(body.requestId)
-    || readText(body.id)
-    || readText(body.prediction_id)
-    || readText(body.predictionId)
-    || readText(asRecord(body.data).request_id)
-    || readText(asRecord(body.data).id)
-}
-
-function readMuapiProviderStatus(body: Record<string, unknown>) {
-  return (readText(body.status)
-    || readText(body.state)
-    || readText(body.task_status)
-    || readText(body.taskStatus)
-    || readText(asRecord(body.data).status)
-    || readText(asRecord(body.result).status)
-    || 'UNKNOWN').toUpperCase()
-}
-
-function muapiStatusIsComplete(status: string) {
-  return ['COMPLETED', 'COMPLETE', 'SUCCEEDED', 'SUCCESS', 'DONE', 'FINISHED'].includes(status)
-}
-
-function muapiStatusIsFailed(status: string) {
-  return ['FAILED', 'ERROR', 'CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'].includes(status)
-}
-
-function falErrorMessage(body: Record<string, unknown>, fallback: string) {
-  if (Array.isArray(body.detail)) {
-    const details = body.detail
-      .map((entry) => {
-        const record = asRecord(entry)
-        const loc = Array.isArray(record.loc) ? record.loc.map(String).join('.') : readText(record.loc)
-        const msg = readText(record.msg) || readText(record.message)
-        const type = readText(record.type)
-        const ctx = asRecord(record.ctx)
-        const extra = asRecord(ctx.extra_info)
-        const reason = readText(extra.reason) || readText(ctx.reason)
-        return [
-          loc ? `loc=${loc}` : '',
-          type ? `type=${type}` : '',
-          reason ? `reason=${reason}` : '',
-          msg,
-        ].filter(Boolean).join(' ')
-      })
-      .filter(Boolean)
-    if (details.length > 0) return details.join('; ').slice(0, 2000)
-  }
-  if (typeof body.detail === 'string' && body.detail.trim()) return body.detail.trim()
-  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
-  if (typeof body.message === 'string' && body.message.trim()) return body.message.trim()
-  if (body.detail !== undefined) {
-    try {
-      return JSON.stringify(body.detail)
-    } catch {
-      // Fall through to the generic fallback below.
-    }
-  }
-  if (body.error !== undefined) {
-    try {
-      return JSON.stringify(body.error)
-    } catch {
-      // Fall through to the generic fallback below.
-    }
-  }
-  return fallback
-}
-
-function isFalReferencePolicyError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? '')
-  return /content_policy_violation|partner_validation_failed|likenesses of real people|private information|loc=body\.image_urls|image_urls/i.test(message)
-}
-
-function normalizeFalResultBody(body: Record<string, unknown>) {
-  return body && typeof body.response === 'object' && body.response !== null
-    ? body.response as Record<string, unknown>
-    : body
-}
-
-function extractFalImageRecord(value: unknown): Record<string, unknown> | null {
-  const record = asRecord(value)
-  const images = Array.isArray(record.images) ? record.images : []
-  for (const image of images) {
-    if (typeof image === 'string' && /^https?:\/\//i.test(image)) return { url: image }
-    const imageRecord = asRecord(image)
-    const url = readText(imageRecord.url)
-    if (url) return imageRecord
-  }
-  for (const key of ['image', 'output', 'response', 'data', 'result']) {
-    const nested = extractFalImageRecord(record[key])
-    if (nested) return nested
-  }
-  const directUrl = readText(record.url) || readText(record.output_url)
-  return directUrl ? { url: directUrl } : null
-}
-
-function extractFalVideoRecord(value: unknown): Record<string, unknown> | null {
-  const record = asRecord(value)
-  for (const key of ['video', 'output', 'response', 'data', 'result']) {
-    const nested = record[key]
-    if (typeof nested === 'string' && /^https?:\/\//i.test(nested)) return { url: nested }
-    const nestedRecord = asRecord(nested)
-    const url = readText(nestedRecord.url) || readText(nestedRecord.output_url)
-    if (url) return nestedRecord
-    const recursive = extractFalVideoRecord(nested)
-    if (recursive) return recursive
-  }
-  const videos = Array.isArray(record.videos) ? record.videos : []
-  for (const video of videos) {
-    if (typeof video === 'string' && /^https?:\/\//i.test(video)) return { url: video }
-    const videoRecord = asRecord(video)
-    const url = readText(videoRecord.url) || readText(videoRecord.output_url)
-    if (url) return videoRecord
-  }
-  const directUrl = readText(record.url) || readText(record.output_url)
-  return directUrl ? { url: directUrl } : null
-}
-
-function normalizeImageSize(value: unknown) {
-  const record = asRecord(value)
-  const width = Number(record.width)
-  const height = Number(record.height)
-  if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0) {
-    const normalizeDimension = (dimension: number) => Math.max(16, Math.min(3840, Math.round(dimension / 16) * 16))
-    return {
-      width: normalizeDimension(width),
-      height: normalizeDimension(height),
-    }
-  }
-  const text = readText(value)
-  return text || { width: 1792, height: 2688 }
-}
-
-async function submitFalImageRequest(input: {
-  apiKey: string
-  model: string
-  prompt: string
-  imageSize: unknown
-  quality: string
-  outputFormat: string
-  referenceImageUrls?: string[]
-  webhookUrl?: string
-}) {
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    image_size: normalizeImageSize(input.imageSize),
-    quality: input.quality,
-    num_images: 1,
-    output_format: input.outputFormat,
-    sync_mode: false,
-  }
-  if (input.referenceImageUrls && input.referenceImageUrls.length > 0) {
-    body.image_urls = input.referenceImageUrls
-  }
-  const url = new URL(`${FAL_QUEUE_BASE_URL}/${input.model}`)
-  if (input.webhookUrl) {
-    url.searchParams.set('fal_webhook', input.webhookUrl)
-    body.webhook_url = input.webhookUrl
-  }
-  return fetchFalJson(url.toString(), {
-    method: 'POST',
-    headers: buildFalHeaders(input.apiKey),
-    body: JSON.stringify(body),
-  })
-}
-
-async function submitFalVideoRequest(input: {
-  apiKey: string
-  model: string
-  prompt: string
-  durationSeconds: number
-  aspectRatio?: string
-  resolution?: string
-  generateAudio?: boolean
-  syncMode?: boolean
-  referenceImageUrls?: string[]
-  referenceVideoUrls?: string[]
-  referenceAudioUrls?: string[]
-}) {
-  const body: Record<string, unknown> = {
-    prompt: input.prompt,
-    duration: input.durationSeconds,
-    aspect_ratio: input.aspectRatio ?? '16:9',
-    resolution: input.resolution ?? '720p',
-    generate_audio: input.generateAudio ?? true,
-    sync_mode: input.syncMode ?? false,
-  }
-  if (input.referenceImageUrls && input.referenceImageUrls.length > 0) {
-    body.image_urls = input.referenceImageUrls
-  }
-  if (input.referenceVideoUrls && input.referenceVideoUrls.length > 0) {
-    body.video_urls = input.referenceVideoUrls
-  }
-  if (input.referenceAudioUrls && input.referenceAudioUrls.length > 0) {
-    body.audio_urls = input.referenceAudioUrls
-  }
-  return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
-    method: 'POST',
-    headers: buildFalHeaders(input.apiKey),
-    body: JSON.stringify(body),
-  })
-}
-
-async function submitMuapiVideoRequest(input: {
-  apiKey: string
-  model: string
-  prompt: string
-  durationSeconds: number
-  aspectRatio?: string
-  quality?: string
-  referenceImageUrls?: string[]
-  referenceVideoUrls?: string[]
-  referenceAudioUrls?: string[]
-  webhookUrl?: string
-}) {
-  const url = new URL(`${MUAPI_BASE_URL}/${resolveMuapiVideoModel(input.model)}`)
-  if (input.webhookUrl) {
-    url.searchParams.set('webhook', input.webhookUrl)
-  }
-  return fetchMuapiJson(url.toString(), {
-    method: 'POST',
-    headers: buildMuapiHeaders(input.apiKey),
-    body: JSON.stringify(buildMuapiVideoPayload(input)),
-  })
-}
-
-async function getMuapiResult(input: {
-  apiKey: string
-  requestId: string
-}) {
-  return fetchMuapiJson(`${MUAPI_BASE_URL}/predictions/${encodeURIComponent(input.requestId)}/result`, {
-    method: 'GET',
-    headers: buildMuapiHeaders(input.apiKey),
-  })
-}
-
-async function getFalStatus(input: {
-  apiKey: string
-  model: string
-  requestId: string
-  statusUrl?: string | null
-}) {
-  const candidates = [
-    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`,
-    input.statusUrl,
-  ].filter((url, index, urls): url is string => (
-    typeof url === 'string' && url.trim().length > 0 && urls.indexOf(url) === index
-  ))
-
-  let lastResult: Awaited<ReturnType<typeof fetchFalJson>> | null = null
-  for (const candidate of candidates) {
-    const url = new URL(candidate)
-    url.searchParams.set('logs', '1')
-    const result = await fetchFalJson(url.toString(), {
-      method: 'GET',
-      headers: buildFalHeaders(input.apiKey),
-    })
-    lastResult = result
-    if (result.response.ok) return result
-    if (result.response.status !== 404 && result.response.status !== 405) return result
-  }
-  const url = new URL(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/status`)
-  url.searchParams.set('logs', '1')
-  return lastResult ?? fetchFalJson(url.toString(), {
-    method: 'GET',
-    headers: buildFalHeaders(input.apiKey),
-  })
-}
-
-async function getFalResult(input: {
-  apiKey: string
-  model: string
-  requestId: string
-  responseUrl?: string | null
-}) {
-  const candidates = [
-    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`,
-    `${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}`,
-    input.responseUrl,
-  ].filter((url, index, urls): url is string => (
-    typeof url === 'string' && url.trim().length > 0 && urls.indexOf(url) === index
-  ))
-
-  let lastResult: Awaited<ReturnType<typeof fetchFalJson>> | null = null
-  for (const url of candidates) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const result = await fetchFalJson(url, {
-        method: 'GET',
-        headers: buildFalHeaders(input.apiKey),
-      })
-      lastResult = result
-      if (result.response.ok) return result
-      const transient = [500, 502, 503, 504].includes(result.response.status)
-      if (!transient) break
-      await sleep(1000 * (attempt + 1))
-    }
-    if (
-      lastResult
-      && lastResult.response.status !== 404
-      && lastResult.response.status !== 405
-      && ![500, 502, 503, 504].includes(lastResult.response.status)
-    ) return lastResult
-  }
-  return lastResult ?? fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}/requests/${input.requestId}/response`, {
-    method: 'GET',
-    headers: buildFalHeaders(input.apiKey),
-  })
 }
 
 class WorkflowCancelledError extends Error {
@@ -4616,25 +3922,11 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
   }) => Promise<void>
 }) {
   const model = outputWorkflowTextModel()
-  const providerStartedAt = new Date().toISOString()
   const accumulator = createSequenceAnimaticShotContinuityStreamAccumulator()
   let providerRequestId = ''
+  let providerStartedAt = ''
   let acceptedRecordCount = 0
   let warningCount = 0
-  let lastProgressAt = 0
-
-  const progress = async (providerStatus: string, force = false) => {
-    const now = Date.now()
-    if (!force && now - lastProgressAt < 15_000) return
-    lastProgressAt = now
-    await input.onProgress?.({
-      providerRequestId,
-      providerStatus,
-      providerMode: 'stream',
-      lastProviderPollAt: new Date().toISOString(),
-      providerStartedAt,
-    })
-  }
 
   const emitEvent = async (
     eventType: string,
@@ -4743,7 +4035,9 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
       return
     }
     if (parsed.record.kind === 'coverage_setup') {
-      if (input.taskClass === 'scene_shot_plan' || readText(asRecord(input.node.config).purpose) === 'sequence_animatic_director_plan') {
+      const plannerPurpose = readText(asRecord(input.node.config).purpose)
+      const isSequenceDirectorPlan = plannerPurpose.startsWith('sequence_animatic_') && plannerPurpose.endsWith('_director_plan')
+      if (input.taskClass === 'scene_shot_plan' || isSequenceDirectorPlan) {
         warningCount += 1
         await emitEvent('shot_continuity_stream_warning', {
           warning: 'Ignored coverage_setup record from shot planner; coverage assignments are created only by the dedicated Coverage Plan node.',
@@ -4806,12 +4100,6 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
     }
   }
 
-  const streamProcessor = createStreamingJsonlProcessor<string>({
-    parseRecord: (recordText) => ({ record: recordText, error: null }),
-    onRecord: (recordText) => processRecordText(recordText),
-    onInvalidRecord: async () => {},
-  })
-
   await clearSequenceAnimaticShotContinuityStreamEvents({
     client: input.client,
     requestId: input.requestId,
@@ -4822,7 +4110,6 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
     graphSpecVersion: 'sequence_animatic_graph_v2',
     status: 'streaming',
   })
-  await progress('streaming', true)
 
   let response: OpenAiResponseResult
   try {
@@ -4830,34 +4117,36 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
     const reasoning = input.reasoningEffortOverride !== undefined
       ? (input.reasoningEffortOverride ? { effort: input.reasoningEffortOverride } : undefined)
       : reasoningPayloadFor(continuityPolicy)
-    response = await runOpenAiResponsesStream({
-      model: continuityPolicy.model,
-      input: input.prompt,
-      instructions: input.instructions,
-      maxOutputTokens: input.maxOutputTokens,
-      reasoning,
-      store: false,
-      timeoutMs: outputWorkflowChapterTimeoutMs(),
-      metadata: {
-        graphcore_task: 'sequence_animatic_shot_continuity_jsonl_stream',
-        graphcore_node_key: input.node.key,
-        graphcore_provider_mode: 'stream',
-        outputRequestId: input.requestId,
-        workflowRunId: input.run.id,
+    const streamResult = await runOpenAiJsonlStream<string>({
+      request: {
+        model: continuityPolicy.model,
+        input: input.prompt,
+        instructions: input.instructions,
+        maxOutputTokens: input.maxOutputTokens,
+        reasoning,
+        store: false,
+        timeoutMs: outputWorkflowChapterTimeoutMs(),
+        metadata: {
+          graphcore_task: 'sequence_animatic_shot_continuity_jsonl_stream',
+          graphcore_node_key: input.node.key,
+          graphcore_provider_mode: 'stream',
+          outputRequestId: input.requestId,
+          workflowRunId: input.run.id,
+        },
       },
-    }, {
-      onEvent: async (event) => {
-        const responseRecord = asRecord(event.data.response)
-        providerRequestId = readText(responseRecord.id) || readText(event.data.response_id) || readText(event.data.id) || providerRequestId
-        await progress(event.type)
-        if (await input.shouldCancel?.()) throw new WorkflowCancelledError()
+      parseRecord: (recordText) => ({ record: recordText, error: null }),
+      onRecord: (recordText) => processRecordText(recordText),
+      onInvalidRecord: async () => {},
+      shouldCancel: input.shouldCancel,
+      createCancelledError: () => new WorkflowCancelledError(),
+      onProviderRequestId: (nextProviderRequestId) => {
+        providerRequestId = nextProviderRequestId || providerRequestId
       },
-      onTextDelta: async (delta) => {
-        await streamProcessor.push(delta)
-      },
+      onProgress: input.onProgress,
     })
-    providerRequestId = response.id || providerRequestId
-    await streamProcessor.flush()
+    response = streamResult.response
+    providerRequestId = streamResult.providerRequestId || providerRequestId
+    providerStartedAt = streamResult.providerStartedAt
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Shot continuity stream failed.'
     await emitEvent('shot_continuity_stream_failed', {
@@ -4887,7 +4176,13 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
       warningCount,
       status: 'ready',
     })
-    await progress('completed', true)
+    await input.onProgress?.({
+      providerRequestId,
+      providerStatus: 'completed',
+      providerMode: 'stream',
+      lastProviderPollAt: new Date().toISOString(),
+      providerStartedAt: providerStartedAt || new Date().toISOString(),
+    })
     return {
       value,
       response,
@@ -5296,98 +4591,6 @@ function sequenceAnimaticContinuityAssetBatches(input: {
   })
 }
 
-function sequenceAnimaticContinuityAssetEntityFromState(stateInput: unknown) {
-  const state = asRecord(stateInput)
-  const assetKey = readText(state.assetKey)
-  const sourceNodeId = readText(state.sourceNodeId)
-  if (!assetKey || !sourceNodeId || readText(state.status) !== 'ready') return null
-  const assetKind = readText(state.assetKind) || 'continuity_asset'
-  return {
-    key: `continuity_ref_${slugify(sourceNodeId)}`,
-    name: readText(state.name) || titleFromRefLike(sourceNodeId),
-    type: assetKind === 'location_angle' || assetKind === 'location_zone' || assetKind === 'location_spot' ? 'location_spot' : assetKind === 'temporary_character' ? 'character' : assetKind === 'prop' ? 'prop' : 'continuity_asset',
-    role: 'continuity_reference',
-    summary: readText(state.summary) || 'Animatic-specific scene graph reference generated for continuity.',
-    visualDescription: 'Use this generated animatic scene-graph reference to preserve spatial layout, materials, camera setup, identity, and prop design.',
-    assetKeys: [assetKey],
-    primaryAssetKey: assetKey,
-    selectedReferenceAssetKey: assetKey,
-    selectedReferenceVariantKey: 'continuity_asset',
-    selectedReferenceVariantLabel: readText(state.name) || titleFromRefLike(sourceNodeId),
-    selectedReferenceVariantType: 'continuity_asset',
-    referenceSelectionReason: `Ready continuity asset for scene graph node ${sourceNodeId}.`,
-    continuitySourceNodeId: sourceNodeId,
-  }
-}
-
-async function augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets(input: {
-  client: DatabaseClient
-  request: OutputRequest
-  workflowId: string
-}) {
-  const requestMetadata = asRecord(input.request.metadata)
-  if (readScreenplayAnimaticRoleFromMetadata(requestMetadata) !== 'storyboard_block') return
-  const masterRequestId = readText(requestMetadata.masterRequestId) || readText(requestMetadata.parentRequestId) || input.request.parentRequestId
-  if (!masterRequestId) return
-  const artifactResponse = await input.client
-    .from('output_artifacts')
-    .select(outputArtifactSelect)
-    .eq('project_id', input.request.projectId)
-    .eq('draft_id', input.request.draftId)
-    .order('created_at', { ascending: false })
-    .limit(500)
-  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-  const continuityEntities = (artifactResponse.data ?? [])
-    .map((row) => asRecord(asRecord(row).metadata))
-    .filter((metadata) => (readText(metadata.role) === 'sequence_animatic_continuity_asset' || readText(metadata.role) === 'sequence_animatic_continuity_asset_batch') && readText(metadata.masterRequestId) === masterRequestId)
-    .flatMap((metadata) => {
-      if (readText(metadata.role) === 'sequence_animatic_continuity_asset_batch') {
-        return Object.values(asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).map((state) => sequenceAnimaticContinuityAssetEntityFromState(state))
-      }
-      return [sequenceAnimaticContinuityAssetEntityFromState(metadata.assetState ?? metadata.asset_state)]
-    })
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-  if (continuityEntities.length === 0) return
-  const nodeResponse = await input.client
-    .from('output_workflow_nodes')
-    .select(outputWorkflowNodeSelect)
-    .eq('workflow_id', input.workflowId)
-    .eq('key', 'block_input')
-    .maybeSingle()
-  if (nodeResponse.error) throw new Error(nodeResponse.error.message)
-  if (!nodeResponse.data) return
-  const node = mapOutputWorkflowNodeRow(nodeResponse.data)
-  const config = asRecord(node.config)
-  const assetPack = asRecord(config.assetPack)
-  const existingEntities = readArray(assetPack.entities).map(asRecord)
-  const existingKeys = new Set(existingEntities.map((entity) => readText(entity.key)).filter(Boolean))
-  const mergedContinuityEntities = continuityEntities.filter((entity) => {
-    const key = readText(entity.key)
-    if (!key || existingKeys.has(key)) return false
-    existingKeys.add(key)
-    return true
-  })
-  if (mergedContinuityEntities.length === 0) return
-  const nextAssetPack = {
-    ...assetPack,
-    entities: [...existingEntities, ...mergedContinuityEntities].slice(0, 32),
-    continuityReferenceAssetKeys: [...new Set([
-      ...readStringArray(assetPack.continuityReferenceAssetKeys),
-      ...mergedContinuityEntities.map((entity) => readText(entity.primaryAssetKey)).filter(Boolean),
-    ])],
-  }
-  await input.client
-    .from('output_workflow_nodes')
-    .update({
-      config: {
-        ...config,
-        assetPack: nextAssetPack,
-        asset_pack: nextAssetPack,
-      },
-    })
-    .eq('id', node.id)
-}
-
 async function startSequenceAnimaticChildRun(input: {
   client: DatabaseClient
   request: OutputRequest
@@ -5395,154 +4598,151 @@ async function startSequenceAnimaticChildRun(input: {
   runIntent: 'prepare_storyboard_block' | 'generate_continuity_asset' | 'generate_scene_shot_plan'
   targetNodeKeys: string[]
 }) {
-  await augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets({
-    client: input.client,
+  return startSequenceAnimaticChildRunRuntime({
     request: input.request,
     workflowId: input.workflowId,
-  })
-  const existingRunId = readText(input.request.latestRunId)
-  if (existingRunId) {
-    const existingRunResponse = await input.client
-      .from('output_workflow_runs')
-      .select('id,status')
-      .eq('id', existingRunId)
-      .maybeSingle()
-    if (existingRunResponse.error) throw new Error(existingRunResponse.error.message)
-    const status = readText(asRecord(existingRunResponse.data).status)
-    if (status === 'queued' || status === 'running' || status === 'completed') {
-      return { started: false, runId: existingRunId, status }
-    }
-  }
-  const [workflowResponse, nodeResponse, edgeResponse] = await Promise.all([
-    input.client
-      .from('output_workflows')
-      .select(outputWorkflowSelect)
-      .eq('id', input.workflowId)
-      .single(),
-    input.client
-      .from('output_workflow_nodes')
-      .select(outputWorkflowNodeSelect)
-      .eq('workflow_id', input.workflowId)
-      .order('created_at', { ascending: true }),
-    input.client
-      .from('output_workflow_edges')
-      .select(outputWorkflowEdgeSelect)
-      .eq('workflow_id', input.workflowId)
-      .order('created_at', { ascending: true }),
-  ])
-  if (workflowResponse.error || !workflowResponse.data) throw new Error(workflowResponse.error?.message ?? 'Child workflow not found.')
-  if (nodeResponse.error) throw new Error(nodeResponse.error.message)
-  if (edgeResponse.error) throw new Error(edgeResponse.error.message)
-  const workflow = mapOutputWorkflowRow(workflowResponse.data)
-  const nodes = (nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow)
-  const edges = (edgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow)
-  const nodeKeySet = new Set(nodes.map((node) => node.key))
-  const activeEdges = edges.filter((edge) => nodeKeySet.has(edge.sourceNodeKey) && nodeKeySet.has(edge.targetNodeKey))
-  const validation = validateOutputWorkflowGraph({ nodes, edges: activeEdges })
-  if (!validation.ok) throw new Error(validation.diagnostics.join(' '))
-  const intentDefaults = outputWorkflowRunIntentDefaults(input.runIntent)
-  const requestMetadata = asRecord(input.request.metadata)
-  const metadata = {
     runIntent: input.runIntent,
-    runScope: intentDefaults?.runScope ?? 'upstream_to_node',
-    debugSkipVideoGeneration: intentDefaults?.debugSkipVideoGeneration ?? true,
-    cinematicVideoApproved: intentDefaults?.cinematicVideoApproved ?? false,
-    allowStaleUpstreamOutputs: intentDefaults?.allowStaleUpstreamOutputs ?? false,
     targetNodeKeys: input.targetNodeKeys,
-    parentRequestId: readText(requestMetadata.parentRequestId) || input.request.parentRequestId,
-    masterRequestId: readText(requestMetadata.masterRequestId) || readText(requestMetadata.parentRequestId) || input.request.parentRequestId,
-    storyboardBlockId: readText(requestMetadata.storyboardBlockId),
-    outputRequestId: input.request.id,
-    queuedAt: new Date().toISOString(),
-    startedBy: 'sequence_animatic_orchestrator',
-  }
-  const selectedSubgraph = selectOutputWorkflowRunSubgraph({
-    nodes,
-    edges: activeEdges,
-    targetNodeKeys: input.targetNodeKeys,
-    runScope: 'upstream_to_node',
-  })
-  if (selectedSubgraph.diagnostics.length > 0) throw new Error(selectedSubgraph.diagnostics.join(' '))
-  const executionPlan = buildOutputWorkflowExecutionPlan(selectedSubgraph.nodes, selectedSubgraph.edges)
-  const nodeOrder = new Map(executionPlan.orderedNodeKeys.map((key, index) => [key, index]))
-  const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
-  const runInput = {
-    sourceEntityKeys: input.request.selectedEntityKeys,
-    sourceSequenceUnitKeys: input.request.selectedSequenceUnitKeys,
-    masterRequestId: readText(metadata.masterRequestId),
-    storyboardBlockId: readText(metadata.storyboardBlockId),
-  }
-  const now = new Date().toISOString()
-  const runResponse = await input.client
-    .from('output_workflow_runs')
-    .insert({
-      project_id: input.request.projectId,
-      draft_id: input.request.draftId,
-      workflow_id: input.workflowId,
-      requested_by: input.request.requestedBy,
-      status: 'queued',
-      preset: workflow.preset,
-      prompt: input.request.prompt,
-      target_format: input.request.targetFormat,
-      world_snapshot_fingerprint: buildOutputWorkflowInputFingerprint(runInput),
-      input: runInput,
-      metadata,
-      heartbeat_at: now,
-    })
-    .select(outputWorkflowRunSelect)
-    .single()
-  if (runResponse.error || !runResponse.data) throw new Error(runResponse.error?.message ?? 'Failed to queue child output workflow run.')
-  const runRow = runResponse.data
-  const stepResponse = await input.client
-    .from('output_workflow_run_steps')
-    .insert(selectedSubgraph.nodes
-      .slice()
-      .sort((left, right) => (nodeOrder.get(left.key) ?? 999) - (nodeOrder.get(right.key) ?? 999))
-      .map((node, index) => ({
-        run_id: runRow.id,
-        workflow_id: input.workflowId,
-        node_id: node.id,
-        draft_id: input.request.draftId,
-        node_key: node.key,
-        node_type: node.nodeType,
-        status: 'queued',
-        order_index: index,
-        label: node.label,
-        metadata: {
-          executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
-          resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
-          groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
-          runScope: metadata.runScope,
-          outputRequestId: input.request.id,
-        },
-      })))
-    .select(outputWorkflowRunStepSelect)
-  if (stepResponse.error) throw new Error(stepResponse.error.message)
-  const updateRequest = await input.client
-    .from('output_requests')
-    .update({
-      latest_run_id: runRow.id,
-      status: 'running',
-      error_message: null,
-      metadata: {
-        ...requestMetadata,
-        readyToRun: false,
-        latestRunId: runRow.id,
-        lastRunStartedAt: now,
-        startedBy: 'sequence_animatic_orchestrator',
+    helpers: {
+      asRecord,
+      readText,
+      readArray,
+      readStringArray,
+      slugify,
+      titleFromRefLike,
+      readScreenplayAnimaticRoleFromMetadata,
+      buildOutputWorkflowInputFingerprint,
+      loadLatestRunStatus: async ({ runId }) => {
+        const response = await input.client
+          .from('output_workflow_runs')
+          .select('id,status')
+          .eq('id', runId)
+          .maybeSingle()
+        if (response.error) throw new Error(response.error.message)
+        return readText(asRecord(response.data).status)
       },
-    })
-    .eq('id', input.request.id)
-  if (updateRequest.error) throw new Error(updateRequest.error.message)
-  await input.client.rpc('refresh_output_request_status_projection', { p_request_id: input.request.id })
-  await notifyWorkerWakeBestEffort({
-    family: 'output_workflow',
-    source: 'sequence-animatic-orchestrator',
-    runId: readText(runRow.id),
-    projectId: input.request.projectId,
-    draftId: input.request.draftId,
+      loadContinuityAssetMetadata: async ({ projectId, draftId }) => {
+        const response = await input.client
+          .from('output_artifacts')
+          .select(outputArtifactSelect)
+          .eq('project_id', projectId)
+          .eq('draft_id', draftId)
+          .order('created_at', { ascending: false })
+          .limit(500)
+        if (response.error) throw new Error(response.error.message)
+        return (response.data ?? []).map((row) => asRecord(asRecord(row).metadata))
+      },
+      loadWorkflowNodeByKey: async ({ workflowId, nodeKey }) => {
+        const response = await input.client
+          .from('output_workflow_nodes')
+          .select(outputWorkflowNodeSelect)
+          .eq('workflow_id', workflowId)
+          .eq('key', nodeKey)
+          .maybeSingle()
+        if (response.error) throw new Error(response.error.message)
+        return response.data ? mapOutputWorkflowNodeRow(response.data as OutputWorkflowNodeRow) : null
+      },
+      updateWorkflowNodeConfig: async ({ nodeId, config }) => {
+        const response = await input.client
+          .from('output_workflow_nodes')
+          .update({ config })
+          .eq('id', nodeId)
+        if (response.error) throw new Error(response.error.message)
+      },
+      loadWorkflowBundle: async ({ workflowId }) => {
+        const [workflowResponse, nodeResponse, edgeResponse] = await Promise.all([
+          input.client
+            .from('output_workflows')
+            .select(outputWorkflowSelect)
+            .eq('id', workflowId)
+            .single(),
+          input.client
+            .from('output_workflow_nodes')
+            .select(outputWorkflowNodeSelect)
+            .eq('workflow_id', workflowId)
+            .order('created_at', { ascending: true }),
+          input.client
+            .from('output_workflow_edges')
+            .select(outputWorkflowEdgeSelect)
+            .eq('workflow_id', workflowId)
+            .order('created_at', { ascending: true }),
+        ])
+        if (workflowResponse.error || !workflowResponse.data) throw new Error(workflowResponse.error?.message ?? 'Child workflow not found.')
+        if (nodeResponse.error) throw new Error(nodeResponse.error.message)
+        if (edgeResponse.error) throw new Error(edgeResponse.error.message)
+        return {
+          workflow: mapOutputWorkflowRow(workflowResponse.data as OutputWorkflowRow),
+          nodes: (nodeResponse.data ?? []).map((row) => mapOutputWorkflowNodeRow(row as OutputWorkflowNodeRow)),
+          edges: (edgeResponse.data ?? []).map((row) => mapOutputWorkflowEdgeRow(row as OutputWorkflowEdgeRow)),
+        }
+      },
+      insertOutputWorkflowRun: async (runInput) => {
+        const response = await input.client
+          .from('output_workflow_runs')
+          .insert({
+            project_id: runInput.projectId,
+            draft_id: runInput.draftId,
+            workflow_id: runInput.workflowId,
+            requested_by: runInput.requestedBy ?? null,
+            status: runInput.status,
+            preset: runInput.preset,
+            prompt: runInput.prompt,
+            target_format: runInput.targetFormat ?? null,
+            world_snapshot_fingerprint: runInput.worldSnapshotFingerprint,
+            input: runInput.runInput,
+            metadata: runInput.metadata,
+            heartbeat_at: runInput.heartbeatAt,
+          })
+          .select(outputWorkflowRunSelect)
+          .single()
+        if (response.error || !response.data) throw new Error(response.error?.message ?? 'Failed to queue child output workflow run.')
+        return { id: readText(asRecord(response.data).id) }
+      },
+      insertOutputWorkflowRunSteps: async ({ steps }) => {
+        const response = await input.client
+          .from('output_workflow_run_steps')
+          .insert(steps.map((step) => ({
+            run_id: step.runId,
+            workflow_id: step.workflowId,
+            node_id: step.nodeId,
+            draft_id: step.draftId,
+            node_key: step.nodeKey,
+            node_type: step.nodeType,
+            status: step.status,
+            order_index: step.orderIndex,
+            label: step.label,
+            metadata: step.metadata,
+          })))
+          .select(outputWorkflowRunStepSelect)
+        if (response.error) throw new Error(response.error.message)
+      },
+      updateOutputRequestForStartedRun: async ({ requestId, runId, metadata }) => {
+        const response = await input.client
+          .from('output_requests')
+          .update({
+            latest_run_id: runId,
+            status: 'running',
+            error_message: null,
+            metadata,
+          })
+          .eq('id', requestId)
+        if (response.error) throw new Error(response.error.message)
+      },
+      refreshOutputRequestStatusProjection: async ({ requestId }) => {
+        const response = await input.client.rpc('refresh_output_request_status_projection', { p_request_id: requestId })
+        if (response.error) throw new Error(response.error.message)
+      },
+      notifyWorkerWakeBestEffort: async ({ runId, projectId, draftId }) => {
+        await notifyWorkerWakeBestEffort({
+          family: 'output_workflow',
+          source: 'sequence-animatic-orchestrator',
+          runId,
+          projectId,
+          draftId,
+        })
+      },
+    },
   })
-  return { started: true, runId: readText(runRow.id), status: 'queued' }
 }
 
 /**
@@ -6015,486 +5215,6 @@ async function maybeStartNextSequenceAnimaticStoryboardBlock(input: {
     })
   }
   return startResult
-}
-
-async function runSequenceAnimaticOrchestrator(input: {
-  client: DatabaseClient
-  run: OutputWorkflowRun
-  workflow: OutputWorkflow
-  node: OutputWorkflowNode
-  upstream: Record<string, unknown>
-}) {
-  const requestResponse = await input.client
-    .from('output_requests')
-    .select(outputRequestSelect)
-    .eq('draft_id', input.run.draftId)
-    .eq('workflow_id', input.workflow.id)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (requestResponse.error) throw new Error(requestResponse.error.message)
-  if (!requestResponse.data) throw new Error('Sequence animatic orchestrator could not find the master output request.')
-  const masterRequest = mapOutputRequestRow(requestResponse.data)
-  const masterMetadata = asRecord(masterRequest.metadata)
-  if (readScreenplayAnimaticRoleFromMetadata(masterMetadata) !== 'master') {
-    throw new Error('Sequence animatic orchestrator requires a master animatic request.')
-  }
-  const directorPlan = asRecord(input.upstream.shotContinuityPlan ?? input.upstream.shot_continuity_plan ?? input.upstream.directorPlan ?? input.upstream.director_plan)
-  const manifest = asRecord(input.upstream.manifest ?? input.upstream.sequenceAnimaticManifest ?? input.upstream.sequence_animatic_manifest)
-  if (Object.keys(directorPlan).length === 0) throw new Error('Sequence animatic orchestrator requires a shot continuity plan.')
-  if (Object.keys(manifest).length === 0) throw new Error('Sequence animatic orchestrator requires the master manifest.')
-  const blocks = sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest, directorPlan)
-  if (blocks.length === 0) throw new Error('Sequence animatic orchestrator found no storyboard blocks to queue.')
-  const screenplayAnimaticSource = readScreenplayAnimaticSourceFromMetadata(
-    masterMetadata,
-    masterRequest.sourceSurface === 'wiki_sequence_unit' ? 'wiki_sequence_unit' : 'prompt_cinematic',
-  )
-  const manifestHash = sequenceAnimaticStableHash(manifest)
-  const directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
-  const masterManifestArtifactKey = readText(masterMetadata.masterManifestArtifactKey) || `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-manifest`
-  const existingChildrenResponse = await input.client
-    .from('output_requests')
-    .select(outputRequestSelect)
-    .eq('project_id', input.run.projectId)
-    .eq('draft_id', input.run.draftId)
-    .eq('parent_request_id', masterRequest.id)
-    .order('created_at', { ascending: true })
-  if (existingChildrenResponse.error) throw new Error(existingChildrenResponse.error.message)
-  const existingChildren = (existingChildrenResponse.data ?? []).map(mapOutputRequestRow)
-  const existingByBlockId = new Map(existingChildren
-    .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'storyboard_block')
-    .map((child) => [readText(asRecord(child.metadata).storyboardBlockId), child] as const)
-    .filter(([id]) => id))
-  const childRequests: OutputRequest[] = [...existingChildren]
-  const now = new Date().toISOString()
-  await insertSequenceAnimaticEvent({
-    client: input.client,
-    projectId: input.run.projectId,
-    draftId: input.run.draftId,
-    requestId: masterRequest.id,
-    workflowId: input.workflow.id,
-    runId: input.run.id,
-    eventType: 'orchestrator_started',
-    payload: { blockCount: blocks.length, directorPlanHash, manifestHash },
-    metadata: { source: 'sequence_animatic_orchestrator' },
-    dedupe: { directorPlanHash },
-  })
-  for (const requirement of readArray(directorPlan.assetRequirements ?? directorPlan.asset_requirements).map(asRecord)) {
-    await insertSequenceAnimaticEvent({
-      client: input.client,
-      projectId: input.run.projectId,
-      draftId: input.run.draftId,
-      requestId: masterRequest.id,
-      workflowId: input.workflow.id,
-      runId: input.run.id,
-      eventType: 'reference_asset_queued',
-      payload: {
-        sceneGraphNodeId: readText(requirement.sceneGraphNodeId ?? requirement.nodeId ?? requirement.id),
-        assetType: readText(requirement.assetType ?? requirement.type),
-        priority: readText(requirement.priority),
-        required: requirement.required === true,
-        reason: readText(requirement.reason),
-      },
-      metadata: { source: 'sequence_animatic_orchestrator' },
-      dedupe: { sceneGraphNodeId: readText(requirement.sceneGraphNodeId ?? requirement.nodeId ?? requirement.id) },
-    })
-  }
-  const continuityAssetBatches = sequenceAnimaticContinuityAssetBatches({ directorPlan, manifest })
-  const existingBatchChildren = existingChildren
-    .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'continuity_asset_batch')
-  const existingBatchById = new Map(existingBatchChildren
-    .map((child) => [readText(asRecord(child.metadata).continuityBatchId), child] as const)
-    .filter(([id]) => id))
-  const batchRequestIds: string[] = []
-  const startedBatchRunIds: string[] = []
-  for (const batch of continuityAssetBatches) {
-    const batchId = readText(batch.batchId)
-    if (!batchId) continue
-    let child = existingBatchById.get(batchId) ?? null
-    const batchHash = sequenceAnimaticStableHash(batch)
-    if (!child) {
-      const targetNodeIds = readStringArray(batch.targetNodeIds)
-      const targetNodes = readArray(batch.targetNodes).map(asRecord).filter((node) => targetNodeIds.includes(readText(node.id)))
-      const workflowId = crypto.randomUUID()
-      const commonConfig = {
-        cinematicPipelineVersion: 'v3_script_storyboards',
-        graphSpecVersion: sequenceAnimaticGraphSpecVersion,
-        screenplayAnimaticRole: 'continuity_asset_batch',
-        screenplayAnimaticSource,
-        sequenceAnimaticRole: 'continuity_asset_batch',
-        parentRequestId: masterRequest.id,
-        masterRequestId: masterRequest.id,
-        continuityBatchId: batchId,
-        continuityBatchHash: batchHash,
-        manifestHash,
-        directorPlanHash,
-        masterManifestArtifactKey,
-        sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
-      }
-      const graphResult = buildValidatedOutputWorkflowTemplateGraph({
-        registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
-        templateKey: sequenceAnimaticContinuityBatchTemplateKey,
-        rawInput: {
-          workflowId,
-          draftId: input.run.draftId,
-          commonConfig,
-          batch,
-          targetNodes,
-          continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-          relevantShots: readArray(directorPlan.shots).map(asRecord).filter((shot) => readStringArray(batch.blockIds).length === 0 || readStringArray(batch.blockIds).includes(readText(shot.storyboardBlockId))),
-          shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
-          assetPack: asRecord(manifest.assetPack),
-          referenceAssetKeys: readStringArray(batch.worldReferenceAssetKeys),
-          visualDependencyEdges: sequenceAnimaticContinuityVisualDependencyEdges(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-          aspectRatio: readText(asRecord(manifest.assetPack).aspectRatio) || '16:9',
-        },
-      })
-      if (!graphResult.ok || !graphResult.graph) throw new Error(graphResult.diagnostics.join(' '))
-      const { nodes, edges } = graphResult.graph
-      const workflowTemplateMetadata = {
-        workflowTemplateKey: sequenceAnimaticContinuityBatchTemplateKey,
-        workflowTemplateSourceHash: graphResult.sourceHash,
-      }
-      const workflowPayload = {
-        project_id: input.run.projectId,
-        draft_id: input.run.draftId,
-        key: `sequence_animatic_${slugify(masterRequest.id)}_${slugify(batchId)}_${manifestHash.slice(0, 8)}`,
-        name: `${masterRequest.title} / ${readText(batch.batchKind) || 'Continuity refs'}`,
-        description: 'Sequence animatic continuity reference batch workflow.',
-        preset: 'cinematic_episode_from_sequence',
-        status: 'active',
-        created_by: masterRequest.requestedBy ?? input.run.requestedBy,
-        metadata: { ...commonConfig, ...workflowTemplateMetadata, readyToRun: true },
-      }
-      const requestPayload = {
-        project_id: input.run.projectId,
-        draft_id: input.run.draftId,
-        parent_request_id: masterRequest.id,
-        requested_by: masterRequest.requestedBy ?? input.run.requestedBy,
-        source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
-        prompt: `${masterRequest.prompt}\n\nGenerate continuity reference batch ${batchId}.`,
-        title: `${masterRequest.title} / ${readText(batch.batchKind) || 'Continuity refs'}`,
-        intent: 'output_generation',
-        output_kind: 'cinematic_episode',
-        status: 'awaiting_confirmation',
-        selected_entity_keys: masterRequest.selectedEntityKeys,
-        selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
-        page_count: null,
-        target_format: 'image',
-        planner_notes: 'Continuity reference batch prepared by the sequence animatic Fly orchestrator.',
-        metadata: {
-          ...commonConfig,
-          ...workflowTemplateMetadata,
-          continuityBatchId: batchId,
-          continuityBatchHash: batchHash,
-          continuityBatchKind: readText(batch.batchKind),
-          continuityBatchRequired: batch.required === true,
-          targetNodeIds: readStringArray(batch.targetNodeIds),
-          blockIds: readStringArray(batch.blockIds),
-          batch,
-          readyToRun: true,
-          createdFromDirectorPlanAt: now,
-        },
-      }
-      const ensured = await ensureMappedChildWorkflow({
-        client: input.client,
-        projectId: input.run.projectId,
-        draftId: input.run.draftId,
-        parentRequestId: masterRequest.id,
-        role: 'continuity_asset_batch',
-        identityKey: 'continuityBatchId',
-        identityValue: batchId,
-        workflow: workflowPayload,
-        nodes,
-        edges,
-        request: requestPayload,
-      })
-      child = ensured.request
-      childRequests.push(child)
-      existingBatchById.set(batchId, child)
-    }
-    if (!child) continue
-    batchRequestIds.push(child.id)
-    await insertSequenceAnimaticEvent({
-      client: input.client,
-      projectId: input.run.projectId,
-      draftId: input.run.draftId,
-      requestId: masterRequest.id,
-      workflowId: child.workflowId,
-      runId: null,
-      eventType: 'reference_asset_queued',
-      payload: {
-        batchId,
-        batchKind: readText(batch.batchKind),
-        targetNodeIds: readStringArray(batch.targetNodeIds),
-        blockIds: readStringArray(batch.blockIds),
-        required: batch.required === true,
-      },
-      metadata: { source: 'sequence_animatic_orchestrator_batch' },
-      dedupe: { batchId },
-    })
-    if (child.workflowId && child.status !== 'running' && child.status !== 'queued' && child.status !== 'completed') {
-      const startResult = await startSequenceAnimaticChildRun({
-        client: input.client,
-        request: child,
-        workflowId: child.workflowId,
-        runIntent: 'generate_continuity_asset',
-        targetNodeKeys: ['continuity_batch_artifact'],
-      })
-      if (startResult.runId) startedBatchRunIds.push(startResult.runId)
-    }
-  }
-  const queuedBlockRequestIds: string[] = []
-  const createdBlockRequestIds: string[] = []
-  for (const block of blocks) {
-    const blockId = readText(block.id)
-    if (!blockId) continue
-    let child = existingByBlockId.get(blockId) ?? null
-    const blockHash = sequenceAnimaticStableHash(block)
-    if (!child) {
-      const storyboardGroup = asRecord(block.storyboardGroup)
-      const layout = asRecord(block.storyboardLayout)
-      const rows = Math.max(1, Number(layout.rows ?? storyboardGroup.rows ?? 1) || 1)
-      const columns = Math.max(1, Number(layout.columns ?? storyboardGroup.columns ?? 1) || 1)
-      const panelCount = Math.max(1, Number(layout.panelCount ?? storyboardGroup.panelCount ?? readArray(block.shots).length) || 1)
-      const aspectRatio = readText(asRecord(manifest.assetPack).aspectRatio) || '16:9'
-      const imageSize = sequenceAnimaticStoryboardImageSize(columns, rows, aspectRatio)
-      const workflowId = crypto.randomUUID()
-      const blockShotPlan = {
-        ...asRecord(manifest.shotPlan),
-        totalEditorialDurationSeconds: Number(block.durationSeconds ?? storyboardGroup.editorialDurationSeconds ?? 0) || readArray(block.shots).reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds ?? 0) || 0), 0),
-        shots: readArray(block.shots).map(asRecord),
-      }
-      const commonConfig = {
-        cinematicPipelineVersion: 'v3_script_storyboards',
-        graphSpecVersion: sequenceAnimaticGraphSpecVersion,
-        screenplayAnimaticRole: 'storyboard_block',
-        screenplayAnimaticSource,
-        sequenceAnimaticRole: 'storyboard_block',
-        parentRequestId: masterRequest.id,
-        masterRequestId: masterRequest.id,
-        sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
-        storyboardBlockId: blockId,
-        manifestHash,
-        blockHash,
-        directorPlanHash,
-        masterManifestArtifactKey,
-      }
-      const durationSeconds = Math.max(4, Math.min(15, Number(block.durationSeconds ?? storyboardGroup.providerDurationSeconds ?? 0) || 8))
-      const graphResult = buildValidatedOutputWorkflowTemplateGraph({
-        registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
-        templateKey: sequenceAnimaticStoryboardBlocksTemplateKey,
-        rawInput: {
-          workflowId,
-          draftId: input.run.draftId,
-          commonConfig,
-          block,
-          manifestSummary: {
-            title: readText(manifest.title) || masterRequest.title,
-            screenplayMarkdown: readText(manifest.screenplayMarkdown),
-          },
-          shotPlan: blockShotPlan,
-          storyboardGroup,
-          storyboardLayout: { rows, columns, panelCount },
-          assetPack: asRecord(manifest.assetPack),
-          aspectRatio,
-          imageSize,
-          durationSeconds,
-        },
-      })
-      if (!graphResult.ok || !graphResult.graph) throw new Error(graphResult.diagnostics.join(' '))
-      const { nodes, edges } = graphResult.graph
-      const workflowTemplateMetadata = {
-        workflowTemplateKey: sequenceAnimaticStoryboardBlocksTemplateKey,
-        workflowTemplateSourceHash: graphResult.sourceHash,
-      }
-      const workflowPayload = {
-        project_id: input.run.projectId,
-        draft_id: input.run.draftId,
-        key: `sequence_animatic_${slugify(masterRequest.id)}_${slugify(blockId)}_${manifestHash.slice(0, 8)}`,
-        name: `${masterRequest.title} / Block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}`,
-        description: 'Sequence animatic storyboard block workflow.',
-        preset: 'cinematic_episode_from_sequence',
-        status: 'active',
-        created_by: masterRequest.requestedBy ?? input.run.requestedBy,
-        metadata: {
-          ...commonConfig,
-          ...workflowTemplateMetadata,
-          sourceMasterWorkflowId: input.workflow.id,
-          readyToRun: true,
-        },
-      }
-      const requestPayload = {
-        project_id: input.run.projectId,
-        draft_id: input.run.draftId,
-        parent_request_id: masterRequest.id,
-        requested_by: masterRequest.requestedBy ?? input.run.requestedBy,
-        source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
-        prompt: `${masterRequest.prompt}\n\nStoryboard block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}: ${readText(block.title) || blockId}`,
-        title: `${masterRequest.title} / Block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}`,
-        intent: 'output_generation',
-        output_kind: 'cinematic_episode',
-        status: 'awaiting_confirmation',
-        selected_entity_keys: masterRequest.selectedEntityKeys,
-        selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
-        page_count: null,
-        target_format: 'video',
-        planner_notes: 'Storyboard block graph prepared by the sequence animatic Fly orchestrator.',
-        metadata: {
-          graphSpecVersion: sequenceAnimaticGraphSpecVersion,
-          directorPlanHash,
-          screenplayAnimaticRole: 'storyboard_block',
-          screenplayAnimaticSource,
-          sequenceAnimaticRole: 'storyboard_block',
-          ...workflowTemplateMetadata,
-          parentRequestId: masterRequest.id,
-          masterRequestId: masterRequest.id,
-          storyboardBlockId: blockId,
-          storyboardBlockIndex: Number(block.index ?? 0) || queuedBlockRequestIds.length + 1,
-          manifestHash,
-          blockHash,
-          masterManifestArtifactKey,
-          sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
-          sourceMasterWorkflowId: input.workflow.id,
-          readyToRun: true,
-          createdFromManifestAt: now,
-          block,
-        },
-      }
-      const ensured = await ensureMappedChildWorkflow({
-        client: input.client,
-        projectId: input.run.projectId,
-        draftId: input.run.draftId,
-        parentRequestId: masterRequest.id,
-        role: 'storyboard_block',
-        identityKey: 'storyboardBlockId',
-        identityValue: blockId,
-        workflow: workflowPayload,
-        nodes,
-        edges,
-        request: requestPayload,
-      })
-      child = ensured.request
-      childRequests.push(child)
-      existingByBlockId.set(blockId, child)
-      if (ensured.created === true) createdBlockRequestIds.push(child.id)
-    }
-    if (!child) continue
-    queuedBlockRequestIds.push(child.id)
-    await insertSequenceAnimaticEvent({
-      client: input.client,
-      projectId: input.run.projectId,
-      draftId: input.run.draftId,
-      requestId: masterRequest.id,
-      workflowId: child.workflowId,
-      runId: null,
-      eventType: 'block_queued',
-      payload: {
-        blockRequestId: child.id,
-        workflowId: child.workflowId,
-        storyboardBlockId: blockId,
-        blockHash,
-        directorPlanHash,
-        title: readText(block.title) || child.title,
-        shotIds: readStringArray(block.shotIds),
-        created: createdBlockRequestIds.includes(child.id),
-      },
-      metadata: { source: 'sequence_animatic_orchestrator' },
-      dedupe: { storyboardBlockId: blockId },
-    })
-  }
-  const activeBlockRuns = childRequests.filter((child) => {
-    const role = readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata))
-    return role === 'storyboard_block' && (child.status === 'running' || child.status === 'queued' || child.status === 'planning')
-  })
-  const activeRequiredBatchRuns = childRequests.filter((child) => {
-    const metadata = asRecord(child.metadata)
-    const role = readScreenplayAnimaticRoleFromMetadata(metadata)
-    return role === 'continuity_asset_batch' && metadata.continuityBatchRequired === true && (child.status === 'running' || child.status === 'queued' || child.status === 'planning')
-  })
-  const blockConcurrency = Math.max(1, Number(asRecord(input.node.config).blockConcurrency ?? 1) || 1)
-  const startableChildren = childRequests
-    .filter((child) => readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'storyboard_block')
-    .filter((child) => child.workflowId)
-    .filter((child) => child.status !== 'running' && child.status !== 'queued' && child.status !== 'completed')
-    .sort((left, right) => (Number(asRecord(left.metadata).storyboardBlockIndex ?? 0) || 999) - (Number(asRecord(right.metadata).storyboardBlockIndex ?? 0) || 999))
-  const startedRunIds: string[] = []
-  const startSlots = activeRequiredBatchRuns.length > 0 || startedBatchRunIds.length > 0 ? 0 : Math.max(0, blockConcurrency - activeBlockRuns.length)
-  for (const child of startableChildren.slice(0, startSlots)) {
-    if (!child.workflowId) continue
-    const startResult = await startSequenceAnimaticChildRun({
-      client: input.client,
-      request: child,
-      workflowId: child.workflowId,
-      runIntent: 'prepare_storyboard_block',
-      targetNodeKeys: ['artifact'],
-    })
-    if (startResult.runId) startedRunIds.push(startResult.runId)
-    if (startResult.started) {
-      await insertSequenceAnimaticEvent({
-        client: input.client,
-        projectId: input.run.projectId,
-        draftId: input.run.draftId,
-        requestId: masterRequest.id,
-        workflowId: child.workflowId,
-        runId: startResult.runId,
-        eventType: 'block_started',
-        payload: {
-          blockRequestId: child.id,
-          workflowId: child.workflowId,
-          storyboardBlockId: readText(asRecord(child.metadata).storyboardBlockId),
-          runId: startResult.runId,
-          status: startResult.status,
-        },
-        metadata: { source: 'sequence_animatic_orchestrator' },
-        dedupe: { storyboardBlockId: readText(asRecord(child.metadata).storyboardBlockId), runId: startResult.runId },
-      })
-    }
-  }
-  const updateMaster = await input.client
-    .from('output_requests')
-    .update({
-      metadata: {
-        ...masterMetadata,
-        screenplayAnimaticRole: 'master',
-        sequenceAnimaticRole: 'master',
-        graphSpecVersion: 'sequence_animatic_graph_v2',
-        directorPlanHash,
-        orchestrationStatus: startableChildren.length > startSlots ? 'partial' : 'queued',
-        orchestrationUpdatedAt: new Date().toISOString(),
-        childBlockRequestIds: queuedBlockRequestIds,
-        continuityBatchRequestIds: batchRequestIds,
-        childBlockWorkflowIds: childRequests.map((child) => child.workflowId).filter(Boolean),
-        activeStoryboardBlockRunIds: startedRunIds,
-        activeContinuityBatchRunIds: startedBatchRunIds,
-      },
-    })
-    .eq('id', masterRequest.id)
-  if (updateMaster.error) throw new Error(updateMaster.error.message)
-  await input.client.rpc('refresh_output_request_status_projection', { p_request_id: masterRequest.id })
-  return {
-    orchestration: {
-      status: startableChildren.length > startSlots ? 'partial' : 'queued',
-      blockCount: blocks.length,
-      queuedBlockCount: queuedBlockRequestIds.length,
-      startedRunCount: startedRunIds.length,
-      startedBatchRunCount: startedBatchRunIds.length,
-      activeBlockRunCount: activeBlockRuns.length + startedRunIds.length,
-      activeRequiredBatchRunCount: activeRequiredBatchRuns.length + startedBatchRunIds.length,
-      blockConcurrency,
-      directorPlanHash,
-      manifestHash,
-      continuityAssetBatchCount: continuityAssetBatches.length,
-    },
-    childRequests: childRequests.map((child) => ({
-      id: child.id,
-      workflowId: child.workflowId,
-      status: child.status,
-      storyboardBlockId: readText(asRecord(child.metadata).storyboardBlockId),
-      title: child.title,
-    })),
-    startedRunIds,
-  }
 }
 
 function mergeComicSelectedEntitiesWithFallback(selectedEntities: Array<Record<string, unknown>>, fallbackPack: Record<string, unknown>) {
@@ -7404,29 +6124,6 @@ const sequenceAnimaticShotContinuityCoverageLinkV2Schema = z.object({
   description: z.string().default(''),
 })
 
-function normalizeSequenceAnimaticCoverageSetupKind(value: unknown) {
-  const normalized = readText(value).toLowerCase().replace(/[\s-]+/g, '_')
-  if (normalized === 'wide' || normalized === 'master' || normalized === 'establishing_master') return 'wide_master'
-  if (normalized === 'over_the_shoulder' || normalized === 'over_shoulder' || normalized === 'ots') return 'ots_a_to_b'
-  if (normalized === 'reverse' || normalized === 'reverse_ots') return 'ots_b_to_a'
-  if (normalized === 'single' || normalized === 'clean_single_a' || normalized === 'clean_single_b') return 'clean_single'
-  if (normalized === 'two-shot') return 'two_shot'
-  if (normalized === 'cutaway') return 'insert'
-  if (normalized === 'move' || normalized === 'moving') return 'movement'
-  if (normalized === 'new_position') return 'blocking_change'
-  if (['wide_master', 'ots_a_to_b', 'ots_b_to_a', 'clean_single', 'two_shot', 'insert', 'movement', 'blocking_change', 'viewpoint'].includes(normalized)) return normalized
-  return 'other'
-}
-
-function normalizeSequenceAnimaticCoverageContinuityMode(value: unknown) {
-  const normalized = readText(value).toLowerCase().replace(/[\s-]+/g, '_')
-  if (['same_setup', 'reverse_angle', 'blocking_change', 'match_action', 'new_setup', 'insert_cutaway', 'new_scene'].includes(normalized)) return normalized
-  if (normalized === 'reverse') return 'reverse_angle'
-  if (normalized === 'same' || normalized === 'return_to_setup') return 'same_setup'
-  if (normalized === 'new_position') return 'blocking_change'
-  return 'new_setup'
-}
-
 const sequenceAnimaticShotContinuityShotV2Schema = z.object({
   id: z.string().min(1),
   index: z.number().int().positive(),
@@ -7483,48 +6180,6 @@ const sequenceAnimaticShotContinuityShotV2Schema = z.object({
       })
     }
   }
-})
-
-const sequenceAnimaticShotContinuityCoverageSetupV2Schema = z.object({
-  id: z.string().min(1),
-  sceneId: z.string().default(''),
-  scene_id: z.string().default(''),
-  setupKind: z.preprocess(normalizeSequenceAnimaticCoverageSetupKind, z.enum(['wide_master', 'ots_a_to_b', 'ots_b_to_a', 'clean_single', 'two_shot', 'insert', 'movement', 'blocking_change', 'viewpoint', 'other'])).default('other'),
-  setup_kind: z.string().default(''),
-  title: z.string().default(''),
-  setId: z.string().default(''),
-  set_id: z.string().default(''),
-  zoneId: z.string().default(''),
-  zone_id: z.string().default(''),
-  primarySpotId: z.string().default(''),
-  primary_spot_id: z.string().default(''),
-  spotIds: z.array(z.string()).default([]),
-  spot_ids: z.array(z.string()).default([]),
-  viewpointId: z.string().default(''),
-  viewpoint_id: z.string().default(''),
-  characterRefIds: z.array(z.string()).default([]),
-  character_ref_ids: z.array(z.string()).default([]),
-  screenDirection: z.string().default(''),
-  screen_direction: z.string().default(''),
-  camera: z.object({
-    framing: z.string().default(''),
-    angle: z.string().default(''),
-    lens: z.string().default(''),
-    movement: z.string().default(''),
-    screenDirectionRule: z.string().default(''),
-  }).default({ framing: '', angle: '', lens: '', movement: '', screenDirectionRule: '' }),
-  lighting: z.string().default(''),
-  stagingBrief: z.string().default(''),
-  staging_brief: z.string().default(''),
-  continuityFromSetupId: z.string().default(''),
-  continuity_from_setup_id: z.string().default(''),
-  continuityMode: z.preprocess(normalizeSequenceAnimaticCoverageContinuityMode, z.enum(['same_setup', 'reverse_angle', 'blocking_change', 'match_action', 'new_setup', 'insert_cutaway', 'new_scene'])).default('new_setup'),
-  continuity_mode: z.string().default(''),
-  usedShotIds: z.array(z.string()).default([]),
-  used_shot_ids: z.array(z.string()).default([]),
-  blockIds: z.array(z.string()).default([]),
-  block_ids: z.array(z.string()).default([]),
-  required: z.boolean().default(false),
 })
 
 const sequenceAnimaticShotPlanSchema = z.object({
@@ -7598,35 +6253,6 @@ const sequenceAnimaticShotContinuityPlanV2Schema = z.object({
   coverageSetups: z.array(sequenceAnimaticShotContinuityCoverageSetupV2Schema).default([]),
   localReferences: z.array(sequenceAnimaticShotContinuityLocalReferenceV2Schema).default([]),
   notes: z.array(z.string()).default([]),
-})
-
-const sequenceAnimaticCoveragePlanSchema = z.object({
-  role: z.literal('sequence_animatic_coverage_plan').default('sequence_animatic_coverage_plan'),
-  contractVersion: z.literal('coverage_plan_v1').default('coverage_plan_v1'),
-  graphSpecVersion: z.literal('sequence_animatic_graph_v2').default('sequence_animatic_graph_v2'),
-  coverageSetups: z.array(sequenceAnimaticShotContinuityCoverageSetupV2Schema).default([]),
-  coverageSetupByShotId: z.record(z.string(), z.string()).default({}),
-  diagnostics: z.array(z.string()).default([]),
-  warnings: z.array(z.string()).default([]),
-})
-
-const sequenceAnimaticCoveragePlanLlmSchema = z.object({
-  coverageSetups: z.array(sequenceAnimaticShotContinuityCoverageSetupV2Schema).default([]),
-  coverageSetupByShotId: z.record(z.string(), z.string()).default({}),
-  diagnostics: z.array(z.string()).default([]),
-  warnings: z.array(z.string()).default([]),
-})
-
-const sequenceAnimaticCoverageAnchorBriefSchema = z.object({
-  cameraPosition: z.string().default(''),
-  framing: z.string().default(''),
-  screenDirection: z.string().default(''),
-  subjectBlocking: z.string().default(''),
-  foregroundBackgroundPlan: z.string().default(''),
-  movementArrows: z.array(z.string()).default([]),
-  labels: z.array(z.string()).default([]),
-  visualNotes: z.array(z.string()).default([]),
-  mustNotInclude: z.array(z.string()).default([]),
 })
 
 const sequenceAnimaticShotContinuityStreamPlanStartRecordSchema = z.object({
@@ -10272,260 +8898,6 @@ function projectShotContinuityPlanV2ToDirectorPlan(value: z.infer<typeof sequenc
       'Shot continuity v2 used shot-level sceneBinding as source of truth.',
     ],
   }
-}
-
-function sequenceAnimaticCoverageShotRefs(shot: Record<string, unknown>) {
-  const refs = asRecord(shot.refs ?? shot.references)
-  return {
-    visibleCharacterRefIds: sequenceAnimaticUniqueTexts([
-      refs.visibleCharacterRefIds,
-      refs.visible_character_ref_ids,
-      shot.visibleCharacterRefIds,
-      shot.visible_character_ref_ids,
-      readArray(shot.performance ?? shot.performanceBeats).map((beat) => readText(asRecord(beat).characterRefId ?? asRecord(beat).character_ref_id)),
-    ]),
-    propRefIds: sequenceAnimaticUniqueTexts([
-      refs.propRefIds,
-      refs.prop_ref_ids,
-      refs.itemRefIds,
-      refs.item_ref_ids,
-      shot.propRefIds,
-      shot.prop_ref_ids,
-      shot.itemRefIds,
-      shot.item_ref_ids,
-    ]),
-    localReferenceIds: sequenceAnimaticUniqueTexts([
-      refs.localReferenceIds,
-      refs.local_reference_ids,
-      asRecord(shot.sceneBinding ?? shot.scene_binding).localReferenceIds,
-      asRecord(shot.sceneBinding ?? shot.scene_binding).local_reference_ids,
-      shot.continuityAnchorIds,
-      shot.continuity_anchor_ids,
-    ]),
-  }
-}
-
-function sequenceAnimaticCoverageSpatialFields(shot: Record<string, unknown>) {
-  const binding = asRecord(shot.sceneBinding ?? shot.scene_binding ?? shot.sceneGraphBinding ?? shot.scene_graph_binding)
-  const spotIds = sequenceAnimaticUniqueTexts([
-    binding.spotIds,
-    binding.spot_ids,
-    shot.spotIds,
-    shot.spot_ids,
-    shot.continuitySpotIds,
-    shot.continuity_spot_ids,
-  ])
-  const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id ?? shot.primarySpotId ?? shot.primary_spot_id) || spotIds[0] || ''
-  return {
-    setId: readText(binding.setId ?? binding.set_id ?? shot.setId ?? shot.set_id ?? shot.continuitySetId ?? shot.continuity_set_id),
-    zoneId: readText(binding.zoneId ?? binding.zone_id ?? shot.zoneId ?? shot.zone_id ?? shot.continuityZoneId ?? shot.continuity_zone_id),
-    primarySpotId,
-    spotIds: sequenceAnimaticUniqueTexts([primarySpotId, spotIds]),
-    viewpointId: readText(binding.viewpointId ?? binding.viewpoint_id ?? shot.viewpointId ?? shot.viewpoint_id ?? shot.continuityAngleId ?? shot.continuity_angle_id),
-  }
-}
-
-function sequenceAnimaticCoverageCameraSignature(shot: Record<string, unknown>) {
-  const camera = asRecord(shot.camera)
-  return [
-    readText(camera.framing).toLowerCase(),
-    readText(camera.angle).toLowerCase(),
-    readText(camera.lens).toLowerCase(),
-    readText(camera.movement).toLowerCase(),
-    readText(camera.screenDirectionRule ?? camera.screen_direction_rule).toLowerCase(),
-  ].join('|')
-}
-
-function sequenceAnimaticCoverageSetupKindForShot(shot: Record<string, unknown>) {
-  const camera = asRecord(shot.camera)
-  const framing = readText(camera.framing).toLowerCase()
-  const movement = readText(camera.movement).toLowerCase()
-  const action = readText(shot.action).toLowerCase()
-  const subjects = sequenceAnimaticCoverageShotRefs(shot).visibleCharacterRefIds
-  if (/wide|master|establish|long/.test(framing)) return 'wide_master'
-  if (/insert|detail|cutaway/.test(framing) || /insert|detail|object|hand|feet|cord|bell|paper|marker/.test(action)) return 'insert'
-  if (/track|dolly|pan|tilt|drift|follow|move|push/.test(movement)) return 'movement'
-  if (subjects.length >= 2 && /two|2-shot|two shot|medium|wide/.test(framing)) return 'two_shot'
-  if (subjects.length === 1) return 'clean_single'
-  return 'other'
-}
-
-function sequenceAnimaticCoverageGroupingKey(shot: Record<string, unknown>) {
-  const spatial = sequenceAnimaticCoverageSpatialFields(shot)
-  const refs = sequenceAnimaticCoverageShotRefs(shot)
-  return sequenceAnimaticStableHash({
-    setId: spatial.setId,
-    zoneId: spatial.zoneId,
-    primarySpotId: spatial.primarySpotId,
-    viewpointId: spatial.viewpointId,
-    camera: sequenceAnimaticCoverageCameraSignature(shot),
-    subjects: [...refs.visibleCharacterRefIds, ...refs.localReferenceIds, ...refs.propRefIds].sort(),
-  }).slice(0, 10)
-}
-
-function sequenceAnimaticCoverageSetupForShotGroup(input: {
-  groupKey: string
-  shots: Record<string, unknown>[]
-  proposedSetup?: Record<string, unknown> | null
-}) {
-  const firstShot = input.shots[0] ?? {}
-  const spatial = sequenceAnimaticCoverageSpatialFields(firstShot)
-  const refs = sequenceAnimaticCoverageShotRefs(firstShot)
-  const camera = asRecord(firstShot.camera)
-  const shotIds = input.shots.map((shot) => readText(shot.id)).filter(Boolean)
-  const blockIds = sequenceAnimaticUniqueTexts(input.shots.map((shot) => readText(shot.blockId ?? shot.storyboardBlockId)).filter(Boolean))
-  const proposed = asRecord(input.proposedSetup)
-  const setupKind = normalizeSequenceAnimaticCoverageSetupKind(readText(proposed.setupKind ?? proposed.setup_kind) || sequenceAnimaticCoverageSetupKindForShot(firstShot))
-  const baseId = readText(proposed.id).replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '')
-  const id = baseId && shotIds.every((shotId) => readStringArray(proposed.usedShotIds ?? proposed.used_shot_ids).includes(shotId))
-    ? baseId
-    : `coverage_${slugify(readText(firstShot.sourceSceneId ?? firstShot.sceneId) || readText(firstShot.blockId ?? firstShot.storyboardBlockId) || 'scene')}_${input.groupKey}`
-  const screenDirection = readText(proposed.screenDirection ?? proposed.screen_direction)
-    || readText(camera.screenDirectionRule ?? camera.screen_direction_rule)
-  return sequenceAnimaticShotContinuityCoverageSetupV2Schema.parse({
-    id,
-    sceneId: readText(firstShot.sourceSceneId ?? firstShot.sceneId),
-    setupKind,
-    title: readText(proposed.title)
-      || `${setupKind.replace(/_/g, ' ')} ${shotIds.length === 1 ? readText(firstShot.title) || shotIds[0] : `${shotIds.length} shots`}`,
-    setId: spatial.setId,
-    zoneId: spatial.zoneId,
-    primarySpotId: spatial.primarySpotId,
-    spotIds: spatial.spotIds,
-    viewpointId: spatial.viewpointId,
-    characterRefIds: refs.visibleCharacterRefIds,
-    screenDirection,
-    camera: {
-      framing: readText(camera.framing),
-      angle: readText(camera.angle),
-      lens: readText(camera.lens),
-      movement: readText(camera.movement),
-      screenDirectionRule: readText(camera.screenDirectionRule ?? camera.screen_direction_rule),
-    },
-    lighting: readText(firstShot.lighting) || readText(proposed.lighting),
-    stagingBrief: readText(proposed.stagingBrief ?? proposed.staging_brief)
-      || compactStoryboardSentence(readText(firstShot.action), '', 28),
-    continuityMode: shotIds.length > 1 ? 'same_setup' : 'new_setup',
-    usedShotIds: shotIds,
-    blockIds,
-    required: true,
-  })
-}
-
-function normalizeSequenceAnimaticCoveragePlan(input: {
-  directorPlan: Record<string, unknown>
-  proposedPlan?: Record<string, unknown>
-}) {
-  const directorPlan = sequenceAnimaticDirectorPlanSchema.parse(input.directorPlan)
-  const shots = readArray(directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
-  const proposed = sequenceAnimaticCoveragePlanLlmSchema.safeParse(input.proposedPlan ?? {})
-  const proposedPlan = proposed.success ? proposed.data : { coverageSetups: [], coverageSetupByShotId: {}, diagnostics: [], warnings: [] }
-  const proposedSetupById = new Map(proposedPlan.coverageSetups.map((setup) => [readText(setup.id), setup] as const).filter(([id]) => id))
-  const groups = new Map<string, Record<string, unknown>[]>()
-  for (const shot of shots) {
-    const proposedSetupId = readText(proposedPlan.coverageSetupByShotId[readText(shot.id)])
-    const proposedSetup = proposedSetupId ? proposedSetupById.get(proposedSetupId) ?? null : null
-    const proposedCompatibleSeed = proposedSetup
-      ? sequenceAnimaticStableHash({
-        proposedSetupId,
-        spatial: sequenceAnimaticCoverageSpatialFields(shot),
-        camera: sequenceAnimaticCoverageCameraSignature(shot),
-        subjects: sequenceAnimaticCoverageShotRefs(shot),
-      }).slice(0, 10)
-      : ''
-    const groupKey = proposedCompatibleSeed || sequenceAnimaticCoverageGroupingKey(shot)
-    const list = groups.get(groupKey) ?? []
-    list.push(shot)
-    groups.set(groupKey, list)
-  }
-  const coverageSetups = [...groups.entries()].map(([groupKey, groupShots]) => {
-    const firstShot = groupShots[0] ?? {}
-    const proposedSetupId = readText(proposedPlan.coverageSetupByShotId[readText(firstShot.id)])
-    return sequenceAnimaticCoverageSetupForShotGroup({
-      groupKey,
-      shots: groupShots,
-      proposedSetup: proposedSetupId ? proposedSetupById.get(proposedSetupId) ?? null : null,
-    })
-  })
-  const coverageSetupByShotId = Object.fromEntries(coverageSetups.flatMap((setup) =>
-    readStringArray(setup.usedShotIds).map((shotId) => [shotId, setup.id] as const),
-  ))
-  const shotsWithCoverage = shots.map((shot) => {
-    const shotId = readText(shot.id)
-    const setupId = readText(coverageSetupByShotId[shotId])
-    return {
-      ...shot,
-      coverageSetupId: setupId,
-      coverage_setup_id: setupId,
-      continuityLink: {
-        ...asRecord(shot.continuityLink ?? shot.continuity_link),
-        mode: readText(asRecord(shot.continuityLink ?? shot.continuity_link).mode) || 'new_setup',
-        fromSetupId: readText(asRecord(shot.continuityLink ?? shot.continuity_link).fromSetupId ?? asRecord(shot.continuityLink ?? shot.continuity_link).from_setup_id),
-      },
-      continuity_link: {
-        ...asRecord(shot.continuityLink ?? shot.continuity_link),
-        mode: readText(asRecord(shot.continuityLink ?? shot.continuity_link).mode) || 'new_setup',
-        fromSetupId: readText(asRecord(shot.continuityLink ?? shot.continuity_link).fromSetupId ?? asRecord(shot.continuityLink ?? shot.continuity_link).from_setup_id),
-      },
-    }
-  })
-  const diagnostics = [
-    ...readStringArray(proposedPlan.diagnostics),
-    `Coverage planner finalized ${coverageSetups.length} setup${coverageSetups.length === 1 ? '' : 's'} for ${shots.length} shot${shots.length === 1 ? '' : 's'}.`,
-    proposed.success ? 'Coverage planner LLM proposal was validated and normalized.' : 'Coverage planner used deterministic fallback because no valid LLM proposal was available.',
-  ]
-  const finalized = sequenceAnimaticDirectorPlanSchema.parse({
-    ...directorPlan,
-    shots: shotsWithCoverage,
-    coverageSetups,
-    coverage_setups: coverageSetups,
-    coverageSetupByShotId,
-    coverage_setup_by_shot_id: coverageSetupByShotId,
-    diagnostics: [...readStringArray(directorPlan.diagnostics), ...diagnostics],
-    warnings: [...readStringArray(directorPlan.warnings), ...readStringArray(proposedPlan.warnings)],
-  })
-  return sequenceAnimaticCoveragePlanSchema.parse({
-    coverageSetups,
-    coverageSetupByShotId,
-    diagnostics,
-    warnings: readStringArray(finalized.warnings),
-  })
-}
-
-function applySequenceAnimaticCoveragePlanToDirectorPlan(input: {
-  directorPlan: Record<string, unknown>
-  coveragePlan: Record<string, unknown>
-}) {
-  const directorPlan = sequenceAnimaticDirectorPlanSchema.parse(input.directorPlan)
-  const coveragePlan = sequenceAnimaticCoveragePlanSchema.parse(input.coveragePlan)
-  const shots = readArray(directorPlan.shots).map(asRecord).map((shot) => {
-    const shotId = readText(shot.id)
-    const setupId = readText(coveragePlan.coverageSetupByShotId[shotId])
-    return {
-      ...shot,
-      coverageSetupId: setupId,
-      coverage_setup_id: setupId,
-    }
-  })
-  return sequenceAnimaticDirectorPlanSchema.parse({
-    ...directorPlan,
-    shots,
-    coverageSetups: coveragePlan.coverageSetups,
-    coverage_setups: coveragePlan.coverageSetups,
-    coverageSetupByShotId: coveragePlan.coverageSetupByShotId,
-    coverage_setup_by_shot_id: coveragePlan.coverageSetupByShotId,
-    shotPlanHash: sequenceAnimaticStableHash({
-      shots,
-      blocks: directorPlan.blocks,
-      coverageSetups: coveragePlan.coverageSetups,
-      coverageSetupByShotId: coveragePlan.coverageSetupByShotId,
-    }),
-    diagnostics: [
-      ...readStringArray(directorPlan.diagnostics),
-      ...coveragePlan.diagnostics.map((entry) => `Coverage plan: ${entry}`),
-    ],
-    warnings: [...readStringArray(directorPlan.warnings), ...coveragePlan.warnings],
-  })
 }
 
 function normalizeSequenceAnimaticDialogueLines(input: {
@@ -16569,12 +14941,8 @@ async function runCinematicV2StructuredNodeBackground<TValue>(input: CinematicV2
 async function runCinematicV2StructuredNodeBackgroundOnce<TValue>(input: CinematicV2StructuredNodeBackgroundInput<TValue>) {
   const model = outputWorkflowTextModel()
   const timeoutMs = input.timeoutMs ?? outputWorkflowChapterTimeoutMs()
-  let result: OpenAiResponseResult
-
-  if (input.priorProviderRequestId) {
-    result = await retrieveOpenAiResponse(input.priorProviderRequestId, 45_000)
-  } else {
-    result = await createOpenAiBackgroundResponse({
+  const backgroundResult = await waitForOpenAiBackgroundResponse({
+    request: {
       model,
       instructions: input.instructions,
       input: input.prompt,
@@ -16593,92 +14961,20 @@ async function runCinematicV2StructuredNodeBackgroundOnce<TValue>(input: Cinemat
         graphcore_provider_mode: 'background',
       },
       timeoutMs: 45_000,
-    })
-  }
-
-  if (!result.response.ok) {
-    throw new Error(openAiErrorMessage(result, `OpenAI background structured response failed with status ${result.response.status}.`))
-  }
-  if (!result.id) throw new Error('OpenAI background structured response did not return a response id.')
-
-  let providerRequestId = result.id
-  let providerStatus = result.status
-  const providerStartedAt = readText(input.providerStartedAt) || new Date().toISOString()
-  const parsedStartedAt = Date.parse(providerStartedAt)
-  const startedAt = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now()
-  let transientPollAttempt = 0
-
-  while (!isOpenAiTerminalStatus(providerStatus)) {
-    await input.onProgress?.({
-      providerRequestId,
-      providerStatus,
-      providerMode: 'background',
-      lastProviderPollAt: new Date().toISOString(),
-      providerStartedAt,
-    })
-    if (await input.shouldCancel?.()) {
-      await cancelOpenAiResponse(providerRequestId, 30_000).catch(() => null)
-      await input.onProgress?.({
-        providerRequestId,
-        providerStatus: 'cancelled',
-        providerMode: 'background',
-        lastProviderPollAt: new Date().toISOString(),
-        providerStartedAt,
-      })
-      throw new WorkflowCancelledError()
-    }
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`OpenAI background structured response did not complete after ${timeoutMs}ms. Response id: ${providerRequestId}.`)
-    }
-    await sleep(3_000)
-    try {
-      result = await retrieveOpenAiResponse(providerRequestId, 45_000)
-    } catch (error) {
-      transientPollAttempt += 1
-      if (!isRetryableOpenAiError(error) || Date.now() - startedAt > timeoutMs) throw error
-      await input.onProgress?.({
-        providerRequestId,
-        providerStatus: `${providerStatus}:poll_retry`,
-        providerMode: 'background',
-        lastProviderPollAt: new Date().toISOString(),
-        providerStartedAt,
-      })
-      await sleep(openAiResponseRetryDelayMs(null, transientPollAttempt))
-      continue
-    }
-    if (!result.response.ok) {
-      if (isTransientOpenAiResponseStatus(result.response.status) && Date.now() - startedAt <= timeoutMs) {
-        transientPollAttempt += 1
-        await input.onProgress?.({
-          providerRequestId,
-          providerStatus: `${providerStatus}:poll_retry_${result.response.status}`,
-          providerMode: 'background',
-          lastProviderPollAt: new Date().toISOString(),
-          providerStartedAt,
-        })
-        await sleep(openAiResponseRetryDelayMs(result, transientPollAttempt))
-        continue
-      }
-      throw new Error(openAiErrorMessage(result, `OpenAI background structured response poll failed with status ${result.response.status}.`))
-    }
-    transientPollAttempt = 0
-    providerRequestId = result.id ?? providerRequestId
-    providerStatus = result.status
-  }
-
-  await input.onProgress?.({
-    providerRequestId,
-    providerStatus,
-    providerMode: 'background',
-    lastProviderPollAt: new Date().toISOString(),
-    providerStartedAt,
-    providerIncompleteReason: openAiIncompleteReason(result),
-    providerIncompleteDetails: openAiIncompleteDetails(result),
+    },
+    priorProviderRequestId: input.priorProviderRequestId,
+    providerStartedAt: input.providerStartedAt,
+    timeoutMs,
+    shouldCancel: input.shouldCancel,
+    createCancelledError: () => new WorkflowCancelledError(),
+    onProgress: input.onProgress,
+    createFailureMessage: (status) => `OpenAI background structured response failed with status ${status}.`,
+    pollFailureMessage: (status) => `OpenAI background structured response poll failed with status ${status}.`,
+    terminalFailureMessage: (providerStatus) => `OpenAI background structured response ended with status ${providerStatus}.`,
+    missingResponseIdMessage: 'OpenAI background structured response did not return a response id.',
   })
-
-  if (providerStatus !== 'completed') {
-    throw new Error(openAiErrorMessage(result, `OpenAI background structured response ended with status ${providerStatus}.`))
-  }
+  const result = backgroundResult.response
+  const providerRequestId = backgroundResult.providerRequestId
 
   try {
     return {
@@ -17472,7 +15768,7 @@ async function materializeDynamicCinematicTakeFanout(input: {
   const videoProvider = resolveOutputVideoProvider(input.config)
   const videoModel = readText(input.config.videoModel)
     || readText(input.config.model)
-    || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
+    || outputWorkflowDefaultVideoModel(videoProvider, resolution)
   const presetFamily = readText(input.config.presetFamily) || 'story_movie_tv'
   const cinematicReferenceMode = normalizeCinematicReferenceMode(input.config.cinematicReferenceMode)
   const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(input.config)
@@ -17636,7 +15932,7 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
   const videoProvider = resolveOutputVideoProvider(input.config)
   const videoModel = readText(input.config.videoModel)
     || readText(input.config.model)
-    || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
+    || outputWorkflowDefaultVideoModel(videoProvider, resolution)
   const generatedByNodeKey = 'cinematic_v3_dynamic_storyboard_fanout'
   const dynamicV3GraphPersistenceVersion = 'v3_persistence_authoring_1'
 
@@ -17808,196 +16104,6 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
   return { expanded: true, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
 }
 
-async function materializeSequenceAnimaticScenePlanFanout(input: {
-  client: DatabaseClient
-  run: OutputWorkflowRun
-  workflow: OutputWorkflow
-  compileOutputs: Record<string, unknown>
-  config: Record<string, unknown>
-}) {
-  const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(asRecord(input.compileOutputs.scenePackage))
-  const scenePackages = scenePackageOutput.scenePackages
-  if (scenePackages.length === 0) throw new Error('Scene plan fanout requires at least one parsed screenplay scene package.')
-  const screenplayDraft = asRecord(input.compileOutputs.screenplayDraft)
-  const referencePlan = asRecord(input.compileOutputs.cinematicReferencePlan)
-  const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue({
-    scenePackageOutput,
-    screenplayDraft,
-    referencePlan,
-  })
-  const aspectRatio = readText(input.config.aspectRatio) || '16:9'
-  const resolution = readText(input.config.resolution) || '720p'
-  const maxShotCount = Number(input.config.maxShotCount ?? 0) || sequenceAnimaticShotContinuityMaxShotCount
-  const generatedByNodeKey = 'sequence_animatic_scene_plan_fanout'
-  let scenePackageSourceNodeKey = 'sequence_animatic_scene_graph_assignment'
-  const scenePlannerConcurrency = Math.max(1, Math.min(8, Number(input.config.scenePlannerConcurrency ?? 4) || 4))
-  const dynamicPersistenceVersion = 'sequence_animatic_scene_graph_assignment_parallel_1'
-
-  const existingNodeResponse = await input.client
-    .from('output_workflow_nodes')
-    .select(outputWorkflowNodeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
-  const allWorkflowNodes = (existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[]
-  if (!allWorkflowNodes.some((row) => row.key === scenePackageSourceNodeKey) && allWorkflowNodes.some((row) => row.key === 'sequence_animatic_scene_package')) {
-    scenePackageSourceNodeKey = 'sequence_animatic_scene_package'
-  }
-  const allExistingDynamicNodes = allWorkflowNodes
-    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
-    .filter((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
-  const existingDynamicNodes = allExistingDynamicNodes.filter((row) => !isStaleDynamicCinematicNode(row))
-  const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row] as const))
-  const existingStepResponse = await input.client
-    .from('output_workflow_run_steps')
-    .select(outputWorkflowRunStepSelect)
-    .eq('run_id', input.run.id)
-    .eq('workflow_id', input.workflow.id)
-  if (existingStepResponse.error) throw new Error(existingStepResponse.error.message)
-  const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
-    .map((row) => [readText(row.node_key), row] as const))
-  const scenePlanKeys = scenePackages.map((scene) => `sequence_animatic_scene_shot_plan_${slugify(scene.sceneId).slice(0, 64)}`)
-  const expectedDynamicKeys = [
-    ...scenePlanKeys,
-    'sequence_animatic_scene_plan_merge',
-    'sequence_animatic_director_plan_artifact',
-    'sequence_animatic_manifest',
-    'artifact',
-    'sequence_animatic_orchestrator',
-  ]
-  const hasRecoverableStepOutput = existingDynamicNodes.some((row) => {
-    if (readText(row.output_hash) || hasStoredOutputs(row.outputs)) return false
-    const step = existingStepByNodeKey.get(row.key)
-    return Boolean(step && (readText(step.output_hash) || hasStoredOutputs(step.outputs)))
-  })
-  const existingSameHash = existingDynamicNodes.length > 0
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3ParsePersistenceVersion) === dynamicPersistenceVersion)
-    && expectedDynamicKeys.every((key) => existingDynamicNodes.some((row) => row.key === key))
-  if (existingSameHash && !hasRecoverableStepOutput) {
-    return { expanded: false, compileHash, sceneCount: scenePackages.length }
-  }
-
-  const existingEdgeResponse = await input.client
-    .from('output_workflow_edges')
-    .select(outputWorkflowEdgeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingEdgeResponse.error) throw new Error(existingEdgeResponse.error.message)
-  const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
-    .filter((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
-    .map((row) => row.key)
-
-  const preserveNodeRow = (row: Record<string, unknown>) => {
-    const key = readText(row.key)
-    const existingNode = existingDynamicNodeByKey.get(key)
-    const existingMetadata = asRecord(existingNode?.metadata)
-    const sameCompileHash = readText(existingMetadata.dynamicCompileHash) === compileHash
-    return preserveExistingDynamicNodeOutput({
-      nextRow: row,
-      existingNode,
-      existingStep: existingStepByNodeKey.get(key) ?? null,
-      compileHash,
-      preserve: Boolean(existingNode)
-        && sameCompileHash
-        && readText(existingNode?.node_type) === readText(row.node_type)
-        && readText(asRecord(existingNode?.config).purpose) === readText(asRecord(row.config).purpose),
-    })
-  }
-  const sceneNode = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => {
-    const row = dynamicNodeRow({
-      workflow: input.workflow,
-      compileHash,
-      generatedByNodeKey,
-      ...args,
-    })
-    return preserveNodeRow({
-      ...row,
-      metadata: {
-        ...asRecord(row.metadata),
-        dynamicV3ParsePersistenceVersion: dynamicPersistenceVersion,
-      },
-    })
-  }
-  const sceneEdge = (args: Omit<Parameters<typeof dynamicEdgeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicEdgeRow({
-    workflow: input.workflow,
-    compileHash,
-    generatedByNodeKey,
-    ...args,
-  })
-
-  const nodeRows: Record<string, unknown>[] = []
-  const edgeRows: Record<string, unknown>[] = []
-  scenePackages.forEach((scenePackage, index) => {
-    const sceneKey = scenePlanKeys[index]
-    const y = 80 + index * 150
-    nodeRows.push(sceneNode({
-      key: sceneKey,
-      nodeType: 'utility_transform',
-      label: `Scene ${scenePackage.index} Shot Plan`,
-      x: 1960,
-      y,
-      config: {
-        purpose: 'sequence_animatic_scene_shot_plan',
-        role: 'sequence_animatic_scene_shot_plan',
-        graphSpecVersion: 'sequence_animatic_graph_v2',
-        cinematicPipelineVersion: 'v3_script_storyboards',
-        sceneId: scenePackage.sceneId,
-        scenePackage,
-        maxShotCount,
-        aspectRatio,
-        resolution,
-        execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_scene_shot_plan', maxConcurrency: scenePlannerConcurrency },
-      },
-    }))
-    edgeRows.push(
-      sceneEdge({ key: `scene_package__${sceneKey}`, sourceNodeKey: scenePackageSourceNodeKey, sourcePort: 'scene_package', targetNodeKey: sceneKey, targetPort: 'scene_package' }),
-      sceneEdge({ key: `screenplay__${sceneKey}`, sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: sceneKey, targetPort: 'screenplay' }),
-      sceneEdge({ key: `context__${sceneKey}`, sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: sceneKey, targetPort: 'context' }),
-      sceneEdge({ key: `guidance__${sceneKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: sceneKey, targetPort: 'guidance' }),
-      sceneEdge({ key: `references__${sceneKey}`, sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: sceneKey, targetPort: 'asset_pack' }),
-      sceneEdge({ key: `${sceneKey}__scene_plan_merge`, sourceNodeKey: sceneKey, sourcePort: 'scene_plan', targetNodeKey: 'sequence_animatic_scene_plan_merge', targetPort: 'scene_plan', metadata: { sceneId: scenePackage.sceneId, sceneIndex: scenePackage.index } }),
-    )
-  })
-  nodeRows.push(
-    sceneNode({ key: 'sequence_animatic_scene_plan_merge', nodeType: 'utility_transform', label: 'Merge Shot Continuity Plan', x: 2240, y: 120, config: { purpose: 'sequence_animatic_scene_plan_merge', role: 'sequence_animatic_director_plan', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', maxShotCount, aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_plan_merge', maxConcurrency: 1 } } }),
-    sceneNode({ key: 'sequence_animatic_director_plan_artifact', nodeType: 'output_artifact', label: 'Register Shot Continuity Plan', x: 2520, y: 120, config: { purpose: 'sequence_animatic_director_plan_artifact', artifactKind: 'other', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
-    sceneNode({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 2800, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
-    sceneNode({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 3080, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
-    sceneNode({ key: 'sequence_animatic_orchestrator', nodeType: 'utility_transform', label: 'Queue Animatic Blocks', x: 3360, y: 120, config: { purpose: 'sequence_animatic_orchestrator', role: 'sequence_animatic_orchestrator', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', blockConcurrency: 1, autoStartStoryboards: true, autoStartVideos: false, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_orchestrator', maxConcurrency: 1 } } }),
-  )
-  edgeRows.push(
-    sceneEdge({ key: 'scene_package__scene_plan_merge', sourceNodeKey: scenePackageSourceNodeKey, sourcePort: 'scene_package', targetNodeKey: 'sequence_animatic_scene_plan_merge', targetPort: 'scene_package' }),
-    sceneEdge({ key: 'screenplay__scene_plan_merge', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_scene_plan_merge', targetPort: 'screenplay' }),
-    sceneEdge({ key: 'references__scene_plan_merge', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_scene_plan_merge', targetPort: 'asset_pack' }),
-    sceneEdge({ key: 'context__scene_plan_merge', sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: 'sequence_animatic_scene_plan_merge', targetPort: 'context' }),
-    sceneEdge({ key: 'scene_plan_merge__director_plan_artifact', sourceNodeKey: 'sequence_animatic_scene_plan_merge', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_director_plan_artifact', targetPort: 'director_plan' }),
-    sceneEdge({ key: 'scene_plan_merge__sequence_manifest', sourceNodeKey: 'sequence_animatic_scene_plan_merge', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'director_plan' }),
-    sceneEdge({ key: 'screenplay__sequence_manifest', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'screenplay' }),
-    sceneEdge({ key: 'references__sequence_manifest', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'asset_pack' }),
-    sceneEdge({ key: 'context__sequence_manifest', sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'context' }),
-    sceneEdge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'manifest', targetNodeKey: 'artifact', targetPort: 'input' }),
-    sceneEdge({ key: 'director_plan__orchestrator', sourceNodeKey: 'sequence_animatic_director_plan_artifact', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_orchestrator', targetPort: 'director_plan' }),
-    sceneEdge({ key: 'sequence_manifest__orchestrator', sourceNodeKey: 'artifact', sourcePort: 'manifest', targetNodeKey: 'sequence_animatic_orchestrator', targetPort: 'manifest' }),
-  )
-
-  await persistDynamicWorkflowGraphRevision({
-    client: input.client,
-    workflow: input.workflow,
-    nodeRows,
-    edgeRows,
-    existingDynamicNodes,
-    dynamicEdgeKeys,
-    compileHash,
-    staleReason: 'sequence_animatic_scene_plan_fanout_rematerialized',
-    workflowMetadataPatch: {
-      cinematicPipelineVersion: 'v3_script_storyboards',
-      sceneGraphAssignmentPackage: scenePackageOutput,
-      sceneGraphAssignmentSceneCount: scenePackages.length,
-      dynamicGraphVersion: dynamicPersistenceVersion,
-    },
-  })
-  return { expanded: true, compileHash, sceneCount: scenePackages.length }
-}
-
 async function materializeDynamicCinematicV3ShotParseFanout(input: {
   client: DatabaseClient
   run: OutputWorkflowRun
@@ -18022,7 +16128,7 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   const videoProvider = resolveOutputVideoProvider(input.config)
   const videoModel = readText(input.config.videoModel)
     || readText(input.config.model)
-    || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
+    || outputWorkflowDefaultVideoModel(videoProvider, resolution)
   const generatedByNodeKey = 'cinematic_v3_dynamic_shot_parse_fanout'
   const sequenceAnimaticMode = readText(input.config.sequenceAnimaticMode)
   const cinematicAnimaticMode = readText(input.config.cinematicAnimaticMode)
@@ -18330,7 +16436,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
   const videoProvider = resolveOutputVideoProvider(input.config)
   const videoModel = readText(input.config.videoModel)
     || readText(input.config.model)
-    || (videoProvider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
+    || outputWorkflowDefaultVideoModel(videoProvider, resolution)
   const generatedByNodeKey = 'cinematic_v2_dynamic_shot_fanout'
 
   const existingNodeResponse = await input.client
@@ -19300,37 +17406,6 @@ async function generateChapterMarkdown(input: {
   throw new Error(attempts > 1 ? `${finalMessage} Retried ${attempts} times.` : finalMessage)
 }
 
-function openAiErrorMessage(result: OpenAiResponseResult, fallback: string) {
-  const error = result.body.error
-  if (error && typeof error === 'object' && !Array.isArray(error)) {
-    const message = readText((error as Record<string, unknown>).message)
-    if (message) return message
-  }
-  if (typeof error === 'string' && error.trim()) return error.trim()
-  const incompleteReason = openAiIncompleteReason(result)
-  if (incompleteReason) return `${fallback} Incomplete reason: ${incompleteReason}.`
-  return fallback
-}
-
-function openAiIncompleteDetails(result: OpenAiResponseResult): Record<string, unknown> | null {
-  const body = asRecord(result.body)
-  const details = asRecord(body.incomplete_details)
-  if (Object.keys(details).length > 0) return details
-  const camelDetails = asRecord(body.incompleteDetails)
-  if (Object.keys(camelDetails).length > 0) return camelDetails
-  return null
-}
-
-function openAiIncompleteReason(result: OpenAiResponseResult) {
-  const details = openAiIncompleteDetails(result)
-  if (!details) return ''
-  return readText(details.reason) || readText(details.code) || readText(details.type)
-}
-
-function isOpenAiTerminalStatus(status: string) {
-  return ['completed', 'failed', 'cancelled', 'incomplete'].includes(status)
-}
-
 async function generateBackgroundMarkdown(input: {
   prompt: string
   instructions: string
@@ -19347,106 +17422,41 @@ async function generateBackgroundMarkdown(input: {
 }) {
   const model = outputWorkflowTextModel()
   const timeoutMs = outputWorkflowChapterTimeoutMs()
-  let result: OpenAiResponseResult
-
-  if (input.priorProviderRequestId) {
-    result = await retrieveOpenAiResponse(input.priorProviderRequestId, 45_000)
-  } else {
-    result = await createOpenAiBackgroundResponse({
+  const backgroundResult = await waitForOpenAiBackgroundResponse({
+    request: {
       model,
       instructions: input.instructions,
       input: input.prompt,
       maxOutputTokens: input.maxOutputTokens,
       metadata: input.metadata,
       timeoutMs: 45_000,
-    })
-  }
-
-  if (!result.response.ok) {
-    throw new Error(openAiErrorMessage(result, `OpenAI background response failed with status ${result.response.status}.`))
-  }
-  if (!result.id) throw new Error('OpenAI background response did not return a response id.')
-
-  let providerRequestId = result.id
-  let providerStatus = result.status
-  const startedAt = Date.now()
-  let transientPollAttempt = 0
-
-  while (!isOpenAiTerminalStatus(providerStatus)) {
-    await input.onProgress?.({
-      providerRequestId,
-      providerStatus,
-      providerMode: 'background',
-      lastProviderPollAt: new Date().toISOString(),
-    })
-
-    if (await input.shouldCancel?.()) {
-      await cancelOpenAiResponse(providerRequestId, 30_000).catch(() => null)
+    },
+    priorProviderRequestId: input.priorProviderRequestId,
+    timeoutMs,
+    shouldCancel: input.shouldCancel,
+    createCancelledError: () => new WorkflowCancelledError(),
+    onProgress: async (progress) => {
       await input.onProgress?.({
-        providerRequestId,
-        providerStatus: 'cancelled',
-        providerMode: 'background',
-        lastProviderPollAt: new Date().toISOString(),
+        providerRequestId: progress.providerRequestId,
+        providerStatus: progress.providerStatus,
+        providerMode: progress.providerMode,
+        lastProviderPollAt: progress.lastProviderPollAt,
       })
-      throw new WorkflowCancelledError()
-    }
-
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`OpenAI background response did not complete after ${timeoutMs}ms. Response id: ${providerRequestId}.`)
-    }
-
-    await sleep(3_000)
-    try {
-      result = await retrieveOpenAiResponse(providerRequestId, 45_000)
-    } catch (error) {
-      transientPollAttempt += 1
-      if (!isRetryableOpenAiError(error) || Date.now() - startedAt > timeoutMs) throw error
-      await input.onProgress?.({
-        providerRequestId,
-        providerStatus: `${providerStatus}:poll_retry`,
-        providerMode: 'background',
-        lastProviderPollAt: new Date().toISOString(),
-      })
-      await sleep(openAiResponseRetryDelayMs(null, transientPollAttempt))
-      continue
-    }
-    if (!result.response.ok) {
-      if (isTransientOpenAiResponseStatus(result.response.status) && Date.now() - startedAt <= timeoutMs) {
-        transientPollAttempt += 1
-        await input.onProgress?.({
-          providerRequestId,
-          providerStatus: `${providerStatus}:poll_retry_${result.response.status}`,
-          providerMode: 'background',
-          lastProviderPollAt: new Date().toISOString(),
-        })
-        await sleep(openAiResponseRetryDelayMs(result, transientPollAttempt))
-        continue
-      }
-      throw new Error(openAiErrorMessage(result, `OpenAI background response poll failed with status ${result.response.status}.`))
-    }
-    transientPollAttempt = 0
-    providerRequestId = result.id ?? providerRequestId
-    providerStatus = result.status
-  }
-
-  await input.onProgress?.({
-    providerRequestId,
-    providerStatus,
-    providerMode: 'background',
-    lastProviderPollAt: new Date().toISOString(),
+    },
+    createFailureMessage: (status) => `OpenAI background response failed with status ${status}.`,
+    pollFailureMessage: (status) => `OpenAI background response poll failed with status ${status}.`,
+    terminalFailureMessage: (providerStatus) => `OpenAI background response ended with status ${providerStatus}.`,
+    missingResponseIdMessage: 'OpenAI background response did not return a response id.',
   })
-
-  if (providerStatus !== 'completed') {
-    throw new Error(openAiErrorMessage(result, `OpenAI background response ended with status ${providerStatus}.`))
-  }
+  const result = backgroundResult.response
 
   const markdown = result.outputText.trim()
   if (!markdown) throw new Error('OpenAI returned an empty background response.')
   return {
     markdown,
     model,
-    providerRequestId,
-    providerStatus,
+    providerRequestId: backgroundResult.providerRequestId,
+    providerStatus: backgroundResult.providerStatus,
     usage: asRecord(result.body.usage),
     timeoutMs,
   }
@@ -19723,16 +17733,6 @@ async function collectAssetPackReferenceRecords(client: DatabaseClient, run: Out
   return references
 }
 
-function referenceLimitForImageNode(config: Record<string, unknown>, role: string) {
-  const configured = Number(config.maxReferenceImages ?? config.referenceLimit ?? 0)
-  if (Number.isFinite(configured) && configured > 0) {
-    return Math.max(1, Math.min(16, Math.floor(configured)))
-  }
-  if (role === 'comic_page') return 6
-  if (role === 'comic_atlas' || role === 'cinematic_atlas' || role === 'cinematic_storyboard' || role === 'cinematic_direction_sheet') return 16
-  return 16
-}
-
 async function projectAssetReferenceUrl(client: DatabaseClient, storagePath: string, mimeType: string) {
   const bucket = client.storage.from('project-assets')
   if (typeof bucket.createSignedUrl === 'function') {
@@ -19805,459 +17805,6 @@ async function buildDocumentReferenceImages(input: {
     }
   }
   return images
-}
-
-type FalWebhookImageResult = {
-  status: 'completed' | 'failed' | 'pending'
-  imageUrl: string
-  errorMessage: string
-  resultBody: Record<string, unknown>
-}
-
-function readFalWebhookImageResult(metadata: Record<string, unknown>, requestId: string): FalWebhookImageResult | null {
-  const currentRequestId = readText(metadata.falRequestId)
-  if (currentRequestId && currentRequestId !== requestId) return null
-  const webhookStatus = readText(metadata.webhookStatus)
-  if (!webhookStatus) return null
-  const imageUrl = readText(metadata.falWebhookImageUrl) || readText(metadata.falImageUrl)
-  const errorMessage = readText(metadata.webhookErrorMessage)
-    || readText(metadata.falWebhookErrorMessage)
-    || readText(metadata.webhookPayloadError)
-  const resultBody = asRecord(metadata.falWebhookPayload)
-  if (webhookStatus === 'ERROR') {
-    return { status: 'failed', imageUrl: '', errorMessage: errorMessage || 'Fal webhook reported an image generation error.', resultBody }
-  }
-  if (imageUrl) return { status: 'completed', imageUrl, errorMessage: '', resultBody }
-  return { status: 'pending', imageUrl: '', errorMessage: '', resultBody }
-}
-
-async function waitForOutputFalImage(input: {
-  priorStep?: OutputWorkflowRunStep | null
-  apiKey: string
-  model: string
-  prompt: string
-  imageSize: unknown
-  quality: string
-  outputFormat: string
-  referenceImageUrls?: string[]
-  shouldCancel?: () => Promise<boolean>
-  onProgress?: (progress: {
-    providerRequestId: string
-    providerStatus: string
-    providerMode: string
-    lastProviderPollAt: string
-    webhookConfigured?: boolean
-    providerSubmittedAt?: string | null
-    providerElapsedMs?: number | null
-    staleRequestRestarted?: boolean
-    statusUrl?: string | null
-    responseUrl?: string | null
-  }) => Promise<void>
-  getWebhookResult?: (requestId: string) => Promise<FalWebhookImageResult | null>
-}) {
-  const priorMetadata = asRecord(input.priorStep?.metadata)
-  let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.falRequestId)
-  let statusUrl: string | null = readText(priorMetadata.falStatusUrl) || null
-  let responseUrl: string | null = readText(priorMetadata.falResponseUrl) || null
-  let providerSubmittedAt = readText(priorMetadata.providerSubmittedAt)
-    || readText(priorMetadata.falSubmittedAt)
-    || inferUuidV7TimestampIso(requestId)
-    || readText(input.priorStep?.startedAt)
-    || ''
-  let staleRequestRestarted = false
-
-  const providerSubmittedAtMs = providerSubmittedAt ? Date.parse(providerSubmittedAt) : NaN
-  if (
-    requestId
-    && Number.isFinite(providerSubmittedAtMs)
-    && Date.now() - providerSubmittedAtMs > outputWorkflowFalStaleRequestMs()
-  ) {
-    requestId = ''
-    statusUrl = null
-    responseUrl = null
-    providerSubmittedAt = ''
-    staleRequestRestarted = true
-  }
-
-  const webhookUrl = resolveFalWebhookUrl()
-  const webhookConfigured = Boolean(webhookUrl)
-  if (!requestId) {
-    const submit = await submitFalImageRequest({
-      apiKey: input.apiKey,
-      model: input.model,
-      prompt: input.prompt,
-      imageSize: input.imageSize,
-      quality: input.quality,
-      outputFormat: input.outputFormat,
-      referenceImageUrls: input.referenceImageUrls,
-      webhookUrl,
-    })
-    if (!submit.response.ok) {
-      throw new Error(falErrorMessage(submit.body, `Fal image submission failed with HTTP ${submit.response.status}.`))
-    }
-    requestId = readText(submit.body.request_id)
-    statusUrl = readText(submit.body.status_url) || null
-    responseUrl = readText(submit.body.response_url) || null
-    if (!requestId) throw new Error('Fal did not return a request id for the output image generation node.')
-    providerSubmittedAt = new Date().toISOString()
-  }
-
-  if (!providerSubmittedAt) providerSubmittedAt = new Date().toISOString()
-  const providerElapsedMs = () => {
-    const submittedAtMs = Date.parse(providerSubmittedAt)
-    return Number.isFinite(submittedAtMs) ? Math.max(0, Date.now() - submittedAtMs) : null
-  }
-
-  await input.onProgress?.({
-    providerRequestId: requestId,
-    providerStatus: 'IN_QUEUE',
-    providerMode: webhookConfigured ? 'fal_webhook_polling' : 'fal_queue',
-    lastProviderPollAt: new Date().toISOString(),
-    webhookConfigured,
-    providerSubmittedAt,
-    providerElapsedMs: providerElapsedMs(),
-    staleRequestRestarted,
-    statusUrl,
-    responseUrl,
-  })
-
-  const timeoutMs = outputWorkflowFalTimeoutMs()
-  const pollIntervalMs = webhookConfigured
-    ? Math.max(outputWorkflowFalPollIntervalMs(), outputWorkflowFalWebhookPollIntervalMs())
-    : outputWorkflowFalPollIntervalMs()
-  const startedAt = Date.now()
-
-  while (Date.now() - startedAt < timeoutMs) {
-    if (await input.shouldCancel?.()) {
-      throw new WorkflowCancelledError()
-    }
-    const webhookResult = await input.getWebhookResult?.(requestId)
-    if (webhookResult?.status === 'failed') {
-      throw new Error(webhookResult.errorMessage || 'Fal webhook reported an output image generation error.')
-    }
-    if (webhookResult?.status === 'completed' && webhookResult.imageUrl) {
-      await input.onProgress?.({
-        providerRequestId: requestId,
-        providerStatus: 'COMPLETED',
-        providerMode: 'fal_webhook_result',
-        lastProviderPollAt: new Date().toISOString(),
-        webhookConfigured,
-        providerSubmittedAt,
-        providerElapsedMs: providerElapsedMs(),
-        statusUrl,
-        responseUrl,
-      })
-      const image = extractFalImageRecord(webhookResult.resultBody)
-      return {
-        requestId,
-        statusUrl,
-        responseUrl,
-        imageUrl: webhookResult.imageUrl,
-        width: Number(image?.width ?? 0) || null,
-        height: Number(image?.height ?? 0) || null,
-        mimeType: readText(image?.content_type) || `image/${input.outputFormat}`,
-        fileName: readText(image?.file_name),
-        fileSize: Number(image?.file_size ?? 0) || null,
-        resultBody: webhookResult.resultBody,
-      }
-    }
-    const status = await getFalStatus({
-      apiKey: input.apiKey,
-      model: input.model,
-      requestId,
-      statusUrl,
-    })
-    const providerStatus = readText(status.body.status) || 'UNKNOWN'
-    await input.onProgress?.({
-      providerRequestId: requestId,
-      providerStatus,
-      providerMode: webhookConfigured ? 'fal_webhook_polling' : 'fal_queue',
-      lastProviderPollAt: new Date().toISOString(),
-      webhookConfigured,
-      providerSubmittedAt,
-      providerElapsedMs: providerElapsedMs(),
-      statusUrl,
-      responseUrl,
-    })
-
-    if (providerStatus === 'COMPLETED' || providerStatus === 'UNKNOWN') {
-      const result = await getFalResult({
-        apiKey: input.apiKey,
-        model: input.model,
-        requestId,
-        responseUrl,
-      })
-      if (!result.response.ok) {
-        if (
-          providerStatus === 'UNKNOWN'
-          && [404, 405, 409, 425].includes(result.response.status)
-        ) {
-          await sleep(pollIntervalMs)
-          continue
-        }
-        throw new Error(falErrorMessage(result.body, `Fal image result failed with HTTP ${result.response.status}.`))
-      }
-      const resultBody = normalizeFalResultBody(result.body)
-      const image = extractFalImageRecord(resultBody) ?? extractFalImageRecord(result.body)
-      const imageUrl = readText(image?.url)
-      if (!imageUrl) throw new Error('Fal completed the output image request but did not return an image URL.')
-      return {
-        requestId,
-        statusUrl,
-        responseUrl,
-        imageUrl,
-        width: Number(image?.width ?? 0) || null,
-        height: Number(image?.height ?? 0) || null,
-        mimeType: readText(image?.content_type) || `image/${input.outputFormat}`,
-        fileName: readText(image?.file_name),
-        fileSize: Number(image?.file_size ?? 0) || null,
-        resultBody,
-      }
-    }
-
-    const errorMessage = falErrorMessage(status.body, '')
-    if (errorMessage && providerStatus !== 'IN_PROGRESS' && providerStatus !== 'IN_QUEUE') {
-      throw new Error(errorMessage)
-    }
-
-    await sleep(pollIntervalMs)
-  }
-
-  await input.onProgress?.({
-    providerRequestId: requestId,
-    providerStatus: 'TIMED_OUT',
-    providerMode: webhookConfigured ? 'fal_webhook_polling' : 'fal_queue',
-    lastProviderPollAt: new Date().toISOString(),
-    webhookConfigured,
-    providerSubmittedAt,
-    providerElapsedMs: providerElapsedMs(),
-    staleRequestRestarted,
-    statusUrl,
-    responseUrl,
-  })
-
-  throw new Error(`Fal image request ${requestId} timed out before completion after ${timeoutMs}ms.`)
-}
-
-async function waitForOutputFalVideo(input: {
-  priorStep?: OutputWorkflowRunStep | null
-  apiKey: string
-  model: string
-  prompt: string
-  durationSeconds: number
-  aspectRatio?: string
-  resolution?: string
-  generateAudio?: boolean
-  syncMode?: boolean
-  referenceImageUrls?: string[]
-  referenceVideoUrls?: string[]
-  referenceAudioUrls?: string[]
-  shouldCancel?: () => Promise<boolean>
-  onProgress?: (progress: {
-    providerRequestId: string
-    providerStatus: string
-    providerMode: string
-    lastProviderPollAt: string
-    statusUrl?: string | null
-    responseUrl?: string | null
-  }) => Promise<void>
-}) {
-  const priorMetadata = asRecord(input.priorStep?.metadata)
-  let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.falRequestId)
-  let statusUrl: string | null = readText(priorMetadata.falStatusUrl) || null
-  let responseUrl: string | null = readText(priorMetadata.falResponseUrl) || null
-
-  if (!requestId) {
-    const submit = await submitFalVideoRequest({
-      apiKey: input.apiKey,
-      model: input.model,
-      prompt: input.prompt,
-      durationSeconds: input.durationSeconds,
-      aspectRatio: input.aspectRatio,
-      resolution: input.resolution,
-      generateAudio: input.generateAudio,
-      syncMode: input.syncMode,
-      referenceImageUrls: input.referenceImageUrls,
-      referenceVideoUrls: input.referenceVideoUrls,
-      referenceAudioUrls: input.referenceAudioUrls,
-    })
-    if (!submit.response.ok) {
-      throw new Error(falErrorMessage(submit.body, `Fal video submission failed with HTTP ${submit.response.status}.`))
-    }
-    requestId = readText(submit.body.request_id)
-    statusUrl = readText(submit.body.status_url) || null
-    responseUrl = readText(submit.body.response_url) || null
-    if (!requestId) throw new Error('Fal did not return a request id for the output video generation node.')
-  }
-
-  await input.onProgress?.({
-    providerRequestId: requestId,
-    providerStatus: 'IN_QUEUE',
-    providerMode: 'fal_queue',
-    lastProviderPollAt: new Date().toISOString(),
-    statusUrl,
-    responseUrl,
-  })
-
-  const timeoutMs = outputWorkflowFalTimeoutMs()
-  const pollIntervalMs = outputWorkflowFalPollIntervalMs()
-  const startedAt = Date.now()
-
-  while (Date.now() - startedAt < timeoutMs) {
-    if (await input.shouldCancel?.()) {
-      throw new WorkflowCancelledError()
-    }
-    const status = await getFalStatus({ apiKey: input.apiKey, model: input.model, requestId, statusUrl })
-    const providerStatus = readText(status.body.status) || 'UNKNOWN'
-    await input.onProgress?.({
-      providerRequestId: requestId,
-      providerStatus,
-      providerMode: 'fal_queue',
-      lastProviderPollAt: new Date().toISOString(),
-      providerSubmittedAt,
-      providerElapsedMs: providerElapsedMs(),
-      staleRequestRestarted,
-      statusUrl,
-      responseUrl,
-    })
-
-    if (providerStatus === 'COMPLETED' || providerStatus === 'UNKNOWN') {
-      const result = await getFalResult({ apiKey: input.apiKey, model: input.model, requestId, responseUrl })
-      if (!result.response.ok) {
-        if (providerStatus === 'UNKNOWN' && [404, 405, 409, 425].includes(result.response.status)) {
-          await sleep(pollIntervalMs)
-          continue
-        }
-        throw new Error(falErrorMessage(result.body, `Fal video result failed with HTTP ${result.response.status}.`))
-      }
-      const resultBody = normalizeFalResultBody(result.body)
-      const video = extractFalVideoRecord(resultBody) ?? extractFalVideoRecord(result.body)
-      const videoUrl = readText(video?.url)
-      if (!videoUrl) throw new Error('Fal completed the output video request but did not return a video URL.')
-      return {
-        requestId,
-        statusUrl,
-        responseUrl,
-        videoUrl,
-        mimeType: readText(video?.content_type) || 'video/mp4',
-        fileName: readText(video?.file_name),
-        fileSize: Number(video?.file_size ?? 0) || null,
-        resultBody,
-      }
-    }
-
-    const errorMessage = falErrorMessage(status.body, '')
-    if (errorMessage && providerStatus !== 'IN_PROGRESS' && providerStatus !== 'IN_QUEUE') {
-      throw new Error(errorMessage)
-    }
-
-    await sleep(pollIntervalMs)
-  }
-
-  throw new Error(`Fal video request timed out before completion after ${timeoutMs}ms.`)
-}
-
-async function waitForOutputMuapiVideo(input: {
-  priorStep?: OutputWorkflowRunStep | null
-  apiKey: string
-  model: string
-  prompt: string
-  durationSeconds: number
-  aspectRatio?: string
-  quality?: string
-  referenceImageUrls?: string[]
-  referenceVideoUrls?: string[]
-  referenceAudioUrls?: string[]
-  shouldCancel?: () => Promise<boolean>
-  onProgress?: (progress: {
-    providerRequestId: string
-    providerStatus: string
-    providerMode: string
-    lastProviderPollAt: string
-    resultUrl: string
-    webhookConfigured?: boolean
-  }) => Promise<void>
-}) {
-  const priorMetadata = asRecord(input.priorStep?.metadata)
-  let requestId = readText(input.priorStep?.providerRequestId) || readText(priorMetadata.muapiRequestId)
-  const webhookUrl = buildOutputWorkflowMuapiWebhookUrl()
-  const providerMode = webhookUrl ? 'muapi_webhook_polling' : 'muapi_polling'
-
-  if (!requestId) {
-    const submit = await submitMuapiVideoRequest({
-      apiKey: input.apiKey,
-      model: input.model,
-      prompt: input.prompt,
-      durationSeconds: input.durationSeconds,
-      aspectRatio: input.aspectRatio,
-      quality: input.quality,
-      referenceImageUrls: input.referenceImageUrls,
-      referenceVideoUrls: input.referenceVideoUrls,
-      referenceAudioUrls: input.referenceAudioUrls,
-      webhookUrl,
-    })
-    if (!submit.response.ok) {
-      throw new Error(muapiErrorMessageWithRaw(submit.body, submit.rawText, `MUAPI video submission failed with HTTP ${submit.response.status}.`))
-    }
-    requestId = readMuapiRequestId(submit.body)
-    if (!requestId) throw new Error('MUAPI did not return a request id for the output video generation node.')
-  }
-
-  const resultUrl = `${MUAPI_BASE_URL}/predictions/${encodeURIComponent(requestId)}/result`
-  await input.onProgress?.({
-    providerRequestId: requestId,
-    providerStatus: 'IN_QUEUE',
-    providerMode,
-    lastProviderPollAt: new Date().toISOString(),
-    resultUrl,
-    webhookConfigured: Boolean(webhookUrl),
-  })
-
-  const timeoutMs = outputWorkflowMuapiTimeoutMs()
-  const pollIntervalMs = outputWorkflowMuapiPollIntervalMs()
-  const startedAt = Date.now()
-
-  while (Date.now() - startedAt < timeoutMs) {
-    if (await input.shouldCancel?.()) {
-      throw new WorkflowCancelledError()
-    }
-
-    const result = await getMuapiResult({ apiKey: input.apiKey, requestId })
-    const providerStatus = readMuapiProviderStatus(result.body)
-    await input.onProgress?.({
-      providerRequestId: requestId,
-      providerStatus,
-      providerMode,
-      lastProviderPollAt: new Date().toISOString(),
-      resultUrl,
-      webhookConfigured: Boolean(webhookUrl),
-    })
-
-    const videoUrl = extractMuapiVideoUrlFromResult(result.body)
-    if (result.response.ok && (videoUrl || muapiStatusIsComplete(providerStatus))) {
-      if (!videoUrl) throw new Error('MUAPI completed the output video request but did not return a video URL.')
-      return {
-        requestId,
-        resultUrl,
-        videoUrl,
-        mimeType: videoUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
-        fileName: videoUrl.split('/').pop()?.split('?')[0] || '',
-        fileSize: null,
-        resultBody: result.body,
-      }
-    }
-
-    if (!result.response.ok && ![404, 409, 425, 429, 500, 502, 503, 504].includes(result.response.status)) {
-      throw new Error(muapiErrorMessageWithRaw(result.body, result.rawText, `MUAPI video result failed with HTTP ${result.response.status}.`))
-    }
-    if (muapiStatusIsFailed(providerStatus)) {
-      throw new Error(muapiErrorMessage(result.body, `MUAPI video generation failed with status ${providerStatus}.`))
-    }
-
-    await sleep(pollIntervalMs)
-  }
-
-  throw new Error(`MUAPI video request timed out before completion after ${timeoutMs}ms.`)
 }
 
 async function registerImageArtifact(input: {
@@ -21059,7 +18606,7 @@ function computeNodeInputHash(input: {
   })
 }
 
-async function executeNode(input: {
+type OutputWorkflowNodeExecutionContext = {
   run: OutputWorkflowRun
   workflow: OutputWorkflow
   node: OutputWorkflowNode
@@ -21075,7 +18622,19 @@ async function executeNode(input: {
     providerRequestId?: string | null
     metadata?: Record<string, unknown>
   }) => Promise<void>
-}) {
+}
+
+type OutputWorkflowNodeExecutionResult = {
+  status?: string
+  inputHash: string
+  outputHash: string
+  outputs: Record<string, unknown>
+  provider?: string | null
+  model?: string | null
+  providerRequestId?: string | null
+}
+
+async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<OutputWorkflowNodeExecutionResult> {
   switch (input.node.nodeType) {
     case 'world_context_query': {
       const context = await refreshWorldContextVisualReferences(input.client, input.run, extractWorldContext(input.run, input.node))
@@ -22654,1049 +20213,10 @@ async function executeNode(input: {
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-editor-v1' }
     }
     case 'image_generation': {
-      const config = asRecord(input.node.config)
-      const purpose = readText(config.purpose) || 'image_prompt'
-      const role = readText(config.role) || purpose
-      const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
-      const keyframePrompts = readFirstUpstreamArray(input.upstream, ['keyframePrompts', 'keyframe_prompts'])
-      const keyframeIndex = Math.max(0, Math.min(2, Number(config.keyframeIndex ?? 0) || 0))
-      const requiresContinuityPrompt = purpose === 'sequence_animatic_continuity_batch_image'
-        || role === 'sequence_animatic_continuity_batch_image'
-        || purpose === 'sequence_animatic_continuity_asset_image'
-        || role === 'sequence_animatic_continuity_asset_image'
-      const continuityFallbackPrompt = (() => {
-        if (purpose === 'sequence_animatic_continuity_batch_image' || role === 'sequence_animatic_continuity_batch_image') {
-          const batch = asRecord(config.batch)
-          const targetNodes = readArray(config.targetNodes).map(asRecord)
-          if (!Object.keys(batch).length || targetNodes.length === 0) return ''
-          return buildSequenceAnimaticContinuityBatchPrompt({
-            batch,
-            targetNodes,
-            relevantShots: readArray(config.relevantShots).map(asRecord),
-            referenceAssetKeys: readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys),
-          }).prompt
-        }
-        if (purpose === 'sequence_animatic_continuity_asset_image' || role === 'sequence_animatic_continuity_asset_image') {
-          const targetNode = asRecord(config.targetNode ?? config.target_node)
-          if (!Object.keys(targetNode).length) return ''
-          return buildSequenceAnimaticContinuityAssetPrompt({
-            targetNode,
-            assetKind: readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset',
-            generationPolicy: readText(config.generationPolicy),
-            zoneMapPoiLines: readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
-            relevantShots: readArray(config.relevantShots).map(asRecord),
-            referenceAssetKeys: readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys),
-          }).prompt
-        }
-        return ''
-      })()
-      const prompt = (purpose === 'cinematic_keyframe' || role === 'cinematic_keyframe'
-        ? readText(keyframePrompts[keyframeIndex]?.prompt)
-        : '')
-        || readFirstUpstreamText(input.upstream, ['prompt'])
-        || readFirstUpstreamText(input.upstream, ['text'])
-        || readText(input.node.inputs.prompt)
-        || continuityFallbackPrompt
-        || (requiresContinuityPrompt ? '' : input.run.prompt)
-      const skipImageGeneration = config.skipImageGeneration === true
-        || config.skip_image_generation === true
-        || input.node.inputs.skipImageGeneration === true
-        || input.node.inputs.skip_image_generation === true
-      if (skipImageGeneration) {
-        const outputs = {
-          skipped: true,
-          skipImageGeneration: true,
-          skip_image_generation: true,
-          reason: readFirstUpstreamText(input.upstream, ['skipReason', 'skip_reason']) || 'No image generation needed for this node.',
-          role,
-          purpose,
-          image: null,
-          images: [],
-          text: readFirstUpstreamText(input.upstream, ['text']) || '',
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-image-generation-skip-v1' }
-      }
-      if (!prompt) throw new Error('Image generation node is missing a prompt.')
-      const priorStepOutputs = asRecord(input.priorStep?.outputs)
-      const priorImageOutput = asRecord(priorStepOutputs.image)
-      const priorIsCinematicV2PanelPassthrough = role === 'cinematic_v2_shot_keyframe' && (
-        readText(input.priorStep?.provider) === 'graphcore'
-        || readText(priorImageOutput.generatedBy) === 'deterministic_panel_passthrough'
-        || readText(priorImageOutput.keyframeMode) === 'storyboard_panel_crop'
-      )
-      if (
-        !priorIsCinematicV2PanelPassthrough
-        && outputWorkflowNodeOutputsReusableForCache(input.node, priorStepOutputs)
-        && input.priorStep?.outputHash
-        && hasStoredOutputs(priorImageOutput)
-      ) {
-        return {
-          inputHash: input.priorStep.inputHash || input.inputHash,
-          outputHash: input.priorStep.outputHash,
-          outputs: priorStepOutputs,
-          provider: input.priorStep.provider,
-          model: input.priorStep.model,
-          providerRequestId: input.priorStep.providerRequestId,
-        }
-      }
-      const recoverableArtifact = await loadRecoverableArtifactBackedNodeOutputs({
-        client: input.client,
-        run: input.run,
-        node: input.node,
-      })
-      if (recoverableArtifact) {
-        const outputHash = hashOutputWorkflowValue(recoverableArtifact.outputs)
-        return {
-          inputHash: input.priorStep?.inputHash || input.inputHash,
-          outputHash,
-          outputs: recoverableArtifact.outputs,
-          provider: recoverableArtifact.provider,
-          model: recoverableArtifact.model,
-          providerRequestId: recoverableArtifact.providerRequestId,
-        }
-      }
-      const forceNodeKeys = new Set(readStringArray(asRecord(input.run.metadata).forceNodeKeys))
-      const existingArtifactRole = readText(config.existingArtifactRole)
-      const globalAssetIdentityKey = readText(config.globalAssetIdentityKey)
-      const globalAssetIdentityValue = readText(config.globalAssetIdentityValue)
-      const expectedAssetKey = readText(config.expectedAssetKey) || (globalAssetIdentityKey === 'assetKey' ? globalAssetIdentityValue : '')
-      if (existingArtifactRole && !forceNodeKeys.has(input.node.key)) {
-        let query = input.client
-          .from('output_artifacts')
-          .select(outputArtifactSelect)
-          .eq('project_id', input.run.projectId)
-          .eq('draft_id', input.run.draftId)
-          .contains('metadata', { role: existingArtifactRole })
-          .order('updated_at', { ascending: false })
-          .limit(200)
-        const masterRequestId = readText(config.masterRequestId)
-        if (masterRequestId) query = query.contains('metadata', { masterRequestId })
-        if (globalAssetIdentityKey && globalAssetIdentityValue && globalAssetIdentityKey !== 'assetKey') {
-          query = query.contains('metadata', { [globalAssetIdentityKey]: globalAssetIdentityValue })
-        }
-        if (expectedAssetKey) query = query.eq('asset_key', expectedAssetKey)
-        const response = await query
-        if (response.error) throw new Error(response.error.message)
-        const reusableArtifact = ((response.data ?? []) as OutputArtifactRow[])
-          .map(mapOutputArtifactRow)
-          .find((artifact) => {
-            const metadata = asRecord(artifact.metadata)
-            if (readText(metadata.role) !== existingArtifactRole) return false
-            if (masterRequestId && readText(metadata.masterRequestId) !== masterRequestId) return false
-            if (globalAssetIdentityKey && globalAssetIdentityValue && globalAssetIdentityKey !== 'assetKey' && readText(metadata[globalAssetIdentityKey]) !== globalAssetIdentityValue) return false
-            if (expectedAssetKey && readText(artifact.assetKey) !== expectedAssetKey) return false
-            return true
-          }) ?? null
-        if (reusableArtifact) {
-          const metadata = asRecord(reusableArtifact.metadata)
-          const artifactImage = asRecord(metadata.image)
-          const assetKey = readText(metadata.assetKey) || readText(reusableArtifact.assetKey) || readText(artifactImage.assetKey)
-          if (assetKey) {
-            const storagePath = readText(artifactImage.storagePath) || readText(artifactImage.storage_path) || readText(metadata.storagePath) || readText(metadata.storage_path)
-            const mimeType = readText(artifactImage.mimeType) || readText(artifactImage.mime_type) || readText(reusableArtifact.mimeType)
-            const image = {
-              ...artifactImage,
-              assetKey,
-              storagePath,
-              storage_path: storagePath,
-              mimeType,
-              mime_type: mimeType,
-              artifactKey: reusableArtifact.key,
-              role,
-              sourceArtifactRole: existingArtifactRole,
-              globalAssetStatus: 'ready_existing',
-              global_asset_status: 'ready_existing',
-              globalAssetIdentityKey,
-              globalAssetIdentityValue,
-              metadata,
-            }
-            const outputs = {
-              image,
-              keyframe: image,
-              primaryReferenceImage: image,
-              assetKey,
-              storagePath,
-              mimeType,
-              prompt,
-              providerPrompt: prompt,
-              role,
-              purpose,
-              artifact: reusableArtifact,
-              globalAssetStatus: 'ready_existing',
-              global_asset_status: 'ready_existing',
-              skipImageGeneration: true,
-              skip_image_generation: true,
-              reference: {
-                status: 'ready',
-                assetKey,
-                artifactKey: reusableArtifact.key,
-                role: readText(config.globalAssetRole) || readText(metadata.sequenceAnimaticRole) || readText(metadata.screenplayAnimaticRole) || role,
-                sourceArtifactRole: existingArtifactRole,
-                identityKey: globalAssetIdentityKey,
-                identityValue: globalAssetIdentityValue,
-              },
-              text: JSON.stringify({ status: 'ready_existing', assetKey, existingArtifactRole, globalAssetIdentityKey, globalAssetIdentityValue }, null, 2),
-              deterministic: true,
-              guidance,
-            }
-            return {
-              status: 'skipped',
-              inputHash: input.inputHash,
-              outputHash: hashOutputWorkflowValue(outputs),
-              outputs,
-              provider: 'graphcore',
-              model: 'sequence-animatic-global-asset-reuse-v1',
-            }
-          }
-        }
-      }
-      const falApiKey = Deno.env.get('FAL_KEY')
-      if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
-      const upstreamImages = readUpstreamImages(input.upstream)
-      const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
-      const rawAssetPack = Object.keys(upstreamAssetPack).length > 0
-        ? upstreamAssetPack
-        : asRecord(config.pageAssetPack ?? config.page_asset_pack ?? config.assetPack ?? config.asset_pack)
-      const referenceLimit = referenceLimitForImageNode(config, role)
-      const isSequenceAnimaticPlannedKeyframeImage = purpose === 'sequence_animatic_planned_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
-      const isCinematicV3StoryboardSheet = purpose === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_v3_storyboard_sheet'
-      const storyboardSheetShotPlan = isCinematicV3StoryboardSheet ? readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']) : {}
-      const storyboardSheetGroupShots = isCinematicV3StoryboardSheet
-        ? cinematicV3StoryboardGroupShots({ shotPlan: storyboardSheetShotPlan, storyboardGroup: asRecord(config.storyboardGroup) })
-        : []
-      const assetPack = isCinematicV3StoryboardSheet && storyboardSheetGroupShots.length > 0
-        ? buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: storyboardSheetGroupShots,
-          maxEntityCount: referenceLimitForImageNode(config, role),
-          maxAssetKeysPerEntity: 1,
-        })
-        : rawAssetPack
-      const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
-        const url = await imageReferenceToFalUrl(input.client, image, input.run)
-        if (!url) return null
-        const imageMetadata = asRecord(image.metadata)
-        return {
-          url,
-          label: readText(image.name) || readText(image.title) || readText(image.label) || titleFromRefLike(readText(image.role) || readText(imageMetadata.role) || `upstream reference ${index + 1}`),
-          role: readText(image.role) || readText(imageMetadata.role) || 'image_reference',
-          modality: 'image' as const,
-        }
-      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
-      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, referenceLimit)
-      const seenReferenceImageKeys = new Set<string>()
-      const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
-        .filter((entry) => {
-          const url = readText(entry.url)
-          if (!url || seenReferenceImageKeys.has(url)) return false
-          seenReferenceImageKeys.add(url)
-          return true
-        })
-        .slice(0, referenceLimit)
-      const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
-      const sequenceAnimaticProviderReferenceManifest = isSequenceAnimaticPlannedKeyframeImage
-        ? sequenceAnimaticReferenceManifestTextFromRecords(referenceImageRecords)
-        : ''
-      const baseModel = outputWorkflowImageModel(config.model)
-      const referenceModel = readText(config.referenceModel) || (baseModel.endsWith('/edit') ? baseModel : `${baseModel}/edit`)
-      const model = referenceImageUrls.length > 0
-        ? referenceModel
-        : baseModel
-      const quality = readText(config.quality)
-        || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_QUALITY')?.trim()
-        || resolveOutputImageGenerationQuality({ role, purpose, prompt })
-      const outputFormat = readText(config.outputFormat)
-        || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_OUTPUT_FORMAT')?.trim()
-        || resolveOutputImageGenerationOutputFormat()
-      const upstreamImageSize = readFirstUpstreamRecord(input.upstream, ['imageSize'])
-      const imageSize = (purpose === 'cinematic_storyboard' || role === 'cinematic_storyboard' || purpose === 'cinematic_beat_sheet' || role === 'cinematic_beat_sheet') && Object.keys(upstreamImageSize).length > 0
-        ? upstreamImageSize
-        : config.imageSize ?? { width: 1792, height: 2688 }
-      const includeProviderGuidance = purpose !== 'cinematic_storyboard'
-        && role !== 'cinematic_storyboard'
-        && purpose !== 'cinematic_beat_sheet'
-        && role !== 'cinematic_beat_sheet'
-        && purpose !== 'cinematic_keyframe'
-        && role !== 'cinematic_keyframe'
-      const providerPrompt = [
-        prompt,
-        sequenceAnimaticProviderReferenceManifest ? '' : '',
-        sequenceAnimaticProviderReferenceManifest ? `Attached image reference order:\n${sequenceAnimaticProviderReferenceManifest}` : '',
-        includeProviderGuidance ? '' : '',
-        includeProviderGuidance ? guidanceMarkdown(guidance) : '',
-        '',
-        'Provider requirements:',
-        '- Generate one finished image only.',
-        '- No visible text, captions, UI, or watermarks unless explicitly requested.',
-      ].filter(Boolean).join('\n')
-
-      const falResult = await waitForOutputFalImage({
-        priorStep: input.priorStep,
-        apiKey: falApiKey,
-        model,
-        prompt: providerPrompt,
-        imageSize,
-        quality,
-        outputFormat,
-        referenceImageUrls,
-        shouldCancel: input.shouldCancel,
-        onProgress: async (progress) => {
-          await input.onProgress?.({
-            provider: 'fal',
-            model,
-            providerRequestId: progress.providerRequestId,
-            metadata: {
-              providerMode: progress.providerMode,
-              providerStatus: progress.providerStatus,
-              lastProviderPollAt: progress.lastProviderPollAt,
-              webhookConfigured: progress.webhookConfigured === true,
-              providerSubmittedAt: progress.providerSubmittedAt ?? null,
-              providerElapsedMs: progress.providerElapsedMs ?? null,
-              staleRequestRestarted: progress.staleRequestRestarted === true,
-              falRequestId: progress.providerRequestId,
-              falStatusUrl: progress.statusUrl ?? null,
-              falResponseUrl: progress.responseUrl ?? null,
-              imageSize: normalizeImageSize(imageSize),
-              quality,
-              outputFormat,
-              referenceImageCount: referenceImageUrls.length,
-            },
-          })
-        },
-        getWebhookResult: async (requestId) => {
-          const stepResponse = await input.client
-            .from('output_workflow_run_steps')
-            .select('id, status, provider_request_id, metadata')
-            .eq('run_id', input.run.id)
-            .eq('node_key', input.node.key)
-            .order('updated_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-          if (stepResponse.error) throw new Error(stepResponse.error.message)
-          const step = asRecord(stepResponse.data)
-          if (!Object.keys(step).length) return null
-          const stepMetadata = asRecord(step.metadata)
-          const currentRequestId = readText(step.provider_request_id) || readText(stepMetadata.falRequestId)
-          if (currentRequestId && currentRequestId !== requestId) return null
-          return readFalWebhookImageResult(stepMetadata, requestId)
-        },
-      })
-      const imageBytes = await downloadRemoteBytes(falResult.imageUrl)
-      const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
-      const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${outputFormat}`
-      const mimeType = falResult.mimeType || `image/${outputFormat}`
-      await uploadBytes(input.client, storagePath, imageBytes, mimeType)
-      const planningOnly = config.planningOnly === true || config.planning_only === true
-      const usedAsVideoReference = config.usedAsVideoReference === true || config.used_as_video_reference === true
-      const packedReferenceEntities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
-      const selectedReferenceVariants = packedReferenceEntities
-        .map((entity) => ({
-          entityKey: readText(entity.key),
-          entityName: readText(entity.name),
-          variantKey: readText(entity.selectedReferenceVariantKey) || 'default',
-          label: readText(entity.selectedReferenceVariantLabel) || (readText(entity.selectedReferenceVariantKey) === 'default' ? 'Default' : readText(entity.selectedReferenceVariantKey)),
-          summary: readText(entity.selectedReferenceVariantSummary),
-          variantType: readText(entity.selectedReferenceVariantType),
-          assetKey: readText(entity.primaryAssetKey) || readStringArray(entity.assetKeys)[0] || '',
-          selectionReason: readText(entity.referenceSelectionReason),
-        }))
-        .filter((entry) => entry.entityKey || entry.entityName)
-      const selectedReferenceVariantKeys = Object.fromEntries(selectedReferenceVariants
-        .filter((entry) => entry.entityKey)
-        .map((entry) => [entry.entityKey, entry.variantKey]))
-      const selectedReferenceAssetKeys = selectedReferenceVariants.map((entry) => entry.assetKey).filter(Boolean)
-      const referenceDiagnostics = [
-        ...readStringArray(assetPack.referenceDiagnostics),
-        ...packedReferenceEntities.flatMap((entity) => readStringArray(entity.referenceDiagnostics)),
-      ].filter(Boolean)
-      const imageOutput = {
-        assetKey,
-        storagePath,
-        mimeType,
-        width: falResult.width,
-        height: falResult.height,
-        prompt,
-        providerPrompt,
-        role,
-        planningOnly,
-        planning_only: planningOnly,
-        usedAsVideoReference,
-        used_as_video_reference: usedAsVideoReference,
-        takeId: readText(config.takeId) || null,
-        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
-        storyboardGroupId: readText(config.storyboardGroupId) || readText(asRecord(config.storyboardGroup).id) || null,
-        shotId: readText(config.shotId) || null,
-        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
-        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
-        provider: 'fal',
-        model,
-        providerRequestId: falResult.requestId,
-        providerMode: 'fal_queue',
-        providerStatus: 'COMPLETED',
-        falRequestId: falResult.requestId,
-        falImageUrl: falResult.imageUrl,
-        falStatusUrl: falResult.statusUrl,
-        falResponseUrl: falResult.responseUrl,
-        referenceImageCount: referenceImageUrls.length,
-        referenceImageRecords,
-        reference_image_records: referenceImageRecords,
-        referenceManifest: sequenceAnimaticProviderReferenceManifest,
-        reference_manifest: sequenceAnimaticProviderReferenceManifest,
-        selectedReferenceVariants,
-        selectedReferenceVariantKeys,
-        selectedReferenceAssetKeys,
-        referenceDiagnostics,
-        sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
-        sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
-      }
-      const metadata = {
-        generatedBy: 'output_workflow',
-        workflowId: input.workflow.id,
-        workflowKey: input.workflow.key,
-        runId: input.run.id,
-        nodeId: input.node.id,
-        nodeKey: input.node.key,
-        preset: input.run.preset,
-        provider: 'fal',
-        model,
-        baseModel,
-        referenceModel,
-        providerRequestId: falResult.requestId,
-        providerMode: 'fal_queue',
-        providerStatus: 'COMPLETED',
-        falRequestId: falResult.requestId,
-        falStatusUrl: falResult.statusUrl,
-        falResponseUrl: falResult.responseUrl,
-        falImageUrl: falResult.imageUrl,
-        prompt,
-        providerPrompt,
-        role,
-        purpose,
-        planningOnly,
-        planning_only: planningOnly,
-        usedAsVideoReference,
-        used_as_video_reference: usedAsVideoReference,
-        takeId: readText(config.takeId) || null,
-        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
-        storyboardGroupId: readText(config.storyboardGroupId) || readText(asRecord(config.storyboardGroup).id) || null,
-        shotId: readText(config.shotId) || null,
-        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
-        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
-        pageNumber: Number(config.pageNumber ?? 0) || null,
-        referenceImageCount: referenceImageUrls.length,
-        referenceImageRecords,
-        reference_image_records: referenceImageRecords,
-        referenceManifest: sequenceAnimaticProviderReferenceManifest,
-        reference_manifest: sequenceAnimaticProviderReferenceManifest,
-        selectedReferenceVariants,
-        selectedReferenceVariantKeys,
-        selectedReferenceAssetKeys,
-        referenceDiagnostics,
-        imageSize: normalizeImageSize(imageSize),
-        quality,
-        outputFormat,
-        byteSize: imageBytes.byteLength,
-        width: falResult.width,
-        height: falResult.height,
-        storageBucket: 'project-assets',
-        storagePath,
-        sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
-        sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
-        skillKeys: guidance.skillKeys,
-        skillVersions: guidance.skillVersions,
-        guidanceHash: guidance.guidanceHash,
-        resolvedGuidancePreview: guidance.resolvedGuidancePreview,
-      }
-      const artifact = await registerImageArtifact({
-        client: input.client,
-        run: input.run,
-        workflow: input.workflow,
-        node: input.node,
-        assetKey,
-        storagePath,
-        name: role === 'ebook_cover' ? `${titleFromContext(worldContextFromRunInput(input.run))} Cover` : input.node.label,
-        summary: role === 'ebook_cover'
-          ? 'Ebook cover image generated with GPT Image 2 from the world graph.'
-          : role === 'comic_atlas' || role === 'cinematic_atlas'
-            ? 'Reference atlas generated from selected world entities.'
-            : role === 'cinematic_direction_sheet'
-              ? 'Primary cinematic direction-sheet reference generated from the compiled take timeline, camera layout, floor map, lighting/mood, and continuity anchors.'
-            : role === 'cinematic_beat_sheet'
-              ? (usedAsVideoReference
-                ? 'Primary cinematic storyboard-grid reference generated from the compiled take timeline.'
-                : 'Planning-only cinematic beat sheet generated from the compiled take timeline.')
-              : role === 'cinematic_keyframe'
-                ? 'Clean cinematic keyframe generated as a Seedance visual reference.'
-              : role === 'cinematic_v2_shot_keyframe'
-                ? 'Enhanced Cinematics V2 shot keyframe generated from the cropped storyboard panel and shot-scoped references.'
-              : purpose === 'sequence_animatic_shot_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
-                ? 'Revised sequence-animatic shot keyframe generated from the prior panel and shot-scoped references.'
-            : role === 'comic_page'
-              ? 'Comic page image generated from comic script and direct entity reference sheets.'
-              : 'Generated image output from the workflow.',
-        mimeType,
-        metadata,
-      })
-      const outputs = {
-        image: imageOutput,
-        assetKey,
-        storagePath,
-        mimeType,
-        width: falResult.width,
-        height: falResult.height,
-        prompt,
-        providerPrompt,
-        pageNumber: Number(config.pageNumber ?? 0) || null,
-        role,
-        planningOnly,
-        planning_only: planningOnly,
-        usedAsVideoReference,
-        used_as_video_reference: usedAsVideoReference,
-        takeId: readText(config.takeId) || null,
-        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
-        storyboardGroupId: readText(config.storyboardGroupId) || readText(asRecord(config.storyboardGroup).id) || null,
-        shotId: readText(config.shotId) || null,
-        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
-        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
-        selectedReferenceVariants,
-        selectedReferenceVariantKeys,
-        selectedReferenceAssetKeys,
-        referenceDiagnostics,
-        referenceImageRecords,
-        reference_image_records: referenceImageRecords,
-        referenceManifest: sequenceAnimaticProviderReferenceManifest,
-        reference_manifest: sequenceAnimaticProviderReferenceManifest,
-        artifact,
-        guidance,
-      }
-      return {
-        inputHash: input.inputHash,
-        outputHash: hashOutputWorkflowValue(outputs),
-        outputs,
-        provider: 'fal',
-        model,
-        providerRequestId: falResult.requestId,
-      }
+      return executeOutputWorkflowImageGeneration(input)
     }
     case 'video_generation': {
-      const config = asRecord(input.node.config)
-      const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
-      const upstreamVideoPromptRecord = readVideoPromptRecordFromUpstream(input.upstream)
-      const upstreamVideoPrompt = readVideoPromptFromUpstream(input.upstream)
-      const prompt = upstreamVideoPrompt
-        || readText(input.node.inputs.prompt)
-        || input.run.prompt
-      if (!prompt) throw new Error('Video generation node is missing a prompt.')
-      const priorStepOutputs = asRecord(input.priorStep?.outputs)
-      const priorVideoOutput = asRecord(priorStepOutputs.video)
-      const cinematicV2ApprovalMissing = isCinematicV2ProductionNode(config, input.node) && !cinematicVideoApprovedEnabled(input.run)
-      const priorVideoWasSkipped = priorVideoOutput.skipped === true
-        || priorStepOutputs.approvalRequired === true
-        || priorStepOutputs.debugSkipVideoGeneration === true
-        || readText(priorStepOutputs.skippedReason).length > 0
-        || readText(priorVideoOutput.skippedReason).length > 0
-      if (!cinematicV2ApprovalMissing && !priorVideoWasSkipped && hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(priorVideoOutput)) {
-        return {
-          inputHash: input.priorStep.inputHash || input.inputHash,
-          outputHash: input.priorStep.outputHash,
-          outputs: priorStepOutputs,
-          provider: input.priorStep.provider,
-          model: input.priorStep.model,
-          providerRequestId: input.priorStep.providerRequestId,
-        }
-      }
-      const resolution = readText(config.resolution) || '720p'
-      const provider = resolveOutputVideoProvider(config)
-      const configuredModel = readText(config.model)
-        || (provider === 'muapi'
-          ? Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_MODEL')?.trim()
-          : Deno.env.get('OUTPUT_WORKFLOW_FAL_VIDEO_MODEL')?.trim())
-        || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_MODEL')?.trim()
-        || (provider === 'muapi' ? DEFAULT_MUAPI_VIDEO_MODEL : resolveFalVideoModel(resolution))
-      const model = provider === 'muapi' ? resolveMuapiVideoModel(configuredModel) : configuredModel
-      const upstreamDurationSeconds = Number(upstreamVideoPromptRecord.durationSeconds ?? upstreamVideoPromptRecord.providerDurationSeconds ?? 0)
-      const configuredDurationSeconds = Number(config.durationSeconds ?? 8) || 8
-      const rawRequestedDurationSeconds = Number(upstreamDurationSeconds || configuredDurationSeconds) || 8
-      const requestedDurationSeconds = Math.max(4, Math.min(15, rawRequestedDurationSeconds))
-      const durationSeconds = provider === 'muapi'
-        ? resolveMuapiVideoDurationSeconds(requestedDurationSeconds)
-        : requestedDurationSeconds
-      const aspectRatio = readText(config.aspectRatio) || '16:9'
-      const quality = provider === 'muapi'
-        ? resolveMuapiVideoQuality(readText(config.quality) || Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_QUALITY'))
-        : readText(config.quality)
-      const generateAudio = config.generateAudio !== false
-      const syncMode = config.syncMode === true
-      if ((readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video') && !upstreamVideoPrompt) {
-        throw new Error('Cinematics V3 storyboard video generation requires a completed Video Prompt node. Run the block storyboard prep first, then generate video.')
-      }
-      if (isCinematicV2ProductionNode(config, input.node) && !cinematicVideoApprovedEnabled(input.run)) {
-        const outputs = {
-          video: {
-            skipped: true,
-            approvalRequired: true,
-            skippedReason: 'cinematic_video_approval_required',
-            prompt,
-            providerPrompt: prompt,
-            provider: 'graphcore',
-            model: 'cinematic-v2-video-approval-gate-v1',
-            targetProvider: provider,
-            targetModel: model,
-            durationSeconds,
-            aspectRatio,
-            resolution,
-            generateAudio,
-            referenceImageCount: 0,
-            referenceVideoCount: 0,
-            referenceAudioCount: 0,
-            referencePolicy: 'cinematic_video_approval_required',
-            role: readText(config.role) || readText(config.purpose) || 'cinematic_v2_shot_video',
-            shotId: readText(config.shotId) || null,
-            shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
-          },
-          prompt,
-          providerPrompt: prompt,
-          durationSeconds,
-          approvalRequired: true,
-          skippedReason: 'cinematic_video_approval_required',
-          guidance,
-        }
-        return {
-          status: 'skipped',
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'cinematic-v2-video-approval-gate-v1',
-        }
-      }
-      const debugSkipVideoGeneration = debugSkipVideoGenerationEnabled(config, input.run, input.node)
-      if (debugSkipVideoGeneration) {
-        const outputs = {
-          video: {
-            skipped: true,
-            debugSkipVideoGeneration: true,
-            skippedReason: 'debug_skip_video_generation',
-            prompt,
-            providerPrompt: prompt,
-            provider: 'graphcore',
-            model: 'debug-skip-video-generation-v1',
-            targetProvider: provider,
-            targetModel: model,
-            durationSeconds,
-            aspectRatio,
-            resolution,
-            generateAudio,
-            referenceImageCount: 0,
-            referenceVideoCount: 0,
-            referenceAudioCount: 0,
-            referencePolicy: 'debug_skip_video_generation',
-            role: readText(config.role) || readText(config.purpose) || 'video',
-            blockNumber: Number(config.blockNumber ?? 0) || null,
-            shotId: readText(config.shotId) || null,
-            shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
-          },
-          prompt,
-          providerPrompt: prompt,
-          durationSeconds,
-          debugSkipVideoGeneration: true,
-          skippedReason: 'debug_skip_video_generation',
-          guidance,
-        }
-        return {
-          status: 'skipped',
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'debug-skip-video-generation-v1',
-        }
-      }
-      const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-      const isCinematicV3StoryboardGroupVideo = readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video'
-      const isSequenceAnimaticShotVideo = readText(config.purpose) === 'sequence_animatic_shot_video' || readText(config.role) === 'sequence_animatic_shot_video'
-      const upstreamShotPlanForVideo = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
-      const cinematicV3VideoGroupShots = isCinematicV3StoryboardGroupVideo
-        ? cinematicV3StoryboardGroupShots({ shotPlan: upstreamShotPlanForVideo, storyboardGroup: asRecord(config.storyboardGroup) })
-        : []
-      const upstreamVideoShotPlanShots = asRecord(upstreamShotPlanForVideo).shots
-      const sequenceAnimaticShotForVideo = isSequenceAnimaticShotVideo
-        ? asRecord(readFirstUpstreamRecord(input.upstream, ['shot']) || (Array.isArray(upstreamVideoShotPlanShots) ? upstreamVideoShotPlanShots.map(asRecord)[0] : null))
-        : {}
-      const assetPack = isCinematicV3StoryboardGroupVideo && cinematicV3VideoGroupShots.length > 0
-        ? buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: cinematicV3VideoGroupShots,
-          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 4) || 4)),
-          maxAssetKeysPerEntity: 1,
-        })
-        : isSequenceAnimaticShotVideo && Object.keys(sequenceAnimaticShotForVideo).length > 0
-          ? buildCinematicV3StoryboardGroupAssetPack({
-            assetPack: rawAssetPack,
-            shots: [sequenceAnimaticShotForVideo],
-            maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
-            maxAssetKeysPerEntity: 1,
-          })
-        : rawAssetPack
-      const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
-      const upstreamImages = orderCinematicVideoReferenceImages(
-        readUpstreamImages(input.upstream, ['image', 'coverImage', 'primaryReferenceImage', 'keyframe']),
-        cinematicReferenceMode,
-      )
-      const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
-        const url = await imageReferenceToFalUrl(input.client, image, input.run)
-        if (!url) return null
-        return {
-          url,
-          label: seedanceImageReferenceLabel(image, cinematicReferenceMode, index + 1),
-          role: (() => {
-            const role = readText(image.role) || readText(asRecord(image.metadata).role)
-            if (role === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_beat_sheet') return 'storyboard_sheet'
-            if (role === 'cinematic_direction_sheet') return 'direction_sheet'
-            if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') return 'keyframe'
-            return 'image_reference'
-          })(),
-          modality: 'image' as const,
-        }
-      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
-      const assetPackReferenceLimit = Math.max(1, Math.min(9, Number(config.assetPackReferenceLimit ?? 9) || 9))
-      const totalReferenceImageLimit = Math.max(1, Math.min(9, directImageRecords.length + assetPackReferenceLimit))
-      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
-      const seenReferenceImageUrls = new Set<string>()
-      const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
-        .filter((entry) => {
-          const url = readText(entry.url)
-          if (!url || seenReferenceImageUrls.has(url)) return false
-          seenReferenceImageUrls.add(url)
-          return true
-        })
-        .slice(0, totalReferenceImageLimit)
-      const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
-      if (isCinematicV3StoryboardGroupVideo && cinematicReferenceMode === 'storyboard_sheet' && directImageRecords.length === 0) {
-        throw new Error('Cinematics V3 storyboard video generation requires the storyboard sheet reference. Generate the storyboard sheet before generating video.')
-      }
-      if (isSequenceAnimaticShotVideo && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
-        throw new Error('Sequence animatic shot video generation requires the cropped shot panel as @Image1. Generate/extract the storyboard panel before generating shot video.')
-      }
-      if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
-        throw new Error('Cinematics V2 video generation requires a shot keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
-      }
-      const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
-      const referenceVideoRecords = (await Promise.all(upstreamVideos.map(async (video, index) => {
-        const url = await imageReferenceToFalUrl(input.client, video, input.run)
-        if (!url) return null
-        return {
-          url,
-          label: readText(video.name) || readText(video.title) || readText(video.label) || `reference video ${index + 1}`,
-          role: 'video_reference',
-          modality: 'video' as const,
-        }
-      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url)).slice(0, 3)
-      const referenceVideoUrls = referenceVideoRecords.map((entry) => readText(entry.url)).filter(Boolean)
-      const referenceAudioUrls: string[] = []
-      const totalReferences = referenceImageUrls.length + referenceVideoUrls.length + referenceAudioUrls.length
-      if (totalReferences > 12) {
-        throw new Error('Seedance 2 Omni Reference supports at most 12 total reference files.')
-      }
-      const buildProviderPrompt = (imageRecords: SeedanceReferenceRecord[], referencePolicy: string) => {
-        const manifest = buildSeedanceReferenceManifest({
-          imageReferences: imageRecords,
-          videoReferences: referenceVideoRecords,
-          audioReferences: [],
-          cinematicReferenceMode,
-        })
-        const promptWithLegend = rewriteSeedanceReferenceLegend(prompt, manifest, (isCinematicV3StoryboardGroupVideo || isSequenceAnimaticShotVideo) ? '' : referencePolicy)
-        const artifactBan = seedanceProductionBoardArtifactBan(manifest)
-        if (isCinematicV3StoryboardGroupVideo || isSequenceAnimaticShotVideo) {
-          const directPrompt = promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
-            ? promptWithLegend
-            : [promptWithLegend, '', artifactBan].filter(Boolean).join('\n')
-          return compactSeedancePromptForProvider(directPrompt)
-        }
-        return compactSeedancePromptForProvider([
-          promptWithLegend,
-          '',
-          `[PROVIDER TARGET]\nOne continuous ${durationSeconds}-second clip, ${aspectRatio}, ${resolution}.`,
-          imageRecords.length > 0 ? 'Preserve identity, wardrobe, environment, prop continuity, and selected variants from the attached references.' : 'Preserve identity, wardrobe, environment, and prop continuity from written descriptions.',
-          promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
-            ? ''
-            : artifactBan,
-        ].filter(Boolean).join('\n'))
-      }
-      const primaryReferenceOnlyRecords = directImageRecords.slice(0, 1)
-      const referenceAttempts = [
-        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs', imageRecords: referenceImageRecords },
-        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_only' : 'storyboard_only', imageRecords: primaryReferenceOnlyRecords },
-        { policy: 'text_only_no_image_refs', imageRecords: [] },
-      ].filter((attempt, index, attempts) => (
-        index === attempts.findIndex((candidate) => candidate.policy === attempt.policy
-          && candidate.imageRecords.map((entry) => readText(entry.url)).join('\n') === attempt.imageRecords.map((entry) => readText(entry.url)).join('\n'))
-      ))
-      const priorFailedReferencePolicy = isFalReferencePolicyError(input.priorStep?.errorMessage)
-      const startAttemptIndex = priorFailedReferencePolicy && referenceAttempts.length > 1 ? 1 : 0
-      let providerResult: {
-        requestId: string
-        videoUrl: string
-        mimeType: string
-        fileName?: string
-        fileSize: number | null
-        resultBody: Record<string, unknown>
-        statusUrl?: string | null
-        responseUrl?: string | null
-        resultUrl?: string | null
-      } | null = null
-      let providerPrompt = ''
-      let usedReferenceImageUrls = referenceImageUrls
-      let usedSeedanceReferenceManifest: SeedanceReferenceManifestEntry[] = []
-      let referencePolicy = cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs'
-      for (let attemptIndex = startAttemptIndex; attemptIndex < referenceAttempts.length; attemptIndex += 1) {
-        const attempt = referenceAttempts[attemptIndex]
-        providerPrompt = buildProviderPrompt(attempt.imageRecords, attempt.policy)
-        usedReferenceImageUrls = attempt.imageRecords.map((entry) => readText(entry.url)).filter(Boolean)
-        usedSeedanceReferenceManifest = buildSeedanceReferenceManifest({
-          imageReferences: attempt.imageRecords,
-          videoReferences: referenceVideoRecords,
-          audioReferences: [],
-          cinematicReferenceMode,
-        })
-        referencePolicy = attempt.policy
-        try {
-          if (provider === 'muapi') {
-            const muapiApiKey = Deno.env.get('MUAPI_KEY')
-            if (!muapiApiKey) throw new Error('MUAPI_KEY is not configured for the output workflow worker.')
-            providerResult = await waitForOutputMuapiVideo({
-              priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
-              apiKey: muapiApiKey,
-              model,
-              prompt: providerPrompt,
-              durationSeconds,
-              aspectRatio,
-              quality,
-              referenceImageUrls: usedReferenceImageUrls,
-              referenceVideoUrls,
-              referenceAudioUrls,
-              shouldCancel: input.shouldCancel,
-              onProgress: async (progress) => {
-                await input.onProgress?.({
-                  provider: 'muapi',
-                  model,
-                  providerRequestId: progress.providerRequestId,
-                  metadata: {
-                    providerMode: progress.providerMode,
-                    providerStatus: progress.providerStatus,
-                    lastProviderPollAt: progress.lastProviderPollAt,
-                    muapiRequestId: progress.providerRequestId,
-                    muapiResultUrl: progress.resultUrl,
-                    muapiWebhookConfigured: progress.webhookConfigured ?? false,
-                    durationSeconds,
-                    requestedDurationSeconds,
-                    aspectRatio,
-                    quality,
-                    resolution,
-                    generateAudio,
-                    referenceImageCount: usedReferenceImageUrls.length,
-                    referenceVideoCount: referenceVideoUrls.length,
-                    referenceAudioCount: referenceAudioUrls.length,
-                    referencePolicy: attempt.policy,
-                    cinematicReferenceMode,
-                    seedanceReferenceManifest: usedSeedanceReferenceManifest,
-                    providerPayload: buildMuapiVideoPayload({
-                      prompt: providerPrompt,
-                      durationSeconds,
-                      aspectRatio,
-                      quality,
-                      referenceImageUrls: usedReferenceImageUrls,
-                      referenceVideoUrls,
-                      referenceAudioUrls,
-                    }),
-                  },
-                })
-              },
-            })
-          } else {
-            const falApiKey = Deno.env.get('FAL_KEY')
-            if (!falApiKey) throw new Error('FAL_KEY is not configured for the output workflow worker.')
-            providerResult = await waitForOutputFalVideo({
-              priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
-              apiKey: falApiKey,
-              model,
-              prompt: providerPrompt,
-              durationSeconds,
-              aspectRatio,
-              resolution,
-              generateAudio,
-              syncMode,
-              referenceImageUrls: usedReferenceImageUrls,
-              referenceVideoUrls,
-              referenceAudioUrls,
-              shouldCancel: input.shouldCancel,
-              onProgress: async (progress) => {
-                await input.onProgress?.({
-                  provider: 'fal',
-                  model,
-                  providerRequestId: progress.providerRequestId,
-                  metadata: {
-                    providerMode: progress.providerMode,
-                    providerStatus: progress.providerStatus,
-                    lastProviderPollAt: progress.lastProviderPollAt,
-                    falRequestId: progress.providerRequestId,
-                    falStatusUrl: progress.statusUrl ?? null,
-                    falResponseUrl: progress.responseUrl ?? null,
-                    durationSeconds,
-                    aspectRatio,
-                    resolution,
-                    generateAudio,
-                    referenceImageCount: usedReferenceImageUrls.length,
-                    referenceVideoCount: referenceVideoUrls.length,
-                    referenceAudioCount: referenceAudioUrls.length,
-                    referencePolicy: attempt.policy,
-                    cinematicReferenceMode,
-                    seedanceReferenceManifest: usedSeedanceReferenceManifest,
-                  },
-                })
-              },
-            })
-          }
-          break
-        } catch (error) {
-          if (isFalReferencePolicyError(error) && attemptIndex < referenceAttempts.length - 1) {
-            continue
-          }
-          throw error
-        }
-      }
-      if (!providerResult) throw new Error(`${provider === 'muapi' ? 'MUAPI' : 'Fal'} video generation did not return a result.`)
-      const muapiWebhookConfigured = provider === 'muapi' ? Boolean(buildOutputWorkflowMuapiWebhookUrl()) : false
-      const muapiProviderMode = muapiWebhookConfigured ? 'muapi_webhook_polling' : 'muapi_polling'
-      const videoBytes = await downloadRemoteBytes(providerResult.videoUrl)
-      const extension = providerResult.mimeType.includes('webm') ? 'webm' : 'mp4'
-      const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
-      const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${extension}`
-      await uploadBytes(input.client, storagePath, videoBytes, providerResult.mimeType)
-      const metadata = {
-        generatedBy: 'output_workflow',
-        workflowId: input.workflow.id,
-        workflowKey: input.workflow.key,
-        runId: input.run.id,
-        nodeId: input.node.id,
-        nodeKey: input.node.key,
-        preset: input.run.preset,
-        provider,
-        model,
-        providerRequestId: providerResult.requestId,
-        providerMode: provider === 'muapi' ? muapiProviderMode : 'fal_queue',
-        providerStatus: 'COMPLETED',
-        falRequestId: provider === 'fal' ? providerResult.requestId : null,
-        falStatusUrl: provider === 'fal' ? providerResult.statusUrl ?? null : null,
-        falResponseUrl: provider === 'fal' ? providerResult.responseUrl ?? null : null,
-        falVideoUrl: provider === 'fal' ? providerResult.videoUrl : null,
-        muapiRequestId: provider === 'muapi' ? providerResult.requestId : null,
-        muapiResultUrl: provider === 'muapi' ? providerResult.resultUrl ?? null : null,
-        muapiVideoUrl: provider === 'muapi' ? providerResult.videoUrl : null,
-        muapiWebhookConfigured,
-        prompt,
-        providerPrompt,
-        durationSeconds,
-        requestedDurationSeconds,
-        aspectRatio,
-        quality: provider === 'muapi' ? quality : null,
-        resolution,
-        generateAudio,
-        referenceImageCount: usedReferenceImageUrls.length,
-        referenceVideoCount: referenceVideoUrls.length,
-        referenceAudioCount: referenceAudioUrls.length,
-        referencePolicy,
-        cinematicReferenceMode,
-        seedanceReferenceManifest: usedSeedanceReferenceManifest,
-        shotId: readText(config.shotId) || null,
-        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
-        storyboardBlockId: readText(config.storyboardBlockId) || null,
-        parentRequestId: readText(config.parentRequestId) || null,
-        masterRequestId: readText(config.masterRequestId) || null,
-        sequenceAnimaticRole: readText(config.sequenceAnimaticRole) || null,
-        providerPayload: provider === 'muapi' ? buildMuapiVideoPayload({
-          prompt: providerPrompt,
-          durationSeconds,
-          aspectRatio,
-          quality,
-          referenceImageUrls: usedReferenceImageUrls,
-          referenceVideoUrls,
-          referenceAudioUrls,
-        }) : null,
-        byteSize: videoBytes.byteLength,
-        storageBucket: 'project-assets',
-        storagePath,
-        skillKeys: guidance.skillKeys,
-        skillVersions: guidance.skillVersions,
-        guidanceHash: guidance.guidanceHash,
-      }
-      const artifact = await registerVideoArtifact({
-        client: input.client,
-        run: input.run,
-        workflow: input.workflow,
-        node: input.node,
-        assetKey,
-        storagePath,
-        name: input.node.label,
-        summary: 'Generated video output from the workflow.',
-        mimeType: providerResult.mimeType,
-        metadata,
-      })
-      const outputs = {
-        video: {
-          assetKey,
-          storagePath,
-          mimeType: providerResult.mimeType,
-          prompt,
-          providerPrompt,
-          provider,
-          model,
-          providerRequestId: providerResult.requestId,
-          providerMode: provider === 'muapi' ? muapiProviderMode : 'fal_queue',
-          durationSeconds,
-          requestedDurationSeconds,
-          aspectRatio,
-          quality: provider === 'muapi' ? quality : null,
-          resolution,
-          generateAudio,
-          referenceImageCount: usedReferenceImageUrls.length,
-          referenceVideoCount: referenceVideoUrls.length,
-          referenceAudioCount: referenceAudioUrls.length,
-          referencePolicy,
-          cinematicReferenceMode,
-          seedanceReferenceManifest: usedSeedanceReferenceManifest,
-          muapiRequestId: provider === 'muapi' ? providerResult.requestId : null,
-          muapiResultUrl: provider === 'muapi' ? providerResult.resultUrl ?? null : null,
-          muapiWebhookConfigured,
-          role: readText(config.role) || readText(config.purpose) || 'video',
-          blockNumber: Number(config.blockNumber ?? 0) || null,
-          shotId: readText(config.shotId) || null,
-          shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
-          storyboardBlockId: readText(config.storyboardBlockId) || null,
-          parentRequestId: readText(config.parentRequestId) || null,
-          masterRequestId: readText(config.masterRequestId) || null,
-          sequenceAnimaticRole: readText(config.sequenceAnimaticRole) || null,
-        },
-        assetKey,
-        storagePath,
-        mimeType: providerResult.mimeType,
-        prompt,
-        providerPrompt,
-        durationSeconds,
-        requestedDurationSeconds,
-        seedanceReferenceManifest: usedSeedanceReferenceManifest,
-        artifact,
-        guidance,
-      }
-      return {
-        inputHash: input.inputHash,
-        outputHash: hashOutputWorkflowValue(outputs),
-        outputs,
-        provider,
-        model,
-        providerRequestId: providerResult.requestId,
-      }
+      return executeOutputWorkflowVideoGeneration(input)
     }
     case 'utility_transform': {
       const purpose = readText(asRecord(input.node.config).purpose)
@@ -24025,36 +20545,6 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-graph-finalize-v2' }
       }
-      if (purpose === 'sequence_animatic_continuity_asset_input') {
-        const config = asRecord(input.node.config)
-        const targetNode = asRecord(config.targetNode)
-        const continuityPack = asRecord(config.continuityPack)
-        const relevantShots = readArray(config.relevantShots).map(asRecord)
-        const shotBindings = asRecord(config.shotBindings)
-        const assetPack = asRecord(config.assetPack)
-        const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
-        const outputs = {
-          continuityPack,
-          continuity_pack: continuityPack,
-          targetNode,
-          target_node: targetNode,
-          relevantShots,
-          relevant_shots: relevantShots,
-          shotBindings,
-          shot_bindings: shotBindings,
-          assetPack,
-          asset_pack: assetPack,
-          referenceAssetKeys,
-          reference_asset_keys: referenceAssetKeys,
-          text: JSON.stringify({
-            targetNode,
-            relevantShotCount: relevantShots.length,
-            referenceAssetKeys,
-          }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-asset-input-v1' }
-      }
       if (purpose === 'sequence_animatic_continuity_batch_input') {
         const config = asRecord(input.node.config)
         const batch = asRecord(config.batch)
@@ -24150,518 +20640,6 @@ async function executeNode(input: {
           deterministic: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-prompt-v1' }
-      }
-      if (isSequenceAnimaticSceneBoardWorkflowPurpose(purpose) && purpose === 'sequence_animatic_zone_coverage_board_input') {
-        const config = asRecord(input.node.config)
-        const board = asRecord(config.board ?? config.zoneCoverageBoard ?? config.zone_coverage_board)
-        const shots = readArray(config.shots).map(asRecord)
-        const coverageCells = readArray(config.coverageCells ?? config.coverage_cells).map(asRecord)
-        const assetPack = asRecord(config.assetPack ?? config.asset_pack)
-        const referenceAssetKeys = readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys)
-        const previousBoard = asRecord(config.previousBoard ?? config.previous_board)
-        const gridLayout = asRecord(config.gridLayout ?? config.grid_layout)
-        const sceneGraphOverrides = readArray(config.sceneGraphOverrides ?? config.scene_graph_overrides).map(asRecord)
-        const outputs = {
-          board,
-          zoneCoverageBoard: board,
-          zone_coverage_board: board,
-          shots,
-          coverageCells,
-          coverage_cells: coverageCells,
-          assetPack,
-          asset_pack: assetPack,
-          referenceAssetKeys,
-          reference_asset_keys: referenceAssetKeys,
-          previousBoard,
-          previous_board: previousBoard,
-          gridLayout,
-          grid_layout: gridLayout,
-          sceneGraphOverrides,
-          scene_graph_overrides: sceneGraphOverrides,
-          text: JSON.stringify({
-            boardId: readText(board.id),
-            sceneId: readText(board.sceneId),
-            zoneId: readText(board.zoneId),
-            chunkIndex: Number(board.chunkIndex ?? 0) || 0,
-            shotIds: readStringArray(board.shotIds),
-            referenceAssetKeys,
-            previousBoardAssetKey: readText(previousBoard.assetKey),
-            sceneGraphOverrides,
-          }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_zone_coverage_board_brief') {
-        const config = asRecord(input.node.config)
-        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
-        const boardRecord = Object.keys(board).length > 0 ? board : asRecord(config.board)
-        const upstreamShots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
-        const shots = upstreamShots.length > 0 ? upstreamShots : readArray(config.shots).map(asRecord)
-        const upstreamCoverageCells = readFirstUpstreamArray(input.upstream, ['coverageCells', 'coverage_cells']).map(asRecord)
-        const coverageCells = upstreamCoverageCells.length > 0 ? upstreamCoverageCells : readArray(config.coverageCells ?? config.coverage_cells).map(asRecord)
-        const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
-        const previousBoard = readFirstUpstreamRecord(input.upstream, ['previousBoard', 'previous_board'])
-        const upstreamSceneGraphOverrides = readFirstUpstreamArray(input.upstream, ['sceneGraphOverrides', 'scene_graph_overrides']).map(asRecord)
-        const sceneGraphOverrides = upstreamSceneGraphOverrides.length > 0
-          ? upstreamSceneGraphOverrides
-          : readArray(config.sceneGraphOverrides ?? config.scene_graph_overrides).map(asRecord)
-        const artStyleDescription = readText(boardRecord.artStyleDescription ?? boardRecord.art_style_description)
-          || readText(config.artStyleDescription ?? config.art_style_description)
-        const boardForbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(shots)
-        const fallbackCells = coverageCells.slice(0, 9).map((cell, index) => {
-          const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
-          const camera = asRecord(cell.camera ?? shot.camera)
-          const framing = readSequenceAnimaticCameraPart(camera, 'framing') || sanitizeSequenceAnimaticCameraPlateText(cell.cameraFraming ?? cell.camera_framing, 120)
-          const cameraAngle = readSequenceAnimaticCameraPart(camera, 'angle') || sanitizeSequenceAnimaticCameraPlateText(cell.cameraAngle ?? cell.camera_angle, 120)
-          const lens = readSequenceAnimaticCameraPart(camera, 'lens')
-          const movement = readSequenceAnimaticCameraPart(camera, 'movement')
-          const cameraText = sanitizeSequenceAnimaticCameraPlateText([
-            framing,
-            cameraAngle,
-            lens,
-            movement,
-          ].filter(Boolean).join('; '), 220)
-          const cameraHeight = inferSequenceAnimaticCameraHeight(cameraText)
-          const inferredCameraAngle = cameraAngle || inferSequenceAnimaticCameraAngle(cameraText)
-          const spotName = sanitizeSequenceAnimaticSpatialPromptText(cell.spotName ?? cell.spot_name, { forbiddenNames: boardForbiddenNames, maxLength: 140 }).text
-          const locationContinuity = sanitizeSequenceAnimaticCameraPlateText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity, 260)
-          const locationFeatures = [
-            spotName ? `frame the ${spotName} area` : '',
-            locationContinuity,
-          ].filter(Boolean).join('; ')
-          const lightingWeather = sanitizeSequenceAnimaticCameraPlateText(cell.lighting ?? shot.lighting, 160)
-          const screenDirection = sanitizeSequenceAnimaticCameraPlateText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction, 140)
-          const normalizedCell = {
-            shotId: readText(cell.shotId),
-            cellIndex: Number(cell.cellIndex ?? index) || index,
-            row: Number(cell.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
-            column: Number(cell.column ?? index % 3) || index % 3,
-            camera: cameraText,
-            framing,
-            cameraHeight,
-            cameraAngle: inferredCameraAngle,
-            lens,
-            movement,
-            foreground: spotName ? `${spotName} foreground geometry` : '',
-            midground: locationFeatures,
-            background: sanitizeSequenceAnimaticCameraPlateText(readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone background', 160),
-            landmarks: locationFeatures,
-            locationFeatures,
-            lightingWeather,
-            lightDirection: lightingWeather,
-            paletteWeather: lightingWeather,
-            screenDirection,
-            composition: sanitizeSequenceAnimaticCameraPlateText([cameraText, locationFeatures, screenDirection].filter(Boolean).join('; '), 260),
-            spotId: readText(cell.spotId ?? cell.spot_id),
-            spotName,
-          }
-          return {
-            ...normalizedCell,
-            cameraPlateBrief: sequenceAnimaticBuildCameraPlateBrief(normalizedCell),
-          }
-        }).filter((cell) => cell.shotId)
-        const fallback = sequenceAnimaticZoneCameraGridBriefSchema.parse({
-          boardSummary: `Location-only camera coverage grid for ${readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone'}.`,
-          cells: fallbackCells.length > 0 ? fallbackCells : [{
-            shotId: 'shot',
-            cellIndex: 0,
-            row: 0,
-            column: 0,
-            cameraPlateBrief: 'Show the zone geography from the shot camera angle, without characters or labels.',
-          }],
-          diagnostics: ['Deterministic camera-grid brief fallback.'],
-        })
-        const briefPrompt = [
-          'Create visual-only camera plate facts for a 3x3 zone camera coverage grid.',
-          'Return compact mechanical fields, not prose. Each cell is an empty location/camera plate only.',
-          'Use only camera facts, spatial binding, lighting/weather, screen direction, set/zone/spot names, and location continuity.',
-          'Do not mention character names, people, bodies, silhouettes, crowds, props held by characters, action beats, dialogue, captions, labels, arrows, storyboard text, panels, UI, or internal IDs.',
-          'If any input implies action or emotion, drop it. Keep only camera angle, lens/height, foreground/midground/background geometry, landmarks, weather, and screen direction.',
-          artStyleDescription ? `Project art style to preserve later: ${artStyleDescription}` : '',
-          readText(previousBoard.assetKey ?? previousBoard.boardAssetKey) ? 'A previous zone camera grid exists. Note reusable camera angles/geography only when shots return to the same location angle.' : '',
-          '',
-          'Board context',
-          JSON.stringify({
-            title: readText(boardRecord.title),
-            scene: readText(boardRecord.sceneTitle) || readText(boardRecord.sceneId),
-            set: readText(boardRecord.setName) || readText(boardRecord.setId),
-            zone: readText(boardRecord.zoneName) || readText(boardRecord.zoneId),
-            zoneSummary: readText(boardRecord.zoneSummary),
-            userSceneGraphOverrides: sceneGraphOverrides.map((override) => ({
-              nodeId: readText(override.nodeId),
-              nodeKind: readText(override.nodeKind),
-              visualBriefOverride: readText(override.visualBriefOverride),
-              extraPromptDirection: readText(override.extraPromptDirection),
-            })),
-          }, null, 2),
-          '',
-          'Cells and shot camera facts',
-          JSON.stringify(coverageCells.slice(0, 9).map((cell, index) => {
-            const shot = shots.find((entry) => readText(entry.id) === readText(cell.shotId)) ?? {}
-            const camera = asRecord(cell.camera ?? shot.camera)
-            return {
-              shotId: readText(cell.shotId),
-              cellIndex: Number(cell.cellIndex ?? index) || index,
-              row: Number(cell.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
-              column: Number(cell.column ?? index % 3) || index % 3,
-              camera: {
-                framing: sanitizeSequenceAnimaticCameraPlateText(camera.framing, 120),
-                angle: sanitizeSequenceAnimaticCameraPlateText(camera.angle, 120),
-                lens: sanitizeSequenceAnimaticCameraPlateText(camera.lens, 120),
-                movement: sanitizeSequenceAnimaticCameraPlateText(camera.movement, 120),
-              },
-              lighting: sanitizeSequenceAnimaticCameraPlateText(cell.lighting ?? shot.lighting, 140),
-              screenDirection: sanitizeSequenceAnimaticCameraPlateText(cell.screenDirection ?? cell.screen_direction ?? shot.screenDirection ?? shot.screen_direction, 140),
-              cameraFraming: sanitizeSequenceAnimaticCameraPlateText(cell.cameraFraming ?? cell.camera_framing, 120),
-              cameraAngle: sanitizeSequenceAnimaticCameraPlateText(cell.cameraAngle ?? cell.camera_angle, 120),
-              locationContinuity: sanitizeSequenceAnimaticCameraPlateText(cell.locationContinuity ?? cell.location_continuity ?? shot.locationContinuity ?? shot.location_continuity, 220),
-              spotId: readText(cell.spotId ?? cell.spot_id),
-              spotName: sanitizeSequenceAnimaticSpatialPromptText(cell.spotName ?? cell.spot_name, { forbiddenNames: boardForbiddenNames, maxLength: 120 }).text,
-            }
-          }), null, 2),
-          '',
-          'Location reference names only',
-          JSON.stringify(readArray(assetPack.entities).map(asRecord).map((entity) => ({
-            name: readText(entity.name ?? entity.title ?? entity.label),
-            role: readText(entity.role),
-            summary: readText(entity.summary ?? entity.visualDescription ?? entity.visual_description),
-          })).slice(0, 16), null, 2),
-        ].filter(Boolean).join('\n')
-        const result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: 'sequence_animatic_zone_camera_grid_brief',
-          schema: sequenceAnimaticZoneCameraGridBriefSchema,
-          instructions: 'Return strict JSON only. Produce location-only camera plate briefs. Never include characters, subject labels, storyboard text, image prompt prose, or internal workflow language.',
-          prompt: briefPrompt,
-          fallback,
-          maxOutputTokens: 4200,
-        })
-        const fallbackByShotId = new Map(fallback.cells.map((cell) => [readText(cell.shotId), cell]))
-        const normalizedCells = result.value.cells.map((cell, index) => {
-          const fallbackCell = asRecord(fallbackByShotId.get(readText(cell.shotId))) || asRecord(fallback.cells[index])
-          const merged = { ...fallbackCell, ...cell }
-          const cameraText = sanitizeSequenceAnimaticCameraPlateText(readText(merged.camera) || readText(fallbackCell.camera), 180)
-          const normalizedCell = {
-            ...merged,
-            shotId: readText(merged.shotId),
-            cellIndex: Number(merged.cellIndex ?? index) || index,
-            row: Number(merged.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
-            column: Number(merged.column ?? index % 3) || index % 3,
-            camera: cameraText,
-            framing: sanitizeSequenceAnimaticCameraPlateText(readText(merged.framing) || readText(fallbackCell.framing), 120),
-            cameraHeight: sanitizeSequenceAnimaticCameraPlateText(readText(merged.cameraHeight) || readText(fallbackCell.cameraHeight) || inferSequenceAnimaticCameraHeight(cameraText), 100),
-            cameraAngle: sanitizeSequenceAnimaticCameraPlateText(readText(merged.cameraAngle) || readText(fallbackCell.cameraAngle) || inferSequenceAnimaticCameraAngle(cameraText), 120),
-            lens: sanitizeSequenceAnimaticCameraPlateText(readText(merged.lens) || readText(fallbackCell.lens), 90),
-            movement: sanitizeSequenceAnimaticCameraPlateText(readText(merged.movement) || readText(fallbackCell.movement), 100),
-            foreground: sanitizeSequenceAnimaticCameraPlateText(readText(merged.foreground) || readText(fallbackCell.foreground), 160),
-            midground: sanitizeSequenceAnimaticCameraPlateText(readText(merged.midground) || readText(fallbackCell.midground), 180),
-            background: sanitizeSequenceAnimaticCameraPlateText(readText(merged.background) || readText(fallbackCell.background), 180),
-            landmarks: sanitizeSequenceAnimaticCameraPlateText(readText(merged.landmarks) || readText(fallbackCell.landmarks) || readText(merged.locationFeatures), 200),
-            locationFeatures: sanitizeSequenceAnimaticCameraPlateText(readText(merged.locationFeatures) || readText(fallbackCell.locationFeatures), 240),
-            lightingWeather: sanitizeSequenceAnimaticCameraPlateText(readText(merged.lightingWeather) || readText(fallbackCell.lightingWeather), 160),
-            lightDirection: sanitizeSequenceAnimaticCameraPlateText(readText(merged.lightDirection) || readText(fallbackCell.lightDirection) || readText(merged.lightingWeather), 140),
-            paletteWeather: sanitizeSequenceAnimaticCameraPlateText(readText(merged.paletteWeather) || readText(fallbackCell.paletteWeather) || readText(merged.lightingWeather), 140),
-            screenDirection: sanitizeSequenceAnimaticCameraPlateText(readText(merged.screenDirection) || readText(fallbackCell.screenDirection), 140),
-            composition: sanitizeSequenceAnimaticCameraPlateText(readText(merged.composition) || readText(fallbackCell.composition), 220),
-            spotId: readText(merged.spotId),
-              spotName: sanitizeSequenceAnimaticSpatialPromptText(readText(merged.spotName) || readText(fallbackCell.spotName), { forbiddenNames: boardForbiddenNames, maxLength: 120 }).text,
-          }
-          return {
-            ...normalizedCell,
-            cameraPlateBrief: sequenceAnimaticBuildCameraPlateBrief(normalizedCell),
-          }
-        }).filter((cell) => cell.shotId && cell.cameraPlateBrief).slice(0, 9)
-        const promptDiagnostics = sequenceAnimaticZoneGridPromptDiagnostics(normalizedCells)
-        const brief = sequenceAnimaticZoneCameraGridBriefSchema.parse({
-          ...result.value,
-          cells: normalizedCells.length > 0 ? normalizedCells : fallback.cells,
-          diagnostics: [
-            ...readStringArray(result.value.diagnostics),
-            ...promptDiagnostics.messages,
-          ].slice(0, 12),
-        })
-        const outputs = {
-          coverageBrief: brief,
-          coverage_brief: brief,
-          cameraGridBrief: brief,
-          camera_grid_brief: brief,
-          cells: brief.cells,
-          board: boardRecord,
-          zoneCoverageBoard: boardRecord,
-          zone_coverage_board: boardRecord,
-          shots,
-          coverageCells,
-          coverage_cells: coverageCells,
-          assetPack,
-          asset_pack: assetPack,
-          previousBoard,
-          previous_board: previousBoard,
-          sceneGraphOverrides,
-          scene_graph_overrides: sceneGraphOverrides,
-          text: JSON.stringify(brief, null, 2),
-          prompt: briefPrompt,
-          promptDiagnostics,
-          prompt_diagnostics: promptDiagnostics,
-          fallbackUsed: result.fallbackUsed,
-          fallbackReason: result.fallbackReason,
-          deterministic: result.fallbackUsed,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model }
-      }
-      if (purpose === 'sequence_animatic_zone_coverage_board_prompt') {
-        const config = asRecord(input.node.config)
-        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
-        const upstreamShots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
-        const shots = upstreamShots.length > 0 ? upstreamShots : readArray(config.shots).map(asRecord)
-        const upstreamCoverageCells = readFirstUpstreamArray(input.upstream, ['coverageCells', 'coverage_cells']).map(asRecord)
-        const coverageCells = upstreamCoverageCells.length > 0 ? upstreamCoverageCells : readArray(config.coverageCells ?? config.coverage_cells).map(asRecord)
-        const coverageBrief = readFirstUpstreamRecord(input.upstream, ['coverageBrief', 'coverage_brief', 'cameraGridBrief', 'camera_grid_brief'])
-        const briefCells = readArray(coverageBrief.cells).map(asRecord)
-        const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
-        const previousBoard = readFirstUpstreamRecord(input.upstream, ['previousBoard', 'previous_board'])
-        const upstreamSceneGraphOverrides = readFirstUpstreamArray(input.upstream, ['sceneGraphOverrides', 'scene_graph_overrides']).map(asRecord)
-        const sceneGraphOverrides = upstreamSceneGraphOverrides.length > 0
-          ? upstreamSceneGraphOverrides
-          : readArray(config.sceneGraphOverrides ?? config.scene_graph_overrides).map(asRecord)
-        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
-        const boardRecord = Object.keys(board).length > 0 ? board : asRecord(config.board)
-        const artStyleDescription = readText(boardRecord.artStyleDescription ?? boardRecord.art_style_description)
-          || readText(config.artStyleDescription ?? config.art_style_description)
-        const boardForbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(shots)
-        const cellLines = coverageCells.map((cell, index) => {
-          const brief = briefCells.find((entry) => readText(entry.shotId) === readText(cell.shotId)) ?? {}
-          return sequenceAnimaticCompactZoneGridCellLine({
-            ...cell,
-            ...brief,
-            row: Number(cell.row ?? brief.row ?? Math.floor(index / 3)) || Math.floor(index / 3),
-            column: Number(cell.column ?? brief.column ?? index % 3) || index % 3,
-            spotName: readText(brief.spotName) || readText(cell.spotName ?? cell.spot_name),
-          }, index)
-        }).join('\n')
-        const previousBoardAssetKey = readText(previousBoard.assetKey ?? previousBoard.boardAssetKey ?? previousBoard.board_asset_key)
-        const referenceNames = sequenceAnimaticReferenceManifestEntries(assetPack)
-          .map((entry) => [readText(entry.label), readText(entry.role)].filter(Boolean).join(' '))
-          .filter(Boolean)
-          .slice(0, 10)
-        const promptDiagnostics = sequenceAnimaticZoneGridPromptDiagnostics(briefCells)
-        const prompt = [
-          'Visual-only production plate grid: create one wide 16:9 zone camera coverage grid divided into a clean 3x3 grid.',
-          'Each filled cell is an empty location camera plate for one shot angle. Fill cells in row-major order; leave unused cells plain and empty.',
-          artStyleDescription ? `Project art style lock: ${artStyleDescription}` : '',
-          'Use attached references in global-to-local order: the zone spatial map locks topology, routes, entrances, sightlines, and POI placement; spot atlas references lock local surfaces, landmarks, material detail, and camera-facing geometry; the set ref locks broader style and lighting logic.',
-          'No people, no characters, no silhouettes, no crowds, no placeholder bodies, no subject labels, no arrows, no captions, no shot numbers, no speech bubbles, no UI, no watermarks, and no visible text inside the image.',
-          'Do not use a cartoony/sketch/comic/storyboard style unless the project art style explicitly says so. Match the project art direction and the visual finish of the location references.',
-          'Each cell should show only camera angle, foreground/midground/background geometry, horizon/ground plane, screen direction, lighting/weather, and stable spatial landmarks.',
-          previousBoardAssetKey ? 'A previous zone camera grid reference is attached. Reuse matching location geography, camera angles, landmarks, and lighting continuity where the new cells return to the same zone angle.' : '',
-          '',
-          `Grid: ${readText(boardRecord.title) || readText(boardRecord.id) || 'Zone camera grid'}`,
-          `Scene: ${readText(boardRecord.sceneTitle) || readText(boardRecord.sceneId) || 'scene'} / Set: ${readText(boardRecord.setName) || readText(boardRecord.setId) || 'set'} / Zone: ${readText(boardRecord.zoneName) || readText(boardRecord.zoneId) || 'zone'}`,
-          readText(boardRecord.zoneSummary) ? `Zone continuity: ${sanitizeSequenceAnimaticCameraPlateText(boardRecord.zoneSummary, 260)}` : '',
-          referenceNames.length > 0 ? `Attached refs: ${referenceNames.join(' / ')}` : '',
-          sceneGraphOverrides.length > 0 ? [
-            '',
-            'User-edited scene graph direction',
-            ...sceneGraphOverrides.map((override) => [
-              readText(override.nodeKind) || 'node',
-              readText(override.nodeId),
-              readText(override.visualBriefOverride) ? `Visual brief: ${sanitizeSequenceAnimaticSpatialPromptText(override.visualBriefOverride, { forbiddenNames: boardForbiddenNames, maxLength: 180 }).text}` : '',
-              readText(override.extraPromptDirection) ? `Extra direction: ${sanitizeSequenceAnimaticSpatialPromptText(override.extraPromptDirection, { forbiddenNames: boardForbiddenNames, maxLength: 180 }).text}` : '',
-            ].filter(Boolean).join(' / ')),
-          ].join('\n') : '',
-          '',
-          'Cell camera/location map',
-          cellLines,
-          promptDiagnostics.messages.length > 0 ? `\nPrompt diagnostics: ${promptDiagnostics.messages.join(' | ')}` : '',
-        ].filter(Boolean).join('\n')
-        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
-        const outputs = {
-          prompt,
-          text: prompt,
-          board: boardRecord,
-          zoneCoverageBoard: boardRecord,
-          zone_coverage_board: boardRecord,
-          shots,
-          coverageCells,
-          coverage_cells: coverageCells,
-          assetPack,
-          asset_pack: assetPack,
-          previousBoard,
-          previous_board: previousBoard,
-          coverageBrief,
-          coverage_brief: coverageBrief,
-          sceneGraphOverrides,
-          scene_graph_overrides: sceneGraphOverrides,
-          referenceManifest,
-          reference_manifest: referenceManifest,
-          referenceManifestText,
-          reference_manifest_text: referenceManifestText,
-          promptDiagnostics,
-          prompt_diagnostics: promptDiagnostics,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-prompt-v1' }
-      }
-      if (purpose === 'sequence_animatic_zone_coverage_board_extract') {
-        const config = asRecord(input.node.config)
-        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
-        const coverageCells = readFirstUpstreamArray(input.upstream, ['coverageCells', 'coverage_cells']).map(asRecord)
-        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
-        const assetKey = readText(image.assetKey)
-        const storagePath = readText(image.storagePath) || readText(image.storage_path)
-        if (!assetKey || !storagePath) throw new Error('Zone camera grid extraction requires a generated grid image.')
-        const mimeType = readText(image.mimeType) || readText(image.mime_type) || 'image/webp'
-        const sourceBytes = await downloadProjectAssetBytes(input.client, storagePath)
-        const tempDir = await Deno.makeTempDir({ prefix: 'graphcore-zone-coverage-board-' })
-        const sourceExt = mimeType.includes('png') ? 'png' : mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'webp'
-        const sourcePath = `${tempDir}/source.${sourceExt}`
-        const extractedCells: Record<string, unknown>[] = []
-        const cellAssetKeysByShotId: Record<string, string> = {}
-        const coverageCellByShotId: Record<string, unknown> = {}
-        try {
-          await Deno.writeFile(sourcePath, sourceBytes)
-          const size = await probeImageSize(sourcePath)
-          if (!size) throw new Error('Zone camera grid extraction could not read generated image dimensions.')
-          const rows = 3
-          const columns = 3
-          for (let index = 0; index < coverageCells.length && index < 9; index += 1) {
-            const cell = coverageCells[index]
-            const shotId = readText(cell.shotId)
-            if (!shotId) continue
-            const row = Math.floor(index / columns)
-            const column = index % columns
-            const cropX = Math.floor((size.width * column) / columns)
-            const cropY = Math.floor((size.height * row) / rows)
-            const nextX = Math.floor((size.width * (column + 1)) / columns)
-            const nextY = Math.floor((size.height * (row + 1)) / rows)
-            const cellWidth = Math.max(1, Math.min(size.width - cropX, nextX - cropX))
-            const cellHeight = Math.max(1, Math.min(size.height - cropY, nextY - cropY))
-            const outputPath = `${tempDir}/${slugify(shotId)}.webp`
-            const crop = await runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${cellWidth}:${cellHeight}:${cropX}:${cropY}`, outputPath])
-            if (!crop.ok) throw new Error(`Zone camera grid crop failed for ${shotId}: ${crop.stderr.slice(0, 1200)}`)
-            const cropVerification = await verifySequenceAnimaticAnchorCrop({
-              outputPath,
-              anchorId: shotId,
-              expectedWidth: cellWidth,
-              expectedHeight: cellHeight,
-              row,
-              column,
-            })
-            const bytes = await Deno.readFile(outputPath)
-            const targetAssetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(shotId)}.sequence-animatic-zone-coverage-cell`
-            const targetStoragePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/zone-coverage-cell-${slugify(shotId)}.webp`
-            await uploadBytes(input.client, targetStoragePath, bytes, 'image/webp')
-            const coverageSetupId = readText(cell.coverageSetupId)
-            const coverageAnchorScopeKey = readText(cell.coverageAnchorScopeKey)
-            const coverageAnchorScope = readText(cell.coverageAnchorScope) || 'shot_scoped'
-            const coverageAnchorSource = readText(cell.coverageAnchorSource ?? cell.coverage_anchor_source ?? config.coverageAnchorSource ?? config.coverage_anchor_source) || 'zone_camera_grid_cell'
-            const coverageAnchorMode = readText(cell.coverageAnchorMode ?? cell.coverage_anchor_mode ?? config.coverageAnchorMode ?? config.coverage_anchor_mode) || 'location_camera_plate_v2'
-            const cellImage = {
-              assetKey: targetAssetKey,
-              storagePath: targetStoragePath,
-              storage_path: targetStoragePath,
-              mimeType: 'image/webp',
-              mime_type: 'image/webp',
-              width: cellWidth,
-              height: cellHeight,
-              role: 'sequence_animatic_coverage_anchor_image',
-              coverageAnchorSource,
-              coverage_anchor_source: coverageAnchorSource,
-            }
-            const artifact = await registerImageArtifact({
-              client: input.client,
-              run: input.run,
-              workflow: input.workflow,
-              node: input.node,
-              assetKey: targetAssetKey,
-              storagePath: targetStoragePath,
-              name: `${readText(cell.shotTitle) || shotId} Coverage Cell`,
-              summary: 'Cropped shot coverage anchor generated from a scene-level zone camera grid.',
-              mimeType: 'image/webp',
-              metadata: {
-                generatedBy: 'output_workflow',
-                workflowId: input.workflow.id,
-                workflowKey: input.workflow.key,
-                runId: input.run.id,
-                nodeId: input.node.id,
-                nodeKey: input.node.key,
-                provider: 'graphcore',
-                model: 'ffmpeg-sequence-animatic-zone-coverage-board-extract-v1',
-                role: 'sequence_animatic_coverage_anchor',
-                sourceArtifactRole: 'sequence_animatic_zone_coverage_cell',
-                sequenceAnimaticRole: 'coverage_anchor',
-                screenplayAnimaticRole: 'coverage_anchor',
-                coverageAnchorMode,
-                coverage_anchor_mode: coverageAnchorMode,
-                coverageAnchorSource,
-                coverage_anchor_source: coverageAnchorSource,
-                masterRequestId: readText(config.masterRequestId),
-                sceneId: readText(board.sceneId ?? config.sceneId),
-                setId: readText(board.setId ?? config.setId),
-                zoneId: readText(board.zoneId ?? config.zoneId),
-                boardId: readText(board.id ?? config.boardId),
-                chunkIndex: Number(board.chunkIndex ?? config.chunkIndex ?? 0) || 0,
-                shotId,
-                shotIds: [shotId],
-                coverageSetupId,
-                coverageAnchorScopeKey,
-                coverageAnchorScope,
-                assetKey: targetAssetKey,
-                image: cellImage,
-                sourceBoardAssetKey: assetKey,
-                sourceBoardStoragePath: storagePath,
-                row,
-                column,
-                cellIndex: index,
-                cropRect: { x: cropX, y: cropY, width: cellWidth, height: cellHeight },
-                cropVerification,
-                cell,
-                storageBucket: 'project-assets',
-                storagePath: targetStoragePath,
-              },
-            })
-            const extractedCell = {
-              ...cell,
-              shotId,
-              assetKey: targetAssetKey,
-              storagePath: targetStoragePath,
-              artifactKey: artifact.key,
-              image: { ...cellImage, artifact },
-              coverageSetupId,
-              coverageAnchorScopeKey,
-              coverageAnchorScope,
-              coverageAnchorSource,
-              coverageAnchorMode,
-              row,
-              column,
-              cellIndex: index,
-              cropRect: { x: cropX, y: cropY, width: cellWidth, height: cellHeight },
-              cropVerification,
-            }
-            extractedCells.push(extractedCell)
-            cellAssetKeysByShotId[shotId] = targetAssetKey
-            coverageCellByShotId[shotId] = extractedCell
-          }
-        } finally {
-          await Deno.remove(tempDir, { recursive: true }).catch(() => {})
-        }
-        const outputs = {
-          cells: extractedCells,
-          coverageCells: extractedCells,
-          coverage_cells: extractedCells,
-          cellAssetKeysByShotId,
-          cell_asset_keys_by_shot_id: cellAssetKeysByShotId,
-          coverageCellByShotId,
-          coverage_cell_by_shot_id: coverageCellByShotId,
-          board: Object.keys(board).length > 0 ? board : asRecord(config.board),
-          sourceImage: image,
-          source_image: image,
-          text: `Extracted ${extractedCells.length} zone camera grid cell${extractedCells.length === 1 ? '' : 's'}.`,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-extract-v1' }
       }
       if (purpose === 'sequence_animatic_continuity_batch_extract') {
         const config = asRecord(input.node.config)
@@ -25132,2220 +21110,6 @@ async function executeNode(input: {
           text: `Extracted ${extractedAnchors.length} ${anchorType === 'character' ? 'temporary character' : anchorType === 'prop' ? 'prop' : 'location spot'} continuity anchor${extractedAnchors.length === 1 ? '' : 's'}.`,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-sequence-animatic-anchor-extract-v1' }
-      }
-      if (purpose === 'sequence_animatic_scene_package' || purpose === 'sequence_animatic_scene_graph_assignment') {
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
-        const context = readFirstUpstreamRecord(input.upstream, ['context'])
-        if (!Object.keys(screenplayDraft).length) throw new Error('Scene graph assignment requires the authored screenplay.')
-        if (!Object.keys(assetPack).length) throw new Error('Scene package builder requires the visual reference asset pack.')
-        if (!Object.keys(context).length) throw new Error('Scene package builder requires world context.')
-        const parsedScenePackage = buildSequenceAnimaticScenePackageFromTaggedScreenplay({
-          screenplayDraft,
-          assetPack,
-          context,
-          contractVersion: purpose === 'sequence_animatic_scene_package' ? 'scene_tagged_screenplay_v2' : 'scene_graph_assignment_v1',
-        })
-        let scenePackage = parsedScenePackage
-        let assignmentFallbackUsed = false
-        let assignmentFallbackReason = ''
-        let providerRequestId: string | undefined
-        if (purpose === 'sequence_animatic_scene_graph_assignment') {
-          const fallbackAssignment = buildFallbackSequenceAnimaticSceneGraphAssignment(parsedScenePackage)
-          let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground<z.infer<typeof sequenceAnimaticSceneGraphAssignmentSchema>>>>
-          try {
-            result = await runCinematicV2StructuredNodeBackground({
-              nodeKey: input.node.key,
-              schemaName: 'sequence_animatic_scene_graph_assignment',
-              schema: sequenceAnimaticSceneGraphAssignmentSchema,
-              instructions: [
-                'You are a cinematic continuity designer and spatial scene graph planner.',
-                'Return strict JSON only. Assign screenplay scenes to output-local scene graph structure before shot planning.',
-              ].join('\n'),
-              prompt: [
-                'Assign each screenplay scene to a usable scene graph package for later parallel shot planning.',
-                'The screenplay is creative only. Do not rewrite the script and do not create shots.',
-                'For every scene, choose or create a worldLocationRefId, setId, zoneId, and useful spotIds where concrete physical points matter.',
-                'Create new output-local scene graph additions only for visual, reusable places: set, zone, spot, or optional viewpoint.',
-                'New graph additions must have stable IDs, valid parent links, human names, and isolated visual briefs that do not mention script beats, characters, shots, emotions, workflow nodes, model names, or providers.',
-                'Parent rules: set parent is a canonical world location ref; zone parent is a set id; spot parent is a zone id; viewpoint parent may be a spot, zone, or set id.',
-                'Prefer existing canonical world location refs from the supplied reference catalog and world context. Do not promote output-local sets/zones/spots into wiki entities.',
-                'Keep assignments scene-level. The later scene shot planner will choose shot-level sceneBinding values from these assignments and may add only missing spots/viewpoints.',
-                'Return sceneAssignments for every parsed scene id exactly once.',
-                compactForPrompt({
-                  parsedScenes: parsedScenePackage.scenePackages.map((scene) => ({
-                    sceneId: scene.sceneId,
-                    index: scene.index,
-                    title: scene.title,
-                    sourceText: scene.sourceText,
-                    existingLocationRefId: scene.worldLocationRefId,
-                    dialogueRows: scene.dialogueRows,
-                  })),
-                  currentGraphDraft: parsedScenePackage.sceneGraphDraft,
-                  referenceCatalog: sequenceAnimaticReferenceCatalog({
-                    animaticReferenceCatalog: readFirstUpstreamRecord(input.upstream, ['animaticReferenceCatalog', 'animatic_reference_catalog']),
-                    assetPack,
-                  }),
-                  world: asRecord(context.wiki ?? context.worldWiki),
-                  entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 80) : [],
-                }, 22000),
-              ].join('\n\n'),
-              fallback: fallbackAssignment,
-              maxOutputTokens: 12000,
-              shouldCancel: input.shouldCancel,
-              onProgress: async (progress) => {
-                await input.onProgress?.({
-                  provider: 'openai',
-                  model: outputWorkflowTextModel(),
-                  providerRequestId: progress.providerRequestId,
-                  metadata: {
-                    providerMode: progress.providerMode,
-                    providerStatus: progress.providerStatus,
-                    lastProviderPollAt: progress.lastProviderPollAt,
-                    providerStartedAt: progress.providerStartedAt,
-                    sequenceAnimaticSceneGraphAssignment: true,
-                  },
-                })
-              },
-            })
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : 'Scene graph assignment failed.'
-            throw new Error(`Sequence animatic scene graph assignment failed: ${reason}`)
-          }
-          providerRequestId = result.providerRequestId
-          assignmentFallbackUsed = result.fallbackUsed
-          assignmentFallbackReason = result.fallbackReason
-          scenePackage = mergeSequenceAnimaticSceneGraphAssignment({
-            parsed: parsedScenePackage,
-            assignment: result.value,
-            assetPack,
-            context,
-          })
-        }
-        const outputRequestId = readText(input.run.metadata?.outputRequestId) || readText(input.run.metadata?.masterRequestId)
-        if (outputRequestId) {
-          await insertSequenceAnimaticEvent({
-            client: input.client,
-            projectId: input.run.projectId,
-            draftId: input.run.draftId,
-            requestId: outputRequestId,
-            workflowId: input.workflow.id,
-            runId: input.run.id,
-            eventType: purpose === 'sequence_animatic_scene_graph_assignment' ? 'scene_graph_assignment_ready' : 'scene_packages_ready',
-            payload: {
-              sceneCount: scenePackage.scenePackages.length,
-              dialogueRowCount: scenePackage.dialogueRows.length,
-              graphAdditionCount: scenePackage.sceneGraphDraft.additions.length,
-              spotRelationCount: scenePackage.spotRelations.length,
-              sourceHash: hashOutputWorkflowValue(scenePackage),
-              status: 'ready',
-              fallbackUsed: assignmentFallbackUsed,
-              fallbackReason: assignmentFallbackReason,
-            },
-            metadata: { source: purpose, nodeKey: input.node.key },
-            dedupe: { sourceHash: hashOutputWorkflowValue(scenePackage) },
-          })
-        }
-        const outputs = {
-          scenePackage,
-          scene_package: scenePackage,
-          scenePackages: scenePackage.scenePackages,
-          scene_packages: scenePackage.scenePackages,
-          screenplayScenes: scenePackage.screenplayScenes,
-          screenplay_scenes: scenePackage.screenplayScenes,
-          dialogueRows: scenePackage.dialogueRows,
-          dialogue_rows: scenePackage.dialogueRows,
-          sceneGraphDraft: scenePackage.sceneGraphDraft,
-          scene_graph_draft: scenePackage.sceneGraphDraft,
-          spotRelations: scenePackage.spotRelations,
-          spot_relations: scenePackage.spotRelations,
-          text: JSON.stringify(scenePackage, null, 2),
-          fallbackUsed: assignmentFallbackUsed,
-          fallbackReason: assignmentFallbackReason,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: purpose === 'sequence_animatic_scene_graph_assignment' && !assignmentFallbackUsed ? 'openai' : 'graphcore',
-          model: purpose === 'sequence_animatic_scene_graph_assignment' && !assignmentFallbackUsed ? outputWorkflowTextModel() : 'deterministic-sequence-animatic-scene-package-v1',
-          providerRequestId,
-        }
-      }
-      if (purpose === 'sequence_animatic_scene_plan_fanout') {
-        const config = asRecord(input.node.config)
-        const compileOutputs = {
-          screenplayDraft: readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft']),
-          scenePackage: readFirstUpstreamRecord(input.upstream, ['scenePackage', 'scene_package']),
-          cinematicReferencePlan: readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan']),
-          compileHash: readText(config.compileHash),
-        }
-        const result = await materializeSequenceAnimaticScenePlanFanout({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          compileOutputs,
-          config,
-        })
-        const outputs = {
-          dynamicGraphExpanded: result.expanded,
-          graphExpanded: result.expanded,
-          compileHash: result.compileHash,
-          sceneCount: result.sceneCount,
-          scene_count: result.sceneCount,
-          text: result.expanded
-            ? `Materialized ${result.sceneCount} parallel scene shot planner node(s), merge, manifest, and orchestrator.`
-            : `Scene shot planner graph already materialized for ${result.sceneCount} scene(s).`,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-plan-fanout-v1' }
-      }
-      if (purpose === 'sequence_animatic_scene_shot_plan') {
-        const config = asRecord(input.node.config)
-        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(readFirstUpstreamRecord(input.upstream, ['scenePackage', 'scene_package']))
-        const configuredScenePackage = sequenceAnimaticTaggedScenePackageSchema.safeParse(config.scenePackage).success
-          ? sequenceAnimaticTaggedScenePackageSchema.parse(config.scenePackage)
-          : null
-        const sceneId = readText(config.sceneId) || configuredScenePackage?.sceneId || ''
-        const scenePackage = configuredScenePackage
-          ?? scenePackageOutput.scenePackages.find((scene) => scene.sceneId === sceneId)
-          ?? scenePackageOutput.scenePackages[0]
-        if (!scenePackage) throw new Error('Scene shot planner requires a parsed scene package.')
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        if (!Object.keys(screenplayDraft).length) throw new Error('Scene shot planner requires the authored tagged screenplay.')
-        if (!Object.keys(assetPack).length) throw new Error('Scene shot planner requires the visual reference asset pack.')
-        const animaticReferenceCatalog = sequenceAnimaticReferenceCatalog({
-          animaticReferenceCatalog: readFirstUpstreamRecord(input.upstream, ['animaticReferenceCatalog', 'animatic_reference_catalog']),
-          assetPack,
-        })
-        const continuityPlannerContext = buildSequenceAnimaticContinuityPlannerContext({
-          screenplayDraft,
-          shotPlan: {},
-          shotBreakPlan: {},
-          assetPack,
-          animaticReferenceCatalog,
-        })
-        const manifest = {
-          role: 'sequence_animatic_scene_director_source',
-          requestId: input.run.metadata?.outputRequestId ?? input.run.metadata?.masterRequestId ?? null,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          screenplayDraft,
-          screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
-          scenePackage,
-          scenePackageOutput,
-          assetPack,
-          animaticReferenceCatalog,
-        }
-        const manifestHash = hashOutputWorkflowValue(manifest)
-        const masterManifestArtifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(scenePackage.sceneId)}-scene-shot-plan`
-        // Streamed shot/coverage events go to the MASTER request: scene child runs
-        // carry their own request id in outputRequestId, but the client's live
-        // animatic view subscribes to the master request's event stream.
-        const outputRequestId = readText(input.run.metadata?.masterRequestId) || readText(input.run.metadata?.outputRequestId)
-        if (!outputRequestId) throw new Error('Scene shot continuity stream requires an output request id.')
-        let result: Awaited<ReturnType<typeof runSequenceAnimaticShotContinuityPlanStream>>
-        try {
-          result = await runSequenceAnimaticShotContinuityPlanStreamWithRetry({
-            client: input.client,
-            run: input.run,
-            workflow: input.workflow,
-            node: input.node,
-            requestId: outputRequestId,
-            taskClass: 'scene_shot_plan',
-            instructions: [
-              'You are a senior animation shot planner and continuity supervisor.',
-              'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
-              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; never drop id fields.',
-              'Every shot must also include a concise lighting note (<=12 words: time of day, key light direction, mood) — lighting drives keyframe atmosphere and is not optional padding.',
-              'Allowed record kinds for this scene node: scene_plan_start, shot, scene_graph_addition, spot_relation, local_reference, scene_plan_done. block is also allowed if helpful.',
-              'Emit shot records as soon as each shot is complete. Do not wait for the entire scene to be complete before streaming shots.',
-            ].join('\n'),
-            prompt: [
-              `Convert only this screenplay scene into a scene-scoped shot continuity plan: ${scenePackage.sceneId} (${scenePackage.title}).`,
-              'Do not plan shots for any other scene. Preserve story order inside this scene.',
-              `Use scene-scoped IDs: shot IDs must start with "${scenePackage.sceneId}_shot_" and block IDs must start with "${scenePackage.sceneId}_block_".`,
-              'Use the scene graph assignment package as first-choice sceneBinding IDs. Add missing spots or viewpoints only when the assigned package lacks a concrete point needed by the action.',
-              `Hard shot boundary rules: durationSeconds must be <= ${sequenceAnimaticShotContinuityMaxDurationSeconds}; preferred duration is 3-${sequenceAnimaticShotContinuityPreferredDurationSeconds} seconds; each shot should contain one camera setup and one visible story beat.`,
-              `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows, at most 140 characters per dialogue line, and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. Split dialogue exchanges across reaction/action shots.`,
-              'Coverage setup rules: do not emit coverage_setup records and do not set coverageSetupId. Capture only shot-local camera facts and optional coverageIntent text; a dedicated downstream coverage planner will assign reusable setups.',
-              'For every dialogue line from the scene package, put a dialogue row on the shot where it is spoken. Preserve speakerRefId exactly.',
-              'Every shot must include sceneBinding with at least setId or worldLocationRefId. Prefer zoneId and primarySpotId/spotIds when present in the scene package.',
-              'The scene planner returns compact shot-first records only. Do not emit top-level shotBindings, continuityGraphV2, assetRequirements, warnings, diagnostics, image prompts, or video prompts.',
-              'Record contracts:',
-              'scene_plan_start: {"kind":"scene_plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
-              'shot: {"kind":"shot","id":"scene_001_shot_001","index":1,"blockId":"scene_001_block_001","title":"...","durationSeconds":3,"continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"coverageIntent":"optional concise camera/staging intent, not an id","action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
-              'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|viewpoint","id":"...","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set","zoneId":"parent_zone","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
-              'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
-              'scene_plan_done: {"kind":"scene_plan_done","shotCount":0,"blockCount":0,"orderedShotIds":[],"orderedBlockIds":[],"screenplaySummary":"...","notes":[]}',
-              compactForPrompt({
-                scenePackage,
-                screenplaySceneText: scenePackage.sourceText,
-                sceneGraphAssignment: {
-                  worldLocationRefId: scenePackage.worldLocationRefId,
-                  setId: scenePackage.setId,
-                  zoneId: scenePackage.zoneId,
-                  spotIds: scenePackage.spotIds,
-                  graphAdditions: scenePackage.graphAdditions,
-                  graphAdditionIds: scenePackage.graphAdditionIds,
-                },
-                sceneGraphDraft: scenePackageOutput.sceneGraphDraft,
-                spotRelations: scenePackageOutput.spotRelations,
-                dialogueRows: scenePackage.dialogueRows,
-                existingWorldReferences: animaticReferenceCatalog,
-                assetPack,
-              }, 22000),
-            ].filter(Boolean).join('\n\n'),
-            maxOutputTokens: Math.max(16000, Math.min(40000, Math.ceil(sequenceAnimaticShotContinuityMaxShotCount / Math.max(1, scenePackageOutput.scenePackages.length)) * 1800)),
-            shouldCancel: input.shouldCancel,
-            onProgress: async (progress) => {
-              await input.onProgress?.({
-                provider: 'openai',
-                model: outputWorkflowTextModel(),
-                providerRequestId: progress.providerRequestId,
-                metadata: {
-                  providerMode: progress.providerMode,
-                  providerStatus: progress.providerStatus,
-                  lastProviderPollAt: progress.lastProviderPollAt,
-                  providerStartedAt: progress.providerStartedAt,
-                  sequenceAnimaticSceneShotPlan: true,
-                  sourceSceneId: scenePackage.sceneId,
-                },
-              })
-            },
-          })
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : 'Scene shot plan generation failed.'
-          throw new Error(`Sequence animatic scene shot plan failed for ${scenePackage.sceneId}: ${reason}`)
-        }
-        const directorPlan = normalizeSequenceAnimaticDirectorPlan({
-          rawPlan: {
-            ...result.value,
-            planningMode: 'single_director_pass',
-            notes: [...result.value.notes, `Scene-scoped shot plan for ${scenePackage.sceneId}.`],
-          },
-          manifest,
-          manifestHash,
-          masterManifestArtifactKey,
-          continuityPlannerContext,
-        })
-        const outputs = {
-          sceneId: scenePackage.sceneId,
-          scene_id: scenePackage.sceneId,
-          sourceSceneIndex: scenePackage.index,
-          source_scene_index: scenePackage.index,
-          scenePackage,
-          scene_package: scenePackage,
-          scenePlan: directorPlan,
-          scene_plan: directorPlan,
-          sceneShotPlan: directorPlan,
-          scene_shot_plan: directorPlan,
-          directorPlan,
-          director_plan: directorPlan,
-          shotContinuityPlan: directorPlan,
-          shot_continuity_plan: directorPlan,
-          text: JSON.stringify(directorPlan, null, 2),
-          deterministic: false,
-          providerRequestId: result.providerRequestId,
-          acceptedStreamRecordCount: result.acceptedRecordCount,
-          streamWarningCount: result.warningCount,
-          usage: asRecord(result.response.body.usage),
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || undefined }
-      }
-      if (purpose === 'sequence_animatic_scene_input') {
-        const config = asRecord(input.node.config)
-        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(asRecord(config.scenePackage))
-        const screenplayText = readText(config.sceneScreenplayText) || readText(config.screenplayText)
-        if (!screenplayText) throw new Error('Sequence animatic scene input requires the authored screenplay text.')
-        const screenplayDraft = { screenplayMarkdown: screenplayText, text: screenplayText }
-        const assetPack = asRecord(config.sceneAssetPack ?? config.assetPack)
-        const context = asRecord(config.sceneContext ?? config.context)
-        const guidance = asRecord(config.sceneGuidance)
-        const outputs = {
-          scenePackage: scenePackageOutput,
-          scene_package: scenePackageOutput,
-          screenplayDraft,
-          screenplay_draft: screenplayDraft,
-          screenplay: screenplayDraft,
-          assetPack,
-          asset_pack: assetPack,
-          context,
-          guidance,
-          sceneId: readText(config.sceneId),
-          sceneIndex: Number(config.sceneIndex ?? 0) || 0,
-          text: screenplayText,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_scene_register') {
-        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(readFirstUpstreamRecord(input.upstream, ['scenePackage', 'scene_package']))
-        const scenePackages = scenePackageOutput.scenePackages.length > 0
-          ? scenePackageOutput.scenePackages
-          : scenePackageOutput.screenplayScenes
-        if (scenePackages.length === 0) throw new Error('Sequence animatic scene registration requires at least one screenplay scene.')
-        const orderedScenes = [...scenePackages].sort((left, right) => (left.index || 9999) - (right.index || 9999))
-        const scenes = orderedScenes.map((scene, index) => ({
-          id: scene.sceneId,
-          index: Number(scene.index) || index + 1,
-          title: readText(scene.title) || `Scene ${index + 1}`,
-          summary: compactSequenceAnimaticText(scene.sourceText, 280),
-          setId: scene.setId || '',
-          zoneId: scene.zoneId || '',
-          worldLocationRefId: scene.worldLocationRefId || scene.locationRefId || '',
-          dialogueRowCount: scene.dialogueRows.length,
-          autoStart: index === 0 && input.node.config.autoStartFirstScene === true,
-        }))
-        const outputRequestId = readText(input.run.metadata?.outputRequestId) || readText(input.run.metadata?.masterRequestId)
-        if (outputRequestId) {
-          await insertSequenceAnimaticEvent({
-            client: input.client,
-            projectId: input.run.projectId,
-            draftId: input.run.draftId,
-            requestId: outputRequestId,
-            workflowId: input.workflow.id,
-            runId: input.run.id,
-            eventType: 'scenes_registered',
-            payload: { sceneCount: scenes.length, scenes },
-            metadata: { source: 'sequence_animatic_scene_register' },
-            dedupe: { source: 'sequence_animatic_scene_register' },
-          }).catch(() => null)
-          for (const scene of scenes) {
-            await insertSequenceAnimaticEvent({
-              client: input.client,
-              projectId: input.run.projectId,
-              draftId: input.run.draftId,
-              requestId: outputRequestId,
-              workflowId: input.workflow.id,
-              runId: input.run.id,
-              eventType: 'scene_registered',
-              payload: scene,
-              metadata: { source: 'sequence_animatic_scene_register' },
-              dedupe: { id: scene.id },
-            }).catch(() => null)
-          }
-          // Surface the GLOBAL scene graph (set -> zone -> spot -> viewpoint) on the
-          // master request so the continuity graph view shows the full shared
-          // hierarchy. Each scene is its own animatic with no cross-scene merge, so
-          // without this the view would only see one scene's streamed additions and
-          // spots would appear orphaned from their parent zones/sets.
-          const graphAdditions = scenePackageOutput.sceneGraphDraft.additions
-          const nodePayloadByKind = (addition: typeof graphAdditions[number]) => {
-            const base = { id: addition.id, name: addition.name, visualBrief: addition.visualBrief, worldLocationRefId: addition.worldLocationRefId || '' }
-            if (addition.kind === 'set') return { ...base, nodeKind: 'set', worldLocationRefId: addition.worldLocationRefId || addition.parentId || '' }
-            if (addition.kind === 'zone') return { ...base, nodeKind: 'zone', setId: addition.setId || addition.parentId || '' }
-            if (addition.kind === 'spot') return { ...base, nodeKind: 'spot', setId: addition.setId || '', zoneId: addition.zoneId || addition.parentId || '' }
-            return { ...base, nodeKind: 'angle', setId: addition.setId || '', zoneId: addition.zoneId || '', spotIds: addition.spotId ? [addition.spotId] : [] }
-          }
-          for (const addition of graphAdditions) {
-            if (!addition.id) continue
-            await insertSequenceAnimaticEvent({
-              client: input.client,
-              projectId: input.run.projectId,
-              draftId: input.run.draftId,
-              requestId: outputRequestId,
-              workflowId: input.workflow.id,
-              runId: input.run.id,
-              eventType: 'scene_graph_node_registered',
-              payload: { nodeId: addition.id, node: nodePayloadByKind(addition) },
-              metadata: { source: 'sequence_animatic_scene_register' },
-              dedupe: { nodeId: addition.id },
-            }).catch(() => null)
-          }
-        }
-        const sceneIndex = {
-          role: 'sequence_animatic_scene_index',
-          graphSpecVersion: 'sequence_animatic_graph_v2',
-          sequenceAnimaticRole: 'scene_index',
-          screenplayAnimaticRole: 'scene_index',
-          requestId: outputRequestId || null,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          sceneCount: scenes.length,
-          scenes,
-          scenePackageOutput,
-        }
-        const registerConfig = asRecord(input.node.config)
-        const outputs = {
-          scenes,
-          sceneCount: scenes.length,
-          scene_count: scenes.length,
-          sceneIndex,
-          sequence_animatic_scene_index: sceneIndex,
-          scenePackage: scenePackageOutput,
-          scene_package: scenePackageOutput,
-          planningDefaults: {
-            maxShotCount: Number(registerConfig.maxShotCount ?? 0) || 150,
-            aspectRatio: readText(registerConfig.aspectRatio) || '16:9',
-            resolution: readText(registerConfig.resolution) || '720p',
-            autoStartFirstScene: registerConfig.autoStartFirstScene === true,
-          },
-          text: JSON.stringify({ sceneCount: scenes.length, scenes }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-register-v1' }
-      }
-      if (purpose === 'sequence_animatic_scene_plan_merge') {
-        // Prefer the scene_input/master node's full scene-package output: the
-        // scene shot-plan node also emits a `scenePackage` key, but that one is a
-        // single tagged scene, not the {scenePackages:[...]} wrapper this merge needs.
-        const scenePackageOutput = sequenceAnimaticScenePackageOutputSchema.parse(
-          readPreferredUpstreamRecord(input.upstream, ['scene_input'], ['scenePackage', 'scene_package']),
-        )
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const contextRecord = readFirstUpstreamRecord(input.upstream, ['context'])
-        const scenePlanEntries = Object.entries(input.upstream)
-          .map(([nodeKey, outputs]) => ({
-            nodeKey,
-            sourceSceneIndex: Number(outputs.sourceSceneIndex ?? outputs.source_scene_index ?? 0) || 0,
-            sourceSceneId: readText(outputs.sceneId ?? outputs.scene_id),
-            plan: asRecord(outputs.directorPlan ?? outputs.director_plan ?? outputs.shotContinuityPlan ?? outputs.shot_continuity_plan ?? outputs.sceneShotPlan ?? outputs.scene_shot_plan),
-          }))
-          .filter((entry) => Object.keys(entry.plan).length > 0 && readArray(entry.plan.shots).length > 0)
-          .sort((left, right) => (left.sourceSceneIndex || 9999) - (right.sourceSceneIndex || 9999) || left.nodeKey.localeCompare(right.nodeKey))
-        if (scenePlanEntries.length === 0) throw new Error('Scene shot plan merge requires completed scene shot plans.')
-        const shots: Record<string, unknown>[] = []
-        const blocks: Record<string, unknown>[] = []
-        const shotIdMap = new Map<string, string>()
-        const blockIdMap = new Map<string, string>()
-        const scenePackageById = new Map(scenePackageOutput.scenePackages.map((scene) => [scene.sceneId, scene] as const))
-        // Per-scene child workflows keep scene-scoped ids (globally unique across
-        // sibling scenes and identical to the streamed events); the legacy
-        // multi-scene merge remaps to a flat global sequence.
-        const preserveSceneScopedIds = asRecord(input.node.config).preserveSceneScopedIds === true
-        let globalShotIndex = 1
-        let globalBlockIndex = 1
-        for (const entry of scenePlanEntries) {
-          const sceneId = entry.sourceSceneId || readText(entry.plan.sourceSceneId) || `scene_${String(entry.sourceSceneIndex || globalBlockIndex).padStart(3, '0')}`
-          const scenePackage = scenePackageById.get(sceneId) ?? scenePackageOutput.scenePackages.find((scene) => scene.index === entry.sourceSceneIndex) ?? null
-          const planBlocks = readArray(entry.plan.blocks).map(asRecord)
-          const planShots = readArray(entry.plan.shots).map(asRecord)
-          for (const block of planBlocks) {
-            const oldBlockId = readText(block.id) || `${sceneId}_block_${String(globalBlockIndex).padStart(3, '0')}`
-            const newBlockId = preserveSceneScopedIds ? oldBlockId : `block_${String(globalBlockIndex).padStart(3, '0')}`
-            blockIdMap.set(`${sceneId}:${oldBlockId}`, newBlockId)
-            globalBlockIndex += 1
-          }
-          for (const shot of planShots) {
-            const oldShotId = readText(shot.id) || `${sceneId}_shot_${String(globalShotIndex).padStart(3, '0')}`
-            const newShotId = preserveSceneScopedIds ? oldShotId : `shot_${String(globalShotIndex).padStart(3, '0')}`
-            shotIdMap.set(`${sceneId}:${oldShotId}`, newShotId)
-            globalShotIndex += 1
-          }
-        }
-        globalShotIndex = 1
-        globalBlockIndex = 1
-        for (const entry of scenePlanEntries) {
-          const sceneId = entry.sourceSceneId || readText(entry.plan.sourceSceneId) || `scene_${String(entry.sourceSceneIndex || globalBlockIndex).padStart(3, '0')}`
-          const scenePackage = scenePackageById.get(sceneId) ?? scenePackageOutput.scenePackages.find((scene) => scene.index === entry.sourceSceneIndex) ?? null
-          const planBlocks = readArray(entry.plan.blocks).map(asRecord)
-          const planShots = readArray(entry.plan.shots).map(asRecord)
-          for (const block of planBlocks) {
-            const oldBlockId = readText(block.id) || `${sceneId}_block_${String(globalBlockIndex).padStart(3, '0')}`
-            const newBlockId = blockIdMap.get(`${sceneId}:${oldBlockId}`) || `block_${String(globalBlockIndex).padStart(3, '0')}`
-            const mappedShotIds = readStringArray(block.shotIds ?? block.shot_ids)
-              .map((shotId) => shotIdMap.get(`${sceneId}:${shotId}`))
-              .filter((shotId): shotId is string => Boolean(shotId))
-            blocks.push({
-              ...block,
-              id: newBlockId,
-              index: globalBlockIndex,
-              title: readText(block.title) || `Scene ${entry.sourceSceneIndex || globalBlockIndex}`,
-              summary: readText(block.summary) || readText(block.title),
-              shotIds: mappedShotIds,
-              sourceSceneId: sceneId,
-            })
-            globalBlockIndex += 1
-          }
-          for (const shot of planShots) {
-            const oldShotId = readText(shot.id) || `${sceneId}_shot_${String(globalShotIndex).padStart(3, '0')}`
-            const oldBlockId = readText(shot.blockId) || readText(shot.storyboardBlockId)
-            const planShotBindings = asRecord(entry.plan.shotBindings ?? entry.plan.shot_bindings)
-            const shotBinding = asRecord(planShotBindings[oldShotId])
-            const rawSceneBinding = asRecord(shot.sceneBinding ?? shot.scene_binding)
-            const sceneBinding = {
-              ...rawSceneBinding,
-              worldLocationRefId: readText(rawSceneBinding.worldLocationRefId ?? rawSceneBinding.world_location_ref_id)
-                || readText(shot.worldLocationRefId ?? shot.world_location_ref_id ?? shot.locationRefId ?? shot.location_ref_id)
-                || readText(shotBinding.worldLocationRefId ?? shotBinding.world_location_ref_id)
-                || scenePackage?.worldLocationRefId
-                || scenePackage?.locationRefId
-                || '',
-              setId: readText(rawSceneBinding.setId ?? rawSceneBinding.set_id)
-                || readText(shot.continuitySetId ?? shot.continuity_set_id)
-                || readText(shotBinding.setId ?? shotBinding.set_id)
-                || scenePackage?.setId
-                || '',
-              zoneId: readText(rawSceneBinding.zoneId ?? rawSceneBinding.zone_id)
-                || readText(shot.continuityZoneId ?? shot.continuity_zone_id)
-                || readText(shotBinding.zoneId ?? shotBinding.zone_id)
-                || scenePackage?.zoneId
-                || '',
-              primarySpotId: readText(rawSceneBinding.primarySpotId ?? rawSceneBinding.primary_spot_id)
-                || readText(shot.primarySpotId ?? shot.primary_spot_id)
-                || readText(shotBinding.primarySpotId ?? shotBinding.primary_spot_id)
-                || scenePackage?.spotIds[0]
-                || '',
-              spotIds: sequenceAnimaticUniqueTexts([
-                rawSceneBinding.spotIds,
-                rawSceneBinding.spot_ids,
-                shot.continuitySpotIds,
-                shot.continuity_spot_ids,
-                shotBinding.spotIds,
-                shotBinding.spot_ids,
-                scenePackage?.spotIds ?? [],
-              ]),
-              viewpointId: readText(rawSceneBinding.viewpointId ?? rawSceneBinding.viewpoint_id)
-                || readText(shot.viewpointId ?? shot.viewpoint_id ?? shot.continuityAngleId ?? shot.continuity_angle_id)
-                || readText(shotBinding.viewpointId ?? shotBinding.viewpoint_id ?? shotBinding.angleId ?? shotBinding.angle_id),
-              localReferenceIds: sequenceAnimaticUniqueTexts([
-                rawSceneBinding.localReferenceIds,
-                rawSceneBinding.local_reference_ids,
-                shot.localReferenceIds,
-                shot.local_reference_ids,
-                shotBinding.localReferenceIds,
-                shotBinding.local_reference_ids,
-              ]),
-            }
-            if (!sceneBinding.primarySpotId && sceneBinding.spotIds.length > 0) {
-              sceneBinding.primarySpotId = sceneBinding.spotIds[0]
-            }
-            const newShotId = shotIdMap.get(`${sceneId}:${oldShotId}`) || `shot_${String(globalShotIndex).padStart(3, '0')}`
-            const newBlockId = blockIdMap.get(`${sceneId}:${oldBlockId}`) || blocks.find((block) => readStringArray(block.shotIds).includes(newShotId))?.id || `block_${String(Math.max(1, globalBlockIndex - 1)).padStart(3, '0')}`
-            const continuityLink = asRecord(shot.continuityLink ?? shot.continuity_link)
-            const continuityLinkFromShotId = readText(continuityLink.fromShotId ?? continuityLink.from_shot_id)
-            const remappedContinuityLink = Object.keys(continuityLink).length > 0
-              ? {
-                ...continuityLink,
-                fromShotId: continuityLinkFromShotId
-                  ? shotIdMap.get(`${sceneId}:${continuityLinkFromShotId}`) || continuityLinkFromShotId
-                  : '',
-                from_shot_id: continuityLinkFromShotId
-                  ? shotIdMap.get(`${sceneId}:${continuityLinkFromShotId}`) || continuityLinkFromShotId
-                  : '',
-              }
-              : continuityLink
-            shots.push({
-              ...shot,
-              id: newShotId,
-              index: globalShotIndex,
-              blockId: newBlockId,
-              storyboardBlockId: newBlockId,
-              coverageSetupId: '',
-              coverage_setup_id: '',
-              continuityLink: remappedContinuityLink,
-              continuity_link: remappedContinuityLink,
-              sceneBinding,
-              scene_binding: sceneBinding,
-              sourceSceneId: sceneId,
-              sourceSceneShotId: oldShotId,
-            })
-            globalShotIndex += 1
-          }
-        }
-        const mergeSceneGraphArray = (field: string) => mergeById(scenePlanEntries.flatMap((entry) => readArray(asRecord(entry.plan.sceneGraphAdditions)[field]).map(asRecord)))
-        const localReferences = mergeById(scenePlanEntries.flatMap((entry) => readArray(entry.plan.localReferences ?? entry.plan.outputLocalReferences).map(asRecord)))
-        const coverageSetups: Record<string, unknown>[] = []
-        const mergedV2 = sequenceAnimaticShotContinuityPlanV2Schema.parse({
-          role: 'sequence_animatic_director_plan',
-          contractVersion: 'shot_continuity_plan_v2',
-          graphSpecVersion: 'sequence_animatic_graph_v2',
-          screenplayAnimaticRole: 'director_plan',
-          sequenceAnimaticRole: 'director_plan',
-          planningMode: 'single_director_pass',
-          screenplaySummary: `Merged ${scenePlanEntries.length} scene-scoped shot plan${scenePlanEntries.length === 1 ? '' : 's'}.`,
-          shots,
-          blocks: blocks.filter((block) => readStringArray(block.shotIds).length > 0),
-          sceneGraphAdditions: {
-            sets: mergeById([...scenePackageOutput.sceneGraphDraft.additions.filter((addition) => addition.kind === 'set').map((addition) => ({ id: addition.id, worldLocationRefId: addition.worldLocationRefId || addition.parentId || null, name: addition.name, visualBrief: addition.visualBrief })), ...mergeSceneGraphArray('sets')]),
-            zones: mergeById([...scenePackageOutput.sceneGraphDraft.additions.filter((addition) => addition.kind === 'zone').map((addition) => ({ id: addition.id, setId: addition.setId || addition.parentId, worldLocationRefId: addition.worldLocationRefId || null, name: addition.name, visualBrief: addition.visualBrief })), ...mergeSceneGraphArray('zones')]),
-            spots: mergeById([...scenePackageOutput.sceneGraphDraft.additions.filter((addition) => addition.kind === 'spot').map((addition) => ({ id: addition.id, setId: addition.setId, zoneId: addition.zoneId || addition.parentId, worldLocationRefId: addition.worldLocationRefId || null, name: addition.name, visualBrief: addition.visualBrief })), ...mergeSceneGraphArray('spots')]),
-            viewpoints: mergeById([...scenePackageOutput.sceneGraphDraft.additions.filter((addition) => addition.kind === 'viewpoint').map((addition) => ({ id: addition.id, setId: addition.setId, zoneId: addition.zoneId, spotIds: [addition.spotId].filter(Boolean), worldLocationRefId: addition.worldLocationRefId || null, name: addition.name, visualBrief: addition.visualBrief })), ...mergeSceneGraphArray('viewpoints')]),
-            angles: mergeSceneGraphArray('angles'),
-            edges: mergeSceneGraphArray('edges'),
-          },
-          coverageSetups,
-          localReferences,
-          notes: scenePlanEntries.flatMap((entry) => readStringArray(entry.plan.notes)),
-        })
-        const manifest = {
-          role: 'sequence_animatic_director_source',
-          requestId: input.run.metadata?.outputRequestId ?? input.run.metadata?.masterRequestId ?? null,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          screenplayDraft,
-          screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
-          scenePackageOutput,
-          assetPack,
-        }
-        const animaticReferenceCatalog = sequenceAnimaticReferenceCatalog({
-          animaticReferenceCatalog: readFirstUpstreamRecord(input.upstream, ['animaticReferenceCatalog', 'animatic_reference_catalog']),
-          assetPack,
-        })
-        const continuityPlannerContext = buildSequenceAnimaticContinuityPlannerContext({
-          screenplayDraft,
-          shotPlan: {},
-          shotBreakPlan: {},
-          assetPack,
-          animaticReferenceCatalog,
-        })
-        const directorPlan = normalizeSequenceAnimaticDirectorPlan({
-          rawPlan: mergedV2,
-          manifest,
-          manifestHash: hashOutputWorkflowValue(manifest),
-          masterManifestArtifactKey: `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-merged-shot-plan`,
-          continuityPlannerContext,
-        })
-        const shotPlan = {
-          sceneId: 'sequence_animatic_master',
-          shots: directorPlan.shots,
-          totalEditorialDurationSeconds: directorPlan.shots.reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds) || 0), 0),
-        }
-        const outputs = {
-          directorPlan,
-          director_plan: directorPlan,
-          shotContinuityPlan: directorPlan,
-          shot_continuity_plan: directorPlan,
-          shotPlan,
-          shot_plan: shotPlan,
-          blocks: directorPlan.blocks,
-          continuityGraphV2: directorPlan.continuityGraphV2,
-          continuity_graph_v2: directorPlan.continuityGraphV2,
-          shotBindings: directorPlan.shotBindings,
-          shot_bindings: directorPlan.shotBindings,
-          scenePackage: scenePackageOutput,
-          scene_package: scenePackageOutput,
-          text: JSON.stringify(directorPlan, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-scene-plan-merge-v1' }
-      }
-      if (purpose === 'sequence_animatic_coverage_plan') {
-        const directorPlan = readFirstUpstreamRecord(input.upstream, ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const context = readFirstUpstreamRecord(input.upstream, ['context'])
-        if (!Object.keys(directorPlan).length) throw new Error('Coverage planner requires a merged shot continuity plan.')
-        const fallbackCoveragePlan = normalizeSequenceAnimaticCoveragePlan({ directorPlan })
-        let providerRequestId: string | undefined
-        let fallbackUsed = false
-        let fallbackReason = ''
-        let proposedCoveragePlan: Record<string, unknown> = {}
-        try {
-          const result = await runCinematicV2StructuredNodeBackground({
-            nodeKey: input.node.key,
-            schemaName: 'sequence_animatic_coverage_plan',
-            schema: sequenceAnimaticCoveragePlanLlmSchema,
-            instructions: [
-              'You are a film coverage supervisor assigning reusable camera/staging setups after shots already exist.',
-              'Return strict JSON only. Do not create shots, scene graph nodes, image prompts, or coverage anchor art.',
-            ].join('\n'),
-            prompt: [
-              'Assign every shot to exactly one coverage setup.',
-              'Only group shots when they share the same set, zone, primary spot, camera side/framing intent, screen direction, and visible subject arrangement.',
-              'Never assign a setup subject that is not visible in every shot using that setup.',
-              'Never group shots across different primarySpotId values unless the setupKind is wide_master and all shots share the same set and zone.',
-              'Create a new setup when blocking, camera side, subject arrangement, or primary spot changes.',
-              'Use concise setup titles and stagingBrief fields. These are planning records, not image prompts.',
-              'Return coverageSetups plus coverageSetupByShotId. Every shot id must appear in coverageSetupByShotId exactly once.',
-              compactForPrompt({
-                shots: readArray(directorPlan.shots).map(asRecord).map((shot) => ({
-                  id: readText(shot.id),
-                  index: Number(shot.index ?? 0) || 0,
-                  blockId: readText(shot.blockId ?? shot.storyboardBlockId),
-                  title: readText(shot.title),
-                  action: readText(shot.action ?? shot.description),
-                  camera: asRecord(shot.camera),
-                  lighting: readText(shot.lighting),
-                  refs: sequenceAnimaticCoverageShotRefs(shot),
-                  sceneBinding: sequenceAnimaticCoverageSpatialFields(shot),
-                  sourceSceneId: readText(shot.sourceSceneId ?? shot.sceneId),
-                })),
-                blocks: readArray(directorPlan.blocks).map(asRecord).map((block) => ({
-                  id: readText(block.id),
-                  index: Number(block.index ?? 0) || 0,
-                  title: readText(block.title),
-                  summary: readText(block.summary),
-                  shotIds: readStringArray(block.shotIds ?? block.shot_ids),
-                })),
-                continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-                screenplay: {
-                  title: readText(screenplayDraft.title),
-                  summary: readText(screenplayDraft.summary),
-                  text: readText(screenplayDraft.screenplayMarkdown ?? screenplayDraft.markdown ?? screenplayDraft.text).slice(0, 8000),
-                },
-                assetPackSummary: {
-                  selectedEntityKeys: cinematicAssetPackEntityKeys(assetPack),
-                  entityCount: readArray(assetPack.entities).length,
-                },
-                world: asRecord(context.wiki ?? context.worldWiki),
-              }, 22000),
-            ].join('\n\n'),
-            fallback: fallbackCoveragePlan,
-            maxOutputTokens: 12000,
-            shouldCancel: input.shouldCancel,
-            onProgress: async (progress) => {
-              await input.onProgress?.({
-                provider: 'openai',
-                model: outputWorkflowTextModel(),
-                providerRequestId: progress.providerRequestId,
-                metadata: {
-                  providerMode: progress.providerMode,
-                  providerStatus: progress.providerStatus,
-                  lastProviderPollAt: progress.lastProviderPollAt,
-                  providerStartedAt: progress.providerStartedAt,
-                  sequenceAnimaticCoveragePlan: true,
-                },
-              })
-            },
-          })
-          providerRequestId = result.providerRequestId
-          fallbackUsed = result.fallbackUsed
-          fallbackReason = result.fallbackReason
-          proposedCoveragePlan = asRecord(result.value)
-        } catch (error) {
-          fallbackUsed = true
-          fallbackReason = error instanceof Error ? error.message : 'Coverage planner LLM failed.'
-          proposedCoveragePlan = fallbackCoveragePlan
-        }
-        const coveragePlan = normalizeSequenceAnimaticCoveragePlan({ directorPlan, proposedPlan: proposedCoveragePlan })
-        const finalizedDirectorPlan = applySequenceAnimaticCoveragePlanToDirectorPlan({ directorPlan, coveragePlan })
-        const outputs = {
-          coveragePlan,
-          coverage_plan: coveragePlan,
-          coverageSetups: coveragePlan.coverageSetups,
-          coverage_setups: coveragePlan.coverageSetups,
-          coverageSetupByShotId: coveragePlan.coverageSetupByShotId,
-          coverage_setup_by_shot_id: coveragePlan.coverageSetupByShotId,
-          directorPlan: finalizedDirectorPlan,
-          director_plan: finalizedDirectorPlan,
-          shotContinuityPlan: finalizedDirectorPlan,
-          shot_continuity_plan: finalizedDirectorPlan,
-          blocks: finalizedDirectorPlan.blocks,
-          continuityGraphV2: finalizedDirectorPlan.continuityGraphV2,
-          continuity_graph_v2: finalizedDirectorPlan.continuityGraphV2,
-          shotBindings: finalizedDirectorPlan.shotBindings,
-          shot_bindings: finalizedDirectorPlan.shotBindings,
-          fallbackUsed,
-          fallbackReason,
-          text: JSON.stringify({ coveragePlan, fallbackUsed, fallbackReason }, null, 2),
-          deterministic: fallbackUsed,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: fallbackUsed ? 'graphcore' : 'openai',
-          model: fallbackUsed ? 'deterministic-sequence-animatic-coverage-plan-v1' : outputWorkflowTextModel(),
-          providerRequestId,
-        }
-      }
-      if (purpose === 'sequence_animatic_manifest') {
-        const directorPlan = readFirstUpstreamRecord(input.upstream, ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
-        if (Object.keys(directorPlan).length > 0) {
-          const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
-          const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-          const context = readFirstUpstreamRecord(input.upstream, ['context'])
-          if (!Object.keys(screenplayDraft).length) throw new Error('Sequence animatic manifest requires the authored screenplay.')
-          if (!Object.keys(assetPack).length) throw new Error('Sequence animatic manifest requires the visual reference asset pack.')
-          const selectedVisualReferenceKeys = cinematicAssetPackEntityKeys(assetPack)
-          const animaticReferenceCatalog = buildSequenceAnimaticReferenceCatalog({ context, assetPack })
-          const rawShotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
-          const directorShots = readArray(directorPlan.shots).map(asRecord)
-          if (directorShots.length === 0) throw new Error('Sequence animatic manifest requires shot-continuity-owned shots.')
-          const parsedShotPlan = sequenceAnimaticShotPlanSchema.safeParse(rawShotPlan)
-          const shotPlan = parsedShotPlan.success
-            ? parsedShotPlan.data
-            : sequenceAnimaticShotPlanSchema.parse({
-              sceneId: 'sequence_animatic_master',
-              totalEditorialDurationSeconds: directorShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds) || 0), 0),
-              shots: directorShots,
-              performanceArc: [],
-              audioPlan: { ambience: '', music: '', sfx: [], dialogueTrackCount: 0, placeholderOnly: true },
-              diagnostics: ['Built shot plan from authoritative shot continuity plan shots.'],
-            })
-          const shotById = new Map(shotPlan.shots.map((shot) => [shot.id, shot] as const))
-          const coverageSetups = readArray(directorPlan.coverageSetups ?? directorPlan.coverage_setups).map(asRecord)
-          const coverageSetupById = new Map(coverageSetups.map((setup) => [readText(setup.id), setup] as const).filter(([id]) => id))
-          let cursor = 0
-          const blocks = readArray(directorPlan.blocks).map(asRecord).map((block, index) => {
-            const blockId = readText(block.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
-            const shotIds = readStringArray(block.shotIds ?? block.shot_ids).filter((shotId) => shotById.has(shotId))
-            const blockShots = shotIds.map((shotId) => shotById.get(shotId)).filter((shot): shot is z.infer<typeof cinematicV2ShotSchema> => Boolean(shot))
-            if (blockShots.length === 0) throw new Error(`Sequence animatic shot continuity block ${blockId} has no valid shots.`)
-            const layout = buildCinematicV3StoryboardLayout(blockShots.length)
-            const duration = blockShots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds) || 0), 0)
-            const startSeconds = cursor
-            const endSeconds = startSeconds + duration
-            cursor = endSeconds
-            const summary = readText(block.summary) || blockShots.map((shot) => shot.title).join(' / ')
-            const blockCoverageSetupIds = [...new Set(blockShots.map((shot) => readText(asRecord(shot).coverageSetupId ?? asRecord(shot).coverage_setup_id)).filter(Boolean))]
-            const blockCoverageSetups = blockCoverageSetupIds.map((setupId) => coverageSetupById.get(setupId)).filter((setup): setup is Record<string, unknown> => Boolean(setup))
-            const storyboardGroup = {
-              id: blockId,
-              index: Number(block.index ?? index + 1) || index + 1,
-              shotIds,
-              summary,
-              rows: layout.rows,
-              columns: layout.columns,
-              panelCount: layout.panelCount,
-              startSeconds,
-              endSeconds,
-              editorialDurationSeconds: duration,
-              providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
-              coverageSetupIds: blockCoverageSetupIds,
-              coverageSetups: blockCoverageSetups,
-              continuityNotes: [
-                ...readStringArray(block.continuityNotes ?? block.continuity_notes),
-                readText(block.summary),
-                ...blockCoverageSetups.slice(0, 8).map((setup) => `Coverage ${readText(setup.id)}: ${readText(setup.title) || readText(setup.setupKind)}; ${readText(setup.screenDirection ?? setup.screen_direction)}; ${readText(setup.stagingBrief ?? setup.staging_brief)}`),
-              ].filter(Boolean),
-            }
-            return {
-              ...block,
-              id: blockId,
-              index: Number(block.index ?? index + 1) || index + 1,
-              title: readText(block.title) || summary || `Storyboard block ${index + 1}`,
-              summary,
-              sourceText: readText(block.sourceText ?? block.source_text),
-              shotIds,
-              shots: blockShots,
-              coverageSetupIds: blockCoverageSetupIds,
-              coverageSetups: blockCoverageSetups,
-              continuityAnchorIds: [...new Set(blockShots.flatMap((shot) => readStringArray(asRecord(shot).continuityAnchorIds)))],
-              storyboardGroup,
-              storyboardLayout: { rows: layout.rows, columns: layout.columns, panelCount: layout.panelCount },
-              durationSeconds: duration,
-              startSeconds,
-              endSeconds,
-              childRequestId: null,
-              childWorkflowId: null,
-            }
-          })
-          if (blocks.length === 0) throw new Error('Sequence animatic manifest requires shot-continuity-owned storyboard blocks.')
-          const roughShotBreakPlan = readFirstUpstreamRecord(input.upstream, ['roughShotBreakPlan', 'rough_shot_break_plan', 'shotBreakPlan', 'shot_break_plan'])
-          const manifest = {
-            role: 'sequence_animatic_manifest',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            screenplayAnimaticRole: 'master',
-            screenplayAnimaticSource: readText(asRecord(input.workflow.metadata).screenplayAnimaticSource)
-              || (readText(asRecord(input.workflow.metadata).cinematicAnimaticMode) === 'prompt_cinematic_master' ? 'prompt_cinematic' : 'wiki_sequence_unit'),
-            sequenceAnimaticRole: 'master',
-            requestId: input.run.metadata?.outputRequestId ?? null,
-            workflowId: input.workflow.id,
-            runId: input.run.id,
-            screenplayDraft,
-            screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
-            shotBreakPlan: roughShotBreakPlan,
-            roughShotBreakPlan,
-            shotPlan,
-            blocks,
-            assetPack,
-            selectedReferences: assetPack,
-            selectedVisualReferenceKeys,
-            animaticReferenceCatalog,
-            directorPlan,
-            directorPlanHash: readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan),
-            shotContinuityPlan: directorPlan,
-            shotContinuityPlanHash: readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan),
-            continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-            shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
-            diagnostics: [
-              ...readStringArray(directorPlan.diagnostics),
-              `Built final sequence animatic manifest from shot continuity plan with ${blocks.length} storyboard block${blocks.length === 1 ? '' : 's'} and ${shotPlan.shots.length} shot${shotPlan.shots.length === 1 ? '' : 's'}.`,
-            ],
-          }
-          const outputs = {
-            manifest,
-            sequenceAnimaticManifest: manifest,
-            sequence_animatic_manifest: manifest,
-            screenplayDraft,
-            screenplay_draft: screenplayDraft,
-            shotBreakPlan: roughShotBreakPlan,
-            shot_break_plan: roughShotBreakPlan,
-            shotPlan,
-            shot_plan: shotPlan,
-            blocks,
-            assetPack,
-            asset_pack: assetPack,
-            selectedVisualReferenceKeys,
-            selected_visual_reference_keys: selectedVisualReferenceKeys,
-            animaticReferenceCatalog,
-            animatic_reference_catalog: animaticReferenceCatalog,
-            directorPlan,
-            director_plan: directorPlan,
-            shotContinuityPlan: directorPlan,
-            shot_continuity_plan: directorPlan,
-            continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-            continuity_graph_v2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-            shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
-            shot_bindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
-            text: JSON.stringify(manifest, null, 2),
-            deterministic: true,
-          }
-          return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-director-manifest-v1' }
-        }
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const context = readFirstUpstreamRecord(input.upstream, ['context'])
-        const animaticReferenceCatalog = buildSequenceAnimaticReferenceCatalog({ context, assetPack })
-        const selectedVisualReferenceKeys = cinematicAssetPackEntityKeys(assetPack)
-        const continuityAnchorPlan = readFirstUpstreamRecord(input.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
-        const readAnchorArray = (fields: string[]) => {
-          const arrays = Object.values(input.upstream).flatMap((outputs) => fields.flatMap((field) => {
-            const value = outputs[field]
-            return Array.isArray(value) ? value.map(asRecord) : []
-          }))
-          const withAssets = arrays.filter((anchor) => readText(anchor.assetKey))
-          return (withAssets.length > 0 ? withAssets : arrays)
-            .filter((anchor, index, values) => readText(anchor.id) && values.findIndex((candidate) => readText(candidate.id) === readText(anchor.id)) === index)
-        }
-        const characterAnchors = readAnchorArray(['characterAnchors', 'character_anchors']).filter((anchor) => readText(anchor.anchorType) === 'character')
-        const propAnchors = readAnchorArray(['propAnchors', 'prop_anchors']).filter((anchor) => readText(anchor.anchorType) !== 'location_spot' && readText(anchor.anchorType) !== 'character')
-        const locationSpotAnchors = readAnchorArray(['locationSpotAnchors', 'location_spot_anchors']).filter((anchor) => readText(anchor.anchorType) === 'location_spot' || readText(anchor.baseLocationRefId))
-        const anchorAssets = [...characterAnchors, ...propAnchors, ...locationSpotAnchors].map(asRecord).filter((anchor) => readText(anchor.id))
-        const continuityAnchorIdsByShotId = asRecord(continuityAnchorPlan.continuityAnchorIdsByShotId ?? continuityAnchorPlan.shotContinuityAnchorIds)
-        const groupPlans = collectCinematicV3ShotPlansFromUpstream(input.upstream)
-        const rawMergedShotPlan = groupPlans.length > 0
-          ? mergeCinematicV3ShotPlansForTimeline(groupPlans)
-          : buildSequenceAnimaticShotPlanFromBreaks({ shotBreakPlan, assetPack, context })
-        const baseMergedShotPlan = repairCinematicV2ShotPlanVisualReferences({
-          shotPlan: rawMergedShotPlan,
-          assetPack,
-        })
-        const mergedShotPlan = {
-          ...baseMergedShotPlan,
-          shots: baseMergedShotPlan.shots.map((shot) => {
-            const anchorIds = readStringArray(continuityAnchorIdsByShotId[shot.id])
-            return {
-              ...shot,
-              continuityAnchorIds: anchorIds,
-              continuityAnchorRefIds: anchorIds,
-            }
-          }),
-        }
-        const breakGroups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
-        const blocks = breakGroups.map((group, index) => {
-          const storyboardGroup = buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index)
-          const shotIds = readStringArray(group.shotBreakIds)
-          const shots = mergedShotPlan.shots.filter((shot) => shotIds.includes(shot.id))
-          const resolvedShots = shots.length > 0
-            ? shots
-            : mergedShotPlan.shots.filter((shot) => storyboardGroup.shotIds.includes(shot.id))
-          const blockAnchorIds = [...new Set(resolvedShots.flatMap((shot) => readStringArray(asRecord(shot).continuityAnchorIds)))]
-          return {
-            id: storyboardGroup.id,
-            index: storyboardGroup.index,
-            title: readText(group.title) || readText(group.summary) || storyboardGroup.summary || `Storyboard block ${storyboardGroup.index}`,
-            summary: storyboardGroup.summary,
-            sourceText: readText(group.sourceText),
-            shotIds: (resolvedShots.length > 0 ? resolvedShots.map((shot) => shot.id) : storyboardGroup.shotIds),
-            shots: resolvedShots,
-            continuityAnchorIds: blockAnchorIds,
-            storyboardGroup,
-            storyboardLayout: { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount },
-            durationSeconds: storyboardGroup.editorialDurationSeconds,
-            startSeconds: storyboardGroup.startSeconds,
-            endSeconds: storyboardGroup.endSeconds,
-            childRequestId: null,
-            childWorkflowId: null,
-          }
-        })
-        const manifest = {
-          role: 'sequence_animatic_manifest',
-          graphSpecVersion: 'sequence_animatic_graph_v1',
-          screenplayAnimaticRole: 'master',
-          screenplayAnimaticSource: readText(asRecord(input.workflow.metadata).screenplayAnimaticSource)
-            || (readText(asRecord(input.workflow.metadata).cinematicAnimaticMode) === 'prompt_cinematic_master' ? 'prompt_cinematic' : 'wiki_sequence_unit'),
-          sequenceAnimaticRole: 'master',
-          requestId: input.run.metadata?.outputRequestId ?? null,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          screenplayDraft,
-          screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
-          shotBreakPlan,
-          shotPlan: mergedShotPlan,
-          blocks,
-          assetPack,
-          selectedReferences: assetPack,
-          selectedVisualReferenceKeys,
-          animaticReferenceCatalog,
-          continuityAnchorPlan,
-          characterAnchors,
-          propAnchors,
-          locationSpotAnchors,
-          anchorAssets,
-          diagnostics: [
-            ...readStringArray(shotBreakPlan.diagnostics),
-            ...readStringArray(continuityAnchorPlan.diagnostics),
-            ...(groupPlans.length === 0 ? ['Skipped parse-group LLM shot planning for sequence animatic master; shot continuity plan will assign shot references and scene graph continuity in one coherent pass.'] : []),
-            `Built sequence animatic manifest with ${blocks.length} storyboard block${blocks.length === 1 ? '' : 's'} and ${mergedShotPlan.shots.length} shot${mergedShotPlan.shots.length === 1 ? '' : 's'}.`,
-          ],
-        }
-        const outputs = {
-          manifest,
-          sequenceAnimaticManifest: manifest,
-          sequence_animatic_manifest: manifest,
-          screenplayDraft,
-          screenplay_draft: screenplayDraft,
-          shotBreakPlan,
-          shot_break_plan: shotBreakPlan,
-          shotPlan: mergedShotPlan,
-          shot_plan: mergedShotPlan,
-          blocks,
-          assetPack,
-          asset_pack: assetPack,
-          selectedVisualReferenceKeys,
-          selected_visual_reference_keys: selectedVisualReferenceKeys,
-          animaticReferenceCatalog,
-          animatic_reference_catalog: animaticReferenceCatalog,
-          continuityAnchorPlan,
-          continuity_anchor_plan: continuityAnchorPlan,
-          characterAnchors,
-          character_anchors: characterAnchors,
-          propAnchors,
-          prop_anchors: propAnchors,
-          locationSpotAnchors,
-          location_spot_anchors: locationSpotAnchors,
-          anchorAssets,
-          anchor_assets: anchorAssets,
-          text: JSON.stringify(manifest, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-manifest-v1' }
-      }
-      if (purpose === 'sequence_animatic_director_plan') {
-        const upstreamManifest = readFirstUpstreamRecord(input.upstream, ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
-        const context = readFirstUpstreamRecord(input.upstream, ['context'])
-        const assetPack = Object.keys(asRecord(upstreamManifest.assetPack)).length > 0
-          ? asRecord(upstreamManifest.assetPack)
-          : readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = Object.keys(asRecord(upstreamManifest.screenplayDraft)).length > 0
-          ? asRecord(upstreamManifest.screenplayDraft)
-          : readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
-        if (!Object.keys(screenplayDraft).length) throw new Error('Sequence animatic shot continuity plan requires the authored screenplay.')
-        if (!Object.keys(assetPack).length) throw new Error('Sequence animatic shot continuity plan requires the visual reference asset pack.')
-        const suggestedDurationSeconds = Number(asRecord(screenplayDraft).suggestedDurationSeconds ?? 0) || null
-        const configuredMaxShotCount = Number(asRecord(input.node.config).maxShotCount ?? 0) || 0
-        const screenplayMetadata = asRecord(asRecord(screenplayDraft).metadata)
-        const scriptContract = readText(screenplayMetadata.scriptContract)
-        const creativeScreenplayContract = scriptContract === 'creative_screenplay_v1'
-        const legacyMarkerContract = scriptContract === 'screenplay_with_shot_markers_v1'
-        const upstreamShotBreakPlan = asRecord(upstreamManifest.shotBreakPlan)
-        const shotBreakPlan = Object.keys(upstreamShotBreakPlan).length > 0
-          ? upstreamShotBreakPlan
-          : legacyMarkerContract
-            ? buildCinematicV3ShotBreakPlan({
-            screenplayDraft,
-            maxShotCount: configuredMaxShotCount > 0 ? configuredMaxShotCount : deriveCinematicV2MaxShotCount(suggestedDurationSeconds),
-            maxPanelsPerSheet: 9,
-            maxDurationPerGroupSeconds: 15,
-          })
-            : {}
-        const shotPlan = Object.keys(asRecord(upstreamManifest.shotPlan)).length > 0
-          ? asRecord(upstreamManifest.shotPlan)
-          : Object.keys(shotBreakPlan).length > 0
-            ? buildSequenceAnimaticShotPlanFromBreaks({ shotBreakPlan, assetPack, context })
-            : {}
-        const scriptShotProjection = Object.keys(shotBreakPlan).length > 0
-          ? buildSequenceAnimaticScriptShotProjection(shotBreakPlan)
-          : { scriptShotStatus: 'missing', scriptShots: [], scriptBlocks: [] }
-        const roughBlocks = readArray(shotBreakPlan.groups).map(asRecord).map((group, index) => {
-          const storyboardGroup = buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index)
-          return {
-            id: storyboardGroup.id,
-            index: storyboardGroup.index,
-            title: readText(group.title) || readText(group.summary) || storyboardGroup.summary,
-            summary: storyboardGroup.summary,
-            shotIds: storyboardGroup.shotIds,
-            storyboardGroup,
-          }
-        })
-        const animaticReferenceCatalog = sequenceAnimaticReferenceCatalog({
-          animaticReferenceCatalog: upstreamManifest.animaticReferenceCatalog,
-          assetPack,
-        })
-        const continuityPlannerContext = buildSequenceAnimaticContinuityPlannerContext({
-          screenplayDraft,
-          shotPlan,
-          shotBreakPlan,
-          assetPack,
-          animaticReferenceCatalog,
-        })
-        const manifest = Object.keys(upstreamManifest).length > 0
-          ? upstreamManifest
-          : {
-            role: 'sequence_animatic_director_source',
-            requestId: input.run.metadata?.outputRequestId ?? null,
-            workflowId: input.workflow.id,
-            runId: input.run.id,
-            screenplayDraft,
-            screenplayMarkdown: readText(screenplayDraft.screenplayMarkdown) || readText(screenplayDraft.markdown) || readText(screenplayDraft.text),
-            shotBreakPlan,
-            shotPlan,
-            blocks: roughBlocks,
-            assetPack,
-            animaticReferenceCatalog,
-          }
-        const manifestHash = hashOutputWorkflowValue(manifest)
-        const masterManifestArtifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-manifest`
-        const shotContinuityPlannerMaxShotCount = Math.max(
-          36,
-          Math.min(
-            sequenceAnimaticShotContinuityMaxShotCount,
-            configuredMaxShotCount > 0
-              ? Math.max(configuredMaxShotCount, sequenceAnimaticShotContinuityMaxShotCount)
-              : Math.ceil((suggestedDurationSeconds && suggestedDurationSeconds > 0 ? suggestedDurationSeconds : 180) / 4),
-          ),
-        )
-        const legacyAnchorPrompt = legacyMarkerContract || scriptShotProjection.scriptShots.length > 0
-          ? [
-            'Legacy screenplay shot anchors are included as optional source references. Preserve sourceScriptShotIds/sourceAnchorIds when useful, but do not let them override better final shot structure.',
-            'For one-to-one legacy shots preserve the source script shot ID. For merges include multiple IDs. For splits reuse the same source ID on each split. For planner-added shots, return empty arrays.',
-          ].join('\n')
-          : 'This creative screenplay has no screenplay shot anchors. sourceScriptShotIds and sourceAnchorIds may be empty arrays; do not invent fake screenplay anchor IDs.'
-        let result: Awaited<ReturnType<typeof runSequenceAnimaticShotContinuityPlanStream>>
-        const outputRequestId = readText(input.run.metadata?.outputRequestId) || readText(input.run.metadata?.masterRequestId)
-        if (!outputRequestId) throw new Error('Sequence animatic shot continuity stream requires an output request id.')
-        try {
-          result = await runSequenceAnimaticShotContinuityPlanStreamWithRetry({
-            client: input.client,
-            run: input.run,
-            workflow: input.workflow,
-            node: input.node,
-            requestId: outputRequestId,
-            instructions: [
-              'You are a senior animation shot planner and continuity supervisor.',
-              'Return newline-delimited JSON only: one complete JSON object per record, no markdown, no array wrapper, no prose outside JSON records.',
-              'Be token-frugal: omit optional descriptive fields whose value would be an empty string, empty array, or null. Structural keys are never optional: every shot record must include id, index, blockId, durationSeconds, action, camera, and sceneBinding; never drop id fields.',
-              'Every shot must also include a concise lighting note (<=12 words: time of day, key light direction, mood) — lighting drives keyframe atmosphere and is not optional padding.',
-              'Allowed record kinds: plan_start, block, shot, scene_graph_addition, spot_relation, local_reference, plan_done.',
-              'Emit records in live-usable order: plan_start, then shot records in story order as soon as each shot is complete. Do not wait for a whole block to be finished before emitting shots.',
-              'Block records are optional during streaming and may arrive before, between, or after related shots. If unsure, assign each shot a stable blockId and keep streaming shots.',
-              'After all shots, emit remaining scene_graph_addition records, spot_relation records, local_reference records, optional block records, then plan_done.',
-            ].join('\n'),
-            prompt: [
-              'Convert the creative screenplay into one compact streamed shot continuity plan for the entire animatic in a single coherent pass.',
-              'The screenplay is the creative source. Your returned shots are the source of truth; do not spend tokens duplicating top-level shotBindings, assetRequirements, warnings, diagnostics, or compatibility fields.',
-              'Create final shots from the script in story order. Preserve action, spoken dialogue, emotional beats, cause/effect, chapter outcome, and open loops, but choose shot boundaries that make the animatic filmable and continuous.',
-              'The output must cover every final shot exactly once. Blocks are editorial grouping metadata; they must never delay shot records.',
-              `Use as many shots as the screenplay needs, up to ${shotContinuityPlannerMaxShotCount}. Do not compress dialogue or multi-beat action to fit an old shot-count budget.`,
-              `Hard shot boundary rules: durationSeconds must be <= ${sequenceAnimaticShotContinuityMaxDurationSeconds}; preferred duration is 3-${sequenceAnimaticShotContinuityPreferredDurationSeconds} seconds; each shot should contain one camera setup and one visible story beat.`,
-              `Dialogue density rules: each shot may contain at most ${sequenceAnimaticShotContinuityMaxDialogueLines} short dialogue rows, at most 140 characters per dialogue line, and at most ${sequenceAnimaticShotContinuityMaxDialogueCharacters} total spoken characters. If a conversation exchange has more than that, split it into alternating dialogue/reaction/action shots.`,
-              'Use reaction shots, inserts, movement beats, and silent performance shots to keep dialogue readable. Do not put a whole conversation paragraph into one shot.',
-              'Coverage setup rules: do not emit coverage_setup records and do not set coverageSetupId. Capture only shot-local camera facts and optional coverageIntent text; a dedicated downstream coverage planner will assign reusable setups.',
-              'Keep action, camera, lighting, performance, visual briefs, summaries, and notes concise. Prefer one strong sentence per field unless the shot requires more.',
-              'Record contracts:',
-              'plan_start: {"kind":"plan_start","contractVersion":"shot_continuity_plan_v2","graphSpecVersion":"sequence_animatic_graph_v2","note":"short optional note"}',
-              'block: {"kind":"block","id":"block_001","index":1,"title":"...","summary":"...","shotIds":["shot_001"]} // optional during streaming; can be emitted after its shots',
-              'shot: {"kind":"shot","id":"shot_001","index":1,"blockId":"block_001","title":"...","durationSeconds":3,"continuityLink":{"mode":"same_setup|reverse_angle|blocking_change|match_action|new_setup|insert_cutaway|new_scene","fromShotId":"...","description":"..."},"coverageIntent":"optional concise camera/staging intent, not an id","action":"...","camera":{"framing":"...","angle":"...","movement":"...","screenDirectionRule":"..."},"lighting":"...","dialogue":[{"id":"dlg_001","speakerRefId":"canonical_or_local_ref","text":"one short spoken line, max 140 chars","emotion":"..."}],"performance":[{"id":"perf_001","characterRefId":"canonical_or_local_ref","emotion":"...","valence":0,"arousal":0.5,"bodyLanguage":"...","facialExpression":"...","gaze":"..."}],"refs":{"visibleCharacterRefIds":[],"speakerRefIds":[],"propRefIds":[],"locationRefIds":[],"localReferenceIds":[]},"sceneBinding":{"setId":"set_...","zoneId":"...","primarySpotId":"...","viewpointId":"..."}} — include performance beats only for featured or speaking characters; omit fields that would be empty.',
-              'scene_graph_addition: {"kind":"scene_graph_addition","nodeKind":"set|zone|spot|viewpoint","id":"set_or_zone_or_spot_or_viewpoint_id","name":"...","visualBrief":"...","worldLocationRefId":"optional_world_ref","setId":"parent_set_for_zone_spot_viewpoint","zoneId":"parent_zone_for_spot_viewpoint","spotIds":[],"shotIds":[],"storyboardBlockIds":[]}',
-              'spot_relation: {"kind":"spot_relation","sourceId":"spot_a","targetId":"spot_b","relationship":"adjacent_to|connected_to|visible_from|entrance_to|faces|opposes|above_below|left_of|right_of|near|occludes","evidence":"short reason","direction":"optional world-space direction","screenDirection":"optional screen-space direction"}',
-              'local_reference: {"kind":"local_reference","id":"local_ref_id","type":"temp_character|prop|item|faction|crowd|vehicle|location_spot","name":"...","visualBrief":"...","usedShotIds":[],"blockIds":[],"required":false,"importance":"hero|supporting|incidental","parentNodeId":"","sourceReferenceIds":[]}',
-              'plan_done: {"kind":"plan_done","shotCount":0,"blockCount":0,"orderedShotIds":[],"orderedBlockIds":[],"screenplaySummary":"...","notes":[]}',
-              legacyAnchorPrompt,
-              'For every shot, fill refs.visibleCharacterRefIds, refs.speakerRefIds, refs.propRefIds, and refs.locationRefIds when matching world refs exist.',
-              'For every spoken line in the screenplay, put one dialogue row on the shot where it is spoken. Every dialogue row must have speakerRefId and non-empty text. Do not create speaker-only dialogue rows.',
-              'Never merge multiple screenplay dialogue turns into one dialogue row. Split dense dialogue across multiple shots rather than summarizing or packing it.',
-              'For visible/speaking characters, add concise performance rows with emotion, valence, arousal, confidence, dominance, body language, facial expression, gaze, gesture, and voice energy when meaningful.',
-              'Do not invent duplicate canonical characters, locations, factions, or props. If a world ref matches, use its key.',
-              'Create output-local scene graph additions only when needed for the animatic: physical sets, zones, spots, and optional reusable viewpoints/camera setups.',
-              'Scene graph nodes must be filmable physical things. Never create nodes for themes, emotions, fog/rain/lighting-only cues, shot titles, action phrases, or character names used as places.',
-              'Spot-first rule: when a shot action is anchored to a concrete point of interest such as a bridge edge, door, custody table, crane hook, skiff prow, pier railing, checkpoint gate, shrine steps, or alley mouth, create or reuse a spot and set primarySpotId. Put the primary spot first in spotIds.',
-              'Zone-only bindings are allowed only when the location is intentionally broad/non-descript and no reusable physical point matters.',
-              'Use viewpointId only for reusable camera setups or important camera-reference continuity. Do not create a viewpoint for every shot just to satisfy structure.',
-              'When two spots matter spatially, emit spot_relation records such as adjacent_to, connected_to, visible_from, entrance_to, faces, opposes, above_below, left_of, right_of, near, or occludes.',
-              'Every shot must include sceneBinding with at least setId or worldLocationRefId. Prefer zoneId, use primarySpotId/spotIds whenever a concrete physical point matters, and use viewpointId only when useful. Reuse the same set/zone/spot/viewpoint IDs across shots.',
-              'Define animatic-only temp characters, props/items, factions/crowds, vehicles, or other local refs in localReferences. Then attach their IDs to refs.localReferenceIds or sceneBinding.localReferenceIds on the shots that use them.',
-              'For each shot, set blockId immediately even if the block record will be emitted later. Use stable block IDs such as block_001, block_002. Keep notes short and only for important ambiguity.',
-              compactForPrompt({
-                screenplay: screenplayDraft,
-                scriptContract: creativeScreenplayContract ? 'creative_screenplay_v1' : scriptContract,
-                legacyScreenplayShotAnchors: scriptShotProjection.scriptShots.length > 0 ? scriptShotProjection : undefined,
-                legacyRoughShotCandidates: Object.keys(shotPlan).length > 0 ? shotPlan : undefined,
-                legacyRoughBlockCandidates: roughBlocks.length > 0 ? roughBlocks : undefined,
-                continuityPlannerContext,
-                existingWorldReferences: animaticReferenceCatalog,
-                assetPack,
-              }, 26000),
-            ].filter(Boolean).join('\n\n'),
-            maxOutputTokens: 64000,
-            shouldCancel: input.shouldCancel,
-            onProgress: async (progress) => {
-              await input.onProgress?.({
-                provider: 'openai',
-                model: outputWorkflowTextModel(),
-                providerRequestId: progress.providerRequestId,
-                metadata: {
-                  providerMode: progress.providerMode,
-                  providerStatus: progress.providerStatus,
-                  lastProviderPollAt: progress.lastProviderPollAt,
-                  providerStartedAt: progress.providerStartedAt,
-                  sequenceAnimaticDirectorPlan: true,
-                  sequenceAnimaticShotContinuityPlan: true,
-                  sequenceAnimaticShotContinuityStream: true,
-                },
-              })
-            },
-          })
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : 'Shot continuity plan generation failed.'
-          throw new Error(`Sequence animatic shot continuity plan failed: ${reason}`)
-        }
-        const directorPlan = normalizeSequenceAnimaticDirectorPlan({
-          rawPlan: result.value,
-          manifest,
-          manifestHash,
-          masterManifestArtifactKey,
-          continuityPlannerContext,
-        })
-        const outputs = {
-          directorPlan,
-          director_plan: directorPlan,
-          shotContinuityPlan: directorPlan,
-          shot_continuity_plan: directorPlan,
-          shotPlan: {
-            ...shotPlan,
-            shots: directorPlan.shots,
-            totalEditorialDurationSeconds: directorPlan.shots.reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds) || 0), 0),
-          },
-          shot_plan: {
-            ...shotPlan,
-            shots: directorPlan.shots,
-            totalEditorialDurationSeconds: directorPlan.shots.reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds) || 0), 0),
-          },
-          blocks: directorPlan.blocks,
-          continuityGraphV2: directorPlan.continuityGraphV2,
-          continuity_graph_v2: directorPlan.continuityGraphV2,
-          shotBindings: directorPlan.shotBindings,
-          shot_bindings: directorPlan.shotBindings,
-          roughShotBreakPlan: shotBreakPlan,
-          rough_shot_break_plan: shotBreakPlan,
-          roughShotPlan: shotPlan,
-          rough_shot_plan: shotPlan,
-          text: JSON.stringify(directorPlan, null, 2),
-          deterministic: false,
-          providerRequestId: result.providerRequestId,
-          acceptedStreamRecordCount: result.acceptedRecordCount,
-          streamWarningCount: result.warningCount,
-          usage: asRecord(result.response.body.usage),
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || undefined }
-      }
-      if (purpose === 'sequence_animatic_block_input') {
-        const config = asRecord(input.node.config)
-        const block = asRecord(config.block)
-        const shotPlan = cinematicV2ShotPlanSchema.parse(config.shotPlan)
-        const storyboardGroup = asRecord(config.storyboardGroup)
-        const storyboardLayout = asRecord(config.storyboardLayout)
-        const assetPack = asRecord(config.assetPack)
-        const manifestSummary = asRecord(config.manifestSummary)
-        const outputs = {
-          block,
-          shotPlan,
-          shot_plan: shotPlan,
-          storyboardGroup,
-          storyboardGroupId: readText(storyboardGroup.id) || readText(block.id),
-          storyboardLayout,
-          assetPack,
-          asset_pack: assetPack,
-          manifestSummary,
-          screenplayAnimaticRole: 'storyboard_block',
-          sequenceAnimaticRole: 'storyboard_block',
-          text: JSON.stringify({
-            block,
-            shotPlan,
-            storyboardGroup,
-            storyboardLayout,
-          }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-block-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_shot_input') {
-        const config = asRecord(input.node.config)
-        const isShotProduction = readText(config.screenplayAnimaticRole) === 'shot_production' || readText(config.sequenceAnimaticRole) === 'shot_production'
-        const shot = cinematicV2ShotPlanSchema.shape.shots.element.parse({
-          ...asRecord(config.shot),
-          editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(asRecord(config.shot).editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3)),
-          providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(asRecord(config.shot).editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3),
-        })
-        const panel = asRecord(config.panel)
-        const panelAssetKey = readText(panel.assetKey)
-        if (!panelAssetKey && !isShotProduction) {
-          throw new Error('Sequence animatic shot video requires a cropped panel asset. Generate/extract the storyboard panel before generating shot video.')
-        }
-        const rawAssetPack = asRecord(config.assetPack)
-        const assetPack = buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: [shot as unknown as Record<string, unknown>],
-          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
-          maxAssetKeysPerEntity: 1,
-        })
-        const editorialDurationSeconds = Math.max(0.5, Math.min(15, Number(config.editorialDurationSeconds ?? shot.editorialDurationSeconds ?? 0) || 3))
-        const providerDurationSeconds = providerSafeCinematicV2DurationSeconds(editorialDurationSeconds)
-        const image = panelAssetKey ? {
-          ...panel,
-          assetKey: panelAssetKey,
-          role: 'cinematic_v2_shot_keyframe',
-          name: readText(panel.name) || `${shot.title || `Shot ${shot.index}`} cropped panel keyframe`,
-          shotId: shot.id,
-          shotIndex: shot.index,
-          storyboardBlockId: readText(config.storyboardBlockId),
-          usedAsVideoReference: true,
-          metadata: {
-            ...asRecord(panel.metadata),
-            role: 'cinematic_v2_shot_keyframe',
-            shotId: shot.id,
-            shotIndex: shot.index,
-            storyboardBlockId: readText(config.storyboardBlockId),
-          },
-        } : null
-        const shotPlan = cinematicV2ShotPlanSchema.parse({
-          sceneId: 'sequence_animatic_shot',
-          totalEditorialDurationSeconds: editorialDurationSeconds,
-          shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
-          performanceArc: [],
-          audioPlan: {
-            ambience: '',
-            music: '',
-            sfx: [],
-            dialogueTrackCount: shot.dialogue.length > 0 ? 1 : 0,
-            placeholderOnly: true,
-          },
-          diagnostics: ['Sequence animatic shot input built from a cropped storyboard panel.'],
-        })
-        const outputs = {
-          shot: { ...shot, editorialDurationSeconds, providerDurationSeconds },
-          shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
-          shotPlan,
-          shot_plan: shotPlan,
-          ...(image ? { image, keyframe: image, primaryReferenceImage: image } : {}),
-          assetPack,
-          asset_pack: assetPack,
-          panel,
-          editorialDurationSeconds,
-          providerDurationSeconds,
-          durationSeconds: providerDurationSeconds,
-          screenplayAnimaticRole: isShotProduction ? 'shot_production' : 'shot_video',
-          screenplayAnimaticSource: readText(config.screenplayAnimaticSource),
-          sequenceAnimaticRole: isShotProduction ? 'shot_production' : 'shot_video',
-          text: JSON.stringify({ shot, image, assetPack }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_shared_asset_ref') {
-        const config = asRecord(input.node.config)
-        const referenceRole = readText(config.referenceRole) || 'continuity_asset'
-        const sourceArtifactRole = readText(config.sourceArtifactRole)
-        const identityKey = readText(config.identityKey)
-        const identityValue = readText(config.identityValue)
-        const expectedAssetKey = readText(config.expectedAssetKey) || (identityKey === 'assetKey' ? identityValue : '')
-        const directReference = asRecord(config.directReference)
-        const directAssetKey = readText(directReference.assetKey) || expectedAssetKey
-        const artifactFromDirect = asRecord(directReference.artifact)
-        const directReferenceReady = Boolean(directAssetKey)
-        let artifact: OutputArtifact | null = null
-        if (!directReferenceReady) {
-          let query = input.client
-            .from('output_artifacts')
-            .select(outputArtifactSelect)
-            .eq('project_id', input.run.projectId)
-            .eq('draft_id', input.run.draftId)
-            .order('updated_at', { ascending: false })
-            .limit(200)
-          if (sourceArtifactRole) query = query.contains('metadata', { role: sourceArtifactRole })
-          const masterRequestId = readText(config.masterRequestId)
-          if (masterRequestId) query = query.contains('metadata', { masterRequestId })
-          if (identityKey && identityValue && identityKey !== 'assetKey') query = query.contains('metadata', { [identityKey]: identityValue })
-          if (expectedAssetKey) query = query.eq('asset_key', expectedAssetKey)
-          const response = await query
-          if (response.error) throw new Error(response.error.message)
-          artifact = ((response.data ?? []) as OutputArtifactRow[])
-            .map(mapOutputArtifactRow)
-            .find((entry) => {
-              const metadata = asRecord(entry.metadata)
-              if (sourceArtifactRole && readText(metadata.role) !== sourceArtifactRole) return false
-              if (identityKey && identityValue && identityKey !== 'assetKey' && readText(metadata[identityKey]) !== identityValue) return false
-              if (expectedAssetKey && readText(entry.assetKey) !== expectedAssetKey) return false
-              return true
-            }) ?? null
-        }
-        const assetKey = directAssetKey || readText(artifact?.assetKey)
-        const ready = Boolean(assetKey)
-        const required = config.required === true
-        if (!ready && required) {
-          throw new Error(`Required ${referenceRole.replace(/_/g, ' ')} reference is missing${identityValue ? ` for ${identityValue}` : ''}.`)
-        }
-        const metadata = asRecord(artifact?.metadata)
-        const image = ready ? {
-          ...directReference,
-          assetKey,
-          artifactKey: readText(artifactFromDirect.key) || readText(artifact?.key),
-          mimeType: readText(directReference.mimeType) || readText(artifact?.mimeType),
-          role: referenceRole,
-          sourceArtifactRole: sourceArtifactRole || readText(metadata.role),
-          sourceWorkflowId: readText(artifact?.workflowId) || readText(config.sourceWorkflowId),
-          sourceRequestId: readText(config.sourceRequestId),
-          metadata: {
-            ...asRecord(directReference.metadata),
-            ...metadata,
-            referenceRole,
-            sourceArtifactRole: sourceArtifactRole || readText(metadata.role),
-          },
-        } : null
-        const reference = {
-          status: ready ? 'ready' : 'missing',
-          assetKey: assetKey || null,
-          artifactKey: readText(artifactFromDirect.key) || readText(artifact?.key) || null,
-          role: referenceRole,
-          sourceArtifactRole: sourceArtifactRole || readText(metadata.role) || null,
-          sourceWorkflowId: readText(artifact?.workflowId) || readText(config.sourceWorkflowId) || null,
-          sourceRequestId: readText(config.sourceRequestId) || null,
-          identityKey,
-          identityValue,
-          blockingReason: ready ? '' : `missing_${referenceRole}`,
-        }
-        const outputs = {
-          reference,
-          status: reference.status,
-          assetKey: assetKey || '',
-          artifact: artifact ?? (Object.keys(artifactFromDirect).length > 0 ? artifactFromDirect : null),
-          ...(image ? { image, keyframe: image, primaryReferenceImage: image } : {}),
-          text: JSON.stringify(reference, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shared-asset-ref-v1' }
-      }
-      if (purpose === 'sequence_animatic_shot_reference_pack') {
-        const config = asRecord(input.node.config)
-        const shot = readFirstUpstreamRecord(input.upstream, ['shot'])
-        const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const references = Object.values(input.upstream)
-          .map((outputs) => asRecord(outputs.reference))
-          .filter((reference) => readText(reference.status) === 'ready' && readText(reference.assetKey))
-        const upstreamImages = readUpstreamImages(input.upstream, ['image', 'keyframe', 'primaryReferenceImage'])
-        const imageByAssetKey = new Map(upstreamImages.map((image) => [readText(image.assetKey), image] as const).filter(([assetKey]) => assetKey))
-        const referenceAssetKeys = references.map((reference) => readText(reference.assetKey)).filter(Boolean)
-        const fallbackEntities = references.map((reference, index) => {
-          const assetKey = readText(reference.assetKey)
-          const role = readText(reference.role) || 'continuity_asset'
-          const label = role === 'coverage_anchor'
-            ? 'Coverage anchor'
-            : role === 'previous_keyframe'
-              ? 'Previous keyframe'
-              : role === 'storyboard_panel'
-                ? 'Storyboard panel'
-                : `${titleFromRefLike(role)} ${index + 1}`
-          return {
-            key: `shot_ref_${index + 1}_${slugify(assetKey || role)}`,
-            name: label,
-            type: role.includes('character') ? 'character' : role.includes('prop') ? 'prop' : 'continuity_asset',
-            role,
-            summary: 'Shot-scoped visual reference resolved from the sequence animatic graph.',
-            visualDescription: 'Use this attached reference for identity, spatial, material, lighting, and continuity grounding.',
-            assetKeys: [assetKey],
-            primaryAssetKey: assetKey,
-            selectedReferenceAssetKey: assetKey,
-            selectedReferenceVariantKey: role,
-            selectedReferenceVariantLabel: label,
-            selectedReferenceVariantType: 'continuity_asset',
-            referenceSelectionReason: 'Resolved by the shot production graph.',
-          }
-        }).filter((entity) => readText(entity.primaryAssetKey))
-        const scopedReferenceAssetKeys = [...new Set([
-          ...readStringArray(config.requiredReferenceAssetKeys),
-          ...referenceAssetKeys,
-        ])]
-        const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
-          assetPack: rawAssetPack,
-          referenceAssetKeys: scopedReferenceAssetKeys.length > 0 ? scopedReferenceAssetKeys : referenceAssetKeys,
-          fallbackEntities,
-          referenceScope: 'sequence_animatic_shot_production',
-          limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
-        }))
-        const coverageAnchor = references.find((reference) => readText(reference.role) === 'coverage_anchor')
-        const previousKeyframe = references.find((reference) => readText(reference.role) === 'previous_keyframe')
-        const storyboardPanel = references.find((reference) => readText(reference.role) === 'storyboard_panel')
-        const coverageAnchorImage = coverageAnchor ? imageByAssetKey.get(readText(coverageAnchor.assetKey)) ?? null : null
-        const previousKeyframeImage = previousKeyframe ? imageByAssetKey.get(readText(previousKeyframe.assetKey)) ?? null : null
-        const storyboardPanelImage = storyboardPanel ? imageByAssetKey.get(readText(storyboardPanel.assetKey)) ?? null : null
-        const primaryImage = coverageAnchorImage ?? storyboardPanelImage ?? previousKeyframeImage ?? upstreamImages[0] ?? null
-        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
-        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
-        const outputs = {
-          shot,
-          shots: Object.keys(shot).length > 0 ? [shot] : [],
-          assetPack,
-          asset_pack: assetPack,
-          referenceManifest,
-          reference_manifest: referenceManifest,
-          referenceManifestText,
-          reference_manifest_text: referenceManifestText,
-          references,
-          referenceAssetKeys,
-          reference_asset_keys: referenceAssetKeys,
-          coverageAnchor: coverageAnchorImage ? { ...coverageAnchorImage, ...asRecord(coverageAnchor) } : coverageAnchor ?? {},
-          coverage_anchor: coverageAnchorImage ? { ...coverageAnchorImage, ...asRecord(coverageAnchor) } : coverageAnchor ?? {},
-          previousKeyframe: previousKeyframeImage ? { ...previousKeyframeImage, ...asRecord(previousKeyframe) } : previousKeyframe ?? {},
-          previous_keyframe: previousKeyframeImage ? { ...previousKeyframeImage, ...asRecord(previousKeyframe) } : previousKeyframe ?? {},
-          storyboardPanel: storyboardPanelImage ? { ...storyboardPanelImage, ...asRecord(storyboardPanel) } : storyboardPanel ?? {},
-          storyboard_panel: storyboardPanelImage ? { ...storyboardPanelImage, ...asRecord(storyboardPanel) } : storyboardPanel ?? {},
-          ...(primaryImage ? { image: primaryImage, keyframe: primaryImage, primaryReferenceImage: primaryImage } : {}),
-          text: JSON.stringify({ shot, references, referenceAssetKeys }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-reference-pack-v1' }
-      }
-      if (purpose === 'sequence_animatic_shot_revision_input') {
-        const config = asRecord(input.node.config)
-        const shot = cinematicV2ShotSchema.parse({
-          ...asRecord(config.shot),
-          editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(asRecord(config.shot).editorialDurationSeconds ?? 0) || 3)),
-          providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(asRecord(config.shot).editorialDurationSeconds ?? 0) || 3),
-        })
-        const panel = asRecord(config.panel)
-        const basePanelAssetKey = readText(panel.assetKey)
-        if (!basePanelAssetKey) {
-          throw new Error('Sequence animatic shot revision requires a cropped panel asset. Generate/extract the storyboard panel before revising this shot.')
-        }
-        const rawAssetPack = asRecord(config.assetPack)
-        const assetPack = buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: [shot as unknown as Record<string, unknown>],
-          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
-          maxAssetKeysPerEntity: 1,
-          includeSpeakerRefs: true,
-          includePerformanceRefs: true,
-          includeTextMentionedRefs: false,
-        })
-        const baseKeyframe = {
-          ...panel,
-          assetKey: basePanelAssetKey,
-          role: 'sequence_animatic_shot_revision_base_keyframe',
-          name: readText(panel.name) || `${shot.title || `Shot ${shot.index}`} base keyframe`,
-          shotId: shot.id,
-          shotIndex: shot.index,
-          storyboardBlockId: readText(config.storyboardBlockId),
-          usedAsVideoReference: true,
-          metadata: {
-            ...asRecord(panel.metadata),
-            role: 'sequence_animatic_shot_revision_base_keyframe',
-            shotId: shot.id,
-            shotIndex: shot.index,
-            storyboardBlockId: readText(config.storyboardBlockId),
-          },
-        }
-        const revisionPrompt = readText(config.revisionPrompt)
-        const outputs = {
-          shot,
-          baseShot: shot,
-          base_shot: shot,
-          baseKeyframe,
-          base_keyframe: baseKeyframe,
-          image: baseKeyframe,
-          keyframe: baseKeyframe,
-          panel,
-          assetPack,
-          asset_pack: assetPack,
-          revisionPrompt,
-          revision_prompt: revisionPrompt,
-          revisionId: readText(config.revisionId),
-          revision_id: readText(config.revisionId),
-          screenplayAnimaticRole: 'shot_revision',
-          sequenceAnimaticRole: 'shot_revision',
-          text: JSON.stringify({ shot, baseKeyframe, revisionPrompt, assetPack }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-revision-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_coverage_anchor_input') {
-        const config = asRecord(input.node.config)
-        const coverageSetup = asRecord(config.coverageSetup ?? config.coverage_setup)
-        const shots = readArray(config.shots).map(asRecord)
-        const rawAssetPack = asRecord(config.assetPack ?? config.asset_pack)
-        const baseAssetPack = buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots,
-          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
-          maxAssetKeysPerEntity: 1,
-          includeSpeakerRefs: true,
-          includePerformanceRefs: true,
-          includeTextMentionedRefs: false,
-        })
-        const referenceAssetKeys = readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys)
-        const extraReferenceEntities = referenceAssetKeys.map((assetKey, index) => ({
-          key: `coverage_anchor_ref_${index + 1}_${slugify(assetKey)}`,
-          name: `Coverage dependency ${index + 1}`,
-          type: 'continuity_asset',
-          role: 'coverage_anchor_dependency_reference',
-          summary: 'Generated scene-graph or canonical reference used to ground this coverage anchor.',
-          visualDescription: 'Use this image to preserve spatial layout, materials, palette, lighting logic, and identity continuity.',
-          assetKeys: [assetKey],
-          primaryAssetKey: assetKey,
-          selectedReferenceAssetKey: assetKey,
-          selectedReferenceVariantKey: 'coverage_anchor_dependency',
-          selectedReferenceVariantLabel: `Coverage dependency ${index + 1}`,
-          selectedReferenceVariantType: 'continuity_asset',
-          referenceSelectionReason: 'Coverage anchor visual reference plan dependency.',
-        }))
-        const assetPack = orderSequenceAnimaticAssetPackReferences({
-          ...scopeAssetPackToReferenceAssetKeys({
-            assetPack: baseAssetPack,
-            referenceAssetKeys,
-            fallbackEntities: extraReferenceEntities,
-            referenceScope: 'sequence_animatic_coverage_anchor',
-            limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
-          }),
-          continuityReferenceAssetKeys: referenceAssetKeys,
-          coverageAnchorReferenceAssetKeys: referenceAssetKeys,
-        })
-        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
-        const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
-        const outputs = {
-          coverageSetup,
-          coverage_setup: coverageSetup,
-          shots,
-          assetPack,
-          asset_pack: assetPack,
-          referenceManifest,
-          reference_manifest: referenceManifest,
-          referenceManifestText: sequenceAnimaticReferenceManifestText(assetPack),
-          reference_manifest_text: sequenceAnimaticReferenceManifestText(assetPack),
-          referenceAssetKeys,
-          reference_asset_keys: referenceAssetKeys,
-          coverageSetupId: setupId,
-          coverage_setup_id: setupId,
-          text: JSON.stringify({ coverageSetup, shots, assetPack }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-coverage-anchor-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_coverage_anchor_brief') {
-        const config = asRecord(input.node.config)
-        const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
-        const sceneGraphOverride = asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override ?? config.sceneGraphOverride ?? config.scene_graph_override)
-        const visualBriefOverride = readText(sceneGraphOverride.visualBriefOverride)
-        const extraPromptDirection = readText(sceneGraphOverride.extraPromptDirection)
-        const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
-        const subjectLabels = [...new Set([
-          ...readArray(assetPack.entities).map(asRecord)
-            .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
-            .map((entity) => sequenceAnimaticReferenceName(entity, 'Subject')),
-          ...shots.flatMap((shot) => readStringArray(shot.visibleCharacterNames ?? shot.visible_character_names)),
-          ...shots.flatMap((shot) => readStringArray(shot.characterNames ?? shot.character_names)),
-        ].map((label) => label.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(0, 8)
-        const fallbackBrief = sequenceAnimaticCoverageAnchorBriefSchema.parse({
-          cameraPosition: readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief) || readText(asRecord(coverageSetup.camera).framing),
-          framing: readText(asRecord(coverageSetup.camera).framing) || readText(coverageSetup.setupKind ?? coverageSetup.setup_kind).replace(/_/g, ' '),
-          screenDirection: readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction) || readText(asRecord(coverageSetup.camera).screenDirectionRule ?? asRecord(coverageSetup.camera).screen_direction_rule),
-          subjectBlocking: readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief) || shots.map((shot) => compactStoryboardSentence(readText(shot.action), '', 18)).filter(Boolean).join(' '),
-          foregroundBackgroundPlan: 'Keep the parent spot/zone geography readable with clear foreground, midground, and background depth.',
-          movementArrows: readStringArray(coverageSetup.movementArrows ?? coverageSetup.movement_arrows),
-          labels: subjectLabels.length > 0 ? [...subjectLabels, 'camera', 'movement'] : ['subject', 'camera', 'movement'],
-          visualNotes: shots.slice(0, 4).map((shot) => compactStoryboardSentence(readText(shot.action ?? shot.description), '', 20)).filter(Boolean),
-          mustNotInclude: ['final character likeness', 'wardrobe detail', 'decorative captions', 'UI panels', 'watermarks'],
-        })
-        let providerRequestId: string | undefined
-        let brief = fallbackBrief
-        let fallbackUsed = false
-        let fallbackReason = ''
-        try {
-          const result = await runCinematicV2StructuredNodeBackground({
-            nodeKey: input.node.key,
-            schemaName: 'sequence_animatic_coverage_anchor_brief',
-            schema: sequenceAnimaticCoverageAnchorBriefSchema,
-            instructions: [
-              'You are a cinematographer making a concise coverage-anchor staging brief.',
-              'Return strict JSON only. This is not final art and not an image prompt.',
-            ].join('\n'),
-            prompt: [
-              'Create a visual staging brief for one coverage anchor blockout plate.',
-              'Use only the scoped setup, shot actions, visible subjects, camera facts, and location/reference summary below.',
-              'Decide the camera position, framing, screen direction, subject placeholder positions, movement arrows, and foreground/background layout.',
-              'Do not add subjects that are not visible in the provided shots. Do not create coverage setup ids.',
-              compactForPrompt({
-                coverageSetup: {
-                  id: setupId,
-                  title: readText(coverageSetup.title),
-                  setupKind: readText(coverageSetup.setupKind ?? coverageSetup.setup_kind),
-                  setId: readText(coverageSetup.setId ?? coverageSetup.set_id),
-                  zoneId: readText(coverageSetup.zoneId ?? coverageSetup.zone_id),
-                  primarySpotId: readText(coverageSetup.primarySpotId ?? coverageSetup.primary_spot_id),
-                  viewpointId: readText(coverageSetup.viewpointId ?? coverageSetup.viewpoint_id),
-                  characterRefIds: readStringArray(coverageSetup.characterRefIds ?? coverageSetup.character_ref_ids),
-                  screenDirection: readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction),
-                  camera: asRecord(coverageSetup.camera),
-                  lighting: readText(coverageSetup.lighting),
-                  stagingBrief: readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief),
-                  visualBriefOverride,
-                  extraPromptDirection,
-                },
-                shots: shots.slice(0, 8).map((shot) => ({
-                  id: readText(shot.id),
-                  title: readText(shot.title),
-                  action: readText(shot.action ?? shot.description),
-                  camera: asRecord(shot.camera),
-                  lighting: readText(shot.lighting),
-                  refs: sequenceAnimaticCoverageShotRefs(shot),
-                  sceneBinding: sequenceAnimaticCoverageSpatialFields(shot),
-                })),
-                referenceSummary: sequenceAnimaticReferenceManifestText(assetPack),
-              }, 14000),
-            ].join('\n\n'),
-            fallback: fallbackBrief,
-            maxOutputTokens: 3000,
-            shouldCancel: input.shouldCancel,
-            onProgress: async (progress) => {
-              await input.onProgress?.({
-                provider: 'openai',
-                model: outputWorkflowTextModel(),
-                providerRequestId: progress.providerRequestId,
-                metadata: {
-                  providerMode: progress.providerMode,
-                  providerStatus: progress.providerStatus,
-                  sequenceAnimaticCoverageAnchorBrief: true,
-                },
-              })
-            },
-          })
-          providerRequestId = result.providerRequestId
-          brief = sequenceAnimaticCoverageAnchorBriefSchema.parse(result.value)
-          fallbackUsed = result.fallbackUsed
-          fallbackReason = result.fallbackReason
-        } catch (error) {
-          fallbackUsed = true
-          fallbackReason = error instanceof Error ? error.message : 'Coverage anchor brief LLM failed.'
-          brief = fallbackBrief
-        }
-        const text = [
-          brief.cameraPosition ? `Camera position: ${brief.cameraPosition}` : '',
-          brief.framing ? `Framing: ${brief.framing}` : '',
-          brief.screenDirection ? `Screen direction: ${brief.screenDirection}` : '',
-          brief.subjectBlocking ? `Subject blocking: ${brief.subjectBlocking}` : '',
-          brief.foregroundBackgroundPlan ? `Foreground/background: ${brief.foregroundBackgroundPlan}` : '',
-          brief.movementArrows.length > 0 ? `Movement arrows: ${brief.movementArrows.join('; ')}` : '',
-          brief.labels.length > 0 ? `Labels: ${brief.labels.join(', ')}` : '',
-          brief.visualNotes.length > 0 ? `Visual notes: ${brief.visualNotes.join('; ')}` : '',
-        ].filter(Boolean).join('\n')
-        const outputs = {
-          coverageBrief: brief,
-          coverage_brief: brief,
-          promptBrief: text,
-          prompt_brief: text,
-          coverageSetup,
-          coverage_setup: coverageSetup,
-          sceneGraphOverride,
-          scene_graph_override: sceneGraphOverride,
-          shots,
-          assetPack,
-          asset_pack: assetPack,
-          coverageSetupId: setupId,
-          coverage_setup_id: setupId,
-          fallbackUsed,
-          fallbackReason,
-          text,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: fallbackUsed ? 'graphcore' : 'openai',
-          model: fallbackUsed ? 'deterministic-sequence-animatic-coverage-anchor-brief-v1' : outputWorkflowTextModel(),
-          providerRequestId,
-        }
-      }
-      if (purpose === 'sequence_animatic_coverage_anchor_prompt') {
-        const config = asRecord(input.node.config)
-        const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
-        const sceneGraphOverride = asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override ?? config.sceneGraphOverride ?? config.scene_graph_override)
-        const visualBriefOverride = readText(sceneGraphOverride.visualBriefOverride)
-        const extraPromptDirection = readText(sceneGraphOverride.extraPromptDirection)
-        const shots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const coverageBrief = readFirstUpstreamRecord(input.upstream, ['coverageBrief', 'coverage_brief'])
-        const coverageBriefText = readFirstUpstreamText(input.upstream, ['promptBrief', 'prompt_brief', 'coverageBriefText', 'coverage_brief_text'])
-        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
-        const coverageScope = readText(config.coverageAnchorScope ?? config.coverage_anchor_scope)
-        const placementLabels = [...new Set([
-          ...readArray(assetPack.entities).map(asRecord)
-            .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
-            .map((entity) => sequenceAnimaticReferenceName(entity, 'Subject')),
-          ...shots.flatMap((shot) => readStringArray(shot.visibleCharacterNames ?? shot.visible_character_names)),
-          ...shots.flatMap((shot) => readStringArray(shot.characterNames ?? shot.character_names)),
-        ].map((label) => label.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(0, 8)
-        const setupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
-        const linkedShotSummary = shots.slice(0, 8).map((shot) => {
-          const camera = asRecord(shot.camera)
-          return [
-            readText(shot.title),
-            readText(shot.action) || readText(shot.description),
-            [readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; '),
-          ].filter(Boolean).join(' / ')
-        }).join('\n')
-        const promptText = [
-          'Create one labeled coverage blockout plate for an animatic shot setup. This is a planning reference, not final art.',
-          'Show environment framing, camera position feel, screen direction, movement arrows, and simple subject placeholders.',
-          'Use attached set/zone/spot reference images as location references for spatial layout, materials, weather, lighting logic, and geography.',
-          'Use named character/item reference images only to know which placeholders to place, their scale, and their rough silhouette; do not render detailed faces, wardrobe likeness, or final character art.',
-          'Every subject placeholder must correspond to a visible shot subject in the reference map or linked shot summary. Do not add unrelated setup subjects.',
-          'Sparse placement labels and arrows are allowed and required. Keep labels short and readable.',
-          'Ban decorative captions, paragraphs, UI panels, watermarks, borders, split panels, and polished final-frame character detail.',
-          '',
-          `Coverage blockout: ${readText(coverageSetup.title) || setupId}`,
-          coverageBriefText ? `Creative staging brief:\n${coverageBriefText}` : '',
-          readStringArray(coverageBrief.labels).length > 0 ? `Required labels: ${readStringArray(coverageBrief.labels).join(', ')}` : '',
-          readText(coverageSetup.setupKind ?? coverageSetup.setup_kind) ? `Setup kind: ${readText(coverageSetup.setupKind ?? coverageSetup.setup_kind).replace(/_/g, ' ')}` : '',
-          readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief) ? `Staging: ${readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)}` : '',
-          readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction) ? `Screen direction: ${readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)}` : '',
-          readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief) ? `Camera: ${readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)}` : '',
-          readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief) ? `Lighting: ${readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief)}` : '',
-          coverageScope === 'shot_scoped' ? 'Scope: current shot only; ignore unrelated linked setup shots.' : '',
-          placementLabels.length > 0 ? `Placement labels: ${placementLabels.join(', ')}, camera, movement` : 'Placement labels: camera, movement, subject placeholders',
-          linkedShotSummary ? `Linked shots:\n${linkedShotSummary}` : '',
-          referenceManifestText ? `Reference map:\n${referenceManifestText}` : '',
-          visualBriefOverride ? `User-edited coverage visual brief:\n${visualBriefOverride}` : '',
-          extraPromptDirection ? `Additional user generation direction:\n${extraPromptDirection}` : '',
-        ].filter(Boolean).join('\n')
-        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
-        const outputs = {
-          prompt: promptText,
-          text: promptText,
-          coverageSetup,
-          coverage_setup: coverageSetup,
-          coverageBrief,
-          coverage_brief: coverageBrief,
-          sceneGraphOverride,
-          scene_graph_override: sceneGraphOverride,
-          promptBrief: coverageBriefText,
-          prompt_brief: coverageBriefText,
-          shots,
-          assetPack,
-          asset_pack: assetPack,
-          referenceManifest,
-          reference_manifest: referenceManifest,
-          referenceManifestText: referenceManifestText,
-          reference_manifest_text: referenceManifestText,
-          coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-          coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-          coverageSetupId: setupId,
-          coverage_setup_id: setupId,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-coverage-anchor-prompt-v1' }
-      }
-      if (purpose === 'sequence_animatic_planned_keyframe_input') {
-        const config = asRecord(input.node.config)
-        const shot = asRecord(config.shot)
-        const coverageSetup = asRecord(config.coverageSetup ?? config.coverage_setup)
-        const coverageAnchor = asRecord(config.coverageAnchor ?? config.coverage_anchor)
-        const previousKeyframe = asRecord(config.previousKeyframe ?? config.previous_keyframe)
-        const storyboardPanel = asRecord(config.storyboardPanel ?? config.storyboard_panel)
-        const rawAssetPack = asRecord(config.assetPack ?? config.asset_pack)
-        const requiredReferenceAssetKeys = readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
-        const extraReferenceEntities = [
-          coverageAnchor,
-          previousKeyframe,
-          storyboardPanel,
-        ].map((image, index) => {
-          const assetKey = readText(image.assetKey)
-          if (!assetKey) return null
-          const label = index === 0 ? 'Coverage anchor' : index === 1 ? 'Previous keyframe' : 'Storyboard panel'
-          return {
-            key: `${label.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${slugify(assetKey)}`,
-            name: label,
-            type: 'continuity_asset',
-            role: index === 0 ? 'coverage_anchor_reference' : index === 1 ? 'previous_keyframe_reference' : 'storyboard_panel_reference',
-            summary: `${label} for this shot.`,
-            visualDescription: `Use this ${label.toLowerCase()} to preserve composition and continuity.`,
-            assetKeys: [assetKey],
-            primaryAssetKey: assetKey,
-            selectedReferenceAssetKey: assetKey,
-            selectedReferenceVariantKey: index === 0 ? 'coverage_anchor' : index === 1 ? 'previous_keyframe' : 'storyboard_panel',
-            selectedReferenceVariantLabel: label,
-            selectedReferenceVariantType: 'continuity_asset',
-          }
-        }).filter((entry): entry is Record<string, unknown> => Boolean(entry))
-          .filter((entry) => !requiredReferenceAssetKeys.includes(readText(entry.primaryAssetKey)))
-        const baseAssetPack = buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: [shot],
-          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
-          maxAssetKeysPerEntity: 1,
-          includeSpeakerRefs: true,
-          includePerformanceRefs: true,
-          includeTextMentionedRefs: false,
-        })
-        const extraReferenceAssetKeys = extraReferenceEntities
-          .map((entity) => readText(entity.primaryAssetKey))
-          .filter(Boolean)
-        const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
-          assetPack: baseAssetPack,
-          referenceAssetKeys: [...requiredReferenceAssetKeys, ...extraReferenceAssetKeys],
-          fallbackEntities: extraReferenceEntities,
-          referenceScope: 'sequence_animatic_shot_keyframe',
-          limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
-        }))
-        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
-        const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
-        const outputs = {
-          shot,
-          coverageSetup,
-          coverage_setup: coverageSetup,
-          coverageAnchor,
-          coverage_anchor: coverageAnchor,
-          previousKeyframe,
-          previous_keyframe: previousKeyframe,
-          storyboardPanel,
-          storyboard_panel: storyboardPanel,
-          assetPack,
-          asset_pack: assetPack,
-          referenceManifest,
-          reference_manifest: referenceManifest,
-          referenceManifestText,
-          reference_manifest_text: referenceManifestText,
-          shotId: readText(shot.id) || readText(config.shotId),
-          shot_id: readText(shot.id) || readText(config.shotId),
-          text: JSON.stringify({ shot, coverageSetup, coverageAnchor, previousKeyframe, storyboardPanel, assetPack }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-planned-keyframe-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_planned_keyframe_prompt') {
-        const config = asRecord(input.node.config)
-        const sceneState = asRecord(config.sceneState ?? config.scene_state)
-        const sceneStateText = compactStoryboardSentence(formatSequenceAnimaticSceneStateForPrompt(sceneState as never), '', 42)
-        const shot = readFirstUpstreamRecord(input.upstream, ['shot'])
-        const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
-        const coverageAnchor = readFirstUpstreamRecord(input.upstream, ['coverageAnchor', 'coverage_anchor'])
-        const previousKeyframe = readFirstUpstreamRecord(input.upstream, ['previousKeyframe', 'previous_keyframe'])
-        const storyboardPanel = readFirstUpstreamRecord(input.upstream, ['storyboardPanel', 'storyboard_panel'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
-        const referenceManifestText = referenceManifest.map((entry) => entry.line).join('\n')
-        const visibleSubjects = readArray(assetPack.entities).map(asRecord)
-          .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
-          .map((entity) => {
-            const name = sequenceAnimaticReferenceName(entity, 'Subject')
-            const visual = sequenceAnimaticReferenceVisual(entity, 16)
-            return visual ? `${name} - ${visual}` : name
-          })
-          .filter(Boolean)
-          .slice(0, 8)
-          .join('\n')
-        const locationRefs = readArray(assetPack.entities).map(asRecord)
-          .filter((entity) => ['spot_reference', 'zone_reference', 'set_reference', 'viewpoint_reference', 'location_reference'].includes(sequenceAnimaticReferenceRole(entity)))
-          .map((entity) => {
-            const name = sequenceAnimaticReferenceName(entity, 'Location ref')
-            const visual = sequenceAnimaticReferenceVisual(entity, 14)
-            return visual ? `${name} - ${visual}` : name
-          })
-          .filter(Boolean)
-          .slice(0, 5)
-          .join('\n')
-        const propRefs = readArray(assetPack.entities).map(asRecord)
-          .filter((entity) => sequenceAnimaticReferenceRole(entity) === 'prop_reference')
-          .map((entity) => {
-            const name = sequenceAnimaticReferenceName(entity, 'Prop')
-            const visual = sequenceAnimaticReferenceVisual(entity, 12)
-            return visual ? `${name} - ${visual}` : name
-          })
-          .filter(Boolean)
-          .slice(0, 5)
-          .join('\n')
-        const camera = asRecord(shot.camera)
-        const dialogue = readArray(shot.dialogue).map(asRecord).map((line) => {
-          const text = readText(line.text)
-          if (!text) return ''
-          return `${readText(line.speakerName) || readText(line.speakerRefId) || 'Speaker'}: "${text}"`
-        }).filter(Boolean).join(' ')
-        const action = compactStoryboardSentence(readText(shot.action) || readText(shot.description) || readText(shot.storyboardPanelPrompt), '', 34)
-        const cameraBrief = [readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ') || readText(shot.camera)
-        const lighting = compactStoryboardSentence(readText(shot.lighting) || readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief), '', 26)
-        const coverageFallback = !readText(coverageAnchor.assetKey) && (
-          readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)
-          || readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)
-          || readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)
-        )
-        const hasCoverageAnchor = Boolean(readText(coverageAnchor.assetKey))
-        const promptText = [
-          'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
-          hasCoverageAnchor
-            ? 'Composition lock: @Image1 is the coverage anchor. Match its camera position, framing, screen direction, horizon/ground plane, major foreground/background shapes, and subject placement. Replace blockout placeholders with final art.'
-            : '',
-          '',
-          'Reference map',
-          referenceManifestText || 'No attached image references; use only the written visual facts.',
-          '',
-          'Frame target',
-          `${readText(shot.title) || 'Untitled shot'} - ${action || 'one clear visible moment.'}`,
-          dialogue ? `Dialogue visible cue: ${compactStoryboardSentence(dialogue, '', 26)}` : '',
-          '',
-          'Visible subjects',
-          visibleSubjects || 'Only subjects explicitly visible in the shot action.',
-          propRefs ? `Props/items\n${propRefs}` : '',
-          '',
-          'Action/blocking',
-          action || 'Hold the exact readable action from the shot.',
-          hasCoverageAnchor
-            ? 'Use @Image1 coverage anchor as the framing/background/blocking source of truth. Do not copy labels, arrows, placeholder figures, or blockout styling.'
-            : (coverageFallback ? `Coverage facts: ${compactStoryboardSentence(coverageFallback, '', 30)}` : ''),
-          readText(previousKeyframe.assetKey) ? 'Use the previous keyframe reference only for same-setup motion continuity and established state.' : '',
-          '',
-          'Camera/framing',
-          cameraBrief || 'Camera and framing follow the shot plan.',
-          readText(shot.performance) ? `Performance: ${compactStoryboardSentence(shot.performance, '', 20)}` : '',
-          '',
-          'Lighting/environment',
-          [lighting, locationRefs ? `Location refs\n${locationRefs}` : '', sceneStateText ? `Visual continuity facts: ${sceneStateText}` : ''].filter(Boolean).join('\n') || 'Preserve environment, weather, material, and lighting continuity.',
-          '',
-          'Negative rules',
-          'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Do not render blockout labels from the coverage anchor. Do not change the coverage-anchor camera angle, lens feel, background layout, or screen direction unless the written shot facts explicitly contradict it. Do not mention workflow, schema, IDs, or asset keys in the image.',
-        ].filter(Boolean).join('\n')
-        const outputs = {
-          prompt: promptText,
-          text: promptText,
-          shot,
-          coverageSetup,
-          coverage_setup: coverageSetup,
-          coverageAnchor,
-          coverage_anchor: coverageAnchor,
-          previousKeyframe,
-          previous_keyframe: previousKeyframe,
-          storyboardPanel,
-          storyboard_panel: storyboardPanel,
-          assetPack,
-          asset_pack: assetPack,
-          referenceManifest,
-          reference_manifest: referenceManifest,
-          referenceManifestText,
-          reference_manifest_text: referenceManifestText,
-          shotId: readText(shot.id) || readText(config.shotId),
-          shot_id: readText(shot.id) || readText(config.shotId),
-          sceneState,
-          scene_state: sceneState,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-planned-keyframe-prompt-v3' }
-      }
-      if (purpose === 'sequence_animatic_shot_revision_plan') {
-        const config = asRecord(input.node.config)
-        const shot = readFirstUpstreamRecord(input.upstream, ['shot', 'baseShot', 'base_shot'])
-        const revisionPrompt = readFirstUpstreamText(input.upstream, ['revisionPrompt', 'revision_prompt']) || readText(config.revisionPrompt)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const baseKeyframe = readFirstUpstreamRecord(input.upstream, ['baseKeyframe', 'base_keyframe', 'image', 'keyframe'])
-        const revision = await planSequenceAnimaticShotRevision({
-          nodeKey: input.node.key,
-          shot,
-          revisionPrompt,
-          assetPack,
-          baseKeyframe,
-          priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
-          shouldCancel: input.shouldCancel,
-          onProgress: async (progress) => {
-            await input.onProgress?.({
-              provider: 'openai',
-              model: outputWorkflowTextModel(),
-              providerRequestId: progress.providerRequestId,
-              metadata: {
-                providerMode: progress.providerMode,
-                providerStatus: progress.providerStatus,
-                lastProviderPollAt: progress.lastProviderPollAt,
-                shotRevisionPlanner: true,
-              },
-            })
-          },
-        })
-        const outputs = {
-          revisionPlan: revision,
-          revision_plan: revision,
-          revisedShot: revision.revisedShot,
-          revised_shot: revision.revisedShot,
-          baseShot: shot,
-          base_shot: shot,
-          revisionPrompt,
-          revision_prompt: revisionPrompt,
-          changeSummary: revision.changeSummary,
-          change_summary: revision.changeSummary,
-          keyframeIntent: revision.keyframeIntent,
-          keyframe_intent: revision.keyframeIntent,
-          diagnostics: [
-            ...readStringArray(revision.diagnostics),
-            ...(revision.fallbackUsed ? [`Fallback used: ${revision.fallbackReason || 'structured revision unavailable'}`] : []),
-          ],
-          text: JSON.stringify(revision, null, 2),
-          providerRequestId: revision.providerRequestId,
-          plannerProvider: revision.provider,
-          plannerModel: revision.model,
-          deterministic: revision.provider === 'graphcore',
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: revision.provider,
-          model: revision.model || 'sequence-animatic-shot-revision-plan-v1',
-          providerRequestId: revision.providerRequestId || undefined,
-        }
-      }
-      if (purpose === 'sequence_animatic_shot_keyframe_prompt') {
-        const config = asRecord(input.node.config)
-        const revisedShot = cinematicV2ShotSchema.parse(readFirstUpstreamRecord(input.upstream, ['revisedShot', 'revised_shot', 'shot']))
-        const baseKeyframe = readFirstUpstreamRecord(input.upstream, ['baseKeyframe', 'base_keyframe', 'image', 'keyframe'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const referenceEntities = readArray(assetPack.entities).map(asRecord).map((entity) => {
-          const name = readText(entity.name)
-          const visual = readText(entity.visualDescription) || readText(entity.summary)
-          return name && visual ? `${name}: ${visual}` : name || visual
-        }).filter(Boolean).slice(0, 8).join('\n')
-        const camera = asRecord(revisedShot.camera)
-        const dialogue = revisedShot.dialogue.map((line) => {
-          const text = readText(line.text)
-          if (!text) return ''
-          return `${readText(line.speakerName) || readText(line.speakerRefId) || 'Speaker'}: "${text}"`
-        }).filter(Boolean).join(' ')
-        const promptText = [
-          'Generate one revised cinematic keyframe for this exact animatic shot. Use the base keyframe reference to preserve identity, location, wardrobe, props, aspect ratio, and continuity, while applying the revised shot direction.',
-          'Do not create a storyboard grid, captions, UI, watermarks, labels, or multiple panels. Produce one finished frame only.',
-          '',
-          `Shot title: ${revisedShot.title}`,
-          `Action: ${revisedShot.action || revisedShot.description || revisedShot.storyboardPanelPrompt}`,
-          dialogue ? `Dialogue context: ${dialogue}` : '',
-          `Camera: ${[readText(camera.framing), readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ')}`,
-          readText(revisedShot.lighting) ? `Lighting: ${readText(revisedShot.lighting)}` : '',
-          readText(revisedShot.mood) ? `Mood: ${readText(revisedShot.mood)}` : '',
-          readText(revisedShot.storyboardPanelPrompt) ? `Panel composition: ${readText(revisedShot.storyboardPanelPrompt)}` : '',
-          '',
-          referenceEntities ? `Relevant references:\n${referenceEntities}` : '',
-          readText(config.revisionPrompt) ? `User revision: ${readText(config.revisionPrompt)}` : '',
-          `Base keyframe asset: ${readText(baseKeyframe.assetKey)}`,
-        ].filter(Boolean).join('\n')
-        const outputs = {
-          prompt: promptText,
-          text: promptText,
-          revisedShot,
-          revised_shot: revisedShot,
-          shot: revisedShot,
-          baseKeyframe,
-          base_keyframe: baseKeyframe,
-          image: baseKeyframe,
-          assetPack,
-          asset_pack: assetPack,
-          revisionId: readText(config.revisionId),
-          revision_id: readText(config.revisionId),
-          storyboardBlockId: readText(config.storyboardBlockId),
-          shotId: readText(config.shotId),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-sequence-animatic-shot-keyframe-prompt-v1' }
       }
       if (purpose === 'cinematic_v3_shot_plan_merge') {
         const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
@@ -27928,138 +21692,6 @@ async function executeNode(input: {
           text: JSON.stringify(qa, null, 2),
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-keyframe-qa-v1' }
-      }
-      if (purpose === 'sequence_animatic_shot_video_prompt') {
-        const config = asRecord(input.node.config)
-        const shotRecord = readFirstUpstreamRecord(input.upstream, ['shot'])
-        const shot = cinematicV2ShotPlanSchema.shape.shots.element.parse({
-          ...shotRecord,
-          editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(shotRecord.editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3)),
-          providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(shotRecord.editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3),
-        })
-        const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const upstreamImages = readUpstreamImages(input.upstream, ['image', 'keyframe', 'primaryReferenceImage'])
-        const assetPackReferenceLimit = Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6))
-        const visualAssetPack = buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: [shot as unknown as Record<string, unknown>],
-          maxEntityCount: assetPackReferenceLimit,
-          maxAssetKeysPerEntity: 1,
-          includeSpeakerRefs: false,
-          includePerformanceRefs: false,
-          includeTextMentionedRefs: false,
-        })
-        const voiceGuideAssetPack = buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: [shot as unknown as Record<string, unknown>],
-          maxEntityCount: assetPackReferenceLimit,
-          maxAssetKeysPerEntity: 1,
-          includeSpeakerRefs: true,
-          includePerformanceRefs: true,
-          includeTextMentionedRefs: false,
-        })
-        const entityByKey = cinematicEntityByKey(voiceGuideAssetPack)
-        const timing = await inferSequenceShotVideoTiming({
-          nodeKey: input.node.key,
-          shot: shot as unknown as Record<string, unknown>,
-          entityByKey,
-        })
-        const editorialDurationSeconds = Math.max(1, Math.min(15, timing.editorialDurationSeconds))
-        const providerDurationSeconds = providerSafeCinematicV2DurationSeconds(editorialDurationSeconds)
-        const dialogueLines = shot.dialogue
-          .map((line) => {
-            const text = readText(line.text)
-            if (!text) return ''
-            const speakerKey = readText(line.speakerRefId)
-            const speaker = readText(entityByKey.get(speakerKey)?.name) || readText(line.speakerName) || speakerKey || 'Speaker'
-            const emotion = readText(line.emotion)
-            return `${speaker}: "${text}"${emotion ? ` (${emotion})` : ''}`
-          })
-          .filter(Boolean)
-          .join(' ')
-        const seedanceReferenceManifest = buildSeedanceReferenceManifest({
-          imageReferences: [
-            ...seedanceReferenceRecordsFromImages(upstreamImages.slice(0, 1), 'keyframes'),
-            ...seedanceReferenceRecordsFromAssetPack(visualAssetPack, assetPackReferenceLimit),
-          ].slice(0, 9),
-          cinematicReferenceMode: 'keyframes',
-        })
-        const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({
-          assetPack: voiceGuideAssetPack,
-          shots: [shot as unknown as z.infer<typeof cinematicV2ShotSchema>],
-          limit: 4,
-          visualIdentityKeys: new Set(shot.visibleCharacterRefIds),
-        })
-        const shotAction = readText(shot.action) || readText(shot.description) || readText(shot.storyboardPanelPrompt) || readText(shot.title)
-        const shotLine = [
-          formatSeedanceShotLine({
-            shot,
-            startSeconds: 0,
-            endSeconds: providerDurationSeconds,
-            dialogueLines,
-          }),
-          readText(shot.lighting) ? `Lighting: ${compactSeedanceControlText(shot.lighting, 12)}.` : '',
-        ].filter(Boolean).join(' ')
-        const prompt = buildCompactSeedanceVideoPrompt({
-          durationSeconds: providerDurationSeconds,
-          aspectRatio: readText(config.aspectRatio) || '16:9',
-          resolution: readText(config.resolution) || '720p',
-          referenceManifest: seedanceReferenceManifest,
-          referenceInstruction: 'Treat @Image1 as the cropped shot keyframe reference, not a storyboard sheet. Preserve composition, visible subjects, lighting, environment, and props while animating the shot.',
-          directedControls: timing.directedControls,
-          shotSectionTitle: 'SHOT',
-          shotLines: shotLine || shotAction,
-          identityGuide: characterVoiceGuide,
-          audioPolicy: 'No music, score, audio bed, room tone, crowd wash, or background ambience. Use only scripted dialogue and direct diegetic sound effects caused by visible or explicitly offscreen shot action.',
-          movementLogic: seedanceLabanMovementBlock([shot as unknown as Record<string, unknown>], input.run.prompt),
-          artifactBan: seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
-          clipLabel: 'this single shot',
-        })
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const outputs = {
-          prompt,
-          text: prompt,
-          shot: { ...shot, editorialDurationSeconds, providerDurationSeconds },
-          shotPlan: {
-            sceneId: 'sequence_animatic_shot',
-            totalEditorialDurationSeconds: editorialDurationSeconds,
-            shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
-          },
-          shot_plan: {
-            sceneId: 'sequence_animatic_shot',
-            totalEditorialDurationSeconds: editorialDurationSeconds,
-            shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
-          },
-          assetPack: visualAssetPack,
-          asset_pack: visualAssetPack,
-          voiceGuideAssetPack,
-          voice_guide_asset_pack: voiceGuideAssetPack,
-          primaryReferenceImage: upstreamImages[0] ?? null,
-          referenceImageCount: upstreamImages.length,
-          seedanceReferenceManifest,
-          directedControls: timing.directedControls,
-          audioPolicy: 'dialogue_and_direct_diegetic_sfx_only',
-          visualReferencePolicy: 'visible_characters_location_props_only',
-          offscreenSpeakerVisualReferencesExcluded: true,
-          editorialDurationSeconds,
-          providerDurationSeconds,
-          durationSeconds: providerDurationSeconds,
-          timingInference: {
-            mode: 'llm_from_shot_details',
-            ignoredTaggedShotTiming: true,
-            rationale: timing.rationale,
-            pacingNotes: timing.pacingNotes,
-            provider: timing.provider,
-            model: timing.model,
-            fallbackUsed: timing.fallbackUsed,
-            fallbackReason: timing.fallbackReason,
-          },
-          storyboardBlockId: readText(config.storyboardBlockId),
-          sequenceAnimaticRole: 'shot_video',
-          guidance,
-          deterministic: timing.provider === 'graphcore',
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: timing.provider, model: timing.model || 'sequence-animatic-shot-video-prompt-v2' }
       }
       if (purpose === 'cinematic_v3_storyboard_group_video_prompt') {
         const config = asRecord(input.node.config)
@@ -28925,134 +22557,6 @@ async function executeNode(input: {
     }
     case 'output_artifact': {
       const purpose = readText(asRecord(input.node.config).purpose)
-      if (purpose === 'sequence_animatic_manifest_artifact') {
-        const manifest = readFirstUpstreamRecord(input.upstream, ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
-        if (!Object.keys(manifest).length) throw new Error('Sequence animatic manifest artifact requires a manifest input.')
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-manifest`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${input.node.label} Manifest`,
-          summary: 'Sequence-unit screenplay animatic manifest with shot-continuity storyboard blocks and shot data.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-manifest-artifact-v1',
-            role: 'sequence_animatic_manifest',
-            graphSpecVersion: readText(manifest.graphSpecVersion) || 'sequence_animatic_graph_v2',
-            sequenceAnimaticRole: 'master',
-            manifest,
-            screenplayDraft: asRecord(manifest.screenplayDraft),
-            shotBreakPlan: asRecord(manifest.shotBreakPlan),
-            directorPlan: asRecord(manifest.directorPlan),
-            shotPlan: asRecord(manifest.shotPlan),
-            blocks: Array.isArray(manifest.blocks) ? manifest.blocks : [],
-            blockCount: Array.isArray(manifest.blocks) ? manifest.blocks.length : 0,
-          },
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey: '',
-          artifact,
-          artifacts: [artifact],
-          manifest,
-          sequenceAnimaticManifest: manifest,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-manifest-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_director_plan_artifact') {
-        const directorPlan = readFirstUpstreamRecord(input.upstream, ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
-        if (!Object.keys(directorPlan).length) throw new Error('Sequence animatic shot continuity plan artifact requires a shot continuity plan input.')
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-director-plan`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${input.node.label} Shot Continuity Plan`,
-          summary: 'Sequence-unit animatic shot continuity plan with all shots, canonical references, output-local scene graph bindings, and asset requirements.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-director-plan-artifact-v1',
-            role: 'sequence_animatic_director_plan',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            sequenceAnimaticRole: 'director_plan',
-            screenplayAnimaticRole: 'director_plan',
-            directorPlan,
-            director_plan: directorPlan,
-            shotContinuityPlan: directorPlan,
-            shot_continuity_plan: directorPlan,
-            shots: readArray(directorPlan.shots).map(asRecord),
-            blocks: readArray(directorPlan.blocks).map(asRecord),
-            coverageSetups: readArray(directorPlan.coverageSetups ?? directorPlan.coverage_setups).map(asRecord),
-            coverage_setups: readArray(directorPlan.coverageSetups ?? directorPlan.coverage_setups).map(asRecord),
-            coverageSetupByShotId: asRecord(directorPlan.coverageSetupByShotId ?? directorPlan.coverage_setup_by_shot_id),
-            coverage_setup_by_shot_id: asRecord(directorPlan.coverageSetupByShotId ?? directorPlan.coverage_setup_by_shot_id),
-            continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-            continuity_graph_v2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-            shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
-            shot_bindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
-            assetRequirements: readArray(directorPlan.assetRequirements ?? directorPlan.asset_requirements).map(asRecord),
-            asset_requirements: readArray(directorPlan.assetRequirements ?? directorPlan.asset_requirements).map(asRecord),
-            outputLocalReferences: readArray(directorPlan.outputLocalReferences ?? directorPlan.output_local_references).map(asRecord),
-            output_local_references: readArray(directorPlan.outputLocalReferences ?? directorPlan.output_local_references).map(asRecord),
-            rejectedCandidates: readArray(directorPlan.rejectedCandidates ?? directorPlan.rejected_candidates).map(asRecord),
-            warnings: readStringArray(directorPlan.warnings),
-            diagnostics: readStringArray(directorPlan.diagnostics),
-            shotCount: readArray(directorPlan.shots).length,
-            blockCount: readArray(directorPlan.blocks).length,
-            manifestHash: readText(directorPlan.manifestHash),
-            shotPlanHash: readText(directorPlan.shotPlanHash),
-          },
-        })
-        await persistSequenceAnimaticDirectorPlanRequestState({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          artifactKey: artifact.key,
-          directorPlan,
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey: '',
-          artifact,
-          artifacts: [artifact],
-          directorPlan,
-          director_plan: directorPlan,
-          shotContinuityPlan: directorPlan,
-          shot_continuity_plan: directorPlan,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-director-plan-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_orchestrator') {
-        const outputs = await runSequenceAnimaticOrchestrator({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          upstream: input.upstream,
-        })
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-orchestrator-v1' }
-      }
       if (purpose === 'sequence_animatic_continuity_structure_artifact') {
         const config = asRecord(input.node.config)
         const blockSuffix = continuityBlockNodeSuffix(input.node.key)
@@ -29413,177 +22917,6 @@ async function executeNode(input: {
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-pack-v1' }
       }
-      if (purpose === 'sequence_animatic_continuity_asset_artifact') {
-        const config = asRecord(input.node.config)
-        const upstreamTargetNode = readFirstUpstreamRecord(input.upstream, ['targetNode', 'target_node'])
-        const targetNode = Object.keys(upstreamTargetNode).length > 0 ? upstreamTargetNode : asRecord(config.targetNode)
-        const image = readFirstUpstreamImage(input.upstream, ['image'])
-        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
-        const targetNodeId = readText(config.targetNodeId) || readText(targetNode.id)
-        if (!targetNodeId) throw new Error('Continuity asset artifact requires a target node id.')
-        const assetKey = readText(image.assetKey)
-        if (!assetKey) throw new Error('Continuity asset image did not produce an asset key.')
-        const referenceAssetKeys = readStringArray(config.referenceAssetKeys)
-        const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
-        const referenceRole = sequenceAnimaticReferenceRole({
-          role: assetKind,
-          type: assetKind,
-          name: readText(targetNode.name) || readText(targetNode.title),
-        })
-        const qcFindings = assetKey ? [] : ['Continuity asset image did not produce an asset key.']
-        const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
-        const assetState = sequenceAnimaticContinuityAssetStateSchema.parse({
-          status: assetKey ? 'ready' : 'failed',
-          inputHash: readText(config.assetInputHash) || sequenceAnimaticContinuityAssetTargetInputHash(targetNode),
-          assetKey: assetKey || null,
-          artifactKey: readText(asRecord(image.artifact).key) || null,
-          prompt,
-          referenceAssetKeys,
-          sourceNodeId: targetNodeId,
-          assetKind,
-          generatedAt: new Date().toISOString(),
-          warnings: qcFindings,
-          error: assetKey ? '' : 'Continuity asset image did not produce an asset key.',
-        })
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(targetNodeId)}.sequence-animatic-continuity-asset`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${readText(targetNode.name) || titleFromRefLike(targetNodeId)} Continuity Asset`,
-          summary: 'Node-scoped sequence animatic continuity asset generated from the evolving scene graph.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-continuity-asset-artifact-v1',
-            role: 'sequence_animatic_continuity_asset',
-            graphSpecVersion: 'sequence_animatic_graph_v1',
-            sequenceAnimaticRole: 'continuity_asset',
-            masterRequestId: readText(config.masterRequestId),
-            continuityRequestId: readText(config.continuityRequestId),
-            worldLocationRefId: readText(config.worldLocationRefId),
-            parentNodeIds: readStringArray(config.parentNodeIds),
-            targetNodeId,
-            assetKind,
-            targetNode,
-            prompt,
-            referenceAssetKeys,
-            qcStatus,
-            qcFindings,
-            assetState,
-            image,
-            assetKey,
-          },
-        })
-        const continuityWorkflowId = readText(config.continuityWorkflowId)
-        if (continuityWorkflowId) {
-          const latestPackResponse = await input.client
-            .from('output_artifacts')
-            .select(outputArtifactSelect)
-            .eq('draft_id', input.run.draftId)
-            .eq('workflow_id', continuityWorkflowId)
-            .order('created_at', { ascending: false })
-            .limit(20)
-          if (!latestPackResponse.error) {
-            const packRow = (latestPackResponse.data ?? []).find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_continuity_pack') ?? null
-            if (packRow) {
-              const packMetadata = asRecord(asRecord(packRow).metadata)
-              const pack = asRecord(packMetadata.continuityPack ?? packMetadata.continuity_pack)
-              const assetStateByNodeId = {
-                ...asRecord(pack.assetStateByNodeId ?? pack.asset_state_by_node_id),
-                [targetNodeId]: assetState,
-              }
-              const assetGenerationStatus = sequenceAnimaticAssetGenerationStatus(assetStateByNodeId)
-              const nextPack = {
-                ...pack,
-                assetStateByNodeId,
-                asset_state_by_node_id: assetStateByNodeId,
-                assetGenerationStatus,
-                asset_generation_status: assetGenerationStatus,
-                anchorAssets: [
-                  ...readArray(pack.anchorAssets).map(asRecord).filter((entry) => readText(entry.id) !== targetNodeId),
-                  {
-                    ...targetNode,
-                    id: targetNodeId,
-                    anchorType: assetKind === 'temporary_character' ? 'character' : assetKind === 'prop' ? 'prop' : 'location_spot',
-                    type: assetKind === 'temporary_character' ? 'character' : assetKind === 'prop' ? 'prop' : 'location_spot',
-                    assetKey,
-                    artifactKey: artifact.key,
-                    prompt,
-                    referenceAssetKeys,
-                  },
-                ].filter((entry) => readText(entry.assetKey)),
-              }
-              await input.client
-                .from('output_artifacts')
-                .update({
-                  metadata: {
-                    ...packMetadata,
-                    continuityPack: nextPack,
-                    continuity_pack: nextPack,
-                    assetStateByNodeId,
-                    asset_state_by_node_id: assetStateByNodeId,
-                    assetGenerationStatus,
-                    asset_generation_status: assetGenerationStatus,
-                    anchorAssets: nextPack.anchorAssets,
-                  },
-                })
-                .eq('id', readText(asRecord(packRow).id))
-            }
-          }
-        }
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey,
-          artifact,
-          artifacts: [artifact],
-          reference: {
-            status: assetKey ? 'ready' : 'missing',
-            assetKey: assetKey || null,
-            artifactKey: artifact.key,
-            role: referenceRole,
-            sourceArtifactRole: 'sequence_animatic_continuity_asset',
-            identityKey: 'targetNodeId',
-            identityValue: targetNodeId,
-            sourceSceneGraphNodeId: targetNodeId,
-            globalAssetStatus: assetKey ? readText(image.globalAssetStatus ?? image.global_asset_status) || 'generated' : 'missing',
-          },
-          continuityAsset: {
-            targetNodeId,
-            assetKind,
-            assetState,
-            image,
-          },
-          continuity_asset: {
-            targetNodeId,
-            assetKind,
-            assetState,
-            image,
-          },
-          assetState,
-          asset_state: assetState,
-          assetStateByNodeId: { [targetNodeId]: assetState },
-          asset_state_by_node_id: { [targetNodeId]: assetState },
-          targetNode,
-          target_node: targetNode,
-          image,
-          keyframe: image,
-          primaryReferenceImage: image,
-          globalAssetStatus: assetKey ? readText(image.globalAssetStatus ?? image.global_asset_status) || 'generated' : 'missing',
-          global_asset_status: assetKey ? readText(image.globalAssetStatus ?? image.global_asset_status) || 'generated' : 'missing',
-          prompt,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-asset-artifact-v1' }
-      }
       if (purpose === 'sequence_animatic_continuity_batch_artifact') {
         const config = asRecord(input.node.config)
         const batch = readFirstUpstreamRecord(input.upstream, ['batch'])
@@ -29649,969 +22982,6 @@ async function executeNode(input: {
           authoringReady: true,
         }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-continuity-batch-artifact-v1' }
-      }
-      if (isSequenceAnimaticSceneBoardWorkflowPurpose(purpose) && purpose === 'sequence_animatic_coverage_intent_input') {
-        const config = asRecord(input.node.config)
-        const intentBatch = asRecord(config.intentBatch ?? config.intent_batch)
-        const shots = readArray(config.shots).map(asRecord)
-        const assetPack = asRecord(config.assetPack ?? config.asset_pack)
-        const outputs = {
-          intentBatch,
-          intent_batch: intentBatch,
-          shots,
-          assetPack,
-          asset_pack: assetPack,
-          shotIds: readStringArray(intentBatch.shotIds ?? intentBatch.shot_ids),
-          shot_ids: readStringArray(intentBatch.shotIds ?? intentBatch.shot_ids),
-          text: JSON.stringify({
-            sceneId: readText(intentBatch.sceneId),
-            setId: readText(intentBatch.setId),
-            zoneId: readText(intentBatch.zoneId),
-            shotIds: readStringArray(intentBatch.shotIds ?? intentBatch.shot_ids),
-          }, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-coverage-intent-input-v1' }
-      }
-      if (purpose === 'sequence_animatic_coverage_intent_plan') {
-        const config = asRecord(input.node.config)
-        const intentBatch = readFirstUpstreamRecord(input.upstream, ['intentBatch', 'intent_batch'])
-        const batchRecord = Object.keys(intentBatch).length > 0 ? intentBatch : asRecord(config.intentBatch ?? config.intent_batch)
-        const upstreamShots = readFirstUpstreamArray(input.upstream, ['shots']).map(asRecord)
-        const shots = upstreamShots.length > 0 ? upstreamShots : readArray(config.shots).map(asRecord)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const pack = Object.keys(assetPack).length > 0 ? assetPack : asRecord(config.assetPack ?? config.asset_pack)
-        const shotById = new Map(shots.map((shot) => [readText(shot.id), shot] as const).filter(([shotId]) => Boolean(shotId)))
-        const fallbackIntents = readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids).map((shotId) => {
-          const shot = shotById.get(shotId) ?? {}
-          const camera = asRecord(shot.camera)
-          const cameraFraming = readText(camera.framing) || readText(shot.framing) || 'shot-appropriate framing'
-          const cameraAngle = [readText(camera.angle), readText(camera.lens), readText(camera.movement)].filter(Boolean).join('; ')
-          const screenDirection = readText(camera.screenDirectionRule ?? camera.screen_direction_rule)
-            || readText(shot.screenDirection ?? shot.screen_direction)
-          const action = readText(shot.action) || readText(shot.description) || readText(shot.title)
-          return {
-            shotId,
-            cameraFraming,
-            cameraAngle,
-            screenDirection,
-            subjectFocus: readText(shot.subjectFocus ?? shot.subject_focus) || readStringArray(asRecord(shot.refs).visibleCharacterRefIds ?? asRecord(shot.refs).visible_character_ref_ids)[0] || 'primary story subject',
-            stagingBrief: readText(shot.stagingBrief ?? shot.staging_brief) || action,
-            coverageIntent: [
-              `Create a coverage direction for ${readText(shot.title) || shotId}.`,
-              cameraFraming ? `Framing: ${cameraFraming}.` : '',
-              cameraAngle ? `Angle/lens/movement: ${cameraAngle}.` : '',
-              screenDirection ? `Screen direction: ${screenDirection}.` : '',
-              action ? `Stage around: ${action}.` : '',
-            ].filter(Boolean).join(' '),
-          }
-        }).filter((intent) => intent.shotId)
-        const fallback = sequenceAnimaticCoverageIntentBatchSchema.parse({
-          intents: fallbackIntents.length > 0 ? fallbackIntents : [{
-            shotId: 'shot',
-            cameraFraming: 'wide',
-            coverageIntent: 'Create a clear coverage direction from the shot camera facts and spatial binding.',
-          }],
-          diagnostics: ['Deterministic coverage intent fallback.'],
-        })
-        const planningPrompt = [
-          'Plan shot coverage directions for a fresh Scene Board zone before image generation.',
-          'Return one compact JSON intent per shot. Do not create coverage setup ids, image prompts, captions, labels, or storyboard text.',
-          'Each intent should preserve camera/framing, subject focus, screen direction, staging, and the specific coverage purpose for this shot.',
-          'Use existing formal camera facts first. If a shot is sparse, infer a conservative cinematic coverage direction from title, action, dialogue, and spatial binding.',
-          '',
-          'Board scope',
-          JSON.stringify({
-            sceneId: readText(batchRecord.sceneId),
-            setId: readText(batchRecord.setId),
-            zoneId: readText(batchRecord.zoneId),
-            shotIds: readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids),
-            sceneGraphOverrides: readArray(batchRecord.sceneGraphOverrides ?? batchRecord.scene_graph_overrides).map(asRecord),
-            referenceAssetKeys: readStringArray(batchRecord.referenceAssetKeys ?? batchRecord.reference_asset_keys),
-          }, null, 2),
-          '',
-          'Shots',
-          JSON.stringify(shots.map((shot) => ({
-            id: readText(shot.id),
-            title: readText(shot.title),
-            action: readText(shot.action) || readText(shot.description),
-            camera: asRecord(shot.camera),
-            lighting: readText(shot.lighting),
-            dialogue: readArray(shot.dialogue).map(asRecord).slice(0, 5),
-            performance: readArray(shot.performance ?? shot.performanceBeats ?? shot.performance_beats).map(asRecord).slice(0, 5),
-            refs: asRecord(shot.refs),
-            sceneBinding: asRecord(shot.sceneBinding ?? shot.scene_binding ?? shot.shotBinding ?? shot.shot_binding),
-          })), null, 2),
-          '',
-          'Location references',
-          JSON.stringify(readArray(pack.entities).map(asRecord).map((entity) => ({
-            name: readText(entity.name ?? entity.title ?? entity.label),
-            role: readText(entity.role),
-            summary: readText(entity.summary ?? entity.visualDescription ?? entity.visual_description),
-          })).slice(0, 16), null, 2),
-        ].filter(Boolean).join('\n')
-        const result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: 'sequence_animatic_coverage_intent_batch',
-          schema: sequenceAnimaticCoverageIntentBatchSchema,
-          instructions: 'Return strict JSON only. Produce coverage direction records keyed by shot id; never invent workflow ids or reusable coverage setup ids.',
-          prompt: planningPrompt,
-          fallback,
-          maxOutputTokens: 5200,
-        })
-        const requestedShotIds = new Set(readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids))
-        const intents = result.value.intents
-          .map((intent) => ({
-            ...intent,
-            shotId: readText(intent.shotId),
-            cameraFraming: readText(intent.cameraFraming),
-            cameraAngle: readText(intent.cameraAngle),
-            screenDirection: readText(intent.screenDirection),
-            subjectFocus: readText(intent.subjectFocus),
-            stagingBrief: readText(intent.stagingBrief),
-            coverageIntent: readText(intent.coverageIntent),
-          }))
-          .filter((intent) => intent.shotId && requestedShotIds.has(intent.shotId))
-        const normalized = sequenceAnimaticCoverageIntentBatchSchema.parse({
-          ...result.value,
-          intents: intents.length > 0 ? intents : fallback.intents,
-        })
-        const outputs = {
-          coverageIntents: normalized.intents,
-          coverage_intents: normalized.intents,
-          coverageIntentBatch: normalized,
-          coverage_intent_batch: normalized,
-          intentBatch: batchRecord,
-          intent_batch: batchRecord,
-          shots,
-          assetPack: pack,
-          asset_pack: pack,
-          text: JSON.stringify(normalized, null, 2),
-          prompt: planningPrompt,
-          fallbackUsed: result.fallbackUsed,
-          fallbackReason: result.fallbackReason,
-          deterministic: result.fallbackUsed,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model }
-      }
-      if (purpose === 'sequence_animatic_coverage_intent_artifact') {
-        const config = asRecord(input.node.config)
-        const intentBatch = readFirstUpstreamRecord(input.upstream, ['intentBatch', 'intent_batch'])
-        const batchRecord = Object.keys(intentBatch).length > 0 ? intentBatch : asRecord(config.intentBatch ?? config.intent_batch)
-        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
-        const intents = readFirstUpstreamArray(input.upstream, ['coverageIntents', 'coverage_intents']).map(asRecord)
-        const batchId = readText(batchRecord.id ?? batchRecord.batchId) || readText(config.coverageIntentBatchId)
-        if (!batchId) throw new Error('Coverage intent artifact requires a batch id.')
-        const now = new Date().toISOString()
-        const masterRequestId = readText(config.masterRequestId)
-        const sourceHash = readText(batchRecord.sourceHash ?? config.sourceHash)
-        const coverageIntentByShotId = Object.fromEntries(intents.map((intent) => {
-          const shotId = readText(intent.shotId)
-          return [shotId, {
-            shotId,
-            sceneId: readText(batchRecord.sceneId ?? config.sceneId),
-            setId: readText(batchRecord.setId ?? config.setId),
-            zoneId: readText(batchRecord.zoneId ?? config.zoneId),
-            primarySpotId: readText(intent.primarySpotId ?? intent.primary_spot_id),
-            coverageIntent: readText(intent.coverageIntent ?? intent.coverage_intent),
-            cameraFraming: readText(intent.cameraFraming ?? intent.camera_framing),
-            cameraAngle: readText(intent.cameraAngle ?? intent.camera_angle),
-            screenDirection: readText(intent.screenDirection ?? intent.screen_direction),
-            subjectFocus: readText(intent.subjectFocus ?? intent.subject_focus),
-            stagingBrief: readText(intent.stagingBrief ?? intent.staging_brief),
-            sourceHash,
-            updatedAt: now,
-            workflowRequestId: input.run.requestId,
-          }]
-        }).filter(([shotId]) => Boolean(shotId)))
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(batchId)}.sequence-animatic-coverage-intent-batch`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${readText(batchRecord.title) || titleFromRefLike(batchId)} Coverage Directions`,
-          summary: 'Shot coverage directions planned for a Scene Board zone before zone camera grid generation.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-coverage-intent-artifact-v1',
-            role: 'sequence_animatic_coverage_intent_batch',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            sequenceAnimaticRole: 'coverage_intent_batch',
-            screenplayAnimaticRole: 'coverage_intent_batch',
-            masterRequestId,
-            sceneId: readText(batchRecord.sceneId ?? config.sceneId),
-            setId: readText(batchRecord.setId ?? config.setId),
-            zoneId: readText(batchRecord.zoneId ?? config.zoneId),
-            shotIds: readStringArray(batchRecord.shotIds ?? batchRecord.shot_ids),
-            sourceHash,
-            intentBatch: batchRecord,
-            intent_batch: batchRecord,
-            prompt,
-            coverageIntentByShotId,
-            coverage_intent_by_shot_id: coverageIntentByShotId,
-            coverageIntents: Object.values(coverageIntentByShotId),
-            coverage_intents: Object.values(coverageIntentByShotId),
-          },
-        })
-        if (masterRequestId) {
-          const masterResponse = await input.client
-            .from('output_requests')
-            .select('metadata')
-            .eq('id', masterRequestId)
-            .maybeSingle()
-          if (!masterResponse.error && masterResponse.data) {
-            const masterMetadata = asRecord(asRecord(masterResponse.data).metadata)
-            const previousRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
-            const previousCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticCoverageRegistry ?? masterMetadata.sequence_animatic_coverage_registry)
-            const previousIntents = {
-              ...asRecord(previousCoverageRegistry.coverageIntentByShotId ?? previousCoverageRegistry.coverage_intent_by_shot_id),
-              ...asRecord(previousRegistry.coverageIntentByShotId ?? previousRegistry.coverage_intent_by_shot_id),
-            }
-            const nextIntents = { ...previousIntents, ...coverageIntentByShotId }
-            const registry = {
-              ...previousRegistry,
-              role: 'sequence_animatic_zone_coverage_registry',
-              contractVersion: readText(previousRegistry.contractVersion) || 'zone_camera_coverage_grid_registry_v1',
-              sourceMasterRequestId: masterRequestId,
-              revision: (Number(previousRegistry.revision ?? 0) || 0) + 1,
-              coverageIntentByShotId: nextIntents,
-              coverage_intent_by_shot_id: nextIntents,
-              updatedAt: now,
-              updatedByCoverageIntentBatchId: batchId,
-            }
-            const coverageRegistry = {
-              ...previousCoverageRegistry,
-              coverageIntentByShotId: nextIntents,
-              coverage_intent_by_shot_id: nextIntents,
-              updatedAt: now,
-              updatedByCoverageIntentBatchId: batchId,
-            }
-            const updateResponse = await input.client
-              .from('output_requests')
-              .update({
-                metadata: {
-                  ...masterMetadata,
-                  sequenceAnimaticZoneCoverageRegistry: registry,
-                  sequence_animatic_zone_coverage_registry: registry,
-                  sequenceAnimaticCoverageRegistry: coverageRegistry,
-                  sequence_animatic_coverage_registry: coverageRegistry,
-                },
-              })
-              .eq('id', masterRequestId)
-            if (updateResponse.error) throw new Error(updateResponse.error.message)
-          }
-        }
-        await insertSequenceAnimaticEvent({
-          client: input.client,
-          projectId: input.run.projectId,
-          draftId: input.run.draftId,
-          requestId: masterRequestId,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          eventType: 'coverage_intent_batch_ready',
-          payload: {
-            batchId,
-            artifactKey: artifact.key,
-            shotIds: Object.keys(coverageIntentByShotId),
-          },
-          metadata: { source: 'sequence_animatic_coverage_intent_workflow' },
-          dedupe: { batchId },
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          artifact,
-          artifacts: [artifact],
-          coverageIntentByShotId,
-          coverage_intent_by_shot_id: coverageIntentByShotId,
-          coverageIntents: Object.values(coverageIntentByShotId),
-          coverage_intents: Object.values(coverageIntentByShotId),
-          intentBatch: batchRecord,
-          intent_batch: batchRecord,
-          prompt,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-coverage-intent-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_zone_coverage_board_artifact') {
-        const config = asRecord(input.node.config)
-        const board = readFirstUpstreamRecord(input.upstream, ['board', 'zoneCoverageBoard', 'zone_coverage_board'])
-        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
-        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
-        const upstreamCellSets = Object.entries(input.upstream)
-          .map(([key, outputs]) => ({
-            key,
-            cells: readFirstUpstreamArray({ [key]: outputs }, ['cells', 'coverageCells', 'coverage_cells']).map(asRecord),
-          }))
-          .filter((entry) => entry.cells.length > 0)
-        const extractedCellSet = upstreamCellSets.find((entry) =>
-          entry.key.includes('extract') && entry.cells.some((cell) => readText(cell.assetKey ?? cell.asset_key)),
-        )
-        const assetBackedCellSet = upstreamCellSets.find((entry) =>
-          entry.cells.some((cell) => readText(cell.assetKey ?? cell.asset_key)),
-        )
-        const cells = (extractedCellSet ?? assetBackedCellSet ?? upstreamCellSets[0] ?? { cells: [] }).cells.map(asRecord)
-        const boardId = readText(board.id) || readText(config.boardId)
-        if (!boardId) throw new Error('Zone camera grid artifact requires a board id.')
-        const boardAssetKey = readText(image.assetKey)
-        if (!boardAssetKey) throw new Error('Zone camera grid image did not produce an asset key.')
-        const cellAssetKeysByShotId = Object.fromEntries(cells
-          .map((cell) => [readText(cell.shotId), readText(cell.assetKey)] as const)
-          .filter(([shotId, assetKey]) => shotId && assetKey))
-        const coverageCellByShotId = Object.fromEntries(cells
-          .map((cell) => [readText(cell.shotId), cell] as const)
-          .filter(([shotId]) => Boolean(shotId)))
-        const now = new Date().toISOString()
-        const boardRecord = {
-          ...board,
-          id: boardId,
-          boardId,
-          boardAssetKey,
-          image,
-          cellAssetKeysByShotId,
-          cell_asset_keys_by_shot_id: cellAssetKeysByShotId,
-          coverageCellByShotId,
-          coverage_cell_by_shot_id: coverageCellByShotId,
-          cells,
-          generatedAt: now,
-          status: 'ready',
-        }
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(boardId)}.sequence-animatic-zone-coverage-board`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${readText(board.title) || titleFromRefLike(boardId)} Zone Camera Grid`,
-          summary: 'Scene-level 3x3 location-only camera grid whose cells feed shot coverage anchors.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-zone-coverage-board-artifact-v1',
-            role: 'sequence_animatic_zone_coverage_board',
-            zoneCoverageGridMode: readText(config.zoneCoverageGridMode ?? config.zone_coverage_grid_mode) || 'location_camera_plate_v2',
-            coverageAnchorSource: readText(config.coverageAnchorSource ?? config.coverage_anchor_source) || 'zone_camera_grid_cell',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            sequenceAnimaticRole: 'zone_coverage_board',
-            screenplayAnimaticRole: 'zone_coverage_board',
-            masterRequestId: readText(config.masterRequestId),
-            sceneId: readText(board.sceneId ?? config.sceneId),
-            setId: readText(board.setId ?? config.setId),
-            zoneId: readText(board.zoneId ?? config.zoneId),
-            chunkIndex: Number(board.chunkIndex ?? config.chunkIndex ?? 0) || 0,
-            shotIds: readStringArray(board.shotIds),
-            sourceHash: readText(board.sourceHash ?? config.sourceHash),
-            previousBoardAssetKey: readText(board.previousBoardAssetKey ?? config.previousBoardAssetKey),
-            board: boardRecord,
-            prompt,
-            image,
-            boardAssetKey,
-            cells,
-            cellAssetKeysByShotId,
-            coverageCellByShotId,
-          },
-        })
-        const masterRequestId = readText(config.masterRequestId)
-        if (masterRequestId) {
-          const masterResponse = await input.client
-            .from('output_requests')
-            .select('metadata')
-            .eq('id', masterRequestId)
-            .maybeSingle()
-          if (!masterResponse.error && masterResponse.data) {
-            const masterMetadata = asRecord(asRecord(masterResponse.data).metadata)
-            const previousRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
-            const previousBoards = readArray(previousRegistry.zoneCoverageBoards ?? previousRegistry.zone_coverage_boards).map(asRecord)
-            const nextBoards = [
-              ...previousBoards.filter((entry) => readText(entry.id ?? entry.boardId) !== boardId),
-              { ...boardRecord, artifactKey: artifact.key },
-            ]
-            const previousCellsByShot = asRecord(previousRegistry.coverageCellByShotId ?? previousRegistry.coverage_cell_by_shot_id)
-            const nextCoverageCellByShotId = {
-              ...previousCellsByShot,
-              ...Object.fromEntries(Object.entries(coverageCellByShotId).map(([shotId, value]) => [shotId, { ...asRecord(value), boardId, artifactKey: artifact.key }])),
-            }
-            const registry = {
-              role: 'sequence_animatic_zone_coverage_registry',
-              contractVersion: 'zone_camera_coverage_grid_registry_v1',
-              sourceMasterRequestId: masterRequestId,
-              revision: (Number(previousRegistry.revision ?? 0) || 0) + 1,
-              zoneCoverageBoards: nextBoards,
-              zone_coverage_boards: nextBoards,
-              coverageCellByShotId: nextCoverageCellByShotId,
-              coverage_cell_by_shot_id: nextCoverageCellByShotId,
-              updatedAt: now,
-              updatedByBoardId: boardId,
-            }
-            const updateResponse = await input.client
-              .from('output_requests')
-              .update({
-                metadata: {
-                  ...masterMetadata,
-                  sequenceAnimaticZoneCoverageRegistry: registry,
-                  sequence_animatic_zone_coverage_registry: registry,
-                },
-              })
-              .eq('id', masterRequestId)
-            if (updateResponse.error) throw new Error(updateResponse.error.message)
-          }
-        }
-        await insertSequenceAnimaticEvent({
-          client: input.client,
-          projectId: input.run.projectId,
-          draftId: input.run.draftId,
-          requestId: masterRequestId,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          eventType: 'zone_coverage_board_ready',
-          payload: {
-            boardId,
-            boardAssetKey,
-            artifactKey: artifact.key,
-            shotIds: readStringArray(board.shotIds),
-            cellAssetKeysByShotId,
-          },
-          metadata: { source: 'sequence_animatic_zone_coverage_board_workflow' },
-          dedupe: { boardId },
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey: boardAssetKey,
-          artifact,
-          artifacts: [artifact],
-          board: boardRecord,
-          zoneCoverageBoard: boardRecord,
-          zone_coverage_board: boardRecord,
-          cells,
-          coverageCells: cells,
-          coverage_cells: cells,
-          cellAssetKeysByShotId,
-          cell_asset_keys_by_shot_id: cellAssetKeysByShotId,
-          coverageCellByShotId,
-          coverage_cell_by_shot_id: coverageCellByShotId,
-          image,
-          keyframe: image,
-          primaryReferenceImage: image,
-          prompt,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-zone-coverage-board-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_coverage_anchor_artifact') {
-        const config = asRecord(input.node.config)
-        const coverageSetup = readFirstUpstreamRecord(input.upstream, ['coverageSetup', 'coverage_setup'])
-        const image = readFirstUpstreamImage(input.upstream, ['image']) ?? {}
-        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
-        const coverageAnchorScopeKey = readText(config.coverageAnchorScopeKey)
-        const coverageSetupId = readText(coverageSetup.id) || readText(config.coverageSetupId)
-        const coverageIdentityValue = coverageAnchorScopeKey || coverageSetupId
-        if (!coverageIdentityValue) throw new Error('Coverage anchor artifact requires a coverage scope key or setup id.')
-        const coverageAnchorScope = readText(config.coverageAnchorScope)
-        const assetKey = readText(image.assetKey)
-        if (!assetKey) throw new Error('Coverage anchor image did not produce an asset key.')
-        const qcFindings = assetKey ? [] : ['Coverage anchor image did not produce an asset key.']
-        const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
-        const anchor = {
-          graphSpecVersion: 'sequence_animatic_graph_v2',
-          screenplayAnimaticRole: 'coverage_anchor',
-          sequenceAnimaticRole: 'coverage_anchor',
-          coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-          coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-          masterRequestId: readText(config.masterRequestId),
-          coverageSetupId,
-          coverageAnchorScopeKey,
-          coverageAnchorScope,
-          coverageSetup,
-          coverage_setup: coverageSetup,
-          shotIds: readStringArray(config.shotIds).length > 0 ? readStringArray(config.shotIds) : readStringArray(coverageSetup.shotIds),
-          storyboardBlockIds: readStringArray(config.storyboardBlockIds).length > 0 ? readStringArray(config.storyboardBlockIds) : readStringArray(coverageSetup.blockIds ?? coverageSetup.storyboardBlockIds),
-          assetKey,
-          image,
-          prompt,
-          qcStatus,
-          qcFindings,
-          status: assetKey ? 'ready' : 'failed',
-          generatedAt: new Date().toISOString(),
-        }
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(coverageIdentityValue)}.sequence-animatic-coverage-anchor`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${readText(coverageSetup.title) || titleFromRefLike(coverageIdentityValue)} Coverage Anchor`,
-          summary: 'Reusable visual keyframe anchor for a sequence animatic coverage setup.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-coverage-anchor-artifact-v1',
-            role: 'sequence_animatic_coverage_anchor',
-            coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-            coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            sequenceAnimaticRole: 'coverage_anchor',
-            screenplayAnimaticRole: 'coverage_anchor',
-            masterRequestId: anchor.masterRequestId,
-            coverageSetupId,
-            coverageAnchorScopeKey,
-            coverageAnchorScope,
-            coverageSetup,
-            coverage_setup: coverageSetup,
-            shotIds: anchor.shotIds,
-            storyboardBlockIds: anchor.storyboardBlockIds,
-            assetKey,
-            requiredReferenceAssetKeys: readStringArray(config.requiredReferenceAssetKeys),
-            omittedReferenceAssetKeys: readStringArray(config.omittedReferenceAssetKeys),
-            sourceReferenceHash: readText(config.sourceReferenceHash),
-            visualPlanHash: readText(config.visualPlanHash),
-            coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-            coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-            qcStatus,
-            qcFindings,
-            prompt,
-            image,
-            anchor,
-          },
-        })
-        await insertSequenceAnimaticEvent({
-          client: input.client,
-          projectId: input.run.projectId,
-          draftId: input.run.draftId,
-          requestId: anchor.masterRequestId,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          eventType: assetKey ? 'coverage_anchor_ready' : 'coverage_anchor_failed',
-          payload: {
-            coverageSetupId,
-            coverageAnchorScopeKey,
-            coverageAnchorScope,
-            assetKey,
-            artifactKey: artifact.key,
-            status: anchor.status,
-            shotIds: anchor.shotIds,
-          },
-          metadata: { source: 'sequence_animatic_keyframe_workflow' },
-          dedupe: { coverageSetupId: coverageSetupId || null, coverageAnchorScopeKey: coverageAnchorScopeKey || null },
-        })
-        const identityKey = coverageAnchorScopeKey ? 'coverageAnchorScopeKey' : 'coverageSetupId'
-        const identityValue = coverageIdentityValue
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey,
-          artifact,
-          artifacts: [artifact],
-          reference: {
-            status: assetKey ? 'ready' : 'missing',
-            assetKey: assetKey || null,
-            artifactKey: artifact.key,
-            role: 'coverage_anchor',
-            sourceArtifactRole: 'sequence_animatic_coverage_anchor',
-            identityKey,
-            identityValue,
-            coverageSetupId,
-            coverageAnchorScopeKey,
-            coverageAnchorScope,
-            globalAssetStatus: assetKey ? readText(image.globalAssetStatus ?? image.global_asset_status) || 'generated' : 'missing',
-          },
-          coverageAnchor: anchor,
-          coverage_anchor: anchor,
-          coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-          coverage_anchor_mode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-          coverageSetup,
-          coverage_setup: coverageSetup,
-          image,
-          keyframe: image,
-          primaryReferenceImage: image,
-          globalAssetStatus: assetKey ? readText(image.globalAssetStatus ?? image.global_asset_status) || 'generated' : 'missing',
-          global_asset_status: assetKey ? readText(image.globalAssetStatus ?? image.global_asset_status) || 'generated' : 'missing',
-          prompt,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-coverage-anchor-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_planned_keyframe_artifact') {
-        const config = asRecord(input.node.config)
-        const shot = readFirstUpstreamRecord(input.upstream, ['shot'])
-        const image = readPreferredUpstreamImage({
-          upstream: input.upstream,
-          preferredNodeKeys: ['planned_keyframe_image', 'shot_keyframe_image'],
-          fields: ['image', 'keyframe', 'primaryReferenceImage'],
-          role: 'sequence_animatic_shot_keyframe',
-        }) ?? {}
-        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
-        const shotId = readText(shot.id) || readText(config.shotId)
-        if (!shotId) throw new Error('Shot keyframe artifact requires a shot id.')
-        const assetKey = readText(image.assetKey)
-        if (!assetKey) throw new Error('Shot keyframe image did not produce an asset key.')
-        const qcFindings = assetKey ? [] : ['Shot keyframe image did not produce an asset key.']
-        const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
-        const keyframe = {
-          graphSpecVersion: 'sequence_animatic_graph_v2',
-          screenplayAnimaticRole: 'shot_keyframe',
-          sequenceAnimaticRole: 'shot_keyframe',
-          masterRequestId: readText(config.masterRequestId),
-          storyboardBlockId: readText(config.storyboardBlockId),
-          shotId,
-          coverageSetupId: readText(config.coverageSetupId),
-          assetKey,
-          image,
-          prompt,
-          qcStatus,
-          qcFindings,
-          status: assetKey ? 'ready' : 'failed',
-          generatedAt: new Date().toISOString(),
-        }
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(shotId)}.sequence-animatic-shot-keyframe`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${readText(shot.title) || titleFromRefLike(shotId)} Keyframe`,
-          summary: 'Final shot keyframe generated from the animatic shot plan, coverage anchor, and shot-scoped references.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-shot-keyframe-artifact-v1',
-            role: 'sequence_animatic_shot_keyframe',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            sequenceAnimaticRole: 'shot_keyframe',
-            screenplayAnimaticRole: 'shot_keyframe',
-            masterRequestId: keyframe.masterRequestId,
-            storyboardBlockId: keyframe.storyboardBlockId,
-            shotId,
-            coverageSetupId: keyframe.coverageSetupId,
-            assetKey,
-            requiredReferenceAssetKeys: readStringArray(config.requiredReferenceAssetKeys),
-            omittedReferenceAssetKeys: readStringArray(config.omittedReferenceAssetKeys),
-            sourceReferenceHash: readText(config.sourceReferenceHash),
-            visualPlanHash: readText(config.visualPlanHash),
-            qcStatus,
-            qcFindings,
-            prompt,
-            image,
-            shot,
-            keyframe,
-          },
-        })
-        await insertSequenceAnimaticEvent({
-          client: input.client,
-          projectId: input.run.projectId,
-          draftId: input.run.draftId,
-          requestId: keyframe.masterRequestId,
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          eventType: assetKey ? 'shot_keyframe_ready' : 'shot_keyframe_failed',
-          payload: {
-            shotId,
-            storyboardBlockId: keyframe.storyboardBlockId,
-            coverageSetupId: keyframe.coverageSetupId,
-            assetKey,
-            artifactKey: artifact.key,
-            status: keyframe.status,
-          },
-          metadata: { source: 'sequence_animatic_keyframe_workflow' },
-          dedupe: { shotId },
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey,
-          artifact,
-          artifacts: [artifact],
-          shotKeyframe: keyframe,
-          shot_keyframe: keyframe,
-          keyframe,
-          image,
-          shot,
-          prompt,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-shot-keyframe-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_shot_video_artifact') {
-        const config = asRecord(input.node.config)
-        const video = readUpstreamVideos(input.upstream, ['video', 'videos'])[0] ?? {}
-        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text', 'providerPrompt'])
-        const keyframe = readFirstUpstreamImage(input.upstream, ['keyframe', 'image', 'primaryReferenceImage'])
-        const shotId = readText(config.shotId)
-        if (!shotId) throw new Error('Shot video artifact requires a shot id.')
-        const assetKey = readText(video.assetKey)
-        if (!assetKey) {
-          const outputs = {
-            video,
-            prompt,
-            keyframe,
-            assetKey: '',
-            skipped: true,
-            skippedReason: readText(video.skippedReason) || 'shot_video_missing_asset',
-            authoringReady: false,
-          }
-          return {
-            status: 'skipped',
-            inputHash: input.inputHash,
-            outputHash: hashOutputWorkflowValue(outputs),
-            outputs,
-            provider: 'graphcore',
-            model: 'sequence-animatic-shot-video-artifact-skip-v1',
-          }
-        }
-        const storagePath = readText(video.storagePath) || readText(video.storage_path)
-        if (!storagePath) throw new Error('Shot video artifact requires a storage path.')
-        const mimeType = readText(video.mimeType) || readText(video.mime_type) || 'video/mp4'
-        const artifact = await registerVideoArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          assetKey,
-          storagePath,
-          mimeType,
-          name: `${titleFromRefLike(readText(config.shotId))} Video`,
-          summary: 'Generated per-shot sequence animatic video.',
-          metadata: {
-            ...asRecord(video.metadata),
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: readText(video.provider),
-            model: readText(video.model),
-            providerRequestId: readText(video.providerRequestId),
-            role: 'sequence_animatic_shot_video',
-            graphSpecVersion: 'sequence_animatic_graph_v2',
-            sequenceAnimaticRole: 'shot_production',
-            screenplayAnimaticRole: 'shot_production',
-            masterRequestId: readText(config.masterRequestId),
-            storyboardBlockId: readText(config.storyboardBlockId),
-            shotId,
-            coverageSetupId: readText(config.coverageSetupId),
-            assetKey,
-            storagePath,
-            prompt,
-            keyframe,
-          },
-        })
-        await insertSequenceAnimaticEvent({
-          client: input.client,
-          projectId: input.run.projectId,
-          draftId: input.run.draftId,
-          requestId: readText(config.masterRequestId),
-          workflowId: input.workflow.id,
-          runId: input.run.id,
-          eventType: 'shot_video_ready',
-          payload: {
-            shotId,
-            storyboardBlockId: readText(config.storyboardBlockId),
-            coverageSetupId: readText(config.coverageSetupId),
-            assetKey,
-            artifactKey: artifact.key,
-            status: 'ready',
-          },
-          metadata: { source: 'sequence_animatic_shot_production_workflow' },
-          dedupe: { shotId, assetKey },
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey,
-          artifact,
-          artifacts: [artifact],
-          video: {
-            ...video,
-            assetKey,
-            storagePath,
-            mimeType,
-            role: 'sequence_animatic_shot_video',
-          },
-          keyframe,
-          prompt,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-shot-video-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_shot_revision_artifact') {
-        const config = asRecord(input.node.config)
-        const revisedShot = cinematicV2ShotSchema.parse(readFirstUpstreamRecord(input.upstream, ['revisedShot', 'revised_shot', 'shot']))
-        const revisionPlan = readFirstUpstreamRecord(input.upstream, ['revisionPlan', 'revision_plan'])
-        const keyframe = readFirstUpstreamRecord(input.upstream, ['keyframe', 'image'])
-        const keyframeAssetKey = readText(keyframe.assetKey)
-        const revisionId = readText(config.revisionId) || `shot_revision_${slugify(readText(config.shotId))}_${input.run.id.slice(0, 8)}`
-        const revisionPrompt = readText(config.revisionPrompt) || readText(input.run.prompt)
-        const sourceManifestHash = readText(config.manifestHash) || readText(asRecord(input.workflow.metadata).manifestHash)
-        const basePanelAssetKey = readText(config.basePanelAssetKey) || readText(asRecord(input.workflow.metadata).basePanelAssetKey)
-        const diagnostics = [
-          ...readStringArray(revisionPlan.diagnostics),
-          ...(keyframeAssetKey ? [] : ['Shot text was revised, but no replacement keyframe image was generated.']),
-        ]
-        const revision = {
-          graphSpecVersion: 'sequence_animatic_graph_v1',
-          screenplayAnimaticRole: 'shot_revision',
-          sequenceAnimaticRole: 'shot_revision',
-          masterRequestId: readText(config.masterRequestId) || readText(asRecord(input.workflow.metadata).masterRequestId),
-          parentRequestId: readText(config.parentRequestId) || readText(asRecord(input.workflow.metadata).parentRequestId),
-          storyboardBlockId: readText(config.storyboardBlockId),
-          shotId: readText(config.shotId),
-          revisionId,
-          sourceManifestHash,
-          manifestHash: sourceManifestHash,
-          blockHash: readText(config.blockHash),
-          shotHash: readText(config.shotHash),
-          continuityPackHash: readText(config.continuityPackHash),
-          masterManifestArtifactKey: readText(config.masterManifestArtifactKey),
-          basePanelAssetKey,
-          revisedShot,
-          keyframeAssetKey,
-          keyframe,
-          prompt: revisionPrompt,
-          changeSummary: readText(revisionPlan.changeSummary),
-          keyframeIntent: readText(revisionPlan.keyframeIntent),
-          diagnostics,
-          revisionHash: hashOutputWorkflowValue({
-            revisedShot,
-            keyframeAssetKey,
-            revisionPrompt,
-            sourceManifestHash,
-          }),
-        }
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-shot-revision`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${input.node.label} Artifact`,
-          summary: 'Sequence animatic output-local single-shot revision.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-shot-revision-artifact-v1',
-            role: 'sequence_animatic_shot_revision',
-            graphSpecVersion: 'sequence_animatic_graph_v1',
-            sequenceAnimaticRole: 'shot_revision',
-            screenplayAnimaticRole: 'shot_revision',
-            masterRequestId: revision.masterRequestId,
-            parentRequestId: revision.parentRequestId,
-            storyboardBlockId: revision.storyboardBlockId,
-            shotId: revision.shotId,
-            revisionId,
-            sourceManifestHash,
-            manifestHash: sourceManifestHash,
-            blockHash: revision.blockHash,
-            shotHash: revision.shotHash,
-            basePanelAssetKey,
-            keyframeAssetKey,
-            prompt: revisionPrompt,
-            revisedShot,
-            keyframe,
-            revision,
-            diagnostics,
-          },
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey: keyframeAssetKey,
-          artifact,
-          artifacts: [artifact],
-          revision,
-          shotRevision: revision,
-          shot_revision: revision,
-          revisedShot,
-          revised_shot: revisedShot,
-          keyframe,
-          image: keyframe,
-          keyframeAssetKey,
-          keyframe_asset_key: keyframeAssetKey,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-shot-revision-artifact-v1' }
-      }
-      if (purpose === 'sequence_animatic_block_artifact') {
-        const config = asRecord(input.node.config)
-        const block = readFirstUpstreamRecord(input.upstream, ['block'])
-        const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
-        const panels = readFirstUpstreamArray(input.upstream, ['panels'])
-        const prompt = readFirstUpstreamText(input.upstream, ['prompt', 'text'])
-        const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.sequence-animatic-block`
-        const artifact = await registerOtherOutputArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          key: artifactKey,
-          name: `${input.node.label} Manifest`,
-          summary: 'Sequence animatic storyboard block manifest with panels and video prompt.',
-          metadata: {
-            generatedBy: 'output_workflow',
-            workflowId: input.workflow.id,
-            workflowKey: input.workflow.key,
-            runId: input.run.id,
-            nodeId: input.node.id,
-            nodeKey: input.node.key,
-            preset: input.run.preset,
-            provider: 'graphcore',
-            model: 'sequence-animatic-block-artifact-v1',
-            role: 'sequence_animatic_block_manifest',
-            sequenceAnimaticRole: 'storyboard_block',
-            parentRequestId: readText(config.parentRequestId) || readText(asRecord(input.workflow.metadata).parentRequestId) || null,
-            sequenceUnitKey: readText(config.sequenceUnitKey) || readText(asRecord(input.workflow.metadata).sequenceUnitKey) || null,
-            storyboardBlockId: readText(config.storyboardBlockId) || readText(block.id) || null,
-            block,
-            shotPlan,
-            panelAssetKeys: panels.map((panel) => readText(asRecord(panel).assetKey)).filter(Boolean),
-            panelCount: panels.length,
-            videoPromptHash: prompt ? hashOutputWorkflowValue(prompt) : '',
-          },
-        })
-        const outputs = {
-          artifactKey: artifact.key,
-          assetKey: '',
-          artifact,
-          artifacts: [artifact],
-          block,
-          shotPlan,
-          panels,
-          videoPrompt: prompt,
-          authoringReady: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'sequence-animatic-block-artifact-v1' }
       }
       if (purpose === 'cinematic_video_artifact') {
         const video = readFirstUpstreamRecord(input.upstream, ['video'])
@@ -30787,16 +23157,1087 @@ async function executeNode(input: {
   }
 }
 
-type OutputWorkflowNodeExecutionContext = Parameters<typeof executeNode>[0]
-type OutputWorkflowNodeExecutionResult = Awaited<ReturnType<typeof executeNode>>
+async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExecutionContext): Promise<OutputWorkflowNodeExecutionResult> {
+      const config = asRecord(input.node.config)
+      const purpose = readText(config.purpose) || 'image_prompt'
+      const role = readText(config.role) || purpose
+      const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
+      const keyframePrompts = readFirstUpstreamArray(input.upstream, ['keyframePrompts', 'keyframe_prompts'])
+      const keyframeIndex = Math.max(0, Math.min(2, Number(config.keyframeIndex ?? 0) || 0))
+      const requiresContinuityPrompt = purpose === 'sequence_animatic_continuity_batch_image'
+        || role === 'sequence_animatic_continuity_batch_image'
+        || purpose === 'sequence_animatic_continuity_asset_image'
+        || role === 'sequence_animatic_continuity_asset_image'
+      const continuityFallbackPrompt = (() => {
+        if (purpose === 'sequence_animatic_continuity_batch_image' || role === 'sequence_animatic_continuity_batch_image') {
+          const batch = asRecord(config.batch)
+          const targetNodes = readArray(config.targetNodes).map(asRecord)
+          if (!Object.keys(batch).length || targetNodes.length === 0) return ''
+          return buildSequenceAnimaticContinuityBatchPrompt({
+            batch,
+            targetNodes,
+            relevantShots: readArray(config.relevantShots).map(asRecord),
+            referenceAssetKeys: readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys),
+          }).prompt
+        }
+        if (purpose === 'sequence_animatic_continuity_asset_image' || role === 'sequence_animatic_continuity_asset_image') {
+          const targetNode = asRecord(config.targetNode ?? config.target_node)
+          if (!Object.keys(targetNode).length) return ''
+          return buildSequenceAnimaticContinuityAssetPrompt({
+            targetNode,
+            assetKind: readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset',
+            generationPolicy: readText(config.generationPolicy),
+            zoneMapPoiLines: readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
+            relevantShots: readArray(config.relevantShots).map(asRecord),
+            referenceAssetKeys: readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys),
+          }).prompt
+        }
+        return ''
+      })()
+      const prompt = (purpose === 'cinematic_keyframe' || role === 'cinematic_keyframe'
+        ? readText(keyframePrompts[keyframeIndex]?.prompt)
+        : '')
+        || readFirstUpstreamText(input.upstream, ['prompt'])
+        || readFirstUpstreamText(input.upstream, ['text'])
+        || readText(input.node.inputs.prompt)
+        || continuityFallbackPrompt
+        || (requiresContinuityPrompt ? '' : input.run.prompt)
+      const skipImageGeneration = config.skipImageGeneration === true
+        || config.skip_image_generation === true
+        || input.node.inputs.skipImageGeneration === true
+        || input.node.inputs.skip_image_generation === true
+      if (skipImageGeneration) {
+        const outputs = {
+          skipped: true,
+          skipImageGeneration: true,
+          skip_image_generation: true,
+          reason: readFirstUpstreamText(input.upstream, ['skipReason', 'skip_reason']) || 'No image generation needed for this node.',
+          role,
+          purpose,
+          image: null,
+          images: [],
+          text: readFirstUpstreamText(input.upstream, ['text']) || '',
+          deterministic: true,
+        }
+        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-image-generation-skip-v1' }
+      }
+      if (!prompt) throw new Error('Image generation node is missing a prompt.')
+      const priorStepOutputs = asRecord(input.priorStep?.outputs)
+      const priorImageOutput = asRecord(priorStepOutputs.image)
+      const priorIsCinematicV2PanelPassthrough = role === 'cinematic_v2_shot_keyframe' && (
+        readText(input.priorStep?.provider) === 'graphcore'
+        || readText(priorImageOutput.generatedBy) === 'deterministic_panel_passthrough'
+        || readText(priorImageOutput.keyframeMode) === 'storyboard_panel_crop'
+      )
+      if (
+        !priorIsCinematicV2PanelPassthrough
+        && outputWorkflowNodeOutputsReusableForCache(input.node, priorStepOutputs)
+        && input.priorStep?.outputHash
+        && hasStoredOutputs(priorImageOutput)
+      ) {
+        return {
+          inputHash: input.priorStep.inputHash || input.inputHash,
+          outputHash: input.priorStep.outputHash,
+          outputs: priorStepOutputs,
+          provider: input.priorStep.provider,
+          model: input.priorStep.model,
+          providerRequestId: input.priorStep.providerRequestId,
+        }
+      }
+      const recoverableArtifact = await loadRecoverableArtifactBackedNodeOutputs({
+        client: input.client,
+        run: input.run,
+        node: input.node,
+      })
+      if (recoverableArtifact) {
+        const outputHash = hashOutputWorkflowValue(recoverableArtifact.outputs)
+        return {
+          inputHash: input.priorStep?.inputHash || input.inputHash,
+          outputHash,
+          outputs: recoverableArtifact.outputs,
+          provider: recoverableArtifact.provider,
+          model: recoverableArtifact.model,
+          providerRequestId: recoverableArtifact.providerRequestId,
+        }
+      }
+      const forceNodeKeys = new Set(readStringArray(asRecord(input.run.metadata).forceNodeKeys))
+      const existingArtifactRole = readText(config.existingArtifactRole)
+      const globalAssetIdentityKey = readText(config.globalAssetIdentityKey)
+      const globalAssetIdentityValue = readText(config.globalAssetIdentityValue)
+      const expectedAssetKey = readText(config.expectedAssetKey) || (globalAssetIdentityKey === 'assetKey' ? globalAssetIdentityValue : '')
+      if (existingArtifactRole && !forceNodeKeys.has(input.node.key)) {
+        let query = input.client
+          .from('output_artifacts')
+          .select(outputArtifactSelect)
+          .eq('project_id', input.run.projectId)
+          .eq('draft_id', input.run.draftId)
+          .contains('metadata', { role: existingArtifactRole })
+          .order('updated_at', { ascending: false })
+          .limit(200)
+        const masterRequestId = readText(config.masterRequestId)
+        if (masterRequestId) query = query.contains('metadata', { masterRequestId })
+        if (globalAssetIdentityKey && globalAssetIdentityValue && globalAssetIdentityKey !== 'assetKey') {
+          query = query.contains('metadata', { [globalAssetIdentityKey]: globalAssetIdentityValue })
+        }
+        if (expectedAssetKey) query = query.eq('asset_key', expectedAssetKey)
+        const response = await query
+        if (response.error) throw new Error(response.error.message)
+        const reusableArtifact = ((response.data ?? []) as OutputArtifactRow[])
+          .map(mapOutputArtifactRow)
+          .find((artifact) => {
+            const metadata = asRecord(artifact.metadata)
+            if (readText(metadata.role) !== existingArtifactRole) return false
+            if (masterRequestId && readText(metadata.masterRequestId) !== masterRequestId) return false
+            if (globalAssetIdentityKey && globalAssetIdentityValue && globalAssetIdentityKey !== 'assetKey' && readText(metadata[globalAssetIdentityKey]) !== globalAssetIdentityValue) return false
+            if (expectedAssetKey && readText(artifact.assetKey) !== expectedAssetKey) return false
+            return true
+          }) ?? null
+        if (reusableArtifact) {
+          const metadata = asRecord(reusableArtifact.metadata)
+          const artifactImage = asRecord(metadata.image)
+          const assetKey = readText(metadata.assetKey) || readText(reusableArtifact.assetKey) || readText(artifactImage.assetKey)
+          if (assetKey) {
+            const storagePath = readText(artifactImage.storagePath) || readText(artifactImage.storage_path) || readText(metadata.storagePath) || readText(metadata.storage_path)
+            const mimeType = readText(artifactImage.mimeType) || readText(artifactImage.mime_type) || readText(reusableArtifact.mimeType)
+            const image = {
+              ...artifactImage,
+              assetKey,
+              storagePath,
+              storage_path: storagePath,
+              mimeType,
+              mime_type: mimeType,
+              artifactKey: reusableArtifact.key,
+              role,
+              sourceArtifactRole: existingArtifactRole,
+              globalAssetStatus: 'ready_existing',
+              global_asset_status: 'ready_existing',
+              globalAssetIdentityKey,
+              globalAssetIdentityValue,
+              metadata,
+            }
+            const outputs = {
+              image,
+              keyframe: image,
+              primaryReferenceImage: image,
+              assetKey,
+              storagePath,
+              mimeType,
+              prompt,
+              providerPrompt: prompt,
+              role,
+              purpose,
+              artifact: reusableArtifact,
+              globalAssetStatus: 'ready_existing',
+              global_asset_status: 'ready_existing',
+              skipImageGeneration: true,
+              skip_image_generation: true,
+              reference: {
+                status: 'ready',
+                assetKey,
+                artifactKey: reusableArtifact.key,
+                role: readText(config.globalAssetRole) || readText(metadata.sequenceAnimaticRole) || readText(metadata.screenplayAnimaticRole) || role,
+                sourceArtifactRole: existingArtifactRole,
+                identityKey: globalAssetIdentityKey,
+                identityValue: globalAssetIdentityValue,
+              },
+              text: JSON.stringify({ status: 'ready_existing', assetKey, existingArtifactRole, globalAssetIdentityKey, globalAssetIdentityValue }, null, 2),
+              deterministic: true,
+              guidance,
+            }
+            return {
+              status: 'skipped',
+              inputHash: input.inputHash,
+              outputHash: hashOutputWorkflowValue(outputs),
+              outputs,
+              provider: 'graphcore',
+              model: 'sequence-animatic-global-asset-reuse-v1',
+            }
+          }
+        }
+      }
+      const falApiKey = Deno.env.get('FAL_KEY')
+      if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
+      const upstreamImages = readUpstreamImages(input.upstream)
+      const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
+      const rawAssetPack = Object.keys(upstreamAssetPack).length > 0
+        ? upstreamAssetPack
+        : asRecord(config.pageAssetPack ?? config.page_asset_pack ?? config.assetPack ?? config.asset_pack)
+      const referenceLimit = referenceLimitForImageNode(config, role)
+      const isSequenceAnimaticPlannedKeyframeImage = purpose === 'sequence_animatic_planned_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
+      const isCinematicV3StoryboardSheet = purpose === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_v3_storyboard_sheet'
+      const storyboardSheetShotPlan = isCinematicV3StoryboardSheet ? readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']) : {}
+      const storyboardSheetGroupShots = isCinematicV3StoryboardSheet
+        ? cinematicV3StoryboardGroupShots({ shotPlan: storyboardSheetShotPlan, storyboardGroup: asRecord(config.storyboardGroup) })
+        : []
+      const assetPack = isCinematicV3StoryboardSheet && storyboardSheetGroupShots.length > 0
+        ? buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: storyboardSheetGroupShots,
+          maxEntityCount: referenceLimitForImageNode(config, role),
+          maxAssetKeysPerEntity: 1,
+        })
+        : rawAssetPack
+      const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
+        const url = await imageReferenceToFalUrl(input.client, image, input.run)
+        if (!url) return null
+        const imageMetadata = asRecord(image.metadata)
+        return {
+          url,
+          label: readText(image.name) || readText(image.title) || readText(image.label) || titleFromRefLike(readText(image.role) || readText(imageMetadata.role) || `upstream reference ${index + 1}`),
+          role: readText(image.role) || readText(imageMetadata.role) || 'image_reference',
+          modality: 'image' as const,
+        }
+      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
+      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, referenceLimit)
+      const seenReferenceImageKeys = new Set<string>()
+      const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
+        .filter((entry) => {
+          const url = readText(entry.url)
+          if (!url || seenReferenceImageKeys.has(url)) return false
+          seenReferenceImageKeys.add(url)
+          return true
+        })
+        .slice(0, referenceLimit)
+      const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+      const sequenceAnimaticProviderReferenceManifest = isSequenceAnimaticPlannedKeyframeImage
+        ? sequenceAnimaticReferenceManifestTextFromRecords(referenceImageRecords)
+        : ''
+      const baseModel = outputWorkflowImageModel(config.model)
+      const referenceModel = readText(config.referenceModel) || (baseModel.endsWith('/edit') ? baseModel : `${baseModel}/edit`)
+      const model = referenceImageUrls.length > 0
+        ? referenceModel
+        : baseModel
+      const quality = readText(config.quality)
+        || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_QUALITY')?.trim()
+        || resolveOutputImageGenerationQuality({ role, purpose, prompt })
+      const outputFormat = readText(config.outputFormat)
+        || Deno.env.get('OUTPUT_WORKFLOW_IMAGE_OUTPUT_FORMAT')?.trim()
+        || resolveOutputImageGenerationOutputFormat()
+      const upstreamImageSize = readFirstUpstreamRecord(input.upstream, ['imageSize'])
+      const imageSize = (purpose === 'cinematic_storyboard' || role === 'cinematic_storyboard' || purpose === 'cinematic_beat_sheet' || role === 'cinematic_beat_sheet') && Object.keys(upstreamImageSize).length > 0
+        ? upstreamImageSize
+        : config.imageSize ?? { width: 1792, height: 2688 }
+      const includeProviderGuidance = purpose !== 'cinematic_storyboard'
+        && role !== 'cinematic_storyboard'
+        && purpose !== 'cinematic_beat_sheet'
+        && role !== 'cinematic_beat_sheet'
+        && purpose !== 'cinematic_keyframe'
+        && role !== 'cinematic_keyframe'
+      const providerPrompt = [
+        prompt,
+        sequenceAnimaticProviderReferenceManifest ? '' : '',
+        sequenceAnimaticProviderReferenceManifest ? `Attached image reference order:\n${sequenceAnimaticProviderReferenceManifest}` : '',
+        includeProviderGuidance ? '' : '',
+        includeProviderGuidance ? guidanceMarkdown(guidance) : '',
+        '',
+        'Provider requirements:',
+        '- Generate one finished image only.',
+        '- No visible text, captions, UI, or watermarks unless explicitly requested.',
+      ].filter(Boolean).join('\n')
+
+      const falResult = await waitForOutputFalImage({
+        priorStep: input.priorStep,
+        apiKey: falApiKey,
+        model,
+        prompt: providerPrompt,
+        imageSize,
+        quality,
+        outputFormat,
+        referenceImageUrls,
+        webhookUrl: resolveFalWebhookUrl(),
+        shouldCancel: input.shouldCancel,
+        createCancelledError: () => new WorkflowCancelledError(),
+        onProgress: async (progress) => {
+          await input.onProgress?.({
+            provider: 'fal',
+            model,
+            providerRequestId: progress.providerRequestId,
+            metadata: {
+              providerMode: progress.providerMode,
+              providerStatus: progress.providerStatus,
+              lastProviderPollAt: progress.lastProviderPollAt,
+              webhookConfigured: progress.webhookConfigured === true,
+              providerSubmittedAt: progress.providerSubmittedAt ?? null,
+              providerElapsedMs: progress.providerElapsedMs ?? null,
+              staleRequestRestarted: progress.staleRequestRestarted === true,
+              falRequestId: progress.providerRequestId,
+              falStatusUrl: progress.statusUrl ?? null,
+              falResponseUrl: progress.responseUrl ?? null,
+              imageSize: normalizeImageSize(imageSize),
+              quality,
+              outputFormat,
+              referenceImageCount: referenceImageUrls.length,
+            },
+          })
+        },
+        getWebhookResult: async (requestId) => {
+          const stepResponse = await input.client
+            .from('output_workflow_run_steps')
+            .select('id, status, provider_request_id, metadata')
+            .eq('run_id', input.run.id)
+            .eq('node_key', input.node.key)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          if (stepResponse.error) throw new Error(stepResponse.error.message)
+          const step = asRecord(stepResponse.data)
+          if (!Object.keys(step).length) return null
+          const stepMetadata = asRecord(step.metadata)
+          const currentRequestId = readText(step.provider_request_id) || readText(stepMetadata.falRequestId)
+          if (currentRequestId && currentRequestId !== requestId) return null
+          return readFalWebhookImageResult(stepMetadata, requestId)
+        },
+      })
+      const imageBytes = await downloadRemoteBytes(falResult.imageUrl)
+      const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
+      const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${outputFormat}`
+      const mimeType = falResult.mimeType || `image/${outputFormat}`
+      await uploadBytes(input.client, storagePath, imageBytes, mimeType)
+      const planningOnly = config.planningOnly === true || config.planning_only === true
+      const usedAsVideoReference = config.usedAsVideoReference === true || config.used_as_video_reference === true
+      const packedReferenceEntities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+      const selectedReferenceVariants = packedReferenceEntities
+        .map((entity) => ({
+          entityKey: readText(entity.key),
+          entityName: readText(entity.name),
+          variantKey: readText(entity.selectedReferenceVariantKey) || 'default',
+          label: readText(entity.selectedReferenceVariantLabel) || (readText(entity.selectedReferenceVariantKey) === 'default' ? 'Default' : readText(entity.selectedReferenceVariantKey)),
+          summary: readText(entity.selectedReferenceVariantSummary),
+          variantType: readText(entity.selectedReferenceVariantType),
+          assetKey: readText(entity.primaryAssetKey) || readStringArray(entity.assetKeys)[0] || '',
+          selectionReason: readText(entity.referenceSelectionReason),
+        }))
+        .filter((entry) => entry.entityKey || entry.entityName)
+      const selectedReferenceVariantKeys = Object.fromEntries(selectedReferenceVariants
+        .filter((entry) => entry.entityKey)
+        .map((entry) => [entry.entityKey, entry.variantKey]))
+      const selectedReferenceAssetKeys = selectedReferenceVariants.map((entry) => entry.assetKey).filter(Boolean)
+      const referenceDiagnostics = [
+        ...readStringArray(assetPack.referenceDiagnostics),
+        ...packedReferenceEntities.flatMap((entity) => readStringArray(entity.referenceDiagnostics)),
+      ].filter(Boolean)
+      const imageOutput = {
+        assetKey,
+        storagePath,
+        mimeType,
+        width: falResult.width,
+        height: falResult.height,
+        prompt,
+        providerPrompt,
+        role,
+        planningOnly,
+        planning_only: planningOnly,
+        usedAsVideoReference,
+        used_as_video_reference: usedAsVideoReference,
+        takeId: readText(config.takeId) || null,
+        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
+        storyboardGroupId: readText(config.storyboardGroupId) || readText(asRecord(config.storyboardGroup).id) || null,
+        shotId: readText(config.shotId) || null,
+        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
+        provider: 'fal',
+        model,
+        providerRequestId: falResult.requestId,
+        providerMode: 'fal_queue',
+        providerStatus: 'COMPLETED',
+        falRequestId: falResult.requestId,
+        falImageUrl: falResult.imageUrl,
+        falStatusUrl: falResult.statusUrl,
+        falResponseUrl: falResult.responseUrl,
+        referenceImageCount: referenceImageUrls.length,
+        referenceImageRecords,
+        reference_image_records: referenceImageRecords,
+        referenceManifest: sequenceAnimaticProviderReferenceManifest,
+        reference_manifest: sequenceAnimaticProviderReferenceManifest,
+        selectedReferenceVariants,
+        selectedReferenceVariantKeys,
+        selectedReferenceAssetKeys,
+        referenceDiagnostics,
+        sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
+        sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
+      }
+      const metadata = {
+        generatedBy: 'output_workflow',
+        workflowId: input.workflow.id,
+        workflowKey: input.workflow.key,
+        runId: input.run.id,
+        nodeId: input.node.id,
+        nodeKey: input.node.key,
+        preset: input.run.preset,
+        provider: 'fal',
+        model,
+        baseModel,
+        referenceModel,
+        providerRequestId: falResult.requestId,
+        providerMode: 'fal_queue',
+        providerStatus: 'COMPLETED',
+        falRequestId: falResult.requestId,
+        falStatusUrl: falResult.statusUrl,
+        falResponseUrl: falResult.responseUrl,
+        falImageUrl: falResult.imageUrl,
+        prompt,
+        providerPrompt,
+        role,
+        purpose,
+        planningOnly,
+        planning_only: planningOnly,
+        usedAsVideoReference,
+        used_as_video_reference: usedAsVideoReference,
+        takeId: readText(config.takeId) || null,
+        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
+        storyboardGroupId: readText(config.storyboardGroupId) || readText(asRecord(config.storyboardGroup).id) || null,
+        shotId: readText(config.shotId) || null,
+        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
+        pageNumber: Number(config.pageNumber ?? 0) || null,
+        referenceImageCount: referenceImageUrls.length,
+        referenceImageRecords,
+        reference_image_records: referenceImageRecords,
+        referenceManifest: sequenceAnimaticProviderReferenceManifest,
+        reference_manifest: sequenceAnimaticProviderReferenceManifest,
+        selectedReferenceVariants,
+        selectedReferenceVariantKeys,
+        selectedReferenceAssetKeys,
+        referenceDiagnostics,
+        imageSize: normalizeImageSize(imageSize),
+        quality,
+        outputFormat,
+        byteSize: imageBytes.byteLength,
+        width: falResult.width,
+        height: falResult.height,
+        storageBucket: 'project-assets',
+        storagePath,
+        sourceEntityKeys: input.run.input.sourceEntityKeys ?? [],
+        sourceSequenceUnitKeys: input.run.input.sourceSequenceUnitKeys ?? [],
+        skillKeys: guidance.skillKeys,
+        skillVersions: guidance.skillVersions,
+        guidanceHash: guidance.guidanceHash,
+        resolvedGuidancePreview: guidance.resolvedGuidancePreview,
+      }
+      const artifact = await registerImageArtifact({
+        client: input.client,
+        run: input.run,
+        workflow: input.workflow,
+        node: input.node,
+        assetKey,
+        storagePath,
+        name: role === 'ebook_cover' ? `${titleFromContext(worldContextFromRunInput(input.run))} Cover` : input.node.label,
+        summary: role === 'ebook_cover'
+          ? 'Ebook cover image generated with GPT Image 2 from the world graph.'
+          : role === 'comic_atlas' || role === 'cinematic_atlas'
+            ? 'Reference atlas generated from selected world entities.'
+            : role === 'cinematic_direction_sheet'
+              ? 'Primary cinematic direction-sheet reference generated from the compiled take timeline, camera layout, floor map, lighting/mood, and continuity anchors.'
+            : role === 'cinematic_beat_sheet'
+              ? (usedAsVideoReference
+                ? 'Primary cinematic storyboard-grid reference generated from the compiled take timeline.'
+                : 'Planning-only cinematic beat sheet generated from the compiled take timeline.')
+              : role === 'cinematic_keyframe'
+                ? 'Clean cinematic keyframe generated as a Seedance visual reference.'
+              : role === 'cinematic_v2_shot_keyframe'
+                ? 'Enhanced Cinematics V2 shot keyframe generated from the cropped storyboard panel and shot-scoped references.'
+              : purpose === 'sequence_animatic_shot_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
+                ? 'Revised sequence-animatic shot keyframe generated from the prior panel and shot-scoped references.'
+            : role === 'comic_page'
+              ? 'Comic page image generated from comic script and direct entity reference sheets.'
+              : 'Generated image output from the workflow.',
+        mimeType,
+        metadata,
+      })
+      const outputs = {
+        image: imageOutput,
+        assetKey,
+        storagePath,
+        mimeType,
+        width: falResult.width,
+        height: falResult.height,
+        prompt,
+        providerPrompt,
+        pageNumber: Number(config.pageNumber ?? 0) || null,
+        role,
+        planningOnly,
+        planning_only: planningOnly,
+        usedAsVideoReference,
+        used_as_video_reference: usedAsVideoReference,
+        takeId: readText(config.takeId) || null,
+        takeIndex: Number(config.takeIndex ?? -1) >= 0 ? Number(config.takeIndex) : null,
+        storyboardGroupId: readText(config.storyboardGroupId) || readText(asRecord(config.storyboardGroup).id) || null,
+        shotId: readText(config.shotId) || null,
+        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+        keyframeIndex: role === 'cinematic_keyframe' ? keyframeIndex : null,
+        selectedReferenceVariants,
+        selectedReferenceVariantKeys,
+        selectedReferenceAssetKeys,
+        referenceDiagnostics,
+        referenceImageRecords,
+        reference_image_records: referenceImageRecords,
+        referenceManifest: sequenceAnimaticProviderReferenceManifest,
+        reference_manifest: sequenceAnimaticProviderReferenceManifest,
+        artifact,
+        guidance,
+      }
+      return {
+        inputHash: input.inputHash,
+        outputHash: hashOutputWorkflowValue(outputs),
+        outputs,
+        provider: 'fal',
+        model,
+        providerRequestId: falResult.requestId,
+      }
+    }
+
+async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExecutionContext): Promise<OutputWorkflowNodeExecutionResult> {
+      const config = asRecord(input.node.config)
+      const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
+      const upstreamVideoPromptRecord = readVideoPromptRecordFromUpstream(input.upstream)
+      const upstreamVideoPrompt = readVideoPromptFromUpstream(input.upstream)
+      const prompt = upstreamVideoPrompt
+        || readText(input.node.inputs.prompt)
+        || input.run.prompt
+      if (!prompt) throw new Error('Video generation node is missing a prompt.')
+      const priorStepOutputs = asRecord(input.priorStep?.outputs)
+      const priorVideoOutput = asRecord(priorStepOutputs.video)
+      const cinematicV2ApprovalMissing = isCinematicV2ProductionNode(config, input.node) && !cinematicVideoApprovedEnabled(input.run)
+      const priorVideoWasSkipped = priorVideoOutput.skipped === true
+        || priorStepOutputs.approvalRequired === true
+        || priorStepOutputs.debugSkipVideoGeneration === true
+        || readText(priorStepOutputs.skippedReason).length > 0
+        || readText(priorVideoOutput.skippedReason).length > 0
+      if (!cinematicV2ApprovalMissing && !priorVideoWasSkipped && hasStoredOutputs(priorStepOutputs) && input.priorStep?.outputHash && hasStoredOutputs(priorVideoOutput)) {
+        return {
+          inputHash: input.priorStep.inputHash || input.inputHash,
+          outputHash: input.priorStep.outputHash,
+          outputs: priorStepOutputs,
+          provider: input.priorStep.provider,
+          model: input.priorStep.model,
+          providerRequestId: input.priorStep.providerRequestId,
+        }
+      }
+      const resolution = readText(config.resolution) || '720p'
+      const provider = resolveOutputVideoProvider(config)
+      const configuredModel = readText(config.model)
+        || (provider === 'muapi'
+          ? Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_MODEL')?.trim()
+          : Deno.env.get('OUTPUT_WORKFLOW_FAL_VIDEO_MODEL')?.trim())
+        || Deno.env.get('OUTPUT_WORKFLOW_VIDEO_MODEL')?.trim()
+        || outputWorkflowDefaultVideoModel(provider, resolution)
+      const model = provider === 'muapi' ? resolveMuapiVideoModel(configuredModel) : configuredModel
+      const upstreamDurationSeconds = Number(upstreamVideoPromptRecord.durationSeconds ?? upstreamVideoPromptRecord.providerDurationSeconds ?? 0)
+      const configuredDurationSeconds = Number(config.durationSeconds ?? 8) || 8
+      const rawRequestedDurationSeconds = Number(upstreamDurationSeconds || configuredDurationSeconds) || 8
+      const requestedDurationSeconds = Math.max(4, Math.min(15, rawRequestedDurationSeconds))
+      const durationSeconds = provider === 'muapi'
+        ? resolveMuapiVideoDurationSeconds(requestedDurationSeconds)
+        : requestedDurationSeconds
+      const aspectRatio = readText(config.aspectRatio) || '16:9'
+      const quality = provider === 'muapi'
+        ? resolveMuapiVideoQuality(readText(config.quality) || Deno.env.get('OUTPUT_WORKFLOW_MUAPI_VIDEO_QUALITY'))
+        : readText(config.quality)
+      const generateAudio = config.generateAudio !== false
+      const syncMode = config.syncMode === true
+      if ((readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video') && !upstreamVideoPrompt) {
+        throw new Error('Cinematics V3 storyboard video generation requires a completed Video Prompt node. Run the block storyboard prep first, then generate video.')
+      }
+      if (isCinematicV2ProductionNode(config, input.node) && !cinematicVideoApprovedEnabled(input.run)) {
+        const outputs = {
+          video: {
+            skipped: true,
+            approvalRequired: true,
+            skippedReason: 'cinematic_video_approval_required',
+            prompt,
+            providerPrompt: prompt,
+            provider: 'graphcore',
+            model: 'cinematic-v2-video-approval-gate-v1',
+            targetProvider: provider,
+            targetModel: model,
+            durationSeconds,
+            aspectRatio,
+            resolution,
+            generateAudio,
+            referenceImageCount: 0,
+            referenceVideoCount: 0,
+            referenceAudioCount: 0,
+            referencePolicy: 'cinematic_video_approval_required',
+            role: readText(config.role) || readText(config.purpose) || 'cinematic_v2_shot_video',
+            shotId: readText(config.shotId) || null,
+            shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+          },
+          prompt,
+          providerPrompt: prompt,
+          durationSeconds,
+          approvalRequired: true,
+          skippedReason: 'cinematic_video_approval_required',
+          guidance,
+        }
+        return {
+          status: 'skipped',
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'cinematic-v2-video-approval-gate-v1',
+        }
+      }
+      const debugSkipVideoGeneration = debugSkipVideoGenerationEnabled(config, input.run, input.node)
+      if (debugSkipVideoGeneration) {
+        const outputs = {
+          video: {
+            skipped: true,
+            debugSkipVideoGeneration: true,
+            skippedReason: 'debug_skip_video_generation',
+            prompt,
+            providerPrompt: prompt,
+            provider: 'graphcore',
+            model: 'debug-skip-video-generation-v1',
+            targetProvider: provider,
+            targetModel: model,
+            durationSeconds,
+            aspectRatio,
+            resolution,
+            generateAudio,
+            referenceImageCount: 0,
+            referenceVideoCount: 0,
+            referenceAudioCount: 0,
+            referencePolicy: 'debug_skip_video_generation',
+            role: readText(config.role) || readText(config.purpose) || 'video',
+            blockNumber: Number(config.blockNumber ?? 0) || null,
+            shotId: readText(config.shotId) || null,
+            shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+          },
+          prompt,
+          providerPrompt: prompt,
+          durationSeconds,
+          debugSkipVideoGeneration: true,
+          skippedReason: 'debug_skip_video_generation',
+          guidance,
+        }
+        return {
+          status: 'skipped',
+          inputHash: input.inputHash,
+          outputHash: hashOutputWorkflowValue(outputs),
+          outputs,
+          provider: 'graphcore',
+          model: 'debug-skip-video-generation-v1',
+        }
+      }
+      const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
+      const isCinematicV3StoryboardGroupVideo = readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video'
+      const isSequenceAnimaticShotVideo = readText(config.purpose) === 'sequence_animatic_shot_video' || readText(config.role) === 'sequence_animatic_shot_video'
+      const upstreamShotPlanForVideo = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
+      const cinematicV3VideoGroupShots = isCinematicV3StoryboardGroupVideo
+        ? cinematicV3StoryboardGroupShots({ shotPlan: upstreamShotPlanForVideo, storyboardGroup: asRecord(config.storyboardGroup) })
+        : []
+      const upstreamVideoShotPlanShots = asRecord(upstreamShotPlanForVideo).shots
+      const sequenceAnimaticShotForVideo = isSequenceAnimaticShotVideo
+        ? asRecord(readFirstUpstreamRecord(input.upstream, ['shot']) || (Array.isArray(upstreamVideoShotPlanShots) ? upstreamVideoShotPlanShots.map(asRecord)[0] : null))
+        : {}
+      const assetPack = isCinematicV3StoryboardGroupVideo && cinematicV3VideoGroupShots.length > 0
+        ? buildCinematicV3StoryboardGroupAssetPack({
+          assetPack: rawAssetPack,
+          shots: cinematicV3VideoGroupShots,
+          maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 4) || 4)),
+          maxAssetKeysPerEntity: 1,
+        })
+        : isSequenceAnimaticShotVideo && Object.keys(sequenceAnimaticShotForVideo).length > 0
+          ? buildCinematicV3StoryboardGroupAssetPack({
+            assetPack: rawAssetPack,
+            shots: [sequenceAnimaticShotForVideo],
+            maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
+            maxAssetKeysPerEntity: 1,
+          })
+        : rawAssetPack
+      const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
+      const upstreamImages = orderCinematicVideoReferenceImages(
+        readUpstreamImages(input.upstream, ['image', 'coverImage', 'primaryReferenceImage', 'keyframe']),
+        cinematicReferenceMode,
+      )
+      const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
+        const url = await imageReferenceToFalUrl(input.client, image, input.run)
+        if (!url) return null
+        return {
+          url,
+          label: seedanceImageReferenceLabel(image, cinematicReferenceMode, index + 1),
+          role: (() => {
+            const role = readText(image.role) || readText(asRecord(image.metadata).role)
+            if (role === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_beat_sheet') return 'storyboard_sheet'
+            if (role === 'cinematic_direction_sheet') return 'direction_sheet'
+            if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') return 'keyframe'
+            return 'image_reference'
+          })(),
+          modality: 'image' as const,
+        }
+      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
+      const assetPackReferenceLimit = Math.max(1, Math.min(9, Number(config.assetPackReferenceLimit ?? 9) || 9))
+      const totalReferenceImageLimit = Math.max(1, Math.min(9, directImageRecords.length + assetPackReferenceLimit))
+      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
+      const seenReferenceImageUrls = new Set<string>()
+      const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
+        .filter((entry) => {
+          const url = readText(entry.url)
+          if (!url || seenReferenceImageUrls.has(url)) return false
+          seenReferenceImageUrls.add(url)
+          return true
+        })
+        .slice(0, totalReferenceImageLimit)
+      const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+      if (isCinematicV3StoryboardGroupVideo && cinematicReferenceMode === 'storyboard_sheet' && directImageRecords.length === 0) {
+        throw new Error('Cinematics V3 storyboard video generation requires the storyboard sheet reference. Generate the storyboard sheet before generating video.')
+      }
+      if (isSequenceAnimaticShotVideo && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
+        throw new Error('Sequence animatic shot video generation requires the cropped shot panel as @Image1. Generate/extract the storyboard panel before generating shot video.')
+      }
+      if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
+        throw new Error('Cinematics V2 video generation requires a shot keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
+      }
+      const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
+      const referenceVideoRecords = (await Promise.all(upstreamVideos.map(async (video, index) => {
+        const url = await imageReferenceToFalUrl(input.client, video, input.run)
+        if (!url) return null
+        return {
+          url,
+          label: readText(video.name) || readText(video.title) || readText(video.label) || `reference video ${index + 1}`,
+          role: 'video_reference',
+          modality: 'video' as const,
+        }
+      }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url)).slice(0, 3)
+      const referenceVideoUrls = referenceVideoRecords.map((entry) => readText(entry.url)).filter(Boolean)
+      const referenceAudioUrls: string[] = []
+      const totalReferences = referenceImageUrls.length + referenceVideoUrls.length + referenceAudioUrls.length
+      if (totalReferences > 12) {
+        throw new Error('Seedance 2 Omni Reference supports at most 12 total reference files.')
+      }
+      const buildProviderPrompt = (imageRecords: SeedanceReferenceRecord[], referencePolicy: string) => {
+        const manifest = buildSeedanceReferenceManifest({
+          imageReferences: imageRecords,
+          videoReferences: referenceVideoRecords,
+          audioReferences: [],
+          cinematicReferenceMode,
+        })
+        const promptWithLegend = rewriteSeedanceReferenceLegend(prompt, manifest, (isCinematicV3StoryboardGroupVideo || isSequenceAnimaticShotVideo) ? '' : referencePolicy)
+        const artifactBan = seedanceProductionBoardArtifactBan(manifest)
+        if (isCinematicV3StoryboardGroupVideo || isSequenceAnimaticShotVideo) {
+          const directPrompt = promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
+            ? promptWithLegend
+            : [promptWithLegend, '', artifactBan].filter(Boolean).join('\n')
+          return compactSeedancePromptForProvider(directPrompt)
+        }
+        return compactSeedancePromptForProvider([
+          promptWithLegend,
+          '',
+          `[PROVIDER TARGET]\nOne continuous ${durationSeconds}-second clip, ${aspectRatio}, ${resolution}.`,
+          imageRecords.length > 0 ? 'Preserve identity, wardrobe, environment, prop continuity, and selected variants from the attached references.' : 'Preserve identity, wardrobe, environment, and prop continuity from written descriptions.',
+          promptWithLegend.includes('Do not render production-board artifacts') || promptWithLegend.includes('Do not render captions, subtitles')
+            ? ''
+            : artifactBan,
+        ].filter(Boolean).join('\n'))
+      }
+      const primaryReferenceOnlyRecords = directImageRecords.slice(0, 1)
+      const referenceAttempts = [
+        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs', imageRecords: referenceImageRecords },
+        { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_only' : 'storyboard_only', imageRecords: primaryReferenceOnlyRecords },
+        { policy: 'text_only_no_image_refs', imageRecords: [] },
+      ].filter((attempt, index, attempts) => (
+        index === attempts.findIndex((candidate) => candidate.policy === attempt.policy
+          && candidate.imageRecords.map((entry) => readText(entry.url)).join('\n') === attempt.imageRecords.map((entry) => readText(entry.url)).join('\n'))
+      ))
+      const priorFailedReferencePolicy = isFalReferencePolicyError(input.priorStep?.errorMessage)
+      const startAttemptIndex = priorFailedReferencePolicy && referenceAttempts.length > 1 ? 1 : 0
+      let providerResult: {
+        requestId: string
+        videoUrl: string
+        mimeType: string
+        fileName?: string
+        fileSize: number | null
+        resultBody: Record<string, unknown>
+        statusUrl?: string | null
+        responseUrl?: string | null
+        resultUrl?: string | null
+      } | null = null
+      let providerPrompt = ''
+      let usedReferenceImageUrls = referenceImageUrls
+      let usedSeedanceReferenceManifest: SeedanceReferenceManifestEntry[] = []
+      let referencePolicy = cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs'
+      for (let attemptIndex = startAttemptIndex; attemptIndex < referenceAttempts.length; attemptIndex += 1) {
+        const attempt = referenceAttempts[attemptIndex]
+        providerPrompt = buildProviderPrompt(attempt.imageRecords, attempt.policy)
+        usedReferenceImageUrls = attempt.imageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+        usedSeedanceReferenceManifest = buildSeedanceReferenceManifest({
+          imageReferences: attempt.imageRecords,
+          videoReferences: referenceVideoRecords,
+          audioReferences: [],
+          cinematicReferenceMode,
+        })
+        referencePolicy = attempt.policy
+        try {
+          if (provider === 'muapi') {
+            const muapiApiKey = Deno.env.get('MUAPI_KEY')
+            if (!muapiApiKey) throw new Error('MUAPI_KEY is not configured for the output workflow worker.')
+            providerResult = await waitForOutputMuapiVideo({
+              priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
+              apiKey: muapiApiKey,
+              model,
+              prompt: providerPrompt,
+              durationSeconds,
+              aspectRatio,
+              quality,
+              referenceImageUrls: usedReferenceImageUrls,
+              referenceVideoUrls,
+              referenceAudioUrls,
+              shouldCancel: input.shouldCancel,
+              createCancelledError: () => new WorkflowCancelledError(),
+              onProgress: async (progress) => {
+                await input.onProgress?.({
+                  provider: 'muapi',
+                  model,
+                  providerRequestId: progress.providerRequestId,
+                  metadata: {
+                    providerMode: progress.providerMode,
+                    providerStatus: progress.providerStatus,
+                    lastProviderPollAt: progress.lastProviderPollAt,
+                    muapiRequestId: progress.providerRequestId,
+                    muapiResultUrl: progress.resultUrl,
+                    muapiWebhookConfigured: progress.webhookConfigured ?? false,
+                    durationSeconds,
+                    requestedDurationSeconds,
+                    aspectRatio,
+                    quality,
+                    resolution,
+                    generateAudio,
+                    referenceImageCount: usedReferenceImageUrls.length,
+                    referenceVideoCount: referenceVideoUrls.length,
+                    referenceAudioCount: referenceAudioUrls.length,
+                    referencePolicy: attempt.policy,
+                    cinematicReferenceMode,
+                    seedanceReferenceManifest: usedSeedanceReferenceManifest,
+                    providerPayload: buildMuapiVideoPayload({
+                      prompt: providerPrompt,
+                      durationSeconds,
+                      aspectRatio,
+                      quality,
+                      referenceImageUrls: usedReferenceImageUrls,
+                      referenceVideoUrls,
+                      referenceAudioUrls,
+                    }),
+                  },
+                })
+              },
+            })
+          } else {
+            const falApiKey = Deno.env.get('FAL_KEY')
+            if (!falApiKey) throw new Error('FAL_KEY is not configured for the output workflow worker.')
+            providerResult = await waitForOutputFalVideo({
+              priorStep: attemptIndex === 0 && !priorFailedReferencePolicy ? input.priorStep : null,
+              apiKey: falApiKey,
+              model,
+              prompt: providerPrompt,
+              durationSeconds,
+              aspectRatio,
+              resolution,
+              generateAudio,
+              syncMode,
+              referenceImageUrls: usedReferenceImageUrls,
+              referenceVideoUrls,
+              referenceAudioUrls,
+              shouldCancel: input.shouldCancel,
+              createCancelledError: () => new WorkflowCancelledError(),
+              onProgress: async (progress) => {
+                await input.onProgress?.({
+                  provider: 'fal',
+                  model,
+                  providerRequestId: progress.providerRequestId,
+                  metadata: {
+                    providerMode: progress.providerMode,
+                    providerStatus: progress.providerStatus,
+                    lastProviderPollAt: progress.lastProviderPollAt,
+                    falRequestId: progress.providerRequestId,
+                    falStatusUrl: progress.statusUrl ?? null,
+                    falResponseUrl: progress.responseUrl ?? null,
+                    durationSeconds,
+                    aspectRatio,
+                    resolution,
+                    generateAudio,
+                    referenceImageCount: usedReferenceImageUrls.length,
+                    referenceVideoCount: referenceVideoUrls.length,
+                    referenceAudioCount: referenceAudioUrls.length,
+                    referencePolicy: attempt.policy,
+                    cinematicReferenceMode,
+                    seedanceReferenceManifest: usedSeedanceReferenceManifest,
+                  },
+                })
+              },
+            })
+          }
+          break
+        } catch (error) {
+          if (isFalReferencePolicyError(error) && attemptIndex < referenceAttempts.length - 1) {
+            continue
+          }
+          throw error
+        }
+      }
+      if (!providerResult) throw new Error(`${provider === 'muapi' ? 'MUAPI' : 'Fal'} video generation did not return a result.`)
+      const muapiWebhookConfigured = provider === 'muapi' ? Boolean(buildOutputWorkflowMuapiWebhookUrl()) : false
+      const muapiProviderMode = muapiWebhookConfigured ? 'muapi_webhook_polling' : 'muapi_polling'
+      const videoBytes = await downloadRemoteBytes(providerResult.videoUrl)
+      const extension = providerResult.mimeType.includes('webm') ? 'webm' : 'mp4'
+      const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
+      const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.${extension}`
+      await uploadBytes(input.client, storagePath, videoBytes, providerResult.mimeType)
+      const metadata = {
+        generatedBy: 'output_workflow',
+        workflowId: input.workflow.id,
+        workflowKey: input.workflow.key,
+        runId: input.run.id,
+        nodeId: input.node.id,
+        nodeKey: input.node.key,
+        preset: input.run.preset,
+        provider,
+        model,
+        providerRequestId: providerResult.requestId,
+        providerMode: provider === 'muapi' ? muapiProviderMode : 'fal_queue',
+        providerStatus: 'COMPLETED',
+        falRequestId: provider === 'fal' ? providerResult.requestId : null,
+        falStatusUrl: provider === 'fal' ? providerResult.statusUrl ?? null : null,
+        falResponseUrl: provider === 'fal' ? providerResult.responseUrl ?? null : null,
+        falVideoUrl: provider === 'fal' ? providerResult.videoUrl : null,
+        muapiRequestId: provider === 'muapi' ? providerResult.requestId : null,
+        muapiResultUrl: provider === 'muapi' ? providerResult.resultUrl ?? null : null,
+        muapiVideoUrl: provider === 'muapi' ? providerResult.videoUrl : null,
+        muapiWebhookConfigured,
+        prompt,
+        providerPrompt,
+        durationSeconds,
+        requestedDurationSeconds,
+        aspectRatio,
+        quality: provider === 'muapi' ? quality : null,
+        resolution,
+        generateAudio,
+        referenceImageCount: usedReferenceImageUrls.length,
+        referenceVideoCount: referenceVideoUrls.length,
+        referenceAudioCount: referenceAudioUrls.length,
+        referencePolicy,
+        cinematicReferenceMode,
+        seedanceReferenceManifest: usedSeedanceReferenceManifest,
+        shotId: readText(config.shotId) || null,
+        shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+        storyboardBlockId: readText(config.storyboardBlockId) || null,
+        parentRequestId: readText(config.parentRequestId) || null,
+        masterRequestId: readText(config.masterRequestId) || null,
+        sequenceAnimaticRole: readText(config.sequenceAnimaticRole) || null,
+        providerPayload: provider === 'muapi' ? buildMuapiVideoPayload({
+          prompt: providerPrompt,
+          durationSeconds,
+          aspectRatio,
+          quality,
+          referenceImageUrls: usedReferenceImageUrls,
+          referenceVideoUrls,
+          referenceAudioUrls,
+        }) : null,
+        byteSize: videoBytes.byteLength,
+        storageBucket: 'project-assets',
+        storagePath,
+        skillKeys: guidance.skillKeys,
+        skillVersions: guidance.skillVersions,
+        guidanceHash: guidance.guidanceHash,
+      }
+      const artifact = await registerVideoArtifact({
+        client: input.client,
+        run: input.run,
+        workflow: input.workflow,
+        node: input.node,
+        assetKey,
+        storagePath,
+        name: input.node.label,
+        summary: 'Generated video output from the workflow.',
+        mimeType: providerResult.mimeType,
+        metadata,
+      })
+      const outputs = {
+        video: {
+          assetKey,
+          storagePath,
+          mimeType: providerResult.mimeType,
+          prompt,
+          providerPrompt,
+          provider,
+          model,
+          providerRequestId: providerResult.requestId,
+          providerMode: provider === 'muapi' ? muapiProviderMode : 'fal_queue',
+          durationSeconds,
+          requestedDurationSeconds,
+          aspectRatio,
+          quality: provider === 'muapi' ? quality : null,
+          resolution,
+          generateAudio,
+          referenceImageCount: usedReferenceImageUrls.length,
+          referenceVideoCount: referenceVideoUrls.length,
+          referenceAudioCount: referenceAudioUrls.length,
+          referencePolicy,
+          cinematicReferenceMode,
+          seedanceReferenceManifest: usedSeedanceReferenceManifest,
+          muapiRequestId: provider === 'muapi' ? providerResult.requestId : null,
+          muapiResultUrl: provider === 'muapi' ? providerResult.resultUrl ?? null : null,
+          muapiWebhookConfigured,
+          role: readText(config.role) || readText(config.purpose) || 'video',
+          blockNumber: Number(config.blockNumber ?? 0) || null,
+          shotId: readText(config.shotId) || null,
+          shotIndex: Number(config.shotIndex ?? -1) >= 0 ? Number(config.shotIndex) : null,
+          storyboardBlockId: readText(config.storyboardBlockId) || null,
+          parentRequestId: readText(config.parentRequestId) || null,
+          masterRequestId: readText(config.masterRequestId) || null,
+          sequenceAnimaticRole: readText(config.sequenceAnimaticRole) || null,
+        },
+        assetKey,
+        storagePath,
+        mimeType: providerResult.mimeType,
+        prompt,
+        providerPrompt,
+        durationSeconds,
+        requestedDurationSeconds,
+        seedanceReferenceManifest: usedSeedanceReferenceManifest,
+        artifact,
+        guidance,
+      }
+      return {
+        inputHash: input.inputHash,
+        outputHash: hashOutputWorkflowValue(outputs),
+        outputs,
+        provider,
+        model,
+        providerRequestId: providerResult.requestId,
+      }
+    }
 
 const outputWorkflowNodeHandlerRegistry = createWorkflowNodeHandlerRegistry<OutputWorkflowNodeExecutionContext, OutputWorkflowNodeExecutionResult>()
 let defaultOutputWorkflowNodeHandlersRegistered = false
 
+function assertNoImplicitMonolithWorkflowNodeHandlers() {
+  const explicitlyRegisteredHandlerKeys = new Set([
+    ...legacyMonolithWorkflowNodeHandlerKeys,
+    ...workflowMediaNodeHandlerKeys,
+    ...workflowUtilityNodeHandlerKeys,
+    ...sceneBoardWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticWorkflowNodeHandlerKeys,
+  ])
+  const implicit = outputWorkflowNodeManifests
+    .filter((manifest) => manifest.executable)
+    .filter((manifest) => !explicitlyRegisteredHandlerKeys.has(manifest.handlerKey))
+    .map((manifest) => `${manifest.purpose} -> ${manifest.handlerKey}`)
+    .sort()
+  if (implicit.length > 0) {
+    throw new Error(`Workflow node manifest(s) need an explicit node pack handler or legacy monolith registration: ${implicit.join(', ')}`)
+  }
+}
+
 function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
   if (defaultOutputWorkflowNodeHandlersRegistered) return
-  for (const manifest of outputWorkflowNodeManifests) {
-    registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, manifest.handlerKey, executeNode, { replace: true })
+  assertNoImplicitMonolithWorkflowNodeHandlers()
+  const mediaRuntime = createWorkflowMediaRuntime({
+    executeImageGeneration: (context) => executeOutputWorkflowImageGeneration(context as never) as never,
+    executeVideoGeneration: (context) => executeOutputWorkflowVideoGeneration(context as never) as never,
+  })
+  for (const handlerKey of legacyMonolithWorkflowNodeHandlerKeys) {
+    registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, executeNode, { replace: true })
   }
   registerWorkflowUtilityNodePack({
     helpers: {
@@ -30813,11 +24254,242 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
     helpers: {
       asRecord,
       readText,
+      readArray,
       readStringArray,
       readFirstUpstreamRecord,
+      readPreferredUpstreamRecord,
+      readFirstUpstreamArray,
+      readFirstUpstreamText,
+      readFirstUpstreamImage,
       slugify,
+      titleFromRefLike,
       hashOutputWorkflowValue,
+      sanitizeSequenceAnimaticCameraPlateText,
+      sanitizeSequenceAnimaticSpatialPromptText,
+      sequenceAnimaticSpatialForbiddenNamesFromShots,
+      sequenceAnimaticCompactZoneGridCellLine,
+      sequenceAnimaticZoneGridPromptDiagnostics,
+      sequenceAnimaticReferenceManifestEntries,
+      sequenceAnimaticReferenceManifestText,
       registerOtherOutputArtifact: registerOtherOutputArtifact as never,
+      registerImageArtifact: registerImageArtifact as never,
+      insertSequenceAnimaticEvent: insertSequenceAnimaticEvent as never,
+      downloadProjectAssetBytes: downloadProjectAssetBytes as never,
+      makeTempDir: (prefix: string) => Deno.makeTempDir({ prefix }),
+      writeFile: (path: string, bytes: Uint8Array) => Deno.writeFile(path, bytes),
+      readFile: (path: string) => Deno.readFile(path),
+      removeDir: (path: string) => Deno.remove(path, { recursive: true }).catch(() => {}),
+      probeImageSize,
+      runFfmpeg,
+      verifySequenceAnimaticAnchorCrop,
+      uploadBytes: uploadBytes as never,
+      runStructuredNode: runCinematicV2StructuredNode,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerWorkflowMediaNodePack({
+    runtime: mediaRuntime,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readArray,
+      readStringArray,
+      readFirstUpstreamRecord,
+      readPreferredUpstreamRecord,
+      readFirstUpstreamArray,
+      readFirstUpstreamText,
+      readFirstUpstreamImage,
+      slugify,
+      titleFromRefLike,
+      hashOutputWorkflowValue,
+      coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
+      buildCinematicV3StoryboardGroupAssetPack,
+      scopeAssetPackToReferenceAssetKeys,
+      orderSequenceAnimaticAssetPackReferences,
+      sequenceAnimaticReferenceManifestEntries,
+      sequenceAnimaticReferenceManifestText,
+      sequenceAnimaticReferenceRole,
+      sequenceAnimaticReferenceName,
+      sequenceAnimaticReferenceVisual,
+      compactStoryboardSentence,
+      compactForPrompt,
+      compactSequenceAnimaticText,
+      outputWorkflowTextModel,
+      cinematicAssetPackEntityKeys,
+      buildSequenceAnimaticReferenceCatalog: (input) => buildSequenceAnimaticReferenceCatalog(input as never) as never,
+      parseSequenceAnimaticShotPlan: (value) => sequenceAnimaticShotPlanSchema.parse(value) as never,
+      safeParseSequenceAnimaticShotPlan: (value) => {
+        const parsed = sequenceAnimaticShotPlanSchema.safeParse(value)
+        return parsed.success ? { success: true, data: parsed.data as never } : { success: false }
+      },
+      buildCinematicV3StoryboardLayout,
+      buildCinematicV3ShotBreakPlan: (input) => buildCinematicV3ShotBreakPlan(input as never) as never,
+      deriveCinematicV2MaxShotCount,
+      buildSequenceAnimaticScriptShotProjection: (shotBreakPlan) => buildSequenceAnimaticScriptShotProjection(shotBreakPlan as never) as never,
+      buildSequenceAnimaticShotPlanFromBreaks: (input) => buildSequenceAnimaticShotPlanFromBreaks(input as never) as never,
+      buildCinematicV3StoryboardGroupFromShotBreakGroup: (group, index) => buildCinematicV3StoryboardGroupFromShotBreakGroup(group as never, index) as never,
+      collectCinematicV3ShotPlansFromUpstream: (upstream) => collectCinematicV3ShotPlansFromUpstream(upstream) as never,
+      mergeCinematicV3ShotPlansForTimeline: (plans) => mergeCinematicV3ShotPlansForTimeline(plans as never) as never,
+      repairCinematicV2ShotPlanVisualReferences: (input) => repairCinematicV2ShotPlanVisualReferences(input as never) as never,
+      parseSequenceAnimaticScenePackageOutput: (value) => sequenceAnimaticScenePackageOutputSchema.parse(value) as never,
+      safeParseSequenceAnimaticTaggedScenePackage: (value) => {
+        const parsed = sequenceAnimaticTaggedScenePackageSchema.safeParse(value)
+        return parsed.success ? { success: true, data: parsed.data as never } : { success: false }
+      },
+      loadWorkflowNodes: async (input) => {
+        const response = await input.client
+          .from('output_workflow_nodes')
+          .select(outputWorkflowNodeSelect)
+          .eq('workflow_id', input.workflowId)
+        if (response.error) throw new Error(response.error.message)
+        return (response.data ?? []) as never
+      },
+      loadWorkflowRunSteps: async (input) => {
+        const response = await input.client
+          .from('output_workflow_run_steps')
+          .select(outputWorkflowRunStepSelect)
+          .eq('run_id', input.runId)
+          .eq('workflow_id', input.workflowId)
+        if (response.error) throw new Error(response.error.message)
+        return (response.data ?? []) as never
+      },
+      loadWorkflowEdges: async (input) => {
+        const response = await input.client
+          .from('output_workflow_edges')
+          .select(outputWorkflowEdgeSelect)
+          .eq('workflow_id', input.workflowId)
+        if (response.error) throw new Error(response.error.message)
+        return (response.data ?? []) as never
+      },
+      hasStoredOutputs,
+      isStaleDynamicCinematicNode: isStaleDynamicCinematicNode as never,
+      preserveExistingDynamicNodeOutput: (input) => preserveExistingDynamicNodeOutput(input as never) as never,
+      dynamicNodeRow: (input) => dynamicNodeRow(input as never) as never,
+      dynamicEdgeRow: (input) => dynamicEdgeRow(input as never) as never,
+      persistDynamicWorkflowGraphRevision: persistDynamicWorkflowGraphRevision as never,
+      buildSequenceAnimaticScenePackageFromTaggedScreenplay: (input) => buildSequenceAnimaticScenePackageFromTaggedScreenplay(input as never) as never,
+      buildFallbackSequenceAnimaticSceneGraphAssignment: (scenePackage) => buildFallbackSequenceAnimaticSceneGraphAssignment(scenePackage as never) as never,
+      runSequenceAnimaticSceneGraphAssignmentProvider: async (input) => {
+        const result = await runCinematicV2StructuredNodeBackground({
+          nodeKey: input.nodeKey,
+          schemaName: 'sequence_animatic_scene_graph_assignment',
+          schema: sequenceAnimaticSceneGraphAssignmentSchema,
+          instructions: input.instructions,
+          prompt: input.prompt,
+          fallback: input.fallback,
+          maxOutputTokens: input.maxOutputTokens,
+          shouldCancel: input.shouldCancel,
+          onProgress: input.onProgress,
+        })
+        return {
+          value: result.value as never,
+          providerRequestId: result.providerRequestId,
+          fallbackUsed: result.fallbackUsed,
+          fallbackReason: result.fallbackReason,
+        }
+      },
+      mergeSequenceAnimaticSceneGraphAssignment: (input) => mergeSequenceAnimaticSceneGraphAssignment(input as never) as never,
+      insertSequenceAnimaticEvent: insertSequenceAnimaticEvent as never,
+      runSequenceAnimaticShotContinuityPlanStreamWithRetry: runSequenceAnimaticShotContinuityPlanStreamWithRetry as never,
+      sequenceAnimaticShotContinuityPolicy: {
+        maxShotCount: sequenceAnimaticShotContinuityMaxShotCount,
+        maxDurationSeconds: sequenceAnimaticShotContinuityMaxDurationSeconds,
+        preferredDurationSeconds: sequenceAnimaticShotContinuityPreferredDurationSeconds,
+        maxDialogueLines: sequenceAnimaticShotContinuityMaxDialogueLines,
+        maxDialogueCharacters: sequenceAnimaticShotContinuityMaxDialogueCharacters,
+      },
+      sequenceAnimaticStableHash,
+      sequenceAnimaticGraphSpecVersion,
+      readScreenplayAnimaticRoleFromMetadata,
+      readScreenplayAnimaticSourceFromMetadata,
+      sequenceAnimaticBlocksFromManifestAndDirectorPlan: (manifest, directorPlan) => sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest as never, directorPlan as never) as never,
+      sequenceAnimaticContinuityAssetBatches: (input) => sequenceAnimaticContinuityAssetBatches(input as never) as never,
+      sequenceAnimaticContinuityVisualDependencyEdges: (graphInput) => sequenceAnimaticContinuityVisualDependencyEdges(graphInput) as never,
+      sequenceAnimaticStoryboardImageSize,
+      loadMasterRequestForWorkflow: async (input) => {
+        const client = input.client as DatabaseClient
+        const response = await client
+          .from('output_requests')
+          .select(outputRequestSelect)
+          .eq('draft_id', input.draftId)
+          .eq('workflow_id', input.workflowId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (response.error) throw new Error(response.error.message)
+        return response.data ? mapOutputRequestRow(response.data as OutputRequestRow) as never : null
+      },
+      loadChildRequests: async (input) => {
+        const client = input.client as DatabaseClient
+        const response = await client
+          .from('output_requests')
+          .select(outputRequestSelect)
+          .eq('project_id', input.projectId)
+          .eq('draft_id', input.draftId)
+          .eq('parent_request_id', input.parentRequestId)
+          .order('created_at', { ascending: true })
+        if (response.error) throw new Error(response.error.message)
+        return (response.data ?? []).map((row) => mapOutputRequestRow(row as OutputRequestRow)) as never
+      },
+      buildSequenceAnimaticTemplateGraph: (input) => buildValidatedOutputWorkflowTemplateGraph({
+        registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
+        templateKey: input.templateKey,
+        rawInput: input.rawInput,
+      }) as never,
+      sequenceAnimaticContinuityBatchTemplateKey,
+      sequenceAnimaticStoryboardBlocksTemplateKey,
+      ensureMappedChildWorkflow: ensureMappedChildWorkflow as never,
+      startSequenceAnimaticChildRun: startSequenceAnimaticChildRun as never,
+      updateMasterRequestMetadata: async (input) => {
+        const client = input.client as DatabaseClient
+        const response = await client
+          .from('output_requests')
+          .update({ metadata: input.metadata })
+          .eq('id', input.requestId)
+        if (response.error) throw new Error(response.error.message)
+      },
+      refreshOutputRequestStatusProjection: async (input) => {
+        const client = input.client as DatabaseClient
+        const response = await client.rpc('refresh_output_request_status_projection', { p_request_id: input.requestId })
+        if (response.error) throw new Error(response.error.message)
+      },
+      parseSequenceAnimaticShotContinuityPlanV2: (value) => sequenceAnimaticShotContinuityPlanV2Schema.parse(value) as never,
+      sequenceAnimaticUniqueTexts,
+      mergeById: (records) => mergeById(records as never) as never,
+      sequenceAnimaticReferenceCatalog: (input) => sequenceAnimaticReferenceCatalog(input as never) as never,
+      buildSequenceAnimaticContinuityPlannerContext: (input) => buildSequenceAnimaticContinuityPlannerContext(input as never) as never,
+      normalizeSequenceAnimaticDirectorPlan: (input) => normalizeSequenceAnimaticDirectorPlan(input as never) as never,
+      planSequenceAnimaticShotRevision,
+      executeImageGeneration: (context) => mediaRuntime.executeImageGeneration(context as never) as never,
+      executeVideoGeneration: (context) => mediaRuntime.executeVideoGeneration(context as never) as never,
+      cinematicEntityByKey: (assetPack) => cinematicEntityByKey(assetPack),
+      inferSequenceShotVideoTiming: inferSequenceShotVideoTiming as never,
+      buildSeedanceReferenceManifest: buildSeedanceReferenceManifest as never,
+      seedanceReferenceRecordsFromImages: seedanceReferenceRecordsFromImages as never,
+      seedanceReferenceRecordsFromAssetPack: seedanceReferenceRecordsFromAssetPack as never,
+      buildSeedanceCharacterVoiceGuide: (input) => buildSeedanceCharacterVoiceGuide(input as never),
+      formatSeedanceShotLine: (input) => formatSeedanceShotLine(input as never),
+      compactSeedanceControlText,
+      buildCompactSeedanceVideoPrompt: (input) => buildCompactSeedanceVideoPrompt(input as never),
+      seedanceLabanMovementBlock,
+      seedanceProductionBoardArtifactBan: seedanceProductionBoardArtifactBan as never,
+      readUpstreamGuidanceBundle,
+      sequenceAnimaticContinuityAssetStateParse: (value) => sequenceAnimaticContinuityAssetStateSchema.parse(value),
+      sequenceAnimaticContinuityAssetTargetInputHash,
+      sequenceAnimaticAssetGenerationStatus,
+      outputArtifactSelect,
+      registerOtherOutputArtifact: registerOtherOutputArtifact as never,
+      persistSequenceAnimaticDirectorPlanRequestState: persistSequenceAnimaticDirectorPlanRequestState as never,
+      registerVideoArtifact: registerVideoArtifact as never,
+      runStructuredNode: runCinematicV2StructuredNode,
+      runBackgroundStructuredNode: runCinematicV2StructuredNodeBackground,
     },
     register: (handlerKey, handler) => {
       registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
