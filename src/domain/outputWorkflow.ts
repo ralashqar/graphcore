@@ -7,7 +7,75 @@ import {
   outputGuidanceModeSchema,
   resolveOutputSkillsForNode,
 } from './outputSkills.ts'
-import { getOutputWorkflowNodeContract } from './outputWorkflowNodeContracts.ts'
+import {
+  getOutputWorkflowNodeContract,
+  getWorkflowNodeManifest,
+  validateWorkflowNodeManifestConfig,
+} from './outputWorkflowNodeContracts.ts'
+export {
+  buildWorkflowProjectionMetadata,
+  childWorkflowUtilityInputSchema,
+  childWorkflowUtilityOutputSchema,
+  createWorkflowNodeExtensionScaffold,
+  createWorkflowNodeManifest,
+  createWorkflowNodeManifestRegistry,
+  getWorkflowNodeManifest as getRegisteredWorkflowNodeManifest,
+  registerWorkflowNodeManifest,
+  validateWorkflowNodeManifestOutput,
+  validateWorkflowTemplateGraph,
+  workflowNodeStreamingPolicySchema,
+  workflowProjectionMetadataSchema,
+  type ChildWorkflowUtilityInput,
+  type ChildWorkflowUtilityOutput,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeExtensionScaffoldInput,
+  type WorkflowNodeManifest,
+  type WorkflowNodeStreamingPolicy,
+  type WorkflowProjectionMetadata,
+  type WorkflowTemplateManifest,
+} from './outputWorkflowManifests.ts'
+export {
+  buildWorkflowTemplateGraph,
+  createWorkflowTemplateRegistry,
+  getWorkflowTemplateManifest,
+  normalizeWorkflowTemplateGraphRows,
+  registerWorkflowTemplateManifest,
+  workflowTemplateSourceHash,
+  type WorkflowTemplateGraphRows,
+  type WorkflowTemplateRegistryEntry,
+} from './outputWorkflowTemplateRegistry.ts'
+export {
+  assertWorkflowNodeHandlerCoverage,
+  createWorkflowNodeHandlerRegistry,
+  getWorkflowNodeHandler,
+  registerWorkflowNodeHandler,
+  type WorkflowNodeHandler,
+  type WorkflowNodeHandlerRegistry,
+} from './workflowNodeHandlerRegistry.ts'
+export {
+  getWorkflowCommandManifest,
+  legacyPayloadForWorkflowCommand,
+  listWorkflowCommandManifests,
+  parseWorkflowCommand,
+  sceneBoardLegacyActionForWorkflowCommand,
+  workflowCommandActionSchema,
+  workflowCommandFamilySchema,
+  workflowCommandFlagsSchema,
+  workflowCommandProxyResponseSchema,
+  workflowCommandSchema,
+  workflowCommandScopeSchema,
+  type WorkflowCommand,
+  type WorkflowCommandAction,
+  type WorkflowCommandFamily,
+  type WorkflowCommandInput,
+  type WorkflowCommandManifest,
+  type WorkflowCommandProxyResponse,
+} from './workflowCommandRegistry.ts'
+export {
+  getWorkflowNodeManifest,
+  outputWorkflowNodeManifests,
+  outputWorkflowNodeManifestsByPurpose,
+} from './outputWorkflowNodeContracts.ts'
 import {
   classifyPromptIntentScored,
   promptIntentCatalogVersion,
@@ -61,7 +129,7 @@ export const cinematicAnimaticModeSchema = z.preprocess(
 
 const sequenceAnimaticMasterMaxShotCount = 150
 export const sequenceAnimaticGraphSpecVersionSchema = z.enum(['sequence_animatic_graph_v1', 'sequence_animatic_graph_v2'])
-export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'director_plan', 'continuity_pack', 'continuity_asset', 'continuity_asset_batch', 'storyboard_block', 'coverage_anchor', 'coverage_intent_batch', 'shot_keyframe', 'shot_video', 'shot_production', 'shot_revision'])
+export const sequenceAnimaticGraphRoleSchema = z.enum(['master', 'director_plan', 'continuity_pack', 'continuity_asset', 'continuity_asset_batch', 'storyboard_block', 'scene_board_prep', 'coverage_anchor', 'coverage_intent_batch', 'shot_keyframe', 'shot_video', 'shot_production', 'shot_revision'])
 export const outputWorkflowArtifactKindSchema = z.enum(['manuscript', 'html', 'pdf', 'epub', 'docx', 'comic_pdf', 'video', 'image', 'package', 'other'])
 export const outputRequestStatusSchema = z.enum(['queued', 'planning', 'awaiting_confirmation', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
 export const outputRequestIntentSchema = z.enum(['world_mutation', 'output_generation', 'answer_only', 'ambiguous'])
@@ -97,6 +165,8 @@ export type OutputWorkflowRunScope = z.infer<typeof outputWorkflowRunScopeSchema
 export const outputWorkflowRunIntentSchema = z.enum([
   'generate_director_plan',
   'prepare_storyboard_block',
+  'prepare_scene_board',
+  'regenerate_scene_board_zone',
   'generate_continuity_pack',
   'derive_continuity_structure',
   'derive_continuity_block',
@@ -815,6 +885,9 @@ export const sequenceAnimaticContinuityAssetBatchKindSchema = z.enum([
   'angle_grid',
   'viewpoint_grid',
   'spot_grid',
+  'zone_spatial_map',
+  'spot_atlas_grid',
+  'viewpoint_atlas_grid',
   'temp_character_grid',
   'prop_grid',
   'single_hero_ref',
@@ -1193,6 +1266,38 @@ export const sequenceAnimaticSceneBoardPrepResponseSchema = z.object({
   prepRuns: sequenceAnimaticSceneBoardPrepRunsSchema,
 })
 
+export const sequenceAnimaticSceneBoardWorkflowCommandActionSchema = z.enum([
+  'prepare_selected_board',
+  'regenerate_zone_top_down',
+  'generate_zone_coverage_grids',
+  'generate_selected_coverage_anchors',
+])
+
+export const sequenceAnimaticSceneBoardWorkflowCommandRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  sceneId: z.string().min(1),
+  action: sequenceAnimaticSceneBoardWorkflowCommandActionSchema.default('prepare_selected_board'),
+  setId: z.string().optional().nullable().default(null),
+  zoneId: z.string().optional().nullable().default(null),
+  scopeNodeId: z.string().optional().nullable().default(null),
+  shotIds: z.array(z.string().min(1)).optional().default([]),
+  forceRefresh: z.boolean().default(false),
+})
+
+export const sequenceAnimaticSceneBoardWorkflowCommandResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  prepRequest: outputRequestSchema,
+  workflow: outputWorkflowSchema,
+  run: outputWorkflowRunSchema.nullable().default(null),
+  nodes: z.array(outputWorkflowNodeSchema).default([]),
+  edges: z.array(outputWorkflowEdgeSchema).default([]),
+  prepRun: sequenceAnimaticSceneBoardPrepRunSchema.nullable().default(null),
+  reused: z.boolean().default(false),
+})
+
 export const sequenceAnimaticSceneGraphNodeKindSchema = z.enum([
   'world_location',
   'set',
@@ -1329,7 +1434,8 @@ export const sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema = z.obje
   masterRequestId: z.string().min(1),
   continuityRequestId: z.string().min(1).nullable().optional(),
   nodeId: z.string().min(1),
-  nodeIds: z.array(z.string().min(1)).max(4).optional(),
+  nodeIds: z.array(z.string().min(1)).max(9).optional(),
+  batchKind: sequenceAnimaticContinuityAssetBatchKindSchema.optional(),
   mode: z.enum(['generate', 'regenerate']).default('generate'),
 })
 
@@ -1571,6 +1677,26 @@ export function validateOutputWorkflowGraph(input: {
     return bundle.diagnostics.map((diagnostic) => `${node.key}: ${diagnostic}`)
   })
   const nodeByKey = new Map(input.nodes.map((node) => [node.key, node] as const))
+  const manifestDiagnostics = input.nodes.flatMap((node) => {
+    const config = node.config && typeof node.config === 'object' && !Array.isArray(node.config)
+      ? node.config as Record<string, unknown>
+      : {}
+    const purpose = typeof config.purpose === 'string' && config.purpose.trim()
+      ? config.purpose.trim()
+      : typeof config.role === 'string'
+        ? config.role.trim()
+        : ''
+    if (!purpose) return []
+    const manifest = getWorkflowNodeManifest(node)
+    if (!manifest) return [`${node.key}: unknown workflow node purpose "${purpose}". Register a WorkflowNodeManifest before using it in a graph.`]
+    if (manifest.nodeType !== '*' && manifest.nodeType !== node.nodeType) {
+      return [`${node.key}: purpose "${purpose}" expects node type "${manifest.nodeType}", received "${node.nodeType}".`]
+    }
+    const configValidation = validateWorkflowNodeManifestConfig(node)
+    return configValidation.ok
+      ? []
+      : configValidation.diagnostics.map((diagnostic) => `${node.key}: ${diagnostic}`)
+  })
   const contractDiagnostics = input.nodes.flatMap((node) => {
     const contract = getOutputWorkflowNodeContract(node)
     if (!contract || contract.requiredInputs.length === 0) return []
@@ -1591,7 +1717,7 @@ export function validateOutputWorkflowGraph(input: {
       ? []
       : [`${edge.sourceNodeKey}: edge uses undeclared "${sourcePort}" output for ${sourceContract.purpose}.`]
   })
-  const diagnostics = [...executionPlan.diagnostics, ...skillDiagnostics, ...contractDiagnostics, ...edgeContractDiagnostics]
+  const diagnostics = [...executionPlan.diagnostics, ...skillDiagnostics, ...manifestDiagnostics, ...contractDiagnostics, ...edgeContractDiagnostics]
   return {
     ok: diagnostics.length === 0,
     diagnostics,
@@ -1856,7 +1982,7 @@ export const defaultOutputWorkflowConcurrency = {
   },
 } as const
 
-export type OutputWorkflowReadyQueueStatus = 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'
+export type OutputWorkflowReadyQueueStatus = 'completed' | 'completed_with_errors' | 'failed' | 'cancelled' | 'waiting'
 
 export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkflowNode, 'key' | 'nodeType' | 'config' | 'metadata'>>(input: {
   nodes: TNode[]
@@ -1869,9 +1995,10 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
     upstream: Record<string, Record<string, unknown>>
     orderIndex: number
     resourceClass: z.infer<typeof outputWorkflowResourceClassSchema>
-  }) => Promise<{ status?: 'completed' | 'skipped'; outputs: Record<string, unknown> }>
+  }) => Promise<{ status?: 'completed' | 'skipped' | 'waiting'; outputs: Record<string, unknown>; resumeAfterMs?: number }>
   onNodeStart?: (context: { node: TNode; orderIndex: number; resourceClass: z.infer<typeof outputWorkflowResourceClassSchema> }) => void | Promise<void>
   onNodeComplete?: (context: { node: TNode; orderIndex: number; outputs: Record<string, unknown>; skipped: boolean }) => void | Promise<void>
+  onNodeWaiting?: (context: { node: TNode; orderIndex: number; outputs: Record<string, unknown>; resumeAfterMs: number }) => void | Promise<void>
   onNodeFailed?: (context: { node: TNode; orderIndex: number; error: unknown; blockedDependents: string[] }) => void | Promise<void>
   onNodeCancelled?: (context: { node: TNode; orderIndex: number; reason: string; blockedBy?: string }) => void | Promise<void>
   onHeartbeat?: (context: { pending: string[]; running: string[]; completed: string[]; failed: string[]; cancelled: string[]; skipped: string[] }) => void | Promise<void>
@@ -1882,7 +2009,7 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
   const nodeByKey = new Map(input.nodes.map((node) => [node.key, node]))
   const orderIndexByKey = new Map(executionPlan.orderedNodeKeys.map((key, index) => [key, index]))
   const pending = new Set(executionPlan.orderedNodeKeys)
-  const running = new Map<string, Promise<{ key: string; outputs?: Record<string, unknown>; skipped?: boolean; error?: unknown }>>()
+  const running = new Map<string, Promise<{ key: string; outputs?: Record<string, unknown>; skipped?: boolean; waiting?: boolean; resumeAfterMs?: number; error?: unknown }>>()
   const completed = new Set<string>()
   const skipped = new Set<string>()
   const failed = new Set<string>()
@@ -1979,7 +2106,7 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
       orderIndex: orderIndexByKey.get(key) ?? 0,
       resourceClass: execution.resourceClass,
     })
-      .then((result) => ({ key, outputs: result.outputs, skipped: result.status === 'skipped' }))
+      .then((result) => ({ key, outputs: result.outputs, skipped: result.status === 'skipped', waiting: result.status === 'waiting', resumeAfterMs: result.resumeAfterMs }))
       .catch((error) => ({ key, error }))
       .finally(() => {
         runningByResourceClass.set(execution.resourceClass, Math.max(0, (runningByResourceClass.get(execution.resourceClass) ?? 1) - 1))
@@ -2045,6 +2172,27 @@ export async function runOutputWorkflowReadyQueue<TNode extends Pick<OutputWorkf
       for (const key of [...pending]) await markCancelled(key, key === settled.key ? 'failed' : 'blocked_by_failed_dependency', settled.key)
       await heartbeat()
       return { status: 'failed' as const, outputsByNodeKey, completed: [...completed], failed: [...failed], cancelled: [...cancelled], skipped: [...skipped] }
+    }
+    if (settled.waiting) {
+      outputsByNodeKey[settled.key] = settled.outputs ?? {}
+      const resumeAfterMs = Math.max(0, Math.floor(Number(settled.resumeAfterMs) || 15_000))
+      await input.onNodeWaiting?.({
+        node: settledNode,
+        orderIndex,
+        outputs: settled.outputs ?? {},
+        resumeAfterMs,
+      })
+      await heartbeat()
+      return {
+        status: 'waiting' as const,
+        outputsByNodeKey,
+        completed: [...completed],
+        failed: [...failed],
+        cancelled: [...cancelled],
+        skipped: [...skipped],
+        waitingNodeKey: settled.key,
+        resumeAfterMs,
+      }
     }
     outputsByNodeKey[settled.key] = settled.outputs ?? {}
     completed.add(settled.key)
@@ -3941,6 +4089,8 @@ export type SequenceAnimaticCoverageIntentRecord = z.infer<typeof sequenceAnimat
 export type SequenceAnimaticShotCoverageIntentEnsureResponse = z.infer<typeof sequenceAnimaticShotCoverageIntentEnsureResponseSchema>
 export type SequenceAnimaticSceneBoardPrepRun = z.infer<typeof sequenceAnimaticSceneBoardPrepRunSchema>
 export type SequenceAnimaticSceneBoardPrepResponse = z.infer<typeof sequenceAnimaticSceneBoardPrepResponseSchema>
+export type SequenceAnimaticSceneBoardWorkflowCommandAction = z.infer<typeof sequenceAnimaticSceneBoardWorkflowCommandActionSchema>
+export type SequenceAnimaticSceneBoardWorkflowCommandResponse = z.infer<typeof sequenceAnimaticSceneBoardWorkflowCommandResponseSchema>
 export type SequenceAnimaticSceneGraphNodeKind = z.infer<typeof sequenceAnimaticSceneGraphNodeKindSchema>
 export type SequenceAnimaticSceneGraphNodeOverride = z.infer<typeof sequenceAnimaticSceneGraphNodeOverrideSchema>
 export type SequenceAnimaticSceneGraphOverrides = z.infer<typeof sequenceAnimaticSceneGraphOverridesSchema>

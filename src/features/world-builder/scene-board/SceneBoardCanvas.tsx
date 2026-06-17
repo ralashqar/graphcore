@@ -1,6 +1,8 @@
 import { Background, Controls, ReactFlow, type Node } from '@xyflow/react'
 import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import type { WorkflowProgressViewModel } from '../../../domain/workflowProgressView'
 import { EntityIcon } from '../../../shared/entityIcons'
+import { WorkflowGraphButton, WorkflowNodeTimeline, WorkflowProgressSummary } from '../../workflows/WorkflowProgressWidgets'
 import {
   buildSequenceAnimaticSceneBoardView,
   sequenceAnimaticSceneBoardPrepRunForScope,
@@ -14,12 +16,31 @@ import {
   type SequenceAnimaticViewModel,
 } from './sceneBoardProjection'
 
+function workflowPrepStage(progress: WorkflowProgressViewModel): SequenceAnimaticSceneBoardPrepRunState['stage'] {
+  const key = `${progress.activeNodeKey} ${progress.activeManifestPurpose} ${progress.activeProgressLabel}`.toLowerCase()
+  if (progress.status === 'failed' || progress.status === 'cancelled' || progress.failedSteps > 0) return 'failed'
+  if (progress.status === 'completed' || progress.status === 'completed_with_errors') return 'complete'
+  if (key.includes('coverage_grid') || key.includes('zone_coverage')) return 'coverage_grids'
+  if (key.includes('coverage_intent') || key.includes('coverage direction')) return 'coverage_directions'
+  if (key.includes('scaffold') || key.includes('zone map') || key.includes('spot atlas')) return 'scaffold_refs'
+  return 'set_refs'
+}
+
+function workflowPrepMessage(progress: WorkflowProgressViewModel) {
+  if (progress.latestError) return progress.latestError
+  if (progress.recoveryHints[0]) return progress.recoveryHints[0]
+  if (progress.activeChildRequestIds.length > 0) return `${progress.activeChildRequestIds.length} child workflow${progress.activeChildRequestIds.length === 1 ? '' : 's'} active.`
+  return progress.activeProgressLabel || progress.activeNodeLabel || progress.title
+}
+
 export function SequenceAnimaticSceneBoardCanvas({
   model,
   initialSceneId,
   scopeNodeId,
   continuityPrepBusy,
   continuityPrepRun,
+  workflowProgress,
+  onOpenWorkflowGraph,
   coverageGenerationBusy,
   keyframeGenerationBusy,
   onClose,
@@ -36,11 +57,13 @@ export function SequenceAnimaticSceneBoardCanvas({
   scopeNodeId?: string | null
   continuityPrepBusy: boolean
   continuityPrepRun?: SequenceAnimaticSceneBoardPrepRunState | null
+  workflowProgress?: WorkflowProgressViewModel | null
+  onOpenWorkflowGraph?: () => void
   coverageGenerationBusy: boolean
   keyframeGenerationBusy: boolean
   onClose: () => void
   onOpenSceneGraph: (sceneId: string, scopeNodeId?: string | null) => void
-  onPrepareContinuity: (scene: any, scopeNodeId?: string | null) => Promise<unknown> | unknown
+  onPrepareContinuity: (scene: any, scopeNodeId?: string | null, options?: { forceRefresh?: boolean }) => Promise<unknown> | unknown
   onCancelPrep: (run: SequenceAnimaticSceneBoardPrepRunState) => void
   onGenerateSceneCoverage: (scene: any) => void
   onGenerateCoverageAnchor: (anchor: any) => Promise<unknown> | unknown
@@ -87,10 +110,46 @@ export function SequenceAnimaticSceneBoardCanvas({
       .filter((tile) => !tile.shot.isProvisional)
       .every((tile) => tile.coverageReady)
     : false
+  const workflowPrepRun = useMemo<SequenceAnimaticSceneBoardPrepRunState | null>(() => {
+    if (!workflowProgress || !scene || !currentPrepRunKey) return null
+    const now = Date.now()
+    const stage = workflowPrepStage(workflowProgress)
+    const running = workflowProgress.runningSteps + workflowProgress.activeChildRequestIds.length
+    return {
+      runKey: currentPrepRunKey,
+      runId: workflowProgress.latestRunId || workflowProgress.requestId || currentPrepRunKey,
+      sceneId: scene.id,
+      setId: null,
+      zoneId: null,
+      scopeNodeId: scopeNodeId || null,
+      activeUnitId: scopeNodeId || null,
+      activeUnitLabel: scene.title,
+      stage,
+      stageLabel: stage === 'complete'
+        ? 'Ready for keyframes'
+        : workflowProgress.activeProgressLabel || workflowProgress.activeNodeLabel || workflowProgress.title,
+      message: workflowPrepMessage(workflowProgress),
+      queued: workflowProgress.queuedSteps,
+      running,
+      ready: workflowProgress.completedSteps || workflowProgress.readyArtifactCount,
+      failed: workflowProgress.failedSteps,
+      activeReferenceNodeIds: [],
+      activeCoverageShotIds: stage === 'coverage_directions' || stage === 'coverage_grids'
+        ? board?.shots.map((tile) => tile.id) ?? []
+        : [],
+      activeRequestIds: workflowProgress.activeChildRequestIds.length > 0 ? workflowProgress.activeChildRequestIds : workflowProgress.requestId ? [workflowProgress.requestId] : [],
+      activeRunIds: workflowProgress.activeChildRunIds.length > 0 ? workflowProgress.activeChildRunIds : workflowProgress.latestRunId ? [workflowProgress.latestRunId] : [],
+      activeRunStepKey: workflowProgress.activeNodeKey,
+      startedAt: now,
+      updatedAt: now,
+      error: workflowProgress.latestError,
+    }
+  }, [board?.shots, currentPrepRunKey, scene, scopeNodeId, workflowProgress])
   const effectivePrepRun = (() => {
+    const graphRun = workflowPrepRun?.runKey === currentPrepRunKey ? workflowPrepRun : null
     const localRun = continuityPrepRun?.runKey === currentPrepRunKey ? continuityPrepRun : null
     const persistedRun = persistedPrepRun?.runKey === currentPrepRunKey ? persistedPrepRun : null
-    const run = localRun ?? persistedRun
+    const run = graphRun ?? localRun ?? persistedRun
     if (!run) return null
     if (allVisibleCoverageReady && run.stage !== 'complete' && run.activeCoverageShotIds.length > 0) {
       return {
@@ -188,6 +247,7 @@ export function SequenceAnimaticSceneBoardCanvas({
   const continuityPrepActionDisabled = !scene
     || optimisticPrepStarting
     || (continuityPrepBusy && !continuityPrepRunFailed)
+    || (continuityPrepRunActive && !continuityPrepRunFailed)
     || coverageGenerationBusy
     || scene.status !== 'ready'
   const continuityPrepButtonLabel = continuityPrepRunFailed
@@ -199,6 +259,18 @@ export function SequenceAnimaticSceneBoardCanvas({
     if (!scene || continuityPrepActionDisabled) return
     setOptimisticPrepStarting(true)
     void Promise.resolve(onPrepareContinuity(scene, scopeNodeId))
+      .catch(() => {
+        // Parent state surfaces the actual error. This local state only controls
+        // immediate click feedback before the persisted prep run hydrates.
+      })
+      .finally(() => {
+        window.setTimeout(() => setOptimisticPrepStarting(false), 250)
+      })
+  }, [continuityPrepActionDisabled, onPrepareContinuity, scene, scopeNodeId])
+  const handleRegenerateZoneTopDownClick = useCallback(() => {
+    if (!scene || continuityPrepActionDisabled) return
+    setOptimisticPrepStarting(true)
+    void Promise.resolve(onPrepareContinuity(scene, scopeNodeId, { forceRefresh: true }))
       .catch(() => {
         // Parent state surfaces the actual error. This local state only controls
         // immediate click feedback before the persisted prep run hydrates.
@@ -407,6 +479,15 @@ export function SequenceAnimaticSceneBoardCanvas({
           >
             {continuityPrepVisualBusy ? <><span className="world-mini-spinner" aria-hidden="true" />{continuityPrepButtonLabel}</> : 'Prepare Selected Board'}
           </button>
+          <button
+            className="ghost-button compact"
+            disabled={continuityPrepActionDisabled}
+            onClick={handleRegenerateZoneTopDownClick}
+            type="button"
+            title="Regenerate the selected zone map, spot atlas refs, and shot coverage grids from the top down."
+          >
+            Regenerate Zone Top-Down
+          </button>
           {continuityPrepRunActive && effectivePrepRun ? (
             <button className="ghost-button compact" onClick={() => onCancelPrep(effectivePrepRun)} type="button">
               Stop
@@ -422,6 +503,14 @@ export function SequenceAnimaticSceneBoardCanvas({
       ) : (
         <div className="world-wiki-scene-board-body">
           <div className="world-wiki-scene-board-canvas">
+            {workflowProgress ? (
+              <div className="world-wiki-scene-board-workflow-progress">
+                <WorkflowProgressSummary model={workflowProgress} compact>
+                  <WorkflowGraphButton disabled={!workflowProgress.workflowId} onOpen={onOpenWorkflowGraph} />
+                </WorkflowProgressSummary>
+                <WorkflowNodeTimeline nodes={workflowProgress.nodes} limit={5} />
+              </div>
+            ) : null}
             <div className="world-wiki-scene-board-prep-strip" aria-label="Continuity Prep stages">
               <div>
                 <strong>{effectivePrepRun ? <>{continuityPrepRunActive ? <span className="world-mini-spinner" aria-hidden="true" /> : null}{effectivePrepRun.stageLabel || effectivePrepRun.message}</> : board.prepSummary}</strong>
@@ -561,6 +650,9 @@ export function SequenceAnimaticSceneBoardCanvas({
                 title={continuityPrepDisabledReason || board.prepSummary}
               >
                 {continuityPrepVisualBusy ? <><span className="world-mini-spinner" aria-hidden="true" />{continuityPrepButtonLabel}</> : 'Prepare Selected Board'}
+              </button>
+              <button className="ghost-button compact" disabled={continuityPrepActionDisabled} onClick={handleRegenerateZoneTopDownClick} type="button">
+                Regenerate Zone Top-Down
               </button>
               <button className="ghost-button compact" disabled={!scene || coverageGenerationBusy || !board.canGenerateCoverageGrids} onClick={() => scene && onGenerateSceneCoverage(scene)} type="button">
                 {coverageGenerationBusy ? <><span className="world-mini-spinner" aria-hidden="true" />Generating grid</> : 'Generate zone grids'}

@@ -2,6 +2,7 @@ import test, { type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { z } from 'zod'
 
 import {
   buildOutputGuidanceBundleForNode,
@@ -61,6 +62,21 @@ import {
   topologicallySortOutputWorkflow,
   validateOutputWorkflowGraph,
   hashOutputWorkflowValue,
+  buildWorkflowTemplateGraph,
+  childWorkflowUtilityInputSchema,
+  childWorkflowUtilityOutputSchema,
+  createWorkflowNodeManifest,
+  createWorkflowNodeExtensionScaffold,
+  createWorkflowNodeManifestRegistry,
+  createWorkflowTemplateRegistry,
+  getWorkflowNodeManifest,
+  normalizeWorkflowTemplateGraphRows,
+  outputWorkflowNodeManifestsByPurpose,
+  registerWorkflowTemplateManifest,
+  validateWorkflowNodeManifestOutput,
+  workflowNodeStreamingPolicySchema,
+  workflowProjectionMetadataSchema,
+  workflowTemplateSourceHash,
 } from './outputWorkflow.ts'
 import {
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
@@ -73,6 +89,8 @@ import {
 import {
   buildSequenceAnimaticShotCoverageIntentWorkflowGraph,
   buildSequenceAnimaticZoneCoverageBoardWorkflowGraph,
+  sequenceAnimaticSceneBoardPrepTemplateKey,
+  sequenceAnimaticWorkflowTemplateRegistry,
 } from '../../supabase/functions/_shared/sequence-animatic-scene-board-workflows.ts'
 import {
   buildRecoveredOutputFromArtifact,
@@ -375,6 +393,223 @@ test('workflow contract validation reports missing required sequence animatic po
   })
   assert.equal(validation.ok, false)
   assert.match(validation.diagnostics.join('\n'), /manifest: missing required "director_plan" input/)
+})
+
+test('workflow node manifests back contracts and reject duplicate purpose registration', () => {
+  const manifest = getWorkflowNodeManifest({ purpose: 'cinematic_v3_storyboard_sheet' })
+  assert.equal(manifest?.purpose, 'cinematic_v3_storyboard_sheet')
+  assert.equal(manifest?.recoveryStrategy, 'node_step_artifact')
+  assert.equal(outputWorkflowNodeManifestsByPurpose.get('sequence_animatic_manifest_artifact')?.progressLabel, 'Registering animatic manifest')
+  const duplicate = createWorkflowNodeManifest({
+    purpose: 'duplicate_manifest_test',
+    label: 'Duplicate',
+    requiredInputs: [],
+    producedOutputs: ['output'],
+    artifactRoles: [],
+    previewRoles: [],
+    recoveryStrategy: 'none',
+    progressLabel: 'Testing duplicate manifest',
+    providerBacked: false,
+    manualOnly: false,
+  })
+  assert.throws(
+    () => createWorkflowNodeManifestRegistry([duplicate, duplicate]),
+    /Duplicate workflow node manifest purpose/,
+  )
+})
+
+test('workflow node manifests expose streaming policy and reusable extension scaffolds', () => {
+  const sceneShotPlan = getWorkflowNodeManifest({ purpose: 'sequence_animatic_scene_shot_plan' })
+  assert.equal(sceneShotPlan?.streamingPolicy.mode, 'jsonl')
+  assert.deepEqual(sceneShotPlan?.streamingPolicy.partialArtifactRoles, ['sequence_animatic_scene_plan'])
+  assert.equal(sceneShotPlan?.streamingPolicy.progressLabels.streaming, 'Streaming scene shot plan')
+
+  const parsedStreamingPolicy = workflowNodeStreamingPolicySchema.parse({
+    mode: 'jsonl',
+    partialArtifactRoles: ['partial_board'],
+    progressLabels: { streaming: 'Streaming partial board' },
+  })
+  assert.equal(parsedStreamingPolicy.resumeTokenRequired, false)
+
+  const scaffold = createWorkflowNodeExtensionScaffold({
+    purpose: 'test_modular_node',
+    label: 'Test Modular Node',
+    requiredInputs: ['input'],
+    producedOutputs: ['output'],
+    artifactRoles: ['test_artifact'],
+    previewRoles: ['output'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Testing modular node',
+    providerBacked: false,
+    manualOnly: false,
+    config: { version: 1 },
+  })
+  assert.equal(scaffold.manifest.purpose, 'test_modular_node')
+  assert.equal(scaffold.handlerKey, 'test_modular_node')
+  assert.equal(scaffold.templateKey, 'test_modular_node_workflow')
+  assert.deepEqual(scaffold.templateNodeConfig, { version: 1, purpose: 'test_modular_node' })
+  assert.ok(scaffold.requiredTests.includes('handler:test_modular_node:output_schema'))
+  assert.match(scaffold.checklist.join('\n'), /server-owned template registry/)
+})
+
+test('workflow node manifest output validation is reusable outside the worker', () => {
+  const manifest = createWorkflowNodeManifest({
+    purpose: 'strict_output_test',
+    label: 'Strict Output Test',
+    requiredInputs: [],
+    producedOutputs: ['ok'],
+    artifactRoles: [],
+    previewRoles: ['ok'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Testing strict output',
+    providerBacked: false,
+    manualOnly: false,
+    outputSchema: z.object({ ok: z.literal(true) }).strict(),
+  })
+  assert.deepEqual(validateWorkflowNodeManifestOutput(manifest, { ok: true }), {
+    ok: true,
+    outputs: { ok: true },
+    diagnostics: [],
+  })
+  const invalid = validateWorkflowNodeManifestOutput(manifest, { ok: false })
+  assert.equal(invalid.ok, false)
+  assert.match(invalid.diagnostics.join('\n'), /Invalid input/)
+})
+
+test('workflow graph validation rejects unknown manifest purposes', () => {
+  const validation = validateOutputWorkflowGraph({
+    nodes: [
+      { key: 'input', nodeType: 'utility_transform', config: {} },
+      { key: 'mystery', nodeType: 'utility_transform', config: { purpose: 'unregistered_runtime_node' } },
+    ],
+    edges: [
+      { sourceNodeKey: 'input', sourcePort: 'output', targetNodeKey: 'mystery', targetPort: 'input' },
+    ],
+  })
+  assert.equal(validation.ok, false)
+  assert.match(validation.diagnostics.join('\n'), /unknown workflow node purpose "unregistered_runtime_node"/)
+})
+
+test('workflow template registry validates scene board prep graph and source hash stability', () => {
+  const rawInput = {
+    workflowId: 'workflow-scene-board',
+    draftId: 'draft-1',
+    commonConfig: {
+      masterRequestId: 'master-1',
+      sceneId: 'scene_001',
+      sceneBoardPrepIdentity: 'identity-1',
+    },
+    command: {
+      action: 'prepare_selected_board',
+      sceneId: 'scene_001',
+      zoneId: 'zone_a',
+      shotIds: ['shot_002', 'shot_001'],
+      forceRefresh: false,
+    },
+  }
+  const result = buildWorkflowTemplateGraph({
+    registry: sequenceAnimaticWorkflowTemplateRegistry,
+    templateKey: sequenceAnimaticSceneBoardPrepTemplateKey,
+    rawInput,
+    validateGraph: (graph) => validateOutputWorkflowGraph(normalizeWorkflowTemplateGraphRows(graph) as any),
+  })
+  assert.equal(result.ok, true, result.diagnostics.join('\n'))
+  assert.deepEqual(result.graph?.nodes.map((node) => node.key), [
+    'scope_input',
+    'required_ref_plan',
+    'fanout_set_refs',
+    'collect_set_refs',
+    'fanout_scaffold_refs',
+    'collect_scaffold_refs',
+    'coverage_intent_batch',
+    'fanout_coverage_intents',
+    'collect_coverage_intents',
+    'zone_coverage_grid',
+    'fanout_zone_coverage_grids',
+    'collect_zone_coverage_grids',
+    'register_projection',
+    'coverage_cell_artifact',
+  ])
+  const purposeByKey = new Map(result.graph?.nodes.map((node) => [node.key, String((node.config as Record<string, unknown>).purpose)]))
+  assert.equal(purposeByKey.get('fanout_set_refs'), 'workflow_fanout_children')
+  assert.equal(purposeByKey.get('collect_set_refs'), 'workflow_collect_child_artifacts')
+  assert.equal(purposeByKey.get('coverage_intent_batch'), 'sequence_animatic_scene_board_coverage_intent_batch')
+  assert.equal(purposeByKey.get('fanout_coverage_intents'), 'workflow_fanout_children')
+  assert.equal(purposeByKey.get('zone_coverage_grid'), 'sequence_animatic_scene_board_zone_coverage_grid')
+  assert.equal(purposeByKey.get('collect_zone_coverage_grids'), 'workflow_collect_child_artifacts')
+  assert.equal(purposeByKey.get('register_projection'), 'workflow_register_artifact_projection')
+  assert.doesNotMatch(JSON.stringify(result.graph), /workflow_ensure_child_workflow/)
+  assert.match(JSON.stringify(result.graph?.edges), /projection__artifact/)
+  assert.match(JSON.stringify(result.graph?.edges), /coverage_intent_batch__fanout_coverage_intents/)
+  assert.match(JSON.stringify(result.graph?.edges), /zone_coverage_grid__fanout_zone_coverage_grids/)
+  const sameHash = workflowTemplateSourceHash({
+    command: rawInput.command,
+    commonConfig: rawInput.commonConfig,
+    draftId: rawInput.draftId,
+    policyVersion: 'scene_board_prep_graph_v1',
+  })
+  const changedHash = workflowTemplateSourceHash({
+    command: { ...rawInput.command, forceRefresh: true },
+    commonConfig: rawInput.commonConfig,
+    draftId: rawInput.draftId,
+    policyVersion: 'scene_board_prep_graph_v1',
+  })
+  assert.equal(result.sourceHash, sameHash)
+  assert.notEqual(result.sourceHash, changedHash)
+})
+
+test('scene board graph-native planner nodes use shared child spec planners', () => {
+  const packSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-scene-board-pack.ts'), 'utf8')
+  const plannerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-scene-board-child-planners.ts'), 'utf8')
+  const utilitySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-utility-pack.ts'), 'utf8')
+
+  assert.match(packSource, /planSceneBoardCoverageIntentChildren/)
+  assert.match(packSource, /planSceneBoardZoneCoverageGridChildren/)
+  assert.match(packSource, /childWorkflows/)
+  assert.match(plannerSource, /buildSequenceAnimaticShotCoverageIntentWorkflowGraph/)
+  assert.match(plannerSource, /buildSequenceAnimaticZoneCoverageBoardWorkflowGraph/)
+  assert.match(plannerSource, /coverageIntentBatchId/)
+  assert.match(plannerSource, /boardId/)
+  assert.doesNotMatch(plannerSource, /from '.\/output-workflow\.ts'/)
+  assert.match(utilitySource, /entry\.childWorkflows/)
+  assert.match(utilitySource, /ensureChildWorkflow/)
+})
+
+test('workflow template registry rejects duplicate templates and child utility schemas are strict', () => {
+  const registry = createWorkflowTemplateRegistry()
+  const template = {
+    key: 'test_template',
+    label: 'Test Template',
+    inputSchema: z.object({ id: z.string() }),
+    policyVersion: 'test_v1',
+    buildGraph: (input: { id: string }) => ({ nodes: [{ key: input.id, config: {} }], edges: [] }),
+    sourceHash: (input: { id: string }) => workflowTemplateSourceHash(input),
+  }
+  registerWorkflowTemplateManifest(registry, template)
+  assert.throws(() => registerWorkflowTemplateManifest(registry, template), /already registered/)
+  assert.equal(childWorkflowUtilityInputSchema.parse({
+    parentRunId: 'run',
+    parentWorkflowId: 'workflow',
+    parentNodeKey: 'node',
+    childTemplateKey: 'template',
+    identityHash: 'hash',
+  }).forceRefresh, false)
+  assert.equal(childWorkflowUtilityOutputSchema.parse({
+    childRequestId: 'request',
+    childWorkflowId: 'workflow',
+  }).status, 'waiting')
+  assert.equal(workflowProjectionMetadataSchema.parse({ activeManifestPurpose: 'purpose' }).activeProgressLabel, '')
+})
+
+test('output worker routes execution through manifest dispatch', () => {
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  assert.match(workerSource, /export async function executeWorkflowNodeByManifest/)
+  assert.match(workerSource, /validateWorkflowNodeManifestOutput/)
+  assert.match(workerSource, /const result = await executeWorkflowNodeByManifest/)
+  assert.match(workerSource, /registerSceneBoardWorkflowNodePack/)
+  assert.match(workerSource, /registerWorkflowUtilityNodePack/)
+  assert.doesNotMatch(workerSource, /sequence-animatic-scene-board-set-ref-generation-v1/)
+  assert.doesNotMatch(workerSource, /sequence-animatic-scene-board-zone-coverage-grid-v1/)
 })
 
 test('shared Seedance reference manifest formats exact provider order', () => {
@@ -2041,6 +2276,10 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(workerSource, /scopeAssetPackToReferenceAssetKeys/)
   assert.match(workerSource, /referenceScope: 'sequence_animatic_shot_keyframe'/)
   assert.match(workerSource, /referenceScope: 'sequence_animatic_coverage_anchor'/)
+  assert.match(workerSource, /requiresContinuityPrompt/)
+  assert.match(workerSource, /continuityFallbackPrompt/)
+  assert.match(workerSource, /\|\| \(requiresContinuityPrompt \? '' : input\.run\.prompt\)/)
+  assert.match(workerSource, /config\.pageAssetPack \?\? config\.page_asset_pack \?\? config\.assetPack \?\? config\.asset_pack/)
   assert.doesNotMatch(workerSource, /Use coverage anchor asset:/)
   assert.doesNotMatch(workerSource, /Use previous keyframe continuity asset:/)
 })
@@ -2346,7 +2585,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(pageSource, /startSequenceAnimaticContinuityAssetRunGroups/)
   assert.match(pageSource, /startSequenceAnimaticZoneCoverageBoardRuns/)
   assert.match(pageSource, /scaffoldGroups\.length/)
-  assert.match(sceneBoardProjectionSource, /index < targets\.length; index \+= 4/)
+  assert.match(sceneBoardProjectionSource, /index < targets\.length; index \+= 9/)
   assert.match(pageSource, /index < group\.length; index \+= 9/)
   assert.match(sceneBoardProjectionSource, /Math\.ceil\(coverageShots\.length \/ 9\)/)
   assert.match(pageSource, /Scene Board/)
@@ -2613,6 +2852,7 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
 
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-zone-coverage-boards/index.ts'), 'utf8')
+  const plannerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-scene-board-child-planners.ts'), 'utf8')
   const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
 
   assert.match(workerSource, /sequence_animatic_zone_coverage_board_brief/)
@@ -2623,7 +2863,7 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.match(workerSource, /sourceArtifactRole: 'sequence_animatic_zone_coverage_cell'/)
   assert.match(workerSource, /role: 'sequence_animatic_coverage_anchor'/)
   assert.match(workerSource, /zone_camera_grid_cell/)
-  assert.match(workerSource, /location_camera_plate_v1/)
+  assert.match(workerSource, /location_camera_plate_v2/)
   assert.match(workerSource, /Project art style lock/)
   assert.match(workerSource, /User-edited scene graph direction/)
   assert.match(workerSource, /sanitizeSequenceAnimaticCameraPlateText/)
@@ -2639,36 +2879,38 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.doesNotMatch(workerSource, /wide storyboard-style labeled blockout plate/)
   assert.doesNotMatch(workerSource, /Labels\/placeholders/)
   assert.match(workerSource, /sequenceAnimaticZoneCoverageRegistry/)
-  assert.match(ensureSource, /chunk\(entries, 9\)/)
-  assert.match(ensureSource, /scopeSetId/)
-  assert.match(ensureSource, /scopeZoneId/)
-  assert.match(ensureSource, /sceneId \+ setId \+ zoneId|setId.*zoneId/s)
-  assert.match(ensureSource, /resolveSequenceAnimaticCombinedManifest/)
-  assert.match(ensureSource, /combinedSceneShots/)
-  assert.match(ensureSource, /readySceneIds: combinedReadySceneIds/)
-  assert.match(ensureSource, /requestedShotIds = readStringArray\(payload\.shotIds\)/)
-  assert.match(ensureSource, /shotIds: requestedShotIds/)
-  assert.match(ensureSource, /shotBindings = asRecord\(directorPlan\.shotBindings/)
-  assert.match(ensureSource, /rawShotBinding = asRecord\(shotBindings\[shotId\]\)/)
-  assert.match(ensureSource, /applyContinuityAssetStatesToNodes/)
-  assert.match(ensureSource, /continuityAssetArtifactsResponse/)
-  assert.match(ensureSource, /locationReferenceAssetKeys: readStringArray\(entry\.assetPack\.scopedReferenceAssetKeys\)/)
-  assert.match(ensureSource, /matchingChildIsActive/)
+  assert.match(ensureSource, /planSceneBoardZoneCoverageGridChildren/)
+  assert.match(ensureSource, /ensureChildWorkflow/)
+  assert.doesNotMatch(ensureSource, /chunk\(entries, 9\)/)
+  assert.match(plannerSource, /chunk\(entries, 9\)/)
+  assert.match(plannerSource, /scopeSetId/)
+  assert.match(plannerSource, /scopeZoneId/)
+  assert.match(plannerSource, /entry\.spatial\.sceneId, entry\.spatial\.setId \|\| 'set', entry\.spatial\.zoneId/)
+  assert.match(plannerSource, /resolveSceneBoardCombinedManifest/)
+  assert.match(plannerSource, /readySceneIds/)
+  assert.match(plannerSource, /requestedShotIds = uniqueTexts\(input\.shotIds/)
+  assert.match(plannerSource, /shotIds: requestedShotIds/)
+  assert.match(plannerSource, /shotBindings = asRecord\(input\.directorPlan\.shotBindings/)
+  assert.match(plannerSource, /rawShotBinding = asRecord\(shotBindings\[shotId\]\)/)
+  assert.match(plannerSource, /applyContinuityAssetStatesToNodes/)
+  assert.match(plannerSource, /continuityAssetArtifactsResponse/)
+  assert.match(plannerSource, /locationReferenceAssetKeys: readStringArray\(entry\.assetPack\.scopedReferenceAssetKeys\)/)
+  assert.match(plannerSource, /matchingChildrenToStale/)
   assert.match(ensureSource, /ZoneCoverageHttpError/)
-  assert.match(ensureSource, /availableZoneIds/)
-  assert.match(ensureSource, /zone_camera_coverage_grid_v6/)
-  assert.match(ensureSource, /effectiveSceneId/)
-  assert.match(ensureSource, /sceneIdFromShotId/)
-  assert.match(ensureSource, /requestedSceneId === 'sequence_animatic_master'/)
-  assert.match(ensureSource, /bindingScene && bindingScene !== 'sequence_animatic_master'/)
-  assert.match(ensureSource, /missing_spatial_reference_assets/)
-  assert.match(ensureSource, /missingSpatialReferencesForEntry/)
-  assert.match(ensureSource, /coverageCellScopeKey/)
-  assert.match(ensureSource, /sceneGraphOverridesForSpatialScope/)
-  assert.match(ensureSource, /sceneGraphOverrides/)
-  assert.match(ensureSource, /locationAssetPackForShot/)
+  assert.match(plannerSource, /availableZoneIds/)
+  assert.match(plannerSource, /zone_camera_coverage_grid_v7/)
+  assert.match(plannerSource, /effectiveSceneId/)
+  assert.match(plannerSource, /sceneIdFromShotId/)
+  assert.match(plannerSource, /requestedSceneId === 'sequence_animatic_master'/)
+  assert.match(plannerSource, /bindingScene && bindingScene !== 'sequence_animatic_master'/)
+  assert.match(plannerSource, /missing_spatial_reference_assets/)
+  assert.match(plannerSource, /missingSpatialReferencesForEntry/)
+  assert.match(plannerSource, /coverageCellScopeKey/)
+  assert.match(plannerSource, /sceneGraphOverridesForSpatialScope/)
+  assert.match(plannerSource, /sceneGraphOverrides/)
+  assert.match(plannerSource, /locationAssetPackForShot/)
   assert.doesNotMatch(ensureSource, /subjectLabelsForShot/)
-  assert.match(ensureSource, /buildSequenceAnimaticZoneCoverageBoardWorkflowGraph/)
+  assert.match(plannerSource, /buildSequenceAnimaticZoneCoverageBoardWorkflowGraph/)
   assert.doesNotMatch(ensureSource, /Prepare the shot graphs for this scene before generating zone coverage boards/)
   assert.doesNotMatch(pageSource, /preparedShotGraphCount/)
   assert.match(pageSource, /runMode: 'sequence_animatic_zone_coverage_board'/)
@@ -2779,9 +3021,13 @@ test('sequence animatic scene board prep state persists responsive progress meta
   const functionSource = readFileSync(resolve(repoRoot, 'supabase/functions/prepare-sequence-animatic-scene-board/index.ts'), 'utf8')
 
   assert.match(pageSource, /sequenceAnimaticSceneBoardPrepRunForScope/)
+  assert.match(pageSource, /sceneBoardPrepRequestMatchesScope/)
+  assert.match(pageSource, /sequenceAnimaticSceneBoardWorkflowProgress/)
+  assert.match(pageSource, /workflowProgressForRequest\(\s*sequenceAnimaticSceneBoardPrepRequestId/)
+  assert.match(pageSource, /workflowProgress={sequenceAnimaticSceneBoardWorkflowProgress}/)
   assert.match(pageSource, /onPrepareSequenceAnimaticSceneBoard/)
-  assert.match(pageSource, /Scene Board prep fallback refresh failed/)
-  assert.match(pageSource, /Still waiting for required set, zone, and spot references before coverage grids/)
+  assert.doesNotMatch(pageSource, /Failed to persist Scene Board prep state/)
+  assert.match(pageSource, /Still waiting for required set, zone map, and spot atlas references before coverage grids/)
   assert.match(pageSource, /Prepare Selected Board first\. Missing required continuity refs/)
   assert.match(sceneBoardProjectionSource, /sequenceAnimaticSceneBoardReferenceHasAsset/)
   assert.match(sceneBoardProjectionSource, /tile\.target\?\.assetKey/)
@@ -2791,6 +3037,11 @@ test('sequence animatic scene board prep state persists responsive progress meta
   assert.match(repoSource, /prepare-sequence-animatic-scene-board/)
   assert.match(functionSource, /sequenceAnimaticSceneBoardPrepRuns/)
   assert.match(functionSource, /action === 'cancel'/)
+  const sceneBoardCanvasSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/scene-board/SceneBoardCanvas.tsx'), 'utf8')
+  assert.match(sceneBoardCanvasSource, /workflowPrepStage/)
+  assert.match(sceneBoardCanvasSource, /workflowPrepRun/)
+  assert.match(sceneBoardCanvasSource, /const run = graphRun \?\? localRun \?\? persistedRun/)
+  assert.match(sceneBoardCanvasSource, /\|\| \(continuityPrepRunActive && !continuityPrepRunFailed\)/)
 })
 
 test('sequence animatic coverage intent batches support fresh scene board coverage grids', () => {
@@ -2907,6 +3158,7 @@ test('sequence animatic coverage intent batches support fresh scene board covera
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const workflowFactorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
   const sceneBoardWorkflowSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-scene-board-workflows.ts'), 'utf8')
+  const plannerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-scene-board-child-planners.ts'), 'utf8')
   const ensureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-shot-coverage-intents/index.ts'), 'utf8')
   const zoneEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/ensure-sequence-animatic-zone-coverage-boards/index.ts'), 'utf8')
   const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
@@ -2918,12 +3170,16 @@ test('sequence animatic coverage intent batches support fresh scene board covera
   assert.match(workerSource, /sequence_animatic_coverage_intent_plan/)
   assert.match(workerSource, /coverageIntentByShotId/)
   assert.match(workerSource, /sequenceAnimaticZoneCoverageRegistry/)
-  assert.match(ensureSource, /buildSequenceAnimaticShotCoverageIntentWorkflowGraph/)
-  assert.match(ensureSource, /coverageIntentBatchId/)
-  assert.match(ensureSource, /sequenceAnimaticStableHash/)
-  assert.match(zoneEnsureSource, /coverageIntentByShotId/)
-  assert.match(zoneEnsureSource, /coverageIntentText/)
-  assert.match(zoneEnsureSource, /coverageIntent: asRecord/)
+  assert.match(ensureSource, /planSceneBoardCoverageIntentChildren/)
+  assert.match(ensureSource, /ensureChildWorkflow/)
+  assert.match(plannerSource, /coverageIntentBatchId/)
+  assert.doesNotMatch(ensureSource, /buildSequenceAnimaticShotCoverageIntentWorkflowGraph/)
+  assert.doesNotMatch(ensureSource, /sequenceAnimaticStableHash/)
+  assert.match(zoneEnsureSource, /coverageCellByShotId/)
+  assert.match(zoneEnsureSource, /planSceneBoardZoneCoverageGridChildren/)
+  assert.match(zoneEnsureSource, /ensureChildWorkflow/)
+  assert.doesNotMatch(zoneEnsureSource, /buildSequenceAnimaticZoneCoverageBoardWorkflowGraph/)
+  assert.doesNotMatch(zoneEnsureSource, /coverageIntent: asRecord/)
   assert.match(pageSource, /coverage_directions/)
   assert.match(pageSource, /startSequenceAnimaticCoverageIntentRuns/)
   assert.match(pageSource, /Planning coverage/)
@@ -5138,6 +5394,45 @@ test('ready queue lets hash-skipped nodes unlock dependents', async () => {
   assert.deepEqual(seen, ['cached', 'dependent'])
   assert.deepEqual(result.skipped, ['cached'])
   assert.equal(result.status, 'completed')
+})
+
+test('ready queue pauses on resumable waiting nodes without running dependents', async () => {
+  const nodes = [
+    { key: 'wait_for_child', nodeType: 'utility_transform' as const, config: {}, metadata: {} },
+    { key: 'downstream', nodeType: 'utility_transform' as const, config: {}, metadata: {} },
+  ]
+  const seen: string[] = []
+  let waitingNodeKey = ''
+  const result = await runOutputWorkflowReadyQueue({
+    nodes,
+    edges: [{ sourceNodeKey: 'wait_for_child', sourcePort: 'output', targetNodeKey: 'downstream', targetPort: 'input' }],
+    executeNode: async ({ node }) => {
+      seen.push(node.key)
+      if (node.key === 'wait_for_child') {
+        return {
+          status: 'waiting',
+          resumeAfterMs: 2_500,
+          outputs: {
+            waiting: true,
+            resumable: true,
+            childRequestId: 'child-1',
+          },
+        }
+      }
+      return { outputs: { nodeKey: node.key } }
+    },
+    onNodeWaiting: ({ node, resumeAfterMs }) => {
+      waitingNodeKey = node.key
+      assert.equal(resumeAfterMs, 2_500)
+    },
+  })
+
+  assert.equal(result.status, 'waiting')
+  assert.equal(result.waitingNodeKey, 'wait_for_child')
+  assert.equal(result.resumeAfterMs, 2_500)
+  assert.deepEqual(result.completed, [])
+  assert.deepEqual(seen, ['wait_for_child'])
+  assert.equal(waitingNodeKey, 'wait_for_child')
 })
 
 test('ready queue blocks failed optional branch and completes independent branches with errors', async () => {

@@ -117,6 +117,12 @@ export function continuityBatchLayoutForTargetCount(count: number): { rows: numb
   return { rows: 2, columns: 2, cellCount }
 }
 
+export function continuityAtlasLayoutForTargetCount(count: number): { rows: number; columns: number; cellCount: number } {
+  const cellCount = Math.max(1, Math.min(9, Math.floor(count) || 1))
+  if (cellCount <= 4) return { rows: 2, columns: 2, cellCount }
+  return { rows: 3, columns: 3, cellCount }
+}
+
 export function continuityNodeUsesParent(node: LooseRecord, parentId: string): boolean {
   if (!parentId) return false
   if (readText(node.id) === parentId) return false

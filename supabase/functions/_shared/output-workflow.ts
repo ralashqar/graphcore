@@ -25,6 +25,7 @@ import {
   runOutputWorkflowReadyQueue,
   selectOutputWorkflowRunSubgraph,
   topologicallySortOutputWorkflow,
+  validateWorkflowNodeManifestOutput,
   validateOutputWorkflowGraph,
   type OutputArtifact,
   type OutputRequest,
@@ -41,8 +42,17 @@ import {
 } from '../../../src/domain/outputWorkflowDurableResolver.ts'
 import {
   getOutputWorkflowNodeContract,
+  getWorkflowNodeManifest,
+  outputWorkflowNodeManifests,
   outputWorkflowRunIntentDefaults,
 } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import {
+  assertWorkflowNodeHandlerCoverage,
+  createWorkflowNodeHandlerRegistry,
+  getWorkflowNodeHandler,
+  registerWorkflowNodeHandler,
+  type WorkflowNodeHandler,
+} from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import {
   buildSequenceAnimaticBlockWorkflowGraph,
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
@@ -54,6 +64,16 @@ import {
 import {
   isSequenceAnimaticSceneBoardWorkflowPurpose,
 } from './sequence-animatic-scene-board.ts'
+import {
+  createStreamingJsonlProcessor,
+  extractCompleteJsonRecords,
+} from './output-workflow-streaming.ts'
+import {
+  registerSceneBoardWorkflowNodePack,
+} from './output-workflow-scene-board-pack.ts'
+import {
+  registerWorkflowUtilityNodePack,
+} from './output-workflow-utility-pack.ts'
 import type {
   SeedanceReferenceManifestEntry,
 } from '../../../src/domain/seedanceReferenceManifest.ts'
@@ -1225,6 +1245,87 @@ async function heartbeat(client: DatabaseClient, runId: string, workerId: string
   if (response.error) throw new Error(response.error.message)
 }
 
+function mergeUniqueStrings(...values: unknown[]) {
+  return [...new Set(values.flatMap((value) => {
+    const direct = readText(value)
+    return direct ? [direct] : readStringArray(value)
+  }))]
+}
+
+function stepRuntimeMetadataFromOutputs(outputs: Record<string, unknown>) {
+  const runtime = {
+    ...asRecord(outputs.workflowRuntime),
+    ...asRecord(outputs.workflow_runtime),
+  }
+  const streaming = {
+    ...asRecord(outputs.streaming),
+    ...asRecord(runtime.streaming),
+  }
+  const activeChildRequestIds = mergeUniqueStrings(
+    runtime.activeChildRequestIds,
+    runtime.active_child_request_ids,
+    outputs.activeChildRequestIds,
+    outputs.active_child_request_ids,
+    outputs.waiting === true ? outputs.childRequestId : [],
+    outputs.waiting === true ? outputs.child_request_id : [],
+    outputs.waiting === true ? outputs.childRequests : [],
+    outputs.waiting === true ? outputs.child_requests : [],
+  )
+  const activeChildRunIds = mergeUniqueStrings(
+    runtime.activeChildRunIds,
+    runtime.active_child_run_ids,
+    outputs.activeChildRunIds,
+    outputs.active_child_run_ids,
+    outputs.waiting === true ? outputs.childRunId : [],
+    outputs.waiting === true ? outputs.child_run_id : [],
+    outputs.waiting === true ? outputs.childRunIds : [],
+    outputs.waiting === true ? outputs.child_run_ids : [],
+  )
+  const readyArtifactKeys = mergeUniqueStrings(
+    runtime.readyArtifactKeys,
+    runtime.ready_artifact_keys,
+    runtime.scopedAssetKeys,
+    runtime.scoped_asset_keys,
+    outputs.readyArtifactKeys,
+    outputs.ready_artifact_keys,
+    outputs.artifactKeys,
+    outputs.artifact_keys,
+  )
+  const readyArtifactRoles = mergeUniqueStrings(
+    runtime.readyArtifactRoles,
+    runtime.ready_artifact_roles,
+    outputs.readyArtifactRoles,
+    outputs.ready_artifact_roles,
+  )
+  const recoveryHints = mergeUniqueStrings(
+    runtime.recoveryHints,
+    runtime.recovery_hints,
+    outputs.recoveryHints,
+    outputs.recovery_hints,
+    outputs.diagnostics,
+  )
+  return {
+    activeChildRequestIds,
+    activeChildRunIds,
+    readyArtifactRoles,
+    readyArtifactKeys,
+    recoveryHints,
+    readyArtifactCount: Number(runtime.readyArtifactCount ?? runtime.ready_artifact_count ?? readyArtifactKeys.length) || readyArtifactKeys.length,
+    providerStatus: readText(runtime.providerStatus ?? runtime.provider_status) || undefined,
+    providerRequestId: readText(runtime.providerRequestId ?? runtime.provider_request_id) || undefined,
+    streaming: Object.keys(streaming).length > 0 ? streaming : undefined,
+    streamingStatus: readText(runtime.streamingStatus ?? runtime.streaming_status ?? streaming.status) || undefined,
+    streamingEventCount: Number(runtime.streamingEventCount ?? runtime.streaming_event_count ?? streaming.eventCount ?? streaming.event_count) || undefined,
+    streamingPartialArtifactKeys: mergeUniqueStrings(
+      runtime.streamingPartialArtifactKeys,
+      runtime.streaming_partial_artifact_keys,
+      streaming.partialArtifactKeys,
+      streaming.partial_artifact_keys,
+    ),
+    streamingResumeToken: readText(runtime.streamingResumeToken ?? runtime.streaming_resume_token ?? streaming.resumeToken ?? streaming.resume_token) || undefined,
+  }
+}
+
 async function setStepStatus(
   client: DatabaseClient,
   input: {
@@ -1246,6 +1347,21 @@ async function setStepStatus(
 ) {
   const now = new Date().toISOString()
   const startedAt = readText(input.startedAt) || now
+  const manifest = getWorkflowNodeManifest(input.node)
+  const config = asRecord(input.node.config)
+  const outputRuntimeMetadata = stepRuntimeMetadataFromOutputs(input.outputs ?? {})
+  const inputMetadata = asRecord(input.metadata)
+  const stepMetadata = {
+    manifestPurpose: manifest?.purpose ?? (readText(config.purpose) || null),
+    progressLabel: manifest?.progressLabel ?? input.node.label,
+    ...outputRuntimeMetadata,
+    ...inputMetadata,
+    activeChildRequestIds: mergeUniqueStrings(outputRuntimeMetadata.activeChildRequestIds, inputMetadata.activeChildRequestIds),
+    activeChildRunIds: mergeUniqueStrings(outputRuntimeMetadata.activeChildRunIds, inputMetadata.activeChildRunIds),
+    readyArtifactRoles: mergeUniqueStrings(outputRuntimeMetadata.readyArtifactRoles, inputMetadata.readyArtifactRoles),
+    readyArtifactKeys: mergeUniqueStrings(outputRuntimeMetadata.readyArtifactKeys, inputMetadata.readyArtifactKeys),
+    recoveryHints: mergeUniqueStrings(outputRuntimeMetadata.recoveryHints, inputMetadata.recoveryHints),
+  }
   const writeStep = async (nodeId: string | null) => client
     .from('output_workflow_run_steps')
     .upsert({
@@ -1265,7 +1381,7 @@ async function setStepStatus(
       model: input.model ?? null,
       provider_request_id: input.providerRequestId ?? null,
       error_message: input.errorMessage ?? null,
-      metadata: input.metadata ?? {},
+      metadata: stepMetadata,
       started_at: input.status === 'queued' ? null : startedAt,
       completed_at: ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(input.status) ? now : null,
     }, { onConflict: 'run_id,node_key' })
@@ -4495,7 +4611,6 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
   const model = outputWorkflowTextModel()
   const providerStartedAt = new Date().toISOString()
   const accumulator = createSequenceAnimaticShotContinuityStreamAccumulator()
-  let streamRecordBuffer = ''
   let providerRequestId = ''
   let acceptedRecordCount = 0
   let warningCount = 0
@@ -4684,6 +4799,12 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
     }
   }
 
+  const streamProcessor = createStreamingJsonlProcessor<string>({
+    parseRecord: (recordText) => ({ record: recordText, error: null }),
+    onRecord: (recordText) => processRecordText(recordText),
+    onInvalidRecord: async () => {},
+  })
+
   await clearSequenceAnimaticShotContinuityStreamEvents({
     client: input.client,
     requestId: input.requestId,
@@ -4725,17 +4846,11 @@ async function runSequenceAnimaticShotContinuityPlanStream(input: {
         if (await input.shouldCancel?.()) throw new WorkflowCancelledError()
       },
       onTextDelta: async (delta) => {
-        streamRecordBuffer += delta
-        const extracted = extractCompleteSequenceAnimaticJsonRecords(streamRecordBuffer)
-        streamRecordBuffer = extracted.rest
-        for (const record of extracted.records) await processRecordText(record)
+        await streamProcessor.push(delta)
       },
     })
     providerRequestId = response.id || providerRequestId
-    if (streamRecordBuffer.trim().startsWith('{')) {
-      await processRecordText(streamRecordBuffer)
-      streamRecordBuffer = ''
-    }
+    await streamProcessor.flush()
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Shot continuity stream failed.'
     await emitEvent('shot_continuity_stream_failed', {
@@ -6925,11 +7040,16 @@ function scopeAssetPackToReferenceAssetKeys(input: {
   const referenceAssetKeys = [...new Set(input.referenceAssetKeys.map(readText).filter(Boolean))].slice(0, Math.max(1, input.limit ?? 8))
   const fallbackEntities = (input.fallbackEntities ?? []).map(asRecord)
   if (referenceAssetKeys.length === 0) {
+    const spatialOnly = input.referenceScope === 'sequence_animatic_spatial_continuity_only'
     return {
       ...input.assetPack,
-      entities: fallbackEntities.length > 0 ? fallbackEntities : readArray(input.assetPack.entities).map(asRecord),
+      entities: fallbackEntities.length > 0 ? fallbackEntities : spatialOnly ? [] : readArray(input.assetPack.entities).map(asRecord),
       scopedReferenceAssetKeys: [],
       referenceScope: input.referenceScope,
+      referenceDiagnostics: [
+        ...readStringArray(input.assetPack.referenceDiagnostics),
+        ...(spatialOnly ? ['Spatial continuity scope has no ready image references; full animatic asset pack was intentionally excluded.'] : []),
+      ],
     }
   }
   const sourceEntities = [...cinematicAssetPackEntities(input.assetPack), ...fallbackEntities]
@@ -9649,68 +9769,7 @@ function sequenceAnimaticAssetRequirementsFromGraph(input: {
 }
 
 function extractCompleteSequenceAnimaticJsonRecords(buffer: string) {
-  const records: string[] = []
-  let current = ''
-  let started = false
-  let inString = false
-  let escaped = false
-  let depth = 0
-  let lastConsumedIndex = 0
-
-  for (let index = 0; index < buffer.length; index += 1) {
-    const char = buffer[index]
-    if (!started) {
-      if (char === '{') {
-        started = true
-        inString = false
-        escaped = false
-        depth = 1
-        current = '{'
-        lastConsumedIndex = index + 1
-      }
-      continue
-    }
-
-    if (inString) {
-      if (escaped) {
-        current += char
-        escaped = false
-      } else if (char === '\\') {
-        current += char
-        escaped = true
-      } else if (char === '"') {
-        current += char
-        inString = false
-      } else if (char === '\n') {
-        current += '\\n'
-      } else if (char !== '\r') {
-        current += char
-      }
-      continue
-    }
-
-    current += char
-    if (char === '"') {
-      inString = true
-    } else if (char === '{' || char === '[') {
-      depth += 1
-    } else if (char === '}' || char === ']') {
-      depth -= 1
-      if (depth === 0) {
-        records.push(current.trim())
-        current = ''
-        started = false
-        inString = false
-        escaped = false
-        lastConsumedIndex = index + 1
-      }
-    }
-  }
-
-  return {
-    records,
-    rest: started ? current : buffer.slice(lastConsumedIndex),
-  }
+  return extractCompleteJsonRecords(buffer)
 }
 
 function deterministicSequenceAnimaticJsonCandidates(record: string) {
@@ -12411,6 +12470,8 @@ function buildSequenceAnimaticAnchorAtlasPrompt(input: {
 function buildSequenceAnimaticContinuityAssetPrompt(input: {
   targetNode: Record<string, unknown>
   assetKind: string
+  generationPolicy?: string
+  zoneMapPoiLines?: string[]
   relevantShots: Record<string, unknown>[]
   referenceAssetKeys: string[]
 }) {
@@ -12425,9 +12486,42 @@ function buildSequenceAnimaticContinuityAssetPrompt(input: {
     : null
   const targetName = sanitizedSpatialNode?.name || readText(input.targetNode.name) || titleFromRefLike(readText(input.targetNode.id))
   const visualBrief = sanitizedSpatialNode?.brief || readText(input.targetNode.visualBrief) || readText(input.targetNode.summary)
-  const locationEvidenceLines = spatialAsset
-    ? buildSequenceAnimaticLocationEvidenceLines(input.relevantShots, { forbiddenNames, limit: 5, maxLineLength: 190 })
-    : []
+  const generationPolicy = readText(input.generationPolicy)
+  const zoneSpatialMapPolicy = input.assetKind === 'location_zone' || generationPolicy.startsWith('zone_spatial_map')
+  const locationEvidenceLines: string[] = []
+  if (input.assetKind === 'location_zone' && zoneSpatialMapPolicy) {
+    const prompt = [
+      `Zone spatial map: ${targetName}`,
+      'Goal: one rendered bird-eye / 3/4 orthographic continuity map, not a cinematic frame and not a camera angle.',
+      visualBrief ? `Zone brief: ${visualBrief}` : '',
+      input.referenceAssetKeys.length > 0
+        ? 'Use attached set/location reference for style, materials, scale, palette, and lighting logic.'
+        : 'Use the zone brief, known spots/POIs, and project style for materials, palette, weather, and lighting logic.',
+      'Show: full zone layout, entrances/exits, walkable routes, thresholds, sightlines, main surfaces, landmarks, set pieces, light/weather direction, and symbolic POI markers.',
+      input.zoneMapPoiLines && input.zoneMapPoiLines.length > 0
+        ? `Known spots / POIs:\n${input.zoneMapPoiLines.slice(0, 12).map((line) => `- ${line}`).join('\n')}`
+        : '',
+      '',
+      'Avoid: people, character silhouettes, crowds, readable labels, text, captions, UI, arrows, borders, watermarks.',
+      'Output: one wide 3072x2048 spatial production map with clean readable geography.',
+    ].filter(Boolean).join('\n\n')
+    return {
+      prompt,
+      sanitizedTargetNode: sanitizedSpatialNode ? {
+        ...input.targetNode,
+        name: sanitizedSpatialNode.name,
+        visualBrief: sanitizedSpatialNode.brief || readText(input.targetNode.visualBrief),
+        summary: sanitizedSpatialNode.brief || readText(input.targetNode.summary),
+        spatialPromptKindLabel: sanitizedSpatialNode.kindLabel,
+      } : input.targetNode,
+      locationEvidenceLines,
+      promptDiagnostics: {
+        policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
+        sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
+        removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
+      },
+    }
+  }
   const shotLines = spatialAsset ? [] : input.relevantShots.slice(0, 8).map((shot) => {
     const camera = compactSequenceAnimaticCamera(shot)
     return [
@@ -12443,7 +12537,9 @@ function buildSequenceAnimaticContinuityAssetPrompt(input: {
       : input.assetKind === 'location_set'
         ? 'Create one broad reusable set environment continuity reference. Preserve overall layout, architecture, surfaces, entrances, landmarks, material palette, weather, and lighting logic. No people, no characters, no silhouettes, no labels, no UI.'
       : input.assetKind === 'location_zone'
-        ? 'Create one reusable zone environment continuity reference inside the set. Preserve sub-area geography, sightlines, access paths, landmarks, surfaces, weather, and lighting continuity. No people, no characters, no silhouettes, no labels, no UI.'
+        ? zoneSpatialMapPolicy
+          ? 'Create one large rendered zone spatial map, not a cinematic camera angle: a bird-eye or 3/4 orthographic production-map view in the project art style. Show the whole zone geography inside the parent set, entrances/exits, routes, thresholds, dominant surfaces, landmarks, set pieces, light/weather direction, sightlines, and symbolic POI markers for known spots. Markers must be visual symbols only; no readable text, labels, arrows, UI, captions, people, characters, crowds, or silhouettes.'
+          : 'Create one reusable zone environment continuity reference inside the set. Preserve sub-area geography, sightlines, access paths, landmarks, surfaces, weather, and lighting continuity. No people, no characters, no silhouettes, no labels, no UI.'
       : input.assetKind === 'location_angle'
         ? 'Create one camera-facing spatial angle reference. Preserve architecture, visible landmarks, screen direction, light direction, entrances, and depth cues. No people, no characters, no silhouettes, no labels, no UI.'
         : 'Create one reusable physical staging position or architectural sub-location continuity reference. Preserve nearby surfaces, entrances, sightlines, landmarks, palette, set-piece placement, and lighting direction. No people, no characters, no silhouettes, no labels, no UI.'
@@ -12455,11 +12551,13 @@ function buildSequenceAnimaticContinuityAssetPrompt(input: {
     input.referenceAssetKeys.length > 0
       ? 'Attached image references are continuity locks. Match their style, materials, palette, lighting logic, architecture, scale, and design language without copying visible layout artifacts.'
       : spatialAsset
-        ? 'No prior continuity asset references are available. Ground the image only in location evidence and project visual style.'
+        ? 'No prior continuity asset references are available. Use only the spatial node brief and project visual style.'
         : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
-    locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
+    '',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
-    'Provider requirements: one finished square production reference image, clean composition, no visible text, no labels, no borders, no watermarks.',
+    zoneSpatialMapPolicy
+      ? 'Provider requirements: one finished wide spatial production map image, clean readable geography, symbolic POI markers only, no readable text, no labels, no borders, no watermarks.'
+      : 'Provider requirements: one finished square production reference image, clean composition, no visible text, no labels, no borders, no watermarks.',
   ].filter(Boolean).join('\n\n')
   return {
     prompt,
@@ -12494,8 +12592,12 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
     || batchKind === 'viewpoint_grid'
     || batchKind === 'parent_child_scaffold_grid'
     || batchKind === 'spot_grid'
+    || batchKind === 'spot_atlas_grid'
+    || batchKind === 'viewpoint_atlas_grid'
     || batchKind === 'location_zone_board'
     || batchKind === 'single_hero_ref'
+  const generationPolicy = readText(input.batch.generationPolicy)
+  const spotAtlasGridPolicy = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid' || generationPolicy.startsWith('spot_atlas_grid')
   const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(input.relevantShots)
   const sanitizedTargets = input.targetNodes.slice(0, rows * columns).map((node) => spatialBatch
     ? sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames })
@@ -12512,14 +12614,14 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
       sanitized?.brief || readText(node.visualBrief) || readText(node.summary),
     ].filter(Boolean).join(' ')
   })
-  const locationEvidenceLines = spatialBatch
-    ? buildSequenceAnimaticLocationEvidenceLines(input.relevantShots, { forbiddenNames, limit: 5, maxLineLength: 180 })
-    : []
+  const locationEvidenceLines: string[] = []
   const shotLines = spatialBatch ? [] : input.relevantShots.slice(0, 8).map((shot) => [
     readText(shot.title),
     compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 220),
   ].filter(Boolean).join(': '))
-  const kindInstruction = batchKind === 'angle_grid' || batchKind === 'viewpoint_grid'
+  const kindInstruction = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
+    ? 'Create a local reference atlas using the single attached zone spatial map as the only visual reference. Each populated cell must show one reusable physical staging position, sub-location, or camera-facing viewpoint inside that mapped zone. Match the zone map topology, entrances, landmarks, surfaces, weather, palette, light direction, and screen-direction logic. No people, no characters, no silhouettes, no readable marker labels, no UI.'
+    : batchKind === 'angle_grid' || batchKind === 'viewpoint_grid'
     ? 'Each populated cell must show a distinct reusable camera-facing viewpoint from the same set, zone, or spot. Preserve architecture, landmarks, light direction, screen direction, entrances, materials, and depth. No characters, no labels, no UI.'
     : batchKind === 'parent_child_scaffold_grid'
       ? 'Create a mixed parent-child spatial scaffold grid. Cell 1 is the parent set/zone/spot environment reference; following cells are child physical staging positions or viewpoints inside that exact parent. Make the children visibly inherit the parent architecture, materials, light direction, landmarks, entrances, geography, and scale. Each cell must be a clean standalone production reference for its assigned node. No people, no characters, no silhouettes, no labels, no UI.'
@@ -12534,12 +12636,14 @@ function buildSequenceAnimaticContinuityBatchPrompt(input: {
             : 'Create one high-detail hero continuity reference. It must be reusable across storyboard and shot-video generation. No labels, no borders, no UI, no watermarks.'
   return [
     `Continuity reference batch: ${batchKind}`,
-    `Grid: ${rows} rows x ${columns} columns on one square 2048x2048 image. Fill cells left-to-right, top-to-bottom. Leave unused cells clean and empty.`,
+    `Grid: ${rows} rows x ${columns} columns on one square ${spotAtlasGridPolicy ? '3072x3072' : '2048x2048'} image. Fill cells left-to-right, top-to-bottom. Leave unused cells clean and empty.`,
     kindInstruction,
     input.referenceAssetKeys.length > 0
-      ? 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
+      ? batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
+        ? 'Attached image reference: the parent zone spatial map only. Treat it as the global topology lock for every cell; do not use any set, character, prop, shot, storyboard, or sibling spot image as an atlas reference.'
+        : 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
       : spatialBatch
-        ? 'No parent image references are available. Ground the batch only in location evidence and project visual style.'
+        ? 'No parent image references are available. Use only the cell assignments and project visual style; do not use shot action, character blocking, or dialogue as visual content.'
         : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
     cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
     locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
@@ -22596,13 +22700,44 @@ async function executeNode(input: {
       const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
       const keyframePrompts = readFirstUpstreamArray(input.upstream, ['keyframePrompts', 'keyframe_prompts'])
       const keyframeIndex = Math.max(0, Math.min(2, Number(config.keyframeIndex ?? 0) || 0))
+      const requiresContinuityPrompt = purpose === 'sequence_animatic_continuity_batch_image'
+        || role === 'sequence_animatic_continuity_batch_image'
+        || purpose === 'sequence_animatic_continuity_asset_image'
+        || role === 'sequence_animatic_continuity_asset_image'
+      const continuityFallbackPrompt = (() => {
+        if (purpose === 'sequence_animatic_continuity_batch_image' || role === 'sequence_animatic_continuity_batch_image') {
+          const batch = asRecord(config.batch)
+          const targetNodes = readArray(config.targetNodes).map(asRecord)
+          if (!Object.keys(batch).length || targetNodes.length === 0) return ''
+          return buildSequenceAnimaticContinuityBatchPrompt({
+            batch,
+            targetNodes,
+            relevantShots: readArray(config.relevantShots).map(asRecord),
+            referenceAssetKeys: readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys),
+          }).prompt
+        }
+        if (purpose === 'sequence_animatic_continuity_asset_image' || role === 'sequence_animatic_continuity_asset_image') {
+          const targetNode = asRecord(config.targetNode ?? config.target_node)
+          if (!Object.keys(targetNode).length) return ''
+          return buildSequenceAnimaticContinuityAssetPrompt({
+            targetNode,
+            assetKind: readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset',
+            generationPolicy: readText(config.generationPolicy),
+            zoneMapPoiLines: readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
+            relevantShots: readArray(config.relevantShots).map(asRecord),
+            referenceAssetKeys: readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys),
+          }).prompt
+        }
+        return ''
+      })()
       const prompt = (purpose === 'cinematic_keyframe' || role === 'cinematic_keyframe'
         ? readText(keyframePrompts[keyframeIndex]?.prompt)
         : '')
         || readFirstUpstreamText(input.upstream, ['prompt'])
         || readFirstUpstreamText(input.upstream, ['text'])
         || readText(input.node.inputs.prompt)
-        || input.run.prompt
+        || continuityFallbackPrompt
+        || (requiresContinuityPrompt ? '' : input.run.prompt)
       const skipImageGeneration = config.skipImageGeneration === true
         || config.skip_image_generation === true
         || input.node.inputs.skipImageGeneration === true
@@ -22759,7 +22894,10 @@ async function executeNode(input: {
       const falApiKey = Deno.env.get('FAL_KEY')
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
-      const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
+      const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
+      const rawAssetPack = Object.keys(upstreamAssetPack).length > 0
+        ? upstreamAssetPack
+        : asRecord(config.pageAssetPack ?? config.page_asset_pack ?? config.assetPack ?? config.asset_pack)
       const referenceLimit = referenceLimitForImageNode(config, role)
       const isSequenceAnimaticPlannedKeyframeImage = purpose === 'sequence_animatic_planned_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
       const isCinematicV3StoryboardSheet = purpose === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_v3_storyboard_sheet'
@@ -22830,8 +22968,7 @@ async function executeNode(input: {
         '',
         'Provider requirements:',
         '- Generate one finished image only.',
-        '- Keep the result visual and artifact-focused.',
-        '- Do not include GraphCore, workflow, node, schema, or internal ID wording in visible text.',
+        '- No visible text, captions, UI, or watermarks unless explicitly requested.',
       ].filter(Boolean).join('\n')
 
       const falResult = await waitForOutputFalImage({
@@ -24005,8 +24142,28 @@ async function executeNode(input: {
         const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : asRecord(config.assetPack)
         const referenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys']).map(readText).filter(Boolean)
+        const effectiveBatch = Object.keys(batch).length > 0 ? batch : asRecord(config.batch)
+        const batchKind = readText(effectiveBatch.batchKind)
+        const spatialBatch = [
+          'angle_grid',
+          'viewpoint_grid',
+          'parent_child_scaffold_grid',
+          'spot_grid',
+          'spot_atlas_grid',
+          'viewpoint_atlas_grid',
+          'location_zone_board',
+        ].includes(batchKind)
+        const scopedAssetPack = spatialBatch
+          ? scopeAssetPackToReferenceAssetKeys({
+            assetPack,
+            referenceAssetKeys,
+            fallbackEntities: [],
+            referenceScope: 'sequence_animatic_spatial_continuity_only',
+            limit: 8,
+          })
+          : assetPack
         const promptResult = buildSequenceAnimaticContinuityBatchPrompt({
-          batch: Object.keys(batch).length > 0 ? batch : asRecord(config.batch),
+          batch: effectiveBatch,
           targetNodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
           relevantShots,
           referenceAssetKeys,
@@ -24015,7 +24172,7 @@ async function executeNode(input: {
         const outputs = {
           prompt,
           text: prompt,
-          batch: Object.keys(batch).length > 0 ? batch : asRecord(config.batch),
+          batch: effectiveBatch,
           targetNodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
           target_nodes: targetNodes.length > 0 ? targetNodes : readArray(config.targetNodes).map(asRecord),
           sanitizedTargetNodes: promptResult.sanitizedTargetNodes,
@@ -24026,8 +24183,8 @@ async function executeNode(input: {
           prompt_diagnostics: promptResult.promptDiagnostics,
           relevantShots,
           relevant_shots: relevantShots,
-          assetPack,
-          asset_pack: assetPack,
+          assetPack: scopedAssetPack,
+          asset_pack: scopedAssetPack,
           referenceAssetKeys,
           reference_asset_keys: referenceAssetKeys,
           deterministic: true,
@@ -24334,7 +24491,7 @@ async function executeNode(input: {
           'Visual-only production plate grid: create one wide 16:9 zone camera coverage grid divided into a clean 3x3 grid.',
           'Each filled cell is an empty location camera plate for one shot angle. Fill cells in row-major order; leave unused cells plain and empty.',
           artStyleDescription ? `Project art style lock: ${artStyleDescription}` : '',
-          'Use the attached set/zone/spot references as the visual source of truth for architecture, terrain, materials, weather, palette, lighting logic, and repeated geography.',
+          'Use attached references in global-to-local order: the zone spatial map locks topology, routes, entrances, sightlines, and POI placement; spot atlas references lock local surfaces, landmarks, material detail, and camera-facing geometry; the set ref locks broader style and lighting logic.',
           'No people, no characters, no silhouettes, no crowds, no placeholder bodies, no subject labels, no arrows, no captions, no shot numbers, no speech bubbles, no UI, no watermarks, and no visible text inside the image.',
           'Do not use a cartoony/sketch/comic/storyboard style unless the project art style explicitly says so. Match the project art direction and the visual finish of the location references.',
           'Each cell should show only camera angle, foreground/midground/background geometry, horizon/ground plane, screen direction, lighting/weather, and stable spatial landmarks.',
@@ -24440,7 +24597,7 @@ async function executeNode(input: {
             const coverageAnchorScopeKey = readText(cell.coverageAnchorScopeKey)
             const coverageAnchorScope = readText(cell.coverageAnchorScope) || 'shot_scoped'
             const coverageAnchorSource = readText(cell.coverageAnchorSource ?? cell.coverage_anchor_source ?? config.coverageAnchorSource ?? config.coverage_anchor_source) || 'zone_camera_grid_cell'
-            const coverageAnchorMode = readText(cell.coverageAnchorMode ?? cell.coverage_anchor_mode ?? config.coverageAnchorMode ?? config.coverage_anchor_mode) || 'location_camera_plate_v1'
+            const coverageAnchorMode = readText(cell.coverageAnchorMode ?? cell.coverage_anchor_mode ?? config.coverageAnchorMode ?? config.coverage_anchor_mode) || 'location_camera_plate_v2'
             const cellImage = {
               assetKey: targetAssetKey,
               storagePath: targetStoragePath,
@@ -24694,12 +24851,24 @@ async function executeNode(input: {
         const upstreamReferenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys']).map(readText).filter(Boolean)
         const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : readStringArray(config.referenceAssetKeys)
         const assetKind = readText(config.assetKind) || readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
+        const spatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
+        const scopedAssetPack = spatialAsset
+          ? scopeAssetPackToReferenceAssetKeys({
+            assetPack,
+            referenceAssetKeys,
+            fallbackEntities: [],
+            referenceScope: 'sequence_animatic_spatial_continuity_only',
+            limit: 8,
+          })
+          : assetPack
         const effectiveTargetNode = visualBriefOverride
           ? { ...targetNode, visualBrief: visualBriefOverride, summary: visualBriefOverride }
           : targetNode
         const promptResult = buildSequenceAnimaticContinuityAssetPrompt({
           targetNode: effectiveTargetNode,
           assetKind,
+          generationPolicy: readText(config.generationPolicy),
+          zoneMapPoiLines: readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
           relevantShots,
           referenceAssetKeys,
         })
@@ -24723,8 +24892,8 @@ async function executeNode(input: {
           scene_graph_override: sceneGraphOverride,
           relevantShots,
           relevant_shots: relevantShots,
-          assetPack,
-          asset_pack: assetPack,
+          assetPack: scopedAssetPack,
+          asset_pack: scopedAssetPack,
           referenceAssetKeys,
           reference_asset_keys: referenceAssetKeys,
           deterministic: true,
@@ -29875,7 +30044,7 @@ async function executeNode(input: {
             provider: 'graphcore',
             model: 'sequence-animatic-zone-coverage-board-artifact-v1',
             role: 'sequence_animatic_zone_coverage_board',
-            zoneCoverageGridMode: readText(config.zoneCoverageGridMode ?? config.zone_coverage_grid_mode) || 'location_camera_plate_v1',
+            zoneCoverageGridMode: readText(config.zoneCoverageGridMode ?? config.zone_coverage_grid_mode) || 'location_camera_plate_v2',
             coverageAnchorSource: readText(config.coverageAnchorSource ?? config.coverage_anchor_source) || 'zone_camera_grid_cell',
             graphSpecVersion: 'sequence_animatic_graph_v2',
             sequenceAnimaticRole: 'zone_coverage_board',
@@ -30658,6 +30827,79 @@ async function executeNode(input: {
   }
 }
 
+type OutputWorkflowNodeExecutionContext = Parameters<typeof executeNode>[0]
+type OutputWorkflowNodeExecutionResult = Awaited<ReturnType<typeof executeNode>>
+
+const outputWorkflowNodeHandlerRegistry = createWorkflowNodeHandlerRegistry<OutputWorkflowNodeExecutionContext, OutputWorkflowNodeExecutionResult>()
+let defaultOutputWorkflowNodeHandlersRegistered = false
+
+function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
+  if (defaultOutputWorkflowNodeHandlersRegistered) return
+  for (const manifest of outputWorkflowNodeManifests) {
+    registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, manifest.handlerKey, executeNode, { replace: true })
+  }
+  registerWorkflowUtilityNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readStringArray,
+      hashOutputWorkflowValue,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSceneBoardWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readStringArray,
+      readFirstUpstreamRecord,
+      slugify,
+      hashOutputWorkflowValue,
+      registerOtherOutputArtifact: registerOtherOutputArtifact as never,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  assertWorkflowNodeHandlerCoverage(outputWorkflowNodeManifests, outputWorkflowNodeHandlerRegistry)
+  defaultOutputWorkflowNodeHandlersRegistered = true
+}
+
+export function registerOutputWorkflowNodeHandler(
+  handlerKey: string,
+  handler: WorkflowNodeHandler<OutputWorkflowNodeExecutionContext, OutputWorkflowNodeExecutionResult>,
+  options: { replace?: boolean } = {},
+) {
+  ensureDefaultOutputWorkflowNodeHandlersRegistered()
+  return registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler, options)
+}
+
+export async function executeWorkflowNodeByManifest(input: OutputWorkflowNodeExecutionContext) {
+  ensureDefaultOutputWorkflowNodeHandlersRegistered()
+  const config = asRecord(input.node.config)
+  const purpose = readText(config.purpose)
+  const manifest = purpose ? getWorkflowNodeManifest({ purpose }) : null
+  if (purpose && !manifest) {
+    throw new Error(`Workflow node purpose "${purpose}" is not registered in the node manifest registry.`)
+  }
+  const handler = manifest ? getWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, manifest.handlerKey) : executeNode
+  if (!handler) {
+    throw new Error(`Workflow node manifest "${manifest?.purpose ?? purpose}" has no registered handler "${manifest?.handlerKey ?? ''}".`)
+  }
+  const result = await handler(input)
+  if (!manifest) return result
+  const validation = validateWorkflowNodeManifestOutput(manifest, result.outputs)
+  if (!validation.ok) {
+    throw new Error(`Workflow node "${input.node.key}" produced invalid output for manifest "${manifest.purpose}": ${validation.diagnostics.join('; ')}`)
+  }
+  return {
+    ...result,
+    outputs: validation.outputs,
+  }
+}
+
 export async function processFlyOutputWorkflowRuns(input: {
   client: DatabaseClient
   workerId: string
@@ -30900,7 +31142,9 @@ export async function processFlyOutputWorkflowRuns(input: {
         const forceNode = forceNodeKeys.has(node.key)
         const priorStep = stepByNodeKey.get(node.key) ?? null
         const hasExistingOutputs = outputWorkflowNodeOutputsReusableForCache(node, node.outputs)
+        const priorStepWaiting = asRecord(priorStep?.metadata).waiting === true
         const hasRecoverableStepOutputs = !forceNode
+          && !priorStepWaiting
           && !hasExistingOutputs
           && outputWorkflowNodeOutputsReusableForCache(node, priorStep?.outputs)
           && Boolean(priorStep?.outputHash)
@@ -31009,7 +31253,7 @@ export async function processFlyOutputWorkflowRuns(input: {
           })
           return { status: 'skipped', outputs: node.outputs }
         }
-        const result = await executeNode({
+        const result = await executeWorkflowNodeByManifest({
           run: bundle.run,
           workflow: bundle.workflow,
           node,
@@ -31072,6 +31316,8 @@ export async function processFlyOutputWorkflowRuns(input: {
             }
           },
         })
+        const resultOutputs = asRecord(result.outputs)
+        const resultWaiting = resultOutputs.waiting === true && resultOutputs.resumable !== false
         nodeResults.set(node.key, {
           inputHash: result.inputHash,
           outputHash: result.outputHash,
@@ -31085,6 +31331,13 @@ export async function processFlyOutputWorkflowRuns(input: {
           staleReusedNodeKeys: cachedExternalUpstream.staleReusedNodeKeys,
           sourceRunIds: cachedExternalUpstream.sourceRunIds,
         })
+        if (resultWaiting) {
+          return {
+            status: 'waiting',
+            outputs: result.outputs,
+            resumeAfterMs: Math.max(0, Math.floor(Number(resultOutputs.resumeAfterMs ?? resultOutputs.resume_after_ms) || 15_000)),
+          }
+        }
         const guidanceMetadata = guidanceStepMetadata(result.outputs.guidance)
         const updateNodeResponse = await input.client
           .from('output_workflow_nodes')
@@ -31224,6 +31477,51 @@ export async function processFlyOutputWorkflowRuns(input: {
           })
         }
       },
+      onNodeWaiting: async ({ node, orderIndex, outputs, resumeAfterMs }) => {
+        const result = nodeResults.get(node.key)
+        const priorStep = stepByNodeKey.get(node.key)
+        const recoveryHints = readStringArray(asRecord(outputs.workflowRuntime).recoveryHints)
+          .concat(readStringArray(outputs.diagnostics))
+        await setStepStatus(input.client, {
+          runId,
+          node,
+          status: 'running',
+          draftId: bundle.run.draftId,
+          orderIndex,
+          inputHash: result?.inputHash ?? '',
+          outputHash: result?.outputHash ?? '',
+          outputs,
+          provider: result?.provider ?? null,
+          model: result?.model ?? null,
+          providerRequestId: result?.providerRequestId ?? null,
+          startedAt: priorStep?.startedAt,
+          metadata: {
+            ...asRecord(priorStep?.metadata),
+            stage: node.nodeType,
+            runScope,
+            executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
+            resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
+            groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
+            waiting: true,
+            resumable: true,
+            resumeAfterMs,
+            recoveryHints,
+            reusedNodeKeys: result?.reusedNodeKeys ?? [],
+            staleReusedNodeKeys: result?.staleReusedNodeKeys ?? [],
+            sourceRunIds: result?.sourceRunIds ?? [],
+            staleInputAllowed: allowStaleUpstreamOutputs,
+          },
+        })
+        await heartbeat(input.client, runId, input.workerId, {
+          runtime: 'fly_output_workflow_worker',
+          stage: 'waiting_for_child_workflow',
+          activeNodeKey: node.key,
+          activeManifestPurpose: getWorkflowNodeManifest(node)?.purpose ?? (readText(asRecord(node.config).purpose) || null),
+          activeProgressLabel: getWorkflowNodeManifest(node)?.progressLabel ?? node.label,
+          resumeAfterMs,
+          recoveryHints,
+        })
+      },
       onNodeFailed: async ({ node, orderIndex, error, blockedDependents }) => {
         const message = error instanceof Error ? error.message : String(error)
         const priorStep = stepByNodeKey.get(node.key)
@@ -31318,6 +31616,46 @@ export async function processFlyOutputWorkflowRuns(input: {
         })
       },
     })
+
+    if (schedulerResult.status === 'waiting') {
+      const waitingNodeKey = readText((schedulerResult as { waitingNodeKey?: unknown }).waitingNodeKey)
+      const resumeAfterMs = Math.max(0, Math.min(30_000, Math.floor(Number((schedulerResult as { resumeAfterMs?: unknown }).resumeAfterMs) || 15_000)))
+      await heartbeat(input.client, runId, input.workerId, {
+        runtime: 'fly_output_workflow_worker',
+        stage: 'waiting_resumable',
+        runMode: targetNodeKeys.length > 0 ? 'targeted_node_run' : 'full_workflow_run',
+        runScope,
+        targetNodeKeys,
+        waitingNodeKey,
+        resumeAfterMs,
+        completedNodeKeys: schedulerResult.completed,
+        failedNodeKeys: schedulerResult.failed,
+        cancelledNodeKeys: schedulerResult.cancelled,
+        skippedNodeKeys: schedulerResult.skipped,
+        executionLevels: executionPlan.levels,
+      })
+      if (resumeAfterMs > 0) await sleep(resumeAfterMs)
+      const requeueResponse = await input.client
+        .from('output_workflow_runs')
+        .update({
+          status: 'queued',
+          worker_id: null,
+          heartbeat_at: null,
+          metadata: {
+            ...asRecord(bundle.run.metadata),
+            runtime: 'fly_output_workflow_worker',
+            stage: 'waiting_resumable',
+            waitingNodeKey,
+            resumeAfterMs,
+            waitingSince: new Date().toISOString(),
+          },
+        })
+        .eq('id', runId)
+        .eq('status', 'running')
+        .eq('worker_id', input.workerId)
+      if (requeueResponse.error) throw new Error(requeueResponse.error.message)
+      return { processed: true, run: { id: bundle.run.id, status: 'queued', preset: bundle.run.preset } }
+    }
 
     if (schedulerResult.status === 'cancelled') {
       const liveRunResponse = await input.client

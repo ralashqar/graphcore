@@ -1,3 +1,9 @@
+.sequence-animatic-pipeline-shell {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
 .sequence-animatic-pipeline-rail {
   display: flex;
   align-items: center;

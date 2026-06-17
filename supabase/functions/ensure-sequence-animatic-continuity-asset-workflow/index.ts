@@ -15,6 +15,7 @@ import {
   sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
 import {
+  continuityAtlasLayoutForTargetCount,
   continuityBatchKindForNodes,
   continuityBatchLayoutForTargetCount,
   continuityNodeCollections,
@@ -79,6 +80,38 @@ function applySceneGraphOverrideToNode(node: Record<string, unknown>, override: 
     sceneGraphOverride: override,
     scene_graph_override: override,
   }
+}
+
+function spatialNodeKind(node: Record<string, unknown>) {
+  return readText(node.nodeKind ?? node.assetKind ?? node.kind)
+}
+
+function compactPromptLine(value: string, maxLength = 150) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxLength) return normalized
+  const clipped = normalized.slice(0, maxLength).replace(/\s+\S*$/, '').trim()
+  return clipped ? `${clipped}.` : normalized.slice(0, maxLength).trim()
+}
+
+function zoneMapPoiLinesForNode(input: {
+  zoneNode: Record<string, unknown>
+  graphNodes: readonly Record<string, unknown>[]
+  relevantShots: readonly Record<string, unknown>[]
+}) {
+  const zoneId = readText(input.zoneNode.id)
+  if (!zoneId) return []
+  const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(input.relevantShots)
+  const children = input.graphNodes
+    .filter((node) => continuityNodeParentId(node) === zoneId)
+    .filter((node) => ['location_spot', 'location_angle', 'location_viewpoint'].includes(spatialNodeKind(node)))
+    .slice(0, 12)
+  return children.map((node) => {
+    const sanitized = sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames })
+    const kind = sanitized.kindLabel || spatialNodeKind(node) || 'POI'
+    const name = sanitized.name || readText(node.name) || readText(node.id) || 'POI'
+    const brief = compactPromptLine(sanitized.brief || readText(node.visualBrief) || readText(node.summary), 140)
+    return brief ? `${name} (${kind}): ${brief}` : `${name} (${kind})`
+  }).filter(Boolean)
 }
 
 function readArtifactMetadataRecord(
@@ -288,14 +321,15 @@ Deno.serve(async (request) => {
     const graph = asRecord(continuityPack.continuityGraphV2 ?? continuityPack.continuity_graph_v2)
     if (Object.keys(graph).length === 0) throw new HttpError(409, 'Generate the shot continuity plan first.')
     const allGraphNodes = continuityNodeCollections(graph)
-    let requestedNodeIds = [...new Set([payload.nodeId, ...readStringArray(payload.nodeIds)].map(readText).filter(Boolean))].slice(0, 4)
+    let requestedNodeIds = [...new Set([payload.nodeId, ...readStringArray(payload.nodeIds)].map(readText).filter(Boolean))].slice(0, 9)
     const targetNodes = requestedNodeIds.map((nodeId) => allGraphNodes.find((entry) => readText(entry.id) === nodeId) ?? null)
     if (targetNodes.some((node) => !node)) throw new HttpError(404, 'One or more continuity nodes were not found in the current scene graph.')
     let resolvedTargetNodes = (targetNodes as Record<string, unknown>[])
       .map((node) => applySceneGraphOverrideToNode(node, sceneGraphOverrideForNode(asRecord(masterRequest.metadata), readText(node.id))))
     let targetNode = resolvedTargetNodes[0] ?? null
     if (!targetNode) throw new HttpError(404, 'Continuity node was not found in the current scene graph.')
-    let batchKind = resolvedTargetNodes.length > 1 ? continuityBatchKindForNodes(resolvedTargetNodes) : ''
+    const requestedBatchKind = readText(payload.batchKind)
+    let batchKind = resolvedTargetNodes.length > 1 ? (requestedBatchKind || continuityBatchKindForNodes(resolvedTargetNodes)) : ''
     let batchParentId = resolvedTargetNodes.length > 1
       ? batchKind === 'parent_child_scaffold_grid'
         ? readText(targetNode.id)
@@ -303,6 +337,11 @@ Deno.serve(async (request) => {
       : ''
     if (resolvedTargetNodes.length > 1) {
       if (!batchKind) throw new HttpError(400, 'Only sibling spots or viewpoints can be generated as a continuity asset grid.')
+      const inferredBatchKind = continuityBatchKindForNodes(resolvedTargetNodes)
+      if ((batchKind === 'spot_atlas_grid' && inferredBatchKind !== 'spot_grid')
+        || (batchKind === 'viewpoint_atlas_grid' && inferredBatchKind !== 'viewpoint_grid')) {
+        throw new HttpError(400, 'Atlas grids require sibling spots or viewpoints with the same parent.')
+      }
       const validBatchParent = batchKind === 'parent_child_scaffold_grid'
         ? batchParentId && resolvedTargetNodes.slice(1).every((node) => continuityNodeParentId(node) === batchParentId)
         : batchParentId && resolvedTargetNodes.every((node) => continuityNodeParentId(node) === batchParentId)
@@ -452,14 +491,31 @@ Deno.serve(async (request) => {
       : []
     if (
       resolvedTargetNodes.length > 1
-      && (batchKind === 'spot_grid' || batchKind === 'viewpoint_grid')
+      && (batchKind === 'spot_grid' || batchKind === 'viewpoint_grid' || batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid')
       && parentReferenceAssetKeys.length === 0
     ) {
       throw new HttpError(409, `Generate parent continuity asset first: ${batchParentId || 'parent spatial node'}.`)
     }
-    const allReferenceAssetKeys = [...new Set([...referenceAssetKeys, ...parentReferenceAssetKeys, ...batchSiblingReferenceAssetKeys, ...worldReferenceAssetKeys])].slice(0, 8)
-    const referenceEntities = allReferenceAssetKeys.map((assetKey) => assetEntityForKey(assetKey, `${readText(targetNode.name) || payload.nodeId} dependency`))
-    const augmentedAssetPack = {
+    const assetKind = readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
+    const targetIsSpatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
+    const batchIsSpatialAsset = resolvedTargetNodes.every((node) => ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(readText(node.assetKind) || readText(node.nodeKind)))
+    const batchIsAtlas = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
+    const allReferenceAssetKeys = batchIsAtlas
+      ? parentReferenceAssetKeys.slice(0, 1)
+      : [...new Set([...referenceAssetKeys, ...parentReferenceAssetKeys, ...batchSiblingReferenceAssetKeys, ...worldReferenceAssetKeys])].slice(0, 8)
+    const referenceEntities = allReferenceAssetKeys.map((assetKey) => assetEntityForKey(assetKey, `${readText(targetNode.name) || payload.nodeId} spatial dependency`))
+    const augmentedAssetPack = (targetIsSpatialAsset || batchIsSpatialAsset) ? {
+      ...assetPack,
+      entities: referenceEntities,
+      selectedEntityKeys: referenceEntities.map((entity) => readText(entity.key)).filter(Boolean),
+      missingReferenceEntityKeys: [],
+      continuityReferenceAssetKeys: allReferenceAssetKeys,
+      scopedReferenceAssetKeys: allReferenceAssetKeys,
+      referenceScope: 'sequence_animatic_spatial_continuity_only',
+      referenceDiagnostics: [
+        'Spatial continuity generation only receives parent/set/zone/spot reference images. Character, prop, and shot-subject references are excluded.',
+      ],
+    } : {
       ...assetPack,
       entities: [
         ...assetPackEntities,
@@ -467,11 +523,13 @@ Deno.serve(async (request) => {
       ],
       continuityReferenceAssetKeys: allReferenceAssetKeys,
     }
-    const assetKind = readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
     if (resolvedTargetNodes.length > 1 && batchKind) {
       const batchTargetIds = resolvedTargetNodes.map((node) => readText(node.id)).filter(Boolean)
       const isParentChildScaffold = batchKind === 'parent_child_scaffold_grid'
-      const sourceReferenceNodeIds = isParentChildScaffold
+      const isSpatialAtlas = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
+      const sourceReferenceNodeIds = isSpatialAtlas
+        ? [batchParentId].filter(Boolean)
+        : isParentChildScaffold
         ? [continuityNodeParentId(targetNode)].filter(Boolean)
         : [
             batchParentId,
@@ -482,9 +540,9 @@ Deno.serve(async (request) => {
               .filter((node) => readText(asRecord(assetStates[readText(node.id)]).assetKey))
               .map((node) => readText(node.id)),
           ].filter(Boolean)
-      const generationPolicy = isParentChildScaffold ? 'parent_child_scaffold_grid' : 'manual_sibling_grid'
+      const generationPolicy = isParentChildScaffold ? 'parent_child_scaffold_grid' : isSpatialAtlas ? 'spot_atlas_grid_v2' : 'manual_sibling_grid'
       const cellRoles = isParentChildScaffold ? ['parent', ...batchTargetIds.slice(1).map(() => 'child')] : batchTargetIds.map(() => 'sibling')
-      const layout = continuityBatchLayoutForTargetCount(batchTargetIds.length)
+      const layout = isSpatialAtlas ? continuityAtlasLayoutForTargetCount(batchTargetIds.length) : continuityBatchLayoutForTargetCount(batchTargetIds.length)
       const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(relevantShots)
       const sanitizedPromptNodes = resolvedTargetNodes.map((node) => sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames }))
       const batch = {
@@ -492,13 +550,14 @@ Deno.serve(async (request) => {
         batchKind,
         targetNodeIds: batchTargetIds,
         sourceReferenceNodeIds,
-        worldReferenceAssetKeys,
+        worldReferenceAssetKeys: isSpatialAtlas ? [] : worldReferenceAssetKeys,
         blockIds: [...new Set(resolvedTargetNodes.flatMap((node) => readStringArray(node.storyboardBlockIds ?? node.blockIds)))],
         layout,
         gridLayout: layout,
         cellRoles,
         required: true,
         generationPolicy,
+        referencePolicy: isSpatialAtlas ? 'zone_map_to_spot_atlas' : isParentChildScaffold ? 'parent_child_scaffold' : 'sibling_grid',
       }
       const batchInputHash = sequenceAnimaticStableHash({
         spatialPromptPolicyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
@@ -517,11 +576,11 @@ Deno.serve(async (request) => {
           && readText(metadata.continuityBatchIdentity) === continuityBatchIdentity
       }) ?? null
       let existingBatchReusable = false
+      let existingBatchActive = false
       if (existingBatch?.workflowId) {
-        existingBatchReusable = existingBatch.status === 'completed'
-          || existingBatch.status === 'queued'
-          || existingBatch.status === 'running'
-          || existingBatch.status === 'planning'
+        const requestStatus = readText(existingBatch.status)
+        existingBatchActive = requestStatus === 'queued' || requestStatus === 'running' || requestStatus === 'planning'
+        existingBatchReusable = requestStatus === 'completed' || existingBatchActive
         if (existingBatch.latestRunId) {
           const existingRunResponse = await admin
             .from('output_workflow_runs')
@@ -531,9 +590,26 @@ Deno.serve(async (request) => {
           const existingRunStatus = readText(existingRunResponse.data?.status)
           if (existingRunStatus === 'failed' || existingRunStatus === 'cancelled') {
             existingBatchReusable = false
+            existingBatchActive = false
           }
         }
       }
+      if (existingBatch?.workflowId && ((!existingBatchReusable) || (payload.mode === 'regenerate' && !existingBatchActive))) {
+        const staleResponse = await admin
+          .from('output_requests')
+          .update({
+            metadata: {
+              ...asRecord(existingBatch.metadata),
+              sequenceAnimaticStale: true,
+              staleReason: payload.mode === 'regenerate'
+                ? 'Continuity atlas refresh requested.'
+                : 'Previous continuity atlas workflow is not reusable.',
+              staleAt: new Date().toISOString(),
+            },
+          })
+          .eq('id', existingBatch.id)
+        if (staleResponse.error) throw new Error(staleResponse.error.message)
+      } else
       if (existingBatch?.workflowId && existingBatchReusable) {
         return json(sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
           ok: true,
@@ -660,14 +736,24 @@ Deno.serve(async (request) => {
     }
 
     const targetIsSpatial = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
+    const singleGenerationPolicy = assetKind === 'location_zone'
+      ? 'zone_spatial_map_v2'
+      : assetKind === 'location_spot' || assetKind === 'location_angle' || assetKind === 'location_viewpoint'
+        ? 'spot_local_reference_v1'
+        : ''
     const singleForbiddenNames = targetIsSpatial ? sequenceAnimaticSpatialForbiddenNamesFromShots(relevantShots) : []
     const sanitizedPromptNode = targetIsSpatial
       ? sanitizeSequenceAnimaticSpatialNodeFields(targetNode, { forbiddenNames: singleForbiddenNames })
       : null
+    const zoneMapPoiLines = assetKind === 'location_zone'
+      ? zoneMapPoiLinesForNode({ zoneNode: targetNode, graphNodes: allGraphNodes, relevantShots })
+      : []
     const inputHash = sequenceAnimaticStableHash({
       spatialPromptPolicyVersion: targetIsSpatial ? sequenceAnimaticSpatialPromptPolicyVersion : '',
+      generationPolicy: singleGenerationPolicy,
       targetNode,
       sanitizedPromptNode,
+      zoneMapPoiLines,
       relevantShotIds: relevantShots.map((shot) => readText(shot.id)),
       referenceAssetKeys: allReferenceAssetKeys,
       manifestHash,
@@ -695,6 +781,36 @@ Deno.serve(async (request) => {
         && readText(metadata.assetIdentity) === assetIdentity
     }) ?? null
     if (existing?.workflowId) {
+      let existingActive = existing.status === 'queued' || existing.status === 'running' || existing.status === 'planning'
+      let existingReusable = existing.status === 'completed' || existingActive
+      if (existing.latestRunId) {
+        const existingRunResponse = await admin
+          .from('output_workflow_runs')
+          .select('id, status')
+          .eq('id', existing.latestRunId)
+          .maybeSingle()
+        const existingRunStatus = readText(existingRunResponse.data?.status)
+        if (existingRunStatus === 'failed' || existingRunStatus === 'cancelled') {
+          existingReusable = false
+          existingActive = false
+        }
+      }
+      if ((!existingReusable) || (payload.mode === 'regenerate' && !existingActive)) {
+        const staleResponse = await admin
+          .from('output_requests')
+          .update({
+            metadata: {
+              ...asRecord(existing.metadata),
+              sequenceAnimaticStale: true,
+              staleReason: payload.mode === 'regenerate'
+                ? 'Continuity asset refresh requested.'
+                : 'Previous continuity asset workflow is not reusable.',
+              staleAt: new Date().toISOString(),
+            },
+          })
+          .eq('id', existing.id)
+        if (staleResponse.error) throw new Error(staleResponse.error.message)
+      } else {
       return json(sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
         ok: true,
         masterRequest,
@@ -706,6 +822,7 @@ Deno.serve(async (request) => {
         assetState: currentAssetState.success ? currentAssetState.data : null,
         reused: true,
       }))
+      }
     }
 
     const workflowId = crypto.randomUUID()
@@ -729,6 +846,8 @@ Deno.serve(async (request) => {
       worldLocationRefId,
       parentNodeIds: dependencyEdges.filter((edge) => readText(edge.targetNodeId) === payload.nodeId).map((edge) => readText(edge.sourceNodeId)).filter(Boolean),
       spatialPromptPolicyVersion: targetIsSpatial ? sequenceAnimaticSpatialPromptPolicyVersion : '',
+      generationPolicy: singleGenerationPolicy,
+      zoneMapPoiLines,
     }
     const { nodes, edges } = buildSequenceAnimaticContinuityAssetWorkflowGraph({
       workflowId,

@@ -1,6 +1,6 @@
 type LooseRecord = Record<string, unknown>
 
-export const sequenceAnimaticSpatialPromptPolicyVersion = 'spatial_location_prompt_v2'
+export const sequenceAnimaticSpatialPromptPolicyVersion = 'spatial_location_prompt_v3'
 
 function readText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -114,6 +114,7 @@ export function sanitizeSequenceAnimaticSpatialNodeFields(node: unknown, options
   const rawBrief = readText(record.visualBrief) || readText(record.visual_brief) || readText(record.summary)
   const nameResult = sanitizeSequenceAnimaticSpatialPromptText(rawName, { forbiddenNames: options.forbiddenNames, maxLength: 96 })
   let name = nameResult.text
+    .replace(/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\s+(?=(?:opposite|close[-\s]?in|watch|kneeling|seated|standing|inner|side|primary|secondary)\b)/i, '')
     .replace(/\bclose[-\s]?in position\b/gi, 'inner approach point')
     .replace(/\bopposite position\b/gi, 'opposite staging position')
     .replace(/\bwatch position\b/gi, 'watch point')

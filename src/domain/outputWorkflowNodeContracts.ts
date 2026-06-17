@@ -1,17 +1,15 @@
 import type { OutputWorkflowNode, OutputWorkflowRunScope } from './outputWorkflow.ts'
+import {
+  createWorkflowNodeManifest,
+  createWorkflowNodeManifestRegistry,
+  getWorkflowNodeManifest as getRegisteredWorkflowNodeManifest,
+  registerWorkflowNodeManifest as registerManifestInRegistry,
+  workflowNodeManifestToContract,
+  type WorkflowNodeContractView,
+  type WorkflowNodeManifest,
+} from './outputWorkflowManifests.ts'
 
-export type OutputWorkflowNodeContract = {
-  purpose: string
-  label: string
-  requiredInputs: string[]
-  producedOutputs: string[]
-  artifactRoles: string[]
-  previewRoles: string[]
-  recoveryStrategy: 'node_step_artifact' | 'node_step' | 'none'
-  progressLabel: string
-  providerBacked: boolean
-  manualOnly: boolean
-}
+export type OutputWorkflowNodeContract = WorkflowNodeContractView
 
 const cinematicSequenceContracts = [
   {
@@ -73,6 +71,16 @@ const cinematicSequenceContracts = [
     progressLabel: 'Building scene shots and continuity',
     providerBacked: true,
     manualOnly: false,
+    streamingPolicy: {
+      mode: 'jsonl',
+      partialArtifactRoles: ['sequence_animatic_scene_plan'],
+      resumeTokenRequired: false,
+      progressLabels: {
+        streaming: 'Streaming scene shot plan',
+        finalizing: 'Finalizing scene shot plan',
+        completed: 'Scene shot plan ready',
+      },
+    },
   },
   {
     purpose: 'sequence_animatic_scene_plan_merge',
@@ -121,6 +129,16 @@ const cinematicSequenceContracts = [
     progressLabel: 'Building shots, refs, and continuity',
     providerBacked: true,
     manualOnly: false,
+    streamingPolicy: {
+      mode: 'jsonl',
+      partialArtifactRoles: ['sequence_animatic_director_plan'],
+      resumeTokenRequired: false,
+      progressLabels: {
+        streaming: 'Streaming shot continuity plan',
+        finalizing: 'Finalizing shot continuity plan',
+        completed: 'Shot continuity plan ready',
+      },
+    },
   },
   {
     purpose: 'sequence_animatic_director_plan_artifact',
@@ -359,6 +377,150 @@ const cinematicSequenceContracts = [
     previewRoles: ['image', 'artifact'],
     recoveryStrategy: 'node_step_artifact',
     progressLabel: 'Resolving shared reference',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'workflow_ensure_child_workflow',
+    label: 'Ensure Child Workflow',
+    requiredInputs: [],
+    producedOutputs: ['childRequestId', 'childWorkflowId', 'childRunId', 'status', 'readyArtifactRoles', 'readyArtifactKeys', 'waiting', 'resumable', 'metadata'],
+    artifactRoles: [],
+    previewRoles: ['metadata'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Ensuring child workflow',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'workflow_wait_child_workflow',
+    label: 'Wait For Child Workflow',
+    requiredInputs: ['childRequestId'],
+    producedOutputs: ['childRequestId', 'childWorkflowId', 'childRunId', 'status', 'readyArtifactRoles', 'readyArtifactKeys', 'waiting', 'resumable', 'resumeAfterMs', 'diagnostics', 'metadata'],
+    artifactRoles: [],
+    previewRoles: ['metadata'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Waiting for child workflow',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'workflow_register_artifact_projection',
+    label: 'Register Artifact Projection',
+    requiredInputs: [],
+    producedOutputs: ['workflowRuntime', 'childRequests', 'child_runs', 'readyArtifactKeys', 'readyArtifactRoles', 'waiting', 'metadata'],
+    artifactRoles: [],
+    previewRoles: ['metadata'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Updating workflow projection',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'workflow_fanout_children',
+    label: 'Fan Out Child Workflows',
+    requiredInputs: [],
+    producedOutputs: ['children', 'childRequests', 'child_requests', 'childRunIds', 'child_run_ids', 'readyArtifactRoles', 'readyArtifactKeys', 'waiting', 'metadata'],
+    artifactRoles: [],
+    previewRoles: ['metadata'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Materializing child workflows',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'workflow_collect_child_artifacts',
+    label: 'Collect Child Artifacts',
+    requiredInputs: [],
+    producedOutputs: ['artifacts', 'artifactKeys', 'artifact_keys', 'childRequests', 'child_requests', 'childRunIds', 'child_run_ids', 'readyArtifactRoles', 'readyArtifactKeys', 'missingArtifactRoles', 'missing_artifact_roles', 'workflowRuntime', 'metadata'],
+    artifactRoles: [],
+    previewRoles: ['metadata'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Collecting child artifacts',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_scene_board_scope_input',
+    label: 'Scene Board Scope',
+    requiredInputs: [],
+    producedOutputs: ['text', 'scope', 'sceneBoardCommand', 'scene_board_command', 'shotIds', 'shot_ids'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Preparing Scene Board scope',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_scene_board_required_ref_plan',
+    label: 'Plan Required Refs',
+    requiredInputs: ['scope'],
+    producedOutputs: ['text', 'requiredRefs', 'required_refs', 'scope'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Planning required refs',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_scene_board_set_ref_generation',
+    label: 'Set Refs',
+    requiredInputs: ['requiredRefs'],
+    producedOutputs: ['text', 'setRefStatus', 'set_ref_status', 'childRequests', 'child_requests'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Queueing set refs',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_scene_board_scaffold_ref_generation',
+    label: 'Zone Map / Spot Atlas',
+    requiredInputs: ['setRefStatus'],
+    producedOutputs: ['text', 'scaffoldRefStatus', 'scaffold_ref_status', 'childRequests', 'child_requests'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Queueing zone maps and spot atlases',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_scene_board_coverage_intent_batch',
+    label: 'Coverage Directions',
+    requiredInputs: ['scaffoldRefStatus'],
+    producedOutputs: ['text', 'coverageIntentStatus', 'coverage_intent_status', 'childWorkflows', 'child_workflows', 'childRequests', 'child_requests'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Queueing coverage directions',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_scene_board_zone_coverage_grid',
+    label: 'Zone Coverage Grid',
+    requiredInputs: ['coverageIntentStatus'],
+    producedOutputs: ['text', 'zoneCoverageStatus', 'zone_coverage_status', 'childWorkflows', 'child_workflows', 'childRequests', 'child_requests'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Queueing zone coverage grids',
+    providerBacked: false,
+    manualOnly: false,
+  },
+  {
+    purpose: 'sequence_animatic_scene_board_coverage_cell_artifact',
+    label: 'Register Board Prep',
+    requiredInputs: ['workflowRuntime', 'scope'],
+    producedOutputs: ['artifact', 'sceneBoardPrep', 'scene_board_prep', 'workflowRuntime', 'workflow_runtime', 'childRequests', 'child_requests', 'readyArtifactKeys', 'ready_artifact_keys'],
+    artifactRoles: ['sequence_animatic_scene_board_prep'],
+    previewRoles: ['artifact'],
+    recoveryStrategy: 'node_step_artifact',
+    progressLabel: 'Saving Scene Board prep',
     providerBacked: false,
     manualOnly: false,
   },
@@ -892,9 +1054,94 @@ const cinematicSequenceContracts = [
   },
 ] satisfies OutputWorkflowNodeContract[]
 
+const legacyWorkflowCompatibilityPurposes = [
+  'action',
+  'bible_assembly',
+  'bible_section',
+  'bible_section_plan',
+  'chapter_assembly',
+  'chapter_plan',
+  'chapter_prose',
+  'cinematic_beat_sheet',
+  'cinematic_beat_sheet_prompt',
+  'cinematic_block_video',
+  'cinematic_entity_selector',
+  'cinematic_keyframe',
+  'cinematic_keyframe_prompt_pack',
+  'cinematic_v2_keyframe_prompt',
+  'cinematic_v2_keyframe_qa',
+  'cinematic_v2_panel_extract',
+  'cinematic_v2_shot_asset_pack',
+  'cinematic_v2_shot_keyframe',
+  'cinematic_v2_shot_keyframe_passthrough',
+  'cinematic_v2_shot_video',
+  'cinematic_v2_storyboard_prompt',
+  'cinematic_v2_storyboard_sheet',
+  'cinematic_v2_timeline_assemble',
+  'cinematic_v2_video_prompt',
+  'cinematic_v3_dynamic_shot_parse_fanout',
+  'cinematic_v3_reference_select',
+  'cinematic_v3_screenplay_author',
+  'cinematic_v3_shot_break_plan',
+  'cinematic_v3_shot_parse_group',
+  'cinematic_v3_timeline_assemble',
+  'cinematic_video_artifact',
+  'cinematic_video_prompt',
+  'comic_artifact',
+  'comic_entity_selector',
+  'comic_page',
+  'comic_page_plan',
+  'comic_page_prompt',
+  'comic_pdf_render',
+  'comic_scene_script',
+  'comic_script',
+  'concept_art_prompt',
+  'concept_art_image',
+  'dialogue',
+  'ebook_cover_image',
+  'ebook_cover_prompt',
+  'editor_pass',
+  'establishing',
+  'front_back_matter',
+  'image_reference_selector',
+  'outline',
+  'poster_prompt',
+  'poster_image',
+  'reaction',
+  'story_bible_artifact',
+  'story_bible_document_render',
+  'video_stitch',
+] as const
+
+const legacyWorkflowCompatibilityContracts = legacyWorkflowCompatibilityPurposes.map((purpose): OutputWorkflowNodeContract => ({
+  purpose,
+  label: purpose.split('_').map((part) => part.slice(0, 1).toUpperCase() + part.slice(1)).join(' '),
+  requiredInputs: [],
+  producedOutputs: [],
+  artifactRoles: purpose.endsWith('_artifact') ? [purpose] : [],
+  previewRoles: [],
+  recoveryStrategy: purpose.endsWith('_artifact') || purpose.endsWith('_image') || purpose.endsWith('_sheet') || purpose.endsWith('_video') ? 'node_step_artifact' : 'node_step',
+  progressLabel: purpose.split('_').join(' '),
+  providerBacked: purpose.includes('image') || purpose.includes('video') || purpose.includes('prose') || purpose.includes('screenplay') || purpose.includes('script'),
+  manualOnly: false,
+}))
+
+export const outputWorkflowNodeManifests = [
+  ...cinematicSequenceContracts,
+  ...legacyWorkflowCompatibilityContracts,
+].map((contract) => createWorkflowNodeManifest(contract))
+
+export const outputWorkflowNodeManifestsByPurpose = createWorkflowNodeManifestRegistry(outputWorkflowNodeManifests)
+
 export const outputWorkflowNodeContractsByPurpose = new Map<string, OutputWorkflowNodeContract>(
-  cinematicSequenceContracts.map((contract) => [contract.purpose, contract]),
+  outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, workflowNodeManifestToContract(manifest)]),
 )
+
+export function registerWorkflowNodeManifest(manifest: WorkflowNodeManifest) {
+  registerManifestInRegistry(outputWorkflowNodeManifestsByPurpose, manifest)
+  outputWorkflowNodeContractsByPurpose.set(manifest.purpose, workflowNodeManifestToContract(manifest))
+  return manifest
+}
 
 export function outputWorkflowNodePurpose(nodeOrConfig: Pick<OutputWorkflowNode, 'config'> | Record<string, unknown> | null | undefined) {
   const config = nodeOrConfig && 'config' in nodeOrConfig
@@ -914,9 +1161,25 @@ export function getOutputWorkflowNodeContract(nodeOrConfig: Pick<OutputWorkflowN
   return purpose ? outputWorkflowNodeContractsByPurpose.get(purpose) ?? null : null
 }
 
+export function getWorkflowNodeManifest(nodeOrConfig: Pick<OutputWorkflowNode, 'config'> | Record<string, unknown> | null | undefined) {
+  return getRegisteredWorkflowNodeManifest(outputWorkflowNodeManifestsByPurpose, outputWorkflowNodePurpose(nodeOrConfig))
+}
+
+export function validateWorkflowNodeManifestConfig(nodeOrConfig: Pick<OutputWorkflowNode, 'config'> | Record<string, unknown> | null | undefined) {
+  const manifest = getWorkflowNodeManifest(nodeOrConfig)
+  const config = nodeOrConfig && 'config' in nodeOrConfig ? nodeOrConfig.config : nodeOrConfig
+  if (!manifest) return { ok: false as const, diagnostics: ['Workflow node purpose is not registered.'] }
+  const parsed = manifest.configSchema.safeParse(config && typeof config === 'object' && !Array.isArray(config) ? config : {})
+  return parsed.success
+    ? { ok: true as const, diagnostics: [] as string[] }
+    : { ok: false as const, diagnostics: parsed.error.issues.map((issue) => `${manifest.purpose}: invalid config at ${issue.path.join('.') || '<root>'}: ${issue.message}`) }
+}
+
 export type OutputWorkflowRunIntent =
   | 'generate_director_plan'
   | 'prepare_storyboard_block'
+  | 'prepare_scene_board'
+  | 'regenerate_scene_board_zone'
   | 'generate_continuity_pack'
   | 'derive_continuity_structure'
   | 'derive_continuity_block'
@@ -945,6 +1208,14 @@ export function outputWorkflowRunIntentDefaults(intent: string | null | undefine
         allowStaleUpstreamOutputs: false,
       }
     case 'prepare_storyboard_block':
+      return {
+        runScope: 'upstream_to_node',
+        debugSkipVideoGeneration: true,
+        cinematicVideoApproved: false,
+        allowStaleUpstreamOutputs: false,
+      }
+    case 'prepare_scene_board':
+    case 'regenerate_scene_board_zone':
       return {
         runScope: 'upstream_to_node',
         debugSkipVideoGeneration: true,

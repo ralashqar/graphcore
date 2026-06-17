@@ -1,8 +1,194 @@
+import { z } from 'zod'
+
+import {
+  createWorkflowTemplateRegistry,
+  workflowTemplateSourceHash,
+  type WorkflowTemplateRegistryEntry,
+} from '../../../src/domain/outputWorkflowTemplateRegistry.ts'
 import {
   sequenceAnimaticGraphSpecVersion,
   sequenceAnimaticWorkflowEdge,
   sequenceAnimaticWorkflowNode,
 } from './sequence-animatic-workflow-factory.ts'
+
+export const sequenceAnimaticSceneBoardPrepPolicyVersion = 'scene_board_prep_graph_v1'
+export const sequenceAnimaticSceneBoardPrepTemplateKey = 'sequence_animatic_scene_board_prep'
+
+export const sequenceAnimaticSceneBoardPrepTemplateInputSchema = z.object({
+  workflowId: z.string().min(1),
+  draftId: z.string().min(1),
+  commonConfig: z.record(z.string(), z.unknown()).default({}),
+  command: z.record(z.string(), z.unknown()).default({}),
+}).strict()
+
+export function buildSequenceAnimaticSceneBoardPrepWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  command: Record<string, unknown>
+}) {
+  const role = 'scene_board_prep'
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    sceneBoardPrepPolicyVersion: sequenceAnimaticSceneBoardPrepPolicyVersion,
+    ...input.commonConfig,
+    command: input.command,
+    sceneBoardCommand: input.command,
+    scene_board_command: input.command,
+    screenplayAnimaticRole: role,
+    sequenceAnimaticRole: role,
+  }
+  const utilityStageConfig = (stage: string, label: string, extra: Record<string, unknown> = {}) => ({
+    ...config,
+    stage,
+    stageLabel: label,
+    optionalChildWorkflow: true,
+    optionalChildWorkflows: true,
+    optional_child_workflows: true,
+    childTemplateKey: `scene_board_${stage}`,
+    identityKey: 'sceneBoardPrepIdentity',
+    identityValue: `${String(input.commonConfig.sceneBoardPrepIdentity ?? 'scene_board_prep')}:${stage}`,
+    execution: { resourceClass: 'utility' as const, groupKey: `scene_board_${stage}`, maxConcurrency: 4 },
+    ...extra,
+  })
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'scope_input', 'utility_transform', 'Scene Board Scope', 80, 120, {
+      purpose: 'sequence_animatic_scene_board_scope_input',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_board_scope_input', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'required_ref_plan', 'utility_transform', 'Plan Required Refs', 360, 120, {
+      purpose: 'sequence_animatic_scene_board_required_ref_plan',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_board_required_ref_plan', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'fanout_set_refs', 'utility_transform', 'Fan Out Set Refs', 640, 60, {
+      purpose: 'workflow_fanout_children',
+      ...utilityStageConfig('set_refs', 'Ensure set references', {
+        role: 'continuity_asset',
+        requiredArtifactRoles: ['sequence_animatic_continuity_asset'],
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'collect_set_refs', 'utility_transform', 'Collect Set Refs', 640, 180, {
+      purpose: 'workflow_collect_child_artifacts',
+      ...utilityStageConfig('set_refs', 'Collect set references', {
+        requiredArtifactRoles: ['sequence_animatic_continuity_asset'],
+        resumeAfterMs: 15_000,
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'fanout_scaffold_refs', 'utility_transform', 'Fan Out Zone Map / Spot Atlas', 920, 60, {
+      purpose: 'workflow_fanout_children',
+      ...utilityStageConfig('scaffold_refs', 'Ensure zone map and spot atlas', {
+        role: 'continuity_asset',
+        requiredArtifactRoles: ['sequence_animatic_continuity_asset'],
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'collect_scaffold_refs', 'utility_transform', 'Collect Zone Map / Spot Atlas', 920, 180, {
+      purpose: 'workflow_collect_child_artifacts',
+      ...utilityStageConfig('scaffold_refs', 'Collect zone map and spot atlas', {
+        requiredArtifactRoles: ['sequence_animatic_continuity_asset'],
+        resumeAfterMs: 15_000,
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_intent_batch', 'utility_transform', 'Plan Coverage Direction Children', 1200, 120, {
+      purpose: 'sequence_animatic_scene_board_coverage_intent_batch',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_board_coverage_intent_batch', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'fanout_coverage_intents', 'utility_transform', 'Fan Out Coverage Directions', 1280, 60, {
+      purpose: 'workflow_fanout_children',
+      ...utilityStageConfig('coverage_directions', 'Ensure coverage directions', {
+        role: 'coverage_intent_batch',
+        requiredArtifactRoles: ['sequence_animatic_coverage_intent_batch'],
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'collect_coverage_intents', 'utility_transform', 'Collect Coverage Directions', 1280, 180, {
+      purpose: 'workflow_collect_child_artifacts',
+      ...utilityStageConfig('coverage_directions', 'Collect coverage directions', {
+        requiredArtifactRoles: ['sequence_animatic_coverage_intent_batch'],
+        resumeAfterMs: 15_000,
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'zone_coverage_grid', 'utility_transform', 'Plan Zone Coverage Grid Children', 1480, 120, {
+      purpose: 'sequence_animatic_scene_board_zone_coverage_grid',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_board_zone_coverage_grid', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'fanout_zone_coverage_grids', 'utility_transform', 'Fan Out Zone Coverage Grids', 1560, 60, {
+      purpose: 'workflow_fanout_children',
+      ...utilityStageConfig('coverage_grids', 'Ensure zone coverage grids', {
+        role: 'zone_coverage_board',
+        requiredArtifactRoles: ['sequence_animatic_zone_coverage_board'],
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'collect_zone_coverage_grids', 'utility_transform', 'Collect Zone Coverage Grids', 1560, 180, {
+      purpose: 'workflow_collect_child_artifacts',
+      ...utilityStageConfig('coverage_grids', 'Collect zone coverage grids', {
+        requiredArtifactRoles: ['sequence_animatic_zone_coverage_board'],
+        resumeAfterMs: 15_000,
+      }),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'register_projection', 'utility_transform', 'Register Prep Projection', 1760, 120, {
+      purpose: 'workflow_register_artifact_projection',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_board_register_projection', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_cell_artifact', 'output_artifact', 'Register Board Prep', 2040, 120, {
+      purpose: 'sequence_animatic_scene_board_coverage_cell_artifact',
+      artifactKind: 'other',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_board_coverage_cell_artifact', maxConcurrency: 4 },
+    }, {}, role),
+  ]
+  const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'scope__required_refs', 'scope_input', 'scope', 'required_ref_plan', 'scope', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'required_refs__fanout_set_refs', 'required_ref_plan', 'requiredRefs', 'fanout_set_refs', 'requiredRefs', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_set_refs__collect_set_refs', 'fanout_set_refs', 'children', 'collect_set_refs', 'children', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'collect_set_refs__fanout_scaffold_refs', 'collect_set_refs', 'workflowRuntime', 'fanout_scaffold_refs', 'upstreamStatus', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_scaffold_refs__collect_scaffold_refs', 'fanout_scaffold_refs', 'children', 'collect_scaffold_refs', 'children', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'collect_scaffold_refs__coverage_intent_batch', 'collect_scaffold_refs', 'workflowRuntime', 'coverage_intent_batch', 'scaffoldRefStatus', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_intent_batch__fanout_coverage_intents', 'coverage_intent_batch', 'childWorkflows', 'fanout_coverage_intents', 'childWorkflows', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_coverage_intents__collect_coverage_intents', 'fanout_coverage_intents', 'children', 'collect_coverage_intents', 'children', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'collect_coverage_intents__zone_coverage_grid', 'collect_coverage_intents', 'workflowRuntime', 'zone_coverage_grid', 'coverageIntentStatus', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'zone_coverage_grid__fanout_zone_coverage_grids', 'zone_coverage_grid', 'childWorkflows', 'fanout_zone_coverage_grids', 'childWorkflows', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_zone_coverage_grids__collect_zone_coverage_grids', 'fanout_zone_coverage_grids', 'children', 'collect_zone_coverage_grids', 'children', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_set_refs__projection', 'fanout_set_refs', 'children', 'register_projection', 'setRefChildren', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'collect_set_refs__projection', 'collect_set_refs', 'workflowRuntime', 'register_projection', 'setRefs', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_scaffold_refs__projection', 'fanout_scaffold_refs', 'children', 'register_projection', 'scaffoldRefChildren', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'collect_scaffold_refs__projection', 'collect_scaffold_refs', 'workflowRuntime', 'register_projection', 'scaffoldRefs', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'coverage_intent_batch__projection', 'coverage_intent_batch', 'coverageIntentStatus', 'register_projection', 'coverageIntentStatus', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_coverage_intents__projection', 'fanout_coverage_intents', 'children', 'register_projection', 'coverageIntentChildren', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'collect_coverage_intents__projection', 'collect_coverage_intents', 'workflowRuntime', 'register_projection', 'coverageIntents', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'zone_coverage_grid__projection', 'zone_coverage_grid', 'zoneCoverageStatus', 'register_projection', 'zoneCoverageStatus', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'fanout_zone_coverage_grids__projection', 'fanout_zone_coverage_grids', 'children', 'register_projection', 'zoneCoverageGridChildren', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'collect_zone_coverage_grids__projection', 'collect_zone_coverage_grids', 'workflowRuntime', 'register_projection', 'zoneCoverageGrids', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'projection__artifact', 'register_projection', 'workflowRuntime', 'coverage_cell_artifact', 'workflowRuntime', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'scope__artifact', 'scope_input', 'scope', 'coverage_cell_artifact', 'scope', {}, role),
+  ]
+  return { nodes, edges }
+}
+
+export const sequenceAnimaticSceneBoardPrepTemplateManifest: WorkflowTemplateRegistryEntry<
+  z.infer<typeof sequenceAnimaticSceneBoardPrepTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticSceneBoardPrepWorkflowGraph>
+> = {
+  key: sequenceAnimaticSceneBoardPrepTemplateKey,
+  label: 'Scene Board Prep',
+  description: 'Server-owned graph template for Scene Board preparation commands.',
+  inputSchema: sequenceAnimaticSceneBoardPrepTemplateInputSchema,
+  policyVersion: sequenceAnimaticSceneBoardPrepPolicyVersion,
+  buildGraph: buildSequenceAnimaticSceneBoardPrepWorkflowGraph,
+  sourceHash: (input) => workflowTemplateSourceHash({
+    policyVersion: sequenceAnimaticSceneBoardPrepPolicyVersion,
+    draftId: input.draftId,
+    commonConfig: input.commonConfig,
+    command: input.command,
+  }),
+}
+
+export const sequenceAnimaticWorkflowTemplateRegistry = createWorkflowTemplateRegistry([
+  sequenceAnimaticSceneBoardPrepTemplateManifest,
+])
 
 export function buildSequenceAnimaticZoneCoverageBoardWorkflowGraph(input: {
   workflowId: string

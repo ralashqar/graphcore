@@ -203,6 +203,7 @@ import {
   sequenceAnimaticSceneGraphNodeUpdateResponseSchema,
   sequenceAnimaticSceneBoardPrepRequestSchema,
   sequenceAnimaticSceneBoardPrepResponseSchema,
+  sequenceAnimaticSceneBoardWorkflowCommandResponseSchema,
   sequenceAnimaticShotCoverageIntentEnsureRequestSchema,
   sequenceAnimaticShotCoverageIntentEnsureResponseSchema,
   sequenceAnimaticZoneCoverageBoardEnsureRequestSchema,
@@ -241,11 +242,19 @@ import {
   type SequenceAnimaticSceneGraphNodeUpdateResponse,
   type SequenceAnimaticShotCoverageIntentEnsureResponse,
   type SequenceAnimaticSceneBoardPrepResponse,
+  type SequenceAnimaticSceneBoardWorkflowCommandAction,
+  type SequenceAnimaticSceneBoardWorkflowCommandResponse,
   type SequenceAnimaticZoneCoverageBoardEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNodeOutputResponse,
 } from '../domain/outputWorkflow'
+import {
+  workflowCommandProxyResponseSchema,
+  workflowCommandSchema,
+  type WorkflowCommandInput,
+  type WorkflowCommandProxyResponse,
+} from '../domain/workflowCommandRegistry'
 import type { PromptIntentClassificationResult } from '../domain/promptIntentClassifier'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
@@ -3556,6 +3565,15 @@ export async function signProjectAssetUrls(projectId: string, assetKeys: string[
         seenIds.add(row.id)
         rows.push(row)
       }
+      continue
+    }
+
+    if (isTransientRequestError(response.error)) {
+      logRateLimitedRequestWarning('asset-signing:direct-lookup-batch-transient', '[GraphCore] project asset batch lookup failed transiently; skipping exact key burst and waiting for retry.', {
+        projectId,
+        batchSize: batch.length,
+        message: response.error.message,
+      })
       continue
     }
 
@@ -8857,33 +8875,37 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     continuityRequestId?: string | null
     nodeId: string
     nodeIds?: string[]
+    batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
     mode?: 'generate' | 'regenerate'
   },
 ): Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating sequence animatic continuity assets.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic continuity assets require a live Supabase-backed draft.')
-  }
-  const payloadInput: Record<string, unknown> = {
+  const payloadInput = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     masterRequestId: request.masterRequestId,
     nodeId: request.nodeId,
     nodeIds: request.nodeIds,
+    batchKind: request.batchKind,
     mode: request.mode ?? 'generate',
-  }
-  if (request.continuityRequestId) payloadInput.continuityRequestId = request.continuityRequestId
-  const payload = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse(payloadInput)
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-continuity-asset-workflow',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+    continuityRequestId: request.continuityRequestId ?? undefined,
+  })
+  const response = await startWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'generate_continuity_assets',
+    scope: {
+      masterRequestId: request.masterRequestId,
+      nodeIds: payloadInput.nodeIds?.length ? payloadInput.nodeIds : [payloadInput.nodeId],
+    },
+    flags: {
+      forceRefresh: payloadInput.mode === 'regenerate',
+      regenerate: payloadInput.mode === 'regenerate',
+    },
+    payload: {
+      continuityRequestId: payloadInput.continuityRequestId,
+      batchKind: payloadInput.batchKind,
+    },
+  })
+  const parsed = sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse(response.result)
   return parsed
 }
 
@@ -8897,10 +8919,6 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     allowProvisional?: boolean
   },
 ): Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating sequence animatic keyframes.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic keyframes require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticKeyframeWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -8910,16 +8928,21 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     coverageSetupIds: request.coverageSetupIds,
     allowProvisional: request.allowProvisional ?? false,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-keyframe-workflows',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  const response = await startWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'generate_keyframes',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      shotIds: payload.shotIds,
+      coverageSetupIds: payload.coverageSetupIds,
+    },
+    flags: {
+      forceRefresh: payload.mode === 'regenerate',
+      regenerate: payload.mode === 'regenerate',
+      allowProvisional: payload.allowProvisional,
+    },
+  })
+  const parsed = sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse(response.result)
   return parsed
 }
 
@@ -8971,10 +8994,6 @@ export async function ensureSequenceAnimaticZoneCoverageBoards(
     forceRefresh?: boolean
   },
 ): Promise<SequenceAnimaticZoneCoverageBoardEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic zone coverage boards.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic zone coverage boards require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticZoneCoverageBoardEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -8986,16 +9005,24 @@ export async function ensureSequenceAnimaticZoneCoverageBoards(
     scopedShots: request.scopedShots ?? [],
     forceRefresh: request.forceRefresh ?? false,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-zone-coverage-boards',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticZoneCoverageBoardEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  const response = await startWorkflowCommand(snapshot, {
+    family: 'scene_board',
+    action: 'generate_zone_coverage_grids',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      sceneId: payload.sceneId,
+      setId: payload.setId,
+      zoneId: payload.zoneId,
+      shotIds: payload.shotIds,
+    },
+    flags: {
+      forceRefresh: payload.forceRefresh,
+    },
+    payload: {
+      scopedShots: payload.scopedShots,
+    },
+  })
+  const parsed = sequenceAnimaticZoneCoverageBoardEnsureResponseSchema.parse(response.result)
   return parsed
 }
 
@@ -9011,10 +9038,6 @@ export async function ensureSequenceAnimaticShotCoverageIntents(
     forceRefresh?: boolean
   },
 ): Promise<SequenceAnimaticShotCoverageIntentEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic coverage directions.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic coverage directions require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticShotCoverageIntentEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -9026,16 +9049,24 @@ export async function ensureSequenceAnimaticShotCoverageIntents(
     scopedShots: request.scopedShots ?? [],
     forceRefresh: request.forceRefresh ?? false,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-shot-coverage-intents',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticShotCoverageIntentEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  const response = await startWorkflowCommand(snapshot, {
+    family: 'scene_board',
+    action: 'generate_coverage_intents',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      sceneId: payload.sceneId,
+      setId: payload.setId,
+      zoneId: payload.zoneId,
+      shotIds: payload.shotIds,
+    },
+    flags: {
+      forceRefresh: payload.forceRefresh,
+    },
+    payload: {
+      scopedShots: payload.scopedShots,
+    },
+  })
+  const parsed = sequenceAnimaticShotCoverageIntentEnsureResponseSchema.parse(response.result)
   return parsed
 }
 
@@ -9117,6 +9148,72 @@ export async function prepareSequenceAnimaticSceneBoard(
   return parsed
 }
 
+export async function startSequenceAnimaticSceneBoardWorkflowCommand(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    sceneId: string
+    action?: SequenceAnimaticSceneBoardWorkflowCommandAction
+    setId?: string | null
+    zoneId?: string | null
+    scopeNodeId?: string | null
+    shotIds?: string[]
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticSceneBoardWorkflowCommandResponse> {
+  const legacyAction = request.action ?? 'prepare_selected_board'
+  const action = legacyAction === 'regenerate_zone_top_down'
+    ? 'regenerate_scene_board_zone'
+    : legacyAction === 'generate_zone_coverage_grids'
+      ? 'generate_zone_coverage_grids'
+      : legacyAction === 'generate_selected_coverage_anchors'
+        ? 'generate_coverage_anchors'
+        : 'prepare_scene_board'
+  const response = await startWorkflowCommand(snapshot, {
+    family: 'scene_board',
+    action,
+    scope: {
+      masterRequestId: request.masterRequestId,
+      sceneId: request.sceneId,
+      setId: request.setId ?? null,
+      zoneId: request.zoneId ?? null,
+      scopeNodeId: request.scopeNodeId ?? null,
+      shotIds: request.shotIds ?? [],
+    },
+    flags: {
+      forceRefresh: request.forceRefresh ?? legacyAction === 'regenerate_zone_top_down',
+    },
+  })
+  const parsed = sequenceAnimaticSceneBoardWorkflowCommandResponseSchema.parse(response.result)
+  return parsed
+}
+
+export async function startWorkflowCommand(
+  snapshot: ProjectSnapshot,
+  request: Omit<WorkflowCommandInput, 'projectId' | 'draftId'> & Partial<Pick<WorkflowCommandInput, 'projectId' | 'draftId'>>,
+): Promise<WorkflowCommandProxyResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting workflow commands.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Workflow commands require a live Supabase-backed draft.')
+  }
+  const payload = workflowCommandSchema.parse({
+    ...request,
+    projectId: request.projectId ?? snapshot.project.id,
+    draftId: request.draftId ?? snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-workflow-command',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = workflowCommandProxyResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
 export async function ensureSequenceAnimaticShotRevisionWorkflow(
   snapshot: ProjectSnapshot,
   request: {
@@ -9126,10 +9223,6 @@ export async function ensureSequenceAnimaticShotRevisionWorkflow(
     prompt: string
   },
 ): Promise<SequenceAnimaticShotRevisionWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before revising a sequence animatic shot.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic shot revisions require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -9138,16 +9231,23 @@ export async function ensureSequenceAnimaticShotRevisionWorkflow(
     shotId: request.shotId,
     prompt: request.prompt,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-shot-revision-workflow',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  const response = await startWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'revise_shot',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      storyboardBlockId: payload.storyboardBlockId,
+      shotId: payload.shotId,
+    },
+    flags: {
+      forceRefresh: true,
+      regenerate: true,
+    },
+    payload: {
+      prompt: payload.prompt,
+    },
+  })
+  const parsed = sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema.parse(response.result)
   return parsed
 }
 

@@ -21,6 +21,36 @@ function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'node'
 }
 
+function sequenceAnimaticContinuityAssetImagePolicy(assetKind: string, generationPolicy = '') {
+  if (generationPolicy.startsWith('zone_spatial_map') || assetKind === 'location_zone') {
+    return {
+      quality: 'medium',
+      imageSize: { width: 3072, height: 2048 },
+      imageSizePolicy: 'zone_spatial_map_3072x2048',
+    }
+  }
+  return {
+    quality: 'low',
+    imageSize: { width: 1536, height: 1536 },
+    imageSizePolicy: 'single_square_ref_1536',
+  }
+}
+
+function sequenceAnimaticContinuityBatchImagePolicy(batchKind: string, generationPolicy = '') {
+  if (generationPolicy.startsWith('spot_atlas_grid') || batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid') {
+    return {
+      quality: 'medium',
+      imageSize: { width: 3072, height: 3072 },
+      imageSizePolicy: 'spot_atlas_grid_3072',
+    }
+  }
+  return {
+    quality: 'medium',
+    imageSize: { width: 2048, height: 2048 },
+    imageSizePolicy: 'continuity_batch_grid_2048',
+  }
+}
+
 type ContinuityWorkflowBlock = {
   id: string
   index: number
@@ -1031,6 +1061,7 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
   visualDependencyEdges: Record<string, unknown>[]
   aspectRatio: string
 }) {
+  const imagePolicy = sequenceAnimaticContinuityAssetImagePolicy(input.assetKind, readText(input.commonConfig.generationPolicy))
   const config = {
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     ...input.commonConfig,
@@ -1062,10 +1093,11 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
       ...config,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'low',
+      quality: imagePolicy.quality,
       outputFormat: 'webp',
       maxReferenceImages: 8,
-      imageSize: { width: 1536, height: 1536 },
+      imageSize: imagePolicy.imageSize,
+      imageSizePolicy: imagePolicy.imageSizePolicy,
       planningOnly: false,
       planning_only: false,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_asset_image', maxConcurrency: 2, continueOnError: true },
@@ -1275,6 +1307,8 @@ export function buildSequenceAnimaticContinuityBatchWorkflowGraph(input: {
   const layout = asRecord(input.batch.layout)
   const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
   const columns = Math.max(1, Number(layout.columns ?? (input.targetNodes.length || 1)) || 1)
+  const batchKind = readText(input.batch.batchKind)
+  const imagePolicy = sequenceAnimaticContinuityBatchImagePolicy(batchKind, readText(input.batch.generationPolicy))
   const config = {
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     ...input.commonConfig,
@@ -1307,10 +1341,11 @@ export function buildSequenceAnimaticContinuityBatchWorkflowGraph(input: {
       ...config,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'medium',
+      quality: imagePolicy.quality,
       outputFormat: 'webp',
       maxReferenceImages: 8,
-      imageSize: { width: 2048, height: 2048 },
+      imageSize: imagePolicy.imageSize,
+      imageSizePolicy: imagePolicy.imageSizePolicy,
       planningOnly: false,
       planning_only: false,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_batch_image', maxConcurrency: 2, continueOnError: true },

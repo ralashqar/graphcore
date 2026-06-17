@@ -26,6 +26,7 @@ import {
   sequenceAnimaticDirectorPlanV1Schema,
   type OutputArtifact,
   type OutputRequest,
+  type OutputRequestStatusProjection,
   type OutputRequestStatusResponse,
   type SequenceAnimaticContinuityAssetWorkflowEnsureResponse,
   type SequenceAnimaticContinuityBlockDeriveResponse,
@@ -33,6 +34,7 @@ import {
   type SequenceAnimaticKeyframeWorkflowEnsureResponse,
   type SequenceAnimaticShotProductionGraphEnsureResponse,
   type SequenceAnimaticShotCoverageIntentEnsureResponse,
+  type SequenceAnimaticSceneBoardWorkflowCommandResponse,
   type SequenceAnimaticZoneCoverageBoardEnsureResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNode,
@@ -43,6 +45,7 @@ import {
   durableWorkflowTextOutput,
   resolveDurableWorkflowNodeOutput,
 } from '../../domain/outputWorkflowDurableResolver'
+import { buildWorkflowProgressViewModel, type WorkflowProgressViewModel } from '../../domain/workflowProgressView'
 import type { ProjectContext } from '../../domain/projectContext'
 import type {
   WorldEntity,
@@ -204,18 +207,14 @@ import { SequenceAnimaticPipelineRail } from './animatic/SequenceAnimaticPipelin
 import { SequenceAnimaticSceneBoardCanvas } from './scene-board/SceneBoardCanvas'
 import {
   buildSequenceAnimaticSceneBoardView,
-  sequenceAnimaticSceneBoardCoverageReferencesGenerating,
   sequenceAnimaticSceneBoardCoverageReferencesReady,
   sequenceAnimaticSceneBoardPrepRunForScope,
   sequenceAnimaticSceneBoardPrepRunKey,
-  sequenceAnimaticSceneBoardPrepStageLabel,
   sequenceAnimaticSceneBoardReferenceReady,
   sequenceAnimaticSceneBoardReferenceRequiredForCoverage,
   sequenceAnimaticSceneBoardShotSnapshot,
   sequenceAnimaticSceneBoardZoneScopeForNode,
   type SequenceAnimaticSceneBoardPrepRunState,
-  type SequenceAnimaticSceneBoardPrepStageKey,
-  type SequenceAnimaticSceneBoardPrepUnit,
 } from './scene-board/sceneBoardProjection'
 import {
   sequenceAnimaticContinuityAssetForceNodeKeys,
@@ -817,6 +816,7 @@ type WorldGraphPageProps = {
     continuityRequestId?: string | null
     nodeId: string
     nodeIds?: string[]
+    batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
     mode?: 'generate' | 'regenerate'
   }) => Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> | SequenceAnimaticContinuityAssetWorkflowEnsureResponse
   onEnsureSequenceAnimaticKeyframeWorkflows: (request: {
@@ -879,6 +879,16 @@ type WorldGraphPageProps = {
     action?: 'start' | 'update' | 'complete' | 'fail' | 'cancel' | 'resume'
     forceRefresh?: boolean
   }) => Promise<{ masterRequest: OutputRequest; prepRun: Record<string, unknown>; prepRuns: Record<string, unknown> }> | { masterRequest: OutputRequest; prepRun: Record<string, unknown>; prepRuns: Record<string, unknown> }
+  onStartSequenceAnimaticSceneBoardWorkflowCommand: (request: {
+    masterRequestId: string
+    sceneId: string
+    action?: 'prepare_selected_board' | 'regenerate_zone_top_down' | 'generate_zone_coverage_grids' | 'generate_selected_coverage_anchors'
+    setId?: string | null
+    zoneId?: string | null
+    scopeNodeId?: string | null
+    shotIds?: string[]
+    forceRefresh?: boolean
+  }) => Promise<SequenceAnimaticSceneBoardWorkflowCommandResponse> | SequenceAnimaticSceneBoardWorkflowCommandResponse
   onEnsureSequenceAnimaticShotRevisionWorkflow: (request: {
     masterRequestId: string
     storyboardBlockId: string
@@ -2975,6 +2985,8 @@ function sequenceAnimaticShouldShowThinking(model: Pick<SequenceAnimaticViewMode
 type SequenceAnimaticContinuityAssetRunGroup = {
   targets: SequenceAnimaticContinuityAssetTargetView[]
   isBatch: boolean
+  batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
+  parentNodeId?: string | null
 }
 
 function sequenceAnimaticContinuityAssetRunGroups(
@@ -3163,6 +3175,30 @@ function isWikiSequenceAnimaticRequest(request: OutputRequest, sequenceKey: stri
 function readOutputRequestScreenplayAnimaticRole(request: OutputRequest) {
   const metadata = readLooseRecord(request.metadata)
   return trimOptionalString(metadata.screenplayAnimaticRole) || trimOptionalString(metadata.sequenceAnimaticRole)
+}
+
+function readOutputRequestWorkflowCommand(request: OutputRequest) {
+  const metadata = readLooseRecord(request.metadata)
+  return readLooseRecord(metadata.command ?? metadata.sceneBoardCommand ?? metadata.scene_board_command)
+}
+
+function sceneBoardPrepRequestMatchesScope(request: OutputRequest, input: {
+  masterRequestId: string
+  sceneId: string
+  scopeNodeId?: string | null
+}) {
+  if (request.parentRequestId !== input.masterRequestId) return false
+  if (readOutputRequestScreenplayAnimaticRole(request) !== 'scene_board_prep') return false
+  const metadata = readLooseRecord(request.metadata)
+  const command = readOutputRequestWorkflowCommand(request)
+  const sceneId = trimOptionalString(metadata.sceneId) || trimOptionalString(command.sceneId)
+  if (sceneId !== input.sceneId) return false
+  const requestedScope = trimOptionalString(input.scopeNodeId)
+  const requestScope = trimOptionalString(metadata.scopeNodeId) || trimOptionalString(command.scopeNodeId)
+  const requestZone = trimOptionalString(metadata.zoneId) || trimOptionalString(command.zoneId)
+  const requestSet = trimOptionalString(metadata.setId) || trimOptionalString(command.setId)
+  if (!requestedScope || requestedScope === 'all') return !requestScope
+  return requestScope === requestedScope || requestZone === requestedScope || requestSet === requestedScope
 }
 
 function sequenceAnimaticProjectionForRequest(request: OutputRequest | null) {
@@ -7110,9 +7146,10 @@ export function WorldGraphPage({
   onEnsureSequenceAnimaticContinuityAssetWorkflow,
   onEnsureSequenceAnimaticKeyframeWorkflows,
   onEnsureSequenceAnimaticShotProductionGraph,
-  onEnsureSequenceAnimaticShotCoverageIntents,
+  onEnsureSequenceAnimaticShotCoverageIntents: _onEnsureSequenceAnimaticShotCoverageIntents,
   onEnsureSequenceAnimaticZoneCoverageBoards,
   onPrepareSequenceAnimaticSceneBoard,
+  onStartSequenceAnimaticSceneBoardWorkflowCommand,
   onEnsureSequenceAnimaticShotRevisionWorkflow,
   onUpdateSequenceAnimaticSceneGraphNode,
   onLoadSequenceAnimaticState,
@@ -8086,60 +8123,6 @@ export function WorldGraphPage({
     }
     return compactResult
   }, [onLoadSequenceAnimaticState])
-  const buildSequenceAnimaticModelFromLoadedState = useCallback((
-    fallbackModel: SequenceAnimaticViewModel,
-    sequenceState: SequenceAnimaticStateResponse,
-  ): SequenceAnimaticViewModel => {
-    const request = sequenceState.masterRequest ?? fallbackModel.request
-    const relatedRequests = sequenceState.requests.length > 0
-      ? [
-        request,
-        ...sequenceState.requests.filter((entry) => entry.id !== request.id),
-        ...outputRequests.filter((entry) => entry.id !== request.id && !sequenceState.requests.some((loaded) => loaded.id === entry.id)),
-      ]
-      : outputRequests
-    const relatedRuns = sequenceState.runs.length > 0
-      ? [
-        ...sequenceState.runs,
-        ...outputWorkflowRuns.filter((entry) => !sequenceState.runs.some((loaded) => loaded.id === entry.id)),
-      ]
-      : outputWorkflowRuns
-    const relatedArtifacts = sequenceState.artifacts.length > 0
-      ? [
-        ...sequenceState.artifacts,
-        ...outputArtifacts.filter((entry) => !sequenceState.artifacts.some((loaded) => loaded.id === entry.id)),
-      ]
-      : outputArtifacts
-    const run = request.latestRunId
-      ? relatedRuns.find((entry) => entry.id === request.latestRunId) ?? null
-      : request.workflowId
-        ? relatedRuns.find((entry) => entry.workflowId === request.workflowId) ?? null
-        : null
-    return buildSequenceAnimaticViewModel({
-      request,
-      run,
-      row: outputLibraryRowByRequestId.get(request.id) ?? null,
-      sequenceState,
-      requests: relatedRequests,
-      runs: relatedRuns,
-      nodes: outputWorkflowNodes,
-      assets: (sequenceState.assets.length > 0 ? sequenceState.assets : assets) as typeof assets,
-      artifacts: relatedArtifacts,
-      worldEntities,
-      imageUrlByEntityKey: wikiImageUrlByEntityKey,
-      referenceSheetIconUrlByEntityKey,
-    })
-  }, [
-    assets,
-    outputArtifacts,
-    outputLibraryRowByRequestId,
-    outputRequests,
-    outputWorkflowNodes,
-    outputWorkflowRuns,
-    referenceSheetIconUrlByEntityKey,
-    wikiImageUrlByEntityKey,
-    worldEntities,
-  ])
   const applyLiveSequenceAnimaticStreamEvent = useCallback((input: {
     masterRequestId: string
     row?: Record<string, unknown>
@@ -8859,61 +8842,6 @@ export function WorldGraphPage({
     }
     return status
   }, [onGetOutputRequestStatus])
-  const startSequenceAnimaticCoverageIntentRuns = useCallback(async (
-    model: SequenceAnimaticViewModel,
-    scene: SequenceAnimaticSceneView,
-    scope: { setId?: string | null; zoneId?: string | null; scopeNodeId?: string | null; shotIds: string[]; scopedShots?: Record<string, unknown>[] },
-    options: { forceRefresh?: boolean } = {},
-  ) => {
-    const intentEnsureResult = await onEnsureSequenceAnimaticShotCoverageIntents({
-      masterRequestId: model.request.id,
-      sceneId: scene.id,
-      setId: trimOptionalString(scope.setId) || null,
-      zoneId: trimOptionalString(scope.zoneId) || null,
-      shotIds: scope.shotIds,
-      scopedShots: scope.scopedShots ?? [],
-      forceRefresh: options.forceRefresh ?? false,
-    })
-    const request = intentEnsureResult.intentRequest
-    const workflowId = request.workflowId || intentEnsureResult.workflow?.id || ''
-    if (!workflowId) throw new Error('Coverage direction workflow could not be prepared for this board.')
-    const existingRun = request.latestRunId
-      ? outputWorkflowRuns.find((run) => run.id === request.latestRunId) ?? null
-      : outputWorkflowRuns.find((run) => run.workflowId === workflowId) ?? null
-    if (sequenceAnimaticRequestIsActive(request, existingRun)) return 1
-    await onStartOutputWorkflowRun({
-      workflowId,
-      prompt: request.prompt || request.title || `Plan coverage directions for ${scene.title}.`,
-      targetFormat: 'markdown',
-      selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
-      input: {
-        ...readLooseRecord(existingRun?.input),
-        debugSkipVideoGeneration: true,
-        cinematicVideoApproved: false,
-      },
-      metadata: {
-        runIntent: 'plan_coverage_directions',
-        runMode: 'sequence_animatic_coverage_intent_batch',
-        runScope: 'upstream_to_node',
-        targetNodeKeys: ['coverage_intent_artifact'],
-        forceNodeKeys: ['coverage_intent_plan', 'coverage_intent_artifact'],
-        reuseExistingUpstreamOutputs: true,
-        allowStaleUpstreamOutputs: false,
-        debugSkipVideoGeneration: true,
-        cinematicVideoApproved: false,
-        sourceRunId: existingRun?.id ?? request.latestRunId ?? model.request.latestRunId,
-        parentRequestId: request.parentRequestId ?? model.request.id,
-        masterRequestId: model.request.id,
-        sequenceAnimaticRole: 'coverage_intent_batch',
-        sceneId: scene.id,
-        scopeNodeId: trimOptionalString(scope.scopeNodeId) || trimOptionalString(scope.zoneId) || trimOptionalString(scope.setId) || null,
-        scopeSetId: trimOptionalString(scope.setId) || null,
-        scopeZoneId: trimOptionalString(scope.zoneId) || null,
-        shotIds: scope.shotIds,
-      },
-    })
-    return 1
-  }, [onEnsureSequenceAnimaticShotCoverageIntents, onStartOutputWorkflowRun, outputWorkflowRuns])
   const handleGenerateSequenceAnimatic = useCallback(async (sequenceEntity: WorldEntity) => {
     if (!canRunOutputs || sequenceAnimaticBusyKey) return
     setSequenceAnimaticBusyKey(sequenceEntity.key)
@@ -9196,6 +9124,7 @@ export function WorldGraphPage({
   const startSequenceAnimaticContinuityAssetRunGroups = useCallback(async (
     model: SequenceAnimaticViewModel,
     runGroups: readonly SequenceAnimaticContinuityAssetRunGroup[],
+    options: { forceRefresh?: boolean } = {},
   ) => {
     let startedCount = 0
     for (const group of runGroups) {
@@ -9208,7 +9137,8 @@ export function WorldGraphPage({
         continuityRequestId: model.continuityRequest?.id ?? null,
         nodeId: target.nodeId,
         nodeIds: group.isBatch ? targetNodeIds : undefined,
-        mode: group.targets.some((entry) => entry.status === 'stale' || entry.status === 'ready') ? 'regenerate' : 'generate',
+        batchKind: group.batchKind,
+        mode: options.forceRefresh || group.targets.some((entry) => entry.status === 'stale' || entry.status === 'ready') ? 'regenerate' : 'generate',
       })
       const assetRequest = ensureResult.assetRequest
       if (!assetRequest?.workflowId) continue
@@ -9295,6 +9225,7 @@ export function WorldGraphPage({
     model: SequenceAnimaticViewModel,
     scene: SequenceAnimaticSceneView,
     scopeNodeId?: string | null,
+    options: { forceRefresh?: boolean } = {},
   ) => {
     const runKey = sequenceAnimaticSceneBoardPrepRunKey({
       masterRequestId: model.request.id,
@@ -9318,7 +9249,7 @@ export function WorldGraphPage({
         activeUnitLabel: scene.title,
         stage: 'set_refs',
         stageLabel: 'Checking set refs',
-        message: 'Preparing selected board.',
+          message: options.forceRefresh ? 'Regenerating selected zone top-down.' : 'Preparing selected board.',
         queued: 0,
         running: 0,
         ready: 0,
@@ -9339,36 +9270,6 @@ export function WorldGraphPage({
         ...(current?.runKey === runKey ? current : next),
         ...next,
       }))
-      const persistedStage = next.stage === 'keyframes' ? 'complete' : next.stage
-      void Promise.resolve(onPrepareSequenceAnimaticSceneBoard({
-        masterRequestId: model.request.id,
-        runId: prepRunId,
-        runKey,
-        sceneId: scene.id,
-        setId: next.setId,
-        zoneId: next.zoneId,
-        scopeNodeId: trimOptionalString(scopeNodeId) || null,
-        shotIds: prepShotIds,
-        stage: persistedStage,
-        status: persistedStage === 'complete' ? 'complete' : persistedStage === 'failed' ? 'failed' : 'running',
-        activeUnitId: next.activeUnitId,
-        activeUnitLabel: next.activeUnitLabel,
-        stageLabel: next.stageLabel,
-        message: next.message,
-        queued: next.queued,
-        running: next.running,
-        ready: next.ready,
-        failed: next.failed,
-        activeRequestIds: next.activeRequestIds,
-        activeRunIds: next.activeRunIds,
-        activeReferenceNodeIds: next.activeReferenceNodeIds,
-        activeCoverageShotIds: next.activeCoverageShotIds,
-        activeRunStepKey: next.activeRunStepKey,
-        error: next.error,
-        action: persistedStage === 'complete' ? 'complete' : persistedStage === 'failed' ? 'fail' : 'update',
-      })).catch((stateError) => {
-        console.warn('[GraphCore] Failed to persist Scene Board prep state.', stateError)
-      })
     }
     if (sequenceAnimaticBusyRunKeys.has(runKey)) {
       updatePrepRun({
@@ -9381,6 +9282,86 @@ export function WorldGraphPage({
       return
     }
     beginSequenceAnimaticRun(runKey)
+    try {
+      if (scene.status !== 'ready') {
+        throw new Error('Generate this scene before preparing continuity.')
+      }
+      const board = buildSequenceAnimaticSceneBoardView({
+        model,
+        scene,
+        scopeNodeId,
+        filter: 'all',
+        grouping: 'zone_spot',
+      })
+      if (board.shots.length === 0) {
+        throw new Error('No shots match this Scene Board scope.')
+      }
+      prepShotIds = board.shots.map((tile) => tile.id).filter(Boolean)
+      const activeUnit = board.prepUnits.find((unit) => unit.scopeNodeId === scopeNodeId || unit.zoneId === scopeNodeId || unit.setId === scopeNodeId)
+        ?? board.prepUnits[0]
+        ?? null
+      updatePrepRun({
+        setId: activeUnit?.setId || null,
+        zoneId: activeUnit?.zoneId || null,
+        activeUnitId: activeUnit?.id ?? null,
+        activeUnitLabel: activeUnit?.title ?? scene.title,
+        stage: options.forceRefresh ? 'scaffold_refs' : 'set_refs',
+        stageLabel: options.forceRefresh ? 'Starting top-down regeneration' : 'Starting graph prep',
+        message: options.forceRefresh
+          ? 'Starting graph-native selected zone regeneration.'
+          : 'Starting graph-native selected board prep.',
+        queued: board.prepStages.reduce((total, stage) => total + stage.missing, 0),
+        running: 0,
+        ready: board.prepStages.reduce((total, stage) => total + stage.ready, 0),
+        failed: board.prepStages.reduce((total, stage) => total + stage.failed, 0),
+        activeReferenceNodeIds: activeUnit?.referenceTiles.filter((tile) => tile.running).map((tile) => tile.nodeId) ?? [],
+        activeCoverageShotIds: prepShotIds,
+        activeRequestIds: [],
+        activeRunIds: [],
+        activeRunStepKey: 'scope_input',
+      })
+      const result = await Promise.resolve(onStartSequenceAnimaticSceneBoardWorkflowCommand({
+        masterRequestId: model.request.id,
+        sceneId: scene.id,
+        action: options.forceRefresh ? 'regenerate_zone_top_down' : 'prepare_selected_board',
+        setId: activeUnit?.setId || null,
+        zoneId: activeUnit?.zoneId || null,
+        scopeNodeId: trimOptionalString(scopeNodeId) || null,
+        shotIds: prepShotIds,
+        forceRefresh: options.forceRefresh ?? false,
+      }))
+      if (result.prepRun) {
+        setSequenceAnimaticSceneBoardPrepRun({
+          ...result.prepRun,
+          startedAt: Date.parse(result.prepRun.startedAt || '') || Date.now(),
+          updatedAt: Date.parse(result.prepRun.updatedAt || '') || Date.now(),
+        } as SequenceAnimaticSceneBoardPrepRunState)
+      }
+      await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
+      return
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      updatePrepRun({
+        stage: 'failed',
+        stageLabel: 'Failed',
+        message: error instanceof Error ? error.message : String(error),
+        error: error instanceof Error ? error.message : String(error),
+      })
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+      return
+    } finally {
+      endSequenceAnimaticRun(runKey)
+    }
+  }, [
+    loadAndStoreSequenceAnimaticState,
+    onStartSequenceAnimaticSceneBoardWorkflowCommand,
+    sequenceAnimaticSceneBoardPrepRun,
+    sequenceAnimaticBusyRunKeys,
+  ])
+  /*
     const refreshModel = async (fallback: SequenceAnimaticViewModel) => {
       const loadedState = await loadAndStoreSequenceAnimaticState({ masterRequestId: fallback.request.id, knownRevision: null })
       return buildSequenceAnimaticModelFromLoadedState(fallback, loadedState)
@@ -9417,7 +9398,7 @@ export function WorldGraphPage({
           stageLabel: input.stage === 'set_refs'
             ? 'Generating set image'
             : input.stage === 'scaffold_refs'
-              ? 'Generating zone/spot scaffold'
+              ? 'Generating zone map / spot atlas'
               : input.stage === 'coverage_directions'
                 ? 'Planning coverage'
                 : input.stage === 'coverage_grids'
@@ -9454,9 +9435,9 @@ export function WorldGraphPage({
       updatePrepRun({
         activeUnitId: null,
         activeUnitLabel: scene.title,
-        stage: 'set_refs',
-        stageLabel: 'Starting selected board prep',
-        message: 'Starting selected board prep.',
+          stage: 'set_refs',
+          stageLabel: options.forceRefresh ? 'Starting top-down regeneration' : 'Starting selected board prep',
+          message: options.forceRefresh ? 'Starting selected zone top-down regeneration.' : 'Starting selected board prep.',
       })
       if (scene.status !== 'ready') {
         throw new Error('Generate this scene before preparing continuity.')
@@ -9523,44 +9504,71 @@ export function WorldGraphPage({
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: result.status === 'failed' ? 'failed' : 'set_refs',
               stageLabel: result.status === 'failed' ? 'Set ref failed' : 'Generating set image',
-              message: result.status === 'failed' ? 'Set reference failed. Retry the selected board after fixing the failed ref.' : 'Still waiting for set image before zone scaffold.',
+              message: result.status === 'failed' ? 'Set reference failed. Retry the selected board after fixing the failed ref.' : 'Still waiting for set image before zone map.',
               running: 0,
             })
             return
           }
         }
         let scaffoldPasses = 0
-        while (unit.scaffoldGroups.length > 0 && !sequenceAnimaticSceneBoardCoverageReferencesReady(unit.referenceTiles) && scaffoldPasses < 8) {
+        let scaffoldGroups = options.forceRefresh
+          ? sequenceAnimaticSceneBoardScaffoldGroupsForUnit({ model: latestModel, referenceTiles: unit.referenceTiles, includeReady: true })
+              .filter((group) => group.batchKind === 'zone_spatial_map' || group.targets.some((target) => target.assetKind === 'location_zone'))
+          : unit.scaffoldGroups
+        while (scaffoldGroups.length > 0 && (options.forceRefresh || !sequenceAnimaticSceneBoardCoverageReferencesReady(unit.referenceTiles)) && scaffoldPasses < 8) {
           scaffoldPasses += 1
+          const activeScaffoldGroups = scaffoldGroups
+          const activeReferenceNodeIds = activeScaffoldGroups.flatMap((group) => group.targets.map((target) => target.nodeId))
+          const previousAssetKeyByNodeId = new Map(
+            activeScaffoldGroups.flatMap((group) => group.targets.map((target) => [target.nodeId, trimOptionalString(target.assetKey)] as const)),
+          )
+          const activeReferencesReady = (candidate: SequenceAnimaticSceneBoardPrepUnit) => activeReferenceNodeIds.every((nodeId) => {
+            const tile = candidate.referenceTiles.find((entry) => entry.nodeId === nodeId) ?? null
+            if (!tile || !sequenceAnimaticSceneBoardReferenceReady(tile)) return false
+            if (!options.forceRefresh) return true
+            const previousAssetKey = previousAssetKeyByNodeId.get(nodeId) ?? ''
+            const nextAssetKey = trimOptionalString(tile.target?.assetKey)
+            return Boolean(nextAssetKey && nextAssetKey !== previousAssetKey)
+          })
           updatePrepRun({
             activeUnitId: unit.id,
             activeUnitLabel: unit.title,
             stage: 'scaffold_refs',
-            stageLabel: unit.scaffoldGroups.some((group) => group.targets.some((target) => target.assetKind.includes('spot') || target.assetKind.includes('angle')))
-              ? 'Generating spot scaffold'
-              : 'Generating zone image',
-            message: `Generating ${unit.scaffoldGroups.length} scaffold grid${unit.scaffoldGroups.length === 1 ? '' : 's'} for ${unit.title}.`,
-            queued: unit.scaffoldGroups.length,
+            stageLabel: activeScaffoldGroups.some((group) => group.batchKind === 'spot_atlas_grid' || group.batchKind === 'viewpoint_atlas_grid' || group.targets.some((target) => target.assetKind.includes('spot') || target.assetKind.includes('angle')))
+              ? 'Generating spot atlas'
+              : 'Generating zone map',
+            message: activeScaffoldGroups.some((group) => group.batchKind === 'zone_spatial_map')
+              ? `Generating zone spatial map for ${unit.title}.`
+              : `Generating ${activeScaffoldGroups.length} spot atlas grid${activeScaffoldGroups.length === 1 ? '' : 's'} for ${unit.title}.`,
+            queued: activeScaffoldGroups.length,
             running: unit.referenceTiles.filter((tile) => tile.status === 'generating').length,
             ready: unit.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceReady).length,
             failed: unit.referenceTiles.filter((tile) => tile.status === 'failed').length,
-            activeReferenceNodeIds: unit.scaffoldGroups.flatMap((group) => group.targets.map((target) => target.nodeId)),
+            activeReferenceNodeIds,
             activeCoverageShotIds: [],
             activeRunStepKey: '',
           })
-          const startedScaffoldRefs = await startSequenceAnimaticContinuityAssetRunGroups(latestModel, unit.scaffoldGroups)
+          const startedScaffoldRefs = await startSequenceAnimaticContinuityAssetRunGroups(latestModel, activeScaffoldGroups, { forceRefresh: options.forceRefresh })
           if (startedScaffoldRefs === 0) {
-            throw new Error(`No zone/spot scaffold workflow started for ${unit.title}. Refresh the animatic state and retry.`)
+            throw new Error(`No zone map / spot atlas workflow started for ${unit.title}. Refresh the animatic state and retry.`)
           }
           const result = await waitForUnit({
             latestModel,
             unitId: unit.id,
             stage: 'scaffold_refs',
-            message: `Waiting for zone/spot scaffold for ${unit.title}.`,
+            message: `Waiting for zone map / spot atlas for ${unit.title}.`,
             maxAttempts: hierarchyReferencePollAttempts,
             isReady: (candidate) => (
-              candidate.scaffoldGroups.length === 0
+              activeReferencesReady(candidate)
+              || (!options.forceRefresh && candidate.scaffoldGroups.length === 0)
               || (
+                !options.forceRefresh
+                && activeReferencesReady(candidate)
+                && candidate.scaffoldGroups.length === 0
+              )
+              || (
+                !options.forceRefresh
+                &&
                 sequenceAnimaticSceneBoardCoverageReferencesReady(candidate.referenceTiles)
                 && !sequenceAnimaticSceneBoardCoverageReferencesGenerating(candidate.referenceTiles)
               )
@@ -9576,14 +9584,32 @@ export function WorldGraphPage({
               activeUnitId: unit?.id ?? initialUnit.id,
               activeUnitLabel: unit?.title ?? initialUnit.title,
               stage: result.status === 'failed' ? 'failed' : 'scaffold_refs',
-              stageLabel: result.status === 'failed' ? 'Scaffold failed' : 'Generating spot scaffold',
-              message: result.status === 'failed' ? 'Zone/spot scaffold failed. Retry the selected board after fixing the failed ref.' : 'Still waiting for zone/spot scaffold images.',
+              stageLabel: result.status === 'failed' ? 'Atlas failed' : 'Generating spot atlas',
+              message: result.status === 'failed' ? 'Zone map or spot atlas generation failed. Retry the selected board after fixing the failed ref.' : 'Still waiting for zone map / spot atlas images.',
               running: 0,
             })
             return
           }
+          if (options.forceRefresh) {
+            latestModel = await refreshModel(latestModel)
+            latestScene = latestModel.scenes.find((entry) => entry.id === scene.id) ?? scene
+            latestBoard = buildSequenceAnimaticSceneBoardView({
+              model: latestModel,
+              scene: latestScene,
+              scopeNodeId,
+              filter: 'all',
+              grouping: 'zone_spot',
+            })
+            unit = latestBoard.prepUnits.find((entry) => entry.id === initialUnit.id) ?? unit
+            scaffoldGroups = scaffoldPasses === 1
+              ? sequenceAnimaticSceneBoardScaffoldGroupsForUnit({ model: latestModel, referenceTiles: unit.referenceTiles, includeReady: true })
+                  .filter((group) => group.batchKind === 'spot_atlas_grid' || group.batchKind === 'viewpoint_atlas_grid')
+              : []
+          } else {
+            scaffoldGroups = unit.scaffoldGroups
+          }
         }
-        if (unit.scaffoldGroups.length > 0 && !sequenceAnimaticSceneBoardCoverageReferencesReady(unit.referenceTiles)) {
+        if (!options.forceRefresh && unit.scaffoldGroups.length > 0 && !sequenceAnimaticSceneBoardCoverageReferencesReady(unit.referenceTiles)) {
           updatePrepRun({
             activeUnitId: unit.id,
             activeUnitLabel: unit.title,
@@ -9618,7 +9644,7 @@ export function WorldGraphPage({
                 stageLabel: result.status === 'failed' ? 'Reference generation failed' : 'Waiting for refs',
                 message: result.status === 'failed'
                   ? 'A required set, zone, or spot reference failed. Retry the selected board after fixing the failed ref.'
-                  : 'Still waiting for required set, zone, and spot references before coverage grids.',
+                  : 'Still waiting for required set, zone map, and spot atlas references before coverage grids.',
                 running: result.status === 'failed' ? 0 : missingRequiredReferences.length,
                 activeReferenceNodeIds: unit?.referenceTiles
                   .filter((tile) => sequenceAnimaticSceneBoardReferenceRequiredForCoverage(tile) && tile.status === 'generating')
@@ -9730,7 +9756,7 @@ export function WorldGraphPage({
             scopeNodeId: unit.scopeNodeId,
             shotIds: unit.shots.filter((tile) => !tile.shot.isProvisional).map((tile) => tile.id).filter(Boolean),
             scopedShots: unit.shots.filter((tile) => !tile.shot.isProvisional).map((tile) => sequenceAnimaticSceneBoardShotSnapshot(tile, latestScene)),
-          })
+          }, { forceRefresh: options.forceRefresh })
           if (startedCoverageGrids === 0) {
             throw new Error(`No coverage grid workflow started for ${unit.title}. Refresh the animatic state and retry.`)
           }
@@ -9799,12 +9825,14 @@ export function WorldGraphPage({
     buildSequenceAnimaticModelFromLoadedState,
     loadAndStoreSequenceAnimaticState,
     onPrepareSequenceAnimaticSceneBoard,
+    onStartSequenceAnimaticSceneBoardWorkflowCommand,
     sequenceAnimaticSceneBoardPrepRun,
     sequenceAnimaticBusyRunKeys,
     startSequenceAnimaticContinuityAssetRunGroups,
     startSequenceAnimaticCoverageIntentRuns,
     startSequenceAnimaticZoneCoverageBoardRuns,
   ])
+  */
   const handleCancelSequenceAnimaticSceneBoardPrep = useCallback((run: SequenceAnimaticSceneBoardPrepRunState) => {
     const next: SequenceAnimaticSceneBoardPrepRunState = {
       ...run,
@@ -10408,6 +10436,71 @@ export function WorldGraphPage({
       sequenceUnitKey: model.request.selectedSequenceUnitKeys[0] ?? null,
     })
   }, [onOpenOutputStudio])
+  const workflowProgressForRequest = useCallback((
+    requestId: string | null | undefined,
+    fallbackTitle?: string,
+    fallbackActiveLabel?: string,
+  ): WorkflowProgressViewModel | null => {
+    const request = requestId ? outputRequests.find((entry) => entry.id === requestId) ?? null : null
+    if (!request) return null
+    const run = request.latestRunId
+      ? outputWorkflowRuns.find((entry) => entry.id === request.latestRunId) ?? null
+      : request.workflowId
+        ? outputWorkflowRuns
+          .filter((entry) => entry.workflowId === request.workflowId)
+          .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''))[0] ?? null
+        : null
+    const artifacts = outputArtifacts.filter((artifact) => (
+      (request.workflowId && artifact.workflowId === request.workflowId)
+      || (run?.id && artifact.runId === run.id)
+    ))
+    const nodes = request.workflowId ? outputWorkflowNodes.filter((node) => node.workflowId === request.workflowId) : []
+    const projection = sequenceAnimaticProjectionForRequest(request) as OutputRequestStatusProjection | null
+    return buildWorkflowProgressViewModel({
+      projection,
+      request,
+      run,
+      artifacts,
+      nodes,
+      fallbackTitle,
+      fallbackActiveLabel,
+    })
+  }, [outputArtifacts, outputRequests, outputWorkflowNodes, outputWorkflowRuns])
+  const sequenceAnimaticSceneBoardPrepRequest = useMemo(() => {
+    if (!sequenceAnimaticSceneBoardModel || !sequenceAnimaticSceneBoardScopeSceneId) return null
+    const matchingPrepRequests = outputRequests
+      .filter((request) => sceneBoardPrepRequestMatchesScope(request, {
+        masterRequestId: sequenceAnimaticSceneBoardModel.request.id,
+        sceneId: sequenceAnimaticSceneBoardScopeSceneId,
+        scopeNodeId: sequenceAnimaticSceneBoardScopeNodeId,
+      }))
+      .sort((left, right) => requestUpdatedAtMs(right) - requestUpdatedAtMs(left))
+    if (matchingPrepRequests[0]) return matchingPrepRequests[0]
+    const localPrepRun = sequenceAnimaticSceneBoardPrepRun?.runKey.startsWith(`${sequenceAnimaticSceneBoardModel.request.id}:`)
+      ? readLooseRecord(sequenceAnimaticSceneBoardPrepRun)
+      : {}
+    const localPrepRequestId = trimOptionalString(localPrepRun.graphNativePrepRequestId)
+    return localPrepRequestId
+      ? outputRequests.find((request) => request.id === localPrepRequestId) ?? null
+      : null
+  }, [
+    outputRequests,
+    sequenceAnimaticSceneBoardModel,
+    sequenceAnimaticSceneBoardPrepRun,
+    sequenceAnimaticSceneBoardScopeNodeId,
+    sequenceAnimaticSceneBoardScopeSceneId,
+  ])
+  const sequenceAnimaticSceneBoardPrepRequestId = sequenceAnimaticSceneBoardPrepRequest?.id
+    ?? (sequenceAnimaticSceneBoardPrepRun?.runKey.startsWith(`${sequenceAnimaticSceneBoardModel?.request.id ?? ''}:`)
+      ? trimOptionalString(readLooseRecord(sequenceAnimaticSceneBoardPrepRun).graphNativePrepRequestId)
+      : '')
+  const sequenceAnimaticSceneBoardWorkflowProgress = workflowProgressForRequest(
+    sequenceAnimaticSceneBoardPrepRequestId,
+    'Scene Board prep',
+    sequenceAnimaticSceneBoardPrepRun?.runKey.startsWith(`${sequenceAnimaticSceneBoardModel?.request.id ?? ''}:`)
+      ? trimOptionalString(sequenceAnimaticSceneBoardPrepRun.stageLabel)
+      : '',
+  )
   const ensureSequenceAnimaticShotVideoRequest = useCallback(async (
     model: SequenceAnimaticViewModel,
     block: SequenceAnimaticBlockView,
@@ -15920,6 +16013,9 @@ export function WorldGraphPage({
           ? routeAnimaticRow?.activeStepLabels ?? (routeAnimaticRow?.currentStepLabel ? [routeAnimaticRow.currentStepLabel] : [])
           : [],
       })
+      const routeAnimaticWorkflowProgress = routeAnimaticModel
+        ? workflowProgressForRequest(routeAnimaticModel.request.id, routeAnimaticModel.title, routeAnimaticRow?.currentStepLabel)
+        : null
       if (routeAnimaticRequestId) {
         const animaticLoading = !routeAnimaticModel && sequenceAnimaticPreviewHydration.status !== 'failed'
         return (
@@ -15930,12 +16026,18 @@ export function WorldGraphPage({
                   <span className="eyebrow">Screenplay animatic</span>
                   <h2>{routeAnimaticModel?.title ?? entity.name}</h2>
                   <p>{routeAnimaticModel ? `${routeAnimaticModel.blocks.length} storyboard block${routeAnimaticModel.blocks.length === 1 ? '' : 's'} / ${routeAnimaticModel.hasPanels ? 'panels available' : 'panels pending'}` : 'Loading linked animatic state directly from this chapter.'}</p>
-                  {routeAnimaticModel ? <SequenceAnimaticPipelineRail model={routeAnimaticModel} /> : null}
+                  {routeAnimaticModel ? (
+                    <SequenceAnimaticPipelineRail
+                      model={routeAnimaticModel}
+                      workflowProgress={routeAnimaticWorkflowProgress}
+                      onOpenWorkflowGraph={() => openSequenceAnimaticOutputGraph(routeAnimaticModel, routeAnimaticModel.request.id)}
+                    />
+                  ) : null}
                 </div>
                 <div className="world-wiki-sequence-animatic-page-actions">
                   {routeAnimaticModel ? (
                     <>
-                      {routeAnimaticWorkflowChips.length > 0 ? (
+                      {!routeAnimaticWorkflowProgress && routeAnimaticWorkflowChips.length > 0 ? (
                         <div className="world-wiki-sequence-animatic-node-strip" aria-label="Active workflow nodes">
                           {routeAnimaticWorkflowChips.map((chip) => (
                             <span className={`is-${chip.status}`} key={chip.key}>
@@ -19311,7 +19413,11 @@ export function WorldGraphPage({
               <div>
                 <span className="eyebrow">Screenplay animatic</span>
                 <h2>{sequenceAnimaticPreviewModel.title}</h2>
-                <SequenceAnimaticPipelineRail model={sequenceAnimaticPreviewModel} />
+                <SequenceAnimaticPipelineRail
+                  model={sequenceAnimaticPreviewModel}
+                  workflowProgress={workflowProgressForRequest(sequenceAnimaticPreviewModel.request.id, sequenceAnimaticPreviewModel.title, sequenceAnimaticPreviewModel.progressLabel)}
+                  onOpenWorkflowGraph={() => openSequenceAnimaticOutputGraph(sequenceAnimaticPreviewModel, sequenceAnimaticPreviewModel.request.id)}
+                />
               </div>
               <div className="world-wiki-sequence-animatic-head-actions">
                 <span>{sequenceAnimaticPreviewModel.statusLabel}</span>
@@ -19947,6 +20053,10 @@ export function WorldGraphPage({
             continuityPrepRun={sequenceAnimaticSceneBoardPrepRun?.runKey.startsWith(`${sequenceAnimaticSceneBoardModel.request.id}:`)
               ? sequenceAnimaticSceneBoardPrepRun
               : null}
+            workflowProgress={sequenceAnimaticSceneBoardWorkflowProgress}
+            onOpenWorkflowGraph={() => {
+              if (sequenceAnimaticSceneBoardPrepRequestId) onOpenOutputStudio(sequenceAnimaticSceneBoardPrepRequestId, 'graph')
+            }}
             coverageGenerationBusy={Boolean(
               sequenceAnimaticSceneBoardScopeSceneId
                 ? sequenceAnimaticBusyRunKeys.has(`${sequenceAnimaticSceneBoardModel.request.id}:${sequenceAnimaticSceneBoardScopeSceneId}:${trimOptionalString(sequenceAnimaticSceneBoardScopeNodeId) || 'all'}:coverage_anchors`)
@@ -19967,7 +20077,7 @@ export function WorldGraphPage({
               setSequenceAnimaticSceneBoardScopeSceneId(null)
               setSequenceAnimaticSceneBoardScopeNodeId(null)
             }}
-            onPrepareContinuity={(scene, scopeNodeId) => handlePrepareSequenceAnimaticSceneBoardContinuity(sequenceAnimaticSceneBoardModel, scene, scopeNodeId)}
+            onPrepareContinuity={(scene, scopeNodeId, options) => handlePrepareSequenceAnimaticSceneBoardContinuity(sequenceAnimaticSceneBoardModel, scene, scopeNodeId, options)}
             onCancelPrep={handleCancelSequenceAnimaticSceneBoardPrep}
             onGenerateSceneCoverage={(scene) => void handleRegenerateSequenceAnimaticSceneCoverageAnchors(sequenceAnimaticSceneBoardModel, scene, sequenceAnimaticSceneBoardScopeNodeId)}
             onGenerateCoverageAnchor={(anchor) => handleRunSequenceAnimaticCoverageAnchor(

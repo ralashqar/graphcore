@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { test, beforeEach } from 'node:test'
 import {
   __resetRequestCoordinatorForTests,
@@ -81,6 +83,14 @@ test('classifies aborted and service unavailable refresh failures as transient',
   const serviceUnavailable = new Error('Service Unavailable') as Error & { status?: number }
   serviceUnavailable.status = 503
   assert.equal(isTransientRequestError(serviceUnavailable), true)
+})
+
+test('asset hydration skips exact key fanout for transient batch lookup failures', () => {
+  const repositorySource = readFileSync(resolve(process.cwd(), 'src/data/graphcoreRepository.ts'), 'utf8')
+  assert.match(repositorySource, /if \(isTransientRequestError\(response\.error\)\) \{/)
+  assert.match(repositorySource, /project asset batch lookup failed transiently; skipping exact key burst/)
+  assert.match(repositorySource, /continue\s*\n\s*\}/)
+  assert.match(repositorySource, /project asset batch lookup failed; retrying exact key lookups/)
 })
 
 test('serializes mutation requests for the same resource key', async () => {

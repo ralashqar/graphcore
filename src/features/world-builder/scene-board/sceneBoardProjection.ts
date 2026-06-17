@@ -4,7 +4,24 @@ type LooseRecord = Record<string, unknown>
 export type SequenceAnimaticContinuityGraphNodeKind = 'world_location' | 'set' | 'zone' | 'spot' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
 export type SequenceAnimaticContinuityAssetTargetView = LooseRecord & { nodeId: string; name: string; assetKind: string; status: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'; statusLabel: string; actionLabel: string; assetKey: string | null; assetUrl: string | null; blockIds: string[]; shotIds: string[] }
 export type SequenceAnimaticContinuityGraphNodeView = LooseRecord & { id: string; kind: SequenceAnimaticContinuityGraphNodeKind; label: string; kindLabel: string; lane?: string; parentId?: string | null; shotIds: string[]; blockIds: string[]; assetStatus?: 'missing' | 'generating' | 'ready' | 'stale' | 'failed' | 'not_required'; assetUrl?: string | null; assetStatusLabel?: string; baseVisualBrief?: string; overrideVisualBrief?: string; extraPromptDirection?: string; summary?: string }
-export type SequenceAnimaticContinuityAssetRunGroup = { targets: SequenceAnimaticContinuityAssetTargetView[]; isBatch: boolean; batchKind?: string; parentNodeId?: string | null }
+export type SequenceAnimaticContinuityAssetBatchKind =
+  | 'location_zone_board'
+  | 'angle_grid'
+  | 'viewpoint_grid'
+  | 'spot_grid'
+  | 'zone_spatial_map'
+  | 'spot_atlas_grid'
+  | 'viewpoint_atlas_grid'
+  | 'temp_character_grid'
+  | 'prop_grid'
+  | 'single_hero_ref'
+
+export type SequenceAnimaticContinuityAssetRunGroup = {
+  targets: SequenceAnimaticContinuityAssetTargetView[]
+  isBatch: boolean
+  batchKind?: SequenceAnimaticContinuityAssetBatchKind
+  parentNodeId?: string | null
+}
 export type SequenceAnimaticSceneView = LooseRecord & { id: string; index: number; title: string; status: 'pending' | 'planning' | 'ready' | 'failed' | string }
 export type SequenceAnimaticBlockView = LooseRecord & { id: string; title: string; shots: SequenceAnimaticShotView[] }
 export type SequenceAnimaticCoverageAnchorView = LooseRecord & { id: string; setId: string; zoneId: string; primarySpotId: string; spotIds: string[]; viewpointId: string; status: string; statusLabel: string; assetUrl: string | null; assetKey?: string | null; running?: boolean; stagingBrief?: string }
@@ -352,7 +369,7 @@ function sequenceAnimaticSceneBoardPrepStageForNodeKind(kind: SequenceAnimaticCo
 
 export function sequenceAnimaticSceneBoardPrepStageLabel(stage: SequenceAnimaticSceneBoardPrepStageKey) {
   if (stage === 'set_refs') return 'Set refs'
-  if (stage === 'scaffold_refs') return 'Zone/spot scaffold'
+  if (stage === 'scaffold_refs') return 'Zone map / spot atlas'
   if (stage === 'coverage_directions') return 'Coverage directions'
   if (stage === 'coverage_grids') return 'Coverage grids'
   return 'Keyframes'
@@ -360,8 +377,8 @@ export function sequenceAnimaticSceneBoardPrepStageLabel(stage: SequenceAnimatic
 
 export function sequenceAnimaticSceneBoardReferenceStageLabel(stage: SequenceAnimaticSceneBoardReferenceStageKey) {
   if (stage === 'set_refs') return 'Set refs'
-  if (stage === 'zone_refs') return 'Zone ref'
-  return 'Spot/viewpoint ref'
+  if (stage === 'zone_refs') return 'Zone map'
+  return 'Spot/viewpoint atlas'
 }
 
 function sequenceAnimaticSceneBoardReferenceBlockedReasons(
@@ -432,6 +449,7 @@ function sequenceAnimaticSceneBoardUnitLabelForNode(
 export function sequenceAnimaticSceneBoardScaffoldGroupsForUnit(input: {
   model: SequenceAnimaticViewModel
   referenceTiles: readonly SequenceAnimaticSceneBoardReferenceTile[]
+  includeReady?: boolean
 }): SequenceAnimaticContinuityAssetRunGroup[] {
   const graphNodeById = new Map(input.model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
   const targetByNodeId = new Map(
@@ -439,24 +457,21 @@ export function sequenceAnimaticSceneBoardScaffoldGroupsForUnit(input: {
       .map((tile) => tile.target ? [tile.target.nodeId, tile.target] as const : null)
       .filter((entry): entry is readonly [string, SequenceAnimaticContinuityAssetTargetView] => Boolean(entry)),
   )
-  const needs = input.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceNeedsGeneration)
-  const missingByNodeId = new Map(needs.map((tile) => [tile.nodeId, tile] as const))
+  const needs = input.includeReady
+    ? input.referenceTiles.filter((tile) => tile.stage !== 'set_refs' && tile.target && tile.blockedReasons.length === 0)
+    : input.referenceTiles.filter(sequenceAnimaticSceneBoardReferenceNeedsGeneration)
   const consumedNodeIds = new Set<string>()
   const groups: SequenceAnimaticContinuityAssetRunGroup[] = []
   const zoneTiles = needs.filter((tile) => tile.stage === 'zone_refs' && tile.blockedReasons.length === 0)
   for (const zoneTile of zoneTiles) {
     if (!zoneTile.target) continue
-    const childTargets = input.referenceTiles
-      .filter((tile) => tile.stage === 'spot_refs')
-      .filter((tile) => tile.target && missingByNodeId.has(tile.nodeId) && !consumedNodeIds.has(tile.nodeId))
-      .filter((tile) => trimOptionalString(graphNodeById.get(tile.nodeId)?.parentId) === zoneTile.nodeId)
-      .filter((tile) => tile.blockedReasons.length === 0)
-      .slice(0, 3)
-      .map((tile) => tile.target)
-      .filter((target): target is SequenceAnimaticContinuityAssetTargetView => Boolean(target))
-    const targets = [zoneTile.target, ...childTargets]
-    targets.forEach((target) => consumedNodeIds.add(target.nodeId))
-    groups.push({ targets, isBatch: targets.length > 1 })
+    consumedNodeIds.add(zoneTile.nodeId)
+    groups.push({
+      targets: [zoneTile.target],
+      isBatch: false,
+      batchKind: 'zone_spatial_map',
+      parentNodeId: trimOptionalString(graphNodeById.get(zoneTile.nodeId)?.parentId) || null,
+    })
   }
   const siblingGroups = new Map<string, SequenceAnimaticContinuityAssetTargetView[]>()
   for (const tile of needs) {
@@ -474,10 +489,12 @@ export function sequenceAnimaticSceneBoardScaffoldGroupsForUnit(input: {
     siblingGroups.set(key, [...(siblingGroups.get(key) ?? []), tile.target])
     consumedNodeIds.add(tile.nodeId)
   }
-  for (const targets of siblingGroups.values()) {
-    for (let index = 0; index < targets.length; index += 4) {
-      const chunk = targets.slice(index, index + 4)
-      groups.push({ targets: chunk, isBatch: chunk.length > 1 })
+  for (const [key, targets] of siblingGroups.entries()) {
+    const [parentId, kind] = key.split(':')
+    const batchKind = kind === 'viewpoints' ? 'viewpoint_atlas_grid' : 'spot_atlas_grid'
+    for (let index = 0; index < targets.length; index += 9) {
+      const chunk = targets.slice(index, index + 9)
+      groups.push({ targets: chunk, isBatch: chunk.length > 1, batchKind, parentNodeId: parentId || null })
     }
   }
   return groups
@@ -604,9 +621,11 @@ function buildSequenceAnimaticSceneBoardPrepView(input: {
               ? 'coverage_grids'
               : 'ready'
     const stageLabel = stage === 'set_refs'
-      ? `Waiting for set image before zone scaffold.`
+      ? `Waiting for set image before zone map.`
       : stage === 'scaffold_refs'
-        ? `Generating ${scaffoldGroups.length} scaffold grid${scaffoldGroups.length === 1 ? '' : 's'} for this zone.`
+        ? unitReferenceTiles.some((tile) => tile.stage === 'zone_refs' && sequenceAnimaticSceneBoardReferenceNeedsGeneration(tile))
+          ? `Generating zone spatial map for this board.`
+          : `Generating ${scaffoldGroups.length} spot atlas grid${scaffoldGroups.length === 1 ? '' : 's'} for this zone.`
         : stage === 'coverage_directions'
           ? `Coverage directions: ${coverageIntentReadyCount}/${coverageIntentShots.length} ready.`
         : stage === 'coverage_grids'
@@ -732,8 +751,8 @@ function buildSequenceAnimaticSceneBoardPrepView(input: {
   const unitCoverageGridPlanCount = prepUnits.reduce((sum, unit) => sum + unit.coverageGridPlanCount, 0)
   const prepSummary = nextPrepTargets.length > 0
     ? `Next: generate ${nextPrepTargets.length} ${sequenceAnimaticSceneBoardReferenceStageLabel(referenceTiles.find((tile) => tile.target?.nodeId === nextPrepTargets[0]?.nodeId)?.stage ?? 'set_refs').toLowerCase()}.`
-    : missingReferenceCount > 0
-      ? 'Waiting for parent references before zone/spot scaffold.'
+      : missingReferenceCount > 0
+      ? 'Waiting for parent references before zone map / spot atlas.'
       : canGenerateCoverageGrids && coverageGridShots.some((tile) => !tile.coverageReady)
         ? `Next: generate ${unitCoverageGridPlanCount} scoped coverage grid${unitCoverageGridPlanCount === 1 ? '' : 's'} for ${coverageGridShots.length} shot${coverageGridShots.length === 1 ? '' : 's'}.`
         : 'Continuity references are ready for this board scope.'

@@ -21,7 +21,10 @@ import {
   validateOutputWorkflowGraph,
 } from '../_shared/output-workflow.ts'
 import { outputWorkflowRunStartRequestSchema } from '../../../src/domain/outputWorkflow.ts'
-import { outputWorkflowRunIntentDefaults } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import {
+  getWorkflowNodeManifest,
+  outputWorkflowRunIntentDefaults,
+} from '../../../src/domain/outputWorkflowNodeContracts.ts'
 import { notifyWorkerWakeBestEffort } from '../_shared/worker-wake.ts'
 
 function readStringArray(value: unknown) {
@@ -200,6 +203,8 @@ Deno.serve(async (request) => {
         order_index: index,
         label: node.label,
         metadata: {
+          manifestPurpose: getWorkflowNodeManifest(node)?.purpose ?? (readText(readRecord(node.config).purpose) || null),
+          progressLabel: getWorkflowNodeManifest(node)?.progressLabel ?? node.label,
           executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
           resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
           groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,
