@@ -1,28 +1,22 @@
 import { z } from 'zod'
 
 import { HttpError } from './http.ts'
+import { ensureMappedChildWorkflow } from './output-workflow-child-utils.ts'
 import {
   buildOutputWorkflowInputFingerprint,
   buildOutputWorkflowExecutionPlan,
   getOutputWorkflowNodeExecutionMetadata,
   getOutputWorkflowNodeGuidanceConfig,
   mapOutputRequestRow,
-  mapOutputWorkflowEdgeRow,
-  mapOutputWorkflowNodeRow,
   mapOutputWorkflowRunRow,
   mapOutputWorkflowRunStepRow,
-  mapOutputWorkflowRow,
   outputRequestSelect,
   outputWorkflowRunSelect,
   outputWorkflowRunStepSelect,
   selectOutputWorkflowRunSubgraph,
-  validateOutputWorkflowGraph,
 } from './output-workflow.ts'
 import {
-  buildWorkflowTemplateGraph,
-  normalizeWorkflowTemplateGraphRows,
-} from '../../../src/domain/outputWorkflowTemplateRegistry.ts'
-import {
+  buildValidatedOutputWorkflowTemplateGraph,
   sequenceAnimaticSceneBoardPrepRunSchema,
   sequenceAnimaticSceneBoardWorkflowCommandRequestSchema,
   sequenceAnimaticSceneBoardWorkflowCommandResponseSchema,
@@ -145,7 +139,7 @@ export async function runSceneBoardWorkflowCommand(input: {
     action: payload.action,
     dependencyMode: 'scene_board_prep_parent',
   }
-  const graphResult = buildWorkflowTemplateGraph({
+  const graphResult = buildValidatedOutputWorkflowTemplateGraph({
     registry: sequenceAnimaticWorkflowTemplateRegistry,
     templateKey: sequenceAnimaticSceneBoardPrepTemplateKey,
     rawInput: {
@@ -154,7 +148,6 @@ export async function runSceneBoardWorkflowCommand(input: {
       commonConfig,
       command,
     },
-    validateGraph: (graph) => validateOutputWorkflowGraph(normalizeWorkflowTemplateGraphRows(graph) as never),
   })
   if (!graphResult.ok || !graphResult.graph) throw new HttpError(400, graphResult.diagnostics.join(' '))
   const graph = graphResult.graph
@@ -166,14 +159,15 @@ export async function runSceneBoardWorkflowCommand(input: {
     : payload.action === 'generate_selected_coverage_anchors'
     ? 'Generate Scene Board Coverage Anchors'
     : 'Prepare Scene Board'
-  const ensureResponse = await admin.rpc('ensure_sequence_animatic_child_workflow', {
-    p_project_id: payload.projectId,
-    p_draft_id: payload.draftId,
-    p_parent_request_id: masterRequest.id,
-    p_role: 'scene_board_prep',
-    p_identity_key: 'sceneBoardPrepIdentity',
-    p_identity_value: identity,
-    p_workflow: {
+  const ensured = await ensureMappedChildWorkflow({
+    client: admin,
+    projectId: payload.projectId,
+    draftId: payload.draftId,
+    parentRequestId: masterRequest.id,
+    role: 'scene_board_prep',
+    identityKey: 'sceneBoardPrepIdentity',
+    identityValue: identity,
+    workflow: {
       project_id: payload.projectId,
       draft_id: payload.draftId,
       key: `sequence_animatic_scene_board_prep_${slugify(masterRequest.id)}_${identity.slice(0, 12)}`,
@@ -190,9 +184,9 @@ export async function runSceneBoardWorkflowCommand(input: {
         workflowTemplateSourceHash: graphResult.sourceHash,
       },
     },
-    p_nodes: graph.nodes,
-    p_edges: graph.edges,
-    p_request: {
+    nodes: graph.nodes,
+    edges: graph.edges,
+    request: {
       project_id: payload.projectId,
       draft_id: payload.draftId,
       parent_request_id: masterRequest.id,
@@ -217,12 +211,11 @@ export async function runSceneBoardWorkflowCommand(input: {
       },
     },
   })
-  if (ensureResponse.error || !ensureResponse.data) throw new Error(ensureResponse.error?.message ?? 'Failed to ensure Scene Board prep workflow.')
-  const ensured = asRecord(ensureResponse.data)
-  const prepRequest = mapOutputRequestRow(asRecord(ensured.request) as never)
-  const workflow = mapOutputWorkflowRow(asRecord(ensured.workflow) as never)
-  const nodes = (Array.isArray(ensured.nodes) ? ensured.nodes : []).map((row) => mapOutputWorkflowNodeRow(asRecord(row) as never))
-  const edges = (Array.isArray(ensured.edges) ? ensured.edges : []).map((row) => mapOutputWorkflowEdgeRow(asRecord(row) as never))
+  const prepRequest = ensured.request
+  const workflow = ensured.workflow
+  if (!workflow) throw new Error('Failed to ensure Scene Board prep workflow.')
+  const nodes = ensured.nodes
+  const edges = ensured.edges
 
   const activeRunResponse = prepRequest.latestRunId
     ? await admin.from('output_workflow_runs').select(outputWorkflowRunSelect).eq('id', prepRequest.latestRunId).maybeSingle()

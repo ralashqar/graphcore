@@ -255,6 +255,7 @@ import {
   type WorkflowCommandInput,
   type WorkflowCommandProxyResponse,
 } from '../domain/workflowCommandRegistry'
+import type { z } from 'zod'
 import type { PromptIntentClassificationResult } from '../domain/promptIntentClassifier'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
@@ -8719,10 +8720,6 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     panelAssetKey?: string
   },
 ): Promise<SequenceAnimaticBlockWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic block workflows.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic block workflows require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticBlockWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -8733,27 +8730,40 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     shotId: request.shotId,
     panelAssetKey: request.panelAssetKey,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-block-workflows',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
+  if ((request.sequenceAnimaticMode ?? 'storyboard_blocks') === 'shot_video') {
+    return startTypedWorkflowCommand(snapshot, {
+      family: 'sequence_animatic',
+      action: 'generate_shot_video',
+      scope: {
+        masterRequestId: payload.masterRequestId,
+        storyboardBlockId: payload.storyboardBlockId,
+        shotId: payload.shotId,
+      },
+      payload: {
+        blockRequestId: payload.blockRequestId,
+        panelAssetKey: payload.panelAssetKey,
+      },
+    }, sequenceAnimaticBlockWorkflowEnsureResponseSchema)
   }
-  const parsed = sequenceAnimaticBlockWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_storyboard_blocks',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+    },
+    payload: {
+      blockRequestId: payload.blockRequestId,
+      storyboardBlockId: payload.storyboardBlockId,
+      shotId: payload.shotId,
+      panelAssetKey: payload.panelAssetKey,
+    },
+  }, sequenceAnimaticBlockWorkflowEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticSceneWorkflows(
   snapshot: ProjectSnapshot,
   request: { masterRequestId: string; sceneIds?: string[]; startSceneId?: string },
 ): Promise<SequenceAnimaticSceneWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic scenes.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic scene workflows require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticSceneWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -8761,43 +8771,36 @@ export async function ensureSequenceAnimaticSceneWorkflows(
     sceneIds: request.sceneIds,
     startSceneId: request.startSceneId,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-scene-workflows',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticSceneWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_scene_shot_plans',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      sceneIds: payload.sceneIds ?? [],
+      sceneId: payload.startSceneId,
+    },
+    payload: {
+      startSceneId: payload.startSceneId,
+    },
+  }, sequenceAnimaticSceneWorkflowEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticContinuityWorkflow(
   snapshot: ProjectSnapshot,
   request: { masterRequestId: string },
 ): Promise<SequenceAnimaticContinuityWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic continuity.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic continuity requires a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticContinuityWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     masterRequestId: request.masterRequestId,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-continuity-workflow',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticContinuityWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_continuity_workflow',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+    },
+  }, sequenceAnimaticContinuityWorkflowEnsureResponseSchema)
 }
 
 export async function deriveSequenceAnimaticContinuityBlock(
@@ -8889,7 +8892,7 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     mode: request.mode ?? 'generate',
     continuityRequestId: request.continuityRequestId ?? undefined,
   })
-  const response = await startWorkflowCommand(snapshot, {
+  return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
     action: 'generate_continuity_assets',
     scope: {
@@ -8904,9 +8907,7 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
       continuityRequestId: payloadInput.continuityRequestId,
       batchKind: payloadInput.batchKind,
     },
-  })
-  const parsed = sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse(response.result)
-  return parsed
+  }, sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticKeyframeWorkflows(
@@ -8928,7 +8929,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     coverageSetupIds: request.coverageSetupIds,
     allowProvisional: request.allowProvisional ?? false,
   })
-  const response = await startWorkflowCommand(snapshot, {
+  return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
     action: 'generate_keyframes',
     scope: {
@@ -8941,9 +8942,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
       regenerate: payload.mode === 'regenerate',
       allowProvisional: payload.allowProvisional,
     },
-  })
-  const parsed = sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse(response.result)
-  return parsed
+  }, sequenceAnimaticKeyframeWorkflowEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticShotProductionGraph(
@@ -8956,10 +8955,6 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     allowProvisional?: boolean
   },
 ): Promise<SequenceAnimaticShotProductionGraphEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic shot graphs.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic shot graphs require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticShotProductionGraphEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -8969,17 +8964,19 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     forceRefresh: request.forceRefresh ?? false,
     allowProvisional: request.allowProvisional ?? false,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-shot-production-graph',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticShotProductionGraphEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_shot_production_graph',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      shotId: payload.shotId,
+      coverageSetupIds: payload.coverageSetupId ? [payload.coverageSetupId] : [],
+    },
+    flags: {
+      forceRefresh: payload.forceRefresh,
+      allowProvisional: payload.allowProvisional,
+    },
+  }, sequenceAnimaticShotProductionGraphEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticZoneCoverageBoards(
@@ -9005,7 +9002,7 @@ export async function ensureSequenceAnimaticZoneCoverageBoards(
     scopedShots: request.scopedShots ?? [],
     forceRefresh: request.forceRefresh ?? false,
   })
-  const response = await startWorkflowCommand(snapshot, {
+  return startTypedWorkflowCommand(snapshot, {
     family: 'scene_board',
     action: 'generate_zone_coverage_grids',
     scope: {
@@ -9021,9 +9018,7 @@ export async function ensureSequenceAnimaticZoneCoverageBoards(
     payload: {
       scopedShots: payload.scopedShots,
     },
-  })
-  const parsed = sequenceAnimaticZoneCoverageBoardEnsureResponseSchema.parse(response.result)
-  return parsed
+  }, sequenceAnimaticZoneCoverageBoardEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticShotCoverageIntents(
@@ -9049,7 +9044,7 @@ export async function ensureSequenceAnimaticShotCoverageIntents(
     scopedShots: request.scopedShots ?? [],
     forceRefresh: request.forceRefresh ?? false,
   })
-  const response = await startWorkflowCommand(snapshot, {
+  return startTypedWorkflowCommand(snapshot, {
     family: 'scene_board',
     action: 'generate_coverage_intents',
     scope: {
@@ -9065,9 +9060,7 @@ export async function ensureSequenceAnimaticShotCoverageIntents(
     payload: {
       scopedShots: payload.scopedShots,
     },
-  })
-  const parsed = sequenceAnimaticShotCoverageIntentEnsureResponseSchema.parse(response.result)
-  return parsed
+  }, sequenceAnimaticShotCoverageIntentEnsureResponseSchema)
 }
 
 export async function prepareSequenceAnimaticSceneBoard(
@@ -9169,7 +9162,7 @@ export async function startSequenceAnimaticSceneBoardWorkflowCommand(
       : legacyAction === 'generate_selected_coverage_anchors'
         ? 'generate_coverage_anchors'
         : 'prepare_scene_board'
-  const response = await startWorkflowCommand(snapshot, {
+  return startTypedWorkflowCommand(snapshot, {
     family: 'scene_board',
     action,
     scope: {
@@ -9183,9 +9176,7 @@ export async function startSequenceAnimaticSceneBoardWorkflowCommand(
     flags: {
       forceRefresh: request.forceRefresh ?? legacyAction === 'regenerate_zone_top_down',
     },
-  })
-  const parsed = sequenceAnimaticSceneBoardWorkflowCommandResponseSchema.parse(response.result)
-  return parsed
+  }, sequenceAnimaticSceneBoardWorkflowCommandResponseSchema)
 }
 
 export async function startWorkflowCommand(
@@ -9214,6 +9205,15 @@ export async function startWorkflowCommand(
   return parsed
 }
 
+async function startTypedWorkflowCommand<T>(
+  snapshot: ProjectSnapshot,
+  request: Omit<WorkflowCommandInput, 'projectId' | 'draftId'> & Partial<Pick<WorkflowCommandInput, 'projectId' | 'draftId'>>,
+  resultSchema: z.ZodType<T>,
+): Promise<T> {
+  const response = await startWorkflowCommand(snapshot, request)
+  return resultSchema.parse(response.result)
+}
+
 export async function ensureSequenceAnimaticShotRevisionWorkflow(
   snapshot: ProjectSnapshot,
   request: {
@@ -9231,7 +9231,7 @@ export async function ensureSequenceAnimaticShotRevisionWorkflow(
     shotId: request.shotId,
     prompt: request.prompt,
   })
-  const response = await startWorkflowCommand(snapshot, {
+  return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
     action: 'revise_shot',
     scope: {
@@ -9246,9 +9246,7 @@ export async function ensureSequenceAnimaticShotRevisionWorkflow(
     payload: {
       prompt: payload.prompt,
     },
-  })
-  const parsed = sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema.parse(response.result)
-  return parsed
+  }, sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema)
 }
 
 export async function loadSequenceAnimaticState(

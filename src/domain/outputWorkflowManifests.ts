@@ -218,7 +218,7 @@ export function createWorkflowNodeManifest(input: WorkflowNodeContractView & {
     ...serializableStreamingPolicy
   } = input.streamingPolicy ?? {}
   const streamingPolicy = workflowNodeStreamingPolicySchema.parse(serializableStreamingPolicy)
-  return {
+  const manifest: WorkflowNodeManifest = {
     purpose,
     nodeType: input.nodeType ?? '*',
     label: input.label,
@@ -262,12 +262,65 @@ export function createWorkflowNodeManifest(input: WorkflowNodeContractView & {
       progressLabels: streamingPolicy.progressLabels,
     },
   }
+  assertWorkflowNodeManifestDefinition(manifest)
+  return manifest
+}
+
+export function validateWorkflowNodeManifestDefinition(manifest: WorkflowNodeManifest) {
+  const diagnostics: string[] = []
+  if (!manifest.purpose.trim()) diagnostics.push('Workflow node manifest purpose is required.')
+  if (!manifest.label.trim()) diagnostics.push(`${manifest.purpose}: workflow node manifest label is required.`)
+  if (!manifest.progressLabel.trim()) diagnostics.push(`${manifest.purpose}: workflow node manifest progressLabel is required.`)
+  if (manifest.executable && !manifest.handlerKey.trim()) diagnostics.push(`${manifest.purpose}: executable workflow node manifest requires handlerKey.`)
+
+  const streaming = manifest.streamingPolicy
+  const streamingLabelKeys = Object.keys(streaming.progressLabels)
+  if (streaming.mode === 'none') {
+    if (streaming.partialArtifactRoles.length > 0) {
+      diagnostics.push(`${manifest.purpose}: non-streaming nodes must not declare partialArtifactRoles.`)
+    }
+    if (streaming.resumeTokenRequired) {
+      diagnostics.push(`${manifest.purpose}: non-streaming nodes must not require a resume token.`)
+    }
+    if (streamingLabelKeys.length > 0) {
+      diagnostics.push(`${manifest.purpose}: non-streaming nodes must not declare streaming progress labels.`)
+    }
+  } else {
+    if (streaming.partialArtifactRoles.length === 0) {
+      diagnostics.push(`${manifest.purpose}: streaming nodes must declare at least one partialArtifactRole.`)
+    }
+    if (!streaming.progressLabels.streaming) {
+      diagnostics.push(`${manifest.purpose}: streaming nodes must declare progressLabels.streaming.`)
+    }
+    if (!streaming.progressLabels.completed) {
+      diagnostics.push(`${manifest.purpose}: streaming nodes must declare progressLabels.completed.`)
+    }
+  }
+
+  if (streaming.partialArtifactRoles.length > 0) {
+    const duplicates = streaming.partialArtifactRoles
+      .filter((role, index, roles) => roles.indexOf(role) !== index)
+    if (duplicates.length > 0) {
+      diagnostics.push(`${manifest.purpose}: duplicate partialArtifactRoles: ${[...new Set(duplicates)].join(', ')}`)
+    }
+  }
+
+  return {
+    ok: diagnostics.length === 0,
+    diagnostics,
+  }
+}
+
+export function assertWorkflowNodeManifestDefinition(manifest: WorkflowNodeManifest) {
+  const validation = validateWorkflowNodeManifestDefinition(manifest)
+  if (!validation.ok) throw new Error(validation.diagnostics.join('\n'))
 }
 
 export function createWorkflowNodeManifestRegistry(manifests: WorkflowNodeManifest[]) {
   const byPurpose = new Map<string, WorkflowNodeManifest>()
   const duplicates = new Set<string>()
   for (const manifest of manifests) {
+    assertWorkflowNodeManifestDefinition(manifest)
     if (byPurpose.has(manifest.purpose)) duplicates.add(manifest.purpose)
     byPurpose.set(manifest.purpose, manifest)
   }
@@ -278,6 +331,7 @@ export function createWorkflowNodeManifestRegistry(manifests: WorkflowNodeManife
 }
 
 export function registerWorkflowNodeManifest(registry: Map<string, WorkflowNodeManifest>, manifest: WorkflowNodeManifest) {
+  assertWorkflowNodeManifestDefinition(manifest)
   if (registry.has(manifest.purpose)) throw new Error(`Workflow node manifest already registered: ${manifest.purpose}`)
   registry.set(manifest.purpose, manifest)
   return manifest

@@ -1,11 +1,13 @@
 import { z } from 'zod'
 
 import {
+  createWorkflowTemplateExtensionScaffold,
   createWorkflowTemplateRegistry,
   workflowTemplateSourceHash,
   type WorkflowTemplateRegistryEntry,
 } from '../../../src/domain/outputWorkflowTemplateRegistry.ts'
 import {
+  buildSequenceAnimaticCoverageAnchorWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
   sequenceAnimaticWorkflowEdge,
   sequenceAnimaticWorkflowNode,
@@ -13,12 +15,53 @@ import {
 
 export const sequenceAnimaticSceneBoardPrepPolicyVersion = 'scene_board_prep_graph_v1'
 export const sequenceAnimaticSceneBoardPrepTemplateKey = 'sequence_animatic_scene_board_prep'
+export const sequenceAnimaticCoverageIntentBatchPolicyVersion = 'coverage_intent_batch_graph_v1'
+export const sequenceAnimaticCoverageIntentBatchTemplateKey = 'sequence_animatic_coverage_intent_batch'
+export const sequenceAnimaticZoneCoverageBoardPolicyVersion = 'zone_coverage_board_graph_v1'
+export const sequenceAnimaticZoneCoverageBoardTemplateKey = 'sequence_animatic_zone_coverage_board'
+export const sequenceAnimaticCoverageAnchorPolicyVersion = 'coverage_anchor_graph_v1'
+export const sequenceAnimaticCoverageAnchorTemplateKey = 'sequence_animatic_coverage_anchor'
+
+const looseRecordSchema = z.record(z.string(), z.unknown())
+const looseRecordArraySchema = z.array(looseRecordSchema)
 
 export const sequenceAnimaticSceneBoardPrepTemplateInputSchema = z.object({
   workflowId: z.string().min(1),
   draftId: z.string().min(1),
-  commonConfig: z.record(z.string(), z.unknown()).default({}),
-  command: z.record(z.string(), z.unknown()).default({}),
+  commonConfig: looseRecordSchema.default({}),
+  command: looseRecordSchema.default({}),
+}).strict()
+
+export const sequenceAnimaticCoverageIntentBatchTemplateInputSchema = z.object({
+  workflowId: z.string().min(1),
+  draftId: z.string().min(1),
+  commonConfig: looseRecordSchema.default({}),
+  intentBatch: looseRecordSchema.default({}),
+  shots: looseRecordArraySchema.default([]),
+  assetPack: looseRecordSchema.default({}),
+}).strict()
+
+export const sequenceAnimaticZoneCoverageBoardTemplateInputSchema = z.object({
+  workflowId: z.string().min(1),
+  draftId: z.string().min(1),
+  commonConfig: looseRecordSchema.default({}),
+  board: looseRecordSchema.default({}),
+  shots: looseRecordArraySchema.default([]),
+  coverageCells: looseRecordArraySchema.default([]),
+  assetPack: looseRecordSchema.default({}),
+  referenceAssetKeys: z.array(z.string()).default([]),
+  previousBoard: looseRecordSchema.optional(),
+}).strict()
+
+export const sequenceAnimaticCoverageAnchorTemplateInputSchema = z.object({
+  workflowId: z.string().min(1),
+  draftId: z.string().min(1),
+  commonConfig: looseRecordSchema.default({}),
+  coverageSetup: looseRecordSchema.default({}),
+  shots: looseRecordArraySchema.default([]),
+  assetPack: looseRecordSchema.default({}),
+  referenceAssetKeys: z.array(z.string()).default([]),
+  aspectRatio: z.string().min(1).default('16:9'),
 }).strict()
 
 export function buildSequenceAnimaticSceneBoardPrepWorkflowGraph(input: {
@@ -168,15 +211,65 @@ export function buildSequenceAnimaticSceneBoardPrepWorkflowGraph(input: {
   return { nodes, edges }
 }
 
-export const sequenceAnimaticSceneBoardPrepTemplateManifest: WorkflowTemplateRegistryEntry<
+export const sequenceAnimaticSceneBoardPrepTemplateScaffold = createWorkflowTemplateExtensionScaffold<
   z.infer<typeof sequenceAnimaticSceneBoardPrepTemplateInputSchema>,
   ReturnType<typeof buildSequenceAnimaticSceneBoardPrepWorkflowGraph>
-> = {
+>({
   key: sequenceAnimaticSceneBoardPrepTemplateKey,
   label: 'Scene Board Prep',
   description: 'Server-owned graph template for Scene Board preparation commands.',
   inputSchema: sequenceAnimaticSceneBoardPrepTemplateInputSchema,
   policyVersion: sequenceAnimaticSceneBoardPrepPolicyVersion,
+  workflowFamily: 'scene_board',
+  commandAction: 'prepare_scene_board',
+  sourceHashKeys: ['draftId', 'commonConfig', 'command'],
+  graphStages: [
+    'scope_input',
+    'required_ref_plan',
+    'fanout_set_refs',
+    'collect_set_refs',
+    'fanout_scaffold_refs',
+    'collect_scaffold_refs',
+    'coverage_intent_batch',
+    'fanout_coverage_intents',
+    'collect_coverage_intents',
+    'zone_coverage_grid',
+    'fanout_zone_coverage_grids',
+    'collect_zone_coverage_grids',
+    'register_projection',
+    'coverage_cell_artifact',
+  ],
+  requiredNodePurposes: [
+    'sequence_animatic_scene_board_scope_input',
+    'sequence_animatic_scene_board_required_ref_plan',
+    'workflow_fanout_children',
+    'workflow_collect_child_artifacts',
+    'sequence_animatic_scene_board_coverage_intent_batch',
+    'sequence_animatic_scene_board_zone_coverage_grid',
+    'workflow_register_artifact_projection',
+    'sequence_animatic_scene_board_coverage_cell_artifact',
+  ],
+  requiredArtifactRoles: [
+    'sequence_animatic_continuity_asset',
+    'sequence_animatic_coverage_intent_batch',
+    'sequence_animatic_zone_coverage_board',
+    'sequence_animatic_scene_board_prep',
+  ],
+  projectionMetadataKeys: [
+    'activeManifestPurpose',
+    'activeProgressLabel',
+    'activeChildRequestIds',
+    'activeChildRunIds',
+    'providerStatus',
+    'failedNodeKey',
+    'readyArtifactCount',
+    'scopedAssetKeys',
+    'recoveryHints',
+  ],
+  compatibilityWrappers: [
+    'start-scene-board-workflow-command',
+    'prepare-sequence-animatic-scene-board',
+  ],
   buildGraph: buildSequenceAnimaticSceneBoardPrepWorkflowGraph,
   sourceHash: (input) => workflowTemplateSourceHash({
     policyVersion: sequenceAnimaticSceneBoardPrepPolicyVersion,
@@ -184,11 +277,12 @@ export const sequenceAnimaticSceneBoardPrepTemplateManifest: WorkflowTemplateReg
     commonConfig: input.commonConfig,
     command: input.command,
   }),
-}
+})
 
-export const sequenceAnimaticWorkflowTemplateRegistry = createWorkflowTemplateRegistry([
-  sequenceAnimaticSceneBoardPrepTemplateManifest,
-])
+export const sequenceAnimaticSceneBoardPrepTemplateManifest: WorkflowTemplateRegistryEntry<
+  z.infer<typeof sequenceAnimaticSceneBoardPrepTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticSceneBoardPrepWorkflowGraph>
+> = sequenceAnimaticSceneBoardPrepTemplateScaffold.manifest
 
 export function buildSequenceAnimaticZoneCoverageBoardWorkflowGraph(input: {
   workflowId: string
@@ -337,3 +431,176 @@ export function buildSequenceAnimaticShotCoverageIntentWorkflowGraph(input: {
   ]
   return { nodes, edges }
 }
+
+export const sequenceAnimaticCoverageIntentBatchTemplateScaffold = createWorkflowTemplateExtensionScaffold<
+  z.infer<typeof sequenceAnimaticCoverageIntentBatchTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticShotCoverageIntentWorkflowGraph>
+>({
+  key: sequenceAnimaticCoverageIntentBatchTemplateKey,
+  label: 'Scene Board Coverage Directions',
+  description: 'Server-owned graph template for scoped Scene Board shot coverage direction batches.',
+  inputSchema: sequenceAnimaticCoverageIntentBatchTemplateInputSchema,
+  policyVersion: sequenceAnimaticCoverageIntentBatchPolicyVersion,
+  workflowFamily: 'scene_board',
+  commandAction: 'generate_coverage_intents',
+  sourceHashKeys: ['draftId', 'commonConfig', 'intentBatch', 'shots', 'assetPack'],
+  graphStages: [
+    'coverage_intent_input',
+    'coverage_intent_plan',
+    'coverage_intent_artifact',
+  ],
+  requiredNodePurposes: [
+    'sequence_animatic_coverage_intent_input',
+    'sequence_animatic_coverage_intent_plan',
+    'sequence_animatic_coverage_intent_artifact',
+  ],
+  requiredArtifactRoles: ['sequence_animatic_coverage_intent_batch'],
+  projectionMetadataKeys: [
+    'activeManifestPurpose',
+    'activeProgressLabel',
+    'providerStatus',
+    'readyArtifactCount',
+    'scopedAssetKeys',
+    'recoveryHints',
+  ],
+  compatibilityWrappers: ['ensure-sequence-animatic-shot-coverage-intents'],
+  buildGraph: buildSequenceAnimaticShotCoverageIntentWorkflowGraph,
+  sourceHash: (input) => workflowTemplateSourceHash({
+    policyVersion: sequenceAnimaticCoverageIntentBatchPolicyVersion,
+    draftId: input.draftId,
+    commonConfig: input.commonConfig,
+    intentBatch: input.intentBatch,
+    shots: input.shots,
+    assetPack: input.assetPack,
+  }),
+})
+
+export const sequenceAnimaticZoneCoverageBoardTemplateScaffold = createWorkflowTemplateExtensionScaffold<
+  z.infer<typeof sequenceAnimaticZoneCoverageBoardTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticZoneCoverageBoardWorkflowGraph>
+>({
+  key: sequenceAnimaticZoneCoverageBoardTemplateKey,
+  label: 'Scene Board Zone Coverage Grid',
+  description: 'Server-owned graph template for 3x3 zone camera grids and reusable coverage cells.',
+  inputSchema: sequenceAnimaticZoneCoverageBoardTemplateInputSchema,
+  policyVersion: sequenceAnimaticZoneCoverageBoardPolicyVersion,
+  workflowFamily: 'scene_board',
+  commandAction: 'generate_zone_coverage_grids',
+  sourceHashKeys: ['draftId', 'commonConfig', 'board', 'shots', 'coverageCells', 'assetPack', 'referenceAssetKeys', 'previousBoard'],
+  graphStages: [
+    'zone_coverage_board_input',
+    'zone_coverage_board_brief',
+    'zone_coverage_board_prompt',
+    'zone_coverage_board_image',
+    'zone_coverage_board_extract',
+    'zone_coverage_board_artifact',
+  ],
+  requiredNodePurposes: [
+    'sequence_animatic_zone_coverage_board_input',
+    'sequence_animatic_zone_coverage_board_brief',
+    'sequence_animatic_zone_coverage_board_prompt',
+    'sequence_animatic_zone_coverage_board_image',
+    'sequence_animatic_zone_coverage_board_extract',
+    'sequence_animatic_zone_coverage_board_artifact',
+  ],
+  requiredArtifactRoles: [
+    'sequence_animatic_zone_coverage_board_image',
+    'sequence_animatic_coverage_anchor',
+    'sequence_animatic_zone_coverage_board',
+  ],
+  projectionMetadataKeys: [
+    'activeManifestPurpose',
+    'activeProgressLabel',
+    'providerStatus',
+    'readyArtifactCount',
+    'scopedAssetKeys',
+    'recoveryHints',
+  ],
+  compatibilityWrappers: ['ensure-sequence-animatic-zone-coverage-boards'],
+  buildGraph: buildSequenceAnimaticZoneCoverageBoardWorkflowGraph,
+  sourceHash: (input) => workflowTemplateSourceHash({
+    policyVersion: sequenceAnimaticZoneCoverageBoardPolicyVersion,
+    draftId: input.draftId,
+    commonConfig: input.commonConfig,
+    board: input.board,
+    shots: input.shots,
+    coverageCells: input.coverageCells,
+    assetPack: input.assetPack,
+    referenceAssetKeys: input.referenceAssetKeys,
+    previousBoard: input.previousBoard ?? {},
+  }),
+})
+
+export const sequenceAnimaticCoverageAnchorTemplateScaffold = createWorkflowTemplateExtensionScaffold<
+  z.infer<typeof sequenceAnimaticCoverageAnchorTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticCoverageAnchorWorkflowGraph>
+>({
+  key: sequenceAnimaticCoverageAnchorTemplateKey,
+  label: 'Scene Board Coverage Anchor',
+  description: 'Server-owned graph template for scoped coverage anchor reference images.',
+  inputSchema: sequenceAnimaticCoverageAnchorTemplateInputSchema,
+  policyVersion: sequenceAnimaticCoverageAnchorPolicyVersion,
+  workflowFamily: 'scene_board',
+  commandAction: 'generate_coverage_anchors',
+  sourceHashKeys: ['draftId', 'commonConfig', 'coverageSetup', 'shots', 'assetPack', 'referenceAssetKeys', 'aspectRatio'],
+  graphStages: [
+    'coverage_anchor_input',
+    'coverage_anchor_brief',
+    'coverage_anchor_prompt',
+    'coverage_anchor_image',
+    'coverage_anchor_artifact',
+  ],
+  requiredNodePurposes: [
+    'sequence_animatic_coverage_anchor_input',
+    'sequence_animatic_coverage_anchor_brief',
+    'sequence_animatic_coverage_anchor_prompt',
+    'sequence_animatic_coverage_anchor_image',
+    'sequence_animatic_coverage_anchor_artifact',
+  ],
+  requiredArtifactRoles: [
+    'sequence_animatic_coverage_anchor_image',
+    'sequence_animatic_coverage_anchor',
+  ],
+  projectionMetadataKeys: [
+    'activeManifestPurpose',
+    'activeProgressLabel',
+    'providerStatus',
+    'readyArtifactCount',
+    'scopedAssetKeys',
+    'recoveryHints',
+  ],
+  compatibilityWrappers: ['ensure-sequence-animatic-keyframe-workflows'],
+  buildGraph: buildSequenceAnimaticCoverageAnchorWorkflowGraph,
+  sourceHash: (input) => workflowTemplateSourceHash({
+    policyVersion: sequenceAnimaticCoverageAnchorPolicyVersion,
+    draftId: input.draftId,
+    commonConfig: input.commonConfig,
+    coverageSetup: input.coverageSetup,
+    shots: input.shots,
+    assetPack: input.assetPack,
+    referenceAssetKeys: input.referenceAssetKeys,
+    aspectRatio: input.aspectRatio,
+  }),
+})
+
+export const sequenceAnimaticCoverageIntentBatchTemplateManifest: WorkflowTemplateRegistryEntry<
+  z.infer<typeof sequenceAnimaticCoverageIntentBatchTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticShotCoverageIntentWorkflowGraph>
+> = sequenceAnimaticCoverageIntentBatchTemplateScaffold.manifest
+
+export const sequenceAnimaticZoneCoverageBoardTemplateManifest: WorkflowTemplateRegistryEntry<
+  z.infer<typeof sequenceAnimaticZoneCoverageBoardTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticZoneCoverageBoardWorkflowGraph>
+> = sequenceAnimaticZoneCoverageBoardTemplateScaffold.manifest
+
+export const sequenceAnimaticCoverageAnchorTemplateManifest: WorkflowTemplateRegistryEntry<
+  z.infer<typeof sequenceAnimaticCoverageAnchorTemplateInputSchema>,
+  ReturnType<typeof buildSequenceAnimaticCoverageAnchorWorkflowGraph>
+> = sequenceAnimaticCoverageAnchorTemplateScaffold.manifest
+
+export const sequenceAnimaticWorkflowTemplateRegistry = createWorkflowTemplateRegistry([
+  sequenceAnimaticSceneBoardPrepTemplateManifest,
+  sequenceAnimaticCoverageIntentBatchTemplateManifest,
+  sequenceAnimaticZoneCoverageBoardTemplateManifest,
+  sequenceAnimaticCoverageAnchorTemplateManifest,
+])

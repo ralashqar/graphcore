@@ -12,8 +12,15 @@ import {
   getWorkflowNodeManifest,
   validateWorkflowNodeManifestConfig,
 } from './outputWorkflowNodeContracts.ts'
+import {
+  buildWorkflowTemplateGraph as buildWorkflowTemplateGraphInternal,
+  normalizeWorkflowTemplateGraphRows as normalizeWorkflowTemplateGraphRowsInternal,
+  type AnyWorkflowTemplateRegistryEntry as AnyWorkflowTemplateRegistryEntryInternal,
+  type WorkflowTemplateGraphRows as WorkflowTemplateGraphRowsInternal,
+} from './outputWorkflowTemplateRegistry.ts'
 export {
   buildWorkflowProjectionMetadata,
+  assertWorkflowNodeManifestDefinition,
   childWorkflowUtilityInputSchema,
   childWorkflowUtilityOutputSchema,
   createWorkflowNodeExtensionScaffold,
@@ -22,6 +29,7 @@ export {
   getWorkflowNodeManifest as getRegisteredWorkflowNodeManifest,
   registerWorkflowNodeManifest,
   validateWorkflowNodeManifestOutput,
+  validateWorkflowNodeManifestDefinition,
   validateWorkflowTemplateGraph,
   workflowNodeStreamingPolicySchema,
   workflowProjectionMetadataSchema,
@@ -35,12 +43,20 @@ export {
   type WorkflowTemplateManifest,
 } from './outputWorkflowManifests.ts'
 export {
+  assertWorkflowTemplateManifestDefinition,
   buildWorkflowTemplateGraph,
+  createWorkflowTemplateExtensionScaffold,
   createWorkflowTemplateRegistry,
   getWorkflowTemplateManifest,
   normalizeWorkflowTemplateGraphRows,
   registerWorkflowTemplateManifest,
+  validateWorkflowTemplateExtensionScaffoldGraph,
+  validateWorkflowTemplateManifestDefinition,
   workflowTemplateSourceHash,
+  type AnyWorkflowTemplateRegistryEntry,
+  type WorkflowTemplateExtensionScaffold,
+  type WorkflowTemplateExtensionScaffoldGraphValidationOptions,
+  type WorkflowTemplateExtensionScaffoldInput,
   type WorkflowTemplateGraphRows,
   type WorkflowTemplateRegistryEntry,
 } from './outputWorkflowTemplateRegistry.ts'
@@ -53,11 +69,13 @@ export {
   type WorkflowNodeHandlerRegistry,
 } from './workflowNodeHandlerRegistry.ts'
 export {
+  assertWorkflowCommandTemplateCoverage,
   getWorkflowCommandManifest,
   legacyPayloadForWorkflowCommand,
   listWorkflowCommandManifests,
   parseWorkflowCommand,
   sceneBoardLegacyActionForWorkflowCommand,
+  validateWorkflowCommandTemplateCoverage,
   workflowCommandActionSchema,
   workflowCommandFamilySchema,
   workflowCommandFlagsSchema,
@@ -70,6 +88,7 @@ export {
   type WorkflowCommandInput,
   type WorkflowCommandManifest,
   type WorkflowCommandProxyResponse,
+  type WorkflowCommandTemplateCoverageInput,
 } from './workflowCommandRegistry.ts'
 export {
   getWorkflowNodeManifest,
@@ -1723,6 +1742,19 @@ export function validateOutputWorkflowGraph(input: {
     diagnostics,
     orderedNodeKeys: executionPlan.orderedNodeKeys,
   }
+}
+
+export function buildValidatedOutputWorkflowTemplateGraph<TGraph extends WorkflowTemplateGraphRowsInternal>(input: {
+  registry: Map<string, AnyWorkflowTemplateRegistryEntryInternal>
+  templateKey: string
+  rawInput: unknown
+}) {
+  return buildWorkflowTemplateGraphInternal<unknown, TGraph>({
+    registry: input.registry,
+    templateKey: input.templateKey,
+    rawInput: input.rawInput,
+    validateGraph: (graph) => validateOutputWorkflowGraph(normalizeWorkflowTemplateGraphRowsInternal(graph) as never),
+  })
 }
 
 export type OutputWorkflowExecutionPlan = {

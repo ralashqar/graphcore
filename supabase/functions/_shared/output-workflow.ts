@@ -19,6 +19,7 @@ import {
   outputWorkflowRunStatusResponseSchema,
   outputWorkflowSchema,
   outputWorkflowStartResponseSchema,
+  buildValidatedOutputWorkflowTemplateGraph,
   planOutputWorkflow,
   resolveOutputImageGenerationOutputFormat,
   resolveOutputImageGenerationQuality,
@@ -54,13 +55,16 @@ import {
   type WorkflowNodeHandler,
 } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import {
-  buildSequenceAnimaticBlockWorkflowGraph,
-  buildSequenceAnimaticContinuityBatchWorkflowGraph,
-  buildSequenceAnimaticSceneWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
   sequenceAnimaticStoryboardImageSize,
   sequenceAnimaticStableHash,
 } from './sequence-animatic-workflow-factory.ts'
+import {
+  sequenceAnimaticCommandWorkflowTemplateRegistry,
+  sequenceAnimaticContinuityBatchTemplateKey,
+  sequenceAnimaticSceneShotPlansTemplateKey,
+  sequenceAnimaticStoryboardBlocksTemplateKey,
+} from './sequence-animatic-template-registry.ts'
 import {
   isSequenceAnimaticSceneBoardWorkflowPurpose,
 } from './sequence-animatic-scene-board.ts'
@@ -74,6 +78,9 @@ import {
 import {
   registerWorkflowUtilityNodePack,
 } from './output-workflow-utility-pack.ts'
+import {
+  ensureMappedChildWorkflow,
+} from './output-workflow-child-utils.ts'
 import type {
   SeedanceReferenceManifestEntry,
 } from '../../../src/domain/seedanceReferenceManifest.ts'
@@ -5618,22 +5625,32 @@ export async function ensureSequenceAnimaticSceneShotPlanWorkflows(input: {
       sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
       sourceMasterWorkflowId: masterRequest.workflowId,
     }
-    const { nodes, edges } = buildSequenceAnimaticSceneWorkflowGraph({
-      workflowId,
-      draftId: masterRequest.draftId,
-      commonConfig,
-      sceneId,
-      sceneIndex: Number(scene.index) || 0,
-      sceneTitle: readText(scene.title),
-      scenePackageOutput: sceneScopedPackageOutput,
-      screenplayText: input.screenplayText,
-      assetPack: input.assetPack,
-      context: input.context,
-      guidance: input.guidance,
-      maxShotCount: input.maxShotCount,
-      aspectRatio: input.aspectRatio,
-      resolution: input.resolution,
+    const graphResult = buildValidatedOutputWorkflowTemplateGraph({
+      registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
+      templateKey: sequenceAnimaticSceneShotPlansTemplateKey,
+      rawInput: {
+        workflowId,
+        draftId: masterRequest.draftId,
+        commonConfig,
+        sceneId,
+        sceneIndex: Number(scene.index) || 0,
+        sceneTitle: readText(scene.title),
+        scenePackageOutput: sceneScopedPackageOutput,
+        screenplayText: input.screenplayText,
+        assetPack: input.assetPack,
+        context: input.context,
+        guidance: input.guidance,
+        maxShotCount: input.maxShotCount,
+        aspectRatio: input.aspectRatio,
+        resolution: input.resolution,
+      },
     })
+    if (!graphResult.ok || !graphResult.graph) throw new Error(graphResult.diagnostics.join(' '))
+    const { nodes, edges } = graphResult.graph
+    const workflowTemplateMetadata = {
+      workflowTemplateKey: sequenceAnimaticSceneShotPlansTemplateKey,
+      workflowTemplateSourceHash: graphResult.sourceHash,
+    }
     const workflowPayload = {
       project_id: masterRequest.projectId,
       draft_id: masterRequest.draftId,
@@ -5643,7 +5660,7 @@ export async function ensureSequenceAnimaticSceneShotPlanWorkflows(input: {
       preset: 'cinematic_episode_from_sequence',
       status: 'active',
       created_by: masterRequest.requestedBy,
-      metadata: { ...commonConfig, readyToRun: true },
+      metadata: { ...commonConfig, ...workflowTemplateMetadata, readyToRun: true },
     }
     const requestPayload = {
       project_id: masterRequest.projectId,
@@ -5663,27 +5680,25 @@ export async function ensureSequenceAnimaticSceneShotPlanWorkflows(input: {
       planner_notes: 'Per-scene shot plan workflow prepared from the registered scene index.',
       metadata: {
         ...commonConfig,
+        ...workflowTemplateMetadata,
         readyToRun: true,
         createdFromSceneIndexAt: now,
       },
     }
-    const ensureResponse = await input.client.rpc('ensure_sequence_animatic_child_workflow', {
-      p_project_id: masterRequest.projectId,
-      p_draft_id: masterRequest.draftId,
-      p_parent_request_id: masterRequest.id,
-      p_role: 'scene_shot_plan',
-      p_identity_key: 'sceneId',
-      p_identity_value: sceneId,
-      p_workflow: workflowPayload,
-      p_nodes: nodes,
-      p_edges: edges,
-      p_request: requestPayload,
+    const ensured = await ensureMappedChildWorkflow({
+      client: input.client,
+      projectId: masterRequest.projectId,
+      draftId: masterRequest.draftId,
+      parentRequestId: masterRequest.id,
+      role: 'scene_shot_plan',
+      identityKey: 'sceneId',
+      identityValue: sceneId,
+      workflow: workflowPayload,
+      nodes,
+      edges,
+      request: requestPayload,
     })
-    if (ensureResponse.error || !ensureResponse.data) {
-      throw new Error(ensureResponse.error?.message ?? `Failed to ensure scene shot plan workflow for ${sceneId}.`)
-    }
-    const ensured = asRecord(ensureResponse.data)
-    const child = mapOutputRequestRow(asRecord(ensured.request) as never)
+    const child = ensured.request
     existingBySceneId.set(sceneId, child)
     childRequests.push(child)
   }
@@ -6116,20 +6131,30 @@ async function runSequenceAnimaticOrchestrator(input: {
         masterManifestArtifactKey,
         sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
       }
-      const { nodes, edges } = buildSequenceAnimaticContinuityBatchWorkflowGraph({
-        workflowId,
-        draftId: input.run.draftId,
-        commonConfig,
-        batch,
-        targetNodes,
-        continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-        relevantShots: readArray(directorPlan.shots).map(asRecord).filter((shot) => readStringArray(batch.blockIds).length === 0 || readStringArray(batch.blockIds).includes(readText(shot.storyboardBlockId))),
-        shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
-        assetPack: asRecord(manifest.assetPack),
-        referenceAssetKeys: readStringArray(batch.worldReferenceAssetKeys),
-        visualDependencyEdges: sequenceAnimaticContinuityVisualDependencyEdges(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
-        aspectRatio: readText(asRecord(manifest.assetPack).aspectRatio) || '16:9',
+      const graphResult = buildValidatedOutputWorkflowTemplateGraph({
+        registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
+        templateKey: sequenceAnimaticContinuityBatchTemplateKey,
+        rawInput: {
+          workflowId,
+          draftId: input.run.draftId,
+          commonConfig,
+          batch,
+          targetNodes,
+          continuityGraphV2: asRecord(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+          relevantShots: readArray(directorPlan.shots).map(asRecord).filter((shot) => readStringArray(batch.blockIds).length === 0 || readStringArray(batch.blockIds).includes(readText(shot.storyboardBlockId))),
+          shotBindings: asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
+          assetPack: asRecord(manifest.assetPack),
+          referenceAssetKeys: readStringArray(batch.worldReferenceAssetKeys),
+          visualDependencyEdges: sequenceAnimaticContinuityVisualDependencyEdges(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+          aspectRatio: readText(asRecord(manifest.assetPack).aspectRatio) || '16:9',
+        },
       })
+      if (!graphResult.ok || !graphResult.graph) throw new Error(graphResult.diagnostics.join(' '))
+      const { nodes, edges } = graphResult.graph
+      const workflowTemplateMetadata = {
+        workflowTemplateKey: sequenceAnimaticContinuityBatchTemplateKey,
+        workflowTemplateSourceHash: graphResult.sourceHash,
+      }
       const workflowPayload = {
         project_id: input.run.projectId,
         draft_id: input.run.draftId,
@@ -6139,7 +6164,7 @@ async function runSequenceAnimaticOrchestrator(input: {
         preset: 'cinematic_episode_from_sequence',
         status: 'active',
         created_by: masterRequest.requestedBy ?? input.run.requestedBy,
-        metadata: { ...commonConfig, readyToRun: true },
+        metadata: { ...commonConfig, ...workflowTemplateMetadata, readyToRun: true },
       }
       const requestPayload = {
         project_id: input.run.projectId,
@@ -6159,6 +6184,7 @@ async function runSequenceAnimaticOrchestrator(input: {
         planner_notes: 'Continuity reference batch prepared by the sequence animatic Fly orchestrator.',
         metadata: {
           ...commonConfig,
+          ...workflowTemplateMetadata,
           continuityBatchId: batchId,
           continuityBatchHash: batchHash,
           continuityBatchKind: readText(batch.batchKind),
@@ -6170,21 +6196,20 @@ async function runSequenceAnimaticOrchestrator(input: {
           createdFromDirectorPlanAt: now,
         },
       }
-      const ensureResponse = await input.client.rpc('ensure_sequence_animatic_child_workflow', {
-        p_project_id: input.run.projectId,
-        p_draft_id: input.run.draftId,
-        p_parent_request_id: masterRequest.id,
-        p_role: 'continuity_asset_batch',
-        p_identity_key: 'continuityBatchId',
-        p_identity_value: batchId,
-        p_workflow: workflowPayload,
-        p_nodes: nodes,
-        p_edges: edges,
-        p_request: requestPayload,
+      const ensured = await ensureMappedChildWorkflow({
+        client: input.client,
+        projectId: input.run.projectId,
+        draftId: input.run.draftId,
+        parentRequestId: masterRequest.id,
+        role: 'continuity_asset_batch',
+        identityKey: 'continuityBatchId',
+        identityValue: batchId,
+        workflow: workflowPayload,
+        nodes,
+        edges,
+        request: requestPayload,
       })
-      if (ensureResponse.error || !ensureResponse.data) throw new Error(ensureResponse.error?.message ?? 'Failed to ensure continuity batch workflow.')
-      const ensured = asRecord(ensureResponse.data)
-      child = mapOutputRequestRow(asRecord(ensured.request) as never)
+      child = ensured.request
       childRequests.push(child)
       existingBatchById.set(batchId, child)
     }
@@ -6235,32 +6260,6 @@ async function runSequenceAnimaticOrchestrator(input: {
       const aspectRatio = readText(asRecord(manifest.assetPack).aspectRatio) || '16:9'
       const imageSize = sequenceAnimaticStoryboardImageSize(columns, rows, aspectRatio)
       const workflowId = crypto.randomUUID()
-      const workflowPayload = {
-        project_id: input.run.projectId,
-        draft_id: input.run.draftId,
-        key: `sequence_animatic_${slugify(masterRequest.id)}_${slugify(blockId)}_${manifestHash.slice(0, 8)}`,
-        name: `${masterRequest.title} / Block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}`,
-        description: 'Sequence animatic storyboard block workflow.',
-        preset: 'cinematic_episode_from_sequence',
-        status: 'active',
-        created_by: masterRequest.requestedBy ?? input.run.requestedBy,
-        metadata: {
-          parentRequestId: masterRequest.id,
-          masterRequestId: masterRequest.id,
-          graphSpecVersion: sequenceAnimaticGraphSpecVersion,
-          directorPlanHash,
-          screenplayAnimaticRole: 'storyboard_block',
-          screenplayAnimaticSource,
-          sequenceAnimaticRole: 'storyboard_block',
-          storyboardBlockId: blockId,
-          manifestHash,
-          blockHash,
-          masterManifestArtifactKey,
-          sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
-          sourceMasterWorkflowId: input.workflow.id,
-          readyToRun: true,
-        },
-      }
       const blockShotPlan = {
         ...asRecord(manifest.shotPlan),
         totalEditorialDurationSeconds: Number(block.durationSeconds ?? storyboardGroup.editorialDurationSeconds ?? 0) || readArray(block.shots).reduce((total, shot) => total + (Number(asRecord(shot).editorialDurationSeconds ?? 0) || 0), 0),
@@ -6282,23 +6281,49 @@ async function runSequenceAnimaticOrchestrator(input: {
         masterManifestArtifactKey,
       }
       const durationSeconds = Math.max(4, Math.min(15, Number(block.durationSeconds ?? storyboardGroup.providerDurationSeconds ?? 0) || 8))
-      const { nodes, edges } = buildSequenceAnimaticBlockWorkflowGraph({
-        workflowId,
-        draftId: input.run.draftId,
-        commonConfig,
-        block,
-        manifestSummary: {
-          title: readText(manifest.title) || masterRequest.title,
-          screenplayMarkdown: readText(manifest.screenplayMarkdown),
+      const graphResult = buildValidatedOutputWorkflowTemplateGraph({
+        registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
+        templateKey: sequenceAnimaticStoryboardBlocksTemplateKey,
+        rawInput: {
+          workflowId,
+          draftId: input.run.draftId,
+          commonConfig,
+          block,
+          manifestSummary: {
+            title: readText(manifest.title) || masterRequest.title,
+            screenplayMarkdown: readText(manifest.screenplayMarkdown),
+          },
+          shotPlan: blockShotPlan,
+          storyboardGroup,
+          storyboardLayout: { rows, columns, panelCount },
+          assetPack: asRecord(manifest.assetPack),
+          aspectRatio,
+          imageSize,
+          durationSeconds,
         },
-        shotPlan: blockShotPlan,
-        storyboardGroup,
-        storyboardLayout: { rows, columns, panelCount },
-        assetPack: asRecord(manifest.assetPack),
-        aspectRatio,
-        imageSize,
-        durationSeconds,
       })
+      if (!graphResult.ok || !graphResult.graph) throw new Error(graphResult.diagnostics.join(' '))
+      const { nodes, edges } = graphResult.graph
+      const workflowTemplateMetadata = {
+        workflowTemplateKey: sequenceAnimaticStoryboardBlocksTemplateKey,
+        workflowTemplateSourceHash: graphResult.sourceHash,
+      }
+      const workflowPayload = {
+        project_id: input.run.projectId,
+        draft_id: input.run.draftId,
+        key: `sequence_animatic_${slugify(masterRequest.id)}_${slugify(blockId)}_${manifestHash.slice(0, 8)}`,
+        name: `${masterRequest.title} / Block ${Number(block.index ?? 0) || queuedBlockRequestIds.length + 1}`,
+        description: 'Sequence animatic storyboard block workflow.',
+        preset: 'cinematic_episode_from_sequence',
+        status: 'active',
+        created_by: masterRequest.requestedBy ?? input.run.requestedBy,
+        metadata: {
+          ...commonConfig,
+          ...workflowTemplateMetadata,
+          sourceMasterWorkflowId: input.workflow.id,
+          readyToRun: true,
+        },
+      }
       const requestPayload = {
         project_id: input.run.projectId,
         draft_id: input.run.draftId,
@@ -6321,6 +6346,7 @@ async function runSequenceAnimaticOrchestrator(input: {
           screenplayAnimaticRole: 'storyboard_block',
           screenplayAnimaticSource,
           sequenceAnimaticRole: 'storyboard_block',
+          ...workflowTemplateMetadata,
           parentRequestId: masterRequest.id,
           masterRequestId: masterRequest.id,
           storyboardBlockId: blockId,
@@ -6335,21 +6361,20 @@ async function runSequenceAnimaticOrchestrator(input: {
           block,
         },
       }
-      const ensureResponse = await input.client.rpc('ensure_sequence_animatic_child_workflow', {
-        p_project_id: input.run.projectId,
-        p_draft_id: input.run.draftId,
-        p_parent_request_id: masterRequest.id,
-        p_role: 'storyboard_block',
-        p_identity_key: 'storyboardBlockId',
-        p_identity_value: blockId,
-        p_workflow: workflowPayload,
-        p_nodes: nodes,
-        p_edges: edges,
-        p_request: requestPayload,
+      const ensured = await ensureMappedChildWorkflow({
+        client: input.client,
+        projectId: input.run.projectId,
+        draftId: input.run.draftId,
+        parentRequestId: masterRequest.id,
+        role: 'storyboard_block',
+        identityKey: 'storyboardBlockId',
+        identityValue: blockId,
+        workflow: workflowPayload,
+        nodes,
+        edges,
+        request: requestPayload,
       })
-      if (ensureResponse.error || !ensureResponse.data) throw new Error(ensureResponse.error?.message ?? 'Failed to ensure storyboard block workflow.')
-      const ensured = asRecord(ensureResponse.data)
-      child = mapOutputRequestRow(asRecord(ensured.request) as never)
+      child = ensured.request
       childRequests.push(child)
       existingByBlockId.set(blockId, child)
       if (ensured.created === true) createdBlockRequestIds.push(child.id)
@@ -17362,6 +17387,74 @@ function dynamicEdgeRow(input: {
   }
 }
 
+async function persistDynamicWorkflowGraphRevision(input: {
+  client: DatabaseClient
+  workflow: OutputWorkflow
+  nodeRows: Record<string, unknown>[]
+  edgeRows: Record<string, unknown>[]
+  existingDynamicNodes: OutputWorkflowNodeRow[]
+  dynamicEdgeKeys: string[]
+  compileHash: string
+  staleReason: string
+  workflowMetadataPatch: Record<string, unknown>
+}) {
+  const uniqueDynamicEdgeKeys = Array.from(new Set(input.dynamicEdgeKeys.filter(Boolean)))
+  if (uniqueDynamicEdgeKeys.length > 0) {
+    const deleteEdges = await input.client
+      .from('output_workflow_edges')
+      .delete()
+      .eq('workflow_id', input.workflow.id)
+      .in('key', uniqueDynamicEdgeKeys)
+    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
+  }
+
+  if (input.nodeRows.length > 0) {
+    const insertNodes = await input.client
+      .from('output_workflow_nodes')
+      .upsert(input.nodeRows, { onConflict: 'workflow_id,key' })
+    if (insertNodes.error) throw new Error(insertNodes.error.message)
+  }
+
+  if (input.edgeRows.length > 0) {
+    const insertEdges = await input.client
+      .from('output_workflow_edges')
+      .upsert(input.edgeRows, { onConflict: 'workflow_id,key' })
+    if (insertEdges.error) throw new Error(insertEdges.error.message)
+  }
+
+  const nextDynamicNodeKeys = new Set(input.nodeRows.map((row) => readText(row.key)))
+  const obsoleteDynamicNodes = input.existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
+  if (obsoleteDynamicNodes.length > 0) {
+    const staleAt = new Date().toISOString()
+    for (const obsoleteNode of obsoleteDynamicNodes) {
+      const markStale = await input.client
+        .from('output_workflow_nodes')
+        .update({
+          dirty: true,
+          metadata: {
+            ...asRecord(obsoleteNode.metadata),
+            dynamicCinematicStale: true,
+            staleAt,
+            staleReason: input.staleReason,
+            replacedByDynamicCompileHash: input.compileHash,
+          },
+        })
+        .eq('id', obsoleteNode.id)
+      if (markStale.error) throw new Error(markStale.error.message)
+    }
+  }
+
+  const updateWorkflow = await input.client.from('output_workflows').update({
+    metadata: {
+      ...input.workflow.metadata,
+      ...input.workflowMetadataPatch,
+      lastDynamicGraphUpdatedAt: new Date().toISOString(),
+      dynamicNodeCount: input.nodeRows.length,
+    },
+  }).eq('id', input.workflow.id)
+  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+}
+
 async function materializeDynamicCinematicTakeFanout(input: {
   client: DatabaseClient
   workflow: OutputWorkflow
@@ -17425,10 +17518,6 @@ async function materializeDynamicCinematicTakeFanout(input: {
   const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
     .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
     .map((row) => row.key)
-  if (dynamicEdgeKeys.length > 0) {
-    const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
-    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
-  }
   const nodeRows: Record<string, unknown>[] = []
   const edgeRows: Record<string, unknown>[] = []
   takePlan.forEach((take, index) => {
@@ -17496,35 +17585,16 @@ async function materializeDynamicCinematicTakeFanout(input: {
   )
   edgeRows.push(dynamicEdgeRow({ workflow: input.workflow, key: 'video_stitch__artifact', sourceNodeKey: 'video_stitch', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input', compileHash }))
 
-  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
-  if (insertNodes.error) throw new Error(insertNodes.error.message)
-  const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
-  if (insertEdges.error) throw new Error(insertEdges.error.message)
-  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
-  if (obsoleteDynamicNodes.length > 0) {
-    const staleAt = new Date().toISOString()
-    for (const obsoleteNode of obsoleteDynamicNodes) {
-      const markStale = await input.client
-        .from('output_workflow_nodes')
-        .update({
-          dirty: true,
-          metadata: {
-            ...asRecord(obsoleteNode.metadata),
-            dynamicCinematicStale: true,
-            staleAt,
-            staleReason: 'dynamic_fanout_rematerialized',
-            replacedByDynamicCompileHash: compileHash,
-          },
-        })
-        .eq('id', obsoleteNode.id)
-      if (markStale.error) throw new Error(markStale.error.message)
-    }
-  }
-  const dynamicUpdatedAt = new Date().toISOString()
-  const updateWorkflow = await input.client.from('output_workflows').update({
-    metadata: {
-      ...input.workflow.metadata,
+  await persistDynamicWorkflowGraphRevision({
+    client: input.client,
+    workflow: input.workflow,
+    nodeRows,
+    edgeRows,
+    existingDynamicNodes,
+    dynamicEdgeKeys,
+    compileHash,
+    staleReason: 'dynamic_fanout_rematerialized',
+    workflowMetadataPatch: {
       directorScriptDoc: input.compileOutputs.directorScriptDoc ?? null,
       cinematicScriptDoc: input.compileOutputs.cinematicScriptDoc ?? null,
       compiledCinematicSequence: input.compileOutputs.compiledCinematicSequence ?? null,
@@ -17538,11 +17608,8 @@ async function materializeDynamicCinematicTakeFanout(input: {
       cinematicV2AnimaticMode,
       dynamicCinematicCompileHash: compileHash,
       dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
-      lastDynamicGraphUpdatedAt: dynamicUpdatedAt,
-      dynamicNodeCount: nodeRows.length,
     },
-  }).eq('id', input.workflow.id)
-  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  })
   return { expanded: true, compileHash, takeCount: takePlan.length }
 }
 
@@ -17622,10 +17689,6 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
       return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
     })
     .map((row) => row.key)
-  if (dynamicEdgeKeys.length > 0) {
-    const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
-    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
-  }
 
   const preserveV3NodeRow = (row: Record<string, unknown>) => {
     const key = readText(row.key)
@@ -17715,37 +17778,16 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
     v3Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v3_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
   )
 
-  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
-  if (insertNodes.error) throw new Error(insertNodes.error.message)
-  const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
-  if (insertEdges.error) throw new Error(insertEdges.error.message)
-
-  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
-  if (obsoleteDynamicNodes.length > 0) {
-    const staleAt = new Date().toISOString()
-    for (const obsoleteNode of obsoleteDynamicNodes) {
-      const markStale = await input.client
-        .from('output_workflow_nodes')
-        .update({
-          dirty: true,
-          metadata: {
-            ...asRecord(obsoleteNode.metadata),
-            dynamicCinematicStale: true,
-            staleAt,
-            staleReason: 'dynamic_v3_storyboard_fanout_rematerialized',
-            replacedByDynamicCompileHash: compileHash,
-          },
-        })
-        .eq('id', obsoleteNode.id)
-      if (markStale.error) throw new Error(markStale.error.message)
-    }
-  }
-
-  const dynamicUpdatedAt = new Date().toISOString()
-  const updateWorkflow = await input.client.from('output_workflows').update({
-    metadata: {
-      ...input.workflow.metadata,
+  await persistDynamicWorkflowGraphRevision({
+    client: input.client,
+    workflow: input.workflow,
+    nodeRows,
+    edgeRows,
+    existingDynamicNodes,
+    dynamicEdgeKeys,
+    compileHash,
+    staleReason: 'dynamic_v3_storyboard_fanout_rematerialized',
+    workflowMetadataPatch: {
       cinematicPipelineVersion: 'v3_script_storyboards',
       cinematicV2ScreenplayDraft: screenplayDraft,
       cinematicV2ShotPlan: shotPlan,
@@ -17761,11 +17803,8 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
       debugSkipVideoGeneration,
       dynamicCinematicCompileHash: compileHash,
       dynamicGraphVersion: 'v3_script_storyboards',
-      lastDynamicGraphUpdatedAt: dynamicUpdatedAt,
-      dynamicNodeCount: nodeRows.length,
     },
-  }).eq('id', input.workflow.id)
-  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  })
   return { expanded: true, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
 }
 
@@ -17846,10 +17885,6 @@ async function materializeSequenceAnimaticScenePlanFanout(input: {
   const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
     .filter((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
     .map((row) => row.key)
-  if (dynamicEdgeKeys.length > 0) {
-    const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
-    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
-  }
 
   const preserveNodeRow = (row: Record<string, unknown>) => {
     const key = readText(row.key)
@@ -17944,45 +17979,22 @@ async function materializeSequenceAnimaticScenePlanFanout(input: {
     sceneEdge({ key: 'sequence_manifest__orchestrator', sourceNodeKey: 'artifact', sourcePort: 'manifest', targetNodeKey: 'sequence_animatic_orchestrator', targetPort: 'manifest' }),
   )
 
-  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
-  if (insertNodes.error) throw new Error(insertNodes.error.message)
-  const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
-  if (insertEdges.error) throw new Error(insertEdges.error.message)
-
-  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
-  if (obsoleteDynamicNodes.length > 0) {
-    const staleAt = new Date().toISOString()
-    for (const obsoleteNode of obsoleteDynamicNodes) {
-      const markStale = await input.client
-        .from('output_workflow_nodes')
-        .update({
-          dirty: true,
-          metadata: {
-            ...asRecord(obsoleteNode.metadata),
-            dynamicCinematicStale: true,
-            staleAt,
-            staleReason: 'sequence_animatic_scene_plan_fanout_rematerialized',
-            replacedByDynamicCompileHash: compileHash,
-          },
-        })
-        .eq('id', obsoleteNode.id)
-      if (markStale.error) throw new Error(markStale.error.message)
-    }
-  }
-
-  const updateWorkflow = await input.client.from('output_workflows').update({
-    metadata: {
-      ...input.workflow.metadata,
+  await persistDynamicWorkflowGraphRevision({
+    client: input.client,
+    workflow: input.workflow,
+    nodeRows,
+    edgeRows,
+    existingDynamicNodes,
+    dynamicEdgeKeys,
+    compileHash,
+    staleReason: 'sequence_animatic_scene_plan_fanout_rematerialized',
+    workflowMetadataPatch: {
       cinematicPipelineVersion: 'v3_script_storyboards',
       sceneGraphAssignmentPackage: scenePackageOutput,
       sceneGraphAssignmentSceneCount: scenePackages.length,
       dynamicGraphVersion: dynamicPersistenceVersion,
-      lastDynamicGraphUpdatedAt: new Date().toISOString(),
-      dynamicNodeCount: nodeRows.length,
     },
-  }).eq('id', input.workflow.id)
-  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  })
   return { expanded: true, compileHash, sceneCount: scenePackages.length }
 }
 
@@ -18093,10 +18105,6 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
     })
     .map((row) => row.key)
-  if (dynamicEdgeKeys.length > 0) {
-    const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
-    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
-  }
 
   const preserveNodeRow = (row: Record<string, unknown>) => {
     const key = readText(row.key)
@@ -18247,35 +18255,16 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
     )
   }
 
-  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows, { onConflict: 'workflow_id,key' })
-  if (insertNodes.error) throw new Error(insertNodes.error.message)
-  const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
-  if (insertEdges.error) throw new Error(insertEdges.error.message)
-
-  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
-  if (obsoleteDynamicNodes.length > 0) {
-    const staleAt = new Date().toISOString()
-    for (const obsoleteNode of obsoleteDynamicNodes) {
-      const markStale = await input.client
-        .from('output_workflow_nodes')
-        .update({
-          dirty: true,
-          metadata: {
-            ...asRecord(obsoleteNode.metadata),
-            dynamicCinematicStale: true,
-            staleAt,
-            staleReason: 'dynamic_v3_shot_parse_fanout_rematerialized',
-            replacedByDynamicCompileHash: compileHash,
-          },
-        })
-        .eq('id', obsoleteNode.id)
-      if (markStale.error) throw new Error(markStale.error.message)
-    }
-  }
-  const updateWorkflow = await input.client.from('output_workflows').update({
-    metadata: {
-      ...input.workflow.metadata,
+  await persistDynamicWorkflowGraphRevision({
+    client: input.client,
+    workflow: input.workflow,
+    nodeRows,
+    edgeRows,
+    existingDynamicNodes,
+    dynamicEdgeKeys,
+    compileHash,
+    staleReason: 'dynamic_v3_shot_parse_fanout_rematerialized',
+    workflowMetadataPatch: {
       cinematicPipelineVersion: 'v3_script_storyboards',
       cinematicV3ScreenplayDraft: screenplayDraft,
       cinematicV3ShotBreakPlan: shotBreakPlan,
@@ -18287,11 +18276,8 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
       storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length,
       dynamicShotCount: groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0),
       dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
-      lastDynamicGraphUpdatedAt: new Date().toISOString(),
-      dynamicNodeCount: nodeRows.length,
     },
-  }).eq('id', input.workflow.id)
-  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  })
   return { expanded: true, compileHash, parseGroupCount: screenplayAnimaticMasterMode ? 0 : groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
 }
 
@@ -18381,10 +18367,6 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
   const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
     .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
     .map((row) => row.key)
-  if (dynamicEdgeKeys.length > 0) {
-    const deleteEdges = await input.client.from('output_workflow_edges').delete().eq('workflow_id', input.workflow.id).in('key', dynamicEdgeKeys)
-    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
-  }
   const nodeRows: Record<string, unknown>[] = []
   const edgeRows: Record<string, unknown>[] = []
   const preserveNodeRow = (row: Record<string, unknown>) => {
@@ -18531,35 +18513,16 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
     v2Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v2_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
   )
 
-  const insertNodes = await input.client.from('output_workflow_nodes').upsert(nodeRows.map(preserveNodeRow), { onConflict: 'workflow_id,key' })
-  if (insertNodes.error) throw new Error(insertNodes.error.message)
-  const insertEdges = await input.client.from('output_workflow_edges').upsert(edgeRows, { onConflict: 'workflow_id,key' })
-  if (insertEdges.error) throw new Error(insertEdges.error.message)
-  const nextDynamicNodeKeys = new Set(nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodes = existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
-  if (obsoleteDynamicNodes.length > 0) {
-    const staleAt = new Date().toISOString()
-    for (const obsoleteNode of obsoleteDynamicNodes) {
-      const markStale = await input.client
-        .from('output_workflow_nodes')
-        .update({
-          dirty: true,
-          metadata: {
-            ...asRecord(obsoleteNode.metadata),
-            dynamicCinematicStale: true,
-            staleAt,
-            staleReason: 'dynamic_fanout_rematerialized',
-            replacedByDynamicCompileHash: compileHash,
-          },
-        })
-        .eq('id', obsoleteNode.id)
-      if (markStale.error) throw new Error(markStale.error.message)
-    }
-  }
-  const dynamicUpdatedAt = new Date().toISOString()
-  const updateWorkflow = await input.client.from('output_workflows').update({
-    metadata: {
-      ...input.workflow.metadata,
+  await persistDynamicWorkflowGraphRevision({
+    client: input.client,
+    workflow: input.workflow,
+    nodeRows: nodeRows.map(preserveNodeRow),
+    edgeRows,
+    existingDynamicNodes,
+    dynamicEdgeKeys,
+    compileHash,
+    staleReason: 'dynamic_fanout_rematerialized',
+    workflowMetadataPatch: {
       cinematicPipelineVersion: 'v2_shot_orchestration',
       cinematicV2ScreenplayDraft: screenplayDraft,
       cinematicV2ParsedScript: parsedScript,
@@ -18576,11 +18539,8 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
       debugSkipVideoGeneration,
       dynamicCinematicCompileHash: compileHash,
       dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
-      lastDynamicGraphUpdatedAt: dynamicUpdatedAt,
-      dynamicNodeCount: nodeRows.length,
     },
-  }).eq('id', input.workflow.id)
-  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  })
   return { expanded: true, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
 }
 

@@ -36,6 +36,45 @@ export function WorkflowGraphButton({
   )
 }
 
+export function WorkflowActiveNodeStrip({
+  nodes,
+  className = '',
+  label = 'Active workflow nodes',
+}: {
+  nodes: Array<{ key: string; label: string; status: string }>
+  className?: string
+  label?: string
+}) {
+  if (nodes.length === 0) return null
+  return (
+    <div className={['workflow-active-node-strip', className].filter(Boolean).join(' ')} aria-label={label}>
+      {nodes.map((node) => (
+        <span className={`is-${node.status}`} key={node.key}>
+          <i className={`workflow-status-dot is-${node.status}`} aria-hidden="true" />
+          <b>{node.label}</b>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+export function WorkflowLiveStatus({
+  label,
+  className = '',
+}: {
+  label: string
+  className?: string
+}) {
+  const cleanLabel = label.trim()
+  if (!cleanLabel) return null
+  return (
+    <div className={['workflow-live-status', className].filter(Boolean).join(' ')}>
+      <span className="world-mini-spinner" aria-hidden="true" />
+      <strong>{cleanLabel}</strong>
+    </div>
+  )
+}
+
 export function WorkflowProgressSummary({
   model,
   compact = false,

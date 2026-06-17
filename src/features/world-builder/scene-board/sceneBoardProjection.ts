@@ -1,4 +1,5 @@
 import type { OutputRequest } from '../../../domain/outputWorkflow'
+import type { WorkflowProgressViewModel } from '../../../domain/workflowProgressView'
 
 type LooseRecord = Record<string, unknown>
 export type SequenceAnimaticContinuityGraphNodeKind = 'world_location' | 'set' | 'zone' | 'spot' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
@@ -31,6 +32,15 @@ export type SequenceAnimaticViewModel = LooseRecord & { request: OutputRequest; 
 function trimOptionalString(value: unknown) { return typeof value === 'string' ? value.trim() : '' }
 function readLooseRecord(value: unknown): LooseRecord { return value && typeof value === 'object' && !Array.isArray(value) ? value as LooseRecord : {} }
 function readLooseArray(value: unknown): unknown[] { return Array.isArray(value) ? value : [] }
+function requestUpdatedAtMs(request: OutputRequest) { return Date.parse(request.updatedAt || request.createdAt || '') || 0 }
+function readOutputRequestWorkflowCommand(request: OutputRequest) {
+  const metadata = readLooseRecord(request.metadata)
+  return readLooseRecord(metadata.command ?? metadata.sceneBoardCommand ?? metadata.scene_board_command)
+}
+function readOutputRequestScreenplayAnimaticRole(request: OutputRequest) {
+  const metadata = readLooseRecord(request.metadata)
+  return trimOptionalString(metadata.screenplayAnimaticRole) || trimOptionalString(metadata.sequenceAnimaticRole)
+}
 function sequenceAnimaticSceneIdFromShotId(shotId: string) { return /^(.+)_shot_\d+/.exec(shotId)?.[1] ?? '' }
 function sequenceAnimaticBlockSceneId(block: { id: string; shots: ReadonlyArray<{ id: string }> }) { for (const shot of block.shots) { const sceneId = sequenceAnimaticSceneIdFromShotId(shot.id); if (sceneId) return sceneId } return /^(.+)_block_\d+/.exec(block.id)?.[1] ?? '' }
 function sequenceAnimaticBlocksForScene(model: Pick<SequenceAnimaticViewModel, 'blocks'>, scene: SequenceAnimaticSceneView) { return model.blocks.filter((block) => { const sceneId = sequenceAnimaticBlockSceneId(block); return !sceneId || sceneId === scene.id }) }
@@ -182,6 +192,69 @@ export type SequenceAnimaticSceneBoardPrepRunState = {
   error: string
 }
 
+export function sequenceAnimaticSceneBoardPrepStageFromWorkflowProgress(progress: WorkflowProgressViewModel): SequenceAnimaticSceneBoardPrepRunState['stage'] {
+  const key = `${progress.activeNodeKey} ${progress.activeManifestPurpose} ${progress.activeProgressLabel}`.toLowerCase()
+  if (progress.status === 'failed' || progress.status === 'cancelled' || progress.failedSteps > 0) return 'failed'
+  if (progress.status === 'completed' || progress.status === 'completed_with_errors') return 'complete'
+  if (key.includes('coverage_grid') || key.includes('zone_coverage')) return 'coverage_grids'
+  if (key.includes('coverage_intent') || key.includes('coverage direction')) return 'coverage_directions'
+  if (key.includes('scaffold') || key.includes('zone map') || key.includes('spot atlas')) return 'scaffold_refs'
+  return 'set_refs'
+}
+
+export function sequenceAnimaticSceneBoardPrepMessageFromWorkflowProgress(progress: WorkflowProgressViewModel) {
+  if (progress.latestError) return progress.latestError
+  if (progress.recoveryHints[0]) return progress.recoveryHints[0]
+  if (progress.activeChildRequestIds.length > 0) return `${progress.activeChildRequestIds.length} child workflow${progress.activeChildRequestIds.length === 1 ? '' : 's'} active.`
+  return progress.activeProgressLabel || progress.activeNodeLabel || progress.title
+}
+
+export function sequenceAnimaticSceneBoardPrepRunFromWorkflowProgress(input: {
+  progress: WorkflowProgressViewModel
+  runKey: string
+  scene: SequenceAnimaticSceneView
+  scopeNodeId?: string | null
+  activeCoverageShotIds?: readonly string[]
+  now?: number
+}): SequenceAnimaticSceneBoardPrepRunState {
+  const stage = sequenceAnimaticSceneBoardPrepStageFromWorkflowProgress(input.progress)
+  const timestamp = input.now ?? Date.now()
+  const activeCoverageShotIds = stage === 'coverage_directions' || stage === 'coverage_grids'
+    ? [...new Set((input.activeCoverageShotIds ?? []).map(trimOptionalString).filter(Boolean))]
+    : []
+  return {
+    runKey: input.runKey,
+    runId: input.progress.latestRunId || input.progress.requestId || input.runKey,
+    sceneId: input.scene.id,
+    setId: null,
+    zoneId: null,
+    scopeNodeId: input.scopeNodeId || null,
+    activeUnitId: input.scopeNodeId || null,
+    activeUnitLabel: input.scene.title,
+    stage,
+    stageLabel: stage === 'complete'
+      ? 'Ready for keyframes'
+      : input.progress.activeProgressLabel || input.progress.activeNodeLabel || input.progress.title,
+    message: sequenceAnimaticSceneBoardPrepMessageFromWorkflowProgress(input.progress),
+    queued: input.progress.queuedSteps,
+    running: input.progress.runningSteps + input.progress.activeChildRequestIds.length,
+    ready: input.progress.completedSteps || input.progress.readyArtifactCount,
+    failed: input.progress.failedSteps,
+    activeReferenceNodeIds: [],
+    activeCoverageShotIds,
+    activeRequestIds: input.progress.activeChildRequestIds.length > 0
+      ? input.progress.activeChildRequestIds
+      : input.progress.requestId ? [input.progress.requestId] : [],
+    activeRunIds: input.progress.activeChildRunIds.length > 0
+      ? input.progress.activeChildRunIds
+      : input.progress.latestRunId ? [input.progress.latestRunId] : [],
+    activeRunStepKey: input.progress.activeNodeKey,
+    startedAt: timestamp,
+    updatedAt: timestamp,
+    error: input.progress.latestError,
+  }
+}
+
 export function sequenceAnimaticSceneBoardPrepRunKey(input: {
   masterRequestId: string
   sceneId: string
@@ -253,6 +326,67 @@ export function sequenceAnimaticSceneBoardPrepRunForScope(input: {
     .map(sequenceAnimaticSceneBoardPrepRunFromRecord)
     .filter((run): run is SequenceAnimaticSceneBoardPrepRunState => Boolean(run && run.runKey === input.runKey))
     .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null
+}
+
+export function sceneBoardPrepRequestMatchesScope(request: OutputRequest, input: {
+  masterRequestId: string
+  sceneId: string
+  scopeNodeId?: string | null
+}) {
+  const masterRequestId = trimOptionalString(input.masterRequestId)
+  const sceneId = trimOptionalString(input.sceneId)
+  if (!masterRequestId || !sceneId) return false
+  if (request.parentRequestId !== masterRequestId) return false
+  if (readOutputRequestScreenplayAnimaticRole(request) !== 'scene_board_prep') return false
+  const metadata = readLooseRecord(request.metadata)
+  const command = readOutputRequestWorkflowCommand(request)
+  const requestSceneId = trimOptionalString(metadata.sceneId) || trimOptionalString(command.sceneId)
+  if (requestSceneId !== sceneId) return false
+  const requestedScope = trimOptionalString(input.scopeNodeId)
+  const requestScope = trimOptionalString(metadata.scopeNodeId) || trimOptionalString(command.scopeNodeId)
+  const requestZone = trimOptionalString(metadata.zoneId) || trimOptionalString(command.zoneId)
+  const requestSet = trimOptionalString(metadata.setId) || trimOptionalString(command.setId)
+  if (!requestedScope || requestedScope === 'all') return !requestScope || requestScope === 'all'
+  return requestScope === requestedScope || requestZone === requestedScope || requestSet === requestedScope
+}
+
+export function sequenceAnimaticSceneBoardPrepRequestIdFromRun(input: {
+  masterRequestId: string
+  prepRun: unknown
+}) {
+  const masterRequestId = trimOptionalString(input.masterRequestId)
+  if (!masterRequestId) return ''
+  const record = readLooseRecord(input.prepRun)
+  const runKey = trimOptionalString(record.runKey)
+  if (!runKey.startsWith(`${masterRequestId}:`)) return ''
+  return trimOptionalString(record.graphNativePrepRequestId)
+}
+
+export function sequenceAnimaticSceneBoardPrepRequestForScope(input: {
+  requests: readonly OutputRequest[]
+  masterRequestId: string
+  sceneId: string | null | undefined
+  scopeNodeId?: string | null
+  prepRun?: unknown
+}) {
+  const masterRequestId = trimOptionalString(input.masterRequestId)
+  const sceneId = trimOptionalString(input.sceneId)
+  if (!masterRequestId || !sceneId) return null
+  const matchingPrepRequests = input.requests
+    .filter((request) => sceneBoardPrepRequestMatchesScope(request, {
+      masterRequestId,
+      sceneId,
+      scopeNodeId: input.scopeNodeId,
+    }))
+    .sort((left, right) => requestUpdatedAtMs(right) - requestUpdatedAtMs(left))
+  if (matchingPrepRequests[0]) return matchingPrepRequests[0]
+  const fallbackRequestId = sequenceAnimaticSceneBoardPrepRequestIdFromRun({
+    masterRequestId,
+    prepRun: input.prepRun,
+  })
+  return fallbackRequestId
+    ? input.requests.find((request) => request.id === fallbackRequestId) ?? null
+    : null
 }
 
 export type SequenceAnimaticSceneBoardGroup = {

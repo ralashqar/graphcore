@@ -6,6 +6,7 @@ import { WorkflowGraphButton, WorkflowNodeTimeline, WorkflowProgressSummary } fr
 import {
   buildSequenceAnimaticSceneBoardView,
   sequenceAnimaticSceneBoardPrepRunForScope,
+  sequenceAnimaticSceneBoardPrepRunFromWorkflowProgress,
   sequenceAnimaticSceneBoardPrepRunKey,
   sequenceAnimaticSceneBoardReferenceStageLabel,
   type SequenceAnimaticContinuityGraphNodeKind,
@@ -15,23 +16,6 @@ import {
   type SequenceAnimaticSceneBoardPrepRunState,
   type SequenceAnimaticViewModel,
 } from './sceneBoardProjection'
-
-function workflowPrepStage(progress: WorkflowProgressViewModel): SequenceAnimaticSceneBoardPrepRunState['stage'] {
-  const key = `${progress.activeNodeKey} ${progress.activeManifestPurpose} ${progress.activeProgressLabel}`.toLowerCase()
-  if (progress.status === 'failed' || progress.status === 'cancelled' || progress.failedSteps > 0) return 'failed'
-  if (progress.status === 'completed' || progress.status === 'completed_with_errors') return 'complete'
-  if (key.includes('coverage_grid') || key.includes('zone_coverage')) return 'coverage_grids'
-  if (key.includes('coverage_intent') || key.includes('coverage direction')) return 'coverage_directions'
-  if (key.includes('scaffold') || key.includes('zone map') || key.includes('spot atlas')) return 'scaffold_refs'
-  return 'set_refs'
-}
-
-function workflowPrepMessage(progress: WorkflowProgressViewModel) {
-  if (progress.latestError) return progress.latestError
-  if (progress.recoveryHints[0]) return progress.recoveryHints[0]
-  if (progress.activeChildRequestIds.length > 0) return `${progress.activeChildRequestIds.length} child workflow${progress.activeChildRequestIds.length === 1 ? '' : 's'} active.`
-  return progress.activeProgressLabel || progress.activeNodeLabel || progress.title
-}
 
 export function SequenceAnimaticSceneBoardCanvas({
   model,
@@ -112,38 +96,13 @@ export function SequenceAnimaticSceneBoardCanvas({
     : false
   const workflowPrepRun = useMemo<SequenceAnimaticSceneBoardPrepRunState | null>(() => {
     if (!workflowProgress || !scene || !currentPrepRunKey) return null
-    const now = Date.now()
-    const stage = workflowPrepStage(workflowProgress)
-    const running = workflowProgress.runningSteps + workflowProgress.activeChildRequestIds.length
-    return {
+    return sequenceAnimaticSceneBoardPrepRunFromWorkflowProgress({
+      progress: workflowProgress,
       runKey: currentPrepRunKey,
-      runId: workflowProgress.latestRunId || workflowProgress.requestId || currentPrepRunKey,
-      sceneId: scene.id,
-      setId: null,
-      zoneId: null,
-      scopeNodeId: scopeNodeId || null,
-      activeUnitId: scopeNodeId || null,
-      activeUnitLabel: scene.title,
-      stage,
-      stageLabel: stage === 'complete'
-        ? 'Ready for keyframes'
-        : workflowProgress.activeProgressLabel || workflowProgress.activeNodeLabel || workflowProgress.title,
-      message: workflowPrepMessage(workflowProgress),
-      queued: workflowProgress.queuedSteps,
-      running,
-      ready: workflowProgress.completedSteps || workflowProgress.readyArtifactCount,
-      failed: workflowProgress.failedSteps,
-      activeReferenceNodeIds: [],
-      activeCoverageShotIds: stage === 'coverage_directions' || stage === 'coverage_grids'
-        ? board?.shots.map((tile) => tile.id) ?? []
-        : [],
-      activeRequestIds: workflowProgress.activeChildRequestIds.length > 0 ? workflowProgress.activeChildRequestIds : workflowProgress.requestId ? [workflowProgress.requestId] : [],
-      activeRunIds: workflowProgress.activeChildRunIds.length > 0 ? workflowProgress.activeChildRunIds : workflowProgress.latestRunId ? [workflowProgress.latestRunId] : [],
-      activeRunStepKey: workflowProgress.activeNodeKey,
-      startedAt: now,
-      updatedAt: now,
-      error: workflowProgress.latestError,
-    }
+      scene,
+      scopeNodeId,
+      activeCoverageShotIds: board?.shots.map((tile) => tile.id) ?? [],
+    })
   }, [board?.shots, currentPrepRunKey, scene, scopeNodeId, workflowProgress])
   const effectivePrepRun = (() => {
     const graphRun = workflowPrepRun?.runKey === currentPrepRunKey ? workflowPrepRun : null
