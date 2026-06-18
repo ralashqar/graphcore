@@ -1,0 +1,336 @@
+import { cinematicV2ShotPlanSchema, providerSafeCinematicV2DurationSeconds } from '../../../src/domain/cinematics.ts'
+import { outputArtifactSchema, type OutputArtifact } from '../../../src/domain/outputWorkflow.ts'
+import type {
+  LooseRecord,
+  SequenceAnimaticNodeExecutionContext,
+  SequenceAnimaticNodeExecutionResult,
+  SequenceAnimaticWorkflowNodePackHelpers,
+} from './output-workflow-sequence-animatic-node-pack-types.ts'
+import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
+
+type OutputArtifactRow = {
+  id: string
+  project_id: string
+  draft_id: string
+  workflow_id: string | null
+  run_id: string | null
+  node_id: string | null
+  key: string
+  name: string
+  kind: string
+  asset_key: string | null
+  mime_type: string | null
+  summary: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+function result(input: {
+  context: SequenceAnimaticNodeExecutionContext
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  outputs: Record<string, unknown>
+  model: string
+  provider?: string | null
+  providerRequestId?: string | null
+}): SequenceAnimaticNodeExecutionResult {
+  return createWorkflowNodeExecutionResult<SequenceAnimaticNodeExecutionResult>(input)
+}
+
+function mapOutputArtifactRow(row: OutputArtifactRow): OutputArtifact {
+  return outputArtifactSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    draftId: row.draft_id,
+    workflowId: row.workflow_id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    key: row.key,
+    name: row.name,
+    kind: row.kind,
+    assetKey: row.asset_key,
+    mimeType: row.mime_type ?? '',
+    summary: row.summary ?? '',
+    metadata: row.metadata ?? {},
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+}
+
+function readUpstreamImages(
+  upstream: Record<string, Record<string, unknown>>,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  fields = ['image', 'coverImage'],
+) {
+  const images: LooseRecord[] = []
+  for (const outputs of Object.values(upstream)) {
+    for (const field of fields) {
+      const value = outputs[field]
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const record = helpers.asRecord(entry)
+          if (helpers.readText(record.assetKey) || helpers.readText(record.storagePath) || helpers.readText(record.url)) images.push(record)
+        }
+        continue
+      }
+      const record = helpers.asRecord(value)
+      if (helpers.readText(record.assetKey) || helpers.readText(record.storagePath) || helpers.readText(record.url)) images.push(record)
+    }
+    if (
+      (helpers.readText(outputs.assetKey) || helpers.readText(outputs.storagePath) || helpers.readText(outputs.storage_path) || helpers.readText(outputs.url))
+      && !images.some((image) => helpers.readText(image.assetKey) === helpers.readText(outputs.assetKey) && helpers.readText(image.storagePath ?? image.storage_path) === helpers.readText(outputs.storagePath ?? outputs.storage_path))
+    ) {
+      images.push(outputs)
+    }
+  }
+  return images
+}
+
+export async function sequenceAnimaticShotInput(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const rawShot = helpers.asRecord(config.shot)
+  const isShotProduction = helpers.readText(config.screenplayAnimaticRole) === 'shot_production' || helpers.readText(config.sequenceAnimaticRole) === 'shot_production'
+  const shot = cinematicV2ShotPlanSchema.shape.shots.element.parse({
+    ...rawShot,
+    editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(rawShot.editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3)),
+    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(rawShot.editorialDurationSeconds ?? config.editorialDurationSeconds ?? 0) || 3),
+  })
+  const panel = helpers.asRecord(config.panel)
+  const panelAssetKey = helpers.readText(panel.assetKey)
+  if (!panelAssetKey && !isShotProduction) {
+    throw new Error('Sequence animatic shot video requires a cropped panel asset. Generate/extract the storyboard panel before generating shot video.')
+  }
+  const assetPack = helpers.buildCinematicV3StoryboardGroupAssetPack({
+    assetPack: helpers.asRecord(config.assetPack),
+    shots: [shot as unknown as LooseRecord],
+    maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
+    maxAssetKeysPerEntity: 1,
+  })
+  const editorialDurationSeconds = Math.max(0.5, Math.min(15, Number(config.editorialDurationSeconds ?? shot.editorialDurationSeconds ?? 0) || 3))
+  const providerDurationSeconds = providerSafeCinematicV2DurationSeconds(editorialDurationSeconds)
+  const image = panelAssetKey ? {
+    ...panel,
+    assetKey: panelAssetKey,
+    role: 'cinematic_v2_shot_keyframe',
+    name: helpers.readText(panel.name) || `${shot.title || `Shot ${shot.index}`} cropped panel keyframe`,
+    shotId: shot.id,
+    shotIndex: shot.index,
+    storyboardBlockId: helpers.readText(config.storyboardBlockId),
+    usedAsVideoReference: true,
+    metadata: {
+      ...helpers.asRecord(panel.metadata),
+      role: 'cinematic_v2_shot_keyframe',
+      shotId: shot.id,
+      shotIndex: shot.index,
+      storyboardBlockId: helpers.readText(config.storyboardBlockId),
+    },
+  } : null
+  const shotPlan = cinematicV2ShotPlanSchema.parse({
+    sceneId: 'sequence_animatic_shot',
+    totalEditorialDurationSeconds: editorialDurationSeconds,
+    shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
+    performanceArc: [],
+    audioPlan: {
+      ambience: '',
+      music: '',
+      sfx: [],
+      dialogueTrackCount: shot.dialogue.length > 0 ? 1 : 0,
+      placeholderOnly: true,
+    },
+    diagnostics: ['Sequence animatic shot input built from a cropped storyboard panel.'],
+  })
+  const outputs = {
+    shot: { ...shot, editorialDurationSeconds, providerDurationSeconds },
+    shots: [{ ...shot, editorialDurationSeconds, providerDurationSeconds }],
+    shotPlan,
+    shot_plan: shotPlan,
+    ...(image ? { image, keyframe: image, primaryReferenceImage: image } : {}),
+    assetPack,
+    asset_pack: assetPack,
+    panel,
+    editorialDurationSeconds,
+    providerDurationSeconds,
+    durationSeconds: providerDurationSeconds,
+    screenplayAnimaticRole: isShotProduction ? 'shot_production' : 'shot_video',
+    screenplayAnimaticSource: helpers.readText(config.screenplayAnimaticSource),
+    sequenceAnimaticRole: isShotProduction ? 'shot_production' : 'shot_video',
+    text: JSON.stringify({ shot, image, assetPack }, null, 2),
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-shot-input-v1' })
+}
+
+export async function sequenceAnimaticSharedAssetRef(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const referenceRole = helpers.readText(config.referenceRole) || 'continuity_asset'
+  const sourceArtifactRole = helpers.readText(config.sourceArtifactRole)
+  const identityKey = helpers.readText(config.identityKey)
+  const identityValue = helpers.readText(config.identityValue)
+  const expectedAssetKey = helpers.readText(config.expectedAssetKey) || (identityKey === 'assetKey' ? identityValue : '')
+  const directReference = helpers.asRecord(config.directReference)
+  const directAssetKey = helpers.readText(directReference.assetKey) || expectedAssetKey
+  const artifactFromDirect = helpers.asRecord(directReference.artifact)
+  const directReferenceReady = Boolean(directAssetKey)
+  let artifact: OutputArtifact | null = null
+  if (!directReferenceReady) {
+    const client = context.client as { from: (table: string) => any }
+    let query = client
+      .from('output_artifacts')
+      .select(helpers.outputArtifactSelect)
+      .eq('project_id', context.run.projectId)
+      .eq('draft_id', context.run.draftId)
+      .order('updated_at', { ascending: false })
+      .limit(200)
+    if (sourceArtifactRole) query = query.contains('metadata', { role: sourceArtifactRole })
+    const masterRequestId = helpers.readText(config.masterRequestId)
+    if (masterRequestId) query = query.contains('metadata', { masterRequestId })
+    if (identityKey && identityValue && identityKey !== 'assetKey') query = query.contains('metadata', { [identityKey]: identityValue })
+    if (expectedAssetKey) query = query.eq('asset_key', expectedAssetKey)
+    const response = await query
+    if (response.error) throw new Error(response.error.message)
+    artifact = ((response.data ?? []) as OutputArtifactRow[])
+      .map(mapOutputArtifactRow)
+      .find((entry) => {
+        const metadata = helpers.asRecord(entry.metadata)
+        if (sourceArtifactRole && helpers.readText(metadata.role) !== sourceArtifactRole) return false
+        if (identityKey && identityValue && identityKey !== 'assetKey' && helpers.readText(metadata[identityKey]) !== identityValue) return false
+        if (expectedAssetKey && helpers.readText(entry.assetKey) !== expectedAssetKey) return false
+        return true
+      }) ?? null
+  }
+  const assetKey = directAssetKey || helpers.readText(artifact?.assetKey)
+  const ready = Boolean(assetKey)
+  const required = config.required === true
+  if (!ready && required) {
+    throw new Error(`Required ${referenceRole.replace(/_/g, ' ')} reference is missing${identityValue ? ` for ${identityValue}` : ''}.`)
+  }
+  const metadata = helpers.asRecord(artifact?.metadata)
+  const image = ready ? {
+    ...directReference,
+    assetKey,
+    artifactKey: helpers.readText(artifactFromDirect.key) || helpers.readText(artifact?.key),
+    mimeType: helpers.readText(directReference.mimeType) || helpers.readText(artifact?.mimeType),
+    role: referenceRole,
+    sourceArtifactRole: sourceArtifactRole || helpers.readText(metadata.role),
+    sourceWorkflowId: helpers.readText(artifact?.workflowId) || helpers.readText(config.sourceWorkflowId),
+    sourceRequestId: helpers.readText(config.sourceRequestId),
+    metadata: {
+      ...helpers.asRecord(directReference.metadata),
+      ...metadata,
+      referenceRole,
+      sourceArtifactRole: sourceArtifactRole || helpers.readText(metadata.role),
+    },
+  } : null
+  const reference = {
+    status: ready ? 'ready' : 'missing',
+    assetKey: assetKey || null,
+    artifactKey: helpers.readText(artifactFromDirect.key) || helpers.readText(artifact?.key) || null,
+    role: referenceRole,
+    sourceArtifactRole: sourceArtifactRole || helpers.readText(metadata.role) || null,
+    sourceWorkflowId: helpers.readText(artifact?.workflowId) || helpers.readText(config.sourceWorkflowId) || null,
+    sourceRequestId: helpers.readText(config.sourceRequestId) || null,
+    identityKey,
+    identityValue,
+    blockingReason: ready ? '' : `missing_${referenceRole}`,
+  }
+  const outputs = {
+    reference,
+    status: reference.status,
+    assetKey: assetKey || '',
+    artifact: artifact ?? (Object.keys(artifactFromDirect).length > 0 ? artifactFromDirect : null),
+    ...(image ? { image, keyframe: image, primaryReferenceImage: image } : {}),
+    text: JSON.stringify(reference, null, 2),
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-shared-asset-ref-v1' })
+}
+
+export async function sequenceAnimaticShotReferencePack(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const shot = helpers.readFirstUpstreamRecord(context.upstream, ['shot'])
+  const rawAssetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
+  const references = Object.values(context.upstream)
+    .map((outputs) => helpers.asRecord(outputs.reference))
+    .filter((reference) => helpers.readText(reference.status) === 'ready' && helpers.readText(reference.assetKey))
+  const upstreamImages = readUpstreamImages(context.upstream, helpers, ['image', 'keyframe', 'primaryReferenceImage'])
+  const imageByAssetKey = new Map(upstreamImages.map((image) => [helpers.readText(image.assetKey), image] as const).filter(([assetKey]) => assetKey))
+  const referenceAssetKeys = references.map((reference) => helpers.readText(reference.assetKey)).filter(Boolean)
+  const fallbackEntities = references.map((reference, index) => {
+    const assetKey = helpers.readText(reference.assetKey)
+    const role = helpers.readText(reference.role) || 'continuity_asset'
+    const label = role === 'coverage_anchor'
+      ? 'Coverage anchor'
+      : role === 'previous_keyframe'
+        ? 'Previous keyframe'
+        : role === 'storyboard_panel'
+          ? 'Storyboard panel'
+          : `${helpers.titleFromRefLike(role)} ${index + 1}`
+    return {
+      key: `shot_ref_${index + 1}_${helpers.slugify(assetKey || role)}`,
+      name: label,
+      type: role.includes('character') ? 'character' : role.includes('prop') ? 'prop' : 'continuity_asset',
+      role,
+      summary: 'Shot-scoped visual reference resolved from the sequence animatic graph.',
+      visualDescription: 'Use this attached reference for identity, spatial, material, lighting, and continuity grounding.',
+      assetKeys: [assetKey],
+      primaryAssetKey: assetKey,
+      selectedReferenceAssetKey: assetKey,
+      selectedReferenceVariantKey: role,
+      selectedReferenceVariantLabel: label,
+      selectedReferenceVariantType: 'continuity_asset',
+      referenceSelectionReason: 'Resolved by the shot production graph.',
+    }
+  }).filter((entity) => helpers.readText(entity.primaryAssetKey))
+  const scopedReferenceAssetKeys = [...new Set([
+    ...helpers.readStringArray(config.requiredReferenceAssetKeys),
+    ...referenceAssetKeys,
+  ])]
+  const assetPack = helpers.orderSequenceAnimaticAssetPackReferences(helpers.scopeAssetPackToReferenceAssetKeys({
+    assetPack: rawAssetPack,
+    referenceAssetKeys: scopedReferenceAssetKeys.length > 0 ? scopedReferenceAssetKeys : referenceAssetKeys,
+    fallbackEntities,
+    referenceScope: 'sequence_animatic_shot_production',
+    limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
+  }))
+  const coverageAnchor = references.find((reference) => helpers.readText(reference.role) === 'coverage_anchor')
+  const previousKeyframe = references.find((reference) => helpers.readText(reference.role) === 'previous_keyframe')
+  const storyboardPanel = references.find((reference) => helpers.readText(reference.role) === 'storyboard_panel')
+  const coverageAnchorImage = coverageAnchor ? imageByAssetKey.get(helpers.readText(coverageAnchor.assetKey)) ?? null : null
+  const previousKeyframeImage = previousKeyframe ? imageByAssetKey.get(helpers.readText(previousKeyframe.assetKey)) ?? null : null
+  const storyboardPanelImage = storyboardPanel ? imageByAssetKey.get(helpers.readText(storyboardPanel.assetKey)) ?? null : null
+  const primaryImage = coverageAnchorImage ?? storyboardPanelImage ?? previousKeyframeImage ?? upstreamImages[0] ?? null
+  const referenceManifest = helpers.sequenceAnimaticReferenceManifestEntries(assetPack)
+  const referenceManifestText = helpers.sequenceAnimaticReferenceManifestText(assetPack)
+  const outputs = {
+    shot,
+    shots: Object.keys(shot).length > 0 ? [shot] : [],
+    assetPack,
+    asset_pack: assetPack,
+    referenceManifest,
+    reference_manifest: referenceManifest,
+    referenceManifestText,
+    reference_manifest_text: referenceManifestText,
+    references,
+    referenceAssetKeys,
+    reference_asset_keys: referenceAssetKeys,
+    coverageAnchor: coverageAnchorImage ? { ...coverageAnchorImage, ...helpers.asRecord(coverageAnchor) } : coverageAnchor ?? {},
+    coverage_anchor: coverageAnchorImage ? { ...coverageAnchorImage, ...helpers.asRecord(coverageAnchor) } : coverageAnchor ?? {},
+    previousKeyframe: previousKeyframeImage ? { ...previousKeyframeImage, ...helpers.asRecord(previousKeyframe) } : previousKeyframe ?? {},
+    previous_keyframe: previousKeyframeImage ? { ...previousKeyframeImage, ...helpers.asRecord(previousKeyframe) } : previousKeyframe ?? {},
+    storyboardPanel: storyboardPanelImage ? { ...storyboardPanelImage, ...helpers.asRecord(storyboardPanel) } : storyboardPanel ?? {},
+    storyboard_panel: storyboardPanelImage ? { ...storyboardPanelImage, ...helpers.asRecord(storyboardPanel) } : storyboardPanel ?? {},
+    ...(primaryImage ? { image: primaryImage, keyframe: primaryImage, primaryReferenceImage: primaryImage } : {}),
+    text: JSON.stringify({ shot, references, referenceAssetKeys }, null, 2),
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-shot-reference-pack-v1' })
+}

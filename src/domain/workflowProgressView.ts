@@ -6,6 +6,7 @@ import type {
   OutputWorkflowRun,
   OutputWorkflowRunStep,
 } from './outputWorkflow'
+import { buildWorkflowStreamingMetadata } from './outputWorkflowManifests.ts'
 
 export type WorkflowProgressStatus = 'idle' | 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled' | 'blocked' | 'waiting'
 
@@ -16,8 +17,11 @@ export type WorkflowProgressNodeView = {
   orderIndex: number
   manifestPurpose: string
   progressLabel: string
+  provider: string
   providerStatus: string
   providerRequestId: string
+  providerElapsedMs: number
+  providerSubmittedAt: string
   streamingStatus: string
   streamingEventCount: number
   streamingPartialArtifactKeys: string[]
@@ -79,6 +83,11 @@ function readNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function readNonNegativeNumber(value: unknown) {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0
+  return Number.isFinite(number) && number > 0 ? number : 0
+}
+
 function normalizeStatus(value: unknown): WorkflowProgressStatus {
   const status = readString(value)
   if (
@@ -93,6 +102,32 @@ function normalizeStatus(value: unknown): WorkflowProgressStatus {
   ) return status
   if (status === 'planning' || status === 'awaiting_confirmation') return 'queued'
   return 'idle'
+}
+
+function normalizedStreamingMetadata(input: {
+  nested?: unknown
+  status?: unknown
+  providerRequestId?: unknown
+  providerStatus?: unknown
+  eventCount?: unknown
+  warningCount?: unknown
+  partialArtifactKeys?: unknown
+  resumeToken?: unknown
+  lastEventAt?: unknown
+}) {
+  const nested = readRecord(input.nested)
+  return buildWorkflowStreamingMetadata({
+    status: input.status ?? nested.status,
+    providerRequestId: input.providerRequestId ?? nested.providerRequestId,
+    providerStatus: input.providerStatus ?? nested.providerStatus,
+    eventCount: input.eventCount ?? nested.eventCount,
+    warningCount: input.warningCount ?? nested.warningCount,
+    partialArtifactKeys: [
+      ...new Set(readStringArray(nested.partialArtifactKeys).concat(readStringArray(input.partialArtifactKeys))),
+    ],
+    resumeToken: input.resumeToken ?? nested.resumeToken,
+    lastEventAt: input.lastEventAt ?? nested.lastEventAt,
+  })
 }
 
 function workflowRuntimeMetadata(projection: OutputRequestStatusProjection | null | undefined, request: OutputRequest | null | undefined) {
@@ -126,7 +161,7 @@ function statusCountsFromProjection(projection: OutputRequestStatusProjection | 
   return {
     queued: readNumber(steps.queued) ?? 0,
     running: readNumber(steps.running) ?? 0,
-    completed: readNumber(steps.completed) ?? 0,
+    completed: (readNumber(steps.completed) ?? 0) + (readNumber(steps.skipped) ?? 0),
     completedWithErrors: readNumber(steps.completedWithErrors) ?? 0,
     failed: readNumber(steps.failed) ?? 0,
     cancelled: readNumber(steps.cancelled) ?? 0,
@@ -135,7 +170,17 @@ function statusCountsFromProjection(projection: OutputRequestStatusProjection | 
 
 function nodeViewFromStep(step: OutputWorkflowRunStep): WorkflowProgressNodeView {
   const metadata = readRecord(step.metadata)
-  const streaming = readRecord(metadata.streaming)
+  const streaming = normalizedStreamingMetadata({
+    nested: metadata.streaming,
+    status: metadata.streamingStatus,
+    providerRequestId: metadata.providerRequestId ?? step.providerRequestId,
+    providerStatus: metadata.providerStatus,
+    eventCount: metadata.streamingEventCount,
+    warningCount: metadata.streamingWarningCount,
+    partialArtifactKeys: metadata.streamingPartialArtifactKeys,
+    resumeToken: metadata.streamingResumeToken,
+    lastEventAt: metadata.streamingLastEventAt,
+  })
   const status = normalizeStatus(metadata.blocked ? 'blocked' : metadata.waiting ? 'waiting' : step.status)
   return {
     key: step.nodeKey,
@@ -144,20 +189,31 @@ function nodeViewFromStep(step: OutputWorkflowRunStep): WorkflowProgressNodeView
     orderIndex: step.orderIndex,
     manifestPurpose: readString(metadata.manifestPurpose),
     progressLabel: readString(metadata.progressLabel) || step.label,
+    provider: readString(step.provider) || readString(metadata.provider),
     providerStatus: readString(metadata.providerStatus),
     providerRequestId: readString(step.providerRequestId) || readString(metadata.providerRequestId) || readString(metadata.falRequestId),
-    streamingStatus: readString(metadata.streamingStatus) || readString(streaming.status),
-    streamingEventCount: readNumber(metadata.streamingEventCount) ?? readNumber(streaming.eventCount) ?? 0,
-    streamingPartialArtifactKeys: [
-      ...new Set(readStringArray(metadata.streamingPartialArtifactKeys).concat(readStringArray(streaming.partialArtifactKeys))),
-    ],
+    providerElapsedMs: readNonNegativeNumber(metadata.providerElapsedMs),
+    providerSubmittedAt: readString(metadata.providerSubmittedAt),
+    streamingStatus: streaming.status,
+    streamingEventCount: streaming.eventCount,
+    streamingPartialArtifactKeys: streaming.partialArtifactKeys,
     errorMessage: readString(step.errorMessage),
   }
 }
 
 function nodeViewFromProjectionEntry(entry: unknown, index: number): WorkflowProgressNodeView {
   const record = readRecord(entry)
-  const streaming = readRecord(record.streaming)
+  const streaming = normalizedStreamingMetadata({
+    nested: record.streaming,
+    status: record.streamingStatus,
+    providerRequestId: record.providerRequestId,
+    providerStatus: record.providerStatus,
+    eventCount: record.streamingEventCount,
+    warningCount: record.streamingWarningCount,
+    partialArtifactKeys: record.streamingPartialArtifactKeys,
+    resumeToken: record.streamingResumeToken,
+    lastEventAt: record.streamingLastEventAt,
+  })
   return {
     key: readString(record.nodeKey) || `active_node_${index + 1}`,
     label: readString(record.label) || readString(record.progressLabel) || 'Active node',
@@ -165,13 +221,14 @@ function nodeViewFromProjectionEntry(entry: unknown, index: number): WorkflowPro
     orderIndex: readNumber(record.orderIndex) ?? index,
     manifestPurpose: readString(record.manifestPurpose),
     progressLabel: readString(record.progressLabel) || readString(record.label),
+    provider: readString(record.provider),
     providerStatus: readString(record.providerStatus),
     providerRequestId: readString(record.providerRequestId) || readString(record.falRequestId),
-    streamingStatus: readString(record.streamingStatus) || readString(streaming.status),
-    streamingEventCount: readNumber(record.streamingEventCount) ?? readNumber(streaming.eventCount) ?? 0,
-    streamingPartialArtifactKeys: [
-      ...new Set(readStringArray(record.streamingPartialArtifactKeys).concat(readStringArray(streaming.partialArtifactKeys))),
-    ],
+    providerElapsedMs: readNonNegativeNumber(record.providerElapsedMs),
+    providerSubmittedAt: readString(record.providerSubmittedAt),
+    streamingStatus: streaming.status,
+    streamingEventCount: streaming.eventCount,
+    streamingPartialArtifactKeys: streaming.partialArtifactKeys,
     errorMessage: readString(record.errorMessage),
   }
 }
@@ -189,7 +246,17 @@ export function buildWorkflowProgressViewModel(input: {
   const request = input.request ?? null
   const run = input.run ?? null
   const runtime = workflowRuntimeMetadata(projection, request)
-  const streaming = readRecord(runtime.streaming)
+  const streaming = normalizedStreamingMetadata({
+    nested: runtime.streaming,
+    status: runtime.streamingStatus,
+    providerRequestId: runtime.providerRequestId,
+    providerStatus: runtime.providerStatus,
+    eventCount: runtime.streamingEventCount,
+    warningCount: runtime.streamingWarningCount,
+    partialArtifactKeys: runtime.streamingPartialArtifactKeys,
+    resumeToken: runtime.streamingResumeToken,
+    lastEventAt: runtime.streamingLastEventAt,
+  })
   const command = commandMetadata(request, run)
   const runSteps = run?.steps ?? []
   const projectionActiveNodes = readArray(readRecord(projection?.progress).activeNodes)
@@ -251,11 +318,10 @@ export function buildWorkflowProgressViewModel(input: {
     activeProgressLabel: readString(runtime.activeProgressLabel) || activeNode?.progressLabel || activeNodeLabel,
     providerStatus: readString(runtime.providerStatus) || activeNode?.providerStatus || '',
     providerRequestId: readString(runtime.providerRequestId) || activeNode?.providerRequestId || '',
-    streamingStatus: readString(runtime.streamingStatus) || readString(streaming.status) || activeNode?.streamingStatus || '',
-    streamingEventCount: readNumber(runtime.streamingEventCount) ?? readNumber(streaming.eventCount) ?? activeNode?.streamingEventCount ?? 0,
+    streamingStatus: streaming.status !== 'idle' ? streaming.status : activeNode?.streamingStatus || '',
+    streamingEventCount: streaming.eventCount || activeNode?.streamingEventCount || 0,
     streamingPartialArtifactKeys: [
-      ...new Set(readStringArray(runtime.streamingPartialArtifactKeys)
-        .concat(readStringArray(streaming.partialArtifactKeys))
+      ...new Set(streaming.partialArtifactKeys
         .concat(activeNode?.streamingPartialArtifactKeys ?? [])),
     ],
     failedNodeKey: readString(runtime.failedNodeKey) || (latestError && activeNode?.status === 'failed' ? activeNode.key : ''),
@@ -275,4 +341,37 @@ export function buildWorkflowProgressViewModel(input: {
     terminal,
     nodes: nodeViews,
   }
+}
+
+function compactDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  const totalSeconds = Math.max(1, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
+  }
+  if (minutes > 0) return `${minutes}m ${seconds.toString().padStart(2, '0')}s`
+  return `${seconds}s`
+}
+
+function workflowProgressNodeElapsedMs(node: WorkflowProgressNodeView, nowMs = Date.now()) {
+  if (node.providerElapsedMs > 0) return node.providerElapsedMs
+  const submittedAtMs = Date.parse(node.providerSubmittedAt)
+  return Number.isFinite(submittedAtMs) ? Math.max(0, nowMs - submittedAtMs) : 0
+}
+
+export function workflowProgressNodeDetailLabel(node: WorkflowProgressNodeView, nowMs = Date.now()) {
+  const label = node.progressLabel || node.label
+  if (!label) return ''
+  const elapsed = compactDuration(workflowProgressNodeElapsedMs(node, nowMs))
+  const details = [
+    node.providerStatus ? node.providerStatus.replace(/_/g, ' ') : '',
+    elapsed ? `${elapsed} elapsed` : '',
+    node.providerRequestId ? node.providerRequestId.slice(0, 8) : '',
+  ].filter(Boolean)
+  if (details.length === 0) return label
+  return `${label} - ${node.provider ? `${node.provider} ` : ''}${details.join(' - ')}`
 }

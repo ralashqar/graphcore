@@ -1,4 +1,8 @@
 import {
+  buildWorkflowStreamingMetadata,
+  type WorkflowStreamingMetadata,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import {
   runOpenAiResponsesStream,
   type OpenAiResponseResult,
   type OpenAiResponsesRequest,
@@ -141,6 +145,11 @@ export type OpenAiJsonlStreamProgress = {
   providerMode: string
   lastProviderPollAt: string
   providerStartedAt: string
+  streaming: WorkflowStreamingMetadata
+  streamingStatus: WorkflowStreamingMetadata['status']
+  streamingEventCount: number
+  streamingWarningCount: number
+  streamingPartialArtifactKeys: string[]
 }
 
 export async function runOpenAiJsonlStream<TRecord>(input: {
@@ -165,24 +174,37 @@ export async function runOpenAiJsonlStream<TRecord>(input: {
   let lastProgressAt = 0
   const progressIntervalMs = Math.max(1_000, input.progressIntervalMs ?? 15_000)
 
+  const streamProcessor = createStreamingJsonlProcessor<TRecord>({
+    parseRecord: input.parseRecord,
+    onRecord: input.onRecord,
+    onInvalidRecord: input.onInvalidRecord,
+  })
+
   const progress = async (providerStatus: string, force = false) => {
     const now = Date.now()
     if (!force && now - lastProgressAt < progressIntervalMs) return
     lastProgressAt = now
+    const streaming = buildWorkflowStreamingMetadata({
+      status: providerStatus === 'completed' ? 'completed' : providerStatus === 'failed' ? 'failed' : 'streaming',
+      providerRequestId,
+      providerStatus,
+      eventCount: streamProcessor.acceptedRecordCount,
+      warningCount: streamProcessor.warningCount,
+      lastEventAt: new Date().toISOString(),
+    })
     await input.onProgress?.({
       providerRequestId,
       providerStatus,
       providerMode: 'stream',
       lastProviderPollAt: new Date().toISOString(),
       providerStartedAt,
+      streaming,
+      streamingStatus: streaming.status,
+      streamingEventCount: streaming.eventCount,
+      streamingWarningCount: streaming.warningCount,
+      streamingPartialArtifactKeys: streaming.partialArtifactKeys,
     })
   }
-
-  const streamProcessor = createStreamingJsonlProcessor<TRecord>({
-    parseRecord: input.parseRecord,
-    onRecord: input.onRecord,
-    onInvalidRecord: input.onInvalidRecord,
-  })
 
   await progress('streaming', true)
 
@@ -196,11 +218,13 @@ export async function runOpenAiJsonlStream<TRecord>(input: {
     },
     onTextDelta: async (delta) => {
       await streamProcessor.push(delta)
+      await progress('streaming')
     },
   })
   providerRequestId = response.id || providerRequestId
   if (providerRequestId) await input.onProviderRequestId?.(providerRequestId)
   await streamProcessor.flush()
+  await progress('completed', true)
 
   return {
     response,

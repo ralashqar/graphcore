@@ -20,6 +20,7 @@ import {
 } from './outputWorkflowTemplateRegistry.ts'
 export {
   buildWorkflowProjectionMetadata,
+  buildWorkflowStreamingMetadata,
   assertWorkflowNodeExtensionScaffold,
   assertWorkflowNodeManifestDefinition,
   childWorkflowUtilityInputSchema,

@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import type { AssetDefinition } from '../../../domain/graphcore.ts'
 import type { OutputArtifact, OutputRequest, OutputWorkflowRun, OutputWorkflowRunStep } from '../../../domain/outputWorkflow.ts'
 import { buildOutputLibraryModel } from './outputLibraryPresentation.ts'
 
 const now = '2026-01-01T00:00:00.000Z'
+const repoRoot = resolve(import.meta.dirname, '../../../..')
 
 function request(overrides: Partial<OutputRequest>): OutputRequest {
   return {
@@ -300,9 +303,12 @@ test('buildOutputLibraryModel uses compact status projection for live progress r
   assert.equal(row?.progress.percent, 90)
   assert.equal(row?.currentStepLabel, 'Parse Shots')
   assert.deepEqual(row?.activeStepLabels, [
-    'Storyboard 1 Sheet · fal IN PROGRESS · 3m 05s elapsed · 019e2c48',
-    'Storyboard 2 Sheet · fal IN QUEUE · 1m 01s elapsed · 019e2c48',
+    'Storyboard 1 Sheet - fal IN PROGRESS - 3m 05s elapsed - 019e2c48',
+    'Storyboard 2 Sheet - fal IN QUEUE - 1m 01s elapsed - 019e2c48',
   ])
+  const source = readFileSync(resolve(repoRoot, 'src/features/world-builder/wiki/outputLibraryPresentation.ts'), 'utf8')
+  assert.match(source, /buildWorkflowProgressViewModel/)
+  assert.match(source, /workflowProgressNodeDetailLabel/)
 })
 
 test('buildOutputLibraryModel resolves gallery URLs from assets and artifact metadata', () => {

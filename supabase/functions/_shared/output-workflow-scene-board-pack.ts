@@ -11,6 +11,7 @@ import {
   planSceneBoardCoverageIntentChildren,
   planSceneBoardZoneCoverageGridChildren,
 } from './sequence-animatic-scene-board-child-planners.ts'
+import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
 import { z } from 'zod'
 
 type LooseRecord = Record<string, unknown>
@@ -154,13 +155,7 @@ function result(input: {
   outputs: Record<string, unknown>
   model: string
 }): SceneBoardNodeExecutionResult {
-  return {
-    inputHash: input.context.inputHash,
-    outputHash: input.helpers.hashOutputWorkflowValue(input.outputs),
-    outputs: input.outputs,
-    provider: 'graphcore',
-    model: input.model,
-  }
+  return createWorkflowNodeExecutionResult<SceneBoardNodeExecutionResult>(input)
 }
 
 const sequenceAnimaticZoneCameraGridBriefSchema = z.object({

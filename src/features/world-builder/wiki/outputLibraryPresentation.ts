@@ -9,6 +9,10 @@ import type {
   OutputWorkflowRun,
   OutputWorkflowRunStep,
 } from '../../../domain/outputWorkflow.ts'
+import {
+  buildWorkflowProgressViewModel,
+  workflowProgressNodeDetailLabel,
+} from '../../../domain/workflowProgressView.ts'
 import { iconForWorldEntity } from '../../../domain/worldGraphHelpers.ts'
 import type { EntityIconId } from '../../../shared/entityIcons'
 
@@ -202,65 +206,6 @@ function artifactCardPriority(artifact: OutputLibraryArtifactCard) {
   return 3
 }
 
-function readNonNegativeNumber(value: unknown) {
-  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0
-  return Number.isFinite(number) && number > 0 ? number : 0
-}
-
-function compactDuration(ms: number) {
-  if (!Number.isFinite(ms) || ms <= 0) return ''
-  const totalSeconds = Math.max(1, Math.round(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  if (minutes >= 60) {
-    const hours = Math.floor(minutes / 60)
-    const remainingMinutes = minutes % 60
-    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
-  }
-  if (minutes > 0) return `${minutes}m ${seconds.toString().padStart(2, '0')}s`
-  return `${seconds}s`
-}
-
-function activeNodeElapsedMs(record: Record<string, unknown>) {
-  const explicit = readNonNegativeNumber(record.providerElapsedMs)
-  if (explicit > 0) return explicit
-  const submittedAt = readTrimmedString(record.providerSubmittedAt)
-  if (!submittedAt) return 0
-  const submittedAtMs = Date.parse(submittedAt)
-  return Number.isFinite(submittedAtMs) ? Math.max(0, Date.now() - submittedAtMs) : 0
-}
-
-function activeNodeLabel(entry: unknown) {
-  const record = readRecord(entry)
-  const label = readTrimmedString(record.label)
-  if (!label) return ''
-  const providerStatus = readTrimmedString(record.providerStatus)
-  const provider = readTrimmedString(record.provider)
-  const requestId = readTrimmedString(record.falRequestId) || readTrimmedString(record.providerRequestId)
-  const elapsed = compactDuration(activeNodeElapsedMs(record))
-  const details = [
-    providerStatus ? providerStatus.replace(/_/g, ' ') : '',
-    elapsed ? `${elapsed} elapsed` : '',
-    requestId ? requestId.slice(0, 8) : '',
-  ].filter(Boolean)
-  if (details.length === 0) return label
-  return `${label} · ${provider ? `${provider} ` : ''}${details.join(' · ')}`
-}
-
-function readProjectionActiveStepLabels(projection: OutputRequestStatusProjection | null) {
-  if (!projection) return []
-  const progressRecord = readRecord(projection.progress)
-  const metadataRecord = readRecord(projection.metadata)
-  const candidates = [
-    ...readArray(progressRecord.activeNodes),
-    ...readArray(metadataRecord.activeNodes),
-  ]
-  const labels = candidates
-    .map(activeNodeLabel)
-    .filter(Boolean)
-  return [...new Set(labels)]
-}
-
 function readProjectionFromRequest(request: OutputRequest): OutputRequestStatusProjection | null {
   const projection = readRecord(request.metadata).outputStatusProjection
   if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return null
@@ -305,29 +250,31 @@ function stepStatusKey(step: OutputWorkflowRunStep | null | undefined) {
 }
 
 function buildProgress(
+  request: OutputRequest,
   run: OutputWorkflowRun | null,
-  nodeCount: number,
+  nodes: readonly OutputWorkflowNode[],
   projection: OutputRequestStatusProjection | null = null,
 ) {
   if (projection) {
-    const progressRecord = readRecord(projection.progress)
-    const stepsRecord = readRecord(progressRecord.steps)
-    const total = readNonNegativeNumber(progressRecord.totalSteps)
-    const completed = Math.min(total, (
-      readNonNegativeNumber(stepsRecord.completed)
-      + readNonNegativeNumber(stepsRecord.skipped)
-      + readNonNegativeNumber(stepsRecord.completedWithErrors)
-    ))
-    const percent = total > 0 ? Math.round((completed / total) * 100) : 0
-    const currentStepLabel = readTrimmedString(projection.activeNodeLabel)
-      || (projection.terminal ? formatStatus(projection.status) : total > 0 ? 'Waiting for next workflow step' : 'Preparing workflow')
-    const activeStepLabels = readProjectionActiveStepLabels(projection)
+    const model = buildWorkflowProgressViewModel({
+      projection,
+      request,
+      run,
+      nodes: [...nodes],
+      fallbackTitle: request.title,
+    })
+    const currentStepLabel = model.activeNodeLabel
+      || model.activeProgressLabel
+      || (model.terminal ? formatStatus(model.status) : model.totalSteps > 0 ? 'Waiting for next workflow step' : 'Preparing workflow')
+    const activeStepLabels = model.nodes
+      .map((node) => workflowProgressNodeDetailLabel(node))
+      .filter(Boolean)
     return {
       progress: {
-        completed,
-        total,
-        percent,
-        label: total > 0 ? `${completed}/${total} steps` : 'Preparing plan',
+        completed: model.completedSteps,
+        total: model.totalSteps,
+        percent: model.percent,
+        label: model.totalSteps > 0 ? `${model.completedSteps}/${model.totalSteps} steps` : 'Preparing plan',
       },
       currentStepLabel,
       activeStepLabels: activeStepLabels.length > 0 ? activeStepLabels : currentStepLabel ? [currentStepLabel] : [],
@@ -340,7 +287,7 @@ function buildProgress(
     return status === 'completed' || status === 'skipped'
   }).length
   const isCompletedRun = run?.status === 'completed'
-  const total = steps.length > 0 ? steps.length : nodeCount > 0 ? nodeCount : isCompletedRun ? 1 : 0
+  const total = steps.length > 0 ? steps.length : nodes.length > 0 ? nodes.length : isCompletedRun ? 1 : 0
   const completed = steps.length > 0 ? completedSteps : isCompletedRun ? total : 0
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0
   const active = steps.find((step) => stepStatusKey(step) === 'running')
@@ -554,9 +501,9 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
   for (const run of input.outputWorkflowRuns.slice().sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())) {
     if (!latestRunByWorkflowId.has(run.workflowId)) latestRunByWorkflowId.set(run.workflowId, run)
   }
-  const nodeCountByWorkflowId = new Map<string, number>()
+  const nodesByWorkflowId = new Map<string, OutputWorkflowNode[]>()
   for (const node of input.outputWorkflowNodes) {
-    nodeCountByWorkflowId.set(node.workflowId, (nodeCountByWorkflowId.get(node.workflowId) ?? 0) + 1)
+    nodesByWorkflowId.set(node.workflowId, [...(nodesByWorkflowId.get(node.workflowId) ?? []), node])
   }
 
   const artifactCards = input.outputArtifacts
@@ -617,8 +564,8 @@ export function buildOutputLibraryModel(input: BuildOutputLibraryModelInput): Ou
         })
       const projection = projectionByRequestId.get(request.id) ?? readProjectionFromRequest(request)
       const groupKey = statusGroup(request, run, artifacts, projection)
-      const nodeCount = request.workflowId ? nodeCountByWorkflowId.get(request.workflowId) ?? 0 : 0
-      const { progress, currentStepLabel, activeStepLabels } = buildProgress(run, nodeCount, projection)
+      const nodes = request.workflowId ? nodesByWorkflowId.get(request.workflowId) ?? [] : []
+      const { progress, currentStepLabel, activeStepLabels } = buildProgress(request, run, nodes, projection)
       const entityRefs = buildEntityRefsForRequest(
         request,
         run,

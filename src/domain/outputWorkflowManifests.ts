@@ -152,8 +152,10 @@ export type WorkflowProjectionMetadata = z.infer<typeof workflowProjectionMetada
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 
+const workflowStreamingStatusValues = ['idle', 'streaming', 'polling', 'finalizing', 'completed', 'failed', 'cancelled'] as const
+
 export const workflowStreamingMetadataSchema = z.object({
-  status: z.enum(['idle', 'streaming', 'polling', 'finalizing', 'completed', 'failed', 'cancelled']).default('idle'),
+  status: z.enum(workflowStreamingStatusValues).default('idle'),
   providerRequestId: z.string().nullable().default(null),
   providerStatus: z.string().nullable().default(null),
   eventCount: z.number().int().nonnegative().default(0),
@@ -164,6 +166,47 @@ export const workflowStreamingMetadataSchema = z.object({
 }).strict()
 
 const defaultWorkflowStreamingMetadata = workflowStreamingMetadataSchema.parse({})
+
+const workflowStreamingStatuses = new Set<string>(workflowStreamingStatusValues)
+
+function readStreamingText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readStreamingArray(value: unknown) {
+  return Array.isArray(value) ? value : []
+}
+
+function readStreamingStringArray(value: unknown) {
+  return readStreamingArray(value).map(readStreamingText).filter(Boolean)
+}
+
+function readStreamingNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+export function buildWorkflowStreamingMetadata(input: {
+  status?: unknown
+  providerRequestId?: unknown
+  providerStatus?: unknown
+  eventCount?: unknown
+  warningCount?: unknown
+  partialArtifactKeys?: unknown
+  resumeToken?: unknown
+  lastEventAt?: unknown
+} = {}): WorkflowStreamingMetadata {
+  const status = readStreamingText(input.status)
+  return workflowStreamingMetadataSchema.parse({
+    status: workflowStreamingStatuses.has(status as never) ? status : 'idle',
+    providerRequestId: readStreamingText(input.providerRequestId) || null,
+    providerStatus: readStreamingText(input.providerStatus) || null,
+    eventCount: Math.max(0, Math.floor(readStreamingNumber(input.eventCount) ?? 0)),
+    warningCount: Math.max(0, Math.floor(readStreamingNumber(input.warningCount) ?? 0)),
+    partialArtifactKeys: readStreamingStringArray(input.partialArtifactKeys),
+    resumeToken: readStreamingText(input.resumeToken) || null,
+    lastEventAt: readStreamingText(input.lastEventAt) || null,
+  })
+}
 
 export const workflowNodeStreamingPolicySchema = z.object({
   mode: z.enum(['none', 'jsonl', 'provider_events', 'polling']).default('none'),

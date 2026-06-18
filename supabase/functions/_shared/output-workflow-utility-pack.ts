@@ -6,6 +6,7 @@ import {
   ensureChildWorkflow,
   waitForChildWorkflowReadiness,
 } from './output-workflow-child-utils.ts'
+import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
 
 type LooseRecord = Record<string, unknown>
 
@@ -124,13 +125,7 @@ function result(input: {
   outputs: Record<string, unknown>
   model: string
 }): UtilityNodeExecutionResult {
-  return {
-    inputHash: input.context.inputHash,
-    outputHash: input.helpers.hashOutputWorkflowValue(input.outputs),
-    outputs: input.outputs,
-    provider: 'graphcore',
-    model: input.model,
-  }
+  return createWorkflowNodeExecutionResult<UtilityNodeExecutionResult>(input)
 }
 
 async function ensureChildWorkflowNode(
