@@ -19,9 +19,18 @@ import {
 } from './workflowNodeHandlerRegistry.ts'
 import { outputWorkflowNodeManifests } from './outputWorkflowNodeContracts.ts'
 import { buildWorkflowProgressViewModel } from './workflowProgressView.ts'
-import { createWorkflowNodeManifest, workflowProjectionMetadataSchema } from './outputWorkflowManifests.ts'
+import {
+  createWorkflowNodeManifest,
+  validateWorkflowNodeExtensionScaffold,
+  workflowProjectionMetadataSchema,
+} from './outputWorkflowManifests.ts'
 import { createStreamingJsonlProcessor, extractCompleteJsonRecords } from '../../supabase/functions/_shared/output-workflow-streaming.ts'
-import { sceneBoardWorkflowNodeHandlerKeys, sceneBoardWorkflowNodePack } from '../../supabase/functions/_shared/output-workflow-scene-board-pack.ts'
+import {
+  sceneBoardWorkflowNodeHandlerKeys,
+  sceneBoardWorkflowNodePack,
+  sceneBoardWorkflowNodeScaffoldHandlerKeys,
+  sceneBoardWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-scene-board-pack.ts'
 import { sequenceAnimaticWorkflowNodeHandlerKeys, sequenceAnimaticWorkflowNodePack } from '../../supabase/functions/_shared/output-workflow-sequence-animatic-pack.ts'
 import { workflowMediaNodeHandlerKeys, workflowMediaNodePack } from '../../supabase/functions/_shared/output-workflow-media-pack.ts'
 import { workflowUtilityNodeHandlerKeys, workflowUtilityNodePack } from '../../supabase/functions/_shared/output-workflow-utility-pack.ts'
@@ -768,6 +777,56 @@ test('scene board media utility and sequence animatic node packs expose register
   )
 })
 
+test('Scene Board node pack is backed by workflow node extension scaffolds', () => {
+  assert.deepEqual(sceneBoardWorkflowNodeScaffoldHandlerKeys, sceneBoardWorkflowNodeHandlerKeys)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sceneBoardWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sceneBoardWorkflowNodeScaffolds.length)
+  assert.ok(sceneBoardWorkflowNodeScaffolds.length > 0)
+
+  for (const scaffold of sceneBoardWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sceneBoardWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sceneBoardWorkflowNodePack.packKey)
+    assert.ok(sceneBoardWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.requiredTests.includes(`pack:${sceneBoardWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sceneBoardWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'structured_llm')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_zone_coverage_board_brief'],
+  )
+  assert.deepEqual(
+    sceneBoardWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'child_workflow_utility')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_scene_board_set_ref_generation',
+      'sequence_animatic_scene_board_scaffold_ref_generation',
+      'sequence_animatic_scene_board_coverage_intent_batch',
+      'sequence_animatic_scene_board_zone_coverage_grid',
+    ],
+  )
+  assert.deepEqual(
+    sceneBoardWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_scene_board_coverage_cell_artifact',
+      'sequence_animatic_zone_coverage_board_extract',
+      'sequence_animatic_zone_coverage_board_artifact',
+    ],
+  )
+})
+
 test('output workflow worker requires explicit legacy or pack node handlers', () => {
   const repoRoot = process.cwd()
   const handlerRegistrySource = readFileSync(resolve(repoRoot, 'src/domain/workflowNodeHandlerRegistry.ts'), 'utf8')
@@ -780,6 +839,7 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   const sequenceAnimaticPlanningRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-planning-runtime.ts'), 'utf8')
   const sequenceAnimaticOrchestratorRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-orchestrator-runtime.ts'), 'utf8')
   const sequenceAnimaticChildRunRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-child-run-runtime.ts'), 'utf8')
+  const sequenceAnimaticSceneRunnerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-scene-runner.ts'), 'utf8')
   const utilityPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-utility-pack.ts'), 'utf8')
   const mediaRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-media-runtime.ts'), 'utf8')
 
@@ -922,6 +982,9 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.match(sequenceAnimaticChildRunRuntimeSource, /augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets/)
   assert.match(runtimeSource, /startSequenceAnimaticChildRunRuntime/)
   assert.doesNotMatch(runtimeSource, /function sequenceAnimaticContinuityAssetEntityFromState/)
+  assert.match(sequenceAnimaticSceneRunnerSource, /export async function ensureSequenceAnimaticSceneShotPlanWorkflowsRuntime/)
+  assert.match(sequenceAnimaticSceneRunnerSource, /role: 'scene_shot_plan'/)
+  assert.match(runtimeSource, /ensureSequenceAnimaticSceneShotPlanWorkflowsRuntime/)
   assert.doesNotMatch(runtimeSource, /async function runSequenceAnimaticOrchestrator/)
   assert.doesNotMatch(runtimeSource, /runSequenceAnimaticOrchestrator:/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_plan_merge'/)

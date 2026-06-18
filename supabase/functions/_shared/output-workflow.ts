@@ -87,6 +87,9 @@ import {
   startSequenceAnimaticChildRunRuntime,
 } from './output-workflow-sequence-animatic-child-run-runtime.ts'
 import {
+  ensureSequenceAnimaticSceneShotPlanWorkflowsRuntime,
+} from './output-workflow-sequence-animatic-scene-runner.ts'
+import {
   registerWorkflowMediaNodePack,
   workflowMediaNodeHandlerKeys,
 } from './output-workflow-media-pack.ts'
@@ -4764,145 +4767,63 @@ export async function ensureSequenceAnimaticSceneShotPlanWorkflows(input: {
   resolution: string
   sceneIds?: string[]
 }): Promise<OutputRequest[]> {
-  const masterRequest = input.masterRequest
-  const masterMetadata = asRecord(masterRequest.metadata)
-  const screenplayAnimaticSource = readText(masterMetadata.screenplayAnimaticSource) === 'prompt_cinematic' ? 'prompt_cinematic' : 'wiki_sequence_unit'
-  const parsedPackage = sequenceAnimaticScenePackageOutputSchema.parse(input.scenePackageOutput)
-  const scenePackages = (parsedPackage.scenePackages.length > 0 ? parsedPackage.scenePackages : parsedPackage.screenplayScenes)
-    .slice()
-    .sort((left, right) => (left.index || 9999) - (right.index || 9999))
-  if (scenePackages.length === 0) throw new Error('Sequence animatic scene ensure requires registered screenplay scenes.')
-  if (!input.screenplayText) throw new Error('Sequence animatic scene ensure requires the authored screenplay text.')
-  const existingChildrenResponse = await input.client
-    .from('output_requests')
-    .select(outputRequestSelect)
-    .eq('project_id', masterRequest.projectId)
-    .eq('draft_id', masterRequest.draftId)
-    .eq('parent_request_id', masterRequest.id)
-    .order('created_at', { ascending: true })
-  if (existingChildrenResponse.error) throw new Error(existingChildrenResponse.error.message)
-  const existingChildren = (existingChildrenResponse.data ?? []).map(mapOutputRequestRow)
-  const existingBySceneId = new Map(existingChildren
-    .filter((child) => asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRoleFromMetadata(asRecord(child.metadata)) === 'scene_shot_plan')
-    .map((child) => [readText(asRecord(child.metadata).sceneId), child] as const)
-    .filter(([id]) => id))
-  const selectedSceneIds = input.sceneIds && input.sceneIds.length > 0 ? new Set(input.sceneIds) : null
-  const now = new Date().toISOString()
-  const childRequests: OutputRequest[] = []
-  for (const scene of scenePackages) {
-    const sceneId = readText(scene.sceneId)
-    if (!sceneId) continue
-    if (selectedSceneIds && !selectedSceneIds.has(sceneId)) {
-      const existing = existingBySceneId.get(sceneId)
-      if (existing) childRequests.push(existing)
-      continue
-    }
-    const existing = existingBySceneId.get(sceneId)
-    if (existing) {
-      childRequests.push(existing)
-      continue
-    }
-    const sceneScopedPackageOutput = {
-      ...parsedPackage,
-      scenePackages: [scene],
-      screenplayScenes: [scene],
-      dialogueRows: scene.dialogueRows,
-    }
-    const sceneHash = sequenceAnimaticStableHash({ scene, screenplayLength: input.screenplayText.length })
-    const workflowId = crypto.randomUUID()
-    const commonConfig = {
-      cinematicPipelineVersion: 'v3_script_storyboards',
-      graphSpecVersion: 'sequence_animatic_graph_v2',
-      screenplayAnimaticRole: 'scene_shot_plan',
-      screenplayAnimaticSource,
-      sequenceAnimaticRole: 'scene_shot_plan',
-      parentRequestId: masterRequest.id,
-      masterRequestId: masterRequest.id,
-      sceneId,
-      sceneIndex: Number(scene.index) || 0,
-      sceneTitle: readText(scene.title),
-      sceneHash,
-      sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
-      sourceMasterWorkflowId: masterRequest.workflowId,
-    }
-    const graphResult = buildValidatedOutputWorkflowTemplateGraph({
-      registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
-      templateKey: sequenceAnimaticSceneShotPlansTemplateKey,
-      rawInput: {
-        workflowId,
-        draftId: masterRequest.draftId,
-        commonConfig,
-        sceneId,
-        sceneIndex: Number(scene.index) || 0,
-        sceneTitle: readText(scene.title),
-        scenePackageOutput: sceneScopedPackageOutput,
-        screenplayText: input.screenplayText,
-        assetPack: input.assetPack,
-        context: input.context,
-        guidance: input.guidance,
-        maxShotCount: input.maxShotCount,
-        aspectRatio: input.aspectRatio,
-        resolution: input.resolution,
+  return ensureSequenceAnimaticSceneShotPlanWorkflowsRuntime({
+    masterRequest: input.masterRequest,
+    scenePackageOutput: input.scenePackageOutput,
+    screenplayText: input.screenplayText,
+    assetPack: input.assetPack,
+    context: input.context,
+    guidance: input.guidance,
+    maxShotCount: input.maxShotCount,
+    aspectRatio: input.aspectRatio,
+    resolution: input.resolution,
+    sceneIds: input.sceneIds,
+    helpers: {
+      asRecord,
+      readText,
+      slugify,
+      sequenceAnimaticStableHash,
+      readScreenplayAnimaticRoleFromMetadata,
+      parseSequenceAnimaticScenePackageOutput: (value) => sequenceAnimaticScenePackageOutputSchema.parse(value) as never,
+      loadChildRequests: async ({ projectId, draftId, parentRequestId }) => {
+        const response = await input.client
+          .from('output_requests')
+          .select(outputRequestSelect)
+          .eq('project_id', projectId)
+          .eq('draft_id', draftId)
+          .eq('parent_request_id', parentRequestId)
+          .order('created_at', { ascending: true })
+        if (response.error) throw new Error(response.error.message)
+        return (response.data ?? []).map((row) => mapOutputRequestRow(row as OutputRequestRow))
       },
-    })
-    if (!graphResult.ok || !graphResult.graph) throw new Error(graphResult.diagnostics.join(' '))
-    const { nodes, edges } = graphResult.graph
-    const workflowTemplateMetadata = {
-      workflowTemplateKey: sequenceAnimaticSceneShotPlansTemplateKey,
-      workflowTemplateSourceHash: graphResult.sourceHash,
-    }
-    const workflowPayload = {
-      project_id: masterRequest.projectId,
-      draft_id: masterRequest.draftId,
-      key: `sequence_animatic_scene_${slugify(masterRequest.id)}_${slugify(sceneId)}_${sceneHash.slice(0, 8)}`,
-      name: `${masterRequest.title} / Scene ${Number(scene.index) || ''}: ${readText(scene.title) || sceneId}`.trim(),
-      description: 'Sequence animatic per-scene shot plan workflow.',
-      preset: 'cinematic_episode_from_sequence',
-      status: 'active',
-      created_by: masterRequest.requestedBy,
-      metadata: { ...commonConfig, ...workflowTemplateMetadata, readyToRun: true },
-    }
-    const requestPayload = {
-      project_id: masterRequest.projectId,
-      draft_id: masterRequest.draftId,
-      parent_request_id: masterRequest.id,
-      requested_by: masterRequest.requestedBy,
-      source_surface: screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit',
-      prompt: `${masterRequest.prompt}\n\nPlan shots and continuity for ${sceneId} (${readText(scene.title) || 'scene'}).`,
-      title: `${masterRequest.title} / Scene ${Number(scene.index) || ''}: ${readText(scene.title) || sceneId}`.trim(),
-      intent: 'output_generation',
-      output_kind: 'cinematic_episode',
-      status: 'awaiting_confirmation',
-      selected_entity_keys: masterRequest.selectedEntityKeys,
-      selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
-      page_count: null,
-      target_format: 'video',
-      planner_notes: 'Per-scene shot plan workflow prepared from the registered scene index.',
-      metadata: {
-        ...commonConfig,
-        ...workflowTemplateMetadata,
-        readyToRun: true,
-        createdFromSceneIndexAt: now,
+      buildSceneShotPlanTemplateGraph: (graphInput) => buildValidatedOutputWorkflowTemplateGraph({
+        registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
+        templateKey: sequenceAnimaticSceneShotPlansTemplateKey,
+        rawInput: graphInput,
+      }) as never,
+      sceneShotPlansTemplateKey: sequenceAnimaticSceneShotPlansTemplateKey,
+      ensureMappedChildWorkflow: async (ensureInput) => {
+        const ensured = await ensureMappedChildWorkflow({
+          client: input.client,
+          projectId: ensureInput.projectId,
+          draftId: ensureInput.draftId,
+          parentRequestId: ensureInput.parentRequestId,
+          role: ensureInput.role,
+          identityKey: ensureInput.identityKey,
+          identityValue: ensureInput.identityValue,
+          workflow: ensureInput.workflow,
+          nodes: ensureInput.nodes,
+          edges: ensureInput.edges,
+          request: ensureInput.request,
+        })
+        return {
+          request: ensured.request,
+          created: ensured.created,
+          reused: ensured.reused,
+        }
       },
-    }
-    const ensured = await ensureMappedChildWorkflow({
-      client: input.client,
-      projectId: masterRequest.projectId,
-      draftId: masterRequest.draftId,
-      parentRequestId: masterRequest.id,
-      role: 'scene_shot_plan',
-      identityKey: 'sceneId',
-      identityValue: sceneId,
-      workflow: workflowPayload,
-      nodes,
-      edges,
-      request: requestPayload,
-    })
-    const child = ensured.request
-    existingBySceneId.set(sceneId, child)
-    childRequests.push(child)
-  }
-  return childRequests.sort((left, right) => (Number(asRecord(left.metadata).sceneIndex ?? 0) || 9999) - (Number(asRecord(right.metadata).sceneIndex ?? 0) || 9999))
+    },
+  })
 }
 
 /**

@@ -4,6 +4,26 @@ export type WorkflowNodeRecoveryStrategy = 'node_step_artifact' | 'node_step' | 
 export type WorkflowNodeCacheMode = 'input_hash' | 'always_rerun' | 'never_rerun'
 export type WorkflowNodeCancellationMode = 'stop_future_nodes' | 'best_effort_provider_cancel' | 'cancel_children_explicitly'
 export type WorkflowNodeStreamingMode = 'none' | 'jsonl' | 'provider_events' | 'polling'
+export type WorkflowNodeRuntimeKind =
+  | 'deterministic_transform'
+  | 'structured_llm'
+  | 'streaming_jsonl'
+  | 'image_generation'
+  | 'video_generation'
+  | 'artifact_registration'
+  | 'child_workflow_utility'
+  | 'provider_polling'
+
+export const workflowNodeRuntimeKinds = [
+  'deterministic_transform',
+  'structured_llm',
+  'streaming_jsonl',
+  'image_generation',
+  'video_generation',
+  'artifact_registration',
+  'child_workflow_utility',
+  'provider_polling',
+] as const satisfies readonly WorkflowNodeRuntimeKind[]
 
 export type WorkflowNodeStreamingPolicy = {
   mode: WorkflowNodeStreamingMode
@@ -86,18 +106,43 @@ export type WorkflowTemplateGraphValidationInput<TNode extends { key: string; co
 export type WorkflowNodeExtensionScaffoldInput = WorkflowNodeContractView & {
   nodeType?: string
   handlerKey?: string
+  packKey: string
+  runtimeKind: WorkflowNodeRuntimeKind
   templateKey?: string
   config?: Record<string, unknown>
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+  inputSchema?: z.ZodType<Record<string, unknown>>
+  outputSchema?: z.ZodType<Record<string, unknown>>
+  configSchema?: z.ZodType<Record<string, unknown>>
+  executable?: boolean
+  executionPolicy?: Partial<WorkflowNodeManifest['executionPolicy']>
+  retryPolicy?: Partial<WorkflowNodeManifest['retryPolicy']>
+  cachePolicy?: Partial<WorkflowNodeManifest['cachePolicy']>
+  cancellationPolicy?: Partial<WorkflowNodeManifest['cancellationPolicy']>
   streamingPolicy?: Partial<WorkflowNodeStreamingPolicy>
 }
 
 export type WorkflowNodeExtensionScaffold = {
   manifest: WorkflowNodeManifest
   handlerKey: string
+  packKey: string
+  runtimeKind: WorkflowNodeRuntimeKind
   templateKey: string
   templateNodeConfig: Record<string, unknown>
+  sourceHashKeys: string[]
+  projectionMetadataKeys: string[]
   requiredTests: string[]
   checklist: string[]
+}
+
+export type WorkflowNodeExtensionScaffoldValidationInput = {
+  scaffold: WorkflowNodeExtensionScaffold
+  registeredManifest?: WorkflowNodeManifest | null
+  pack?: {
+    packKey: string
+    handlerKeys: readonly string[]
+  } | null
 }
 
 export type ChildWorkflowUtilityInput = z.infer<typeof childWorkflowUtilityInputSchema>
@@ -367,34 +412,104 @@ export function validateWorkflowNodeManifestOutput(manifest: WorkflowNodeManifes
       }
 }
 
+function uniqueTrimmedStrings(values: readonly string[] | undefined): string[] {
+  return Array.from(new Set((values ?? []).map((value) => String(value ?? '').trim()).filter(Boolean)))
+}
+
 export function createWorkflowNodeExtensionScaffold(input: WorkflowNodeExtensionScaffoldInput): WorkflowNodeExtensionScaffold {
+  const packKey = input.packKey.trim()
+  if (!packKey) throw new Error(`${input.purpose || '<unknown>'}: workflow node scaffold requires packKey.`)
+  const runtimeKind = input.runtimeKind
+  if (!workflowNodeRuntimeKinds.includes(runtimeKind)) {
+    throw new Error(`${input.purpose || '<unknown>'}: workflow node scaffold requires a valid runtimeKind.`)
+  }
+  const sourceHashKeys = uniqueTrimmedStrings(input.sourceHashKeys)
+  if (sourceHashKeys.length === 0 && input.cachePolicy?.mode !== 'always_rerun') {
+    throw new Error(`${input.purpose || '<unknown>'}: workflow node scaffold requires sourceHashKeys unless cachePolicy.mode is always_rerun.`)
+  }
+  const projectionMetadataKeys = uniqueTrimmedStrings(input.projectionMetadataKeys)
   const manifest = createWorkflowNodeManifest({
     ...input,
     handlerKey: input.handlerKey ?? input.purpose,
     nodeType: input.nodeType ?? '*',
+    cachePolicy: {
+      ...input.cachePolicy,
+      sourceHashKeys: input.cachePolicy?.sourceHashKeys ?? sourceHashKeys,
+    },
   })
   const templateKey = input.templateKey?.trim() || `${manifest.purpose}_workflow`
   return {
     manifest,
     handlerKey: manifest.handlerKey,
+    packKey,
+    runtimeKind,
     templateKey,
     templateNodeConfig: {
       ...input.config,
       purpose: manifest.purpose,
     },
+    sourceHashKeys,
+    projectionMetadataKeys,
     requiredTests: [
       `manifest:${manifest.purpose}:registered`,
       `handler:${manifest.handlerKey}:registered`,
+      `pack:${packKey}:owns:${manifest.handlerKey}`,
       `handler:${manifest.handlerKey}:output_schema`,
       `template:${templateKey}:validated_graph`,
       `template:${templateKey}:source_hash_stability`,
+      `projection:${manifest.purpose}:metadata_shape`,
     ],
     checklist: [
+      `Register the manifest in outputWorkflowNodeManifests and the handler in the "${packKey}" node pack.`,
+      `Declare runtimeKind "${runtimeKind}" so reviewers know whether this is deterministic, provider-backed, streaming, media, artifact, or child-workflow orchestration.`,
       'Declare manifest inputs, outputs, artifact roles, progress label, retry/cache policy, cancellation behavior, and streaming policy if applicable.',
       'Register exactly one handler for the manifest handlerKey in a product node pack or shared utility pack.',
       'Validate handler outputs with validateWorkflowNodeManifestOutput before relying on them in downstream nodes.',
+      'Include sourceHashKeys for every scope field, force flag, policy version, reference asset key, selected shot/scene/zone id, and user override that can change outputs.',
       'Build graph rows through a server-owned template registry entry; clients should send typed commands, not raw graph rows.',
       'Add projection metadata for active child runs, provider/streaming status, ready artifacts, and recovery hints.',
     ],
   }
+}
+
+export function validateWorkflowNodeExtensionScaffold(input: WorkflowNodeExtensionScaffoldValidationInput) {
+  const diagnostics: string[] = []
+  const { scaffold } = input
+  const manifestValidation = validateWorkflowNodeManifestDefinition(scaffold.manifest)
+  diagnostics.push(...manifestValidation.diagnostics)
+  if (!scaffold.packKey.trim()) diagnostics.push(`${scaffold.manifest.purpose}: scaffold packKey is required.`)
+  if (!scaffold.runtimeKind) diagnostics.push(`${scaffold.manifest.purpose}: scaffold runtimeKind is required.`)
+  if (scaffold.sourceHashKeys.length === 0 && scaffold.manifest.cachePolicy.mode !== 'always_rerun') {
+    diagnostics.push(`${scaffold.manifest.purpose}: scaffold sourceHashKeys are required unless cachePolicy.mode is always_rerun.`)
+  }
+  if (input.registeredManifest) {
+    if (input.registeredManifest.purpose !== scaffold.manifest.purpose) {
+      diagnostics.push(`${scaffold.manifest.purpose}: registered manifest purpose mismatch (${input.registeredManifest.purpose}).`)
+    }
+    if (input.registeredManifest.handlerKey !== scaffold.manifest.handlerKey) {
+      diagnostics.push(`${scaffold.manifest.purpose}: registered manifest handlerKey mismatch (${input.registeredManifest.handlerKey}).`)
+    }
+  } else if (input.registeredManifest === null) {
+    diagnostics.push(`${scaffold.manifest.purpose}: scaffold manifest is not registered.`)
+  }
+  if (input.pack) {
+    const packKey = input.pack.packKey.trim()
+    if (packKey !== scaffold.packKey) {
+      diagnostics.push(`${scaffold.manifest.purpose}: scaffold packKey "${scaffold.packKey}" does not match pack "${packKey}".`)
+    }
+    if (!input.pack.handlerKeys.includes(scaffold.handlerKey)) {
+      diagnostics.push(`${scaffold.manifest.purpose}: pack "${packKey}" does not register handler "${scaffold.handlerKey}".`)
+    }
+  } else if (input.pack === null) {
+    diagnostics.push(`${scaffold.manifest.purpose}: scaffold pack "${scaffold.packKey}" is not available for validation.`)
+  }
+  return diagnostics.length === 0
+    ? { ok: true as const, diagnostics: [] }
+    : { ok: false as const, diagnostics }
+}
+
+export function assertWorkflowNodeExtensionScaffold(input: WorkflowNodeExtensionScaffoldValidationInput) {
+  const validation = validateWorkflowNodeExtensionScaffold(input)
+  if (!validation.ok) throw new Error(validation.diagnostics.join('\n'))
+  return input.scaffold
 }

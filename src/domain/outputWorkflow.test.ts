@@ -79,6 +79,7 @@ import {
   outputWorkflowNodeManifestsByPurpose,
   registerWorkflowTemplateManifest,
   validateWorkflowCommandTemplateCoverage,
+  validateWorkflowNodeExtensionScaffold,
   validateWorkflowNodeManifestDefinition,
   validateWorkflowNodeManifestOutput,
   validateWorkflowTemplateExtensionScaffoldGraph,
@@ -466,6 +467,8 @@ test('workflow node manifests expose streaming policy and reusable extension sca
   const scaffold = createWorkflowNodeExtensionScaffold({
     purpose: 'test_modular_node',
     label: 'Test Modular Node',
+    packKey: 'test_modular_pack',
+    runtimeKind: 'deterministic_transform',
     requiredInputs: ['input'],
     producedOutputs: ['output'],
     artifactRoles: ['test_artifact'],
@@ -475,13 +478,90 @@ test('workflow node manifests expose streaming policy and reusable extension sca
     providerBacked: false,
     manualOnly: false,
     config: { version: 1 },
+    sourceHashKeys: ['draftId', 'scope.sceneId', 'policyVersion'],
+    projectionMetadataKeys: ['activeManifestPurpose', 'readyArtifactCount'],
   })
   assert.equal(scaffold.manifest.purpose, 'test_modular_node')
   assert.equal(scaffold.handlerKey, 'test_modular_node')
+  assert.equal(scaffold.packKey, 'test_modular_pack')
+  assert.equal(scaffold.runtimeKind, 'deterministic_transform')
   assert.equal(scaffold.templateKey, 'test_modular_node_workflow')
   assert.deepEqual(scaffold.templateNodeConfig, { version: 1, purpose: 'test_modular_node' })
+  assert.deepEqual(scaffold.sourceHashKeys, ['draftId', 'scope.sceneId', 'policyVersion'])
+  assert.deepEqual(scaffold.projectionMetadataKeys, ['activeManifestPurpose', 'readyArtifactCount'])
+  assert.deepEqual(scaffold.manifest.cachePolicy.sourceHashKeys, ['draftId', 'scope.sceneId', 'policyVersion'])
+  assert.ok(scaffold.requiredTests.includes('pack:test_modular_pack:owns:test_modular_node'))
   assert.ok(scaffold.requiredTests.includes('handler:test_modular_node:output_schema'))
+  assert.ok(scaffold.requiredTests.includes('projection:test_modular_node:metadata_shape'))
+  assert.equal(validateWorkflowNodeExtensionScaffold({
+    scaffold,
+    registeredManifest: scaffold.manifest,
+    pack: { packKey: 'test_modular_pack', handlerKeys: ['test_modular_node'] },
+  }).ok, true)
+  assert.equal(validateWorkflowNodeExtensionScaffold({
+    scaffold,
+    registeredManifest: null,
+    pack: { packKey: 'other_pack', handlerKeys: [] },
+  }).ok, false)
   assert.match(scaffold.checklist.join('\n'), /server-owned template registry/)
+  assert.match(scaffold.checklist.join('\n'), /sourceHashKeys/)
+
+  assert.throws(
+    () => createWorkflowNodeExtensionScaffold({
+      purpose: 'missing_pack_node',
+      label: 'Missing Pack Node',
+      packKey: ' ',
+      runtimeKind: 'deterministic_transform',
+      requiredInputs: [],
+      producedOutputs: ['output'],
+      artifactRoles: [],
+      previewRoles: [],
+      recoveryStrategy: 'node_step',
+      progressLabel: 'Missing pack node',
+      providerBacked: false,
+      manualOnly: false,
+      sourceHashKeys: ['draftId'],
+    }),
+    /requires packKey/,
+  )
+
+  assert.throws(
+    () => createWorkflowNodeExtensionScaffold({
+      purpose: 'missing_hash_node',
+      label: 'Missing Hash Node',
+      packKey: 'test_pack',
+      runtimeKind: 'deterministic_transform',
+      requiredInputs: [],
+      producedOutputs: ['output'],
+      artifactRoles: [],
+      previewRoles: [],
+      recoveryStrategy: 'node_step',
+      progressLabel: 'Missing hash node',
+      providerBacked: false,
+      manualOnly: false,
+      sourceHashKeys: [],
+    }),
+    /requires sourceHashKeys/,
+  )
+
+  assert.throws(
+    () => createWorkflowNodeExtensionScaffold({
+      purpose: 'invalid_runtime_node',
+      label: 'Invalid Runtime Node',
+      packKey: 'test_pack',
+      runtimeKind: 'random_runtime' as never,
+      requiredInputs: [],
+      producedOutputs: ['output'],
+      artifactRoles: [],
+      previewRoles: [],
+      recoveryStrategy: 'node_step',
+      progressLabel: 'Invalid runtime node',
+      providerBacked: false,
+      manualOnly: false,
+      sourceHashKeys: ['draftId'],
+    }),
+    /valid runtimeKind/,
+  )
 
   assert.throws(
     () => createWorkflowNodeManifest({
@@ -4353,6 +4433,7 @@ test('sequence animatic production hardening uses atomic ensures, signal refresh
   const worldGraphSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const orchestratorRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-orchestrator-runtime.ts'), 'utf8')
+  const sceneRunnerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-scene-runner.ts'), 'utf8')
   const directorNotesSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/cinematic-director-notes.ts'), 'utf8')
   const graphSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-graph/index.ts'), 'utf8')
   const nodeOutputSource = readFileSync(resolve(repoRoot, 'supabase/functions/get-output-workflow-node-output/index.ts'), 'utf8')
@@ -4395,8 +4476,9 @@ test('sequence animatic production hardening uses atomic ensures, signal refresh
   assert.match(workerSource, /ensureMappedChildWorkflow/)
   assert.match(workerSource, /buildValidatedOutputWorkflowTemplateGraph/)
   assert.doesNotMatch(workerSource, /function buildValidatedOutputWorkflowTemplateGraph/)
-  assert.match(workerSource, /sequenceAnimaticSceneShotPlansTemplateKey/)
-  assert.match(workerSource, /workflowTemplateSourceHash: graphResult\.sourceHash/)
+  assert.match(sceneRunnerSource, /ensureSequenceAnimaticSceneShotPlanWorkflowsRuntime/)
+  assert.match(sceneRunnerSource, /sceneShotPlansTemplateKey/)
+  assert.match(sceneRunnerSource, /workflowTemplateSourceHash: graphResult\.sourceHash/)
   assert.match(orchestratorRuntimeSource, /sequenceAnimaticContinuityBatchTemplateKey/)
   assert.match(orchestratorRuntimeSource, /sequenceAnimaticStoryboardBlocksTemplateKey/)
   assert.match(orchestratorRuntimeSource, /workflowTemplateSourceHash: graphResult\.sourceHash/)
@@ -4405,7 +4487,7 @@ test('sequence animatic production hardening uses atomic ensures, signal refresh
   assert.doesNotMatch(workerSource, /buildSequenceAnimaticBlockWorkflowGraph/)
   assert.doesNotMatch(orchestratorRuntimeSource, /buildSequenceAnimaticContinuityBatchWorkflowGraph/)
   assert.doesNotMatch(orchestratorRuntimeSource, /buildSequenceAnimaticBlockWorkflowGraph/)
-  assert.match(workerSource, /role: 'scene_shot_plan'/)
+  assert.match(sceneRunnerSource, /role: 'scene_shot_plan'/)
   assert.match(orchestratorRuntimeSource, /role: 'continuity_asset_batch'/)
   assert.match(orchestratorRuntimeSource, /role: 'storyboard_block'/)
   assert.doesNotMatch(workerSource, /ensure_sequence_animatic_child_workflow/)

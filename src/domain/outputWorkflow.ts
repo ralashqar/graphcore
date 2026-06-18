@@ -20,6 +20,7 @@ import {
 } from './outputWorkflowTemplateRegistry.ts'
 export {
   buildWorkflowProjectionMetadata,
+  assertWorkflowNodeExtensionScaffold,
   assertWorkflowNodeManifestDefinition,
   childWorkflowUtilityInputSchema,
   childWorkflowUtilityOutputSchema,
@@ -29,8 +30,10 @@ export {
   getWorkflowNodeManifest as getRegisteredWorkflowNodeManifest,
   registerWorkflowNodeManifest,
   validateWorkflowNodeManifestOutput,
+  validateWorkflowNodeExtensionScaffold,
   validateWorkflowNodeManifestDefinition,
   validateWorkflowTemplateGraph,
+  workflowNodeRuntimeKinds,
   workflowNodeStreamingPolicySchema,
   workflowProjectionMetadataSchema,
   type ChildWorkflowUtilityInput,
@@ -38,6 +41,7 @@ export {
   type WorkflowNodeExtensionScaffold,
   type WorkflowNodeExtensionScaffoldInput,
   type WorkflowNodeManifest,
+  type WorkflowNodeRuntimeKind,
   type WorkflowNodeStreamingPolicy,
   type WorkflowProjectionMetadata,
   type WorkflowTemplateManifest,

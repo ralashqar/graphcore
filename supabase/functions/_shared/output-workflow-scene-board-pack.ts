@@ -1,4 +1,11 @@
 import type { OutputArtifact } from '../../../src/domain/outputWorkflow.ts'
+import {
+  createWorkflowNodeExtensionScaffold,
+  workflowNodeManifestToContract,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeRuntimeKind,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
 import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import {
   planSceneBoardCoverageIntentChildren,
@@ -1292,17 +1299,221 @@ const sceneBoardHandlers = {
   sequence_animatic_zone_coverage_board_artifact: sequenceAnimaticZoneCoverageBoardArtifact,
 }
 
+const sceneBoardWorkflowNodePackKey = 'sequence_animatic_scene_board'
+
 export const sceneBoardWorkflowNodePack = defineWorkflowNodePack<
   SceneBoardNodeExecutionContext,
   SceneBoardNodeExecutionResult,
   SceneBoardWorkflowNodePackHelpers,
   typeof sceneBoardHandlers
 >({
-  packKey: 'sequence_animatic_scene_board',
+  packKey: sceneBoardWorkflowNodePackKey,
   handlers: sceneBoardHandlers,
 })
 
 export const sceneBoardWorkflowNodeHandlerKeys = sceneBoardWorkflowNodePack.handlerKeys
+
+function createSceneBoardNodeScaffold(input: {
+  purpose: keyof typeof sceneBoardHandlers
+  runtimeKind: WorkflowNodeRuntimeKind
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+}): WorkflowNodeExtensionScaffold {
+  const manifest = outputWorkflowNodeManifestsByPurpose.get(input.purpose)
+  if (!manifest) throw new Error(`Scene Board workflow node scaffold missing registered manifest: ${input.purpose}`)
+  return createWorkflowNodeExtensionScaffold({
+    ...workflowNodeManifestToContract(manifest),
+    nodeType: manifest.nodeType,
+    handlerKey: manifest.handlerKey,
+    packKey: sceneBoardWorkflowNodePackKey,
+    runtimeKind: input.runtimeKind,
+    sourceHashKeys: input.sourceHashKeys,
+    projectionMetadataKeys: input.projectionMetadataKeys,
+    inputSchema: manifest.inputSchema,
+    outputSchema: manifest.outputSchema,
+    configSchema: manifest.configSchema,
+    executable: manifest.executable,
+    executionPolicy: manifest.executionPolicy,
+    retryPolicy: manifest.retryPolicy,
+    cachePolicy: {
+      ...manifest.cachePolicy,
+      sourceHashKeys: manifest.cachePolicy.sourceHashKeys.length > 0
+        ? manifest.cachePolicy.sourceHashKeys
+        : input.sourceHashKeys,
+    },
+    cancellationPolicy: manifest.cancellationPolicy,
+    streamingPolicy: manifest.streamingPolicy,
+  })
+}
+
+export const sceneBoardWorkflowNodeScaffolds = [
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_scope_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.masterRequestId',
+      'config.parentRequestId',
+      'config.command.action',
+      'config.command.sceneId',
+      'config.command.setId',
+      'config.command.zoneId',
+      'config.command.scopeNodeId',
+      'config.command.shotIds',
+      'config.command.forceRefresh',
+      'config.sceneBoardPrepPolicyVersion',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'scopedAssetKeys', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_required_ref_plan',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.scope',
+      'config.command.sceneId',
+      'config.command.setId',
+      'config.command.zoneId',
+      'config.command.scopeNodeId',
+      'config.command.shotIds',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_set_ref_generation',
+    runtimeKind: 'child_workflow_utility',
+    sourceHashKeys: [
+      'upstream.requiredRefs',
+      'config.masterRequestId',
+      'config.command.forceRefresh',
+      'config.sceneBoardChildWorkflowSpecsByStage.set_refs',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'activeChildRequestIds', 'activeChildRunIds', 'readyArtifactCount', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_scaffold_ref_generation',
+    runtimeKind: 'child_workflow_utility',
+    sourceHashKeys: [
+      'upstream.setRefStatus',
+      'config.masterRequestId',
+      'config.command.forceRefresh',
+      'config.sceneBoardChildWorkflowSpecsByStage.scaffold_refs',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'activeChildRequestIds', 'activeChildRunIds', 'readyArtifactCount', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_coverage_intent_batch',
+    runtimeKind: 'child_workflow_utility',
+    sourceHashKeys: [
+      'upstream.scaffoldRefStatus',
+      'config.masterRequestId',
+      'config.command.sceneId',
+      'config.command.setId',
+      'config.command.zoneId',
+      'config.command.shotIds',
+      'config.command.scopedShots',
+      'config.command.forceRefresh',
+      'config.sceneBoardChildWorkflowSpecsByStage.coverage_directions',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'activeChildRequestIds', 'activeChildRunIds', 'readyArtifactCount', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_zone_coverage_grid',
+    runtimeKind: 'child_workflow_utility',
+    sourceHashKeys: [
+      'upstream.coverageIntentStatus',
+      'config.masterRequestId',
+      'config.command.sceneId',
+      'config.command.setId',
+      'config.command.zoneId',
+      'config.command.shotIds',
+      'config.command.scopedShots',
+      'config.command.forceRefresh',
+      'config.sceneBoardChildWorkflowSpecsByStage.coverage_grids',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'activeChildRequestIds', 'activeChildRunIds', 'readyArtifactCount', 'scopedAssetKeys', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_coverage_cell_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.workflowRuntime',
+      'upstream.scope',
+      'config.masterRequestId',
+      'config.command.sceneId',
+      'config.command.zoneId',
+      'config.command.shotIds',
+      'config.command.forceRefresh',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'activeChildRequestIds', 'readyArtifactCount', 'scopedAssetKeys', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_zone_coverage_board_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.masterRequestId',
+      'config.board',
+      'config.shots',
+      'config.coverageCells',
+      'config.assetPack',
+      'config.previousBoard',
+      'config.sceneGraphOverrides',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'scopedAssetKeys', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_zone_coverage_board_brief',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.board',
+      'upstream.coverageCells',
+      'upstream.assetPack',
+      'config.masterRequestId',
+      'config.sceneGraphOverrides',
+      'config.zoneCoverageGridPolicyVersion',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'providerStatus', 'providerRequestId', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_zone_coverage_board_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.coverageBrief',
+      'upstream.coverageCells',
+      'upstream.assetPack',
+      'config.sceneGraphOverrides',
+      'config.referenceAssetKeys',
+      'config.zoneCoverageGridPolicyVersion',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_zone_coverage_board_extract',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.image.assetKey',
+      'upstream.image.storagePath',
+      'upstream.coverageCells',
+      'config.masterRequestId',
+      'config.coverageAnchorSource',
+      'config.coverageAnchorMode',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'readyArtifactCount', 'scopedAssetKeys', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_zone_coverage_board_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.image.assetKey',
+      'upstream.cells',
+      'upstream.board',
+      'config.masterRequestId',
+      'config.zoneCoverageGridMode',
+      'config.coverageAnchorSource',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'readyArtifactCount', 'scopedAssetKeys', 'recoveryHints'],
+  }),
+]
+
+export const sceneBoardWorkflowNodeScaffoldHandlerKeys = sceneBoardWorkflowNodeScaffolds.map((scaffold) => scaffold.handlerKey)
 
 export function registerSceneBoardWorkflowNodePack(input: {
   helpers: SceneBoardWorkflowNodePackHelpers
