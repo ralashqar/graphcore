@@ -3,6 +3,7 @@
     "allowImportingTsExtensions": true
   },
   "imports": {
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.49.8"
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.49.8",
+    "zod": "npm:zod@4"
   }
 }

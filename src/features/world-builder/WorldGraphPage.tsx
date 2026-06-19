@@ -1118,6 +1118,16 @@ function writeWikiEntityPageRoute(page: ActiveWikiEntityPageState, mode: 'push' 
   if (page) {
     url.searchParams.set(WIKI_ENTITY_ROUTE_ENTITY_PARAM, page.entityKey)
     url.searchParams.set(WIKI_ENTITY_ROUTE_SECTION_PARAM, page.sectionKind)
+    if (page.animaticRequestId && UUID_ROUTE_VALUE_PATTERN.test(page.animaticRequestId)) {
+      url.searchParams.set(WIKI_ANIMATIC_ROUTE_REQUEST_PARAM, page.animaticRequestId)
+    } else {
+      url.searchParams.delete(WIKI_ANIMATIC_ROUTE_REQUEST_PARAM)
+    }
+    if (page.animaticBlockId) {
+      url.searchParams.set(WIKI_ANIMATIC_ROUTE_BLOCK_PARAM, page.animaticBlockId)
+    } else {
+      url.searchParams.delete(WIKI_ANIMATIC_ROUTE_BLOCK_PARAM)
+    }
   } else {
     url.searchParams.delete(WIKI_ENTITY_ROUTE_ENTITY_PARAM)
     url.searchParams.delete(WIKI_ENTITY_ROUTE_SECTION_PARAM)
@@ -2515,7 +2525,7 @@ export function WorldGraphPage({
   const sequenceAnimaticViewerRef = useRef<HTMLElement | null>(null)
   const sequenceAnimaticShotElementRefs = useRef<Record<string, HTMLElement | null>>({})
   const sequenceAnimaticKnownStreamedShotKeysRef = useRef<Set<string>>(new Set())
-  const sequenceAnimaticStateRevisionRef = useRef<string | null>(null)
+  const sequenceAnimaticStateRevisionByRequestRef = useRef<Record<string, string | null>>({})
   const loadAndStoreSequenceAnimaticState = useCallback(async (request: {
     masterRequestId?: string | null
     sequenceUnitKey?: string | null
@@ -3051,9 +3061,11 @@ export function WorldGraphPage({
       lastRefreshAt = Date.now()
       void Promise.resolve(loadAndStoreSequenceAnimaticState({
         masterRequestId: previewRequestId,
-        knownRevision: sequenceAnimaticStateRevisionRef.current,
+        knownRevision: sequenceAnimaticStateRevisionByRequestRef.current[previewRequestId] ?? null,
       })).then((result) => {
-        if (!cancelled && result.revision) sequenceAnimaticStateRevisionRef.current = result.revision
+        if (!cancelled && result.revision) {
+          sequenceAnimaticStateRevisionByRequestRef.current[previewRequestId] = result.revision
+        }
         if (cancelled) return
         const active = hasActiveSequenceAnimaticWork(result)
         if (result.unchanged && reason === 'fallback') {
@@ -3437,7 +3449,7 @@ export function WorldGraphPage({
     if (!canRunOutputs || viewMode !== 'wiki' || wikiSubView !== 'wiki') return
     if (!activeWikiEntity || activeWikiEntity.nodeType !== 'sequence_unit') return
     const sequenceKey = activeWikiEntity.key
-    const localRequest = latestWikiSequenceAnimaticRequest(outputRequests, sequenceKey)
+    const localRequest = latestWikiSequenceAnimaticRequest(outputRequests, sequenceKey, outputWorkflowRuns, outputArtifacts)
     if (localRequest) {
       setSequenceAnimaticLookupByKey((previous) => {
         const current = previous[sequenceKey]
@@ -3501,7 +3513,7 @@ export function WorldGraphPage({
     }).finally(() => {
       sequenceAnimaticLookupInFlightRef.current.delete(sequenceKey)
     })
-  }, [activeWikiEntity, canRunOutputs, loadAndStoreSequenceAnimaticState, outputRequests, sequenceAnimaticLookupByKey, viewMode, wikiSubView])
+  }, [activeWikiEntity, canRunOutputs, loadAndStoreSequenceAnimaticState, outputArtifacts, outputRequests, outputWorkflowRuns, sequenceAnimaticLookupByKey, viewMode, wikiSubView])
   useEffect(() => {
     if (viewMode === 'wiki' && wikiSubView === 'wiki') return
     if (!activeWikiEntityPage && !readWikiEntityPageRoute()) return

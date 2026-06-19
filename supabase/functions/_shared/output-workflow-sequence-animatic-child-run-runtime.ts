@@ -1,7 +1,6 @@
 import {
   buildOutputWorkflowExecutionPlan,
   getOutputWorkflowNodeExecutionMetadata,
-  outputWorkflowRunIntentDefaults,
   selectOutputWorkflowRunSubgraph,
   validateOutputWorkflowGraph,
   type OutputRequest,
@@ -9,6 +8,7 @@ import {
   type OutputWorkflowEdge,
   type OutputWorkflowNode,
 } from '../../../src/domain/outputWorkflow.ts'
+import { outputWorkflowRunIntentDefaults } from '../../../src/domain/outputWorkflowNodeContracts.ts'
 
 type LooseRecord = Record<string, unknown>
 

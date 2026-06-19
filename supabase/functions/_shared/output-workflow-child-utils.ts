@@ -3,6 +3,10 @@ import {
   type ChildWorkflowUtilityOutput,
 } from '../../../src/domain/outputWorkflowManifests.ts'
 import {
+  buildOutputWorkflowExecutionPlan,
+  getOutputWorkflowNodeGuidanceConfig,
+  getOutputWorkflowNodeExecutionMetadata,
+  selectOutputWorkflowRunSubgraph,
   outputRequestSchema,
   outputWorkflowEdgeSchema,
   outputWorkflowSchema,
@@ -11,6 +15,9 @@ import {
   type OutputWorkflowEdge,
   type OutputWorkflowNode,
 } from '../../../src/domain/outputWorkflow.ts'
+import {
+  getWorkflowNodeManifest,
+} from '../../../src/domain/outputWorkflowNodeContracts.ts'
 
 type EnsureChildWorkflowClient = {
   rpc: (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }>
@@ -270,6 +277,207 @@ export async function loadOutputRequestById(input: {
     throw new Error(response.error?.message ?? input.notFoundMessage ?? 'Output request was not found.')
   }
   return mapChildRequestRow(asRecord(response.data))
+}
+
+const ACTIVE_CHILD_RUN_STATUSES = new Set(['queued', 'running'])
+const TERMINAL_CHILD_REQUEST_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
+
+function readBoolean(value: unknown) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') return true
+    if (normalized === 'false') return false
+  }
+  return null
+}
+
+function mapChildNodeForPlan(row: Record<string, unknown>) {
+  return {
+    id: readText(row.id),
+    key: readText(row.key),
+    nodeType: readText(row.node_type),
+    label: readText(row.label),
+    config: asRecord(row.config),
+    metadata: asRecord(row.metadata),
+  }
+}
+
+function mapChildEdgeForPlan(row: Record<string, unknown>) {
+  return {
+    key: readText(row.key),
+    sourceNodeKey: readText(row.source_node_key),
+    sourcePort: readText(row.source_port),
+    targetNodeKey: readText(row.target_node_key),
+    targetPort: readText(row.target_port),
+    metadata: asRecord(row.metadata),
+  }
+}
+
+function inferChildTargetNodeKeys(input: {
+  nodes: Array<ReturnType<typeof mapChildNodeForPlan>>
+  configuredTargetNodeKeys?: readonly string[]
+}) {
+  const configured = uniqueText([...(input.configuredTargetNodeKeys ?? [])])
+  if (configured.length > 0) return configured
+  const artifactKeys = input.nodes
+    .filter((node) => node.nodeType === 'output_artifact' || node.key.endsWith('_artifact'))
+    .map((node) => node.key)
+    .filter(Boolean)
+  return artifactKeys.length > 0 ? [artifactKeys[artifactKeys.length - 1]] : []
+}
+
+export async function ensureChildWorkflowRun(input: {
+  client: ChildWorkflowWriteClient
+  projectId: string
+  draftId: string
+  request: Record<string, unknown>
+  workflow: Record<string, unknown>
+  nodes: Record<string, unknown>[]
+  edges: Record<string, unknown>[]
+  parentRunId: string
+  parentNodeKey: string
+  parentNodePurpose?: string | null
+  targetNodeKeys?: string[]
+  runScope?: string
+  runIntent?: string
+  workflowFamily?: string
+  commandAction?: string
+  source?: string
+  inputFingerprint: (value: unknown) => string
+}) {
+  const requestId = readText(input.request.id)
+  const workflowId = readText(input.workflow.id)
+  if (!requestId || !workflowId) return null
+  const requestStatus = readText(input.request.status)
+  if (TERMINAL_CHILD_REQUEST_STATUSES.has(requestStatus)) return null
+  const requestMetadata = asRecord(input.request.metadata)
+  if (readBoolean(requestMetadata.readyToRun) === false) return null
+
+  const latestRunId = readText(input.request.latest_run_id ?? input.request.latestRunId)
+  if (latestRunId) {
+    const activeRunResponse = await input.client
+      .from('output_workflow_runs')
+      .select('id, status')
+      .eq('id', latestRunId)
+      .maybeSingle()
+    if (activeRunResponse.error) throw new Error(activeRunResponse.error.message)
+    const activeStatus = readText(asRecord(activeRunResponse.data).status)
+    if (ACTIVE_CHILD_RUN_STATUSES.has(activeStatus)) {
+      return { runId: latestRunId, status: activeStatus, reused: true }
+    }
+  }
+
+  const nodes = input.nodes.map(mapChildNodeForPlan).filter((node) => node.key)
+  const edges = input.edges.map(mapChildEdgeForPlan).filter((edge) => edge.sourceNodeKey && edge.targetNodeKey)
+  const targetNodeKeys = inferChildTargetNodeKeys({ nodes, configuredTargetNodeKeys: input.targetNodeKeys })
+  const runScope = readText(input.runScope) || (targetNodeKeys.length > 0 ? 'upstream_to_node' : 'full_workflow')
+  const selectedSubgraph = selectOutputWorkflowRunSubgraph({
+    nodes,
+    edges,
+    targetNodeKeys,
+    runScope: runScope as never,
+  })
+  if (selectedSubgraph.diagnostics.length > 0) throw new Error(selectedSubgraph.diagnostics.join(' '))
+  const executionPlan = buildOutputWorkflowExecutionPlan(selectedSubgraph.nodes, selectedSubgraph.edges)
+  if (executionPlan.diagnostics.length > 0) throw new Error(executionPlan.diagnostics.join(' '))
+  const nodeOrder = new Map(executionPlan.orderedNodeKeys.map((key, index) => [key, index]))
+  const executionLevelByNodeKey = new Map(executionPlan.levels.flatMap((level, index) => level.map((key) => [key, index] as const)))
+  const now = new Date().toISOString()
+  const runInput = {
+    childRequestId: requestId,
+    parentRunId: input.parentRunId,
+    parentNodeKey: input.parentNodeKey,
+    targetNodeKeys,
+    sourceEntityKeys: Array.isArray(input.request.selected_entity_keys) ? input.request.selected_entity_keys : [],
+    sourceSequenceUnitKeys: Array.isArray(input.request.selected_sequence_unit_keys) ? input.request.selected_sequence_unit_keys : [],
+  }
+  const runResponse = await input.client
+    .from('output_workflow_runs')
+    .insert({
+      project_id: input.projectId,
+      draft_id: input.draftId,
+      workflow_id: workflowId,
+      requested_by: readText(input.request.requested_by),
+      status: 'queued',
+      preset: readText(input.workflow.preset) || 'cinematic_episode_from_sequence',
+      prompt: readText(input.request.prompt),
+      target_format: readText(input.request.target_format) || 'json',
+      world_snapshot_fingerprint: input.inputFingerprint(runInput),
+      input: runInput,
+      metadata: {
+        ...requestMetadata,
+        runIntent: input.runIntent || readText(requestMetadata.workflowCommandAction) || 'child_workflow',
+        workflowFamily: input.workflowFamily || readText(requestMetadata.workflowFamily) || 'child_workflow',
+        workflowCommandAction: input.commandAction || readText(requestMetadata.workflowCommandAction) || 'auto_start_child_workflow',
+        runScope,
+        targetNodeKeys,
+        parentRunId: input.parentRunId,
+        parentNodeKey: input.parentNodeKey,
+        parentNodePurpose: input.parentNodePurpose ?? null,
+        queuedAt: now,
+        startedBy: input.source || 'workflow-utility-auto-start',
+      },
+      heartbeat_at: now,
+    })
+    .select('id, status')
+    .single()
+  if (runResponse.error || !runResponse.data) throw new Error(runResponse.error?.message ?? 'Failed to create child workflow run.')
+
+  const runId = readText(runResponse.data.id)
+  const stepRows = selectedSubgraph.nodes
+    .slice()
+    .sort((left, right) => (nodeOrder.get(left.key) ?? 999) - (nodeOrder.get(right.key) ?? 999))
+    .map((node, index) => ({
+      run_id: runId,
+      workflow_id: workflowId,
+      node_id: node.id,
+      draft_id: input.draftId,
+      node_key: node.key,
+      node_type: node.nodeType,
+      status: 'queued',
+      order_index: index,
+      label: node.label || node.key,
+      metadata: {
+        manifestPurpose: getWorkflowNodeManifest(node as never)?.purpose ?? (readText(asRecord(node.config).purpose) || null),
+        progressLabel: getWorkflowNodeManifest(node as never)?.progressLabel ?? node.label ?? node.key,
+        executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
+        resourceClass: getOutputWorkflowNodeExecutionMetadata(node as never).resourceClass,
+        groupKey: getOutputWorkflowNodeExecutionMetadata(node as never).groupKey ?? null,
+        skillKeys: getOutputWorkflowNodeGuidanceConfig(node as never).skillKeys,
+        guidanceMode: getOutputWorkflowNodeGuidanceConfig(node as never).guidanceMode,
+        runScope,
+      },
+    }))
+  if (stepRows.length > 0) {
+    const stepResponse = await input.client
+      .from('output_workflow_run_steps')
+      .insert(stepRows)
+    if (stepResponse.error) throw new Error(stepResponse.error.message)
+  }
+
+  const requestUpdateResponse = await input.client
+    .from('output_requests')
+    .update({
+      latest_run_id: runId,
+      status: 'running',
+      error_message: null,
+      metadata: {
+        ...requestMetadata,
+        readyToRun: false,
+        lastRunStartedAt: now,
+        latestRunId: runId,
+        autoStartedByParentRunId: input.parentRunId,
+        autoStartedByParentNodeKey: input.parentNodeKey,
+      },
+    })
+    .eq('id', requestId)
+  if (requestUpdateResponse.error) throw new Error(requestUpdateResponse.error.message)
+  if (input.client.rpc) {
+    const projectionResponse = await input.client.rpc('refresh_output_request_status_projection', { p_request_id: requestId })
+    if (projectionResponse.error) throw new Error(projectionResponse.error.message ?? 'Failed to refresh child workflow projection.')
+  }
+  return { runId, status: 'queued', reused: false }
 }
 
 export async function markChildWorkflowStale(input: {

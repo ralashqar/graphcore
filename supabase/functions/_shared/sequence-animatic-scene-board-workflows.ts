@@ -88,6 +88,8 @@ export function buildSequenceAnimaticSceneBoardPrepWorkflowGraph(input: {
     optionalChildWorkflow: true,
     optionalChildWorkflows: true,
     optional_child_workflows: true,
+    autoStartChildren: true,
+    auto_start_children: true,
     childTemplateKey: `scene_board_${stage}`,
     identityKey: 'sceneBoardPrepIdentity',
     identityValue: `${String(input.commonConfig.sceneBoardPrepIdentity ?? 'scene_board_prep')}:${stage}`,

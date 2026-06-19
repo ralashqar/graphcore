@@ -105,7 +105,12 @@ import {
   documentWorkflowNodeHandlerKeys,
   documentWorkflowNodePack,
 } from '../../supabase/functions/_shared/output-workflow-document-pack.ts'
-import { workflowUtilityNodeHandlerKeys, workflowUtilityNodePack } from '../../supabase/functions/_shared/output-workflow-utility-pack.ts'
+import {
+  childWorkflowIsWaiting,
+  normalizeChildWorkflowUtilityStatus,
+  workflowUtilityNodeHandlerKeys,
+  workflowUtilityNodePack,
+} from '../../supabase/functions/_shared/output-workflow-utility-pack.ts'
 import {
   assertLegacyMonolithWorkflowNodeHandlerDebtIsTracked,
   legacyMonolithWorkflowNodeHandlerKeys,
@@ -1053,6 +1058,10 @@ test('scene board media utility and sequence animatic node packs expose register
     manifests: outputWorkflowNodeManifests,
     expectedPurposes: workflowUtilityNodeHandlerKeys,
   }))
+  assert.equal(normalizeChildWorkflowUtilityStatus('awaiting_confirmation'), 'waiting')
+  assert.equal(childWorkflowIsWaiting('awaiting_confirmation'), true)
+  assert.equal(normalizeChildWorkflowUtilityStatus('completed'), 'completed')
+  assert.equal(childWorkflowIsWaiting('completed'), false)
   assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
     pack: cinematicTextWorkflowNodePack,
     manifests: outputWorkflowNodeManifests,

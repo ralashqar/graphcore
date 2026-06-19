@@ -4,6 +4,7 @@ import {
 import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import {
   ensureChildWorkflow,
+  ensureChildWorkflowRun,
   waitForChildWorkflowReadiness,
 } from './output-workflow-child-utils.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
@@ -14,6 +15,7 @@ type UtilityNodeExecutionContext = {
   client: unknown
   inputHash: string
   node: {
+    key?: string
     config: unknown
   }
   workflow: {
@@ -24,6 +26,7 @@ type UtilityNodeExecutionContext = {
     projectId: string
     draftId: string
     workflowId: string
+    requestedBy?: string | null
     metadata?: unknown
   }
   upstream: Record<string, Record<string, unknown>>
@@ -40,6 +43,9 @@ type UtilityNodeExecutionResult = {
   provider: string
   model: string
 }
+
+const TERMINAL_CHILD_REQUEST_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
+const CHILD_WORKFLOW_UTILITY_STATUSES = new Set(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'waiting'])
 
 export type WorkflowUtilityNodePackHelpers = {
   asRecord: (value: unknown) => LooseRecord
@@ -91,6 +97,15 @@ function collectUpstreamChildOutputs(upstream: Record<string, Record<string, unk
     seen.add(child.childRequestId)
     return true
   })
+}
+
+export function normalizeChildWorkflowUtilityStatus(status: string) {
+  if (!status) return 'waiting'
+  return CHILD_WORKFLOW_UTILITY_STATUSES.has(status) ? status : 'waiting'
+}
+
+export function childWorkflowIsWaiting(status: string) {
+  return !TERMINAL_CHILD_REQUEST_STATUSES.has(status)
 }
 
 function optionalSkippedChildOutput(input: {
@@ -146,6 +161,7 @@ async function ensureChildWorkflowNode(
   const identityValue = helpers.readText(child.identityValue ?? child.identity_value ?? config.identityValue)
   const stage = helpers.readText(config.stage ?? child.stage ?? role) || 'child_workflow'
   const optional = config.optional === true || config.optionalChildWorkflow === true || config.optional_child_workflow === true
+  const autoStart = config.autoStartChild === true || config.auto_start_child === true || config.autoStartChildren === true || config.auto_start_children === true
   if (Object.keys(child).length === 0 && optional) {
     const outputs = optionalSkippedChildOutput({
       context,
@@ -176,17 +192,44 @@ async function ensureChildWorkflowNode(
   })
   const ensuredRequest = helpers.asRecord(ensured.request)
   const ensuredWorkflow = helpers.asRecord(ensured.workflow)
+  let requestStatus = helpers.readText(ensuredRequest.status)
+  const childRun = autoStart
+    ? await ensureChildWorkflowRun({
+      client: context.client as never,
+      projectId: context.run.projectId,
+      draftId: context.run.draftId,
+      request: ensuredRequest,
+      workflow: ensuredWorkflow,
+      nodes: ensured.nodes,
+      edges: ensured.edges,
+      parentRunId: context.run.id,
+      parentNodeKey: helpers.readText(context.node.key) || stage,
+      parentNodePurpose: helpers.readText(config.purpose),
+      targetNodeKeys: helpers.readStringArray(config.childTargetNodeKeys ?? config.child_target_node_keys),
+      runScope: helpers.readText(config.childRunScope ?? config.child_run_scope),
+      runIntent: helpers.readText(config.childRunIntent ?? config.child_run_intent),
+      workflowFamily: helpers.readText(config.workflowFamily ?? config.workflow_family),
+      commandAction: helpers.readText(config.workflowCommandAction ?? config.workflow_command_action),
+      source: 'workflow-ensure-child-workflow',
+      inputFingerprint: helpers.hashOutputWorkflowValue,
+    })
+    : null
+  if (childRun?.runId) {
+    ensuredRequest.latest_run_id = childRun.runId
+    requestStatus = childRun.status
+  }
   const outputs = childWorkflowUtilityOutputSchema.parse({
     childRequestId: helpers.readText(ensuredRequest.id),
     childWorkflowId: helpers.readText(ensuredWorkflow.id),
     childRunId: helpers.readText(ensuredRequest.latest_run_id ?? ensuredRequest.latestRunId) || null,
-    status: helpers.readText(ensuredRequest.status) || 'waiting',
+    status: normalizeChildWorkflowUtilityStatus(requestStatus),
     readyArtifactRoles: [],
     readyArtifactKeys: [],
-    waiting: !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(helpers.readText(ensuredRequest.status)),
+    waiting: childWorkflowIsWaiting(requestStatus),
     resumable: true,
     metadata: {
       reused: ensured.reused,
+      requestStatus,
       childNodeCount: ensured.nodes.length,
       childEdgeCount: ensured.edges.length,
     },
@@ -257,6 +300,7 @@ async function fanoutChildrenNode(
 ) {
   const config = helpers.asRecord(context.node.config)
   const parentRequestId = helpers.readText(config.parentRequestId) || helpers.readText(helpers.asRecord(context.run.metadata).outputRequestId)
+  const autoStartChildren = config.autoStartChildren === true || config.auto_start_children === true
   const configured = Array.isArray(config.childWorkflows)
     ? config.childWorkflows
     : Array.isArray(config.child_workflows)
@@ -315,17 +359,51 @@ async function fanoutChildrenNode(
     })
     const ensuredRequest = helpers.asRecord(ensured.request)
     const ensuredWorkflow = helpers.asRecord(ensured.workflow)
+    let requestStatus = helpers.readText(ensuredRequest.status)
+    const childRun = autoStartChildren
+      ? await ensureChildWorkflowRun({
+        client: context.client as never,
+        projectId: context.run.projectId,
+        draftId: context.run.draftId,
+        request: ensuredRequest,
+        workflow: ensuredWorkflow,
+        nodes: ensured.nodes,
+        edges: ensured.edges,
+        parentRunId: context.run.id,
+        parentNodeKey: helpers.readText(context.node.key) || helpers.readText(config.stage) || context.workflow.id,
+        parentNodePurpose: helpers.readText(config.purpose),
+        targetNodeKeys: helpers.readStringArray(
+          child.childTargetNodeKeys
+            ?? child.child_target_node_keys
+            ?? spec.childTargetNodeKeys
+            ?? spec.child_target_node_keys
+            ?? config.childTargetNodeKeys
+            ?? config.child_target_node_keys,
+        ),
+        runScope: helpers.readText(child.childRunScope ?? child.child_run_scope ?? spec.childRunScope ?? spec.child_run_scope ?? config.childRunScope ?? config.child_run_scope),
+        runIntent: helpers.readText(child.childRunIntent ?? child.child_run_intent ?? spec.childRunIntent ?? spec.child_run_intent ?? config.childRunIntent ?? config.child_run_intent),
+        workflowFamily: helpers.readText(child.workflowFamily ?? child.workflow_family ?? spec.workflowFamily ?? spec.workflow_family ?? config.workflowFamily ?? config.workflow_family),
+        commandAction: helpers.readText(child.workflowCommandAction ?? child.workflow_command_action ?? spec.workflowCommandAction ?? spec.workflow_command_action ?? config.workflowCommandAction ?? config.workflow_command_action),
+        source: 'workflow-fanout-children',
+        inputFingerprint: helpers.hashOutputWorkflowValue,
+      })
+      : null
+    if (childRun?.runId) {
+      ensuredRequest.latest_run_id = childRun.runId
+      requestStatus = childRun.status
+    }
     children.push(childWorkflowUtilityOutputSchema.parse({
       childRequestId: helpers.readText(ensuredRequest.id),
       childWorkflowId: helpers.readText(ensuredWorkflow.id),
       childRunId: helpers.readText(ensuredRequest.latest_run_id ?? ensuredRequest.latestRunId) || null,
-      status: helpers.readText(ensuredRequest.status) || 'waiting',
+      status: normalizeChildWorkflowUtilityStatus(requestStatus),
       readyArtifactRoles: [],
       readyArtifactKeys: [],
-      waiting: !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(helpers.readText(ensuredRequest.status)),
+      waiting: childWorkflowIsWaiting(requestStatus),
       resumable: true,
       metadata: {
         reused: ensured.reused,
+        requestStatus,
         role,
         identityKey,
         identityValue,
