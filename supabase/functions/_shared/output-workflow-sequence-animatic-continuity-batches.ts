@@ -35,9 +35,9 @@ function sequenceAnimaticBatchLayout(count: number) {
   return { rows: 3, columns: 3, cellCount: safeCount }
 }
 
-function sequenceAnimaticContinuityNodeCollections(graphInput: unknown) {
+function sequenceAnimaticContinuityNodeCollections(graphInput: unknown): LooseRecord[] {
   const graph = asRecord(graphInput)
-  return [
+  const nodes: LooseRecord[] = [
     ...readArray(graph.locationSets ?? graph.location_sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_zone' })),
     ...readArray(graph.zones).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_zone', assetKind: 'location_zone' })),
     ...readArray(graph.spots).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_spot', assetKind: 'location_spot' })),
@@ -52,7 +52,8 @@ function sequenceAnimaticContinuityNodeCollections(graphInput: unknown) {
         assetKind: type === 'character' ? 'temporary_character' : type === 'prop' ? 'prop' : 'location_spot',
       }
     }),
-  ].filter((entry) => readText(entry.id))
+  ]
+  return nodes.filter((entry) => readText(entry.id))
 }
 
 function sequenceAnimaticNodeRequiredMap(requirementsInput: unknown) {

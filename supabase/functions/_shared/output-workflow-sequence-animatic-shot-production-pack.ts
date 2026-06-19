@@ -1,5 +1,13 @@
 import { cinematicV2ShotPlanSchema, providerSafeCinematicV2DurationSeconds } from '../../../src/domain/cinematics.ts'
 import { formatSequenceAnimaticSceneStateForPrompt } from '../../../src/domain/sequenceAnimaticSceneState.ts'
+import {
+  createWorkflowNodeExtensionScaffold,
+  workflowNodeManifestToContract,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeRuntimeKind,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import type {
   LooseRecord,
   SequenceAnimaticNodeExecutionContext,
@@ -7,6 +15,28 @@ import type {
   SequenceAnimaticWorkflowNodePackHelpers,
 } from './output-workflow-sequence-animatic-node-pack-types.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
+import {
+  buildCompactSeedanceVideoPrompt,
+  buildSeedanceCharacterVoiceGuide,
+  buildSeedanceReferenceManifest,
+  compactSeedanceControlText,
+  formatSeedanceShotLine,
+  seedanceLabanMovementBlock,
+  seedanceProductionBoardArtifactBan,
+  seedanceReferenceRecordsFromAssetPack,
+  seedanceReferenceRecordsFromImages,
+} from './output-workflow-seedance-video-prompt-runtime.ts'
+import { buildCinematicV3StoryboardGroupAssetPack } from './output-workflow-cinematic-asset-pack-runtime.ts'
+import { inferSequenceShotVideoTimingRuntime } from './output-workflow-sequence-animatic-shot-video-runtime.ts'
+import {
+  orderSequenceAnimaticAssetPackReferences,
+  scopeAssetPackToReferenceAssetKeys,
+  sequenceAnimaticReferenceManifestEntries,
+  sequenceAnimaticReferenceManifestText,
+  sequenceAnimaticReferenceName,
+  sequenceAnimaticReferenceRole,
+  sequenceAnimaticReferenceVisual,
+} from './output-workflow-sequence-animatic-reference-runtime.ts'
 
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
@@ -121,36 +151,36 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
   const previousKeyframe = helpers.readFirstUpstreamRecord(context.upstream, ['previousKeyframe', 'previous_keyframe'])
   const storyboardPanel = helpers.readFirstUpstreamRecord(context.upstream, ['storyboardPanel', 'storyboard_panel'])
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
-  const referenceManifest = helpers.sequenceAnimaticReferenceManifestEntries(assetPack)
+  const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
   const referenceManifestText = referenceManifest
     .map((entry) => helpers.readText(helpers.asRecord(entry).line))
     .filter(Boolean)
     .join('\n')
   const visibleSubjects = helpers.readArray(assetPack.entities).map(helpers.asRecord)
-    .filter((entity) => ['character_reference', 'temp_character_reference'].includes(helpers.sequenceAnimaticReferenceRole(entity)))
+    .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
     .map((entity) => {
-      const name = helpers.sequenceAnimaticReferenceName(entity, 'Subject')
-      const visual = helpers.sequenceAnimaticReferenceVisual(entity, 16)
+      const name = sequenceAnimaticReferenceName(entity, 'Subject')
+      const visual = sequenceAnimaticReferenceVisual(entity, 16)
       return visual ? `${name} - ${visual}` : name
     })
     .filter(Boolean)
     .slice(0, 8)
     .join('\n')
   const locationRefs = helpers.readArray(assetPack.entities).map(helpers.asRecord)
-    .filter((entity) => ['spot_reference', 'zone_reference', 'set_reference', 'viewpoint_reference', 'location_reference'].includes(helpers.sequenceAnimaticReferenceRole(entity)))
+    .filter((entity) => ['spot_reference', 'zone_reference', 'set_reference', 'viewpoint_reference', 'location_reference'].includes(sequenceAnimaticReferenceRole(entity)))
     .map((entity) => {
-      const name = helpers.sequenceAnimaticReferenceName(entity, 'Location ref')
-      const visual = helpers.sequenceAnimaticReferenceVisual(entity, 14)
+      const name = sequenceAnimaticReferenceName(entity, 'Location ref')
+      const visual = sequenceAnimaticReferenceVisual(entity, 14)
       return visual ? `${name} - ${visual}` : name
     })
     .filter(Boolean)
     .slice(0, 5)
     .join('\n')
   const propRefs = helpers.readArray(assetPack.entities).map(helpers.asRecord)
-    .filter((entity) => helpers.sequenceAnimaticReferenceRole(entity) === 'prop_reference')
+    .filter((entity) => sequenceAnimaticReferenceRole(entity) === 'prop_reference')
     .map((entity) => {
-      const name = helpers.sequenceAnimaticReferenceName(entity, 'Prop')
-      const visual = helpers.sequenceAnimaticReferenceVisual(entity, 12)
+      const name = sequenceAnimaticReferenceName(entity, 'Prop')
+      const visual = sequenceAnimaticReferenceVisual(entity, 12)
       return visual ? `${name} - ${visual}` : name
     })
     .filter(Boolean)
@@ -266,7 +296,7 @@ export async function sequenceAnimaticPlannedKeyframeInput(
       selectedReferenceVariantType: 'continuity_asset',
     }]
   }).filter((entry) => !requiredReferenceAssetKeys.includes(helpers.readText(entry.primaryAssetKey)))
-  const baseAssetPack = helpers.buildCinematicV3StoryboardGroupAssetPack({
+  const baseAssetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: helpers.asRecord(config.assetPack ?? config.asset_pack),
     shots: [shot],
     maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
@@ -278,15 +308,15 @@ export async function sequenceAnimaticPlannedKeyframeInput(
   const extraReferenceAssetKeys = extraReferenceEntities
     .map((entity) => helpers.readText(entity.primaryAssetKey))
     .filter(Boolean)
-  const assetPack = helpers.orderSequenceAnimaticAssetPackReferences(helpers.scopeAssetPackToReferenceAssetKeys({
+  const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
     assetPack: baseAssetPack,
     referenceAssetKeys: [...requiredReferenceAssetKeys, ...extraReferenceAssetKeys],
     fallbackEntities: extraReferenceEntities,
     referenceScope: 'sequence_animatic_shot_keyframe',
     limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
   }))
-  const referenceManifest = helpers.sequenceAnimaticReferenceManifestEntries(assetPack)
-  const referenceManifestText = helpers.sequenceAnimaticReferenceManifestText(assetPack)
+  const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+  const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
   const outputs = {
     shot,
     coverageSetup,
@@ -443,7 +473,7 @@ export async function sequenceAnimaticShotVideoPrompt(
   const rawAssetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const upstreamImages = readUpstreamImages(context.upstream, helpers, ['image', 'keyframe', 'primaryReferenceImage'])
   const assetPackReferenceLimit = Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6))
-  const visualAssetPack = helpers.buildCinematicV3StoryboardGroupAssetPack({
+  const visualAssetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: rawAssetPack,
     shots: [shot as unknown as LooseRecord],
     maxEntityCount: assetPackReferenceLimit,
@@ -452,7 +482,7 @@ export async function sequenceAnimaticShotVideoPrompt(
     includePerformanceRefs: false,
     includeTextMentionedRefs: false,
   })
-  const voiceGuideAssetPack = helpers.buildCinematicV3StoryboardGroupAssetPack({
+  const voiceGuideAssetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: rawAssetPack,
     shots: [shot as unknown as LooseRecord],
     maxEntityCount: assetPackReferenceLimit,
@@ -462,10 +492,11 @@ export async function sequenceAnimaticShotVideoPrompt(
     includeTextMentionedRefs: false,
   })
   const entityByKey = helpers.cinematicEntityByKey(voiceGuideAssetPack)
-  const timing = await helpers.inferSequenceShotVideoTiming({
+  const timing = await inferSequenceShotVideoTimingRuntime({
     nodeKey: context.node.key,
     shot: shot as unknown as LooseRecord,
     entityByKey,
+    runStructuredNode: helpers.runStructuredNode,
   })
   const editorialDurationSeconds = Math.max(1, Math.min(15, Number(timing.editorialDurationSeconds) || 3))
   const providerDurationSeconds = providerSafeCinematicV2DurationSeconds(editorialDurationSeconds)
@@ -480,14 +511,14 @@ export async function sequenceAnimaticShotVideoPrompt(
     })
     .filter(Boolean)
     .join(' ')
-  const seedanceReferenceManifest = helpers.buildSeedanceReferenceManifest({
+  const seedanceReferenceManifest = buildSeedanceReferenceManifest({
     imageReferences: [
-      ...helpers.seedanceReferenceRecordsFromImages(upstreamImages.slice(0, 1), 'keyframes'),
-      ...helpers.seedanceReferenceRecordsFromAssetPack(visualAssetPack, assetPackReferenceLimit),
+      ...seedanceReferenceRecordsFromImages(upstreamImages.slice(0, 1), 'keyframes'),
+      ...seedanceReferenceRecordsFromAssetPack(visualAssetPack, assetPackReferenceLimit),
     ].slice(0, 9),
     cinematicReferenceMode: 'keyframes',
   })
-  const characterVoiceGuide = helpers.buildSeedanceCharacterVoiceGuide({
+  const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({
     assetPack: voiceGuideAssetPack,
     shots: [shot as unknown as LooseRecord],
     limit: 4,
@@ -495,27 +526,27 @@ export async function sequenceAnimaticShotVideoPrompt(
   })
   const shotAction = helpers.readText(shot.action) || helpers.readText(shot.description) || helpers.readText(shot.storyboardPanelPrompt) || helpers.readText(shot.title)
   const shotLine = [
-    helpers.formatSeedanceShotLine({
+    formatSeedanceShotLine({
       shot: shot as unknown as LooseRecord,
       startSeconds: 0,
       endSeconds: providerDurationSeconds,
       dialogueLines,
     }),
-    helpers.readText(shot.lighting) ? `Lighting: ${helpers.compactSeedanceControlText(shot.lighting, 12)}.` : '',
+    helpers.readText(shot.lighting) ? `Lighting: ${compactSeedanceControlText(shot.lighting, 12)}.` : '',
   ].filter(Boolean).join(' ')
-  const prompt = helpers.buildCompactSeedanceVideoPrompt({
+  const prompt = buildCompactSeedanceVideoPrompt({
     durationSeconds: providerDurationSeconds,
     aspectRatio: helpers.readText(config.aspectRatio) || '16:9',
     resolution: helpers.readText(config.resolution) || '720p',
     referenceManifest: seedanceReferenceManifest,
     referenceInstruction: 'Treat @Image1 as the cropped shot keyframe reference, not a storyboard sheet. Preserve composition, visible subjects, lighting, environment, and props while animating the shot.',
-    directedControls: timing.directedControls,
+    directedControls: helpers.asRecord(timing.directedControls),
     shotSectionTitle: 'SHOT',
     shotLines: shotLine || shotAction,
     identityGuide: characterVoiceGuide,
     audioPolicy: 'No music, score, audio bed, room tone, crowd wash, or background ambience. Use only scripted dialogue and direct diegetic sound effects caused by visible or explicitly offscreen shot action.',
-    movementLogic: helpers.seedanceLabanMovementBlock([shot as unknown as LooseRecord], helpers.readText(context.run.prompt)),
-    artifactBan: helpers.seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
+    movementLogic: seedanceLabanMovementBlock([shot as unknown as LooseRecord], helpers.readText(context.run.prompt)),
+    artifactBan: seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
     clipLabel: 'this single shot',
   })
   const guidance = helpers.readUpstreamGuidanceBundle(context.upstream)
@@ -684,4 +715,220 @@ export async function sequenceAnimaticShotVideo(
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
 ) {
   return helpers.executeVideoGeneration(context)
+}
+
+const sequenceAnimaticShotProductionHandlers = {
+  sequence_animatic_planned_keyframe_prompt: sequenceAnimaticPlannedKeyframePrompt,
+  sequence_animatic_planned_keyframe_input: sequenceAnimaticPlannedKeyframeInput,
+  sequence_animatic_planned_keyframe_image: sequenceAnimaticPlannedKeyframeImage,
+  sequence_animatic_planned_keyframe_artifact: sequenceAnimaticPlannedKeyframeArtifact,
+  sequence_animatic_shot_video_prompt: sequenceAnimaticShotVideoPrompt,
+  sequence_animatic_shot_video: sequenceAnimaticShotVideo,
+  sequence_animatic_shot_video_artifact: sequenceAnimaticShotVideoArtifact,
+}
+
+const sequenceAnimaticShotProductionWorkflowNodePackKey = 'sequence_animatic_shot_production'
+
+export const sequenceAnimaticShotProductionWorkflowNodePack = defineWorkflowNodePack<
+  SequenceAnimaticNodeExecutionContext,
+  SequenceAnimaticNodeExecutionResult,
+  SequenceAnimaticWorkflowNodePackHelpers,
+  typeof sequenceAnimaticShotProductionHandlers
+>({
+  packKey: sequenceAnimaticShotProductionWorkflowNodePackKey,
+  handlers: sequenceAnimaticShotProductionHandlers,
+})
+
+export const sequenceAnimaticShotProductionWorkflowNodeHandlerKeys = sequenceAnimaticShotProductionWorkflowNodePack.handlerKeys
+
+function createSequenceAnimaticShotProductionNodeScaffold(input: {
+  purpose: keyof typeof sequenceAnimaticShotProductionHandlers
+  runtimeKind: WorkflowNodeRuntimeKind
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+}): WorkflowNodeExtensionScaffold {
+  const manifest = outputWorkflowNodeManifestsByPurpose.get(input.purpose)
+  if (!manifest) throw new Error(`Sequence animatic shot production workflow node scaffold missing registered manifest: ${input.purpose}`)
+  return createWorkflowNodeExtensionScaffold({
+    ...workflowNodeManifestToContract(manifest),
+    nodeType: manifest.nodeType,
+    handlerKey: manifest.handlerKey,
+    packKey: sequenceAnimaticShotProductionWorkflowNodePackKey,
+    runtimeKind: input.runtimeKind,
+    sourceHashKeys: input.sourceHashKeys,
+    projectionMetadataKeys: input.projectionMetadataKeys,
+    inputSchema: manifest.inputSchema,
+    outputSchema: manifest.outputSchema,
+    configSchema: manifest.configSchema,
+    executable: manifest.executable,
+    executionPolicy: manifest.executionPolicy,
+    retryPolicy: manifest.retryPolicy,
+    cachePolicy: {
+      ...manifest.cachePolicy,
+      sourceHashKeys: manifest.cachePolicy.sourceHashKeys.length > 0
+        ? manifest.cachePolicy.sourceHashKeys
+        : input.sourceHashKeys,
+    },
+    cancellationPolicy: manifest.cancellationPolicy,
+    streamingPolicy: manifest.streamingPolicy,
+  })
+}
+
+const shotProductionProjectionMetadataKeys = [
+  'activeManifestPurpose',
+  'activeProgressLabel',
+  'readyArtifactCount',
+  'scopedAssetKeys',
+  'recoveryHints',
+]
+
+export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_planned_keyframe_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.shot',
+      'upstream.coverageSetup',
+      'upstream.coverageAnchor',
+      'upstream.previousKeyframe',
+      'upstream.storyboardPanel',
+      'upstream.assetPack',
+      'config.shotId',
+      'config.sceneState',
+      'config.keyframePromptPolicyVersion',
+      'config.referenceAssetKeys',
+    ],
+    projectionMetadataKeys: shotProductionProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_planned_keyframe_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.masterRequestId',
+      'config.storyboardBlockId',
+      'config.shotId',
+      'config.coverageSetupId',
+      'config.shot',
+      'config.coverageSetup',
+      'config.coverageAnchor',
+      'config.previousKeyframe',
+      'config.storyboardPanel',
+      'config.assetPack',
+      'config.requiredReferenceAssetKeys',
+      'config.sourceReferenceHash',
+      'config.visualPlanHash',
+      'config.assetPackReferenceLimit',
+    ],
+    projectionMetadataKeys: shotProductionProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_planned_keyframe_image',
+    runtimeKind: 'image_generation',
+    sourceHashKeys: [
+      'upstream.prompt',
+      'upstream.referenceManifest',
+      'config.shotId',
+      'config.coverageSetupId',
+      'config.imageModel',
+      'config.imageSize',
+      'config.quality',
+      'config.requiredReferenceAssetKeys',
+      'config.sourceReferenceHash',
+      'config.visualPlanHash',
+    ],
+    projectionMetadataKeys: [
+      ...shotProductionProjectionMetadataKeys,
+      'providerStatus',
+      'providerRequestId',
+    ],
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_planned_keyframe_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.image',
+      'upstream.prompt',
+      'upstream.shot',
+      'config.masterRequestId',
+      'config.storyboardBlockId',
+      'config.shotId',
+      'config.coverageSetupId',
+      'config.requiredReferenceAssetKeys',
+      'config.omittedReferenceAssetKeys',
+      'config.sourceReferenceHash',
+      'config.visualPlanHash',
+    ],
+    projectionMetadataKeys: shotProductionProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_shot_video_prompt',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.shot',
+      'upstream.assetPack',
+      'upstream.image',
+      'upstream.keyframe',
+      'config.shotId',
+      'config.storyboardBlockId',
+      'config.aspectRatio',
+      'config.resolution',
+      'config.editorialDurationSeconds',
+      'config.assetPackReferenceLimit',
+      'config.videoPromptPolicyVersion',
+      'config.videoTimingPolicyVersion',
+    ],
+    projectionMetadataKeys: [
+      ...shotProductionProjectionMetadataKeys,
+      'providerStatus',
+      'providerRequestId',
+    ],
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_shot_video',
+    runtimeKind: 'video_generation',
+    sourceHashKeys: [
+      'upstream.prompt',
+      'upstream.primaryReferenceImage',
+      'upstream.seedanceReferenceManifest',
+      'upstream.durationSeconds',
+      'upstream.directedControls',
+      'config.shotId',
+      'config.videoModel',
+      'config.videoProvider',
+      'config.aspectRatio',
+      'config.resolution',
+      'config.durationSeconds',
+    ],
+    projectionMetadataKeys: [
+      ...shotProductionProjectionMetadataKeys,
+      'providerStatus',
+      'providerRequestId',
+    ],
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_shot_video_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.video',
+      'upstream.prompt',
+      'upstream.keyframe',
+      'config.masterRequestId',
+      'config.storyboardBlockId',
+      'config.shotId',
+      'config.coverageSetupId',
+    ],
+    projectionMetadataKeys: shotProductionProjectionMetadataKeys,
+  }),
+]
+
+export const sequenceAnimaticShotProductionWorkflowNodeScaffoldHandlerKeys = sequenceAnimaticShotProductionWorkflowNodeScaffolds.map((scaffold) => scaffold.handlerKey)
+
+export function registerSequenceAnimaticShotProductionWorkflowNodePack(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  register: (handlerKey: string, handler: (context: SequenceAnimaticNodeExecutionContext) => Promise<SequenceAnimaticNodeExecutionResult>) => void
+}) {
+  sequenceAnimaticShotProductionWorkflowNodePack.register({
+    dependencies: input.helpers,
+    register: input.register,
+  })
 }

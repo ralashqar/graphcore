@@ -5,6 +5,9 @@ import {
   hashOutputWorkflowValue,
 } from '../../../src/domain/outputWorkflow.ts'
 import {
+  readWorldEntityVisualDescription,
+} from '../../../src/domain/worldEntityVisuals.ts'
+import {
   sequenceAnimaticContinuityGraphV2Schema,
   sequenceAnimaticContinuityGraphAngleSchema,
   sequenceAnimaticContinuityGraphEdgeSchema,
@@ -15,6 +18,8 @@ import {
   sequenceAnimaticContinuityLocationSetSchema,
   sequenceAnimaticContinuityPlannerAnchorSchema,
   sequenceAnimaticContinuityRejectedCandidateSchema,
+  sequenceAnimaticContinuityRejectedReasonSchema,
+  sequenceAnimaticContinuitySceneGraphSchema,
   sequenceAnimaticContinuityShotBindingSchema,
   sequenceAnimaticContinuityWorldLocationRefSchema,
 } from './output-workflow-sequence-animatic-shot-continuity-contracts.ts'
@@ -59,6 +64,49 @@ export const sequenceAnimaticContinuityBlockDeltaSchema = z.object({
 export const sequenceAnimaticContinuityAssetStateSchema = continuityAssetStateSchema
 export const sequenceAnimaticContinuityVisualDependencyEdgeSchema = continuityVisualDependencyEdgeSchema
 
+export const sequenceAnimaticContinuityPlanV2Schema = z.object({
+  version: z.literal('sequence_animatic_continuity_plan_v2').default('sequence_animatic_continuity_plan_v2'),
+  planningMode: z.enum(['block_graph_v2', 'llm_structured_v2', 'deterministic_fallback']).default('llm_structured_v2'),
+  anchors: z.array(sequenceAnimaticContinuityPlannerAnchorSchema).default([]),
+  continuityGraphV2: sequenceAnimaticContinuityGraphV2Schema.optional(),
+  locationSets: z.array(sequenceAnimaticContinuityLocationSetSchema).default([]),
+  locationAngles: z.array(sequenceAnimaticContinuityLocationAngleSchema).default([]),
+  sceneGraph: sequenceAnimaticContinuitySceneGraphSchema.default({ nodes: [], edges: [] }),
+  shotBindings: z.record(z.string(), sequenceAnimaticContinuityShotBindingSchema).default({}),
+  rejectedCandidates: z.array(sequenceAnimaticContinuityRejectedCandidateSchema).default([]),
+  warnings: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+export type SequenceAnimaticContinuityAnchor = {
+  id: string
+  name: string
+  anchorType: 'prop' | 'location_spot' | 'character'
+  continuitySubtype?: 'prop' | 'location_set' | 'location_angle' | 'location_spot' | 'character'
+  baseLocationRefId?: string | null
+  summary: string
+  visualBrief: string
+  persistenceReason?: string
+  confidence?: number
+  sourceEvidence?: string[]
+  existingWorldEntityMatch?: string | null
+  rejectionRisk?: string
+  shotIds: string[]
+  storyboardBlockIds: string[]
+  usageCount: number
+  setId?: string | null
+  angleId?: string | null
+  connectedTo?: string[]
+  entryFrom?: string[]
+  visibleFrom?: string[]
+  relationshipHints?: string[]
+  sourcePhrases?: string[]
+  assetKey?: string | null
+  artifactKey?: string | null
+  sourceAtlasAssetKey?: string | null
+  cropRect?: Record<string, number> | null
+}
+
 export function sequenceAnimaticGraphLocationRefsFromContext(context: Record<string, unknown>) {
   return readArray(context.existingWorldReferences).map(asRecord)
     .filter((entry) => /\b(place|location|environment|set)\b/i.test(readText(entry.type)))
@@ -69,6 +117,16 @@ export function sequenceAnimaticGraphLocationRefsFromContext(context: Record<str
       visualSummary: compactSequenceAnimaticText(entry.visualSummary, 420),
     }))
     .filter((entry, index, values) => entry.id && values.findIndex((candidate) => candidate.id === entry.id) === index)
+}
+
+export function continuityBlockNodeSuffix(nodeKey: string) {
+  return /^continuity_block_(\d+)_/.exec(nodeKey)?.[1] ?? ''
+}
+
+export function previousContinuityGraphNodeKeys(blockSuffix: string) {
+  const blockNumber = Number.parseInt(blockSuffix, 10)
+  if (!Number.isFinite(blockNumber) || blockNumber <= 1) return ['continuity_global_merge', 'continuity_seed_graph']
+  return [`continuity_block_${String(blockNumber - 1).padStart(3, '0')}_merge`, 'continuity_global_merge', 'continuity_seed_graph']
 }
 
 export function sequenceAnimaticEmptyGraphV2(context: Record<string, unknown> = {}) {
@@ -135,6 +193,305 @@ export function sequenceAnimaticGlobalStoryboardBlock(continuityPlannerContext: 
   }
 }
 
+const sequenceAnimaticDeterministicSpotPhrases = [
+  'threshold',
+  'doorway',
+  'entrance',
+  'hidden passage',
+  'service gap',
+  'service shaft',
+  'central chamber',
+  'leader chamber table',
+  'long table',
+  'map wall',
+  'saltglass window',
+  'porthole window',
+  'catwalk',
+  'platform',
+  'rail',
+  'corridor',
+  'archive wall',
+  'pipe lane',
+  'clock face',
+  'engine heart',
+]
+
+function sequenceAnimaticDeterministicSlug(...parts: unknown[]) {
+  const slug = parts.map(readText).filter(Boolean).join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 84)
+  return slug || 'output'
+}
+
+function sequenceAnimaticDeterministicSpatialRecord(shot: Record<string, unknown>) {
+  return asRecord(shot.spatialContinuity ?? shot.spatial_continuity)
+}
+
+function compactSequenceAnimaticCameraForGraph(shot: Record<string, unknown>) {
+  const camera = asRecord(shot.camera)
+  return {
+    framing: compactSequenceAnimaticText(camera.framing ?? shot.framing, 220),
+    angle: compactSequenceAnimaticText(camera.angle ?? shot.cameraAngle, 220),
+    movement: compactSequenceAnimaticText(camera.movement ?? shot.cameraMovement, 260),
+  }
+}
+
+function sequenceAnimaticPersistentLightingCueForGraph(value: unknown) {
+  const text = compactSequenceAnimaticText(value, 360)
+  if (!text) return ''
+  return /\b(lantern|torch|fire|candle|window|sun|moon|neon|monitor|screen|emergency|practical|lamp|spotlight|backlight|silhouette|strobe|flicker|glow from|shafts? of light)\b/i.test(text)
+    ? text
+    : ''
+}
+
+function sequenceAnimaticShotWorldLocationRefId(shot: Record<string, unknown>, graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>) {
+  const resolvedLocation = asRecord(asRecord(shot.resolvedRefs).location)
+  return readText(shot.worldLocationRefId)
+    || readText(shot.locationRefId)
+    || readText(resolvedLocation.key)
+    || graph.worldLocationRefs[0]?.id
+    || 'unknown_location'
+}
+
+function sequenceAnimaticGraphSetId(shot: Record<string, unknown>, worldLocationRefId: string) {
+  return readText(shot.continuitySetId)
+    || `set_${sequenceAnimaticDeterministicSlug(worldLocationRefId, 'primary')}`
+}
+
+function sequenceAnimaticGraphZoneSeed(shot: Record<string, unknown>, worldLocationRefId: string) {
+  const spatial = sequenceAnimaticDeterministicSpatialRecord(shot)
+  const physicalCandidates = [
+    readText(shot.continuityZoneLabel),
+    readText(spatial.subjectPosition),
+    ...readStringArray(spatial.visibleLandmarks),
+  ].filter(Boolean)
+  const physicalCandidate = physicalCandidates.find((candidate) => sequenceAnimaticContinuityTextHasPhysicalLocationCue(candidate))
+  return physicalCandidate || `${worldLocationRefId} action area`
+}
+
+function sequenceAnimaticGraphZoneId(shot: Record<string, unknown>, worldLocationRefId: string, setId: string) {
+  return readText(shot.continuityZoneId)
+    || `zone_${sequenceAnimaticDeterministicSlug(setId, sequenceAnimaticGraphZoneSeed(shot, worldLocationRefId)).slice(0, 64)}`
+}
+
+function sequenceAnimaticGraphAngleId(shot: Record<string, unknown>, setId: string, zoneId: string) {
+  const camera = asRecord(shot.camera)
+  return readText(shot.continuityAngleId)
+    || `angle_${sequenceAnimaticDeterministicSlug(setId, zoneId, camera.framing, camera.angle, camera.movement).slice(0, 64)}`
+}
+
+function sequenceAnimaticGraphSpotIds(shot: Record<string, unknown>, zoneId: string) {
+  const explicit = readStringArray(shot.continuitySpotIds)
+  if (explicit.length > 0) return explicit
+  const action = normalizeSequenceAnimaticReferenceText([shot.title, shot.action, shot.description].map(readText).filter(Boolean).join(' '))
+  const phrases = sequenceAnimaticDeterministicSpotPhrases.filter((phrase) => action.includes(normalizeSequenceAnimaticReferenceText(phrase))).slice(0, 3)
+  return phrases.length > 0
+    ? phrases.map((phrase) => `spot_${sequenceAnimaticDeterministicSlug(zoneId, phrase).slice(0, 72)}`)
+    : [`spot_${sequenceAnimaticDeterministicSlug(zoneId, 'primary').slice(0, 72)}`]
+}
+
+function sequenceAnimaticGraphShotBindingAnchorIds(graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>, shotId: string) {
+  const characterAnchorIds: string[] = []
+  const propAnchorIds: string[] = []
+  graph.assetAnchors.forEach((anchor) => {
+    if (!anchor.shotIds.includes(shotId)) return
+    const id = readText(anchor.id)
+    if (!id) return
+    if (anchor.type === 'character') characterAnchorIds.push(id)
+    if (anchor.type === 'prop') propAnchorIds.push(id)
+  })
+  return {
+    characterAnchorIds: [...new Set(characterAnchorIds)],
+    propAnchorIds: [...new Set(propAnchorIds)],
+  }
+}
+
+function sequenceAnimaticContinuitySafePhysicalLabel(input: {
+  fallbackPrefix: string
+  worldLocationRefId: string
+  shot: Record<string, unknown>
+  lookup?: ReturnType<typeof buildSequenceAnimaticReferenceLookup>
+}) {
+  const spatial = sequenceAnimaticDeterministicSpatialRecord(input.shot)
+  const candidates = [
+    readText(input.shot.continuityZoneLabel),
+    readText(spatial.subjectPosition),
+    readText(spatial.cameraPosition),
+    ...readStringArray(spatial.visibleLandmarks),
+    readText(asRecord(asRecord(input.shot.resolvedRefs).location).name),
+    sequenceAnimaticContinuityTitleFromRefLike(input.worldLocationRefId),
+  ].filter(Boolean)
+  for (const candidate of candidates) {
+    if (!sequenceAnimaticContinuityTextHasPhysicalLocationCue(candidate)) continue
+    if (input.lookup && sequenceAnimaticCanonicalCharacterMatchForText(candidate, input.lookup)) continue
+    return sequenceAnimaticContinuityTitleFromRefLike(candidate)
+  }
+  return `${sequenceAnimaticContinuityTitleFromRefLike(input.worldLocationRefId)} ${input.fallbackPrefix}`.trim()
+}
+
+export function buildDeterministicSequenceAnimaticBlockDelta(input: {
+  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
+  continuityPlannerContext: Record<string, unknown>
+  storyboardBlock: Record<string, unknown>
+  assetAnchors?: Array<z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>>
+  fallbackReason?: string
+}) {
+  const blockId = readText(input.storyboardBlock.id) || readText(input.storyboardBlock.storyboardBlockId) || 'storyboard_block'
+  const blockTitle = readText(input.storyboardBlock.title) || readText(input.storyboardBlock.summary) || blockId
+  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
+  const locationSets: Array<z.infer<typeof sequenceAnimaticContinuityGraphSetSchema>> = []
+  const zones: Array<z.infer<typeof sequenceAnimaticContinuityGraphZoneSchema>> = []
+  const spots: Array<z.infer<typeof sequenceAnimaticContinuityGraphSpotSchema>> = []
+  const angles: Array<z.infer<typeof sequenceAnimaticContinuityGraphAngleSchema>> = []
+  const edges: Array<z.infer<typeof sequenceAnimaticContinuityGraphEdgeSchema>> = []
+  const shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>> = {}
+  const assetAnchors = (input.assetAnchors ?? []).map((anchor) => sequenceAnimaticContinuityPlannerAnchorSchema.parse(anchor))
+  const rejectedCandidates: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
+  const worldLocationRefs = [...input.graph.worldLocationRefs]
+  const referenceLookup = sequenceAnimaticReferenceLookupFromPlannerContext(input.continuityPlannerContext)
+
+  for (const shot of shots) {
+    const shotId = readText(shot.id)
+    if (!shotId) continue
+    const spatial = sequenceAnimaticDeterministicSpatialRecord(shot)
+    const camera = compactSequenceAnimaticCameraForGraph(shot)
+    const worldLocationRefId = sequenceAnimaticShotWorldLocationRefId(shot, input.graph)
+    if (worldLocationRefId && !worldLocationRefs.some((entry) => entry.id === worldLocationRefId)) {
+      const resolvedLocation = asRecord(asRecord(shot.resolvedRefs).location)
+      worldLocationRefs.push({
+        id: worldLocationRefId,
+        name: readText(resolvedLocation.name) || sequenceAnimaticContinuityTitleFromRefLike(worldLocationRefId),
+        summary: compactSequenceAnimaticText(resolvedLocation.summary, 360),
+        visualSummary: compactSequenceAnimaticText(resolvedLocation.visualSummary, 420),
+      })
+    }
+    const setId = sequenceAnimaticGraphSetId(shot, worldLocationRefId)
+    const zoneId = sequenceAnimaticGraphZoneId(shot, worldLocationRefId, setId)
+    const spotIds = sequenceAnimaticGraphSpotIds(shot, zoneId)
+    const angleId = sequenceAnimaticGraphAngleId(shot, setId, zoneId)
+    const zoneName = sequenceAnimaticContinuitySafePhysicalLabel({
+      fallbackPrefix: 'action zone',
+      worldLocationRefId,
+      shot,
+      lookup: referenceLookup,
+    })
+    const spotName = sequenceAnimaticContinuitySafePhysicalLabel({
+      fallbackPrefix: 'primary spot',
+      worldLocationRefId,
+      shot,
+      lookup: referenceLookup,
+    })
+    const angleName = [
+      sequenceAnimaticContinuitySafePhysicalLabel({
+        fallbackPrefix: 'camera angle',
+        worldLocationRefId,
+        shot,
+        lookup: referenceLookup,
+      }),
+      camera.framing || camera.angle || camera.movement ? 'camera angle' : '',
+    ].filter(Boolean).join(' ')
+    const shotIds = [shotId]
+    const storyboardBlockIds = [blockId].filter(Boolean)
+    locationSets.push({
+      id: setId,
+      worldLocationRefId,
+      name: `${sequenceAnimaticContinuityTitleFromRefLike(worldLocationRefId)} primary set`,
+      visualBrief: compactSequenceAnimaticText(readText(asRecord(asRecord(shot.resolvedRefs).location).visualSummary) || readText(shot.action), 700),
+      shotIds,
+      storyboardBlockIds,
+    })
+    zones.push({
+      id: zoneId,
+      setId,
+      worldLocationRefId,
+      name: zoneName,
+      visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 700),
+      shotIds,
+      storyboardBlockIds,
+    })
+    for (const spotId of spotIds) {
+      spots.push({
+        id: spotId,
+        zoneId,
+        setId,
+        worldLocationRefId,
+        name: spotId.includes('primary') ? spotName : sequenceAnimaticContinuityTitleFromRefLike(spotId.replace(/^spot_/, '')),
+        visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 520),
+        landmarks: readStringArray(spatial.visibleLandmarks),
+        shotIds,
+        storyboardBlockIds,
+      })
+      edges.push({ sourceId: zoneId, targetId: spotId, relationship: 'contains', evidence: `Shot ${shotId} occurs at this spot.`, direction: '', screenDirection: '' })
+    }
+    angles.push({
+      id: angleId,
+      setId,
+      zoneId,
+      spotIds,
+      worldLocationRefId,
+      name: angleName || `${sequenceAnimaticContinuityTitleFromRefLike(worldLocationRefId)} camera angle`,
+      visualBrief: compactSequenceAnimaticText([readText(shot.action), camera.framing, camera.angle, camera.movement].filter(Boolean).join(' '), 700),
+      framing: camera.framing,
+      cameraPosition: readText(spatial.cameraPosition),
+      facingDirection: readText(spatial.facingDirection) || camera.angle,
+      subjectPosition: readText(spatial.subjectPosition),
+      visibleLandmarks: readStringArray(spatial.visibleLandmarks),
+      lightingDirection: readText(spatial.lightSourceDirection) || sequenceAnimaticPersistentLightingCueForGraph(shot.lighting),
+      shotIds,
+      storyboardBlockIds,
+    })
+    edges.push(
+      { sourceId: setId, targetId: zoneId, relationship: 'contains', evidence: `Block ${blockId} uses this zone.`, direction: '', screenDirection: '' },
+      { sourceId: angleId, targetId: zoneId, relationship: 'same_space_angle', evidence: `Shot ${shotId} camera coverage.`, direction: '', screenDirection: '' },
+      { sourceId: angleId, targetId: spotIds[0] ?? zoneId, relationship: 'camera_faces', evidence: `Shot ${shotId} framing faces this spot.`, direction: '', screenDirection: '' },
+    )
+
+    const graphAnchorIds = sequenceAnimaticGraphShotBindingAnchorIds(input.graph, shotId)
+    const characterAnchorIds = [
+      ...graphAnchorIds.characterAnchorIds,
+      ...assetAnchors.filter((anchor) => anchor.type === 'character' && anchor.shotIds.includes(shotId)).map((anchor) => readText(anchor.id)).filter(Boolean),
+    ]
+    const propAnchorIds = [
+      ...graphAnchorIds.propAnchorIds,
+      ...assetAnchors.filter((anchor) => anchor.type === 'prop' && anchor.shotIds.includes(shotId)).map((anchor) => readText(anchor.id)).filter(Boolean),
+    ]
+    shotBindings[shotId] = {
+      shotId,
+      storyboardBlockId: blockId,
+      worldLocationRefId,
+      setId,
+      zoneId,
+      primarySpotId: spotIds[0] ?? '',
+      spotIds,
+      viewpointId: angleId,
+      angleId,
+      characterAnchorIds: [...new Set(characterAnchorIds)],
+      propAnchorIds: [...new Set(propAnchorIds)],
+      assetAnchorIds: [...new Set([...characterAnchorIds, ...propAnchorIds])],
+      spatialNodeIds: [...new Set([setId, zoneId, spotIds[0] ?? '', ...spotIds, angleId].filter(Boolean))],
+      continuityAnchorIds: [...new Set([...characterAnchorIds, ...propAnchorIds])],
+    }
+  }
+
+  return sequenceAnimaticContinuityBlockDeltaSchema.parse({
+    blockId,
+    blockSummary: `${blockTitle}: ${shots.length} shot${shots.length === 1 ? '' : 's'} spatially bound.`,
+    worldLocationRefs,
+    locationSets,
+    zones,
+    spots,
+    angles,
+    edges,
+    shotBindings,
+    assetAnchors,
+    rejectedCandidates,
+    warnings: input.fallbackReason ? [`Block continuity fallback used: ${input.fallbackReason}`] : [],
+    diagnostics: [`Planned continuity scene graph delta for ${blockId}.`],
+  })
+}
+
 export function parseSequenceAnimaticGraphV2(value: unknown): z.infer<typeof sequenceAnimaticContinuityGraphV2Schema> {
   const parsed = sequenceAnimaticContinuityGraphV2Schema.safeParse(value)
   if (!parsed.success) return sequenceAnimaticEmptyGraphV2()
@@ -172,6 +529,1216 @@ export function sequenceAnimaticContinuityAnchorStableId(anchor: { type?: string
   if (type === 'location_set') return `set_anchor_${slug}`
   if (type === 'location_angle') return `angle_anchor_${slug}`
   return `anchor_${slug}`
+}
+
+function normalizeSequenceAnimaticAnchorName(value: unknown) {
+  return readText(value)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const sequenceAnimaticRuntimeNonCharacterSpeakerNames = new Set([
+  'unknown',
+  'narrator',
+  'voiceover',
+  'voice over',
+  'offscreen voice',
+  'crowd',
+  'all',
+])
+
+function sequenceAnimaticTemporaryCharacterLooksSpecific(name: string, visualBrief = '') {
+  const normalized = sequenceAnimaticContinuityAnchorSemanticName(`${name} ${visualBrief}`)
+  if (!normalized || sequenceAnimaticRuntimeNonCharacterSpeakerNames.has(normalized)) return false
+  if (/\b(crowd|workers|people|figures|extras|everyone|someone|anyone|voices|background)\b/i.test(normalized)) return false
+  return /\b(mechanic|worker|courier|cashier|shopkeeper|guard|watchman|attendant|scribe|clerk|messenger|apprentice|elder|old|young|vole|puffin|mouse|rat|otter|mole|badger|fox|bird)\b/i.test(normalized)
+}
+
+function sequenceAnimaticTemporaryCharacterEvidenceIsVisible(sourceEvidence: string[]) {
+  const evidenceText = sourceEvidence.join(' ')
+  return /\b(visible|nearby|beside|behind|below|above|foreground|background|passes|stands|sits|walks|crosses|looks|glances|ignores|reacts|speaks|asks|says|dialogue|worker|mechanic|courier|guard|attendant)\b/i.test(evidenceText)
+}
+
+function sequenceAnimaticShouldKeepSingleUseTemporaryCharacter(input: {
+  name: string
+  visualBrief?: string
+  sourceEvidence: string[]
+  existingWorldEntityMatch?: string | null
+}) {
+  if (readText(input.existingWorldEntityMatch)) return false
+  return sequenceAnimaticTemporaryCharacterLooksSpecific(input.name, input.visualBrief)
+    && sequenceAnimaticTemporaryCharacterEvidenceIsVisible(input.sourceEvidence)
+}
+
+const sequenceAnimaticContinuityPropInteractionPattern = /\b(activates?|adjusts?|aims?|attaches?|breaks?|carries|carry|checks?|clicks?|compares?|connects?|cuts?|diagnoses?|drags?|drops?|examines?|fails?|fixes?|flips?|grabs?|grips?|hands?|hangs?|hits?|holds?|holding|inserts?|jerks?|lifts?|locks?|lowers?|manipulates?|moves?|opens?|passes?|places?|points?|presses?|pulls?|pushes?|raises?|reads?|repairs?|reveals?|rises?|seals?|sets?|shuts?|slides?|snaps?|strikes?|takes?|taps?|throws?|touches?|turns?|twists?|unlocks?|uses?|watches?|wrenches?|writes?|gaze|gazes|look|looks|stares?)\b/i
+
+const sequenceAnimaticContinuityPropNameStopWords = new Set([
+  'the',
+  'and',
+  'with',
+  'from',
+  'into',
+  'onto',
+  'near',
+  'over',
+  'under',
+  'side',
+  'small',
+  'large',
+  'old',
+  'new',
+  'primary',
+])
+
+function sequenceAnimaticContinuityPropNameTokens(value: unknown) {
+  return sequenceAnimaticContinuityAnchorSemanticName(readText(value))
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !sequenceAnimaticContinuityPropNameStopWords.has(token))
+}
+
+function sequenceAnimaticContinuityShotEvidenceText(shot: Record<string, unknown>) {
+  const dialogue = readArray(shot.dialogue).map(asRecord)
+    .map((line) => `${readText(line.speakerName)} ${readText(line.text)}`)
+    .filter(Boolean)
+    .join(' ')
+  return [
+    shot.description,
+    shot.action,
+    shot.actionLine,
+    shot.title,
+    dialogue,
+  ].map(readText).filter(Boolean).join(' ')
+}
+
+function sequenceAnimaticContinuityPropMentionedInText(anchor: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>, text: string) {
+  const normalized = sequenceAnimaticContinuityAnchorSemanticName(text)
+  const name = sequenceAnimaticContinuityAnchorSemanticName(anchor.name)
+  if (name && normalized.includes(name)) return true
+  const tokens = sequenceAnimaticContinuityPropNameTokens(anchor.name)
+  if (tokens.length === 0) return false
+  return tokens.some((token) => normalized.includes(token))
+}
+
+export function sequenceAnimaticContinuityPropHasInteractionEvidence(input: {
+  anchor: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>
+  continuityPlannerContext: Record<string, unknown>
+  existingGraphAnchors?: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[]
+}) {
+  const anchorKey = sequenceAnimaticContinuityAnchorSemanticKey(input.anchor)
+  const matchingExisting = (input.existingGraphAnchors ?? []).filter((entry) => sequenceAnimaticContinuityAnchorSemanticKey(entry) === anchorKey)
+  const shotIds = [...new Set([
+    ...input.anchor.shotIds,
+    ...matchingExisting.flatMap((entry) => entry.shotIds),
+    ...readArray(input.continuityPlannerContext.shots).map(asRecord)
+      .filter((shot) => sequenceAnimaticContinuityPropMentionedInText(input.anchor, sequenceAnimaticContinuityShotEvidenceText(shot)))
+      .map((shot) => readText(shot.id)),
+  ].map(readText).filter(Boolean))]
+  if (shotIds.length < 2) {
+    return {
+      keep: false,
+      reason: 'single_use_not_story_critical' as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>,
+      shotIds,
+      evidence: readStringArray(input.anchor.sourceEvidence),
+    }
+  }
+
+  const shotById = new Map(readArray(input.continuityPlannerContext.shots).map(asRecord).map((shot) => [readText(shot.id), shot]))
+  const evidenceTexts = [
+    ...readStringArray(input.anchor.sourceEvidence),
+    ...matchingExisting.flatMap((entry) => readStringArray(entry.sourceEvidence)),
+  ]
+  const interactionShotIds = new Set<string>()
+
+  for (const shotId of shotIds) {
+    const shot = shotById.get(shotId)
+    const shotText = shot ? sequenceAnimaticContinuityShotEvidenceText(shot) : ''
+    const sourceEvidence = evidenceTexts.filter((entry) => readText(entry).includes(shotId)).join(' ')
+    const combined = [shotText, sourceEvidence].filter(Boolean).join(' ')
+    if (!sequenceAnimaticContinuityPropInteractionPattern.test(combined)) continue
+    if (!sequenceAnimaticContinuityPropMentionedInText(input.anchor, combined)) continue
+    interactionShotIds.add(shotId)
+  }
+
+  if (interactionShotIds.size < 2) {
+    return {
+      keep: false,
+      reason: 'low_confidence' as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>,
+      shotIds,
+      evidence: evidenceTexts,
+    }
+  }
+
+  return { keep: true, reason: null, shotIds, evidence: evidenceTexts }
+}
+
+export function sequenceAnimaticContinuityAnchorFromRejectedCandidate(input: {
+  rejected: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>
+  continuityPlannerContext: Record<string, unknown>
+  existingGraphAnchors: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[]
+}) {
+  const rejected = input.rejected
+  const type = readText(rejected.type)
+  if (type !== 'character' && type !== 'prop') return null
+  if (!['single_use_not_story_critical', 'low_confidence', 'too_generic'].includes(rejected.reason)) return null
+  const name = normalizeSequenceAnimaticAnchorName(rejected.name)
+  if (!name) return null
+  const sourceEvidence = readStringArray(rejected.sourceEvidence)
+  const shotIds = readStringArray(rejected.shotIds)
+  const visualBrief = type === 'character'
+    ? `${name}, specific visible incidental supporting character; preserve species, body shape, age cue, clothing, silhouette, and working-role details.`
+    : `${name}, physical prop continuity reference; preserve form, material, scale, damage/wear, and readable functional details.`
+  const baseAnchor = sequenceAnimaticContinuityPlannerAnchorSchema.parse({
+    id: sequenceAnimaticContinuityAnchorStableId({ type, name }),
+    type,
+    name,
+    visualBrief,
+    persistenceReason: type === 'character'
+      ? 'Specific visible incidental character with no canonical world entity; keep design consistent for storyboard continuity.'
+      : 'Repeated physical prop with direct action or character-interaction evidence; keep design consistent across shots.',
+    confidence: type === 'character' ? 0.72 : 0.68,
+    shotIds,
+    storyboardBlockIds: [],
+    sourceEvidence,
+    existingWorldEntityMatch: readText(rejected.existingWorldEntityMatch) || null,
+    rejectionRisk: `Recovered from LLM ${rejected.reason} rejection after GraphCore continuity validation.`,
+  })
+  if (type === 'character') {
+    return sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
+      name,
+      visualBrief,
+      sourceEvidence,
+      existingWorldEntityMatch: baseAnchor.existingWorldEntityMatch,
+    })
+      ? baseAnchor
+      : null
+  }
+  const propCheck = sequenceAnimaticContinuityPropHasInteractionEvidence({
+    anchor: baseAnchor,
+    continuityPlannerContext: input.continuityPlannerContext,
+    existingGraphAnchors: input.existingGraphAnchors,
+  })
+  return propCheck.keep
+    ? sequenceAnimaticContinuityPlannerAnchorSchema.parse({
+      ...baseAnchor,
+      shotIds: propCheck.shotIds,
+      sourceEvidence: propCheck.evidence.length > 0 ? propCheck.evidence : sourceEvidence,
+    })
+    : null
+}
+
+function sequenceAnimaticContinuityReferenceTextKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+function sequenceAnimaticRuntimeSlugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'output'
+}
+
+function sequenceAnimaticRuntimeAnchorId(prefix: 'prop' | 'spot' | 'char', name: string, baseLocationRefId = '') {
+  const base = [baseLocationRefId, name].filter(Boolean).join(' ')
+  return `${prefix}_${sequenceAnimaticRuntimeSlugify(base).slice(0, 72)}`
+}
+
+function sequenceAnimaticRuntimeTitleFromRefLike(value: string) {
+  return normalizeSequenceAnimaticAnchorName(value)
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
+}
+
+function sequenceAnimaticRuntimeAssetPackEntities(assetPack: Record<string, unknown>) {
+  return readArray(assetPack.entities).map(asRecord)
+}
+
+function sequenceAnimaticRuntimeKnownEntityAliases(assetPack: Record<string, unknown>) {
+  const aliases = new Map<string, string>()
+  sequenceAnimaticRuntimeAssetPackEntities(assetPack).forEach((entity) => {
+    const key = readText(entity.key)
+    const values = [
+      key,
+      readText(entity.name),
+      readText(entity.label),
+      ...readStringArray(entity.aliases),
+      ...readStringArray(asRecord(entity.metadata).aliases),
+    ].map(sequenceAnimaticContinuityReferenceTextKey).filter(Boolean)
+    values.forEach((value) => {
+      if (key && value) aliases.set(value, key)
+    })
+  })
+  return aliases
+}
+
+function sequenceAnimaticRuntimeWorldEntityVisualSource(entity: Record<string, unknown>) {
+  return {
+    summary: readText(entity.summary),
+    context: readText(entity.context),
+    metadata: asRecord(entity.metadata),
+    customProperties: asRecord(entity.customProperties ?? entity.custom_properties),
+  }
+}
+
+function readSequenceAnimaticRuntimeEntityVisualDescription(entity: Record<string, unknown>) {
+  return readWorldEntityVisualDescription(sequenceAnimaticRuntimeWorldEntityVisualSource(entity))
+    || readText(entity.visualDescription)
+}
+
+const sequenceAnimaticRuntimeAbstractContinuityTerms = new Set([
+  'rain',
+  'fog',
+  'mist',
+  'smoke',
+  'tension',
+  'silence',
+  'ambience',
+  'ambiance',
+  'atmosphere',
+  'mood',
+  'danger',
+  'blue light',
+  'red light',
+  'lighting',
+  'shadow',
+  'shadows',
+  'darkness',
+  'wind',
+  'motion',
+  'movement',
+  'music',
+  'score',
+  'room tone',
+])
+
+function sequenceAnimaticRuntimeContinuityAbstractReason(name: string, visualBrief = '') {
+  const normalized = sequenceAnimaticContinuityReferenceTextKey(name) || sequenceAnimaticContinuityReferenceTextKey(visualBrief)
+  if (!normalized) return 'too_generic'
+  for (const term of sequenceAnimaticRuntimeAbstractContinuityTerms) {
+    const normalizedTerm = sequenceAnimaticContinuityReferenceTextKey(term)
+    if (normalized === normalizedTerm || normalized.includes(` ${normalizedTerm} `) || normalized.startsWith(`${normalizedTerm} `) || normalized.endsWith(` ${normalizedTerm}`)) {
+      return 'abstract_or_atmospheric'
+    }
+  }
+  const words = normalized.split(' ').filter(Boolean)
+  if (words.length <= 1 && ['door', 'wall', 'floor', 'window', 'table', 'room', 'corridor', 'hall', 'light'].includes(normalized)) return 'too_generic'
+  return ''
+}
+
+function sequenceAnimaticRuntimeShotSearchText(shot: Record<string, unknown>) {
+  const dialogue = readArray(shot.dialogue).map(asRecord)
+    .map((line) => `${readText(line.speakerName)} ${readText(line.text)}`)
+    .join(' ')
+  const camera = asRecord(shot.camera)
+  return [
+    shot.id,
+    shot.title,
+    shot.description,
+    shot.action,
+    shot.caption,
+    shot.storyboardPanelPrompt,
+    shot.videoDirection,
+    shot.lighting,
+    shot.mood,
+    camera.framing,
+    camera.angle,
+    camera.movement,
+    dialogue,
+  ].map(readText).filter(Boolean).join(' ')
+}
+
+function sequenceAnimaticRuntimeShotPropSearchText(shot: Record<string, unknown>) {
+  const dialogue = readArray(shot.dialogue).map(asRecord)
+    .map((line) => `${readText(line.speakerName)} ${readText(line.text)}`)
+    .join(' ')
+  const camera = asRecord(shot.camera)
+  return [
+    shot.id,
+    shot.title,
+    shot.description,
+    shot.action,
+    shot.caption,
+    shot.storyboardPanelPrompt,
+    shot.videoDirection,
+    camera.framing,
+    camera.angle,
+    camera.movement,
+    dialogue,
+  ].map(readText).filter(Boolean).join(' ')
+}
+
+const sequenceAnimaticRuntimePropPhrases = [
+  'tide dial',
+  'broken tide dial',
+  'saltglass atlas',
+  'saltglass gauge',
+  'brass keys',
+  'hidden latch',
+  'map threads',
+  'stitched map',
+  'wall map',
+  'schematic',
+  'metal shard',
+  'inspection slate',
+  'tool-belt satchel',
+  'brass tool-belt',
+  'mail tube',
+  'paper notices',
+  'wet slips',
+  'hatch door',
+  'sealed hatch',
+  'access hatch',
+  'sight-tube water',
+  'sight tube water',
+  'sight tube',
+  'water tube',
+  'clock hand',
+  'bell hammer',
+  'clock dial',
+  'clock mechanism',
+  'chime arm',
+  'dead chime-arm',
+  'escapement',
+  'timing gear',
+  'gear assembly',
+  'clamp',
+  'leak clamp',
+  'lantern',
+  'oilskin lantern',
+]
+
+const sequenceAnimaticRuntimeImportantSinglePropPhrases = new Set([
+  'broken tide dial',
+  'saltglass atlas',
+  'saltglass gauge',
+  'brass keys',
+  'hidden latch',
+  'metal shard',
+  'inspection slate',
+  'hatch door',
+  'sealed hatch',
+  'access hatch',
+  'sight-tube water',
+  'sight tube water',
+  'sight tube',
+  'water tube',
+  'clock hand',
+  'bell hammer',
+  'clock dial',
+  'clock mechanism',
+  'chime arm',
+  'dead chime-arm',
+])
+
+const sequenceAnimaticRuntimeSpotPhrases = [
+  'threshold',
+  'doorway',
+  'entrance',
+  'hidden passage',
+  'service gap',
+  'service shaft',
+  'central chamber',
+  'leader chamber table',
+  'long table',
+  'map wall',
+  'saltglass window',
+  'porthole window',
+  'catwalk',
+  'platform',
+  'rail',
+  'corridor',
+  'archive wall',
+  'pipe lane',
+  'clock face',
+  'engine heart',
+]
+
+const sequenceAnimaticRuntimeImportantSingleSpotPhrases = new Set([
+  'hidden passage',
+  'service shaft',
+  'central chamber',
+  'leader chamber table',
+  'map wall',
+  'saltglass window',
+  'engine heart',
+])
+
+const sequenceAnimaticRuntimeIncidentalCharacterPhrases = [
+  'vole mechanic',
+  'elder mechanic',
+  'old mechanic',
+  'courier',
+  'puffin courier',
+  'cashier',
+  'shopkeeper',
+  'guard',
+  'watchman',
+  'attendant',
+  'scribe',
+  'clerk',
+  'messenger',
+  'apprentice',
+]
+
+function sequenceAnimaticRuntimeAnchorUsageFromPhrase(shots: Record<string, unknown>[], phrase: string) {
+  const normalizedPhrase = sequenceAnimaticContinuityReferenceTextKey(phrase)
+  return shots.filter((shot) => sequenceAnimaticContinuityReferenceTextKey(sequenceAnimaticRuntimeShotSearchText(shot)).includes(normalizedPhrase))
+}
+
+function sequenceAnimaticRuntimePropAnchorUsageFromPhrase(shots: Record<string, unknown>[], phrase: string) {
+  const normalizedPhrase = sequenceAnimaticContinuityReferenceTextKey(phrase)
+  return shots.filter((shot) => sequenceAnimaticContinuityReferenceTextKey(sequenceAnimaticRuntimeShotPropSearchText(shot)).includes(normalizedPhrase))
+}
+
+export function collectSequenceAnimaticContinuityAnchors(input: {
+  shotPlan: Record<string, unknown>
+  shotBreakPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+}) {
+  const shots = readArray(input.shotPlan.shots).map(asRecord)
+  const groups = readArray(input.shotBreakPlan.groups).map(asRecord)
+  const groupIdByShotId = new Map<string, string>()
+  groups.forEach((group, index) => {
+    const groupId = readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
+    readStringArray(group.shotBreakIds).forEach((shotId) => groupIdByShotId.set(shotId, groupId))
+  })
+  const entities = sequenceAnimaticRuntimeAssetPackEntities(input.assetPack)
+  const entityByKey = new Map(entities.map((entity) => [readText(entity.key), entity] as const).filter(([key]) => key))
+  const knownCharacterAliases = new Set<string>()
+  entities.forEach((entity) => {
+    const type = readText(entity.type) || readText(entity.nodeType) || readText(entity.entityType)
+    const role = readText(entity.role)
+    const looksCharacter = ['character', 'person', 'cast', 'actor'].some((token) => type.toLowerCase().includes(token) || role.toLowerCase().includes(token))
+    if (!looksCharacter) return
+    ;[entity.key, entity.name, entity.label].map(readText).filter(Boolean).forEach((value) => {
+      knownCharacterAliases.add(sequenceAnimaticContinuityReferenceTextKey(value))
+      const parts = sequenceAnimaticContinuityReferenceTextKey(value).split('_').filter((part) => part.length >= 3)
+      if (parts.length > 1) {
+        knownCharacterAliases.add(parts[0])
+        knownCharacterAliases.add(parts[parts.length - 1])
+      }
+    })
+  })
+  const anchorById = new Map<string, SequenceAnimaticContinuityAnchor>()
+  const addAnchor = (anchor: SequenceAnimaticContinuityAnchor) => {
+    const existing = anchorById.get(anchor.id)
+    if (!existing) {
+      anchorById.set(anchor.id, anchor)
+      return
+    }
+    existing.shotIds = [...new Set([...existing.shotIds, ...anchor.shotIds])]
+    existing.storyboardBlockIds = [...new Set([...existing.storyboardBlockIds, ...anchor.storyboardBlockIds])]
+    existing.usageCount = Math.max(existing.usageCount, existing.shotIds.length)
+    existing.sourcePhrases = [...new Set([...(existing.sourcePhrases ?? []), ...(anchor.sourcePhrases ?? [])])]
+  }
+  const anchorFromShotRefs = new Map<string, Set<string>>()
+  shots.forEach((shot) => {
+    const shotId = readText(shot.id)
+    readStringArray(shot.propRefIds).forEach((propId) => {
+      if (!entityByKey.has(propId)) return
+      const set = anchorFromShotRefs.get(propId) ?? new Set<string>()
+      if (shotId) set.add(shotId)
+      anchorFromShotRefs.set(propId, set)
+    })
+  })
+  anchorFromShotRefs.forEach((shotIdSet, propId) => {
+    if (shotIdSet.size < 2) return
+    const entity = entityByKey.get(propId) ?? {}
+    const name = readText(entity.name) || sequenceAnimaticRuntimeTitleFromRefLike(propId)
+    const shotIds = [...shotIdSet]
+    addAnchor({
+      id: sequenceAnimaticRuntimeAnchorId('prop', name),
+      name,
+      anchorType: 'prop',
+      summary: `Reusable prop continuity reference for ${name}.`,
+      visualBrief: readSequenceAnimaticRuntimeEntityVisualDescription(entity) || readText(entity.summary) || `${name}, isolated reusable prop reference.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      sourcePhrases: [propId],
+    })
+  })
+  shots.forEach((shot) => {
+    const shotId = readText(shot.id)
+    const structuredAnchors = [
+      ...readArray(shot.continuityAnchors),
+      ...readArray(shot.plannedContinuityAnchors),
+      ...readArray(shot.temporaryReferenceAnchors),
+    ].map(asRecord)
+    structuredAnchors.forEach((entry) => {
+      const rawType = readText(entry.anchorType) || readText(entry.type)
+      const anchorType = rawType === 'character' || rawType === 'prop' || rawType === 'location_spot'
+        ? rawType
+        : rawType.includes('location') ? 'location_spot' : rawType.includes('char') ? 'character' : 'prop'
+      const name = readText(entry.name) || readText(entry.label) || readText(entry.id)
+      if (!name) return
+      const shotIds = [...new Set([shotId, ...readStringArray(entry.shotIds)].filter(Boolean))]
+      addAnchor({
+        id: readText(entry.id) || sequenceAnimaticRuntimeAnchorId(anchorType === 'location_spot' ? 'spot' : anchorType === 'character' ? 'char' : 'prop', name, readText(entry.baseLocationRefId)),
+        name,
+        anchorType,
+        baseLocationRefId: readText(entry.baseLocationRefId) || null,
+        summary: readText(entry.summary) || `Structured ${anchorType.replace(/_/g, ' ')} continuity reference for ${name}.`,
+        visualBrief: readText(entry.visualBrief) || readText(entry.visualDescription) || readText(entry.summary) || `${name}, reusable continuity reference for storyboard consistency.`,
+        shotIds,
+        storyboardBlockIds: [...new Set(shotIds.map((id) => groupIdByShotId.get(id) ?? '').filter(Boolean))],
+        usageCount: Math.max(1, shotIds.length),
+        sourcePhrases: [readText(entry.source) || 'structured_shot_anchor'],
+      })
+    })
+  })
+  const temporaryCharacterShotIds = new Map<string, Set<string>>()
+  const temporaryCharacterNames = new Map<string, string>()
+  const addTemporaryCharacterUsage = (name: string, shotId: string) => {
+    const normalizedName = normalizeSequenceAnimaticAnchorName(name)
+    const lookup = sequenceAnimaticContinuityReferenceTextKey(normalizedName)
+    if (!normalizedName || !lookup || sequenceAnimaticRuntimeNonCharacterSpeakerNames.has(lookup.replace(/_/g, ' ')) || knownCharacterAliases.has(lookup)) return
+    const set = temporaryCharacterShotIds.get(lookup) ?? new Set<string>()
+    if (shotId) set.add(shotId)
+    temporaryCharacterShotIds.set(lookup, set)
+    if (!temporaryCharacterNames.has(lookup)) temporaryCharacterNames.set(lookup, sequenceAnimaticRuntimeTitleFromRefLike(normalizedName))
+  }
+  shots.forEach((shot) => {
+    const shotId = readText(shot.id)
+    readArray(shot.dialogue).map(asRecord).forEach((line) => {
+      const speakerRefId = readText(line.speakerRefId) || readText(line.characterRefId)
+      if (speakerRefId && entityByKey.has(speakerRefId)) return
+      const speakerName = readText(line.speakerName) || readText(line.speaker) || readText(line.characterName)
+      addTemporaryCharacterUsage(speakerName, shotId)
+    })
+    const searchText = sequenceAnimaticContinuityReferenceTextKey(sequenceAnimaticRuntimeShotSearchText(shot))
+    sequenceAnimaticRuntimeIncidentalCharacterPhrases.forEach((phrase) => {
+      if (searchText.includes(sequenceAnimaticContinuityReferenceTextKey(phrase))) addTemporaryCharacterUsage(phrase, shotId)
+    })
+  })
+  temporaryCharacterShotIds.forEach((shotIdSet, lookup) => {
+    if (shotIdSet.size < 1) return
+    const name = temporaryCharacterNames.get(lookup) ?? sequenceAnimaticRuntimeTitleFromRefLike(lookup)
+    const shotIds = [...shotIdSet]
+    addAnchor({
+      id: sequenceAnimaticRuntimeAnchorId('char', name),
+      name,
+      anchorType: 'character',
+      summary: `Temporary character continuity reference for ${name}.`,
+      visualBrief: `${name}, temporary supporting character design for storyboard continuity. Show a clean readable half-body or full-body character reference, consistent species/age/wardrobe/silhouette, neutral pose, no text.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      sourcePhrases: [name],
+    })
+  })
+  sequenceAnimaticRuntimePropPhrases.forEach((phrase) => {
+    const usedShots = sequenceAnimaticRuntimePropAnchorUsageFromPhrase(shots, phrase)
+    if (usedShots.length < (sequenceAnimaticRuntimeImportantSinglePropPhrases.has(phrase) ? 1 : 2)) return
+    const shotIds = usedShots.map((shot) => readText(shot.id)).filter(Boolean)
+    const name = sequenceAnimaticRuntimeTitleFromRefLike(phrase)
+    addAnchor({
+      id: sequenceAnimaticRuntimeAnchorId('prop', name),
+      name,
+      anchorType: 'prop',
+      summary: `Reusable prop continuity reference for ${name}.`,
+      visualBrief: `${name}, clean isolated prop reference, consistent shape, material, scale, color, and worn detail for reuse across shots.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      sourcePhrases: [phrase],
+    })
+  })
+  sequenceAnimaticRuntimeSpotPhrases.forEach((phrase) => {
+    const usedShots = sequenceAnimaticRuntimeAnchorUsageFromPhrase(shots, phrase)
+    if (usedShots.length < (sequenceAnimaticRuntimeImportantSingleSpotPhrases.has(phrase) ? 1 : 2)) return
+    const shotIds = usedShots.map((shot) => readText(shot.id)).filter(Boolean)
+    const firstShot = usedShots[0] ?? {}
+    const baseLocationRefId = readText(firstShot.locationRefId) || null
+    const name = sequenceAnimaticRuntimeTitleFromRefLike(phrase)
+    const connectedTo = sequenceAnimaticRuntimeSpotPhrases
+      .filter((other) => other !== phrase && usedShots.some((shot) => sequenceAnimaticContinuityReferenceTextKey(sequenceAnimaticRuntimeShotSearchText(shot)).includes(sequenceAnimaticContinuityReferenceTextKey(other))))
+      .map(sequenceAnimaticRuntimeTitleFromRefLike)
+      .slice(0, 4)
+    addAnchor({
+      id: sequenceAnimaticRuntimeAnchorId('spot', name, baseLocationRefId ?? ''),
+      name,
+      anchorType: 'location_spot',
+      baseLocationRefId,
+      summary: `Reusable set-continuity spot for ${name}.`,
+      visualBrief: `${name} inside ${baseLocationRefId ? sequenceAnimaticRuntimeTitleFromRefLike(baseLocationRefId) : 'the base location'}, cinematic set-reference angle, clear entrances, surfaces, lighting direction, scale, and spatial relation to adjacent areas.`,
+      shotIds,
+      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
+      usageCount: shotIds.length,
+      connectedTo,
+      entryFrom: phrase.includes('entrance') || phrase.includes('threshold') || phrase.includes('door') ? connectedTo : [],
+      visibleFrom: connectedTo,
+      relationshipHints: connectedTo.map((target) => `${name} visible/connected to ${target}`),
+      sourcePhrases: [phrase],
+    })
+  })
+  const anchors = [...anchorById.values()]
+    .map((anchor) => ({ ...anchor, shotIds: [...new Set(anchor.shotIds)], storyboardBlockIds: [...new Set(anchor.storyboardBlockIds)] }))
+    .sort((left, right) => right.usageCount - left.usageCount || left.id.localeCompare(right.id))
+    .slice(0, 18)
+  const characterAnchors = anchors.filter((anchor) => anchor.anchorType === 'character').slice(0, 9)
+  const propAnchors = anchors.filter((anchor) => anchor.anchorType === 'prop').slice(0, 9)
+  const locationSpotAnchors = anchors.filter((anchor) => anchor.anchorType === 'location_spot').slice(0, 9)
+  const selectedAnchors = [...characterAnchors, ...propAnchors, ...locationSpotAnchors]
+  const continuityAnchorIdsByShotId: Record<string, string[]> = {}
+  selectedAnchors.forEach((anchor) => {
+    anchor.shotIds.forEach((shotId) => {
+      continuityAnchorIdsByShotId[shotId] = [...new Set([...(continuityAnchorIdsByShotId[shotId] ?? []), anchor.id])]
+    })
+  })
+  return {
+    version: 'sequence_animatic_continuity_plan_v2',
+    planningMode: 'deterministic_fallback',
+    llmRepairUsed: false,
+    anchors: selectedAnchors,
+    locationSets: [],
+    locationAngles: [],
+    sceneGraph: { nodes: [], edges: [] },
+    rejectedCandidates: [],
+    characterAnchors,
+    propAnchors,
+    locationSpotAnchors,
+    continuityAnchorIdsByShotId,
+    shotContinuityMap: continuityAnchorIdsByShotId,
+    warnings: ['Continuity planner used deterministic fallback extraction; review anchors before relying on them for detailed continuity.'],
+    diagnostics: [
+      `Planned ${characterAnchors.length} temporary character anchor${characterAnchors.length === 1 ? '' : 's'}, ${propAnchors.length} prop continuity anchor${propAnchors.length === 1 ? '' : 's'}, and ${locationSpotAnchors.length} location spot anchor${locationSpotAnchors.length === 1 ? '' : 's'}.`,
+    ],
+  }
+}
+
+function sequenceAnimaticPlannerAnchorFromLegacyAnchor(anchor: SequenceAnimaticContinuityAnchor): z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema> | null {
+  const id = readText(anchor.id)
+  const anchorType = readText(anchor.anchorType)
+  const name = readText(anchor.name)
+  if (!id || !name || (anchorType !== 'character' && anchorType !== 'prop')) return null
+  return sequenceAnimaticContinuityPlannerAnchorSchema.parse({
+    id,
+    type: anchorType,
+    name,
+    visualBrief: readText(anchor.visualBrief) || readText(anchor.summary) || `${name}, reusable continuity reference for storyboard consistency.`,
+    persistenceReason: readText(anchor.persistenceReason) || readText(anchor.summary) || `Output-local ${anchorType === 'character' ? 'temporary character' : 'prop'} continuity reference for ${name}.`,
+    confidence: Math.max(0.62, Math.min(0.86, Number(anchor.confidence) || 0.72)),
+    shotIds: readStringArray(anchor.shotIds),
+    storyboardBlockIds: readStringArray(anchor.storyboardBlockIds),
+    sourceEvidence: readStringArray(anchor.sourcePhrases).length > 0
+      ? readStringArray(anchor.sourcePhrases)
+      : readStringArray(anchor.shotIds).map((shotId) => `${shotId}: deterministic continuity asset cue`),
+    existingWorldEntityMatch: readText(anchor.existingWorldEntityMatch) || null,
+    rejectionRisk: readText(anchor.rejectionRisk) || 'low: deterministic output-local continuity asset candidate.',
+    baseLocationRefId: readText(anchor.baseLocationRefId) || null,
+    setId: readText(anchor.setId) || null,
+    angleId: readText(anchor.angleId) || null,
+    connectedTo: readStringArray(anchor.connectedTo),
+    visibleFrom: readStringArray(anchor.visibleFrom),
+    entryFrom: readStringArray(anchor.entryFrom),
+  })
+}
+
+function deterministicSequenceAnimaticAssetAnchorsForBlock(input: {
+  continuityPlannerContext: Record<string, unknown>
+  storyboardBlock: Record<string, unknown>
+}) {
+  const blockId = readText(input.storyboardBlock.id) || readText(input.storyboardBlock.storyboardBlockId) || 'storyboard_block'
+  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
+  if (shots.length === 0) return []
+  const shotBreakIds = shots.map((shot) => readText(shot.id)).filter(Boolean)
+  const fallbackPlan = collectSequenceAnimaticContinuityAnchors({
+    shotPlan: { shots },
+    shotBreakPlan: { groups: [{ id: blockId, shotBreakIds }] },
+    assetPack: { entities: readArray(input.continuityPlannerContext.existingWorldReferences).map(asRecord) },
+  })
+  return [
+    ...readArray(fallbackPlan.characterAnchors).map(asRecord),
+    ...readArray(fallbackPlan.propAnchors).map(asRecord),
+  ]
+    .map((anchor) => sequenceAnimaticPlannerAnchorFromLegacyAnchor(anchor as SequenceAnimaticContinuityAnchor))
+    .filter((anchor): anchor is z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema> => Boolean(anchor))
+}
+
+function sequenceAnimaticRuntimeRejectedCandidate(input: {
+  name: string
+  type?: string
+  reason: z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>
+  sourceEvidence?: string[]
+  shotIds?: string[]
+  existingWorldEntityMatch?: string | null
+}) {
+  const type = input.type === 'character' || input.type === 'prop' || input.type === 'location_spot' || input.type === 'location_set' || input.type === 'location_angle'
+    ? input.type
+    : 'unknown'
+  return sequenceAnimaticContinuityRejectedCandidateSchema.parse({
+    name: input.name || 'Unnamed candidate',
+    type,
+    reason: input.reason,
+    sourceEvidence: input.sourceEvidence ?? [],
+    shotIds: input.shotIds ?? [],
+    existingWorldEntityMatch: input.existingWorldEntityMatch ?? null,
+  })
+}
+
+function sequenceAnimaticRuntimeGroupIdByShotId(shotBreakPlan: Record<string, unknown>) {
+  const groupIdByShotId = new Map<string, string>()
+  const groups = readArray(shotBreakPlan.groups).map(asRecord)
+  groups.forEach((group, index) => {
+    const groupId = readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
+    readStringArray(group.shotBreakIds).forEach((shotId) => groupIdByShotId.set(shotId, groupId))
+  })
+  return groupIdByShotId
+}
+
+export function normalizeSequenceAnimaticContinuityPlan(input: {
+  rawPlan: z.infer<typeof sequenceAnimaticContinuityPlanV2Schema>
+  fallbackPlan: Record<string, unknown>
+  shotPlan: Record<string, unknown>
+  shotBreakPlan: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  fallbackUsed: boolean
+  fallbackReason?: string
+}) {
+  if (input.fallbackUsed) {
+    return {
+      ...input.fallbackPlan,
+      planningMode: 'deterministic_fallback',
+      warnings: [
+        ...readStringArray(input.fallbackPlan.warnings),
+        input.fallbackReason ? `LLM continuity planner fallback: ${input.fallbackReason}` : 'LLM continuity planner fallback was used.',
+      ],
+    }
+  }
+  const knownAliases = sequenceAnimaticRuntimeKnownEntityAliases(input.assetPack)
+  const shots = readArray(input.shotPlan.shots).map(asRecord)
+  const knownShotIds = new Set(shots.map((shot) => readText(shot.id)).filter(Boolean))
+  const groupIdByShotId = sequenceAnimaticRuntimeGroupIdByShotId(input.shotBreakPlan)
+  const rejectedCandidates = [...input.rawPlan.rejectedCandidates]
+  const anchorById = new Map<string, SequenceAnimaticContinuityAnchor>()
+  const addRejected = (entry: ReturnType<typeof sequenceAnimaticRuntimeRejectedCandidate>) => {
+    const key = `${entry.name}:${entry.reason}:${entry.shotIds.join(',')}`
+    if (rejectedCandidates.some((candidate) => `${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}` === key)) return
+    rejectedCandidates.push(entry)
+  }
+  const acceptedSourceIds = new Set<string>()
+  const acceptedRejectedCandidateKeys = new Set<string>()
+
+  const cleanShotIds = (ids: string[]) => [...new Set(ids.map(readText).filter((id) => !knownShotIds.size || knownShotIds.has(id)))]
+  const cleanBlockIds = (ids: string[], shotIds: string[]) => {
+    const explicit = ids.map(readText).filter(Boolean)
+    const inferred = shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean)
+    return [...new Set([...explicit, ...inferred])]
+  }
+  const anchorPrefixForType = (type: string): 'char' | 'prop' | 'spot' => type === 'character' ? 'char' : type === 'prop' ? 'prop' : 'spot'
+
+  for (const rawAnchor of input.rawPlan.anchors) {
+    const name = normalizeSequenceAnimaticAnchorName(rawAnchor.name)
+    const visualBrief = readText(rawAnchor.visualBrief)
+    const type = rawAnchor.type
+    const sourceEvidence = rawAnchor.sourceEvidence.map(readText).filter(Boolean)
+    const shotIds = cleanShotIds(rawAnchor.shotIds)
+    const explicitExistingMatch = readText(rawAnchor.existingWorldEntityMatch)
+    const aliasMatch = knownAliases.get(sequenceAnimaticContinuityReferenceTextKey(name)) ?? ''
+    const existingWorldEntityMatch = explicitExistingMatch || aliasMatch
+    const abstractReason = sequenceAnimaticRuntimeContinuityAbstractReason(name, visualBrief)
+    const storyCritical = /story[-\s]?critical|hero|plot|recurring|reuse|continuity|required|persistent/i.test(rawAnchor.persistenceReason)
+      || sourceEvidence.length >= 2
+      || shotIds.length >= 2
+      || (type === 'character' && sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
+        name,
+        visualBrief,
+        sourceEvidence,
+        existingWorldEntityMatch,
+      }))
+    const confidence = Math.max(0, Math.min(1, Number(rawAnchor.confidence) || 0))
+    if (!name || !visualBrief) {
+      addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name, type, reason: 'not_visual', sourceEvidence, shotIds }))
+      continue
+    }
+    if (abstractReason) {
+      addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name, type, reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence, shotIds }))
+      continue
+    }
+    if (existingWorldEntityMatch && type !== 'location_angle' && type !== 'location_set') {
+      addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name, type, reason: 'existing_world_entity', sourceEvidence, shotIds, existingWorldEntityMatch }))
+      continue
+    }
+    if (confidence < 0.45) {
+      addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name, type, reason: 'low_confidence', sourceEvidence, shotIds }))
+      continue
+    }
+    if (shotIds.length <= 1 && !storyCritical) {
+      addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name, type, reason: 'single_use_not_story_critical', sourceEvidence, shotIds }))
+      continue
+    }
+    const continuitySubtype = type === 'location_set' || type === 'location_angle' ? type : type === 'location_spot' ? 'location_spot' : type
+    const legacyAnchorType: SequenceAnimaticContinuityAnchor['anchorType'] = type === 'character' ? 'character' : type === 'prop' ? 'prop' : 'location_spot'
+    const baseLocationRefId = readText(rawAnchor.baseLocationRefId) || null
+    const id = readText(rawAnchor.id) || sequenceAnimaticRuntimeAnchorId(anchorPrefixForType(legacyAnchorType), name, baseLocationRefId ?? '')
+    if (acceptedSourceIds.has(id)) continue
+    acceptedSourceIds.add(id)
+    const storyboardBlockIds = cleanBlockIds(rawAnchor.storyboardBlockIds, shotIds)
+    anchorById.set(id, {
+      id,
+      name,
+      anchorType: legacyAnchorType,
+      continuitySubtype,
+      baseLocationRefId,
+      summary: readText(rawAnchor.persistenceReason) || `Reusable ${legacyAnchorType.replace(/_/g, ' ')} continuity reference for ${name}.`,
+      visualBrief,
+      persistenceReason: readText(rawAnchor.persistenceReason),
+      confidence,
+      sourceEvidence,
+      existingWorldEntityMatch: existingWorldEntityMatch || null,
+      rejectionRisk: readText(rawAnchor.rejectionRisk),
+      shotIds,
+      storyboardBlockIds,
+      usageCount: Math.max(shotIds.length, storyboardBlockIds.length, 1),
+      setId: readText(rawAnchor.setId) || null,
+      angleId: readText(rawAnchor.angleId) || null,
+      connectedTo: rawAnchor.connectedTo.map(readText).filter(Boolean),
+      visibleFrom: rawAnchor.visibleFrom.map(readText).filter(Boolean),
+      entryFrom: rawAnchor.entryFrom.map(readText).filter(Boolean),
+      relationshipHints: [],
+      sourcePhrases: sourceEvidence,
+    })
+  }
+
+  for (const rejected of input.rawPlan.rejectedCandidates) {
+    const name = normalizeSequenceAnimaticAnchorName(rejected.name)
+    const sourceEvidence = rejected.sourceEvidence.map(readText).filter(Boolean)
+    const shotIds = cleanShotIds(rejected.shotIds)
+    const existingWorldEntityMatch = readText(rejected.existingWorldEntityMatch)
+    if (
+      rejected.type !== 'character'
+      || rejected.reason !== 'single_use_not_story_critical'
+      || shotIds.length <= 0
+      || !sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
+        name,
+        sourceEvidence,
+        existingWorldEntityMatch,
+      })
+    ) {
+      continue
+    }
+    const id = sequenceAnimaticRuntimeAnchorId('char', name)
+    if (acceptedSourceIds.has(id)) continue
+    acceptedSourceIds.add(id)
+    acceptedRejectedCandidateKeys.add(`${rejected.name}:${rejected.reason}:${rejected.shotIds.join(',')}`)
+    const storyboardBlockIds = cleanBlockIds([], shotIds)
+    anchorById.set(id, {
+      id,
+      name,
+      anchorType: 'character',
+      continuitySubtype: 'character',
+      baseLocationRefId: null,
+      summary: `Visible incidental character continuity reference for ${name}.`,
+      visualBrief: `${name}, visible temporary supporting character design for storyboard continuity. Keep species, age, wardrobe, silhouette, and working-role details consistent; neutral pose, no text.`,
+      persistenceReason: 'Visible incidental character with no canonical world entity; keep design consistent for storyboard continuity.',
+      confidence: 0.72,
+      sourceEvidence,
+      existingWorldEntityMatch: null,
+      rejectionRisk: 'medium: appears in one shot, but is a specific visible character rather than an abstract or crowd cue.',
+      shotIds,
+      storyboardBlockIds,
+      usageCount: Math.max(1, shotIds.length),
+      setId: null,
+      angleId: null,
+      connectedTo: [],
+      visibleFrom: [],
+      entryFrom: [],
+      relationshipHints: [],
+      sourcePhrases: sourceEvidence,
+    })
+  }
+
+  const anchors = [...anchorById.values()]
+    .sort((left, right) => right.usageCount - left.usageCount || (right.confidence ?? 0) - (left.confidence ?? 0) || left.id.localeCompare(right.id))
+    .slice(0, 24)
+  const characterAnchors = anchors.filter((anchor) => anchor.anchorType === 'character').slice(0, 9)
+  const propAnchors = anchors.filter((anchor) => anchor.anchorType === 'prop').slice(0, 9)
+  const locationSpotAnchors = anchors.filter((anchor) => anchor.anchorType === 'location_spot').slice(0, 12)
+  const selectedAnchors = [...characterAnchors, ...propAnchors, ...locationSpotAnchors]
+  const shotContinuityMap: Record<string, string[]> = {}
+  selectedAnchors.forEach((anchor) => {
+    anchor.shotIds.forEach((shotId) => {
+      shotContinuityMap[shotId] = [...new Set([...(shotContinuityMap[shotId] ?? []), anchor.id])]
+    })
+  })
+
+  const selectedAnchorIds = new Set(selectedAnchors.map((anchor) => anchor.id))
+  const locationSets = input.rawPlan.locationSets
+    .filter((entry) => {
+      const abstractReason = sequenceAnimaticRuntimeContinuityAbstractReason(entry.name, entry.visualBrief)
+      if (abstractReason) {
+        addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name: entry.name, type: 'location_set', reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence: [entry.persistenceReason], shotIds: entry.shotIds }))
+        return false
+      }
+      const aliasMatch = knownAliases.get(sequenceAnimaticContinuityReferenceTextKey(entry.name)) ?? ''
+      if (aliasMatch && (!entry.baseLocationRefId || entry.baseLocationRefId === aliasMatch)) {
+        addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name: entry.name, type: 'location_set', reason: 'existing_world_entity', sourceEvidence: [entry.persistenceReason], shotIds: entry.shotIds, existingWorldEntityMatch: aliasMatch }))
+        return false
+      }
+      return true
+    })
+    .map((entry) => ({
+      ...entry,
+      shotIds: cleanShotIds(entry.shotIds),
+      storyboardBlockIds: cleanBlockIds(entry.storyboardBlockIds, cleanShotIds(entry.shotIds)),
+    }))
+    .slice(0, 12)
+  const locationAngles = input.rawPlan.locationAngles
+    .filter((entry) => {
+      const abstractReason = sequenceAnimaticRuntimeContinuityAbstractReason(entry.name, entry.visualBrief)
+      if (abstractReason) {
+        addRejected(sequenceAnimaticRuntimeRejectedCandidate({ name: entry.name, type: 'location_angle', reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence: [entry.visualBrief], shotIds: entry.shotIds }))
+        return false
+      }
+      return true
+    })
+    .map((entry) => ({
+      ...entry,
+      shotIds: cleanShotIds(entry.shotIds),
+      storyboardBlockIds: cleanBlockIds(entry.storyboardBlockIds, cleanShotIds(entry.shotIds)),
+    }))
+    .slice(0, 18)
+  const graphNodeById = new Map<string, { id: string; type: 'location_set' | 'location_angle'; name: string }>()
+  locationSets.forEach((entry) => graphNodeById.set(entry.id, { id: entry.id, type: 'location_set', name: entry.name }))
+  locationAngles.forEach((entry) => graphNodeById.set(entry.id, { id: entry.id, type: 'location_angle', name: entry.name }))
+  input.rawPlan.sceneGraph.nodes.forEach((entry) => {
+    if (graphNodeById.has(entry.id)) return
+    if (entry.type === 'location_set' || entry.type === 'location_angle') graphNodeById.set(entry.id, entry)
+  })
+  const sceneGraph = {
+    nodes: [...graphNodeById.values()],
+    edges: input.rawPlan.sceneGraph.edges
+      .filter((edge) => graphNodeById.has(edge.sourceId) && graphNodeById.has(edge.targetId) && edge.sourceId !== edge.targetId)
+      .slice(0, 40),
+  }
+  const warnings = [
+    ...input.rawPlan.warnings,
+    ...(selectedAnchorIds.size === 0 ? ['LLM continuity planner found no physical, non-duplicative sidecar anchors worth persisting.'] : []),
+  ]
+  const finalRejectedCandidates = rejectedCandidates.filter((candidate) => !acceptedRejectedCandidateKeys.has(`${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}`))
+  return {
+    version: 'sequence_animatic_continuity_plan_v2',
+    planningMode: 'llm_structured_v2',
+    anchors: selectedAnchors,
+    characterAnchors,
+    propAnchors,
+    locationSpotAnchors,
+    locationSets,
+    locationAngles,
+    sceneGraph,
+    continuityAnchorIdsByShotId: shotContinuityMap,
+    shotContinuityMap,
+    rejectedCandidates: finalRejectedCandidates,
+    warnings,
+    diagnostics: [
+      ...input.rawPlan.diagnostics,
+      ...(acceptedRejectedCandidateKeys.size > 0
+        ? [`Recovered ${acceptedRejectedCandidateKeys.size} visible one-shot incidental character anchor${acceptedRejectedCandidateKeys.size === 1 ? '' : 's'} from LLM single-use rejections.`]
+        : []),
+      `LLM continuity planner accepted ${selectedAnchors.length} anchor${selectedAnchors.length === 1 ? '' : 's'} and rejected ${finalRejectedCandidates.length} candidate${finalRejectedCandidates.length === 1 ? '' : 's'}.`,
+    ],
+  }
+}
+
+export function repairSequenceAnimaticContinuityBlockDelta(input: {
+  delta: z.infer<typeof sequenceAnimaticContinuityBlockDeltaSchema>
+  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
+  continuityPlannerContext: Record<string, unknown>
+  storyboardBlock: Record<string, unknown>
+  allowDeterministicFallback?: boolean
+}) {
+  const delta = sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes({
+    delta: sequenceAnimaticContinuityBlockDeltaSchema.parse(input.delta),
+    continuityPlannerContext: input.continuityPlannerContext,
+    storyboardBlock: input.storyboardBlock,
+  })
+  const allowDeterministicFallback = input.allowDeterministicFallback === true
+  const deterministicAssetAnchors = allowDeterministicFallback
+    ? deterministicSequenceAnimaticAssetAnchorsForBlock({
+      continuityPlannerContext: input.continuityPlannerContext,
+      storyboardBlock: input.storyboardBlock,
+    })
+    : []
+  const fallback = allowDeterministicFallback
+    ? buildDeterministicSequenceAnimaticBlockDelta({
+      graph: input.graph,
+      continuityPlannerContext: input.continuityPlannerContext,
+      storyboardBlock: input.storyboardBlock,
+      assetAnchors: deterministicAssetAnchors,
+      fallbackReason: 'missing_shot_bindings_repair',
+    })
+    : null
+  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
+  const shotBindings = { ...delta.shotBindings }
+  let repairedCount = 0
+  const referenceLookup = sequenceAnimaticReferenceLookupFromPlannerContext(input.continuityPlannerContext)
+  const rejectedCanonicalAnchors: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
+  const rejectedPropAnchors: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
+  const removedCanonicalAnchorIds = new Set<string>()
+  const recoveredRejectedAssetAnchors = delta.rejectedCandidates
+    .map((rejected) => sequenceAnimaticContinuityAnchorFromRejectedCandidate({
+      rejected,
+      continuityPlannerContext: input.continuityPlannerContext,
+      existingGraphAnchors: input.graph.assetAnchors,
+    }))
+    .filter((anchor): anchor is z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema> => Boolean(anchor))
+  const rawAssetAnchors = mergeById(
+    [...deterministicAssetAnchors, ...recoveredRejectedAssetAnchors].map((entry) => ({ ...entry, id: readText(entry.id) })),
+    delta.assetAnchors.map((entry) => ({ ...entry, id: readText(entry.id) })),
+  ).filter((entry) => entry.id) as z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[]
+  const semanticAnchorMerge = mergeSequenceAnimaticContinuityAssetAnchorsBySemanticKey(rawAssetAnchors)
+  for (const [shotId, bindingValue] of Object.entries(shotBindings)) {
+    shotBindings[shotId] = remapSequenceAnimaticContinuityShotBindingAnchorIds(bindingValue, semanticAnchorMerge.idRemap)
+  }
+  const assetAnchors = semanticAnchorMerge.anchors.filter((anchor) => {
+    const match = sequenceAnimaticCanonicalReferenceMatchForAnchor(anchor, referenceLookup)
+    if (!match && readText(anchor.type) === 'prop') {
+      const propCheck = sequenceAnimaticContinuityPropHasInteractionEvidence({
+        anchor,
+        continuityPlannerContext: input.continuityPlannerContext,
+        existingGraphAnchors: input.graph.assetAnchors,
+      })
+      if (!propCheck.keep) {
+        const anchorId = readText(anchor.id)
+        if (anchorId) removedCanonicalAnchorIds.add(anchorId)
+        rejectedPropAnchors.push(sequenceAnimaticRuntimeRejectedCandidate({
+          name: readText(anchor.name),
+          type: 'prop',
+          reason: propCheck.reason ?? 'low_confidence',
+          sourceEvidence: propCheck.evidence,
+          shotIds: propCheck.shotIds,
+        }))
+        return false
+      }
+    }
+    if (!match) return true
+    const anchorId = readText(anchor.id)
+    if (anchorId) removedCanonicalAnchorIds.add(anchorId)
+    const matchKey = readText(match.key) || readText(match.name)
+    rejectedCanonicalAnchors.push(sequenceAnimaticRuntimeRejectedCandidate({
+      name: readText(anchor.name),
+      type: readText(anchor.type),
+      reason: 'existing_world_entity',
+      sourceEvidence: readStringArray(anchor.sourceEvidence),
+      shotIds: readStringArray(anchor.shotIds),
+      existingWorldEntityMatch: matchKey || null,
+    }))
+    return false
+  })
+
+  for (const shot of shots) {
+    const shotId = readText(shot.id)
+    if (!shotId) continue
+    const existing = asRecord(shotBindings[shotId])
+    if ((readText(existing.setId) || readText(existing.worldLocationRefId)) && (readText(existing.zoneId) || readText(existing.primarySpotId) || readStringArray(existing.spotIds).length > 0 || readText(existing.viewpointId) || readText(existing.angleId))) continue
+
+    const fallbackBinding = asRecord(fallback?.shotBindings[shotId])
+    const zone = delta.zones.find((entry) => entry.shotIds.includes(shotId))
+    const set = delta.locationSets.find((entry) => entry.shotIds.includes(shotId) || entry.id === zone?.setId)
+      ?? input.graph.locationSets.find((entry) => entry.id === zone?.setId)
+    const spots = delta.spots.filter((entry) => entry.shotIds.includes(shotId))
+    const angle = delta.angles.find((entry) => entry.shotIds.includes(shotId))
+    const characterAnchorIds = assetAnchors
+      .filter((anchor) => anchor.shotIds.includes(shotId) && readText(anchor.type) === 'character')
+      .map((anchor) => readText(anchor.id))
+      .filter(Boolean)
+    const propAnchorIds = assetAnchors
+      .filter((anchor) => anchor.shotIds.includes(shotId) && readText(anchor.type) === 'prop')
+      .map((anchor) => readText(anchor.id))
+      .filter(Boolean)
+    const setId = readText(set?.id) || readText(zone?.setId) || readText(angle?.setId) || readText(fallbackBinding.setId)
+    const zoneId = readText(zone?.id) || readText(angle?.zoneId) || readText(fallbackBinding.zoneId)
+    const spotIds = spots.map((entry) => readText(entry.id)).filter(Boolean)
+    const angleId = readText(angle?.id) || readText(fallbackBinding.angleId) || readText(fallbackBinding.viewpointId)
+    if (!setId && !zoneId && !angleId) continue
+    const assetAnchorIds = [...new Set([...characterAnchorIds, ...propAnchorIds].filter(Boolean))]
+    shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
+      shotId,
+      storyboardBlockId: delta.blockId || readText(input.storyboardBlock.id),
+      worldLocationRefId: readText(zone?.worldLocationRefId) || readText(set?.worldLocationRefId) || readText(angle?.worldLocationRefId) || readText(fallbackBinding.worldLocationRefId),
+      setId,
+      zoneId,
+      primarySpotId: spotIds[0] || readText(fallbackBinding.primarySpotId),
+      spotIds: spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds),
+      viewpointId: angleId,
+      angleId,
+      characterAnchorIds,
+      propAnchorIds,
+      assetAnchorIds,
+      spatialNodeIds: [...new Set([setId, zoneId, spotIds[0] || readText(fallbackBinding.primarySpotId), ...(spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds)), angleId].filter(Boolean))],
+      continuityAnchorIds: assetAnchorIds,
+    })
+    repairedCount += 1
+  }
+
+  if (removedCanonicalAnchorIds.size > 0) {
+    for (const [shotId, bindingValue] of Object.entries(shotBindings)) {
+      const binding = sequenceAnimaticContinuityShotBindingSchema.parse(bindingValue)
+      const characterAnchorIds = binding.characterAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
+      const propAnchorIds = binding.propAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
+      const assetAnchorIds = binding.assetAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
+      const continuityAnchorIds = binding.continuityAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
+      shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
+        ...binding,
+        characterAnchorIds,
+        propAnchorIds,
+        assetAnchorIds,
+        continuityAnchorIds,
+      })
+    }
+  }
+
+  for (const [shotId, bindingValue] of Object.entries(shotBindings)) {
+    const binding = sequenceAnimaticContinuityShotBindingSchema.parse(bindingValue)
+    const availableAssetAnchorMerge = mergeSequenceAnimaticContinuityAssetAnchorsBySemanticKey([...input.graph.assetAnchors, ...assetAnchors])
+    const availableAssetAnchors = availableAssetAnchorMerge.anchors
+    const inferredCharacterAnchorIds = availableAssetAnchors
+      .filter((anchor) => anchor.type === 'character' && anchor.shotIds.includes(shotId))
+      .map((anchor) => readText(anchor.id))
+      .filter(Boolean)
+    const inferredPropAnchorIds = availableAssetAnchors
+      .filter((anchor) => anchor.type === 'prop' && anchor.shotIds.includes(shotId))
+      .map((anchor) => readText(anchor.id))
+      .filter(Boolean)
+    const characterAnchorIds = [...new Set([...binding.characterAnchorIds, ...inferredCharacterAnchorIds])]
+      .filter((id) => availableAssetAnchors.some((anchor) => anchor.id === id && anchor.type === 'character'))
+    const propAnchorIds = [...new Set([...binding.propAnchorIds, ...inferredPropAnchorIds])]
+      .filter((id) => availableAssetAnchors.some((anchor) => anchor.id === id && anchor.type === 'prop'))
+    const assetAnchorIds = [...new Set([...characterAnchorIds, ...propAnchorIds].filter(Boolean))]
+    shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
+      ...binding,
+      characterAnchorIds,
+      propAnchorIds,
+      assetAnchorIds,
+      spatialNodeIds: [...new Set([binding.setId, binding.zoneId, binding.primarySpotId, ...binding.spotIds, binding.viewpointId, binding.angleId, ...binding.spatialNodeIds].filter(Boolean))],
+      continuityAnchorIds: assetAnchorIds,
+    })
+  }
+
+  return sequenceAnimaticContinuityBlockDeltaSchema.parse({
+    ...delta,
+    assetAnchors,
+    rejectedCandidates: [...delta.rejectedCandidates, ...rejectedCanonicalAnchors, ...rejectedPropAnchors]
+      .filter((entry) => !assetAnchors.some((anchor) => sequenceAnimaticContinuityAnchorSemanticKey(anchor) === `${readText(entry.type)}:${sequenceAnimaticContinuityAnchorSemanticName(readText(entry.name))}`))
+      .filter((entry, index, values) => values.findIndex((candidate) => `${candidate.name}:${candidate.reason}:${candidate.existingWorldEntityMatch ?? ''}:${candidate.shotIds.join(',')}` === `${entry.name}:${entry.reason}:${entry.existingWorldEntityMatch ?? ''}:${entry.shotIds.join(',')}`) === index),
+    shotBindings,
+    warnings: [
+      ...delta.warnings,
+      ...(repairedCount > 0
+        ? [`Repaired missing shotBindings for ${repairedCount} shot${repairedCount === 1 ? '' : 's'} from planned continuity zones/spots/angles.`]
+        : []),
+      ...(rejectedCanonicalAnchors.length > 0
+        ? [`Rejected ${rejectedCanonicalAnchors.length} continuity anchor${rejectedCanonicalAnchors.length === 1 ? '' : 's'} that matched existing world entities.`]
+        : []),
+      ...(rejectedPropAnchors.length > 0
+        ? [`Rejected ${rejectedPropAnchors.length} prop anchor${rejectedPropAnchors.length === 1 ? '' : 's'} without multi-shot action or character-interaction evidence.`]
+        : []),
+      ...(recoveredRejectedAssetAnchors.length > 0
+        ? [`Recovered ${recoveredRejectedAssetAnchors.length} asset anchor${recoveredRejectedAssetAnchors.length === 1 ? '' : 's'} from LLM rejected candidates after continuity validation.`]
+        : []),
+    ],
+  })
 }
 
 function sequenceAnimaticPreferContinuityAnchorText(previous: string, incoming: string) {
@@ -1067,7 +2634,7 @@ export function sequenceAnimaticContinuityVisualDependencyEdges(graphInput: unkn
       evidence,
     }))
   }
-  graph.locationSets.forEach((set) => push(set.worldLocationRefId, set.id, 'world_location_to_set', true, `Set ${set.name} belongs to ${set.worldLocationRefId}.`))
+  graph.locationSets.forEach((set) => push(readText(set.worldLocationRefId), set.id, 'world_location_to_set', true, `Set ${set.name} belongs to ${set.worldLocationRefId}.`))
   graph.zones.forEach((zone) => push(zone.setId, zone.id, 'set_to_zone', true, `Zone ${zone.name} belongs to set ${zone.setId}.`))
   graph.spots.forEach((spot) => push(spot.zoneId, spot.id, 'zone_to_spot', true, `Spot ${spot.name} belongs to zone ${spot.zoneId}.`))
   graph.angles.forEach((angle) => {

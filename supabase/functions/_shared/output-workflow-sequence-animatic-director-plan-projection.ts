@@ -11,8 +11,10 @@ import {
 } from './output-workflow-sequence-animatic-shot-continuity-contracts.ts'
 import {
   normalizeSequenceAnimaticCoverageSetup,
-  type SequenceAnimaticShotRefs,
 } from './output-workflow-sequence-animatic-shot-continuity-plan-runtime.ts'
+import type {
+  SequenceAnimaticShotRefs,
+} from './output-workflow-sequence-animatic-shot-binding-runtime.ts'
 
 export type SequenceAnimaticDirectorPlanProjectionHelpers = {
   sequenceAnimaticShotRefs: (shot: Record<string, unknown>, fallback?: Record<string, unknown>) => SequenceAnimaticShotRefs

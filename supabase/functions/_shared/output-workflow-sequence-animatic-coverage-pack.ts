@@ -1,5 +1,13 @@
 import { z } from 'zod'
 import {
+  createWorkflowNodeExtensionScaffold,
+  workflowNodeManifestToContract,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeRuntimeKind,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
+import {
   applySequenceAnimaticCoveragePlanToDirectorPlan,
   normalizeSequenceAnimaticCoveragePlan,
   sequenceAnimaticCoveragePlanLlmSchema,
@@ -13,6 +21,18 @@ import type {
   SequenceAnimaticWorkflowNodePackHelpers,
 } from './output-workflow-sequence-animatic-node-pack-types.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
+import {
+  buildCinematicV3StoryboardGroupAssetPack,
+  cinematicAssetPackEntityKeys,
+} from './output-workflow-cinematic-asset-pack-runtime.ts'
+import {
+  orderSequenceAnimaticAssetPackReferences,
+  sequenceAnimaticReferenceManifestEntries,
+  sequenceAnimaticReferenceManifestText,
+  sequenceAnimaticReferenceName,
+  sequenceAnimaticReferenceRole,
+  scopeAssetPackToReferenceAssetKeys,
+} from './output-workflow-sequence-animatic-reference-runtime.ts'
 
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
@@ -440,7 +460,7 @@ export async function sequenceAnimaticCoveragePlan(
             text: helpers.readText(screenplayDraft.screenplayMarkdown ?? screenplayDraft.markdown ?? screenplayDraft.text).slice(0, 8000),
           },
           assetPackSummary: {
-            selectedEntityKeys: helpers.cinematicAssetPackEntityKeys(assetPack),
+            selectedEntityKeys: cinematicAssetPackEntityKeys(assetPack),
             entityCount: helpers.readArray(assetPack.entities).length,
           },
           world: helpers.asRecord(worldContext.wiki ?? worldContext.worldWiki),
@@ -515,7 +535,7 @@ export async function sequenceAnimaticCoverageAnchorInput(
   const shots = helpers.readArray(config.shots).map(helpers.asRecord)
   const rawAssetPack = helpers.asRecord(config.assetPack ?? config.asset_pack)
   const referenceLimit = Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8))
-  const baseAssetPack = helpers.buildCinematicV3StoryboardGroupAssetPack({
+  const baseAssetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: rawAssetPack,
     shots,
     maxEntityCount: referenceLimit,
@@ -540,8 +560,8 @@ export async function sequenceAnimaticCoverageAnchorInput(
     selectedReferenceVariantType: 'continuity_asset',
     referenceSelectionReason: 'Coverage anchor visual reference plan dependency.',
   }))
-  const assetPack = helpers.orderSequenceAnimaticAssetPackReferences({
-    ...helpers.scopeAssetPackToReferenceAssetKeys({
+  const assetPack = orderSequenceAnimaticAssetPackReferences({
+    ...scopeAssetPackToReferenceAssetKeys({
       assetPack: baseAssetPack,
       referenceAssetKeys,
       fallbackEntities: extraReferenceEntities,
@@ -551,7 +571,7 @@ export async function sequenceAnimaticCoverageAnchorInput(
     continuityReferenceAssetKeys: referenceAssetKeys,
     coverageAnchorReferenceAssetKeys: referenceAssetKeys,
   })
-  const referenceManifest = helpers.sequenceAnimaticReferenceManifestEntries(assetPack)
+  const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
   const setupId = helpers.readText(coverageSetup.id) || helpers.readText(config.coverageSetupId)
   const outputs = {
     coverageSetup,
@@ -561,8 +581,8 @@ export async function sequenceAnimaticCoverageAnchorInput(
     asset_pack: assetPack,
     referenceManifest,
     reference_manifest: referenceManifest,
-    referenceManifestText: helpers.sequenceAnimaticReferenceManifestText(assetPack),
-    reference_manifest_text: helpers.sequenceAnimaticReferenceManifestText(assetPack),
+    referenceManifestText: sequenceAnimaticReferenceManifestText(assetPack),
+    reference_manifest_text: sequenceAnimaticReferenceManifestText(assetPack),
     referenceAssetKeys,
     reference_asset_keys: referenceAssetKeys,
     coverageSetupId: setupId,
@@ -592,8 +612,8 @@ export async function sequenceAnimaticCoverageAnchorBrief(
   const setupId = helpers.readText(coverageSetup.id) || helpers.readText(config.coverageSetupId)
   const subjectLabels = [...new Set([
     ...helpers.readArray(assetPack.entities).map(helpers.asRecord)
-      .filter((entity) => ['character_reference', 'temp_character_reference'].includes(helpers.sequenceAnimaticReferenceRole(entity)))
-      .map((entity) => helpers.sequenceAnimaticReferenceName(entity, 'Subject')),
+      .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
+      .map((entity) => sequenceAnimaticReferenceName(entity, 'Subject')),
     ...shots.flatMap((shot) => helpers.readStringArray(shot.visibleCharacterNames ?? shot.visible_character_names)),
     ...shots.flatMap((shot) => helpers.readStringArray(shot.characterNames ?? shot.character_names)),
   ].map((label) => label.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(0, 8)
@@ -657,7 +677,7 @@ export async function sequenceAnimaticCoverageAnchorBrief(
             refs: helpers.asRecord(shot.refs),
             sceneBinding: helpers.asRecord(shot.sceneBinding ?? shot.scene_binding ?? shot.shotBinding ?? shot.shot_binding),
           })),
-          referenceSummary: helpers.sequenceAnimaticReferenceManifestText(assetPack),
+          referenceSummary: sequenceAnimaticReferenceManifestText(assetPack),
         }, null, 2).slice(0, 14000),
       ].join('\n\n'),
       fallback: fallbackBrief,
@@ -741,12 +761,12 @@ export async function sequenceAnimaticCoverageAnchorPrompt(
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const coverageBrief = helpers.readFirstUpstreamRecord(context.upstream, ['coverageBrief', 'coverage_brief'])
   const coverageBriefText = helpers.readFirstUpstreamText(context.upstream, ['promptBrief', 'prompt_brief', 'coverageBriefText', 'coverage_brief_text'])
-  const referenceManifestText = helpers.sequenceAnimaticReferenceManifestText(assetPack)
+  const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
   const coverageScope = helpers.readText(config.coverageAnchorScope ?? config.coverage_anchor_scope)
   const placementLabels = [...new Set([
     ...helpers.readArray(assetPack.entities).map(helpers.asRecord)
-      .filter((entity) => ['character_reference', 'temp_character_reference'].includes(helpers.sequenceAnimaticReferenceRole(entity)))
-      .map((entity) => helpers.sequenceAnimaticReferenceName(entity, 'Subject')),
+      .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
+      .map((entity) => sequenceAnimaticReferenceName(entity, 'Subject')),
     ...shots.flatMap((shot) => helpers.readStringArray(shot.visibleCharacterNames ?? shot.visible_character_names)),
     ...shots.flatMap((shot) => helpers.readStringArray(shot.characterNames ?? shot.character_names)),
   ].map((label) => label.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(0, 8)
@@ -783,7 +803,7 @@ export async function sequenceAnimaticCoverageAnchorPrompt(
     visualBriefOverride ? `User-edited coverage visual brief:\n${visualBriefOverride}` : '',
     extraPromptDirection ? `Additional user generation direction:\n${extraPromptDirection}` : '',
   ].filter(Boolean).join('\n')
-  const referenceManifest = helpers.sequenceAnimaticReferenceManifestEntries(assetPack)
+  const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
   const outputs = {
     prompt: promptText,
     text: promptText,
@@ -951,4 +971,239 @@ export async function sequenceAnimaticCoverageAnchorArtifact(
     authoringReady: true,
   }
   return result({ context, helpers, outputs, model: 'sequence-animatic-coverage-anchor-artifact-v1' })
+}
+
+const sequenceAnimaticCoverageHandlers = {
+  sequence_animatic_coverage_plan: sequenceAnimaticCoveragePlan,
+  sequence_animatic_coverage_intent_input: sequenceAnimaticCoverageIntentInput,
+  sequence_animatic_coverage_intent_plan: sequenceAnimaticCoverageIntentPlan,
+  sequence_animatic_coverage_intent_artifact: sequenceAnimaticCoverageIntentArtifact,
+  sequence_animatic_coverage_anchor_input: sequenceAnimaticCoverageAnchorInput,
+  sequence_animatic_coverage_anchor_brief: sequenceAnimaticCoverageAnchorBrief,
+  sequence_animatic_coverage_anchor_prompt: sequenceAnimaticCoverageAnchorPrompt,
+  sequence_animatic_coverage_anchor_artifact: sequenceAnimaticCoverageAnchorArtifact,
+}
+
+const sequenceAnimaticCoverageWorkflowNodePackKey = 'sequence_animatic_coverage'
+
+export const sequenceAnimaticCoverageWorkflowNodePack = defineWorkflowNodePack<
+  SequenceAnimaticNodeExecutionContext,
+  SequenceAnimaticNodeExecutionResult,
+  SequenceAnimaticWorkflowNodePackHelpers,
+  typeof sequenceAnimaticCoverageHandlers
+>({
+  packKey: sequenceAnimaticCoverageWorkflowNodePackKey,
+  handlers: sequenceAnimaticCoverageHandlers,
+})
+
+export const sequenceAnimaticCoverageWorkflowNodeHandlerKeys = sequenceAnimaticCoverageWorkflowNodePack.handlerKeys
+
+function createSequenceAnimaticCoverageNodeScaffold(input: {
+  purpose: keyof typeof sequenceAnimaticCoverageHandlers
+  runtimeKind: WorkflowNodeRuntimeKind
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+}): WorkflowNodeExtensionScaffold {
+  const manifest = outputWorkflowNodeManifestsByPurpose.get(input.purpose)
+  if (!manifest) throw new Error(`Sequence animatic coverage workflow node scaffold missing registered manifest: ${input.purpose}`)
+  return createWorkflowNodeExtensionScaffold({
+    ...workflowNodeManifestToContract(manifest),
+    nodeType: manifest.nodeType,
+    handlerKey: manifest.handlerKey,
+    packKey: sequenceAnimaticCoverageWorkflowNodePackKey,
+    runtimeKind: input.runtimeKind,
+    sourceHashKeys: input.sourceHashKeys,
+    projectionMetadataKeys: input.projectionMetadataKeys,
+    inputSchema: manifest.inputSchema,
+    outputSchema: manifest.outputSchema,
+    configSchema: manifest.configSchema,
+    executable: manifest.executable,
+    executionPolicy: manifest.executionPolicy,
+    retryPolicy: manifest.retryPolicy,
+    cachePolicy: {
+      ...manifest.cachePolicy,
+      sourceHashKeys: manifest.cachePolicy.sourceHashKeys.length > 0
+        ? manifest.cachePolicy.sourceHashKeys
+        : input.sourceHashKeys,
+    },
+    cancellationPolicy: manifest.cancellationPolicy,
+    streamingPolicy: manifest.streamingPolicy,
+  })
+}
+
+export const sequenceAnimaticCoverageWorkflowNodeScaffolds = [
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_plan',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.shotContinuityPlan',
+      'upstream.directorPlan',
+      'upstream.screenplayDraft',
+      'upstream.assetPack',
+      'upstream.context',
+      'config.masterRequestId',
+      'config.coveragePlanPolicyVersion',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'providerStatus',
+      'providerRequestId',
+      'readyArtifactCount',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_intent_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.intentBatch',
+      'config.shots',
+      'config.assetPack',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_intent_plan',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.intentBatch',
+      'upstream.shots',
+      'upstream.assetPack',
+      'config.intentBatch',
+      'config.shots',
+      'config.assetPack',
+      'config.masterRequestId',
+      'config.coverageIntentPolicyVersion',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'providerStatus',
+      'providerRequestId',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_intent_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.intentBatch',
+      'upstream.coverageIntents',
+      'upstream.prompt',
+      'config.coverageIntentBatchId',
+      'config.masterRequestId',
+      'config.sourceHash',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_anchor_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.coverageSetup',
+      'config.shots',
+      'config.assetPack',
+      'config.referenceAssetKeys',
+      'config.assetPackReferenceLimit',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_anchor_brief',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.coverageSetup',
+      'upstream.shots',
+      'upstream.assetPack',
+      'config.coverageSetupId',
+      'config.sceneGraphOverride',
+      'config.masterRequestId',
+      'config.coverageAnchorBriefPolicyVersion',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'providerStatus',
+      'providerRequestId',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_anchor_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.coverageSetup',
+      'upstream.coverageBrief',
+      'upstream.shots',
+      'upstream.assetPack',
+      'config.coverageSetupId',
+      'config.coverageAnchorScope',
+      'config.sceneGraphOverride',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticCoverageNodeScaffold({
+    purpose: 'sequence_animatic_coverage_anchor_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.coverageSetup',
+      'upstream.image',
+      'upstream.prompt',
+      'config.coverageAnchorScopeKey',
+      'config.coverageAnchorScope',
+      'config.coverageSetupId',
+      'config.requiredReferenceAssetKeys',
+      'config.sourceReferenceHash',
+      'config.visualPlanHash',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+]
+
+export const sequenceAnimaticCoverageWorkflowNodeScaffoldHandlerKeys = sequenceAnimaticCoverageWorkflowNodeScaffolds.map((scaffold) => scaffold.handlerKey)
+
+export function registerSequenceAnimaticCoverageWorkflowNodePack(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  register: (handlerKey: string, handler: (context: SequenceAnimaticNodeExecutionContext) => Promise<SequenceAnimaticNodeExecutionResult>) => void
+}) {
+  sequenceAnimaticCoverageWorkflowNodePack.register({
+    dependencies: input.helpers,
+    register: input.register,
+  })
 }

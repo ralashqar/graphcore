@@ -1,3 +1,11 @@
+import {
+  createWorkflowNodeExtensionScaffold,
+  workflowNodeManifestToContract,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeRuntimeKind,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import { cinematicV2ShotPlanSchema, providerSafeCinematicV2DurationSeconds } from '../../../src/domain/cinematics.ts'
 import { outputArtifactSchema, type OutputArtifact } from '../../../src/domain/outputWorkflow.ts'
 import type {
@@ -7,6 +15,13 @@ import type {
   SequenceAnimaticWorkflowNodePackHelpers,
 } from './output-workflow-sequence-animatic-node-pack-types.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
+import { buildCinematicV3StoryboardGroupAssetPack } from './output-workflow-cinematic-asset-pack-runtime.ts'
+import {
+  orderSequenceAnimaticAssetPackReferences,
+  scopeAssetPackToReferenceAssetKeys,
+  sequenceAnimaticReferenceManifestEntries,
+  sequenceAnimaticReferenceManifestText,
+} from './output-workflow-sequence-animatic-reference-runtime.ts'
 
 type OutputArtifactRow = {
   id: string
@@ -103,7 +118,7 @@ export async function sequenceAnimaticShotInput(
   if (!panelAssetKey && !isShotProduction) {
     throw new Error('Sequence animatic shot video requires a cropped panel asset. Generate/extract the storyboard panel before generating shot video.')
   }
-  const assetPack = helpers.buildCinematicV3StoryboardGroupAssetPack({
+  const assetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: helpers.asRecord(config.assetPack),
     shots: [shot as unknown as LooseRecord],
     maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
@@ -294,7 +309,7 @@ export async function sequenceAnimaticShotReferencePack(
     ...helpers.readStringArray(config.requiredReferenceAssetKeys),
     ...referenceAssetKeys,
   ])]
-  const assetPack = helpers.orderSequenceAnimaticAssetPackReferences(helpers.scopeAssetPackToReferenceAssetKeys({
+  const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
     assetPack: rawAssetPack,
     referenceAssetKeys: scopedReferenceAssetKeys.length > 0 ? scopedReferenceAssetKeys : referenceAssetKeys,
     fallbackEntities,
@@ -308,8 +323,8 @@ export async function sequenceAnimaticShotReferencePack(
   const previousKeyframeImage = previousKeyframe ? imageByAssetKey.get(helpers.readText(previousKeyframe.assetKey)) ?? null : null
   const storyboardPanelImage = storyboardPanel ? imageByAssetKey.get(helpers.readText(storyboardPanel.assetKey)) ?? null : null
   const primaryImage = coverageAnchorImage ?? storyboardPanelImage ?? previousKeyframeImage ?? upstreamImages[0] ?? null
-  const referenceManifest = helpers.sequenceAnimaticReferenceManifestEntries(assetPack)
-  const referenceManifestText = helpers.sequenceAnimaticReferenceManifestText(assetPack)
+  const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+  const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
   const outputs = {
     shot,
     shots: Object.keys(shot).length > 0 ? [shot] : [],
@@ -333,4 +348,137 @@ export async function sequenceAnimaticShotReferencePack(
     deterministic: true,
   }
   return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-shot-reference-pack-v1' })
+}
+
+const sequenceAnimaticShotReferenceHandlers = {
+  sequence_animatic_shot_input: sequenceAnimaticShotInput,
+  sequence_animatic_shared_asset_ref: sequenceAnimaticSharedAssetRef,
+  sequence_animatic_shot_reference_pack: sequenceAnimaticShotReferencePack,
+}
+
+const sequenceAnimaticShotReferenceWorkflowNodePackKey = 'sequence_animatic_shot_reference'
+
+export const sequenceAnimaticShotReferenceWorkflowNodePack = defineWorkflowNodePack<
+  SequenceAnimaticNodeExecutionContext,
+  SequenceAnimaticNodeExecutionResult,
+  SequenceAnimaticWorkflowNodePackHelpers,
+  typeof sequenceAnimaticShotReferenceHandlers
+>({
+  packKey: sequenceAnimaticShotReferenceWorkflowNodePackKey,
+  handlers: sequenceAnimaticShotReferenceHandlers,
+})
+
+export const sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys = sequenceAnimaticShotReferenceWorkflowNodePack.handlerKeys
+
+function createSequenceAnimaticShotReferenceNodeScaffold(input: {
+  purpose: keyof typeof sequenceAnimaticShotReferenceHandlers
+  runtimeKind: WorkflowNodeRuntimeKind
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+}): WorkflowNodeExtensionScaffold {
+  const manifest = outputWorkflowNodeManifestsByPurpose.get(input.purpose)
+  if (!manifest) throw new Error(`Sequence animatic shot reference workflow node scaffold missing registered manifest: ${input.purpose}`)
+  return createWorkflowNodeExtensionScaffold({
+    ...workflowNodeManifestToContract(manifest),
+    nodeType: manifest.nodeType,
+    handlerKey: manifest.handlerKey,
+    packKey: sequenceAnimaticShotReferenceWorkflowNodePackKey,
+    runtimeKind: input.runtimeKind,
+    sourceHashKeys: input.sourceHashKeys,
+    projectionMetadataKeys: input.projectionMetadataKeys,
+    inputSchema: manifest.inputSchema,
+    outputSchema: manifest.outputSchema,
+    configSchema: manifest.configSchema,
+    executable: manifest.executable,
+    executionPolicy: manifest.executionPolicy,
+    retryPolicy: manifest.retryPolicy,
+    cachePolicy: {
+      ...manifest.cachePolicy,
+      sourceHashKeys: manifest.cachePolicy.sourceHashKeys.length > 0
+        ? manifest.cachePolicy.sourceHashKeys
+        : input.sourceHashKeys,
+    },
+    cancellationPolicy: manifest.cancellationPolicy,
+    streamingPolicy: manifest.streamingPolicy,
+  })
+}
+
+export const sequenceAnimaticShotReferenceWorkflowNodeScaffolds = [
+  createSequenceAnimaticShotReferenceNodeScaffold({
+    purpose: 'sequence_animatic_shot_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.shot',
+      'config.panel',
+      'config.assetPack',
+      'config.editorialDurationSeconds',
+      'config.storyboardBlockId',
+      'config.sequenceAnimaticRole',
+      'config.screenplayAnimaticRole',
+      'config.screenplayAnimaticSource',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticShotReferenceNodeScaffold({
+    purpose: 'sequence_animatic_shared_asset_ref',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.referenceRole',
+      'config.sourceArtifactRole',
+      'config.identityKey',
+      'config.identityValue',
+      'config.expectedAssetKey',
+      'config.directReference',
+      'config.masterRequestId',
+      'config.sourceWorkflowId',
+      'config.sourceRequestId',
+      'config.required',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticShotReferenceNodeScaffold({
+    purpose: 'sequence_animatic_shot_reference_pack',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.shot',
+      'upstream.assetPack',
+      'upstream.asset_pack',
+      'upstream.reference',
+      'upstream.image',
+      'upstream.keyframe',
+      'upstream.primaryReferenceImage',
+      'config.requiredReferenceAssetKeys',
+      'config.assetPackReferenceLimit',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+]
+
+export const sequenceAnimaticShotReferenceWorkflowNodeScaffoldHandlerKeys = sequenceAnimaticShotReferenceWorkflowNodeScaffolds.map((scaffold) => scaffold.handlerKey)
+
+export function registerSequenceAnimaticShotReferenceWorkflowNodePack(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  register: (handlerKey: string, handler: (context: SequenceAnimaticNodeExecutionContext) => Promise<SequenceAnimaticNodeExecutionResult>) => void
+}) {
+  sequenceAnimaticShotReferenceWorkflowNodePack.register({
+    dependencies: input.helpers,
+    register: input.register,
+  })
 }

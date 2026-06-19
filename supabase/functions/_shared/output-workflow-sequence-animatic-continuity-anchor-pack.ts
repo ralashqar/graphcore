@@ -1,3 +1,11 @@
+import {
+  createWorkflowNodeExtensionScaffold,
+  workflowNodeManifestToContract,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeRuntimeKind,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import type {
   LooseRecord,
   SequenceAnimaticNodeExecutionContext,
@@ -5,6 +13,21 @@ import type {
   SequenceAnimaticWorkflowNodePackHelpers,
 } from './output-workflow-sequence-animatic-node-pack-types.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
+import {
+  buildSequenceAnimaticAnchorAtlasPrompt,
+} from './output-workflow-sequence-animatic-continuity-asset-runtime.ts'
+import {
+  planSequenceAnimaticContinuityAnchorsRuntime,
+  sequenceAnimaticAtlasImageSize,
+  sequenceAnimaticAtlasLayout,
+} from './output-workflow-sequence-animatic-continuity-anchor-runtime.ts'
+import {
+  collectCinematicV3ShotPlansFromUpstream,
+  mergeCinematicV3ShotPlansForTimeline,
+} from './output-workflow-sequence-animatic-planning-runtime.ts'
+import {
+  repairCinematicV2ShotPlanVisualReferences,
+} from './output-workflow-cinematic-asset-pack-runtime.ts'
 
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
@@ -27,12 +50,12 @@ export async function sequenceAnimaticContinuityAnchorPlan(
   const screenplayDraft = helpers.readFirstUpstreamRecord(context.upstream, ['screenplayDraft', 'screenplay_draft', 'screenplay'])
   const continuityPlannerContext = helpers.readFirstUpstreamRecord(context.upstream, ['continuityPlannerContext', 'continuity_planner_context'])
   const continuityGraphV2 = helpers.readFirstUpstreamRecord(context.upstream, ['continuityGraphV2', 'continuity_graph_v2'])
-  const groupPlans = helpers.collectCinematicV3ShotPlansFromUpstream(context.upstream)
+  const groupPlans = collectCinematicV3ShotPlansFromUpstream(context.upstream)
   const shotPlan = Array.isArray(directShotPlan.shots) && directShotPlan.shots.length > 0
     ? directShotPlan
-    : helpers.mergeCinematicV3ShotPlansForTimeline(groupPlans)
-  const mergedShotPlan = helpers.repairCinematicV2ShotPlanVisualReferences({ shotPlan, assetPack })
-  const continuityAnchorPlan = await helpers.planSequenceAnimaticContinuityAnchors({
+    : mergeCinematicV3ShotPlansForTimeline(groupPlans)
+  const mergedShotPlan = repairCinematicV2ShotPlanVisualReferences({ shotPlan, assetPack })
+  const continuityAnchorPlan = await planSequenceAnimaticContinuityAnchorsRuntime({
     nodeKey: context.node.key,
     prompt: context.run.prompt,
     screenplayDraft,
@@ -43,6 +66,9 @@ export async function sequenceAnimaticContinuityAnchorPlan(
     continuityGraphV2,
     priorProviderRequestId: helpers.readText(context.priorStep?.providerRequestId) || helpers.readText(helpers.asRecord(context.priorStep?.metadata).providerRequestId),
     priorProviderStartedAt: helpers.readText(helpers.asRecord(context.priorStep?.metadata).providerStartedAt) || context.priorStep?.startedAt,
+    timeoutMs: helpers.outputWorkflowContinuityPlannerTimeoutMs(),
+    compactForPrompt: helpers.compactForPrompt,
+    runBackgroundStructuredNode: helpers.runBackgroundStructuredNode,
     shouldCancel: context.shouldCancel,
     onProgress: async (progress) => {
       await context.onProgress?.({
@@ -58,7 +84,20 @@ export async function sequenceAnimaticContinuityAnchorPlan(
         },
       })
     },
-  })
+  }) as LooseRecord & {
+    characterAnchors?: unknown[]
+    propAnchors?: unknown[]
+    locationSpotAnchors?: unknown[]
+    continuityAnchorIdsByShotId?: unknown
+    shotContinuityMap?: unknown
+    shotBindings?: unknown
+    locationSets?: unknown
+    locationAngles?: unknown
+    sceneGraph?: unknown
+    rejectedCandidates?: unknown
+    continuityGraphV2?: unknown
+    planningMode?: string
+  }
   const plan = helpers.asRecord(continuityAnchorPlan)
   const outputs = {
     continuityAnchorPlan,
@@ -143,7 +182,7 @@ export async function sequenceAnimaticAnchorAtlasPrompt(
   const plan = helpers.readFirstUpstreamRecord(context.upstream, ['continuityAnchorPlan', 'continuity_anchor_plan'])
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const anchors = sequenceAnimaticAnchorsForType(helpers, plan, anchorType)
-  const layout = helpers.sequenceAnimaticAtlasLayout(anchors.length)
+  const layout = sequenceAnimaticAtlasLayout(anchors.length)
   if (anchors.length === 0) {
     const outputs = {
       skipImageGeneration: true,
@@ -151,19 +190,19 @@ export async function sequenceAnimaticAnchorAtlasPrompt(
       skipReason: `No ${sequenceAnimaticAnchorTypeLabel(anchorType)} continuity anchors needed.`,
       anchors,
       atlasLayout: layout,
-      imageSize: helpers.sequenceAnimaticAtlasImageSize(layout),
+      imageSize: sequenceAnimaticAtlasImageSize(layout),
       text: `No ${sequenceAnimaticAnchorTypeLabel(anchorType)} continuity anchors needed.`,
       deterministic: true,
     }
     return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-anchor-atlas-prompt-v1' })
   }
-  const prompt = helpers.buildSequenceAnimaticAnchorAtlasPrompt({ anchorType, anchors, layout, assetPack })
+  const prompt = buildSequenceAnimaticAnchorAtlasPrompt({ anchorType, anchors, layout, assetPack })
   const outputs = {
     prompt,
     text: prompt,
     anchors,
     atlasLayout: layout,
-    imageSize: helpers.sequenceAnimaticAtlasImageSize(layout),
+    imageSize: sequenceAnimaticAtlasImageSize(layout),
     continuityAnchorPlan: plan,
     continuity_anchor_plan: plan,
     deterministic: true,
@@ -193,7 +232,7 @@ export async function sequenceAnimaticAnchorExtract(
     }
     return result({ context, helpers, outputs, model: 'ffmpeg-sequence-animatic-anchor-extract-v1' })
   }
-  const layout = helpers.sequenceAnimaticAtlasLayout(anchors.length)
+  const layout = sequenceAnimaticAtlasLayout(anchors.length)
   const atlasStoragePath = helpers.readText(atlasImage.storagePath) || helpers.readText(atlasImage.storage_path)
   const atlasBytes = atlasStoragePath
     ? await helpers.downloadProjectAssetBytes(context.client, atlasStoragePath)
@@ -317,4 +356,201 @@ export async function sequenceAnimaticAnchorExtract(
     text: `Extracted ${extractedAnchors.length} ${sequenceAnimaticAnchorTypeLabel(anchorType)} continuity anchor${extractedAnchors.length === 1 ? '' : 's'}.`,
   }
   return result({ context, helpers, outputs, model: 'ffmpeg-sequence-animatic-anchor-extract-v1' })
+}
+
+const sequenceAnimaticContinuityAnchorHandlers = {
+  sequence_animatic_continuity_anchor_plan: sequenceAnimaticContinuityAnchorPlan,
+  sequence_animatic_character_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt,
+  sequence_animatic_prop_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt,
+  sequence_animatic_location_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt,
+  sequence_animatic_character_anchor_extract: sequenceAnimaticAnchorExtract,
+  sequence_animatic_prop_anchor_extract: sequenceAnimaticAnchorExtract,
+  sequence_animatic_location_anchor_extract: sequenceAnimaticAnchorExtract,
+}
+
+const sequenceAnimaticContinuityAnchorWorkflowNodePackKey = 'sequence_animatic_continuity_anchor'
+
+export const sequenceAnimaticContinuityAnchorWorkflowNodePack = defineWorkflowNodePack<
+  SequenceAnimaticNodeExecutionContext,
+  SequenceAnimaticNodeExecutionResult,
+  SequenceAnimaticWorkflowNodePackHelpers,
+  typeof sequenceAnimaticContinuityAnchorHandlers
+>({
+  packKey: sequenceAnimaticContinuityAnchorWorkflowNodePackKey,
+  handlers: sequenceAnimaticContinuityAnchorHandlers,
+})
+
+export const sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys = sequenceAnimaticContinuityAnchorWorkflowNodePack.handlerKeys
+
+function createSequenceAnimaticContinuityAnchorNodeScaffold(input: {
+  purpose: keyof typeof sequenceAnimaticContinuityAnchorHandlers
+  runtimeKind: WorkflowNodeRuntimeKind
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+}): WorkflowNodeExtensionScaffold {
+  const manifest = outputWorkflowNodeManifestsByPurpose.get(input.purpose)
+  if (!manifest) throw new Error(`Sequence animatic continuity anchor workflow node scaffold missing registered manifest: ${input.purpose}`)
+  return createWorkflowNodeExtensionScaffold({
+    ...workflowNodeManifestToContract(manifest),
+    nodeType: manifest.nodeType,
+    handlerKey: manifest.handlerKey,
+    packKey: sequenceAnimaticContinuityAnchorWorkflowNodePackKey,
+    runtimeKind: input.runtimeKind,
+    sourceHashKeys: input.sourceHashKeys,
+    projectionMetadataKeys: input.projectionMetadataKeys,
+    inputSchema: manifest.inputSchema,
+    outputSchema: manifest.outputSchema,
+    configSchema: manifest.configSchema,
+    executable: manifest.executable,
+    executionPolicy: manifest.executionPolicy,
+    retryPolicy: manifest.retryPolicy,
+    cachePolicy: {
+      ...manifest.cachePolicy,
+      sourceHashKeys: manifest.cachePolicy.sourceHashKeys.length > 0
+        ? manifest.cachePolicy.sourceHashKeys
+        : input.sourceHashKeys,
+    },
+    cancellationPolicy: manifest.cancellationPolicy,
+    streamingPolicy: manifest.streamingPolicy,
+  })
+}
+
+export const sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds = [
+  createSequenceAnimaticContinuityAnchorNodeScaffold({
+    purpose: 'sequence_animatic_continuity_anchor_plan',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.shotBreakPlan',
+      'upstream.shotPlan',
+      'upstream.assetPack',
+      'upstream.screenplayDraft',
+      'upstream.continuityPlannerContext',
+      'upstream.continuityGraphV2',
+      'config.masterRequestId',
+      'config.continuityAnchorPolicyVersion',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'providerStatus',
+      'providerRequestId',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticContinuityAnchorNodeScaffold({
+    purpose: 'sequence_animatic_character_anchor_atlas_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.continuityAnchorPlan',
+      'upstream.assetPack',
+      'config.anchorType',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticContinuityAnchorNodeScaffold({
+    purpose: 'sequence_animatic_prop_anchor_atlas_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.continuityAnchorPlan',
+      'upstream.assetPack',
+      'config.anchorType',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticContinuityAnchorNodeScaffold({
+    purpose: 'sequence_animatic_location_anchor_atlas_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.continuityAnchorPlan',
+      'upstream.assetPack',
+      'config.anchorType',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticContinuityAnchorNodeScaffold({
+    purpose: 'sequence_animatic_character_anchor_extract',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.continuityAnchorPlan',
+      'upstream.image',
+      'config.anchorType',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticContinuityAnchorNodeScaffold({
+    purpose: 'sequence_animatic_prop_anchor_extract',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.continuityAnchorPlan',
+      'upstream.image',
+      'config.anchorType',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticContinuityAnchorNodeScaffold({
+    purpose: 'sequence_animatic_location_anchor_extract',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.continuityAnchorPlan',
+      'upstream.image',
+      'config.anchorType',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+]
+
+export const sequenceAnimaticContinuityAnchorWorkflowNodeScaffoldHandlerKeys = sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds.map((scaffold) => scaffold.handlerKey)
+
+export function registerSequenceAnimaticContinuityAnchorWorkflowNodePack(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  register: (handlerKey: string, handler: (context: SequenceAnimaticNodeExecutionContext) => Promise<SequenceAnimaticNodeExecutionResult>) => void
+}) {
+  sequenceAnimaticContinuityAnchorWorkflowNodePack.register({
+    dependencies: input.helpers,
+    register: input.register,
+  })
 }

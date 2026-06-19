@@ -1,3 +1,11 @@
+import {
+  createWorkflowNodeExtensionScaffold,
+  workflowNodeManifestToContract,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeRuntimeKind,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import { cinematicV2ShotSchema, providerSafeCinematicV2DurationSeconds } from '../../../src/domain/cinematics.ts'
 import type {
   LooseRecord,
@@ -6,6 +14,8 @@ import type {
   SequenceAnimaticWorkflowNodePackHelpers,
 } from './output-workflow-sequence-animatic-node-pack-types.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
+import { buildCinematicV3StoryboardGroupAssetPack } from './output-workflow-cinematic-asset-pack-runtime.ts'
+import { planSequenceAnimaticShotRevisionRuntime } from './output-workflow-sequence-animatic-shot-revision-runtime.ts'
 
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
@@ -34,7 +44,7 @@ export async function sequenceAnimaticShotRevisionInput(
   if (!basePanelAssetKey) {
     throw new Error('Sequence animatic shot revision requires a cropped panel asset. Generate/extract the storyboard panel before revising this shot.')
   }
-  const assetPack = helpers.buildCinematicV3StoryboardGroupAssetPack({
+  const assetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: helpers.asRecord(config.assetPack),
     shots: [shot as unknown as LooseRecord],
     maxEntityCount: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 6) || 6)),
@@ -94,7 +104,7 @@ export async function sequenceAnimaticShotRevisionPlan(
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const baseKeyframe = helpers.readFirstUpstreamRecord(context.upstream, ['baseKeyframe', 'base_keyframe', 'image', 'keyframe'])
   const priorStepMetadata = helpers.asRecord(context.priorStep?.metadata)
-  const revision = await helpers.planSequenceAnimaticShotRevision({
+  const revision = await planSequenceAnimaticShotRevisionRuntime({
     nodeKey: context.node.key,
     shot,
     revisionPrompt,
@@ -102,6 +112,7 @@ export async function sequenceAnimaticShotRevisionPlan(
     baseKeyframe,
     priorProviderRequestId: helpers.readText(context.priorStep?.providerRequestId) || helpers.readText(priorStepMetadata.providerRequestId),
     shouldCancel: context.shouldCancel,
+    runBackgroundStructuredNode: helpers.runBackgroundStructuredNode,
     onProgress: async (progress) => {
       await context.onProgress?.({
         provider: 'openai',
@@ -314,4 +325,167 @@ export async function sequenceAnimaticShotRevisionArtifact(
     authoringReady: true,
   }
   return result({ context, helpers, outputs, model: 'sequence-animatic-shot-revision-artifact-v1' })
+}
+
+const sequenceAnimaticShotRevisionHandlers = {
+  sequence_animatic_shot_revision_input: sequenceAnimaticShotRevisionInput,
+  sequence_animatic_shot_revision_plan: sequenceAnimaticShotRevisionPlan,
+  sequence_animatic_shot_keyframe_prompt: sequenceAnimaticShotKeyframePrompt,
+  sequence_animatic_shot_keyframe_image: sequenceAnimaticShotKeyframeImage,
+  sequence_animatic_shot_revision_artifact: sequenceAnimaticShotRevisionArtifact,
+}
+
+const sequenceAnimaticShotRevisionWorkflowNodePackKey = 'sequence_animatic_shot_revision'
+
+export const sequenceAnimaticShotRevisionWorkflowNodePack = defineWorkflowNodePack<
+  SequenceAnimaticNodeExecutionContext,
+  SequenceAnimaticNodeExecutionResult,
+  SequenceAnimaticWorkflowNodePackHelpers,
+  typeof sequenceAnimaticShotRevisionHandlers
+>({
+  packKey: sequenceAnimaticShotRevisionWorkflowNodePackKey,
+  handlers: sequenceAnimaticShotRevisionHandlers,
+})
+
+export const sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys = sequenceAnimaticShotRevisionWorkflowNodePack.handlerKeys
+
+function createSequenceAnimaticShotRevisionNodeScaffold(input: {
+  purpose: keyof typeof sequenceAnimaticShotRevisionHandlers
+  runtimeKind: WorkflowNodeRuntimeKind
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+}): WorkflowNodeExtensionScaffold {
+  const manifest = outputWorkflowNodeManifestsByPurpose.get(input.purpose)
+  if (!manifest) throw new Error(`Sequence animatic shot revision workflow node scaffold missing registered manifest: ${input.purpose}`)
+  return createWorkflowNodeExtensionScaffold({
+    ...workflowNodeManifestToContract(manifest),
+    nodeType: manifest.nodeType,
+    handlerKey: manifest.handlerKey,
+    packKey: sequenceAnimaticShotRevisionWorkflowNodePackKey,
+    runtimeKind: input.runtimeKind,
+    sourceHashKeys: input.sourceHashKeys,
+    projectionMetadataKeys: input.projectionMetadataKeys,
+    inputSchema: manifest.inputSchema,
+    outputSchema: manifest.outputSchema,
+    configSchema: manifest.configSchema,
+    executable: manifest.executable,
+    executionPolicy: manifest.executionPolicy,
+    retryPolicy: manifest.retryPolicy,
+    cachePolicy: {
+      ...manifest.cachePolicy,
+      sourceHashKeys: manifest.cachePolicy.sourceHashKeys.length > 0
+        ? manifest.cachePolicy.sourceHashKeys
+        : input.sourceHashKeys,
+    },
+    cancellationPolicy: manifest.cancellationPolicy,
+    streamingPolicy: manifest.streamingPolicy,
+  })
+}
+
+const shotRevisionProjectionMetadataKeys = [
+  'activeManifestPurpose',
+  'activeProgressLabel',
+  'providerStatus',
+  'providerRequestId',
+  'readyArtifactCount',
+  'scopedAssetKeys',
+  'recoveryHints',
+]
+
+export const sequenceAnimaticShotRevisionWorkflowNodeScaffolds = [
+  createSequenceAnimaticShotRevisionNodeScaffold({
+    purpose: 'sequence_animatic_shot_revision_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.shot',
+      'config.panel',
+      'config.assetPack',
+      'config.revisionPrompt',
+      'config.revisionId',
+      'config.storyboardBlockId',
+      'config.shotId',
+      'config.manifestHash',
+      'config.blockHash',
+      'config.shotHash',
+    ],
+    projectionMetadataKeys: shotRevisionProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticShotRevisionNodeScaffold({
+    purpose: 'sequence_animatic_shot_revision_plan',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.shot',
+      'upstream.baseKeyframe',
+      'upstream.assetPack',
+      'upstream.revisionPrompt',
+      'config.revisionPrompt',
+      'config.revisionId',
+      'config.shotRevisionPolicyVersion',
+    ],
+    projectionMetadataKeys: shotRevisionProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticShotRevisionNodeScaffold({
+    purpose: 'sequence_animatic_shot_keyframe_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.revisedShot',
+      'upstream.baseKeyframe',
+      'upstream.assetPack',
+      'config.revisionPrompt',
+      'config.revisionId',
+      'config.storyboardBlockId',
+      'config.shotId',
+    ],
+    projectionMetadataKeys: shotRevisionProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticShotRevisionNodeScaffold({
+    purpose: 'sequence_animatic_shot_keyframe_image',
+    runtimeKind: 'image_generation',
+    sourceHashKeys: [
+      'upstream.prompt',
+      'upstream.baseKeyframe',
+      'upstream.assetPack',
+      'config.revisionId',
+      'config.shotId',
+      'config.imagePolicyVersion',
+    ],
+    projectionMetadataKeys: [
+      ...shotRevisionProjectionMetadataKeys,
+      'providerStatus',
+      'providerRequestId',
+    ],
+  }),
+  createSequenceAnimaticShotRevisionNodeScaffold({
+    purpose: 'sequence_animatic_shot_revision_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.revisedShot',
+      'upstream.revisionPlan',
+      'upstream.keyframe',
+      'config.revisionPrompt',
+      'config.revisionId',
+      'config.masterRequestId',
+      'config.parentRequestId',
+      'config.storyboardBlockId',
+      'config.shotId',
+      'config.manifestHash',
+      'config.blockHash',
+      'config.shotHash',
+      'config.continuityPackHash',
+      'config.basePanelAssetKey',
+    ],
+    projectionMetadataKeys: shotRevisionProjectionMetadataKeys,
+  }),
+]
+
+export const sequenceAnimaticShotRevisionWorkflowNodeScaffoldHandlerKeys = sequenceAnimaticShotRevisionWorkflowNodeScaffolds.map((scaffold) => scaffold.handlerKey)
+
+export function registerSequenceAnimaticShotRevisionWorkflowNodePack(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  register: (handlerKey: string, handler: (context: SequenceAnimaticNodeExecutionContext) => Promise<SequenceAnimaticNodeExecutionResult>) => void
+}) {
+  sequenceAnimaticShotRevisionWorkflowNodePack.register({
+    dependencies: input.helpers,
+    register: input.register,
+  })
 }

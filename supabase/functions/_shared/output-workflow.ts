@@ -56,8 +56,6 @@ import {
   type WorkflowNodeHandler,
 } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import {
-  sequenceAnimaticGraphSpecVersion,
-  sequenceAnimaticStoryboardImageSize,
   sequenceAnimaticStableHash,
 } from './sequence-animatic-workflow-factory.ts'
 import {
@@ -77,51 +75,20 @@ import {
   createSequenceAnimaticShotContinuityStreamAccumulator,
   finalizeSequenceAnimaticShotContinuityStreamPlan,
   parseSequenceAnimaticStreamRecord,
-  type SequenceAnimaticShotContinuityPlanRuntimeHelpers,
 } from './output-workflow-sequence-animatic-shot-continuity-plan-runtime.ts'
-import {
-  normalizeSequenceAnimaticDirectorPlan,
-  sequenceAnimaticDirectorPlanSchema,
-  type SequenceAnimaticDirectorPlanRuntimeHelpers,
-} from './output-workflow-sequence-animatic-director-plan-runtime.ts'
 import {
   sequenceAnimaticShotBindingFromSceneBinding,
   sequenceAnimaticShotRefs,
   sequenceAnimaticUniqueTexts,
 } from './output-workflow-sequence-animatic-shot-binding-runtime.ts'
 import {
-  finalizeSequenceAnimaticContinuityGraphV2,
-  emptySequenceAnimaticContinuityBlockDelta,
-  mergeSequenceAnimaticContinuityAssetAnchorsBySemanticKey,
-  mergeSequenceAnimaticContinuityGraphV2,
-  parseSequenceAnimaticGraphV2,
-  remapSequenceAnimaticContinuityShotBindingAnchorIds,
-  sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes,
-  sanitizeSequenceAnimaticContinuityGraphCanonicalAnchors,
-  sequenceAnimaticBlockShots,
-  sequenceAnimaticContinuityAnchorSemanticKey,
-  sequenceAnimaticContinuityAnchorSemanticName,
-  sequenceAnimaticContinuityAnchorStableId,
   sequenceAnimaticContinuityAssetStateSchema,
   sequenceAnimaticContinuityAssetTargetInputHash,
   sequenceAnimaticAssetGenerationStatus,
-  sequenceAnimaticContinuityBlockDeltaSchema,
-  sequenceAnimaticContinuityBlockStatesFromGraph,
-  sequenceAnimaticContinuityCoverage,
   sequenceAnimaticContinuityGraphStatusFromBlockStates,
-  sequenceAnimaticEmptyGraphV2,
-  sequenceAnimaticGlobalStoryboardBlock,
-  sequenceAnimaticPlanFromContinuityGraphV2,
-  sequenceAnimaticSeededBlockStatesFromCoverage,
-  withSequenceAnimaticContinuityAssetState,
 } from './output-workflow-sequence-animatic-continuity-graph-runtime.ts'
 import {
-  sequenceAnimaticContinuityGraphAngleSchema,
-  sequenceAnimaticContinuityGraphEdgeSchema,
-  sequenceAnimaticContinuityGraphSetSchema,
-  sequenceAnimaticContinuityGraphSpotSchema,
   sequenceAnimaticContinuityGraphV2Schema,
-  sequenceAnimaticContinuityGraphZoneSchema,
   sequenceAnimaticContinuityLocationSetSchema,
   sequenceAnimaticContinuityLocationAngleSchema,
   sequenceAnimaticContinuityPlannerAnchorSchema,
@@ -137,7 +104,6 @@ import {
   sequenceAnimaticShotContinuityMaxDurationSeconds,
   sequenceAnimaticShotContinuityMaxShotCount,
   sequenceAnimaticShotContinuityPerformanceBeatV2Schema,
-  sequenceAnimaticShotContinuityPlanV2Schema,
   sequenceAnimaticShotContinuityPreferredDurationSeconds,
   sequenceAnimaticShotContinuityShotV2Schema,
   sequenceAnimaticShotPlanSchema,
@@ -147,9 +113,48 @@ import {
   sceneBoardWorkflowNodeHandlerKeys,
 } from './output-workflow-scene-board-pack.ts'
 import {
-  registerSequenceAnimaticWorkflowNodePack,
-  sequenceAnimaticWorkflowNodeHandlerKeys,
-} from './output-workflow-sequence-animatic-pack.ts'
+  registerSequenceAnimaticPlanningWorkflowNodePack,
+  sequenceAnimaticPlanningWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-planning-pack.ts'
+import {
+  registerSequenceAnimaticSceneLifecycleWorkflowNodePack,
+  sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-scene-lifecycle-pack.ts'
+import {
+  registerSequenceAnimaticArtifactWorkflowNodePack,
+  sequenceAnimaticArtifactWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-artifact-pack.ts'
+import {
+  registerSequenceAnimaticCoverageWorkflowNodePack,
+  sequenceAnimaticCoverageWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-coverage-pack.ts'
+import {
+  registerSequenceAnimaticContinuityAnchorWorkflowNodePack,
+  sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-continuity-anchor-pack.ts'
+import {
+  registerSequenceAnimaticContinuityAssetWorkflowNodePack,
+  sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-continuity-asset-pack.ts'
+import {
+  registerSequenceAnimaticContinuityGraphWorkflowNodePack,
+  sequenceAnimaticContinuityGraphWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-continuity-graph-pack.ts'
+import {
+  registerSequenceAnimaticShotReferenceWorkflowNodePack,
+  sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-shot-reference-pack.ts'
+import {
+  registerSequenceAnimaticShotProductionWorkflowNodePack,
+  sequenceAnimaticShotProductionWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-shot-production-pack.ts'
+import {
+  registerSequenceAnimaticShotRevisionWorkflowNodePack,
+  sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys,
+} from './output-workflow-sequence-animatic-shot-revision-pack.ts'
+import type {
+  SequenceAnimaticWorkflowNodePackHelpers,
+} from './output-workflow-sequence-animatic-node-pack-types.ts'
 import {
   startSequenceAnimaticChildRunRuntime,
 } from './output-workflow-sequence-animatic-child-run-runtime.ts'
@@ -157,22 +162,61 @@ import {
   ensureSequenceAnimaticSceneShotPlanWorkflowsRuntime,
 } from './output-workflow-sequence-animatic-scene-runner.ts'
 import {
-  orderSequenceAnimaticAssetPackReferences,
   sequenceAnimaticAssetPackReferenceRecord,
   sequenceAnimaticReferenceManifestEntries,
   sequenceAnimaticReferenceManifestText,
   sequenceAnimaticReferenceManifestTextFromRecords,
-  sequenceAnimaticReferenceName,
-  sequenceAnimaticReferenceRole,
-  sequenceAnimaticReferenceVisual,
 } from './output-workflow-sequence-animatic-reference-runtime.ts'
 import {
-  sequenceAnimaticContinuityAssetBatches,
-} from './output-workflow-sequence-animatic-continuity-batches.ts'
+  sequenceAnimaticSceneGraphAssignmentSchema,
+} from './output-workflow-sequence-animatic-scene-package-runtime.ts'
+import {
+  buildSequenceAnimaticContinuityAssetPrompt,
+  buildSequenceAnimaticContinuityBatchPrompt,
+} from './output-workflow-sequence-animatic-continuity-asset-runtime.ts'
+import {
+  buildSequenceAnimaticShotPlanFromBreaks,
+} from './output-workflow-sequence-animatic-planning-runtime.ts'
 import {
   registerWorkflowMediaNodePack,
   workflowMediaNodeHandlerKeys,
 } from './output-workflow-media-pack.ts'
+import {
+  imagePromptWorkflowNodeHandlerKeys,
+  registerImagePromptWorkflowNodePack,
+} from './output-workflow-image-prompt-pack.ts'
+import {
+  comicWorkflowNodeHandlerKeys,
+  registerComicWorkflowNodePack,
+} from './output-workflow-comic-pack.ts'
+import {
+  documentWorkflowNodeHandlerKeys,
+  registerDocumentWorkflowNodePack,
+} from './output-workflow-document-pack.ts'
+import {
+  cinematicTextWorkflowNodeHandlerKeys,
+  registerCinematicTextWorkflowNodePack,
+} from './output-workflow-cinematic-text-pack.ts'
+import {
+  cinematicAuthoringWorkflowNodeHandlerKeys,
+  registerCinematicAuthoringWorkflowNodePack,
+} from './output-workflow-cinematic-authoring-pack.ts'
+import {
+  cinematicPlanningWorkflowNodeHandlerKeys,
+  registerCinematicPlanningWorkflowNodePack,
+} from './output-workflow-cinematic-planning-pack.ts'
+import {
+  cinematicReferenceWorkflowNodeHandlerKeys,
+  registerCinematicReferenceWorkflowNodePack,
+} from './output-workflow-cinematic-reference-pack.ts'
+import {
+  cinematicParseWorkflowNodeHandlerKeys,
+  registerCinematicParseWorkflowNodePack,
+} from './output-workflow-cinematic-parse-pack.ts'
+import {
+  cinematicFanoutWorkflowNodeHandlerKeys,
+  registerCinematicFanoutWorkflowNodePack,
+} from './output-workflow-cinematic-fanout-pack.ts'
 import {
   buildOutputWorkflowMuapiWebhookUrl,
   buildMuapiVideoPayload,
@@ -193,6 +237,34 @@ import {
   waitForOutputFalVideo,
   waitForOutputMuapiVideo,
 } from './output-workflow-media-runtime.ts'
+import {
+  buildSeedanceReferenceManifest,
+  compactSeedanceControlText,
+  formatSeedanceReferenceManifest,
+  seedanceLabanMovementBlock,
+  seedanceProductionBoardArtifactBan,
+  seedanceStoryboardManifestInstruction,
+} from './output-workflow-seedance-video-prompt-runtime.ts'
+import {
+  buildCinematicV3StoryboardGroupAssetPack,
+  cinematicAssetPackEntityKeys,
+  repairCinematicV2ShotPlanVisualReferences,
+} from './output-workflow-cinematic-asset-pack-runtime.ts'
+import {
+  cinematicV3StoryboardGroupShots,
+  materializeDynamicCinematicV3ShotParseFanoutRuntime,
+  materializeDynamicCinematicV3StoryboardFanoutRuntime,
+  parseAspectRatio,
+} from './output-workflow-cinematic-v3-fanout-runtime.ts'
+import {
+  materializeDynamicCinematicV2ShotFanoutRuntime,
+} from './output-workflow-cinematic-v2-fanout-runtime.ts'
+import {
+  dynamicWorkflowEdgeRow,
+  dynamicWorkflowNodeRow,
+  persistDynamicWorkflowGraphRevisionRuntime,
+  preserveExistingDynamicWorkflowNodeOutput,
+} from './output-workflow-dynamic-graph-runtime.ts'
 
 export {
   buildOutputWorkflowMuapiWebhookUrl,
@@ -200,6 +272,10 @@ export {
   compactSeedancePromptForProvider,
   extractMuapiVideoUrlFromResult,
 } from './output-workflow-media-runtime.ts'
+export {
+  buildSeedanceReferenceManifest,
+  formatSeedanceReferenceManifest,
+} from './output-workflow-seedance-video-prompt-runtime.ts'
 import {
   registerWorkflowUtilityNodePack,
   workflowUtilityNodeHandlerKeys,
@@ -212,14 +288,12 @@ import {
 } from './output-workflow-child-utils.ts'
 import type {
   SeedanceReferenceManifestEntry,
+  SeedanceReferenceRecord,
 } from '../../../src/domain/seedanceReferenceManifest.ts'
 import { buildEbookDocumentMetadata, buildEbookHtmlDocument } from '../../../src/domain/ebookDocument.ts'
 import {
   buildCinematicSequenceFromScriptDoc,
-  buildCinematicV2StoryboardGroupPlan,
   buildCinematicV2StoryboardLayout,
-  buildCinematicV3StoryboardGroupPlan,
-  buildCinematicV3StoryboardLayout,
   deriveCinematicV2MaxShotCount,
   cinematicScriptDocSchema,
   cinematicV2ParsedScriptSchema,
@@ -260,11 +334,8 @@ import {
 } from './output-workflow-text-runtime.ts'
 import { resolveOutputTextModelPolicy, reasoningPayloadFor } from './model-policy.ts'
 import {
-  buildSequenceAnimaticLocationEvidenceLines,
-  sanitizeSequenceAnimaticSpatialNodeFields,
   sanitizeSequenceAnimaticSpatialPromptText,
   sequenceAnimaticSpatialForbiddenNamesFromShots,
-  sequenceAnimaticSpatialPromptPolicyVersion,
 } from '../../../src/domain/sequenceAnimaticSpatialPrompt.ts'
 import { aiGenerationSettings } from '../../../src/config/aiGenerationSettings.ts'
 import { normalizeStrictJsonSchema } from './structured-output.ts'
@@ -2437,16 +2508,6 @@ function readPreferredUpstreamRecord(upstream: Record<string, Record<string, unk
   return readFirstUpstreamRecord(upstream, fields)
 }
 
-function continuityBlockNodeSuffix(nodeKey: string) {
-  return /^continuity_block_(\d+)_/.exec(nodeKey)?.[1] ?? ''
-}
-
-function previousContinuityGraphNodeKeys(blockSuffix: string) {
-  const blockNumber = Number.parseInt(blockSuffix, 10)
-  if (!Number.isFinite(blockNumber) || blockNumber <= 1) return ['continuity_global_merge', 'continuity_seed_graph']
-  return [`continuity_block_${String(blockNumber - 1).padStart(3, '0')}_merge`, 'continuity_global_merge', 'continuity_seed_graph']
-}
-
 function readUpstreamGuidanceBundle(upstream: Record<string, Record<string, unknown>>) {
   for (const outputs of Object.values(upstream)) {
     const candidate = outputs.guidance ?? outputs.guidanceBundle
@@ -3570,54 +3631,6 @@ async function refreshWorldContextVisualReferences(client: DatabaseClient, run: 
   }
 }
 
-function buildDeterministicImageAssetPack(context: Record<string, unknown>, options: number | { limit?: number; prompt?: string } = 8) {
-  const limit = typeof options === 'number' ? options : Math.max(1, Math.floor(Number(options.limit ?? 8) || 8))
-  const prompt = typeof options === 'number' ? '' : readText(options.prompt)
-  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
-  const assets = Array.isArray(context.assets) ? context.assets.map(asRecord) : []
-  const packedEntities = entities.slice(0, limit).map((entity) => {
-    const visualDescription = readOutputEntityVisualDescription(entity)
-    const referenceSelection = resolveImageOutputReferenceSelection(entity, assets, prompt)
-    return {
-      key: readText(entity.key),
-      name: readText(entity.name),
-      type: readText(entity.nodeType ?? entity.node_type),
-      role: readText(entity.nodeType ?? entity.node_type),
-      summary: readText(entity.summary),
-      visualDescription,
-      visualTraits: readOutputEntityVisualTraits(entity),
-      visualTraitMap: readOutputEntityVisualTraitMap(entity),
-      referenceVariants: referenceSelection.referenceVariants,
-      selectedReferenceVariantKey: referenceSelection.selectedReferenceVariantKey,
-      selectedReferenceVariantLabel: referenceSelection.selectedReferenceVariantLabel,
-      selectedReferenceVariantSummary: referenceSelection.selectedReferenceVariantSummary,
-      selectedReferenceVariantType: referenceSelection.selectedReferenceVariantType,
-      selectedReferenceVariantAssetKey: referenceSelection.selectedReferenceVariantAssetKey,
-      referenceSelectionReason: referenceSelection.referenceSelectionReason,
-      referenceDiagnostics: referenceSelection.referenceDiagnostics,
-      primaryAssetKey: referenceSelection.primaryAssetKey,
-      assetKeys: referenceSelection.primaryAssetKey ? [referenceSelection.primaryAssetKey] : [],
-    }
-  }).filter((entity) => entity.key || entity.name)
-  const referenceDiagnostics = [...new Set(packedEntities.flatMap((entity) => readStringArray(entity.referenceDiagnostics)))]
-  return {
-    entities: packedEntities,
-    selectedReferenceVariants: packedEntities
-      .filter((entity) => readText(entity.selectedReferenceVariantKey) && readText(entity.selectedReferenceVariantKey) !== 'default')
-      .map((entity) => ({
-        entityKey: entity.key,
-        entityName: entity.name,
-        variantKey: entity.selectedReferenceVariantKey,
-        label: entity.selectedReferenceVariantLabel,
-        summary: entity.selectedReferenceVariantSummary,
-        variantType: entity.selectedReferenceVariantType,
-        assetKey: entity.selectedReferenceVariantAssetKey,
-      })),
-    referenceDiagnostics,
-    missingReferenceEntityKeys: packedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
-  }
-}
-
 function buildOutputReferenceSelectionSnapshot(outputs: unknown) {
   const record = asRecord(outputs)
   const assetPackCandidate = asRecord(record.assetPack)
@@ -4127,34 +4140,6 @@ function readScreenplayAnimaticSourceFromMetadata(metadata: Record<string, unkno
   return source === 'prompt_cinematic' || source === 'wiki_sequence_unit' ? source : fallback
 }
 
-function sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest: Record<string, unknown>, directorPlan: Record<string, unknown>) {
-  const directorShots = readArray(directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
-  const directorShotById = new Map(directorShots.map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
-  const directorBlocks = readArray(directorPlan.blocks).map(asRecord).filter((block) => readText(block.id))
-  const directorBlockById = new Map(directorBlocks.map((block) => [readText(block.id), block] as const).filter(([id]) => id))
-  return readArray(manifest.blocks).map(asRecord).filter((block) => readText(block.id)).map((block) => {
-    const blockId = readText(block.id)
-    const directorBlock = directorBlockById.get(blockId) ?? {}
-    const manifestShotIds = readStringArray(block.shotIds)
-    const directorShotIds = readStringArray(directorBlock.shotIds)
-    const shotIds = directorShotIds.length > 0 ? directorShotIds : manifestShotIds
-    const manifestShotsById = new Map(readArray(block.shots).map(asRecord).map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
-    const shots = shotIds
-      .map((shotId) => ({ ...asRecord(manifestShotsById.get(shotId)), ...asRecord(directorShotById.get(shotId)), id: shotId }))
-      .filter((shot) => readText(shot.id))
-    return {
-      ...block,
-      ...directorBlock,
-      id: blockId,
-      shotIds: shotIds.length > 0 ? shotIds : readStringArray(block.shotIds),
-      shots: shots.length > 0 ? shots : readArray(block.shots).map(asRecord),
-      storyboardGroup: asRecord(block.storyboardGroup),
-      storyboardLayout: asRecord(block.storyboardLayout),
-      durationSeconds: Number(directorBlock.durationSeconds ?? block.durationSeconds ?? 0) || Number(block.durationSeconds ?? 0) || undefined,
-    }
-  })
-}
-
 async function startSequenceAnimaticChildRun(input: {
   client: DatabaseClient
   request: OutputRequest
@@ -4345,7 +4330,6 @@ export async function ensureSequenceAnimaticSceneShotPlanWorkflows(input: {
       slugify,
       sequenceAnimaticStableHash,
       readScreenplayAnimaticRoleFromMetadata,
-      parseSequenceAnimaticScenePackageOutput: (value) => sequenceAnimaticScenePackageOutputSchema.parse(value) as never,
       loadChildRequests: async ({ projectId, draftId, parentRequestId }) => {
         const response = await input.client
           .from('output_requests')
@@ -4739,10 +4723,6 @@ function cinematicAssetPackEntities(assetPack: Record<string, unknown>) {
   return Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
 }
 
-function cinematicAssetPackEntityKeys(assetPack: Record<string, unknown>) {
-  return cinematicAssetPackEntities(assetPack).map((entity) => readText(entity.key)).filter(Boolean)
-}
-
 function referencePlanKeys(plan: Record<string, unknown>) {
   return [...new Set([
     ...readStringArray(plan.primaryCastRefIds),
@@ -4924,869 +4904,11 @@ function sanitizeCinematicV2ReferencePlan(plan: Record<string, unknown>, assetPa
   return buildFallbackCinematicV2ReferencePlan(assetPack, maxReferenceCount)
 }
 
-function entityMentionedInShotText(entity: Record<string, unknown>, shotText: string) {
-  const selectedVariant = selectedReferenceVariantForPackedEntity(entity)
-  const candidates = [
-    readText(entity.key),
-    readText(entity.name),
-    ...readStringArray(entity.aliases),
-    readText(entity.selectedReferenceVariantKey),
-    readText(entity.selectedReferenceVariantLabel),
-    readText(selectedVariant?.variantKey ?? selectedVariant?.variant_key),
-    readText(selectedVariant?.label),
-    readText(selectedVariant?.summary),
-    readText(selectedVariant?.guidance),
-  ]
-  return candidates
-    .map((candidate) => normalizeComicReferenceText(candidate).replace(/_/g, ' '))
-    .filter((candidate) => candidate.length > 2)
-    .some((candidate) => shotText.includes(candidate))
-}
-
-function cinematicShotReferenceRepairText(shot: z.infer<typeof cinematicV2ShotSchema>) {
-  return normalizeComicReferenceText([
-    shot.title,
-    shot.description,
-    shot.action,
-    shot.caption,
-    shot.lighting,
-    shot.mood,
-    shot.storyboardPanelPrompt,
-    shot.videoDirection,
-    shot.continuityInputs.join(' '),
-    shot.camera.framing,
-    shot.camera.angle,
-    shot.camera.lens,
-    shot.camera.movement,
-    shot.camera.screenDirectionRule,
-    ...shot.dialogue.map((line) => `${line.speakerName} ${line.speakerRefId} ${line.text} ${line.emotion}`),
-    ...shot.performanceBeats.map((beat) => [
-      beat.characterRefId,
-      beat.bodyLanguage,
-      beat.facialExpression,
-      beat.gaze,
-      beat.gesture,
-      beat.voiceEnergy,
-    ].filter(Boolean).join(' ')),
-  ].filter(Boolean).join(' ')).replace(/_/g, ' ')
-}
-
-function entityExactNameMatched(entity: Record<string, unknown>, value: string) {
-  const normalizedValue = normalizeComicReferenceText(value).replace(/_/g, ' ')
-  if (!normalizedValue) return false
-  const candidates = [
-    readText(entity.key),
-    readText(entity.name),
-    ...readStringArray(entity.aliases),
-  ]
-    .map((candidate) => normalizeComicReferenceText(candidate).replace(/_/g, ' '))
-    .filter((candidate) => candidate.length > 1)
-  return candidates.some((candidate) => {
-    if (candidate === normalizedValue) return true
-    const parts = candidate.split(/\s+/).filter((part) => part.length > 1)
-    return parts.includes(normalizedValue)
-  })
-}
-
-export function repairCinematicV2ShotPlanVisualReferences(input: {
-  shotPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-}) {
-  const shotPlan = cinematicV2ShotPlanSchema.parse(input.shotPlan)
-  const entities = cinematicAssetPackEntities(input.assetPack)
-  const allowedKeys = new Set(entities.map((entity) => readText(entity.key)).filter(Boolean))
-  const byKey = new Map(entities.map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
-  const diagnostics: string[] = []
-  const actorTypes = new Set(['actor', 'character'])
-  const locationTypes = new Set(['place', 'environment', 'location', 'location_spot'])
-  const propTypes = new Set(['object', 'item', 'inventory_item', 'prop'])
-
-  const repairedShots = shotPlan.shots.map((shot) => {
-    const parsedShot = cinematicV2ShotSchema.parse(shot)
-    const shotText = cinematicShotReferenceRepairText(parsedShot)
-    const visibleCharacterRefIds = [...new Set(parsedShot.visibleCharacterRefIds.filter((key) => allowedKeys.has(key)))]
-    const speakerRefIds = [...new Set(parsedShot.speakerRefIds.filter((key) => allowedKeys.has(key)))]
-    const propRefIds = [...new Set(parsedShot.propRefIds.filter((key) => allowedKeys.has(key)))]
-    let locationRefId = parsedShot.locationRefId && allowedKeys.has(parsedShot.locationRefId) ? parsedShot.locationRefId : null
-    const matchedEntities = entities.filter((entity) => {
-      const key = readText(entity.key)
-      return key && entityMentionedInShotText(entity, shotText)
-    })
-
-    for (const line of parsedShot.dialogue) {
-      const currentSpeaker = readText(line.speakerRefId)
-      if (currentSpeaker && allowedKeys.has(currentSpeaker)) {
-        if (!speakerRefIds.includes(currentSpeaker)) speakerRefIds.push(currentSpeaker)
-        continue
-      }
-      const matchedSpeaker = entities.find((entity) => {
-        const key = readText(entity.key)
-        const type = readText(entity.type) || readText(entity.role)
-        return key && actorTypes.has(type) && entityExactNameMatched(entity, readText(line.speakerName))
-      })
-      const speakerKey = matchedSpeaker ? readText(matchedSpeaker.key) : ''
-      if (speakerKey && !speakerRefIds.includes(speakerKey)) {
-        speakerRefIds.push(speakerKey)
-        diagnostics.push(`Repaired speaker reference ${speakerKey} on ${parsedShot.id} from dialogue speaker name.`)
-      }
-      if (speakerKey && !visibleCharacterRefIds.includes(speakerKey)) visibleCharacterRefIds.push(speakerKey)
-    }
-
-    for (const entity of matchedEntities) {
-      const key = readText(entity.key)
-      const type = readText(entity.type) || readText(entity.role)
-      if (!key) continue
-      if (actorTypes.has(type) && !visibleCharacterRefIds.includes(key)) {
-        visibleCharacterRefIds.push(key)
-        diagnostics.push(`Repaired visible character reference ${key} on ${parsedShot.id} from shot text.`)
-      } else if (locationTypes.has(type)) {
-        const currentLocation = locationRefId ? byKey.get(locationRefId) : null
-        const currentLocationMentioned = currentLocation ? entityMentionedInShotText(currentLocation, shotText) : false
-        if (!locationRefId || (!currentLocationMentioned && locationRefId !== key)) {
-          const previousLocation = locationRefId
-          locationRefId = key
-          diagnostics.push(previousLocation
-            ? `Repaired location reference on ${parsedShot.id} from ${previousLocation} to ${key} based on shot text.`
-            : `Repaired location reference ${key} on ${parsedShot.id} from shot text.`)
-        }
-      } else if (propTypes.has(type) && !propRefIds.includes(key)) {
-        propRefIds.push(key)
-        diagnostics.push(`Repaired prop reference ${key} on ${parsedShot.id} from shot text.`)
-      }
-    }
-
-    return cinematicV2ShotSchema.parse({
-      ...parsedShot,
-      visibleCharacterRefIds,
-      speakerRefIds,
-      locationRefId,
-      worldLocationRefId: readText(parsedShot.worldLocationRefId) || locationRefId,
-      continuitySetId: readText(parsedShot.continuitySetId) || (locationRefId ? `set_${slugify(locationRefId)}_primary` : ''),
-      continuityZoneId: readText(parsedShot.continuityZoneId),
-      continuitySpotIds: readStringArray(parsedShot.continuitySpotIds),
-      continuityAngleId: readText(parsedShot.continuityAngleId),
-      propRefIds,
-    })
-  })
-
-  return cinematicV2ShotPlanSchema.parse({
-    ...shotPlan,
-    shots: repairedShots,
-    diagnostics: [...shotPlan.diagnostics, ...diagnostics],
-  })
-}
-
-export function buildCinematicV2ShotAssetPack(input: {
-  assetPack: Record<string, unknown>
-  referencePlan?: Record<string, unknown> | null
-  shot: Record<string, unknown>
-  maxEntityCount?: number
-  maxAssetKeysPerEntity?: number
-}) {
-  const shot = cinematicV2ShotSchema.parse(input.shot)
-  const parsedReferencePlan = cinematicV2ReferencePlanSchema.safeParse(input.referencePlan ?? {})
-  const referencePlan = parsedReferencePlan.success && referencePlanKeys(parsedReferencePlan.data).length > 0
-    ? parsedReferencePlan.data
-    : buildFallbackCinematicV2ReferencePlan(input.assetPack)
-  const plannedKeys = new Set(referencePlanKeys(referencePlan))
-  const byKey = new Map(cinematicAssetPackEntities(input.assetPack).map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
-  const shotText = normalizeComicReferenceText([
-    shot.title,
-    shot.description,
-    shot.action,
-    shot.caption,
-    shot.lighting,
-    shot.mood,
-    shot.storyboardPanelPrompt,
-    shot.videoDirection,
-    shot.continuityInputs.join(' '),
-    shot.camera.framing,
-    shot.camera.angle,
-    shot.camera.lens,
-    shot.camera.movement,
-    shot.camera.screenDirectionRule,
-    ...shot.dialogue.map((line) => `${line.speakerName || line.speakerRefId} ${line.text} ${line.emotion}`),
-    ...shot.performanceBeats.map((beat) => [
-      beat.characterRefId,
-      beat.bodyLanguage,
-      beat.facialExpression,
-      beat.gaze,
-      beat.gesture,
-      beat.voiceEnergy,
-    ].filter(Boolean).join(' ')),
-  ].filter(Boolean).join(' ')).replace(/_/g, ' ')
-  const priorityKeys = [
-    ...shot.speakerRefIds,
-    ...shot.visibleCharacterRefIds,
-    ...(shot.locationRefId ? [shot.locationRefId] : []),
-    ...shot.propRefIds,
-  ].filter((key) => plannedKeys.has(key) && byKey.has(key))
-  const continuityKeys = referencePlan.continuityAnchorRefIds
-    .filter((key) => plannedKeys.has(key) && byKey.has(key))
-    .filter((key) => entityMentionedInShotText(byKey.get(key) ?? {}, shotText))
-  const textMentionedKeys = [...plannedKeys]
-    .filter((key) => byKey.has(key))
-    .filter((key) => entityMentionedInShotText(byKey.get(key) ?? {}, shotText))
-  const fallbackKeys = [
-    ...referencePlan.primaryCastRefIds,
-    ...referencePlan.locationRefIds,
-    ...referencePlan.propRefIds,
-    ...referencePlan.conceptRefIds,
-  ].filter((key) => plannedKeys.has(key) && byKey.has(key))
-  const directKeys = [...new Set([
-    ...priorityKeys,
-    ...continuityKeys,
-    ...textMentionedKeys,
-  ])]
-  const selectedKeys = (directKeys.length > 0 ? directKeys : fallbackKeys)
-    .slice(0, Math.max(1, input.maxEntityCount ?? 6))
-  const shotAssetPack = filterCinematicAssetPack(input.assetPack, selectedKeys, input.maxEntityCount ?? 6, input.maxAssetKeysPerEntity ?? 2)
-  return {
-    ...shotAssetPack,
-    shotId: shot.id,
-    shotIndex: shot.index,
-    shotReferenceKeys: selectedKeys,
-    referencePlan,
-    text: JSON.stringify(shotAssetPack, null, 2),
-  }
-}
-
-function cinematicV3StoryboardGroupShots(input: {
-  shotPlan: Record<string, unknown>
-  storyboardGroup?: Record<string, unknown> | null
-}) {
-  const parsedShotPlan = cinematicV2ShotPlanSchema.safeParse(input.shotPlan)
-  if (!parsedShotPlan.success) return []
-  const parsedGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(input.storyboardGroup ?? {})
-  if (!parsedGroup.success) return parsedShotPlan.data.shots
-  const groupShotIds = new Set(parsedGroup.data.shotIds)
-  const matchedGroupShots = parsedShotPlan.data.shots.filter((shot) => groupShotIds.has(shot.id))
-  return matchedGroupShots.length > 0 ? matchedGroupShots : parsedShotPlan.data.shots
-}
-
-function buildCinematicV3StoryboardGroupAssetPack(input: {
-  assetPack: Record<string, unknown>
-  shots: Record<string, unknown>[]
-  maxEntityCount?: number
-  maxAssetKeysPerEntity?: number
-  includeSpeakerRefs?: boolean
-  includePerformanceRefs?: boolean
-  includeTextMentionedRefs?: boolean
-}) {
-  const byKey = new Map(cinematicAssetPackEntities(input.assetPack).map((entity) => [readText(entity.key), entity]).filter(([key]) => key))
-  const keys: string[] = []
-  const addKey = (key: string) => {
-    if (key && byKey.has(key) && !keys.includes(key)) keys.push(key)
-  }
-  const groupTextParts: string[] = []
-
-  input.shots.forEach((rawShot) => {
-    readStringArray(rawShot.continuityAnchorIds).forEach(addKey)
-    readStringArray(rawShot.continuityAnchorRefIds).forEach(addKey)
-    const parsedShot = cinematicV2ShotSchema.safeParse(rawShot)
-    const shot = parsedShot.success ? parsedShot.data : null
-    if (shot) {
-      shot.visibleCharacterRefIds.forEach(addKey)
-      if (shot.locationRefId) addKey(shot.locationRefId)
-      shot.propRefIds.forEach(addKey)
-      if (input.includeSpeakerRefs !== false) {
-        shot.speakerRefIds.forEach(addKey)
-        shot.dialogue.forEach((line) => addKey(line.speakerRefId))
-      }
-      if (input.includePerformanceRefs !== false) {
-        shot.performanceBeats.forEach((beat) => addKey(beat.characterRefId))
-      }
-      groupTextParts.push([
-        shot.title,
-        shot.description,
-        shot.action,
-        shot.caption,
-        shot.lighting,
-        shot.mood,
-        shot.storyboardPanelPrompt,
-        shot.videoDirection,
-        ...(input.includeSpeakerRefs === false ? [] : shot.dialogue.map((line) => `${line.speakerName || line.speakerRefId} ${line.text} ${line.emotion}`)),
-      ].filter(Boolean).join(' '))
-      return
-    }
-    readStringArray(rawShot.visibleCharacterRefIds).forEach(addKey)
-    const locationRefId = readText(rawShot.locationRefId)
-    if (locationRefId) addKey(locationRefId)
-    readStringArray(rawShot.propRefIds).forEach(addKey)
-    if (input.includeSpeakerRefs !== false) readStringArray(rawShot.speakerRefIds).forEach(addKey)
-    groupTextParts.push(JSON.stringify(rawShot))
-  })
-
-  if (input.includeTextMentionedRefs !== false) {
-    const groupText = normalizeComicReferenceText(groupTextParts.join(' ')).replace(/_/g, ' ')
-    cinematicAssetPackEntities(input.assetPack)
-      .filter((entity) => entityMentionedInShotText(entity, groupText))
-      .forEach((entity) => addKey(readText(entity.key)))
-  }
-
-  const selectedKeys = keys.slice(0, Math.max(0, input.maxEntityCount ?? 4))
-  const groupAssetPack = filterCinematicAssetPack(
-    input.assetPack,
-    selectedKeys,
-    Math.max(1, input.maxEntityCount ?? 4),
-    input.maxAssetKeysPerEntity ?? 2,
-  )
-  return {
-    ...groupAssetPack,
-    storyboardGroupReferenceKeys: selectedKeys,
-    referenceScope: 'cinematic_v3_storyboard_group',
-    text: JSON.stringify(groupAssetPack, null, 2),
-  }
-}
-
-function directReferenceEntityForAssetKey(assetKey: string, index: number, role = 'continuity_reference') {
-  return {
-    key: `direct_ref_${index + 1}_${slugify(assetKey)}`,
-    name: `Reference ${index + 1}`,
-    type: 'continuity_asset',
-    role,
-    summary: 'Selected visual reference for this generated image.',
-    visualDescription: 'Use the attached reference to preserve identity, spatial layout, materials, lighting, and style continuity.',
-    assetKeys: [assetKey],
-    primaryAssetKey: assetKey,
-    selectedReferenceAssetKey: assetKey,
-    selectedReferenceVariantKey: 'selected_reference',
-    selectedReferenceVariantLabel: `Reference ${index + 1}`,
-    selectedReferenceVariantType: 'continuity_asset',
-    referenceSelectionReason: 'Selected by the sequence animatic visual reference plan.',
-  }
-}
-
-function scopeAssetPackToReferenceAssetKeys(input: {
-  assetPack: Record<string, unknown>
-  referenceAssetKeys: string[]
-  fallbackEntities?: Record<string, unknown>[]
-  referenceScope: string
-  limit?: number
-}) {
-  const referenceAssetKeys = [...new Set(input.referenceAssetKeys.map(readText).filter(Boolean))].slice(0, Math.max(1, input.limit ?? 8))
-  const fallbackEntities = (input.fallbackEntities ?? []).map(asRecord)
-  if (referenceAssetKeys.length === 0) {
-    const spatialOnly = input.referenceScope === 'sequence_animatic_spatial_continuity_only'
-    return {
-      ...input.assetPack,
-      entities: fallbackEntities.length > 0 ? fallbackEntities : spatialOnly ? [] : readArray(input.assetPack.entities).map(asRecord),
-      scopedReferenceAssetKeys: [],
-      referenceScope: input.referenceScope,
-      referenceDiagnostics: [
-        ...readStringArray(input.assetPack.referenceDiagnostics),
-        ...(spatialOnly ? ['Spatial continuity scope has no ready image references; full animatic asset pack was intentionally excluded.'] : []),
-      ],
-    }
-  }
-  const sourceEntities = [...cinematicAssetPackEntities(input.assetPack), ...fallbackEntities]
-  const entities = referenceAssetKeys.map((assetKey, index) => {
-    const source = sourceEntities.find((entity) => {
-      const keys = [
-        readText(entity.primaryAssetKey),
-        readText(entity.selectedReferenceAssetKey),
-        readText(entity.selectedReferenceVariantAssetKey),
-        ...readStringArray(entity.assetKeys),
-      ].filter(Boolean)
-      return keys.includes(assetKey)
-    })
-    if (!source) return directReferenceEntityForAssetKey(assetKey, index)
-    const cloned = cloneCinematicAssetPackEntity(source, 1)
-    return {
-      ...cloned,
-      primaryAssetKey: assetKey,
-      selectedReferenceAssetKey: assetKey,
-      assetKeys: [assetKey],
-      referenceSelectionReason: readText(cloned.referenceSelectionReason) || 'Selected by the sequence animatic visual reference plan.',
-    }
-  })
-  return {
-    ...input.assetPack,
-    entities,
-    selectedEntityKeys: entities.map((entity) => readText(entity.key)).filter(Boolean),
-    scopedReferenceAssetKeys: referenceAssetKeys,
-    referenceScope: input.referenceScope,
-    referenceDiagnostics: readStringArray(input.assetPack.referenceDiagnostics),
-  }
-}
-
-type SequenceAnimaticContinuityAnchor = {
-  id: string
-  name: string
-  anchorType: 'prop' | 'location_spot' | 'character'
-  continuitySubtype?: 'prop' | 'location_set' | 'location_angle' | 'location_spot' | 'character'
-  baseLocationRefId?: string | null
-  summary: string
-  visualBrief: string
-  persistenceReason?: string
-  confidence?: number
-  sourceEvidence?: string[]
-  existingWorldEntityMatch?: string | null
-  rejectionRisk?: string
-  shotIds: string[]
-  storyboardBlockIds: string[]
-  usageCount: number
-  setId?: string | null
-  angleId?: string | null
-  connectedTo?: string[]
-  entryFrom?: string[]
-  visibleFrom?: string[]
-  relationshipHints?: string[]
-  sourcePhrases?: string[]
-  assetKey?: string | null
-  artifactKey?: string | null
-  sourceAtlasAssetKey?: string | null
-  cropRect?: Record<string, number> | null
-}
-
-const sequenceAnimaticTaggedDialogueRowSchema = z.object({
-  id: z.string(),
-  sceneId: z.string(),
-  speakerName: z.string(),
-  speakerRefId: z.string(),
-  text: z.string(),
-  lineNumber: z.number().int().positive(),
-})
-
-const sequenceAnimaticTaggedSceneGraphAdditionSchema = z.object({
-  id: z.string(),
-  kind: z.enum(['set', 'zone', 'spot', 'viewpoint']),
-  name: z.string(),
-  visualBrief: z.string(),
-  parentId: z.string().default(''),
-  worldLocationRefId: z.string().default(''),
-  setId: z.string().default(''),
-  zoneId: z.string().default(''),
-  spotId: z.string().default(''),
-})
-
-const sequenceAnimaticTaggedScenePackageSchema = z.object({
-  sceneId: z.string(),
-  index: z.number().int().positive(),
-  title: z.string(),
-  sourceText: z.string(),
-  startLine: z.number().int().positive(),
-  endLine: z.number().int().positive(),
-  locationRefId: z.string().default(''),
-  worldLocationRefId: z.string().default(''),
-  setId: z.string().default(''),
-  zoneId: z.string().default(''),
-  spotIds: z.array(z.string()).default([]),
-  dialogueRows: z.array(sequenceAnimaticTaggedDialogueRowSchema).default([]),
-  graphAdditionIds: z.array(z.string()).default([]),
-  graphAdditions: z.array(sequenceAnimaticTaggedSceneGraphAdditionSchema).default([]),
-  relevantReferenceIds: z.array(z.string()).default([]),
-})
-
-const sequenceAnimaticScenePackageOutputSchema = z.object({
-  contractVersion: z.enum(['scene_tagged_screenplay_v2', 'scene_graph_assignment_v1']).default('scene_graph_assignment_v1'),
-  screenplayScenes: z.array(sequenceAnimaticTaggedScenePackageSchema).default([]),
-  scenePackages: z.array(sequenceAnimaticTaggedScenePackageSchema).default([]),
-  dialogueRows: z.array(sequenceAnimaticTaggedDialogueRowSchema).default([]),
-  sceneGraphDraft: z.object({
-    additions: z.array(sequenceAnimaticTaggedSceneGraphAdditionSchema).default([]),
-  }).default({ additions: [] }),
-  spotRelations: z.array(z.record(z.string(), z.unknown())).default([]),
-  warnings: z.array(z.string()).default([]),
-  diagnostics: z.array(z.string()).default([]),
-})
-
-type SequenceAnimaticTaggedScenePackage = z.infer<typeof sequenceAnimaticTaggedScenePackageSchema>
-type SequenceAnimaticTaggedScenePackageOutput = z.infer<typeof sequenceAnimaticScenePackageOutputSchema>
-
-const sequenceAnimaticSceneGraphAssignmentSceneSchema = z.object({
-  sceneId: z.string(),
-  worldLocationRefId: z.string().default(''),
-  setId: z.string().default(''),
-  zoneId: z.string().default(''),
-  spotIds: z.array(z.string()).default([]),
-  graphAdditionIds: z.array(z.string()).default([]),
-  relevantReferenceIds: z.array(z.string()).default([]),
-  rationale: z.string().default(''),
-})
-
-const sequenceAnimaticSceneGraphAssignmentSchema = z.object({
-  contractVersion: z.literal('scene_graph_assignment_v1').default('scene_graph_assignment_v1'),
-  sceneAssignments: z.array(sequenceAnimaticSceneGraphAssignmentSceneSchema).default([]),
-  sceneGraphDraft: z.object({
-    additions: z.array(sequenceAnimaticTaggedSceneGraphAdditionSchema).default([]),
-  }).default({ additions: [] }),
-  spotRelations: z.array(z.record(z.string(), z.unknown())).default([]),
-  warnings: z.array(z.string()).default([]),
-  diagnostics: z.array(z.string()).default([]),
-})
-
-function collectReferenceIdsForSequenceAnimatic(value: unknown, output = new Set<string>(), depth = 0) {
-  if (depth > 6 || value == null) return output
-  if (Array.isArray(value)) {
-    for (const item of value) collectReferenceIdsForSequenceAnimatic(item, output, depth + 1)
-    return output
-  }
-  if (typeof value !== 'object') return output
-  const record = asRecord(value)
-  for (const key of ['id', 'key', 'refId', 'ref_id', 'entityKey', 'entity_key', 'assetKey', 'asset_key']) {
-    const id = readText(record[key])
-    if (id) output.add(id)
-  }
-  for (const nested of Object.values(record)) collectReferenceIdsForSequenceAnimatic(nested, output, depth + 1)
-  return output
-}
-
-function parseSequenceAnimaticTaggedIdAndTitle(raw: string, fallbackId: string) {
-  const cleaned = raw.trim().replace(/^[-*:]+/, '').trim()
-  const colonIndex = cleaned.indexOf(':')
-  const beforeColon = colonIndex >= 0 ? cleaned.slice(0, colonIndex).trim() : cleaned
-  const afterColon = colonIndex >= 0 ? cleaned.slice(colonIndex + 1).trim() : ''
-  const firstToken = beforeColon.split(/\s+/)[0]?.trim() || ''
-  const looksLikeId = /^[a-z][a-z0-9_-]{1,96}$/i.test(firstToken) && /[_-]|\d/.test(firstToken)
-  const id = looksLikeId ? firstToken : fallbackId
-  const title = afterColon || (looksLikeId ? beforeColon.slice(firstToken.length).trim() : beforeColon) || fallbackId
-  return { id: id.replace(/[^A-Za-z0-9_-]/g, '_'), title }
-}
-
-function parseSequenceAnimaticSceneGraphAdditionLine(line: string) {
-  const normalized = line.trim().replace(/^\|/, '').replace(/\|$/, '').trim()
-  if (!normalized || /^[-|\s]+$/.test(normalized) || /^kind\s*\|/i.test(normalized)) return null
-  const parts = normalized.split('|').map((part) => part.trim()).filter(Boolean)
-  if (parts.length < 4) return null
-  const kind = parts[0].toLowerCase()
-  if (!['set', 'zone', 'spot', 'viewpoint'].includes(kind)) return null
-  const id = parts[1]
-  const parentPart = parts[2] ?? ''
-  const name = parts[3] ?? id
-  const visualBrief = parts.slice(4).join(' | ') || name
-  const keyValues = Object.fromEntries(parentPart
-    .split(/[;,]/)
-    .map((entry) => entry.trim())
-    .map((entry) => {
-      const [key, ...rest] = entry.split('=')
-      return [key?.trim(), rest.join('=').trim()] as const
-    })
-    .filter(([key, value]) => key && value))
-  const parentId = readText(keyValues.parentId) || readText(keyValues.parent) || parentPart.replace(/^parent(Id)?=/i, '').trim()
-  const explicitSpotId = readText(keyValues.spotId)
-  const explicitZoneId = readText(keyValues.zoneId)
-  const explicitSetId = readText(keyValues.setId)
-  const inferredViewpointSpotId = kind === 'viewpoint' && !explicitSpotId && !explicitZoneId && !explicitSetId && /^spot[_-]/i.test(parentId) ? parentId : ''
-  const inferredViewpointZoneId = kind === 'viewpoint' && !explicitSpotId && !explicitZoneId && !explicitSetId && /^zone[_-]/i.test(parentId) ? parentId : ''
-  const inferredViewpointSetId = kind === 'viewpoint' && !explicitSpotId && !explicitZoneId && !explicitSetId && /^set[_-]/i.test(parentId) ? parentId : ''
-  const record = {
-    id,
-    kind,
-    name,
-    visualBrief,
-    parentId,
-    worldLocationRefId: readText(keyValues.worldLocationRefId) || readText(keyValues.location) || (kind === 'set' ? parentId : ''),
-    setId: explicitSetId || (kind === 'zone' ? parentId : inferredViewpointSetId),
-    zoneId: explicitZoneId || (kind === 'spot' ? parentId : inferredViewpointZoneId),
-    spotId: explicitSpotId || inferredViewpointSpotId,
-  }
-  return sequenceAnimaticTaggedSceneGraphAdditionSchema.parse(record)
-}
-
-function validateSequenceAnimaticTaggedSceneGraph(input: {
-  additions: z.infer<typeof sequenceAnimaticTaggedSceneGraphAdditionSchema>[]
-  scenePackages: SequenceAnimaticTaggedScenePackage[]
-  knownReferenceIds: Set<string>
-}) {
-  const ids = new Set<string>()
-  const duplicates = input.additions
-    .map((addition) => addition.id)
-    .filter((id) => {
-      if (ids.has(id)) return true
-      ids.add(id)
-      return false
-    })
-  if (duplicates.length > 0) throw new Error(`Tagged screenplay has duplicate scene graph addition IDs: ${[...new Set(duplicates)].join(', ')}.`)
-  const setIds = new Set(input.additions.filter((addition) => addition.kind === 'set').map((addition) => addition.id))
-  const zoneIds = new Set(input.additions.filter((addition) => addition.kind === 'zone').map((addition) => addition.id))
-  const spotIds = new Set(input.additions.filter((addition) => addition.kind === 'spot').map((addition) => addition.id))
-  const taggedSetIds = new Set(input.scenePackages.map((scene) => scene.setId).filter(Boolean))
-  const taggedZoneIds = new Set(input.scenePackages.map((scene) => scene.zoneId).filter(Boolean))
-  const taggedSpotIds = new Set(input.scenePackages.flatMap((scene) => scene.spotIds).filter(Boolean))
-  for (const addition of input.additions) {
-    if (addition.kind === 'set' && !addition.worldLocationRefId && !addition.parentId) {
-      throw new Error(`Scene graph set "${addition.id}" needs a parent world location ref.`)
-    }
-    if (addition.kind === 'zone' && !setIds.has(addition.setId) && !taggedSetIds.has(addition.setId)) {
-      throw new Error(`Scene graph zone "${addition.id}" has unknown parent set "${addition.setId || addition.parentId}".`)
-    }
-    if (addition.kind === 'spot' && !zoneIds.has(addition.zoneId) && !taggedZoneIds.has(addition.zoneId)) {
-      throw new Error(`Scene graph spot "${addition.id}" has unknown parent zone "${addition.zoneId || addition.parentId}".`)
-    }
-    if (addition.kind === 'viewpoint') {
-      if (!addition.spotId && !addition.zoneId && !addition.setId && addition.parentId) {
-        if (spotIds.has(addition.parentId) || taggedSpotIds.has(addition.parentId)) addition.spotId = addition.parentId
-        else if (zoneIds.has(addition.parentId) || taggedZoneIds.has(addition.parentId)) addition.zoneId = addition.parentId
-        else if (setIds.has(addition.parentId) || taggedSetIds.has(addition.parentId)) addition.setId = addition.parentId
-      }
-      const parent = addition.spotId || addition.zoneId || addition.setId || addition.parentId
-      if (addition.spotId && !spotIds.has(addition.spotId) && !taggedSpotIds.has(addition.spotId)) {
-        throw new Error(`Scene graph viewpoint "${addition.id}" has unknown parent spot "${parent}".`)
-      }
-      if (addition.zoneId && !zoneIds.has(addition.zoneId) && !taggedZoneIds.has(addition.zoneId)) {
-        throw new Error(`Scene graph viewpoint "${addition.id}" has unknown parent zone "${parent}".`)
-      }
-      if (addition.setId && !setIds.has(addition.setId) && !taggedSetIds.has(addition.setId)) {
-        throw new Error(`Scene graph viewpoint "${addition.id}" has unknown parent set "${parent}".`)
-      }
-      if (!addition.spotId && !addition.zoneId && !addition.setId) {
-        throw new Error(`Scene graph viewpoint "${addition.id}" has unknown parent "${parent}".`)
-      }
-    }
-  }
-}
-
-function buildSequenceAnimaticScenePackageFromTaggedScreenplay(input: {
-  screenplayDraft: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  context: Record<string, unknown>
-  contractVersion?: 'scene_tagged_screenplay_v2' | 'scene_graph_assignment_v1'
-}) {
-  const markdown = readText(input.screenplayDraft.screenplayMarkdown)
-    || readText(input.screenplayDraft.markdown)
-    || readText(input.screenplayDraft.text)
-  if (!markdown) throw new Error('Tagged screenplay package requires screenplay Markdown.')
-  const knownReferenceIds = collectReferenceIdsForSequenceAnimatic({
-    assetPack: input.assetPack,
-    entities: readArray(input.context.entities),
-    world: input.context.wiki ?? input.context.worldWiki,
-  })
-  const lines = markdown.split(/\r?\n/)
-  const graphSectionIndex = lines.findIndex((line) => /^##\s*Scene Graph Additions\s*$/i.test(line.trim()))
-  const screenplayLines = graphSectionIndex >= 0 ? lines.slice(0, graphSectionIndex) : lines
-  const graphLines = graphSectionIndex >= 0 ? lines.slice(graphSectionIndex + 1) : []
-  const sceneStarts: Array<{ index: number; id: string; title: string }> = []
-  screenplayLines.forEach((line, lineIndex) => {
-    const match = line.trim().match(/^#Scene\s+(.+)$/i)
-    if (!match) return
-    const parsed = parseSequenceAnimaticTaggedIdAndTitle(match[1], `scene_${String(sceneStarts.length + 1).padStart(3, '0')}`)
-    sceneStarts.push({ index: lineIndex, id: parsed.id, title: parsed.title })
-  })
-  if (sceneStarts.length === 0) {
-    sceneStarts.push({ index: 0, id: 'scene_001', title: 'Scene 1' })
-  }
-  const duplicateSceneIds = sceneStarts
-    .map((scene) => scene.id)
-    .filter((id, index, ids) => ids.indexOf(id) !== index)
-  if (duplicateSceneIds.length > 0) {
-    throw new Error(`Tagged screenplay has duplicate #Scene IDs: ${[...new Set(duplicateSceneIds)].join(', ')}.`)
-  }
-  const additions = graphLines
-    .map(parseSequenceAnimaticSceneGraphAdditionLine)
-    .filter((addition): addition is z.infer<typeof sequenceAnimaticTaggedSceneGraphAdditionSchema> => Boolean(addition))
-  const additionsById = new Map(additions.map((addition) => [addition.id, addition] as const))
-  const dialogueRows: z.infer<typeof sequenceAnimaticTaggedDialogueRowSchema>[] = []
-  const scenePackages = sceneStarts.map((sceneStart, sceneIndex) => {
-    const nextStart = sceneStarts[sceneIndex + 1]?.index ?? screenplayLines.length
-    const sceneLines = screenplayLines.slice(sceneStart.index, nextStart)
-    let worldLocationRefId = ''
-    let setId = ''
-    let zoneId = ''
-    const spotIds: string[] = []
-    sceneLines.forEach((line) => {
-      const trimmed = line.trim()
-      const locationMatch = trimmed.match(/^#Location\s+(.+)$/i)
-      const setMatch = trimmed.match(/^#Set\s+(.+)$/i)
-      const zoneMatch = trimmed.match(/^#Zone\s+(.+)$/i)
-      const spotMatch = trimmed.match(/^#Spot\s+(.+)$/i)
-      if (locationMatch) worldLocationRefId = parseSequenceAnimaticTaggedIdAndTitle(locationMatch[1], '').id || locationMatch[1].trim()
-      if (setMatch) setId = parseSequenceAnimaticTaggedIdAndTitle(setMatch[1], '').id || setMatch[1].trim()
-      if (zoneMatch) zoneId = parseSequenceAnimaticTaggedIdAndTitle(zoneMatch[1], '').id || zoneMatch[1].trim()
-      if (spotMatch) {
-        const spotId = parseSequenceAnimaticTaggedIdAndTitle(spotMatch[1], '').id || spotMatch[1].trim()
-        if (spotId && !spotIds.includes(spotId)) spotIds.push(spotId)
-      }
-    })
-    const sceneDialogueRows = sceneLines.flatMap((line, localIndex) => {
-      const trimmed = line.trim()
-      const match = trimmed.match(/^([^:\[]+?)\s*\[ref:([^\]]+)\]\s*:\s*(.+)$/)
-      if (!match) return []
-      const speakerName = match[1].trim()
-      const speakerRefId = match[2].trim()
-      const text = match[3].trim()
-      if (!speakerRefId || !text) return []
-      if (knownReferenceIds.size > 0 && !knownReferenceIds.has(speakerRefId) && !/^local_|^temp_/i.test(speakerRefId)) {
-        throw new Error(`Dialogue speaker ref "${speakerRefId}" in ${sceneStart.id} was not found in the animatic reference catalog.`)
-      }
-      return [sequenceAnimaticTaggedDialogueRowSchema.parse({
-        id: `${sceneStart.id}_dialogue_${String(dialogueRows.length + localIndex + 1).padStart(3, '0')}`,
-        sceneId: sceneStart.id,
-        speakerName,
-        speakerRefId,
-        text,
-        lineNumber: sceneStart.index + localIndex + 1,
-      })]
-    })
-    dialogueRows.push(...sceneDialogueRows)
-    const graphAdditionIds = [setId, zoneId, ...spotIds].filter((id) => additionsById.has(id))
-    const graphAdditions = graphAdditionIds.map((id) => additionsById.get(id)).filter((addition): addition is z.infer<typeof sequenceAnimaticTaggedSceneGraphAdditionSchema> => Boolean(addition))
-    return sequenceAnimaticTaggedScenePackageSchema.parse({
-      sceneId: sceneStart.id,
-      index: sceneIndex + 1,
-      title: sceneStart.title,
-      sourceText: sceneLines.join('\n').trim(),
-      startLine: sceneStart.index + 1,
-      endLine: nextStart,
-      locationRefId: worldLocationRefId,
-      worldLocationRefId,
-      setId,
-      zoneId,
-      spotIds,
-      dialogueRows: sceneDialogueRows,
-      graphAdditionIds,
-      graphAdditions,
-      relevantReferenceIds: [...new Set([
-        worldLocationRefId,
-        ...sceneDialogueRows.map((row) => row.speakerRefId),
-      ].filter(Boolean))],
-    })
-  })
-  validateSequenceAnimaticTaggedSceneGraph({ additions, scenePackages, knownReferenceIds })
-  const warnings = scenePackages
-    .filter((scene) => !scene.setId && !scene.worldLocationRefId)
-    .map((scene) => `Scene ${scene.sceneId} has no #Set or #Location tag; scene planner must bind shots to an existing world location.`)
-  return sequenceAnimaticScenePackageOutputSchema.parse({
-    contractVersion: input.contractVersion ?? 'scene_graph_assignment_v1',
-    screenplayScenes: scenePackages,
-    scenePackages,
-    dialogueRows,
-    sceneGraphDraft: { additions },
-    warnings,
-    diagnostics: [`Parsed ${scenePackages.length} tagged screenplay scene package${scenePackages.length === 1 ? '' : 's'} and ${additions.length} scene graph addition${additions.length === 1 ? '' : 's'}.`],
-  })
-}
-
-function buildFallbackSequenceAnimaticSceneGraphAssignment(parsed: SequenceAnimaticScenePackageOutput) {
-  return sequenceAnimaticSceneGraphAssignmentSchema.parse({
-    contractVersion: 'scene_graph_assignment_v1',
-    sceneAssignments: parsed.scenePackages.map((scene) => ({
-      sceneId: scene.sceneId,
-      worldLocationRefId: scene.worldLocationRefId,
-      setId: scene.setId,
-      zoneId: scene.zoneId,
-      spotIds: scene.spotIds,
-      graphAdditionIds: scene.graphAdditionIds,
-      relevantReferenceIds: scene.relevantReferenceIds,
-      rationale: scene.worldLocationRefId || scene.setId ? 'Deterministic screenplay tag fallback.' : 'No spatial assignment was available in fallback parsing.',
-    })),
-    sceneGraphDraft: parsed.sceneGraphDraft,
-    spotRelations: parsed.spotRelations,
-    warnings: parsed.warnings,
-    diagnostics: parsed.diagnostics,
-  })
-}
-
-function mergeSequenceAnimaticSceneGraphAssignment(input: {
-  parsed: SequenceAnimaticScenePackageOutput
-  assignment: z.infer<typeof sequenceAnimaticSceneGraphAssignmentSchema>
-  assetPack: Record<string, unknown>
-  context: Record<string, unknown>
-}) {
-  const knownReferenceIds = collectReferenceIdsForSequenceAnimatic({
-    assetPack: input.assetPack,
-    entities: readArray(input.context.entities),
-    world: input.context.wiki ?? input.context.worldWiki,
-  })
-  const assignmentBySceneId = new Map(input.assignment.sceneAssignments.map((assignment) => [assignment.sceneId, assignment] as const))
-  const additions = input.assignment.sceneGraphDraft.additions
-  const additionsById = new Map(additions.map((addition) => [addition.id, addition] as const))
-  const scenePackages = input.parsed.scenePackages.map((scene) => {
-    const assignment = assignmentBySceneId.get(scene.sceneId)
-    const worldLocationRefId = readText(assignment?.worldLocationRefId) || scene.worldLocationRefId
-    const setId = readText(assignment?.setId) || scene.setId
-    const zoneId = readText(assignment?.zoneId) || scene.zoneId
-    const spotIds = readStringArray(assignment?.spotIds).length > 0 ? readStringArray(assignment?.spotIds) : scene.spotIds
-    const graphAdditionIds = [...new Set([
-      ...readStringArray(assignment?.graphAdditionIds),
-      setId,
-      zoneId,
-      ...spotIds,
-    ].filter((id) => additionsById.has(id)))]
-    const graphAdditions = graphAdditionIds
-      .map((id) => additionsById.get(id))
-      .filter((addition): addition is z.infer<typeof sequenceAnimaticTaggedSceneGraphAdditionSchema> => Boolean(addition))
-    return sequenceAnimaticTaggedScenePackageSchema.parse({
-      ...scene,
-      locationRefId: worldLocationRefId,
-      worldLocationRefId,
-      setId,
-      zoneId,
-      spotIds,
-      graphAdditionIds,
-      graphAdditions,
-      relevantReferenceIds: [...new Set([
-        ...scene.relevantReferenceIds,
-        ...readStringArray(assignment?.relevantReferenceIds),
-        worldLocationRefId,
-        ...scene.dialogueRows.map((row) => row.speakerRefId),
-      ].filter(Boolean))],
-    })
-  })
-  validateSequenceAnimaticTaggedSceneGraph({ additions, scenePackages, knownReferenceIds })
-  const unassignedSceneIds = scenePackages
-    .filter((scene) => !scene.setId && !scene.worldLocationRefId)
-    .map((scene) => scene.sceneId)
-  return sequenceAnimaticScenePackageOutputSchema.parse({
-    contractVersion: 'scene_graph_assignment_v1',
-    screenplayScenes: scenePackages,
-    scenePackages,
-    dialogueRows: input.parsed.dialogueRows,
-    sceneGraphDraft: { additions },
-    spotRelations: input.assignment.spotRelations,
-    warnings: [
-      ...input.assignment.warnings,
-      ...unassignedSceneIds.map((sceneId) => `Scene ${sceneId} has no assigned set or world location; scene planner must bind shots to an existing world location.`),
-    ],
-    diagnostics: [
-      ...input.assignment.diagnostics,
-      `Assigned scene graph for ${scenePackages.length} screenplay scene${scenePackages.length === 1 ? '' : 's'} and ${additions.length} graph addition${additions.length === 1 ? '' : 's'}.`,
-    ],
-  })
-}
-
-const sequenceAnimaticContinuityPlanV2Schema = z.object({
-  version: z.literal('sequence_animatic_continuity_plan_v2').default('sequence_animatic_continuity_plan_v2'),
-  planningMode: z.enum(['block_graph_v2', 'llm_structured_v2', 'deterministic_fallback']).default('llm_structured_v2'),
-  anchors: z.array(sequenceAnimaticContinuityPlannerAnchorSchema).default([]),
-  continuityGraphV2: sequenceAnimaticContinuityGraphV2Schema.optional(),
-  locationSets: z.array(sequenceAnimaticContinuityLocationSetSchema).default([]),
-  locationAngles: z.array(sequenceAnimaticContinuityLocationAngleSchema).default([]),
-  sceneGraph: sequenceAnimaticContinuitySceneGraphSchema.default({ nodes: [], edges: [] }),
-  shotBindings: z.record(z.string(), sequenceAnimaticContinuityShotBindingSchema).default({}),
-  rejectedCandidates: z.array(sequenceAnimaticContinuityRejectedCandidateSchema).default([]),
-  warnings: z.array(z.string()).default([]),
-  diagnostics: z.array(z.string()).default([]),
-})
-
 function normalizeAnchorName(value: string) {
   return value
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-}
-
-function sequenceAnchorId(prefix: 'prop' | 'spot' | 'char', name: string, baseLocationRefId = '') {
-  const base = [baseLocationRefId, name].filter(Boolean).join(' ')
-  return `${prefix}_${slugify(base).slice(0, 72)}`
-}
-
-function sequenceAnimaticAtlasLayout(count: number) {
-  const panelCount = Math.max(0, Math.min(9, Math.ceil(count)))
-  if (panelCount <= 0) return { rows: 0, columns: 0, panelCount: 0 }
-  if (panelCount === 1) return { rows: 1, columns: 1, panelCount }
-  if (panelCount === 2) return { rows: 1, columns: 2, panelCount }
-  if (panelCount <= 4) return { rows: 2, columns: 2, panelCount }
-  if (panelCount <= 6) return { rows: 2, columns: 3, panelCount }
-  return { rows: 3, columns: 3, panelCount }
-}
-
-function sequenceAnimaticAtlasImageSize(layout: { rows: number; columns: number }) {
-  if (layout.rows <= 0 || layout.columns <= 0) return { width: 1024, height: 1024 }
-  return {
-    width: Math.max(1024, Math.min(3072, layout.columns * 768)),
-    height: Math.max(1024, Math.min(3072, layout.rows * 768)),
-  }
 }
 
 async function verifySequenceAnimaticAnchorCrop(input: {
@@ -5827,770 +4949,12 @@ async function verifySequenceAnimaticAnchorCrop(input: {
   }
 }
 
-function sequenceShotSearchText(shot: Record<string, unknown>) {
-  const dialogue = (Array.isArray(shot.dialogue) ? shot.dialogue : [])
-    .map((line) => `${readText(asRecord(line).speakerName)} ${readText(asRecord(line).text)}`)
-    .join(' ')
-  const camera = asRecord(shot.camera)
-  return [
-    shot.id,
-    shot.title,
-    shot.description,
-    shot.action,
-    shot.caption,
-    shot.storyboardPanelPrompt,
-    shot.videoDirection,
-    shot.lighting,
-    shot.mood,
-    camera.framing,
-    camera.angle,
-    camera.movement,
-    dialogue,
-  ].map(readText).filter(Boolean).join(' ')
-}
-
-function sequenceShotPropSearchText(shot: Record<string, unknown>) {
-  const dialogue = (Array.isArray(shot.dialogue) ? shot.dialogue : [])
-    .map((line) => `${readText(asRecord(line).speakerName)} ${readText(asRecord(line).text)}`)
-    .join(' ')
-  const camera = asRecord(shot.camera)
-  return [
-    shot.id,
-    shot.title,
-    shot.description,
-    shot.action,
-    shot.caption,
-    shot.storyboardPanelPrompt,
-    shot.videoDirection,
-    camera.framing,
-    camera.angle,
-    camera.movement,
-    dialogue,
-  ].map(readText).filter(Boolean).join(' ')
-}
-
 function titleFromRefLike(value: string) {
   return normalizeAnchorName(value)
     .split(' ')
     .filter(Boolean)
     .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
     .join(' ')
-}
-
-const sequenceAnimaticPropPhrases = [
-  'tide dial',
-  'broken tide dial',
-  'saltglass atlas',
-  'saltglass gauge',
-  'brass keys',
-  'hidden latch',
-  'map threads',
-  'stitched map',
-  'wall map',
-  'schematic',
-  'metal shard',
-  'inspection slate',
-  'tool-belt satchel',
-  'brass tool-belt',
-  'mail tube',
-  'paper notices',
-  'wet slips',
-  'hatch door',
-  'sealed hatch',
-  'access hatch',
-  'sight-tube water',
-  'sight tube water',
-  'sight tube',
-  'water tube',
-  'clock hand',
-  'bell hammer',
-  'clock dial',
-  'clock mechanism',
-  'chime arm',
-  'dead chime-arm',
-  'escapement',
-  'timing gear',
-  'gear assembly',
-  'clamp',
-  'leak clamp',
-  'lantern',
-  'oilskin lantern',
-]
-
-const sequenceAnimaticImportantSinglePropPhrases = new Set([
-  'broken tide dial',
-  'saltglass atlas',
-  'saltglass gauge',
-  'brass keys',
-  'hidden latch',
-  'metal shard',
-  'inspection slate',
-  'hatch door',
-  'sealed hatch',
-  'access hatch',
-  'sight-tube water',
-  'sight tube water',
-  'sight tube',
-  'water tube',
-  'clock hand',
-  'bell hammer',
-  'clock dial',
-  'clock mechanism',
-  'chime arm',
-  'dead chime-arm',
-])
-
-const sequenceAnimaticSpotPhrases = [
-  'threshold',
-  'doorway',
-  'entrance',
-  'hidden passage',
-  'service gap',
-  'service shaft',
-  'central chamber',
-  'leader chamber table',
-  'long table',
-  'map wall',
-  'saltglass window',
-  'porthole window',
-  'catwalk',
-  'platform',
-  'rail',
-  'corridor',
-  'archive wall',
-  'pipe lane',
-  'clock face',
-  'engine heart',
-]
-
-const sequenceAnimaticImportantSingleSpotPhrases = new Set([
-  'hidden passage',
-  'service shaft',
-  'central chamber',
-  'leader chamber table',
-  'map wall',
-  'saltglass window',
-  'engine heart',
-])
-
-const sequenceAnimaticIncidentalCharacterPhrases = [
-  'vole mechanic',
-  'elder mechanic',
-  'old mechanic',
-  'courier',
-  'puffin courier',
-  'cashier',
-  'shopkeeper',
-  'guard',
-  'watchman',
-  'attendant',
-  'scribe',
-  'clerk',
-  'messenger',
-  'apprentice',
-]
-
-const sequenceAnimaticNonCharacterSpeakerNames = new Set([
-  'unknown',
-  'narrator',
-  'voiceover',
-  'voice over',
-  'offscreen voice',
-  'crowd',
-  'all',
-])
-
-const sequenceAnimaticAbstractContinuityTerms = new Set([
-  'rain',
-  'fog',
-  'mist',
-  'smoke',
-  'tension',
-  'silence',
-  'ambience',
-  'ambiance',
-  'atmosphere',
-  'mood',
-  'danger',
-  'blue light',
-  'red light',
-  'lighting',
-  'shadow',
-  'shadows',
-  'darkness',
-  'wind',
-  'motion',
-  'movement',
-  'music',
-  'score',
-  'room tone',
-])
-
-function sequenceAnimaticKnownEntityAliases(assetPack: Record<string, unknown>) {
-  const aliases = new Map<string, string>()
-  cinematicAssetPackEntities(assetPack).forEach((entity) => {
-    const key = readText(entity.key)
-    const values = [
-      key,
-      readText(entity.name),
-      readText(entity.label),
-      ...readStringArray(entity.aliases),
-      ...readStringArray(asRecord(entity.metadata).aliases),
-    ].map(normalizeComicReferenceText).filter(Boolean)
-    values.forEach((value) => {
-      if (key && value) aliases.set(value, key)
-    })
-  })
-  return aliases
-}
-
-function sequenceAnimaticContinuityAbstractReason(name: string, visualBrief = '') {
-  const normalized = normalizeComicReferenceText(name) || normalizeComicReferenceText(visualBrief)
-  if (!normalized) return 'too_generic'
-  for (const term of sequenceAnimaticAbstractContinuityTerms) {
-    const normalizedTerm = normalizeComicReferenceText(term)
-    if (normalized === normalizedTerm || normalized.includes(` ${normalizedTerm} `) || normalized.startsWith(`${normalizedTerm} `) || normalized.endsWith(` ${normalizedTerm}`)) {
-      return 'abstract_or_atmospheric'
-    }
-  }
-  const words = normalized.split(' ').filter(Boolean)
-  if (words.length <= 1 && ['door', 'wall', 'floor', 'window', 'table', 'room', 'corridor', 'hall', 'light'].includes(normalized)) return 'too_generic'
-  return ''
-}
-
-function sequenceAnimaticRejectedCandidate(input: {
-  name: string
-  type?: string
-  reason: z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>
-  sourceEvidence?: string[]
-  shotIds?: string[]
-  existingWorldEntityMatch?: string | null
-}) {
-  const type = input.type === 'character' || input.type === 'prop' || input.type === 'location_spot' || input.type === 'location_set' || input.type === 'location_angle'
-    ? input.type
-    : 'unknown'
-  return {
-    name: input.name || 'Unnamed candidate',
-    type,
-    reason: input.reason,
-    sourceEvidence: input.sourceEvidence ?? [],
-    shotIds: input.shotIds ?? [],
-    existingWorldEntityMatch: input.existingWorldEntityMatch ?? null,
-  }
-}
-
-function sequenceAnimaticTemporaryCharacterLooksSpecific(name: string, visualBrief = '') {
-  const normalized = normalizeComicReferenceText(`${name} ${visualBrief}`)
-  if (!normalized || sequenceAnimaticNonCharacterSpeakerNames.has(normalized)) return false
-  if (/\b(crowd|workers|people|figures|extras|everyone|someone|anyone|voices|background)\b/i.test(normalized)) return false
-  return /\b(mechanic|worker|courier|cashier|shopkeeper|guard|watchman|attendant|scribe|clerk|messenger|apprentice|elder|old|young|vole|puffin|mouse|rat|otter|mole|badger|fox|bird)\b/i.test(normalized)
-}
-
-function sequenceAnimaticTemporaryCharacterEvidenceIsVisible(sourceEvidence: string[]) {
-  const evidenceText = sourceEvidence.join(' ')
-  return /\b(visible|nearby|beside|behind|below|above|foreground|background|passes|stands|sits|walks|crosses|looks|glances|ignores|reacts|speaks|asks|says|dialogue|worker|mechanic|courier|guard|attendant)\b/i.test(evidenceText)
-}
-
-function sequenceAnimaticShouldKeepSingleUseTemporaryCharacter(input: {
-  name: string
-  visualBrief?: string
-  sourceEvidence: string[]
-  existingWorldEntityMatch?: string | null
-}) {
-  if (readText(input.existingWorldEntityMatch)) return false
-  return sequenceAnimaticTemporaryCharacterLooksSpecific(input.name, input.visualBrief)
-    && sequenceAnimaticTemporaryCharacterEvidenceIsVisible(input.sourceEvidence)
-}
-
-function anchorUsageFromPhrase(shots: Record<string, unknown>[], phrase: string) {
-  const normalizedPhrase = normalizeComicReferenceText(phrase)
-  return shots.filter((shot) => normalizeComicReferenceText(sequenceShotSearchText(shot)).includes(normalizedPhrase))
-}
-
-function propAnchorUsageFromPhrase(shots: Record<string, unknown>[], phrase: string) {
-  const normalizedPhrase = normalizeComicReferenceText(phrase)
-  return shots.filter((shot) => normalizeComicReferenceText(sequenceShotPropSearchText(shot)).includes(normalizedPhrase))
-}
-
-function collectSequenceAnimaticContinuityAnchors(input: {
-  shotPlan: Record<string, unknown>
-  shotBreakPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-}) {
-  const shots = Array.isArray(input.shotPlan.shots) ? input.shotPlan.shots.map(asRecord) : []
-  const groups = Array.isArray(input.shotBreakPlan.groups) ? input.shotBreakPlan.groups.map(asRecord) : []
-  const groupIdByShotId = new Map<string, string>()
-  groups.forEach((group, index) => {
-    const groupId = readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
-    readStringArray(group.shotBreakIds).forEach((shotId) => groupIdByShotId.set(shotId, groupId))
-  })
-  const entityByKey = new Map(cinematicAssetPackEntities(input.assetPack).map((entity) => [readText(entity.key), entity] as const).filter(([key]) => key))
-  const knownCharacterAliases = new Set<string>()
-  cinematicAssetPackEntities(input.assetPack).forEach((entity) => {
-    const type = readText(entity.type) || readText(entity.nodeType) || readText(entity.entityType)
-    const role = readText(entity.role)
-    const looksCharacter = ['character', 'person', 'cast', 'actor'].some((token) => type.toLowerCase().includes(token) || role.toLowerCase().includes(token))
-    if (!looksCharacter) return
-    ;[entity.key, entity.name, entity.label].map(readText).filter(Boolean).forEach((value) => {
-      knownCharacterAliases.add(normalizeComicReferenceText(value))
-      const parts = normalizeComicReferenceText(value).split(' ').filter((part) => part.length >= 3)
-      if (parts.length > 1) {
-        knownCharacterAliases.add(parts[0])
-        knownCharacterAliases.add(parts[parts.length - 1])
-      }
-    })
-  })
-  const anchorById = new Map<string, SequenceAnimaticContinuityAnchor>()
-  const addAnchor = (anchor: SequenceAnimaticContinuityAnchor) => {
-    const existing = anchorById.get(anchor.id)
-    if (!existing) {
-      anchorById.set(anchor.id, anchor)
-      return
-    }
-    existing.shotIds = [...new Set([...existing.shotIds, ...anchor.shotIds])]
-    existing.storyboardBlockIds = [...new Set([...existing.storyboardBlockIds, ...anchor.storyboardBlockIds])]
-    existing.usageCount = Math.max(existing.usageCount, existing.shotIds.length)
-    existing.sourcePhrases = [...new Set([...(existing.sourcePhrases ?? []), ...(anchor.sourcePhrases ?? [])])]
-  }
-  const anchorFromShotRefs = new Map<string, Set<string>>()
-  shots.forEach((shot) => {
-    const shotId = readText(shot.id)
-    readStringArray(shot.propRefIds).forEach((propId) => {
-      if (!entityByKey.has(propId)) return
-      const set = anchorFromShotRefs.get(propId) ?? new Set<string>()
-      if (shotId) set.add(shotId)
-      anchorFromShotRefs.set(propId, set)
-    })
-  })
-  anchorFromShotRefs.forEach((shotIdSet, propId) => {
-    if (shotIdSet.size < 2) return
-    const entity = entityByKey.get(propId) ?? {}
-    const name = readText(entity.name) || titleFromRefLike(propId)
-    const shotIds = [...shotIdSet]
-    addAnchor({
-      id: sequenceAnchorId('prop', name),
-      name,
-      anchorType: 'prop',
-      summary: `Reusable prop continuity reference for ${name}.`,
-      visualBrief: readOutputEntityVisualDescription(entity) || readText(entity.summary) || `${name}, isolated reusable prop reference.`,
-      shotIds,
-      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
-      usageCount: shotIds.length,
-      sourcePhrases: [propId],
-    })
-  })
-  shots.forEach((shot) => {
-    const shotId = readText(shot.id)
-    const structuredAnchors = [
-      ...(Array.isArray(shot.continuityAnchors) ? shot.continuityAnchors : []),
-      ...(Array.isArray(shot.plannedContinuityAnchors) ? shot.plannedContinuityAnchors : []),
-      ...(Array.isArray(shot.temporaryReferenceAnchors) ? shot.temporaryReferenceAnchors : []),
-    ].map(asRecord)
-    structuredAnchors.forEach((entry) => {
-      const rawType = readText(entry.anchorType) || readText(entry.type)
-      const anchorType = rawType === 'character' || rawType === 'prop' || rawType === 'location_spot'
-        ? rawType
-        : rawType.includes('location') ? 'location_spot' : rawType.includes('char') ? 'character' : 'prop'
-      const name = readText(entry.name) || readText(entry.label) || readText(entry.id)
-      if (!name) return
-      const shotIds = [...new Set([shotId, ...readStringArray(entry.shotIds)].filter(Boolean))]
-      addAnchor({
-        id: readText(entry.id) || sequenceAnchorId(anchorType === 'location_spot' ? 'spot' : anchorType === 'character' ? 'char' : 'prop', name, readText(entry.baseLocationRefId)),
-        name,
-        anchorType,
-        baseLocationRefId: readText(entry.baseLocationRefId) || null,
-        summary: readText(entry.summary) || `Structured ${anchorType.replace(/_/g, ' ')} continuity reference for ${name}.`,
-        visualBrief: readText(entry.visualBrief) || readText(entry.visualDescription) || readText(entry.summary) || `${name}, reusable continuity reference for storyboard consistency.`,
-        shotIds,
-        storyboardBlockIds: [...new Set(shotIds.map((id) => groupIdByShotId.get(id) ?? '').filter(Boolean))],
-        usageCount: Math.max(1, shotIds.length),
-        sourcePhrases: [readText(entry.source) || 'structured_shot_anchor'],
-      })
-    })
-  })
-  const temporaryCharacterShotIds = new Map<string, Set<string>>()
-  const temporaryCharacterNames = new Map<string, string>()
-  const addTemporaryCharacterUsage = (name: string, shotId: string) => {
-    const normalizedName = normalizeAnchorName(name)
-    const lookup = normalizeComicReferenceText(normalizedName)
-    if (!normalizedName || !lookup || sequenceAnimaticNonCharacterSpeakerNames.has(lookup) || knownCharacterAliases.has(lookup)) return
-    const set = temporaryCharacterShotIds.get(lookup) ?? new Set<string>()
-    if (shotId) set.add(shotId)
-    temporaryCharacterShotIds.set(lookup, set)
-    if (!temporaryCharacterNames.has(lookup)) temporaryCharacterNames.set(lookup, titleFromRefLike(normalizedName))
-  }
-  shots.forEach((shot) => {
-    const shotId = readText(shot.id)
-    const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
-    dialogue.forEach((line) => {
-      const speakerRefId = readText(line.speakerRefId) || readText(line.characterRefId)
-      if (speakerRefId && entityByKey.has(speakerRefId)) return
-      const speakerName = readText(line.speakerName) || readText(line.speaker) || readText(line.characterName)
-      addTemporaryCharacterUsage(speakerName, shotId)
-    })
-    const searchText = normalizeComicReferenceText(sequenceShotSearchText(shot))
-    sequenceAnimaticIncidentalCharacterPhrases.forEach((phrase) => {
-      if (searchText.includes(normalizeComicReferenceText(phrase))) addTemporaryCharacterUsage(phrase, shotId)
-    })
-  })
-  temporaryCharacterShotIds.forEach((shotIdSet, lookup) => {
-    if (shotIdSet.size < 1) return
-    const name = temporaryCharacterNames.get(lookup) ?? titleFromRefLike(lookup)
-    const shotIds = [...shotIdSet]
-    addAnchor({
-      id: sequenceAnchorId('char', name),
-      name,
-      anchorType: 'character',
-      summary: `Temporary character continuity reference for ${name}.`,
-      visualBrief: `${name}, temporary supporting character design for storyboard continuity. Show a clean readable half-body or full-body character reference, consistent species/age/wardrobe/silhouette, neutral pose, no text.`,
-      shotIds,
-      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
-      usageCount: shotIds.length,
-      sourcePhrases: [name],
-    })
-  })
-  sequenceAnimaticPropPhrases.forEach((phrase) => {
-    const usedShots = propAnchorUsageFromPhrase(shots, phrase)
-    if (usedShots.length < (sequenceAnimaticImportantSinglePropPhrases.has(phrase) ? 1 : 2)) return
-    const shotIds = usedShots.map((shot) => readText(shot.id)).filter(Boolean)
-    const name = titleFromRefLike(phrase)
-    addAnchor({
-      id: sequenceAnchorId('prop', name),
-      name,
-      anchorType: 'prop',
-      summary: `Reusable prop continuity reference for ${name}.`,
-      visualBrief: `${name}, clean isolated prop reference, consistent shape, material, scale, color, and worn detail for reuse across shots.`,
-      shotIds,
-      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
-      usageCount: shotIds.length,
-      sourcePhrases: [phrase],
-    })
-  })
-  sequenceAnimaticSpotPhrases.forEach((phrase) => {
-    const usedShots = anchorUsageFromPhrase(shots, phrase)
-    if (usedShots.length < (sequenceAnimaticImportantSingleSpotPhrases.has(phrase) ? 1 : 2)) return
-    const shotIds = usedShots.map((shot) => readText(shot.id)).filter(Boolean)
-    const firstShot = usedShots[0] ?? {}
-    const baseLocationRefId = readText(firstShot.locationRefId) || null
-    const name = titleFromRefLike(phrase)
-    const connectedTo = sequenceAnimaticSpotPhrases
-      .filter((other) => other !== phrase && usedShots.some((shot) => normalizeComicReferenceText(sequenceShotSearchText(shot)).includes(normalizeComicReferenceText(other))))
-      .map(titleFromRefLike)
-      .slice(0, 4)
-    addAnchor({
-      id: sequenceAnchorId('spot', name, baseLocationRefId ?? ''),
-      name,
-      anchorType: 'location_spot',
-      baseLocationRefId,
-      summary: `Reusable set-continuity spot for ${name}.`,
-      visualBrief: `${name} inside ${baseLocationRefId ? titleFromRefLike(baseLocationRefId) : 'the base location'}, cinematic set-reference angle, clear entrances, surfaces, lighting direction, scale, and spatial relation to adjacent areas.`,
-      shotIds,
-      storyboardBlockIds: [...new Set(shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean))],
-      usageCount: shotIds.length,
-      connectedTo,
-      entryFrom: phrase.includes('entrance') || phrase.includes('threshold') || phrase.includes('door') ? connectedTo : [],
-      visibleFrom: connectedTo,
-      relationshipHints: connectedTo.map((target) => `${name} visible/connected to ${target}`),
-      sourcePhrases: [phrase],
-    })
-  })
-  const anchors = [...anchorById.values()]
-    .map((anchor) => ({ ...anchor, shotIds: [...new Set(anchor.shotIds)], storyboardBlockIds: [...new Set(anchor.storyboardBlockIds)] }))
-    .sort((left, right) => right.usageCount - left.usageCount || left.id.localeCompare(right.id))
-    .slice(0, 18)
-  const characterAnchors = anchors.filter((anchor) => anchor.anchorType === 'character').slice(0, 9)
-  const propAnchors = anchors.filter((anchor) => anchor.anchorType === 'prop').slice(0, 9)
-  const locationSpotAnchors = anchors.filter((anchor) => anchor.anchorType === 'location_spot').slice(0, 9)
-  const selectedAnchors = [...characterAnchors, ...propAnchors, ...locationSpotAnchors]
-  const continuityAnchorIdsByShotId: Record<string, string[]> = {}
-  selectedAnchors.forEach((anchor) => {
-    anchor.shotIds.forEach((shotId) => {
-      continuityAnchorIdsByShotId[shotId] = [...new Set([...(continuityAnchorIdsByShotId[shotId] ?? []), anchor.id])]
-    })
-  })
-  return {
-    version: 'sequence_animatic_continuity_plan_v2',
-    planningMode: 'deterministic_fallback',
-    llmRepairUsed: false,
-    anchors: selectedAnchors,
-    locationSets: [],
-    locationAngles: [],
-    sceneGraph: { nodes: [], edges: [] },
-    rejectedCandidates: [],
-    characterAnchors,
-    propAnchors,
-    locationSpotAnchors,
-    continuityAnchorIdsByShotId,
-    shotContinuityMap: continuityAnchorIdsByShotId,
-    warnings: ['Continuity planner used deterministic fallback extraction; review anchors before relying on them for detailed continuity.'],
-    diagnostics: [
-      `Planned ${characterAnchors.length} temporary character anchor${characterAnchors.length === 1 ? '' : 's'}, ${propAnchors.length} prop continuity anchor${propAnchors.length === 1 ? '' : 's'}, and ${locationSpotAnchors.length} location spot anchor${locationSpotAnchors.length === 1 ? '' : 's'}.`,
-    ],
-  }
-}
-
-function sequenceAnimaticGroupIdByShotId(shotBreakPlan: Record<string, unknown>) {
-  const groupIdByShotId = new Map<string, string>()
-  const groups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
-  groups.forEach((group, index) => {
-    const groupId = readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`
-    readStringArray(group.shotBreakIds).forEach((shotId) => groupIdByShotId.set(shotId, groupId))
-  })
-  return groupIdByShotId
-}
-
-function normalizeSequenceAnimaticContinuityPlan(input: {
-  rawPlan: z.infer<typeof sequenceAnimaticContinuityPlanV2Schema>
-  fallbackPlan: Record<string, unknown>
-  shotPlan: Record<string, unknown>
-  shotBreakPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  fallbackUsed: boolean
-  fallbackReason?: string
-}) {
-  if (input.fallbackUsed) {
-    return {
-      ...input.fallbackPlan,
-      planningMode: 'deterministic_fallback',
-      warnings: [
-        ...readStringArray(input.fallbackPlan.warnings),
-        input.fallbackReason ? `LLM continuity planner fallback: ${input.fallbackReason}` : 'LLM continuity planner fallback was used.',
-      ],
-    }
-  }
-  const knownAliases = sequenceAnimaticKnownEntityAliases(input.assetPack)
-  const shots = Array.isArray(input.shotPlan.shots) ? input.shotPlan.shots.map(asRecord) : []
-  const knownShotIds = new Set(shots.map((shot) => readText(shot.id)).filter(Boolean))
-  const groupIdByShotId = sequenceAnimaticGroupIdByShotId(input.shotBreakPlan)
-  const rejectedCandidates = [...input.rawPlan.rejectedCandidates]
-  const anchorById = new Map<string, SequenceAnimaticContinuityAnchor>()
-  const addRejected = (entry: ReturnType<typeof sequenceAnimaticRejectedCandidate>) => {
-    const key = `${entry.name}:${entry.reason}:${entry.shotIds.join(',')}`
-    if (rejectedCandidates.some((candidate) => `${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}` === key)) return
-    rejectedCandidates.push(entry)
-  }
-  const acceptedSourceIds = new Set<string>()
-  const acceptedRejectedCandidateKeys = new Set<string>()
-
-  const cleanShotIds = (ids: string[]) => [...new Set(ids.map(readText).filter((id) => !knownShotIds.size || knownShotIds.has(id)))]
-  const cleanBlockIds = (ids: string[], shotIds: string[]) => {
-    const explicit = ids.map(readText).filter(Boolean)
-    const inferred = shotIds.map((shotId) => groupIdByShotId.get(shotId) ?? '').filter(Boolean)
-    return [...new Set([...explicit, ...inferred])]
-  }
-  const anchorPrefixForType = (type: string): 'char' | 'prop' | 'spot' => type === 'character' ? 'char' : type === 'prop' ? 'prop' : 'spot'
-
-  for (const rawAnchor of input.rawPlan.anchors) {
-    const name = normalizeAnchorName(rawAnchor.name)
-    const visualBrief = readText(rawAnchor.visualBrief)
-    const type = rawAnchor.type
-    const sourceEvidence = rawAnchor.sourceEvidence.map(readText).filter(Boolean)
-    const shotIds = cleanShotIds(rawAnchor.shotIds)
-    const explicitExistingMatch = readText(rawAnchor.existingWorldEntityMatch)
-    const aliasMatch = knownAliases.get(normalizeComicReferenceText(name)) ?? ''
-    const existingWorldEntityMatch = explicitExistingMatch || aliasMatch
-    const abstractReason = sequenceAnimaticContinuityAbstractReason(name, visualBrief)
-    const storyCritical = /story[-\s]?critical|hero|plot|recurring|reuse|continuity|required|persistent/i.test(rawAnchor.persistenceReason)
-      || sourceEvidence.length >= 2
-      || shotIds.length >= 2
-      || (type === 'character' && sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
-        name,
-        visualBrief,
-        sourceEvidence,
-        existingWorldEntityMatch,
-      }))
-    const confidence = Math.max(0, Math.min(1, Number(rawAnchor.confidence) || 0))
-    if (!name || !visualBrief) {
-      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'not_visual', sourceEvidence, shotIds }))
-      continue
-    }
-    if (abstractReason) {
-      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence, shotIds }))
-      continue
-    }
-    if (existingWorldEntityMatch && type !== 'location_angle' && type !== 'location_set') {
-      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'existing_world_entity', sourceEvidence, shotIds, existingWorldEntityMatch }))
-      continue
-    }
-    if (confidence < 0.45) {
-      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'low_confidence', sourceEvidence, shotIds }))
-      continue
-    }
-    if (shotIds.length <= 1 && !storyCritical) {
-      addRejected(sequenceAnimaticRejectedCandidate({ name, type, reason: 'single_use_not_story_critical', sourceEvidence, shotIds }))
-      continue
-    }
-    const continuitySubtype = type === 'location_set' || type === 'location_angle' ? type : type === 'location_spot' ? 'location_spot' : type
-    const legacyAnchorType: SequenceAnimaticContinuityAnchor['anchorType'] = type === 'character' ? 'character' : type === 'prop' ? 'prop' : 'location_spot'
-    const baseLocationRefId = readText(rawAnchor.baseLocationRefId) || null
-    const id = readText(rawAnchor.id) || sequenceAnchorId(anchorPrefixForType(legacyAnchorType), name, baseLocationRefId ?? '')
-    if (acceptedSourceIds.has(id)) continue
-    acceptedSourceIds.add(id)
-    const storyboardBlockIds = cleanBlockIds(rawAnchor.storyboardBlockIds, shotIds)
-    anchorById.set(id, {
-      id,
-      name,
-      anchorType: legacyAnchorType,
-      continuitySubtype,
-      baseLocationRefId,
-      summary: readText(rawAnchor.persistenceReason) || `Reusable ${legacyAnchorType.replace(/_/g, ' ')} continuity reference for ${name}.`,
-      visualBrief,
-      persistenceReason: readText(rawAnchor.persistenceReason),
-      confidence,
-      sourceEvidence,
-      existingWorldEntityMatch: existingWorldEntityMatch || null,
-      rejectionRisk: readText(rawAnchor.rejectionRisk),
-      shotIds,
-      storyboardBlockIds,
-      usageCount: Math.max(shotIds.length, storyboardBlockIds.length, 1),
-      setId: readText(rawAnchor.setId) || null,
-      angleId: readText(rawAnchor.angleId) || null,
-      connectedTo: rawAnchor.connectedTo.map(readText).filter(Boolean),
-      visibleFrom: rawAnchor.visibleFrom.map(readText).filter(Boolean),
-      entryFrom: rawAnchor.entryFrom.map(readText).filter(Boolean),
-      relationshipHints: [],
-      sourcePhrases: sourceEvidence,
-    })
-  }
-
-  for (const rejected of input.rawPlan.rejectedCandidates) {
-    const name = normalizeAnchorName(rejected.name)
-    const sourceEvidence = rejected.sourceEvidence.map(readText).filter(Boolean)
-    const shotIds = cleanShotIds(rejected.shotIds)
-    const existingWorldEntityMatch = readText(rejected.existingWorldEntityMatch)
-    if (
-      rejected.type !== 'character'
-      || rejected.reason !== 'single_use_not_story_critical'
-      || shotIds.length <= 0
-      || !sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
-        name,
-        sourceEvidence,
-        existingWorldEntityMatch,
-      })
-    ) {
-      continue
-    }
-    const id = sequenceAnchorId('char', name)
-    if (acceptedSourceIds.has(id)) continue
-    acceptedSourceIds.add(id)
-    acceptedRejectedCandidateKeys.add(`${rejected.name}:${rejected.reason}:${rejected.shotIds.join(',')}`)
-    const storyboardBlockIds = cleanBlockIds([], shotIds)
-    anchorById.set(id, {
-      id,
-      name,
-      anchorType: 'character',
-      continuitySubtype: 'character',
-      baseLocationRefId: null,
-      summary: `Visible incidental character continuity reference for ${name}.`,
-      visualBrief: `${name}, visible temporary supporting character design for storyboard continuity. Keep species, age, wardrobe, silhouette, and working-role details consistent; neutral pose, no text.`,
-      persistenceReason: 'Visible incidental character with no canonical world entity; keep design consistent for storyboard continuity.',
-      confidence: 0.72,
-      sourceEvidence,
-      existingWorldEntityMatch: null,
-      rejectionRisk: 'medium: appears in one shot, but is a specific visible character rather than an abstract or crowd cue.',
-      shotIds,
-      storyboardBlockIds,
-      usageCount: Math.max(1, shotIds.length),
-      setId: null,
-      angleId: null,
-      connectedTo: [],
-      visibleFrom: [],
-      entryFrom: [],
-      relationshipHints: [],
-      sourcePhrases: sourceEvidence,
-    })
-  }
-
-  const anchors = [...anchorById.values()]
-    .sort((left, right) => right.usageCount - left.usageCount || (right.confidence ?? 0) - (left.confidence ?? 0) || left.id.localeCompare(right.id))
-    .slice(0, 24)
-  const characterAnchors = anchors.filter((anchor) => anchor.anchorType === 'character').slice(0, 9)
-  const propAnchors = anchors.filter((anchor) => anchor.anchorType === 'prop').slice(0, 9)
-  const locationSpotAnchors = anchors.filter((anchor) => anchor.anchorType === 'location_spot').slice(0, 12)
-  const selectedAnchors = [...characterAnchors, ...propAnchors, ...locationSpotAnchors]
-  const shotContinuityMap: Record<string, string[]> = {}
-  selectedAnchors.forEach((anchor) => {
-    anchor.shotIds.forEach((shotId) => {
-      shotContinuityMap[shotId] = [...new Set([...(shotContinuityMap[shotId] ?? []), anchor.id])]
-    })
-  })
-
-  const selectedAnchorIds = new Set(selectedAnchors.map((anchor) => anchor.id))
-  const locationSets = input.rawPlan.locationSets
-    .filter((entry) => {
-      const abstractReason = sequenceAnimaticContinuityAbstractReason(entry.name, entry.visualBrief)
-      if (abstractReason) {
-        addRejected(sequenceAnimaticRejectedCandidate({ name: entry.name, type: 'location_set', reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence: [entry.persistenceReason], shotIds: entry.shotIds }))
-        return false
-      }
-      const aliasMatch = knownAliases.get(normalizeComicReferenceText(entry.name)) ?? ''
-      if (aliasMatch && (!entry.baseLocationRefId || entry.baseLocationRefId === aliasMatch)) {
-        addRejected(sequenceAnimaticRejectedCandidate({ name: entry.name, type: 'location_set', reason: 'existing_world_entity', sourceEvidence: [entry.persistenceReason], shotIds: entry.shotIds, existingWorldEntityMatch: aliasMatch }))
-        return false
-      }
-      return true
-    })
-    .map((entry) => ({
-      ...entry,
-      shotIds: cleanShotIds(entry.shotIds),
-      storyboardBlockIds: cleanBlockIds(entry.storyboardBlockIds, cleanShotIds(entry.shotIds)),
-    }))
-    .slice(0, 12)
-  const locationAngles = input.rawPlan.locationAngles
-    .filter((entry) => {
-      const abstractReason = sequenceAnimaticContinuityAbstractReason(entry.name, entry.visualBrief)
-      if (abstractReason) {
-        addRejected(sequenceAnimaticRejectedCandidate({ name: entry.name, type: 'location_angle', reason: abstractReason as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>, sourceEvidence: [entry.visualBrief], shotIds: entry.shotIds }))
-        return false
-      }
-      return true
-    })
-    .map((entry) => ({
-      ...entry,
-      shotIds: cleanShotIds(entry.shotIds),
-      storyboardBlockIds: cleanBlockIds(entry.storyboardBlockIds, cleanShotIds(entry.shotIds)),
-    }))
-    .slice(0, 18)
-  const graphNodeById = new Map<string, { id: string; type: 'location_set' | 'location_angle'; name: string }>()
-  locationSets.forEach((entry) => graphNodeById.set(entry.id, { id: entry.id, type: 'location_set', name: entry.name }))
-  locationAngles.forEach((entry) => graphNodeById.set(entry.id, { id: entry.id, type: 'location_angle', name: entry.name }))
-  input.rawPlan.sceneGraph.nodes.forEach((entry) => {
-    if (graphNodeById.has(entry.id)) return
-    if (entry.type === 'location_set' || entry.type === 'location_angle') graphNodeById.set(entry.id, entry)
-  })
-  const sceneGraph = {
-    nodes: [...graphNodeById.values()],
-    edges: input.rawPlan.sceneGraph.edges
-      .filter((edge) => graphNodeById.has(edge.sourceId) && graphNodeById.has(edge.targetId) && edge.sourceId !== edge.targetId)
-      .slice(0, 40),
-  }
-  const warnings = [
-    ...input.rawPlan.warnings,
-    ...(selectedAnchorIds.size === 0 ? ['LLM continuity planner found no physical, non-duplicative sidecar anchors worth persisting.'] : []),
-  ]
-  const finalRejectedCandidates = rejectedCandidates.filter((candidate) => !acceptedRejectedCandidateKeys.has(`${candidate.name}:${candidate.reason}:${candidate.shotIds.join(',')}`))
-  return {
-    version: 'sequence_animatic_continuity_plan_v2',
-    planningMode: 'llm_structured_v2',
-    anchors: selectedAnchors,
-    characterAnchors,
-    propAnchors,
-    locationSpotAnchors,
-    locationSets,
-    locationAngles,
-    sceneGraph,
-    continuityAnchorIdsByShotId: shotContinuityMap,
-    shotContinuityMap,
-    rejectedCandidates: finalRejectedCandidates,
-    warnings,
-    diagnostics: [
-      ...input.rawPlan.diagnostics,
-      ...(acceptedRejectedCandidateKeys.size > 0
-        ? [`Recovered ${acceptedRejectedCandidateKeys.size} visible one-shot incidental character anchor${acceptedRejectedCandidateKeys.size === 1 ? '' : 's'} from LLM single-use rejections.`]
-        : []),
-      `LLM continuity planner accepted ${selectedAnchors.length} anchor${selectedAnchors.length === 1 ? '' : 's'} and rejected ${finalRejectedCandidates.length} candidate${finalRejectedCandidates.length === 1 ? '' : 's'}.`,
-    ],
-  }
 }
 
 function compactSequenceAnimaticText(value: unknown, maxLength = 900) {
@@ -6612,384 +4976,6 @@ function sequenceAnimaticPersistentLightingCue(value: unknown) {
     : ''
 }
 
-function compactSequenceAnimaticCamera(shot: Record<string, unknown>) {
-  const camera = asRecord(shot.camera)
-  return {
-    framing: compactSequenceAnimaticText(camera.framing ?? shot.framing, 220),
-    angle: compactSequenceAnimaticText(camera.angle ?? shot.cameraAngle, 220),
-    movement: compactSequenceAnimaticText(camera.movement ?? shot.cameraMovement, 260),
-  }
-}
-
-function compactSequenceAnimaticReferenceEntry(entity: Record<string, unknown>, assets: Record<string, unknown>[], source: string) {
-  const metadata = asRecord(entity.metadata)
-  const key = readText(entity.key)
-  const type = readText(entity.type) || readText(entity.role) || readText(entity.nodeType ?? entity.node_type)
-  const selectedReferenceVariantAssetKey = selectedReferenceVariantAssetKeyForEntity(entity)
-  const packedAssetKeys = [
-    readText(entity.primaryAssetKey),
-    selectedReferenceVariantAssetKey,
-    ...readStringArray(entity.assetKeys),
-  ].filter(Boolean)
-  const worldAssetKeys = entityAssetKeys(entity, assets)
-  const visualSummary = compactSequenceAnimaticText(
-    readText(entity.visualDescription)
-      || readText(metadata.visualDescription)
-      || readOutputEntityVisualDescription(entity),
-    700,
-  )
-  return {
-    key,
-    name: readText(entity.name) || readText(entity.label) || key,
-    type,
-    aliases: [...new Set([
-      ...readStringArray(entity.aliases),
-      ...readStringArray(metadata.aliases),
-    ])].filter(Boolean),
-    summary: compactSequenceAnimaticText(readText(entity.summary) || readText(entity.context), 700),
-    visualSummary,
-    assetKeys: [...new Set([...packedAssetKeys, ...worldAssetKeys])].filter(Boolean).slice(0, 8),
-    referenceRole: type || readText(entity.referenceRole) || 'entity',
-    source,
-  }
-}
-
-function mergeSequenceAnimaticReferenceCatalogEntries(entries: Array<Record<string, unknown>>) {
-  const byKey = new Map<string, Record<string, unknown>>()
-  for (const entry of entries) {
-    const key = readText(entry.key)
-    if (!key) continue
-    const existing = byKey.get(key)
-    if (!existing) {
-      byKey.set(key, entry)
-      continue
-    }
-    byKey.set(key, {
-      ...existing,
-      ...entry,
-      name: readText(existing.name) || readText(entry.name),
-      type: readText(existing.type) || readText(entry.type),
-      summary: readText(existing.summary) || readText(entry.summary),
-      visualSummary: readText(existing.visualSummary) || readText(entry.visualSummary),
-      aliases: [...new Set([...readStringArray(existing.aliases), ...readStringArray(entry.aliases)])].filter(Boolean),
-      assetKeys: [...new Set([...readStringArray(existing.assetKeys), ...readStringArray(entry.assetKeys)])].filter(Boolean).slice(0, 8),
-      source: [...new Set([readText(existing.source), readText(entry.source)].filter(Boolean))].join('+'),
-    })
-  }
-  return [...byKey.values()]
-}
-
-function buildSequenceAnimaticReferenceCatalog(input: {
-  context?: Record<string, unknown>
-  assetPack: Record<string, unknown>
-}) {
-  const context = asRecord(input.context)
-  const assets = readArray(context.assets).map(asRecord)
-  const contextEntries = readArray(context.entities)
-    .map(asRecord)
-    .map((entity) => compactSequenceAnimaticReferenceEntry(entity, assets, 'world_context'))
-  const assetPackEntries = cinematicAssetPackEntities(input.assetPack)
-    .map((entity) => compactSequenceAnimaticReferenceEntry(entity, assets, 'selected_asset_pack'))
-  return mergeSequenceAnimaticReferenceCatalogEntries([...contextEntries, ...assetPackEntries])
-}
-
-function sequenceAnimaticReferenceCatalog(input: {
-  animaticReferenceCatalog?: unknown
-  assetPack: Record<string, unknown>
-}) {
-  const catalog = readArray(input.animaticReferenceCatalog).map(asRecord)
-  return catalog.length > 0
-    ? catalog
-    : buildSequenceAnimaticReferenceCatalog({ assetPack: input.assetPack })
-}
-
-function normalizedSequenceAnimaticReferenceKey(value: unknown) {
-  return normalizeComicReferenceText(readText(value))
-}
-
-const sequenceAnimaticReferenceAliasStopwords = new Set([
-  'a',
-  'an',
-  'and',
-  'at',
-  'by',
-  'for',
-  'from',
-  'in',
-  'of',
-  'on',
-  'or',
-  'the',
-  'to',
-  'with',
-])
-
-function sequenceAnimaticReferenceIsCharacterLike(entry: Record<string, unknown>) {
-  const type = normalizeComicReferenceText([
-    readText(entry.type),
-    readText(entry.referenceRole),
-    readText(entry.nodeType),
-  ].filter(Boolean).join(' '))
-  return /\b(actor|character|cast|person|persona|protagonist|antagonist)\b/.test(type)
-}
-
-function sequenceAnimaticReferenceAliasCandidates(entry: Record<string, unknown>) {
-  const rawValues = [
-    readText(entry.key),
-    readText(entry.key).replace(/_/g, ' '),
-    readText(entry.name),
-    readText(entry.label),
-    ...readStringArray(entry.aliases),
-  ].filter(Boolean)
-  const candidates = new Set<string>()
-  for (const value of rawValues) {
-    const normalized = normalizedSequenceAnimaticReferenceKey(value)
-    if (normalized) candidates.add(normalized)
-  }
-
-  if (sequenceAnimaticReferenceIsCharacterLike(entry)) {
-    for (const value of rawValues) {
-      const parts = normalizedSequenceAnimaticReferenceKey(value)
-        .split('_')
-        .filter((part) => part.length >= 3 && !sequenceAnimaticReferenceAliasStopwords.has(part))
-      if (parts.length >= 2) {
-        candidates.add(parts[0])
-        candidates.add(parts[parts.length - 1])
-      }
-    }
-  }
-
-  return [...candidates]
-}
-
-function buildSequenceAnimaticReferenceLookup(catalog: Array<Record<string, unknown>>) {
-  const byKey = new Map<string, Record<string, unknown>>()
-  const byAlias = new Map<string, Record<string, unknown>>()
-  for (const entry of catalog) {
-    const key = readText(entry.key)
-    if (key) byKey.set(key, entry)
-    for (const normalized of sequenceAnimaticReferenceAliasCandidates(entry)) {
-      if (normalized && !byAlias.has(normalized)) byAlias.set(normalized, entry)
-    }
-  }
-  return { byKey, byAlias }
-}
-
-function sequenceAnimaticReferenceLookupFromPlannerContext(context: Record<string, unknown>) {
-  const references = readArray(context.existingWorldReferences).map(asRecord)
-  const resolvedReferences: Array<Record<string, unknown>> = []
-  for (const shot of readArray(context.shots).map(asRecord)) {
-    const resolvedRefs = asRecord(shot.resolvedRefs)
-    for (const value of Object.values(resolvedRefs)) {
-      if (Array.isArray(value)) resolvedReferences.push(...value.map(asRecord))
-      else {
-        const record = asRecord(value)
-        if (Object.keys(record).length > 0) resolvedReferences.push(record)
-      }
-    }
-  }
-  return buildSequenceAnimaticReferenceLookup(mergeSequenceAnimaticReferenceCatalogEntries([
-    ...references,
-    ...resolvedReferences,
-  ]))
-}
-
-function sequenceAnimaticCanonicalReferenceMatchForAnchor(
-  anchor: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>,
-  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>,
-) {
-  const anchorType = readText(anchor.type)
-  if (anchorType !== 'character' && anchorType !== 'prop') return null
-  const explicitMatch = readText(anchor.existingWorldEntityMatch)
-  if (explicitMatch) {
-    return lookup.byKey.get(explicitMatch)
-      ?? lookup.byAlias.get(normalizedSequenceAnimaticReferenceKey(explicitMatch))
-      ?? { key: explicitMatch, name: explicitMatch, type: 'world_entity' }
-  }
-  const candidates = [
-    readText(anchor.name),
-    readText(anchor.id).replace(/^anchor_(character|prop)_/i, '').replace(/_block\d+$/i, '').replace(/_/g, ' '),
-  ].filter(Boolean)
-  for (const candidate of candidates) {
-    const match = lookup.byAlias.get(normalizedSequenceAnimaticReferenceKey(candidate))
-    if (match) return match
-  }
-  return null
-}
-
-function sequenceAnimaticContinuityTextHasPhysicalLocationCue(value: unknown) {
-  const normalized = ` ${normalizeComicReferenceText(readText(value)).replace(/_/g, ' ')} `
-  return /\b(row|lane|street|city|station|clock|face|pipe|rail|catwalk|walkway|chamber|room|corridor|passage|gap|hatch|ledge|platform|shaft|wall|door|gate|workshop|bay|bench|tunnel|engine|basin|bridge|stair|dock|harbor|drain|crate|lamp|lantern)\b/.test(normalized)
-}
-
-function sequenceAnimaticContinuitySafePhysicalLabel(input: {
-  fallbackPrefix: string
-  worldLocationRefId: string
-  shot: Record<string, unknown>
-  lookup?: ReturnType<typeof buildSequenceAnimaticReferenceLookup>
-}) {
-  const spatial = sequenceAnimaticSpatialRecord(input.shot)
-  const candidates = [
-    readText(input.shot.continuityZoneLabel),
-    readText(spatial.subjectPosition),
-    readText(spatial.cameraPosition),
-    ...readStringArray(spatial.visibleLandmarks),
-    readText(asRecord(asRecord(input.shot.resolvedRefs).location).name),
-    titleFromRefLike(input.worldLocationRefId),
-  ].filter(Boolean)
-  for (const candidate of candidates) {
-    if (!sequenceAnimaticContinuityTextHasPhysicalLocationCue(candidate)) continue
-    if (input.lookup && sequenceAnimaticCanonicalCharacterMatchForText(candidate, input.lookup)) continue
-    return titleFromRefLike(candidate)
-  }
-  return `${titleFromRefLike(input.worldLocationRefId)} ${input.fallbackPrefix}`.trim()
-}
-
-function sequenceAnimaticCanonicalCharacterMatchForText(
-  value: unknown,
-  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>,
-) {
-  const normalized = normalizedSequenceAnimaticReferenceKey(value)
-  if (!normalized) return null
-  for (const [alias, entry] of lookup.byAlias.entries()) {
-    if (alias.length < 3 || !sequenceAnimaticReferenceIsCharacterLike(entry)) continue
-    if (normalized === alias || normalized.includes(`_${alias}_`) || normalized.startsWith(`${alias}_`) || normalized.endsWith(`_${alias}`)) {
-      return entry
-    }
-  }
-  return null
-}
-
-function compactResolvedSequenceAnimaticReference(entry: Record<string, unknown>) {
-  return {
-    key: readText(entry.key),
-    name: readText(entry.name) || readText(entry.key),
-    type: readText(entry.type) || readText(entry.referenceRole),
-    aliases: readStringArray(entry.aliases).slice(0, 8),
-    summary: compactSequenceAnimaticText(readText(entry.summary), 360),
-    visualSummary: compactSequenceAnimaticText(readText(entry.visualSummary), 420),
-  }
-}
-
-function resolveSequenceAnimaticShotReference(
-  refId: string,
-  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>,
-) {
-  if (!refId) return null
-  return lookup.byKey.get(refId)
-    ?? lookup.byAlias.get(normalizedSequenceAnimaticReferenceKey(refId))
-    ?? null
-}
-
-function sequenceAnimaticShotStringArray(shot: Record<string, unknown>, fields: string[]) {
-  return [...new Set(fields.flatMap((field) => readStringArray(shot[field])).filter(Boolean))]
-}
-
-function resolveSequenceAnimaticShotRefs(input: {
-  shot: Record<string, unknown>
-  shotId: string
-  lookup: ReturnType<typeof buildSequenceAnimaticReferenceLookup>
-}) {
-  const resolveMany = (role: string, values: string[]) => {
-    const unresolved: Array<Record<string, unknown>> = []
-    const resolved = values.map((refId) => {
-      const entry = resolveSequenceAnimaticShotReference(refId, input.lookup)
-      if (!entry) {
-        unresolved.push({ shotId: input.shotId, role, refId })
-        return null
-      }
-      return compactResolvedSequenceAnimaticReference(entry)
-    }).filter((entry): entry is ReturnType<typeof compactResolvedSequenceAnimaticReference> => Boolean(entry))
-    return { resolved, unresolved }
-  }
-  const visibleCharacters = resolveMany('visible_character', sequenceAnimaticShotStringArray(input.shot, ['visibleCharacterRefIds', 'visible_character_ref_ids', 'characterRefIds', 'character_ref_ids']))
-  const speakers = resolveMany('speaker', sequenceAnimaticShotStringArray(input.shot, ['speakerRefIds', 'speaker_ref_ids']))
-  const props = resolveMany('prop', sequenceAnimaticShotStringArray(input.shot, ['propRefIds', 'prop_ref_ids']))
-  const locationRefId = readText(input.shot.locationRefId) || readText(input.shot.location_ref_id)
-  const location = resolveMany('location', locationRefId ? [locationRefId] : [])
-  return {
-    resolvedRefs: {
-      visibleCharacters: visibleCharacters.resolved,
-      speakers: speakers.resolved,
-      props: props.resolved,
-      location: location.resolved[0] ?? null,
-    },
-    unresolvedRefs: [
-      ...visibleCharacters.unresolved,
-      ...speakers.unresolved,
-      ...props.unresolved,
-      ...location.unresolved,
-    ],
-  }
-}
-
-function buildSequenceAnimaticContinuityPlannerContext(input: {
-  screenplayDraft: Record<string, unknown>
-  shotPlan: Record<string, unknown>
-  shotBreakPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  animaticReferenceCatalog?: unknown
-}) {
-  const sourceShots = readArray(input.shotPlan.shots).map(asRecord)
-  const sourceBlocks = readArray(input.shotBreakPlan.groups).map(asRecord)
-  const existingWorldReferences = sequenceAnimaticReferenceCatalog({
-    animaticReferenceCatalog: input.animaticReferenceCatalog,
-    assetPack: input.assetPack,
-  })
-  const referenceLookup = buildSequenceAnimaticReferenceLookup(existingWorldReferences)
-  const unresolvedShotRefs: Array<Record<string, unknown>> = []
-  return {
-    screenplayBrief: {
-      title: readText(input.screenplayDraft.title),
-      logline: compactSequenceAnimaticText(input.screenplayDraft.logline ?? input.screenplayDraft.summary ?? input.screenplayDraft.synopsis, 700),
-    },
-    blocks: sourceBlocks.map((block, index) => ({
-      id: readText(block.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`,
-      title: readText(block.title) || readText(block.summary),
-      shotBreakIds: readStringArray(block.shotBreakIds),
-      sourceText: compactSequenceAnimaticText(block.sourceText, 1000),
-    })),
-    shots: sourceShots.map((shot, index) => ({
-      ...(() => {
-        const shotId = readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`
-        const refs = resolveSequenceAnimaticShotRefs({ shot, shotId, lookup: referenceLookup })
-        unresolvedShotRefs.push(...refs.unresolvedRefs)
-        const shotDescription = compactSequenceAnimaticText(shot.description ?? shot.action ?? shot.caption, 1200)
-        return {
-          id: shotId,
-          title: readText(shot.title),
-          description: shotDescription,
-          action: shotDescription,
-          actionLine: compactSequenceAnimaticText(shot.action ?? shot.caption ?? shot.description, 500),
-          camera: compactSequenceAnimaticCamera(shot),
-          locationRefId: readText(shot.locationRefId) || readText(shot.location_ref_id),
-          worldLocationRefId: readText(shot.worldLocationRefId) || readText(shot.world_location_ref_id) || readText(shot.locationRefId) || readText(shot.location_ref_id),
-          continuitySetId: readText(shot.continuitySetId) || readText(shot.continuity_set_id),
-          continuityZoneId: readText(shot.continuityZoneId) || readText(shot.continuity_zone_id),
-          continuitySpotIds: sequenceAnimaticShotStringArray(shot, ['continuitySpotIds', 'continuity_spot_ids']),
-          continuityAngleId: readText(shot.continuityAngleId) || readText(shot.continuity_angle_id),
-          spatialContinuity: sequenceAnimaticContinuityPlannerSpatialRecord(shot),
-          propRefIds: sequenceAnimaticShotStringArray(shot, ['propRefIds', 'prop_ref_ids']),
-          visibleCharacterRefIds: sequenceAnimaticShotStringArray(shot, ['visibleCharacterRefIds', 'visible_character_ref_ids', 'characterRefIds', 'character_ref_ids']),
-          speakerRefIds: sequenceAnimaticShotStringArray(shot, ['speakerRefIds', 'speaker_ref_ids']),
-          resolvedRefs: refs.resolvedRefs,
-          unresolvedRefs: refs.unresolvedRefs,
-          dialogue: readArray(shot.dialogue).map(asRecord).map((line) => ({
-            speakerRefId: readText(line.speakerRefId) || readText(line.characterRefId),
-            speakerName: readText(line.speakerName) || readText(line.speaker),
-            text: compactSequenceAnimaticText(line.text, 500),
-          })).filter((line) => line.speakerRefId || line.speakerName || line.text),
-        }
-      })(),
-    })),
-    existingWorldReferences,
-    unresolvedShotRefs,
-    diagnostics: unresolvedShotRefs.length > 0
-      ? [`${unresolvedShotRefs.length} shot reference${unresolvedShotRefs.length === 1 ? '' : 's'} could not be resolved against the animatic reference catalog.`]
-      : [],
-  }
-}
-
 function sequenceAnimaticManifestBlockIdByShotId(manifest: Record<string, unknown>) {
   const map = new Map<string, string>()
   readArray(manifest.blocks).map(asRecord).forEach((block) => {
@@ -7005,1982 +4991,8 @@ function sequenceAnimaticManifestBlockIdByShotId(manifest: Record<string, unknow
   return map
 }
 
-const sequenceAnimaticShotContinuityPlanRuntimeHelpers: SequenceAnimaticShotContinuityPlanRuntimeHelpers = {
-  sequenceAnimaticShotRefs,
-  sequenceAnimaticShotBindingFromSceneBinding,
-}
-
-const sequenceAnimaticDirectorPlanRuntimeHelpers: SequenceAnimaticDirectorPlanRuntimeHelpers = {
-  sequenceAnimaticShotRefs,
-  sequenceAnimaticShotBindingFromSceneBinding,
-  hashOutputWorkflowValue,
-}
-
-function sequenceAnimaticGraphSlug(...parts: unknown[]) {
-  return slugify(parts.map(readText).filter(Boolean).join(' ')).slice(0, 84)
-}
-
-function sequenceAnimaticShotWorldLocationRefId(shot: Record<string, unknown>, graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>) {
-  const resolvedLocation = asRecord(asRecord(shot.resolvedRefs).location)
-  return readText(shot.worldLocationRefId)
-    || readText(shot.locationRefId)
-    || readText(resolvedLocation.key)
-    || graph.worldLocationRefs[0]?.id
-    || 'unknown_location'
-}
-
 function sequenceAnimaticSpatialRecord(shot: Record<string, unknown>) {
   return asRecord(shot.spatialContinuity ?? shot.spatial_continuity)
-}
-
-function sequenceAnimaticContinuityPlannerSpatialRecord(shot: Record<string, unknown>) {
-  const spatial = { ...sequenceAnimaticSpatialRecord(shot) }
-  ;[
-    'lighting',
-    'lightSource',
-    'light_source',
-    'lightSourceDirection',
-    'light_source_direction',
-    'lightingDirection',
-    'lighting_direction',
-    'lightingQuality',
-    'lighting_quality',
-    'colorTemperature',
-    'color_temperature',
-  ].forEach((key) => {
-    delete spatial[key]
-  })
-  return spatial
-}
-
-function sequenceAnimaticGraphSetId(shot: Record<string, unknown>, worldLocationRefId: string) {
-  return readText(shot.continuitySetId)
-    || `set_${sequenceAnimaticGraphSlug(worldLocationRefId, 'primary')}`
-}
-
-function sequenceAnimaticGraphZoneSeed(shot: Record<string, unknown>, worldLocationRefId: string) {
-  const spatial = sequenceAnimaticSpatialRecord(shot)
-  const physicalCandidates = [
-    readText(shot.continuityZoneLabel),
-    readText(spatial.subjectPosition),
-    ...readStringArray(spatial.visibleLandmarks),
-  ].filter(Boolean)
-  const physicalCandidate = physicalCandidates.find((candidate) => sequenceAnimaticContinuityTextHasPhysicalLocationCue(candidate))
-  return physicalCandidate || `${worldLocationRefId} action area`
-}
-
-function sequenceAnimaticGraphZoneId(shot: Record<string, unknown>, worldLocationRefId: string, setId: string) {
-  return readText(shot.continuityZoneId)
-    || `zone_${sequenceAnimaticGraphSlug(setId, sequenceAnimaticGraphZoneSeed(shot, worldLocationRefId)).slice(0, 64)}`
-}
-
-function sequenceAnimaticGraphAngleId(shot: Record<string, unknown>, setId: string, zoneId: string) {
-  const camera = asRecord(shot.camera)
-  return readText(shot.continuityAngleId)
-    || `angle_${sequenceAnimaticGraphSlug(setId, zoneId, camera.framing, camera.angle, camera.movement).slice(0, 64)}`
-}
-
-function sequenceAnimaticGraphSpotIds(shot: Record<string, unknown>, zoneId: string) {
-  const explicit = readStringArray(shot.continuitySpotIds)
-  if (explicit.length > 0) return explicit
-  const action = normalizeComicReferenceText([shot.title, shot.action, shot.description].map(readText).filter(Boolean).join(' '))
-  const phrases = sequenceAnimaticSpotPhrases.filter((phrase) => action.includes(normalizeComicReferenceText(phrase))).slice(0, 3)
-  return phrases.length > 0
-    ? phrases.map((phrase) => `spot_${sequenceAnimaticGraphSlug(zoneId, phrase).slice(0, 72)}`)
-    : [`spot_${sequenceAnimaticGraphSlug(zoneId, 'primary').slice(0, 72)}`]
-}
-
-function sequenceAnimaticGraphShotBindingAnchorIds(graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>, shotId: string) {
-  const characterAnchorIds: string[] = []
-  const propAnchorIds: string[] = []
-  graph.assetAnchors.forEach((anchor) => {
-    if (!anchor.shotIds.includes(shotId)) return
-    const id = readText(anchor.id)
-    if (!id) return
-    if (anchor.type === 'character') characterAnchorIds.push(id)
-    if (anchor.type === 'prop') propAnchorIds.push(id)
-  })
-  return {
-    characterAnchorIds: [...new Set(characterAnchorIds)],
-    propAnchorIds: [...new Set(propAnchorIds)],
-  }
-}
-
-function sequenceAnimaticPlannerAnchorFromLegacyAnchor(anchor: SequenceAnimaticContinuityAnchor): z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema> | null {
-  const id = readText(anchor.id)
-  const anchorType = readText(anchor.anchorType)
-  const name = readText(anchor.name)
-  if (!id || !name || (anchorType !== 'character' && anchorType !== 'prop')) return null
-  return sequenceAnimaticContinuityPlannerAnchorSchema.parse({
-    id,
-    type: anchorType,
-    name,
-    visualBrief: readText(anchor.visualBrief) || readText(anchor.summary) || `${name}, reusable continuity reference for storyboard consistency.`,
-    persistenceReason: readText(anchor.persistenceReason) || readText(anchor.summary) || `Output-local ${anchorType === 'character' ? 'temporary character' : 'prop'} continuity reference for ${name}.`,
-    confidence: Math.max(0.62, Math.min(0.86, Number(anchor.confidence) || 0.72)),
-    shotIds: readStringArray(anchor.shotIds),
-    storyboardBlockIds: readStringArray(anchor.storyboardBlockIds),
-    sourceEvidence: readStringArray(anchor.sourcePhrases).length > 0
-      ? readStringArray(anchor.sourcePhrases)
-      : readStringArray(anchor.shotIds).map((shotId) => `${shotId}: deterministic continuity asset cue`),
-    existingWorldEntityMatch: readText(anchor.existingWorldEntityMatch) || null,
-    rejectionRisk: readText(anchor.rejectionRisk) || 'low: deterministic output-local continuity asset candidate.',
-    baseLocationRefId: readText(anchor.baseLocationRefId) || null,
-    setId: readText(anchor.setId) || null,
-    angleId: readText(anchor.angleId) || null,
-    connectedTo: readStringArray(anchor.connectedTo),
-    visibleFrom: readStringArray(anchor.visibleFrom),
-    entryFrom: readStringArray(anchor.entryFrom),
-  })
-}
-
-function deterministicSequenceAnimaticAssetAnchorsForBlock(input: {
-  continuityPlannerContext: Record<string, unknown>
-  storyboardBlock: Record<string, unknown>
-}) {
-  const blockId = readText(input.storyboardBlock.id) || readText(input.storyboardBlock.storyboardBlockId) || 'storyboard_block'
-  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
-  if (shots.length === 0) return []
-  const shotBreakIds = shots.map((shot) => readText(shot.id)).filter(Boolean)
-  const fallbackPlan = collectSequenceAnimaticContinuityAnchors({
-    shotPlan: { shots },
-    shotBreakPlan: { groups: [{ id: blockId, shotBreakIds }] },
-    assetPack: { entities: readArray(input.continuityPlannerContext.existingWorldReferences).map(asRecord) },
-  })
-  return [
-    ...readArray(fallbackPlan.characterAnchors).map(asRecord),
-    ...readArray(fallbackPlan.propAnchors).map(asRecord),
-  ]
-    .map((anchor) => sequenceAnimaticPlannerAnchorFromLegacyAnchor(anchor as SequenceAnimaticContinuityAnchor))
-    .filter((anchor): anchor is z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema> => Boolean(anchor))
-}
-
-function buildDeterministicSequenceAnimaticBlockDelta(input: {
-  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
-  continuityPlannerContext: Record<string, unknown>
-  storyboardBlock: Record<string, unknown>
-  fallbackReason?: string
-}) {
-  const blockId = readText(input.storyboardBlock.id) || readText(input.storyboardBlock.storyboardBlockId) || 'storyboard_block'
-  const blockTitle = readText(input.storyboardBlock.title) || readText(input.storyboardBlock.summary) || blockId
-  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
-  const locationSets: Array<z.infer<typeof sequenceAnimaticContinuityGraphSetSchema>> = []
-  const zones: Array<z.infer<typeof sequenceAnimaticContinuityGraphZoneSchema>> = []
-  const spots: Array<z.infer<typeof sequenceAnimaticContinuityGraphSpotSchema>> = []
-  const angles: Array<z.infer<typeof sequenceAnimaticContinuityGraphAngleSchema>> = []
-  const edges: Array<z.infer<typeof sequenceAnimaticContinuityGraphEdgeSchema>> = []
-  const shotBindings: Record<string, z.infer<typeof sequenceAnimaticContinuityShotBindingSchema>> = {}
-  const assetAnchors = deterministicSequenceAnimaticAssetAnchorsForBlock({
-    continuityPlannerContext: input.continuityPlannerContext,
-    storyboardBlock: input.storyboardBlock,
-  })
-  const rejectedCandidates: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
-  const worldLocationRefs = [...input.graph.worldLocationRefs]
-  const referenceLookup = sequenceAnimaticReferenceLookupFromPlannerContext(input.continuityPlannerContext)
-
-  for (const shot of shots) {
-    const shotId = readText(shot.id)
-    if (!shotId) continue
-    const spatial = sequenceAnimaticSpatialRecord(shot)
-    const camera = compactSequenceAnimaticCamera(shot)
-    const worldLocationRefId = sequenceAnimaticShotWorldLocationRefId(shot, input.graph)
-    if (worldLocationRefId && !worldLocationRefs.some((entry) => entry.id === worldLocationRefId)) {
-      const resolvedLocation = asRecord(asRecord(shot.resolvedRefs).location)
-      worldLocationRefs.push({
-        id: worldLocationRefId,
-        name: readText(resolvedLocation.name) || titleFromRefLike(worldLocationRefId),
-        summary: compactSequenceAnimaticText(resolvedLocation.summary, 360),
-        visualSummary: compactSequenceAnimaticText(resolvedLocation.visualSummary, 420),
-      })
-    }
-    const setId = sequenceAnimaticGraphSetId(shot, worldLocationRefId)
-    const zoneId = sequenceAnimaticGraphZoneId(shot, worldLocationRefId, setId)
-    const spotIds = sequenceAnimaticGraphSpotIds(shot, zoneId)
-    const angleId = sequenceAnimaticGraphAngleId(shot, setId, zoneId)
-    const zoneName = sequenceAnimaticContinuitySafePhysicalLabel({
-      fallbackPrefix: 'action zone',
-      worldLocationRefId,
-      shot,
-      lookup: referenceLookup,
-    })
-    const spotName = sequenceAnimaticContinuitySafePhysicalLabel({
-      fallbackPrefix: 'primary spot',
-      worldLocationRefId,
-      shot,
-      lookup: referenceLookup,
-    })
-    const angleName = [
-      sequenceAnimaticContinuitySafePhysicalLabel({
-        fallbackPrefix: 'camera angle',
-        worldLocationRefId,
-        shot,
-        lookup: referenceLookup,
-      }),
-      camera.framing || camera.angle || camera.movement ? 'camera angle' : '',
-    ].filter(Boolean).join(' ')
-    const shotIds = [shotId]
-    const storyboardBlockIds = [blockId].filter(Boolean)
-    locationSets.push({
-      id: setId,
-      worldLocationRefId,
-      name: `${titleFromRefLike(worldLocationRefId)} primary set`,
-      visualBrief: compactSequenceAnimaticText(readText(asRecord(asRecord(shot.resolvedRefs).location).visualSummary) || readText(shot.action), 700),
-      shotIds,
-      storyboardBlockIds,
-    })
-    zones.push({
-      id: zoneId,
-      setId,
-      worldLocationRefId,
-      name: zoneName,
-      visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 700),
-      shotIds,
-      storyboardBlockIds,
-    })
-    for (const spotId of spotIds) {
-      spots.push({
-        id: spotId,
-        zoneId,
-        setId,
-        worldLocationRefId,
-        name: spotId.includes('primary') ? spotName : titleFromRefLike(spotId.replace(/^spot_/, '')),
-        visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 520),
-        landmarks: readStringArray(spatial.visibleLandmarks),
-        shotIds,
-        storyboardBlockIds,
-      })
-      edges.push({ sourceId: zoneId, targetId: spotId, relationship: 'contains', evidence: `Shot ${shotId} occurs at this spot.` })
-    }
-    angles.push({
-      id: angleId,
-      setId,
-      zoneId,
-      spotIds,
-      worldLocationRefId,
-      name: angleName || `${titleFromRefLike(worldLocationRefId)} camera angle`,
-      visualBrief: compactSequenceAnimaticText([readText(shot.action), camera.framing, camera.angle, camera.movement].filter(Boolean).join(' '), 700),
-      framing: camera.framing,
-      cameraPosition: readText(spatial.cameraPosition),
-      facingDirection: readText(spatial.facingDirection) || camera.angle,
-      subjectPosition: readText(spatial.subjectPosition),
-      visibleLandmarks: readStringArray(spatial.visibleLandmarks),
-      lightingDirection: readText(spatial.lightSourceDirection) || sequenceAnimaticPersistentLightingCue(shot.lighting),
-      shotIds,
-      storyboardBlockIds,
-    })
-    edges.push(
-      { sourceId: setId, targetId: zoneId, relationship: 'contains', evidence: `Block ${blockId} uses this zone.` },
-      { sourceId: angleId, targetId: zoneId, relationship: 'same_space_angle', evidence: `Shot ${shotId} camera coverage.` },
-      { sourceId: angleId, targetId: spotIds[0] ?? zoneId, relationship: 'camera_faces', evidence: `Shot ${shotId} framing faces this spot.` },
-    )
-
-    const graphAnchorIds = sequenceAnimaticGraphShotBindingAnchorIds(input.graph, shotId)
-    const characterAnchorIds = [
-      ...graphAnchorIds.characterAnchorIds,
-      ...assetAnchors.filter((anchor) => anchor.type === 'character' && anchor.shotIds.includes(shotId)).map((anchor) => readText(anchor.id)).filter(Boolean),
-    ]
-    const propAnchorIds = [
-      ...graphAnchorIds.propAnchorIds,
-      ...assetAnchors.filter((anchor) => anchor.type === 'prop' && anchor.shotIds.includes(shotId)).map((anchor) => readText(anchor.id)).filter(Boolean),
-    ]
-    shotBindings[shotId] = {
-      shotId,
-      storyboardBlockId: blockId,
-      worldLocationRefId,
-      setId,
-      zoneId,
-      primarySpotId: spotIds[0] ?? '',
-      spotIds,
-      viewpointId: angleId,
-      angleId,
-      characterAnchorIds: [...new Set(characterAnchorIds)],
-      propAnchorIds: [...new Set(propAnchorIds)],
-      assetAnchorIds: [...new Set([...characterAnchorIds, ...propAnchorIds])],
-      spatialNodeIds: [...new Set([setId, zoneId, spotIds[0] ?? '', ...spotIds, angleId].filter(Boolean))],
-      continuityAnchorIds: [...new Set([...characterAnchorIds, ...propAnchorIds])],
-    }
-  }
-
-  return sequenceAnimaticContinuityBlockDeltaSchema.parse({
-    blockId,
-    blockSummary: `${blockTitle}: ${shots.length} shot${shots.length === 1 ? '' : 's'} spatially bound.`,
-    worldLocationRefs,
-    locationSets,
-    zones,
-    spots,
-    angles,
-    edges,
-    shotBindings,
-    assetAnchors,
-    rejectedCandidates,
-    warnings: input.fallbackReason ? [`Block continuity fallback used: ${input.fallbackReason}`] : [],
-    diagnostics: [`Planned continuity scene graph delta for ${blockId}.`],
-  })
-}
-
-function repairSequenceAnimaticContinuityBlockDelta(input: {
-  delta: z.infer<typeof sequenceAnimaticContinuityBlockDeltaSchema>
-  graph: z.infer<typeof sequenceAnimaticContinuityGraphV2Schema>
-  continuityPlannerContext: Record<string, unknown>
-  storyboardBlock: Record<string, unknown>
-  allowDeterministicFallback?: boolean
-}) {
-  const delta = sanitizeSequenceAnimaticContinuityBlockDeltaSpatialNodes({
-    delta: sequenceAnimaticContinuityBlockDeltaSchema.parse(input.delta),
-    continuityPlannerContext: input.continuityPlannerContext,
-    storyboardBlock: input.storyboardBlock,
-  })
-  const allowDeterministicFallback = input.allowDeterministicFallback === true
-  const fallback = allowDeterministicFallback
-    ? buildDeterministicSequenceAnimaticBlockDelta({
-      graph: input.graph,
-      continuityPlannerContext: input.continuityPlannerContext,
-      storyboardBlock: input.storyboardBlock,
-      fallbackReason: 'missing_shot_bindings_repair',
-    })
-    : null
-  const shots = sequenceAnimaticBlockShots(input.continuityPlannerContext, input.storyboardBlock)
-  const shotBindings = { ...delta.shotBindings }
-  let repairedCount = 0
-  const referenceLookup = sequenceAnimaticReferenceLookupFromPlannerContext(input.continuityPlannerContext)
-  const rejectedCanonicalAnchors: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
-  const rejectedPropAnchors: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>[] = []
-  const removedCanonicalAnchorIds = new Set<string>()
-  const deterministicAssetAnchors = allowDeterministicFallback
-    ? deterministicSequenceAnimaticAssetAnchorsForBlock({
-      continuityPlannerContext: input.continuityPlannerContext,
-      storyboardBlock: input.storyboardBlock,
-    })
-    : []
-  const recoveredRejectedAssetAnchors = delta.rejectedCandidates
-    .map((rejected) => sequenceAnimaticContinuityAnchorFromRejectedCandidate({
-      rejected,
-      continuityPlannerContext: input.continuityPlannerContext,
-      existingGraphAnchors: input.graph.assetAnchors,
-    }))
-    .filter((anchor): anchor is z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema> => Boolean(anchor))
-  const rawAssetAnchors = mergeById(
-    [...deterministicAssetAnchors, ...recoveredRejectedAssetAnchors].map((entry) => ({ ...entry, id: readText(entry.id) })),
-    delta.assetAnchors.map((entry) => ({ ...entry, id: readText(entry.id) })),
-  ).filter((entry) => entry.id) as z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[]
-  const semanticAnchorMerge = mergeSequenceAnimaticContinuityAssetAnchorsBySemanticKey(rawAssetAnchors)
-  for (const [shotId, bindingValue] of Object.entries(shotBindings)) {
-    shotBindings[shotId] = remapSequenceAnimaticContinuityShotBindingAnchorIds(bindingValue, semanticAnchorMerge.idRemap)
-  }
-  const assetAnchors = semanticAnchorMerge.anchors.filter((anchor) => {
-    const match = sequenceAnimaticCanonicalReferenceMatchForAnchor(anchor, referenceLookup)
-    if (!match && readText(anchor.type) === 'prop') {
-      const propCheck = sequenceAnimaticContinuityPropHasInteractionEvidence({
-        anchor,
-        continuityPlannerContext: input.continuityPlannerContext,
-        existingGraphAnchors: input.graph.assetAnchors,
-      })
-      if (!propCheck.keep) {
-        const anchorId = readText(anchor.id)
-        if (anchorId) removedCanonicalAnchorIds.add(anchorId)
-        rejectedPropAnchors.push(sequenceAnimaticRejectedCandidate({
-          name: readText(anchor.name),
-          type: 'prop',
-          reason: propCheck.reason ?? 'low_confidence',
-          sourceEvidence: propCheck.evidence,
-          shotIds: propCheck.shotIds,
-        }))
-        return false
-      }
-    }
-    if (!match) return true
-    const anchorId = readText(anchor.id)
-    if (anchorId) removedCanonicalAnchorIds.add(anchorId)
-    const matchKey = readText(match.key) || readText(match.name)
-    rejectedCanonicalAnchors.push(sequenceAnimaticRejectedCandidate({
-      name: readText(anchor.name),
-      type: readText(anchor.type),
-      reason: 'existing_world_entity',
-      sourceEvidence: readStringArray(anchor.sourceEvidence),
-      shotIds: readStringArray(anchor.shotIds),
-      existingWorldEntityMatch: matchKey || null,
-    }))
-    return false
-  })
-
-  for (const shot of shots) {
-    const shotId = readText(shot.id)
-    if (!shotId) continue
-    const existing = asRecord(shotBindings[shotId])
-    if ((readText(existing.setId) || readText(existing.worldLocationRefId)) && (readText(existing.zoneId) || readText(existing.primarySpotId) || readStringArray(existing.spotIds).length > 0 || readText(existing.viewpointId) || readText(existing.angleId))) continue
-
-    const fallbackBinding = asRecord(fallback?.shotBindings[shotId])
-    const zone = delta.zones.find((entry) => entry.shotIds.includes(shotId))
-    const set = delta.locationSets.find((entry) => entry.shotIds.includes(shotId) || entry.id === zone?.setId)
-      ?? input.graph.locationSets.find((entry) => entry.id === zone?.setId)
-    const spots = delta.spots.filter((entry) => entry.shotIds.includes(shotId))
-    const angle = delta.angles.find((entry) => entry.shotIds.includes(shotId))
-    const characterAnchorIds = assetAnchors
-      .filter((anchor) => anchor.shotIds.includes(shotId) && readText(anchor.type) === 'character')
-      .map((anchor) => readText(anchor.id))
-      .filter(Boolean)
-    const propAnchorIds = assetAnchors
-      .filter((anchor) => anchor.shotIds.includes(shotId) && readText(anchor.type) === 'prop')
-      .map((anchor) => readText(anchor.id))
-      .filter(Boolean)
-    const setId = readText(set?.id) || readText(zone?.setId) || readText(angle?.setId) || readText(fallbackBinding.setId)
-    const zoneId = readText(zone?.id) || readText(angle?.zoneId) || readText(fallbackBinding.zoneId)
-    const spotIds = spots.map((entry) => readText(entry.id)).filter(Boolean)
-    const angleId = readText(angle?.id) || readText(fallbackBinding.angleId) || readText(fallbackBinding.viewpointId)
-    if (!setId && !zoneId && !angleId) continue
-    const assetAnchorIds = [...new Set([...characterAnchorIds, ...propAnchorIds].filter(Boolean))]
-    shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
-      shotId,
-      storyboardBlockId: delta.blockId || readText(input.storyboardBlock.id),
-      worldLocationRefId: readText(zone?.worldLocationRefId) || readText(set?.worldLocationRefId) || readText(angle?.worldLocationRefId) || readText(fallbackBinding.worldLocationRefId),
-      setId,
-      zoneId,
-      primarySpotId: spotIds[0] || readText(fallbackBinding.primarySpotId),
-      spotIds: spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds),
-      viewpointId: angleId,
-      angleId,
-      characterAnchorIds,
-      propAnchorIds,
-      assetAnchorIds,
-      spatialNodeIds: [...new Set([setId, zoneId, spotIds[0] || readText(fallbackBinding.primarySpotId), ...(spotIds.length > 0 ? spotIds : readStringArray(fallbackBinding.spotIds)), angleId].filter(Boolean))],
-      continuityAnchorIds: assetAnchorIds,
-    })
-    repairedCount += 1
-  }
-
-  if (removedCanonicalAnchorIds.size > 0) {
-    for (const [shotId, bindingValue] of Object.entries(shotBindings)) {
-      const binding = sequenceAnimaticContinuityShotBindingSchema.parse(bindingValue)
-      const characterAnchorIds = binding.characterAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
-      const propAnchorIds = binding.propAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
-      const assetAnchorIds = binding.assetAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
-      const continuityAnchorIds = binding.continuityAnchorIds.filter((id) => !removedCanonicalAnchorIds.has(id))
-      shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
-        ...binding,
-        characterAnchorIds,
-        propAnchorIds,
-        assetAnchorIds,
-        continuityAnchorIds,
-      })
-    }
-  }
-
-  for (const [shotId, bindingValue] of Object.entries(shotBindings)) {
-    const binding = sequenceAnimaticContinuityShotBindingSchema.parse(bindingValue)
-    const availableAssetAnchorMerge = mergeSequenceAnimaticContinuityAssetAnchorsBySemanticKey([...input.graph.assetAnchors, ...assetAnchors])
-    const availableAssetAnchors = availableAssetAnchorMerge.anchors
-    const inferredCharacterAnchorIds = availableAssetAnchors
-      .filter((anchor) => anchor.type === 'character' && anchor.shotIds.includes(shotId))
-      .map((anchor) => readText(anchor.id))
-      .filter(Boolean)
-    const inferredPropAnchorIds = availableAssetAnchors
-      .filter((anchor) => anchor.type === 'prop' && anchor.shotIds.includes(shotId))
-      .map((anchor) => readText(anchor.id))
-      .filter(Boolean)
-    const characterAnchorIds = [...new Set([...binding.characterAnchorIds, ...inferredCharacterAnchorIds])]
-      .filter((id) => availableAssetAnchors.some((anchor) => anchor.id === id && anchor.type === 'character'))
-    const propAnchorIds = [...new Set([...binding.propAnchorIds, ...inferredPropAnchorIds])]
-      .filter((id) => availableAssetAnchors.some((anchor) => anchor.id === id && anchor.type === 'prop'))
-    const assetAnchorIds = [...new Set([...characterAnchorIds, ...propAnchorIds].filter(Boolean))]
-    shotBindings[shotId] = sequenceAnimaticContinuityShotBindingSchema.parse({
-      ...binding,
-      characterAnchorIds,
-      propAnchorIds,
-      assetAnchorIds,
-      spatialNodeIds: [...new Set([binding.setId, binding.zoneId, binding.primarySpotId, ...binding.spotIds, binding.viewpointId, binding.angleId, ...binding.spatialNodeIds].filter(Boolean))],
-      continuityAnchorIds: assetAnchorIds,
-    })
-  }
-
-  return sequenceAnimaticContinuityBlockDeltaSchema.parse({
-    ...delta,
-    assetAnchors,
-    rejectedCandidates: [...delta.rejectedCandidates, ...rejectedCanonicalAnchors, ...rejectedPropAnchors]
-      .filter((entry) => !assetAnchors.some((anchor) => sequenceAnimaticContinuityAnchorSemanticKey(anchor) === `${readText(entry.type)}:${sequenceAnimaticContinuityAnchorSemanticName(readText(entry.name))}`))
-      .filter((entry, index, values) => values.findIndex((candidate) => `${candidate.name}:${candidate.reason}:${candidate.existingWorldEntityMatch ?? ''}:${candidate.shotIds.join(',')}` === `${entry.name}:${entry.reason}:${entry.existingWorldEntityMatch ?? ''}:${entry.shotIds.join(',')}`) === index),
-    shotBindings,
-    warnings: [
-      ...delta.warnings,
-      ...(repairedCount > 0
-        ? [`Repaired missing shotBindings for ${repairedCount} shot${repairedCount === 1 ? '' : 's'} from planned continuity zones/spots/angles.`]
-        : []),
-      ...(rejectedCanonicalAnchors.length > 0
-        ? [`Rejected ${rejectedCanonicalAnchors.length} continuity anchor${rejectedCanonicalAnchors.length === 1 ? '' : 's'} that matched existing world entities.`]
-        : []),
-      ...(rejectedPropAnchors.length > 0
-        ? [`Rejected ${rejectedPropAnchors.length} prop anchor${rejectedPropAnchors.length === 1 ? '' : 's'} without multi-shot action or character-interaction evidence.`]
-        : []),
-      ...(recoveredRejectedAssetAnchors.length > 0
-        ? [`Recovered ${recoveredRejectedAssetAnchors.length} asset anchor${recoveredRejectedAssetAnchors.length === 1 ? '' : 's'} from LLM rejected candidates after continuity validation.`]
-        : []),
-    ],
-  })
-}
-
-function mergeById<T extends { id: string; shotIds?: string[]; storyboardBlockIds?: string[] }>(
-  existing: T[] = [],
-  incoming: T[] = [],
-) {
-  const byId = new Map<string, T>()
-  for (const entry of existing) if (entry.id) byId.set(entry.id, entry)
-  for (const entry of incoming) {
-    if (!entry.id) continue
-    const previous = byId.get(entry.id)
-    byId.set(entry.id, previous
-      ? {
-        ...previous,
-        ...entry,
-        shotIds: [...new Set([...(previous.shotIds ?? []), ...(entry.shotIds ?? [])])],
-        storyboardBlockIds: [...new Set([...(previous.storyboardBlockIds ?? []), ...(entry.storyboardBlockIds ?? [])])],
-      }
-      : entry)
-  }
-  return [...byId.values()]
-}
-
-const sequenceAnimaticContinuityPropInteractionPattern = /\b(activates?|adjusts?|aims?|attaches?|breaks?|carries|carry|checks?|clicks?|compares?|connects?|cuts?|diagnoses?|drags?|drops?|examines?|fails?|fixes?|flips?|grabs?|grips?|hands?|hangs?|hits?|holds?|holding|inserts?|jerks?|lifts?|locks?|lowers?|manipulates?|moves?|opens?|passes?|places?|points?|presses?|pulls?|pushes?|raises?|reads?|repairs?|reveals?|rises?|seals?|sets?|shuts?|slides?|snaps?|strikes?|takes?|taps?|throws?|touches?|turns?|twists?|unlocks?|uses?|watches?|wrenches?|writes?|gaze|gazes|look|looks|stares?)\b/i
-
-const sequenceAnimaticContinuityPropNameStopWords = new Set([
-  'the',
-  'and',
-  'with',
-  'from',
-  'into',
-  'onto',
-  'near',
-  'over',
-  'under',
-  'side',
-  'small',
-  'large',
-  'old',
-  'new',
-  'primary',
-])
-
-function sequenceAnimaticContinuityPropNameTokens(value: unknown) {
-  return sequenceAnimaticContinuityAnchorSemanticName(readText(value))
-    .split(' ')
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !sequenceAnimaticContinuityPropNameStopWords.has(token))
-}
-
-function sequenceAnimaticContinuityShotEvidenceText(shot: Record<string, unknown>) {
-  const dialogue = readArray(shot.dialogue).map(asRecord)
-    .map((line) => `${readText(line.speakerName)} ${readText(line.text)}`)
-    .filter(Boolean)
-    .join(' ')
-  return [
-    shot.description,
-    shot.action,
-    shot.actionLine,
-    shot.title,
-    dialogue,
-  ].map(readText).filter(Boolean).join(' ')
-}
-
-function sequenceAnimaticContinuityPropMentionedInText(anchor: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>, text: string) {
-  const normalized = sequenceAnimaticContinuityAnchorSemanticName(text)
-  const name = sequenceAnimaticContinuityAnchorSemanticName(anchor.name)
-  if (name && normalized.includes(name)) return true
-  const tokens = sequenceAnimaticContinuityPropNameTokens(anchor.name)
-  if (tokens.length === 0) return false
-  return tokens.some((token) => normalized.includes(token))
-}
-
-function sequenceAnimaticContinuityPropHasInteractionEvidence(input: {
-  anchor: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>
-  continuityPlannerContext: Record<string, unknown>
-  existingGraphAnchors?: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[]
-}) {
-  const anchorKey = sequenceAnimaticContinuityAnchorSemanticKey(input.anchor)
-  const matchingExisting = (input.existingGraphAnchors ?? []).filter((entry) => sequenceAnimaticContinuityAnchorSemanticKey(entry) === anchorKey)
-  const shotIds = [...new Set([
-    ...input.anchor.shotIds,
-    ...matchingExisting.flatMap((entry) => entry.shotIds),
-    ...readArray(input.continuityPlannerContext.shots).map(asRecord)
-      .filter((shot) => sequenceAnimaticContinuityPropMentionedInText(input.anchor, sequenceAnimaticContinuityShotEvidenceText(shot)))
-      .map((shot) => readText(shot.id)),
-  ].map(readText).filter(Boolean))]
-  if (shotIds.length < 2) {
-    return {
-      keep: false,
-      reason: 'single_use_not_story_critical' as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>,
-      shotIds,
-      evidence: readStringArray(input.anchor.sourceEvidence),
-    }
-  }
-
-  const shotById = new Map(readArray(input.continuityPlannerContext.shots).map(asRecord).map((shot) => [readText(shot.id), shot]))
-  const evidenceTexts = [
-    ...readStringArray(input.anchor.sourceEvidence),
-    ...matchingExisting.flatMap((entry) => readStringArray(entry.sourceEvidence)),
-  ]
-  const interactionShotIds = new Set<string>()
-
-  for (const shotId of shotIds) {
-    const shot = shotById.get(shotId)
-    const shotText = shot ? sequenceAnimaticContinuityShotEvidenceText(shot) : ''
-    const sourceEvidence = evidenceTexts.filter((entry) => readText(entry).includes(shotId)).join(' ')
-    const combined = [shotText, sourceEvidence].filter(Boolean).join(' ')
-    if (!sequenceAnimaticContinuityPropInteractionPattern.test(combined)) continue
-    if (!sequenceAnimaticContinuityPropMentionedInText(input.anchor, combined)) continue
-    interactionShotIds.add(shotId)
-  }
-
-  if (interactionShotIds.size < 2) {
-    return {
-      keep: false,
-      reason: 'low_confidence' as z.infer<typeof sequenceAnimaticContinuityRejectedReasonSchema>,
-      shotIds,
-      evidence: evidenceTexts,
-    }
-  }
-
-  return { keep: true, reason: null, shotIds, evidence: evidenceTexts }
-}
-
-function sequenceAnimaticContinuityAnchorFromRejectedCandidate(input: {
-  rejected: z.infer<typeof sequenceAnimaticContinuityRejectedCandidateSchema>
-  continuityPlannerContext: Record<string, unknown>
-  existingGraphAnchors: z.infer<typeof sequenceAnimaticContinuityPlannerAnchorSchema>[]
-}) {
-  const rejected = input.rejected
-  const type = readText(rejected.type)
-  if (type !== 'character' && type !== 'prop') return null
-  if (!['single_use_not_story_critical', 'low_confidence', 'too_generic'].includes(rejected.reason)) return null
-  const name = normalizeAnchorName(rejected.name)
-  if (!name) return null
-  const sourceEvidence = readStringArray(rejected.sourceEvidence)
-  const shotIds = readStringArray(rejected.shotIds)
-  const visualBrief = type === 'character'
-    ? `${name}, specific visible incidental supporting character; preserve species, body shape, age cue, clothing, silhouette, and working-role details.`
-    : `${name}, physical prop continuity reference; preserve form, material, scale, damage/wear, and readable functional details.`
-  const baseAnchor = sequenceAnimaticContinuityPlannerAnchorSchema.parse({
-    id: sequenceAnimaticContinuityAnchorStableId({ type, name }),
-    type,
-    name,
-    visualBrief,
-    persistenceReason: type === 'character'
-      ? 'Specific visible incidental character with no canonical world entity; keep design consistent for storyboard continuity.'
-      : 'Repeated physical prop with direct action or character-interaction evidence; keep design consistent across shots.',
-    confidence: type === 'character' ? 0.72 : 0.68,
-    shotIds,
-    storyboardBlockIds: [],
-    sourceEvidence,
-    existingWorldEntityMatch: readText(rejected.existingWorldEntityMatch) || null,
-    rejectionRisk: `Recovered from LLM ${rejected.reason} rejection after GraphCore continuity validation.`,
-  })
-  if (type === 'character') {
-    return sequenceAnimaticShouldKeepSingleUseTemporaryCharacter({
-      name,
-      visualBrief,
-      sourceEvidence,
-      existingWorldEntityMatch: baseAnchor.existingWorldEntityMatch,
-    })
-      ? baseAnchor
-      : null
-  }
-  const propCheck = sequenceAnimaticContinuityPropHasInteractionEvidence({
-    anchor: baseAnchor,
-    continuityPlannerContext: input.continuityPlannerContext,
-    existingGraphAnchors: input.existingGraphAnchors,
-  })
-  return propCheck.keep
-    ? sequenceAnimaticContinuityPlannerAnchorSchema.parse({
-      ...baseAnchor,
-      shotIds: propCheck.shotIds,
-      sourceEvidence: propCheck.evidence.length > 0 ? propCheck.evidence : sourceEvidence,
-    })
-    : null
-}
-
-async function planSequenceAnimaticContinuityAnchors(input: {
-  nodeKey: string
-  prompt: string
-  screenplayDraft: Record<string, unknown>
-  shotPlan: Record<string, unknown>
-  shotBreakPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  continuityPlannerContext?: Record<string, unknown>
-  continuityGraphV2?: Record<string, unknown>
-  priorProviderRequestId?: string | null
-  priorProviderStartedAt?: string | null
-  shouldCancel?: () => Promise<boolean>
-  onProgress?: (progress: {
-    providerRequestId: string
-    providerStatus: string
-    providerMode: string
-    lastProviderPollAt: string
-    providerStartedAt: string
-    providerIncompleteReason?: string
-    providerIncompleteDetails?: Record<string, unknown> | null
-  }) => Promise<void>
-}) {
-  const providedContinuityGraphV2 = asRecord(input.continuityGraphV2)
-  if (Object.keys(providedContinuityGraphV2).length > 0) {
-    return sequenceAnimaticPlanFromContinuityGraphV2(providedContinuityGraphV2)
-  }
-  const emptyPlan = sequenceAnimaticContinuityPlanV2Schema.parse({
-    version: 'sequence_animatic_continuity_plan_v2',
-    planningMode: 'llm_structured_v2',
-    anchors: [],
-    rejectedCandidates: [],
-    warnings: [],
-    diagnostics: [],
-  })
-  const providedPlannerContext = asRecord(input.continuityPlannerContext)
-  const continuityPlannerContext = Object.keys(providedPlannerContext).length > 0
-    ? providedPlannerContext
-    : buildSequenceAnimaticContinuityPlannerContext({
-      screenplayDraft: input.screenplayDraft,
-      shotPlan: input.shotPlan,
-      shotBreakPlan: input.shotBreakPlan,
-      assetPack: input.assetPack,
-      animaticReferenceCatalog: input.screenplayDraft.animaticReferenceCatalog,
-    })
-  const continuityPrompt = [
-      'Plan output-local continuity references for a screenplay animatic.',
-      'Use the compact planner context as the truth source; infer from shot action, camera, dialogue, resolved refs, and block membership rather than full screenplay prose.',
-      'Treat existingWorldReferences and every shot.resolvedRefs entry as canonical world entities. Never recreate those characters, locations, props, aliases, or keys as sidecar anchors.',
-      'Persist only visual physical assets that need continuity and do not already have a world/entity reference.',
-      'Accept: incidental speakers without world entities, recurring or story-critical props, set pieces, rooms, sub-locations, and persistent camera angles.',
-      'Also accept specific visible one-shot incidental characters when they have a concrete role/species/identity cue, such as a vole mechanic, guard, courier, attendant, or shopkeeper; reject only generic crowds/background figures.',
-      'For props, use shot.description as the primary evidence. Accept a prop only when it appears in at least two shots and is the subject of action, diagnosis, gaze, manipulation, comparison, or character interaction. Reject background-only objects even if named.',
-      'Audit every shot.description for physical object candidates. Every named object, mechanism, door/hatch, gauge, clock part, tube, valve, lever, clamp, tool, panel, note, map, or set-piece that appears in two or more shots must appear either in anchors or rejectedCandidates; do not silently omit it.',
-      'If a repeated physical object is better represented as a set-piece/spot/zone than a prop, create the appropriate location/spot structure and still include a rejectedCandidates entry explaining why it is not a prop anchor.',
-      'Reject atmosphere/effects/abstracts/non-assets: rain, fog, mist, smoke, tension, silence, ambience, mood, danger, lighting/color-only cues, music, generic motion.',
-      'Reject existing world entities by key/name/alias. If a shot uses an existing character/location/prop, do not create a sidecar anchor for it; include existingWorldEntityMatch on the rejected candidate.',
-      'Unresolved shot refs are diagnostics, not permission to duplicate canon. Only create an anchor from unresolved prose when the shot clearly describes a missing temporary physical visual asset.',
-      'For locations, infer locationSets and locationAngles. Build sceneGraph edges for connected_to, visible_from, entrance_to, adjacent_to, or same_space_angle.',
-      'Use stable IDs: char_*, prop_*, set_*, angle_* or spot_*. Group aliases across shots into one anchor.',
-      'Every accepted anchor needs a persistenceReason, confidence 0-1, shotIds, storyboardBlockIds, sourceEvidence, existingWorldEntityMatch null unless rejected, and rejectionRisk.',
-      'Put rejected candidates and the reason in rejectedCandidates.',
-      `User brief:\n${input.prompt}`,
-      compactForPrompt({ continuityPlannerContext }, 16_000),
-    ].filter(Boolean).join('\n\n')
-  let result: Awaited<ReturnType<typeof runCinematicV2StructuredNodeBackground<z.infer<typeof sequenceAnimaticContinuityPlanV2Schema>>>>
-  try {
-    result = await runCinematicV2StructuredNodeBackground({
-      nodeKey: input.nodeKey,
-      schemaName: 'sequence_animatic_continuity_plan_v2',
-      schema: sequenceAnimaticContinuityPlanV2Schema,
-      instructions: 'You are a film continuity supervisor. Return strict JSON only. Infer only physical, drawable, reusable sidecar continuity assets from parsed shots.',
-      prompt: continuityPrompt,
-      fallback: emptyPlan,
-      maxOutputTokens: 5200,
-      priorProviderRequestId: input.priorProviderRequestId,
-      providerStartedAt: input.priorProviderStartedAt,
-      timeoutMs: outputWorkflowContinuityPlannerTimeoutMs(),
-      shouldCancel: input.shouldCancel,
-      onProgress: input.onProgress,
-    })
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Background continuity planner failed.'
-    throw new Error(`LLM continuity planner failed and deterministic fallback is disabled: ${reason}`)
-  }
-  if (result.fallbackUsed) {
-    throw new Error(`LLM continuity planner returned fallback output and deterministic fallback is disabled: ${result.fallbackReason || 'structured output unavailable'}`)
-  }
-  const normalizedPlan = normalizeSequenceAnimaticContinuityPlan({
-    rawPlan: result.value,
-    fallbackPlan: emptyPlan,
-    shotPlan: input.shotPlan,
-    shotBreakPlan: input.shotBreakPlan,
-    assetPack: input.assetPack,
-    fallbackUsed: result.fallbackUsed,
-    fallbackReason: result.fallbackReason,
-  })
-  return {
-    ...normalizedPlan,
-    providerRequestId: result.providerRequestId || readText(input.priorProviderRequestId) || null,
-    plannerProvider: result.provider,
-    plannerModel: result.model,
-    plannerFallbackReason: result.fallbackReason,
-  }
-}
-
-function buildSequenceAnimaticAnchorAtlasPrompt(input: {
-  anchorType: 'prop' | 'location_spot' | 'character'
-  anchors: SequenceAnimaticContinuityAnchor[]
-  layout: { rows: number; columns: number; panelCount: number }
-  assetPack: Record<string, unknown>
-}) {
-  const kindLabel = input.anchorType === 'character'
-    ? 'temporary supporting character continuity reference atlas'
-    : input.anchorType === 'prop'
-      ? 'prop continuity reference atlas'
-      : 'location spot and angle continuity reference atlas'
-  const cellLines = input.anchors.map((anchor, index) => {
-    const cell = index + 1
-    const subtype = anchor.continuitySubtype && anchor.continuitySubtype !== anchor.anchorType ? ` (${anchor.continuitySubtype.replace(/_/g, ' ')})` : ''
-    const reason = anchor.persistenceReason ? ` Persistence: ${anchor.persistenceReason}` : ''
-    return `Cell ${cell}: ${anchor.name}${subtype}. ${anchor.visualBrief}${reason}`
-  })
-  return [
-    `Create one ${kindLabel} as a fixed ${input.layout.rows} row x ${input.layout.columns} column grid.`,
-    'Fill cells left-to-right, top-to-bottom. Leave unused cells cleanly blank. Do not add labels, numbers, arrows, borders, captions, UI, watermarks, or handwritten notes.',
-    input.anchorType === 'character'
-      ? 'Each populated cell should show one temporary supporting character reference in neutral pose, consistent project art style, clear species/body shape/wardrobe/silhouette, no action scene, no duplicate poses, no labels.'
-      : input.anchorType === 'prop'
-        ? 'Each populated cell should show one isolated reusable prop/object reference in neutral cinematic lighting, consistent with the project art style, with enough detail for later storyboard continuity.'
-        : 'Each populated cell should show one reusable cinematic set, room, sub-location, or camera-facing angle inside the base location. No characters, no crowds, no actor silhouettes unless scale is essential; prioritize entrances, surfaces, sightlines, landmarks, screen direction, and lighting direction.',
-    '',
-    ...cellLines,
-  ].filter(Boolean).join('\n')
-}
-
-function buildSequenceAnimaticContinuityAssetPrompt(input: {
-  targetNode: Record<string, unknown>
-  assetKind: string
-  generationPolicy?: string
-  zoneMapPoiLines?: string[]
-  relevantShots: Record<string, unknown>[]
-  referenceAssetKeys: string[]
-}) {
-  const spatialAsset = input.assetKind === 'location_set'
-    || input.assetKind === 'location_zone'
-    || input.assetKind === 'location_spot'
-    || input.assetKind === 'location_angle'
-    || input.assetKind === 'location_viewpoint'
-  const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(input.relevantShots)
-  const sanitizedSpatialNode = spatialAsset
-    ? sanitizeSequenceAnimaticSpatialNodeFields(input.targetNode, { forbiddenNames })
-    : null
-  const targetName = sanitizedSpatialNode?.name || readText(input.targetNode.name) || titleFromRefLike(readText(input.targetNode.id))
-  const visualBrief = sanitizedSpatialNode?.brief || readText(input.targetNode.visualBrief) || readText(input.targetNode.summary)
-  const generationPolicy = readText(input.generationPolicy)
-  const zoneSpatialMapPolicy = input.assetKind === 'location_zone' || generationPolicy.startsWith('zone_spatial_map')
-  const locationEvidenceLines: string[] = []
-  if (input.assetKind === 'location_zone' && zoneSpatialMapPolicy) {
-    const prompt = [
-      `Zone spatial map: ${targetName}`,
-      'Goal: one rendered bird-eye / 3/4 orthographic continuity map, not a cinematic frame and not a camera angle.',
-      visualBrief ? `Zone brief: ${visualBrief}` : '',
-      input.referenceAssetKeys.length > 0
-        ? 'Use attached set/location reference for style, materials, scale, palette, and lighting logic.'
-        : 'Use the zone brief, known spots/POIs, and project style for materials, palette, weather, and lighting logic.',
-      'Show: full zone layout, entrances/exits, walkable routes, thresholds, sightlines, main surfaces, landmarks, set pieces, light/weather direction, and symbolic POI markers.',
-      input.zoneMapPoiLines && input.zoneMapPoiLines.length > 0
-        ? `Known spots / POIs:\n${input.zoneMapPoiLines.slice(0, 12).map((line) => `- ${line}`).join('\n')}`
-        : '',
-      '',
-      'Avoid: people, character silhouettes, crowds, readable labels, text, captions, UI, arrows, borders, watermarks.',
-      'Output: one wide 3072x2048 spatial production map with clean readable geography.',
-    ].filter(Boolean).join('\n\n')
-    return {
-      prompt,
-      sanitizedTargetNode: sanitizedSpatialNode ? {
-        ...input.targetNode,
-        name: sanitizedSpatialNode.name,
-        visualBrief: sanitizedSpatialNode.brief || readText(input.targetNode.visualBrief),
-        summary: sanitizedSpatialNode.brief || readText(input.targetNode.summary),
-        spatialPromptKindLabel: sanitizedSpatialNode.kindLabel,
-      } : input.targetNode,
-      locationEvidenceLines,
-      promptDiagnostics: {
-        policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
-        sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
-        removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
-      },
-    }
-  }
-  const shotLines = spatialAsset ? [] : input.relevantShots.slice(0, 8).map((shot) => {
-    const camera = compactSequenceAnimaticCamera(shot)
-    return [
-      readText(shot.title),
-      compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 240),
-      [camera.framing, camera.angle, camera.movement].filter(Boolean).join(' / '),
-    ].filter(Boolean).join(': ')
-  })
-  const kindInstruction = input.assetKind === 'temporary_character'
-    ? 'Create one neutral temporary supporting-character continuity reference sheet. Show body shape, silhouette, wardrobe, face/species cues, and scale clearly. No action scene, no text, no captions.'
-    : input.assetKind === 'prop'
-      ? 'Create one isolated reusable prop continuity reference sheet. Show the object clearly with material, shape, wear, function, and a clean cinematic close-up. No labels, no UI, no text.'
-      : input.assetKind === 'location_set'
-        ? 'Create one broad reusable set environment continuity reference. Preserve overall layout, architecture, surfaces, entrances, landmarks, material palette, weather, and lighting logic. No people, no characters, no silhouettes, no labels, no UI.'
-      : input.assetKind === 'location_zone'
-        ? zoneSpatialMapPolicy
-          ? 'Create one large rendered zone spatial map, not a cinematic camera angle: a bird-eye or 3/4 orthographic production-map view in the project art style. Show the whole zone geography inside the parent set, entrances/exits, routes, thresholds, dominant surfaces, landmarks, set pieces, light/weather direction, sightlines, and symbolic POI markers for known spots. Markers must be visual symbols only; no readable text, labels, arrows, UI, captions, people, characters, crowds, or silhouettes.'
-          : 'Create one reusable zone environment continuity reference inside the set. Preserve sub-area geography, sightlines, access paths, landmarks, surfaces, weather, and lighting continuity. No people, no characters, no silhouettes, no labels, no UI.'
-      : input.assetKind === 'location_angle'
-        ? 'Create one camera-facing spatial angle reference. Preserve architecture, visible landmarks, screen direction, light direction, entrances, and depth cues. No people, no characters, no silhouettes, no labels, no UI.'
-        : 'Create one reusable physical staging position or architectural sub-location continuity reference. Preserve nearby surfaces, entrances, sightlines, landmarks, palette, set-piece placement, and lighting direction. No people, no characters, no silhouettes, no labels, no UI.'
-  const prompt = [
-    `Continuity asset: ${targetName}`,
-    spatialAsset ? `Asset kind: ${sanitizedSpatialNode?.kindLabel || 'spatial continuity reference'}` : `Asset kind: ${input.assetKind || 'continuity_asset'}`,
-    visualBrief ? `Visual brief: ${visualBrief}` : '',
-    kindInstruction,
-    input.referenceAssetKeys.length > 0
-      ? 'Attached image references are continuity locks. Match their style, materials, palette, lighting logic, architecture, scale, and design language without copying visible layout artifacts.'
-      : spatialAsset
-        ? 'No prior continuity asset references are available. Use only the spatial node brief and project visual style.'
-        : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
-    '',
-    shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
-    zoneSpatialMapPolicy
-      ? 'Provider requirements: one finished wide spatial production map image, clean readable geography, symbolic POI markers only, no readable text, no labels, no borders, no watermarks.'
-      : 'Provider requirements: one finished square production reference image, clean composition, no visible text, no labels, no borders, no watermarks.',
-  ].filter(Boolean).join('\n\n')
-  return {
-    prompt,
-    sanitizedTargetNode: sanitizedSpatialNode ? {
-      ...input.targetNode,
-      name: sanitizedSpatialNode.name,
-      visualBrief: sanitizedSpatialNode.brief || readText(input.targetNode.visualBrief),
-      summary: sanitizedSpatialNode.brief || readText(input.targetNode.summary),
-      spatialPromptKindLabel: sanitizedSpatialNode.kindLabel,
-    } : input.targetNode,
-    locationEvidenceLines,
-    promptDiagnostics: {
-      policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
-      sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
-      removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
-    },
-  }
-}
-
-function buildSequenceAnimaticContinuityBatchPrompt(input: {
-  batch: Record<string, unknown>
-  targetNodes: Record<string, unknown>[]
-  relevantShots: Record<string, unknown>[]
-  referenceAssetKeys: string[]
-}) {
-  const batchKind = readText(input.batch.batchKind) || 'single_hero_ref'
-  const layout = asRecord(input.batch.layout)
-  const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
-  const columns = Math.max(1, Number(layout.columns ?? 1) || 1)
-  const cellRoles = readStringArray(input.batch.cellRoles ?? input.batch.cell_roles)
-  const spatialBatch = batchKind === 'angle_grid'
-    || batchKind === 'viewpoint_grid'
-    || batchKind === 'parent_child_scaffold_grid'
-    || batchKind === 'spot_grid'
-    || batchKind === 'spot_atlas_grid'
-    || batchKind === 'viewpoint_atlas_grid'
-    || batchKind === 'location_zone_board'
-    || batchKind === 'single_hero_ref'
-  const generationPolicy = readText(input.batch.generationPolicy)
-  const spotAtlasGridPolicy = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid' || generationPolicy.startsWith('spot_atlas_grid')
-  const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(input.relevantShots)
-  const sanitizedTargets = input.targetNodes.slice(0, rows * columns).map((node) => spatialBatch
-    ? sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames })
-    : null)
-  const cellLines = input.targetNodes.slice(0, rows * columns).map((node, index) => {
-    const row = Math.floor(index / columns) + 1
-    const column = (index % columns) + 1
-    const role = cellRoles[index] || 'target'
-    const sanitized = sanitizedTargets[index]
-    return [
-      `Cell ${index + 1} (row ${row}, column ${column}, ${role}):`,
-      sanitized?.name || readText(node.name) || titleFromRefLike(readText(node.id)),
-      sanitized?.kindLabel || readText(node.assetKind) || readText(node.nodeKind),
-      sanitized?.brief || readText(node.visualBrief) || readText(node.summary),
-    ].filter(Boolean).join(' ')
-  })
-  const locationEvidenceLines: string[] = []
-  const shotLines = spatialBatch ? [] : input.relevantShots.slice(0, 8).map((shot) => [
-    readText(shot.title),
-    compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 220),
-  ].filter(Boolean).join(': '))
-  const kindInstruction = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
-    ? 'Create a local reference atlas using the single attached zone spatial map as the only visual reference. Each populated cell must show one reusable physical staging position, sub-location, or camera-facing viewpoint inside that mapped zone. Match the zone map topology, entrances, landmarks, surfaces, weather, palette, light direction, and screen-direction logic. No people, no characters, no silhouettes, no readable marker labels, no UI.'
-    : batchKind === 'angle_grid' || batchKind === 'viewpoint_grid'
-    ? 'Each populated cell must show a distinct reusable camera-facing viewpoint from the same set, zone, or spot. Preserve architecture, landmarks, light direction, screen direction, entrances, materials, and depth. No characters, no labels, no UI.'
-    : batchKind === 'parent_child_scaffold_grid'
-      ? 'Create a mixed parent-child spatial scaffold grid. Cell 1 is the parent set/zone/spot environment reference; following cells are child physical staging positions or viewpoints inside that exact parent. Make the children visibly inherit the parent architecture, materials, light direction, landmarks, entrances, geography, and scale. Each cell must be a clean standalone production reference for its assigned node. No people, no characters, no silhouettes, no labels, no UI.'
-    : batchKind === 'spot_grid'
-      ? 'Each populated cell must show one reusable physical staging position or architectural sub-location inside the same zone. Preserve local surfaces, landmarks, entrances, sightlines, material continuity, set-piece placement, and lighting. No people, no characters, no silhouettes, no labels, no UI.'
-      : batchKind === 'temp_character_grid'
-        ? 'Each populated cell must show one temporary supporting character or crowd/faction member in neutral pose. Make silhouettes, wardrobe, body shape, face/species cues, and scale readable. No action scene, no labels.'
-        : batchKind === 'prop_grid'
-          ? 'Each populated cell must show one reusable prop or item in clean cinematic lighting. Make material, shape, wear, function, and scale readable. No labels, no UI.'
-          : batchKind === 'location_zone_board'
-            ? 'Create one clean environment production board for a specific set or zone. Show usable cinematic spatial information: architecture, entrances, landmarks, light direction, material palette, and camera-friendly surfaces. No characters, no labels, no maps, no UI.'
-            : 'Create one high-detail hero continuity reference. It must be reusable across storyboard and shot-video generation. No labels, no borders, no UI, no watermarks.'
-  return [
-    `Continuity reference batch: ${batchKind}`,
-    `Grid: ${rows} rows x ${columns} columns on one square ${spotAtlasGridPolicy ? '3072x3072' : '2048x2048'} image. Fill cells left-to-right, top-to-bottom. Leave unused cells clean and empty.`,
-    kindInstruction,
-    input.referenceAssetKeys.length > 0
-      ? batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
-        ? 'Attached image reference: the parent zone spatial map only. Treat it as the global topology lock for every cell; do not use any set, character, prop, shot, storyboard, or sibling spot image as an atlas reference.'
-        : 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
-      : spatialBatch
-        ? 'No parent image references are available. Use only the cell assignments and project visual style; do not use shot action, character blocking, or dialogue as visual content.'
-        : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
-    cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
-    locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
-    shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
-    'Provider requirements: one finished image only, exact cell order, no visible text, no captions, no labels, no arrows, no UI, no watermarks. Use clean spacing or subtle gutters only; every populated cell must crop cleanly as its own square reference.',
-  ].filter(Boolean).join('\n\n')
-  return {
-    prompt,
-    sanitizedTargetNodes: input.targetNodes.map((node, index) => {
-      const sanitized = sanitizedTargets[index]
-      if (!sanitized) return node
-      return {
-        ...node,
-        name: sanitized.name,
-        visualBrief: sanitized.brief || readText(node.visualBrief),
-        summary: sanitized.brief || readText(node.summary),
-        spatialPromptKindLabel: sanitized.kindLabel,
-      }
-    }),
-    locationEvidenceLines,
-    promptDiagnostics: {
-      policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
-      sanitized: sanitizedTargets.some((target) => target?.changed) || locationEvidenceLines.length > 0,
-      removedTerms: [...new Set(sanitizedTargets.flatMap((target) => target?.diagnostics ?? []))],
-    },
-  }
-}
-
-function cinematicContextBrief(context: Record<string, unknown>) {
-  const wiki = asRecord(context.wiki ?? context.worldWiki)
-  const sequenceUnits = Array.isArray(context.sequenceUnits) ? context.sequenceUnits.map(asRecord) : []
-  const entities = Array.isArray(context.entities) ? context.entities.map(asRecord) : []
-  const relationships = Array.isArray(context.relationships) ? context.relationships.map(asRecord) : []
-  return {
-    wiki: {
-      title: readText(wiki.title),
-      logline: readText(wiki.logline),
-      synopsis: readText(wiki.synopsis),
-      genre: readText(wiki.genre),
-      toneTags: readStringArray(wiki.toneTags),
-      visualStyle: readText(wiki.artStyleDescription) || readText(wiki.visualStyle),
-    },
-    sequenceUnits: sequenceUnits.slice(0, 4).map((unit) => ({
-      key: readText(unit.key),
-      name: readText(unit.name),
-      summary: readText(unit.summary),
-      sequence: readEntitySequence(unit),
-    })),
-    entities: entities.slice(0, 18).map((entity) => ({
-      key: readText(entity.key),
-      name: readText(entity.name),
-      type: readText(entity.nodeType ?? entity.node_type),
-      summary: readText(entity.summary),
-      visualDescription: readOutputEntityVisualDescription(entity),
-      visualTraits: readOutputEntityVisualTraits(entity),
-      visualTraitMap: readOutputEntityVisualTraitMap(entity),
-      voice: readOutputEntityVoiceIdentity(entity),
-      voiceDescription: readOutputEntityVoiceDescription(entity),
-    })),
-    relationships: relationships.slice(0, 32),
-  }
-}
-
-function isUgcCinematicPresetFamily(presetFamily: string) {
-  const normalized = presetFamily.toLowerCase()
-  return normalized.startsWith('ugc') || normalized.includes('brand') || normalized.includes('ad')
-}
-
-function cinematicScriptAuthoringJsonSchemaForPreset(presetFamily: string) {
-  const includeUgcDirectives = isUgcCinematicPresetFamily(presetFamily)
-  const schema: Record<string, unknown> = {
-    type: 'object',
-    additionalProperties: false,
-    required: [
-      'title',
-      'logline',
-      'tone',
-      'continuityLock',
-      'scenes',
-      'entityRefs',
-      'shots',
-      ...(includeUgcDirectives ? ['ugcDirectives'] : []),
-    ],
-    properties: {
-      title: { type: 'string' },
-      logline: { type: 'string' },
-      tone: { type: 'string' },
-      continuityLock: { type: 'string' },
-      scenes: {
-        type: 'array',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['id', 'title', 'summary', 'location'],
-          properties: {
-            id: { type: 'string' },
-            title: { type: 'string' },
-            summary: { type: 'string' },
-            location: { type: 'string' },
-          },
-        },
-      },
-      entityRefs: {
-        type: 'array',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['id', 'role'],
-          properties: {
-            id: { type: 'string' },
-            role: { type: 'string' },
-          },
-        },
-      },
-      shots: {
-        type: 'array',
-        minItems: 1,
-        maxItems: 36,
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: [
-            'id',
-            'sceneId',
-            'title',
-            'beat',
-            'emotionalBeat',
-            'durationSeconds',
-            'framing',
-            'cameraMovement',
-            'visualAction',
-            'composition',
-            'participants',
-            'location',
-            'props',
-            'actions',
-            'audioCues',
-            'dialogue',
-            'forceTakeBreak',
-          ],
-          properties: {
-            id: { type: 'string' },
-            sceneId: { type: 'string' },
-            title: { type: 'string' },
-            beat: { type: 'string' },
-            emotionalBeat: { type: 'string' },
-            durationSeconds: { type: 'number' },
-            framing: { type: 'string' },
-            cameraMovement: { type: 'string' },
-            visualAction: { type: 'string' },
-            composition: { type: 'string' },
-            participants: { type: 'array', items: { type: 'string' } },
-            location: { type: 'string' },
-            props: { type: 'array', items: { type: 'string' } },
-            actions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['actor', 'verb', 'target', 'prop', 'stagingNotes', 'startSeconds', 'endSeconds'],
-                properties: {
-                  actor: { type: 'string' },
-                  verb: { type: 'string' },
-                  target: { type: 'string' },
-                  prop: { type: 'string' },
-                  stagingNotes: { type: 'string' },
-                  startSeconds: { type: 'number' },
-                  endSeconds: { type: 'number' },
-                },
-              },
-            },
-            audioCues: { type: 'array', items: { type: 'string' } },
-            dialogue: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['speaker', 'line', 'delivery', 'startSeconds', 'endSeconds'],
-                properties: {
-                  speaker: { type: 'string' },
-                  line: { type: 'string' },
-                  delivery: { type: 'string' },
-                  startSeconds: { type: 'number' },
-                  endSeconds: { type: 'number' },
-                },
-              },
-            },
-            forceTakeBreak: { type: 'boolean' },
-          },
-        },
-      },
-    },
-  }
-  if (includeUgcDirectives) {
-    const properties = asRecord(schema.properties)
-    properties.ugcDirectives = {
-      type: 'object',
-      additionalProperties: false,
-      required: ['formulaFamily', 'hookType', 'proofMoment', 'ctaType'],
-      properties: {
-        formulaFamily: { type: 'string' },
-        hookType: { type: 'string' },
-        proofMoment: { type: 'string' },
-        ctaType: { type: 'string' },
-      },
-    }
-  }
-  return schema
-}
-
-function normalizeMaybeNullString(value: unknown) {
-  return readText(value) || null
-}
-
-function clampShotDuration(value: unknown, fallback = 4) {
-  const numeric = typeof value === 'number' ? value : Number(readText(value))
-  if (!Number.isFinite(numeric)) return fallback
-  return Math.max(1, Math.min(15, Math.round(numeric)))
-}
-
-function coerceCinematicShotType(value: unknown) {
-  const text = readText(value)
-  return ['establishing', 'dialogue', 'reveal', 'action', 'insert', 'transition', 'custom'].includes(text) ? text : 'custom'
-}
-
-function coerceCinematicAudioKind(value: unknown) {
-  const text = readText(value)
-  return ['dialogue', 'ambience', 'sfx', 'music', 'silence', 'offscreen'].includes(text) ? text : 'ambience'
-}
-
-function canonicalCinematicEntityKey(entity: Record<string, unknown>, fallbackId: string) {
-  const assetKey = readStringArray(entity.assetKeys)[0] ?? readText(entity.assetKey)
-  const name = readText(entity.name)
-  const key = readText(entity.key) || readText(entity.id) || fallbackId
-  return [
-    name ? `name:${name.toLowerCase().replace(/[^a-z0-9]+/g, '')}` : '',
-    assetKey ? `asset:${assetKey}` : '',
-    key ? `key:${key.toLowerCase().replace(/^world\.[^.]+\./, '').replace(/[^a-z0-9]+/g, '')}` : '',
-  ].filter(Boolean)[0] ?? `fallback:${fallbackId}`
-}
-
-function buildCinematicEntityBindings(assetPack: Record<string, unknown>) {
-  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
-  const byKey = new Map<string, Record<string, unknown>>()
-  for (const [index, entity] of entities.entries()) {
-    const canonicalKey = canonicalCinematicEntityKey(entity, `entity_${index + 1}`)
-    const existing = byKey.get(canonicalKey)
-    if (!existing) {
-      byKey.set(canonicalKey, { ...entity, _originalIndex: index })
-      continue
-    }
-    const existingAsset = readStringArray(existing.assetKeys)[0] ?? readText(existing.assetKey)
-    const nextAsset = readStringArray(entity.assetKeys)[0] ?? readText(entity.assetKey)
-    if (!existingAsset && nextAsset) {
-      byKey.set(canonicalKey, { ...entity, _originalIndex: readText(existing._originalIndex) || index })
-    }
-  }
-  return Array.from(byKey.values()).slice(0, 16).map((entity, index) => {
-    const type = readText(entity.type)
-    const role = readText(entity.role) || type || 'reference'
-    const kind = type === 'place' || role === 'place' || role === 'environment'
-      ? 'environment'
-      : type === 'item' || role === 'item' || role === 'prop'
-        ? 'item'
-        : role === 'group'
-          ? 'character'
-          : 'character'
-    return {
-      id: readText(entity.key) || readText(entity.id) || `entity_${index + 1}`,
-      kind,
-      role,
-      label: readText(entity.name) || readText(entity.key) || `Entity ${index + 1}`,
-      sourceName: readText(entity.name),
-      summary: readText(entity.summary),
-      assetKey: (readStringArray(entity.assetKeys)[0] ?? readText(entity.assetKey)) || null,
-      stagingNotes: [
-        readText(entity.visualDescription),
-        readStringArray(entity.visualTraits).length > 0 ? `Traits: ${readStringArray(entity.visualTraits).join(', ')}` : '',
-        readText(entity.selectedReferenceVariantKey) && readText(entity.selectedReferenceVariantKey) !== 'default'
-          ? `Selected visual variant: ${readText(entity.selectedReferenceVariantLabel) || readText(entity.selectedReferenceVariantKey)}${readText(entity.selectedReferenceVariantSummary) ? ` (${readText(entity.selectedReferenceVariantSummary)})` : ''}.`
-          : '',
-      ].filter(Boolean).join(' '),
-      priority: Math.max(10, 90 - index * 4),
-      required: true,
-    }
-  })
-}
-
-function sanitizeCinematicScriptText(value: unknown) {
-  return readText(value)
-    .replace(/@[\s_-]*(?:image|video|audio)\s*\d+/gi, '')
-    .replace(/\b(?:GPT\s*Image\s*2|Seedance\s*2(?:\.0)?|gpt-image-2|reference-to-video)\b/gi, '')
-    .replace(/\b(?:480p|720p|1080p)\b/gi, '')
-    .replace(/\b(?:16:9|9:16|1:1|4:3|3:4)\b/g, '')
-    .replace(/\bkeyframes?\b/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-}
-
-function normalizeDirectorDialogue(value: unknown, durationSeconds = 1) {
-  const entries = Array.isArray(value) ? value.map(asRecord) : []
-  return entries.map((entry) => ({
-    speaker: sanitizeCinematicScriptText(entry.speaker ?? entry.speakerName ?? entry.speakerRefId),
-    line: sanitizeCinematicScriptText(entry.line),
-    delivery: sanitizeCinematicScriptText(entry.delivery),
-    startSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.startSeconds ?? 0) || 0)),
-    endSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.endSeconds ?? Math.min(durationSeconds, 2)) || Math.min(durationSeconds, 2))),
-  })).filter((entry) => entry.line)
-}
-
-function normalizeDirectorActions(value: unknown, input: {
-  shotId: string
-  participantRefIds: string[]
-  propRefIds: string[]
-  beat: string
-  visualAction: string
-  durationSeconds: number
-}) {
-  const entries = Array.isArray(value) ? value.map(asRecord) : []
-  const normalized = entries.map((entry, index) => {
-    const startSeconds = Math.max(0, Math.min(input.durationSeconds, Number(entry.startSeconds ?? 0) || 0))
-    const endSeconds = Math.max(startSeconds, Math.min(input.durationSeconds, Number(entry.endSeconds ?? input.durationSeconds) || input.durationSeconds))
-    return {
-      actor: sanitizeCinematicScriptText(entry.actor ?? entry.actorRefId) || input.participantRefIds[0] || '',
-      verb: sanitizeCinematicScriptText(entry.verb ?? entry.action) || input.beat || `visible action ${index + 1}`,
-      target: sanitizeCinematicScriptText(entry.target ?? entry.targetRefId),
-      prop: sanitizeCinematicScriptText(entry.prop ?? entry.propRefId) || input.propRefIds[0] || '',
-      stagingNotes: sanitizeCinematicScriptText(entry.stagingNotes ?? entry.description) || input.visualAction || input.beat,
-      startSeconds,
-      endSeconds,
-    }
-  }).filter((entry) => entry.verb || entry.stagingNotes)
-  if (normalized.length > 0) return normalized.slice(0, 5)
-  return [{
-    actor: input.participantRefIds[0] || '',
-    verb: input.beat || 'moves through the shot',
-    target: '',
-    prop: input.propRefIds[0] || '',
-    stagingNotes: input.visualAction || input.beat || 'Stage the shot as one clear visible action.',
-    startSeconds: 0,
-    endSeconds: input.durationSeconds,
-  }]
-}
-
-function normalizeCinematicScriptAuthoring(input: {
-  value: Record<string, unknown>
-  fallback: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  presetFamily: string
-  maxTotalDurationSeconds: number
-}) {
-  const { value, fallback, assetPack } = input
-  const rawShots = Array.isArray(value.shots) ? value.shots.map(asRecord) : []
-  const source = rawShots.length > 0 ? value : fallback
-  const sourceShots = Array.isArray(source.shots) ? source.shots.map(asRecord) : []
-  const entityBindings = buildCinematicEntityBindings(assetPack)
-  const entityKeys = new Set(entityBindings.map((entry) => entry.id))
-  const normalizeRefArray = (refs: unknown) => readStringArray(refs).filter((key) => entityKeys.size === 0 || entityKeys.has(key)).slice(0, 8)
-  const sceneValues = Array.isArray(source.scenes) ? source.scenes.map(asRecord) : []
-  const directorScenes = sceneValues.length > 0
-    ? sceneValues.map((scene, index) => ({
-      id: sanitizeCinematicScriptText(scene.id) || `scene_${index + 1}`,
-      title: sanitizeCinematicScriptText(scene.title) || `Scene ${index + 1}`,
-      summary: sanitizeCinematicScriptText(scene.summary),
-      location: sanitizeCinematicScriptText(scene.location ?? scene.locationId),
-    }))
-    : [{
-      id: 'scene_1',
-      title: 'Scene 1',
-      summary: sanitizeCinematicScriptText(source.logline ?? fallback.logline),
-      location: entityBindings.find((entry) => entry.kind === 'environment')?.id ?? '',
-    }]
-  let cumulativeStart = 0
-  const maxTotalDurationSeconds = Math.max(4, Math.min(CINEMATIC_MAX_TOTAL_DURATION_SECONDS, input.maxTotalDurationSeconds || CINEMATIC_MAX_TOTAL_DURATION_SECONDS))
-  const directorShots: Record<string, unknown>[] = []
-  const legacyShots: Record<string, unknown>[] = []
-  for (const [index, shot] of sourceShots.slice(0, 36).entries()) {
-    if (cumulativeStart >= maxTotalDurationSeconds) break
-    const remaining = maxTotalDurationSeconds - cumulativeStart
-    const durationSeconds = Math.min(remaining, clampShotDuration(shot.durationSeconds, index === 0 ? 3 : 4))
-    if (durationSeconds <= 0) break
-    const shotId = sanitizeCinematicScriptText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`
-    const sceneId = sanitizeCinematicScriptText(shot.sceneId) || directorScenes[0]?.id || 'scene_1'
-    const participantRefIds = normalizeRefArray(shot.participants ?? shot.participantRefIds)
-    const locationRefId = normalizeMaybeNullString(shot.location ?? shot.locationRefId)
-    const propRefIds = normalizeRefArray(shot.props ?? shot.propRefIds)
-    const visualAction = sanitizeCinematicScriptText(shot.visualAction ?? shot.visualPrompt ?? shot.beat ?? shot.title)
-    const composition = sanitizeCinematicScriptText(shot.composition ?? shot.compositionGuide)
-    const beat = sanitizeCinematicScriptText(shot.beat) || visualAction || `Cinematic beat ${index + 1}`
-    const startSeconds = cumulativeStart
-    const endSeconds = cumulativeStart + durationSeconds
-    const actions = Array.isArray(shot.actions) ? shot.actions.map(asRecord).slice(0, 5) : []
-    const audio = Array.isArray(shot.audio) ? shot.audio.map(asRecord).slice(0, 3) : []
-    const audioCues = readStringArray(shot.audioCues).map(sanitizeCinematicScriptText).filter(Boolean)
-    const directorDialogue = normalizeDirectorDialogue(shot.dialogue, durationSeconds).slice(0, 4)
-    const directorActions = normalizeDirectorActions(shot.actions, {
-      shotId,
-      participantRefIds,
-      propRefIds,
-      beat,
-      visualAction,
-      durationSeconds,
-    })
-    directorShots.push({
-      id: shotId,
-      sceneId,
-      title: sanitizeCinematicScriptText(shot.title) || `Shot ${index + 1}`,
-      beat,
-      emotionalBeat: sanitizeCinematicScriptText(shot.emotionalBeat),
-      durationSeconds,
-      startSeconds,
-      endSeconds,
-      framing: sanitizeCinematicScriptText(shot.framing),
-      cameraMovement: sanitizeCinematicScriptText(shot.cameraMovement),
-      visualAction,
-      composition,
-      participants: participantRefIds,
-      location: locationRefId ?? '',
-      props: propRefIds,
-      actions: directorActions,
-      audioCues,
-      dialogue: directorDialogue,
-      forceTakeBreak: shot.forceTakeBreak === true,
-    })
-    legacyShots.push({
-      id: shotId,
-      sceneId,
-      orderIndex: index,
-      title: sanitizeCinematicScriptText(shot.title) || `Shot ${index + 1}`,
-      beat,
-      emotionalBeat: sanitizeCinematicScriptText(shot.emotionalBeat),
-      durationSeconds,
-      shotType: coerceCinematicShotType(shot.shotType),
-      framing: sanitizeCinematicScriptText(shot.framing),
-      cameraAngle: sanitizeCinematicScriptText(shot.cameraAngle),
-      cameraMovement: sanitizeCinematicScriptText(shot.cameraMovement),
-      lensPreference: sanitizeCinematicScriptText(shot.lensPreference),
-      visualPrompt: visualAction || beat,
-      compositionGuide: composition,
-      continuityNotes: sanitizeCinematicScriptText(shot.continuityNotes),
-      participantRefIds,
-      locationRefId,
-      propRefIds,
-      backdropRefIds: normalizeRefArray(shot.backdropRefIds),
-      startSeconds,
-      endSeconds,
-      forceTakeBreak: shot.forceTakeBreak === true,
-      actions: actions.length > 0 ? actions.map((action, actionIndex) => ({
-        id: sanitizeCinematicScriptText(action.id) || `${shotId}_action_${actionIndex + 1}`,
-        actorRefId: normalizeMaybeNullString(action.actorRefId ?? action.actor),
-        targetRefId: normalizeMaybeNullString(action.targetRefId ?? action.target),
-        verb: sanitizeCinematicScriptText(action.verb ?? action.action) || beat,
-        propRefId: normalizeMaybeNullString(action.propRefId ?? action.prop),
-        stagingNotes: sanitizeCinematicScriptText(action.stagingNotes ?? action.description),
-        startSeconds: Math.max(0, Number(action.startSeconds ?? 0) || 0),
-        endSeconds: Math.max(0, Math.min(durationSeconds, Number(action.endSeconds ?? durationSeconds) || durationSeconds)),
-      })) : [{
-        id: `${shotId}_action_1`,
-        actorRefId: participantRefIds[0] ?? null,
-        targetRefId: null,
-        verb: beat,
-        propRefId: null,
-        stagingNotes: visualAction || composition,
-        startSeconds: 0,
-        endSeconds: durationSeconds,
-      }],
-      dialogue: directorDialogue.map((entry, dialogueIndex) => ({
-        id: `${shotId}_dialogue_${dialogueIndex + 1}`,
-        speakerRefId: normalizeMaybeNullString(entry.speaker),
-        speakerName: readText(entry.speaker),
-        line: readText(entry.line),
-        delivery: readText(entry.delivery),
-        startSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.startSeconds ?? dialogueIndex) || dialogueIndex)),
-        endSeconds: Math.max(0.5, Math.min(durationSeconds, Number(entry.endSeconds ?? dialogueIndex + 2) || dialogueIndex + 2)),
-        lipSync: true,
-      })),
-      audio: audio.map((entry, audioIndex) => ({
-        id: sanitizeCinematicScriptText(entry.id) || `${shotId}_audio_${audioIndex + 1}`,
-        kind: coerceCinematicAudioKind(entry.kind),
-        cue: sanitizeCinematicScriptText(entry.cue),
-        sourceRefId: normalizeMaybeNullString(entry.sourceRefId),
-        startSeconds: Math.max(0, Number(entry.startSeconds ?? 0) || 0),
-        endSeconds: Math.max(0, Math.min(durationSeconds, Number(entry.endSeconds ?? durationSeconds) || durationSeconds)),
-      })).filter((entry) => entry.cue).concat(audioCues.map((cue, audioIndex) => ({
-        id: `${shotId}_audio_cue_${audioIndex + 1}`,
-        kind: 'ambience',
-        cue,
-        sourceRefId: null,
-        startSeconds: 0,
-        endSeconds: durationSeconds,
-      }))),
-    })
-    cumulativeStart = endSeconds
-  }
-  const directorScriptDoc: Record<string, unknown> = {
-    title: sanitizeCinematicScriptText(source.title) || sanitizeCinematicScriptText(fallback.title) || 'Prompt Cinematic',
-    logline: sanitizeCinematicScriptText(source.logline) || sanitizeCinematicScriptText(fallback.logline),
-    tone: sanitizeCinematicScriptText(source.tone) || sanitizeCinematicScriptText(fallback.tone),
-    continuityLock: sanitizeCinematicScriptText(source.continuityLock ?? source.continuityNotes ?? fallback.continuityNotes),
-    scenes: directorScenes,
-    entityRefs: entityBindings.map((entry) => ({ id: entry.id, role: entry.role })),
-    shots: directorShots,
-  }
-  if (isUgcCinematicPresetFamily(input.presetFamily)) {
-    const ugc = asRecord(source.ugcDirectives)
-    directorScriptDoc.ugcDirectives = {
-      formulaFamily: sanitizeCinematicScriptText(ugc.formulaFamily),
-      hookType: sanitizeCinematicScriptText(ugc.hookType),
-      proofMoment: sanitizeCinematicScriptText(ugc.proofMoment),
-      ctaType: sanitizeCinematicScriptText(ugc.ctaType),
-    }
-  }
-  const cinematicScriptDoc = cinematicScriptDocSchema.parse({
-    title: directorScriptDoc.title,
-    logline: directorScriptDoc.logline,
-    tone: directorScriptDoc.tone,
-    continuityNotes: directorScriptDoc.continuityLock,
-    scenes: directorScenes.map((scene) => ({
-      id: scene.id,
-      title: scene.title,
-      summary: scene.summary,
-      locationRefId: scene.location || null,
-    })),
-    entityBindings,
-    shots: legacyShots,
-  })
-  return { directorScriptDoc, cinematicScriptDoc }
-}
-
-function buildDeterministicCinematicScriptDoc(input: {
-  context: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  prompt: string
-  presetFamily: string
-}) {
-  const wiki = asRecord(input.context.wiki ?? input.context.worldWiki)
-  const sequenceUnits = Array.isArray(input.context.sequenceUnits) ? input.context.sequenceUnits.map(asRecord) : []
-  const sequence = sequenceUnits[0] ?? {}
-  const title = readText(wiki.title) || readText(sequence.name) || 'Prompt Cinematic'
-  const summary = readText(readEntitySequence(sequence).synopsis) || readText(sequence.summary) || readText(wiki.logline) || input.prompt
-  const bindings = buildCinematicEntityBindings(input.assetPack)
-  const primary = bindings[0]?.id ?? null
-  const location = bindings.find((entry) => entry.kind === 'environment' || entry.role === 'place')?.id ?? null
-  const baseDurations = input.presetFamily.startsWith('ugc') ? [3, 4, 4, 4, 4] : [4, 5, 5, 5, 4, 4]
-  return cinematicScriptDocSchema.parse({
-    title,
-    logline: summary,
-    tone: readStringArray(wiki.toneTags).join(', ') || 'cinematic',
-    continuityNotes: 'Preserve world canon, neutral visual identities, wardrobe, place geography, and emotional continuity.',
-    entityBindings: bindings,
-    shots: baseDurations.map((durationSeconds, index) => {
-      const shotId = `shot_${String(index + 1).padStart(3, '0')}`
-      const beat = index === 0
-        ? `Open on the clearest visual hook from: ${summary}`
-        : index === baseDurations.length - 1
-          ? `Resolve the cinematic beat with a visible consequence.`
-          : `Escalate the cinematic action through a new visible turn.`
-      return {
-        id: shotId,
-        sceneId: 'scene_1',
-        orderIndex: index,
-        title: `Shot ${index + 1}`,
-        beat,
-        emotionalBeat: index === 0 ? 'attention' : index === baseDurations.length - 1 ? 'payoff' : 'escalation',
-        durationSeconds,
-        shotType: index === 0 ? 'establishing' : index === baseDurations.length - 1 ? 'reveal' : 'action',
-        framing: index % 3 === 0 ? 'wide readable frame' : index % 3 === 1 ? 'medium subject-focused frame' : 'close reaction or insert',
-        cameraAngle: 'cinematic eye-level angle',
-        cameraMovement: index % 2 === 0 ? 'controlled push-in' : 'smooth lateral tracking move',
-        visualPrompt: beat,
-        compositionGuide: 'Clear subject silhouette, readable environment, grounded continuity.',
-        participantRefIds: primary ? [primary] : [],
-        locationRefId: location,
-        forceTakeBreak: false,
-        actions: [{
-          id: `${shotId}_action_1`,
-          actorRefId: primary,
-          targetRefId: null,
-          verb: beat,
-          propRefId: null,
-          stagingNotes: 'Make the beat visible through blocking, movement, and environment interaction.',
-          startSeconds: 0,
-          endSeconds: durationSeconds,
-        }],
-        audio: [{
-          id: `${shotId}_audio_1`,
-          kind: 'ambience',
-          cue: input.presetFamily.startsWith('ugc') ? 'natural short-form audio bed' : 'cinematic ambience and restrained score',
-          sourceRefId: null,
-          startSeconds: 0,
-          endSeconds: durationSeconds,
-        }],
-      }
-    }),
-  })
-}
-
-function buildCinematicScriptAuthoringInstruction(input: {
-  context: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  prompt: string
-  guidance: OutputGuidanceBundle
-  aspectRatio: string
-  resolution: string
-  presetFamily: string
-  legacyVideoBlockCount?: number | null
-  legacyDurationPerBlockSeconds?: number | null
-  maxTotalDurationSeconds?: number | null
-}) {
-  const maxTotalDurationSeconds = Math.max(4, Math.min(60, Number(input.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS))
-  const legacyHints = [
-    input.legacyVideoBlockCount ? `Legacy requested block count hint: ${input.legacyVideoBlockCount}. Treat as a soft hint only.` : '',
-    input.legacyDurationPerBlockSeconds ? `Legacy requested block duration hint: ${input.legacyDurationPerBlockSeconds}s. Treat as a soft hint only.` : '',
-  ].filter(Boolean).join('\n')
-  return [
-    'Author the full directed cinematic script the prompt deserves as a lean director script, not a provider execution object.',
-    `Preset family: ${input.presetFamily}.`,
-    input.prompt ? `User request: ${input.prompt}` : '',
-    legacyHints,
-    guidanceMarkdown(input.guidance),
-    '',
-    'Requirements:',
-    '- Return JSON only.',
-    '- Let the shot count and runtime emerge from the prompt, world sequence, and dramatic complexity.',
-    `- Hard limit: the complete cinematic script must not exceed ${maxTotalDurationSeconds} seconds total runtime.`,
-    '- Every shot duration must be 1-15 seconds; the compiler will group shots into Seedance takes of 4-15 seconds.',
-    '- Prefer continuous directed shots with blocking and camera intent; do not split every tiny motion into a separate shot.',
-    '- Each shot gets one main visible action and one primary camera move. Avoid micro-choreography.',
-    '- Include visible subject/action/blocking, camera/framing/movement, composition, actions, dialogue when spoken, audio cues, and entity ids.',
-    '- Shot actions must be stage directions, not prose summary: actor, verb, target if any, prop if any, staging notes, and local shot timing.',
-    '- Write action verbs as natural prose words, not snake_case machine labels.',
-    '- Dialogue entries must include local shot timing and stay in the script only; storyboard images will convert speech into visible expression/body language.',
-    '- Do not include provider refs or execution details: no @Image/@Video/@Audio labels, no keyframe wording, no model names, no resolution, no aspect-ratio strings.',
-    '- Do not output empty legacy fields, workflow metadata, execution metadata, provider request fields, or storyboard/image-node instructions.',
-    '- Preserve selected world canon and neutral visual identity traits. Do not invent new canon.',
-    '- Use supplied entity keys in participants, location, props, entityRefs, and scene locations when relevant.',
-    '- Add more than one scene only when location, time, or story mode actually changes.',
-    isUgcCinematicPresetFamily(input.presetFamily)
-      ? '- Because this is a UGC/brand preset, include concise ugcDirectives for hook/proof/CTA structure.'
-      : '- Because this is story/movie cinematic output, do not include UGC formula, proof, CTA, platform, or ad fields.',
-    '',
-    'World context:',
-    compactForPrompt({
-      ...cinematicContextBrief(input.context),
-      assetPack: input.assetPack,
-    }, 14000),
-  ].filter(Boolean).join('\n\n')
-}
-
-function buildDeterministicCinematicSequencePlan(input: {
-  context: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  prompt: string
-  guidance: OutputGuidanceBundle
-  blockCount: number
-  durationPerBlockSeconds: number
-  aspectRatio: string
-  resolution: string
-  presetFamily: string
-}) {
-  const wiki = asRecord(input.context.wiki ?? input.context.worldWiki)
-  const sequenceUnits = Array.isArray(input.context.sequenceUnits) ? input.context.sequenceUnits.map(asRecord) : []
-  const sequence = sequenceUnits[0] ?? {}
-  const title = readText(wiki.title) || readText(sequence.name) || 'Cinematic Sequence'
-  const summary = readText(sequence.summary) || readText(readEntitySequence(sequence).synopsis) || readText(wiki.logline) || input.prompt
-  const entities = Array.isArray(input.assetPack.entities) ? input.assetPack.entities.map(asRecord) : []
-  const blockFunctions = input.presetFamily.startsWith('ugc')
-    ? ['hook and problem', 'proof and demonstration', 'payoff and call to action', 'variant proof', 'objection answer', 'final payoff']
-    : ['visual hook and premise', 'escalation and reveal', 'payoff and consequence', 'reversal', 'climax', 'aftermath']
-  return {
-    title,
-    presetFamily: input.presetFamily,
-    aspectRatio: input.aspectRatio,
-    resolution: input.resolution,
-    totalDurationSeconds: input.blockCount * input.durationPerBlockSeconds,
-    blocks: Array.from({ length: input.blockCount }, (_, index) => {
-      const blockNumber = index + 1
-      return {
-        blockNumber,
-        durationSeconds: input.durationPerBlockSeconds,
-        storyFunction: blockFunctions[index] ?? `story movement ${blockNumber}`,
-        hook: blockNumber === 1 ? 'Open with the clearest visual pressure or proof in the first two seconds.' : 'Continue with a visible escalation from the previous block.',
-        summary,
-        shotCount: input.durationPerBlockSeconds > 9 ? 12 : 8,
-        requiredEntityKeys: entities.slice(0, 8).map((entity) => readText(entity.key)).filter(Boolean),
-      }
-    }),
-    continuityNotes: [
-      'Use neutral visual identity traits and available reference images as continuity anchors.',
-      'Do not overwrite character/object/place identity with temporary action states.',
-      'Each block must be renderable as a separate 4-15 second video clip.',
-    ],
-  }
-}
-
-const cinematicSequencePlanJsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['title', 'presetFamily', 'aspectRatio', 'resolution', 'totalDurationSeconds', 'blocks', 'continuityNotes'],
-  properties: {
-    title: { type: 'string' },
-    presetFamily: { type: 'string' },
-    aspectRatio: { type: 'string' },
-    resolution: { type: 'string' },
-    totalDurationSeconds: { type: 'number' },
-    blocks: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['blockNumber', 'durationSeconds', 'storyFunction', 'hook', 'summary', 'shotCount', 'requiredEntityKeys'],
-        properties: {
-          blockNumber: { type: 'number' },
-          durationSeconds: { type: 'number' },
-          storyFunction: { type: 'string' },
-          hook: { type: 'string' },
-          summary: { type: 'string' },
-          shotCount: { type: 'number' },
-          requiredEntityKeys: { type: 'array', items: { type: 'string' } },
-        },
-      },
-    },
-    continuityNotes: { type: 'array', items: { type: 'string' } },
-  },
-}
-
-const cinematicBlockScriptJsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['blockNumber', 'blockCount', 'durationSeconds', 'title', 'storyFunction', 'hook', 'summary', 'continuityNotes', 'shots'],
-  properties: {
-    blockNumber: { type: 'number' },
-    blockCount: { type: 'number' },
-    durationSeconds: { type: 'number' },
-    title: { type: 'string' },
-    storyFunction: { type: 'string' },
-    hook: { type: 'string' },
-    summary: { type: 'string' },
-    continuityNotes: { type: 'array', items: { type: 'string' } },
-    shots: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['shotNumber', 'startTimeSeconds', 'endTimeSeconds', 'subject', 'action', 'camera', 'composition', 'audio', 'referenceNotes'],
-        properties: {
-          shotNumber: { type: 'number' },
-          startTimeSeconds: { type: 'number' },
-          endTimeSeconds: { type: 'number' },
-          subject: { type: 'string' },
-          action: { type: 'string' },
-          camera: { type: 'string' },
-          composition: { type: 'string' },
-          audio: { type: 'string' },
-          referenceNotes: { type: 'string' },
-        },
-      },
-    },
-  },
-}
-
-function normalizeCinematicSequencePlan(value: Record<string, unknown>, fallback: Record<string, unknown>) {
-  const blocks = Array.isArray(value.blocks) ? value.blocks.map(asRecord) : []
-  if (blocks.length === 0) return fallback
-  return {
-    title: readText(value.title) || readText(fallback.title),
-    presetFamily: readText(value.presetFamily) || readText(fallback.presetFamily),
-    aspectRatio: readText(value.aspectRatio) || readText(fallback.aspectRatio),
-    resolution: readText(value.resolution) || readText(fallback.resolution),
-    totalDurationSeconds: Number(value.totalDurationSeconds ?? fallback.totalDurationSeconds ?? 0) || 0,
-    blocks: blocks.map((block, index) => ({
-      blockNumber: Number(block.blockNumber ?? index + 1) || index + 1,
-      durationSeconds: Math.max(4, Math.min(15, Number(block.durationSeconds ?? 8) || 8)),
-      storyFunction: readText(block.storyFunction),
-      hook: readText(block.hook),
-      summary: readText(block.summary),
-      shotCount: Math.max(4, Math.min(15, Number(block.shotCount ?? 8) || 8)),
-      requiredEntityKeys: readStringArray(block.requiredEntityKeys).slice(0, 12),
-    })),
-    continuityNotes: readStringArray(value.continuityNotes).length > 0
-      ? readStringArray(value.continuityNotes)
-      : readStringArray(fallback.continuityNotes),
-  }
-}
-
-function normalizeCinematicBlockScript(value: Record<string, unknown>, fallback: Record<string, unknown>, durationSeconds: number) {
-  const shots = Array.isArray(value.shots) ? value.shots.map(asRecord) : []
-  if (shots.length === 0) return fallback
-  return {
-    blockNumber: Number(value.blockNumber ?? fallback.blockNumber ?? 1) || 1,
-    blockCount: Number(value.blockCount ?? fallback.blockCount ?? 1) || 1,
-    durationSeconds: Math.max(4, Math.min(15, Number(value.durationSeconds ?? durationSeconds) || durationSeconds)),
-    title: readText(value.title) || readText(fallback.title),
-    storyFunction: readText(value.storyFunction) || readText(fallback.storyFunction),
-    hook: readText(value.hook) || readText(fallback.hook),
-    summary: readText(value.summary) || readText(fallback.summary),
-    continuityNotes: readStringArray(value.continuityNotes).length > 0
-      ? readStringArray(value.continuityNotes)
-      : readStringArray(fallback.continuityNotes),
-    shots: shots.map((shot, index) => ({
-      shotNumber: Number(shot.shotNumber ?? index + 1) || index + 1,
-      startTimeSeconds: Math.max(0, readShotStartSeconds(shot)),
-      endTimeSeconds: Math.min(durationSeconds, Math.max(0, readShotEndSeconds(shot) || durationSeconds)),
-      subject: readText(shot.subject),
-      action: readText(shot.action),
-      camera: readText(shot.camera),
-      composition: readText(shot.composition),
-      audio: readText(shot.audio),
-      referenceNotes: readText(shot.referenceNotes),
-    })),
-  }
-}
-
-function buildCinematicSequencePlanInstruction(input: {
-  context: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  prompt: string
-  guidance: OutputGuidanceBundle
-  blockCount: number
-  durationPerBlockSeconds: number
-  aspectRatio: string
-  resolution: string
-  presetFamily: string
-}) {
-  return [
-    `Plan exactly ${input.blockCount} cinematic video block(s), each ${input.durationPerBlockSeconds} seconds.`,
-    `Preset family: ${input.presetFamily}. Aspect ratio: ${input.aspectRatio}. Resolution: ${input.resolution}.`,
-    input.prompt ? `User request: ${input.prompt}` : '',
-    guidanceMarkdown(input.guidance),
-    '',
-    'Requirements:',
-    '- Return JSON only.',
-    '- Every block must be independently renderable as a 4-15 second video clip.',
-    '- Make the first block hook visible within the first 1.5-2 seconds.',
-    '- Preserve world canon and neutral visual identity traits; do not invent new canon.',
-    '- Use concise shotCount values that produce clean contact sheets: prefer 4, 6, 8, 9, 12, or 16 shots per block.',
-    '',
-    'World context:',
-    compactForPrompt({
-      ...cinematicContextBrief(input.context),
-      assetPack: input.assetPack,
-    }, 12000),
-  ].filter(Boolean).join('\n\n')
-}
-
-function buildCinematicBlockScriptInstruction(input: {
-  context: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  sequencePlan: Record<string, unknown>
-  prompt: string
-  guidance: OutputGuidanceBundle
-  blockNumber: number
-  blockCount: number
-  durationSeconds: number
-  presetFamily: string
-}) {
-  const planBlock = cinematicSequencePlanBlock(input.sequencePlan, input.blockNumber)
-  return [
-    `Write the timestamped shot script for cinematic video block ${input.blockNumber} of ${input.blockCount}.`,
-    `Duration: exactly ${input.durationSeconds} seconds. Preset family: ${input.presetFamily}.`,
-    input.prompt ? `User request: ${input.prompt}` : '',
-    guidanceMarkdown(input.guidance),
-    '',
-    'Requirements:',
-    '- Return JSON only.',
-    '- Shots must be ordered, timestamped, and fit inside the block duration.',
-    '- If the planned block includes shotCount, return exactly that many shots.',
-    '- Each shot needs one dominant subject, one visible action, one camera direction, composition, audio note, and reference note.',
-    '- Do not write prose, screenplay pages, marketing copy, hidden motivation, or workflow/internal terms.',
-    '- Use @Image1 as storyboard continuity in referenceNotes and mention entity references only as continuity anchors.',
-    '',
-    'Planned block:',
-    compactForPrompt(planBlock, 3000),
-    '',
-    'World context:',
-    compactForPrompt({
-      ...cinematicContextBrief(input.context),
-      assetPack: input.assetPack,
-    }, 10000),
-  ].filter(Boolean).join('\n\n')
-}
-
-function cinematicSequencePlanBlock(sequencePlan: Record<string, unknown>, blockNumber: number) {
-  const blocks = Array.isArray(sequencePlan.blocks) ? sequencePlan.blocks.map(asRecord) : []
-  return blocks.find((block) => Number(block.blockNumber ?? 0) === blockNumber) ?? blocks[blockNumber - 1] ?? {}
-}
-
-function buildDeterministicCinematicBlockScript(input: {
-  context: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  sequencePlan: Record<string, unknown>
-  prompt: string
-  guidance: OutputGuidanceBundle
-  blockNumber: number
-  blockCount: number
-  durationSeconds: number
-  presetFamily: string
-}) {
-  const planBlock = cinematicSequencePlanBlock(input.sequencePlan, input.blockNumber)
-  const entities = Array.isArray(input.assetPack.entities) ? input.assetPack.entities.map(asRecord) : []
-  const shotCount = Math.min(input.durationSeconds > 9 ? 12 : 8, Math.max(4, Number(planBlock.shotCount ?? 8) || 8))
-  const slice = input.durationSeconds / shotCount
-  const primaryEntities = entities.slice(0, 4)
-  const subjectFallback = primaryEntities.map((entity) => readText(entity.name)).filter(Boolean).join(', ') || 'the primary subject'
-  const shots = Array.from({ length: shotCount }, (_, index) => {
-    const start = Number((index * slice).toFixed(2))
-    const end = Number(Math.min(input.durationSeconds, (index + 1) * slice).toFixed(2))
-    const subject = readText(primaryEntities[index % Math.max(1, primaryEntities.length)]?.name) || subjectFallback
-    const hookPrefix = input.blockNumber === 1 && index === 0 ? 'Immediate hook: ' : ''
-    return {
-      shotNumber: index + 1,
-      startTimeSeconds: start,
-      endTimeSeconds: end,
-      subject,
-      action: `${hookPrefix}${readText(planBlock.storyFunction) || 'cinematic story beat'} made visible through ${subject}.`,
-      camera: index % 3 === 0 ? 'slow push-in with stable framing' : index % 3 === 1 ? 'controlled tracking move following the action' : 'clean reaction or insert shot',
-      composition: index === 0 ? 'readable establishing frame with strong subject silhouette' : 'clear single-beat cinematic composition',
-      audio: input.presetFamily.startsWith('ugc') ? 'natural creator-style voice or proof-focused sound if audio is generated' : 'cinematic ambient sound and restrained music if audio is generated',
-      referenceNotes: '@Image1 storyboard continuity; use entity references for identity, wardrobe, environment, and hero props.',
-    }
-  })
-  return {
-    blockNumber: input.blockNumber,
-    blockCount: input.blockCount,
-    durationSeconds: input.durationSeconds,
-    title: `Block ${input.blockNumber}: ${readText(planBlock.storyFunction) || 'Cinematic beat'}`,
-    storyFunction: readText(planBlock.storyFunction),
-    hook: readText(planBlock.hook),
-    summary: readText(planBlock.summary) || input.prompt,
-    continuityNotes: readStringArray(input.sequencePlan.continuityNotes),
-    shots,
-  }
-}
-
-function validateCinematicBlockScript(script: Record<string, unknown>, durationSeconds: number) {
-  const diagnostics: string[] = []
-  const scriptDuration = Number(script.durationSeconds ?? 0) || durationSeconds
-  if (scriptDuration > 15) diagnostics.push('Block duration exceeds 15 seconds.')
-  if (scriptDuration < 4) diagnostics.push('Block duration is below 4 seconds.')
-  const shots = Array.isArray(script.shots) ? script.shots.map(asRecord) : []
-  if (shots.length < 3) diagnostics.push('Block script needs at least 3 timestamped shots.')
-  let previousEnd = 0
-  shots.forEach((shot, index) => {
-    const start = Number(shot.startTimeSeconds ?? -1)
-    const end = Number(shot.endTimeSeconds ?? -1)
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
-      diagnostics.push(`Shot ${index + 1} has invalid timestamps.`)
-    }
-    if (start < previousEnd - 0.05) diagnostics.push(`Shot ${index + 1} overlaps the previous shot.`)
-    if (end > durationSeconds + 0.05) diagnostics.push(`Shot ${index + 1} exceeds the block duration.`)
-    if (!readText(shot.subject) || !readText(shot.action) || !readText(shot.camera)) {
-      diagnostics.push(`Shot ${index + 1} is missing subject, action, or camera direction.`)
-    }
-    previousEnd = Math.max(previousEnd, end)
-  })
-  return diagnostics
-}
-
-function cinematicBlockScriptMarkdown(script: Record<string, unknown>) {
-  const shots = Array.isArray(script.shots) ? script.shots.map(asRecord) : []
-  return [
-    `# ${readText(script.title) || `Cinematic Block ${Number(script.blockNumber ?? 1)}`}`,
-    readText(script.summary),
-    '',
-    shots.map((shot, index) => [
-      `## Shot ${Number(shot.shotNumber ?? index + 1) || index + 1} (${formatShotSeconds(readShotStartSeconds(shot), 0)}s-${formatShotSeconds(readShotEndSeconds(shot), 0)}s)`,
-      `Subject: ${readText(shot.subject)}`,
-      `Action: ${readText(shot.action)}`,
-      `Camera: ${readText(shot.camera)}`,
-      readText(shot.composition) ? `Composition: ${readText(shot.composition)}` : '',
-      readText(shot.audio) ? `Audio: ${readText(shot.audio)}` : '',
-      readText(shot.referenceNotes) ? `References: ${readText(shot.referenceNotes)}` : '',
-    ].filter(Boolean).join('\n')).join('\n\n'),
-  ].filter(Boolean).join('\n\n')
 }
 
 function readNumericAlias(record: Record<string, unknown>, keys: string[], fallback = 0) {
@@ -9006,50 +5018,6 @@ function formatShotSeconds(value: unknown, fallback: number) {
   const numeric = typeof value === 'number' ? value : Number(readText(value))
   const seconds = Number.isFinite(numeric) ? numeric : fallback
   return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
-}
-
-function parseAspectRatio(value: string) {
-  const [rawWidth, rawHeight] = value.split(':').map((part) => Number(part))
-  if (Number.isFinite(rawWidth) && Number.isFinite(rawHeight) && rawWidth > 0 && rawHeight > 0) {
-    return { width: rawWidth, height: rawHeight }
-  }
-  return { width: 16, height: 9 }
-}
-
-function storyboardLayoutForShotCount(shotCount: number) {
-  const count = Math.max(1, Math.min(16, Math.ceil(shotCount)))
-  if (count <= 3) return { columns: count, rows: 1, panelCount: count }
-  if (count === 4) return { columns: 2, rows: 2, panelCount: count }
-  if (count <= 6) return { columns: 3, rows: 2, panelCount: count }
-  if (count <= 8) return { columns: 4, rows: 2, panelCount: count }
-  if (count === 9) return { columns: 3, rows: 3, panelCount: count }
-  if (count <= 12) return { columns: 4, rows: 3, panelCount: count }
-  return { columns: 4, rows: 4, panelCount: count }
-}
-
-function normalizeStoryboardImageDimension(value: number) {
-  return Math.max(16, Math.min(3072, Math.round(value / 16) * 16))
-}
-
-function storyboardImageSizeForLayout(input: {
-  columns: number
-  rows: number
-  aspectRatio: string
-}) {
-  const ratio = parseAspectRatio(input.aspectRatio)
-  const landscapeOrSquare = ratio.width >= ratio.height
-  const panelShortSide = 432
-  const rawWidth = landscapeOrSquare
-    ? input.columns * panelShortSide * (ratio.width / ratio.height)
-    : input.columns * panelShortSide
-  const rawHeight = landscapeOrSquare
-    ? input.rows * panelShortSide
-    : input.rows * panelShortSide * (ratio.height / ratio.width)
-  const scale = Math.min(1, 3072 / Math.max(rawWidth, rawHeight))
-  return {
-    width: normalizeStoryboardImageDimension(rawWidth * scale),
-    height: normalizeStoryboardImageDimension(rawHeight * scale),
-  }
 }
 
 function compactCinematicEntityAnchors(assetPack: Record<string, unknown>, limit = 8) {
@@ -9114,25 +5082,6 @@ function cinematicEntityLabelByKey(assetPack: Record<string, unknown>) {
   return labels
 }
 
-function resolveCinematicV2AnimaticMode(config: Record<string, unknown>, run?: OutputWorkflowRun | null) {
-  const runInput = asRecord(run?.input)
-  const runMetadata = asRecord(run?.metadata)
-  const raw = readText(runInput.cinematicV2AnimaticMode)
-    || readText(runMetadata.cinematicV2AnimaticMode)
-    || readText(config.cinematicV2AnimaticMode)
-  return raw === 'quality_keyframes' ? 'quality_keyframes' : 'fast_panels'
-}
-
-function resolveCinematicV2QualityShotIds(config: Record<string, unknown>, run?: OutputWorkflowRun | null) {
-  const runInput = asRecord(run?.input)
-  const runMetadata = asRecord(run?.metadata)
-  return uniqueStrings([
-    ...readStringArray(runInput.cinematicV2QualityShotIds),
-    ...readStringArray(runMetadata.cinematicV2QualityShotIds),
-    ...readStringArray(config.cinematicV2QualityShotIds),
-  ])
-}
-
 function formatCinematicEntityAnchorLines(entities: ReturnType<typeof compactCinematicEntityAnchors>) {
   return entities.map((entity) => {
     const parts = [
@@ -9144,45 +5093,6 @@ function formatCinematicEntityAnchorLines(entities: ReturnType<typeof compactCin
     ].filter(Boolean)
     return `${entity.name || 'Visual anchor'}: ${parts.join('. ')}.`
   }).join('\n')
-}
-
-function buildSeedanceCharacterVoiceGuide(input: {
-  assetPack: Record<string, unknown>
-  shots: Array<z.infer<typeof cinematicV2ShotSchema>>
-  limit?: number
-  visualIdentityKeys?: Set<string>
-}) {
-  const entityByKey = cinematicEntityByKey(input.assetPack)
-  const orderedKeys = uniqueStrings(input.shots.flatMap((shot) => [
-    ...shot.visibleCharacterRefIds,
-    ...shot.speakerRefIds,
-    ...shot.performanceBeats.map((beat) => beat.characterRefId),
-  ]))
-  const fallbackKeys = cinematicAssetPackEntities(input.assetPack)
-    .filter((entity) => ['actor', 'character', 'persona', 'group'].includes(readText(entity.type) || readText(entity.role)))
-    .map((entity) => readText(entity.key))
-    .filter(Boolean)
-  const keys = uniqueStrings([...orderedKeys, ...fallbackKeys]).slice(0, Math.max(1, input.limit ?? 8))
-  const lines: string[] = []
-  for (const key of keys) {
-    const entity = entityByKey.get(key)
-    if (!entity) continue
-    const name = readText(entity.name) || key
-    const summary = readText(entity.summary)
-    const includeVisualIdentity = !input.visualIdentityKeys || input.visualIdentityKeys.has(key)
-    const visualDescription = readText(entity.visualDescription)
-    const visualTraits = readStringArray(entity.visualTraits)
-    const voiceDescription = readText(entity.voiceDescription)
-      || composeWorldEntityVoiceDescription(asRecord(entity.voice))
-    const descriptors = [
-      summary ? `role: ${compactBeatCaptionSentence(summary, '', 12).replace(/\.$/, '')}` : '',
-      includeVisualIdentity && visualDescription ? `identity: ${compactBeatCaptionSentence(visualDescription, '', 14).replace(/\.$/, '')}` : '',
-      includeVisualIdentity && visualTraits.length > 0 ? `traits: ${visualTraits.slice(0, 5).join(', ')}` : '',
-      voiceDescription ? `voice: ${compactBeatCaptionSentence(voiceDescription, '', 24).replace(/\.$/, '')}` : '',
-    ].filter(Boolean)
-    if (descriptors.length > 0) lines.push(`- ${name}: ${descriptors.join('; ')}.`)
-  }
-  return lines.join('\n')
 }
 
 function formatTimecode(seconds: number) {
@@ -9997,59 +5907,6 @@ function buildCinematicKeyframePromptPack(input: {
   }
 }
 
-function buildCinematicStoryboardPrompt(input: {
-  blockScript: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  aspectRatio: string
-  prompt: string
-  guidance: OutputGuidanceBundle | null
-  debugCinematicStoryboardStyleSafeMode?: boolean
-  cinematicStoryboardStyleOverride?: string
-}) {
-  const shots = Array.isArray(input.blockScript.shots) ? input.blockScript.shots.map(asRecord) : []
-  const storyboardPanels = Array.isArray(input.blockScript.storyboardPanels) ? input.blockScript.storyboardPanels.map(asRecord) : []
-  const entities = compactCinematicEntityAnchors(input.assetPack, 10)
-  const layout = storyboardLayoutForShotCount(storyboardPanels.length || shots.length || 1)
-  const imageSize = storyboardImageSizeForLayout({
-    columns: layout.columns,
-    rows: layout.rows,
-    aspectRatio: input.aspectRatio,
-  })
-  const safeMode = input.debugCinematicStoryboardStyleSafeMode === true
-  const storyboardStyle = safeMode
-    ? (readText(input.cinematicStoryboardStyleOverride) || DEFAULT_CINEMATIC_STORYBOARD_STYLE_PROMPT)
-    : ''
-  const shotLines = storyboardPanels.length > 0
-    ? storyboardPanels.slice(0, layout.panelCount).map((panel, index) => [
-      `Panel ${index + 1}: ${readText(panel.title) || readText(panel.shotId) || `Storyboard panel ${index + 1}`}.`,
-      readText(panel.description),
-    ].filter(Boolean).join(' '))
-    : shots.slice(0, layout.panelCount).map((shot, index) => [
-      `Panel ${index + 1}: ${formatShotSeconds(readShotStartSeconds(shot), index)}s-${formatShotSeconds(readShotEndSeconds(shot), index + 1)}s.`,
-      `Subject: ${readText(shot.subject)}.`,
-      `Action: ${readText(shot.action)}.`,
-      `Camera: ${readText(shot.camera)}.`,
-    ].filter(Boolean).join(' '))
-  return [
-    `Create a clean ${layout.columns}-column x ${layout.rows}-row storyboard contact sheet with exactly ${layout.panelCount} panels for a ${readText(input.blockScript.durationSeconds)} second cinematic video block.`,
-    `Every panel must be ${input.aspectRatio}, matching the final video aspect ratio. Arrange panels in timestamp order, left-to-right then top-to-bottom.`,
-    `Target storyboard canvas: ${imageSize.width}x${imageSize.height}.`,
-    'Each panel is one shot thumbnail. Do not add extra panels or leave blank placeholder panels. Use consistent identity, wardrobe, environment, props, palette, and camera continuity across panels.',
-    'No captions, labels, speech bubbles, watermarks, signatures, UI, or visible text unless the user explicitly requested on-screen text.',
-    `Block title: ${readText(input.blockScript.title)}`,
-    `Block summary: ${readText(input.blockScript.summary)}`,
-    'Shot panels:',
-    shotLines.join('\n'),
-    entities.length > 0 ? 'Canonical visual identity anchors:' : '',
-    entities.length > 0 ? compactForPrompt({ entities }, 3200) : '',
-    input.prompt ? `User style brief: ${input.prompt}` : '',
-    safeMode
-      ? `Render as ${storyboardStyle}; this is a stylized production-board translation, not photorealistic likeness. Preserve reference identity anchors, silhouette, wardrobe, props, palette, and environment geometry tightly.`
-      : 'Render as low-detail but readable cinematic storyboard art, not a poster and not a finished comic page.',
-    `Storyboard style safe mode: ${safeMode ? 'painterly comic-book' : 'disabled'}.`,
-  ].filter(Boolean).join('\n\n')
-}
-
 function formatSeedanceDialogueForShot(shot: Record<string, unknown>) {
   const dialogueRecords = readShotDialogueRecords(shot).filter((entry) => readText(entry.line))
   if (dialogueRecords.length === 0) return ''
@@ -10079,227 +5936,6 @@ function formatSeedanceActionForShot(shot: Record<string, unknown>) {
     || cleanBeatCaptionText(shot.composition)
     || cleanBeatCaptionText(shot.beat)
     || 'one coherent visible action'
-}
-
-type SeedanceReferenceRecord = {
-  url?: string
-  label: string
-  role?: string
-  modality?: 'image' | 'video' | 'audio'
-}
-
-function compactSeedanceLabel(value: string, fallback: string) {
-  const cleaned = value.replace(/\s+/g, ' ').trim()
-  return cleaned ? cleaned.slice(0, 140) : fallback
-}
-
-function seedanceImageReferenceLabel(image: Record<string, unknown>, cinematicReferenceMode: string, fallbackIndex: number) {
-  const metadata = asRecord(image.metadata)
-  const role = readText(image.role) || readText(metadata.role)
-  const name = readText(image.name) || readText(image.title) || readText(image.label)
-  if (role === 'cinematic_v3_storyboard_sheet') return 'storyboard sheet'
-  if (role === 'cinematic_beat_sheet') return 'storyboard beat sheet'
-  if (role === 'cinematic_direction_sheet') return 'cinematic direction sheet'
-  if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') {
-    const keyframeIndex = Number(image.keyframeIndex ?? metadata.keyframeIndex ?? fallbackIndex - 1) || 0
-    return keyframeIndex === 0 ? 'opening shot keyframe' : keyframeIndex === 1 ? 'midpoint shot keyframe' : keyframeIndex === 2 ? 'ending shot keyframe' : `shot keyframe ${keyframeIndex + 1}`
-  }
-  if (role === 'cinematic_v2_storyboard_panel' || role === 'cinematic_v3_storyboard_panel') return name || 'cropped storyboard panel'
-  if (name) return name
-  return normalizeCinematicReferenceMode(cinematicReferenceMode) === 'keyframes' ? `keyframe/reference image ${fallbackIndex}` : `reference image ${fallbackIndex}`
-}
-
-function seedanceReferenceRoleDescription(entry: SeedanceReferenceRecord, cinematicReferenceMode: string, index: number) {
-  const role = readText(entry.role)
-  if (role === 'storyboard_sheet' || /storyboard/i.test(entry.label)) return 'primary sequential storyboard keyframe reference'
-  if (role === 'direction_sheet') return 'primary director/camera/spatial reference'
-  if (role === 'keyframe') return index === 1 && normalizeCinematicReferenceMode(cinematicReferenceMode) === 'keyframes'
-    ? 'primary opening keyframe reference'
-    : 'keyframe continuity reference'
-  if (role === 'entity_reference') return 'entity identity, wardrobe, variant, or prop continuity reference'
-  if (role === 'location_reference') return 'environment or shot-location continuity reference'
-  if (role === 'video_reference') return 'motion continuity reference'
-  if (role === 'audio_reference') return 'audio continuity reference'
-  return 'supporting continuity reference'
-}
-
-export function buildSeedanceReferenceManifest(input: {
-  imageReferences?: SeedanceReferenceRecord[]
-  videoReferences?: SeedanceReferenceRecord[]
-  audioReferences?: SeedanceReferenceRecord[]
-  cinematicReferenceMode?: string
-}) {
-  const cinematicReferenceMode = normalizeCinematicReferenceMode(input.cinematicReferenceMode)
-  const entries: SeedanceReferenceManifestEntry[] = []
-  const pushEntries = (records: SeedanceReferenceRecord[] | undefined, modality: 'image' | 'video' | 'audio') => {
-    const source = records ?? []
-    source.forEach((record, localIndex) => {
-      const index = localIndex + 1
-      const prefix = modality === 'image' ? 'Image' : modality === 'video' ? 'Video' : 'Audio'
-      const label = compactSeedanceLabel(record.label, `${modality} reference ${index}`)
-      entries.push({
-        tag: `@${prefix}${index}`,
-        modality,
-        index,
-        label,
-        role: seedanceReferenceRoleDescription(record, cinematicReferenceMode, index),
-        url: record.url,
-      })
-    })
-  }
-  pushEntries(input.imageReferences, 'image')
-  pushEntries(input.videoReferences, 'video')
-  pushEntries(input.audioReferences, 'audio')
-  return entries
-}
-
-export function formatSeedanceReferenceManifest(manifest: SeedanceReferenceManifestEntry[]) {
-  if (manifest.length === 0) return 'No provider references are attached; use the written identity, action, and continuity instructions only.'
-  return manifest.map((entry) => `${entry.tag}: ${entry.label}; ${entry.role}.`).join('\n')
-}
-
-function seedanceStoryboardManifestInstruction(manifest: SeedanceReferenceManifestEntry[]) {
-  const storyboard = manifest.find((entry) => entry.modality === 'image' && /storyboard/i.test(`${entry.label} ${entry.role}`))
-  if (!storyboard) return ''
-  return `Treat ${storyboard.tag} as sequential visual keyframes for this clip. Follow its panel order, action progression, camera rhythm, framing, readable movement direction, lighting continuity, and pacing. Do not render storyboard markings, arrows, labels, panel numbers, borders, gutters, captions, notes, UI, or watermarks.`
-}
-
-function seedanceProductionBoardArtifactBan(manifest: SeedanceReferenceManifestEntry[]) {
-  const hasBoard = manifest.some((entry) => entry.modality === 'image' && /(storyboard|direction sheet|keyframe|panel)/i.test(`${entry.label} ${entry.role}`))
-  return hasBoard
-    ? 'Do not render production-board artifacts: no arrows, labels, captions, subtitles, guide boxes, panel borders, grid gutters, map diagrams, UI, logos, watermarks, or handwritten notes.'
-    : 'Do not render captions, subtitles, UI, logos, watermarks, or unrelated text.'
-}
-
-function formatSeedanceDirectedControls(controls: SeedanceDirectedControls) {
-  const lines = [
-    readText(controls.cameraMotion) ? `Camera: ${readText(controls.cameraMotion)}.` : '',
-    readText(controls.subjectMotion) ? `Subject motion: ${readText(controls.subjectMotion)}.` : '',
-    readText(controls.focusTarget) ? `Focus: ${readText(controls.focusTarget)}.` : '',
-    readText(controls.framingLock) ? `Framing: ${readText(controls.framingLock)}.` : '',
-    readText(controls.visibility) ? `Visibility: ${readText(controls.visibility)}.` : '',
-    readText(controls.performance) ? `Performance: ${readText(controls.performance)}.` : '',
-    readText(controls.voice) ? `Voice: ${readText(controls.voice)}.` : '',
-    readText(controls.motionIntensity) ? `Motion: ${readText(controls.motionIntensity)}.` : '',
-  ].filter(Boolean)
-  return lines.join('\n')
-}
-
-function formatSeedanceShotLine(input: {
-  shot: z.infer<typeof cinematicV2ShotSchema>
-  startSeconds: number
-  endSeconds: number
-  dialogueLines?: string
-}) {
-  const action = compactSeedanceControlText(input.shot.action || input.shot.description || input.shot.storyboardPanelPrompt || input.shot.title, 34)
-  const timing = `${formatTimecode(input.startSeconds)}-${formatTimecode(input.endSeconds)}`
-  return [
-    `${timing}: ${action}.`,
-    input.dialogueLines ? `Dialogue: ${input.dialogueLines}.` : '',
-  ].filter(Boolean).join(' ')
-}
-
-function buildCompactSeedanceVideoPrompt(input: {
-  durationSeconds: number
-  aspectRatio: string
-  resolution: string
-  referenceManifest: SeedanceReferenceManifestEntry[]
-  referenceInstruction?: string
-  directedControls: SeedanceDirectedControls | SeedanceDirectedControls[]
-  shotSectionTitle?: 'SHOT' | 'SHOTS'
-  shotLines: string
-  identityGuide?: string
-  audioPolicy?: string
-  movementLogic?: string
-  artifactBan?: string
-  clipLabel?: string
-}) {
-  const controlBlocks = Array.isArray(input.directedControls)
-    ? input.directedControls.map((controls, index) => {
-      const block = formatSeedanceDirectedControls(controls)
-      return block ? `Shot ${index + 1}: ${block.replace(/\n/g, ' ')}` : ''
-    }).filter(Boolean).join('\n')
-    : formatSeedanceDirectedControls(input.directedControls)
-  const artifactBan = readText(input.artifactBan) || seedanceProductionBoardArtifactBan(input.referenceManifest)
-  const hasStoryboard = input.referenceManifest.some((entry) => entry.modality === 'image' && /storyboard/i.test(`${entry.label} ${entry.role}`))
-  const compositionTarget = hasStoryboard ? 'storyboard/keyframe composition' : 'keyframe composition'
-  return compactSeedancePromptForProvider([
-    `Generate one Seedance 2 clip${input.clipLabel ? ` for ${input.clipLabel}` : ''}, ${input.aspectRatio}, ${input.resolution}.`,
-    '[REFERENCE LEGEND]',
-    formatSeedanceReferenceManifest(input.referenceManifest),
-    readText(input.referenceInstruction),
-    controlBlocks ? '[DIRECTED CONTROLS]' : '',
-    controlBlocks,
-    `[${input.shotSectionTitle ?? 'SHOT'}]`,
-    input.shotLines,
-    input.identityGuide ? `[PERFORMANCE / VOICE]\n${input.identityGuide}` : '',
-    input.audioPolicy ? `[AUDIO]\n${input.audioPolicy}` : '',
-    input.movementLogic ? `[MOVEMENT LOGIC]\n${input.movementLogic}` : '',
-    `${artifactBan} Preserve attached refs and ${compositionTarget}.`,
-  ].filter(Boolean).join('\n\n'))
-}
-
-function seedanceShotPhysicalityText(shot: Record<string, unknown>) {
-  return [
-    readText(shot.title),
-    readText(shot.action),
-    readText(shot.description),
-    readText(shot.videoDirection),
-    readText(shot.mood),
-    readText(shot.lighting),
-    JSON.stringify(shot.performanceBeats ?? ''),
-  ].join(' ').toLowerCase()
-}
-
-function shouldUseSeedanceLabanMovement(input: { shots: Record<string, unknown>[]; prompt: string }) {
-  const text = `${input.prompt} ${input.shots.map(seedanceShotPhysicalityText).join(' ')}`
-  const physicalHits = countRegexMatches(text, /\b(fight|combat|martial|kung\s*fu|karate|ninja|samurai|duel|chase|sprint|leap|jump|kick|strike|punch|staff|sword|blade|dodge|tumble|flip|parkour|impact|vortex|shockwave|battle)\b/g)
-  const quietHits = countRegexMatches(text, /\b(dialogue|conversation|whisper|quiet|banter|romance|tender|still|subtle|mystery|investigate|environment|establishing)\b/g)
-  return physicalHits >= 2 && physicalHits > quietHits
-}
-
-function seedanceLabanMovementBlock(shots: Record<string, unknown>[], prompt: string) {
-  if (!shouldUseSeedanceLabanMovement({ shots, prompt })) return ''
-  return [
-    'Laban movement logic for physical action only:',
-    '- weight: strong and grounded on impacts; light during jumps, aerial turns, or recoveries.',
-    '- time: quick during strikes, dodges, runs, and impacts; sustained during held poses or suspended beats.',
-    '- space: direct for attacks, lunges, throws, and goal-oriented motion; indirect for spins, evasions, or swirling effects.',
-    '- flow: bound for precise controlled moves; free for cloth, hair, debris, and release moments.',
-  ].join('\n')
-}
-
-function seedanceReferenceRecordsFromImages(images: Record<string, unknown>[], cinematicReferenceMode: string): SeedanceReferenceRecord[] {
-  return images.map((image, index) => ({
-    label: seedanceImageReferenceLabel(image, cinematicReferenceMode, index + 1),
-    role: (() => {
-      const role = readText(image.role) || readText(asRecord(image.metadata).role)
-      if (role === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_beat_sheet') return 'storyboard_sheet'
-      if (role === 'cinematic_direction_sheet') return 'direction_sheet'
-      if (role === 'cinematic_keyframe' || role === 'cinematic_v2_shot_keyframe') return 'keyframe'
-      return 'image_reference'
-    })(),
-    modality: 'image',
-  }))
-}
-
-function seedanceReferenceRecordsFromAssetPack(assetPack: Record<string, unknown>, limit = 4): SeedanceReferenceRecord[] {
-  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
-  return entities.slice(0, Math.max(0, limit)).map((entity) => {
-    const name = readText(entity.name) || readText(entity.key) || 'Entity reference'
-    const type = readText(entity.type) || readText(entity.role)
-    const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
-    const selectedVariantLabel = readText(entity.selectedReferenceVariantLabel)
-    const selectedVariantSummary = readText(entity.selectedReferenceVariantSummary)
-    const variantText = selectedVariantKey && selectedVariantKey !== 'default'
-      ? `${selectedVariantLabel || selectedVariantKey} variant${selectedVariantSummary ? `, ${compactBeatCaptionSentence(selectedVariantSummary, '', 16).replace(/\.$/, '')}` : ''}`
-      : 'default reference'
-    return {
-      label: `${name} ${variantText}`,
-      role: ['location', 'place', 'environment', 'location_spot'].includes(type) ? 'location_reference' : 'entity_reference',
-      modality: 'image' as const,
-    }
-  })
 }
 
 export function rewriteSeedanceReferenceLegend(prompt: string, manifest: SeedanceReferenceManifestEntry[], referencePolicy = '') {
@@ -10586,391 +6222,6 @@ function inferCinematicV2ScreenplayTitle(markdown: string, fallbackTitle: string
     .map((line) => line.trim())
     .find((line) => /^#{1,3}\s+\S/.test(line))
   return heading ? heading.replace(/^#{1,3}\s+/, '').trim().slice(0, 120) || fallbackTitle : fallbackTitle
-}
-
-type CinematicV3ShotBreak = {
-  id: string
-  index: number
-  title: string
-  approximateDurationSeconds: number
-  startOffset: number
-  endOffset: number
-  text: string
-}
-
-type CinematicV3ShotBreakGroup = {
-  id: string
-  index: number
-  shotBreakIds: string[]
-  shotBreaks: CinematicV3ShotBreak[]
-  title: string
-  summary: string
-  startOffset: number
-  endOffset: number
-  screenplayExcerpt: string
-  approximateDurationSeconds: number
-  rows: number
-  columns: number
-  panelCount: number
-}
-
-function parseCinematicV3ShotMarker(line: string) {
-  const anchor = line.match(/^\s*#shot\b\s*:?\s*([^|(\n]+?)(?:\s*(?:\||\()\s*~?\s*(\d+(?:\.\d+)?)\s*s?\)?)?\s*$/i)
-  if (anchor) {
-    return {
-      index: 0,
-      title: anchor[1]?.trim() || '',
-      durationSeconds: Number(anchor[2] ?? 0) || null,
-      deterministicIndex: true,
-    }
-  }
-  const html = line.match(/<!--\s*SHOT\s+(\d{1,3})\s*:\s*([^|>-]+?)(?:\s*\|\s*~?\s*(\d+(?:\.\d+)?)\s*s?)?\s*-->/i)
-  if (html) {
-    return {
-      index: Number(html[1]) || 0,
-      title: html[2]?.trim() || '',
-      durationSeconds: Number(html[3] ?? 0) || null,
-      deterministicIndex: false,
-    }
-  }
-  const markdown = line.match(/^\s*(?:#{2,4}\s*)?SHOT\s+(\d{1,3})\s*[:\-]\s*([^|(\n]+?)(?:\s*(?:\||\()\s*~?\s*(\d+(?:\.\d+)?)\s*s?\)?)?\s*$/i)
-  if (markdown) {
-    return {
-      index: Number(markdown[1]) || 0,
-      title: markdown[2]?.trim() || '',
-      durationSeconds: Number(markdown[3] ?? 0) || null,
-      deterministicIndex: false,
-    }
-  }
-  return null
-}
-
-function estimateCinematicV3ShotDurationSeconds(text: string, fallback = 3) {
-  const explicit = text.match(/\b(?:duration|~)\s*:?\s*(\d+(?:\.\d+)?)\s*(?:sec|secs|second|seconds|s)\b/i)
-  const value = Number(explicit?.[1] ?? 0)
-  if (Number.isFinite(value) && value > 0) return Math.max(1, Math.min(8, value))
-  const dialogueLineCount = (text.match(/^[A-Z][A-Z\s.'-]{1,40}\s*$/gm) ?? []).length
-  const paragraphCount = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean).length
-  return Math.max(2, Math.min(6, fallback + Math.min(2, Math.floor(paragraphCount / 2)) + Math.min(2, dialogueLineCount)))
-}
-
-function buildCinematicV3FallbackShotBreaks(markdown: string, maxShotCount: number): CinematicV3ShotBreak[] {
-  const body = markdown.replace(/^#{1,3}\s+.*$/gm, '').trim()
-  const paragraphs = body.split(/\n{2,}/).map((part) => part.trim()).filter((part) => part && !/^##\s*(Performance Notes|Visual Motifs)/i.test(part))
-  const chunks: string[] = []
-  let current = ''
-  for (const paragraph of paragraphs) {
-    const next = current ? `${current}\n\n${paragraph}` : paragraph
-    if (current && next.length > 900) {
-      chunks.push(current)
-      current = paragraph
-    } else {
-      current = next
-    }
-    if (chunks.length >= maxShotCount - 1) break
-  }
-  if (current && chunks.length < maxShotCount) chunks.push(current)
-  const fallbackChunks = chunks.length > 0 ? chunks : [markdown.slice(0, 1200)]
-  let searchOffset = 0
-  return fallbackChunks.map((text, index) => {
-    const foundOffset = markdown.indexOf(text, searchOffset)
-    const startOffset = foundOffset >= 0 ? foundOffset : searchOffset
-    searchOffset = startOffset + text.length
-    return {
-      id: `shot_${String(index + 1).padStart(3, '0')}`,
-      index: index + 1,
-      title: truncateStatusText(text.split(/\r?\n/).find((line) => line.trim())?.trim() || `Shot ${index + 1}`, 80),
-      approximateDurationSeconds: estimateCinematicV3ShotDurationSeconds(text, 3),
-      startOffset,
-      endOffset: startOffset + text.length,
-      text,
-    }
-  })
-}
-
-function buildCinematicV3ShotBreakPlan(input: {
-  screenplayDraft: Record<string, unknown>
-  maxShotCount?: number
-  maxPanelsPerSheet?: number
-  maxDurationPerGroupSeconds?: number
-}) {
-  const draft = cinematicV2ScreenplayDraftSchema.safeParse(input.screenplayDraft)
-  const markdown = draft.success ? draft.data.screenplayMarkdown : readText(input.screenplayDraft.screenplayMarkdown)
-  const maxShotCount = Math.max(1, Math.min(36, Math.floor(input.maxShotCount ?? 18) || 18))
-  const maxPanels = Math.max(1, Math.min(9, Math.floor(input.maxPanelsPerSheet ?? 9) || 9))
-  const maxDuration = Math.max(1, Math.min(15, Number(input.maxDurationPerGroupSeconds ?? 15) || 15))
-  const markerMatches: Array<{ marker: NonNullable<ReturnType<typeof parseCinematicV3ShotMarker>>, offset: number, markerText: string }> = []
-  const markerPattern = /<!--\s*SHOT\s+\d{1,3}\s*:[\s\S]*?-->|^\s*#shot\b.*$|^\s*(?:#{2,4}\s*)?SHOT\s+\d{1,3}\s*[:\-].*$/gim
-  for (const match of markdown.matchAll(markerPattern)) {
-    const markerText = match[0] ?? ''
-    const marker = parseCinematicV3ShotMarker(markerText)
-    if (marker) markerMatches.push({ marker, offset: match.index ?? 0, markerText })
-    if (markerMatches.length >= maxShotCount) break
-  }
-  let shotBreaks: CinematicV3ShotBreak[] = markerMatches.map((match, index) => {
-    const nextOffset = markerMatches[index + 1]?.offset ?? markdown.length
-    const textStart = match.offset + match.markerText.length
-    const text = markdown.slice(textStart, nextOffset).trim()
-    const duration = match.marker.durationSeconds || estimateCinematicV3ShotDurationSeconds(text, 3)
-    const markerIndex = index + 1
-    return {
-      id: `shot_${String(markerIndex).padStart(3, '0')}`,
-      index: markerIndex,
-      title: truncateStatusText(match.marker.title || `Shot ${markerIndex}`, 80),
-      approximateDurationSeconds: Math.max(1, Math.min(8, duration)),
-      startOffset: match.offset,
-      endOffset: nextOffset,
-      text,
-    }
-  }).filter((shot) => shot.text.trim())
-  const diagnostics: string[] = []
-  if (shotBreaks.length === 0) {
-    shotBreaks = buildCinematicV3FallbackShotBreaks(markdown, maxShotCount)
-    diagnostics.push('No screenplay shot markers found; derived fallback shot breaks from screenplay paragraphs.')
-  }
-  shotBreaks = shotBreaks
-    .slice(0, maxShotCount)
-    .map((shot, index) => ({
-      ...shot,
-      id: `shot_${String(index + 1).padStart(3, '0')}`,
-      index: index + 1,
-    }))
-  const groups: CinematicV3ShotBreakGroup[] = []
-  let current: CinematicV3ShotBreak[] = []
-  const flush = () => {
-    if (!current.length) return
-    const groupIndex = groups.length + 1
-    const layout = buildCinematicV3StoryboardLayout(current.length)
-    const excerpt = markdown.slice(current[0].startOffset, current[current.length - 1].endOffset).trim()
-    const duration = current.reduce((total, shot) => total + shot.approximateDurationSeconds, 0)
-    groups.push({
-      id: `cinematic_v3_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
-      index: groupIndex,
-      shotBreakIds: current.map((shot) => shot.id),
-      shotBreaks: current,
-      title: `Storyboard ${groupIndex}`,
-      summary: current.map((shot) => shot.title).filter(Boolean).join(' / '),
-      startOffset: current[0].startOffset,
-      endOffset: current[current.length - 1].endOffset,
-      screenplayExcerpt: excerpt,
-      approximateDurationSeconds: duration,
-      rows: layout.rows,
-      columns: layout.columns,
-      panelCount: layout.panelCount,
-    })
-    current = []
-  }
-  for (const shotBreak of shotBreaks) {
-    const currentDuration = current.reduce((total, shot) => total + shot.approximateDurationSeconds, 0)
-    if (current.length > 0 && (current.length >= maxPanels || currentDuration + shotBreak.approximateDurationSeconds > maxDuration)) flush()
-    current.push(shotBreak)
-  }
-  flush()
-  if (groups.length > 1) diagnostics.push(`Split ${shotBreaks.length} screenplay shot markers into ${groups.length} parse/storyboard groups.`)
-  return {
-    shotBreaks,
-    groups,
-    maxPanelsPerSheet: maxPanels,
-    maxDurationPerGroupSeconds: maxDuration,
-    diagnostics,
-  }
-}
-
-function buildSequenceAnimaticScriptShotProjection(shotBreakPlan: Record<string, unknown>) {
-  const rawShots = readArray(shotBreakPlan.shotBreaks ?? shotBreakPlan.shot_breaks).map(asRecord)
-  const scriptShots = rawShots.map((shot, index) => {
-    const shotIndex = Number(shot.index ?? 0) || index + 1
-    const id = readText(shot.id) || `shot_${String(shotIndex).padStart(3, '0')}`
-    const approximateDurationSeconds = Math.max(1, Math.min(12, Number(shot.approximateDurationSeconds ?? shot.durationSeconds ?? 0) || 3))
-    return {
-      id,
-      index: shotIndex,
-      title: truncateStatusText(readText(shot.title) || `Shot ${shotIndex}`, 80),
-      approximateDurationSeconds,
-      screenplayText: readText(shot.screenplayText) || readText(shot.screenplay_text) || readText(shot.text),
-      startOffset: Number.isFinite(Number(shot.startOffset)) ? Number(shot.startOffset) : undefined,
-      endOffset: Number.isFinite(Number(shot.endOffset)) ? Number(shot.endOffset) : undefined,
-    }
-  })
-  const shotById = new Map(scriptShots.map((shot) => [shot.id, shot] as const))
-  const scriptBlocks = readArray(shotBreakPlan.groups).map(asRecord).map((group, index) => {
-    const blockIndex = Number(group.index ?? 0) || index + 1
-    const shotIds = readStringArray(group.shotBreakIds ?? group.shot_break_ids)
-      .filter((shotId) => shotById.has(shotId))
-    const approximateDurationSeconds = Number(group.approximateDurationSeconds ?? 0)
-      || shotIds.reduce((total, shotId) => total + (shotById.get(shotId)?.approximateDurationSeconds ?? 0), 0)
-    return {
-      id: readText(group.id) || `script_block_${String(blockIndex).padStart(3, '0')}`,
-      index: blockIndex,
-      title: truncateStatusText(readText(group.title) || readText(group.summary) || `Screenplay block ${blockIndex}`, 96),
-      shotIds,
-      approximateDurationSeconds,
-    }
-  }).filter((block) => block.shotIds.length > 0)
-  if (scriptShots.length > 0 && scriptBlocks.length === 0) {
-    scriptBlocks.push({
-      id: 'script_block_001',
-      index: 1,
-      title: 'Screenplay shots',
-      shotIds: scriptShots.map((shot) => shot.id),
-      approximateDurationSeconds: scriptShots.reduce((total, shot) => total + shot.approximateDurationSeconds, 0),
-    })
-  }
-  return {
-    scriptShotStatus: scriptShots.length > 0 ? 'ready' : 'missing',
-    scriptShots,
-    scriptBlocks,
-  }
-}
-
-function buildSequenceAnimaticShotPlanFromBreaks(input: {
-  shotBreakPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  context: Record<string, unknown>
-}) {
-  const shotBreaks = Array.isArray(input.shotBreakPlan.shotBreaks)
-    ? input.shotBreakPlan.shotBreaks.map(asRecord)
-    : []
-  const fallbackLocationRefId = cinematicV2LocationRefId(input.assetPack, input.context)
-  const shots = shotBreaks.map((shotBreak, index) => {
-    const shotId = readText(shotBreak.id) || `shot_${String(index + 1).padStart(3, '0')}`
-    const duration = Math.max(1, Math.min(8, Number(shotBreak.approximateDurationSeconds ?? 0) || 3))
-    const title = truncateStatusText(readText(shotBreak.title) || `Shot ${index + 1}`, 80)
-    const action = readText(shotBreak.text) || title
-    const purpose = index === 0
-      ? 'establishing'
-      : index === shotBreaks.length - 1 ? 'closing' : 'action'
-    return cinematicV2ShotSchema.parse({
-      id: shotId,
-      sceneId: 'sequence_animatic_master',
-      index: index + 1,
-      title,
-      purpose,
-      editorialDurationSeconds: duration,
-      providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
-      description: action,
-      action,
-      caption: title,
-      lighting: '',
-      mood: '',
-      storyboardPanelPrompt: `Storyboard ${shotId}: ${action}`,
-      videoDirection: action,
-      dialogue: [],
-      speakerRefIds: [],
-      visibleCharacterRefIds: [],
-      performanceBeats: [],
-      locationRefId: fallbackLocationRefId,
-      worldLocationRefId: fallbackLocationRefId,
-      propRefIds: [],
-      continuityInputs: [],
-      camera: {
-        framing: index === 0 ? 'wide establishing frame' : 'readable cinematic frame',
-        angle: 'eye level',
-        lens: '',
-        movement: index === 0 ? 'controlled establishing movement' : 'motivated shot movement',
-        screenDirectionRule: '',
-      },
-      requiresLipSync: false,
-      status: 'planned',
-    })
-  })
-  return cinematicV2ShotPlanSchema.parse({
-    sceneId: 'sequence_animatic_master',
-    totalEditorialDurationSeconds: Math.max(1, shots.reduce((total, shot) => total + shot.editorialDurationSeconds, 0)),
-    shots,
-    performanceArc: [],
-    audioPlan: { ambience: '', music: '', sfx: [], dialogueTrackCount: 0, placeholderOnly: true },
-    diagnostics: ['Derived initial sequence animatic shot plan from screenplay shot breaks; shot continuity plan will assign final references and continuity graph bindings.'],
-  })
-}
-
-function buildCinematicV3StoryboardGroupFromShotBreakGroup(
-  group: Record<string, unknown>,
-  index: number,
-): z.infer<typeof cinematicV2StoryboardGroupPlanSchema>['groups'][number] {
-  const groupIndex = Number(group.index ?? 0) || index + 1
-  const shotIds = readStringArray(group.shotBreakIds).length > 0
-    ? readStringArray(group.shotBreakIds)
-    : (Array.isArray(group.shotBreaks) ? group.shotBreaks.map(asRecord).map((shot) => readText(shot.id)).filter(Boolean) : [])
-  const panelCount = Math.max(1, Math.min(9, Number(group.panelCount ?? 0) || shotIds.length || 1))
-  const layout = buildCinematicV3StoryboardLayout(panelCount)
-  const duration = Math.max(1, Math.min(15, Number(group.approximateDurationSeconds ?? group.editorialDurationSeconds ?? 0) || panelCount * 3))
-  const startSeconds = Math.max(0, Number(group.startSeconds ?? 0) || 0)
-  return cinematicV2StoryboardGroupPlanSchema.shape.groups.element.parse({
-    id: readText(group.id) || `cinematic_v3_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
-    index: groupIndex,
-    shotIds: shotIds.length > 0 ? shotIds.slice(0, 9) : [`shot_${String(groupIndex).padStart(3, '0')}`],
-    summary: readText(group.summary) || readText(group.title) || `Storyboard ${groupIndex}`,
-    rows: layout.rows,
-    columns: layout.columns,
-    panelCount: layout.panelCount,
-    startSeconds,
-    endSeconds: startSeconds + duration,
-    editorialDurationSeconds: duration,
-    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
-    continuityNotes: [
-      ...readStringArray(group.continuityNotes),
-      `Storyboard block ${groupIndex} from screenplay shot markers.`,
-    ],
-  })
-}
-
-function collectCinematicV3ShotPlansFromUpstream(upstream: Record<string, Record<string, unknown>>) {
-  return Object.values(upstream)
-    .map((outputs) => cinematicV2ShotPlanSchema.safeParse(outputs.shotPlan ?? outputs.shot_plan))
-    .filter((result): result is { success: true; data: z.infer<typeof cinematicV2ShotPlanSchema> } => result.success)
-    .map((result) => result.data)
-}
-
-function mergeCinematicV3ShotPlansForTimeline(
-  plans: z.infer<typeof cinematicV2ShotPlanSchema>[],
-): z.infer<typeof cinematicV2ShotPlanSchema> {
-  if (plans.length === 0) throw new Error('No Cinematics V3 shot plans were available for timeline assembly.')
-  if (plans.length === 1) return plans[0]
-  const diagnostics = [
-    ...plans.flatMap((plan) => plan.diagnostics),
-    `Assembled timeline from ${plans.length} storyboard-block shot plan(s).`,
-  ]
-  const shotOrderNumber = (shot: z.infer<typeof cinematicV2ShotSchema>, fallback: number) => {
-    const match = readText(shot.id).match(/(\d+)(?!.*\d)/)
-    const parsed = Number(match?.[1] ?? 0)
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
-  }
-  const shots = plans
-    .flatMap((plan, planIndex) => plan.shots.map((shot, shotIndex) => ({
-      shot,
-      planIndex,
-      shotIndex,
-      orderNumber: shotOrderNumber(shot, (planIndex * 1000) + shotIndex + 1),
-    })))
-    .sort((left, right) => left.orderNumber - right.orderNumber || left.planIndex - right.planIndex || left.shotIndex - right.shotIndex)
-    .map((entry) => entry.shot)
-  const duplicateIds = shots
-    .map((shot) => readText(shot.id))
-    .filter((id, index, list) => id && list.indexOf(id) !== index)
-  const finalShots = duplicateIds.length > 0
-    ? shots.map((shot, index) => ({
-      ...shot,
-      id: `shot_${String(index + 1).padStart(3, '0')}`,
-      index: index + 1,
-    }))
-    : shots.map((shot, index) => ({ ...shot, index: index + 1 }))
-  if (duplicateIds.length > 0) diagnostics.push(`Renumbered duplicate shot IDs during timeline assembly: ${[...new Set(duplicateIds)].join(', ')}.`)
-  const audioSource = plans.map((plan) => plan.audioPlan).find((plan) => plan && (plan.ambience || plan.music || plan.sfx.length > 0)) ?? plans[0].audioPlan
-  return cinematicV2ShotPlanSchema.parse({
-    sceneId: plans[0].sceneId || 'scene_1',
-    totalEditorialDurationSeconds: finalShots.reduce((total, shot) => total + Math.max(0, Number(shot.editorialDurationSeconds) || 0), 0),
-    shots: finalShots,
-    performanceArc: plans.flatMap((plan) => plan.performanceArc),
-    audioPlan: {
-      ambience: audioSource.ambience,
-      music: audioSource.music,
-      sfx: [...new Set(plans.flatMap((plan) => plan.audioPlan.sfx))],
-      dialogueTrackCount: finalShots.reduce((total, shot) => total + (shot.dialogue.length > 0 ? 1 : 0), 0),
-      placeholderOnly: true,
-    },
-    diagnostics,
-  })
 }
 
 function normalizeVisualScriptLookupTerm(value: string) {
@@ -11290,6 +6541,38 @@ async function runCinematicV2ScreenplayAuthor(input: {
   return { value, response, provider: 'openai', model, fallbackUsed: false, fallbackReason: '' }
 }
 
+async function runCinematicSimpleTextPrompt(input: {
+  nodeKey: string
+  task: string
+  instructions: string
+  prompt: string
+  maxOutputTokens?: number
+  timeoutMs?: number
+  failureMessage: string
+}) {
+  const model = outputWorkflowTextModel()
+  const response = await runOpenAiResponses({
+    model,
+    instructions: input.instructions,
+    input: input.prompt,
+    maxOutputTokens: input.maxOutputTokens ?? 1200,
+    metadata: {
+      graphcore_task: input.task,
+      graphcore_node_key: input.nodeKey,
+    },
+    timeoutMs: input.timeoutMs ?? 120_000,
+  })
+  if (!response.response.ok) {
+    throw new Error(openAiErrorMessage(response, `${input.failureMessage} with status ${response.response.status}.`))
+  }
+  return {
+    text: response.outputText,
+    usage: response.body?.usage,
+    model,
+    providerRequestId: readText(response.body?.id) || response.response.headers.get('x-request-id') || null,
+  }
+}
+
 function buildFallbackCinematicV2ParsedScript(input: {
   context: Record<string, unknown>
   assetPack: Record<string, unknown>
@@ -11538,331 +6821,6 @@ async function runCinematicV2StructuredNode<TValue>(input: {
   }
 }
 
-const seedanceDirectedControlsSchema = z.object({
-  cameraMotion: z.string().max(220).default(''),
-  subjectMotion: z.string().max(260).default(''),
-  focusTarget: z.string().max(180).default(''),
-  framingLock: z.string().max(180).default(''),
-  visibility: z.string().max(220).default(''),
-  motionIntensity: z.string().max(160).default(''),
-  performance: z.string().max(280).default(''),
-  voice: z.string().max(260).default(''),
-})
-
-type SeedanceDirectedControls = z.infer<typeof seedanceDirectedControlsSchema>
-
-const sequenceAnimaticShotVideoTimingSchema = z.object({
-  editorialDurationSeconds: z.number().min(1).max(15),
-  rationale: z.string().max(600).default(''),
-  pacingNotes: z.string().max(500).default(''),
-  directedControls: seedanceDirectedControlsSchema.default({}),
-})
-
-const sequenceAnimaticShotRevisionPlanSchema = z.object({
-  revisedShot: cinematicV2ShotSchema,
-  changeSummary: z.string().max(800).default(''),
-  keyframeIntent: z.string().max(900).default(''),
-  diagnostics: z.array(z.string().max(400)).default([]),
-})
-
-function deterministicShotRevisionPlan(input: {
-  shot: Record<string, unknown>
-  revisionPrompt: string
-}) {
-  const base = cinematicV2ShotSchema.parse({
-    ...input.shot,
-    editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(input.shot.editorialDurationSeconds ?? 0) || 3)),
-    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(input.shot.editorialDurationSeconds ?? 0) || 3),
-  })
-  const prompt = readText(input.revisionPrompt)
-  const revisedShot = cinematicV2ShotSchema.parse({
-    ...base,
-    action: [base.action, prompt ? `Revision direction: ${prompt}` : ''].filter(Boolean).join(' '),
-    storyboardPanelPrompt: [
-      readText(base.storyboardPanelPrompt) || base.action || base.description || base.title,
-      prompt ? `Apply this user revision visibly: ${prompt}` : '',
-    ].filter(Boolean).join(' '),
-    videoDirection: [
-      readText(base.videoDirection),
-      prompt ? `Apply the revised staging/keyframe intent: ${prompt}` : '',
-    ].filter(Boolean).join(' '),
-  })
-  return sequenceAnimaticShotRevisionPlanSchema.parse({
-    revisedShot,
-    changeSummary: prompt ? `Applied requested shot revision: ${prompt}` : 'No revision prompt supplied; preserved the original shot.',
-    keyframeIntent: prompt,
-    diagnostics: ['Deterministic shot revision fallback used.'],
-  })
-}
-
-async function planSequenceAnimaticShotRevision(input: {
-  nodeKey: string
-  shot: Record<string, unknown>
-  revisionPrompt: string
-  assetPack: Record<string, unknown>
-  baseKeyframe: Record<string, unknown>
-  priorProviderRequestId?: string | null
-  shouldCancel?: () => Promise<boolean>
-  onProgress?: (progress: {
-    providerRequestId: string
-    providerStatus: string
-    providerMode: string
-    lastProviderPollAt: string
-  }) => Promise<void>
-}) {
-  const fallback = deterministicShotRevisionPlan(input)
-  const shot = cinematicV2ShotSchema.parse({
-    ...input.shot,
-    editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(input.shot.editorialDurationSeconds ?? 0) || 3)),
-    providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(input.shot.editorialDurationSeconds ?? 0) || 3),
-  })
-  const assetEntities = readArray(input.assetPack.entities).map(asRecord).map((entity) => ({
-    key: readText(entity.key),
-    name: readText(entity.name),
-    type: readText(entity.type),
-    summary: readText(entity.summary),
-    visualDescription: readText(entity.visualDescription),
-    selectedReferenceAssetKey: readText(entity.selectedReferenceAssetKey) || readStringArray(entity.assetKeys)[0] || '',
-    continuityAnchor: entity.continuityAnchor === true,
-  })).filter((entry) => entry.key || entry.name)
-  const dialogue = shot.dialogue.map((line) => {
-    const speaker = readText(line.speakerName) || readText(line.speakerRefId) || 'Speaker'
-    const text = readText(line.text)
-    return text ? `${speaker}: "${text}"${readText(line.emotion) ? ` (${readText(line.emotion)})` : ''}` : ''
-  }).filter(Boolean).join('\n')
-  const prompt = [
-    'Revise exactly one sequence animatic shot from a user prompt.',
-    'Return a complete revised shot object, not a patch. Preserve the same id, index, duration fields, visible/speaker/location/prop refs, continuity ids, and dialogue unless the user explicitly asks to change them.',
-    'The revision is output-local; do not mutate world canon. Make the shot internally coherent for a new single keyframe.',
-    'Keep the result compact and drawable. If the user asks for camera or lighting changes, update camera, lighting, action, storyboardPanelPrompt, and videoDirection as needed.',
-    '',
-    `User revision prompt: ${readText(input.revisionPrompt)}`,
-    '',
-    `Base shot JSON:\n${JSON.stringify(shot, null, 2)}`,
-    '',
-    `Available canonical/continuity references:\n${JSON.stringify(assetEntities.slice(0, 16), null, 2)}`,
-    '',
-    `Base keyframe asset key: ${readText(input.baseKeyframe.assetKey)}`,
-  ].join('\n')
-  const result = await runCinematicV2StructuredNodeBackground({
-    nodeKey: input.nodeKey,
-    schemaName: 'sequence_animatic_shot_revision_plan_v1',
-    schema: sequenceAnimaticShotRevisionPlanSchema,
-    instructions: 'You are a senior storyboard director revising one parsed animatic shot. Return strict JSON only.',
-    prompt,
-    fallback,
-    maxOutputTokens: 2400,
-    priorProviderRequestId: input.priorProviderRequestId,
-    shouldCancel: input.shouldCancel,
-    onProgress: input.onProgress,
-  })
-  const value = sequenceAnimaticShotRevisionPlanSchema.parse(result.value)
-  return {
-    ...value,
-    revisedShot: cinematicV2ShotSchema.parse({
-      ...value.revisedShot,
-      id: shot.id,
-      index: shot.index,
-      editorialDurationSeconds: shot.editorialDurationSeconds,
-      providerDurationSeconds: shot.providerDurationSeconds,
-    }),
-    provider: result.provider,
-    model: result.model,
-    providerRequestId: result.providerRequestId,
-    fallbackUsed: result.fallbackUsed,
-    fallbackReason: result.fallbackReason,
-  }
-}
-
-function estimateSequenceShotVideoDurationSeconds(shot: Record<string, unknown>) {
-  const dialogueText = Array.isArray(shot.dialogue)
-    ? shot.dialogue.map((line) => readText(asRecord(line).text)).filter(Boolean).join(' ')
-    : ''
-  const actionText = [
-    readText(shot.action),
-    readText(shot.description),
-    readText(shot.storyboardPanelPrompt),
-    readText(shot.videoDirection),
-    readText(asRecord(shot.camera).movement),
-    readText(asRecord(shot.camera).framing),
-  ].filter(Boolean).join(' ')
-  const dialogueWords = dialogueText.split(/\s+/).filter(Boolean).length
-  const actionWords = actionText.split(/\s+/).filter(Boolean).length
-  const dialogueSeconds = dialogueWords > 0 ? Math.max(1.2, dialogueWords / 2.6 + 0.6) : 0
-  const actionSeconds = Math.max(1.8, Math.min(8, actionWords / 12))
-  const hasFastAction = /\b(run|runs|running|leap|leaps|jump|jumps|fight|fighting|strike|strikes|slam|slams|crash|chase|skid|rush|dash|spin|falls?|lands?|burst|explodes?)\b/i.test(actionText)
-  const hasQuietActing = /\b(looks?|glances?|holds?|listens?|waits?|breathes?|realizes?|smiles?|frowns?|stares?|hesitates?|settles?)\b/i.test(actionText)
-  const cameraSeconds = /\b(slow|push|dolly|drift|linger|hold)\b/i.test(actionText) ? 0.8 : 0.3
-  const actionBias = hasFastAction ? 1.1 : hasQuietActing ? 0.4 : 0.7
-  return Math.max(2, Math.min(12, Number((dialogueSeconds + actionSeconds + cameraSeconds + actionBias).toFixed(1))))
-}
-
-function compactSeedanceControlText(value: unknown, maxWords = 18) {
-  return compactBeatCaptionSentence(readText(value).replace(/\s+/g, ' ').trim(), '', maxWords).replace(/\.$/, '')
-}
-
-function seedanceMotionIntensityForShot(shot: Record<string, unknown>) {
-  const text = seedanceShotPhysicalityText(shot)
-  if (/\b(fight|combat|strike|kick|punch|sword|staff|leap|jump|chase|sprint|crash|impact|explosion|vortex|shockwave)\b/i.test(text)) return 'high intensity; prioritize readable action direction and clean motion arcs'
-  if (/\b(run|rush|dash|skid|climb|fall|spin|turn|grab|throw|slam)\b/i.test(text)) return 'moderate intensity; keep movement readable with natural follow-through'
-  if (/\b(look|glance|listen|hold|wait|breathe|smile|frown|hesitate|realize|watch|stare)\b/i.test(text)) return 'low intensity; subtle face, eye, breath, ear, cloth, and prop micro-motion'
-  return 'controlled intensity; natural physical motion and stable final settle'
-}
-
-function buildSeedanceDirectedControlsFromShot(input: {
-  shot: Record<string, unknown>
-  entityByKey?: Map<string, Record<string, unknown>>
-  visibleCharacterRefIds?: string[]
-}) {
-  const shot = input.shot
-  const camera = asRecord(shot.camera)
-  const visibleKeys = input.visibleCharacterRefIds ?? readStringArray(shot.visibleCharacterRefIds)
-  const speakerKeys = readStringArray(shot.speakerRefIds)
-  const entityName = (key: string) => readText(input.entityByKey?.get(key)?.name) || key
-  const visibleNames = visibleKeys.map(entityName).filter(Boolean)
-  const offscreenNames = speakerKeys.filter((key) => key && !visibleKeys.includes(key)).map(entityName).filter(Boolean)
-  const dialogueRecords = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
-  const dialogueSpeakers = dialogueRecords
-    .map((line) => readText(line.speakerName) || entityName(readText(line.speakerRefId)))
-    .filter(Boolean)
-  const dialogueSpeakerVoiceGuides = uniqueStrings(dialogueRecords
-    .map((line) => readText(line.speakerRefId))
-    .filter(Boolean))
-    .map((key) => {
-      const entity = input.entityByKey?.get(key)
-      const name = entityName(key)
-      const voice = entity
-        ? readText(entity.voiceDescription) || composeWorldEntityVoiceDescription(asRecord(entity.voice))
-        : ''
-      return voice ? `${name}: ${compactSeedanceControlText(voice, 14)}` : ''
-    })
-    .filter(Boolean)
-  const dialogueEmotion = dialogueRecords
-    .map((line) => readText(line.emotion))
-    .filter(Boolean)
-    .slice(0, 2)
-    .join(', ')
-  const performanceBeats = Array.isArray(shot.performanceBeats) ? shot.performanceBeats.map(asRecord) : []
-  const performanceText = performanceBeats
-    .map((beat) => {
-      const who = entityName(readText(beat.characterRefId))
-      const parts = [
-        readText(beat.bodyLanguage),
-        readText(beat.facialExpression),
-        readText(beat.gaze),
-        readText(beat.gesture),
-      ].filter(Boolean).join(', ')
-      return parts ? `${who}: ${parts}` : ''
-    })
-    .filter(Boolean)
-    .join('; ')
-  const voiceText = [
-    dialogueSpeakers.length > 0 ? `${uniqueStrings(dialogueSpeakers).join(', ')} speaking` : '',
-    dialogueEmotion ? `delivery: ${dialogueEmotion}` : '',
-    dialogueSpeakerVoiceGuides.slice(0, 2).join('; '),
-    performanceBeats.map((beat) => readText(beat.voiceEnergy)).filter(Boolean).slice(0, 2).join(', '),
-  ].filter(Boolean).join('; ')
-  const focusFallback = [
-    visibleNames[0],
-    readText(shot.caption),
-    readText(shot.title),
-    readText(shot.locationRefId),
-    ...readStringArray(shot.propRefIds).slice(0, 1),
-  ].filter(Boolean).join(', ')
-  const movement = readText((shot as Record<string, unknown>).videoDirection)
-    || readText(shot.action)
-    || readText(shot.description)
-    || readText(shot.storyboardPanelPrompt)
-  return seedanceDirectedControlsSchema.parse({
-    cameraMotion: compactSeedanceControlText([readText(camera.framing), readText(camera.angle), readText(camera.movement)].filter(Boolean).join('; '), 18),
-    subjectMotion: compactSeedanceControlText(movement, 22),
-    focusTarget: compactSeedanceControlText(focusFallback || 'main visible subject and key prop', 14),
-    framingLock: compactSeedanceControlText(readText(camera.framing) ? `preserve ${readText(camera.framing)} composition` : 'preserve keyframe composition and subject scale', 14),
-    visibility: compactSeedanceControlText([
-      visibleNames.length > 0 ? `show ${visibleNames.join(', ')}` : 'show only subjects visible in the keyframe',
-      offscreenNames.length > 0 ? `${offscreenNames.join(', ')} speaks offscreen; do not reveal them` : '',
-    ].filter(Boolean).join('; '), 22),
-    motionIntensity: seedanceMotionIntensityForShot(shot),
-    performance: compactSeedanceControlText(performanceText || readText(shot.mood) || readText(shot.caption) || readText(shot.title), 24),
-    voice: compactSeedanceControlText(voiceText || (dialogueRecords.length > 0 ? 'match dialogue emotion and timing' : 'no dialogue; use silent facial/body acting'), 22),
-  })
-}
-
-function mergeSeedanceDirectedControls(primary: unknown, fallback: SeedanceDirectedControls) {
-  const parsed = seedanceDirectedControlsSchema.safeParse(primary)
-  const value = parsed.success ? parsed.data : {}
-  return seedanceDirectedControlsSchema.parse({
-    cameraMotion: readText(value.cameraMotion) || fallback.cameraMotion,
-    subjectMotion: readText(value.subjectMotion) || fallback.subjectMotion,
-    focusTarget: readText(value.focusTarget) || fallback.focusTarget,
-    framingLock: readText(value.framingLock) || fallback.framingLock,
-    visibility: readText(value.visibility) || fallback.visibility,
-    motionIntensity: readText(value.motionIntensity) || fallback.motionIntensity,
-    performance: readText(value.performance) || fallback.performance,
-    voice: readText(value.voice) || fallback.voice,
-  })
-}
-
-async function inferSequenceShotVideoTiming(input: {
-  nodeKey: string
-  shot: Record<string, unknown>
-  entityByKey?: Map<string, Record<string, unknown>>
-}) {
-  const fallbackDuration = estimateSequenceShotVideoDurationSeconds(input.shot)
-  const fallbackDirectedControls = buildSeedanceDirectedControlsFromShot({
-    shot: input.shot,
-    entityByKey: input.entityByKey,
-  })
-  const dialogue = Array.isArray(input.shot.dialogue)
-    ? input.shot.dialogue.map((line) => {
-      const record = asRecord(line)
-      const speaker = readText(record.speakerName) || readText(record.speakerRefId) || 'Speaker'
-      const text = readText(record.text)
-      return text ? `${speaker}: ${text}` : ''
-    }).filter(Boolean).join('\n')
-    : ''
-  const prompt = [
-    'Infer compact video-generation controls for one Seedance shot. Ignore any screenplay marker or existing tagged duration.',
-    'Base the duration only on visible action, dialogue length, camera movement, performance beats, and the time needed for a readable settle.',
-    'Return the shortest realistic duration that still feels cinematic. Do not pad to 15 seconds.',
-    'Also return direct, short controls for camera, subject motion, focus, framing, visibility, motion intensity, performance, and voice.',
-    'For offscreen speakers, put delivery in voice and visibility, but do not imply they are visible.',
-    '',
-    `Title: ${readText(input.shot.title) || 'Untitled shot'}`,
-    `Action: ${readText(input.shot.action) || readText(input.shot.description) || readText(input.shot.storyboardPanelPrompt)}`,
-    `Video direction: ${readText(input.shot.videoDirection)}`,
-    `Camera: ${readText(asRecord(input.shot.camera).framing)}; ${readText(asRecord(input.shot.camera).angle)}; ${readText(asRecord(input.shot.camera).movement)}`,
-    `Performance: ${Array.isArray(input.shot.performanceBeats) ? input.shot.performanceBeats.map((beat) => readText(asRecord(beat).description) || JSON.stringify(beat)).filter(Boolean).join('; ') : ''}`,
-    dialogue ? `Dialogue:\n${dialogue}` : 'Dialogue: none',
-  ].join('\n')
-  const result = await runCinematicV2StructuredNode({
-    nodeKey: input.nodeKey,
-    schemaName: 'sequence_animatic_shot_video_timing',
-    schema: sequenceAnimaticShotVideoTimingSchema,
-    instructions: 'You are a cinematic editor timing a single shot for reference-to-video generation. Return strict JSON only.',
-    prompt,
-    fallback: {
-      editorialDurationSeconds: fallbackDuration,
-      rationale: 'Deterministic fallback based on action, dialogue, camera movement, and settle time.',
-      pacingNotes: 'Use a natural shot pace without padding to the screenplay marker.',
-      directedControls: fallbackDirectedControls,
-    },
-    maxOutputTokens: 900,
-  })
-  const value = sequenceAnimaticShotVideoTimingSchema.parse(result.value)
-  const directedControls = mergeSeedanceDirectedControls(value.directedControls, fallbackDirectedControls)
-  return {
-    editorialDurationSeconds: Math.max(1, Math.min(15, Number(value.editorialDurationSeconds) || fallbackDuration)),
-    rationale: readText(value.rationale),
-    pacingNotes: readText(value.pacingNotes),
-    directedControls,
-    provider: result.provider,
-    model: result.model,
-    fallbackUsed: result.fallbackUsed,
-    fallbackReason: result.fallbackReason,
-  }
-}
-
 type CinematicV2StructuredNodeBackgroundInput<TValue> = {
   nodeKey: string
   schemaName: string
@@ -12035,252 +6993,6 @@ function buildCinematicV2StoryboardPrompt(input: {
     input.prompt ? `User brief: ${input.prompt}` : '',
     'Preserve character identity, costumes, props, location architecture, lighting direction, color grade, screen direction, and proportions across panels.',
   ].filter(Boolean).join('\n\n')
-}
-
-function buildCinematicV3StoryboardPrompt(input: {
-  shotPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  storyboardGroup?: Record<string, unknown> | null
-  aspectRatio: string
-  prompt: string
-}) {
-  const fullShotPlan = cinematicV2ShotPlanSchema.parse(input.shotPlan)
-  const storyboardGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(input.storyboardGroup ?? {}).success
-    ? cinematicV2StoryboardGroupPlanSchema.shape.groups.element.parse(input.storyboardGroup)
-    : null
-  const groupShotIds = new Set(storyboardGroup?.shotIds ?? [])
-  const matchedGroupShots = storyboardGroup
-    ? fullShotPlan.shots.filter((shot) => groupShotIds.has(shot.id))
-    : fullShotPlan.shots
-  const fallbackGroupShots = storyboardGroup && matchedGroupShots.length === 0
-    ? fullShotPlan.shots.slice(
-      Math.max(0, (storyboardGroup.index - 1) * 9),
-      Math.max(0, (storyboardGroup.index - 1) * 9) + storyboardGroup.panelCount,
-    )
-    : []
-  const shotPlan = {
-    ...fullShotPlan,
-    shots: matchedGroupShots.length > 0 ? matchedGroupShots : fallbackGroupShots.length > 0 ? fallbackGroupShots : fullShotPlan.shots,
-  }
-  const layout = storyboardGroup
-    ? { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
-    : buildCinematicV3StoryboardLayout(shotPlan.shots.length)
-  const gridCellCount = layout.rows * layout.columns
-  const blankCellCount = Math.max(0, gridCellCount - layout.panelCount)
-  const entities = compactCinematicEntityAnchors(input.assetPack, 12)
-  const labelByKey = cinematicEntityLabelByKey(input.assetPack)
-  const coverageSetups = Array.isArray((storyboardGroup as unknown as Record<string, unknown> | null)?.coverageSetups)
-    ? ((storyboardGroup as unknown as Record<string, unknown>).coverageSetups as unknown[]).map(asRecord)
-    : []
-  const coverageSetupById = new Map(coverageSetups.map((setup) => [readText(setup.id), setup] as const).filter(([id]) => id))
-  const coverageSetupLines = coverageSetups.slice(0, 12).map((setup) => [
-    `${readText(setup.id)}: ${readText(setup.title) || titleFromRefLike(readText(setup.id))}.`,
-    readText(setup.setupKind ?? setup.setup_kind) ? `Kind: ${readText(setup.setupKind ?? setup.setup_kind)}.` : '',
-    readText(setup.screenDirection ?? setup.screen_direction) ? `Screen direction: ${readText(setup.screenDirection ?? setup.screen_direction)}.` : '',
-    readText(setup.stagingBrief ?? setup.staging_brief) ? `Staging: ${readText(setup.stagingBrief ?? setup.staging_brief)}.` : '',
-    readText(setup.lighting) ? `Lighting: ${readText(setup.lighting)}.` : '',
-  ].filter(Boolean).join(' '))
-  const shotLines = shotPlan.shots.slice(0, layout.panelCount).map((shot, index) => {
-    const caption = readText((shot as unknown as Record<string, unknown>).caption)
-    const storyboardPanelPrompt = readText((shot as unknown as Record<string, unknown>).storyboardPanelPrompt)
-    const lighting = readText((shot as unknown as Record<string, unknown>).lighting)
-    const mood = readText((shot as unknown as Record<string, unknown>).mood)
-    const coverageSetupId = readText((shot as unknown as Record<string, unknown>).coverageSetupId ?? (shot as unknown as Record<string, unknown>).coverage_setup_id)
-    const coverageSetup = coverageSetupId ? coverageSetupById.get(coverageSetupId) ?? null : null
-    const continuityLink = asRecord((shot as unknown as Record<string, unknown>).continuityLink ?? (shot as unknown as Record<string, unknown>).continuity_link)
-    return [
-      `Panel ${index + 1}: ${shot.title}.`,
-      coverageSetupId ? `Coverage setup: ${coverageSetupId}${coverageSetup ? ` (${readText(coverageSetup.title) || readText(coverageSetup.setupKind ?? coverageSetup.setup_kind)})` : ''}. Keep this panel visually consistent with every other panel using the same setup.` : '',
-      readText(continuityLink.mode) ? `Continuity link: ${readText(continuityLink.mode)}${readText(continuityLink.fromSetupId) ? ` from ${readText(continuityLink.fromSetupId)}` : ''}${readText(continuityLink.description) ? `; ${readText(continuityLink.description)}` : ''}.` : '',
-      `Required subjects (${shot.visibleCharacterRefIds.length}): ${shot.visibleCharacterRefIds.map((key) => labelByKey.get(key) || key).join(', ') || 'no named character subject'}.`,
-      shot.locationRefId ? `Required location: ${labelByKey.get(shot.locationRefId) || shot.locationRefId}.` : '',
-      shot.propRefIds.length > 0 ? `Required props: ${shot.propRefIds.map((key) => labelByKey.get(key) || key).join(', ')}.` : '',
-      formatCinematicV2PerformanceDirection(shot) ? `Required acting/performance: ${formatCinematicV2PerformanceDirection(shot)}.` : '',
-      `Action: ${shot.action || shot.description}.`,
-      caption ? `Caption meaning, not visible text: ${caption}.` : '',
-      lighting ? `Lighting: ${lighting}.` : '',
-      mood ? `Mood: ${mood}.` : '',
-      storyboardPanelPrompt ? `Panel composition: ${storyboardPanelPrompt}.` : '',
-      `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.lens}; ${shot.camera.movement}.`,
-      'Do not add unlisted principal characters, duplicate versions of the same character, captions, labels, speech bubbles, UI, or panel text.',
-    ].filter(Boolean).join(' ')
-  }).join('\n')
-  const blankCellInstruction = blankCellCount > 0
-    ? `Cells ${layout.panelCount + 1}-${gridCellCount} are intentional empty placeholders: keep them plain dark/neutral blank cells with no characters, no props, no action, and no text.`
-    : ''
-  const layoutInstruction = gridCellCount === 1
-    ? [
-      'Create one high-quality cinematic storyboard frame as a single full-image panel, not a multi-cell grid.',
-      'Do not divide the image into cells, gutters, borders, frames, labels, captions, or panels. The whole image is Panel 1.',
-    ]
-    : [
-      `Create a high-quality cinematic storyboard sheet as a fixed ${layout.rows}x${layout.columns} rectangular grid with exactly ${gridCellCount} equal-size cells.`,
-      `Fill cells 1-${layout.panelCount} with the storyboard panels below, ordered left-to-right then top-to-bottom. Do not change row count, column count, cell sizes, or panel positions.`,
-      'Use straight, evenly spaced gutters that divide the sheet into identical rectangular cells so automated cropping can split the image by rows and columns.',
-      'Do not create a masonry layout, irregular comic layout, unequal panel sizes, merged panels, staggered rows, inset panels, diagonal dividers, floating panels, or extra panels.',
-    ]
-  return [
-    ...layoutInstruction,
-    blankCellInstruction,
-    storyboardGroup ? `This is storyboard sheet ${storyboardGroup.index}: ${storyboardGroup.summary}.` : '',
-    storyboardGroup ? `This sheet represents one video block of ${Math.min(15, Math.max(0, Number(storyboardGroup.editorialDurationSeconds) || 0)).toFixed(1).replace(/\.0$/, '')} seconds or less. It may contain fewer than 4 panels for a slow scene; leave unused grid cells blank exactly as instructed.` : '',
-    storyboardGroup?.continuityNotes.length ? `Group continuity notes: ${storyboardGroup.continuityNotes.join(' ')}` : '',
-    coverageSetupLines.length > 0 ? `Reusable camera/staging coverage setups:\n${coverageSetupLines.join('\n')}` : '',
-    `Every panel must have an internal ${input.aspectRatio} cinematic crop and feel like frames from the same continuous sequence.`,
-    'No captions, no labels, no speech bubbles, no UI, no watermark, no text inside the image.',
-    'Shot panels:',
-    shotLines,
-    entities.length > 0 ? `Canonical visual identity anchors:\n${compactForPrompt({ entities }, 3600)}` : '',
-    input.prompt ? `User brief: ${input.prompt}` : '',
-    'Preserve character identity, costumes, props, location architecture, lighting direction, color grade, screen direction, and proportions across panels.',
-  ].filter(Boolean).join('\n\n')
-}
-
-function formatCinematicV2PerformanceDirection(shot: z.infer<typeof cinematicV2ShotSchema>) {
-  if (shot.performanceBeats.length === 0) return ''
-  return shot.performanceBeats.map((beat) => {
-    const metrics = [
-      `valence ${beat.valence}`,
-      `arousal ${beat.arousal}`,
-      `confidence ${beat.confidence}`,
-      `dominance ${beat.dominance}`,
-    ].join(', ')
-    const acting = [
-      beat.facialExpression ? `face: ${beat.facialExpression}` : '',
-      beat.bodyLanguage ? `body: ${beat.bodyLanguage}` : '',
-      beat.gaze ? `gaze: ${beat.gaze}` : '',
-      beat.gesture ? `gesture: ${beat.gesture}` : '',
-      beat.voiceEnergy ? `voice: ${beat.voiceEnergy}` : '',
-    ].filter(Boolean).join('; ')
-    return `${beat.characterRefId} (${metrics})${acting ? ` - ${acting}` : ''}`
-  }).join(' | ')
-}
-
-function buildCinematicV2KeyframePrompt(input: {
-  shot: Record<string, unknown>
-  sceneState: Record<string, unknown>
-  layoutPlan: Record<string, unknown>
-  panelAssetKey: string
-  assetPack: Record<string, unknown>
-  aspectRatio: string
-  prompt: string
-}) {
-  const shot = cinematicV2ShotSchema.parse(input.shot)
-  const sceneState = cinematicV2SceneStateSchema.parse(input.sceneState)
-  const entities = compactCinematicEntityAnchors(input.assetPack, 8)
-  const labelByKey = cinematicEntityLabelByKey(input.assetPack)
-  const expectedCharacters = shot.visibleCharacterRefIds.map((key) => labelByKey.get(key) || key).filter(Boolean)
-  const expectedProps = shot.propRefIds.map((key) => labelByKey.get(key) || key).filter(Boolean)
-  const performanceDirection = formatCinematicV2PerformanceDirection(shot)
-  const coverageSetupId = readText(shot.coverageSetupId) || readText(shot.coverage_setup_id)
-  const continuityLink = asRecord(shot.continuityLink ?? shot.continuity_link)
-  return [
-    `Refine the extracted storyboard panel into one high-quality cinematic keyframe for shot ${shot.index}: ${shot.title}.`,
-    `Aspect ratio: ${input.aspectRatio}.`,
-    `Shot purpose: ${shot.purpose}.`,
-    `Required visible characters (${expectedCharacters.length}): ${expectedCharacters.join(', ') || 'none'}.`,
-    shot.locationRefId ? `Required location/environment: ${labelByKey.get(shot.locationRefId) || shot.locationRefId}.` : '',
-    expectedProps.length > 0 ? `Required props/items: ${expectedProps.join(', ')}.` : '',
-    `Shot action: ${shot.action || shot.description}.`,
-    coverageSetupId ? `Coverage setup anchor: ${coverageSetupId}. If other shots use this same setup, preserve the same camera position, screen direction, blocking geography, lighting direction, and subject scale; vary only the shot-specific performance/action.` : '',
-    readText(continuityLink.mode) ? `Shot-to-shot continuity link: ${readText(continuityLink.mode)}${readText(continuityLink.fromSetupId) ? ` from setup ${readText(continuityLink.fromSetupId)}` : ''}${readText(continuityLink.description) ? `; ${readText(continuityLink.description)}` : ''}.` : '',
-    performanceDirection ? `Acting/performance direction: ${performanceDirection}. Use the valence/arousal/confidence/dominance values as readable facial expression, body language, gaze, and gesture.` : '',
-    `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.lens}; ${shot.camera.movement}.`,
-    `Scene lighting: ${sceneState.lighting.direction}; ${sceneState.lighting.quality}; ${sceneState.lighting.colorTemperature}; ${sceneState.lighting.contrast}.`,
-    `Layout rule: ${shot.camera.screenDirectionRule || readText(input.layoutPlan.summary)}.`,
-    `Source panel asset: ${input.panelAssetKey}. Use it for composition and blocking only, not as identity truth.`,
-    'Entity reference sheets and shot-scoped visual descriptions are the identity truth. Repair faces, silhouettes, wardrobe, badges, logos, props, hands, scale, and environment details to match those references exactly.',
-    entities.length > 0 ? `Canonical visual identity anchors:\n${compactForPrompt({ entities }, 2600)}` : '',
-    input.prompt ? `User brief: ${input.prompt}` : '',
-    'Do not redesign characters, costumes, props, faces, weapons, or location architecture.',
-    'No duplicate principal characters, no background lookalikes of listed characters, no swapped identities, no extra unlisted characters, no malformed signature logos/badges, no captions, no UI, no text, no watermark, no storyboard borders, no reference-sheet layout artifacts.',
-  ].filter(Boolean).join('\n\n')
-}
-
-function buildCinematicV2VideoPrompt(input: {
-  shot: Record<string, unknown>
-  sceneState: Record<string, unknown>
-  layoutPlan: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  aspectRatio: string
-  resolution: string
-  prompt: string
-}) {
-  const shot = cinematicV2ShotSchema.parse(input.shot)
-  const sceneState = cinematicV2SceneStateSchema.parse(input.sceneState)
-  const entities = compactCinematicEntityAnchors(input.assetPack, 6)
-  const labelByKey = cinematicEntityLabelByKey(input.assetPack)
-  const dialogue = shot.dialogue.map((line) => {
-    const speaker = labelByKey.get(line.speakerRefId) || line.speakerName || line.speakerRefId
-    return `${speaker}: "${line.text}" (${line.emotion})`
-  }).join(' ')
-  const performanceDirection = formatCinematicV2PerformanceDirection(shot)
-  const coverageSetupId = readText(shot.coverageSetupId) || readText(shot.coverage_setup_id)
-  const continuityLink = asRecord(shot.continuityLink ?? shot.continuity_link)
-  const entityLocks = entities
-    .map((entity) => {
-      const record = asRecord(entity)
-      const name = readText(record.name)
-      const visualDescription = readText(record.visualDescription)
-      const voiceDescription = readText(record.voiceDescription)
-      const details = [
-        visualDescription,
-        voiceDescription ? `Voice: ${voiceDescription}` : '',
-      ].filter(Boolean).join(' ')
-      return [name, details].filter(Boolean).join(': ')
-    })
-    .filter(Boolean)
-    .slice(0, 4)
-  return [
-    `Create a ${shot.providerDurationSeconds}-second cinematic shot at ${input.aspectRatio}, ${input.resolution}.`,
-    `Use @Image1 as the exact opening composition, character identity, wardrobe, lighting, and environment reference for shot ${shot.index}: ${shot.title}.`,
-    `Action: ${shot.action || shot.description}.`,
-    coverageSetupId ? `Coverage setup anchor: ${coverageSetupId}. Preserve the same camera geography and screen direction as the matching setup shots; do not drift to a new angle unless the prompt says blocking_change.` : '',
-    readText(continuityLink.mode) ? `Continuity link: ${readText(continuityLink.mode)}${readText(continuityLink.fromSetupId) ? ` from setup ${readText(continuityLink.fromSetupId)}` : ''}${readText(continuityLink.description) ? `; ${readText(continuityLink.description)}` : ''}.` : '',
-    performanceDirection ? `Performance over the clip: ${performanceDirection}. Let the acting change subtly through posture, gaze, expression, and gesture without breaking identity.` : '',
-    `Blocking: ${shot.camera.screenDirectionRule || readText(input.layoutPlan.summary) || 'preserve the established scene geography and screen direction.'}`,
-    `Camera: ${shot.camera.framing}, ${shot.camera.angle}, ${shot.camera.lens}; ${shot.camera.movement}.`,
-    `End state: let the action complete naturally while preserving the same location, face, costume, prop design, and scene geography.`,
-    dialogue ? `Visible dialogue: ${dialogue}. Keep mouth motion subtle and stable; final lip sync is not required.` : '',
-    `Lighting and grade: ${sceneState.lighting.direction}; ${sceneState.lighting.quality}; ${sceneState.lighting.colorTemperature}; ${sceneState.lighting.contrast}.`,
-    `Continuity: ${[...shot.continuityInputs, sceneState.visualContinuity.cameraMovementStyle].filter(Boolean).join('; ')}.`,
-    entityLocks.length > 0 ? `Identity references: ${entityLocks.join(' | ')}` : '',
-    input.prompt ? `Brief context: ${input.prompt}` : '',
-    'Avoid: captions, subtitles, UI, watermarks, storyboard borders, maps, arrows, labels, reference-sheet artifacts, sudden redesigns, teleporting, extra cuts, montage edits, camera-angle changes inside the shot.',
-  ].filter(Boolean).join('\n\n')
-}
-
-function buildCinematicV2Timeline(input: {
-  shotPlan: Record<string, unknown>
-  videos: Record<string, unknown>[]
-}) {
-  const shotPlan = cinematicV2ShotPlanSchema.parse(input.shotPlan)
-  let cursor = 0
-  const videoByShotId = new Map(input.videos.map((video) => [readText(video.shotId), video] as const))
-  const videoClips = shotPlan.shots.map((shot) => {
-    const video = videoByShotId.get(shot.id) ?? {}
-    const startTime = cursor
-    const endTime = startTime + shot.editorialDurationSeconds
-    cursor = endTime
-    return {
-      shotId: shot.id,
-      videoAssetKey: readText(video.assetKey) || null,
-      startTime,
-      endTime,
-      trimIn: 0,
-      trimOut: Math.max(0, shot.providerDurationSeconds - shot.editorialDurationSeconds),
-    }
-  })
-  return cinematicV2TimelineSchema.parse({
-    id: 'timeline_1',
-    sceneId: shotPlan.sceneId,
-    durationSeconds: cursor,
-    videoClips,
-    audioClips: [
-      { type: 'ambience', label: shotPlan.audioPlan.ambience || 'continuous ambience placeholder', startTime: 0, endTime: cursor, volumeDb: -12, placeholder: true },
-      { type: 'music', label: shotPlan.audioPlan.music || 'continuous music placeholder', startTime: 0, endTime: cursor, volumeDb: -18, placeholder: true },
-    ],
-  })
 }
 
 function compileCinematicScriptDocForOutput(input: {
@@ -12520,25 +7232,7 @@ function dynamicNodeRow(input: {
   compileHash: string
   generatedByNodeKey?: string
 }) {
-  return {
-    workflow_id: input.workflow.id,
-    draft_id: input.workflow.draftId,
-    key: input.key,
-    node_type: input.nodeType,
-    label: input.label,
-    position: { x: input.x, y: input.y },
-    config: input.config,
-    inputs: {},
-    outputs: {},
-    dirty: true,
-    input_hash: '',
-    output_hash: '',
-    metadata: {
-      dynamicCinematicGenerated: true,
-      dynamicCompileHash: input.compileHash,
-      generatedByNodeKey: input.generatedByNodeKey ?? 'cinematic_dynamic_take_fanout',
-    },
-  }
+  return dynamicWorkflowNodeRow(input)
 }
 
 function preserveExistingDynamicNodeOutput(input: {
@@ -12548,68 +7242,25 @@ function preserveExistingDynamicNodeOutput(input: {
   preserve: boolean
   compileHash: string
 }) {
-  if (!input.preserve || !input.existingNode) return input.nextRow
-  const existingMetadata = asRecord(input.existingNode.metadata)
-  const nextConfigHash = hashOutputWorkflowValue(asRecord(input.nextRow.config))
-  const existingConfigHash = hashOutputWorkflowValue(asRecord(input.existingNode.config))
-  if (nextConfigHash !== existingConfigHash) {
-    return {
-      ...input.nextRow,
-      metadata: {
-        ...asRecord(input.nextRow.metadata),
-        invalidatedPreviousOutput: true,
-        invalidatedReason: 'dynamic_node_config_changed',
-        previousDynamicCompileHash: readText(existingMetadata.dynamicCompileHash),
-        previousConfigHash: existingConfigHash,
-        nextConfigHash,
-      },
-    }
-  }
-  const existingOutputs = asRecord(input.existingNode.outputs)
-  const existingPreview = asRecord(existingMetadata.outputPreview)
-  const existingOutputHash = readText(input.existingNode.output_hash)
-  const stepOutputs = asRecord(input.existingStep?.outputs)
-  const stepMetadata = asRecord(input.existingStep?.metadata)
-  const stepOutputHash = readText(input.existingStep?.output_hash)
-  const stepHasOutput = Boolean(stepOutputHash) || hasStoredOutputs(stepOutputs)
-  const useStepOutput = !existingOutputHash && !hasStoredOutputs(existingOutputs) && stepHasOutput
-  const preservedOutputs = useStepOutput ? stepOutputs : existingOutputs
-  const preservedOutputHash = useStepOutput ? stepOutputHash : existingOutputHash
-  const preservedInputHash = useStepOutput ? readText(input.existingStep?.input_hash) : readText(input.existingNode.input_hash)
-  const preservedPreview = Object.keys(existingPreview).length > 0
-    ? existingPreview
-    : Object.keys(asRecord(stepMetadata.outputPreview)).length > 0
-      ? asRecord(stepMetadata.outputPreview)
-      : preservedOutputHash
-        ? buildOutputWorkflowNodeOutputPreview({
-          node: {
-            key: readText(input.nextRow.key),
-            nodeType: readText(input.nextRow.node_type) as OutputWorkflowNode['nodeType'],
-            outputHash: preservedOutputHash,
-          },
-          outputs: preservedOutputs,
-          provider: useStepOutput ? readText(input.existingStep?.provider) || null : null,
-          model: useStepOutput ? readText(input.existingStep?.model) || null : null,
-        })
-        : {}
-  const stepCompleted = ['completed', 'completed_with_errors'].includes(readText(input.existingStep?.status))
-  return {
-    ...input.nextRow,
-    outputs: preservedOutputs,
-    dirty: useStepOutput ? !stepCompleted : input.existingNode.dirty === true,
-    input_hash: preservedInputHash,
-    output_hash: preservedOutputHash,
-    metadata: {
-      ...asRecord(input.nextRow.metadata),
-      execution: asRecord(existingMetadata.execution),
-      outputPreview: preservedPreview,
-      preservedDuringDynamicRematerialization: true,
-      preservedDuringSelectedShotMaterialization: true,
-      preservedFromRunStep: useStepOutput,
-      preservedFromDynamicCompileHash: readText(existingMetadata.dynamicCompileHash),
-      dynamicCompileHash: input.compileHash,
+  return preserveExistingDynamicWorkflowNodeOutput({
+    ...input,
+    helpers: {
+      asRecord,
+      readText,
+      hashValue: hashOutputWorkflowValue,
+      hasStoredOutputs,
+      buildOutputPreview: (previewInput) => buildOutputWorkflowNodeOutputPreview({
+        node: {
+          key: previewInput.node.key,
+          nodeType: previewInput.node.nodeType as OutputWorkflowNode['nodeType'],
+          outputHash: previewInput.node.outputHash,
+        },
+        outputs: previewInput.outputs,
+        provider: previewInput.provider,
+        model: previewInput.model,
+      }),
     },
-  }
+  })
 }
 
 function isStaleDynamicCinematicNode(node: { metadata?: unknown } | null | undefined) {
@@ -12632,21 +7283,7 @@ function dynamicEdgeRow(input: {
   metadata?: Record<string, unknown>
   generatedByNodeKey?: string
 }) {
-  return {
-    workflow_id: input.workflow.id,
-    draft_id: input.workflow.draftId,
-    key: input.key,
-    source_node_key: input.sourceNodeKey,
-    source_port: input.sourcePort,
-    target_node_key: input.targetNodeKey,
-    target_port: input.targetPort,
-    metadata: {
-      dynamicCinematicGenerated: true,
-      dynamicCompileHash: input.compileHash,
-      generatedByNodeKey: input.generatedByNodeKey ?? 'cinematic_dynamic_take_fanout',
-      ...(input.metadata ?? {}),
-    },
-  }
+  return dynamicWorkflowEdgeRow(input)
 }
 
 async function persistDynamicWorkflowGraphRevision(input: {
@@ -12660,61 +7297,11 @@ async function persistDynamicWorkflowGraphRevision(input: {
   staleReason: string
   workflowMetadataPatch: Record<string, unknown>
 }) {
-  const uniqueDynamicEdgeKeys = Array.from(new Set(input.dynamicEdgeKeys.filter(Boolean)))
-  if (uniqueDynamicEdgeKeys.length > 0) {
-    const deleteEdges = await input.client
-      .from('output_workflow_edges')
-      .delete()
-      .eq('workflow_id', input.workflow.id)
-      .in('key', uniqueDynamicEdgeKeys)
-    if (deleteEdges.error) throw new Error(deleteEdges.error.message)
-  }
-
-  if (input.nodeRows.length > 0) {
-    const insertNodes = await input.client
-      .from('output_workflow_nodes')
-      .upsert(input.nodeRows, { onConflict: 'workflow_id,key' })
-    if (insertNodes.error) throw new Error(insertNodes.error.message)
-  }
-
-  if (input.edgeRows.length > 0) {
-    const insertEdges = await input.client
-      .from('output_workflow_edges')
-      .upsert(input.edgeRows, { onConflict: 'workflow_id,key' })
-    if (insertEdges.error) throw new Error(insertEdges.error.message)
-  }
-
-  const nextDynamicNodeKeys = new Set(input.nodeRows.map((row) => readText(row.key)))
-  const obsoleteDynamicNodes = input.existingDynamicNodes.filter((row) => !nextDynamicNodeKeys.has(row.key))
-  if (obsoleteDynamicNodes.length > 0) {
-    const staleAt = new Date().toISOString()
-    for (const obsoleteNode of obsoleteDynamicNodes) {
-      const markStale = await input.client
-        .from('output_workflow_nodes')
-        .update({
-          dirty: true,
-          metadata: {
-            ...asRecord(obsoleteNode.metadata),
-            dynamicCinematicStale: true,
-            staleAt,
-            staleReason: input.staleReason,
-            replacedByDynamicCompileHash: input.compileHash,
-          },
-        })
-        .eq('id', obsoleteNode.id)
-      if (markStale.error) throw new Error(markStale.error.message)
-    }
-  }
-
-  const updateWorkflow = await input.client.from('output_workflows').update({
-    metadata: {
-      ...input.workflow.metadata,
-      ...input.workflowMetadataPatch,
-      lastDynamicGraphUpdatedAt: new Date().toISOString(),
-      dynamicNodeCount: input.nodeRows.length,
-    },
-  }).eq('id', input.workflow.id)
-  if (updateWorkflow.error) throw new Error(updateWorkflow.error.message)
+  return persistDynamicWorkflowGraphRevisionRuntime({
+    ...input,
+    client: input.client as never,
+    helpers: { asRecord, readText },
+  })
 }
 
 async function materializeDynamicCinematicTakeFanout(input: {
@@ -12875,6 +7462,62 @@ async function materializeDynamicCinematicTakeFanout(input: {
   return { expanded: true, compileHash, takeCount: takePlan.length }
 }
 
+function createCinematicDynamicFanoutMaterializerHelpers() {
+  return {
+    asRecord,
+    readText,
+    readStringArray,
+    hashOutputWorkflowValue,
+    hasStoredOutputs,
+    isStaleDynamicCinematicNode: (node: unknown) => isStaleDynamicCinematicNode(node as never),
+    loadWorkflowNodes: async (input: { client: unknown; workflowId: string }) => {
+      const response = await (input.client as DatabaseClient)
+        .from('output_workflow_nodes')
+        .select(outputWorkflowNodeSelect)
+        .eq('workflow_id', input.workflowId)
+      if (response.error) throw new Error(response.error.message)
+      return (response.data ?? []) as Record<string, unknown>[]
+    },
+    loadWorkflowRunSteps: async (input: { client: unknown; workflowId: string; runId: string }) => {
+      const response = await (input.client as DatabaseClient)
+        .from('output_workflow_run_steps')
+        .select(outputWorkflowRunStepSelect)
+        .eq('run_id', input.runId)
+        .eq('workflow_id', input.workflowId)
+      if (response.error) throw new Error(response.error.message)
+      return (response.data ?? []) as Record<string, unknown>[]
+    },
+    loadWorkflowEdges: async (input: { client: unknown; workflowId: string }) => {
+      const response = await (input.client as DatabaseClient)
+        .from('output_workflow_edges')
+        .select(outputWorkflowEdgeSelect)
+        .eq('workflow_id', input.workflowId)
+      if (response.error) throw new Error(response.error.message)
+      return (response.data ?? []) as Record<string, unknown>[]
+    },
+    dynamicNodeRow: (input: Record<string, unknown>) => dynamicNodeRow(input as never) as Record<string, unknown>,
+    dynamicEdgeRow: (input: Record<string, unknown>) => dynamicEdgeRow(input as never) as Record<string, unknown>,
+    preserveExistingDynamicNodeOutput: (input: {
+      nextRow: Record<string, unknown>
+      existingNode?: Record<string, unknown> | null
+      existingStep?: Record<string, unknown> | null
+      compileHash: string
+      preserve: boolean
+    }) => preserveExistingDynamicNodeOutput(input as never) as Record<string, unknown>,
+    persistDynamicWorkflowGraphRevision: (input: {
+      client: unknown
+      workflow: unknown
+      nodeRows: Record<string, unknown>[]
+      edgeRows: Record<string, unknown>[]
+      existingDynamicNodes: Record<string, unknown>[]
+      dynamicEdgeKeys: string[]
+      compileHash: string
+      staleReason: string
+      workflowMetadataPatch: Record<string, unknown>
+    }) => persistDynamicWorkflowGraphRevision(input as never),
+  }
+}
+
 async function materializeDynamicCinematicV3StoryboardFanout(input: {
   client: DatabaseClient
   run: OutputWorkflowRun
@@ -12882,192 +7525,7 @@ async function materializeDynamicCinematicV3StoryboardFanout(input: {
   compileOutputs: Record<string, unknown>
   config: Record<string, unknown>
 }) {
-  const shotPlan = cinematicV2ShotPlanSchema.parse(input.compileOutputs.shotPlan)
-  const storyboardGroupPlan = cinematicV2StoryboardGroupPlanSchema.parse(input.compileOutputs.storyboardGroupPlan)
-  const screenplayDraft = asRecord(input.compileOutputs.screenplayDraft)
-  const referencePlan = asRecord(input.compileOutputs.cinematicReferencePlan)
-  const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue({
-    shotPlan,
-    storyboardGroupPlan,
-    screenplayDraft,
-    referencePlan,
-  })
-  const aspectRatio = readText(input.config.aspectRatio) || '16:9'
-  const resolution = readText(input.config.resolution) || '720p'
-  const debugSkipVideoGeneration = input.config.debugSkipVideoGeneration !== false
-  const videoProvider = resolveOutputVideoProvider(input.config)
-  const videoModel = readText(input.config.videoModel)
-    || readText(input.config.model)
-    || outputWorkflowDefaultVideoModel(videoProvider, resolution)
-  const generatedByNodeKey = 'cinematic_v3_dynamic_storyboard_fanout'
-  const dynamicV3GraphPersistenceVersion = 'v3_persistence_authoring_1'
-
-  const existingNodeResponse = await input.client
-    .from('output_workflow_nodes')
-    .select(outputWorkflowNodeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
-  const allExistingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
-    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
-    .filter((row) => {
-      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
-      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
-    })
-  const existingDynamicNodes = allExistingDynamicNodes.filter((row) => !isStaleDynamicCinematicNode(row))
-  const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row] as const))
-  const existingStepResponse = await input.client
-    .from('output_workflow_run_steps')
-    .select(outputWorkflowRunStepSelect)
-    .eq('run_id', input.run.id)
-    .eq('workflow_id', input.workflow.id)
-  if (existingStepResponse.error) throw new Error(existingStepResponse.error.message)
-  const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
-    .map((row) => [readText(row.node_key), row] as const))
-  const hasRecoverableStepOutput = existingDynamicNodes.some((row) => {
-    if (readText(row.output_hash) || hasStoredOutputs(row.outputs)) return false
-    const step = existingStepByNodeKey.get(row.key)
-    return Boolean(step && (readText(step.output_hash) || hasStoredOutputs(step.outputs)))
-  })
-  const existingSameHash = existingDynamicNodes.length > 0
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3GraphPersistenceVersion) === dynamicV3GraphPersistenceVersion)
-    && existingDynamicNodes.some((row) => row.key === 'cinematic_v3_timeline_assemble')
-    && existingDynamicNodes.some((row) => row.key === 'artifact')
-    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_prompt`))
-    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_sheet`))
-    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_panel_extract`))
-    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_video_prompt`))
-    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_video`))
-  if (existingSameHash && !hasRecoverableStepOutput) return { expanded: false, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
-
-  const existingEdgeResponse = await input.client
-    .from('output_workflow_edges')
-    .select(outputWorkflowEdgeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingEdgeResponse.error) throw new Error(existingEdgeResponse.error.message)
-  const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
-    .filter((row) => {
-      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
-      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
-    })
-    .map((row) => row.key)
-
-  const preserveV3NodeRow = (row: Record<string, unknown>) => {
-    const key = readText(row.key)
-    const existingNode = existingDynamicNodeByKey.get(key)
-    const existingMetadata = asRecord(existingNode?.metadata)
-    const sameCompileHash = readText(existingMetadata.dynamicCompileHash) === compileHash
-    return preserveExistingDynamicNodeOutput({
-      nextRow: row,
-      existingNode,
-      existingStep: existingStepByNodeKey.get(key) ?? null,
-      compileHash,
-      preserve: Boolean(existingNode)
-        && sameCompileHash
-        && readText(existingNode?.node_type) === readText(row.node_type)
-        && readText(asRecord(existingNode?.config).purpose) === readText(asRecord(row.config).purpose),
-    })
-  }
-  const v3Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => {
-    const row = dynamicNodeRow({
-      workflow: input.workflow,
-      compileHash,
-      generatedByNodeKey,
-      ...args,
-    })
-    return preserveV3NodeRow({
-      ...row,
-      metadata: {
-        ...asRecord(row.metadata),
-        dynamicV3GraphPersistenceVersion,
-      },
-    })
-  }
-  const v3Edge = (args: Omit<Parameters<typeof dynamicEdgeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicEdgeRow({
-    workflow: input.workflow,
-    compileHash,
-    generatedByNodeKey,
-    ...args,
-  })
-
-  const nodeRows: Record<string, unknown>[] = []
-  const edgeRows: Record<string, unknown>[] = []
-  const assetPackSourceNodeKey = 'cinematic_v3_reference_select'
-  storyboardGroupPlan.groups.forEach((group, index) => {
-    const storyboardLayout = { rows: group.rows, columns: group.columns, panelCount: group.panelCount }
-    const storyboardImageSize = storyboardImageSizeForLayout({ columns: group.columns, rows: group.rows, aspectRatio })
-    const y = 80 + index * 180
-    const promptKey = `${group.id}_prompt`
-    const sheetKey = `${group.id}_sheet`
-    const extractKey = `${group.id}_panel_extract`
-    const videoPromptKey = `${group.id}_video_prompt`
-    const videoKey = `${group.id}_video`
-    const groupDurationSeconds = Math.max(4, Math.min(15, Math.ceil(Number(group.providerDurationSeconds || group.editorialDurationSeconds) || group.shotIds.length * 3)))
-    nodeRows.push(
-      v3Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard ${group.index} Prompt`, x: 1760, y, config: { purpose: 'cinematic_v3_storyboard_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, storyboardGroup: group, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_storyboard_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard ${group.index} Sheet`, x: 2040, y, config: { purpose: 'cinematic_v3_storyboard_sheet', role: 'cinematic_v3_storyboard_sheet', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'high', outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v3_storyboard_sheets', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 8), continueOnError: true } } }),
-      v3Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Storyboard ${group.index}`, x: 2320, y, config: { purpose: 'cinematic_v3_panel_extract', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_panel_extract', maxConcurrency: 6 } } }),
-      v3Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Storyboard ${group.index} Video Prompt`, x: 2600, y, config: { purpose: 'cinematic_v3_storyboard_group_video_prompt', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_video_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: videoKey, nodeType: 'video_generation', label: `Storyboard ${group.index} Video`, x: 2880, y, config: { purpose: 'cinematic_v3_storyboard_group_video', role: 'cinematic_v3_storyboard_group_video', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup: group, storyboardGroupId: group.id, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'storyboard_sheet', assetPackReferenceLimit: 4, debugSkipVideoGeneration, syncMode: false, manualOnly: true, manual_only: true, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'video_prompt', 'storyboard_sheet', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v3_storyboard_group_videos', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 4), manualOnly: true } } }),
-    )
-    edgeRows.push(
-      v3Edge({ key: `shot_plan__${promptKey}`, sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'shot_plan' }),
-      v3Edge({ key: `${assetPackSourceNodeKey}__${promptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: promptKey, targetPort: 'asset_pack' }),
-      v3Edge({ key: `skill_context__${promptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: promptKey, targetPort: 'guidance' }),
-      v3Edge({ key: `${promptKey}__${sheetKey}`, sourceNodeKey: promptKey, sourcePort: 'text', targetNodeKey: sheetKey, targetPort: 'prompt' }),
-      v3Edge({ key: `${assetPackSourceNodeKey}__${sheetKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: sheetKey, targetPort: 'references' }),
-      v3Edge({ key: `skill_context__${sheetKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: sheetKey, targetPort: 'guidance' }),
-      v3Edge({ key: `${sheetKey}__${extractKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: extractKey, targetPort: 'image' }),
-      v3Edge({ key: `shot_plan__${extractKey}`, sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: extractKey, targetPort: 'shot_plan' }),
-      v3Edge({ key: `shot_plan__${videoPromptKey}`, sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'shot_plan' }),
-      v3Edge({ key: `${assetPackSourceNodeKey}__${videoPromptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack' }),
-      v3Edge({ key: `skill_context__${videoPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoPromptKey, targetPort: 'guidance' }),
-      v3Edge({ key: `${sheetKey}__${videoPromptKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references' }),
-      v3Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt' }),
-      v3Edge({ key: `${sheetKey}__${videoKey}_reference`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references' }),
-      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index, optional: true, optionalDependency: true, authoringOptional: true } }),
-      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index, optional: true, optionalDependency: true, authoringOptional: true } }),
-      v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: group.id, storyboardGroupIndex: group.index, optional: true, optionalDependency: true, manualOnly: true } }),
-    )
-  })
-
-  nodeRows.push(
-    v3Node({ key: 'cinematic_v3_timeline_assemble', nodeType: 'utility_transform', label: 'Assemble Storyboard Timeline', x: 3160, y: 120, config: { purpose: 'cinematic_v3_timeline_assemble', role: 'cinematic_v3_final_timeline', cinematicPipelineVersion: 'v3_script_storyboards', dynamicShotCount: shotPlan.shots.length, aspectRatio, resolution, debugSkipVideoGeneration, execution: { resourceClass: 'video', groupKey: 'cinematic_v3_timeline_assemble', maxConcurrency: 1 } } }),
-    v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Cinematic', x: 3440, y: 120, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
-  )
-  edgeRows.push(
-    v3Edge({ key: 'shot_plan__timeline', sourceNodeKey: 'cinematic_v3_shot_plan_merge', sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'shot_plan' }),
-    v3Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v3_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
-  )
-
-  await persistDynamicWorkflowGraphRevision({
-    client: input.client,
-    workflow: input.workflow,
-    nodeRows,
-    edgeRows,
-    existingDynamicNodes,
-    dynamicEdgeKeys,
-    compileHash,
-    staleReason: 'dynamic_v3_storyboard_fanout_rematerialized',
-    workflowMetadataPatch: {
-      cinematicPipelineVersion: 'v3_script_storyboards',
-      cinematicV2ScreenplayDraft: screenplayDraft,
-      cinematicV2ShotPlan: shotPlan,
-      cinematicV2StoryboardGroupPlan: storyboardGroupPlan,
-      cinematicV3ScreenplayDraft: screenplayDraft,
-      cinematicV3ShotPlan: shotPlan,
-      cinematicV3StoryboardGroupPlan: storyboardGroupPlan,
-      dynamicShotCount: shotPlan.shots.length,
-      storyboardSheetCount: storyboardGroupPlan.groups.length,
-      totalDurationSeconds: shotPlan.totalEditorialDurationSeconds,
-      videoProvider,
-      videoModel,
-      debugSkipVideoGeneration,
-      dynamicCinematicCompileHash: compileHash,
-      dynamicGraphVersion: 'v3_script_storyboards',
-    },
-  })
-  return { expanded: true, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
+  return materializeDynamicCinematicV3StoryboardFanoutRuntime(input, createCinematicDynamicFanoutMaterializerHelpers())
 }
 
 async function materializeDynamicCinematicV3ShotParseFanout(input: {
@@ -13077,282 +7535,8 @@ async function materializeDynamicCinematicV3ShotParseFanout(input: {
   compileOutputs: Record<string, unknown>
   config: Record<string, unknown>
 }) {
-  const shotBreakPlan = asRecord(input.compileOutputs.shotBreakPlan)
-  const groups = (Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : [])
-    .filter((group) => readText(group.id))
-  const screenplayDraft = asRecord(input.compileOutputs.screenplayDraft)
-  const referencePlan = asRecord(input.compileOutputs.cinematicReferencePlan)
-  const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue({
-    shotBreakPlan,
-    screenplayDraft,
-    referencePlan,
-  })
-  const aspectRatio = readText(input.config.aspectRatio) || '16:9'
-  const resolution = readText(input.config.resolution) || '720p'
-  const maxShotCount = Number(input.config.maxShotCount ?? 0) || 36
-  const debugSkipVideoGeneration = input.config.debugSkipVideoGeneration !== false
-  const videoProvider = resolveOutputVideoProvider(input.config)
-  const videoModel = readText(input.config.videoModel)
-    || readText(input.config.model)
-    || outputWorkflowDefaultVideoModel(videoProvider, resolution)
-  const generatedByNodeKey = 'cinematic_v3_dynamic_shot_parse_fanout'
-  const sequenceAnimaticMode = readText(input.config.sequenceAnimaticMode)
-  const cinematicAnimaticMode = readText(input.config.cinematicAnimaticMode)
-    || readText(asRecord(input.workflow.metadata).cinematicAnimaticMode)
-  const workflowMetadata = asRecord(input.workflow.metadata)
-  const screenplayAnimaticMasterMode = sequenceAnimaticMode === 'master_script_only'
-    || cinematicAnimaticMode === 'prompt_cinematic_master'
-    || readText(workflowMetadata.screenplayAnimaticRole) === 'master'
-    || readText(workflowMetadata.sequenceAnimaticRole) === 'master'
-  const screenplayAnimaticSource = readText(workflowMetadata.screenplayAnimaticSource)
-    || (cinematicAnimaticMode === 'prompt_cinematic_master' ? 'prompt_cinematic' : '')
-  const dynamicV3ParsePersistenceVersion = screenplayAnimaticMasterMode
-    ? 'v3_sequence_master_director_first_2'
-    : 'v3_parse_groups_direct_storyboards_1'
-  const storyboardGroups = groups.map((group, index) => buildCinematicV3StoryboardGroupFromShotBreakGroup(group, index))
-
-  const existingNodeResponse = await input.client
-    .from('output_workflow_nodes')
-    .select(outputWorkflowNodeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
-  const allExistingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
-    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
-    .filter((row) => {
-      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
-      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
-    })
-  const existingDynamicNodes = allExistingDynamicNodes.filter((row) => !isStaleDynamicCinematicNode(row))
-  const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row] as const))
-  const existingStepResponse = await input.client
-    .from('output_workflow_run_steps')
-    .select(outputWorkflowRunStepSelect)
-    .eq('run_id', input.run.id)
-    .eq('workflow_id', input.workflow.id)
-  if (existingStepResponse.error) throw new Error(existingStepResponse.error.message)
-  const existingStepByNodeKey = new Map(((existingStepResponse.data ?? []) as OutputWorkflowRunStepRow[])
-    .map((row) => [readText(row.node_key), row] as const))
-  const groupParseKeys = screenplayAnimaticMasterMode
-    ? []
-    : groups.map((group) => `${readText(group.id)}_shot_parse`)
-  const directStoryboardKeys = screenplayAnimaticMasterMode
-    ? []
-    : storyboardGroups.flatMap((group) => [
-      `${group.id}_prompt`,
-      `${group.id}_sheet`,
-      `${group.id}_panel_extract`,
-      `${group.id}_video_prompt`,
-      `${group.id}_video`,
-    ])
-  const expectedDynamicKeys = screenplayAnimaticMasterMode
-    ? [
-      'sequence_animatic_manifest',
-      'sequence_animatic_director_plan',
-      'sequence_animatic_director_plan_artifact',
-      'sequence_animatic_orchestrator',
-      'artifact',
-    ]
-    : [...groupParseKeys, ...directStoryboardKeys, 'cinematic_v3_timeline_assemble', 'artifact']
-  const hasRecoverableStepOutput = existingDynamicNodes.some((row) => {
-    if (readText(row.output_hash) || hasStoredOutputs(row.outputs)) return false
-    const step = existingStepByNodeKey.get(row.key)
-    return Boolean(step && (readText(step.output_hash) || hasStoredOutputs(step.outputs)))
-  })
-  const existingSameHash = existingDynamicNodes.length > 0
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicV3ParsePersistenceVersion) === dynamicV3ParsePersistenceVersion)
-    && expectedDynamicKeys.every((key) => existingDynamicNodes.some((row) => row.key === key))
-  if (existingSameHash && !hasRecoverableStepOutput) {
-    return { expanded: false, compileHash, parseGroupCount: screenplayAnimaticMasterMode ? 0 : groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
-  }
-
-  const existingEdgeResponse = await input.client
-    .from('output_workflow_edges')
-    .select(outputWorkflowEdgeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingEdgeResponse.error) throw new Error(existingEdgeResponse.error.message)
-  const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
-    .filter((row) => {
-      const generatedBy = readText(asRecord(row.metadata).generatedByNodeKey)
-      return generatedBy === generatedByNodeKey || generatedBy === 'cinematic_v3_dynamic_storyboard_fanout'
-    })
-    .map((row) => row.key)
-
-  const preserveNodeRow = (row: Record<string, unknown>) => {
-    const key = readText(row.key)
-    const existingNode = existingDynamicNodeByKey.get(key)
-    const existingMetadata = asRecord(existingNode?.metadata)
-    const sameCompileHash = readText(existingMetadata.dynamicCompileHash) === compileHash
-    return preserveExistingDynamicNodeOutput({
-      nextRow: row,
-      existingNode,
-      existingStep: existingStepByNodeKey.get(key) ?? null,
-      compileHash,
-      preserve: Boolean(existingNode)
-        && sameCompileHash
-        && readText(existingNode?.node_type) === readText(row.node_type)
-        && readText(asRecord(existingNode?.config).purpose) === readText(asRecord(row.config).purpose),
-    })
-  }
-  const v3Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => {
-    const row = dynamicNodeRow({
-      workflow: input.workflow,
-      compileHash,
-      generatedByNodeKey,
-      ...args,
-    })
-    return preserveNodeRow({
-      ...row,
-      metadata: {
-        ...asRecord(row.metadata),
-        dynamicV3ParsePersistenceVersion,
-      },
-    })
-  }
-  const v3Edge = (args: Omit<Parameters<typeof dynamicEdgeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicEdgeRow({
-    workflow: input.workflow,
-    compileHash,
-    generatedByNodeKey,
-    ...args,
-  })
-
-  const nodeRows: Record<string, unknown>[] = []
-  const edgeRows: Record<string, unknown>[] = []
-  const assetPackSourceNodeKey = 'cinematic_v3_reference_select'
-  groups.forEach((group, index) => {
-    if (screenplayAnimaticMasterMode) return
-    const groupId = readText(group.id)
-    const storyboardGroup = storyboardGroups[index]
-    const storyboardLayout = { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
-    const storyboardImageSize = storyboardImageSizeForLayout({ columns: storyboardGroup.columns, rows: storyboardGroup.rows, aspectRatio })
-    const parseKey = `${groupId}_shot_parse`
-    const promptKey = `${storyboardGroup.id}_prompt`
-    const sheetKey = `${storyboardGroup.id}_sheet`
-    const extractKey = `${storyboardGroup.id}_panel_extract`
-    const videoPromptKey = `${storyboardGroup.id}_video_prompt`
-    const videoKey = `${storyboardGroup.id}_video`
-    const y = 80 + index * 180
-    const groupDurationSeconds = Math.max(4, Math.min(15, Math.ceil(Number(storyboardGroup.providerDurationSeconds || storyboardGroup.editorialDurationSeconds) || storyboardGroup.shotIds.length * 3)))
-    nodeRows.push(
-      v3Node({
-        key: parseKey,
-        nodeType: 'text_llm',
-        label: `Parse Storyboard ${storyboardGroup.index}`,
-        x: 1960,
-        y,
-        config: {
-          purpose: 'cinematic_v3_shot_parse_group',
-          cinematicPipelineVersion: 'v3_script_storyboards',
-          storyboardGroup: group,
-          storyboardGroupId: groupId,
-          maxShotCount: Math.max(1, Math.min(9, readStringArray(group.shotBreakIds).length || maxShotCount)),
-          aspectRatio,
-          resolution,
-          skillKeys: ['cinematic_shot_direction', 'cinematic_directorial_language', 'provider_prompt_hygiene'],
-          guidanceMode: 'strict',
-          execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_shot_parse_groups', maxConcurrency: Math.min(groups.length, 6) },
-        },
-      }),
-    )
-    edgeRows.push(
-      v3Edge({ key: `screenplay__${parseKey}`, sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: parseKey, targetPort: 'screenplay' }),
-      v3Edge({ key: `shot_break_plan__${parseKey}`, sourceNodeKey: 'cinematic_v3_shot_break_plan', sourcePort: 'text', targetNodeKey: parseKey, targetPort: 'shot_break_plan' }),
-      v3Edge({ key: `context__${parseKey}`, sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: parseKey, targetPort: 'context' }),
-      v3Edge({ key: `guidance__${parseKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: parseKey, targetPort: 'guidance' }),
-      v3Edge({ key: `references__${parseKey}`, sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: parseKey, targetPort: 'asset_pack' }),
-    )
-    if (screenplayAnimaticMasterMode) {
-      edgeRows.push(
-        v3Edge({ key: `${parseKey}__sequence_manifest`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
-      )
-      return
-    }
-    nodeRows.push(
-      v3Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Prompt`, x: 2240, y, config: { purpose: 'cinematic_v3_storyboard_prompt', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, storyboardGroup, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_storyboard_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard ${storyboardGroup.index} Sheet`, x: 2520, y, config: { purpose: 'cinematic_v3_storyboard_sheet', role: 'cinematic_v3_storyboard_sheet', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'high', outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v3_storyboard_sheets', maxConcurrency: Math.min(storyboardGroups.length, 8), continueOnError: true } } }),
-      v3Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Storyboard ${storyboardGroup.index}`, x: 2800, y, config: { purpose: 'cinematic_v3_panel_extract', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_panel_extract', maxConcurrency: 6 } } }),
-      v3Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Storyboard ${storyboardGroup.index} Video Prompt`, x: 3080, y, config: { purpose: 'cinematic_v3_storyboard_group_video_prompt', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v3_video_prompts', maxConcurrency: 6 } } }),
-      v3Node({ key: videoKey, nodeType: 'video_generation', label: `Storyboard ${storyboardGroup.index} Video`, x: 3360, y, config: { purpose: 'cinematic_v3_storyboard_group_video', role: 'cinematic_v3_storyboard_group_video', cinematicPipelineVersion: 'v3_script_storyboards', storyboardGroup, storyboardGroupId: storyboardGroup.id, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: groupDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'storyboard_sheet', assetPackReferenceLimit: 4, debugSkipVideoGeneration, syncMode: false, manualOnly: true, manual_only: true, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v3', 'video_prompt', 'storyboard_sheet', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v3_storyboard_group_videos', maxConcurrency: Math.min(storyboardGroups.length, 4), manualOnly: true } } }),
-    )
-    edgeRows.push(
-      v3Edge({ key: `${parseKey}__${promptKey}`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'shot_plan' }),
-      v3Edge({ key: `${assetPackSourceNodeKey}__${promptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: promptKey, targetPort: 'asset_pack' }),
-      v3Edge({ key: `skill_context__${promptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: promptKey, targetPort: 'guidance' }),
-      v3Edge({ key: `${promptKey}__${sheetKey}`, sourceNodeKey: promptKey, sourcePort: 'text', targetNodeKey: sheetKey, targetPort: 'prompt' }),
-      v3Edge({ key: `${assetPackSourceNodeKey}__${sheetKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: sheetKey, targetPort: 'references' }),
-      v3Edge({ key: `skill_context__${sheetKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: sheetKey, targetPort: 'guidance' }),
-      v3Edge({ key: `${sheetKey}__${extractKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: extractKey, targetPort: 'image' }),
-      v3Edge({ key: `${parseKey}__${extractKey}`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: extractKey, targetPort: 'shot_plan' }),
-      v3Edge({ key: `${parseKey}__${videoPromptKey}`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'shot_plan' }),
-      v3Edge({ key: `${assetPackSourceNodeKey}__${videoPromptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack' }),
-      v3Edge({ key: `skill_context__${videoPromptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: videoPromptKey, targetPort: 'guidance' }),
-      v3Edge({ key: `${sheetKey}__${videoPromptKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references' }),
-      v3Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt' }),
-      v3Edge({ key: `${sheetKey}__${videoKey}_reference`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references' }),
-      v3Edge({ key: `${parseKey}__timeline`, sourceNodeKey: parseKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'shot_plan', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index } }),
-      v3Edge({ key: `${extractKey}__timeline_panels`, sourceNodeKey: extractKey, sourcePort: 'panels', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'panels', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, authoringOptional: true } }),
-      v3Edge({ key: `${videoPromptKey}__timeline_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'video_prompts', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, authoringOptional: true } }),
-      v3Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v3_timeline_assemble', targetPort: 'videos', metadata: { storyboardGroupId: storyboardGroup.id, storyboardGroupIndex: storyboardGroup.index, optional: true, optionalDependency: true, manualOnly: true } }),
-    )
-  })
-  if (screenplayAnimaticMasterMode) {
-    nodeRows.push(
-      v3Node({ key: 'sequence_animatic_director_plan', nodeType: 'utility_transform', label: 'Shot Continuity Plan', x: 1960, y: 120, config: { purpose: 'sequence_animatic_director_plan', role: 'sequence_animatic_director_plan', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', maxShotCount, aspectRatio, resolution, execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_director_plan', maxConcurrency: 1 } } }),
-      v3Node({ key: 'sequence_animatic_director_plan_artifact', nodeType: 'output_artifact', label: 'Register Shot Continuity Plan', x: 2240, y: 120, config: { purpose: 'sequence_animatic_director_plan_artifact', artifactKind: 'other', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
-      v3Node({ key: 'sequence_animatic_manifest', nodeType: 'utility_transform', label: 'Build Animatic Manifest', x: 2520, y: 120, config: { purpose: 'sequence_animatic_manifest', role: 'sequence_animatic_manifest', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', aspectRatio, resolution, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 } } }),
-      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Animatic Manifest', x: 2800, y: 120, config: { purpose: 'sequence_animatic_manifest_artifact', artifactKind: 'other', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
-      v3Node({ key: 'sequence_animatic_orchestrator', nodeType: 'utility_transform', label: 'Queue Animatic Blocks', x: 3080, y: 120, config: { purpose: 'sequence_animatic_orchestrator', role: 'sequence_animatic_orchestrator', graphSpecVersion: 'sequence_animatic_graph_v2', cinematicPipelineVersion: 'v3_script_storyboards', blockConcurrency: 1, autoStartStoryboards: true, autoStartVideos: false, execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_orchestrator', maxConcurrency: 1 } } }),
-    )
-    edgeRows.push(
-      v3Edge({ key: 'context__sequence_director_plan', sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'context' }),
-      v3Edge({ key: 'guidance__sequence_director_plan', sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'guidance' }),
-      v3Edge({ key: 'references__sequence_director_plan', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'asset_pack' }),
-      v3Edge({ key: 'screenplay__sequence_director_plan', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_director_plan', targetPort: 'screenplay' }),
-      v3Edge({ key: 'director_plan__director_plan_artifact', sourceNodeKey: 'sequence_animatic_director_plan', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_director_plan_artifact', targetPort: 'director_plan' }),
-      v3Edge({ key: 'director_plan__sequence_manifest', sourceNodeKey: 'sequence_animatic_director_plan', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'director_plan' }),
-      v3Edge({ key: 'screenplay__sequence_manifest', sourceNodeKey: 'cinematic_v3_screenplay_author', sourcePort: 'text', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'screenplay' }),
-      v3Edge({ key: 'references__sequence_manifest', sourceNodeKey: 'cinematic_v3_reference_select', sourcePort: 'asset_pack', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'asset_pack' }),
-      v3Edge({ key: 'context__sequence_manifest', sourceNodeKey: 'world_context', sourcePort: 'context', targetNodeKey: 'sequence_animatic_manifest', targetPort: 'context' }),
-      v3Edge({ key: 'sequence_manifest__artifact', sourceNodeKey: 'sequence_animatic_manifest', sourcePort: 'manifest', targetNodeKey: 'artifact', targetPort: 'input' }),
-      v3Edge({ key: 'director_plan__orchestrator', sourceNodeKey: 'sequence_animatic_director_plan_artifact', sourcePort: 'director_plan', targetNodeKey: 'sequence_animatic_orchestrator', targetPort: 'director_plan' }),
-      v3Edge({ key: 'sequence_manifest__orchestrator', sourceNodeKey: 'artifact', sourcePort: 'manifest', targetNodeKey: 'sequence_animatic_orchestrator', targetPort: 'manifest' }),
-    )
-  } else {
-    nodeRows.push(
-      v3Node({ key: 'cinematic_v3_timeline_assemble', nodeType: 'utility_transform', label: 'Assemble Storyboard Timeline', x: 3660, y: 120, config: { purpose: 'cinematic_v3_timeline_assemble', role: 'cinematic_v3_final_timeline', cinematicPipelineVersion: 'v3_script_storyboards', dynamicShotCount: Array.isArray(shotBreakPlan.shotBreaks) ? shotBreakPlan.shotBreaks.length : groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0), aspectRatio, resolution, debugSkipVideoGeneration, execution: { resourceClass: 'video', groupKey: 'cinematic_v3_timeline_assemble', maxConcurrency: 1 } } }),
-      v3Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register Cinematic', x: 3940, y: 120, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', cinematicPipelineVersion: 'v3_script_storyboards', execution: { resourceClass: 'utility' } } }),
-    )
-    edgeRows.push(
-      v3Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v3_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
-    )
-  }
-
-  await persistDynamicWorkflowGraphRevision({
-    client: input.client,
-    workflow: input.workflow,
-    nodeRows,
-    edgeRows,
-    existingDynamicNodes,
-    dynamicEdgeKeys,
-    compileHash,
-    staleReason: 'dynamic_v3_shot_parse_fanout_rematerialized',
-    workflowMetadataPatch: {
-      cinematicPipelineVersion: 'v3_script_storyboards',
-      cinematicV3ScreenplayDraft: screenplayDraft,
-      cinematicV3ShotBreakPlan: shotBreakPlan,
-      dynamicCinematicParseCompileHash: compileHash,
-      dynamicV3ParseGroupCount: groups.length,
-      screenplayAnimaticRole: screenplayAnimaticMasterMode ? 'master' : asRecord(input.workflow.metadata).screenplayAnimaticRole,
-      screenplayAnimaticSource: screenplayAnimaticMasterMode ? screenplayAnimaticSource || asRecord(input.workflow.metadata).screenplayAnimaticSource : asRecord(input.workflow.metadata).screenplayAnimaticSource,
-      sequenceAnimaticRole: screenplayAnimaticMasterMode ? 'master' : asRecord(input.workflow.metadata).sequenceAnimaticRole,
-      storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length,
-      dynamicShotCount: groups.reduce((total, group) => total + readStringArray(group.shotBreakIds).length, 0),
-      dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
-    },
-  })
-  return { expanded: true, compileHash, parseGroupCount: screenplayAnimaticMasterMode ? 0 : groups.length, storyboardSheetCount: screenplayAnimaticMasterMode ? 0 : storyboardGroups.length }
+  return materializeDynamicCinematicV3ShotParseFanoutRuntime(input, createCinematicDynamicFanoutMaterializerHelpers())
 }
-
 async function materializeDynamicCinematicV2ShotFanout(input: {
   client: DatabaseClient
   run: OutputWorkflowRun
@@ -13360,260 +7544,7 @@ async function materializeDynamicCinematicV2ShotFanout(input: {
   compileOutputs: Record<string, unknown>
   config: Record<string, unknown>
 }) {
-  const shotPlan = cinematicV2ShotPlanSchema.parse(input.compileOutputs.shotPlan ?? input.compileOutputs.shot_plan)
-  const sceneState = cinematicV2SceneStateSchema.parse(input.compileOutputs.sceneState ?? input.compileOutputs.scene_state)
-  const layoutPlan = cinematicV2SceneLayoutPlanSchema.parse(input.compileOutputs.layoutPlan ?? input.compileOutputs.layout_plan)
-  const parsedScript = cinematicV2ParsedScriptSchema.parse(input.compileOutputs.parsedScript ?? input.compileOutputs.parsed_script)
-  const storyboardGroupPlan = cinematicV2StoryboardGroupPlanSchema.safeParse(input.compileOutputs.storyboardGroupPlan ?? input.compileOutputs.storyboard_group_plan).success
-    ? cinematicV2StoryboardGroupPlanSchema.parse(input.compileOutputs.storyboardGroupPlan ?? input.compileOutputs.storyboard_group_plan)
-    : buildCinematicV2StoryboardGroupPlan(shotPlan)
-  const screenplayDraft = cinematicV2ScreenplayDraftSchema.safeParse(input.compileOutputs.screenplayDraft ?? input.compileOutputs.screenplay_draft).success
-    ? cinematicV2ScreenplayDraftSchema.parse(input.compileOutputs.screenplayDraft ?? input.compileOutputs.screenplay_draft)
-    : null
-  const referencePlan = cinematicV2ReferencePlanSchema.safeParse(input.compileOutputs.cinematicReferencePlan ?? input.compileOutputs.cinematic_reference_plan).success
-    ? cinematicV2ReferencePlanSchema.parse(input.compileOutputs.cinematicReferencePlan ?? input.compileOutputs.cinematic_reference_plan)
-    : null
-  const aspectRatio = readText(input.config.aspectRatio) || '16:9'
-  const resolution = readText(input.config.resolution) || '720p'
-  const cinematicV2AnimaticMode = resolveCinematicV2AnimaticMode(input.config, input.run)
-  const useQualityKeyframes = cinematicV2AnimaticMode === 'quality_keyframes'
-  const cinematicV2QualityShotIds = resolveCinematicV2QualityShotIds(input.config, input.run)
-  const cinematicV2QualityShotIdSet = new Set(cinematicV2QualityShotIds)
-  const selectedShotMaterialization = readText(asRecord(input.run.metadata).materializationMode) === 'selected_shots'
-    || readText(input.run.input.materializationMode) === 'selected_shots'
-  const shotUsesQualityKeyframe = (shot: z.infer<typeof cinematicV2ShotSchema>) => (
-    useQualityKeyframes
-    || cinematicV2QualityShotIdSet.has(shot.id)
-    || cinematicV2QualityShotIdSet.has(String(shot.index))
-    || cinematicV2QualityShotIdSet.has(String(shot.index).padStart(3, '0'))
-  )
-  const compileHash = readText(input.compileOutputs.compileHash) || hashOutputWorkflowValue({
-    shotPlan,
-    storyboardGroupPlan,
-    sceneState,
-    layoutPlan,
-    parsedScript,
-    screenplayDraft,
-    referencePlan,
-    cinematicV2AnimaticMode,
-    cinematicV2QualityShotIds: cinematicV2QualityShotIds.slice().sort(),
-  })
-  const debugSkipVideoGeneration = input.config.debugSkipVideoGeneration === true
-  const videoProvider = resolveOutputVideoProvider(input.config)
-  const videoModel = readText(input.config.videoModel)
-    || readText(input.config.model)
-    || outputWorkflowDefaultVideoModel(videoProvider, resolution)
-  const generatedByNodeKey = 'cinematic_v2_dynamic_shot_fanout'
-
-  const existingNodeResponse = await input.client
-    .from('output_workflow_nodes')
-    .select(outputWorkflowNodeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingNodeResponse.error) throw new Error(existingNodeResponse.error.message)
-  const allExistingDynamicNodes = ((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[])
-    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
-  const existingDynamicNodes = allExistingDynamicNodes.filter((row) => !isStaleDynamicCinematicNode(row))
-  const existingDynamicNodeByKey = new Map(existingDynamicNodes.map((row) => [row.key, row]))
-  const existingSameHash = existingDynamicNodes.length > 0
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).dynamicCompileHash) === compileHash)
-    && existingDynamicNodes.every((row) => readText(asRecord(row.metadata).generatedByNodeKey) === generatedByNodeKey)
-    && existingDynamicNodes.some((row) => row.key === 'cinematic_v2_timeline_assemble')
-    && storyboardGroupPlan.groups.every((group) => existingDynamicNodes.some((row) => row.key === `${group.id}_sheet`))
-    && shotPlan.shots.every((shot) => existingDynamicNodes.some((row) => row.key === `cinematic_v2_shot_${String(shot.index).padStart(3, '0')}_asset_pack`))
-    && shotPlan.shots.every((shot) => {
-      const keyframeNode = existingDynamicNodes.find((row) => row.key === `cinematic_v2_shot_${String(shot.index).padStart(3, '0')}_keyframe`)
-      const keyframePurpose = readText(asRecord(keyframeNode?.config).purpose)
-      return shotUsesQualityKeyframe(shot)
-        ? keyframePurpose === 'cinematic_v2_shot_keyframe'
-        : keyframePurpose === 'cinematic_v2_shot_keyframe_passthrough'
-    })
-    && shotPlan.shots.every((shot) => existingDynamicNodes.some((row) => row.key === `cinematic_v2_shot_${String(shot.index).padStart(3, '0')}_keyframe_qa`))
-    && shotPlan.shots.every((shot) => existingDynamicNodes.some((row) => row.key === `cinematic_v2_shot_${String(shot.index).padStart(3, '0')}_video`))
-  if (existingSameHash) return { expanded: false, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
-
-  const existingEdgeResponse = await input.client
-    .from('output_workflow_edges')
-    .select(outputWorkflowEdgeSelect)
-    .eq('workflow_id', input.workflow.id)
-  if (existingEdgeResponse.error) throw new Error(existingEdgeResponse.error.message)
-  const dynamicEdgeKeys = ((existingEdgeResponse.data ?? []) as OutputWorkflowEdgeRow[])
-    .filter((row) => asRecord(row.metadata).dynamicCinematicGenerated === true)
-    .map((row) => row.key)
-  const nodeRows: Record<string, unknown>[] = []
-  const edgeRows: Record<string, unknown>[] = []
-  const preserveNodeRow = (row: Record<string, unknown>) => {
-    const key = readText(row.key)
-    const existingNode = existingDynamicNodeByKey.get(key)
-    const nextPurpose = readText(asRecord(row.config).purpose)
-    const existingPurpose = readText(asRecord(existingNode?.config).purpose)
-    const selectedShotKeyframeNode = shotPlan.shots.some((shot, index) => {
-      if (!shotUsesQualityKeyframe(shot)) return false
-      const suffix = String(shot.index || index + 1).padStart(3, '0')
-      const baseKey = `cinematic_v2_shot_${suffix}`
-      return key === `${baseKey}_keyframe_prompt`
-        || key === `${baseKey}_keyframe`
-        || key === `${baseKey}_keyframe_qa`
-    })
-    return preserveExistingDynamicNodeOutput({
-      nextRow: row,
-      existingNode,
-      compileHash,
-      preserve: selectedShotMaterialization
-        && !selectedShotKeyframeNode
-        && Boolean(existingNode)
-        && readText(existingNode?.node_type) === readText(row.node_type)
-        && existingPurpose === nextPurpose,
-    })
-  }
-  const v2Node = (args: Omit<Parameters<typeof dynamicNodeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicNodeRow({
-    workflow: input.workflow,
-    compileHash,
-    generatedByNodeKey,
-    ...args,
-  })
-  const v2Edge = (args: Omit<Parameters<typeof dynamicEdgeRow>[0], 'workflow' | 'compileHash' | 'generatedByNodeKey'>) => dynamicEdgeRow({
-    workflow: input.workflow,
-    compileHash,
-    generatedByNodeKey,
-    ...args,
-  })
-  const existingNodeKeys = new Set(((existingNodeResponse.data ?? []) as OutputWorkflowNodeRow[]).map((row) => row.key))
-  const assetPackSourceNodeKey = existingNodeKeys.has('cinematic_v2_reference_select')
-    ? 'cinematic_v2_reference_select'
-    : 'cinematic_entities'
-  const storyboardGroupByShotId = new Map<string, z.infer<typeof cinematicV2StoryboardGroupPlanSchema>['groups'][number]>()
-  storyboardGroupPlan.groups.forEach((group) => {
-    group.shotIds.forEach((shotId) => storyboardGroupByShotId.set(shotId, group))
-  })
-
-  storyboardGroupPlan.groups.forEach((group, index) => {
-    const storyboardLayout = { rows: group.rows, columns: group.columns, panelCount: group.panelCount }
-    const storyboardImageSize = storyboardImageSizeForLayout({ columns: group.columns, rows: group.rows, aspectRatio })
-    const y = 80 + index * 170
-    const promptKey = `${group.id}_prompt`
-    const sheetKey = `${group.id}_sheet`
-    const extractKey = `${group.id}_panel_extract`
-    nodeRows.push(
-      v2Node({ key: promptKey, nodeType: 'utility_transform', label: `Storyboard Group ${group.index} Prompt`, x: 1760, y, config: { purpose: 'cinematic_v2_storyboard_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', aspectRatio, storyboardGroup: group, storyboardLayout, planningOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_storyboard_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: sheetKey, nodeType: 'image_generation', label: `Storyboard Group ${group.index} Sheet`, x: 2040, y, config: { purpose: 'cinematic_v2_storyboard_sheet', role: 'cinematic_v2_storyboard_sheet', cinematicPipelineVersion: 'v2_shot_orchestration', storyboardGroup: group, storyboardGroupId: group.id, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: CINEMATIC_STORYBOARD_IMAGE_QUALITY, outputFormat: 'webp', maxReferenceImages: 16, imageSize: storyboardImageSize, aspectRatio, storyboardLayout, planningOnly: true, planning_only: true, usedAsVideoReference: false, used_as_video_reference: false, skillKeys: ['cinematic_beat_sheet_planning', 'storyboard_panel_accuracy', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'storyboard_sheet', 'panel_grid', 'image_prompt', 'entity_reference', 'panel_accuracy'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_storyboard_sheets', maxConcurrency: Math.min(storyboardGroupPlan.groups.length, 8) } } }),
-      v2Node({ key: extractKey, nodeType: 'utility_transform', label: `Extract Group ${group.index} Panels`, x: 2320, y, config: { purpose: 'cinematic_v2_panel_extract', cinematicPipelineVersion: 'v2_shot_orchestration', storyboardGroup: group, storyboardGroupId: group.id, storyboardLayout, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_panel_extract', maxConcurrency: 6 } } }),
-    )
-    edgeRows.push(
-      v2Edge({ key: `shot_plan__${promptKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'shot_plan' }),
-      v2Edge({ key: `scene_state__${promptKey}`, sourceNodeKey: 'cinematic_v2_scene_compile', sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'scene_state' }),
-      v2Edge({ key: `layout_plan__${promptKey}`, sourceNodeKey: 'cinematic_v2_layout_plan', sourcePort: 'text', targetNodeKey: promptKey, targetPort: 'layout_plan' }),
-      v2Edge({ key: `${assetPackSourceNodeKey}__${promptKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: promptKey, targetPort: 'asset_pack' }),
-      v2Edge({ key: `skill_context__${promptKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: promptKey, targetPort: 'guidance' }),
-      v2Edge({ key: `${promptKey}__${sheetKey}`, sourceNodeKey: promptKey, sourcePort: 'text', targetNodeKey: sheetKey, targetPort: 'prompt' }),
-      v2Edge({ key: `${assetPackSourceNodeKey}__${sheetKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: sheetKey, targetPort: 'references' }),
-      v2Edge({ key: `skill_context__${sheetKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: sheetKey, targetPort: 'guidance' }),
-      v2Edge({ key: `${sheetKey}__${extractKey}`, sourceNodeKey: sheetKey, sourcePort: 'image', targetNodeKey: extractKey, targetPort: 'image' }),
-      v2Edge({ key: `shot_plan__${extractKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: extractKey, targetPort: 'shot_plan' }),
-    )
-  })
-
-  shotPlan.shots.forEach((shot, index) => {
-    const suffix = String(shot.index || index + 1).padStart(3, '0')
-    const baseKey = `cinematic_v2_shot_${suffix}`
-    const y = 260 + index * 170
-    const keyframePromptKey = `${baseKey}_keyframe_prompt`
-    const keyframeKey = `${baseKey}_keyframe`
-    const keyframeQaKey = `${baseKey}_keyframe_qa`
-    const videoPromptKey = `${baseKey}_video_prompt`
-    const videoKey = `${baseKey}_video`
-    const shotAssetPackKey = `${baseKey}_asset_pack`
-    const storyboardGroup = storyboardGroupByShotId.get(shot.id)
-    const panelExtractKey = storyboardGroup ? `${storyboardGroup.id}_panel_extract` : 'cinematic_v2_panel_extract'
-    const shotMeta = { shotId: shot.id, shotIndex: shot.index, storyboardGroupId: storyboardGroup?.id ?? null }
-    const shotQualityKeyframe = shotUsesQualityKeyframe(shot)
-    const shotAnimaticMode = shotQualityKeyframe ? 'quality_keyframes' : cinematicV2AnimaticMode
-    nodeRows.push(
-      v2Node({ key: shotAssetPackKey, nodeType: 'utility_transform', label: `Shot ${shot.index} References`, x: 2460, y, config: { purpose: 'cinematic_v2_shot_asset_pack', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, maxEntityCount: 6, maxAssetKeysPerEntity: 2, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_shot_asset_packs', maxConcurrency: 12 } } }),
-      ...(shotQualityKeyframe
-        ? [
-          v2Node({ key: keyframePromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe Enhancement Prompt`, x: 2600, y, config: { purpose: 'cinematic_v2_keyframe_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode: shotAnimaticMode, shotId: shot.id, shotIndex: shot.index, aspectRatio, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_prompts', maxConcurrency: 6 } } }),
-          v2Node({ key: keyframeKey, nodeType: 'image_generation', label: `Shot ${shot.index} Enhanced Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode: shotAnimaticMode, shotId: shot.id, shotIndex: shot.index, model: 'openai/gpt-image-2', referenceModel: 'openai/gpt-image-2/edit', quality: 'medium', outputFormat: 'webp', maxReferenceImages: 6, imageSize: { width: 1536, height: 864 }, aspectRatio, usedAsVideoReference: true, used_as_video_reference: true, skillKeys: ['cinematic_keyframe_prompting', 'cinematic_keyframe_reference_repair', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'keyframe', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity', 'reference_repair'], guidanceMode: 'strict', execution: { resourceClass: 'image', groupKey: 'cinematic_v2_shot_keyframes', maxConcurrency: Math.min(shotPlan.shots.length, 8) } } }),
-        ]
-        : [
-          v2Node({ key: keyframeKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Panel Keyframe`, x: 2880, y, config: { purpose: 'cinematic_v2_shot_keyframe_passthrough', role: 'cinematic_v2_shot_keyframe', cinematicPipelineVersion: 'v2_shot_orchestration', cinematicV2AnimaticMode, shotId: shot.id, shotIndex: shot.index, aspectRatio, planningOnly: true, planning_only: true, usedAsVideoReference: true, used_as_video_reference: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_panel_keyframes', maxConcurrency: 12 } } }),
-        ]),
-      v2Node({ key: keyframeQaKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Keyframe QA`, x: 3020, y, config: { purpose: 'cinematic_v2_keyframe_qa', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, advisoryOnly: true, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_keyframe_qa', maxConcurrency: 12 } } }),
-      v2Node({ key: videoPromptKey, nodeType: 'utility_transform', label: `Shot ${shot.index} Video Prompt`, x: 3160, y, config: { purpose: 'cinematic_v2_video_prompt', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, execution: { resourceClass: 'utility', groupKey: 'cinematic_v2_video_prompts', maxConcurrency: 6 } } }),
-      v2Node({ key: videoKey, nodeType: 'video_generation', label: `Shot ${shot.index} Video`, x: 3440, y, config: { purpose: 'cinematic_v2_shot_video', role: 'cinematic_v2_shot_video', cinematicPipelineVersion: 'v2_shot_orchestration', shotId: shot.id, shotIndex: shot.index, provider: videoProvider, videoProvider, model: videoModel, durationSeconds: shot.providerDurationSeconds, aspectRatio, resolution, generateAudio: false, cinematicReferenceMode: 'keyframes', assetPackReferenceLimit: 5, debugSkipVideoGeneration, syncMode: false, skillKeys: ['seedance_reference_video_prompting', 'seedance_truth_source_modes', 'cinematic_shot_direction', 'provider_prompt_hygiene'], autoSkillTags: ['cinematic_v2', 'video_prompt', 'seedance', 'provider_hygiene'], guidanceMode: 'strict', execution: { resourceClass: 'video', groupKey: 'cinematic_v2_videos', maxConcurrency: Math.min(shotPlan.shots.length, 8) } } }),
-    )
-    edgeRows.push(
-      v2Edge({ key: `${assetPackSourceNodeKey}__${shotAssetPackKey}`, sourceNodeKey: assetPackSourceNodeKey, sourcePort: 'asset_pack', targetNodeKey: shotAssetPackKey, targetPort: 'asset_pack', metadata: shotMeta }),
-      v2Edge({ key: `shot_plan__${shotAssetPackKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: shotAssetPackKey, targetPort: 'shot_plan', metadata: shotMeta }),
-      ...(shotQualityKeyframe
-        ? [
-          v2Edge({ key: `${panelExtractKey}__${keyframePromptKey}`, sourceNodeKey: panelExtractKey, sourcePort: 'panels', targetNodeKey: keyframePromptKey, targetPort: 'panels', metadata: shotMeta }),
-          v2Edge({ key: `shot_plan__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: keyframePromptKey, targetPort: 'shot_plan', metadata: shotMeta }),
-          v2Edge({ key: `scene_state__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_scene_compile', sourcePort: 'text', targetNodeKey: keyframePromptKey, targetPort: 'scene_state', metadata: shotMeta }),
-          v2Edge({ key: `layout_plan__${keyframePromptKey}`, sourceNodeKey: 'cinematic_v2_layout_plan', sourcePort: 'text', targetNodeKey: keyframePromptKey, targetPort: 'layout_plan', metadata: shotMeta }),
-          v2Edge({ key: `${shotAssetPackKey}__${keyframePromptKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: keyframePromptKey, targetPort: 'asset_pack', metadata: shotMeta }),
-          v2Edge({ key: `${keyframePromptKey}__${keyframeKey}_prompt`, sourceNodeKey: keyframePromptKey, sourcePort: 'text', targetNodeKey: keyframeKey, targetPort: 'prompt', metadata: shotMeta }),
-          v2Edge({ key: `${keyframePromptKey}__${keyframeKey}_panel`, sourceNodeKey: keyframePromptKey, sourcePort: 'image', targetNodeKey: keyframeKey, targetPort: 'references', metadata: shotMeta }),
-        ]
-        : [
-          v2Edge({ key: `${panelExtractKey}__${keyframeKey}_panel`, sourceNodeKey: panelExtractKey, sourcePort: 'image', targetNodeKey: keyframeKey, targetPort: 'image', metadata: shotMeta }),
-          v2Edge({ key: `${panelExtractKey}__${keyframeKey}_panels`, sourceNodeKey: panelExtractKey, sourcePort: 'panels', targetNodeKey: keyframeKey, targetPort: 'panels', metadata: shotMeta }),
-          v2Edge({ key: `shot_plan__${keyframeKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: keyframeKey, targetPort: 'shot_plan', metadata: shotMeta }),
-        ]),
-      v2Edge({ key: `${shotAssetPackKey}__${keyframeKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: keyframeKey, targetPort: 'references', metadata: shotMeta }),
-      v2Edge({ key: `skill_context__${keyframeKey}`, sourceNodeKey: 'skill_context', sourcePort: 'guidance', targetNodeKey: keyframeKey, targetPort: 'guidance', metadata: shotMeta }),
-      v2Edge({ key: `${keyframeKey}__${keyframeQaKey}`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: keyframeQaKey, targetPort: 'image', metadata: shotMeta }),
-      v2Edge({ key: `${shotAssetPackKey}__${keyframeQaKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: keyframeQaKey, targetPort: 'asset_pack', metadata: shotMeta }),
-      v2Edge({ key: `shot_plan__${keyframeQaKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: keyframeQaKey, targetPort: 'shot_plan', metadata: shotMeta }),
-      v2Edge({ key: `${keyframeKey}__${videoPromptKey}_image`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoPromptKey, targetPort: 'references', metadata: shotMeta }),
-      v2Edge({ key: `shot_plan__${videoPromptKey}`, sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'shot_plan', metadata: shotMeta }),
-      v2Edge({ key: `scene_state__${videoPromptKey}`, sourceNodeKey: 'cinematic_v2_scene_compile', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'scene_state', metadata: shotMeta }),
-      v2Edge({ key: `layout_plan__${videoPromptKey}`, sourceNodeKey: 'cinematic_v2_layout_plan', sourcePort: 'text', targetNodeKey: videoPromptKey, targetPort: 'layout_plan', metadata: shotMeta }),
-      v2Edge({ key: `${shotAssetPackKey}__${videoPromptKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: videoPromptKey, targetPort: 'asset_pack', metadata: shotMeta }),
-      v2Edge({ key: `${videoPromptKey}__${videoKey}_prompt`, sourceNodeKey: videoPromptKey, sourcePort: 'text', targetNodeKey: videoKey, targetPort: 'prompt', metadata: shotMeta }),
-      v2Edge({ key: `${keyframeKey}__${videoKey}_reference`, sourceNodeKey: keyframeKey, sourcePort: 'image', targetNodeKey: videoKey, targetPort: 'references', metadata: shotMeta }),
-      v2Edge({ key: `${shotAssetPackKey}__${videoKey}`, sourceNodeKey: shotAssetPackKey, sourcePort: 'asset_pack', targetNodeKey: videoKey, targetPort: 'references', metadata: { ...shotMeta, optional: true, optionalDependency: true } }),
-      v2Edge({ key: `${videoKey}__timeline`, sourceNodeKey: videoKey, sourcePort: 'video', targetNodeKey: 'cinematic_v2_timeline_assemble', targetPort: 'videos', metadata: shotMeta }),
-    )
-  })
-
-  nodeRows.push(
-    v2Node({ key: 'cinematic_v2_timeline_assemble', nodeType: 'utility_transform', label: 'V2 Assemble Timeline', x: 3720, y: 120, config: { purpose: 'cinematic_v2_timeline_assemble', role: 'cinematic_v2_final_timeline', cinematicPipelineVersion: 'v2_shot_orchestration', dynamicShotCount: shotPlan.shots.length, aspectRatio, resolution, debugSkipVideoGeneration, execution: { resourceClass: 'video', groupKey: 'cinematic_v2_timeline_assemble', maxConcurrency: 1 } } }),
-    v2Node({ key: 'artifact', nodeType: 'output_artifact', label: 'Register V2 Cinematic', x: 4000, y: 120, config: { purpose: 'cinematic_video_artifact', artifactKind: 'video', cinematicPipelineVersion: 'v2_shot_orchestration', execution: { resourceClass: 'utility' } } }),
-  )
-  edgeRows.push(
-    v2Edge({ key: 'shot_plan__timeline', sourceNodeKey: 'cinematic_v2_shot_plan', sourcePort: 'text', targetNodeKey: 'cinematic_v2_timeline_assemble', targetPort: 'shot_plan' }),
-    v2Edge({ key: 'timeline__artifact', sourceNodeKey: 'cinematic_v2_timeline_assemble', sourcePort: 'video', targetNodeKey: 'artifact', targetPort: 'input' }),
-  )
-
-  await persistDynamicWorkflowGraphRevision({
-    client: input.client,
-    workflow: input.workflow,
-    nodeRows: nodeRows.map(preserveNodeRow),
-    edgeRows,
-    existingDynamicNodes,
-    dynamicEdgeKeys,
-    compileHash,
-    staleReason: 'dynamic_fanout_rematerialized',
-    workflowMetadataPatch: {
-      cinematicPipelineVersion: 'v2_shot_orchestration',
-      cinematicV2ScreenplayDraft: screenplayDraft,
-      cinematicV2ParsedScript: parsedScript,
-      cinematicV2SceneState: sceneState,
-      cinematicV2LayoutPlan: layoutPlan,
-      cinematicV2ShotPlan: shotPlan,
-      cinematicV2StoryboardGroupPlan: storyboardGroupPlan,
-      cinematicV2QualityShotIds,
-      dynamicShotCount: shotPlan.shots.length,
-      storyboardSheetCount: storyboardGroupPlan.groups.length,
-      totalDurationSeconds: shotPlan.totalEditorialDurationSeconds,
-      videoProvider,
-      videoModel,
-      debugSkipVideoGeneration,
-      dynamicCinematicCompileHash: compileHash,
-      dynamicGraphVersion: `${compileHash}:${nodeRows.length}:${edgeRows.length}`,
-    },
-  })
-  return { expanded: true, compileHash, shotCount: shotPlan.shots.length, storyboardSheetCount: storyboardGroupPlan.groups.length }
+  return materializeDynamicCinematicV2ShotFanoutRuntime(input, createCinematicDynamicFanoutMaterializerHelpers())
 }
 
 function buildComicEntitySelectorInstruction(input: {
@@ -13957,28 +7888,6 @@ function buildComicAtlasPromptInstruction(input: {
     input.prompt ? `User brief: ${input.prompt}` : '',
     guidanceMarkdown(input.guidance),
     compactForPrompt({ assetPack: input.assetPack, wiki }),
-  ].filter(Boolean).join('\n\n')
-}
-
-function buildCinematicAtlasPromptInstruction(input: {
-  context: Record<string, unknown>
-  assetPack: Record<string, unknown>
-  prompt: string
-  guidance: OutputGuidanceBundle
-}) {
-  const wiki = asRecord(input.context.wiki)
-  const entities = compactCinematicEntityAnchors(input.assetPack, 12)
-  return [
-    'Create one GPT Image 2 prompt for a square cinematic reference atlas.',
-    'The atlas should show all relevant characters, places, objects, symbols, wardrobe anchors, palette swatches, and material cues as clean visual reference panels.',
-    'Use readable labels/captions for entity names only. A short caption under each panel is allowed when it clarifies role or visual identity.',
-    'Keep the atlas neutral and continuity-focused: default appearance, recognizable silhouettes, faces, clothing, props, materials, and environment design. Do not depict combat poses, injury, blood, temporary emotion, camera effects, or scene-specific action.',
-    'The atlas will be used as a single Seedance reference image, so each entity panel must be legible at thumbnail size and visually separated from the others.',
-    readText(wiki.artStyleDescription) ? `Project art direction: ${readText(wiki.artStyleDescription)}` : '',
-    Array.isArray(wiki.toneTags) ? `Tone tags: ${wiki.toneTags.join(', ')}` : '',
-    input.prompt ? `User brief: ${input.prompt}` : '',
-    guidanceMarkdown(input.guidance),
-    compactForPrompt({ entities, wiki }, 7000),
   ].filter(Boolean).join('\n\n')
 }
 
@@ -15502,1284 +9411,6 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
       const prompt = readText(input.node.inputs.prompt) || input.run.prompt
       const context = asRecord(asRecord(input.upstream.world_context).context)
       const guidance = resolveGuidanceForExecution({ run: input.run, node: input.node, upstream: input.upstream })
-      if (purpose === 'outline') {
-        const outline = outlineFromContext(context)
-        const outputs = { outline, text: outline.map((chapter) => `${chapter.number}. ${chapter.title}`).join('\n'), guidance }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-outline-v1' }
-      }
-      if (purpose === 'chapter_plan') {
-        const outline = readFirstUpstreamArray(input.upstream, ['outline'])
-        const chapterPlan = buildChapterPlan(context, outline.length > 0 ? outline : outlineFromContext(context))
-        const text = chapterPlan.map((chapter) => `${chapter.number}. ${chapter.title}: ${chapter.synopsis}`).join('\n')
-        const outputs = { chapterPlan, plan: chapterPlan, text, guidance }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-chapter-plan-v1' }
-      }
-      if (purpose === 'bible_section_plan') {
-        const config = asRecord(input.node.config)
-        const sectionPlan = buildBibleSectionPlan(config, context)
-        const text = sectionPlan.map((section) => `${section.order}. ${section.title}: ${section.description}`).join('\n')
-        const outputs = { sectionPlan, plan: sectionPlan, sections: sectionPlan, text, guidance }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-bible-section-plan-v1' }
-      }
-      if (purpose === 'bible_section') {
-        const config = asRecord(input.node.config)
-        const sectionKey = readText(config.sectionKey)
-        const sectionTitle = readText(config.sectionTitle) || input.node.label
-        const sectionDescription = readText(config.sectionDescription)
-        const sectionOrder = Number(config.sectionOrder ?? 9999) || 9999
-        const sectionPlan = readFirstUpstreamArray(input.upstream, ['sectionPlan', 'plan', 'sections'])
-        const prose = await generateBackgroundMarkdown({
-          instructions: [
-            'You are a senior story bible editor and canon documentation writer.',
-            'Write concise reference-document Markdown from the supplied world graph only.',
-            'Do not write fiction prose, screenplay, chapter prose, or marketing copy.',
-            'If source material is missing, say so plainly instead of inventing canon.',
-          ].join(' '),
-          prompt: buildBibleSectionInstruction({
-            context,
-            sectionPlan,
-            sectionKey,
-            sectionTitle,
-            sectionDescription,
-            prompt,
-            guidance,
-          }),
-          maxOutputTokens: 4200,
-          metadata: {
-            graphcore_task: 'output_workflow_bible_section',
-            graphcore_node_key: input.node.key,
-            graphcore_section_key: sectionKey,
-          },
-          priorProviderRequestId: input.priorStep?.providerRequestId,
-          shouldCancel: input.shouldCancel,
-          onProgress: async (progress) => {
-            await input.onProgress?.({
-              provider: 'openai',
-              model: outputWorkflowTextModel(),
-              providerRequestId: progress.providerRequestId,
-              metadata: {
-                providerMode: progress.providerMode,
-                providerStatus: progress.providerStatus,
-                lastProviderPollAt: progress.lastProviderPollAt,
-              },
-            })
-          },
-        })
-        const outputs = {
-          markdown: prose.markdown,
-          text: prose.markdown,
-          sectionKey,
-          sectionTitle,
-          sectionOrder,
-          documentMode: readText(config.documentMode) || 'reference',
-          pageSize: readText(config.pageSize) || '',
-          imagePolicy: readText(config.imagePolicy) || '',
-          guidance,
-          usage: prose.usage,
-          providerStatus: prose.providerStatus,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'openai',
-          model: prose.model,
-          providerRequestId: prose.providerRequestId,
-        }
-      }
-      if (purpose === 'concept_art_prompt' || purpose === 'poster_prompt') {
-        const worldWiki = asRecord(context.worldWiki ?? context.wiki)
-        const title = readText(worldWiki.title) || titleFromContext(context)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const packedEntities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
-        const entities = packedEntities.length > 0
-          ? packedEntities.slice(0, 10)
-          : Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 10) : []
-        const entityLines = entities
-          .map((entity) => {
-            const name = readText(entity.name)
-            const visualDescription = readText(entity.visualDescription) || readText(entity.summary) || readText(entity.context)
-            const visualTraits = readStringArray(entity.visualTraits)
-            const assetKeys = readStringArray(entity.assetKeys)
-            const traitNote = visualTraits.length > 0 ? ` Traits: ${visualTraits.join(', ')}.` : ''
-            const selectedVariantKey = readText(entity.selectedReferenceVariantKey)
-            const selectedVariantLabel = readText(entity.selectedReferenceVariantLabel) || selectedVariantKey
-            const selectedVariantSummary = readText(entity.selectedReferenceVariantSummary)
-            const variantNote = selectedVariantKey && selectedVariantKey !== 'default'
-              ? ` Selected visual variant: ${selectedVariantLabel}${selectedVariantSummary ? ` (${selectedVariantSummary})` : ''}.`
-              : ''
-            const assetNote = assetKeys.length > 0 ? ` Reference image asset: ${assetKeys.join(', ')}.` : ''
-            return name ? `- ${name}: ${visualDescription}${traitNote}${variantNote}${assetNote}` : ''
-          })
-          .filter(Boolean)
-          .join('\n')
-        const visualStyle = readText(worldWiki.artStyleDescription) || readText(worldWiki.visualStyle) || ''
-        const kind = purpose === 'poster_prompt' ? 'finished vertical poster/key art' : 'production concept art image'
-        const text = [
-          `Create a ${kind} for "${title}".`,
-          `User request: ${prompt}`,
-          visualStyle ? `World visual style: ${visualStyle}` : '',
-          entityLines ? `Canonical subjects:\n${entityLines}` : '',
-          'When a selected visual variant is listed for a subject, treat that variant reference as authoritative for costume, gear, props, location subset, and shot setting. Do not blend it with the default reference or replace it with the default look.',
-          'Use exact canonical visual details. Keep the prompt visual-only. Do not mention GraphCore, schemas, nodes, world graph, internal keys, or implementation details.',
-          purpose === 'poster_prompt'
-            ? `If visible typography is needed, use the exact title text "${title}" and keep all other text minimal.`
-            : 'No captions or UI text unless the user explicitly requested visible typography.',
-        ].filter(Boolean).join('\n\n')
-        const outputs = { text, prompt: text, assetPack, asset_pack: assetPack, guidance }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-visual-prompt-v1' }
-      }
-      if (purpose === 'image_reference_selector') {
-        const assetPack = buildDeterministicImageAssetPack(context, { prompt: input.run.prompt })
-        const outputs = {
-          assetPack,
-          asset_pack: assetPack,
-          text: JSON.stringify(assetPack, null, 2),
-          guidance,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-image-asset-pack-v1',
-        }
-      }
-      if (purpose === 'cinematic_entity_selector') {
-        const assetPack = buildDeterministicCinematicAssetPack(context)
-        const outputs = {
-          assetPack,
-          asset_pack: assetPack,
-          text: JSON.stringify(assetPack, null, 2),
-          guidance,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-asset-pack-v1',
-        }
-      }
-      if (purpose === 'cinematic_v2_reference_select' || purpose === 'cinematic_v3_reference_select') {
-        const config = asRecord(input.node.config)
-        const maxReferenceCount = Math.max(1, Math.min(16, Number(config.maxReferenceCount ?? 16) || 16))
-        const sourceAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const fallbackPlan = buildFallbackCinematicV2ReferencePlan(sourceAssetPack, maxReferenceCount)
-        const result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: purpose === 'cinematic_v3_reference_select' ? 'output_workflow_cinematic_v3_reference_select' : 'output_workflow_cinematic_v2_reference_select',
-          schema: cinematicV2ReferencePlanSchema,
-          instructions: 'You are a cinematic reference selector. Return strict JSON only. Choose only supplied reference keys needed for a V2 cinematic scene.',
-          prompt: [
-            'Choose the cinematic-level reference plan from the already sequence-scoped asset pack.',
-            'Do not add or invent world entities. Do not select every available reference by default.',
-            'Select primary cast, supporting cast, locations, props, concepts, and continuity anchors that are genuinely needed for the storyboard and shot plan.',
-            'Visual variants are not separate refs. When the user names a room, chamber, cafe, outfit, gear, or other visual variant, select the parent entity that owns the matching referenceVariants entry.',
-            'For location phrases such as "in the leader\'s chamber of Whistlewick" or "inside the Pact Chamber", prefer the parent location with the matching shot_location_sheet variant. Do not select unrelated props/items merely because one word like "chamber" appears in their name.',
-            'A multi-word variant label or summary match beats a single-token entity-name match.',
-            'Reject refs that are unrelated to this prompt/sequence and explain briefly.',
-            `User brief:\n${input.run.prompt}`,
-            guidanceMarkdown(guidance),
-            compactForPrompt({
-              world: asRecord(context.wiki ?? context.worldWiki),
-              sequenceUnits: Array.isArray(context.sequenceUnits) ? context.sequenceUnits.map(asRecord).slice(0, 4) : [],
-              sourceAssetPack,
-            }, 9000),
-          ].filter(Boolean).join('\n\n'),
-          fallback: fallbackPlan,
-          maxOutputTokens: 2800,
-        })
-        const cinematicReferencePlan = strengthenCinematicReferencePlanWithVariantMatches(
-          sanitizeCinematicV2ReferencePlan(asRecord(result.value), sourceAssetPack, maxReferenceCount),
-          sourceAssetPack,
-          input.run.prompt,
-          maxReferenceCount,
-        )
-        const assetPack = filterCinematicAssetPack(sourceAssetPack, referencePlanKeys(cinematicReferencePlan), maxReferenceCount, 2)
-        const outputs = {
-          cinematicReferencePlan,
-          cinematic_reference_plan: cinematicReferencePlan,
-          assetPack,
-          asset_pack: assetPack,
-          sourceAssetPackEntityCount: cinematicAssetPackEntityKeys(sourceAssetPack).length,
-          selectedEntityCount: cinematicAssetPackEntityKeys(assetPack).length,
-          text: JSON.stringify({ cinematicReferencePlan, assetPack }, null, 2),
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_v2_script_parse') {
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const fallback = buildFallbackCinematicV2ParsedScript({ context, assetPack, prompt: input.run.prompt, screenplayDraft })
-        const result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: 'output_workflow_cinematic_v2_script_parse',
-          schema: cinematicV2ParsedScriptSchema,
-          instructions: 'You are a cinematic script parser. Return strict JSON only. Resolve references to existing world asset keys when supplied; do not invent new entity keys.',
-          prompt: [
-            'Parse the authored screenplay/treatment into cinematic beats for a shot-orchestrated production graph. The screenplay is the story spine; the raw user brief is only supporting context.',
-            'Identify characters, location, props, dialogue, actions, emotional turns, and story-driven target duration.',
-            'Do not target a fixed 15-second total runtime. The total animatic may exceed 15 seconds by using multiple short shots; 15 seconds is only a provider-safe ceiling for one generated clip.',
-            'Use only canonical reference keys from the supplied asset pack/context. If a subject is implied but not bound, leave it as prose in the beat text rather than inventing a key.',
-            `User brief:\n${input.run.prompt}`,
-            compactForPrompt({ screenplayDraft }, 6000),
-            guidanceMarkdown(guidance),
-            compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 9000),
-          ].filter(Boolean).join('\n\n'),
-          fallback,
-          maxOutputTokens: 3600,
-        })
-        const outputs = {
-          parsedScript: result.value,
-          parsed_script: result.value,
-          text: JSON.stringify(result.value, null, 2),
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_v2_screenplay_author' || purpose === 'cinematic_v3_screenplay_author') {
-        const config = asRecord(input.node.config)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const fallback = buildFallbackCinematicV2ScreenplayDraft({ context, assetPack, prompt: input.run.prompt })
-        const v3Screenplay = purpose === 'cinematic_v3_screenplay_author'
-        const presetFamily = readText(config.presetFamily) || 'story_movie_tv'
-        const sequenceAnimaticMode = readText(config.sequenceAnimaticMode)
-        const cinematicAnimaticMode = readText(config.cinematicAnimaticMode)
-        const screenplayAnimaticMaster = v3Screenplay && (sequenceAnimaticMode === 'master_script_only' || cinematicAnimaticMode === 'prompt_cinematic_master')
-        const v3ShotMarkedScreenplay = v3Screenplay && !screenplayAnimaticMaster
-        const fullSequenceUnitAnimatic = v3Screenplay && sequenceAnimaticMode === 'master_script_only'
-        const ugcScreenplayMaster = screenplayAnimaticMaster && presetFamily.toLowerCase().startsWith('ugc')
-        const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
-        const selectedSequenceUnitBrief = fullSequenceUnitAnimatic
-          ? buildSelectedSequenceUnitScreenplayBrief(context)
-          : null
-        const result = await runCinematicV2ScreenplayAuthor({
-          nodeKey: input.node.key,
-          instructions: [
-            'You are a senior screenwriter and cinematic story artist.',
-            'Return plain Markdown screenplay/treatment text only. Do not return JSON.',
-          ].join('\n'),
-          prompt: screenplayAnimaticMaster
-            ? [
-              fullSequenceUnitAnimatic
-                ? 'Write a full sequence-unit creative screenplay for the selected chapter/sequence unit. This pass is writing only; scene graph assignment and technical shot planning happen in later workflow nodes.'
-                : ugcScreenplayMaster
-                  ? 'Write a creator/UGC-style creative screenplay for the requested cinematic. This pass is writing only; scene graph assignment and technical shot planning happen in later workflow nodes.'
-                  : 'Write the creative screenplay for the requested cinematic. This pass is writing only; scene graph assignment and technical shot planning happen in later workflow nodes.',
-              'Keep it readable as screenplay/treatment prose: scene tags, concise visible action, explicit ref-bound dialogue, emotional performance, concrete visual motifs, and clear chapter/outcome fidelity.',
-              ugcScreenplayMaster
-                ? 'Shape the script around a strong hook, product/story proof, natural creator delivery, visual demonstration beats, and a clear end beat. Keep it cinematic, not a marketing outline.'
-                : '',
-              'Use these exact parseable scene tags at the start of each scene:',
-              '#Scene scene_001: Short scene title',
-              '#Location canonical_world_location_ref',
-              'Use #Location only when the broad canonical world location is obvious from supplied context. Do not invent set, zone, spot, or viewpoint tags.',
-              'Do not use #Set, #Zone, #Spot, #Viewpoint, #shot anchors, numbered shot headings, or a final scene graph section.',
-              'Dialogue must use explicit speaker refs in this exact single-line form: CHARACTER NAME [ref:canonical_or_local_ref]: dialogue text',
-              'When a speaker is canonical, use the exact reference key from the supplied reference catalog. If a truly temporary speaker is needed, use a stable local ref such as local_guard_captain.',
-              'Do not write storyboard panel lists, final shot lists, graph node rows, visual briefs for locations, camera breakdowns per shot, lighting breakdowns per shot, image prompts, video prompts, JSON, schema fields, provider instructions, model names, resolution, aspect ratio, or workflow metadata.',
-              'The next nodes will assign scene graph structure, split scenes into shots, bind refs, create storyboard blocks, and generate continuity assets. Do not pre-structure this screenplay as final shots.',
-              fullSequenceUnitAnimatic
-                ? 'Treat the selected sequence unit fields as authoritative: synopsis, dramatic question, outcome, POV notes, character arc deltas, consequences, open loops, context, summary, and visual identity all need to shape the screenplay.'
-                : '',
-              fullSequenceUnitAnimatic
-                ? 'Dramatize the chapter pressure instead of summarizing it: setup ordinary life, show the protagonist flaw under pressure, escalate attempts and discoveries, land the outcome, and clearly seed unresolved open loops.'
-                : '',
-              'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
-              'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
-              'Keep performance direction compact and visible. Describe what an actor would do, what the camera could see, and what changes emotionally in the scene.',
-              'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
-              'Recommended shape:',
-              '#Scene scene_001: [short title]',
-              '#Location canonical_location_ref',
-              'EXT./INT. LOCATION - TIME',
-              'Action lines.',
-              'CHARACTER NAME [ref:canonical_character_ref]: spoken line.',
-              '## Performance Notes',
-              '- Character: visible acting direction.',
-              '## Visual Motifs',
-              '- concrete recurring image.',
-              `User brief:\n${input.run.prompt}`,
-              selectedSequenceUnitBrief
-                ? `Selected sequence unit to adapt fully:\n${JSON.stringify(selectedSequenceUnitBrief, null, 2)}`
-                : '',
-              guidanceMarkdown(guidance),
-              compactForPrompt({
-                world: asRecord(context.wiki ?? context.worldWiki),
-                selectedSequenceUnit: selectedSequenceUnitBrief,
-                assetPack,
-                entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [],
-              }, fullSequenceUnitAnimatic ? 14000 : 11000),
-            ].filter(Boolean).join('\n\n')
-            : v3ShotMarkedScreenplay
-            ? [
-              'Write the cinematic source screenplay before technical parsing happens.',
-              'Keep it creative and readable: scene heading, concise visible action lines, dialogue blocks, performance notes, and visual motifs.',
-              'Insert one lightweight shot anchor immediately before every intended storyboard/video shot beat using this exact form:',
-              '#shot short visual beat title | ~3s',
-              'Do not number shot anchors. The system assigns stable shot_001, shot_002, etc. IDs deterministically after screenplay authoring.',
-              'Shot markers are structural anchors only. Do not turn the script into JSON, a rigid field list, image prompts, or provider instructions.',
-              'Use 6-18 shot markers depending on the requested scene duration. Each marked shot should be a coherent storyboard panel and future short-video beat.',
-              'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
-              'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
-              'Keep performance direction compact: valence/arousal-style emotional movement may be described in plain language, but do not emit numeric JSON.',
-              'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
-              'Do not write graph operations, provider instructions, image prompts, video prompts, model names, @Image labels, resolution, aspect-ratio instructions, schema fields, visible subtitles, or workflow metadata.',
-              'Recommended shape:',
-              '## Scene: [short title]',
-              'EXT./INT. LOCATION - TIME',
-              '#shot threshold reveal | ~3s',
-              'Action lines and dialogue.',
-              '#shot reaction closeup | ~2s',
-              'Action lines and dialogue.',
-              '## Performance Notes',
-              '- Character: visible acting direction.',
-              '## Visual Motifs',
-              '- concrete recurring image.',
-              `User brief:\n${input.run.prompt}`,
-              selectedSequenceUnitBrief
-                ? `Selected sequence unit to adapt fully:\n${JSON.stringify(selectedSequenceUnitBrief, null, 2)}`
-                : '',
-              guidanceMarkdown(guidance),
-              compactForPrompt({
-                world: asRecord(context.wiki ?? context.worldWiki),
-                selectedSequenceUnit: selectedSequenceUnitBrief,
-                assetPack,
-                entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [],
-              }, fullSequenceUnitAnimatic ? 14000 : 11000),
-            ].filter(Boolean).join('\n\n')
-            : [
-              'Write the cinematic source screenplay before any technical planning happens.',
-              'Format it for production parsing: scene heading, concise visible action lines, dialogue blocks, short performance notes, and visual motifs.',
-              'Prefer screenplay/action lines over novelistic prose. Avoid interior explanation unless it is paired with visible behavior.',
-              'Target roughly 600-1200 words for one cinematic part unless the selected story unit clearly needs less.',
-              'Use concrete visual behavior: blocking, gesture, expression, gaze, action, dialogue, and transitions.',
-              'Keep performance direction compact: valence/arousal-style emotional movement may be described in plain language, but do not emit numeric JSON.',
-              'Use the supplied world context and references as canon. Preserve selected sequence outcomes and entity identities.',
-              'Do not write graph operations, provider instructions, image prompts, video prompts, model names, @Image labels, resolution, aspect-ratio instructions, or schema fields.',
-              'Do not include a JSON object, bullet-only outline, or workflow metadata.',
-              'Recommended shape:',
-              '## Scene: [short title]',
-              'EXT./INT. LOCATION - TIME',
-              'Action lines and dialogue.',
-              '## Performance Notes',
-              '- Character: visible acting direction.',
-              '## Visual Motifs',
-              '- concrete recurring image.',
-              `User brief:\n${input.run.prompt}`,
-              guidanceMarkdown(guidance),
-              compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 11000),
-            ].filter(Boolean).join('\n\n'),
-          fallback,
-          maxOutputTokens: screenplayAnimaticMaster ? 9000 : v3ShotMarkedScreenplay ? 5200 : 4200,
-        })
-        const scriptContract = screenplayAnimaticMaster
-          ? 'creative_scene_screenplay_v3'
-          : v3ShotMarkedScreenplay
-            ? 'screenplay_with_shot_markers_v1'
-            : readText(asRecord(result.value.metadata).scriptContract)
-        const screenplayDraft = result.fallbackUsed
-          ? cinematicV2ScreenplayDraftSchema.parse({
-            ...result.value,
-            diagnostics: [
-              ...readStringArray(asRecord(result.value).diagnostics),
-              `Screenplay author fallback reason: ${result.fallbackReason}`,
-            ],
-            metadata: {
-              ...asRecord(result.value.metadata),
-              scriptContract,
-            },
-          })
-          : cinematicV2ScreenplayDraftSchema.parse({
-            ...result.value,
-            metadata: {
-              ...asRecord(result.value.metadata),
-              ...(scriptContract ? { scriptContract } : {}),
-            },
-          })
-        const v3ShotBreakPlan = v3ShotMarkedScreenplay
-          ? buildCinematicV3ShotBreakPlan({
-            screenplayDraft,
-            maxShotCount: configuredMaxShotCount > 0
-              ? configuredMaxShotCount
-              : deriveCinematicV2MaxShotCount(screenplayDraft.suggestedDurationSeconds),
-            maxPanelsPerSheet: 9,
-            maxDurationPerGroupSeconds: 15,
-          })
-          : null
-        const screenplayDraftWithMarkers = v3ShotMarkedScreenplay
-          ? cinematicV2ScreenplayDraftSchema.parse({
-            ...screenplayDraft,
-            metadata: {
-              ...asRecord(screenplayDraft.metadata),
-              scriptContract: 'screenplay_with_shot_markers_v1',
-              shotBreaks: v3ShotBreakPlan?.shotBreaks ?? [],
-            },
-          })
-          : screenplayDraft
-        const scriptShotProjection = v3ShotBreakPlan
-          ? buildSequenceAnimaticScriptShotProjection(v3ShotBreakPlan)
-          : { scriptShotStatus: 'missing', scriptShots: [], scriptBlocks: [] }
-        const outputs = {
-          screenplayDraft: screenplayDraftWithMarkers,
-          screenplay_draft: screenplayDraftWithMarkers,
-          shotBreakPlan: v3ShotBreakPlan ?? {},
-          shot_break_plan: v3ShotBreakPlan ?? {},
-          shotBreaks: v3ShotBreakPlan?.shotBreaks ?? [],
-          shot_breaks: v3ShotBreakPlan?.shotBreaks ?? [],
-          scriptShotStatus: scriptShotProjection.scriptShotStatus,
-          script_shot_status: scriptShotProjection.scriptShotStatus,
-          scriptShots: scriptShotProjection.scriptShots,
-          script_shots: scriptShotProjection.scriptShots,
-          scriptBlocks: scriptShotProjection.scriptBlocks,
-          script_blocks: scriptShotProjection.scriptBlocks,
-          text: screenplayDraftWithMarkers.screenplayMarkdown,
-          fallbackUsed: result.fallbackUsed,
-          fallbackReason: result.fallbackReason,
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_v3_shot_parse_group') {
-        const config = asRecord(input.node.config)
-        const group = asRecord(config.storyboardGroup)
-        const groupIndex = Number(group.index ?? 0) || 1
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
-        const groupBreaks = (Array.isArray(group.shotBreaks) ? group.shotBreaks.map(asRecord) : [])
-        const groupExcerpt = readText(group.screenplayExcerpt) || groupBreaks.map((entry) => readText(entry.text)).filter(Boolean).join('\n\n')
-        const parsedScript = buildFallbackCinematicV2ParsedScript({ context, assetPack, prompt: input.run.prompt, screenplayDraft })
-        const sceneState = buildFallbackCinematicV2SceneState({ parsedScript, context })
-        const maxShotCount = Math.max(1, Math.min(9, groupBreaks.length || Number(config.maxShotCount ?? 0) || 6))
-        const fallback = buildFallbackCinematicV2ShotPlan({ parsedScript, sceneState, maxShotCount })
-        const expectedShotIds = groupBreaks.map((entry, index) => readText(entry.id) || `shot_${String(index + 1).padStart(3, '0')}`)
-        const result = await runCinematicV2StructuredNodeBackground({
-          nodeKey: input.node.key,
-          schemaName: 'output_workflow_cinematic_v3_shot_parse_group',
-          schema: cinematicV2ShotPlanSchema,
-          instructions: 'You are a cinematic shot parser. Return strict JSON only. Parse one screenplay segment into timed storyboard/video shots using only supplied reference keys.',
-          prompt: [
-            `Parse only storyboard/video block ${groupIndex} into at most ${maxShotCount} cinematic shots.`,
-            'The screenplay excerpt is the authority for this block. Preserve its creative beats, dialogue, emotional turn, and shot markers.',
-            'Each output shot must be a concrete storyboard panel and future short video beat: timing, visible action, dialogue/caption meaning, camera, lighting, mood, acting direction, and reference IDs.',
-            'Fill caption as semantic beat meaning only; it must not become visible text in generated images.',
-            'Fill storyboardPanelPrompt with a concise visual panel instruction. Fill videoDirection with concise movement/action continuity for the future storyboard-group video.',
-            'Use only canonical reference keys from the supplied asset pack/context. If a subject is implied but not bound, leave it in prose rather than inventing a key.',
-            'For spatial continuity, every shot must include worldLocationRefId, continuitySetId, continuityZoneId, continuitySpotIds, continuityAngleId, and spatialContinuity. Use provisional stable IDs such as set_whistlewick_primary, zone_service_lane, spot_leak_pipe, and angle_service_lane_ots. These are output-local continuity IDs, not world entity keys.',
-            'spatialContinuity must describe cameraPosition, facingDirection, subjectPosition, visibleLandmarks, entryPath, exitPath, and lightSourceDirection when inferable.',
-            'For dialogue, preserve the exact script speaker label in dialogue[].speakerName. Set dialogue[].speakerRefId only when the speaker is confidently one of the supplied canonical reference keys; for minor or temporary speakers such as a shopkeeper, guard, mechanic, crowd voice, or passerby, use a stable temporary speakerRefId like temporary_vole_mechanic and keep speakerRefIds limited to canonical reference keys only.',
-            'Provider durations must be 4-15 seconds; editorial durations should reflect actual timeline timing.',
-            expectedShotIds.length > 0 ? `Preferred shot IDs in order: ${expectedShotIds.join(', ')}` : '',
-            `User brief:\n${input.run.prompt}`,
-            `Screenplay excerpt for this block:\n${groupExcerpt}`,
-            compactForPrompt({ shotBreakPlan: { groups: [group], diagnostics: asRecord(shotBreakPlan).diagnostics ?? [] } }, 5000),
-            guidanceMarkdown(guidance),
-            compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, entities: Array.isArray(context.entities) ? context.entities.map(asRecord).slice(0, 30) : [] }, 9000),
-          ].filter(Boolean).join('\n\n'),
-          fallback,
-          maxOutputTokens: 9000,
-          priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
-          shouldCancel: input.shouldCancel,
-          onProgress: input.onProgress,
-        })
-        const parsedShotPlan = cinematicV2ShotPlanSchema.parse({
-          ...result.value,
-          shots: result.value.shots.slice(0, maxShotCount).map((shot, index) => ({
-            ...shot,
-            id: expectedShotIds[index] || readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`,
-            index: index + 1,
-            providerDurationSeconds: providerSafeCinematicV2DurationSeconds(shot.editorialDurationSeconds),
-          })),
-        })
-        const normalizedShotPlan = repairCinematicV2ShotPlanVisualReferences({
-          shotPlan: parsedShotPlan,
-          assetPack,
-        })
-        const referenceDiagnostics = validateCinematicV2ShotPlanReferences({
-          shotPlan: normalizedShotPlan,
-          referenceIds: cinematicV2ReferenceIds(assetPack, {}),
-        })
-        const outputShotPlan = {
-          ...normalizedShotPlan,
-          diagnostics: [
-            ...normalizedShotPlan.diagnostics,
-            `parsed_storyboard_group_${String(groupIndex).padStart(3, '0')}`,
-            ...(result.fallbackUsed ? [`V3 group shot parser fallback used. ${result.fallbackReason}`] : []),
-            ...referenceDiagnostics,
-          ],
-        }
-        const outputs = {
-          shotPlan: outputShotPlan,
-          shot_plan: outputShotPlan,
-          shots: outputShotPlan.shots,
-          storyboardGroup: group,
-          storyboard_group: group,
-          storyboardGroupId: readText(group.id),
-          text: JSON.stringify(outputShotPlan, null, 2),
-          referenceDiagnostics,
-          fallbackUsed: result.fallbackUsed,
-          fallbackReason: result.fallbackReason,
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_v3_shot_parse') {
-        const config = asRecord(input.node.config)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const parsedScript = buildFallbackCinematicV2ParsedScript({ context, assetPack, prompt: input.run.prompt, screenplayDraft })
-        const sceneState = buildFallbackCinematicV2SceneState({ parsedScript, context })
-        const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
-        const suggestedDurationSeconds = Number(asRecord(screenplayDraft).suggestedDurationSeconds ?? 0) || null
-        const maxShotCount = Math.max(1, Math.min(36, configuredMaxShotCount > 0 ? configuredMaxShotCount : deriveCinematicV2MaxShotCount(suggestedDurationSeconds)))
-        const fallback = buildFallbackCinematicV2ShotPlan({ parsedScript, sceneState, maxShotCount })
-        const deterministicVisualScript = buildCinematicV3ShotPlanFromVisualScript({
-          screenplayDraft,
-          assetPack,
-          context,
-          prompt: input.run.prompt,
-          maxShotCount,
-        })
-        let result: {
-          value: z.infer<typeof cinematicV2ShotPlanSchema>
-          response: OpenAiResponseResult | Record<string, unknown>
-          provider: string
-          model: string
-          providerRequestId?: string | null
-          fallbackUsed: boolean
-          fallbackReason: string
-          shotBlocks?: Array<Record<string, unknown>>
-          unknownRefNames?: string[]
-        }
-        if (deterministicVisualScript) {
-          result = {
-            value: deterministicVisualScript.shotPlan,
-            response: { usage: {}, id: null },
-            provider: 'graphcore',
-            model: 'deterministic-visual-shot-script-v1',
-            providerRequestId: null,
-            fallbackUsed: false,
-            fallbackReason: '',
-            shotBlocks: deterministicVisualScript.shotBlocks,
-            unknownRefNames: deterministicVisualScript.unknownRefNames,
-          }
-        } else {
-          result = await runCinematicV2StructuredNodeBackground({
-            nodeKey: input.node.key,
-            schemaName: 'output_workflow_cinematic_v3_shot_parse_repair',
-            schema: cinematicV2ShotPlanSchema,
-            instructions: 'Repair or parse a Cinematics V3 visual script into strict valid JSON only. Preserve screenplay coverage, use only supplied reference keys, and keep shots storyboard/video ready.',
-            prompt: [
-              'The authored script did not match the visual_shot_script_v1 deterministic contract. Return a complete valid shot plan JSON matching the schema.',
-              `Maximum shots: ${maxShotCount}.`,
-              'Do not invent entity/location/prop keys. Unknown subjects must remain in prose fields.',
-              'Fill caption as semantic beat meaning only; it must not become visible text in generated images.',
-              'Fill storyboardPanelPrompt and videoDirection for every shot.',
-              'Every shot must include provisional spatial continuity fields: worldLocationRefId, continuitySetId, continuityZoneId, continuitySpotIds, continuityAngleId, and spatialContinuity with cameraPosition, facingDirection, subjectPosition, visibleLandmarks, entryPath, exitPath, and lightSourceDirection.',
-              `User brief:\n${input.run.prompt}`,
-              compactForPrompt({ screenplayDraft }, 12000),
-              guidanceMarkdown(guidance),
-              compactForPrompt({ world: asRecord(context.wiki ?? context.worldWiki), assetPack, fallback }, 12000),
-            ].filter(Boolean).join('\n\n'),
-            fallback,
-            maxOutputTokens: 12000,
-            priorProviderRequestId: readText(input.priorStep?.providerRequestId) || readText(asRecord(input.priorStep?.metadata).providerRequestId),
-            shouldCancel: input.shouldCancel,
-            onProgress: input.onProgress,
-          })
-          result = {
-            ...result,
-            fallbackUsed: result.fallbackUsed || result.provider === 'graphcore',
-            fallbackReason: result.fallbackReason || 'llm_repair_used',
-          }
-        }
-        const parsedShotPlan = cinematicV2ShotPlanSchema.parse({
-          ...result.value,
-          shots: result.value.shots.map((shot) => ({
-            ...shot,
-            providerDurationSeconds: providerSafeCinematicV2DurationSeconds(shot.editorialDurationSeconds),
-          })),
-        })
-        const normalizedShotPlan = repairCinematicV2ShotPlanVisualReferences({
-          shotPlan: parsedShotPlan,
-          assetPack,
-        })
-        const referenceDiagnostics = validateCinematicV2ShotPlanReferences({
-          shotPlan: normalizedShotPlan,
-          referenceIds: cinematicV2ReferenceIds(assetPack, {}),
-        })
-        const outputShotPlan = {
-          ...normalizedShotPlan,
-          diagnostics: [
-            ...normalizedShotPlan.diagnostics,
-            ...(deterministicVisualScript ? ['deterministic_visual_script_parse'] : ['llm_repair_used']),
-            ...(result.fallbackUsed ? [`V3 shot parser fallback used. ${result.fallbackReason}`] : []),
-            ...referenceDiagnostics,
-          ],
-        }
-        const outputs = {
-          shotPlan: outputShotPlan,
-          shot_plan: outputShotPlan,
-          shots: outputShotPlan.shots,
-          parsedShotBlocks: result.shotBlocks ?? [],
-          parsed_shot_blocks: result.shotBlocks ?? [],
-          unknownRefNames: result.unknownRefNames ?? [],
-          text: JSON.stringify(outputShotPlan, null, 2),
-          referenceDiagnostics,
-          fallbackUsed: result.fallbackUsed,
-          fallbackReason: result.fallbackReason,
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: result.providerRequestId || readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_v2_scene_compile') {
-        const parsedScript = readFirstUpstreamRecord(input.upstream, ['parsedScript', 'parsed_script'])
-        const fallback = buildFallbackCinematicV2SceneState({ parsedScript, context })
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: 'output_workflow_cinematic_v2_scene_compile',
-          schema: cinematicV2SceneStateSchema,
-          instructions: 'You are a cinematic scene compiler. Return strict JSON only. Instantiate existing world references into a scene state; do not redesign characters or locations.',
-          prompt: [
-            'Create a lightweight cinematic scene state from the parsed beats, world style, and canonical references.',
-            'Derive character emotional baselines and performance continuity from the screenplay arc; do not reset character acting between shots.',
-            'Specify lighting, atmosphere, mood, visual continuity, character scene states, and location state.',
-            'Do not create new canon and do not redesign existing identities.',
-            `User brief:\n${input.run.prompt}`,
-            compactForPrompt({ screenplayDraft }, 4500),
-            guidanceMarkdown(guidance),
-            compactForPrompt({ parsedScript, world: asRecord(context.wiki ?? context.worldWiki), assetPack }, 9000),
-          ].filter(Boolean).join('\n\n'),
-          fallback,
-          maxOutputTokens: 3600,
-        })
-        const outputs = {
-          sceneState: result.value,
-          scene_state: result.value,
-          text: JSON.stringify(result.value, null, 2),
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_v2_layout_plan') {
-        const parsedScript = readFirstUpstreamRecord(input.upstream, ['parsedScript', 'parsed_script'])
-        const sceneState = readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state'])
-        const fallback = buildFallbackCinematicV2LayoutPlan({ parsedScript, sceneState })
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: 'output_workflow_cinematic_v2_layout_plan',
-          schema: cinematicV2SceneLayoutPlanSchema,
-          instructions: 'You are a cinematic blocking and continuity planner. Return strict JSON only. Plan spatial continuity before storyboards or videos.',
-          prompt: [
-            'Plan scene geography, character positions, landmarks, camera positions, eyelines, lighting direction, and screen-direction rules.',
-            'Keep it practical for short cinematic AI video shots. This is a JSON blocking plan, not final art.',
-            'Do not use game or app language such as playable, level, sandbox, UI, or mechanics unless the user explicitly requested a game/app cinematic.',
-            'Keep the camera plan compact and production-useful; prefer the fewest camera setups needed for the planned shots.',
-            `User brief:\n${input.run.prompt}`,
-            compactForPrompt({ screenplayDraft }, 4500),
-            guidanceMarkdown(guidance),
-            compactForPrompt({ parsedScript, sceneState, assetPack }, 9000),
-          ].filter(Boolean).join('\n\n'),
-          fallback,
-          maxOutputTokens: 3600,
-        })
-        const outputs = {
-          layoutPlan: result.value,
-          layout_plan: result.value,
-          text: JSON.stringify(result.value, null, 2),
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_v2_shot_plan') {
-        const config = asRecord(input.node.config)
-        const parsedScript = readFirstUpstreamRecord(input.upstream, ['parsedScript', 'parsed_script'])
-        const sceneState = readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state'])
-        const layoutPlan = readFirstUpstreamRecord(input.upstream, ['layoutPlan', 'layout_plan'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const parsedDuration = Number(asRecord(parsedScript).targetDurationSeconds ?? 0) || null
-        const derivedMaxShotCount = deriveCinematicV2MaxShotCount(parsedDuration)
-        const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
-        const maxShotCount = Math.max(1, Math.min(36, configuredMaxShotCount > 0 && configuredMaxShotCount < 36 ? configuredMaxShotCount : derivedMaxShotCount))
-        const fallback = buildFallbackCinematicV2ShotPlan({ parsedScript, sceneState, maxShotCount })
-        let result = await runCinematicV2StructuredNode({
-          nodeKey: input.node.key,
-          schemaName: 'output_workflow_cinematic_v2_shot_plan',
-          schema: cinematicV2ShotPlanSchema,
-          instructions: 'You are a cinematic shot planner. Return strict JSON only. Split scenes into short controllable shots for AI video generation.',
-          prompt: [
-            `Plan at most ${maxShotCount} shots. Each shot should have one purpose, one camera intent, explicit visible/speaker reference keys, and short editorial timing.`,
-            'Dialogue closeups should be 2-4 editorial seconds. Reactions can be 1-2 seconds. Action/impact shots should be 1-3 seconds. Provider durations must be 4-15 seconds; final assembly trims to editorial timing.',
-            'Use the authored screenplay as the creative source. Preserve its emotional progression and do not collapse the total runtime to 15 seconds unless explicitly requested; use more shots when the scene needs more time.',
-            'For every visible character in a shot, fill performanceBeats with valence (-1 to 1), arousal/confidence/dominance (0 to 1), plus concrete body language, facial expression, gaze, gesture, and voice energy when relevant.',
-            'Fill performanceArc at the shot-plan level so the timeline can show how each character changes across the scene.',
-            'Fill visibleCharacterRefIds, speakerRefIds, locationRefId, and propRefIds only with keys from the supplied cinematic reference plan/asset pack. Do not invent refs and do not pull in unrelated sequence entities.',
-            'Use layout rules for screen direction, eyelines, and lighting continuity. Mark requiresLipSync only for visible mouth dialogue; V2 MVP stores placeholder audio only.',
-            `User brief:\n${input.run.prompt}`,
-            compactForPrompt({ screenplayDraft }, 5000),
-            guidanceMarkdown(guidance),
-            compactForPrompt({ parsedScript, sceneState, layoutPlan, assetPack }, 10000),
-          ].filter(Boolean).join('\n\n'),
-          fallback,
-          maxOutputTokens: 12000,
-        })
-        if (result.fallbackUsed && result.response.response.ok) {
-          result = await runCinematicV2StructuredNode({
-            nodeKey: input.node.key,
-            schemaName: 'output_workflow_cinematic_v2_shot_plan_repair',
-            schema: cinematicV2ShotPlanSchema,
-            instructions: 'Repair a Cinematics V2 shot plan into strict valid JSON only. Preserve the authored scene coverage and do not shorten the scene unless the user requested it.',
-            prompt: [
-              'The previous directed shot-plan response failed validation. Return a complete valid shot plan JSON matching the schema.',
-              `Validation or parse failure:\n${result.fallbackReason}`,
-              `Maximum shots: ${maxShotCount}. Preferred total editorial duration: ${readText(asRecord(parsedScript).targetDurationSeconds) || 'story-driven'}.`,
-              'Use the screenplay and parsed beats to cover the whole scene. Do not collapse the plan to one 3x3 storyboard sheet.',
-              `Previous model output:\n${result.response.outputText.slice(0, 24000)}`,
-              compactForPrompt({ screenplayDraft, parsedScript, sceneState, layoutPlan, assetPack }, 14000),
-            ].filter(Boolean).join('\n\n'),
-            fallback,
-            maxOutputTokens: 12000,
-          })
-        }
-        const normalizedShotPlan = cinematicV2ShotPlanSchema.parse({
-          ...result.value,
-          shots: result.value.shots.map((shot) => ({
-            ...shot,
-            providerDurationSeconds: providerSafeCinematicV2DurationSeconds(shot.editorialDurationSeconds),
-          })),
-        })
-        const referenceDiagnostics = validateCinematicV2ShotPlanReferences({
-          shotPlan: normalizedShotPlan,
-          referenceIds: cinematicV2ReferenceIds(assetPack, {}),
-        })
-        const outputs = {
-          shotPlan: {
-            ...normalizedShotPlan,
-            diagnostics: [...normalizedShotPlan.diagnostics, ...(result.fallbackUsed ? [`Directed shot planner failed; fallback plan generated. ${result.fallbackReason}`] : []), ...referenceDiagnostics],
-          },
-          shot_plan: {
-            ...normalizedShotPlan,
-            diagnostics: [...normalizedShotPlan.diagnostics, ...(result.fallbackUsed ? [`Directed shot planner failed; fallback plan generated. ${result.fallbackReason}`] : []), ...referenceDiagnostics],
-          },
-          shots: normalizedShotPlan.shots,
-          text: JSON.stringify({
-            ...normalizedShotPlan,
-            diagnostics: [...normalizedShotPlan.diagnostics, ...(result.fallbackUsed ? [`Directed shot planner failed; fallback plan generated. ${result.fallbackReason}`] : []), ...referenceDiagnostics],
-          }, null, 2),
-          referenceDiagnostics,
-          fallbackUsed: result.fallbackUsed,
-          fallbackReason: result.fallbackReason,
-          guidance,
-          usage: asRecord(result.response).usage,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: result.provider, model: result.model, providerRequestId: readText(asRecord(result.response).id) || undefined }
-      }
-      if (purpose === 'cinematic_script_authoring') {
-        const config = asRecord(input.node.config)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const scriptInput = {
-          context,
-          assetPack,
-          prompt: input.run.prompt,
-          guidance,
-          aspectRatio: readText(config.aspectRatio) || '16:9',
-          resolution: readText(config.resolution) || '720p',
-          presetFamily: readText(config.presetFamily) || 'story_movie_tv',
-          legacyVideoBlockCount: Number(config.legacyVideoBlockCount ?? 0) || null,
-          legacyDurationPerBlockSeconds: Number(config.legacyDurationPerBlockSeconds ?? 0) || null,
-          maxTotalDurationSeconds: Number(config.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
-        }
-        const fallbackScriptDoc = buildDeterministicCinematicScriptDoc(scriptInput)
-        const scriptAuthorPolicy = resolveOutputTextModelPolicy('screenplay_author')
-        const model = scriptAuthorPolicy.model
-        const response = await runOpenAiResponses({
-          model,
-          reasoning: reasoningPayloadFor(scriptAuthorPolicy),
-          instructions: 'You are a cinematic script author and shot director. Return strict JSON for a directed cinematic script only.',
-          input: buildCinematicScriptAuthoringInstruction(scriptInput),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_cinematic_script_authoring',
-              schema: cinematicScriptAuthoringJsonSchemaForPreset(scriptInput.presetFamily),
-              strict: true,
-            },
-          },
-          maxOutputTokens: 9000,
-          metadata: {
-            graphcore_task: 'output_workflow_cinematic_script_authoring',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 180_000,
-        })
-        const normalizedScript = normalizeCinematicScriptAuthoring({
-          value: response.response.ok ? parseJsonObject(response.outputText) : fallbackScriptDoc,
-          fallback: fallbackScriptDoc,
-          assetPack,
-          presetFamily: scriptInput.presetFamily,
-          maxTotalDurationSeconds: scriptInput.maxTotalDurationSeconds,
-        })
-        const { directorScriptDoc, cinematicScriptDoc } = normalizedScript
-        if (cinematicScriptDoc.shots.length === 0) {
-          throw new Error('Cinematic script authoring produced zero shots.')
-        }
-        const totalDurationSeconds = cinematicScriptDoc.shots.reduce((total, shot) => total + (Number(shot.durationSeconds ?? 0) || 0), 0)
-        const text = JSON.stringify(directorScriptDoc, null, 2)
-        const outputs = {
-          directorScriptDoc,
-          cinematicScriptDoc,
-          scriptDoc: cinematicScriptDoc,
-          script: directorScriptDoc,
-          executionScriptDoc: cinematicScriptDoc,
-          text,
-          shotCount: cinematicScriptDoc.shots.length,
-          totalDurationSeconds,
-          scriptDurationSource: response.response.ok ? 'authored_script' : 'fallback_script',
-          guidance,
-          usage: response.response.ok ? asRecord(response.body?.usage) : {},
-          providerStatus: response.response.ok ? response.status : 'fallback',
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: response.response.ok ? 'openai' : 'graphcore',
-          model: response.response.ok ? model : 'deterministic-cinematic-script-v1',
-          providerRequestId: response.response.ok ? readText(response.body?.id) || response.response.headers.get('x-request-id') || null : null,
-        }
-      }
-      if (purpose === 'cinematic_sequence_plan') {
-        const config = asRecord(input.node.config)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const blockCount = Math.max(1, Math.min(6, Number(config.blockCount ?? 3) || 3))
-        const durationPerBlockSeconds = Math.max(4, Math.min(15, Number(config.durationPerBlockSeconds ?? 8) || 8))
-        const planInput = {
-          context,
-          assetPack,
-          prompt: input.run.prompt,
-          guidance,
-          blockCount,
-          durationPerBlockSeconds,
-          aspectRatio: readText(config.aspectRatio) || '16:9',
-          resolution: readText(config.resolution) || '720p',
-          presetFamily: readText(config.presetFamily) || 'story_movie_tv',
-        }
-        const fallbackPlan = buildDeterministicCinematicSequencePlan(planInput)
-        const sequencePlanPolicy = resolveOutputTextModelPolicy('director_plan')
-        const model = sequencePlanPolicy.model
-        const response = await runOpenAiResponses({
-          model,
-          reasoning: reasoningPayloadFor(sequencePlanPolicy),
-          instructions: 'You are a cinematic sequence planner. Return strict JSON for timed video block planning only.',
-          input: buildCinematicSequencePlanInstruction(planInput),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_cinematic_sequence_plan',
-              schema: cinematicSequencePlanJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 2800,
-          metadata: {
-            graphcore_task: 'output_workflow_cinematic_sequence_plan',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
-        })
-        const sequencePlan = response.response.ok
-          ? normalizeCinematicSequencePlan(parseJsonObject(response.outputText), fallbackPlan)
-          : fallbackPlan
-        const text = JSON.stringify(sequencePlan, null, 2)
-        const outputs = {
-          sequencePlan,
-          sequence_plan: sequencePlan,
-          blocks: sequencePlan.blocks,
-          text,
-          guidance,
-          usage: response.response.ok ? asRecord(response.body?.usage) : {},
-          providerStatus: response.response.ok ? response.status : 'fallback',
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: response.response.ok ? 'openai' : 'graphcore',
-          model: response.response.ok ? model : 'deterministic-cinematic-sequence-plan-v1',
-          providerRequestId: response.response.ok ? readText(response.body?.id) || response.response.headers.get('x-request-id') || null : null,
-        }
-      }
-      if (purpose === 'cinematic_block_script') {
-        const config = asRecord(input.node.config)
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const sequencePlan = readFirstUpstreamRecord(input.upstream, ['sequencePlan', 'sequence_plan'])
-        const blockNumber = Math.max(1, Number(config.blockNumber ?? 1) || 1)
-        const blockCount = Math.max(1, Number(config.blockCount ?? 1) || 1)
-        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 8) || 8))
-        const scriptInput = {
-          context,
-          assetPack,
-          sequencePlan,
-          prompt: input.run.prompt,
-          guidance,
-          blockNumber,
-          blockCount,
-          durationSeconds,
-          presetFamily: readText(config.presetFamily) || 'story_movie_tv',
-        }
-        const fallbackScript = buildDeterministicCinematicBlockScript(scriptInput)
-        const blockScriptPolicy = resolveOutputTextModelPolicy('block_script')
-        const model = blockScriptPolicy.model
-        const response = await runOpenAiResponses({
-          model,
-          reasoning: reasoningPayloadFor(blockScriptPolicy),
-          instructions: 'You are a cinematic shot director. Return strict JSON for one timestamped video block script only.',
-          input: buildCinematicBlockScriptInstruction(scriptInput),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_cinematic_block_script',
-              schema: cinematicBlockScriptJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 4200,
-          metadata: {
-            graphcore_task: 'output_workflow_cinematic_block_script',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
-        })
-        let blockScript = response.response.ok
-          ? normalizeCinematicBlockScript(parseJsonObject(response.outputText), fallbackScript, durationSeconds)
-          : fallbackScript
-        let diagnostics = validateCinematicBlockScript(blockScript, durationSeconds)
-        if (diagnostics.length > 0 && response.response.ok) {
-          blockScript = fallbackScript
-          diagnostics = validateCinematicBlockScript(blockScript, durationSeconds)
-        }
-        if (diagnostics.length > 0) {
-          throw new Error(`Cinematic block script validation failed: ${diagnostics.slice(0, 8).join(' ')}`)
-        }
-        const markdown = cinematicBlockScriptMarkdown(blockScript)
-        const outputs = {
-          blockScript,
-          block_script: blockScript,
-          script: blockScript,
-          markdown,
-          text: markdown,
-          blockNumber,
-          durationSeconds,
-          guidance,
-          usage: response.response.ok ? asRecord(response.body?.usage) : {},
-          providerStatus: response.response.ok ? response.status : 'fallback',
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: response.response.ok ? 'openai' : 'graphcore',
-          model: response.response.ok ? model : 'deterministic-cinematic-block-script-v1',
-          providerRequestId: response.response.ok ? readText(response.body?.id) || response.response.headers.get('x-request-id') || null : null,
-        }
-      }
-      if (purpose === 'cinematic_atlas_prompt') {
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const model = outputWorkflowTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a cinematic art director writing GPT Image 2 prompts. Return one prompt only.',
-          input: buildCinematicAtlasPromptInstruction({ context, assetPack, prompt, guidance }),
-          maxOutputTokens: 1200,
-          metadata: {
-            graphcore_task: 'output_workflow_cinematic_atlas_prompt',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
-        })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI cinematic atlas prompt failed with status ${response.response.status}.`))
-        }
-        const atlasPrompt = response.outputText.trim()
-        const outputs = { prompt: atlasPrompt, text: atlasPrompt, assetPack, guidance, usage: asRecord(response.body?.usage) }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: readText(response.body?.id) || response.response.headers.get('x-request-id') || null,
-        }
-      }
-      if (purpose === 'comic_entity_selector') {
-        const fallbackPack = buildDeterministicComicAssetPack(context)
-        const model = outputWorkflowTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You select visual comic references from canonical world context and return compact JSON only.',
-          input: buildComicEntitySelectorInstruction({ context, prompt, guidance }),
-          maxOutputTokens: 1800,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_entity_selector',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
-        })
-        const parsed = response.response.ok ? parseJsonObject(response.outputText) : {}
-        const parsedEntities = Array.isArray(parsed.entities) && parsed.entities.length > 0
-          ? parsed.entities.map(asRecord).map((entity) => ({
-            key: readText(entity.key),
-            name: readText(entity.name),
-            type: readText(entity.type),
-            role: readText(entity.role),
-            summary: readText(entity.summary),
-            visualDescription: readText(entity.visualDescription),
-            visualTraits: readStringArray(entity.visualTraits),
-            visualTraitMap: asRecord(entity.visualTraitMap),
-            assetKeys: readStringArray(entity.assetKeys),
-          })).filter((entity) => entity.key || entity.name)
-          : []
-        const selectedEntities = mergeComicSelectedEntitiesWithFallback(parsedEntities, fallbackPack)
-        const assetPack = {
-          entities: selectedEntities,
-          missingReferenceEntityKeys: selectedEntities.filter((entity) => entity.assetKeys.length === 0).map((entity) => entity.key),
-        }
-        const outputs = {
-          assetPack,
-          asset_pack: assetPack,
-          text: JSON.stringify(assetPack, null, 2),
-          guidance,
-          usage: asRecord(response.body?.usage),
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: response.response.ok ? 'openai' : 'graphcore',
-          model: response.response.ok ? model : 'deterministic-comic-asset-pack-v1',
-          providerRequestId: readText(response.body?.id) || response.response.headers.get('x-request-id') || null,
-        }
-      }
-      if (purpose === 'comic_script') {
-        const config = asRecord(input.node.config)
-        const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const sceneScript = readFirstUpstreamRecord(input.upstream, ['sceneScript', 'scene_script'])
-        const pagePlan = readFirstUpstreamRecord(input.upstream, ['pagePlan', 'page_plan'])
-        const model = outputWorkflowComicTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a professional comic writer and comics editor converting an approved scene treatment and page plan into final page/panel script JSON only. Never return outline placeholders.',
-          input: buildComicScriptInstruction({ context, assetPack, sceneScript, pagePlan, prompt, guidance, pageCount }),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_comic_script',
-              schema: comicScriptJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 9000,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_script',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 240_000,
-        })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI comic script failed with status ${response.response.status}.`))
-        }
-        if (response.status === 'incomplete') {
-          throw new Error('OpenAI comic script response was incomplete; rerun the Comic Script node.')
-        }
-        let script = normalizeComicScript(parseJsonObject(response.outputText), { context, pageCount, prompt })
-        let diagnostics = validateComicScript(script, { pageCount })
-        let repairResponse: OpenAiResponseResult | null = null
-        const firstPassDiagnostics = diagnostics
-        if (diagnostics.length > 0) {
-          repairResponse = await runOpenAiResponses({
-            model,
-            instructions: 'You are a senior comic script doctor. Repair invalid comic JSON into a complete production script JSON object only.',
-            input: buildComicScriptRepairInstruction({
-              context,
-              assetPack,
-              sceneScript,
-              pagePlan,
-              invalidScript: script,
-              diagnostics,
-              prompt,
-              guidance,
-              pageCount,
-            }),
-            text: {
-              format: {
-                type: 'json_schema',
-                name: 'output_workflow_comic_script_repair',
-                schema: comicScriptJsonSchema,
-                strict: true,
-              },
-            },
-            maxOutputTokens: 10_000,
-            metadata: {
-              graphcore_task: 'output_workflow_comic_script_repair',
-              graphcore_node_key: input.node.key,
-            },
-            timeoutMs: 240_000,
-          })
-          if (!repairResponse.response.ok) {
-            throw new Error(openAiErrorMessage(repairResponse, `OpenAI comic script repair failed with status ${repairResponse.response.status}.`))
-          }
-          if (repairResponse.status === 'incomplete') {
-            throw new Error('OpenAI comic script repair response was incomplete; rerun the Comic Script node.')
-          }
-          script = normalizeComicScript(parseJsonObject(repairResponse.outputText), { context, pageCount, prompt })
-          diagnostics = validateComicScript(script, { pageCount })
-        }
-        if (diagnostics.length > 0) {
-          throw new Error(`Comic script validation failed after repair: ${diagnostics.slice(0, 8).join(' ')}`)
-        }
-        const markdown = comicScriptMarkdown(script)
-        const outputs = {
-          script,
-          pages: script.pages,
-          markdown,
-          text: markdown,
-          guidance,
-          repaired: repairResponse !== null,
-          firstPassDiagnostics,
-          usage: asRecord(repairResponse?.body.usage ?? response.body.usage),
-          firstPassUsage: repairResponse ? asRecord(response.body.usage) : undefined,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
-        }
-      }
-      if (purpose === 'comic_scene_script') {
-        const config = asRecord(input.node.config)
-        const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const model = outputWorkflowComicTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a senior comic adaptation writer. Return a rich structured dramatic scene script as JSON only, not final panel JSON.',
-          input: buildComicSceneScriptInstruction({ context, assetPack, prompt, guidance, pageCount }),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_comic_scene_script',
-              schema: comicSceneScriptJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 7000,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_scene_script',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 240_000,
-        })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI comic scene script failed with status ${response.response.status}.`))
-        }
-        if (response.status === 'incomplete') {
-          throw new Error('OpenAI comic scene script response was incomplete; rerun the Scene Script node.')
-        }
-        const sceneScript = parseJsonObject(response.outputText)
-        const markdown = comicSceneScriptMarkdown(sceneScript)
-        const outputs = {
-          sceneScript,
-          scene_script: sceneScript,
-          markdown,
-          text: markdown,
-          assetPack,
-          guidance,
-          usage: asRecord(response.body.usage),
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
-        }
-      }
-      if (purpose === 'comic_page_plan') {
-        const config = asRecord(input.node.config)
-        const pageCount = Math.max(1, Math.min(12, Number(config.pageCount ?? 8)))
-        const sceneScript = readFirstUpstreamRecord(input.upstream, ['sceneScript', 'scene_script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const model = outputWorkflowComicTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: 'You are a senior comic editor planning page rhythm and compression. Return page-plan JSON only, not final panels.',
-          input: buildComicPagePlanInstruction({ context, sceneScript, assetPack, prompt, guidance, pageCount }),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_workflow_comic_page_plan',
-              schema: comicPagePlanJsonSchema,
-              strict: true,
-            },
-          },
-          maxOutputTokens: 5200,
-          metadata: {
-            graphcore_task: 'output_workflow_comic_page_plan',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 180_000,
-        })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI comic page plan failed with status ${response.response.status}.`))
-        }
-        if (response.status === 'incomplete') {
-          throw new Error('OpenAI comic page plan response was incomplete; rerun the Page Plan node.')
-        }
-        const pagePlan = parseJsonObject(response.outputText)
-        const diagnostics = validateComicPagePlan(pagePlan, { pageCount })
-        if (diagnostics.length > 0) {
-          throw new Error(`Comic page plan validation failed: ${diagnostics.slice(0, 8).join(' ')}`)
-        }
-        const markdown = comicPagePlanMarkdown(pagePlan)
-        const outputs = {
-          pagePlan,
-          page_plan: pagePlan,
-          markdown,
-          text: markdown,
-          sceneScript,
-          assetPack,
-          guidance,
-          usage: asRecord(response.body.usage),
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
-        }
-      }
       if (purpose === 'comic_atlas_prompt') {
         const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
         const model = outputWorkflowTextModel()
@@ -16799,78 +9430,6 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
         }
         const atlasPrompt = response.outputText.trim()
         const outputs = { prompt: atlasPrompt, text: atlasPrompt, assetPack, guidance, usage: asRecord(response.body.usage) }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'openai',
-          model,
-          providerRequestId: readText(response.body.id) || response.response.headers.get('x-request-id') || null,
-        }
-      }
-      if (purpose === 'comic_page_prompt') {
-        const config = asRecord(input.node.config)
-        const pageNumber = Math.max(1, Number(config.pageNumber ?? 1))
-        const pageCount = Math.max(1, Number(config.pageCount ?? 8))
-        const script = readFirstUpstreamRecord(input.upstream, ['script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const scriptPage = comicScriptPage(script, pageNumber)
-        const pagePrompt = buildDeterministicComicPageImagePrompt({ script, assetPack, pageNumber, pageCount, prompt: input.run.prompt, guidance })
-        const pageAssetPack = filterComicAssetPackForPage(assetPack, scriptPage, 6)
-        const outputs = {
-          prompt: pagePrompt,
-          text: pagePrompt,
-          pageNumber,
-          pageCount,
-          scriptPage,
-          pageAssetPack,
-          page_asset_pack: pageAssetPack,
-          pageReferenceEntityKeys: readStringArray(pageAssetPack.pageReferenceEntityKeys),
-          assetPack,
-          guidance,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-comic-page-prompt-v1',
-          providerRequestId: null,
-        }
-      }
-      if (purpose === 'ebook_cover_prompt') {
-        const model = outputWorkflowTextModel()
-        const response = await runOpenAiResponses({
-          model,
-          instructions: [
-            'You are a senior publishing art director writing prompts for GPT Image 2.',
-            'Return one concise, visual, production-ready image prompt for a finished ebook front cover.',
-            'The prompt may request title typography in the image, but must not mention workflow internals.',
-          ].join(' '),
-          input: buildEbookCoverPromptInstruction({
-            context,
-            prompt: readText(input.node.inputs.prompt) || input.run.prompt,
-            guidance,
-          }),
-          maxOutputTokens: 1100,
-          metadata: {
-            graphcore_task: 'output_workflow_ebook_cover_prompt',
-            graphcore_node_key: input.node.key,
-          },
-          timeoutMs: 120_000,
-        })
-        if (!response.response.ok) {
-          throw new Error(openAiErrorMessage(response, `OpenAI ebook cover prompt failed with status ${response.response.status}.`))
-        }
-        const coverPrompt = response.outputText.trim()
-        if (!coverPrompt) throw new Error('OpenAI returned an empty ebook cover prompt.')
-        const outputs = {
-          prompt: coverPrompt,
-          text: coverPrompt,
-          guidance,
-          usage: asRecord(response.body.usage),
-        }
         return {
           inputHash: input.inputHash,
           outputHash: hashOutputWorkflowValue(outputs),
@@ -16977,75 +9536,6 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
           providerRequestId: prose.providerRequestId,
         }
       }
-      if (purpose === 'chapter_prose') {
-        const config = asRecord(input.node.config)
-        const chapterNumber = Number(config.chapterNumber ?? 1)
-        const sequenceUnitKey = readText(config.sequenceUnitKey)
-        const sequenceUnitName = readText(config.sequenceUnitName)
-        const chapterPlan = readFirstUpstreamArray(input.upstream, ['chapterPlan', 'plan'])
-        const prose = await generateBackgroundMarkdown({
-          instructions: [
-            'You are a professional longform book writer.',
-            'Write restrained, specific, publishable prose from the supplied canon.',
-            'Open scenes through character action, choice, dialogue, or immediate pressure rather than weather, skyline, mood, or decorative metaphor.',
-            'Follow the requested style guidance, but never reveal the guidance or workflow.',
-            'Return only the requested Markdown manuscript content.',
-          ].join(' '),
-          prompt: buildChapterProsePrompt({
-            context,
-            prompt,
-            chapterPlan: chapterPlan.length > 0 ? chapterPlan : buildChapterPlan(context, outlineFromContext(context)),
-            chapterNumber,
-            sequenceUnitKey,
-            sequenceUnitName,
-            guidance,
-          }),
-          maxOutputTokens: 9000,
-          metadata: {
-            graphcore_task: 'output_workflow_chapter_prose',
-            graphcore_node_key: input.node.key,
-          },
-          priorProviderRequestId: input.priorStep?.providerRequestId,
-          shouldCancel: input.shouldCancel,
-          onProgress: async (progress) => {
-            await input.onProgress?.({
-              provider: 'openai',
-              model: outputWorkflowTextModel(),
-              providerRequestId: progress.providerRequestId,
-              metadata: {
-                providerMode: progress.providerMode,
-                providerStatus: progress.providerStatus,
-                lastProviderPollAt: progress.lastProviderPollAt,
-              },
-            })
-          },
-        })
-        const outputs = {
-          markdown: prose.markdown,
-          text: prose.markdown,
-          chapterNumber,
-          sequenceUnitKey,
-          sourceSequenceUnitKeys: sequenceUnitKey ? [sequenceUnitKey] : [],
-          guidance,
-          usage: prose.usage,
-          timeoutMs: prose.timeoutMs,
-          providerStatus: prose.providerStatus,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'openai',
-          model: prose.model,
-          providerRequestId: prose.providerRequestId,
-        }
-      }
-      if (purpose === 'front_back_matter') {
-        const source = readFirstUpstreamText(input.upstream)
-        const markdown = addFrontBackMatter(worldContextFromRunInput(input.run), editMarkdown(source))
-        const outputs = { markdown, text: markdown, guidance }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-front-back-matter-v1' }
-      }
       const source = readFirstUpstreamText(input.upstream)
       const markdown = editMarkdown(source)
       const outputs = { markdown, text: markdown, guidance }
@@ -17059,1258 +9549,6 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
     }
     case 'utility_transform': {
       const purpose = readText(asRecord(input.node.config).purpose)
-      if (purpose === 'cinematic_v3_shot_break_plan') {
-        const config = asRecord(input.node.config)
-        const screenplayDraft = readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft'])
-        const suggestedDurationSeconds = Number(asRecord(screenplayDraft).suggestedDurationSeconds ?? 0) || null
-        const configuredMaxShotCount = Number(config.maxShotCount ?? 0) || 0
-        const shotBreakPlan = buildCinematicV3ShotBreakPlan({
-          screenplayDraft,
-          maxShotCount: configuredMaxShotCount > 0 ? configuredMaxShotCount : deriveCinematicV2MaxShotCount(suggestedDurationSeconds),
-          maxPanelsPerSheet: Number(config.maxPanelsPerSheet ?? 9) || 9,
-          maxDurationPerGroupSeconds: Number(config.maxDurationPerGroupSeconds ?? 15) || 15,
-        })
-        const outputs = {
-          shotBreakPlan,
-          shot_break_plan: shotBreakPlan,
-          shotBreaks: shotBreakPlan.shotBreaks,
-          shot_breaks: shotBreakPlan.shotBreaks,
-          groups: shotBreakPlan.groups,
-          text: JSON.stringify(shotBreakPlan, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-shot-break-plan-v1' }
-      }
-      if (purpose === 'cinematic_v3_shot_plan_merge') {
-        const shotBreakPlan = readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan'])
-        const groupPlans = Object.values(input.upstream)
-          .map((outputs) => asRecord(outputs.shotPlan ?? outputs.shot_plan))
-          .filter((plan) => Array.isArray(plan.shots))
-        const breakGroups = Array.isArray(shotBreakPlan.groups) ? shotBreakPlan.groups.map(asRecord) : []
-        const diagnostics = [
-          ...readStringArray(shotBreakPlan.diagnostics),
-          `Merged ${groupPlans.length} storyboard parse group${groupPlans.length === 1 ? '' : 's'}.`,
-        ]
-        const shots = groupPlans
-          .flatMap((plan) => Array.isArray(plan.shots) ? plan.shots.map(asRecord) : [])
-          .map((shot, index) => ({
-            ...shot,
-            id: readText(shot.id) || `shot_${String(index + 1).padStart(3, '0')}`,
-            index: index + 1,
-            editorialDurationSeconds: Math.max(0.5, Math.min(8, Number(shot.editorialDurationSeconds ?? 0) || 3)),
-            providerDurationSeconds: providerSafeCinematicV2DurationSeconds(Number(shot.editorialDurationSeconds ?? 0) || 3),
-          }))
-        if (shots.length === 0) throw new Error('No parsed Cinematics V3 shot groups were available to merge.')
-        const duplicateIds = shots
-          .map((shot) => readText(shot.id))
-          .filter((id, index, list) => id && list.indexOf(id) !== index)
-        const finalShots = duplicateIds.length > 0
-          ? shots.map((shot, index) => ({ ...shot, id: `shot_${String(index + 1).padStart(3, '0')}` }))
-          : shots
-        if (duplicateIds.length > 0) diagnostics.push(`Renumbered duplicate shot IDs: ${[...new Set(duplicateIds)].join(', ')}.`)
-        const audioPlanSource = groupPlans.map((plan) => asRecord(plan.audioPlan)).find((plan) => Object.keys(plan).length > 0) ?? {}
-        const performanceArc = groupPlans.flatMap((plan) => Array.isArray(plan.performanceArc) ? plan.performanceArc.map(asRecord) : [])
-        const shotPlan = cinematicV2ShotPlanSchema.parse({
-          sceneId: 'scene_1',
-          totalEditorialDurationSeconds: finalShots.reduce((total, shot) => total + Number(shot.editorialDurationSeconds ?? 0), 0),
-          shots: finalShots,
-          performanceArc,
-          audioPlan: {
-            ambience: readText(audioPlanSource.ambience),
-            music: readText(audioPlanSource.music),
-            sfx: Array.isArray(audioPlanSource.sfx) ? audioPlanSource.sfx : [],
-            dialogueTrackCount: finalShots.reduce((total, shot) => total + (Array.isArray(shot.dialogue) && shot.dialogue.length > 0 ? 1 : 0), 0),
-            placeholderOnly: true,
-          },
-          diagnostics,
-        })
-        const preferredStoryboardGroupPlan = cinematicV2StoryboardGroupPlanSchema.safeParse({
-          groups: breakGroups.map((group, index) => {
-            const shotIds = readStringArray(group.shotBreakIds).filter((id) => shotPlan.shots.some((shot) => shot.id === id))
-            const groupShots = shotIds.length > 0 ? shotPlan.shots.filter((shot) => shotIds.includes(shot.id)) : []
-            const layout = buildCinematicV3StoryboardLayout(Math.max(1, groupShots.length || Number(group.panelCount ?? 1) || 1))
-            const duration = groupShots.reduce((total, shot) => total + shot.editorialDurationSeconds, 0) || Number(group.approximateDurationSeconds ?? 0) || 3
-            const startSeconds = shotPlan.shots
-              .slice(0, Math.max(0, shotPlan.shots.findIndex((shot) => shot.id === groupShots[0]?.id)))
-              .reduce((total, shot) => total + shot.editorialDurationSeconds, 0)
-            return {
-              id: readText(group.id) || `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`,
-              index: index + 1,
-              shotIds: groupShots.length > 0 ? groupShots.map((shot) => shot.id) : shotPlan.shots.slice(index, index + 1).map((shot) => shot.id),
-              summary: readText(group.summary) || groupShots.map((shot) => shot.title).join(' / '),
-              rows: layout.rows,
-              columns: layout.columns,
-              panelCount: layout.panelCount,
-              startSeconds,
-              endSeconds: startSeconds + duration,
-              editorialDurationSeconds: duration,
-              providerDurationSeconds: providerSafeCinematicV2DurationSeconds(duration),
-              continuityNotes: [`Parse group ${index + 1} from screenplay shot markers.`],
-            }
-          }).filter((group) => group.shotIds.length > 0),
-          maxPanelsPerSheet: Math.max(1, Math.min(9, Number(shotBreakPlan.maxPanelsPerSheet ?? 9) || 9)),
-          maxDurationPerGroupSeconds: Math.max(1, Math.min(15, Number(shotBreakPlan.maxDurationPerGroupSeconds ?? 15) || 15)),
-          diagnostics: ['Storyboard groups preserved from screenplay shot-marker parse groups.'],
-        }).data ?? buildCinematicV3StoryboardGroupPlan(shotPlan, {
-          maxPanelsPerSheet: Number(shotBreakPlan.maxPanelsPerSheet ?? 9) || 9,
-          maxDurationPerGroupSeconds: Number(shotBreakPlan.maxDurationPerGroupSeconds ?? 15) || 15,
-        })
-        const outputs = {
-          shotPlan,
-          shot_plan: shotPlan,
-          shots: shotPlan.shots,
-          preferredStoryboardGroupPlan,
-          preferred_storyboard_group_plan: preferredStoryboardGroupPlan,
-          text: JSON.stringify(shotPlan, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-shot-plan-merge-v1' }
-      }
-      if (purpose === 'cinematic_v3_dynamic_shot_parse_fanout') {
-        const config = asRecord(input.node.config)
-        const compileOutputs = {
-          screenplayDraft: readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft']),
-          shotBreakPlan: readFirstUpstreamRecord(input.upstream, ['shotBreakPlan', 'shot_break_plan']),
-          cinematicReferencePlan: readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan']),
-          compileHash: readText(config.compileHash),
-        }
-        const result = await materializeDynamicCinematicV3ShotParseFanout({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          compileOutputs,
-          config,
-        })
-        const isSequenceAnimaticMasterFanout = readText(config.sequenceAnimaticMode) === 'master_script_only'
-          || readText(asRecord(input.workflow.metadata).screenplayAnimaticRole) === 'master'
-          || readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'master'
-        const outputs = {
-          dynamicGraphExpanded: result.expanded,
-          graphExpanded: result.expanded,
-          compileHash: result.compileHash,
-          parseGroupCount: result.parseGroupCount,
-          storyboardSheetCount: result.storyboardSheetCount,
-          text: result.expanded
-            ? (isSequenceAnimaticMasterFanout
-              ? 'Materialized sequence animatic master manifest, shot continuity plan, and orchestrator nodes without parse-group LLM dependencies.'
-              : `Materialized ${result.parseGroupCount} Cinematics V3 screenplay parse group node(s) and ${result.storyboardSheetCount} direct storyboard workflow(s).`)
-            : `Cinematics V3 parse groups and storyboard workflows already materialized (${result.parseGroupCount} group(s), ${result.storyboardSheetCount} sheet(s)).`,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-dynamic-shot-parse-fanout-v1' }
-      }
-      if (purpose === 'cinematic_v2_storyboard_group_plan' || purpose === 'cinematic_v3_storyboard_group_plan') {
-        const config = asRecord(input.node.config)
-        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const maxPanelsPerSheet = Math.max(1, Math.min(9, Number(config.maxPanelsPerSheet ?? 9) || 9))
-        const maxDurationPerGroupSeconds = Math.max(1, Math.min(15, Number(config.maxDurationPerGroupSeconds ?? 15) || 15))
-        const preferredStoryboardGroupPlan = cinematicV2StoryboardGroupPlanSchema.safeParse(readFirstUpstreamRecord(input.upstream, ['preferredStoryboardGroupPlan', 'preferred_storyboard_group_plan']))
-        const storyboardGroupPlan = purpose === 'cinematic_v3_storyboard_group_plan' && preferredStoryboardGroupPlan.success
-          ? preferredStoryboardGroupPlan.data
-          : purpose === 'cinematic_v3_storyboard_group_plan'
-          ? buildCinematicV3StoryboardGroupPlan(shotPlan, {
-            maxPanelsPerSheet,
-            maxDurationPerGroupSeconds,
-          })
-          : buildCinematicV2StoryboardGroupPlan(shotPlan, maxPanelsPerSheet)
-        const outputs = {
-          storyboardGroupPlan,
-          storyboard_group_plan: storyboardGroupPlan,
-          groups: storyboardGroupPlan.groups,
-          maxPanelsPerSheet: storyboardGroupPlan.maxPanelsPerSheet,
-          maxDurationPerGroupSeconds: storyboardGroupPlan.maxDurationPerGroupSeconds,
-          text: JSON.stringify(storyboardGroupPlan, null, 2),
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: purpose === 'cinematic_v3_storyboard_group_plan' ? 'deterministic-cinematic-v3-storyboard-group-plan-v2' : 'deterministic-cinematic-v2-storyboard-group-plan-v1' }
-      }
-      if (purpose === 'cinematic_v3_dynamic_storyboard_fanout') {
-        const config = asRecord(input.node.config)
-        const compileOutputs = {
-          screenplayDraft: readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft']),
-          shotPlan: readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']),
-          storyboardGroupPlan: readFirstUpstreamRecord(input.upstream, ['storyboardGroupPlan', 'storyboard_group_plan']),
-          cinematicReferencePlan: readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan']),
-          compileHash: readText(config.compileHash),
-        }
-        const result = await materializeDynamicCinematicV3StoryboardFanout({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          compileOutputs,
-          config,
-        })
-        const outputs = {
-          dynamicGraphExpanded: result.expanded,
-          graphExpanded: result.expanded,
-          compileHash: result.compileHash,
-          dynamicShotCount: result.shotCount,
-          storyboardSheetCount: result.storyboardSheetCount,
-          text: result.expanded
-            ? `Materialized ${result.storyboardSheetCount} Cinematics V3 storyboard sheet workflow(s) covering ${result.shotCount} shot(s).`
-            : `Cinematics V3 storyboard workflows already materialized for ${result.shotCount} shots across ${result.storyboardSheetCount} sheet(s).`,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-v3-dynamic-storyboard-fanout-v1',
-        }
-      }
-      if (purpose === 'cinematic_v2_dynamic_shot_fanout') {
-        const config = asRecord(input.node.config)
-        const compileOutputs = {
-          screenplayDraft: readFirstUpstreamRecord(input.upstream, ['screenplayDraft', 'screenplay_draft']),
-          parsedScript: readFirstUpstreamRecord(input.upstream, ['parsedScript', 'parsed_script']),
-          sceneState: readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state']),
-          layoutPlan: readFirstUpstreamRecord(input.upstream, ['layoutPlan', 'layout_plan']),
-          shotPlan: readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']),
-          storyboardGroupPlan: readFirstUpstreamRecord(input.upstream, ['storyboardGroupPlan', 'storyboard_group_plan']),
-          cinematicReferencePlan: readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan']),
-          compileHash: readText(config.compileHash),
-        }
-        const result = await materializeDynamicCinematicV2ShotFanout({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          compileOutputs,
-          config,
-        })
-        const outputs = {
-          dynamicGraphExpanded: result.expanded,
-          graphExpanded: result.expanded,
-          compileHash: result.compileHash,
-          dynamicShotCount: result.shotCount,
-          storyboardSheetCount: result.storyboardSheetCount,
-          text: result.expanded
-            ? `Materialized ${result.shotCount} Cinematics V2 shot workflows across ${result.storyboardSheetCount} storyboard sheet(s).`
-            : `Cinematics V2 shot workflows already materialized for ${result.shotCount} shots across ${result.storyboardSheetCount} storyboard sheet(s).`,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-v2-dynamic-shot-fanout-v1',
-        }
-      }
-      if (purpose === 'cinematic_v2_storyboard_prompt' || purpose === 'cinematic_v3_storyboard_prompt') {
-        const config = asRecord(input.node.config)
-        const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
-        const sceneState = readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state'])
-        const layoutPlan = readFirstUpstreamRecord(input.upstream, ['layoutPlan', 'layout_plan'])
-        const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const aspectRatio = readText(config.aspectRatio) || '16:9'
-        const configuredGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(config.storyboardGroup)
-        const storyboardGroup = configuredGroup.success ? configuredGroup.data : null
-        const groupShots = purpose === 'cinematic_v3_storyboard_prompt'
-          ? cinematicV3StoryboardGroupShots({ shotPlan, storyboardGroup })
-          : []
-        const assetPack = purpose === 'cinematic_v3_storyboard_prompt'
-          ? buildCinematicV3StoryboardGroupAssetPack({
-            assetPack: rawAssetPack,
-            shots: groupShots,
-            maxEntityCount: 8,
-            maxAssetKeysPerEntity: 1,
-          })
-          : rawAssetPack
-        const layout = storyboardGroup
-          ? { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
-          : purpose === 'cinematic_v3_storyboard_prompt'
-            ? buildCinematicV3StoryboardLayout(cinematicV2ShotPlanSchema.parse(shotPlan).shots.length)
-            : buildCinematicV2StoryboardLayout(cinematicV2ShotPlanSchema.parse(shotPlan).shots.length)
-        const imageSize = storyboardImageSizeForLayout({ columns: layout.columns, rows: layout.rows, aspectRatio })
-        const prompt = purpose === 'cinematic_v3_storyboard_prompt'
-          ? buildCinematicV3StoryboardPrompt({
-            shotPlan,
-            assetPack,
-            storyboardGroup,
-            aspectRatio,
-            prompt: input.run.prompt,
-          })
-          : buildCinematicV2StoryboardPrompt({
-            shotPlan,
-            sceneState,
-            layoutPlan,
-            assetPack,
-            storyboardGroup,
-            aspectRatio,
-            prompt: input.run.prompt,
-          })
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const outputs = {
-          prompt,
-          text: prompt,
-          shotPlan,
-          sceneState,
-          layoutPlan,
-          assetPack,
-          asset_pack: assetPack,
-          storyboardLayout: layout,
-          storyboardGroup,
-          storyboardGroupId: storyboardGroup?.id ?? null,
-          gridColumns: layout.columns,
-          gridRows: layout.rows,
-          panelCount: layout.panelCount,
-          gridCellCount: layout.rows * layout.columns,
-          aspectRatio,
-          imageSize,
-          guidance,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: purpose === 'cinematic_v3_storyboard_prompt' ? 'deterministic-cinematic-v3-storyboard-prompt-v1' : 'deterministic-cinematic-v2-storyboard-prompt-v1' }
-      }
-      if (purpose === 'cinematic_v2_shot_asset_pack') {
-        const config = asRecord(input.node.config)
-        const shotId = readText(config.shotId)
-        const shotIndex = Number(config.shotIndex ?? 0) || 0
-        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const referencePlan = readFirstUpstreamRecord(input.upstream, ['cinematicReferencePlan', 'cinematic_reference_plan'])
-        const shot = shotPlan.shots.find((entry) => entry.id === shotId)
-          ?? shotPlan.shots.find((entry) => entry.index === shotIndex)
-          ?? shotPlan.shots[0]
-        const shotAssetPack = buildCinematicV2ShotAssetPack({
-          assetPack,
-          referencePlan,
-          shot,
-          maxEntityCount: Math.max(1, Math.min(8, Number(config.maxEntityCount ?? 6) || 6)),
-          maxAssetKeysPerEntity: Math.max(1, Math.min(3, Number(config.maxAssetKeysPerEntity ?? 2) || 2)),
-        })
-        const outputs = {
-          assetPack: shotAssetPack,
-          asset_pack: shotAssetPack,
-          shot,
-          shotReferenceKeys: readStringArray(shotAssetPack.shotReferenceKeys),
-          selectedEntityCount: cinematicAssetPackEntityKeys(shotAssetPack).length,
-          deterministic: true,
-          text: JSON.stringify(shotAssetPack, null, 2),
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-shot-asset-pack-v1' }
-      }
-      if (purpose === 'cinematic_v2_panel_extract' || purpose === 'cinematic_v3_panel_extract') {
-        const config = asRecord(input.node.config)
-        const sheetImage = readFirstUpstreamImage(input.upstream, ['image'])
-        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        if (!sheetImage) throw new Error('Cinematics V2 panel extraction requires a storyboard sheet image.')
-        const configuredLayout = cinematicV2StoryboardLayoutSchema.safeParse(config.storyboardLayout)
-        const configuredGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(config.storyboardGroup)
-        const storyboardGroup = configuredGroup.success ? configuredGroup.data : null
-        const imageLayout = cinematicV2StoryboardLayoutSchema.safeParse(sheetImage.storyboardLayout ?? asRecord(sheetImage.metadata).storyboardLayout)
-        const layout = configuredLayout.success
-          ? configuredLayout.data
-          : imageLayout.success
-            ? imageLayout.data
-            : purpose === 'cinematic_v3_panel_extract'
-              ? buildCinematicV3StoryboardLayout(shotPlan.shots.length)
-              : buildCinematicV2StoryboardLayout(shotPlan.shots.length)
-        const groupShotIds = new Set(storyboardGroup?.shotIds ?? [])
-        const matchedGroupShots = storyboardGroup
-          ? shotPlan.shots.filter((shot) => groupShotIds.has(shot.id))
-          : []
-        const shotsToExtract = storyboardGroup
-          ? (matchedGroupShots.length > 0 ? matchedGroupShots : shotPlan.shots).slice(0, layout.panelCount)
-          : shotPlan.shots.slice(0, layout.panelCount)
-        const sheetStoragePath = readText(sheetImage.storagePath) || readText(sheetImage.storage_path)
-        const sheetBytes = sheetStoragePath
-          ? await downloadProjectAssetBytes(input.client, sheetStoragePath)
-          : await downloadRemoteBytes(readText(sheetImage.url))
-        const sourceMimeType = readText(sheetImage.mimeType) || readText(sheetImage.mime_type) || 'image/webp'
-        const tempDir = await Deno.makeTempDir({ prefix: 'graphcore-cinematic-panels-' })
-        const panels: Record<string, unknown>[] = []
-        try {
-          const sourcePath = `${tempDir}/storyboard.${sourceMimeType.includes('png') ? 'png' : sourceMimeType.includes('jpeg') || sourceMimeType.includes('jpg') ? 'jpg' : 'webp'}`
-          await Deno.writeFile(sourcePath, sheetBytes)
-          const probedSize = await probeImageSize(sourcePath)
-          const width = probedSize?.width
-            || Number(sheetImage.width ?? 0)
-            || Number(asRecord(config.imageSize).width ?? 0)
-            || 1536
-          const height = probedSize?.height
-            || Number(sheetImage.height ?? 0)
-            || Number(asRecord(config.imageSize).height ?? 0)
-            || 864
-          for (const [index, shot] of shotsToExtract.entries()) {
-            const row = Math.floor(index / layout.columns)
-            const column = index % layout.columns
-            const cropX = Math.floor((width * column) / layout.columns)
-            const cropY = Math.floor((height * row) / layout.rows)
-            const nextX = Math.floor((width * (column + 1)) / layout.columns)
-            const nextY = Math.floor((height * (row + 1)) / layout.rows)
-            const panelWidth = Math.max(1, Math.min(width - cropX, nextX - cropX))
-            const panelHeight = Math.max(1, Math.min(height - cropY, nextY - cropY))
-            if (panelWidth < 32 || panelHeight < 32) {
-              throw new Error(`Cinematics V3 panel extraction produced an invalid crop for shot ${shot.index}: ${panelWidth}x${panelHeight}. Check the persisted storyboard grid layout.`)
-            }
-            const outputPath = `${tempDir}/panel-${String(index + 1).padStart(3, '0')}.webp`
-            const crop = await runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${panelWidth}:${panelHeight}:${cropX}:${cropY}`, outputPath])
-            if (!crop.ok) {
-              throw new Error(`Cinematics V2 panel crop failed for shot ${shot.index}: ${crop.stderr.slice(0, 1200)}`)
-            }
-            const panelBytes = await Deno.readFile(outputPath)
-            const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.cinematic-v2-panel-${slugify(shot.id)}`
-            const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/cinematic-v2-panels/${slugify(storyboardGroup?.id || 'single')}/${slugify(shot.id)}.webp`
-            const mimeType = 'image/webp'
-            await uploadBytes(input.client, storagePath, panelBytes, mimeType)
-            const metadata = {
-              generatedBy: 'output_workflow',
-              workflowId: input.workflow.id,
-              workflowKey: input.workflow.key,
-              runId: input.run.id,
-              nodeId: input.node.id,
-              nodeKey: input.node.key,
-              preset: input.run.preset,
-              role: purpose === 'cinematic_v3_panel_extract' ? 'cinematic_v3_storyboard_panel' : 'cinematic_v2_storyboard_panel',
-              sequenceAnimaticArtifactRole: readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'storyboard_block' ? 'sequence_animatic_block_panel' : null,
-              parentRequestId: readText(asRecord(input.workflow.metadata).parentRequestId) || readText(asRecord(input.run.metadata).parentRequestId) || null,
-              sequenceUnitKey: readText(asRecord(input.workflow.metadata).sequenceUnitKey) || readText(asRecord(input.run.metadata).sequenceUnitKey) || null,
-              storyboardBlockId: readText(asRecord(input.workflow.metadata).storyboardBlockId) || storyboardGroup?.id || null,
-              purpose,
-              shotId: shot.id,
-              shotIndex: shot.index,
-              storyboardGroupId: storyboardGroup?.id ?? null,
-              panelIndexInGroup: index,
-              sourceSheetAssetKey: readText(sheetImage.assetKey),
-              sourceSheetStoragePath: sheetStoragePath,
-              row,
-              column,
-              crop: { x: cropX, y: cropY, width: panelWidth, height: panelHeight },
-              cropRect: { x: cropX, y: cropY, width: panelWidth, height: panelHeight },
-              cropMode: 'ffmpeg_crop',
-              storageBucket: 'project-assets',
-              storagePath,
-            }
-            const artifact = await registerImageArtifact({
-              client: input.client,
-              run: input.run,
-              workflow: input.workflow,
-              node: input.node,
-              assetKey,
-              storagePath,
-              name: `Shot ${shot.index} Storyboard Panel`,
-              summary: 'Extracted Cinematics V2 storyboard panel for one shot.',
-              mimeType,
-              metadata,
-            })
-            panels.push({
-              id: `panel_${shot.id}`,
-              shotId: shot.id,
-              shotIndex: shot.index,
-              storyboardGroupId: storyboardGroup?.id ?? null,
-              panelIndexInGroup: index,
-              assetKey,
-              storagePath,
-              mimeType,
-              sourceSheetAssetKey: readText(sheetImage.assetKey) || null,
-              row,
-              column,
-              cropRect: { x: cropX, y: cropY, width: panelWidth, height: panelHeight },
-              width: panelWidth,
-              height: panelHeight,
-              role: purpose === 'cinematic_v3_panel_extract' ? 'cinematic_v3_storyboard_panel' : 'cinematic_v2_storyboard_panel',
-              sequenceAnimaticArtifactRole: readText(asRecord(input.workflow.metadata).sequenceAnimaticRole) === 'storyboard_block' ? 'sequence_animatic_block_panel' : null,
-              artifact,
-            })
-          }
-        } finally {
-          await Deno.remove(tempDir, { recursive: true }).catch(() => {})
-        }
-        if (panels.length !== shotsToExtract.length) {
-          throw new Error(`Cinematics V3 panel extraction expected ${shotsToExtract.length} cropped panel${shotsToExtract.length === 1 ? '' : 's'} from the persisted ${layout.rows}x${layout.columns} grid but produced ${panels.length}.`)
-        }
-        const missingPanelShotIds = shotsToExtract
-          .map((shot) => shot.id)
-          .filter((shotId) => !panels.some((panel) => readText(panel.shotId) === shotId && readText(panel.assetKey)))
-        if (missingPanelShotIds.length > 0) {
-          throw new Error(`Cinematics V3 panel extraction missed shot panel asset(s): ${missingPanelShotIds.join(', ')}.`)
-        }
-        const outputs = {
-          panels,
-          images: panels,
-          image: panels[0] ?? null,
-          storyboardLayout: layout,
-          storyboardGroup,
-          storyboardGroupId: storyboardGroup?.id ?? null,
-          sourceImage: sheetImage,
-          shotPlan,
-          deterministic: true,
-          text: `Extracted ${panels.length} Cinematics V2 storyboard panels.`,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-cinematic-v2-panel-extract-v1' }
-      }
-      if (purpose === 'cinematic_v2_keyframe_prompt') {
-        const config = asRecord(input.node.config)
-        const shotId = readText(config.shotId)
-        const shotIndex = Number(config.shotIndex ?? 0) || 0
-        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const sceneState = readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state'])
-        const layoutPlan = readFirstUpstreamRecord(input.upstream, ['layoutPlan', 'layout_plan'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const panels = readFirstUpstreamArray(input.upstream, ['panels', 'images'])
-        const shot = shotPlan.shots.find((entry) => entry.id === shotId) ?? shotPlan.shots.find((entry) => entry.index === shotIndex) ?? shotPlan.shots[0]
-        const panel = panels.find((entry) => readText(entry.shotId) === shot.id) ?? panels.find((entry) => Number(entry.shotIndex ?? 0) === shot.index) ?? panels[0] ?? {}
-        const prompt = buildCinematicV2KeyframePrompt({
-          shot,
-          sceneState,
-          layoutPlan,
-          panelAssetKey: readText(panel.assetKey),
-          assetPack,
-          aspectRatio: readText(config.aspectRatio) || '16:9',
-          prompt: input.run.prompt,
-        })
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const outputs = {
-          prompt,
-          text: prompt,
-          shot,
-          panel,
-          image: panel,
-          panelAssetKey: readText(panel.assetKey),
-          sceneState,
-          layoutPlan,
-          assetPack,
-          guidance,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-keyframe-prompt-v1' }
-      }
-      if (purpose === 'cinematic_v2_shot_keyframe_passthrough') {
-        const config = asRecord(input.node.config)
-        const shotId = readText(config.shotId)
-        const shotIndex = Number(config.shotIndex ?? 0) || 0
-        const shotPlan = cinematicV2ShotPlanSchema.safeParse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const shot = shotPlan.success
-          ? shotPlan.data.shots.find((entry) => entry.id === shotId) ?? shotPlan.data.shots.find((entry) => entry.index === shotIndex) ?? null
-          : null
-        const panels = readFirstUpstreamArray(input.upstream, ['panels', 'images'])
-        const selectedPanel = panels.find((entry) => readText(entry.shotId) === (shot?.id ?? shotId))
-          ?? panels.find((entry) => Number(entry.shotIndex ?? 0) === (shot?.index ?? shotIndex))
-          ?? null
-        const selectedImage = selectedPanel ?? readFirstUpstreamImage(input.upstream, ['image'])
-        if (!selectedImage) throw new Error('Cinematics V2 panel keyframe requires a cropped storyboard panel image.')
-        const image = {
-          ...selectedImage,
-          role: 'cinematic_v2_shot_keyframe',
-          sourceRole: readText(selectedImage.role) || readText(asRecord(selectedImage.metadata).role) || 'cinematic_v2_storyboard_panel',
-          sourcePanelAssetKey: readText(selectedImage.assetKey),
-          sourcePanelStoragePath: readText(selectedImage.storagePath) || readText(selectedImage.storage_path),
-          shotId: readText(selectedImage.shotId) || shot?.id || shotId || null,
-          shotIndex: Number(selectedImage.shotIndex ?? 0) || shot?.index || shotIndex || null,
-          generatedBy: 'deterministic_panel_passthrough',
-          keyframeMode: 'storyboard_panel_crop',
-          planningOnly: true,
-          planning_only: true,
-        }
-        const outputs = {
-          image,
-          keyframe: image,
-          shot,
-          deterministic: true,
-          text: `Selected cropped storyboard panel as the shot ${image.shotIndex ?? ''} animatic keyframe.`.trim(),
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-panel-keyframe-v1' }
-      }
-      if (purpose === 'cinematic_v2_keyframe_qa') {
-        const config = asRecord(input.node.config)
-        const shotId = readText(config.shotId)
-        const shotIndex = Number(config.shotIndex ?? 0) || 0
-        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const shot = shotPlan.shots.find((entry) => entry.id === shotId) ?? shotPlan.shots.find((entry) => entry.index === shotIndex) ?? shotPlan.shots[0]
-        const keyframeImage = readFirstUpstreamImage(input.upstream, ['image', 'keyframe'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const expectedEntityRefIds = [
-          ...shot.visibleCharacterRefIds,
-          ...shot.speakerRefIds,
-          ...(shot.locationRefId ? [shot.locationRefId] : []),
-          ...shot.propRefIds,
-        ].filter((value, index, values) => value && values.indexOf(value) === index)
-        const selectedEntityCount = cinematicAssetPackEntityKeys(assetPack).length
-        const notes = [
-          `Expected refs: ${expectedEntityRefIds.join(', ') || 'none'}.`,
-          shot.performanceBeats.length > 0 ? `Expected acting direction: ${formatCinematicV2PerformanceDirection(shot)}.` : 'No structured acting direction was supplied for this shot.',
-          `Shot-scoped asset pack refs: ${selectedEntityCount}.`,
-          keyframeImage ? 'Keyframe media is present for advisory review.' : 'No keyframe media was found.',
-        ]
-        if (shot.visibleCharacterRefIds.length === 1) {
-          notes.push('Single-character shot: review for duplicate subject or background lookalike risk.')
-        }
-        const issueCategories = [
-          ...(!keyframeImage ? ['missing_keyframe' as const] : []),
-          ...(shot.visibleCharacterRefIds.length === 1 ? ['duplicate_subject_risk' as const] : []),
-          'storyboard_artifact_risk' as const,
-          'prompt_adherence_risk' as const,
-        ]
-        const qa = cinematicV2KeyframeQaSchema.parse({
-          shotId: shot.id,
-          shotIndex: shot.index,
-          status: keyframeImage ? 'needs_review' : 'missing_media',
-          expectedEntityRefIds,
-          expectedEntityCount: expectedEntityRefIds.length,
-          issueCategories,
-          notes,
-        })
-        const outputs = {
-          keyframeQa: qa,
-          keyframe_qa: qa,
-          shot,
-          image: keyframeImage ?? null,
-          assetPack,
-          deterministic: true,
-          text: JSON.stringify(qa, null, 2),
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-keyframe-qa-v1' }
-      }
-      if (purpose === 'cinematic_v3_storyboard_group_video_prompt') {
-        const config = asRecord(input.node.config)
-        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const configuredGroup = cinematicV2StoryboardGroupPlanSchema.shape.groups.element.safeParse(config.storyboardGroup)
-        const storyboardGroup = configuredGroup.success ? configuredGroup.data : null
-        const groupShots = cinematicV3StoryboardGroupShots({ shotPlan, storyboardGroup })
-        const upstreamImages = readUpstreamImages(input.upstream)
-        const assetPackReferenceLimit = Math.max(0, Math.min(8, Number(asRecord(input.node.config).assetPackReferenceLimit ?? 4) || 4))
-        const assetPack = buildCinematicV3StoryboardGroupAssetPack({
-          assetPack: rawAssetPack,
-          shots: groupShots,
-          maxEntityCount: assetPackReferenceLimit,
-          maxAssetKeysPerEntity: 1,
-        })
-        const entityByKey = cinematicEntityByKey(assetPack)
-        const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({ assetPack, shots: groupShots, limit: 8 })
-        const seedanceReferenceManifest = buildSeedanceReferenceManifest({
-          imageReferences: [
-            ...seedanceReferenceRecordsFromImages(upstreamImages, 'storyboard_sheet'),
-            ...seedanceReferenceRecordsFromAssetPack(assetPack, assetPackReferenceLimit),
-          ].slice(0, 9),
-          cinematicReferenceMode: 'storyboard_sheet',
-        })
-        const directedControls = groupShots.map((shot) => buildSeedanceDirectedControlsFromShot({
-          shot: shot as unknown as Record<string, unknown>,
-          entityByKey,
-          visibleCharacterRefIds: shot.visibleCharacterRefIds,
-        }))
-        let localCursorSeconds = 0
-        const timelineLines = groupShots.map((shot) => {
-          const shotDurationSeconds = Math.max(0.1, Math.min(15, Number(shot.editorialDurationSeconds) || 2))
-          const localStartSeconds = localCursorSeconds
-          const localEndSeconds = localStartSeconds + shotDurationSeconds
-          localCursorSeconds = localEndSeconds
-          const dialogueLines = shot.dialogue
-            .map((line) => {
-              const text = readText(line.text)
-              if (!text) return ''
-              const speakerKey = readText(line.speakerRefId)
-              const speaker = readText(entityByKey.get(speakerKey)?.name) || readText(line.speakerName) || speakerKey || 'Speaker'
-              const emotion = readText(line.emotion)
-              return `${speaker}: "${text}"${emotion ? ` (${emotion})` : ''}`
-            })
-            .filter(Boolean)
-            .join(' ')
-          return formatSeedanceShotLine({
-            shot,
-            startSeconds: localStartSeconds,
-            endSeconds: localEndSeconds,
-            dialogueLines,
-          })
-        }).join('\n')
-        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? 0) || Math.ceil(groupShots.length * 3)))
-        const prompt = buildCompactSeedanceVideoPrompt({
-          durationSeconds,
-          aspectRatio: readText(config.aspectRatio) || '16:9',
-          resolution: readText(config.resolution) || '720p',
-          referenceManifest: seedanceReferenceManifest,
-          referenceInstruction: seedanceStoryboardManifestInstruction(seedanceReferenceManifest),
-          directedControls,
-          shotSectionTitle: 'SHOTS',
-          shotLines: timelineLines,
-          identityGuide: characterVoiceGuide,
-          movementLogic: seedanceLabanMovementBlock(groupShots, input.run.prompt),
-          artifactBan: seedanceProductionBoardArtifactBan(seedanceReferenceManifest),
-          clipLabel: `storyboard group ${storyboardGroup?.index ?? 1}`,
-        })
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const outputs = {
-          prompt,
-          text: prompt,
-          shotPlan,
-          assetPack,
-          asset_pack: assetPack,
-          storyboardGroup,
-          primaryReferenceImage: upstreamImages[0] ?? null,
-          referenceImageCount: upstreamImages.length,
-          storyboardGroupReferenceKeys: readStringArray(assetPack.storyboardGroupReferenceKeys),
-          seedanceReferenceManifest,
-          directedControls,
-          durationSeconds,
-          guidance,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v3-storyboard-group-video-prompt-v1' }
-      }
-      if (purpose === 'cinematic_v2_video_prompt') {
-        const config = asRecord(input.node.config)
-        const shotId = readText(config.shotId)
-        const shotIndex = Number(config.shotIndex ?? 0) || 0
-        const shotPlan = cinematicV2ShotPlanSchema.parse(readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']))
-        const sceneState = readFirstUpstreamRecord(input.upstream, ['sceneState', 'scene_state'])
-        const layoutPlan = readFirstUpstreamRecord(input.upstream, ['layoutPlan', 'layout_plan'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const shot = shotPlan.shots.find((entry) => entry.id === shotId) ?? shotPlan.shots.find((entry) => entry.index === shotIndex) ?? shotPlan.shots[0]
-        const upstreamImages = readUpstreamImages(input.upstream)
-        const prompt = buildCinematicV2VideoPrompt({
-          shot,
-          sceneState,
-          layoutPlan,
-          assetPack,
-          aspectRatio: readText(config.aspectRatio) || '16:9',
-          resolution: readText(config.resolution) || '720p',
-          prompt: input.run.prompt,
-        })
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const outputs = {
-          prompt,
-          text: prompt,
-          shot,
-          sceneState,
-          layoutPlan,
-          assetPack,
-          primaryReferenceImage: upstreamImages[0] ?? null,
-          referenceImageCount: upstreamImages.length,
-          durationSeconds: shot.providerDurationSeconds,
-          guidance,
-          deterministic: true,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-cinematic-v2-video-prompt-v1' }
-      }
-      if (purpose === 'cinematic_v3_timeline_assemble') {
-        const config = asRecord(input.node.config)
-        const shotPlan = mergeCinematicV3ShotPlansForTimeline(collectCinematicV3ShotPlansFromUpstream(input.upstream))
-        const videos = collectCinematicV2ShotVideos(input.upstream)
-        const rawPanels = Object.values(input.upstream)
-          .flatMap((outputs) => {
-            const directPanels = Array.isArray(outputs.panels) ? outputs.panels.map(asRecord) : []
-            const images = Array.isArray(outputs.images) ? outputs.images.map(asRecord) : []
-            return [...directPanels, ...images].filter((entry) => (
-              readText(entry.assetKey)
-              && (
-                readText(entry.role) === 'cinematic_v3_storyboard_panel'
-                || readText(asRecord(entry.metadata).role) === 'cinematic_v3_storyboard_panel'
-                || readText(entry.shotId)
-              )
-            ))
-          })
-        const seenPanelKeys = new Set<string>()
-        const panels = rawPanels.filter((panel) => {
-          const key = readText(panel.assetKey) || `${readText(panel.storyboardGroupId)}:${readText(panel.shotId)}:${readText(panel.id)}`
-          if (!key || seenPanelKeys.has(key)) return false
-          seenPanelKeys.add(key)
-          return true
-        })
-        const videoPrompts = Object.entries(input.upstream)
-          .map(([nodeKey, outputs]) => {
-            const prompt = readText(outputs.prompt) || readText(outputs.text)
-            if (!prompt) return null
-            const storyboardGroup = asRecord(outputs.storyboardGroup)
-            return {
-              nodeKey,
-              prompt,
-              promptHash: hashOutputWorkflowValue(prompt),
-              storyboardGroupId: readText(outputs.storyboardGroupId) || readText(storyboardGroup.id),
-              storyboardGroupIndex: Number(storyboardGroup.index ?? 0) || null,
-              durationSeconds: Number(outputs.durationSeconds ?? 0) || null,
-              referenceImageCount: Number(outputs.referenceImageCount ?? 0) || 0,
-            }
-          })
-          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-        const timeline = buildCinematicV2Timeline({ shotPlan, videos })
-        if (!cinematicVideoApprovedEnabled(input.run)) {
-          const video = {
-            authoringOnly: true,
-            approvalRequired: true,
-            skippedReason: 'cinematic_video_approval_required',
-            provider: 'graphcore',
-            model: 'cinematic-v3-authoring-timeline-v1',
-            role: 'cinematic_v3_final_timeline',
-            sourceVideoCount: videos.length,
-            sourcePanelCount: panels.length,
-            videoPromptCount: videoPrompts.length,
-          }
-          const outputs = {
-            video,
-            videos,
-            shotPlan,
-            shot_plan: shotPlan,
-            panels,
-            videoPrompts,
-            timeline,
-            approvalRequired: true,
-            authoringReady: true,
-            skippedReason: 'cinematic_video_approval_required',
-            text: JSON.stringify({
-              timeline,
-              panelCount: panels.length,
-              videoPromptCount: videoPrompts.length,
-              approvalRequired: true,
-            }, null, 2),
-          }
-          return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'cinematic-v3-authoring-timeline-v1' }
-        }
-        if (videos.length === 0 && (debugSkipVideoGenerationEnabled(config, input.run) || upstreamHasDebugSkippedVideo(input.upstream))) {
-          const video = {
-            skipped: true,
-            debugSkipVideoGeneration: true,
-            skippedReason: 'debug_skip_video_generation',
-            provider: 'graphcore',
-            model: 'debug-skip-cinematic-v3-timeline-v1',
-            role: 'cinematic_v3_final_timeline',
-            sourceVideoCount: 0,
-          }
-          const outputs = { video, videos: [], shotPlan, shot_plan: shotPlan, timeline, debugSkipVideoGeneration: true, skippedReason: 'debug_skip_video_generation' }
-          return { status: 'skipped', inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'debug-skip-cinematic-v3-timeline-v1' }
-        }
-        const stitchResult = await stitchVideoBytes({ client: input.client, videos })
-        const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
-        const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.mp4`
-        await uploadBytes(input.client, storagePath, stitchResult.bytes, stitchResult.mimeType)
-        const metadata = {
-          generatedBy: 'output_workflow',
-          workflowId: input.workflow.id,
-          workflowKey: input.workflow.key,
-          runId: input.run.id,
-          nodeId: input.node.id,
-          nodeKey: input.node.key,
-          preset: input.run.preset,
-          provider: 'graphcore',
-          model: 'ffmpeg-cinematic-v3-timeline-assemble-v1',
-          role: 'cinematic_v3_final_timeline',
-          stitchMode: stitchResult.mode,
-          timeline,
-          sourceVideoAssetKeys: videos.map((video) => readText(video.assetKey)).filter(Boolean),
-          sourceVideoStoragePaths: videos.map((video) => readText(video.storagePath) || readText(video.storage_path)).filter(Boolean),
-          byteSize: stitchResult.bytes.byteLength,
-          storageBucket: 'project-assets',
-          storagePath,
-        }
-        const artifact = await registerVideoArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          assetKey,
-          storagePath,
-          name: input.node.label,
-          summary: 'Final Cinematics V3 storyboard-group sequence video.',
-          mimeType: stitchResult.mimeType,
-          metadata,
-        })
-        const video = {
-          assetKey,
-          storagePath,
-          mimeType: stitchResult.mimeType,
-          provider: 'graphcore',
-          model: 'ffmpeg-cinematic-v3-timeline-assemble-v1',
-          role: 'cinematic_v3_final_timeline',
-          sourceVideoCount: videos.length,
-          stitchMode: stitchResult.mode,
-        }
-        const outputs = { video, videos, shotPlan, shot_plan: shotPlan, timeline, artifact, assetKey, storagePath, mimeType: stitchResult.mimeType }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-cinematic-v3-timeline-assemble-v1' }
-      }
-      if (purpose === 'cinematic_v2_timeline_assemble') {
-        const config = asRecord(input.node.config)
-        const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
-        const videos = collectCinematicV2ShotVideos(input.upstream)
-        const timeline = buildCinematicV2Timeline({ shotPlan, videos })
-        if (!cinematicVideoApprovedEnabled(input.run)) {
-          const video = {
-            skipped: true,
-            approvalRequired: true,
-            skippedReason: 'cinematic_video_approval_required',
-            provider: 'graphcore',
-            model: 'cinematic-v2-timeline-approval-gate-v1',
-            role: 'cinematic_v2_final_timeline',
-            sourceVideoCount: videos.length,
-          }
-          const outputs = { video, videos, timeline, approvalRequired: true, skippedReason: 'cinematic_video_approval_required' }
-          return { status: 'skipped', inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'cinematic-v2-timeline-approval-gate-v1' }
-        }
-        if (videos.length === 0 && (debugSkipVideoGenerationEnabled(config, input.run) || upstreamHasDebugSkippedVideo(input.upstream))) {
-          const video = {
-            skipped: true,
-            debugSkipVideoGeneration: true,
-            skippedReason: 'debug_skip_video_generation',
-            provider: 'graphcore',
-            model: 'debug-skip-cinematic-v2-timeline-v1',
-            role: 'cinematic_v2_final_timeline',
-            sourceVideoCount: 0,
-          }
-          const outputs = { video, videos: [], timeline, debugSkipVideoGeneration: true, skippedReason: 'debug_skip_video_generation' }
-          return { status: 'skipped', inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'debug-skip-cinematic-v2-timeline-v1' }
-        }
-        const stitchResult = await stitchVideoBytes({ client: input.client, videos })
-        const assetKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}`
-        const storagePath = `generated/output-workflows/${input.run.projectId}/${input.run.id}/${slugify(input.node.key)}.mp4`
-        await uploadBytes(input.client, storagePath, stitchResult.bytes, stitchResult.mimeType)
-        const metadata = {
-          generatedBy: 'output_workflow',
-          workflowId: input.workflow.id,
-          workflowKey: input.workflow.key,
-          runId: input.run.id,
-          nodeId: input.node.id,
-          nodeKey: input.node.key,
-          preset: input.run.preset,
-          provider: 'graphcore',
-          model: 'ffmpeg-cinematic-v2-timeline-assemble-v1',
-          role: 'cinematic_v2_final_timeline',
-          stitchMode: stitchResult.mode,
-          timeline,
-          sourceVideoAssetKeys: videos.map((video) => readText(video.assetKey)).filter(Boolean),
-          sourceVideoStoragePaths: videos.map((video) => readText(video.storagePath) || readText(video.storage_path)).filter(Boolean),
-          byteSize: stitchResult.bytes.byteLength,
-          storageBucket: 'project-assets',
-          storagePath,
-        }
-        const artifact = await registerVideoArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          assetKey,
-          storagePath,
-          name: input.node.label,
-          summary: 'Final Cinematics V2 shot-orchestrated sequence video.',
-          mimeType: stitchResult.mimeType,
-          metadata,
-        })
-        const video = {
-          assetKey,
-          storagePath,
-          mimeType: stitchResult.mimeType,
-          provider: 'graphcore',
-          model: 'ffmpeg-cinematic-v2-timeline-assemble-v1',
-          role: 'cinematic_v2_final_timeline',
-          sourceVideoCount: videos.length,
-          stitchMode: stitchResult.mode,
-        }
-        const outputs = { video, videos, timeline, artifact, assetKey, storagePath, mimeType: stitchResult.mimeType }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'ffmpeg-cinematic-v2-timeline-assemble-v1' }
-      }
-      if (purpose === 'cinematic_sequence_compile') {
-        const config = asRecord(input.node.config)
-        const scriptDoc = readFirstUpstreamRecord(input.upstream, ['cinematicScriptDoc', 'scriptDoc'])
-        const directorScriptDoc = readFirstUpstreamRecord(input.upstream, ['directorScriptDoc', 'script'])
-        if (Object.keys(scriptDoc).length === 0) {
-          throw new Error('Cinematic sequence compile requires an authored cinematic script document.')
-        }
-        const compiled = compileCinematicScriptDocForOutput({
-          scriptDoc,
-          directorScriptDoc,
-          maxDynamicTakes: Number(config.maxDynamicTakes ?? 6) || 6,
-          maxTotalDurationSeconds: Number(config.maxTotalDurationSeconds ?? CINEMATIC_MAX_TOTAL_DURATION_SECONDS) || CINEMATIC_MAX_TOTAL_DURATION_SECONDS,
-        })
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const outputs = {
-          ...compiled,
-          guidance,
-          text: JSON.stringify({
-            dynamicTakeCount: compiled.dynamicTakeCount,
-            totalDurationSeconds: compiled.totalDurationSeconds,
-            diagnostics: compiled.diagnostics,
-          }, null, 2),
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-sequence-compile-v1',
-        }
-      }
-      if (purpose === 'cinematic_dynamic_take_fanout') {
-        const config = asRecord(input.node.config)
-        const compileOutputs = Object.values(input.upstream).find((outputs) => {
-          const record = asRecord(outputs)
-          return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
-        })
-        if (!compileOutputs) {
-          throw new Error('Cinematic dynamic fanout requires compiled take outputs.')
-        }
-        const result = await materializeDynamicCinematicTakeFanout({
-          client: input.client,
-          workflow: input.workflow,
-          compileOutputs: asRecord(compileOutputs),
-          config,
-        })
-        const outputs = {
-          dynamicGraphExpanded: result.expanded,
-          graphExpanded: result.expanded,
-          compileHash: result.compileHash,
-          dynamicTakeCount: result.takeCount,
-          text: result.expanded
-            ? `Materialized ${result.takeCount} cinematic take workflows.`
-            : `Cinematic take workflows already materialized for ${result.takeCount} takes.`,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-dynamic-take-fanout-v1',
-        }
-      }
-      if (purpose === 'cinematic_beat_sheet_prompt') {
-        const config = asRecord(input.node.config)
-        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
-          const compileOutputs = Object.values(input.upstream).find((outputs) => {
-            const record = asRecord(outputs)
-            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
-          })
-          if (!compileOutputs) throw new Error('Cinematic beat sheet prompt requires a block script or compiled take output.')
-          blockScript = buildTakeBlockScriptFromCompiledSequence({
-            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
-            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
-            takeId: readText(config.takeId),
-            takeIndex: Number(config.takeIndex ?? 0) || 0,
-            assetPack,
-          })
-        }
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
-        const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
-        const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(config, input.run)
-        const beatSheet = cinematicReferenceMode === 'shot_reference_sheet'
-          ? buildCinematicDirectionSheetPrompt({
-            blockScript,
-            assetPack,
-            aspectRatio,
-            prompt: input.run.prompt,
-            guidance,
-            debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
-            cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
-          })
-          : buildCinematicBeatSheetPrompt({
-            blockScript,
-            assetPack,
-            aspectRatio,
-            prompt: input.run.prompt,
-            guidance,
-            debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
-            cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
-          })
-        const outputs = {
-          prompt: beatSheet.prompt,
-          text: beatSheet.prompt,
-          blockScript,
-          assetPack,
-          beatSheetPlan: beatSheet.beatSheetPlan,
-          directionSheetPlan: 'directionSheetPlan' in beatSheet ? beatSheet.directionSheetPlan : null,
-          planningOnly: true,
-          planning_only: true,
-          referenceSheetKind: cinematicReferenceMode === 'shot_reference_sheet' ? 'shot_reference_sheet' : 'storyboard_sheet',
-          aspectRatio,
-          panelAspectRatio: aspectRatio,
-          imageSize: beatSheet.imageSize,
-          cinematicReferenceMode,
-          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
-          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
-          storyboardStyleSafeModeLabel: storyboardStylePolicy.label,
-          diagnostics: [
-            `Storyboard style safe mode: ${storyboardStylePolicy.label}.`,
-            cinematicReferenceMode === 'shot_reference_sheet'
-              ? 'Cinematic direction sheet reference mode: @Image1 will carry shot strip, floor map, camera layout, lighting/mood, hero frame, and continuity anchors.'
-              : 'Storyboard-grid reference mode: @Image1 will carry timed beat-sheet panels.',
-          ],
-          guidance,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-beat-sheet-prompt-v1',
-        }
-      }
-      if (purpose === 'cinematic_keyframe_prompt_pack') {
-        const config = asRecord(input.node.config)
-        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
-          const compileOutputs = Object.values(input.upstream).find((outputs) => {
-            const record = asRecord(outputs)
-            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
-          })
-          if (!compileOutputs) throw new Error('Cinematic keyframe prompt pack requires a block script or compiled take output.')
-          blockScript = buildTakeBlockScriptFromCompiledSequence({
-            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
-            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
-            takeId: readText(config.takeId),
-            takeIndex: Number(config.takeIndex ?? 0) || 0,
-            assetPack,
-          })
-        }
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
-        const keyframes = buildCinematicKeyframePromptPack({
-          blockScript,
-          assetPack,
-          aspectRatio,
-          prompt: input.run.prompt,
-          debugCinematicStoryboardStyleSafeMode: resolveCinematicStoryboardStylePolicy(config, input.run).safeMode,
-          cinematicStoryboardStyleOverride: resolveCinematicStoryboardStylePolicy(config, input.run).stylePrompt,
-        })
-        const outputs = {
-          prompt: keyframes.keyframePrompts[0]?.prompt ?? '',
-          text: keyframes.keyframePrompts.map((entry) => `${entry.referenceName} ${entry.label}\n${entry.prompt}`).join('\n\n'),
-          blockScript,
-          assetPack,
-          keyframePlan: keyframes.keyframePlan,
-          keyframePrompts: keyframes.keyframePrompts,
-          aspectRatio,
-          imageSize: keyframeImageSizeForAspectRatio(aspectRatio),
-          guidance,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-keyframe-prompt-pack-v1',
-        }
-      }
-      if (purpose === 'cinematic_storyboard_prompt') {
-        const config = asRecord(input.node.config)
-        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
-          const compileOutputs = Object.values(input.upstream).find((outputs) => {
-            const record = asRecord(outputs)
-            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
-          })
-          if (!compileOutputs) throw new Error('Cinematic storyboard prompt requires a block script or compiled take output.')
-          blockScript = buildTakeBlockScriptFromCompiledSequence({
-            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
-            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
-            takeId: readText(config.takeId),
-            takeIndex: Number(config.takeIndex ?? 0) || 0,
-            assetPack,
-          })
-        }
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const shots = Array.isArray(blockScript.shots) ? blockScript.shots.map(asRecord) : []
-        const aspectRatio = readText(config.aspectRatio) || readText(blockScript.aspectRatio) || '16:9'
-        const layout = storyboardLayoutForShotCount(shots.length || Number(config.panelCount ?? 0) || 1)
-        const imageSize = storyboardImageSizeForLayout({
-          columns: layout.columns,
-          rows: layout.rows,
-          aspectRatio,
-        })
-        const storyboardPrompt = buildCinematicStoryboardPrompt({
-          blockScript,
-          assetPack,
-          aspectRatio,
-          prompt: input.run.prompt,
-          guidance,
-          debugCinematicStoryboardStyleSafeMode: resolveCinematicStoryboardStylePolicy(config, input.run).safeMode,
-          cinematicStoryboardStyleOverride: resolveCinematicStoryboardStylePolicy(config, input.run).stylePrompt,
-        })
-        const outputs = {
-          prompt: storyboardPrompt,
-          text: storyboardPrompt,
-          blockScript,
-          assetPack,
-          storyboardLayout: layout,
-          gridDimension: Math.max(layout.columns, layout.rows),
-          gridColumns: layout.columns,
-          gridRows: layout.rows,
-          panelCount: layout.panelCount,
-          aspectRatio,
-          panelAspectRatio: aspectRatio,
-          imageSize,
-          guidance,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-storyboard-prompt-v2',
-        }
-      }
-      if (purpose === 'cinematic_video_prompt') {
-        const config = asRecord(input.node.config)
-        let blockScript = readFirstUpstreamRecord(input.upstream, ['blockScript', 'block_script', 'script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        if (!Array.isArray(blockScript.shots) || blockScript.shots.length === 0) {
-          const compileOutputs = Object.values(input.upstream).find((outputs) => {
-            const record = asRecord(outputs)
-            return Array.isArray(record.takePlan) && Object.keys(asRecord(record.compiledCinematicSequence)).length > 0
-          })
-          if (!compileOutputs) throw new Error('Cinematic video prompt requires a block script or compiled take output.')
-          blockScript = buildTakeBlockScriptFromCompiledSequence({
-            compiledCinematicSequence: asRecord(asRecord(compileOutputs).compiledCinematicSequence),
-            takePlan: Array.isArray(asRecord(compileOutputs).takePlan) ? asRecord(compileOutputs).takePlan.map(asRecord) : [],
-            takeId: readText(config.takeId),
-            takeIndex: Number(config.takeIndex ?? 0) || 0,
-            assetPack,
-          })
-        }
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
-        const storyboardStylePolicy = resolveCinematicStoryboardStylePolicy(config, input.run)
-        const upstreamImages = orderCinematicVideoReferenceImages(readUpstreamImages(input.upstream), cinematicReferenceMode)
-        const referenceImageCount = Math.min(9, upstreamImages.length)
-        const durationSeconds = Math.max(4, Math.min(15, Number(config.durationSeconds ?? blockScript.durationSeconds ?? 8) || 8))
-        const videoPrompt = buildCinematicVideoPrompt({
-          blockScript,
-          assetPack,
-          prompt: input.run.prompt,
-          guidance,
-          durationSeconds,
-          aspectRatio: readText(config.aspectRatio) || '16:9',
-          resolution: readText(config.resolution) || '720p',
-          generateAudio: config.generateAudio !== false,
-          referenceImageCount,
-          cinematicReferenceMode,
-          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
-          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
-        })
-        const outputs = {
-          prompt: videoPrompt,
-          text: videoPrompt,
-          blockScript,
-          assetPack,
-          durationSeconds,
-          referenceImageCount,
-          cinematicReferenceMode,
-          debugCinematicStoryboardStyleSafeMode: storyboardStylePolicy.safeMode,
-          cinematicStoryboardStyleOverride: storyboardStylePolicy.stylePrompt,
-          targetVideoStyle: inferCinematicTargetVideoStyle({
-            prompt: input.run.prompt,
-            truthSourceMode: readText(blockScript.truthSourceMode) || 'CINEMATIC SETUP',
-            blockScript,
-          }),
-          diagnostics: [`Storyboard style safe mode: ${storyboardStylePolicy.label}.`],
-          guidance,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-video-prompt-v1',
-        }
-      }
       if (purpose === 'video_stitch') {
         const config = asRecord(input.node.config)
         const videos = collectCinematicBlockVideos(input.upstream)
@@ -18391,38 +9629,6 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
           model: 'ffmpeg-video-stitch-v1',
         }
       }
-      if (purpose === 'comic_page_prompt') {
-        const config = asRecord(input.node.config)
-        const pageNumber = Math.max(1, Number(config.pageNumber ?? 1))
-        const pageCount = Math.max(1, Number(config.pageCount ?? 8))
-        const script = readFirstUpstreamRecord(input.upstream, ['script'])
-        const assetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const prompt = input.run.prompt
-        const scriptPage = comicScriptPage(script, pageNumber)
-        const pagePrompt = buildDeterministicComicPageImagePrompt({ script, assetPack, pageNumber, pageCount, prompt, guidance })
-        const pageAssetPack = filterComicAssetPackForPage(assetPack, scriptPage, 6)
-        const outputs = {
-          prompt: pagePrompt,
-          text: pagePrompt,
-          pageNumber,
-          pageCount,
-          scriptPage,
-          pageAssetPack,
-          page_asset_pack: pageAssetPack,
-          pageReferenceEntityKeys: readStringArray(pageAssetPack.pageReferenceEntityKeys),
-          assetPack,
-          guidance,
-          deterministic: true,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-comic-page-prompt-v1',
-        }
-      }
       if (purpose === 'single_chapter_assembly') {
         const config = asRecord(input.node.config)
         const chapterNumber = Number(config.chapterNumber ?? 9999)
@@ -18431,65 +9637,10 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
         const outputs = { markdown, text: markdown, chapterNumber, guidance }
         return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-single-chapter-assembly-v1' }
       }
-      if (purpose === 'chapter_assembly') {
-        const markdown = assembleChapterMarkdown(input.upstream)
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const outputs = { markdown, text: markdown, guidance }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-chapter-assembly-v1' }
-      }
-      if (purpose === 'bible_assembly') {
-        const config = asRecord(input.node.config)
-        const context = worldContextFromRunInput(input.run)
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const markdown = assembleBibleMarkdown({
-          context,
-          upstream: input.upstream,
-          configuredSections: configuredBibleSections(config),
-          outputKind: readText(config.outputKind),
-        })
-        const outputs = {
-          markdown,
-          text: markdown,
-          documentMode: readText(config.documentMode) || 'reference',
-          pageSize: readText(config.pageSize) || '',
-          imagePolicy: readText(config.imagePolicy) || '',
-          guidance,
-          sectionCount: configuredBibleSections(config).length,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-bible-assembly-v1' }
-      }
       const outputs = { output: input.upstream }
       return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-utility-v1' }
     }
     case 'document_render': {
-      const purpose = readText(asRecord(input.node.config).purpose)
-      if (purpose === 'comic_pdf_render') {
-        const script = readFirstUpstreamRecord(input.upstream, ['script'])
-        const markdown = readFirstUpstreamText(input.upstream, ['markdown', 'text'])
-        const guidance = readUpstreamGuidanceBundle(input.upstream)
-        const comicPages = collectComicPageImages(input.upstream)
-        const context = worldContextFromRunInput(input.run)
-        const renderMetadata = {
-          renderer: 'graphcore-comic-pdf-v1',
-          pageSize: '6.625in x 10.25in',
-          pageCount: comicPages.length,
-          scriptCharacterCount: markdown.length,
-          sequenceUnitKey: readStringArray(input.run.input.sourceSequenceUnitKeys)[0] ?? '',
-          title: readText(script.title) || titleFromContext(context),
-        }
-        const outputs = {
-          markdown,
-          text: markdown,
-          script,
-          comicPages,
-          pageImages: comicPages,
-          mimeType: 'application/pdf',
-          fileName: `${slugify(input.workflow.name)}.pdf`,
-          renderMetadata,
-          guidance,
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-comic-document-render-v1' }
-      }
       const markdown = readFirstUpstreamText(input.upstream)
       const config = asRecord(input.node.config)
       const guidance = readUpstreamGuidanceBundle(input.upstream)
@@ -18527,141 +9678,6 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
     }
     case 'output_artifact': {
       const purpose = readText(asRecord(input.node.config).purpose)
-      if (purpose === 'cinematic_video_artifact') {
-        const video = readFirstUpstreamRecord(input.upstream, ['video'])
-        const artifact = readFirstUpstreamRecord(input.upstream, ['artifact'])
-        if (video.authoringOnly === true || (video.approvalRequired === true && readText(video.role) === 'cinematic_v3_final_timeline')) {
-          const timeline = readFirstUpstreamRecord(input.upstream, ['timeline'])
-          const shotPlan = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
-          const panels = readFirstUpstreamArray(input.upstream, ['panels'])
-          const videoPrompts = readFirstUpstreamArray(input.upstream, ['videoPrompts', 'video_prompts'])
-          const artifactKey = `output.${slugify(input.workflow.name)}.${input.run.id.slice(0, 8)}.${slugify(input.node.key)}.authoring`
-          const authoringArtifact = await registerOtherOutputArtifact({
-            client: input.client,
-            run: input.run,
-            workflow: input.workflow,
-            node: input.node,
-            key: artifactKey,
-            name: `${input.node.label} Authoring Timeline`,
-            summary: 'Cinematics V3 storyboard authoring timeline with panel crops and video prompts; video generation is approval-gated.',
-            metadata: {
-              generatedBy: 'output_workflow',
-              workflowId: input.workflow.id,
-              workflowKey: input.workflow.key,
-              runId: input.run.id,
-              nodeId: input.node.id,
-              nodeKey: input.node.key,
-              preset: input.run.preset,
-              provider: 'graphcore',
-              model: 'cinematic-v3-authoring-artifact-v1',
-              role: 'cinematic_v3_authoring_timeline',
-              timeline,
-              shotPlan,
-              panelAssetKeys: panels.map((panel) => readText(panel.assetKey)).filter(Boolean),
-              panelCount: panels.length,
-              videoPromptCount: videoPrompts.length,
-              videoPrompts: videoPrompts.map((prompt) => ({
-                nodeKey: readText(prompt.nodeKey),
-                storyboardGroupId: readText(prompt.storyboardGroupId),
-                storyboardGroupIndex: Number(prompt.storyboardGroupIndex ?? 0) || null,
-                durationSeconds: Number(prompt.durationSeconds ?? 0) || null,
-                promptHash: readText(prompt.promptHash),
-              })),
-              approvalRequired: true,
-            },
-          })
-          const outputs = {
-            artifactKey: authoringArtifact.key,
-            assetKey: '',
-            artifact: authoringArtifact,
-            artifacts: [authoringArtifact],
-            video,
-            timeline,
-            shotPlan,
-            panels,
-            videoPrompts,
-            approvalRequired: true,
-            authoringReady: true,
-          }
-          return {
-            inputHash: input.inputHash,
-            outputHash: hashOutputWorkflowValue(outputs),
-            outputs,
-            provider: 'graphcore',
-            model: 'cinematic-v3-authoring-artifact-v1',
-          }
-        }
-        if (
-          video.debugSkipVideoGeneration === true
-          || video.skippedReason === 'debug_skip_video_generation'
-          || video.skippedReason === 'cinematic_video_approval_required'
-        ) {
-          const skippedReason = readText(video.skippedReason) || 'debug_skip_video_generation'
-          const outputs = {
-            artifactKey: '',
-            assetKey: '',
-            artifact: {},
-            artifacts: [],
-            video,
-            debugSkipVideoGeneration: video.debugSkipVideoGeneration === true,
-            approvalRequired: video.skippedReason === 'cinematic_video_approval_required',
-            skippedReason,
-          }
-          return {
-            status: 'skipped',
-            inputHash: input.inputHash,
-            outputHash: hashOutputWorkflowValue(outputs),
-            outputs,
-            provider: 'graphcore',
-            model: skippedReason === 'cinematic_video_approval_required'
-              ? 'cinematic-v2-artifact-approval-gate-v1'
-              : 'debug-skip-cinematic-video-artifact-v1',
-          }
-        }
-        const assetKey = readText(video.assetKey) || readText(artifact.assetKey)
-        if (!assetKey) throw new Error('Cinematic video artifact requires a stitched video input.')
-        const outputs = {
-          artifactKey: readText(artifact.key),
-          assetKey,
-          artifact,
-          artifacts: Object.keys(artifact).length > 0 ? [artifact] : [],
-          video,
-        }
-        return {
-          inputHash: input.inputHash,
-          outputHash: hashOutputWorkflowValue(outputs),
-          outputs,
-          provider: 'graphcore',
-          model: 'deterministic-cinematic-video-artifact-v1',
-        }
-      }
-      if (input.run.preset === 'comic_issue_from_sequence' || purpose === 'comic_artifact') {
-        const script = readFirstUpstreamRecord(input.upstream, ['script'])
-        const markdown = readFirstUpstreamText(input.upstream, ['markdown', 'text'])
-        const comicPages = collectComicPageImages(input.upstream)
-        if (comicPages.length === 0) throw new Error('Comic PDF artifact requires generated comic page images.')
-        const artifact = await registerComicArtifact({
-          client: input.client,
-          run: input.run,
-          workflow: input.workflow,
-          node: input.node,
-          comicPages,
-          scriptMarkdown: markdown,
-          script,
-          documentRenderer: input.documentRenderer,
-        })
-        const outputs = {
-          artifactKey: artifact.pdfArtifact.key,
-          assetKey: artifact.pdfArtifact.assetKey,
-          scriptArtifactKey: artifact.scriptArtifact.key,
-          scriptAssetKey: artifact.scriptArtifact.assetKey,
-          artifact: artifact.pdfArtifact,
-          artifacts: [artifact.pdfArtifact, artifact.scriptArtifact],
-          renderMetadata: artifact.renderMetadata,
-          pageAssetKeys: comicPages.map((page) => readText(page.assetKey)).filter(Boolean),
-        }
-        return { inputHash: input.inputHash, outputHash: hashOutputWorkflowValue(outputs), outputs, provider: 'graphcore', model: 'deterministic-comic-artifact-v1' }
-      }
       const markdown = readFirstUpstreamText(input.upstream)
       const guidance = readUpstreamGuidanceBundle(input.upstream)
       const coverImage = readFirstUpstreamImage(input.upstream, ['coverImage', 'image'])
@@ -18675,7 +9691,7 @@ async function executeNode(input: OutputWorkflowNodeExecutionContext): Promise<O
         coverImage,
         documentMode: readText(asRecord(input.node.config).documentMode) === 'designed_reference'
           ? 'designed_reference'
-          : input.run.preset === 'story_bible_from_world' || purpose === 'story_bible_artifact'
+          : input.run.preset === 'story_bible_from_world'
             ? 'reference'
             : 'ebook',
         documentRenderer: input.documentRenderer,
@@ -19758,10 +10774,28 @@ let defaultOutputWorkflowNodeHandlersRegistered = false
 function assertNoImplicitMonolithWorkflowNodeHandlers() {
   const explicitlyRegisteredHandlerKeys = new Set([
     ...legacyMonolithWorkflowNodeHandlerKeys,
+    ...cinematicTextWorkflowNodeHandlerKeys,
+    ...cinematicAuthoringWorkflowNodeHandlerKeys,
+    ...cinematicPlanningWorkflowNodeHandlerKeys,
+    ...cinematicReferenceWorkflowNodeHandlerKeys,
+    ...cinematicParseWorkflowNodeHandlerKeys,
+    ...cinematicFanoutWorkflowNodeHandlerKeys,
     ...workflowMediaNodeHandlerKeys,
+    ...imagePromptWorkflowNodeHandlerKeys,
+    ...comicWorkflowNodeHandlerKeys,
+    ...documentWorkflowNodeHandlerKeys,
     ...workflowUtilityNodeHandlerKeys,
     ...sceneBoardWorkflowNodeHandlerKeys,
-    ...sequenceAnimaticWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticPlanningWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticArtifactWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticCoverageWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticContinuityGraphWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticShotProductionWorkflowNodeHandlerKeys,
+    ...sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys,
   ])
   const implicit = outputWorkflowNodeManifests
     .filter((manifest) => manifest.executable)
@@ -19789,6 +10823,125 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
       readText,
       readStringArray,
       hashOutputWorkflowValue,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerCinematicTextWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readStringArray,
+      readFirstUpstreamRecord,
+      readFirstUpstreamArray,
+      readUpstreamImages,
+      readUpstreamGuidanceBundle,
+      worldContextFromRunInput: (run) => worldContextFromRunInput(run as never),
+      resolveGuidanceForExecution: (context) => resolveGuidanceForExecution(context as never) as never,
+      guidanceMarkdown: (bundle) => guidanceMarkdown(bundle as never),
+      compactForPrompt,
+      slugify,
+      titleFromRefLike,
+      hashOutputWorkflowValue,
+      buildTakeBlockScriptFromCompiledSequence: (input) => buildTakeBlockScriptFromCompiledSequence(input as never) as never,
+      normalizeCinematicReferenceMode,
+      resolveCinematicStoryboardStylePolicy: (config, run) => resolveCinematicStoryboardStylePolicy(config as never, run as never),
+      buildCinematicBeatSheetPrompt: (input) => buildCinematicBeatSheetPrompt(input as never),
+      buildCinematicDirectionSheetPrompt: (input) => buildCinematicDirectionSheetPrompt(input as never),
+      buildCinematicKeyframePromptPack: (input) => buildCinematicKeyframePromptPack(input as never) as never,
+      keyframeImageSizeForAspectRatio,
+      orderCinematicVideoReferenceImages: (images, cinematicReferenceMode) => orderCinematicVideoReferenceImages(images as never, cinematicReferenceMode),
+      buildCinematicVideoPrompt: (input) => buildCinematicVideoPrompt(input as never),
+      inferCinematicTargetVideoStyle: (input) => inferCinematicTargetVideoStyle(input as never),
+      buildFallbackCinematicV2ScreenplayDraft: (input) => buildFallbackCinematicV2ScreenplayDraft(input as never) as never,
+      buildSelectedSequenceUnitScreenplayBrief: (context) => buildSelectedSequenceUnitScreenplayBrief(context as never),
+      runCinematicV2ScreenplayAuthor: (input) => runCinematicV2ScreenplayAuthor(input as never) as never,
+      runCinematicSimpleTextPrompt: (input) => runCinematicSimpleTextPrompt(input as never),
+      runCinematicStructuredJson: async (nodeInput) => {
+        const policy = resolveOutputTextModelPolicy(nodeInput.taskClass as never)
+        const response = await runOpenAiResponses({
+          model: policy.model,
+          reasoning: reasoningPayloadFor(policy),
+          instructions: nodeInput.instructions,
+          input: nodeInput.prompt,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: nodeInput.schemaName,
+              schema: nodeInput.schema,
+              strict: true,
+            },
+          },
+          maxOutputTokens: nodeInput.maxOutputTokens,
+          metadata: {
+            graphcore_task: nodeInput.task,
+            graphcore_node_key: nodeInput.nodeKey,
+          },
+          timeoutMs: nodeInput.timeoutMs,
+        })
+        return {
+          responseOk: response.response.ok,
+          outputText: response.outputText,
+          body: response.body,
+          status: String(response.response.status ?? ''),
+          model: policy.model,
+          providerRequestId: readText(asRecord(response.body).id) || response.response.headers.get('x-request-id') || null,
+        }
+      },
+      parseJsonObject: (text) => parseJsonObject(text) as never,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerCinematicAuthoringWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readFirstUpstreamRecord: (upstream, fields) => readFirstUpstreamRecord(upstream as never, fields) as never,
+      readFirstUpstreamArray: (upstream, fields) => readFirstUpstreamArray(upstream as never, fields) as never,
+      readFirstUpstreamImage: (upstream, fields) => readFirstUpstreamImage(upstream as never, fields) as never,
+      slugify,
+      hashOutputWorkflowValue,
+      downloadProjectAssetBytes: (client, storagePath) => downloadProjectAssetBytes(client as never, storagePath),
+      downloadRemoteBytes,
+      uploadBytes: (client, storagePath, bytes, mimeType) => uploadBytes(client as never, storagePath, bytes, mimeType),
+      runFfmpeg,
+      probeImageSize,
+      stitchVideoBytes: (input) => stitchVideoBytes(input as never) as never,
+      registerImageArtifact: (input) => registerImageArtifact(input as never),
+      registerVideoArtifact: (input) => registerVideoArtifact(input as never),
+      registerOtherArtifact: (input) => registerOtherOutputArtifact(input as never),
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerCinematicPlanningWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readStringArray,
+      readFirstUpstreamRecord: (upstream, fields) => readFirstUpstreamRecord(upstream as never, fields),
+      guidanceMarkdown: (bundle) => guidanceMarkdown(bundle as never),
+      compactForPrompt,
+      hashOutputWorkflowValue,
+      buildFallbackCinematicV2SceneState: (input) => buildFallbackCinematicV2SceneState(input as never) as never,
+      buildFallbackCinematicV2LayoutPlan: (input) => buildFallbackCinematicV2LayoutPlan(input as never) as never,
+      buildFallbackCinematicV2ShotPlan: (input) => buildFallbackCinematicV2ShotPlan(input as never) as never,
+      runStructuredNode: (input) => runCinematicV2StructuredNode({
+        nodeKey: input.nodeKey,
+        schemaName: input.schemaName,
+        schema: input.schema as never,
+        instructions: input.instructions,
+        prompt: input.prompt,
+        fallback: input.fallback,
+        maxOutputTokens: input.maxOutputTokens,
+      }) as never,
+      providerSafeCinematicV2DurationSeconds,
+      validateCinematicV2ShotPlanReferences: (input) => validateCinematicV2ShotPlanReferences(input as never),
+      cinematicV2ReferenceIds: (assetPack, context) => cinematicV2ReferenceIds(assetPack as never, context as never),
     },
     register: (handlerKey, handler) => {
       registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
@@ -19833,14 +10986,195 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
       registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
     },
   })
+  registerCinematicReferenceWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readFirstUpstreamRecord: (upstream, fields) => readFirstUpstreamRecord(upstream as never, fields),
+      resolveGuidanceForExecution: (context) => resolveGuidanceForExecution(context as never) as never,
+      guidanceMarkdown: (bundle) => guidanceMarkdown(bundle as never),
+      compactForPrompt,
+      hashOutputWorkflowValue,
+      buildDeterministicCinematicAssetPack: (context) => buildDeterministicCinematicAssetPack(context as never) as never,
+      buildFallbackCinematicV2ReferencePlan: (assetPack, maxReferenceCount) => buildFallbackCinematicV2ReferencePlan(assetPack as never, maxReferenceCount),
+      runCinematicV2ReferenceSelector: (input) => runCinematicV2StructuredNode({
+        nodeKey: input.nodeKey,
+        schemaName: input.schemaName,
+        schema: cinematicV2ReferencePlanSchema,
+        instructions: input.instructions,
+        prompt: input.prompt,
+        fallback: input.fallback,
+        maxOutputTokens: input.maxOutputTokens,
+      }) as never,
+      sanitizeCinematicV2ReferencePlan: (plan, assetPack, maxReferenceCount) => sanitizeCinematicV2ReferencePlan(plan, assetPack as never, maxReferenceCount) as never,
+      strengthenCinematicReferencePlanWithVariantMatches: (plan, assetPack, prompt, maxReferenceCount) => strengthenCinematicReferencePlanWithVariantMatches(plan, assetPack as never, prompt, maxReferenceCount) as never,
+      referencePlanKeys,
+      filterCinematicAssetPack: (assetPack, selectedKeys, maxEntityCount, maxAssetKeysPerEntity) => filterCinematicAssetPack(assetPack as never, selectedKeys, maxEntityCount, maxAssetKeysPerEntity) as never,
+      cinematicAssetPackEntityKeys: (assetPack) => cinematicAssetPackEntityKeys(assetPack as never),
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerCinematicParseWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readFirstUpstreamRecord: (upstream, fields) => readFirstUpstreamRecord(upstream as never, fields),
+      guidanceMarkdown: (bundle) => guidanceMarkdown(bundle as never),
+      compactForPrompt,
+      hashOutputWorkflowValue,
+      buildFallbackCinematicV2ParsedScript: (input) => buildFallbackCinematicV2ParsedScript(input as never) as never,
+      buildFallbackCinematicV2SceneState: (input) => buildFallbackCinematicV2SceneState(input as never) as never,
+      buildFallbackCinematicV2ShotPlan: (input) => buildFallbackCinematicV2ShotPlan(input as never) as never,
+      buildCinematicV3ShotPlanFromVisualScript: (input) => buildCinematicV3ShotPlanFromVisualScript(input as never) as never,
+      deriveCinematicV2MaxShotCount,
+      runCinematicV2ScriptParse: (input) => runCinematicV2StructuredNode({
+        nodeKey: input.nodeKey,
+        schemaName: input.schemaName,
+        schema: cinematicV2ParsedScriptSchema,
+        instructions: input.instructions,
+        prompt: input.prompt,
+        fallback: input.fallback,
+        maxOutputTokens: input.maxOutputTokens,
+      }) as never,
+      runCinematicV3ShotParseGroup: (input) => runCinematicV2StructuredNodeBackground({
+        nodeKey: input.nodeKey,
+        schemaName: input.schemaName,
+        schema: cinematicV2ShotPlanSchema,
+        instructions: input.instructions,
+        prompt: input.prompt,
+        fallback: input.fallback,
+        maxOutputTokens: input.maxOutputTokens,
+        priorProviderRequestId: input.priorProviderRequestId,
+        shouldCancel: input.shouldCancel,
+        onProgress: input.onProgress,
+      }) as never,
+      providerSafeCinematicV2DurationSeconds,
+      repairCinematicV2ShotPlanVisualReferences: (input) => repairCinematicV2ShotPlanVisualReferences(input as never) as never,
+      validateCinematicV2ShotPlanReferences: (input) => validateCinematicV2ShotPlanReferences(input as never),
+      cinematicV2ReferenceIds: (assetPack, context) => cinematicV2ReferenceIds(assetPack as never, context as never),
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerCinematicFanoutWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readFirstUpstreamRecord: (upstream, fields) => readFirstUpstreamRecord(upstream as never, fields),
+      readUpstreamGuidanceBundle: (upstream) => readUpstreamGuidanceBundle(upstream as never),
+      hashOutputWorkflowValue,
+      compileCinematicScriptDocForOutput: (input) => compileCinematicScriptDocForOutput(input as never) as never,
+      materializeDynamicCinematicV2ShotFanout: (input) => materializeDynamicCinematicV2ShotFanout(input as never) as never,
+      materializeDynamicCinematicTakeFanout: (input) => materializeDynamicCinematicTakeFanout(input as never) as never,
+      materializeDynamicCinematicV3StoryboardFanout: (input) => materializeDynamicCinematicV3StoryboardFanout(input as never) as never,
+      materializeDynamicCinematicV3ShotParseFanout: (input) => materializeDynamicCinematicV3ShotParseFanout(input as never) as never,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
   registerWorkflowMediaNodePack({
     runtime: mediaRuntime,
     register: (handlerKey, handler) => {
       registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
     },
   })
-  registerSequenceAnimaticWorkflowNodePack({
+  registerImagePromptWorkflowNodePack({
     helpers: {
+      asRecord,
+      readText,
+      readStringArray,
+      readFirstUpstreamRecord: (upstream, fields) => readFirstUpstreamRecord(upstream as never, fields),
+      titleFromContext: (context) => titleFromContext(context as never),
+      resolveGuidanceForExecution: (context) => resolveGuidanceForExecution(context as never),
+      hashOutputWorkflowValue,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerDocumentWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readFirstUpstreamArray: (upstream, fields) => readFirstUpstreamArray(upstream as never, fields),
+      readFirstUpstreamText: (upstream, fields) => readFirstUpstreamText(upstream as never, fields),
+      readFirstUpstreamImage: (upstream, fields) => readFirstUpstreamImage(upstream as never, fields),
+      readUpstreamGuidanceBundle: (upstream) => readUpstreamGuidanceBundle(upstream as never),
+      resolveGuidanceForExecution: (context) => resolveGuidanceForExecution(context as never) as never,
+      worldContextFromRunInput: (run) => worldContextFromRunInput(run as never),
+      titleFromContext: (context) => titleFromContext(context as never),
+      outlineFromContext: (context) => outlineFromContext(context as never) as never,
+      buildChapterPlan: (context, outline) => buildChapterPlan(context as never, outline as never) as never,
+      buildBibleSectionPlan: (config, context) => buildBibleSectionPlan(config as never, context as never) as never,
+      buildBibleSectionInstruction: (input) => buildBibleSectionInstruction(input as never),
+      configuredBibleSections: (config) => configuredBibleSections(config as never),
+      assembleBibleMarkdown: (input) => assembleBibleMarkdown(input as never),
+      buildChapterProsePrompt: (input) => buildChapterProsePrompt(input as never),
+      buildEbookCoverPromptInstruction: (input) => buildEbookCoverPromptInstruction(input as never),
+      addFrontBackMatter: (context, markdown) => addFrontBackMatter(context as never, markdown),
+      editMarkdown,
+      assembleChapterMarkdown: (upstream) => assembleChapterMarkdown(upstream as never),
+      generateBackgroundMarkdown: (input) => generateBackgroundMarkdown(input as never) as never,
+      runOpenAiResponses: (input) => runOpenAiResponses(input as never) as never,
+      outputWorkflowTextModel,
+      openAiErrorMessage: (response, fallback) => openAiErrorMessage(response as never, fallback),
+      registerDocumentArtifact: (input) => registerDocumentArtifact(input as never) as never,
+      slugify,
+      hashOutputWorkflowValue,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerComicWorkflowNodePack({
+    helpers: {
+      asRecord,
+      readText,
+      readStringArray,
+      readFirstUpstreamRecord: (upstream, fields) => readFirstUpstreamRecord(upstream as never, fields),
+      readFirstUpstreamText: (upstream, fields) => readFirstUpstreamText(upstream as never, fields),
+      readUpstreamGuidanceBundle: (upstream) => readUpstreamGuidanceBundle(upstream as never),
+      resolveGuidanceForExecution: (context) => resolveGuidanceForExecution(context as never) as never,
+      worldContextFromRunInput: (run) => worldContextFromRunInput(run as never),
+      titleFromContext: (context) => titleFromContext(context as never),
+      buildDeterministicComicAssetPack: (context) => buildDeterministicComicAssetPack(context as never) as never,
+      mergeComicSelectedEntitiesWithFallback: (selected, fallbackPack) => mergeComicSelectedEntitiesWithFallback(selected as never, fallbackPack as never) as never,
+      buildComicEntitySelectorInstruction: (input) => buildComicEntitySelectorInstruction(input as never),
+      buildComicSceneScriptInstruction: (input) => buildComicSceneScriptInstruction(input as never),
+      buildComicPagePlanInstruction: (input) => buildComicPagePlanInstruction(input as never),
+      buildComicScriptInstruction: (input) => buildComicScriptInstruction(input as never),
+      buildComicScriptRepairInstruction: (input) => buildComicScriptRepairInstruction(input as never),
+      runOpenAiResponses: (input) => runOpenAiResponses(input as never) as never,
+      outputWorkflowTextModel,
+      outputWorkflowComicTextModel,
+      openAiErrorMessage: (response, fallback) => openAiErrorMessage(response as never, fallback),
+      parseJsonObject: (text) => parseJsonObject(text) as never,
+      comicSceneScriptJsonSchema: comicSceneScriptJsonSchema as never,
+      comicPagePlanJsonSchema: comicPagePlanJsonSchema as never,
+      comicScriptJsonSchema: comicScriptJsonSchema as never,
+      comicSceneScriptMarkdown: (sceneScript) => comicSceneScriptMarkdown(sceneScript as never),
+      comicPagePlanMarkdown: (pagePlan) => comicPagePlanMarkdown(pagePlan as never),
+      validateComicPagePlan: (pagePlan, input) => validateComicPagePlan(pagePlan as never, input),
+      normalizeComicScript: (raw, input) => normalizeComicScript(raw as never, input as never) as never,
+      validateComicScript: (script, input) => validateComicScript(script as never, input),
+      comicScriptMarkdown: (script) => comicScriptMarkdown(script as never),
+      comicScriptPage: (script, pageNumber) => comicScriptPage(script as never, pageNumber) as never,
+      buildDeterministicComicPageImagePrompt: (input) => buildDeterministicComicPageImagePrompt(input as never),
+      filterComicAssetPackForPage: (assetPack, page, limit) => filterComicAssetPackForPage(assetPack as never, page as never, limit) as never,
+      collectComicPageImages: (upstream) => collectComicPageImages(upstream as never) as never,
+      registerComicArtifact: (input) => registerComicArtifact(input as never) as never,
+      slugify,
+      hashOutputWorkflowValue,
+    },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  const sequenceAnimaticNodePackHelpers: SequenceAnimaticWorkflowNodePackHelpers = {
       asRecord,
       readText,
       readArray,
@@ -19853,40 +11187,14 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
       slugify,
       titleFromRefLike,
       hashOutputWorkflowValue,
+      sequenceAnimaticShotRefs,
+      sequenceAnimaticShotBindingFromSceneBinding,
       coverageAnchorMode: SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE,
-      buildCinematicV3StoryboardGroupAssetPack,
-      scopeAssetPackToReferenceAssetKeys,
-      orderSequenceAnimaticAssetPackReferences,
-      sequenceAnimaticReferenceManifestEntries,
-      sequenceAnimaticReferenceManifestText,
-      sequenceAnimaticReferenceRole,
-      sequenceAnimaticReferenceName,
-      sequenceAnimaticReferenceVisual,
       compactStoryboardSentence,
       compactForPrompt,
       compactSequenceAnimaticText,
       outputWorkflowTextModel,
-      cinematicAssetPackEntityKeys,
-      buildSequenceAnimaticReferenceCatalog: (input) => buildSequenceAnimaticReferenceCatalog(input as never) as never,
-      parseSequenceAnimaticShotPlan: (value) => sequenceAnimaticShotPlanSchema.parse(value) as never,
-      safeParseSequenceAnimaticShotPlan: (value) => {
-        const parsed = sequenceAnimaticShotPlanSchema.safeParse(value)
-        return parsed.success ? { success: true, data: parsed.data as never } : { success: false }
-      },
-      buildCinematicV3StoryboardLayout,
-      buildCinematicV3ShotBreakPlan: (input) => buildCinematicV3ShotBreakPlan(input as never) as never,
-      deriveCinematicV2MaxShotCount,
-      buildSequenceAnimaticScriptShotProjection: (shotBreakPlan) => buildSequenceAnimaticScriptShotProjection(shotBreakPlan as never) as never,
-      buildSequenceAnimaticShotPlanFromBreaks: (input) => buildSequenceAnimaticShotPlanFromBreaks(input as never) as never,
-      buildCinematicV3StoryboardGroupFromShotBreakGroup: (group, index) => buildCinematicV3StoryboardGroupFromShotBreakGroup(group as never, index) as never,
-      collectCinematicV3ShotPlansFromUpstream: (upstream) => collectCinematicV3ShotPlansFromUpstream(upstream) as never,
-      mergeCinematicV3ShotPlansForTimeline: (plans) => mergeCinematicV3ShotPlansForTimeline(plans as never) as never,
-      repairCinematicV2ShotPlanVisualReferences: (input) => repairCinematicV2ShotPlanVisualReferences(input as never) as never,
-      parseSequenceAnimaticScenePackageOutput: (value) => sequenceAnimaticScenePackageOutputSchema.parse(value) as never,
-      safeParseSequenceAnimaticTaggedScenePackage: (value) => {
-        const parsed = sequenceAnimaticTaggedScenePackageSchema.safeParse(value)
-        return parsed.success ? { success: true, data: parsed.data as never } : { success: false }
-      },
+      outputWorkflowContinuityPlannerTimeoutMs,
       loadWorkflowNodes: async (input) => {
         const response = await input.client
           .from('output_workflow_nodes')
@@ -19918,8 +11226,6 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
       dynamicNodeRow: (input) => dynamicNodeRow(input as never) as never,
       dynamicEdgeRow: (input) => dynamicEdgeRow(input as never) as never,
       persistDynamicWorkflowGraphRevision: persistDynamicWorkflowGraphRevision as never,
-      buildSequenceAnimaticScenePackageFromTaggedScreenplay: (input) => buildSequenceAnimaticScenePackageFromTaggedScreenplay(input as never) as never,
-      buildFallbackSequenceAnimaticSceneGraphAssignment: (scenePackage) => buildFallbackSequenceAnimaticSceneGraphAssignment(scenePackage as never) as never,
       runSequenceAnimaticSceneGraphAssignmentProvider: async (input) => {
         const result = await runCinematicV2StructuredNodeBackground({
           nodeKey: input.nodeKey,
@@ -19939,7 +11245,6 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
           fallbackReason: result.fallbackReason,
         }
       },
-      mergeSequenceAnimaticSceneGraphAssignment: (input) => mergeSequenceAnimaticSceneGraphAssignment(input as never) as never,
       insertSequenceAnimaticEvent: insertSequenceAnimaticEvent as never,
       runSequenceAnimaticShotContinuityPlanStreamWithRetry: (input) => runSequenceAnimaticShotContinuityPlanStreamWithRetryRuntime(input as never, {
         asRecord,
@@ -19955,7 +11260,7 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
         openAiErrorMessage: (response, fallback) => openAiErrorMessage(response as never, fallback),
         parseSequenceAnimaticStreamRecord: (recordText) => parseSequenceAnimaticStreamRecord(recordText) as never,
         createSequenceAnimaticShotContinuityStreamAccumulator,
-        applySequenceAnimaticShotContinuityStreamRecord: (accumulator, record) => applySequenceAnimaticShotContinuityStreamRecord(accumulator as never, record as never, sequenceAnimaticShotContinuityPlanRuntimeHelpers),
+        applySequenceAnimaticShotContinuityStreamRecord: (accumulator, record) => applySequenceAnimaticShotContinuityStreamRecord(accumulator as never, record as never),
         finalizeSequenceAnimaticShotContinuityStreamPlan: (accumulator) => finalizeSequenceAnimaticShotContinuityStreamPlan(accumulator as never) as never,
         isOpenAiTruncationError,
         isRetryableOpenAiStreamError,
@@ -19971,14 +11276,8 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
         maxDialogueLines: sequenceAnimaticShotContinuityMaxDialogueLines,
         maxDialogueCharacters: sequenceAnimaticShotContinuityMaxDialogueCharacters,
       },
-      sequenceAnimaticStableHash,
-      sequenceAnimaticGraphSpecVersion,
       readScreenplayAnimaticRoleFromMetadata,
       readScreenplayAnimaticSourceFromMetadata,
-      sequenceAnimaticBlocksFromManifestAndDirectorPlan: (manifest, directorPlan) => sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest as never, directorPlan as never) as never,
-      sequenceAnimaticContinuityAssetBatches: (input) => sequenceAnimaticContinuityAssetBatches(input as never) as never,
-      sequenceAnimaticContinuityVisualDependencyEdges: (graphInput) => sequenceAnimaticContinuityVisualDependencyEdges(graphInput) as never,
-      sequenceAnimaticStoryboardImageSize,
       loadMasterRequestForWorkflow: async (input) => {
         const client = input.client as DatabaseClient
         const response = await client
@@ -20026,74 +11325,16 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
         const response = await client.rpc('refresh_output_request_status_projection', { p_request_id: input.requestId })
         if (response.error) throw new Error(response.error.message)
       },
-      parseSequenceAnimaticShotContinuityPlanV2: (value) => sequenceAnimaticShotContinuityPlanV2Schema.parse(value) as never,
-      sequenceAnimaticUniqueTexts,
-      mergeById: (records) => mergeById(records as never) as never,
-      sequenceAnimaticReferenceCatalog: (input) => sequenceAnimaticReferenceCatalog(input as never) as never,
-      buildSequenceAnimaticContinuityPlannerContext: (input) => buildSequenceAnimaticContinuityPlannerContext(input as never) as never,
-      normalizeSequenceAnimaticDirectorPlan: (input) => normalizeSequenceAnimaticDirectorPlan({
-        ...(input as never),
-        helpers: sequenceAnimaticDirectorPlanRuntimeHelpers,
-      }) as never,
-      sequenceAnimaticEmptyGraphV2: (context) => sequenceAnimaticEmptyGraphV2(context as never) as never,
-      parseSequenceAnimaticGraphV2: (value) => parseSequenceAnimaticGraphV2(value) as never,
-      sequenceAnimaticGlobalStoryboardBlock: (continuityPlannerContext) => sequenceAnimaticGlobalStoryboardBlock(continuityPlannerContext as never) as never,
-      sequenceAnimaticBlockShots: (context, block) => sequenceAnimaticBlockShots(context as never, block as never) as never,
-      emptySequenceAnimaticContinuityBlockDelta: (blockId, warning) => emptySequenceAnimaticContinuityBlockDelta(blockId, warning) as never,
-      sequenceAnimaticContinuityBlockDeltaSchema: sequenceAnimaticContinuityBlockDeltaSchema as never,
-      parseSequenceAnimaticContinuityBlockDelta: (value) => sequenceAnimaticContinuityBlockDeltaSchema.parse(value) as never,
-      repairSequenceAnimaticContinuityBlockDelta: (input) => repairSequenceAnimaticContinuityBlockDelta(input as never) as never,
-      mergeSequenceAnimaticContinuityGraphV2: (input) => {
-        const rawInput = asRecord(input)
-        const continuityPlannerContext = asRecord(rawInput.continuityPlannerContext)
-        const graph = Object.keys(continuityPlannerContext).length > 0
-          ? sanitizeSequenceAnimaticContinuityGraphCanonicalAnchors({
-            graph: parseSequenceAnimaticGraphV2(rawInput.graph),
-            continuityPlannerContext,
-          })
-          : parseSequenceAnimaticGraphV2(rawInput.graph)
-        return mergeSequenceAnimaticContinuityGraphV2({
-          ...rawInput,
-          graph,
-          delta: sequenceAnimaticContinuityBlockDeltaSchema.parse(rawInput.delta),
-          continuityPlannerContext,
-        } as never) as never
-      },
-      finalizeSequenceAnimaticContinuityGraphV2: (graphInput) => finalizeSequenceAnimaticContinuityGraphV2(graphInput) as never,
-      sequenceAnimaticContinuityCoverage: (graphInput, continuityPlannerContext, blockStates) => sequenceAnimaticContinuityCoverage(graphInput, continuityPlannerContext as never, blockStates as never) as never,
-      continuityBlockNodeSuffix,
-      previousContinuityGraphNodeKeys,
       outputWorkflowContinuityBlockPlannerTimeoutMs,
-      sequenceAnimaticContinuityBlockStatesFromGraph: (graphInput, options) => sequenceAnimaticContinuityBlockStatesFromGraph(graphInput, options as never) as never,
-      sequenceAnimaticSeededBlockStatesFromCoverage: (graphInput, continuityPlannerContext, previousBlockStates) => sequenceAnimaticSeededBlockStatesFromCoverage(graphInput, continuityPlannerContext as never, previousBlockStates as never) as never,
-      sequenceAnimaticContinuityGraphStatusFromBlockStates: (blockStates) => sequenceAnimaticContinuityGraphStatusFromBlockStates(blockStates),
-      withSequenceAnimaticContinuityAssetState: (pack, graphInput) => withSequenceAnimaticContinuityAssetState(pack as never, graphInput) as never,
       persistSequenceAnimaticContinuityRequestState: persistSequenceAnimaticContinuityRequestState as never,
-      planSequenceAnimaticShotRevision,
       executeImageGeneration: (context) => mediaRuntime.executeImageGeneration(context as never) as never,
       executeVideoGeneration: (context) => mediaRuntime.executeVideoGeneration(context as never) as never,
       cinematicEntityByKey: (assetPack) => cinematicEntityByKey(assetPack),
-      inferSequenceShotVideoTiming: inferSequenceShotVideoTiming as never,
-      buildSeedanceReferenceManifest: buildSeedanceReferenceManifest as never,
-      seedanceReferenceRecordsFromImages: seedanceReferenceRecordsFromImages as never,
-      seedanceReferenceRecordsFromAssetPack: seedanceReferenceRecordsFromAssetPack as never,
-      buildSeedanceCharacterVoiceGuide: (input) => buildSeedanceCharacterVoiceGuide(input as never),
-      formatSeedanceShotLine: (input) => formatSeedanceShotLine(input as never),
-      compactSeedanceControlText,
-      buildCompactSeedanceVideoPrompt: (input) => buildCompactSeedanceVideoPrompt(input as never),
-      seedanceLabanMovementBlock,
-      seedanceProductionBoardArtifactBan: seedanceProductionBoardArtifactBan as never,
       readUpstreamGuidanceBundle,
       sequenceAnimaticContinuityAssetStateParse: (value) => sequenceAnimaticContinuityAssetStateSchema.parse(value),
       sequenceAnimaticContinuityAssetTargetInputHash,
       sequenceAnimaticAssetGenerationStatus,
       outputArtifactSelect,
-      buildSequenceAnimaticContinuityAssetPrompt: (input) => buildSequenceAnimaticContinuityAssetPrompt(input as never) as never,
-      buildSequenceAnimaticContinuityBatchPrompt: (input) => buildSequenceAnimaticContinuityBatchPrompt(input as never) as never,
-      planSequenceAnimaticContinuityAnchors: (input) => planSequenceAnimaticContinuityAnchors(input as never) as never,
-      sequenceAnimaticAtlasLayout,
-      sequenceAnimaticAtlasImageSize,
-      buildSequenceAnimaticAnchorAtlasPrompt: (input) => buildSequenceAnimaticAnchorAtlasPrompt(input as never),
       registerOtherOutputArtifact: registerOtherOutputArtifact as never,
       registerImageArtifact: registerImageArtifact as never,
       downloadProjectAssetBytes: downloadProjectAssetBytes as never,
@@ -20110,7 +11351,63 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
       registerVideoArtifact: registerVideoArtifact as never,
       runStructuredNode: runCinematicV2StructuredNode,
       runBackgroundStructuredNode: runCinematicV2StructuredNodeBackground,
+  }
+  registerSequenceAnimaticPlanningWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
     },
+  })
+  registerSequenceAnimaticSceneLifecycleWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticArtifactWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticCoverageWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticContinuityAnchorWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticContinuityAssetWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticContinuityGraphWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticShotReferenceWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticShotProductionWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerSequenceAnimaticShotRevisionWorkflowNodePack({
+    helpers: sequenceAnimaticNodePackHelpers,
     register: (handlerKey, handler) => {
       registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
     },

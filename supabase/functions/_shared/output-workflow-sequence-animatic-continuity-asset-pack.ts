@@ -1,9 +1,25 @@
+import {
+  createWorkflowNodeExtensionScaffold,
+  workflowNodeManifestToContract,
+  type WorkflowNodeExtensionScaffold,
+  type WorkflowNodeRuntimeKind,
+} from '../../../src/domain/outputWorkflowManifests.ts'
+import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import type {
   SequenceAnimaticNodeExecutionContext,
   SequenceAnimaticNodeExecutionResult,
   SequenceAnimaticWorkflowNodePackHelpers,
 } from './output-workflow-sequence-animatic-node-pack-types.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
+import {
+  buildSequenceAnimaticContinuityAssetPrompt,
+  buildSequenceAnimaticContinuityBatchPrompt,
+} from './output-workflow-sequence-animatic-continuity-asset-runtime.ts'
+import {
+  scopeAssetPackToReferenceAssetKeys,
+  sequenceAnimaticReferenceRole,
+} from './output-workflow-sequence-animatic-reference-runtime.ts'
 
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
@@ -118,7 +134,7 @@ export async function sequenceAnimaticContinuityBatchPrompt(
     'location_zone_board',
   ].includes(batchKind)
   const scopedAssetPack = spatialBatch
-    ? helpers.scopeAssetPackToReferenceAssetKeys({
+    ? scopeAssetPackToReferenceAssetKeys({
       assetPack,
       referenceAssetKeys,
       fallbackEntities: [],
@@ -128,7 +144,7 @@ export async function sequenceAnimaticContinuityBatchPrompt(
     : assetPack
   const fallbackTargetNodes = helpers.readArray(config.targetNodes).map(helpers.asRecord)
   const effectiveTargetNodes = targetNodes.length > 0 ? targetNodes : fallbackTargetNodes
-  const promptResult = helpers.buildSequenceAnimaticContinuityBatchPrompt({
+  const promptResult = buildSequenceAnimaticContinuityBatchPrompt({
     batch: effectiveBatch,
     targetNodes: effectiveTargetNodes,
     relevantShots,
@@ -318,7 +334,7 @@ export async function sequenceAnimaticContinuityAssetPrompt(
   const assetKind = helpers.readText(config.assetKind) || helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset'
   const spatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
   const scopedAssetPack = spatialAsset
-    ? helpers.scopeAssetPackToReferenceAssetKeys({
+    ? scopeAssetPackToReferenceAssetKeys({
       assetPack,
       referenceAssetKeys,
       fallbackEntities: [],
@@ -329,7 +345,7 @@ export async function sequenceAnimaticContinuityAssetPrompt(
   const effectiveTargetNode = visualBriefOverride
     ? { ...targetNode, visualBrief: visualBriefOverride, summary: visualBriefOverride }
     : targetNode
-  const promptResult = helpers.buildSequenceAnimaticContinuityAssetPrompt({
+  const promptResult = buildSequenceAnimaticContinuityAssetPrompt({
     targetNode: effectiveTargetNode,
     assetKind,
     generationPolicy: helpers.readText(config.generationPolicy),
@@ -381,7 +397,7 @@ export async function sequenceAnimaticContinuityAssetArtifact(
   if (!assetKey) throw new Error('Continuity asset image did not produce an asset key.')
   const referenceAssetKeys = helpers.readStringArray(config.referenceAssetKeys)
   const assetKind = helpers.readText(config.assetKind) || helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset'
-  const referenceRole = helpers.sequenceAnimaticReferenceRole({
+  const referenceRole = sequenceAnimaticReferenceRole({
     role: assetKind,
     type: assetKind,
     name: helpers.readText(targetNode.name) || helpers.readText(targetNode.title),
@@ -631,4 +647,185 @@ export async function sequenceAnimaticContinuityBatchArtifact(
     authoringReady: true,
   }
   return result({ context, helpers, outputs, model: 'sequence-animatic-continuity-batch-artifact-v1' })
+}
+
+const sequenceAnimaticContinuityAssetHandlers = {
+  sequence_animatic_continuity_asset_input: sequenceAnimaticContinuityAssetInput,
+  sequence_animatic_continuity_batch_input: sequenceAnimaticContinuityBatchInput,
+  sequence_animatic_continuity_batch_prompt: sequenceAnimaticContinuityBatchPrompt,
+  sequence_animatic_continuity_batch_extract: sequenceAnimaticContinuityBatchExtract,
+  sequence_animatic_continuity_asset_prompt: sequenceAnimaticContinuityAssetPrompt,
+  sequence_animatic_continuity_asset_artifact: sequenceAnimaticContinuityAssetArtifact,
+  sequence_animatic_continuity_batch_artifact: sequenceAnimaticContinuityBatchArtifact,
+}
+
+const sequenceAnimaticContinuityAssetWorkflowNodePackKey = 'sequence_animatic_continuity_asset'
+
+export const sequenceAnimaticContinuityAssetWorkflowNodePack = defineWorkflowNodePack<
+  SequenceAnimaticNodeExecutionContext,
+  SequenceAnimaticNodeExecutionResult,
+  SequenceAnimaticWorkflowNodePackHelpers,
+  typeof sequenceAnimaticContinuityAssetHandlers
+>({
+  packKey: sequenceAnimaticContinuityAssetWorkflowNodePackKey,
+  handlers: sequenceAnimaticContinuityAssetHandlers,
+})
+
+export const sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys = sequenceAnimaticContinuityAssetWorkflowNodePack.handlerKeys
+
+function createSequenceAnimaticContinuityAssetNodeScaffold(input: {
+  purpose: keyof typeof sequenceAnimaticContinuityAssetHandlers
+  runtimeKind: WorkflowNodeRuntimeKind
+  sourceHashKeys: string[]
+  projectionMetadataKeys?: string[]
+}): WorkflowNodeExtensionScaffold {
+  const manifest = outputWorkflowNodeManifestsByPurpose.get(input.purpose)
+  if (!manifest) throw new Error(`Sequence animatic continuity asset workflow node scaffold missing registered manifest: ${input.purpose}`)
+  return createWorkflowNodeExtensionScaffold({
+    ...workflowNodeManifestToContract(manifest),
+    nodeType: manifest.nodeType,
+    handlerKey: manifest.handlerKey,
+    packKey: sequenceAnimaticContinuityAssetWorkflowNodePackKey,
+    runtimeKind: input.runtimeKind,
+    sourceHashKeys: input.sourceHashKeys,
+    projectionMetadataKeys: input.projectionMetadataKeys,
+    inputSchema: manifest.inputSchema,
+    outputSchema: manifest.outputSchema,
+    configSchema: manifest.configSchema,
+    executable: manifest.executable,
+    executionPolicy: manifest.executionPolicy,
+    retryPolicy: manifest.retryPolicy,
+    cachePolicy: {
+      ...manifest.cachePolicy,
+      sourceHashKeys: manifest.cachePolicy.sourceHashKeys.length > 0
+        ? manifest.cachePolicy.sourceHashKeys
+        : input.sourceHashKeys,
+    },
+    cancellationPolicy: manifest.cancellationPolicy,
+    streamingPolicy: manifest.streamingPolicy,
+  })
+}
+
+const continuityAssetProjectionMetadataKeys = [
+  'activeManifestPurpose',
+  'activeProgressLabel',
+  'readyArtifactCount',
+  'scopedAssetKeys',
+  'recoveryHints',
+]
+
+export const sequenceAnimaticContinuityAssetWorkflowNodeScaffolds = [
+  createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_asset_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.targetNode',
+      'config.continuityPack',
+      'config.relevantShots',
+      'config.shotBindings',
+      'config.assetPack',
+      'config.referenceAssetKeys',
+      'config.masterRequestId',
+      'config.assetInputHash',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_batch_input',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.batch',
+      'config.targetNodes',
+      'config.relevantShots',
+      'config.shotBindings',
+      'config.assetPack',
+      'config.referenceAssetKeys',
+      'config.masterRequestId',
+      'config.continuityBatchId',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_batch_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.batch',
+      'upstream.targetNodes',
+      'upstream.relevantShots',
+      'upstream.assetPack',
+      'upstream.referenceAssetKeys',
+      'config.batch',
+      'config.targetNodes',
+      'config.assetPack',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_batch_extract',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.batch',
+      'upstream.targetNodes',
+      'upstream.image',
+      'config.batch',
+      'config.masterRequestId',
+      'config.continuityBatchId',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_asset_prompt',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.targetNode',
+      'upstream.relevantShots',
+      'upstream.assetPack',
+      'upstream.referenceAssetKeys',
+      'config.targetNode',
+      'config.assetPack',
+      'config.masterRequestId',
+      'config.assetInputHash',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_asset_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.targetNode',
+      'upstream.image',
+      'upstream.prompt',
+      'config.targetNode',
+      'config.assetInputHash',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_batch_artifact',
+    runtimeKind: 'artifact_registration',
+    sourceHashKeys: [
+      'upstream.batch',
+      'upstream.assetStateByNodeId',
+      'upstream.assets',
+      'upstream.prompt',
+      'config.batch',
+      'config.continuityBatchId',
+      'config.masterRequestId',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+]
+
+export const sequenceAnimaticContinuityAssetWorkflowNodeScaffoldHandlerKeys = sequenceAnimaticContinuityAssetWorkflowNodeScaffolds.map((scaffold) => scaffold.handlerKey)
+
+export function registerSequenceAnimaticContinuityAssetWorkflowNodePack(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  register: (handlerKey: string, handler: (context: SequenceAnimaticNodeExecutionContext) => Promise<SequenceAnimaticNodeExecutionResult>) => void
+}) {
+  sequenceAnimaticContinuityAssetWorkflowNodePack.register({
+    dependencies: input.helpers,
+    register: input.register,
+  })
 }

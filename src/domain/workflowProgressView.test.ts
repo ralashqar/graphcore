@@ -33,18 +33,120 @@ import {
   sceneBoardWorkflowNodeScaffolds,
 } from '../../supabase/functions/_shared/output-workflow-scene-board-pack.ts'
 import {
-  sequenceAnimaticWorkflowNodeHandlerKeys,
-  sequenceAnimaticWorkflowNodePack,
-  sequenceAnimaticWorkflowNodeScaffoldHandlerKeys,
-  sequenceAnimaticWorkflowNodeScaffolds,
-} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-pack.ts'
+  sequenceAnimaticPlanningWorkflowNodeHandlerKeys,
+  sequenceAnimaticPlanningWorkflowNodePack,
+  sequenceAnimaticPlanningWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticPlanningWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-planning-pack.ts'
+import {
+  sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys,
+  sequenceAnimaticSceneLifecycleWorkflowNodePack,
+  sequenceAnimaticSceneLifecycleWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticSceneLifecycleWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-scene-lifecycle-pack.ts'
+import {
+  sequenceAnimaticArtifactWorkflowNodeHandlerKeys,
+  sequenceAnimaticArtifactWorkflowNodePack,
+  sequenceAnimaticArtifactWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticArtifactWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-artifact-pack.ts'
+import {
+  sequenceAnimaticCoverageWorkflowNodeHandlerKeys,
+  sequenceAnimaticCoverageWorkflowNodePack,
+  sequenceAnimaticCoverageWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticCoverageWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-coverage-pack.ts'
+import {
+  sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys,
+  sequenceAnimaticContinuityAnchorWorkflowNodePack,
+  sequenceAnimaticContinuityAnchorWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-continuity-anchor-pack.ts'
+import {
+  sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys,
+  sequenceAnimaticContinuityAssetWorkflowNodePack,
+  sequenceAnimaticContinuityAssetWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticContinuityAssetWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-continuity-asset-pack.ts'
+import {
+  sequenceAnimaticContinuityGraphWorkflowNodeHandlerKeys,
+  sequenceAnimaticContinuityGraphWorkflowNodePack,
+  sequenceAnimaticContinuityGraphWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticContinuityGraphWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-continuity-graph-pack.ts'
+import {
+  sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys,
+  sequenceAnimaticShotReferenceWorkflowNodePack,
+  sequenceAnimaticShotReferenceWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticShotReferenceWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-shot-reference-pack.ts'
+import {
+  sequenceAnimaticShotProductionWorkflowNodeHandlerKeys,
+  sequenceAnimaticShotProductionWorkflowNodePack,
+  sequenceAnimaticShotProductionWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticShotProductionWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-shot-production-pack.ts'
+import {
+  sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys,
+  sequenceAnimaticShotRevisionWorkflowNodePack,
+  sequenceAnimaticShotRevisionWorkflowNodeScaffoldHandlerKeys,
+  sequenceAnimaticShotRevisionWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-shot-revision-pack.ts'
 import { workflowMediaNodeHandlerKeys, workflowMediaNodePack } from '../../supabase/functions/_shared/output-workflow-media-pack.ts'
+import {
+  imagePromptWorkflowNodeHandlerKeys,
+  imagePromptWorkflowNodePack,
+} from '../../supabase/functions/_shared/output-workflow-image-prompt-pack.ts'
+import {
+  comicWorkflowNodeHandlerKeys,
+  comicWorkflowNodePack,
+} from '../../supabase/functions/_shared/output-workflow-comic-pack.ts'
+import {
+  documentWorkflowNodeHandlerKeys,
+  documentWorkflowNodePack,
+} from '../../supabase/functions/_shared/output-workflow-document-pack.ts'
 import { workflowUtilityNodeHandlerKeys, workflowUtilityNodePack } from '../../supabase/functions/_shared/output-workflow-utility-pack.ts'
 import {
   assertLegacyMonolithWorkflowNodeHandlerDebtIsTracked,
   legacyMonolithWorkflowNodeHandlerKeys,
   legacyMonolithWorkflowNodeHandlerRecords,
 } from '../../supabase/functions/_shared/output-workflow-legacy-handlers.ts'
+import {
+  cinematicTextWorkflowNodeHandlerKeys,
+  cinematicTextWorkflowNodePack,
+  cinematicTextWorkflowNodeScaffoldHandlerKeys,
+  cinematicTextWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-cinematic-text-pack.ts'
+import {
+  cinematicAuthoringWorkflowNodeHandlerKeys,
+  cinematicAuthoringWorkflowNodePack,
+  cinematicAuthoringWorkflowNodeScaffoldHandlerKeys,
+  cinematicAuthoringWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-cinematic-authoring-pack.ts'
+import {
+  cinematicPlanningWorkflowNodeHandlerKeys,
+  cinematicPlanningWorkflowNodePack,
+  cinematicPlanningWorkflowNodeScaffoldHandlerKeys,
+  cinematicPlanningWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-cinematic-planning-pack.ts'
+import {
+  cinematicReferenceWorkflowNodeHandlerKeys,
+  cinematicReferenceWorkflowNodePack,
+  cinematicReferenceWorkflowNodeScaffoldHandlerKeys,
+  cinematicReferenceWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-cinematic-reference-pack.ts'
+import {
+  cinematicParseWorkflowNodeHandlerKeys,
+  cinematicParseWorkflowNodePack,
+  cinematicParseWorkflowNodeScaffoldHandlerKeys,
+  cinematicParseWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-cinematic-parse-pack.ts'
+import {
+  cinematicFanoutWorkflowNodeHandlerKeys,
+  cinematicFanoutWorkflowNodePack,
+  cinematicFanoutWorkflowNodeScaffoldHandlerKeys,
+  cinematicFanoutWorkflowNodeScaffolds,
+} from '../../supabase/functions/_shared/output-workflow-cinematic-fanout-pack.ts'
 
 test('buildWorkflowProgressViewModel derives active runtime state from projection metadata', () => {
   const model = buildWorkflowProgressViewModel({
@@ -733,6 +835,65 @@ test('workflow node pack definitions bind handlers through one reusable registra
 })
 
 test('scene board media utility and sequence animatic node packs expose registered handler keys', () => {
+  assert.equal(cinematicTextWorkflowNodePack.packKey, 'output_workflow_cinematic_text')
+  assert.deepEqual(cinematicTextWorkflowNodeHandlerKeys, [
+    'cinematic_atlas_prompt',
+    'cinematic_v2_screenplay_author',
+    'cinematic_v3_screenplay_author',
+    'cinematic_script_authoring',
+    'cinematic_sequence_plan',
+    'cinematic_block_script',
+    'cinematic_storyboard_prompt',
+    'cinematic_v2_storyboard_prompt',
+    'cinematic_v2_keyframe_prompt',
+    'cinematic_v2_video_prompt',
+    'cinematic_beat_sheet_prompt',
+    'cinematic_keyframe_prompt_pack',
+    'cinematic_video_prompt',
+    'cinematic_v3_storyboard_prompt',
+    'cinematic_v3_storyboard_group_video_prompt',
+  ])
+  assert.equal(cinematicAuthoringWorkflowNodePack.packKey, 'output_workflow_cinematic_authoring')
+  assert.deepEqual(cinematicAuthoringWorkflowNodeHandlerKeys, [
+    'cinematic_v2_panel_extract',
+    'cinematic_v2_keyframe_qa',
+    'cinematic_v2_shot_keyframe_passthrough',
+    'cinematic_v2_timeline_assemble',
+    'cinematic_v3_panel_extract',
+    'cinematic_v3_timeline_assemble',
+    'cinematic_video_artifact',
+  ])
+  assert.equal(cinematicPlanningWorkflowNodePack.packKey, 'output_workflow_cinematic_planning')
+  assert.deepEqual(cinematicPlanningWorkflowNodeHandlerKeys, [
+    'cinematic_v2_scene_compile',
+    'cinematic_v2_layout_plan',
+    'cinematic_v2_shot_plan',
+    'cinematic_v3_shot_break_plan',
+    'cinematic_v3_shot_plan_merge',
+    'cinematic_v2_storyboard_group_plan',
+    'cinematic_v3_storyboard_group_plan',
+  ])
+  assert.equal(cinematicReferenceWorkflowNodePack.packKey, 'output_workflow_cinematic_reference')
+  assert.deepEqual(cinematicReferenceWorkflowNodeHandlerKeys, [
+    'cinematic_entity_selector',
+    'cinematic_v2_reference_select',
+    'cinematic_v2_shot_asset_pack',
+    'cinematic_v3_reference_select',
+  ])
+  assert.equal(cinematicParseWorkflowNodePack.packKey, 'output_workflow_cinematic_parse')
+  assert.deepEqual(cinematicParseWorkflowNodeHandlerKeys, [
+    'cinematic_v2_script_parse',
+    'cinematic_v3_shot_parse',
+    'cinematic_v3_shot_parse_group',
+  ])
+  assert.equal(cinematicFanoutWorkflowNodePack.packKey, 'output_workflow_cinematic_fanout')
+  assert.deepEqual(cinematicFanoutWorkflowNodeHandlerKeys, [
+    'cinematic_sequence_compile',
+    'cinematic_v2_dynamic_shot_fanout',
+    'cinematic_dynamic_take_fanout',
+    'cinematic_v3_dynamic_shot_parse_fanout',
+    'cinematic_v3_dynamic_storyboard_fanout',
+  ])
   assert.deepEqual(sceneBoardWorkflowNodeHandlerKeys, [
     'sequence_animatic_scene_board_scope_input',
     'sequence_animatic_scene_board_required_ref_plan',
@@ -775,24 +936,63 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_prop_anchor_atlas',
     'sequence_animatic_zone_coverage_board_image',
   ])
-  assert.deepEqual(sequenceAnimaticWorkflowNodeHandlerKeys, [
-    'sequence_animatic_shot_input',
-    'sequence_animatic_shared_asset_ref',
-    'sequence_animatic_shot_reference_pack',
+  assert.deepEqual(imagePromptWorkflowNodeHandlerKeys, [
+    'concept_art_prompt',
+    'image_reference_selector',
+    'poster_prompt',
+  ])
+  assert.deepEqual(documentWorkflowNodeHandlerKeys, [
+    'bible_assembly',
+    'bible_section',
+    'bible_section_plan',
+    'chapter_assembly',
+    'chapter_plan',
+    'chapter_prose',
+    'ebook_cover_prompt',
+    'front_back_matter',
+    'outline',
+    'story_bible_artifact',
+    'story_bible_document_render',
+  ])
+  assert.deepEqual(comicWorkflowNodeHandlerKeys, [
+    'comic_artifact',
+    'comic_entity_selector',
+    'comic_page_plan',
+    'comic_page_prompt',
+    'comic_pdf_render',
+    'comic_scene_script',
+    'comic_script',
+  ])
+  assert.deepEqual(sequenceAnimaticPlanningWorkflowNodeHandlerKeys, [
     'sequence_animatic_block_input',
-    'sequence_animatic_block_artifact',
     'sequence_animatic_scene_plan_fanout',
     'sequence_animatic_scene_package',
     'sequence_animatic_scene_graph_assignment',
     'sequence_animatic_scene_shot_plan',
     'sequence_animatic_director_plan',
-    'sequence_animatic_scene_input',
-    'sequence_animatic_scene_register',
     'sequence_animatic_orchestrator',
     'sequence_animatic_scene_plan_merge',
     'sequence_animatic_manifest',
+  ])
+  assert.deepEqual(sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys, [
+    'sequence_animatic_scene_input',
+    'sequence_animatic_scene_register',
+  ])
+  assert.deepEqual(sequenceAnimaticArtifactWorkflowNodeHandlerKeys, [
+    'sequence_animatic_block_artifact',
     'sequence_animatic_manifest_artifact',
     'sequence_animatic_director_plan_artifact',
+  ])
+  assert.deepEqual(sequenceAnimaticShotProductionWorkflowNodeHandlerKeys, [
+    'sequence_animatic_planned_keyframe_prompt',
+    'sequence_animatic_planned_keyframe_input',
+    'sequence_animatic_planned_keyframe_image',
+    'sequence_animatic_planned_keyframe_artifact',
+    'sequence_animatic_shot_video_prompt',
+    'sequence_animatic_shot_video',
+    'sequence_animatic_shot_video_artifact',
+  ])
+  assert.deepEqual(sequenceAnimaticCoverageWorkflowNodeHandlerKeys, [
     'sequence_animatic_coverage_plan',
     'sequence_animatic_coverage_intent_input',
     'sequence_animatic_coverage_intent_plan',
@@ -801,7 +1001,8 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_coverage_anchor_brief',
     'sequence_animatic_coverage_anchor_prompt',
     'sequence_animatic_coverage_anchor_artifact',
-    'sequence_animatic_continuity_input',
+  ])
+  assert.deepEqual(sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys, [
     'sequence_animatic_continuity_anchor_plan',
     'sequence_animatic_character_anchor_atlas_prompt',
     'sequence_animatic_prop_anchor_atlas_prompt',
@@ -809,6 +1010,18 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_character_anchor_extract',
     'sequence_animatic_prop_anchor_extract',
     'sequence_animatic_location_anchor_extract',
+  ])
+  assert.deepEqual(sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys, [
+    'sequence_animatic_continuity_asset_input',
+    'sequence_animatic_continuity_batch_input',
+    'sequence_animatic_continuity_batch_prompt',
+    'sequence_animatic_continuity_batch_extract',
+    'sequence_animatic_continuity_asset_prompt',
+    'sequence_animatic_continuity_asset_artifact',
+    'sequence_animatic_continuity_batch_artifact',
+  ])
+  assert.deepEqual(sequenceAnimaticContinuityGraphWorkflowNodeHandlerKeys, [
+    'sequence_animatic_continuity_input',
     'sequence_animatic_continuity_seed_graph',
     'sequence_animatic_continuity_global_plan',
     'sequence_animatic_continuity_global_merge',
@@ -816,21 +1029,14 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_continuity_block_merge',
     'sequence_animatic_continuity_graph_finalize',
     'sequence_animatic_continuity_structure_artifact',
-    'sequence_animatic_continuity_asset_input',
-    'sequence_animatic_continuity_batch_input',
-    'sequence_animatic_continuity_batch_prompt',
-    'sequence_animatic_continuity_batch_extract',
-    'sequence_animatic_continuity_asset_prompt',
-    'sequence_animatic_continuity_asset_artifact',
     'sequence_animatic_continuity_artifact',
-    'sequence_animatic_continuity_batch_artifact',
-    'sequence_animatic_planned_keyframe_prompt',
-    'sequence_animatic_planned_keyframe_input',
-    'sequence_animatic_planned_keyframe_image',
-    'sequence_animatic_planned_keyframe_artifact',
-    'sequence_animatic_shot_video_prompt',
-    'sequence_animatic_shot_video',
-    'sequence_animatic_shot_video_artifact',
+  ])
+  assert.deepEqual(sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys, [
+    'sequence_animatic_shot_input',
+    'sequence_animatic_shared_asset_ref',
+    'sequence_animatic_shot_reference_pack',
+  ])
+  assert.deepEqual(sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys, [
     'sequence_animatic_shot_revision_input',
     'sequence_animatic_shot_revision_plan',
     'sequence_animatic_shot_keyframe_prompt',
@@ -848,14 +1054,151 @@ test('scene board media utility and sequence animatic node packs expose register
     expectedPurposes: workflowUtilityNodeHandlerKeys,
   }))
   assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: cinematicTextWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: [
+      'cinematic_atlas_prompt',
+      'cinematic_v2_screenplay_author',
+      'cinematic_v3_screenplay_author',
+      'cinematic_script_authoring',
+      'cinematic_sequence_plan',
+      'cinematic_block_script',
+      'cinematic_storyboard_prompt',
+      'cinematic_v2_storyboard_prompt',
+      'cinematic_v2_keyframe_prompt',
+      'cinematic_v2_video_prompt',
+      'cinematic_beat_sheet_prompt',
+      'cinematic_keyframe_prompt_pack',
+      'cinematic_video_prompt',
+      'cinematic_v3_storyboard_prompt',
+      'cinematic_v3_storyboard_group_video_prompt',
+    ],
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: cinematicAuthoringWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: [
+      'cinematic_v2_panel_extract',
+      'cinematic_v2_keyframe_qa',
+      'cinematic_v2_shot_keyframe_passthrough',
+      'cinematic_v2_timeline_assemble',
+      'cinematic_v3_panel_extract',
+      'cinematic_v3_timeline_assemble',
+      'cinematic_video_artifact',
+    ],
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: cinematicPlanningWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: [
+      'cinematic_v2_scene_compile',
+      'cinematic_v2_layout_plan',
+      'cinematic_v2_shot_plan',
+      'cinematic_v3_shot_break_plan',
+      'cinematic_v3_shot_plan_merge',
+      'cinematic_v2_storyboard_group_plan',
+      'cinematic_v3_storyboard_group_plan',
+    ],
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: cinematicReferenceWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: [
+      'cinematic_entity_selector',
+      'cinematic_v2_reference_select',
+      'cinematic_v2_shot_asset_pack',
+      'cinematic_v3_reference_select',
+    ],
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: cinematicParseWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: [
+      'cinematic_v2_script_parse',
+      'cinematic_v3_shot_parse',
+      'cinematic_v3_shot_parse_group',
+    ],
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: cinematicFanoutWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: [
+      'cinematic_sequence_compile',
+      'cinematic_v2_dynamic_shot_fanout',
+      'cinematic_dynamic_take_fanout',
+      'cinematic_v3_dynamic_shot_parse_fanout',
+      'cinematic_v3_dynamic_storyboard_fanout',
+    ],
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
     pack: workflowMediaNodePack,
     manifests: outputWorkflowNodeManifests,
     expectedPurposes: workflowMediaNodeHandlerKeys,
   }))
   assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
-    pack: sequenceAnimaticWorkflowNodePack,
+    pack: imagePromptWorkflowNodePack,
     manifests: outputWorkflowNodeManifests,
-    expectedPurposes: sequenceAnimaticWorkflowNodeHandlerKeys,
+    expectedPurposes: imagePromptWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: documentWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: documentWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: comicWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: comicWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticPlanningWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticPlanningWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticSceneLifecycleWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticArtifactWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticArtifactWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticCoverageWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticCoverageWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticContinuityAnchorWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticContinuityAssetWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticContinuityGraphWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticContinuityGraphWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticShotReferenceWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticShotProductionWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticShotProductionWorkflowNodeHandlerKeys,
+  }))
+  assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
+    pack: sequenceAnimaticShotRevisionWorkflowNodePack,
+    manifests: outputWorkflowNodeManifests,
+    expectedPurposes: sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys,
   }))
   assert.throws(
     () => assertWorkflowNodePackManifestCoverage({
@@ -864,6 +1207,76 @@ test('scene board media utility and sequence animatic node packs expose register
     }),
     /handler key\(s\) without executable manifests/,
   )
+})
+
+test('cinematic node packs are backed by workflow node extension scaffolds', () => {
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  const scaffoldGroups = [
+    {
+      pack: cinematicTextWorkflowNodePack,
+      handlerKeys: cinematicTextWorkflowNodeHandlerKeys,
+      scaffoldHandlerKeys: cinematicTextWorkflowNodeScaffoldHandlerKeys,
+      scaffolds: cinematicTextWorkflowNodeScaffolds,
+      expectedRuntimeKinds: ['structured_llm', 'deterministic_transform'],
+    },
+    {
+      pack: cinematicAuthoringWorkflowNodePack,
+      handlerKeys: cinematicAuthoringWorkflowNodeHandlerKeys,
+      scaffoldHandlerKeys: cinematicAuthoringWorkflowNodeScaffoldHandlerKeys,
+      scaffolds: cinematicAuthoringWorkflowNodeScaffolds,
+      expectedRuntimeKinds: ['artifact_registration', 'deterministic_transform'],
+    },
+    {
+      pack: cinematicPlanningWorkflowNodePack,
+      handlerKeys: cinematicPlanningWorkflowNodeHandlerKeys,
+      scaffoldHandlerKeys: cinematicPlanningWorkflowNodeScaffoldHandlerKeys,
+      scaffolds: cinematicPlanningWorkflowNodeScaffolds,
+      expectedRuntimeKinds: ['structured_llm', 'deterministic_transform'],
+    },
+    {
+      pack: cinematicReferenceWorkflowNodePack,
+      handlerKeys: cinematicReferenceWorkflowNodeHandlerKeys,
+      scaffoldHandlerKeys: cinematicReferenceWorkflowNodeScaffoldHandlerKeys,
+      scaffolds: cinematicReferenceWorkflowNodeScaffolds,
+      expectedRuntimeKinds: ['structured_llm', 'deterministic_transform'],
+    },
+    {
+      pack: cinematicParseWorkflowNodePack,
+      handlerKeys: cinematicParseWorkflowNodeHandlerKeys,
+      scaffoldHandlerKeys: cinematicParseWorkflowNodeScaffoldHandlerKeys,
+      scaffolds: cinematicParseWorkflowNodeScaffolds,
+      expectedRuntimeKinds: ['structured_llm', 'provider_polling'],
+    },
+    {
+      pack: cinematicFanoutWorkflowNodePack,
+      handlerKeys: cinematicFanoutWorkflowNodeHandlerKeys,
+      scaffoldHandlerKeys: cinematicFanoutWorkflowNodeScaffoldHandlerKeys,
+      scaffolds: cinematicFanoutWorkflowNodeScaffolds,
+      expectedRuntimeKinds: ['deterministic_transform'],
+    },
+  ] as const
+
+  for (const group of scaffoldGroups) {
+    assert.deepEqual(group.scaffoldHandlerKeys, group.handlerKeys)
+    assert.equal(new Set(group.scaffolds.map((scaffold) => scaffold.manifest.purpose)).size, group.scaffolds.length)
+    assert.equal(group.scaffolds.length, group.handlerKeys.length)
+    for (const scaffold of group.scaffolds) {
+      const validation = validateWorkflowNodeExtensionScaffold({
+        scaffold,
+        registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+        pack: group.pack,
+      })
+      assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+      assert.equal(scaffold.packKey, group.pack.packKey)
+      assert.ok(group.handlerKeys.includes(scaffold.handlerKey as never))
+      assert.ok(scaffold.sourceHashKeys.length > 0)
+      assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+      assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+      assert.ok(scaffold.requiredTests.includes(`pack:${group.pack.packKey}:owns:${scaffold.handlerKey}`))
+      assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+      assert.ok(group.expectedRuntimeKinds.includes(scaffold.runtimeKind as never))
+    }
+  }
 })
 
 test('Scene Board node pack is backed by workflow node extension scaffolds', () => {
@@ -925,42 +1338,42 @@ test('sequence animatic master path nodes are backed by workflow node extension 
     'sequence_animatic_manifest',
     'sequence_animatic_orchestrator',
   ]
-  assert.deepEqual(sequenceAnimaticWorkflowNodeScaffoldHandlerKeys, expectedMasterPathHandlers)
+  assert.deepEqual(sequenceAnimaticPlanningWorkflowNodeScaffoldHandlerKeys, expectedMasterPathHandlers)
 
   const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
-  assert.equal(new Set(sequenceAnimaticWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticWorkflowNodeScaffolds.length)
-  assert.equal(sequenceAnimaticWorkflowNodeScaffolds.length, expectedMasterPathHandlers.length)
+  assert.equal(new Set(sequenceAnimaticPlanningWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticPlanningWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticPlanningWorkflowNodeScaffolds.length, expectedMasterPathHandlers.length)
 
-  for (const scaffold of sequenceAnimaticWorkflowNodeScaffolds) {
+  for (const scaffold of sequenceAnimaticPlanningWorkflowNodeScaffolds) {
     const validation = validateWorkflowNodeExtensionScaffold({
       scaffold,
       registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
-      pack: sequenceAnimaticWorkflowNodePack,
+      pack: sequenceAnimaticPlanningWorkflowNodePack,
     })
     assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
-    assert.equal(scaffold.packKey, sequenceAnimaticWorkflowNodePack.packKey)
-    assert.ok(sequenceAnimaticWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.equal(scaffold.packKey, sequenceAnimaticPlanningWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticPlanningWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
     assert.ok(scaffold.sourceHashKeys.length > 0)
     assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
     assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
-    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticPlanningWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
     assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
   }
 
   assert.deepEqual(
-    sequenceAnimaticWorkflowNodeScaffolds
+    sequenceAnimaticPlanningWorkflowNodeScaffolds
       .filter((scaffold) => scaffold.runtimeKind === 'structured_llm')
       .map((scaffold) => scaffold.manifest.purpose),
     ['sequence_animatic_scene_graph_assignment'],
   )
   assert.deepEqual(
-    sequenceAnimaticWorkflowNodeScaffolds
+    sequenceAnimaticPlanningWorkflowNodeScaffolds
       .filter((scaffold) => scaffold.runtimeKind === 'streaming_jsonl')
       .map((scaffold) => scaffold.manifest.purpose),
     ['sequence_animatic_scene_shot_plan'],
   )
   assert.deepEqual(
-    sequenceAnimaticWorkflowNodeScaffolds
+    sequenceAnimaticPlanningWorkflowNodeScaffolds
       .filter((scaffold) => scaffold.runtimeKind === 'child_workflow_utility')
       .map((scaffold) => scaffold.manifest.purpose),
     [
@@ -969,7 +1382,7 @@ test('sequence animatic master path nodes are backed by workflow node extension 
     ],
   )
   assert.deepEqual(
-    sequenceAnimaticWorkflowNodeScaffolds
+    sequenceAnimaticPlanningWorkflowNodeScaffolds
       .filter((scaffold) => scaffold.runtimeKind === 'deterministic_transform')
       .map((scaffold) => scaffold.manifest.purpose),
     [
@@ -979,24 +1392,470 @@ test('sequence animatic master path nodes are backed by workflow node extension 
   )
 })
 
+test('sequence animatic scene lifecycle nodes are backed by workflow node extension scaffolds', () => {
+  const expectedSceneLifecycleHandlers = [
+    'sequence_animatic_scene_input',
+    'sequence_animatic_scene_register',
+  ]
+  assert.deepEqual(sequenceAnimaticSceneLifecycleWorkflowNodeScaffoldHandlerKeys, expectedSceneLifecycleHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticSceneLifecycleWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticSceneLifecycleWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticSceneLifecycleWorkflowNodeScaffolds.length, expectedSceneLifecycleHandlers.length)
+
+  for (const scaffold of sequenceAnimaticSceneLifecycleWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticSceneLifecycleWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticSceneLifecycleWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticSceneLifecycleWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticSceneLifecycleWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'deterministic_transform')
+      .map((scaffold) => scaffold.manifest.purpose),
+    expectedSceneLifecycleHandlers,
+  )
+})
+
+test('sequence animatic artifact nodes are backed by workflow node extension scaffolds', () => {
+  const expectedArtifactHandlers = [
+    'sequence_animatic_block_artifact',
+    'sequence_animatic_manifest_artifact',
+    'sequence_animatic_director_plan_artifact',
+  ]
+  assert.deepEqual(sequenceAnimaticArtifactWorkflowNodeScaffoldHandlerKeys, expectedArtifactHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticArtifactWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticArtifactWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticArtifactWorkflowNodeScaffolds.length, expectedArtifactHandlers.length)
+
+  for (const scaffold of sequenceAnimaticArtifactWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticArtifactWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticArtifactWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticArtifactWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('readyArtifactCount'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticArtifactWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticArtifactWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    expectedArtifactHandlers,
+  )
+})
+
+test('sequence animatic coverage nodes are backed by workflow node extension scaffolds', () => {
+  const expectedCoverageHandlers = [
+    'sequence_animatic_coverage_plan',
+    'sequence_animatic_coverage_intent_input',
+    'sequence_animatic_coverage_intent_plan',
+    'sequence_animatic_coverage_intent_artifact',
+    'sequence_animatic_coverage_anchor_input',
+    'sequence_animatic_coverage_anchor_brief',
+    'sequence_animatic_coverage_anchor_prompt',
+    'sequence_animatic_coverage_anchor_artifact',
+  ]
+  assert.deepEqual(sequenceAnimaticCoverageWorkflowNodeScaffoldHandlerKeys, expectedCoverageHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticCoverageWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticCoverageWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticCoverageWorkflowNodeScaffolds.length, expectedCoverageHandlers.length)
+
+  for (const scaffold of sequenceAnimaticCoverageWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticCoverageWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticCoverageWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticCoverageWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticCoverageWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticCoverageWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'structured_llm')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_coverage_plan',
+      'sequence_animatic_coverage_intent_plan',
+      'sequence_animatic_coverage_anchor_brief',
+    ],
+  )
+  assert.deepEqual(
+    sequenceAnimaticCoverageWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_coverage_intent_artifact',
+      'sequence_animatic_coverage_anchor_artifact',
+    ],
+  )
+})
+
+test('sequence animatic continuity anchor nodes are backed by workflow node extension scaffolds', () => {
+  const expectedContinuityAnchorHandlers = [
+    'sequence_animatic_continuity_anchor_plan',
+    'sequence_animatic_character_anchor_atlas_prompt',
+    'sequence_animatic_prop_anchor_atlas_prompt',
+    'sequence_animatic_location_anchor_atlas_prompt',
+    'sequence_animatic_character_anchor_extract',
+    'sequence_animatic_prop_anchor_extract',
+    'sequence_animatic_location_anchor_extract',
+  ]
+  assert.deepEqual(sequenceAnimaticContinuityAnchorWorkflowNodeScaffoldHandlerKeys, expectedContinuityAnchorHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds.length, expectedContinuityAnchorHandlers.length)
+
+  for (const scaffold of sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticContinuityAnchorWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticContinuityAnchorWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticContinuityAnchorWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'structured_llm')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_continuity_anchor_plan'],
+  )
+  assert.deepEqual(
+    sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_character_anchor_extract',
+      'sequence_animatic_prop_anchor_extract',
+      'sequence_animatic_location_anchor_extract',
+    ],
+  )
+})
+
+test('sequence animatic continuity asset nodes are backed by workflow node extension scaffolds', () => {
+  const expectedContinuityAssetHandlers = [
+    'sequence_animatic_continuity_asset_input',
+    'sequence_animatic_continuity_batch_input',
+    'sequence_animatic_continuity_batch_prompt',
+    'sequence_animatic_continuity_batch_extract',
+    'sequence_animatic_continuity_asset_prompt',
+    'sequence_animatic_continuity_asset_artifact',
+    'sequence_animatic_continuity_batch_artifact',
+  ]
+  assert.deepEqual(sequenceAnimaticContinuityAssetWorkflowNodeScaffoldHandlerKeys, expectedContinuityAssetHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticContinuityAssetWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticContinuityAssetWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticContinuityAssetWorkflowNodeScaffolds.length, expectedContinuityAssetHandlers.length)
+
+  for (const scaffold of sequenceAnimaticContinuityAssetWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticContinuityAssetWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticContinuityAssetWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticContinuityAssetWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticContinuityAssetWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_continuity_batch_extract',
+      'sequence_animatic_continuity_asset_artifact',
+      'sequence_animatic_continuity_batch_artifact',
+    ],
+  )
+  assert.deepEqual(
+    sequenceAnimaticContinuityAssetWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'deterministic_transform')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_continuity_asset_input',
+      'sequence_animatic_continuity_batch_input',
+      'sequence_animatic_continuity_batch_prompt',
+      'sequence_animatic_continuity_asset_prompt',
+    ],
+  )
+})
+
+test('sequence animatic continuity graph nodes are backed by workflow node extension scaffolds', () => {
+  const expectedContinuityGraphHandlers = [
+    'sequence_animatic_continuity_input',
+    'sequence_animatic_continuity_seed_graph',
+    'sequence_animatic_continuity_global_plan',
+    'sequence_animatic_continuity_global_merge',
+    'sequence_animatic_continuity_block_plan',
+    'sequence_animatic_continuity_block_merge',
+    'sequence_animatic_continuity_graph_finalize',
+    'sequence_animatic_continuity_structure_artifact',
+    'sequence_animatic_continuity_artifact',
+  ]
+  assert.deepEqual(sequenceAnimaticContinuityGraphWorkflowNodeScaffoldHandlerKeys, expectedContinuityGraphHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticContinuityGraphWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticContinuityGraphWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticContinuityGraphWorkflowNodeScaffolds.length, expectedContinuityGraphHandlers.length)
+
+  for (const scaffold of sequenceAnimaticContinuityGraphWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticContinuityGraphWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticContinuityGraphWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticContinuityGraphWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticContinuityGraphWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticContinuityGraphWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'structured_llm')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_continuity_global_plan',
+      'sequence_animatic_continuity_block_plan',
+    ],
+  )
+  assert.deepEqual(
+    sequenceAnimaticContinuityGraphWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_continuity_structure_artifact',
+      'sequence_animatic_continuity_artifact',
+    ],
+  )
+})
+
+test('sequence animatic shot reference nodes are backed by workflow node extension scaffolds', () => {
+  const expectedShotReferenceHandlers = [
+    'sequence_animatic_shot_input',
+    'sequence_animatic_shared_asset_ref',
+    'sequence_animatic_shot_reference_pack',
+  ]
+  assert.deepEqual(sequenceAnimaticShotReferenceWorkflowNodeScaffoldHandlerKeys, expectedShotReferenceHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticShotReferenceWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticShotReferenceWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticShotReferenceWorkflowNodeScaffolds.length, expectedShotReferenceHandlers.length)
+
+  for (const scaffold of sequenceAnimaticShotReferenceWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticShotReferenceWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticShotReferenceWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticShotReferenceWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticShotReferenceWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'deterministic_transform')
+      .map((scaffold) => scaffold.manifest.purpose),
+    expectedShotReferenceHandlers,
+  )
+})
+
+test('sequence animatic shot production nodes are backed by workflow node extension scaffolds', () => {
+  const expectedShotProductionHandlers = [
+    'sequence_animatic_planned_keyframe_prompt',
+    'sequence_animatic_planned_keyframe_input',
+    'sequence_animatic_planned_keyframe_image',
+    'sequence_animatic_planned_keyframe_artifact',
+    'sequence_animatic_shot_video_prompt',
+    'sequence_animatic_shot_video',
+    'sequence_animatic_shot_video_artifact',
+  ]
+  assert.deepEqual(sequenceAnimaticShotProductionWorkflowNodeScaffoldHandlerKeys, expectedShotProductionHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticShotProductionWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticShotProductionWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticShotProductionWorkflowNodeScaffolds.length, expectedShotProductionHandlers.length)
+
+  for (const scaffold of sequenceAnimaticShotProductionWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticShotProductionWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticShotProductionWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticShotProductionWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticShotProductionWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticShotProductionWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'image_generation')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_planned_keyframe_image'],
+  )
+  assert.deepEqual(
+    sequenceAnimaticShotProductionWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'video_generation')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_shot_video'],
+  )
+  assert.deepEqual(
+    sequenceAnimaticShotProductionWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_planned_keyframe_artifact', 'sequence_animatic_shot_video_artifact'],
+  )
+})
+
+test('sequence animatic shot revision nodes are backed by workflow node extension scaffolds', () => {
+  const expectedShotRevisionHandlers = [
+    'sequence_animatic_shot_revision_input',
+    'sequence_animatic_shot_revision_plan',
+    'sequence_animatic_shot_keyframe_prompt',
+    'sequence_animatic_shot_keyframe_image',
+    'sequence_animatic_shot_revision_artifact',
+  ]
+  assert.deepEqual(sequenceAnimaticShotRevisionWorkflowNodeScaffoldHandlerKeys, expectedShotRevisionHandlers)
+
+  const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
+  assert.equal(new Set(sequenceAnimaticShotRevisionWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticShotRevisionWorkflowNodeScaffolds.length)
+  assert.equal(sequenceAnimaticShotRevisionWorkflowNodeScaffolds.length, expectedShotRevisionHandlers.length)
+
+  for (const scaffold of sequenceAnimaticShotRevisionWorkflowNodeScaffolds) {
+    const validation = validateWorkflowNodeExtensionScaffold({
+      scaffold,
+      registeredManifest: manifestByPurpose.get(scaffold.manifest.purpose) ?? null,
+      pack: sequenceAnimaticShotRevisionWorkflowNodePack,
+    })
+    assert.equal(validation.ok, true, `${scaffold.manifest.purpose}\n${validation.diagnostics.join('\n')}`)
+    assert.equal(scaffold.packKey, sequenceAnimaticShotRevisionWorkflowNodePack.packKey)
+    assert.ok(sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys.includes(scaffold.handlerKey))
+    assert.ok(scaffold.sourceHashKeys.length > 0)
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeManifestPurpose'))
+    assert.ok(scaffold.projectionMetadataKeys.includes('activeProgressLabel'))
+    assert.ok(scaffold.requiredTests.includes(`pack:${sequenceAnimaticShotRevisionWorkflowNodePack.packKey}:owns:${scaffold.handlerKey}`))
+    assert.ok(scaffold.requiredTests.includes(`projection:${scaffold.manifest.purpose}:metadata_shape`))
+  }
+
+  assert.deepEqual(
+    sequenceAnimaticShotRevisionWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'structured_llm')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_shot_revision_plan'],
+  )
+  assert.deepEqual(
+    sequenceAnimaticShotRevisionWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'image_generation')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_shot_keyframe_image'],
+  )
+  assert.deepEqual(
+    sequenceAnimaticShotRevisionWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'artifact_registration')
+      .map((scaffold) => scaffold.manifest.purpose),
+    ['sequence_animatic_shot_revision_artifact'],
+  )
+})
+
 test('output workflow worker requires explicit legacy or pack node handlers', () => {
   const repoRoot = process.cwd()
   const handlerRegistrySource = readFileSync(resolve(repoRoot, 'src/domain/workflowNodeHandlerRegistry.ts'), 'utf8')
   const runtimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const legacyHandlersSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-legacy-handlers.ts'), 'utf8')
+  const cinematicTextPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-text-pack.ts'), 'utf8')
+  const cinematicScriptRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-script-runtime.ts'), 'utf8')
+  const cinematicAuthoringPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-authoring-pack.ts'), 'utf8')
+  const cinematicPlanningPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-planning-pack.ts'), 'utf8')
+  const cinematicReferencePackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-reference-pack.ts'), 'utf8')
+  const cinematicParsePackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-parse-pack.ts'), 'utf8')
+  const cinematicFanoutPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-fanout-pack.ts'), 'utf8')
   const mediaPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-media-pack.ts'), 'utf8')
+  const imagePromptPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-image-prompt-pack.ts'), 'utf8')
+  const documentPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-document-pack.ts'), 'utf8')
+  const comicPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-comic-pack.ts'), 'utf8')
   const sceneBoardPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-scene-board-pack.ts'), 'utf8')
   const sequenceAnimaticPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-pack.ts'), 'utf8')
   const sequenceAnimaticNodePackTypesSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-node-pack-types.ts'), 'utf8')
   const sequenceAnimaticAnchorPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-anchor-pack.ts'), 'utf8')
+  const sequenceAnimaticAnchorRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-anchor-runtime.ts'), 'utf8')
   const sequenceAnimaticAssetPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-asset-pack.ts'), 'utf8')
   const sequenceAnimaticGraphPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-graph-pack.ts'), 'utf8')
+  const sequenceAnimaticGraphRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-graph-runtime.ts'), 'utf8')
   const sequenceAnimaticCoveragePackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-coverage-pack.ts'), 'utf8')
   const sequenceAnimaticShotReferencePackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-shot-reference-pack.ts'), 'utf8')
   const sequenceAnimaticShotProductionPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-shot-production-pack.ts'), 'utf8')
   const sequenceAnimaticShotRevisionPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-shot-revision-pack.ts'), 'utf8')
+  const sequenceAnimaticShotRevisionRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-shot-revision-runtime.ts'), 'utf8')
+  const seedanceVideoPromptRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-seedance-video-prompt-runtime.ts'), 'utf8')
+  const sequenceAnimaticShotVideoRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-shot-video-runtime.ts'), 'utf8')
+  const sequenceAnimaticReferenceRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-reference-runtime.ts'), 'utf8')
+  const cinematicAssetPackRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-asset-pack-runtime.ts'), 'utf8')
+  const cinematicV3FanoutRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-v3-fanout-runtime.ts'), 'utf8')
+  const cinematicV2FanoutRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-v2-fanout-runtime.ts'), 'utf8')
   const sequenceAnimaticPlanningPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-planning-pack.ts'), 'utf8')
-  const sequenceAnimaticOwnedSource = `${sequenceAnimaticPackSource}\n${sequenceAnimaticAnchorPackSource}\n${sequenceAnimaticAssetPackSource}\n${sequenceAnimaticGraphPackSource}\n${sequenceAnimaticCoveragePackSource}\n${sequenceAnimaticShotReferencePackSource}\n${sequenceAnimaticShotProductionPackSource}\n${sequenceAnimaticShotRevisionPackSource}\n${sequenceAnimaticPlanningPackSource}`
+  const sequenceAnimaticSceneLifecyclePackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-scene-lifecycle-pack.ts'), 'utf8')
+  const sequenceAnimaticArtifactPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-artifact-pack.ts'), 'utf8')
+  const sequenceAnimaticManifestRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-manifest-runtime.ts'), 'utf8')
+  const sequenceAnimaticScenePackageRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-scene-package-runtime.ts'), 'utf8')
+  const sequenceAnimaticShotContinuityPlanRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-shot-continuity-plan-runtime.ts'), 'utf8')
   const sequenceAnimaticCoverageRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-coverage-runtime.ts'), 'utf8')
   const sequenceAnimaticPlanningRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-planning-runtime.ts'), 'utf8')
   const sequenceAnimaticOrchestratorRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-orchestrator-runtime.ts'), 'utf8')
@@ -1007,13 +1866,13 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   const nodePackRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-node-pack-runtime.ts'), 'utf8')
 
   assert.match(handlerRegistrySource, /export function defineWorkflowNodePack/)
-  for (const packSource of [mediaPackSource, sceneBoardPackSource, sequenceAnimaticPackSource, utilityPackSource]) {
+  for (const packSource of [cinematicTextPackSource, cinematicAuthoringPackSource, cinematicPlanningPackSource, cinematicReferencePackSource, cinematicParsePackSource, cinematicFanoutPackSource, mediaPackSource, imagePromptPackSource, documentPackSource, comicPackSource, sceneBoardPackSource, sequenceAnimaticPlanningPackSource, sequenceAnimaticSceneLifecyclePackSource, sequenceAnimaticArtifactPackSource, sequenceAnimaticShotReferencePackSource, utilityPackSource]) {
     assert.match(packSource, /defineWorkflowNodePack/)
     assert.doesNotMatch(packSource, /export const \w+NodeHandlerKeys = Object\.keys\(/)
     assert.doesNotMatch(packSource, /for \(const \[handlerKey, handler\] of Object\.entries/)
   }
   assert.match(nodePackRuntimeSource, /export function createWorkflowNodeExecutionResult/)
-  for (const packSource of [sceneBoardPackSource, sequenceAnimaticAnchorPackSource, sequenceAnimaticAssetPackSource, sequenceAnimaticGraphPackSource, sequenceAnimaticCoveragePackSource, sequenceAnimaticShotReferencePackSource, sequenceAnimaticShotProductionPackSource, sequenceAnimaticShotRevisionPackSource, sequenceAnimaticPlanningPackSource, utilityPackSource]) {
+  for (const packSource of [cinematicTextPackSource, cinematicAuthoringPackSource, cinematicPlanningPackSource, cinematicReferencePackSource, cinematicParsePackSource, cinematicFanoutPackSource, documentPackSource, comicPackSource, sceneBoardPackSource, sequenceAnimaticAnchorPackSource, sequenceAnimaticAssetPackSource, sequenceAnimaticGraphPackSource, sequenceAnimaticCoveragePackSource, sequenceAnimaticShotReferencePackSource, sequenceAnimaticShotProductionPackSource, sequenceAnimaticShotRevisionPackSource, sequenceAnimaticPlanningPackSource, sequenceAnimaticSceneLifecyclePackSource, sequenceAnimaticArtifactPackSource, utilityPackSource]) {
     assert.match(packSource, /createWorkflowNodeExecutionResult/)
     assert.doesNotMatch(packSource, /outputHash: input\.helpers\.hashOutputWorkflowValue\(input\.outputs\)/)
   }
@@ -1026,18 +1885,47 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.equal(new Set(legacyMonolithWorkflowNodeHandlerKeys).size, legacyMonolithWorkflowNodeHandlerKeys.length)
   assert.ok(legacyMonolithWorkflowNodeHandlerRecords.every((record) => record.migrationTarget.length > 0))
   const legacyHandlerKeySet = new Set<string>(legacyMonolithWorkflowNodeHandlerKeys)
+  assert.ok(cinematicTextWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(cinematicAuthoringWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(cinematicPlanningWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(cinematicReferenceWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(cinematicParseWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(cinematicFanoutWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(imagePromptWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(documentWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(comicWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
+  assert.ok(sequenceAnimaticArtifactWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
   assert.ok(sceneBoardWorkflowNodeHandlerKeys.every((handlerKey) => !legacyHandlerKeySet.has(handlerKey)))
   assert.doesNotMatch(legacyHandlersSource, /sequence_animatic_scene_board_pack/)
   assert.doesNotMatch(legacyHandlersSource, /sequence_animatic_coverage_pack/)
   assert.ok(legacyMonolithWorkflowNodeHandlerKeys.every((handlerKey) => !handlerKey.startsWith('sequence_animatic_coverage_')))
-  assert.ok(legacyMonolithWorkflowNodeHandlerRecords.some((record) => record.migrationTarget === 'cinematic_text_pack'))
+  assert.ok(legacyMonolithWorkflowNodeHandlerRecords.some((record) => record.migrationTarget === 'legacy_output_pack'))
   assert.match(runtimeSource, /function assertNoImplicitMonolithWorkflowNodeHandlers/)
   assert.match(runtimeSource, /Workflow node manifest\(s\) need an explicit node pack handler or legacy monolith registration/)
   assert.match(runtimeSource, /for \(const handlerKey of legacyMonolithWorkflowNodeHandlerKeys\)/)
   assert.match(runtimeSource, /registerWorkflowUtilityNodePack/)
+  assert.match(runtimeSource, /registerCinematicTextWorkflowNodePack/)
+  assert.match(runtimeSource, /registerCinematicAuthoringWorkflowNodePack/)
+  assert.match(runtimeSource, /registerCinematicPlanningWorkflowNodePack/)
+  assert.match(runtimeSource, /registerCinematicReferenceWorkflowNodePack/)
+  assert.match(runtimeSource, /registerCinematicParseWorkflowNodePack/)
+  assert.match(runtimeSource, /registerCinematicFanoutWorkflowNodePack/)
   assert.match(runtimeSource, /registerWorkflowMediaNodePack/)
+  assert.match(runtimeSource, /registerImagePromptWorkflowNodePack/)
+  assert.match(runtimeSource, /registerDocumentWorkflowNodePack/)
+  assert.match(runtimeSource, /registerComicWorkflowNodePack/)
   assert.match(runtimeSource, /registerSceneBoardWorkflowNodePack/)
-  assert.match(runtimeSource, /registerSequenceAnimaticWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticPlanningWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticSceneLifecycleWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticArtifactWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticContinuityAnchorWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticContinuityAssetWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticContinuityGraphWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticCoverageWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticShotReferenceWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticShotProductionWorkflowNodePack/)
+  assert.match(runtimeSource, /registerSequenceAnimaticShotRevisionWorkflowNodePack/)
   assert.match(runtimeSource, /createWorkflowMediaRuntime/)
   assert.match(runtimeSource, /const mediaRuntime = createWorkflowMediaRuntime\(/)
   assert.match(runtimeSource, /executeImageGeneration: \(context\) => executeOutputWorkflowImageGeneration\(context as never\) as never/)
@@ -1049,23 +1937,310 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.doesNotMatch(runtimeSource, /executeVideoGeneration: \(context\) => executeNode\(context as never\) as never/)
   assert.doesNotMatch(runtimeSource, /executeMediaGeneration: \(context\) => executeNode/)
   assert.match(runtimeSource, /\.\.\.workflowMediaNodeHandlerKeys/)
-  assert.match(runtimeSource, /\.\.\.sequenceAnimaticWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.imagePromptWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.documentWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.comicWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticPlanningWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticContinuityAnchorWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticContinuityAssetWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticContinuityGraphWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticCoverageWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticShotProductionWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.cinematicReferenceWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.cinematicParseWorkflowNodeHandlerKeys/)
+  assert.match(runtimeSource, /\.\.\.cinematicFanoutWorkflowNodeHandlerKeys/)
   assert.match(sequenceAnimaticNodePackTypesSource, /export type SequenceAnimaticNodeExecutionContext/)
   assert.match(sequenceAnimaticNodePackTypesSource, /export type SequenceAnimaticWorkflowNodePackHelpers/)
-  assert.match(sequenceAnimaticPackSource, /from '\.\/output-workflow-sequence-animatic-node-pack-types\.ts'/)
-  for (const packSource of [sequenceAnimaticAnchorPackSource, sequenceAnimaticAssetPackSource, sequenceAnimaticGraphPackSource, sequenceAnimaticCoveragePackSource, sequenceAnimaticShotReferencePackSource, sequenceAnimaticShotProductionPackSource, sequenceAnimaticShotRevisionPackSource, sequenceAnimaticPlanningPackSource]) {
+  assert.match(sequenceAnimaticAnchorPackSource, /sequenceAnimaticAtlasLayout/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequenceAnimaticAtlasImageSize/)
+  assert.match(sequenceAnimaticAnchorRuntimeSource, /export function sequenceAnimaticAtlasLayout/)
+  assert.match(sequenceAnimaticAnchorRuntimeSource, /export function sequenceAnimaticAtlasImageSize/)
+  assert.doesNotMatch(runtimeSource, /function sequenceAnimaticAtlasLayout/)
+  assert.doesNotMatch(runtimeSource, /function sequenceAnimaticAtlasImageSize/)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticAtlasLayout,\s*\n/)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticAtlasImageSize,\s*\n/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticAtlasLayout:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticAtlasImageSize:/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /output-workflow-seedance-video-prompt-runtime/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /output-workflow-sequence-animatic-shot-video-runtime/)
+  assert.match(seedanceVideoPromptRuntimeSource, /export function buildCompactSeedanceVideoPrompt/)
+  assert.match(seedanceVideoPromptRuntimeSource, /export function buildSeedanceCharacterVoiceGuide/)
+  assert.match(seedanceVideoPromptRuntimeSource, /export function buildSeedanceReferenceManifest/)
+  assert.match(sequenceAnimaticShotVideoRuntimeSource, /export async function inferSequenceShotVideoTimingRuntime/)
+  assert.match(sequenceAnimaticShotVideoRuntimeSource, /export const seedanceDirectedControlsSchema/)
+  assert.match(sequenceAnimaticShotVideoRuntimeSource, /export const sequenceAnimaticShotVideoTimingSchema/)
+  assert.match(sequenceAnimaticShotRevisionPackSource, /output-workflow-sequence-animatic-shot-revision-runtime/)
+  assert.match(sequenceAnimaticShotRevisionRuntimeSource, /export async function planSequenceAnimaticShotRevisionRuntime/)
+  assert.match(sequenceAnimaticShotRevisionRuntimeSource, /export const sequenceAnimaticShotRevisionPlanSchema/)
+  assert.match(sequenceAnimaticReferenceRuntimeSource, /export function scopeAssetPackToReferenceAssetKeys/)
+  assert.match(cinematicAssetPackRuntimeSource, /export function buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(cinematicAssetPackRuntimeSource, /export function repairCinematicV2ShotPlanVisualReferences/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export function buildCinematicV3StoryboardDynamicFanoutGroupRows/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export function buildCinematicV3StoryboardDynamicFanoutTimelineRows/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export function parseAspectRatio/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export function storyboardLayoutForShotCount/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export function storyboardImageSizeForLayout/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export function cinematicV3StoryboardGroupShots/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export async function materializeDynamicCinematicV3StoryboardFanoutRuntime/)
+  assert.match(cinematicV3FanoutRuntimeSource, /export async function materializeDynamicCinematicV3ShotParseFanoutRuntime/)
+  assert.match(cinematicV3FanoutRuntimeSource, /buildCinematicV3StoryboardDynamicFanoutGroupRows/)
+  assert.match(cinematicV3FanoutRuntimeSource, /buildCinematicV3StoryboardDynamicFanoutTimelineRows/)
+  assert.match(runtimeSource, /createCinematicDynamicFanoutMaterializerHelpers/)
+  assert.match(runtimeSource, /materializeDynamicCinematicV3StoryboardFanoutRuntime/)
+  assert.match(runtimeSource, /materializeDynamicCinematicV3ShotParseFanoutRuntime/)
+  assert.match(runtimeSource, /materializeDynamicCinematicV2ShotFanoutRuntime/)
+  assert.match(cinematicV2FanoutRuntimeSource, /export async function materializeDynamicCinematicV2ShotFanoutRuntime/)
+  assert.match(cinematicV2FanoutRuntimeSource, /cinematic_v2_storyboard_prompt/)
+  assert.match(cinematicV2FanoutRuntimeSource, /cinematic_v2_timeline_assemble/)
+  assert.doesNotMatch(runtimeSource, /function resolveCinematicV2QualityShotIds/)
+  assert.match(cinematicTextPackSource, /cinematic_atlas_prompt: cinematicAtlasPromptNode/)
+  assert.match(cinematicTextPackSource, /buildCinematicAtlasPromptInstruction/)
+  assert.match(cinematicTextPackSource, /runCinematicSimpleTextPrompt/)
+  assert.match(cinematicTextPackSource, /cinematic_v2_screenplay_author: cinematicV3ScreenplayAuthorNode/)
+  assert.match(cinematicTextPackSource, /cinematic_v3_screenplay_author: cinematicV3ScreenplayAuthorNode/)
+  assert.match(cinematicTextPackSource, /cinematic_script_authoring: cinematicScriptAuthoringNode/)
+  assert.match(cinematicTextPackSource, /cinematic_sequence_plan: cinematicSequencePlanNode/)
+  assert.match(cinematicTextPackSource, /cinematic_block_script: cinematicBlockScriptNode/)
+  assert.match(cinematicTextPackSource, /output-workflow-cinematic-script-runtime/)
+  assert.match(cinematicScriptRuntimeSource, /export function cinematicScriptAuthoringJsonSchemaForPreset/)
+  assert.match(cinematicScriptRuntimeSource, /export function normalizeCinematicScriptAuthoring/)
+  assert.match(cinematicScriptRuntimeSource, /export function buildDeterministicCinematicSequencePlan/)
+  assert.match(cinematicScriptRuntimeSource, /export function cinematicBlockScriptMarkdown/)
+  assert.match(cinematicTextPackSource, /runCinematicStructuredJson/)
+  assert.match(cinematicTextPackSource, /const v3Screenplay = purpose !== 'cinematic_v2_screenplay_author'/)
+  assert.match(cinematicTextPackSource, /cinematic_v3_storyboard_prompt: cinematicV3StoryboardPromptNode/)
+  assert.match(cinematicTextPackSource, /cinematic_v3_storyboard_group_video_prompt: cinematicV3StoryboardGroupVideoPromptNode/)
+  assert.match(cinematicTextPackSource, /cinematic_storyboard_prompt: cinematicStoryboardPromptNode/)
+  assert.match(cinematicTextPackSource, /buildLegacyCinematicStoryboardPrompt/)
+  assert.match(cinematicTextPackSource, /cinematic_v2_storyboard_prompt: cinematicV2StoryboardPromptNode/)
+  assert.match(cinematicTextPackSource, /cinematic_v2_keyframe_prompt: cinematicV2KeyframePromptNode/)
+  assert.match(cinematicTextPackSource, /cinematic_v2_video_prompt: cinematicV2VideoPromptNode/)
+  assert.match(cinematicTextPackSource, /cinematic_beat_sheet_prompt: cinematicBeatSheetPromptNode/)
+  assert.match(cinematicTextPackSource, /cinematic_keyframe_prompt_pack: cinematicKeyframePromptPackNode/)
+  assert.match(cinematicTextPackSource, /cinematic_video_prompt: cinematicVideoPromptNode/)
+  assert.match(cinematicTextPackSource, /buildCinematicBeatSheetPrompt/)
+  assert.match(cinematicTextPackSource, /buildCinematicDirectionSheetPrompt/)
+  assert.match(cinematicTextPackSource, /buildCinematicKeyframePromptPack/)
+  assert.match(cinematicTextPackSource, /buildCinematicVideoPrompt/)
+  assert.match(cinematicTextPackSource, /buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(cinematicTextPackSource, /buildCompactSeedanceVideoPrompt/)
+  assert.match(cinematicTextPackSource, /buildSeedanceDirectedControlsFromShot/)
+  assert.match(cinematicAuthoringPackSource, /cinematic_v3_panel_extract: cinematicV3PanelExtractNode/)
+  assert.match(cinematicAuthoringPackSource, /cinematic_v3_timeline_assemble: cinematicV3TimelineAssembleNode/)
+  assert.match(cinematicAuthoringPackSource, /cinematic_v2_panel_extract: cinematicV2PanelExtractNode/)
+  assert.match(cinematicAuthoringPackSource, /cinematic_v2_keyframe_qa: cinematicV2KeyframeQaNode/)
+  assert.match(cinematicAuthoringPackSource, /cinematic_v2_shot_keyframe_passthrough: cinematicV2ShotKeyframePassthroughNode/)
+  assert.match(cinematicAuthoringPackSource, /cinematic_v2_timeline_assemble: cinematicV2TimelineAssembleNode/)
+  assert.match(cinematicAuthoringPackSource, /cinematic_video_artifact: cinematicVideoArtifactNode/)
+  assert.match(cinematicAuthoringPackSource, /cinematic-v3-authoring-artifact-v1/)
+  assert.match(cinematicAuthoringPackSource, /registerOtherArtifact/)
+  assert.match(cinematicAuthoringPackSource, /registerImageArtifact/)
+  assert.match(cinematicAuthoringPackSource, /stitchVideoBytes/)
+  assert.match(cinematicAuthoringPackSource, /collectCinematicV3ShotPlansFromUpstream/)
+  assert.match(cinematicAuthoringPackSource, /mergeCinematicV3ShotPlansForTimeline/)
+  assert.match(cinematicPlanningPackSource, /cinematic_v3_shot_break_plan: cinematicV3ShotBreakPlanNode/)
+  assert.match(cinematicPlanningPackSource, /cinematic_v2_scene_compile: cinematicV2SceneCompileNode/)
+  assert.match(cinematicPlanningPackSource, /cinematic_v2_layout_plan: cinematicV2LayoutPlanNode/)
+  assert.match(cinematicPlanningPackSource, /cinematic_v2_shot_plan: cinematicV2ShotPlanNode/)
+  assert.match(cinematicPlanningPackSource, /cinematic_v3_shot_plan_merge: cinematicV3ShotPlanMergeNode/)
+  assert.match(cinematicPlanningPackSource, /cinematic_v2_storyboard_group_plan: cinematicStoryboardGroupPlanNode/)
+  assert.match(cinematicPlanningPackSource, /cinematic_v3_storyboard_group_plan: cinematicStoryboardGroupPlanNode/)
+  assert.match(cinematicPlanningPackSource, /buildCinematicV3ShotBreakPlan/)
+  assert.match(cinematicPlanningPackSource, /buildCinematicV3StoryboardGroupPlan/)
+  assert.match(cinematicPlanningPackSource, /buildCinematicV2StoryboardGroupPlan/)
+  assert.match(cinematicPlanningPackSource, /deriveCinematicV2MaxShotCount/)
+  assert.match(cinematicPlanningPackSource, /schemaName: 'output_workflow_cinematic_v2_scene_compile'/)
+  assert.match(cinematicPlanningPackSource, /schemaName: 'output_workflow_cinematic_v2_layout_plan'/)
+  assert.match(cinematicPlanningPackSource, /schemaName: 'output_workflow_cinematic_v2_shot_plan'/)
+  assert.match(cinematicPlanningPackSource, /schemaName: 'output_workflow_cinematic_v2_shot_plan_repair'/)
+  assert.match(cinematicReferencePackSource, /cinematic_entity_selector: cinematicEntitySelectorNode/)
+  assert.match(cinematicReferencePackSource, /buildDeterministicCinematicAssetPack/)
+  assert.match(cinematicReferencePackSource, /cinematic_v3_reference_select: cinematicV3ReferenceSelectNode/)
+  assert.match(cinematicReferencePackSource, /cinematic_v2_reference_select: cinematicV2ReferenceSelectNode/)
+  assert.match(cinematicReferencePackSource, /cinematic_v2_shot_asset_pack: cinematicV2ShotAssetPackNode/)
+  assert.match(cinematicReferencePackSource, /schemaName: 'output_workflow_cinematic_v2_reference_select'/)
+  assert.match(cinematicReferencePackSource, /schemaName: 'output_workflow_cinematic_v3_reference_select'/)
+  assert.match(cinematicReferencePackSource, /Choose only supplied reference keys needed for a V3 cinematic scene/)
+  assert.match(cinematicParsePackSource, /cinematic_v2_script_parse: cinematicV2ScriptParseNode/)
+  assert.match(cinematicParsePackSource, /cinematic_v3_shot_parse: cinematicV3ShotParseNode/)
+  assert.match(cinematicParsePackSource, /cinematic_v3_shot_parse_group: cinematicV3ShotParseGroupNode/)
+  assert.match(cinematicParsePackSource, /schemaName: 'output_workflow_cinematic_v2_script_parse'/)
+  assert.match(cinematicParsePackSource, /runCinematicV3ShotParseGroup/)
+  assert.match(cinematicParsePackSource, /schemaName: 'output_workflow_cinematic_v3_shot_parse_repair'/)
+  assert.match(cinematicParsePackSource, /schemaName: 'output_workflow_cinematic_v3_shot_parse_group'/)
+  assert.match(cinematicParsePackSource, /Screenplay excerpt for this block/)
+  assert.match(cinematicParsePackSource, /Preferred shot IDs in order/)
+  assert.match(cinematicFanoutPackSource, /cinematic_sequence_compile: cinematicSequenceCompileNode/)
+  assert.match(cinematicFanoutPackSource, /cinematic_v2_dynamic_shot_fanout: cinematicV2DynamicShotFanoutNode/)
+  assert.match(cinematicFanoutPackSource, /cinematic_dynamic_take_fanout: cinematicDynamicTakeFanoutNode/)
+  assert.match(cinematicFanoutPackSource, /compileCinematicScriptDocForOutput/)
+  assert.match(cinematicFanoutPackSource, /cinematic_v3_dynamic_shot_parse_fanout: cinematicV3DynamicShotParseFanoutNode/)
+  assert.match(cinematicFanoutPackSource, /cinematic_v3_dynamic_storyboard_fanout: cinematicV3DynamicStoryboardFanoutNode/)
+  assert.match(cinematicFanoutPackSource, /materializeDynamicCinematicV2ShotFanout/)
+  assert.match(cinematicFanoutPackSource, /materializeDynamicCinematicTakeFanout/)
+  assert.match(cinematicFanoutPackSource, /materializeDynamicCinematicV3ShotParseFanout/)
+  assert.match(cinematicFanoutPackSource, /materializeDynamicCinematicV3StoryboardFanout/)
+  assert.match(cinematicFanoutPackSource, /Materialized sequence animatic master manifest/)
+  assert.match(cinematicFanoutPackSource, /Cinematics V3 parse groups and storyboard workflows already materialized/)
+  assert.match(cinematicFanoutPackSource, /Cinematics V3 storyboard workflows already materialized/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export function buildCinematicV3ShotBreakPlan/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export function buildSequenceAnimaticShotPlanFromBreaks/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export function buildSequenceAnimaticScriptShotProjection/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export function collectCinematicV3ShotPlansFromUpstream/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export function mergeCinematicV3ShotPlansForTimeline/)
+  assert.doesNotMatch(runtimeSource, /function buildCompactSeedanceVideoPrompt/)
+  assert.doesNotMatch(runtimeSource, /function buildSeedanceCharacterVoiceGuide/)
+  assert.doesNotMatch(runtimeSource, /function buildSeedanceReferenceManifest/)
+  assert.doesNotMatch(runtimeSource, /async function inferSequenceShotVideoTiming/)
+  assert.doesNotMatch(runtimeSource, /const seedanceDirectedControlsSchema/)
+  assert.doesNotMatch(runtimeSource, /const sequenceAnimaticShotVideoTimingSchema/)
+  assert.doesNotMatch(runtimeSource, /async function planSequenceAnimaticShotRevision/)
+  assert.doesNotMatch(runtimeSource, /const sequenceAnimaticShotRevisionPlanSchema/)
+  assert.doesNotMatch(runtimeSource, /function scopeAssetPackToReferenceAssetKeys/)
+  assert.doesNotMatch(runtimeSource, /function directReferenceEntityForAssetKey/)
+  assert.doesNotMatch(runtimeSource, /function buildCinematicV3StoryboardGroupAssetPack/)
+  assert.doesNotMatch(runtimeSource, /function buildCinematicV3StoryboardDynamicFanoutGroupRows/)
+  assert.doesNotMatch(runtimeSource, /function buildCinematicV3StoryboardDynamicFanoutTimelineRows/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_dynamic_storyboard_fanout'\)/)
+  assert.doesNotMatch(runtimeSource, /function buildCinematicV3StoryboardPrompt/)
+  assert.doesNotMatch(runtimeSource, /function buildCinematicStoryboardPrompt/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_storyboard_prompt'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_storyboard_prompt'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_storyboard_group_video_prompt'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_script_authoring'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_sequence_plan'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_block_script'/)
+  assert.doesNotMatch(runtimeSource, /function cinematicScriptAuthoringJsonSchemaForPreset/)
+  assert.doesNotMatch(runtimeSource, /function normalizeCinematicScriptAuthoring/)
+  assert.doesNotMatch(runtimeSource, /function buildDeterministicCinematicScriptDoc/)
+  assert.doesNotMatch(runtimeSource, /function buildCinematicScriptAuthoringInstruction/)
+  assert.doesNotMatch(runtimeSource, /const cinematicSequencePlanJsonSchema/)
+  assert.doesNotMatch(runtimeSource, /const cinematicBlockScriptJsonSchema/)
+  assert.doesNotMatch(runtimeSource, /function cinematicBlockScriptMarkdown/)
+  assert.doesNotMatch(runtimeSource, /function isUgcCinematicPresetFamily/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_storyboard_prompt'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_keyframe_prompt'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_video_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_storyboard_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_storyboard_group_video_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_storyboard_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_script_authoring'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_sequence_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_block_script'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_storyboard_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_keyframe_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_video_prompt'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_panel_extract'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_timeline_assemble'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_panel_extract'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_keyframe_qa'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_shot_keyframe_passthrough'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_timeline_assemble'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_video_artifact'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_panel_extract'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_timeline_assemble'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_panel_extract'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_keyframe_qa'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_shot_keyframe_passthrough'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_timeline_assemble'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_video_artifact'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_shot_break_plan'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_scene_compile'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_layout_plan'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_shot_plan'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_shot_plan_merge'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_storyboard_group_plan' \|\| purpose === 'cinematic_v3_storyboard_group_plan'\)/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_shot_break_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_scene_compile'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_layout_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_shot_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_shot_plan_merge'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_storyboard_group_plan'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_storyboard_group_plan'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_reference_select' \|\| purpose === 'cinematic_v3_reference_select'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_reference_select'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_shot_asset_pack'\)/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_reference_select'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_reference_select'\)/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_shot_asset_pack'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_reference_select'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_shot_parse_group'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_shot_parse'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_script_parse'\)/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_script_parse'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_shot_parse'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_shot_parse_group'/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_sequence_compile'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_dynamic_shot_fanout'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_dynamic_take_fanout'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_dynamic_shot_parse_fanout'\)/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_sequence_compile'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_dynamic_shot_fanout'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_dynamic_take_fanout'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_dynamic_shot_parse_fanout'/)
+  assert.doesNotMatch(runtimeSource, /function cinematicV3StoryboardGroupShots/)
+  assert.doesNotMatch(runtimeSource, /function storyboardImageSizeForLayout/)
+  assert.doesNotMatch(runtimeSource, /function storyboardLayoutForShotCount/)
+  assert.doesNotMatch(runtimeSource, /function parseAspectRatio/)
+  assert.doesNotMatch(runtimeSource, /function repairCinematicV2ShotPlanVisualReferences/)
+  assert.doesNotMatch(runtimeSource, /function buildCinematicV3ShotBreakPlan/)
+  assert.doesNotMatch(runtimeSource, /function buildSequenceAnimaticShotPlanFromBreaks/)
+  assert.doesNotMatch(runtimeSource, /function buildSequenceAnimaticScriptShotProjection/)
+  assert.doesNotMatch(runtimeSource, /function collectCinematicV3ShotPlansFromUpstream/)
+  assert.doesNotMatch(runtimeSource, /function mergeCinematicV3ShotPlansForTimeline/)
+  assert.doesNotMatch(runtimeSource, /buildCompactSeedanceVideoPrompt: /)
+  assert.doesNotMatch(runtimeSource, /buildSeedanceCharacterVoiceGuide: /)
+  assert.doesNotMatch(runtimeSource, /buildSeedanceReferenceManifest: /)
+  assert.doesNotMatch(runtimeSource, /inferSequenceShotVideoTiming: /)
+  assert.doesNotMatch(runtimeSource, /planSequenceAnimaticShotRevision: /)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildCompactSeedanceVideoPrompt:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildSeedanceCharacterVoiceGuide:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildSeedanceReferenceManifest:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /inferSequenceShotVideoTiming:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /planSequenceAnimaticShotRevision:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /scopeAssetPackToReferenceAssetKeys:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildCinematicV3StoryboardGroupAssetPack:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /repairCinematicV2ShotPlanVisualReferences:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildCinematicV3ShotBreakPlan:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildSequenceAnimaticShotPlanFromBreaks:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildSequenceAnimaticScriptShotProjection:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /collectCinematicV3ShotPlansFromUpstream:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /mergeCinematicV3ShotPlansForTimeline:/)
+  assert.match(sequenceAnimaticPackSource, /from '\.\/output-workflow-sequence-animatic-planning-pack\.ts'/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /defineWorkflowNodePack/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_scene_graph_assignment: sequenceAnimaticSceneGraphAssignment/)
+  assert.match(sequenceAnimaticPlanningPackSource, /from '\.\/output-workflow-sequence-animatic-node-pack-types\.ts'/)
+  for (const packSource of [sequenceAnimaticAnchorPackSource, sequenceAnimaticAssetPackSource, sequenceAnimaticGraphPackSource, sequenceAnimaticCoveragePackSource, sequenceAnimaticShotReferencePackSource, sequenceAnimaticShotProductionPackSource, sequenceAnimaticShotRevisionPackSource, sequenceAnimaticPlanningPackSource, sequenceAnimaticSceneLifecyclePackSource, sequenceAnimaticArtifactPackSource]) {
     assert.match(packSource, /from '\.\/output-workflow-sequence-animatic-node-pack-types\.ts'/)
     assert.doesNotMatch(packSource, /from '\.\/output-workflow-sequence-animatic-pack\.ts'/)
   }
   assert.doesNotMatch(runtimeSource, /for \(const manifest of outputWorkflowNodeManifests\)[\s\S]{0,160}registerWorkflowNodeHandler\(outputWorkflowNodeHandlerRegistry, manifest\.handlerKey, executeNode/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_beat_sheet'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_beat_sheet_prompt'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_block_video'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_keyframe'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_keyframe_prompt_pack'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_video_prompt'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v2_shot_keyframe'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v2_shot_video'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v2_storyboard_sheet'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v3_storyboard_group_video'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'cinematic_v3_storyboard_sheet'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v3_screenplay_author'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_v2_screenplay_author'/)
+  assert.doesNotMatch(legacyHandlersSource, /'cinematic_entity_selector'/)
+  assert.match(cinematicTextPackSource, /cinematic_v2_screenplay_author: cinematicV3ScreenplayAuthorNode/)
+  assert.match(cinematicTextPackSource, /cinematic_v3_screenplay_author: cinematicV3ScreenplayAuthorNode/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_entity_selector'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_atlas_prompt'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_beat_sheet_prompt'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_keyframe_prompt_pack'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_video_prompt'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_screenplay_author' \|\| purpose === 'cinematic_v3_screenplay_author'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v2_screenplay_author'\)/)
+  assert.doesNotMatch(runtimeSource, /if \(purpose === 'cinematic_v3_screenplay_author'\)/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'comic_page'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'concept_art_image'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'ebook_cover_image'/)
@@ -1094,6 +2269,9 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.match(sceneBoardPackSource, /sequence_animatic_zone_coverage_board_artifact/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_block_input'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_block_artifact'/)
+  assert.match(sequenceAnimaticArtifactPackSource, /sequence_animatic_block_artifact/)
+  assert.match(sequenceAnimaticArtifactPackSource, /Sequence animatic storyboard block manifest with panels and video prompt/)
+  assert.doesNotMatch(sequenceAnimaticPlanningPackSource, /sequence_animatic_block_artifact/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_package'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_graph_assignment'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_shot_plan'/)
@@ -1105,10 +2283,10 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_graph_assignment'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_shot_plan'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_director_plan'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_package/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_graph_assignment/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_shot_plan/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_director_plan/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_scene_package/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_scene_graph_assignment/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_scene_shot_plan/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_director_plan/)
   assert.match(sequenceAnimaticPlanningPackSource, /runSequenceAnimaticScenePackageAssignmentRuntime/)
   assert.match(sequenceAnimaticPlanningPackSource, /runSequenceAnimaticSceneShotPlanRuntime/)
   assert.match(sequenceAnimaticPlanningPackSource, /runSequenceAnimaticDirectorPlanRuntime/)
@@ -1118,6 +2296,84 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.match(sequenceAnimaticPlanningRuntimeSource, /export async function runSequenceAnimaticSceneShotPlanRuntime/)
   assert.match(sequenceAnimaticPlanningRuntimeSource, /runSequenceAnimaticShotContinuityPlanStreamWithRetry/)
   assert.match(sequenceAnimaticPlanningRuntimeSource, /sequenceAnimaticShotContinuityPolicy/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /sequenceAnimaticShotContinuityPlanV2Schema\.parse/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /sequenceAnimaticUniqueTexts/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /function mergeById/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /normalizeSequenceAnimaticDirectorPlan/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /sequenceAnimaticShotRefs: SequenceAnimaticDirectorPlanNormalizationHelpers\['sequenceAnimaticShotRefs'\]/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /buildSequenceAnimaticMasterDynamicFanoutRows/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /context__sequence_manifest/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /Queue Animatic Blocks/)
+  assert.match(sequenceAnimaticShotContinuityPlanRuntimeSource, /output-workflow-sequence-animatic-shot-binding-runtime/)
+  assert.doesNotMatch(runtimeSource, /parseSequenceAnimaticShotContinuityPlanV2: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticUniqueTexts,\s*\n\s*mergeById: /)
+  assert.doesNotMatch(runtimeSource, /mergeById: \(records\)/)
+  assert.doesNotMatch(runtimeSource, /function mergeById<T extends \{ id: string/)
+  assert.doesNotMatch(runtimeSource, /normalizeSequenceAnimaticDirectorPlan: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticDirectorPlanRuntimeHelpers/)
+  assert.doesNotMatch(runtimeSource, /context__sequence_manifest/)
+  assert.doesNotMatch(runtimeSource, /Queue Animatic Blocks/)
+  assert.doesNotMatch(runtimeSource, /SequenceAnimaticShotContinuityPlanRuntimeHelpers/)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticShotContinuityPlanRuntimeHelpers/)
+  assert.doesNotMatch(sequenceAnimaticShotContinuityPlanRuntimeSource, /SequenceAnimaticShotContinuityPlanRuntimeHelpers/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /parseSequenceAnimaticShotContinuityPlanV2:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticUniqueTexts:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /mergeById:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /normalizeSequenceAnimaticDirectorPlan:/)
+  assert.match(runtimeSource, /output-workflow-sequence-animatic-scene-package-runtime/)
+  assert.match(sequenceAnimaticScenePackageRuntimeSource, /export const sequenceAnimaticScenePackageOutputSchema/)
+  assert.match(sequenceAnimaticScenePackageRuntimeSource, /export const sequenceAnimaticSceneGraphAssignmentSchema/)
+  assert.match(sequenceAnimaticScenePackageRuntimeSource, /export function buildSequenceAnimaticScenePackageFromTaggedScreenplay/)
+  assert.match(sequenceAnimaticScenePackageRuntimeSource, /export function mergeSequenceAnimaticSceneGraphAssignment/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /sequenceAnimaticScenePackageOutputSchema\.parse/)
+  assert.match(sequenceAnimaticSceneRunnerSource, /sequenceAnimaticScenePackageOutputSchema\.parse/)
+  assert.match(sequenceAnimaticGraphPackSource, /output-workflow-sequence-animatic-continuity-graph-runtime/)
+  assert.match(sequenceAnimaticGraphRuntimeSource, /export function sequenceAnimaticEmptyGraphV2/)
+  assert.match(sequenceAnimaticGraphRuntimeSource, /export function parseSequenceAnimaticGraphV2/)
+  assert.match(sequenceAnimaticGraphRuntimeSource, /export function continuityBlockNodeSuffix/)
+  assert.match(sequenceAnimaticGraphRuntimeSource, /export function previousContinuityGraphNodeKeys/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequenceAnimaticContinuityBlockDeltaSchema\.parse/)
+  assert.match(sequenceAnimaticGraphPackSource, /mergeSequenceAnimaticContinuityGraphV2/)
+  assert.match(sequenceAnimaticGraphPackSource, /finalizeSequenceAnimaticContinuityGraphV2/)
+  assert.doesNotMatch(runtimeSource, /const sequenceAnimaticTaggedDialogueRowSchema/)
+  assert.doesNotMatch(runtimeSource, /function buildSequenceAnimaticScenePackageFromTaggedScreenplay/)
+  assert.doesNotMatch(runtimeSource, /buildSequenceAnimaticScenePackageFromTaggedScreenplay: /)
+  assert.doesNotMatch(runtimeSource, /mergeSequenceAnimaticSceneGraphAssignment: /)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /parseSequenceAnimaticScenePackageOutput:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /buildSequenceAnimaticScenePackageFromTaggedScreenplay:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /mergeSequenceAnimaticSceneGraphAssignment:/)
+  assert.doesNotMatch(runtimeSource, /function continuityBlockNodeSuffix/)
+  assert.doesNotMatch(runtimeSource, /function previousContinuityGraphNodeKeys/)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticEmptyGraphV2: /)
+  assert.doesNotMatch(runtimeSource, /parseSequenceAnimaticGraphV2: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticGlobalStoryboardBlock: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticBlockShots: /)
+  assert.doesNotMatch(runtimeSource, /emptySequenceAnimaticContinuityBlockDelta: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticContinuityBlockDeltaSchema: /)
+  assert.doesNotMatch(runtimeSource, /parseSequenceAnimaticContinuityBlockDelta: /)
+  assert.doesNotMatch(runtimeSource, /mergeSequenceAnimaticContinuityGraphV2: /)
+  assert.doesNotMatch(runtimeSource, /finalizeSequenceAnimaticContinuityGraphV2: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticContinuityCoverage: /)
+  assert.doesNotMatch(runtimeSource, /continuityBlockNodeSuffix,\s*\n/)
+  assert.doesNotMatch(runtimeSource, /previousContinuityGraphNodeKeys,\s*\n/)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticContinuityBlockStatesFromGraph: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticSeededBlockStatesFromCoverage: /)
+  assert.doesNotMatch(runtimeSource, /withSequenceAnimaticContinuityAssetState: /)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticEmptyGraphV2:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /parseSequenceAnimaticGraphV2:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticGlobalStoryboardBlock:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticBlockShots:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /emptySequenceAnimaticContinuityBlockDelta:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticContinuityBlockDeltaSchema:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /parseSequenceAnimaticContinuityBlockDelta:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /mergeSequenceAnimaticContinuityGraphV2:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /finalizeSequenceAnimaticContinuityGraphV2:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticContinuityCoverage:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /continuityBlockNodeSuffix:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /previousContinuityGraphNodeKeys:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticContinuityBlockStatesFromGraph:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticSeededBlockStatesFromCoverage:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /withSequenceAnimaticContinuityAssetState:/)
   assert.doesNotMatch(runtimeSource, /async function runSequenceAnimaticScenePackageAssignment/)
   assert.doesNotMatch(runtimeSource, /runSequenceAnimaticScenePackageAssignment:/)
   assert.doesNotMatch(runtimeSource, /async function runSequenceAnimaticSceneShotPlan/)
@@ -1132,27 +2388,58 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_input'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_register'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_orchestrator'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'concept_art_prompt'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'poster_prompt'/)
+  assert.doesNotMatch(runtimeSource, /purpose === 'image_reference_selector'/)
   assert.doesNotMatch(runtimeSource, /async function materializeSequenceAnimaticScenePlanFanout/)
   assert.doesNotMatch(runtimeSource, /materializeSequenceAnimaticScenePlanFanout:/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_plan_fanout'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_input'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_register'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_orchestrator'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_plan_fanout/)
+  assert.doesNotMatch(legacyHandlersSource, /'concept_art_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'poster_prompt'/)
+  assert.doesNotMatch(legacyHandlersSource, /'image_reference_selector'/)
+  assert.match(imagePromptPackSource, /concept_art_prompt/)
+  assert.match(imagePromptPackSource, /poster_prompt/)
+  assert.match(imagePromptPackSource, /image_reference_selector/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_scene_plan_fanout/)
   assert.match(sequenceAnimaticPlanningPackSource, /materializeSequenceAnimaticScenePlanFanoutRuntime/)
   assert.match(sequenceAnimaticPlanningRuntimeSource, /export async function materializeSequenceAnimaticScenePlanFanoutRuntime/)
   assert.match(sequenceAnimaticPlanningPackSource, /Materialized \$\{fanout\.sceneCount\} parallel scene shot planner/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_input/)
-  assert.match(sequenceAnimaticPlanningPackSource, /Sequence animatic scene input requires the authored screenplay text/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_register/)
-  assert.match(sequenceAnimaticPlanningPackSource, /Sequence animatic scene registration requires at least one screenplay scene/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_orchestrator/)
+  assert.match(sequenceAnimaticSceneLifecyclePackSource, /sequence_animatic_scene_input/)
+  assert.match(sequenceAnimaticSceneLifecyclePackSource, /Sequence animatic scene input requires the authored screenplay text/)
+  assert.match(sequenceAnimaticSceneLifecyclePackSource, /sequence_animatic_scene_register/)
+  assert.match(sequenceAnimaticSceneLifecyclePackSource, /scenes_registered/)
+  assert.match(sequenceAnimaticSceneLifecyclePackSource, /Sequence animatic scene registration requires at least one screenplay scene/)
+  assert.doesNotMatch(sequenceAnimaticPlanningPackSource, /sequence_animatic_scene_input/)
+  assert.doesNotMatch(sequenceAnimaticPlanningPackSource, /sequence_animatic_scene_register/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_orchestrator/)
   assert.match(sequenceAnimaticPlanningPackSource, /runSequenceAnimaticOrchestratorRuntime/)
   assert.match(sequenceAnimaticPlanningPackSource, /output-workflow-sequence-animatic-orchestrator-runtime/)
   assert.match(sequenceAnimaticOrchestratorRuntimeSource, /export async function runSequenceAnimaticOrchestratorRuntime/)
   assert.match(sequenceAnimaticOrchestratorRuntimeSource, /ensureMappedChildWorkflow/)
   assert.match(sequenceAnimaticOrchestratorRuntimeSource, /buildSequenceAnimaticTemplateGraph/)
   assert.match(sequenceAnimaticOrchestratorRuntimeSource, /startSequenceAnimaticChildRun/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /export function sequenceAnimaticBlocksFromManifestAndDirectorPlan/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /sequenceAnimaticStoryboardImageSize/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /output-workflow-sequence-animatic-continuity-batches/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /sequenceAnimaticContinuityAssetBatches/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /sequenceAnimaticContinuityVisualDependencyEdges/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /sequenceAnimaticStableHash/)
+  assert.match(sequenceAnimaticOrchestratorRuntimeSource, /sequenceAnimaticGraphSpecVersion/)
+  assert.doesNotMatch(runtimeSource, /output-workflow-sequence-animatic-continuity-batches/)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticContinuityAssetBatches: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticContinuityVisualDependencyEdges: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticGraphSpecVersion,\s*\n/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticContinuityAssetBatches:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticContinuityVisualDependencyEdges:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticStableHash:/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticGraphSpecVersion:/)
+  assert.doesNotMatch(runtimeSource, /function sequenceAnimaticBlocksFromManifestAndDirectorPlan/)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticBlocksFromManifestAndDirectorPlan: /)
+  assert.doesNotMatch(runtimeSource, /sequenceAnimaticStoryboardImageSize/)
+  assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticStoryboardImageSize:/)
   assert.match(sequenceAnimaticChildRunRuntimeSource, /export async function startSequenceAnimaticChildRunRuntime/)
   assert.match(sequenceAnimaticChildRunRuntimeSource, /augmentStoryboardBlockWorkflowAssetPackWithContinuityAssets/)
   assert.match(runtimeSource, /startSequenceAnimaticChildRunRuntime/)
@@ -1165,28 +2452,36 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_scene_plan_merge'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_scene_plan_merge'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_scene_plan_merge'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_scene_plan_merge/)
-  assert.match(sequenceAnimaticPlanningPackSource, /Scene shot plan merge requires completed scene shot plans/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_scene_plan_merge/)
+  assert.match(sequenceAnimaticPlanningPackSource, /runSequenceAnimaticScenePlanMergeRuntime/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /export function runSequenceAnimaticScenePlanMergeRuntime/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /Scene shot plan merge requires completed scene shot plans/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /deterministic-sequence-animatic-scene-plan-merge-v1/)
+  assert.doesNotMatch(sequenceAnimaticPlanningPackSource, /Scene shot plan merge requires completed scene shot plans/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_manifest'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_manifest'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_manifest'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_manifest/)
-  assert.match(sequenceAnimaticPlanningPackSource, /Sequence animatic manifest requires the authored screenplay/)
-  assert.match(sequenceAnimaticPlanningPackSource, /deterministic-sequence-animatic-director-manifest-v1/)
+  assert.match(sequenceAnimaticPlanningPackSource, /sequence_animatic_manifest/)
+  assert.match(sequenceAnimaticPlanningPackSource, /buildSequenceAnimaticManifestRuntime/)
+  assert.match(sequenceAnimaticManifestRuntimeSource, /Sequence animatic manifest requires the authored screenplay/)
+  assert.match(sequenceAnimaticManifestRuntimeSource, /deterministic-sequence-animatic-director-manifest-v1/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_manifest_artifact'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_manifest_artifact'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_manifest_artifact'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_manifest_artifact/)
-  assert.match(sequenceAnimaticPlanningPackSource, /Sequence animatic manifest artifact requires a manifest input/)
+  assert.match(sequenceAnimaticArtifactPackSource, /sequence_animatic_manifest_artifact/)
+  assert.match(sequenceAnimaticArtifactPackSource, /Sequence animatic manifest artifact requires a manifest input/)
+  assert.doesNotMatch(sequenceAnimaticPlanningPackSource, /sequence_animatic_manifest_artifact/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_director_plan_artifact'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_director_plan_artifact'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_director_plan_artifact'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_director_plan_artifact/)
-  assert.match(sequenceAnimaticPlanningPackSource, /Sequence animatic shot continuity plan artifact requires a shot continuity plan input/)
+  assert.match(sequenceAnimaticArtifactPackSource, /sequence_animatic_director_plan_artifact/)
+  assert.match(sequenceAnimaticArtifactPackSource, /Sequence animatic shot continuity plan artifact requires a shot continuity plan input/)
+  assert.doesNotMatch(sequenceAnimaticPlanningPackSource, /sequence_animatic_director_plan_artifact/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_plan'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_coverage_plan'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_plan'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_plan/)
+  assert.match(sequenceAnimaticCoveragePackSource, /sequence_animatic_coverage_plan: sequenceAnimaticCoveragePlan/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_coverage_plan: sequenceAnimaticCoveragePlan/)
   assert.match(sequenceAnimaticCoveragePackSource, /from '\.\/output-workflow-sequence-animatic-coverage-runtime\.ts'/)
   assert.match(sequenceAnimaticCoveragePackSource, /Assign every shot to exactly one coverage setup/)
   assert.match(sequenceAnimaticCoverageRuntimeSource, /export const sequenceAnimaticShotContinuityCoverageSetupV2Schema/)
@@ -1204,7 +2499,8 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_intent_artifact'/)
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_coverage_intent_plan'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_intent_plan'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_intent_plan/)
+  assert.match(sequenceAnimaticCoveragePackSource, /sequence_animatic_coverage_intent_plan: sequenceAnimaticCoverageIntentPlan/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_coverage_intent_plan: sequenceAnimaticCoverageIntentPlan/)
   assert.match(sequenceAnimaticCoveragePackSource, /sequence_animatic_coverage_intent_batch/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_anchor_input'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_coverage_anchor_brief'/)
@@ -1214,18 +2510,29 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.doesNotMatch(runtimeSource, /purpose === 'sequence_animatic_coverage_anchor_prompt'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_anchor_brief'/)
   assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_coverage_anchor_prompt'/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_anchor_brief/)
-  assert.match(sequenceAnimaticPackSource, /sequence_animatic_coverage_anchor_prompt/)
+  assert.match(sequenceAnimaticCoveragePackSource, /sequence_animatic_coverage_anchor_brief: sequenceAnimaticCoverageAnchorBrief/)
+  assert.match(sequenceAnimaticCoveragePackSource, /sequence_animatic_coverage_anchor_prompt: sequenceAnimaticCoverageAnchorPrompt/)
+  assert.match(sequenceAnimaticCoveragePackSource, /sequenceAnimaticCoverageWorkflowNodeScaffolds/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_coverage_anchor_brief: sequenceAnimaticCoverageAnchorBrief/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_coverage_anchor_prompt: sequenceAnimaticCoverageAnchorPrompt/)
   assert.match(sequenceAnimaticCoveragePackSource, /runBackgroundStructuredNode/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequence_animatic_continuity_anchor_plan: sequenceAnimaticContinuityAnchorPlan/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequence_animatic_character_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequence_animatic_prop_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequence_animatic_location_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequence_animatic_character_anchor_extract: sequenceAnimaticAnchorExtract/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequence_animatic_prop_anchor_extract: sequenceAnimaticAnchorExtract/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequence_animatic_location_anchor_extract: sequenceAnimaticAnchorExtract/)
+  assert.match(sequenceAnimaticAnchorPackSource, /sequenceAnimaticContinuityAnchorWorkflowNodeScaffolds/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_continuity_anchor_plan: sequenceAnimaticContinuityAnchorPlan/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_character_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_prop_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_location_anchor_atlas_prompt: sequenceAnimaticAnchorAtlasPrompt/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_character_anchor_extract: sequenceAnimaticAnchorExtract/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_prop_anchor_extract: sequenceAnimaticAnchorExtract/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_location_anchor_extract: sequenceAnimaticAnchorExtract/)
   const migratedContinuityGraphHandlers = [
     'sequence_animatic_continuity_input',
-    'sequence_animatic_continuity_anchor_plan',
-    'sequence_animatic_character_anchor_atlas_prompt',
-    'sequence_animatic_prop_anchor_atlas_prompt',
-    'sequence_animatic_location_anchor_atlas_prompt',
-    'sequence_animatic_character_anchor_extract',
-    'sequence_animatic_prop_anchor_extract',
-    'sequence_animatic_location_anchor_extract',
     'sequence_animatic_continuity_seed_graph',
     'sequence_animatic_continuity_global_plan',
     'sequence_animatic_continuity_global_merge',
@@ -1235,54 +2542,119 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
     'sequence_animatic_continuity_structure_artifact',
     'sequence_animatic_continuity_artifact',
   ]
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_input: sequenceAnimaticContinuityInput/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_seed_graph: sequenceAnimaticContinuitySeedGraph/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_global_plan: sequenceAnimaticContinuityGlobalPlan/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_global_merge: sequenceAnimaticContinuityGlobalMerge/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_block_plan: sequenceAnimaticContinuityBlockPlan/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_block_merge: sequenceAnimaticContinuityBlockMerge/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_graph_finalize: sequenceAnimaticContinuityGraphFinalize/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_structure_artifact: sequenceAnimaticContinuityStructureArtifact/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequence_animatic_continuity_artifact: sequenceAnimaticContinuityArtifact/)
+  assert.match(sequenceAnimaticGraphPackSource, /sequenceAnimaticContinuityGraphWorkflowNodeScaffolds/)
   for (const handlerKey of migratedContinuityGraphHandlers) {
     assert.doesNotMatch(runtimeSource, new RegExp(`legacyMonolithWorkflowNodeHandlerKeys = \\[[\\s\\S]*'${handlerKey}'`))
     assert.doesNotMatch(runtimeSource, new RegExp(`if \\(purpose === '${handlerKey}'`))
     assert.doesNotMatch(legacyHandlersSource, new RegExp(`'${handlerKey}'`))
-    assert.match(sequenceAnimaticOwnedSource, new RegExp(handlerKey))
+    assert.match(sequenceAnimaticGraphPackSource, new RegExp(handlerKey))
+    assert.doesNotMatch(sequenceAnimaticPackSource, new RegExp(`${handlerKey}:`))
   }
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_asset_input'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_batch_input'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_batch_prompt'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_batch_extract'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_asset_prompt'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_asset_artifact'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_continuity_batch_artifact'/)
-  assert.doesNotMatch(runtimeSource, /if \(purpose === 'sequence_animatic_continuity_batch_input'/)
-  assert.doesNotMatch(runtimeSource, /if \(purpose === 'sequence_animatic_continuity_batch_prompt'/)
-  assert.doesNotMatch(runtimeSource, /if \(purpose === 'sequence_animatic_continuity_batch_extract'/)
-  assert.doesNotMatch(runtimeSource, /if \(purpose === 'sequence_animatic_continuity_asset_prompt'/)
-  assert.doesNotMatch(runtimeSource, /if \(purpose === 'sequence_animatic_continuity_batch_artifact'/)
-  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_continuity_batch_input'/)
-  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_continuity_batch_prompt'/)
-  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_continuity_batch_extract'/)
-  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_continuity_asset_prompt'/)
-  assert.doesNotMatch(legacyHandlersSource, /'sequence_animatic_continuity_batch_artifact'/)
-  assert.match(sequenceAnimaticAssetPackSource, /sequenceAnimaticContinuityBatchInput/)
-  assert.match(sequenceAnimaticAssetPackSource, /sequenceAnimaticContinuityBatchPrompt/)
-  assert.match(sequenceAnimaticAssetPackSource, /sequenceAnimaticContinuityBatchExtract/)
-  assert.match(sequenceAnimaticAssetPackSource, /sequenceAnimaticContinuityAssetPrompt/)
-  assert.match(sequenceAnimaticAssetPackSource, /sequenceAnimaticContinuityBatchArtifact/)
+  for (const handlerKey of [
+    'sequence_animatic_continuity_anchor_plan',
+    'sequence_animatic_character_anchor_atlas_prompt',
+    'sequence_animatic_prop_anchor_atlas_prompt',
+    'sequence_animatic_location_anchor_atlas_prompt',
+    'sequence_animatic_character_anchor_extract',
+    'sequence_animatic_prop_anchor_extract',
+    'sequence_animatic_location_anchor_extract',
+  ]) {
+    assert.doesNotMatch(runtimeSource, new RegExp(`legacyMonolithWorkflowNodeHandlerKeys = \\[[\\s\\S]*'${handlerKey}'`))
+    assert.doesNotMatch(runtimeSource, new RegExp(`if \\(purpose === '${handlerKey}'`))
+    assert.doesNotMatch(legacyHandlersSource, new RegExp(`'${handlerKey}'`))
+    assert.match(sequenceAnimaticAnchorPackSource, new RegExp(handlerKey))
+    assert.doesNotMatch(sequenceAnimaticPackSource, new RegExp(`${handlerKey}:`))
+  }
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_asset_input: sequenceAnimaticContinuityAssetInput/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_input: sequenceAnimaticContinuityBatchInput/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_prompt: sequenceAnimaticContinuityBatchPrompt/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_extract: sequenceAnimaticContinuityBatchExtract/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_asset_prompt: sequenceAnimaticContinuityAssetPrompt/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_asset_artifact: sequenceAnimaticContinuityAssetArtifact/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_artifact: sequenceAnimaticContinuityBatchArtifact/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequenceAnimaticContinuityAssetWorkflowNodeScaffolds/)
+  for (const handlerKey of [
+    'sequence_animatic_continuity_asset_input',
+    'sequence_animatic_continuity_batch_input',
+    'sequence_animatic_continuity_batch_prompt',
+    'sequence_animatic_continuity_batch_extract',
+    'sequence_animatic_continuity_asset_prompt',
+    'sequence_animatic_continuity_asset_artifact',
+    'sequence_animatic_continuity_batch_artifact',
+  ]) {
+    assert.doesNotMatch(runtimeSource, new RegExp(`legacyMonolithWorkflowNodeHandlerKeys = \\[[\\s\\S]*'${handlerKey}'`))
+    assert.doesNotMatch(runtimeSource, new RegExp(`if \\(purpose === '${handlerKey}'`))
+    assert.doesNotMatch(legacyHandlersSource, new RegExp(`'${handlerKey}'`))
+    assert.match(sequenceAnimaticAssetPackSource, new RegExp(handlerKey))
+    assert.doesNotMatch(sequenceAnimaticPackSource, new RegExp(`${handlerKey}:`))
+  }
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_input'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shared_asset_ref'/)
   assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_reference_pack'/)
   assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticShotInput/)
   assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticSharedAssetRef/)
   assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticShotReferencePack/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /sequence_animatic_shot_input: sequenceAnimaticShotInput/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /sequence_animatic_shared_asset_ref: sequenceAnimaticSharedAssetRef/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /sequence_animatic_shot_reference_pack: sequenceAnimaticShotReferencePack/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /registerSequenceAnimaticShotReferenceWorkflowNodePack/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticShotReferenceWorkflowNodeScaffolds/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_shot_input: sequenceAnimaticShotInput/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_shared_asset_ref: sequenceAnimaticSharedAssetRef/)
+  assert.doesNotMatch(sequenceAnimaticPackSource, /sequence_animatic_shot_reference_pack: sequenceAnimaticShotReferencePack/)
   assert.match(sequenceAnimaticShotReferencePackSource, /providerSafeCinematicV2DurationSeconds/)
   assert.match(sequenceAnimaticShotReferencePackSource, /referenceScope: 'sequence_animatic_shot_production'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_prompt'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_input'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_image'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_planned_keyframe_artifact'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_video_prompt'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_video'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_video_artifact'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_revision_input'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_revision_plan'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_keyframe_prompt'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_keyframe_image'/)
-  assert.doesNotMatch(runtimeSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_revision_artifact'/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_planned_keyframe_prompt: sequenceAnimaticPlannedKeyframePrompt/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_planned_keyframe_input: sequenceAnimaticPlannedKeyframeInput/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_planned_keyframe_image: sequenceAnimaticPlannedKeyframeImage/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_planned_keyframe_artifact: sequenceAnimaticPlannedKeyframeArtifact/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_shot_video_prompt: sequenceAnimaticShotVideoPrompt/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_shot_video: sequenceAnimaticShotVideo/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_shot_video_artifact: sequenceAnimaticShotVideoArtifact/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequenceAnimaticShotProductionWorkflowNodeScaffolds/)
+  for (const handlerKey of [
+    'sequence_animatic_planned_keyframe_prompt',
+    'sequence_animatic_planned_keyframe_input',
+    'sequence_animatic_planned_keyframe_image',
+    'sequence_animatic_planned_keyframe_artifact',
+    'sequence_animatic_shot_video_prompt',
+    'sequence_animatic_shot_video',
+    'sequence_animatic_shot_video_artifact',
+  ]) {
+    assert.doesNotMatch(runtimeSource, new RegExp(`legacyMonolithWorkflowNodeHandlerKeys = \\[[\\s\\S]*'${handlerKey}'`))
+    assert.doesNotMatch(runtimeSource, new RegExp(`if \\(purpose === '${handlerKey}'`))
+    assert.doesNotMatch(legacyHandlersSource, new RegExp(`'${handlerKey}'`))
+    assert.match(sequenceAnimaticShotProductionPackSource, new RegExp(handlerKey))
+    assert.doesNotMatch(sequenceAnimaticPackSource, new RegExp(`${handlerKey}:`))
+  }
+  assert.match(sequenceAnimaticShotRevisionPackSource, /sequence_animatic_shot_revision_input: sequenceAnimaticShotRevisionInput/)
+  assert.match(sequenceAnimaticShotRevisionPackSource, /sequence_animatic_shot_revision_plan: sequenceAnimaticShotRevisionPlan/)
+  assert.match(sequenceAnimaticShotRevisionPackSource, /sequence_animatic_shot_keyframe_prompt: sequenceAnimaticShotKeyframePrompt/)
+  assert.match(sequenceAnimaticShotRevisionPackSource, /sequence_animatic_shot_keyframe_image: sequenceAnimaticShotKeyframeImage/)
+  assert.match(sequenceAnimaticShotRevisionPackSource, /sequence_animatic_shot_revision_artifact: sequenceAnimaticShotRevisionArtifact/)
+  assert.match(sequenceAnimaticShotRevisionPackSource, /sequenceAnimaticShotRevisionWorkflowNodeScaffolds/)
+  for (const handlerKey of [
+    'sequence_animatic_shot_revision_input',
+    'sequence_animatic_shot_revision_plan',
+    'sequence_animatic_shot_keyframe_prompt',
+    'sequence_animatic_shot_keyframe_image',
+    'sequence_animatic_shot_revision_artifact',
+  ]) {
+    assert.doesNotMatch(runtimeSource, new RegExp(`legacyMonolithWorkflowNodeHandlerKeys = \\[[\\s\\S]*'${handlerKey}'`))
+    assert.doesNotMatch(runtimeSource, new RegExp(`if \\(purpose === '${handlerKey}'`))
+    assert.doesNotMatch(legacyHandlersSource, new RegExp(`'${handlerKey}'`))
+    assert.match(sequenceAnimaticShotRevisionPackSource, new RegExp(handlerKey))
+    assert.doesNotMatch(sequenceAnimaticPackSource, new RegExp(`${handlerKey}:`))
+  }
   assert.match(mediaPackSource, /executeImageGeneration/)
   assert.match(mediaPackSource, /executeVideoGeneration/)
   assert.match(mediaPackSource, /WorkflowMediaRuntime/)
@@ -1402,6 +2774,27 @@ test('scene board progress lookup is owned by projection helpers', () => {
   assert.doesNotMatch(pageSource, /\.filter\(\(request\) => sceneBoardPrepRequestMatchesScope/)
 })
 
+test('sequence animatic reference policy is imported by packs instead of injected by executor helpers', () => {
+  const repoRoot = process.cwd()
+  const helperTypesSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-node-pack-types.ts'), 'utf8')
+  const referenceRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-reference-runtime.ts'), 'utf8')
+  const cinematicAssetPackRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-cinematic-asset-pack-runtime.ts'), 'utf8')
+  const coveragePackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-coverage-pack.ts'), 'utf8')
+  const shotProductionPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-shot-production-pack.ts'), 'utf8')
+  const manifestRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-manifest-runtime.ts'), 'utf8')
+
+  assert.match(referenceRuntimeSource, /export function orderSequenceAnimaticAssetPackReferences/)
+  assert.match(referenceRuntimeSource, /export function sequenceAnimaticReferenceManifestEntries/)
+  assert.match(cinematicAssetPackRuntimeSource, /export function cinematicAssetPackEntityKeys/)
+  assert.match(coveragePackSource, /output-workflow-sequence-animatic-reference-runtime/)
+  assert.match(shotProductionPackSource, /sequenceAnimaticReferenceVisual/)
+  assert.match(manifestRuntimeSource, /cinematicV2ShotPlanSchema\.safeParse/)
+  assert.doesNotMatch(helperTypesSource, /sequenceAnimaticReferenceManifestEntries:/)
+  assert.doesNotMatch(helperTypesSource, /sequenceAnimaticReferenceRole:/)
+  assert.doesNotMatch(helperTypesSource, /cinematicAssetPackEntityKeys:/)
+  assert.doesNotMatch(helperTypesSource, /parseSequenceAnimaticShotPlan:/)
+})
+
 test('streaming jsonl processor extracts partial JSON records and tracks warnings', async () => {
   const repoRoot = process.cwd()
   const streamingSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-streaming.ts'), 'utf8')
@@ -1482,3 +2875,4 @@ function step(
     updatedAt: '2026-01-01T00:00:00.000Z',
   }
 }
+

@@ -1,4 +1,60 @@
+import {
+  sequenceAnimaticGraphSpecVersion,
+  sequenceAnimaticStableHash,
+  sequenceAnimaticStoryboardImageSize,
+} from './sequence-animatic-workflow-factory.ts'
+import {
+  sequenceAnimaticContinuityAssetBatches,
+} from './output-workflow-sequence-animatic-continuity-batches.ts'
+import {
+  sequenceAnimaticContinuityVisualDependencyEdges,
+} from './output-workflow-sequence-animatic-continuity-graph-runtime.ts'
+
 type LooseRecord = Record<string, unknown>
+
+function asRecord(value: unknown): LooseRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as LooseRecord : {}
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function readText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readStringArray(value: unknown) {
+  return readArray(value).map(readText).filter(Boolean)
+}
+
+export function sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest: LooseRecord, directorPlan: LooseRecord): LooseRecord[] {
+  const directorShots = readArray(directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
+  const directorShotById = new Map(directorShots.map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+  const directorBlocks = readArray(directorPlan.blocks).map(asRecord).filter((block) => readText(block.id))
+  const directorBlockById = new Map(directorBlocks.map((block) => [readText(block.id), block] as const).filter(([id]) => id))
+  return readArray(manifest.blocks).map(asRecord).filter((block) => readText(block.id)).map((block) => {
+    const blockId = readText(block.id)
+    const directorBlock = directorBlockById.get(blockId) ?? {}
+    const manifestShotIds = readStringArray(block.shotIds)
+    const directorShotIds = readStringArray(directorBlock.shotIds)
+    const shotIds = directorShotIds.length > 0 ? directorShotIds : manifestShotIds
+    const manifestShotsById = new Map(readArray(block.shots).map(asRecord).map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+    const shots = shotIds
+      .map((shotId) => ({ ...asRecord(manifestShotsById.get(shotId)), ...asRecord(directorShotById.get(shotId)), id: shotId }))
+      .filter((shot) => readText(shot.id))
+    return {
+      ...block,
+      ...directorBlock,
+      id: blockId,
+      shotIds: shotIds.length > 0 ? shotIds : readStringArray(block.shotIds),
+      shots: shots.length > 0 ? shots : readArray(block.shots).map(asRecord),
+      storyboardGroup: asRecord(block.storyboardGroup),
+      storyboardLayout: asRecord(block.storyboardLayout),
+      durationSeconds: Number(directorBlock.durationSeconds ?? block.durationSeconds ?? 0) || Number(block.durationSeconds ?? 0) || undefined,
+    }
+  })
+}
 
 type SequenceAnimaticRuntimeRequest = {
   id: string
@@ -64,20 +120,11 @@ export type SequenceAnimaticOrchestratorRuntimeHelpers = {
   readArray: (value: unknown) => unknown[]
   readStringArray: (value: unknown) => string[]
   slugify: (value: string) => string
-  sequenceAnimaticStableHash: (value: unknown) => string
-  sequenceAnimaticGraphSpecVersion: string
   readScreenplayAnimaticRoleFromMetadata: (metadata: LooseRecord) => string
   readScreenplayAnimaticSourceFromMetadata: (
     metadata: LooseRecord,
     fallback?: 'wiki_sequence_unit' | 'prompt_cinematic',
   ) => 'wiki_sequence_unit' | 'prompt_cinematic'
-  sequenceAnimaticBlocksFromManifestAndDirectorPlan: (manifest: LooseRecord, directorPlan: LooseRecord) => LooseRecord[]
-  sequenceAnimaticContinuityAssetBatches: (input: {
-    directorPlan: LooseRecord
-    manifest: LooseRecord
-  }) => LooseRecord[]
-  sequenceAnimaticContinuityVisualDependencyEdges: (graphInput: unknown) => unknown[]
-  sequenceAnimaticStoryboardImageSize: (columns: number, rows: number, aspectRatio: string) => { width: number; height: number }
   loadMasterRequestForWorkflow: (input: {
     client: unknown
     draftId: string
@@ -163,15 +210,15 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
   if (Object.keys(directorPlan).length === 0) throw new Error('Sequence animatic orchestrator requires a shot continuity plan.')
   if (Object.keys(manifest).length === 0) throw new Error('Sequence animatic orchestrator requires the master manifest.')
 
-  const blocks = helpers.sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest, directorPlan)
+  const blocks = sequenceAnimaticBlocksFromManifestAndDirectorPlan(manifest, directorPlan)
   if (blocks.length === 0) throw new Error('Sequence animatic orchestrator found no storyboard blocks to queue.')
 
   const screenplayAnimaticSource = helpers.readScreenplayAnimaticSourceFromMetadata(
     masterMetadata,
     masterRequest.sourceSurface === 'wiki_sequence_unit' ? 'wiki_sequence_unit' : 'prompt_cinematic',
   )
-  const manifestHash = helpers.sequenceAnimaticStableHash(manifest)
-  const directorPlanHash = helpers.readText(directorPlan.shotPlanHash) || helpers.sequenceAnimaticStableHash(directorPlan)
+  const manifestHash = sequenceAnimaticStableHash(manifest)
+  const directorPlanHash = helpers.readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
   const masterManifestArtifactKey = helpers.readText(masterMetadata.masterManifestArtifactKey)
     || `output.${helpers.slugify(context.workflow.name)}.${context.run.id.slice(0, 8)}.sequence-animatic-manifest`
   const existingChildren = await helpers.loadChildRequests({
@@ -221,7 +268,7 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
     })
   }
 
-  const continuityAssetBatches = helpers.sequenceAnimaticContinuityAssetBatches({ directorPlan, manifest })
+  const continuityAssetBatches = sequenceAnimaticContinuityAssetBatches({ directorPlan, manifest })
   const existingBatchChildren = existingChildren
     .filter((child) => helpers.asRecord(child.metadata).sequenceAnimaticStale !== true && helpers.readScreenplayAnimaticRoleFromMetadata(helpers.asRecord(child.metadata)) === 'continuity_asset_batch')
   const existingBatchById = new Map(existingBatchChildren
@@ -233,14 +280,14 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
     const batchId = helpers.readText(batch.batchId)
     if (!batchId) continue
     let child = existingBatchById.get(batchId) ?? null
-    const batchHash = helpers.sequenceAnimaticStableHash(batch)
+    const batchHash = sequenceAnimaticStableHash(batch)
     if (!child) {
       const targetNodeIds = helpers.readStringArray(batch.targetNodeIds)
       const targetNodes = helpers.readArray(batch.targetNodes).map(helpers.asRecord).filter((node) => targetNodeIds.includes(helpers.readText(node.id)))
       const workflowId = crypto.randomUUID()
       const commonConfig = {
         cinematicPipelineVersion: 'v3_script_storyboards',
-        graphSpecVersion: helpers.sequenceAnimaticGraphSpecVersion,
+        graphSpecVersion: sequenceAnimaticGraphSpecVersion,
         screenplayAnimaticRole: 'continuity_asset_batch',
         screenplayAnimaticSource,
         sequenceAnimaticRole: 'continuity_asset_batch',
@@ -266,7 +313,7 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
           shotBindings: helpers.asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings),
           assetPack: helpers.asRecord(manifest.assetPack),
           referenceAssetKeys: helpers.readStringArray(batch.worldReferenceAssetKeys),
-          visualDependencyEdges: helpers.sequenceAnimaticContinuityVisualDependencyEdges(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
+          visualDependencyEdges: sequenceAnimaticContinuityVisualDependencyEdges(directorPlan.continuityGraphV2 ?? directorPlan.continuity_graph_v2),
           aspectRatio: helpers.readText(helpers.asRecord(manifest.assetPack).aspectRatio) || '16:9',
         },
       })
@@ -372,7 +419,7 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
     const blockId = helpers.readText(block.id)
     if (!blockId) continue
     let child = existingByBlockId.get(blockId) ?? null
-    const blockHash = helpers.sequenceAnimaticStableHash(block)
+    const blockHash = sequenceAnimaticStableHash(block)
     if (!child) {
       const storyboardGroup = helpers.asRecord(block.storyboardGroup)
       const layout = helpers.asRecord(block.storyboardLayout)
@@ -380,7 +427,7 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
       const columns = Math.max(1, Number(layout.columns ?? storyboardGroup.columns ?? 1) || 1)
       const panelCount = Math.max(1, Number(layout.panelCount ?? storyboardGroup.panelCount ?? helpers.readArray(block.shots).length) || 1)
       const aspectRatio = helpers.readText(helpers.asRecord(manifest.assetPack).aspectRatio) || '16:9'
-      const imageSize = helpers.sequenceAnimaticStoryboardImageSize(columns, rows, aspectRatio)
+      const imageSize = sequenceAnimaticStoryboardImageSize(columns, rows, aspectRatio)
       const workflowId = crypto.randomUUID()
       const blockShotPlan = {
         ...helpers.asRecord(manifest.shotPlan),
@@ -389,7 +436,7 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
       }
       const commonConfig = {
         cinematicPipelineVersion: 'v3_script_storyboards',
-        graphSpecVersion: helpers.sequenceAnimaticGraphSpecVersion,
+        graphSpecVersion: sequenceAnimaticGraphSpecVersion,
         screenplayAnimaticRole: 'storyboard_block',
         screenplayAnimaticSource,
         sequenceAnimaticRole: 'storyboard_block',
@@ -462,7 +509,7 @@ export async function runSequenceAnimaticOrchestratorRuntime(input: {
         target_format: 'video',
         planner_notes: 'Storyboard block graph prepared by the sequence animatic Fly orchestrator.',
         metadata: {
-          graphSpecVersion: helpers.sequenceAnimaticGraphSpecVersion,
+          graphSpecVersion: sequenceAnimaticGraphSpecVersion,
           directorPlanHash,
           screenplayAnimaticRole: 'storyboard_block',
           screenplayAnimaticSource,

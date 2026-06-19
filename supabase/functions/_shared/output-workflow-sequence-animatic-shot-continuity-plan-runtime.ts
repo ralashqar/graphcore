@@ -17,24 +17,10 @@ import {
 import {
   sequenceAnimaticShotContinuityCoverageSetupV2Schema,
 } from './output-workflow-sequence-animatic-coverage-runtime.ts'
-
-export type SequenceAnimaticShotRefs = {
-  visibleCharacterRefIds: string[]
-  speakerRefIds: string[]
-  propRefIds: string[]
-  locationRefIds: string[]
-  localReferenceIds: string[]
-}
-
-export type SequenceAnimaticShotContinuityPlanRuntimeHelpers = {
-  sequenceAnimaticShotRefs: (shot: Record<string, unknown>, fallback?: Record<string, unknown>) => SequenceAnimaticShotRefs
-  sequenceAnimaticShotBindingFromSceneBinding: (input: {
-    shotId: string
-    storyboardBlockId: string
-    sceneBinding: Record<string, unknown>
-    refs: SequenceAnimaticShotRefs
-  }) => unknown
-}
+import {
+  sequenceAnimaticShotBindingFromSceneBinding,
+  sequenceAnimaticShotRefs,
+} from './output-workflow-sequence-animatic-shot-binding-runtime.ts'
 
 type SequenceAnimaticShotContinuityStreamAccumulator = {
   planStarted: boolean
@@ -279,7 +265,6 @@ function sequenceAnimaticSceneGraphRecordToNode(record: z.infer<typeof sequenceA
 export function applySequenceAnimaticShotContinuityStreamRecord(
   accumulator: SequenceAnimaticShotContinuityStreamAccumulator,
   record: SequenceAnimaticShotContinuityStreamRecord,
-  helpers: SequenceAnimaticShotContinuityPlanRuntimeHelpers,
 ) {
   if (record.kind === 'plan_start') {
     accumulator.planStarted = true
@@ -293,8 +278,8 @@ export function applySequenceAnimaticShotContinuityStreamRecord(
   }
   if (record.kind === 'shot') {
     const { kind: _kind, ...shot } = record
-    const refs = helpers.sequenceAnimaticShotRefs(shot)
-    helpers.sequenceAnimaticShotBindingFromSceneBinding({
+    const refs = sequenceAnimaticShotRefs(shot)
+    sequenceAnimaticShotBindingFromSceneBinding({
       shotId: shot.id,
       storyboardBlockId: shot.blockId,
       sceneBinding: asRecord(shot.sceneBinding),

@@ -1,6 +1,9 @@
 import {
   type OutputRequest,
 } from '../../../src/domain/outputWorkflow.ts'
+import {
+  sequenceAnimaticScenePackageOutputSchema,
+} from './output-workflow-sequence-animatic-scene-package-runtime.ts'
 
 type LooseRecord = Record<string, unknown>
 
@@ -33,7 +36,6 @@ export type SequenceAnimaticSceneShotPlanEnsureHelpers = {
   slugify: (value: string) => string
   sequenceAnimaticStableHash: (value: unknown) => string
   readScreenplayAnimaticRoleFromMetadata: (metadata: LooseRecord) => string
-  parseSequenceAnimaticScenePackageOutput: (value: unknown) => ScenePackageOutput
   loadChildRequests: (input: {
     projectId: string
     draftId: string
@@ -92,7 +94,7 @@ export async function ensureSequenceAnimaticSceneShotPlanWorkflowsRuntime(input:
   const screenplayAnimaticSource = helpers.readText(masterMetadata.screenplayAnimaticSource) === 'prompt_cinematic'
     ? 'prompt_cinematic'
     : 'wiki_sequence_unit'
-  const parsedPackage = helpers.parseSequenceAnimaticScenePackageOutput(input.scenePackageOutput)
+  const parsedPackage = sequenceAnimaticScenePackageOutputSchema.parse(input.scenePackageOutput) as ScenePackageOutput
   const scenePackages = (parsedPackage.scenePackages.length > 0 ? parsedPackage.scenePackages : parsedPackage.screenplayScenes)
     .slice()
     .sort((left, right) => (Number(left.index ?? 0) || 9999) - (Number(right.index ?? 0) || 9999))
