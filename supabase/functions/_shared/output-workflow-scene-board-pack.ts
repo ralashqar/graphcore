@@ -6,9 +6,17 @@ import {
   type WorkflowNodeRuntimeKind,
 } from '../../../src/domain/outputWorkflowManifests.ts'
 import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import {
+  buildSceneContinuityManifestSourceHash,
+  buildShotReferenceReadinessHash,
+  sceneContinuityManifestSchema,
+  type SceneContinuityBlockerReason,
+} from '../../../src/domain/sceneContinuityManifest.ts'
 import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import {
   planSceneBoardCoverageIntentChildren,
+  planSceneBoardScaffoldRefChildren,
+  planSceneBoardSetRefChildren,
   planSceneBoardZoneCoverageGridChildren,
 } from './sequence-animatic-scene-board-child-planners.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
@@ -313,8 +321,8 @@ async function sceneBoardRequiredRefPlan(
     zoneId: helpers.readText(scope.zoneId ?? command.zoneId),
     scopeNodeId: helpers.readText(scope.scopeNodeId ?? command.scopeNodeId),
     shotIds: helpers.readStringArray(scope.shotIds ?? command.shotIds),
-    stages: ['set_refs', 'scaffold_refs', 'coverage_directions', 'coverage_grids'],
-    migrationMode: 'graph_native_parent',
+    stages: ['set_refs', 'zone_maps', 'spot_atlases', 'spot_angles', 'coverage_directions', 'coverage_grids', 'shot_reference_readiness'],
+    migrationMode: 'scene_continuity_prep_parent',
   }
   const outputs = {
     scope,
@@ -326,21 +334,101 @@ async function sceneBoardRequiredRefPlan(
   return result({ context, helpers, outputs, model: 'sequence-animatic-scene-board-required-ref-plan-v1' })
 }
 
+async function sceneBoardSpotAngleCoverage(
+  context: SceneBoardNodeExecutionContext,
+  helpers: SceneBoardWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const command = helpers.asRecord(config.command ?? config.sceneBoardCommand ?? config.scene_board_command)
+  const upstreamStatus = helpers.readFirstUpstreamRecord(context.upstream, ['workflowRuntime', 'workflow_runtime', 'upstreamStatus'])
+  const configuredChildWorkflows = readStageChildWorkflows(config, command, 'spot_angles')
+  const planned = configuredChildWorkflows.length > 0
+    ? { childWorkflows: configuredChildWorkflows, diagnostics: [] as string[], metadata: { source: 'configured' } }
+    : await planSceneBoardScaffoldRefChildren({
+        client: context.client as never,
+        projectId: context.run.projectId,
+        draftId: context.run.draftId,
+        masterRequestId: helpers.readText(config.masterRequestId),
+        sceneId: helpers.readText(command.sceneId ?? config.sceneId),
+        setId: helpers.readText(command.setId ?? config.setId),
+        zoneId: helpers.readText(command.zoneId ?? config.zoneId),
+        shotIds: helpers.readStringArray(command.shotIds ?? command.shot_ids ?? config.shotIds),
+        scopedShots: Array.isArray(command.scopedShots) ? command.scopedShots.map(helpers.asRecord) : [],
+        requestedBy: helpers.readText(config.requestedBy) || helpers.readText(context.run.requestedBy),
+        forceRefresh: command.forceRefresh === true || config.forceRefresh === true,
+        upstreamStatus,
+        mode: 'spot_angles',
+      })
+  const childWorkflows = planned.childWorkflows
+  const planningBlocked = childWorkflows.length === 0
+    && planned.diagnostics.length > 0
+    && helpers.readText(helpers.asRecord(planned.metadata).reason)
+  const spotAngleStatus = {
+    status: childWorkflows.length > 0 ? 'planned' : planningBlocked ? 'blocked' : 'ready',
+    stage: 'spot_angles',
+    upstreamStatus,
+    message: childWorkflows.length > 0
+      ? 'Canonical spot angle child workflows are planned under the Scene Board continuity prep parent.'
+      : 'All required canonical spot angle references are already ready or no spot angles are required for this scope.',
+    childWorkflowCount: childWorkflows.length,
+    diagnostics: planned.diagnostics,
+    planningMetadata: planned.metadata,
+    childRequests: [],
+  }
+  const outputs = {
+    spotAngleStatus,
+    spot_angle_status: spotAngleStatus,
+    childWorkflows,
+    child_workflows: childWorkflows,
+    childRequests: [],
+    child_requests: [],
+    text: JSON.stringify(spotAngleStatus, null, 2),
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'sequence-animatic-scene-board-spot-angle-coverage-v1' })
+}
+
 async function sceneBoardSetRefGeneration(
   context: SceneBoardNodeExecutionContext,
   helpers: SceneBoardWorkflowNodePackHelpers,
 ) {
+  const config = helpers.asRecord(context.node.config)
+  const command = helpers.asRecord(config.command ?? config.sceneBoardCommand ?? config.scene_board_command)
   const requiredRefs = helpers.readFirstUpstreamRecord(context.upstream, ['requiredRefs', 'required_refs'])
+  const configuredChildWorkflows = readStageChildWorkflows(config, command, 'set_refs')
+  const planned = configuredChildWorkflows.length > 0
+    ? { childWorkflows: configuredChildWorkflows, diagnostics: [] as string[], metadata: { source: 'configured' } }
+    : await planSceneBoardSetRefChildren({
+        client: context.client as never,
+        projectId: context.run.projectId,
+        draftId: context.run.draftId,
+        masterRequestId: helpers.readText(config.masterRequestId),
+        sceneId: helpers.readText(command.sceneId ?? config.sceneId),
+        setId: helpers.readText(command.setId ?? config.setId),
+        zoneId: helpers.readText(command.zoneId ?? config.zoneId),
+        shotIds: helpers.readStringArray(command.shotIds ?? command.shot_ids ?? config.shotIds),
+        scopedShots: Array.isArray(command.scopedShots) ? command.scopedShots.map(helpers.asRecord) : [],
+        requestedBy: helpers.readText(config.requestedBy) || helpers.readText(context.run.requestedBy),
+        forceRefresh: command.forceRefresh === true || config.forceRefresh === true,
+      })
+  const childWorkflows = planned.childWorkflows
   const setRefStatus = {
-    status: 'delegated',
+    status: childWorkflows.length > 0 ? 'planned' : 'ready',
     stage: 'set_refs',
     requiredRefs,
-    message: 'Set reference generation is represented by the graph-native Scene Board prep parent. Existing continuity asset child workflows remain the asset-producing implementation during migration.',
+    message: childWorkflows.length > 0
+      ? 'Set reference child workflows are planned under the Scene Board continuity prep parent.'
+      : 'All required set references are already ready or no set references are required for this scope.',
+    childWorkflowCount: childWorkflows.length,
+    diagnostics: planned.diagnostics,
+    planningMetadata: planned.metadata,
     childRequests: [],
   }
   const outputs = {
     setRefStatus,
     set_ref_status: setRefStatus,
+    childWorkflows,
+    child_workflows: childWorkflows,
     childRequests: [],
     child_requests: [],
     text: JSON.stringify(setRefStatus, null, 2),
@@ -353,17 +441,56 @@ async function sceneBoardScaffoldRefGeneration(
   context: SceneBoardNodeExecutionContext,
   helpers: SceneBoardWorkflowNodePackHelpers,
 ) {
-  const setRefStatus = helpers.readFirstUpstreamRecord(context.upstream, ['setRefStatus', 'set_ref_status'])
+  const config = helpers.asRecord(context.node.config)
+  const command = helpers.asRecord(config.command ?? config.sceneBoardCommand ?? config.scene_board_command)
+  const mode = helpers.readText(config.scaffoldMode ?? config.scaffold_mode) === 'spot_atlases' ? 'spot_atlases' : 'zone_maps'
+  const upstreamStatus = helpers.readFirstUpstreamRecord(context.upstream, ['setRefStatus', 'set_ref_status', 'workflowRuntime', 'workflow_runtime', 'upstreamStatus'])
+  const configuredChildWorkflows = readStageChildWorkflows(config, command, mode)
+  const legacyConfiguredChildWorkflows = configuredChildWorkflows.length > 0 ? configuredChildWorkflows : readStageChildWorkflows(config, command, 'scaffold_refs')
+  const planned = configuredChildWorkflows.length > 0
+    ? { childWorkflows: configuredChildWorkflows, diagnostics: [] as string[], metadata: { source: 'configured' } }
+    : legacyConfiguredChildWorkflows.length > 0
+      ? { childWorkflows: legacyConfiguredChildWorkflows, diagnostics: [] as string[], metadata: { source: 'configured_legacy_scaffold_refs' } }
+    : await planSceneBoardScaffoldRefChildren({
+        client: context.client as never,
+        projectId: context.run.projectId,
+        draftId: context.run.draftId,
+        masterRequestId: helpers.readText(config.masterRequestId),
+        sceneId: helpers.readText(command.sceneId ?? config.sceneId),
+        setId: helpers.readText(command.setId ?? config.setId),
+        zoneId: helpers.readText(command.zoneId ?? config.zoneId),
+        shotIds: helpers.readStringArray(command.shotIds ?? command.shot_ids ?? config.shotIds),
+        scopedShots: Array.isArray(command.scopedShots) ? command.scopedShots.map(helpers.asRecord) : [],
+        requestedBy: helpers.readText(config.requestedBy) || helpers.readText(context.run.requestedBy),
+        forceRefresh: command.forceRefresh === true || config.forceRefresh === true,
+        upstreamStatus,
+        mode,
+      })
+  const childWorkflows = planned.childWorkflows
+  const planningBlocked = childWorkflows.length === 0
+    && planned.diagnostics.length > 0
+    && helpers.readText(helpers.asRecord(planned.metadata).reason)
   const scaffoldRefStatus = {
-    status: 'delegated',
-    stage: 'scaffold_refs',
-    upstreamStatus: setRefStatus,
-    message: 'Zone map and spot atlas generation are sequenced by the parent prep graph while existing continuity asset child graphs remain compatible asset producers.',
+    status: childWorkflows.length > 0 ? 'planned' : planningBlocked ? 'blocked' : 'ready',
+    stage: mode,
+    upstreamStatus,
+    message: mode === 'zone_maps'
+      ? childWorkflows.length > 0
+        ? 'Zone spatial map child workflows are planned under the Scene Board continuity prep parent.'
+        : 'All required zone spatial maps are already ready or no zone maps are required for this scope.'
+      : childWorkflows.length > 0
+        ? 'Spot atlas child workflows are planned under the Scene Board continuity prep parent.'
+        : 'All required spot atlases are already ready or no spot atlases are required for this scope.',
+    childWorkflowCount: childWorkflows.length,
+    diagnostics: planned.diagnostics,
+    planningMetadata: planned.metadata,
     childRequests: [],
   }
   const outputs = {
     scaffoldRefStatus,
     scaffold_ref_status: scaffoldRefStatus,
+    childWorkflows,
+    child_workflows: childWorkflows,
     childRequests: [],
     child_requests: [],
     text: JSON.stringify(scaffoldRefStatus, null, 2),
@@ -443,8 +570,11 @@ async function sceneBoardZoneCoverageGrid(
         forceRefresh: command.forceRefresh === true || config.forceRefresh === true,
       })
   const childWorkflows = planned.childWorkflows
+  const planningBlocked = childWorkflows.length === 0
+    && planned.diagnostics.length > 0
+    && helpers.readText(helpers.asRecord(planned.metadata).reason)
   const zoneCoverageStatus = {
-    status: childWorkflows.length > 0 ? 'planned' : 'delegated',
+    status: childWorkflows.length > 0 ? 'planned' : planningBlocked ? 'blocked' : 'delegated',
     stage: 'coverage_grids',
     upstreamStatus: coverageIntentStatus,
     message: 'Zone coverage grid generation is tracked by the parent prep graph while existing zone coverage board child workflows keep producing cells.',
@@ -466,6 +596,96 @@ async function sceneBoardZoneCoverageGrid(
   return result({ context, helpers, outputs, model: 'sequence-animatic-scene-board-zone-coverage-grid-v1' })
 }
 
+async function loadSceneContinuityArtifactIndex(input: {
+  client: unknown
+  projectId: string
+  draftId: string
+  masterRequestId: string
+  helpers: SceneBoardWorkflowNodePackHelpers
+}) {
+  const client = input.client as { from: (table: string) => any }
+  const response = await client
+    .from('output_artifacts')
+    .select('id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at')
+    .eq('project_id', input.projectId)
+    .eq('draft_id', input.draftId)
+    .order('created_at', { ascending: false })
+    .limit(500)
+  if (response.error) throw new Error(response.error.message || 'Failed to read continuity artifacts.')
+  const rows = ((response.data ?? []) as unknown[])
+    .map((row) => input.helpers.asRecord(row))
+    .filter((row) => input.helpers.readText(input.helpers.asRecord(row.metadata).masterRequestId) === input.masterRequestId)
+
+  const assetKeysByNodeId: Record<string, string[]> = {}
+  const strictSpotAtlasAssetKeysBySpotId: Record<string, string[]> = {}
+  const spotAngleAssetKeysBySpotId: Record<string, string[]> = {}
+  const spotAngleIdsBySpotId: Record<string, string[]> = {}
+  const coverageCellByShotId: Record<string, unknown> = {}
+  const append = (target: Record<string, string[]>, key: string, value: string) => {
+    if (!key || !value) return
+    target[key] = [...new Set([...(target[key] ?? []), value])]
+  }
+
+  for (const row of rows) {
+    const metadata = input.helpers.asRecord(row.metadata)
+    const role = input.helpers.readText(metadata.role)
+    if (role === 'sequence_animatic_continuity_asset') {
+      const state = input.helpers.asRecord(metadata.assetState ?? metadata.asset_state)
+      const nodeId = input.helpers.readText(state.sourceNodeId ?? state.source_node_id ?? metadata.targetNodeId)
+      append(assetKeysByNodeId, nodeId, input.helpers.readText(state.assetKey ?? state.asset_key))
+      continue
+    }
+    if (role === 'sequence_animatic_continuity_asset_batch') {
+      const states = input.helpers.asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)
+      for (const [nodeId, value] of Object.entries(states)) {
+        const state = input.helpers.asRecord(value)
+        const assetKey = input.helpers.readText(state.assetKey ?? state.asset_key)
+        const assetKind = input.helpers.readText(state.assetKind ?? state.asset_kind)
+        const generationPolicy = input.helpers.readText(state.generationPolicy ?? state.generation_policy ?? metadata.generationPolicy)
+        append(assetKeysByNodeId, nodeId, assetKey)
+        if ((assetKind === 'location_spot' || assetKind === 'location_viewpoint') && generationPolicy === 'spot_atlas_grid_rectangular_ref_v3') {
+          append(strictSpotAtlasAssetKeysBySpotId, nodeId, assetKey)
+        }
+        if (assetKind === 'location_angle' && generationPolicy === 'spot_angle_coverage_v1') {
+          const spotId = input.helpers.readText(state.sourceSpotId ?? state.source_spot_id ?? state.parentNodeId ?? state.parent_node_id)
+          append(spotAngleAssetKeysBySpotId, spotId, assetKey)
+          append(spotAngleIdsBySpotId, spotId, nodeId)
+        }
+      }
+      continue
+    }
+    if (role === 'sequence_animatic_coverage_anchor') {
+      const shotId = input.helpers.readText(metadata.shotId) || input.helpers.readStringArray(metadata.shotIds)[0] || ''
+      if (!shotId || coverageCellByShotId[shotId]) continue
+      const cell = input.helpers.asRecord(metadata.cell)
+      coverageCellByShotId[shotId] = {
+        ...cell,
+        shotId,
+        assetKey: input.helpers.readText(metadata.assetKey ?? metadata.asset_key ?? row.asset_key),
+        artifactKey: input.helpers.readText(row.key),
+        boardId: input.helpers.readText(metadata.boardId),
+        coverageSetupId: input.helpers.readText(metadata.coverageSetupId),
+        spotId: input.helpers.readText(cell.spotId ?? cell.spot_id),
+      }
+      continue
+    }
+    if (role === 'sequence_animatic_zone_coverage_board') {
+      const cells = input.helpers.asRecord(metadata.coverageCellByShotId ?? metadata.coverage_cell_by_shot_id)
+      for (const [shotId, value] of Object.entries(cells)) {
+        if (!shotId || coverageCellByShotId[shotId]) continue
+        coverageCellByShotId[shotId] = value
+      }
+    }
+  }
+  return {
+    assetKeysByNodeId,
+    strictSpotAtlasAssetKeysBySpotId,
+    spotAngleAssetKeysBySpotId,
+    spotAngleIdsBySpotId,
+    coverageCellByShotId,
+  }
+}
+
 async function sceneBoardCoverageCellArtifact(
   context: SceneBoardNodeExecutionContext,
   helpers: SceneBoardWorkflowNodePackHelpers,
@@ -477,23 +697,238 @@ async function sceneBoardCoverageCellArtifact(
   const childRequests = helpers.readStringArray(workflowRuntime.activeChildRequestIds ?? workflowRuntime.active_child_request_ids)
   const readyArtifactKeys = helpers.readStringArray(workflowRuntime.scopedAssetKeys ?? workflowRuntime.scoped_asset_keys)
   const recoveryHints = helpers.readStringArray(workflowRuntime.recoveryHints ?? workflowRuntime.recovery_hints)
+  const artifactIndex = await loadSceneContinuityArtifactIndex({
+    client: context.client,
+    projectId: context.run.projectId,
+    draftId: context.run.draftId,
+    masterRequestId: helpers.readText(config.masterRequestId),
+    helpers,
+  })
   const waiting = childRequests.length > 0 || recoveryHints.length > 0
   const sceneId = helpers.readText(scope.sceneId ?? config.sceneId)
   const scopeNodeId = helpers.readText(scope.scopeNodeId ?? config.scopeNodeId)
+  const shotIds = helpers.readStringArray(scope.shotIds ?? config.shotIds)
+  const setId = helpers.readText(scope.setId ?? config.setId)
+  const zoneId = helpers.readText(scope.zoneId ?? config.zoneId)
+  const blockerReasons = recoveryHints.length > 0
+    ? recoveryHints.map((hint): SceneContinuityBlockerReason => {
+      const lower = hint.toLowerCase()
+      if (lower.includes('coverage')) return 'missing_coverage_anchor'
+      if (lower.includes('local')) return 'missing_local_ref'
+      return 'missing_spatial_ref'
+    }).filter((reason, index, values) => values.indexOf(reason) === index)
+    : []
+  const recoveryActions = blockerReasons.map((reason) => ({
+    action: reason === 'missing_coverage_anchor' ? 'generate_coverage_anchors' : 'prepare_scene_board',
+    label: reason === 'missing_coverage_anchor' ? 'Generate coverage anchors' : 'Prepare Scene Board references',
+    reason,
+    shotId: '',
+    nodeId: scopeNodeId,
+    coverageSetupId: '',
+  }))
+  const spatialNodeIds = [setId, zoneId, scopeNodeId].filter((value, index, values) => value && values.indexOf(value) === index)
+  const shotReadinessEntries = shotIds.map((shotId) => {
+    const coverageCell = helpers.asRecord(artifactIndex.coverageCellByShotId[shotId])
+    const coverageCellAssetKey = helpers.readText(coverageCell.assetKey ?? coverageCell.asset_key)
+    const coverageBoardId = helpers.readText(coverageCell.boardId ?? coverageCell.board_id)
+    const coverageSetupId = helpers.readText(coverageCell.coverageSetupId ?? coverageCell.coverage_setup_id)
+    const spotId = helpers.readText(coverageCell.spotId ?? coverageCell.spot_id) || (scopeNodeId && scopeNodeId !== zoneId && scopeNodeId !== setId ? scopeNodeId : '')
+    const shotSpatialNodeIds = [setId, zoneId, spotId].filter((value, index, values) => value && values.indexOf(value) === index)
+    const setAssetKeys = setId ? helpers.readStringArray(artifactIndex.assetKeysByNodeId[setId]) : []
+    const zoneAssetKeys = zoneId ? helpers.readStringArray(artifactIndex.assetKeysByNodeId[zoneId]) : []
+    const spotAtlasAssetKeys = spotId ? helpers.readStringArray(artifactIndex.strictSpotAtlasAssetKeysBySpotId[spotId]) : []
+    const spotAngleAssetKeys = spotId ? helpers.readStringArray(artifactIndex.spotAngleAssetKeysBySpotId[spotId]) : []
+    const requiredArtifactKeys = [...setAssetKeys, ...zoneAssetKeys, ...spotAtlasAssetKeys, ...spotAngleAssetKeys, coverageCellAssetKey].filter(Boolean)
+    const readyShotArtifactKeys = requiredArtifactKeys.filter(Boolean)
+    const missingArtifactRoles = [
+      setId && setAssetKeys.length === 0 ? 'set_ref' : '',
+      zoneId && zoneAssetKeys.length === 0 ? 'zone_map' : '',
+      spotId && spotAtlasAssetKeys.length === 0 ? 'spot_atlas' : '',
+      spotId && spotAngleAssetKeys.length === 0 ? 'spot_angle_coverage' : '',
+      coverageCellAssetKey ? '' : 'coverage_cell',
+    ].filter(Boolean)
+    const shotBlockers = [
+      ...blockerReasons,
+      missingArtifactRoles.some((role) => role === 'spot_angle_coverage') ? 'missing_spot_angle' as const : null,
+      missingArtifactRoles.some((role) => role === 'coverage_cell') ? 'missing_coverage_anchor' as const : null,
+      missingArtifactRoles.some((role) => role === 'set_ref' || role === 'zone_map' || role === 'spot_atlas') ? 'missing_spatial_ref' as const : null,
+    ].filter((reason, index, values): reason is SceneContinuityBlockerReason => Boolean(reason) && values.indexOf(reason) === index)
+    const shotWaiting = waiting || missingArtifactRoles.length > 0
+    const shotRecoveryActions = [
+      ...recoveryActions.map((action) => ({ ...action, shotId })),
+      missingArtifactRoles.includes('spot_angle_coverage')
+        ? {
+            action: 'generate_spot_angle_coverage',
+            label: 'Generate spot angle coverage',
+            reason: 'missing_spot_angle' as const,
+            shotId,
+            nodeId: spotId,
+            coverageSetupId,
+          }
+        : null,
+      missingArtifactRoles.includes('coverage_cell')
+        ? {
+            action: 'generate_zone_coverage_grids',
+            label: 'Generate zone coverage grids',
+            reason: 'missing_coverage_anchor' as const,
+            shotId,
+            nodeId: zoneId,
+            coverageSetupId,
+          }
+        : null,
+      (missingArtifactRoles.includes('set_ref') || missingArtifactRoles.includes('zone_map') || missingArtifactRoles.includes('spot_atlas'))
+        ? {
+            action: missingArtifactRoles.includes('spot_atlas') ? 'regenerate_spot_atlas' : 'prepare_selected_board',
+            label: missingArtifactRoles.includes('spot_atlas') ? 'Regenerate spot atlas' : 'Prepare Scene Board references',
+            reason: 'missing_spatial_ref' as const,
+            shotId,
+            nodeId: missingArtifactRoles.includes('spot_atlas') ? spotId : zoneId || setId,
+            coverageSetupId,
+          }
+        : null,
+    ].filter((action): action is {
+      action: string
+      label: string
+      reason: SceneContinuityBlockerReason
+      shotId: string
+      nodeId: string
+      coverageSetupId: string
+    } => Boolean(action))
+    const baseReadiness = {
+      shotId,
+      status: shotWaiting ? waiting && childRequests.length > 0 ? 'waiting' as const : 'blocked' as const : 'ready' as const,
+      sceneId,
+      setId,
+      zoneId,
+      spotIds: spotId ? [spotId] : [],
+      viewpointId: '',
+      angleIds: spotId ? helpers.readStringArray(artifactIndex.spotAngleIdsBySpotId[spotId]) : [],
+      worldRefIds: [],
+      localRefIds: [],
+      spatialNodeIds: shotSpatialNodeIds,
+      requiredArtifactKeys,
+      readyArtifactKeys: readyShotArtifactKeys,
+      spotAtlasAssetKeys,
+      spotAngleAssetKeys,
+      missingArtifactRoles: shotWaiting ? missingArtifactRoles : [],
+      coverageSetupId,
+      coverageAnchorAssetKey: coverageCellAssetKey,
+      coverageCellAssetKey,
+      coverageBoardId,
+      previousShotId: '',
+      previousKeyframeAssetKey: '',
+      blockers: shotBlockers,
+      recoveryActions: shotRecoveryActions,
+    }
+    return {
+      ...baseReadiness,
+      hash: buildShotReferenceReadinessHash(baseReadiness),
+    }
+  })
+  const manifestSourceHash = buildSceneContinuityManifestSourceHash({
+    policyVersion: 'scene_continuity_manifest_v1',
+    masterRequestId: helpers.readText(config.masterRequestId),
+    sceneId,
+    setId,
+    zoneId,
+    scopeNodeId,
+    shotIds,
+    spatialNodeIds,
+    readyArtifactKeys,
+    spotAtlasAssetKeys: Object.values(artifactIndex.strictSpotAtlasAssetKeysBySpotId).flatMap((value) => helpers.readStringArray(value)),
+    spotAngleAssetKeys: Object.values(artifactIndex.spotAngleAssetKeysBySpotId).flatMap((value) => helpers.readStringArray(value)),
+    coverageCellAssetKeys: shotReadinessEntries.map((entry) => entry.coverageCellAssetKey).filter(Boolean),
+    forceRefresh: scope.forceRefresh === true || config.forceRefresh === true,
+  })
+  const manifestMissingBlockers = [...new Set([
+    ...blockerReasons,
+    ...shotReadinessEntries.flatMap((entry) => entry.blockers),
+  ])]
+  const manifestRecoveryActions = [...new Map([
+    ...recoveryActions,
+    ...shotReadinessEntries.flatMap((entry) => entry.recoveryActions),
+  ].map((action) => [
+    [action.action, action.reason, action.shotId, action.nodeId, action.coverageSetupId].join('::'),
+    action,
+  ] as const)).values()]
+  const manifestReadyArtifactKeys = [...new Set([
+    ...readyArtifactKeys,
+    ...shotReadinessEntries.flatMap((entry) => entry.readyArtifactKeys),
+  ])]
+  const manifestStatus = waiting
+    ? recoveryHints.length > 0 ? 'blocked' as const : 'waiting' as const
+    : manifestMissingBlockers.length > 0 ? 'blocked' as const : 'ready' as const
+  const sceneContinuityManifest = sceneContinuityManifestSchema.parse({
+    status: manifestStatus,
+    masterRequestId: helpers.readText(config.masterRequestId),
+    sceneId,
+    setId,
+    zoneId,
+    scopeNodeId,
+    shotIds,
+    hierarchy: {
+      setIds: setId ? [setId] : [],
+      zoneIds: zoneId ? [zoneId] : [],
+      spotIds: [...new Set(shotReadinessEntries.flatMap((entry) => entry.spotIds))],
+      viewpointIds: [],
+      angleIds: [...new Set(shotReadinessEntries.flatMap((entry) => entry.angleIds))],
+    },
+    requiredWorldRefIds: [],
+    requiredLocalRefIds: [],
+    requiredSpatialNodeIds: spatialNodeIds,
+    readyArtifactKeys: manifestReadyArtifactKeys,
+    spotAtlasAssetKeys: [...new Set(shotReadinessEntries.flatMap((entry) => entry.spotAtlasAssetKeys))],
+    spotAngleAssetKeys: [...new Set(shotReadinessEntries.flatMap((entry) => entry.spotAngleAssetKeys))],
+    coverageCellAssetKeys: [...new Set(shotReadinessEntries.map((entry) => entry.coverageCellAssetKey).filter(Boolean))],
+    missingBlockers: manifestMissingBlockers,
+    recoveryActions: manifestRecoveryActions,
+    shotReadiness: shotReadinessEntries,
+    sourceHash: manifestSourceHash,
+    policyVersion: 'scene_continuity_manifest_v1',
+    metadata: {
+      source: 'scene_board_prep',
+      workflowId: context.workflow.id,
+      runId: context.run.id,
+      workflowRuntime,
+    },
+  })
+  const shotReferenceReadiness = {
+    status: manifestStatus,
+    sceneId,
+    setId,
+    zoneId,
+    scopeNodeId,
+    shotIds,
+    readyArtifactKeys,
+    readyArtifactCount: readyArtifactKeys.length,
+    activeChildRequestIds: childRequests,
+    recoveryHints,
+    requiredStages: ['set_refs', 'zone_maps', 'spot_atlases', 'spot_angles', 'coverage_directions', 'coverage_grids'],
+    missingStages: manifestMissingBlockers.length > 0 ? manifestMissingBlockers : recoveryHints.length > 0 ? ['see_recovery_hints'] : [],
+    contractVersion: 'scene_board_shot_reference_readiness_v1',
+    sceneContinuityManifestHash: sceneContinuityManifest.sourceHash,
+    shotReadiness: sceneContinuityManifest.shotReadiness,
+  }
   const artifactKey = `output.${helpers.slugify(context.workflow.name)}.${context.run.id.slice(0, 8)}.${helpers.slugify(sceneId || 'scene')}.sequence-animatic-scene-board-prep`
   const sceneBoardPrep = {
-    status: waiting ? 'waiting' : 'ready',
+    status: manifestStatus,
     sceneId,
     setId: helpers.readText(scope.setId ?? config.setId),
     zoneId: helpers.readText(scope.zoneId ?? config.zoneId),
     scopeNodeId,
-    shotIds: helpers.readStringArray(scope.shotIds ?? config.shotIds),
+    shotIds,
     forceRefresh: scope.forceRefresh === true || config.forceRefresh === true,
     zoneCoverageStatus,
     workflowRuntime,
+    shotReferenceReadiness,
+    shot_reference_readiness: shotReferenceReadiness,
+    sceneContinuityManifest,
+    scene_continuity_manifest: sceneContinuityManifest,
     readyArtifactKeys,
+    manifestMissingBlockers,
     recoveryHints,
-    migrationMode: 'graph_native_parent',
+    recoveryActions: manifestRecoveryActions,
+    migrationMode: 'scene_continuity_prep_parent',
     completedAt: new Date().toISOString(),
   }
   const artifact = await helpers.registerOtherOutputArtifact({
@@ -515,6 +950,9 @@ async function sceneBoardCoverageCellArtifact(
       provider: 'graphcore',
       model: 'sequence-animatic-scene-board-prep-artifact-v1',
       role: 'sequence_animatic_scene_board_prep',
+      continuityManifestRole: 'scene_continuity_manifest',
+      continuityManifestContractVersion: 'scene_continuity_manifest_v1',
+      sceneContinuityManifestHash: sceneContinuityManifest.sourceHash,
       graphSpecVersion: 'sequence_animatic_graph_v2',
       sequenceAnimaticRole: 'scene_board_prep',
       screenplayAnimaticRole: 'scene_board_prep',
@@ -525,6 +963,10 @@ async function sceneBoardCoverageCellArtifact(
       scopeNodeId,
       sceneBoardPrep,
       scene_board_prep: sceneBoardPrep,
+      shotReferenceReadiness,
+      shot_reference_readiness: shotReferenceReadiness,
+      sceneContinuityManifest,
+      scene_continuity_manifest: sceneContinuityManifest,
       workflowRuntime,
       workflow_runtime: workflowRuntime,
     },
@@ -535,6 +977,10 @@ async function sceneBoardCoverageCellArtifact(
     artifacts: [artifact],
     sceneBoardPrep,
     scene_board_prep: sceneBoardPrep,
+    shotReferenceReadiness,
+    shot_reference_readiness: shotReferenceReadiness,
+    sceneContinuityManifest,
+    scene_continuity_manifest: sceneContinuityManifest,
     workflowRuntime,
     workflow_runtime: workflowRuntime,
     childRequests,
@@ -544,7 +990,7 @@ async function sceneBoardCoverageCellArtifact(
     recoveryHints,
     recovery_hints: recoveryHints,
     waiting,
-    authoringReady: !waiting,
+    authoringReady: manifestStatus === 'ready',
   }
   return result({ context, helpers, outputs, model: 'sequence-animatic-scene-board-prep-artifact-v1' })
 }
@@ -1284,6 +1730,7 @@ const sceneBoardHandlers = {
   sequence_animatic_scene_board_required_ref_plan: sceneBoardRequiredRefPlan,
   sequence_animatic_scene_board_set_ref_generation: sceneBoardSetRefGeneration,
   sequence_animatic_scene_board_scaffold_ref_generation: sceneBoardScaffoldRefGeneration,
+  sequence_animatic_scene_board_spot_angle_coverage: sceneBoardSpotAngleCoverage,
   sequence_animatic_scene_board_coverage_intent_batch: sceneBoardCoverageIntentBatch,
   sequence_animatic_scene_board_zone_coverage_grid: sceneBoardZoneCoverageGrid,
   sequence_animatic_scene_board_coverage_cell_artifact: sceneBoardCoverageCellArtifact,
@@ -1391,6 +1838,21 @@ export const sceneBoardWorkflowNodeScaffolds = [
       'config.masterRequestId',
       'config.command.forceRefresh',
       'config.sceneBoardChildWorkflowSpecsByStage.scaffold_refs',
+    ],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'activeChildRequestIds', 'activeChildRunIds', 'readyArtifactCount', 'recoveryHints'],
+  }),
+  createSceneBoardNodeScaffold({
+    purpose: 'sequence_animatic_scene_board_spot_angle_coverage',
+    runtimeKind: 'child_workflow_utility',
+    sourceHashKeys: [
+      'upstream.workflowRuntime',
+      'config.masterRequestId',
+      'config.command.sceneId',
+      'config.command.setId',
+      'config.command.zoneId',
+      'config.command.shotIds',
+      'config.command.forceRefresh',
+      'config.sceneBoardChildWorkflowSpecsByStage.spot_angles',
     ],
     projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'activeChildRequestIds', 'activeChildRunIds', 'readyArtifactCount', 'recoveryHints'],
   }),

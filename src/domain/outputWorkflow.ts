@@ -191,6 +191,7 @@ export const outputWorkflowRunIntentSchema = z.enum([
   'prepare_storyboard_block',
   'prepare_scene_board',
   'regenerate_scene_board_zone',
+  'generate_spot_angle_coverage',
   'generate_continuity_pack',
   'derive_continuity_structure',
   'derive_continuity_block',
@@ -1076,7 +1077,14 @@ export const sequenceAnimaticKeyframeWorkflowEnsureRequestSchema = z.object({
 export const sequenceAnimaticBlockedShotKeyframeSchema = z.object({
   shotId: z.string(),
   storyboardBlockId: z.string().nullable().default(null),
-  reason: z.enum(['missing_continuity_asset', 'missing_coverage_anchor', 'missing_previous_keyframe']),
+  reason: z.enum([
+    'missing_continuity_asset',
+    'missing_coverage_anchor',
+    'missing_previous_keyframe',
+    'missing_scene_continuity_manifest',
+    'missing_spatial_ref',
+    'missing_local_ref',
+  ]),
   coverageSetupId: z.string().nullable().default(null),
   previousShotId: z.string().nullable().default(null),
   missingContinuityNodeIds: z.array(z.string()).default([]),
@@ -1133,11 +1141,13 @@ export const sequenceAnimaticShotProductionGraphEnsureRequestSchema = z.object({
 export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object({
   ok: z.literal(true),
   masterRequest: outputRequestSchema,
-  shotRequest: outputRequestSchema,
+  shotRequest: outputRequestSchema.nullable().default(null),
   workflow: outputWorkflowSchema.nullable().default(null),
   nodes: z.array(outputWorkflowNodeSchema).default([]),
   edges: z.array(outputWorkflowEdgeSchema).default([]),
-  cacheStatus: z.enum(['reused', 'created', 'refreshed']).default('created'),
+  cacheStatus: z.enum(['reused', 'created', 'refreshed', 'blocked']).default('created'),
+  nextAction: sequenceAnimaticKeyframeNextActionSchema,
+  blockedShotKeyframes: z.array(sequenceAnimaticBlockedShotKeyframeSchema).default([]),
   shotId: z.string().min(1),
   coverageSetupId: z.string().nullable().default(null),
   dependencyNodeIds: z.array(z.string()).default([]),
@@ -1293,6 +1303,7 @@ export const sequenceAnimaticSceneBoardPrepResponseSchema = z.object({
 export const sequenceAnimaticSceneBoardWorkflowCommandActionSchema = z.enum([
   'prepare_selected_board',
   'regenerate_zone_top_down',
+  'generate_spot_angle_coverage',
   'generate_zone_coverage_grids',
   'generate_selected_coverage_anchors',
 ])

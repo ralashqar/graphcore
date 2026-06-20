@@ -6229,7 +6229,7 @@ export default function App() {
     const result = await workspaceService.ensureSequenceAnimaticShotProductionGraph(snapshot, request)
     const current = snapshotRef.current ?? snapshot
     const workflows = result.workflow ? [result.workflow] : []
-    const requests = [result.masterRequest, result.shotRequest]
+    const requests = [result.masterRequest, result.shotRequest].filter((entry): entry is typeof result.masterRequest => Boolean(entry))
     commitPersistedSnapshot({
       ...current,
       outputRequests: [

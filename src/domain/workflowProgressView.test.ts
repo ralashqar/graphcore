@@ -904,6 +904,7 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_scene_board_required_ref_plan',
     'sequence_animatic_scene_board_set_ref_generation',
     'sequence_animatic_scene_board_scaffold_ref_generation',
+    'sequence_animatic_scene_board_spot_angle_coverage',
     'sequence_animatic_scene_board_coverage_intent_batch',
     'sequence_animatic_scene_board_zone_coverage_grid',
     'sequence_animatic_scene_board_coverage_cell_artifact',
@@ -1322,6 +1323,7 @@ test('Scene Board node pack is backed by workflow node extension scaffolds', () 
     [
       'sequence_animatic_scene_board_set_ref_generation',
       'sequence_animatic_scene_board_scaffold_ref_generation',
+      'sequence_animatic_scene_board_spot_angle_coverage',
       'sequence_animatic_scene_board_coverage_intent_batch',
       'sequence_animatic_scene_board_zone_coverage_grid',
     ],
@@ -2781,6 +2783,20 @@ test('scene board progress lookup is owned by projection helpers', () => {
   assert.match(pageSource, /sequenceAnimaticSceneBoardPrepRequestForScope\(\{/)
   assert.doesNotMatch(pageSource, /function sceneBoardPrepRequestMatchesScope/)
   assert.doesNotMatch(pageSource, /\.filter\(\(request\) => sceneBoardPrepRequestMatchesScope/)
+})
+
+test('scene board modal resets stale scene state when the selected animatic changes', () => {
+  const repoRoot = process.cwd()
+  const pageSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/WorldGraphPage.tsx'), 'utf8')
+  const sceneBoardCanvasSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/scene-board/SceneBoardCanvas.tsx'), 'utf8')
+
+  assert.match(sceneBoardCanvasSource, /const desiredSceneId = requestedInitialSceneId/)
+  assert.match(sceneBoardCanvasSource, /setSceneId\(\(current\) => \(/)
+  assert.match(sceneBoardCanvasSource, /model\.request\.id, requestedInitialSceneId, scopeNodeId/)
+  assert.match(sceneBoardCanvasSource, /setSelectedShotIds\(new Set\(\)\)/)
+  assert.match(pageSource, /sceneBoardSequenceKeys = sequenceAnimaticSceneBoardModel\.request\.selectedSequenceUnitKeys/)
+  assert.match(pageSource, /sceneBoardSequenceKeys\.includes\(activeWikiEntity\.key\)/)
+  assert.match(pageSource, /setSequenceAnimaticSceneBoardRequestId\(null\)[\s\S]*setSequenceAnimaticSceneBoardScopeSceneId\(null\)[\s\S]*setSequenceAnimaticSceneBoardScopeNodeId\(null\)/)
 })
 
 test('sequence animatic reference policy is imported by packs instead of injected by executor helpers', () => {

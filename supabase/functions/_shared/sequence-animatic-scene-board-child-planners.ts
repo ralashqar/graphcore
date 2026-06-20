@@ -6,6 +6,10 @@ import {
   buildSequenceAnimaticShotCoverageIntentWorkflowGraph,
   buildSequenceAnimaticZoneCoverageBoardWorkflowGraph,
 } from './sequence-animatic-scene-board-workflows.ts'
+import {
+  buildSequenceAnimaticContinuityAssetWorkflowGraph,
+  buildSequenceAnimaticContinuityBatchWorkflowGraph,
+} from './sequence-animatic-workflow-factory.ts'
 import { continuityNodeCollections } from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
 
 type LooseRecord = Record<string, unknown>
@@ -26,11 +30,12 @@ type SceneBoardChildPlannerInput = {
   scopedShots?: readonly LooseRecord[]
   requestedBy?: string | null
   forceRefresh?: boolean
+  upstreamStatus?: LooseRecord
 }
 
 export type SceneBoardChildWorkflowSpec = {
-  stage: 'coverage_directions' | 'coverage_grids'
-  role: 'coverage_intent_batch' | 'zone_coverage_board'
+  stage: 'set_refs' | 'zone_maps' | 'spot_atlases' | 'spot_angles' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids'
+  role: 'continuity_asset' | 'continuity_asset_batch' | 'coverage_intent_batch' | 'zone_coverage_board'
   identityKey: string
   identityValue: string
   workflow: LooseRecord
@@ -50,6 +55,10 @@ const outputRequestSelect = 'id, project_id, draft_id, parent_request_id, workfl
 const outputArtifactSelect = 'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const COVERAGE_INTENT_POLICY_VERSION = 'coverage_intent_batch_v2'
 const ZONE_COVERAGE_BOARD_POLICY_VERSION = 'zone_camera_coverage_grid_v7'
+const SET_REF_POLICY_VERSION = 'scene_board_set_ref_v1'
+const ZONE_MAP_POLICY_VERSION = 'scene_board_zone_spatial_map_v1'
+const SPOT_ATLAS_POLICY_VERSION = 'scene_board_spot_atlas_rectangular_grid_ref_v3'
+const SPOT_ANGLE_POLICY_VERSION = 'scene_board_spot_angle_coverage_v1'
 const ZONE_COVERAGE_GRID_MODE = 'location_camera_plate_v2'
 const ZONE_COVERAGE_CELL_SOURCE = 'zone_camera_grid_cell'
 const ACTIVE_OUTPUT_REQUEST_STATUSES = new Set(['queued', 'planning', 'running'])
@@ -327,6 +336,15 @@ function continuityAssetKeysForNode(node: LooseRecord) {
   ])
 }
 
+function strictSpotAtlasAssetKeysForNode(node: LooseRecord) {
+  const state = asRecord(node.assetState ?? node.asset_state)
+  const generationPolicy = readText(state.generationPolicy ?? state.generation_policy)
+  const referenceAssetKeys = readStringArray(state.referenceAssetKeys ?? state.reference_asset_keys)
+  return generationPolicy === 'spot_atlas_grid_rectangular_ref_v3' && referenceAssetKeys.length > 0
+    ? continuityAssetKeysForNode(node)
+    : []
+}
+
 function continuityAssetStatesFromArtifacts(artifacts: readonly LooseRecord[]) {
   const states = new Map<string, LooseRecord>()
   for (const artifact of artifacts) {
@@ -334,16 +352,86 @@ function continuityAssetStatesFromArtifacts(artifacts: readonly LooseRecord[]) {
     const role = readText(metadata.role)
     if (role === 'sequence_animatic_continuity_asset_batch') {
       Object.entries(asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).forEach(([nodeId, value]) => {
-        if (nodeId) states.set(nodeId, asRecord(value))
+        if (nodeId && !states.has(nodeId)) states.set(nodeId, asRecord(value))
       })
       continue
     }
     if (role !== 'sequence_animatic_continuity_asset') continue
     const state = asRecord(metadata.assetState ?? metadata.asset_state)
     const nodeId = readText(state.sourceNodeId) || readText(metadata.targetNodeId)
-    if (nodeId) states.set(nodeId, state)
+    if (nodeId && !states.has(nodeId)) states.set(nodeId, state)
   }
   return states
+}
+
+function upstreamRuntimeRecords(value: unknown): LooseRecord[] {
+  const root = asRecord(value)
+  return [
+    root,
+    asRecord(root.upstreamStatus ?? root.upstream_status),
+    asRecord(root.workflowRuntime ?? root.workflow_runtime),
+  ].filter((record) => Object.keys(record).length > 0)
+}
+
+function upstreamAssetStatesByNodeId(value: unknown) {
+  const states = new Map<string, LooseRecord>()
+  for (const record of upstreamRuntimeRecords(value)) {
+    const byNode = asRecord(record.assetStatesByNodeId ?? record.asset_states_by_node_id)
+    for (const [nodeId, state] of Object.entries(byNode)) {
+      if (nodeId && !states.has(nodeId)) states.set(nodeId, asRecord(state))
+    }
+  }
+  return states
+}
+
+function upstreamAssetKeysForNodeId(
+  value: unknown,
+  nodeId: string,
+  predicate?: (state: LooseRecord) => boolean,
+) {
+  const keys: string[] = []
+  const states = upstreamAssetStatesByNodeId(value)
+  const state = states.get(nodeId)
+  if (state && (!predicate || predicate(state))) {
+    keys.push(
+      readText(state.assetKey ?? state.asset_key),
+      readText(state.imageAssetKey ?? state.image_asset_key),
+      readText(state.primaryAssetKey ?? state.primary_asset_key),
+      readText(state.selectedReferenceAssetKey ?? state.selected_reference_asset_key),
+      ...readStringArray(state.assetKeys ?? state.asset_keys),
+    )
+  }
+  for (const record of upstreamRuntimeRecords(value)) {
+    const byNode = asRecord(record.assetKeysByNodeId ?? record.asset_keys_by_node_id)
+    const directKeys = readStringArray(byNode[nodeId])
+    if (directKeys.length > 0 && (!predicate || !state || predicate(state))) keys.push(...directKeys)
+  }
+  return uniqueTexts(keys)
+}
+
+function upstreamReferenceAssetKeysForNodeId(value: unknown, nodeId: string) {
+  const state = upstreamAssetStatesByNodeId(value).get(nodeId)
+  return state ? readStringArray(state.referenceAssetKeys ?? state.reference_asset_keys) : []
+}
+
+function strictSpotAtlasStateIsUsable(state: LooseRecord) {
+  const generationPolicy = readText(state.generationPolicy ?? state.generation_policy)
+  const referenceAssetKeys = readStringArray(state.referenceAssetKeys ?? state.reference_asset_keys)
+  return generationPolicy === 'spot_atlas_grid_rectangular_ref_v3' && referenceAssetKeys.length > 0
+}
+
+function referenceAssetKeysForNodeIdsWithRuntime(input: {
+  nodeIds: readonly string[]
+  nodesById: Map<string, LooseRecord>
+  upstreamStatus?: LooseRecord
+  forceRefresh?: boolean
+  predicate?: (state: LooseRecord) => boolean
+}) {
+  const currentRunKeys = input.nodeIds.flatMap((nodeId) => upstreamAssetKeysForNodeId(input.upstreamStatus, nodeId, input.predicate))
+  const fallbackKeys = input.forceRefresh === true
+    ? []
+    : input.nodeIds.flatMap((nodeId) => continuityAssetKeysForNode(input.nodesById.get(nodeId) ?? {}))
+  return uniqueTexts([...currentRunKeys, ...fallbackKeys])
 }
 
 function applyContinuityAssetStatesToNodes(
@@ -351,13 +439,26 @@ function applyContinuityAssetStatesToNodes(
   statesByNodeId: Map<string, LooseRecord>,
 ) {
   for (const [nodeId, state] of statesByNodeId.entries()) {
-    const node = nodesById.get(nodeId)
-    if (!node) continue
+    const node = nodesById.get(nodeId) ?? {
+      id: nodeId,
+      nodeKind: readText(state.assetKind) || 'location_angle',
+      assetKind: readText(state.assetKind) || 'location_angle',
+      kind: readText(state.assetKind) || 'location_angle',
+      name: readText(state.name) || nodeId,
+      summary: readText(state.summary),
+      parentId: readText(state.parentNodeId ?? state.parent_node_id ?? state.sourceSpotId ?? state.source_spot_id),
+      parent_id: readText(state.parentNodeId ?? state.parent_node_id ?? state.sourceSpotId ?? state.source_spot_id),
+      spotId: readText(state.sourceSpotId ?? state.source_spot_id),
+      spot_id: readText(state.sourceSpotId ?? state.source_spot_id),
+      zoneId: readText(state.sourceZoneId ?? state.source_zone_id),
+      zone_id: readText(state.sourceZoneId ?? state.source_zone_id),
+    }
     node.assetState = {
       ...asRecord(node.assetState ?? node.asset_state),
       ...state,
     }
     node.asset_state = node.assetState
+    nodesById.set(nodeId, node)
   }
 }
 
@@ -373,7 +474,13 @@ function graphNodeMap(input: { manifest: LooseRecord; directorPlan: LooseRecord 
 
 function locationReferenceEntitiesForShot(shot: LooseRecord, nodesById: Map<string, LooseRecord>) {
   const spatial = spatialFieldsForShot(shot)
-  const spatialNodeIds = uniqueTexts([spatial.setId, spatial.zoneId, spatial.primarySpotId, spatial.viewpointId])
+  const angleNodeIds = [...nodesById.values()]
+    .filter((node) => {
+      const kind = spatialAssetKindForNode(node)
+      return kind === 'location_angle' && readText(node.spotId ?? node.spot_id ?? node.parentId ?? node.parent_id) === spatial.primarySpotId
+    })
+    .map((node) => readText(node.id))
+  const spatialNodeIds = uniqueTexts([spatial.setId, spatial.zoneId, spatial.primarySpotId, spatial.viewpointId, ...angleNodeIds])
   const entities: LooseRecord[] = []
   for (const nodeId of spatialNodeIds) {
     const node = nodesById.get(nodeId)
@@ -449,6 +556,338 @@ function missingSpatialReferencesForEntry(entry: {
       }
     })
     .filter((entry) => entry.reason)
+}
+
+function spotAngleAssetKeysForSpot(spotId: string, nodesById: Map<string, LooseRecord>) {
+  return uniqueTexts([...nodesById.values()]
+    .filter((node) => spatialAssetKindForNode(node) === 'location_angle')
+    .filter((node) => readText(node.spotId ?? node.spot_id ?? node.parentId ?? node.parent_id) === spotId)
+    .flatMap(continuityAssetKeysForNode))
+}
+
+function missingSpotAngleReferencesForEntry(entry: {
+  shot: LooseRecord
+  spatial: Record<string, string>
+}, nodesById: Map<string, LooseRecord>) {
+  const spotId = readText(entry.spatial.primarySpotId)
+  if (!spotId) return []
+  const angleAssets = spotAngleAssetKeysForSpot(spotId, nodesById)
+  return angleAssets.length > 0 ? [] : [{
+    nodeId: `${spotId}::spot_angle_coverage`,
+    shotId: readText(entry.shot.id),
+    kind: 'location_angle',
+    name: `${readText(nodesById.get(spotId)?.name) || spotId} angle coverage`,
+    reason: 'missing_spot_angle_assets',
+  }]
+}
+
+function spatialAssetKindForNode(node: LooseRecord) {
+  const kind = readText(node.nodeKind ?? node.assetKind ?? node.kind)
+  const id = readText(node.id)
+  if (kind === 'world_location' || kind === 'location_set' || kind === 'set' || id.startsWith('set_')) return 'location_set'
+  if (kind === 'location_zone' || kind === 'zone' || id.startsWith('zone_')) return 'location_zone'
+  if (kind === 'location_angle' || kind === 'angle' || id.includes('_angle_')) return 'location_angle'
+  if (kind === 'location_viewpoint' || kind === 'viewpoint' || id.includes('_viewpoint')) return 'location_viewpoint'
+  if (kind === 'location_spot' || kind === 'spot' || id.startsWith('spot_')) return 'location_spot'
+  return kind || 'location_reference'
+}
+
+function parentIdForSpatialNode(node: LooseRecord) {
+  return readText(
+    node.parentId
+      ?? node.parent_id
+      ?? node.setId
+      ?? node.set_id
+      ?? node.zoneId
+      ?? node.zone_id
+      ?? node.spotId
+      ?? node.spot_id,
+  )
+}
+
+function continuityPackForSceneBoard(input: {
+  masterRequestId: string
+  manifest: LooseRecord
+  directorPlan: LooseRecord
+}) {
+  const graph = asRecord(
+    input.manifest.continuityGraphV2
+      ?? input.manifest.continuity_graph_v2
+      ?? input.directorPlan.continuityGraphV2
+      ?? input.directorPlan.continuity_graph_v2,
+  )
+  const shotBindings = asRecord(
+    input.manifest.shotBindings
+      ?? input.manifest.shot_bindings
+      ?? input.directorPlan.shotBindings
+      ?? input.directorPlan.shot_bindings,
+  )
+  return {
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    masterRequestId: input.masterRequestId,
+    continuityGraphV2: graph,
+    continuity_graph_v2: graph,
+    shotBindings,
+    shot_bindings: shotBindings,
+    continuityPackHash: sequenceAnimaticStableHash({ graph, shotBindings }),
+  }
+}
+
+function relevantShotsForNode(nodeId: string, entries: readonly { shot: LooseRecord; spatial: Record<string, string> }[]) {
+  return entries
+    .filter((entry) => requiredSpatialReferenceIds(entry.spatial).includes(nodeId))
+    .map((entry) => entry.shot)
+}
+
+function buildContinuityAssetChildSpec(input: {
+  stage: 'set_refs' | 'zone_maps'
+  policyVersion: string
+  context: Awaited<ReturnType<typeof loadSceneBoardPlanningContext>>
+  projectId: string
+  draftId: string
+  requestedBy: string
+  targetNode: LooseRecord
+  relevantShots: LooseRecord[]
+  referenceAssetKeys: string[]
+  generationPolicy: string
+  sourceSurface: string
+}) {
+  const targetNodeId = readText(input.targetNode.id)
+  const assetKind = spatialAssetKindForNode(input.targetNode)
+  const sourceHash = sequenceAnimaticStableHash({
+    policy: input.policyVersion,
+    targetNodeId,
+    targetNode: input.targetNode,
+    assetKind,
+    generationPolicy: input.generationPolicy,
+    relevantShotIds: input.relevantShots.map((shot) => readText(shot.id)),
+    referenceAssetKeys: input.referenceAssetKeys,
+  })
+  const workflowId = crypto.randomUUID()
+  const commonConfig = {
+    cinematicPipelineVersion: 'v3_script_storyboards',
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    screenplayAnimaticRole: 'continuity_asset',
+    screenplayAnimaticSource: input.context.screenplayAnimaticSource,
+    sequenceAnimaticRole: 'continuity_asset',
+    parentRequestId: input.context.masterRequest.id,
+    masterRequestId: input.context.masterRequest.id,
+    sceneBoardPrepStage: input.stage,
+    scene_board_prep_stage: input.stage,
+    sceneBoardContinuityPolicyVersion: input.policyVersion,
+    scene_board_continuity_policy_version: input.policyVersion,
+    sourceHash,
+    sceneBoardContinuityIdentity: `${input.stage}:${targetNodeId}:${sourceHash}`,
+    scene_board_continuity_identity: `${input.stage}:${targetNodeId}:${sourceHash}`,
+    targetNodeId,
+    assetKind,
+    generationPolicy: input.generationPolicy,
+    readyToRun: true,
+  }
+  const graphPlan = buildSequenceAnimaticContinuityAssetWorkflowGraph({
+    workflowId,
+    draftId: input.draftId,
+    commonConfig,
+    continuityPack: continuityPackForSceneBoard({
+      masterRequestId: input.context.masterRequest.id,
+      manifest: input.context.manifest,
+      directorPlan: input.context.directorPlan,
+    }),
+    targetNode: input.targetNode,
+    targetNodeId,
+    assetKind,
+    relevantShots: input.relevantShots,
+    shotBindings: asRecord(input.context.directorPlan.shotBindings ?? input.context.directorPlan.shot_bindings),
+    assetPack: asRecord(input.context.manifest.assetPack),
+    referenceAssetKeys: input.referenceAssetKeys,
+    visualDependencyEdges: [],
+    aspectRatio: assetKind === 'location_zone' ? '3:2' : '1:1',
+  })
+  const title = `${input.context.masterRequest.title} / ${readText(input.targetNode.name) || targetNodeId} Reference`
+  return {
+    stage: input.stage,
+    role: 'continuity_asset',
+    identityKey: 'sceneBoardContinuityIdentity',
+    identityValue: `${input.stage}:${targetNodeId}:${sourceHash}`,
+    workflow: {
+      project_id: input.projectId,
+      draft_id: input.draftId,
+      key: `sequence_animatic_scene_board_${input.stage}_${slugify(input.context.masterRequest.id)}_${slugify(targetNodeId)}_${sourceHash.slice(0, 8)}`,
+      name: title,
+      description: 'Scene Board continuity reference child workflow.',
+      preset: 'cinematic_episode_from_sequence',
+      status: 'active',
+      created_by: input.requestedBy,
+      metadata: commonConfig,
+    },
+    nodes: graphPlan.nodes.map(asRecord),
+    edges: graphPlan.edges.map(asRecord),
+    request: {
+      project_id: input.projectId,
+      draft_id: input.draftId,
+      parent_request_id: input.context.masterRequest.id,
+      requested_by: input.requestedBy,
+      source_surface: input.sourceSurface,
+      prompt: `Generate continuity reference for ${readText(input.targetNode.name) || targetNodeId}.`,
+      title,
+      intent: 'output_generation',
+      output_kind: 'cinematic_episode',
+      status: 'awaiting_confirmation',
+      selected_entity_keys: input.context.masterRequest.selectedEntityKeys,
+      selected_sequence_unit_keys: input.context.masterRequest.selectedSequenceUnitKeys,
+      page_count: null,
+      target_format: 'image',
+      planner_notes: 'Scene Board parent workflow generated this spatial continuity reference child.',
+      metadata: {
+        ...commonConfig,
+        targetNode: input.targetNode,
+        target_node: input.targetNode,
+        relevantShotIds: input.relevantShots.map((shot) => readText(shot.id)).filter(Boolean),
+        relevant_shot_ids: input.relevantShots.map((shot) => readText(shot.id)).filter(Boolean),
+        referenceAssetKeys: input.referenceAssetKeys,
+        reference_asset_keys: input.referenceAssetKeys,
+        createdFromSceneBoardPrepAt: new Date().toISOString(),
+      },
+    },
+    metadata: { sourceHash, targetNodeId, assetKind, referenceAssetKeys: input.referenceAssetKeys },
+  } satisfies SceneBoardChildWorkflowSpec
+}
+
+function buildContinuityBatchChildSpec(input: {
+  stage: 'spot_atlases' | 'spot_angles'
+  policyVersion: string
+  context: Awaited<ReturnType<typeof loadSceneBoardPlanningContext>>
+  projectId: string
+  draftId: string
+  requestedBy: string
+  parentNode: LooseRecord
+  targetNodes: LooseRecord[]
+  relevantShots: LooseRecord[]
+  referenceAssetKeys: string[]
+  generationPolicy: string
+  batchKind: string
+  sourceSurface: string
+  forceRefresh?: boolean
+}) {
+  const parentNodeId = readText(input.parentNode.id) || 'scene'
+  const targetNodeIds = input.targetNodes.map((node) => readText(node.id)).filter(Boolean)
+  const columns = input.stage === 'spot_angles' && input.targetNodes.length === 4
+    ? 2
+    : Math.min(3, Math.max(1, input.targetNodes.length))
+  const rows = Math.max(1, Math.ceil(input.targetNodes.length / columns))
+  const layout = { rows, columns, cellCount: input.targetNodes.length }
+  const sourceHash = sequenceAnimaticStableHash({
+    policy: input.policyVersion,
+    parentNodeId,
+    targetNodeIds,
+    layout,
+    generationPolicy: input.generationPolicy,
+    relevantShotIds: input.relevantShots.map((shot) => readText(shot.id)),
+    referenceAssetKeys: input.referenceAssetKeys,
+    forceRefresh: input.forceRefresh === true,
+  })
+  const workflowId = crypto.randomUUID()
+  const batchId = sequenceAnimaticStableHash({
+    policy: input.policyVersion,
+    parentNodeId,
+    targetNodeIds,
+    layout,
+  })
+  const batchTitle = input.stage === 'spot_angles'
+    ? `${readText(input.parentNode.name) || parentNodeId} canonical spot angles`
+    : `${readText(input.parentNode.name) || parentNodeId} spot atlas`
+  const batch = {
+    batchId,
+    batchKind: input.batchKind,
+    generationPolicy: input.generationPolicy,
+    parentNodeId,
+    targetNodeIds,
+    layout,
+    cellRoles: input.targetNodes.map((node) => spatialAssetKindForNode(node)),
+    title: batchTitle,
+  }
+  const commonConfig = {
+    cinematicPipelineVersion: 'v3_script_storyboards',
+    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    screenplayAnimaticRole: 'continuity_asset_batch',
+    screenplayAnimaticSource: input.context.screenplayAnimaticSource,
+    sequenceAnimaticRole: 'continuity_asset_batch',
+    parentRequestId: input.context.masterRequest.id,
+    masterRequestId: input.context.masterRequest.id,
+    sceneBoardPrepStage: input.stage,
+    scene_board_prep_stage: input.stage,
+    sceneBoardContinuityPolicyVersion: input.policyVersion,
+    scene_board_continuity_policy_version: input.policyVersion,
+    batchId,
+    sourceHash,
+    sceneBoardContinuityIdentity: `${input.stage}:${batchId}:${sourceHash}`,
+    scene_board_continuity_identity: `${input.stage}:${batchId}:${sourceHash}`,
+    parentNodeId,
+    generationPolicy: input.generationPolicy,
+    forceRefresh: input.forceRefresh === true,
+    readyToRun: true,
+  }
+  const graphPlan = buildSequenceAnimaticContinuityBatchWorkflowGraph({
+    workflowId,
+    draftId: input.draftId,
+    commonConfig,
+    batch,
+    targetNodes: input.targetNodes,
+    continuityGraphV2: asRecord(input.context.manifest.continuityGraphV2 ?? input.context.manifest.continuity_graph_v2 ?? input.context.directorPlan.continuityGraphV2 ?? input.context.directorPlan.continuity_graph_v2),
+    relevantShots: input.relevantShots,
+    shotBindings: asRecord(input.context.directorPlan.shotBindings ?? input.context.directorPlan.shot_bindings),
+    assetPack: asRecord(input.context.manifest.assetPack),
+    referenceAssetKeys: input.referenceAssetKeys,
+    visualDependencyEdges: [],
+    aspectRatio: '1:1',
+  })
+  const title = `${input.context.masterRequest.title} / ${readText(batch.title) || 'Spot Atlas'}`
+  return {
+    stage: input.stage,
+    role: 'continuity_asset_batch',
+    identityKey: 'sceneBoardContinuityIdentity',
+    identityValue: `${input.stage}:${batchId}:${sourceHash}`,
+    workflow: {
+      project_id: input.projectId,
+      draft_id: input.draftId,
+      key: `sequence_animatic_scene_board_${input.stage}_${slugify(input.context.masterRequest.id)}_${slugify(parentNodeId)}_${sourceHash.slice(0, 8)}`,
+      name: title,
+      description: 'Scene Board spot atlas child workflow.',
+      preset: 'cinematic_episode_from_sequence',
+      status: 'active',
+      created_by: input.requestedBy,
+      metadata: commonConfig,
+    },
+    nodes: graphPlan.nodes.map(asRecord),
+    edges: graphPlan.edges.map(asRecord),
+    request: {
+      project_id: input.projectId,
+      draft_id: input.draftId,
+      parent_request_id: input.context.masterRequest.id,
+      requested_by: input.requestedBy,
+      source_surface: input.sourceSurface,
+      prompt: `Generate spot atlas for ${readText(input.parentNode.name) || parentNodeId}.`,
+      title,
+      intent: 'output_generation',
+      output_kind: 'cinematic_episode',
+      status: 'awaiting_confirmation',
+      selected_entity_keys: input.context.masterRequest.selectedEntityKeys,
+      selected_sequence_unit_keys: input.context.masterRequest.selectedSequenceUnitKeys,
+      page_count: null,
+      target_format: 'image',
+      planner_notes: 'Scene Board parent workflow generated this spot atlas child.',
+      metadata: {
+        ...commonConfig,
+        batch,
+        targetNodes: input.targetNodes,
+        target_nodes: input.targetNodes,
+        referenceAssetKeys: input.referenceAssetKeys,
+        reference_asset_keys: input.referenceAssetKeys,
+        createdFromSceneBoardPrepAt: new Date().toISOString(),
+      },
+    },
+    metadata: { sourceHash, batchId, parentNodeId, targetNodeIds, referenceAssetKeys: input.referenceAssetKeys },
+  } satisfies SceneBoardChildWorkflowSpec
 }
 
 function coverageCellScopeKey(input: {
@@ -792,6 +1231,326 @@ async function markMatchingChildrenStale(input: {
   }
 }
 
+export async function planSceneBoardSetRefChildren(input: SceneBoardChildPlannerInput): Promise<SceneBoardChildPlannerResult> {
+  const context = await loadSceneBoardPlanningContext(input)
+  const prepared = prepareSceneShots({
+    manifest: context.manifest,
+    directorPlan: context.directorPlan,
+    nodesById: context.nodesById,
+    sceneId: input.sceneId,
+    setId: input.setId,
+    zoneId: input.zoneId,
+    shotIds: input.shotIds,
+    scopedShots: input.scopedShots,
+    assetPackScope: 'sequence_animatic_scene_board_set_ref',
+  })
+  if (prepared.preparedShots.length === 0) {
+    return {
+      childWorkflows: [],
+      diagnostics: ['This scene scope has no matching shots for set reference generation.'],
+      metadata: {
+        reason: prepared.allPreparedShots.length === 0 ? 'no_finalized_scene_shots' : 'scope_mismatch',
+        sceneId: prepared.effectiveSceneId,
+        requestedSceneId: prepared.requestedSceneId,
+        availableZoneIds: prepared.availableZoneIds,
+      },
+    }
+  }
+
+  const requestedBy = readText(input.requestedBy) || readText(context.masterRequest.requestedBy)
+  const sourceSurface = context.screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit'
+  const setIds = uniqueTexts(prepared.preparedShots.map((entry) => entry.spatial.setId))
+  const childWorkflows = setIds
+    .map((setId) => context.nodesById.get(setId) ?? {})
+    .filter((node) => readText(node.id))
+    .filter((node) => input.forceRefresh || continuityAssetKeysForNode(node).length === 0)
+    .map((node) => buildContinuityAssetChildSpec({
+      stage: 'set_refs',
+      policyVersion: SET_REF_POLICY_VERSION,
+      context,
+      projectId: input.projectId,
+      draftId: input.draftId,
+      requestedBy,
+      targetNode: node,
+      relevantShots: relevantShotsForNode(readText(node.id), prepared.preparedShots),
+      referenceAssetKeys: [],
+      generationPolicy: 'location_set_reference_v1',
+      sourceSurface,
+    }))
+
+  return {
+    childWorkflows,
+    diagnostics: childWorkflows.length > 0 ? [] : ['All required set references are already ready for this Scene Board scope.'],
+    metadata: {
+      stage: 'set_refs',
+      childWorkflowCount: childWorkflows.length,
+      preparedShotCount: prepared.preparedShots.length,
+      requiredSetIds: setIds,
+    },
+  }
+}
+
+function canonicalSpotAngleNodes(input: {
+  spotNode: LooseRecord
+  zoneId: string
+  setId: string
+  angleCount?: number
+}) {
+  const spotId = readText(input.spotNode.id)
+  const spotName = readText(input.spotNode.name) || spotId
+  const count = Math.max(4, Math.min(8, Number(input.angleCount ?? 4) || 4))
+  const defaults = [
+    ['approach', 'Establishing / approach angle showing the main entrance, walkable route, and dominant landmarks.'],
+    ['reverse', 'Reverse angle preserving screen direction, exits, background depth, and landmark continuity.'],
+    ['profile_cross_axis', 'Profile or cross-axis side angle clarifying lateral movement, foreground/midground/background planes, and staging depth.'],
+    ['low_detail', 'Low, detail, or overhead utility angle for inserts, obstacle handling, props, and local surface continuity.'],
+    ['high_wide', 'Higher wide angle for geography, crowd flow, and route continuity.'],
+    ['tight_reverse', 'Tighter reverse angle for dialogue or reaction coverage while preserving the same local layout.'],
+    ['diagonal_depth', 'Diagonal depth angle showing near/far landmarks and screen-direction logic.'],
+    ['overhead_insert', 'Overhead/detail insert angle for spatial problem solving and local object placement.'],
+  ]
+  return defaults.slice(0, count).map(([key, brief], index) => ({
+    id: `${spotId}_angle_${key}`,
+    name: `${spotName} ${key.replace(/_/g, ' ')} angle`,
+    nodeKind: 'location_angle',
+    assetKind: 'location_angle',
+    kind: 'location_angle',
+    parentId: spotId,
+    parent_id: spotId,
+    spotId,
+    spot_id: spotId,
+    zoneId: input.zoneId,
+    zone_id: input.zoneId,
+    setId: input.setId,
+    set_id: input.setId,
+    angleIndex: index,
+    angle_index: index,
+    visualBrief: brief,
+    summary: brief,
+  }))
+}
+
+export async function planSceneBoardScaffoldRefChildren(
+  input: SceneBoardChildPlannerInput & { mode?: 'zone_maps' | 'spot_atlases' | 'spot_angles' },
+): Promise<SceneBoardChildPlannerResult> {
+  const mode = input.mode === 'spot_atlases' || input.mode === 'spot_angles' ? input.mode : 'zone_maps'
+  const context = await loadSceneBoardPlanningContext(input)
+  const prepared = prepareSceneShots({
+    manifest: context.manifest,
+    directorPlan: context.directorPlan,
+    nodesById: context.nodesById,
+    sceneId: input.sceneId,
+    setId: input.setId,
+    zoneId: input.zoneId,
+    shotIds: input.shotIds,
+    scopedShots: input.scopedShots,
+    assetPackScope: mode === 'zone_maps'
+      ? 'sequence_animatic_scene_board_zone_map'
+      : mode === 'spot_angles'
+        ? 'sequence_animatic_scene_board_spot_angle'
+        : 'sequence_animatic_scene_board_spot_atlas',
+  })
+  if (prepared.preparedShots.length === 0) {
+    return {
+      childWorkflows: [],
+      diagnostics: [`This scene scope has no matching shots for ${mode === 'zone_maps' ? 'zone map' : mode === 'spot_angles' ? 'spot angle' : 'spot atlas'} generation.`],
+      metadata: {
+        reason: prepared.allPreparedShots.length === 0 ? 'no_finalized_scene_shots' : 'scope_mismatch',
+        sceneId: prepared.effectiveSceneId,
+        requestedSceneId: prepared.requestedSceneId,
+        availableZoneIds: prepared.availableZoneIds,
+      },
+    }
+  }
+
+  const requestedBy = readText(input.requestedBy) || readText(context.masterRequest.requestedBy)
+  const sourceSurface = context.screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit'
+  if (mode === 'zone_maps') {
+    const zoneIds = uniqueTexts(prepared.preparedShots.map((entry) => entry.spatial.zoneId))
+    const missingParentSetRefs = zoneIds
+      .map((zoneId) => context.nodesById.get(zoneId) ?? {})
+      .map((zoneNode) => readText(parentIdForSpatialNode(zoneNode)) || prepared.preparedShots.find((entry) => entry.spatial.zoneId === readText(zoneNode.id))?.spatial.setId || '')
+      .filter(Boolean)
+      .filter((setId) => referenceAssetKeysForNodeIdsWithRuntime({
+        nodeIds: [setId],
+        nodesById: context.nodesById,
+        upstreamStatus: input.upstreamStatus,
+        forceRefresh: input.forceRefresh,
+      }).length === 0)
+    if (missingParentSetRefs.length > 0 && !input.forceRefresh) {
+      return {
+        childWorkflows: [],
+        diagnostics: ['Generate set references before creating zone spatial maps.'],
+        metadata: {
+          reason: 'missing_parent_set_reference_assets',
+          missingReferenceCount: uniqueTexts(missingParentSetRefs).length,
+          missingReferences: uniqueTexts(missingParentSetRefs).map((nodeId) => ({
+            nodeId,
+            kind: 'location_set',
+            name: readText(context.nodesById.get(nodeId)?.name) || nodeId,
+            reason: 'missing_asset',
+          })),
+        },
+      }
+    }
+    const childWorkflows = zoneIds
+      .map((zoneId) => context.nodesById.get(zoneId) ?? {})
+      .filter((node) => readText(node.id))
+      .filter((node) => input.forceRefresh || continuityAssetKeysForNode(node).length === 0)
+      .map((node) => {
+        const parentSetId = readText(parentIdForSpatialNode(node))
+          || prepared.preparedShots.find((entry) => entry.spatial.zoneId === readText(node.id))?.spatial.setId
+          || ''
+        return buildContinuityAssetChildSpec({
+          stage: 'zone_maps',
+          policyVersion: ZONE_MAP_POLICY_VERSION,
+          context,
+          projectId: input.projectId,
+          draftId: input.draftId,
+          requestedBy,
+          targetNode: node,
+          relevantShots: relevantShotsForNode(readText(node.id), prepared.preparedShots),
+          referenceAssetKeys: referenceAssetKeysForNodeIdsWithRuntime({
+            nodeIds: [parentSetId],
+            nodesById: context.nodesById,
+            upstreamStatus: input.upstreamStatus,
+            forceRefresh: input.forceRefresh,
+          }),
+          generationPolicy: 'zone_spatial_map_v1',
+          sourceSurface,
+        })
+      })
+    return {
+      childWorkflows,
+      diagnostics: childWorkflows.length > 0 ? [] : ['All required zone spatial maps are already ready for this Scene Board scope.'],
+      metadata: {
+        stage: 'zone_maps',
+        childWorkflowCount: childWorkflows.length,
+        preparedShotCount: prepared.preparedShots.length,
+        requiredZoneIds: zoneIds,
+      },
+    }
+  }
+
+  const groups = new Map<string, Array<{ shot: LooseRecord; spatial: Record<string, string> }>>()
+  for (const entry of prepared.preparedShots) {
+    const zoneId = entry.spatial.zoneId
+    if (!zoneId) continue
+    groups.set(zoneId, [...(groups.get(zoneId) ?? []), entry])
+  }
+  const childWorkflows: SceneBoardChildWorkflowSpec[] = []
+  const missingZoneRefs: string[] = []
+  for (const [zoneId, entries] of groups.entries()) {
+    const zoneNode = context.nodesById.get(zoneId) ?? {}
+    const zoneAssetKeys = referenceAssetKeysForNodeIdsWithRuntime({
+      nodeIds: [zoneId],
+      nodesById: context.nodesById,
+      upstreamStatus: input.upstreamStatus,
+      forceRefresh: input.forceRefresh,
+    })
+    if (zoneAssetKeys.length === 0 && (mode === 'spot_atlases' || !input.forceRefresh)) {
+      missingZoneRefs.push(zoneId)
+      continue
+    }
+    const spotIds = uniqueTexts(entries.flatMap((entry) => [entry.spatial.primarySpotId, entry.spatial.viewpointId]))
+    const spotNodes = spotIds
+      .map((nodeId) => context.nodesById.get(nodeId) ?? {})
+      .filter((node) => readText(node.id))
+    if (mode === 'spot_angles') {
+      const angleCount = Number(context.masterMetadata.sceneBoardSpotAngleCount ?? context.masterMetadata.scene_board_spot_angle_count ?? 4) || 4
+      for (const spotNode of spotNodes) {
+        const spotId = readText(spotNode.id)
+        if (!spotId) continue
+        if (!input.forceRefresh && spotAngleAssetKeysForSpot(spotId, context.nodesById).length > 0) continue
+        const currentSpotAtlasAssetKeys = upstreamAssetKeysForNodeId(input.upstreamStatus, spotId, strictSpotAtlasStateIsUsable)
+        const fallbackSpotAtlasAssetKeys = input.forceRefresh ? [] : strictSpotAtlasAssetKeysForNode(spotNode)
+        const spotAssetKeys = uniqueTexts([...currentSpotAtlasAssetKeys, ...fallbackSpotAtlasAssetKeys])
+        const atlasReferenceZoneKeys = upstreamReferenceAssetKeysForNodeId(input.upstreamStatus, spotId)
+        const spotZoneAssetKeys = uniqueTexts([
+          ...atlasReferenceZoneKeys,
+          ...(atlasReferenceZoneKeys.length > 0 || input.forceRefresh ? [] : zoneAssetKeys),
+        ])
+        if (spotAssetKeys.length === 0 || spotZoneAssetKeys.length === 0) {
+          missingZoneRefs.push(spotId)
+          continue
+        }
+        const targetNodes = canonicalSpotAngleNodes({
+          spotNode,
+          zoneId,
+          setId: entries.find((entry) => entry.spatial.zoneId === zoneId)?.spatial.setId || '',
+          angleCount,
+        })
+        if (targetNodes.length === 0) continue
+        childWorkflows.push(buildContinuityBatchChildSpec({
+          stage: 'spot_angles',
+          policyVersion: SPOT_ANGLE_POLICY_VERSION,
+          context,
+          projectId: input.projectId,
+          draftId: input.draftId,
+          requestedBy,
+          parentNode: spotNode,
+          targetNodes,
+          relevantShots: entries
+            .filter((entry) => entry.spatial.primarySpotId === spotId || entry.spatial.viewpointId === spotId)
+            .map((entry) => entry.shot),
+          referenceAssetKeys: uniqueTexts([...spotZoneAssetKeys, ...spotAssetKeys]),
+          generationPolicy: 'spot_angle_coverage_v1',
+          batchKind: 'angle_grid',
+          sourceSurface,
+          forceRefresh: input.forceRefresh,
+        }))
+      }
+      continue
+    }
+    const targetNodes = spotNodes
+      .filter((node) => input.forceRefresh || strictSpotAtlasAssetKeysForNode(node).length === 0)
+      .slice(0, 9)
+    if (targetNodes.length === 0) continue
+    childWorkflows.push(buildContinuityBatchChildSpec({
+      stage: 'spot_atlases',
+      policyVersion: SPOT_ATLAS_POLICY_VERSION,
+      context,
+      projectId: input.projectId,
+      draftId: input.draftId,
+      requestedBy,
+      parentNode: zoneNode,
+      targetNodes,
+      relevantShots: entries.map((entry) => entry.shot),
+      referenceAssetKeys: zoneAssetKeys,
+      generationPolicy: 'spot_atlas_grid_rectangular_ref_v3',
+      batchKind: 'spot_atlas_grid',
+      sourceSurface,
+      forceRefresh: input.forceRefresh,
+    }))
+  }
+  if (missingZoneRefs.length > 0) {
+    return {
+      childWorkflows: [],
+      diagnostics: [mode === 'spot_angles' ? 'Generate strict spot atlases before creating spot angle coverage.' : 'Generate zone spatial maps before creating spot atlases.'],
+      metadata: {
+        reason: mode === 'spot_angles' ? 'missing_spot_atlas_assets' : 'missing_zone_spatial_map_assets',
+        missingReferenceCount: uniqueTexts(missingZoneRefs).length,
+        missingReferences: uniqueTexts(missingZoneRefs).map((nodeId) => ({
+          nodeId,
+          kind: 'location_zone',
+          name: readText(context.nodesById.get(nodeId)?.name) || nodeId,
+          reason: 'missing_asset',
+        })),
+      },
+    }
+  }
+  return {
+    childWorkflows,
+    diagnostics: childWorkflows.length > 0 ? [] : [mode === 'spot_angles' ? 'All required spot angle references are already ready for this Scene Board scope.' : 'All required spot atlases are already ready for this Scene Board scope.'],
+    metadata: {
+      stage: mode,
+      childWorkflowCount: childWorkflows.length,
+      preparedShotCount: prepared.preparedShots.length,
+      requiredZoneIds: [...groups.keys()],
+    },
+  }
+}
+
 export async function planSceneBoardCoverageIntentChildren(input: SceneBoardChildPlannerInput): Promise<SceneBoardChildPlannerResult> {
   const context = await loadSceneBoardPlanningContext(input)
   const prepared = prepareSceneShots({
@@ -1008,12 +1767,15 @@ export async function planSceneBoardZoneCoverageGridChildren(input: SceneBoardCh
     }
   }
   const missingSpatialReferences = [...new Map(zonePreparedShots
-    .flatMap((entry) => missingSpatialReferencesForEntry(entry, context.nodesById))
+    .flatMap((entry) => [
+      ...missingSpatialReferencesForEntry(entry, context.nodesById),
+      ...missingSpotAngleReferencesForEntry(entry, context.nodesById),
+    ])
     .map((entry) => [entry.nodeId, entry] as const)).values()]
   if (missingSpatialReferences.length > 0) {
     return {
       childWorkflows: [],
-      diagnostics: ['Generate set, zone, and spot continuity references before creating zone camera grids.'],
+      diagnostics: ['Generate set, zone, spot, and canonical spot angle continuity references before creating zone camera grids.'],
       metadata: {
         reason: 'missing_spatial_reference_assets',
         missingReferenceCount: missingSpatialReferences.length,

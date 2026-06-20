@@ -60,7 +60,13 @@ export function SequenceAnimaticSceneBoardCanvas({
     clearOverride?: boolean
   }) => Promise<unknown> | unknown
 }) {
-  const [sceneId, setSceneId] = useState(initialSceneId || model.scenes[0]?.id || '')
+  const requestedInitialSceneId = initialSceneId?.trim() ?? ''
+  const availableSceneIds = model.scenes.map((entry) => entry.id).join('\u001f')
+  const fallbackSceneId = model.scenes[0]?.id ?? ''
+  const desiredSceneId = requestedInitialSceneId && model.scenes.some((entry) => entry.id === requestedInitialSceneId)
+    ? requestedInitialSceneId
+    : fallbackSceneId
+  const [sceneId, setSceneId] = useState(desiredSceneId)
   const [filter, setFilter] = useState<SequenceAnimaticSceneBoardFilter>('all')
   const [grouping, setGrouping] = useState<SequenceAnimaticSceneBoardGrouping>('zone_spot')
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
@@ -128,8 +134,18 @@ export function SequenceAnimaticSceneBoardCanvas({
     return run
   })()
   useEffect(() => {
-    if (!scene && model.scenes[0]) setSceneId(model.scenes[0].id)
-  }, [model.scenes, scene])
+    const currentSceneIds = availableSceneIds ? availableSceneIds.split('\u001f') : []
+    setSceneId((current) => (
+      current && current === desiredSceneId && currentSceneIds.includes(current)
+        ? current
+        : desiredSceneId
+    ))
+    setSelectedGroupId(null)
+    setSelectedReferenceNodeId(null)
+    setSelectedShotIds(new Set())
+    setOverrideError('')
+    setOptimisticPrepStarting(false)
+  }, [availableSceneIds, desiredSceneId, model.request.id, requestedInitialSceneId, scopeNodeId])
   useEffect(() => {
     if (!board) return
     setSelectedGroupId((current) => current && board.groups.some((group) => group.id === current) ? current : board.groups[0]?.id ?? null)
@@ -462,54 +478,56 @@ export function SequenceAnimaticSceneBoardCanvas({
       ) : (
         <div className="world-wiki-scene-board-body">
           <div className="world-wiki-scene-board-canvas">
-            {workflowProgress ? (
-              <div className="world-wiki-scene-board-workflow-progress">
-                <WorkflowProgressSummary model={workflowProgress} compact>
-                  <WorkflowGraphButton disabled={!workflowProgress.workflowId} onOpen={onOpenWorkflowGraph} />
-                </WorkflowProgressSummary>
-                <WorkflowNodeTimeline nodes={workflowProgress.nodes} limit={5} />
-              </div>
-            ) : null}
-            <div className="world-wiki-scene-board-prep-strip" aria-label="Continuity Prep stages">
-              <div>
-                <strong>{effectivePrepRun ? <>{continuityPrepRunActive ? <span className="world-mini-spinner" aria-hidden="true" /> : null}{effectivePrepRun.stageLabel || effectivePrepRun.message}</> : board.prepSummary}</strong>
-                <span>
-                  {effectivePrepRun
-                    ? `${effectivePrepRun.activeUnitLabel} / queued ${effectivePrepRun.queued} / running ${effectivePrepRun.running} / ready ${effectivePrepRun.ready} / failed ${effectivePrepRun.failed}`
-                    : `${board.prepUnits.length} zone board${board.prepUnits.length === 1 ? '' : 's'} / ${board.coverageGridPlanCount} grid${board.coverageGridPlanCount === 1 ? '' : 's'} / ${board.coverageGridShotCount} shot${board.coverageGridShotCount === 1 ? '' : 's'} in scope`}
-                </span>
-              </div>
-              <ol>
-                {board.prepStages.map((stage) => {
-                  const stageReady = stage.total > 0 && stage.ready >= stage.total
-                  const stageActive = stage.generating > 0 || (continuityPrepRunActive && effectivePrepRun?.stage === stage.key)
-                  return (
-                    <li key={stage.key} className={[stageReady ? 'is-ready' : '', stageActive ? 'is-running' : '', stage.blocked > 0 ? 'is-blocked' : ''].filter(Boolean).join(' ')}>
-                      <b>{stage.label}</b>
-                      <span>{stage.ready}/{stage.total}{stage.failed > 0 ? ` / ${stage.failed} failed` : ''}</span>
-                    </li>
-                  )
-                })}
-              </ol>
-              {board.prepUnits.length > 1 ? (
-                <div className="world-wiki-scene-board-unit-queue" aria-label="Zone board queue">
-                  {board.prepUnits.map((unit) => (
-                    <button
-                      key={unit.id}
-                      className={[
-                        effectivePrepRun?.activeUnitId === unit.id ? 'is-running' : '',
-                        unit.stage === 'ready' ? 'is-ready' : '',
-                        unit.stage === 'blocked' || unit.stage === 'failed' ? 'is-blocked' : '',
-                      ].filter(Boolean).join(' ')}
-                      onClick={() => setSelectedGroupId(unit.shots[0]?.spotId ? `${unit.setId || 'unbound_set'}:${unit.zoneId || 'unbound_zone'}:${unit.shots[0].spotId}` : selectedGroupId)}
-                      type="button"
-                    >
-                      <strong>{unit.title}</strong>
-                      <span>{unit.stageLabel}</span>
-                    </button>
-                  ))}
+            <div className="world-wiki-scene-board-progress-stack">
+              {workflowProgress ? (
+                <div className="world-wiki-scene-board-workflow-progress">
+                  <WorkflowProgressSummary model={workflowProgress} compact>
+                    <WorkflowGraphButton disabled={!workflowProgress.workflowId} onOpen={onOpenWorkflowGraph} />
+                  </WorkflowProgressSummary>
+                  <WorkflowNodeTimeline nodes={workflowProgress.nodes} limit={3} />
                 </div>
               ) : null}
+              <div className="world-wiki-scene-board-prep-strip" aria-label="Continuity Prep stages">
+                <div>
+                  <strong>{effectivePrepRun ? <>{continuityPrepRunActive ? <span className="world-mini-spinner" aria-hidden="true" /> : null}{effectivePrepRun.stageLabel || effectivePrepRun.message}</> : board.prepSummary}</strong>
+                  <span>
+                    {effectivePrepRun
+                      ? `${effectivePrepRun.activeUnitLabel} / queued ${effectivePrepRun.queued} / running ${effectivePrepRun.running} / ready ${effectivePrepRun.ready} / failed ${effectivePrepRun.failed}`
+                      : `${board.prepUnits.length} zone board${board.prepUnits.length === 1 ? '' : 's'} / ${board.coverageGridPlanCount} grid${board.coverageGridPlanCount === 1 ? '' : 's'} / ${board.coverageGridShotCount} shot${board.coverageGridShotCount === 1 ? '' : 's'} in scope`}
+                  </span>
+                </div>
+                <ol>
+                  {board.prepStages.map((stage) => {
+                    const stageReady = stage.total > 0 && stage.ready >= stage.total
+                    const stageActive = stage.generating > 0 || (continuityPrepRunActive && effectivePrepRun?.stage === stage.key)
+                    return (
+                      <li key={stage.key} className={[stageReady ? 'is-ready' : '', stageActive ? 'is-running' : '', stage.blocked > 0 ? 'is-blocked' : ''].filter(Boolean).join(' ')}>
+                        <b>{stage.label}</b>
+                        <span>{stage.ready}/{stage.total}{stage.failed > 0 ? ` / ${stage.failed} failed` : ''}</span>
+                      </li>
+                    )
+                  })}
+                </ol>
+                {board.prepUnits.length > 1 ? (
+                  <div className="world-wiki-scene-board-unit-queue" aria-label="Zone board queue">
+                    {board.prepUnits.map((unit) => (
+                      <button
+                        key={unit.id}
+                        className={[
+                          effectivePrepRun?.activeUnitId === unit.id ? 'is-running' : '',
+                          unit.stage === 'ready' ? 'is-ready' : '',
+                          unit.stage === 'blocked' || unit.stage === 'failed' ? 'is-blocked' : '',
+                        ].filter(Boolean).join(' ')}
+                        onClick={() => setSelectedGroupId(unit.shots[0]?.spotId ? `${unit.setId || 'unbound_set'}:${unit.zoneId || 'unbound_zone'}:${unit.shots[0].spotId}` : selectedGroupId)}
+                        type="button"
+                      >
+                        <strong>{unit.title}</strong>
+                        <span>{unit.stageLabel}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </div>
             <ReactFlow
               nodes={flowNodes}

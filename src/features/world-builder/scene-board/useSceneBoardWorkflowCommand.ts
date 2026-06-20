@@ -23,7 +23,7 @@ type SceneBoardPrepPersistRequest = {
   zoneId?: string | null
   scopeNodeId?: string | null
   shotIds?: string[]
-  stage?: 'idle' | 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'complete' | 'failed' | 'cancelled'
+  stage?: 'idle' | 'set_refs' | 'scaffold_refs' | 'spot_angles' | 'coverage_directions' | 'coverage_grids' | 'complete' | 'failed' | 'cancelled'
   status?: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled'
   activeUnitId?: string | null
   activeUnitLabel?: string
@@ -46,7 +46,7 @@ type SceneBoardPrepPersistRequest = {
 type SceneBoardWorkflowCommandRequest = {
   masterRequestId: string
   sceneId: string
-  action?: 'prepare_selected_board' | 'regenerate_zone_top_down' | 'generate_zone_coverage_grids' | 'generate_selected_coverage_anchors'
+  action?: 'prepare_selected_board' | 'regenerate_zone_top_down' | 'generate_spot_angle_coverage' | 'generate_zone_coverage_grids' | 'generate_selected_coverage_anchors'
   setId?: string | null
   zoneId?: string | null
   scopeNodeId?: string | null

@@ -51,6 +51,13 @@ export const workflowCommandHandlers = {
     userId,
     payload,
   }),
+  generate_spot_angle_coverage: async ({ client, admin, userId, payload }) => runSceneBoardWorkflowCommand({
+    client: client as never,
+    admin: admin as never,
+    userId,
+    payload: sequenceAnimaticSceneBoardWorkflowCommandRequestSchema.parse(payload),
+    startedBy: 'start-workflow-command',
+  }),
   generate_zone_coverage_grids: async ({ client, admin, userId, payload }) => runSequenceAnimaticZoneCoverageBoardsCommand({
     client: client as never,
     admin: admin as never,

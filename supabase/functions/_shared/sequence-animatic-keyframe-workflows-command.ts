@@ -76,6 +76,15 @@ import {
   sequenceAnimaticCoverageAnchorTemplateKey,
   sequenceAnimaticWorkflowTemplateRegistry,
 } from './sequence-animatic-scene-board-workflows.ts'
+import {
+  loadSceneContinuityManifests,
+  resolveSceneContinuityForShot,
+  sceneContinuityBlockingReason,
+} from './scene-continuity-manifest-utils.ts'
+import {
+  buildShotReferenceReadinessHash,
+  type SceneContinuityBlockerReason,
+} from '../../../src/domain/sceneContinuityManifest.ts'
 
 async function insertSequenceAnimaticEvent(input: {
   admin: {
@@ -1138,6 +1147,84 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       coverageSetupId: scopedCoverageSetupId || null,
       dependencyNodeIds,
     })
+    const sceneContinuityManifests = await loadSceneContinuityManifests({
+      client,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+      masterRequestId: masterRequest.id,
+    })
+    const sceneContinuityByShotId = new Map<string, ReturnType<typeof resolveSceneContinuityForShot>>()
+    const sceneContinuityBlockedShotKeyframes: Array<{
+      shotId: string
+      storyboardBlockId: string | null
+      reason: SceneContinuityBlockerReason
+      coverageSetupId: string | null
+      previousShotId: string | null
+      missingContinuityNodeIds: string[]
+    }> = []
+    for (const job of readArray(keyframePlan.shotKeyframeJobs).map(asRecord)) {
+      const shotId = readText(job.shotId)
+      if (!shotId) continue
+      const shot = asRecord(job.shot)
+      const continuity = resolveSceneContinuityForShot({
+        manifests: sceneContinuityManifests,
+        shot,
+      })
+      sceneContinuityByShotId.set(shotId, continuity)
+      if (payload.allowProvisional || provisionalContext) continue
+      if (payload.mode === 'generate' && readText(shotKeyframeImageByShotId.get(shotId)?.assetKey)) continue
+      const blockReason = sceneContinuityBlockingReason(continuity)
+      if (!blockReason) continue
+      sceneContinuityBlockedShotKeyframes.push({
+        shotId,
+        storyboardBlockId: readText(job.storyboardBlockId) || null,
+        reason: blockReason,
+        coverageSetupId: readText(job.coverageSetupId) || null,
+        previousShotId: readText(job.previousShotId) || null,
+        missingContinuityNodeIds: readStringArray(continuity.readiness?.spatialNodeIds),
+      })
+    }
+    if (sceneContinuityBlockedShotKeyframes.length > 0) {
+      const scopedBlock = isShotScopedEnsure
+        ? sceneContinuityBlockedShotKeyframes.find((entry) => entry.shotId === scopedShotId) ?? sceneContinuityBlockedShotKeyframes[0]
+        : null
+      return sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse({
+        ok: true,
+        masterRequest,
+        keyframePlan: {
+          ...keyframePlanWithSource,
+          dependencyReadiness: {
+            status: 'waiting_for_scene_continuity_manifest',
+            dependencyNodeIds: dependencyTargetIds,
+            missingDependencyNodeIds: missingDependencyIds,
+          },
+          sceneContinuityManifests,
+        },
+        visualReferencePlan,
+        nextAction: scopedBlock
+          ? blockedNextAction(
+            scopedBlock.reason === 'missing_scene_continuity_manifest'
+              ? 'Prepare the Scene Board before generating final keyframes.'
+              : 'Scene continuity references are not ready for this shot.',
+            scopedBlock.missingContinuityNodeIds,
+          )
+          : null,
+        shotReadiness: isShotScopedEnsure ? {
+          ...asRecord(shotReadiness),
+          status: 'blocked',
+          missingContinuityNodeIds: scopedBlock?.missingContinuityNodeIds ?? [],
+        } : null,
+        blockedShotKeyframes: sceneContinuityBlockedShotKeyframes,
+        dependencyWaves,
+        continuityAssetRequests: [],
+        coverageAnchorRequests: [],
+        shotKeyframeRequests: [],
+        childRequests: [],
+        workflows: await workflowsForCreatedIds(),
+        nodes: createdNodes,
+        edges: createdEdges,
+      })
+    }
     const relevantShotsForNodes = (nodes: readonly Record<string, unknown>[]) => {
       const targetShotIds = new Set(nodes.flatMap((node) => readStringArray(node.shotIds)))
       const requestedNodeIds = new Set(nodes.map((node) => readText(node.id)).filter(Boolean))
@@ -1834,7 +1921,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     const blockedShotKeyframes: Array<{
       shotId: string
       storyboardBlockId: string | null
-      reason: 'missing_continuity_asset' | 'missing_coverage_anchor' | 'missing_previous_keyframe'
+      reason: 'missing_continuity_asset' | 'missing_coverage_anchor' | 'missing_previous_keyframe' | SceneContinuityBlockerReason
       coverageSetupId: string | null
       previousShotId: string | null
       missingContinuityNodeIds: string[]
@@ -1990,12 +2077,19 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           .filter(Boolean)
         : visualPlanOmittedReferenceAssetKeys
       const sourceReferenceHash = sequenceAnimaticVisualReferenceHash({ shotId, coverageSetupId, requiredReferenceAssetKeys, omittedReferenceAssetKeys })
+      const sceneContinuity = sceneContinuityByShotId.get(shotId) ?? { manifest: null, readiness: null }
+      const sceneContinuityManifest = sceneContinuity.manifest ?? {}
+      const sceneContinuityManifestHash = readText(sceneContinuity.manifest?.sourceHash)
+      const shotReferenceReadinessHash = readText(sceneContinuity.readiness?.hash)
+        || (sceneContinuity.readiness ? buildShotReferenceReadinessHash(sceneContinuity.readiness) : '')
       const sourceShotHash = sequenceAnimaticStableHash({
         shotId,
         shot,
         coverageSetupId,
         coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
         sourceReferenceHash,
+        sceneContinuityManifestHash,
+        shotReferenceReadinessHash,
         graphPolicyVersion: shotGraphPolicyVersion,
         coverageRegistryRevision: coverageRegistry.revision,
         coverageDecision: coverageResolution.coverageDecision,
@@ -2088,7 +2182,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         const continuityDependencies = shotGraphDependencyMode === 'single_node_chain'
           ? shotContinuityDependenciesForGraph(shot, coverageSetup)
           : []
-        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId, manifestHash, directorPlanHash, sourceReferenceHash, graphPolicyVersion: shotGraphPolicyVersion })
+        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId, manifestHash, directorPlanHash, sourceReferenceHash, sceneContinuityManifestHash, shotReferenceReadinessHash, graphPolicyVersion: shotGraphPolicyVersion })
         const commonConfig = {
           cinematicPipelineVersion: 'v3_script_storyboards',
           graphSpecVersion: sequenceAnimaticGraphSpecVersion,
@@ -2109,6 +2203,9 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           coverageSetupSource: coverageResolution.coverageSetupSource,
           keyframeHash,
           sourceShotHash,
+          sceneContinuityManifestHash,
+          shotReferenceReadinessHash,
+          sceneContinuityManifestStatus: readText(sceneContinuity.manifest?.status),
           manifestHash,
           directorPlanHash,
           masterManifestArtifactKey,
@@ -2176,6 +2273,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
             shot,
             panel: {},
             coverageAnchor: coverageSetupId ? coverageAnchorImageBySetupId.get(coverageSetupId) ?? {} : {},
+            sceneContinuityManifest,
             coverageSetup,
             coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
             coverageReferenceAssetKeys: requiredReferenceAssetKeys,

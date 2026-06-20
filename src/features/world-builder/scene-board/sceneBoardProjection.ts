@@ -116,8 +116,8 @@ export function sequenceAnimaticSceneBoardShotSnapshot(tile: SequenceAnimaticSce
 }
 
 export type SequenceAnimaticSceneBoardReferenceStageKey = 'set_refs' | 'zone_refs' | 'spot_refs'
-export type SequenceAnimaticSceneBoardPrepStageKey = 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'keyframes'
-export type SequenceAnimaticSceneBoardPrepUnitStage = 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'ready' | 'blocked' | 'failed'
+export type SequenceAnimaticSceneBoardPrepStageKey = 'set_refs' | 'scaffold_refs' | 'spot_angles' | 'coverage_directions' | 'coverage_grids' | 'keyframes'
+export type SequenceAnimaticSceneBoardPrepUnitStage = 'set_refs' | 'scaffold_refs' | 'spot_angles' | 'coverage_directions' | 'coverage_grids' | 'ready' | 'blocked' | 'failed'
 
 export type SequenceAnimaticSceneBoardPrepStage = {
   key: SequenceAnimaticSceneBoardPrepStageKey
@@ -198,6 +198,7 @@ export function sequenceAnimaticSceneBoardPrepStageFromWorkflowProgress(progress
   if (progress.status === 'completed' || progress.status === 'completed_with_errors') return 'complete'
   if (key.includes('coverage_grid') || key.includes('zone_coverage')) return 'coverage_grids'
   if (key.includes('coverage_intent') || key.includes('coverage direction')) return 'coverage_directions'
+  if (key.includes('spot_angle') || key.includes('spot angle')) return 'spot_angles'
   if (key.includes('scaffold') || key.includes('zone map') || key.includes('spot atlas')) return 'scaffold_refs'
   return 'set_refs'
 }
@@ -277,6 +278,7 @@ export function sequenceAnimaticSceneBoardPrepRunFromRecord(value: unknown): Seq
   const stage = trimOptionalString(record.stage) as SequenceAnimaticSceneBoardPrepRunState['stage']
   const validStage = stage === 'set_refs'
     || stage === 'scaffold_refs'
+    || stage === 'spot_angles'
     || stage === 'coverage_directions'
     || stage === 'coverage_grids'
     || stage === 'complete'
@@ -492,7 +494,7 @@ function sequenceAnimaticSceneBoardShotMatchesFilter(
 }
 
 const sequenceAnimaticSceneBoardReferenceStageOrder: SequenceAnimaticSceneBoardReferenceStageKey[] = ['set_refs', 'zone_refs', 'spot_refs']
-const sequenceAnimaticSceneBoardPrepStageOrder: SequenceAnimaticSceneBoardPrepStageKey[] = ['set_refs', 'scaffold_refs', 'coverage_directions', 'coverage_grids', 'keyframes']
+const sequenceAnimaticSceneBoardPrepStageOrder: SequenceAnimaticSceneBoardPrepStageKey[] = ['set_refs', 'scaffold_refs', 'spot_angles', 'coverage_directions', 'coverage_grids', 'keyframes']
 
 function sequenceAnimaticSceneBoardPrepStageForNodeKind(kind: SequenceAnimaticContinuityGraphNodeKind): SequenceAnimaticSceneBoardReferenceTile['stage'] | null {
   if (kind === 'world_location' || kind === 'set') return 'set_refs'
@@ -504,6 +506,7 @@ function sequenceAnimaticSceneBoardPrepStageForNodeKind(kind: SequenceAnimaticCo
 export function sequenceAnimaticSceneBoardPrepStageLabel(stage: SequenceAnimaticSceneBoardPrepStageKey) {
   if (stage === 'set_refs') return 'Set refs'
   if (stage === 'scaffold_refs') return 'Zone map / spot atlas'
+  if (stage === 'spot_angles') return 'Spot angles'
   if (stage === 'coverage_directions') return 'Coverage directions'
   if (stage === 'coverage_grids') return 'Coverage grids'
   return 'Keyframes'

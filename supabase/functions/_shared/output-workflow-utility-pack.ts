@@ -455,6 +455,33 @@ async function collectChildArtifactsNode(
   const artifacts: LooseRecord[] = (artifactResponse.data ?? []).map(helpers.asRecord)
   const readyArtifactRoles = [...new Set(artifacts.map((artifact: LooseRecord) => helpers.readText(helpers.asRecord(artifact.metadata).role)).filter(Boolean))]
   const readyArtifactKeys = [...new Set(artifacts.map((artifact: LooseRecord) => helpers.readText(artifact.key)).filter(Boolean))]
+  const assetStatesByNodeId: Record<string, LooseRecord> = {}
+  const assetKeysByNodeId: Record<string, string[]> = {}
+  const appendNodeAssetKey = (nodeId: string, assetKey: string) => {
+    if (!nodeId || !assetKey) return
+    assetKeysByNodeId[nodeId] = [...new Set([...(assetKeysByNodeId[nodeId] ?? []), assetKey])]
+  }
+  for (const artifact of artifacts) {
+    const metadata = helpers.asRecord(artifact.metadata)
+    const role = helpers.readText(metadata.role)
+    if (role === 'sequence_animatic_continuity_asset_batch') {
+      for (const [nodeId, value] of Object.entries(helpers.asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id))) {
+        if (!nodeId) continue
+        const state = helpers.asRecord(value)
+        if (!assetStatesByNodeId[nodeId]) assetStatesByNodeId[nodeId] = state
+        appendNodeAssetKey(nodeId, helpers.readText(state.assetKey ?? state.asset_key))
+      }
+      continue
+    }
+    if (role === 'sequence_animatic_continuity_asset') {
+      const state = helpers.asRecord(metadata.assetState ?? metadata.asset_state)
+      const nodeId = helpers.readText(state.sourceNodeId ?? state.source_node_id ?? metadata.targetNodeId ?? metadata.target_node_id)
+      if (!nodeId) continue
+      if (!assetStatesByNodeId[nodeId]) assetStatesByNodeId[nodeId] = state
+      appendNodeAssetKey(nodeId, helpers.readText(state.assetKey ?? state.asset_key ?? artifact.asset_key))
+    }
+  }
+  const assetKeys = [...new Set(Object.values(assetKeysByNodeId).flat())]
   const missingArtifactRoles = uniqueWorkflowIds.length === 0 && optional
     ? []
     : requiredRoles.filter((role) => !readyArtifactRoles.includes(role))
@@ -477,12 +504,21 @@ async function collectChildArtifactsNode(
       activeChildRunIds: children.filter((child) => child.waiting).map((child) => child.childRunId).filter(Boolean),
       readyArtifactCount: readyArtifactKeys.length,
       scopedAssetKeys: readyArtifactKeys,
+      outputArtifactKeys: readyArtifactKeys,
+      output_artifact_keys: readyArtifactKeys,
+      assetKeys,
+      asset_keys: assetKeys,
+      assetKeysByNodeId,
+      asset_keys_by_node_id: assetKeysByNodeId,
+      assetStatesByNodeId,
+      asset_states_by_node_id: assetStatesByNodeId,
       recoveryHints: missingArtifactRoles.map((role) => `Missing child artifact role "${role}".`),
     },
     metadata: {
       childCount: children.length,
       workflowCount: uniqueWorkflowIds.length,
       artifactCount: artifacts.length,
+      assetCount: assetKeys.length,
       optional,
       skipped: uniqueWorkflowIds.length === 0 && optional,
     },

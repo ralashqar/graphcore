@@ -3292,24 +3292,49 @@
     linear-gradient(180deg, rgba(15, 23, 42, 0.74), rgba(3, 7, 18, 0.96));
 }
 
+.world-wiki-scene-board-progress-stack {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  max-height: min(220px, 28vh);
+  overflow: auto;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  background: rgba(2, 6, 23, 0.62);
+}
+
 .world-wiki-scene-board-prep-strip {
   display: grid;
   grid-template-columns: minmax(220px, 0.84fr) minmax(0, 1.2fr);
   gap: 12px;
   align-items: center;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
   padding: 10px 12px;
-  background: rgba(2, 6, 23, 0.62);
 }
 
 .world-wiki-scene-board-workflow-progress {
   display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.1fr);
-  gap: 10px;
-  align-items: start;
+  grid-template-columns: minmax(260px, 0.95fr) minmax(0, 1.05fr);
+  gap: 8px;
+  align-items: center;
   border-bottom: 1px solid rgba(148, 163, 184, 0.13);
-  padding: 10px 12px;
+  padding: 8px 12px;
   background: rgba(2, 6, 23, 0.72);
+}
+
+.world-wiki-scene-board-workflow-progress .workflow-progress-summary {
+  min-height: 0;
+}
+
+.world-wiki-scene-board-workflow-progress .workflow-node-timeline {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.world-wiki-scene-board-workflow-progress .workflow-node-timeline li {
+  min-height: 30px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  padding: 5px 7px;
+  background: rgba(15, 23, 42, 0.42);
 }
 
 .world-wiki-scene-board-prep-strip > div {

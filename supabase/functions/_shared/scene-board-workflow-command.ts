@@ -154,6 +154,8 @@ export async function runSceneBoardWorkflowCommand(input: {
 
   const title = payload.action === 'regenerate_zone_top_down'
     ? 'Regenerate Scene Board Zone'
+    : payload.action === 'generate_spot_angle_coverage'
+    ? 'Generate Scene Board Spot Angles'
     : payload.action === 'generate_zone_coverage_grids'
     ? 'Generate Scene Board Coverage Grids'
     : payload.action === 'generate_selected_coverage_anchors'
@@ -245,7 +247,11 @@ export async function runSceneBoardWorkflowCommand(input: {
         world_snapshot_fingerprint: buildOutputWorkflowInputFingerprint(runInput),
         input: runInput,
         metadata: {
-          runIntent: payload.action === 'regenerate_zone_top_down' ? 'regenerate_scene_board_zone' : 'prepare_scene_board',
+          runIntent: payload.action === 'regenerate_zone_top_down'
+            ? 'regenerate_scene_board_zone'
+            : payload.action === 'generate_spot_angle_coverage'
+              ? 'generate_spot_angle_coverage'
+              : 'prepare_scene_board',
           workflowFamily: 'scene_board',
           workflowCommandAction: payload.action,
           runScope: 'upstream_to_node',

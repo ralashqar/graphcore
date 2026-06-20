@@ -6,6 +6,7 @@ export const workflowCommandActionSchema = z.enum([
   'prepare_scene_board',
   'regenerate_scene_board_zone',
   'generate_coverage_intents',
+  'generate_spot_angle_coverage',
   'generate_zone_coverage_grids',
   'generate_coverage_anchors',
   'prepare_storyboard_blocks',
@@ -125,6 +126,17 @@ const workflowCommandManifests: WorkflowCommandManifest[] = [
     legacyEndpoint: 'ensure-sequence-animatic-shot-coverage-intents',
     targetRole: 'coverage_intent_batch',
     projectionFamily: 'coverage_intent_batch',
+    defaultForceRefresh: false,
+  },
+  {
+    family: 'scene_board',
+    action: 'generate_spot_angle_coverage',
+    label: 'Generate Spot Angle Coverage',
+    description: 'Generate canonical reusable camera angles for selected Scene Board spots.',
+    templateKey: 'sequence_animatic_scene_board_prep',
+    legacyEndpoint: 'start-scene-board-workflow-command',
+    targetRole: 'scene_board_prep',
+    projectionFamily: 'scene_board_prep',
     defaultForceRefresh: false,
   },
   {
@@ -303,6 +315,7 @@ export function parseWorkflowCommand(value: unknown) {
 export function sceneBoardLegacyActionForWorkflowCommand(action: WorkflowCommandAction) {
   if (action === 'prepare_scene_board') return 'prepare_selected_board'
   if (action === 'regenerate_scene_board_zone') return 'regenerate_zone_top_down'
+  if (action === 'generate_spot_angle_coverage') return 'generate_spot_angle_coverage'
   if (action === 'generate_zone_coverage_grids') return 'generate_zone_coverage_grids'
   if (action === 'generate_coverage_anchors') return 'generate_selected_coverage_anchors'
   return null
@@ -359,6 +372,21 @@ const workflowCommandLegacyPayloadBuilders: Record<WorkflowCommandAction, Workfl
     forceRefresh: parsed.flags.forceRefresh,
     ...parsed.payload,
   }),
+  generate_spot_angle_coverage: (parsed) => {
+    const action = sceneBoardLegacyActionForWorkflowCommand(parsed.action)
+    if (!action) throw new Error(`Workflow command cannot be routed through the Scene Board wrapper: ${parsed.action}`)
+    return {
+      ...baseWorkflowCommandPayload(parsed),
+      sceneId: parsed.scope.sceneId,
+      action,
+      setId: parsed.scope.setId ?? null,
+      zoneId: parsed.scope.zoneId ?? null,
+      scopeNodeId: parsed.scope.scopeNodeId ?? null,
+      shotIds: parsed.scope.shotIds,
+      forceRefresh: parsed.flags.forceRefresh,
+      ...parsed.payload,
+    }
+  },
   generate_zone_coverage_grids: (parsed) => ({
     ...baseWorkflowCommandPayload(parsed),
     sceneId: parsed.scope.sceneId,

@@ -862,7 +862,7 @@ type WorldGraphPageProps = {
     zoneId?: string | null
     scopeNodeId?: string | null
     shotIds?: string[]
-    stage?: 'idle' | 'set_refs' | 'scaffold_refs' | 'coverage_directions' | 'coverage_grids' | 'complete' | 'failed' | 'cancelled'
+    stage?: 'idle' | 'set_refs' | 'scaffold_refs' | 'spot_angles' | 'coverage_directions' | 'coverage_grids' | 'complete' | 'failed' | 'cancelled'
     status?: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled'
     activeUnitId?: string | null
     activeUnitLabel?: string
@@ -884,7 +884,7 @@ type WorldGraphPageProps = {
   onStartSequenceAnimaticSceneBoardWorkflowCommand: (request: {
     masterRequestId: string
     sceneId: string
-    action?: 'prepare_selected_board' | 'regenerate_zone_top_down' | 'generate_zone_coverage_grids' | 'generate_selected_coverage_anchors'
+    action?: 'prepare_selected_board' | 'regenerate_zone_top_down' | 'generate_spot_angle_coverage' | 'generate_zone_coverage_grids' | 'generate_selected_coverage_anchors'
     setId?: string | null
     zoneId?: string | null
     scopeNodeId?: string | null
@@ -3514,6 +3514,16 @@ export function WorldGraphPage({
       sequenceAnimaticLookupInFlightRef.current.delete(sequenceKey)
     })
   }, [activeWikiEntity, canRunOutputs, loadAndStoreSequenceAnimaticState, outputArtifacts, outputRequests, outputWorkflowRuns, sequenceAnimaticLookupByKey, viewMode, wikiSubView])
+  useEffect(() => {
+    if (viewMode !== 'wiki' || wikiSubView !== 'wiki') return
+    if (!sequenceAnimaticSceneBoardRequestId || !sequenceAnimaticSceneBoardModel) return
+    if (!activeWikiEntity || activeWikiEntity.nodeType !== 'sequence_unit') return
+    const sceneBoardSequenceKeys = sequenceAnimaticSceneBoardModel.request.selectedSequenceUnitKeys
+    if (sceneBoardSequenceKeys.includes(activeWikiEntity.key)) return
+    setSequenceAnimaticSceneBoardRequestId(null)
+    setSequenceAnimaticSceneBoardScopeSceneId(null)
+    setSequenceAnimaticSceneBoardScopeNodeId(null)
+  }, [activeWikiEntity, sequenceAnimaticSceneBoardModel, sequenceAnimaticSceneBoardRequestId, viewMode, wikiSubView])
   useEffect(() => {
     if (viewMode === 'wiki' && wikiSubView === 'wiki') return
     if (!activeWikiEntityPage && !readWikiEntityPageRoute()) return

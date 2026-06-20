@@ -90,6 +90,7 @@ export const sequenceAnimaticShotProductionTemplateInputSchema = z.object({
   assetPack: looseRecordSchema.default({}),
   coverageAssetPack: looseRecordSchema.optional(),
   coverageAnchor: looseRecordSchema.optional(),
+  sceneContinuityManifest: looseRecordSchema.optional(),
   previousKeyframe: looseRecordSchema.optional(),
   requiredReferenceAssetKeys: z.array(z.string()).default([]),
   omittedReferenceAssetKeys: z.array(z.string()).default([]),
@@ -114,6 +115,7 @@ export const sequenceAnimaticShotKeyframesTemplateInputSchema = z.object({
   shot: looseRecordSchema.default({}),
   coverageSetup: looseRecordSchema.default({}),
   coverageAnchor: looseRecordSchema.default({}),
+  sceneContinuityManifest: looseRecordSchema.default({}),
   previousKeyframe: looseRecordSchema.default({}),
   storyboardPanel: looseRecordSchema.default({}),
   assetPack: looseRecordSchema.default({}),
@@ -273,7 +275,7 @@ export const sequenceAnimaticShotProductionTemplateScaffold = createWorkflowTemp
   policyVersion: 'sequence_animatic_shot_production_graph_v1',
   workflowFamily: 'sequence_animatic',
   commandAction: 'prepare_shot_production_graph',
-  sourceHashKeys: ['draftId', 'commonConfig', 'shot', 'panel', 'assetPack', 'coverageSetup', 'coverageAnchor', 'continuityDependencies', 'dependencyMode', 'aspectRatio'],
+  sourceHashKeys: ['draftId', 'commonConfig', 'shot', 'panel', 'assetPack', 'coverageSetup', 'coverageAnchor', 'sceneContinuityManifest', 'continuityDependencies', 'dependencyMode', 'aspectRatio'],
   graphStages: ['shot_input', 'shot_reference_pack', 'planned_keyframe_prompt', 'planned_keyframe_image', 'planned_keyframe_artifact', 'shot_video_prompt', 'shot_video'],
   requiredNodePurposes: [
     'sequence_animatic_shot_input',
@@ -302,7 +304,7 @@ export const sequenceAnimaticShotKeyframesTemplateScaffold = createWorkflowTempl
   policyVersion: 'sequence_animatic_shot_keyframes_graph_v1',
   workflowFamily: 'sequence_animatic',
   commandAction: 'generate_keyframes',
-  sourceHashKeys: ['draftId', 'commonConfig', 'shot', 'coverageSetup', 'coverageAnchor', 'previousKeyframe', 'storyboardPanel', 'assetPack', 'aspectRatio'],
+  sourceHashKeys: ['draftId', 'commonConfig', 'shot', 'coverageSetup', 'coverageAnchor', 'sceneContinuityManifest', 'previousKeyframe', 'storyboardPanel', 'assetPack', 'aspectRatio'],
   graphStages: ['planned_keyframe_input', 'planned_keyframe_prompt', 'planned_keyframe_image', 'planned_keyframe_artifact'],
   requiredNodePurposes: [
     'sequence_animatic_planned_keyframe_input',

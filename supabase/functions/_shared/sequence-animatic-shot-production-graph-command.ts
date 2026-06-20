@@ -59,6 +59,14 @@ import {
 } from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
 import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceAnimaticSceneState.ts'
 import { sequenceAnimaticVisualReferenceHash } from '../../../src/domain/sequenceAnimaticVisualReferencePlan.ts'
+import {
+  loadSceneContinuityManifests,
+  resolveSceneContinuityForShot,
+  sceneContinuityBlockingReason,
+} from './scene-continuity-manifest-utils.ts'
+import {
+  buildShotReferenceReadinessHash,
+} from '../../../src/domain/sceneContinuityManifest.ts'
 
 const SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v7'
 const SHOT_GRAPH_DEPENDENCY_MODE = 'single_node_chain'
@@ -296,6 +304,57 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       sceneGraphOverrideForNode(asRecord(masterRequest.metadata), coverageSetupId),
     )
     sceneState = asRecord(deriveSequenceAnimaticSceneStates({ shots: mergedShots, coverageSetups: coverageRegistryNext.coverageSetups }).get(payload.shotId))
+    const sceneContinuityManifests = await loadSceneContinuityManifests({
+      client,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+      masterRequestId: masterRequest.id,
+    })
+    const sceneContinuity = resolveSceneContinuityForShot({
+      manifests: sceneContinuityManifests,
+      shot,
+    })
+    const sceneContinuityBlockReason = payload.allowProvisional ? null : sceneContinuityBlockingReason(sceneContinuity)
+    if (sceneContinuityBlockReason) {
+      const missingNodeIds = readStringArray(sceneContinuity.readiness?.spatialNodeIds)
+      return sequenceAnimaticShotProductionGraphEnsureResponseSchema.parse({
+        ok: true,
+        masterRequest,
+        shotRequest: null,
+        workflow: null,
+        nodes: [],
+        edges: [],
+        cacheStatus: 'blocked',
+        nextAction: {
+          kind: 'blocked',
+          requestId: null,
+          workflowId: null,
+          role: null,
+          reason: sceneContinuityBlockReason === 'missing_scene_continuity_manifest'
+            ? 'Prepare the Scene Board before creating this shot production graph.'
+            : 'Scene continuity references are not ready for this shot.',
+          shotId: payload.shotId,
+          coverageSetupId: coverageSetupId || null,
+          dependencyNodeIds: missingNodeIds,
+        },
+        blockedShotKeyframes: [{
+          shotId: payload.shotId,
+          storyboardBlockId: readText(shot.storyboardBlockId ?? shot.blockId) || null,
+          reason: sceneContinuityBlockReason,
+          coverageSetupId: coverageSetupId || null,
+          previousShotId: null,
+          missingContinuityNodeIds: missingNodeIds,
+        }],
+        shotId: payload.shotId,
+        coverageSetupId: coverageSetupId || null,
+        dependencyNodeIds: missingNodeIds,
+        graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
+      })
+    }
+    const sceneContinuityManifest = sceneContinuity.manifest ?? {}
+    const sceneContinuityManifestHash = readText(sceneContinuity.manifest?.sourceHash)
+    const shotReferenceReadinessHash = readText(sceneContinuity.readiness?.hash)
+      || (sceneContinuity.readiness ? buildShotReferenceReadinessHash(sceneContinuity.readiness) : '')
 
     const graph = asRecord(
       manifest.continuityGraphV2
@@ -471,6 +530,8 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       zoneCoverageRegistryRevision,
       zoneCoverageAnchorScopeKey,
       zoneCoverageAnchorAssetKey,
+      sceneContinuityManifestHash,
+      shotReferenceReadinessHash,
       coverageDecision: coverageResolution.coverageDecision,
       graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
     })
@@ -553,6 +614,8 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         manifestHash,
         directorPlanHash,
         sourceReferenceHash,
+        sceneContinuityManifestHash,
+        shotReferenceReadinessHash,
         graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
       })
       const commonConfig = {
@@ -570,6 +633,9 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         coverageSetupId,
         keyframeHash,
         sourceShotHash,
+        sceneContinuityManifestHash,
+        shotReferenceReadinessHash,
+        sceneContinuityManifestStatus: readText(sceneContinuity.manifest?.status),
         manifestHash,
         directorPlanHash,
         masterManifestArtifactKey,
@@ -638,6 +704,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
           block,
           shot,
           panel: {},
+          sceneContinuityManifest,
           coverageAnchor: {},
           coverageSetup,
           coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],

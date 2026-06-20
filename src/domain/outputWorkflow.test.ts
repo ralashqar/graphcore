@@ -124,6 +124,9 @@ import {
   sequenceAnimaticWorkflowTemplateRegistry,
 } from '../../supabase/functions/_shared/sequence-animatic-scene-board-workflows.ts'
 import {
+  sequenceAnimaticContinuityBatchPrompt,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-continuity-asset-pack.ts'
+import {
   buildRecoveredOutputFromArtifact,
   resolveDurableWorkflowNodeOutput,
 } from './outputWorkflowDurableResolver.ts'
@@ -161,6 +164,12 @@ import {
   isTerminalOutputActivityStatus,
   outputProgressSignature,
 } from './outputActivityMonitor.ts'
+import {
+  buildSceneContinuityManifestSourceHash,
+  buildShotReferenceReadinessHash,
+  sceneContinuityManifestSchema,
+  shotReferenceReadinessSchema,
+} from './sceneContinuityManifest.ts'
 
 const now = '2026-05-03T00:00:00.000Z'
 const repoRoot = resolve(import.meta.dirname, '../..')
@@ -208,6 +217,57 @@ test('sequence animatic scene graph override schemas preserve authoring fields',
   assert.equal(overrides.version, 'sequence_animatic_scene_graph_overrides_v1')
   assert.equal(overrides.nodes.spot_bridge?.visualBriefOverride, 'rain-slick bridge landing with lantern spill')
   assert.deepEqual(overrides.nodes.spot_bridge?.previousAssetKeys, ['asset_old'])
+})
+
+test('scene continuity manifest schema and hashes track shot readiness inputs', () => {
+  const readiness = shotReferenceReadinessSchema.parse({
+    shotId: 'scene_1_shot_001',
+    status: 'ready',
+    sceneId: 'scene_1',
+    setId: 'set_hall',
+    zoneId: 'zone_door',
+    spotIds: ['spot_threshold'],
+    spatialNodeIds: ['set_hall', 'zone_door', 'spot_threshold'],
+    readyArtifactKeys: ['asset_set', 'asset_zone', 'asset_spot'],
+  })
+  const hash = buildShotReferenceReadinessHash(readiness)
+  assert.equal(typeof hash, 'string')
+  assert.notEqual(hash, buildShotReferenceReadinessHash({ ...readiness, readyArtifactKeys: ['asset_set'] }))
+
+  const sourceHash = buildSceneContinuityManifestSourceHash({
+    policyVersion: 'scene_continuity_manifest_v1',
+    masterRequestId: 'request_1',
+    sceneId: 'scene_1',
+    setId: 'set_hall',
+    zoneId: 'zone_door',
+    shotIds: ['scene_1_shot_001'],
+    spatialNodeIds: ['set_hall', 'zone_door', 'spot_threshold'],
+    readyArtifactKeys: ['asset_set', 'asset_zone', 'asset_spot'],
+  })
+  const manifest = sceneContinuityManifestSchema.parse({
+    status: 'ready',
+    masterRequestId: 'request_1',
+    sceneId: 'scene_1',
+    setId: 'set_hall',
+    zoneId: 'zone_door',
+    shotIds: ['scene_1_shot_001'],
+    requiredSpatialNodeIds: ['set_hall', 'zone_door', 'spot_threshold'],
+    readyArtifactKeys: ['asset_set', 'asset_zone', 'asset_spot'],
+    shotReadiness: [{ ...readiness, hash }],
+    sourceHash,
+  })
+  assert.equal(manifest.contractVersion, 'scene_continuity_manifest_v1')
+  assert.equal(manifest.shotReadiness[0]?.hash, hash)
+  assert.notEqual(sourceHash, buildSceneContinuityManifestSourceHash({
+    policyVersion: 'scene_continuity_manifest_v1',
+    masterRequestId: 'request_1',
+    sceneId: 'scene_1',
+    setId: 'set_hall',
+    zoneId: 'zone_door',
+    shotIds: ['scene_1_shot_002'],
+    spatialNodeIds: ['set_hall', 'zone_door', 'spot_threshold'],
+    readyArtifactKeys: ['asset_set', 'asset_zone', 'asset_spot'],
+  }))
 })
 
 test('output activity monitor treats compatibility terminal statuses as inactive', () => {
@@ -653,12 +713,19 @@ test('workflow template registry validates scene board prep graph and source has
   assert.equal(sequenceAnimaticSceneBoardPrepTemplateScaffold.commandAction, 'prepare_scene_board')
   assert.deepEqual(sequenceAnimaticSceneBoardPrepTemplateScaffold.sourceHashKeys, ['draftId', 'commonConfig', 'command'])
   assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredTests.includes('template:sequence_animatic_scene_board_prep:command_route:scene_board:prepare_scene_board'))
+  assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredNodePurposes.includes('sequence_animatic_scene_board_set_ref_generation'))
+  assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredNodePurposes.includes('sequence_animatic_scene_board_scaffold_ref_generation'))
+  assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredNodePurposes.includes('sequence_animatic_scene_board_spot_angle_coverage'))
   assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredNodePurposes.includes('sequence_animatic_scene_board_coverage_intent_batch'))
   assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredNodePurposes.includes('sequence_animatic_scene_board_zone_coverage_grid'))
   assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredNodePurposes.includes('workflow_register_artifact_projection'))
   assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredArtifactRoles.includes('sequence_animatic_scene_board_prep'))
+  assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.requiredArtifactRoles.includes('sequence_animatic_continuity_asset_batch'))
   assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.projectionMetadataKeys.includes('activeChildRequestIds'))
   assert.ok(sequenceAnimaticSceneBoardPrepTemplateScaffold.compatibilityWrappers.includes('start-scene-board-workflow-command'))
+  const prepArtifactContract = getOutputWorkflowNodeContract({ purpose: 'sequence_animatic_scene_board_coverage_cell_artifact' })
+  assert.ok(prepArtifactContract?.producedOutputs.includes('sceneContinuityManifest'))
+  assert.ok(prepArtifactContract?.producedOutputs.includes('scene_continuity_manifest'))
   const rawInput = {
     workflowId: 'workflow-scene-board',
     draftId: 'draft-1',
@@ -692,10 +759,18 @@ test('workflow template registry validates scene board prep graph and source has
   assert.deepEqual(result.graph?.nodes.map((node) => node.key), [
     'scope_input',
     'required_ref_plan',
+    'set_ref_generation',
     'fanout_set_refs',
     'collect_set_refs',
-    'fanout_scaffold_refs',
-    'collect_scaffold_refs',
+    'zone_map_generation',
+    'fanout_zone_maps',
+    'collect_zone_maps',
+    'spot_atlas_generation',
+    'fanout_spot_atlases',
+    'collect_spot_atlases',
+    'spot_angle_coverage',
+    'fanout_spot_angles',
+    'collect_spot_angles',
     'coverage_intent_batch',
     'fanout_coverage_intents',
     'collect_coverage_intents',
@@ -706,8 +781,15 @@ test('workflow template registry validates scene board prep graph and source has
     'coverage_cell_artifact',
   ])
   const purposeByKey = new Map(result.graph?.nodes.map((node) => [node.key, String((node.config as Record<string, unknown>).purpose)]))
+  assert.equal(purposeByKey.get('set_ref_generation'), 'sequence_animatic_scene_board_set_ref_generation')
   assert.equal(purposeByKey.get('fanout_set_refs'), 'workflow_fanout_children')
   assert.equal(purposeByKey.get('collect_set_refs'), 'workflow_collect_child_artifacts')
+  assert.equal(purposeByKey.get('zone_map_generation'), 'sequence_animatic_scene_board_scaffold_ref_generation')
+  assert.equal(purposeByKey.get('fanout_zone_maps'), 'workflow_fanout_children')
+  assert.equal(purposeByKey.get('spot_atlas_generation'), 'sequence_animatic_scene_board_scaffold_ref_generation')
+  assert.equal(purposeByKey.get('fanout_spot_atlases'), 'workflow_fanout_children')
+  assert.equal(purposeByKey.get('spot_angle_coverage'), 'sequence_animatic_scene_board_spot_angle_coverage')
+  assert.equal(purposeByKey.get('fanout_spot_angles'), 'workflow_fanout_children')
   assert.equal(purposeByKey.get('coverage_intent_batch'), 'sequence_animatic_scene_board_coverage_intent_batch')
   assert.equal(purposeByKey.get('fanout_coverage_intents'), 'workflow_fanout_children')
   assert.equal(purposeByKey.get('zone_coverage_grid'), 'sequence_animatic_scene_board_zone_coverage_grid')
@@ -715,27 +797,105 @@ test('workflow template registry validates scene board prep graph and source has
   assert.equal(purposeByKey.get('register_projection'), 'workflow_register_artifact_projection')
   const configByKey = new Map(result.graph?.nodes.map((node) => [node.key, node.config as Record<string, unknown>]))
   assert.equal(configByKey.get('fanout_set_refs')?.autoStartChildren, true)
-  assert.equal(configByKey.get('fanout_scaffold_refs')?.autoStartChildren, true)
+  assert.equal(configByKey.get('zone_map_generation')?.scaffoldMode, 'zone_maps')
+  assert.equal(configByKey.get('spot_atlas_generation')?.scaffoldMode, 'spot_atlases')
+  assert.equal(configByKey.get('spot_angle_coverage')?.scaffoldMode, 'spot_angles')
+  assert.equal(configByKey.get('fanout_zone_maps')?.autoStartChildren, true)
+  assert.equal(configByKey.get('fanout_spot_atlases')?.autoStartChildren, true)
+  assert.equal(configByKey.get('fanout_spot_angles')?.autoStartChildren, true)
   assert.equal(configByKey.get('fanout_coverage_intents')?.autoStartChildren, true)
   assert.equal(configByKey.get('fanout_zone_coverage_grids')?.autoStartChildren, true)
   assert.doesNotMatch(JSON.stringify(result.graph), /workflow_ensure_child_workflow/)
   assert.match(JSON.stringify(result.graph?.edges), /projection__artifact/)
+  assert.match(JSON.stringify(result.graph?.edges), /set_ref_generation__fanout_set_refs/)
+  assert.match(JSON.stringify(result.graph?.edges), /zone_map_generation__fanout_zone_maps/)
+  assert.match(JSON.stringify(result.graph?.edges), /spot_atlas_generation__fanout_spot_atlases/)
+  assert.match(JSON.stringify(result.graph?.edges), /spot_angle_coverage__fanout_spot_angles/)
   assert.match(JSON.stringify(result.graph?.edges), /coverage_intent_batch__fanout_coverage_intents/)
   assert.match(JSON.stringify(result.graph?.edges), /zone_coverage_grid__fanout_zone_coverage_grids/)
   const sameHash = workflowTemplateSourceHash({
     command: rawInput.command,
     commonConfig: rawInput.commonConfig,
     draftId: rawInput.draftId,
-    policyVersion: 'scene_board_prep_graph_v1',
+    policyVersion: 'scene_board_prep_graph_v4',
   })
   const changedHash = workflowTemplateSourceHash({
     command: { ...rawInput.command, forceRefresh: true },
     commonConfig: rawInput.commonConfig,
     draftId: rawInput.draftId,
-    policyVersion: 'scene_board_prep_graph_v1',
+    policyVersion: 'scene_board_prep_graph_v4',
   })
   assert.equal(result.sourceHash, sameHash)
   assert.notEqual(result.sourceHash, changedHash)
+})
+
+test('scene board continuity planners use current-run refs and complete per-spot angle batches', () => {
+  const plannerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-scene-board-child-planners.ts'), 'utf8')
+  const packSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-scene-board-pack.ts'), 'utf8')
+  const utilitySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-utility-pack.ts'), 'utf8')
+
+  assert.match(utilitySource, /assetStatesByNodeId/)
+  assert.match(utilitySource, /assetKeysByNodeId/)
+  assert.match(plannerSource, /function upstreamAssetKeysForNodeId/)
+  assert.match(plannerSource, /upstreamReferenceAssetKeysForNodeId/)
+  assert.match(plannerSource, /for \(const spotNode of spotNodes\)/)
+  assert.doesNotMatch(plannerSource, /\.flatMap\([\s\S]{0,500}\)\s*\.slice\(0,\s*8\)/)
+  assert.match(plannerSource, /spotZoneAssetKeys/)
+  assert.match(plannerSource, /forceRefresh: input\.forceRefresh === true/)
+  assert.match(packSource, /upstreamStatus,\s*\n\s*mode: 'spot_angles'/)
+  assert.match(packSource, /status: childWorkflows\.length > 0 \? 'planned' : planningBlocked \? 'blocked' : 'ready'/)
+  assert.match(packSource, /action: 'generate_spot_angle_coverage'/)
+  assert.match(packSource, /status: manifestStatus/)
+})
+
+test('shot production templates include scene continuity manifest in input and source hash', () => {
+  assert.ok(sequenceAnimaticCommandWorkflowTemplateRegistry)
+  const shotProduction = sequenceAnimaticCommandTemplateScaffolds.find((entry) => entry.manifest.key === sequenceAnimaticShotProductionTemplateKey)
+  const shotKeyframes = sequenceAnimaticCommandTemplateScaffolds.find((entry) => entry.manifest.key === sequenceAnimaticShotKeyframesTemplateKey)
+  assert.ok(shotProduction)
+  assert.ok(shotKeyframes)
+  assert.ok(shotProduction.sourceHashKeys.includes('sceneContinuityManifest'))
+  assert.ok(shotKeyframes.sourceHashKeys.includes('sceneContinuityManifest'))
+
+  const graph = buildSequenceAnimaticShotProductionWorkflowGraph({
+    workflowId: 'workflow-shot',
+    draftId: 'draft-1',
+    commonConfig: { masterRequestId: 'master-1', shotId: 'shot_1' },
+    block: { id: 'block_1' },
+    shot: { id: 'shot_1', title: 'Shot 1' },
+    panel: {},
+    assetPack: {},
+    sceneContinuityManifest: { contractVersion: 'scene_continuity_manifest_v1', sourceHash: 'manifest-hash' },
+    requiredReferenceAssetKeys: [],
+    omittedReferenceAssetKeys: [],
+    selectedReferences: [],
+    omittedReferences: [],
+    sharedDependencyRequests: [],
+    continuityDependencies: [],
+    coverageSetup: {},
+    coverageShots: [],
+    coverageReferenceAssetKeys: [],
+    dependencyMode: 'single_node_chain',
+    editorialDurationSeconds: 3,
+    providerDurationSeconds: 5,
+    aspectRatio: '16:9',
+  })
+  const shotInput = graph.nodes.find((node) => node.key === 'shot_input')
+  assert.deepEqual((shotInput?.config as Record<string, unknown>).sceneContinuityManifest, { contractVersion: 'scene_continuity_manifest_v1', sourceHash: 'manifest-hash' })
+})
+
+test('keyframe and shot production commands gate final generation on scene continuity manifests', () => {
+  const keyframeCommandSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-keyframe-workflows-command.ts'), 'utf8')
+  const shotProductionCommandSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-shot-production-graph-command.ts'), 'utf8')
+  const sceneBoardPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-scene-board-pack.ts'), 'utf8')
+  assert.match(sceneBoardPackSource, /sceneContinuityManifest/)
+  assert.match(sceneBoardPackSource, /scene_continuity_manifest/)
+  assert.match(keyframeCommandSource, /loadSceneContinuityManifests/)
+  assert.match(keyframeCommandSource, /missing_scene_continuity_manifest/)
+  assert.match(keyframeCommandSource, /sceneContinuityManifestHash/)
+  assert.match(shotProductionCommandSource, /sceneContinuityBlockingReason/)
+  assert.match(shotProductionCommandSource, /cacheStatus: 'blocked'/)
+  assert.match(shotProductionCommandSource, /sceneContinuityManifestHash/)
 })
 
 test('workflow command template coverage validates Scene Board command presets against registered templates', () => {
@@ -3203,6 +3363,44 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   })
   assert.equal(batchValidation.ok, true, batchValidation.diagnostics.join('\n'))
 
+  const spotAtlasGraph = buildSequenceAnimaticContinuityBatchWorkflowGraph({
+    workflowId: 'workflow-spot-atlas-batch',
+    draftId: 'draft-1',
+    commonConfig: {
+      graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+      screenplayAnimaticRole: 'continuity_asset_batch',
+      sequenceAnimaticRole: 'continuity_asset_batch',
+      masterRequestId: 'request-master',
+      continuityBatchId: 'batch_zone_spots',
+    },
+    batch: {
+      batchId: 'batch_zone_spots',
+      batchKind: 'spot_atlas_grid',
+      generationPolicy: 'spot_atlas_grid_rectangular_ref_v3',
+      targetNodeIds: ['spot_1', 'spot_2', 'spot_3', 'spot_4', 'spot_5'],
+      layout: { rows: 2, columns: 3, cellCount: 5 },
+      required: true,
+    },
+    targetNodes: [
+      { id: 'spot_1', name: 'Spot 1', assetKind: 'location_spot' },
+      { id: 'spot_2', name: 'Spot 2', assetKind: 'location_spot' },
+      { id: 'spot_3', name: 'Spot 3', assetKind: 'location_spot' },
+      { id: 'spot_4', name: 'Spot 4', assetKind: 'location_spot' },
+      { id: 'spot_5', name: 'Spot 5', assetKind: 'location_spot' },
+    ],
+    continuityGraphV2: {},
+    relevantShots: [{ id: 'shot_001', storyboardBlockId: 'block_001' }],
+    shotBindings: { shot_001: { zoneId: 'zone_1' } },
+    assetPack: { entities: [] },
+    referenceAssetKeys: ['zone-map-asset'],
+    visualDependencyEdges: [],
+    aspectRatio: '1:1',
+  })
+  const spotAtlasImageNode = spotAtlasGraph.nodes.find((node) => node.key === 'continuity_batch_image')
+  assert.deepEqual(spotAtlasImageNode?.config.gridLayout, { rows: 2, columns: 3, cellCount: 5 })
+  assert.deepEqual(spotAtlasImageNode?.config.imageSize, { width: 3072, height: 2048 })
+  assert.equal(spotAtlasImageNode?.config.imageSizePolicy, 'spot_atlas_grid_3072x2048')
+
   assert.match(sequenceAnimaticOrchestratorRuntimeSource, /output-workflow-sequence-animatic-continuity-batches/)
   assert.match(sequenceAnimaticOrchestratorRuntimeSource, /sequenceAnimaticContinuityAssetBatches/)
   assert.match(sequenceAnimaticOrchestratorRuntimeSource, /sequenceAnimaticContinuityVisualDependencyEdges/)
@@ -3227,6 +3425,8 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Location evidence/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /promptDiagnostics/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /physical staging position or architectural sub-location/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /one \${imageShapeLabel} \${imageSize\.width}x\${imageSize\.height} image/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /do not center a smaller square grid/)
   assert.doesNotMatch(workerSource, /action spot inside the same zone/)
   const keyframeEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-keyframe-workflows-command.ts'), 'utf8')
   assert.match(keyframeEnsureSource, /parent_child_scaffold_grid/)
@@ -4574,6 +4774,48 @@ test('prompt-created cinematics can use screenplay animatic master mode', () => 
   assert.match(outputsSource, /cinematicAnimaticMode: 'prompt_cinematic_master'/)
   assert.match(outputsSource, /is-animatic-timeline/)
   assert.match(outputsSource, /isScreenplayAnimaticMasterRequest\(request\)/)
+})
+
+test('spot atlas batch prompt preserves config reference keys as direct image references', async () => {
+  const promptResult = await sequenceAnimaticContinuityBatchPrompt({
+    inputHash: 'spot-atlas-prompt-input',
+    node: {
+      config: {
+        batch: {
+          batchId: 'batch_zone_spots',
+          batchKind: 'spot_atlas_grid',
+          generationPolicy: 'spot_atlas_grid_rectangular_ref_v3',
+          targetNodeIds: ['spot_1', 'spot_2'],
+          layout: { rows: 1, columns: 2, cellCount: 2 },
+        },
+        targetNodes: [
+          { id: 'spot_1', name: 'Spot 1', assetKind: 'location_spot' },
+          { id: 'spot_2', name: 'Spot 2', assetKind: 'location_spot' },
+        ],
+        assetPack: { entities: [] },
+        referenceAssetKeys: ['zone-map-asset'],
+      },
+    },
+    upstream: {},
+  } as never, {
+    asRecord: (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {},
+    readArray: (value: unknown) => Array.isArray(value) ? value : [],
+    readStringArray: (value: unknown) => Array.isArray(value) ? value.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter(Boolean) : [],
+    readText: (value: unknown) => typeof value === 'string' ? value.trim() : '',
+    readFirstUpstreamRecord: () => ({}),
+    readFirstUpstreamArray: () => [],
+    hashOutputWorkflowValue,
+  } as never)
+  const assetPack = promptResult.outputs.assetPack as {
+    entities?: Array<Record<string, unknown>>
+    referenceDiagnostics?: string[]
+    scopedReferenceAssetKeys?: string[]
+  }
+
+  assert.deepEqual(promptResult.outputs.referenceAssetKeys, ['zone-map-asset'])
+  assert.deepEqual(assetPack.scopedReferenceAssetKeys, ['zone-map-asset'])
+  assert.equal(assetPack.entities?.[0]?.primaryAssetKey, 'zone-map-asset')
+  assert.doesNotMatch((assetPack.referenceDiagnostics ?? []).join('\n'), /no ready image references/i)
 })
 
 test('sequence animatic continuity anchors are planned, extracted, and passed to child workflows', () => {

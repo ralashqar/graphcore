@@ -119,9 +119,12 @@ export async function sequenceAnimaticContinuityBatchPrompt(
   const relevantShots = helpers.readFirstUpstreamArray(context.upstream, ['relevantShots', 'relevant_shots']).map(helpers.asRecord)
   const upstreamAssetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : helpers.asRecord(config.assetPack)
-  const referenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+  const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
     .map(helpers.readText)
     .filter(Boolean)
+  const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0
+    ? upstreamReferenceAssetKeys
+    : helpers.readStringArray(config.referenceAssetKeys)
   const effectiveBatch = Object.keys(batch).length > 0 ? batch : helpers.asRecord(config.batch)
   const batchKind = helpers.readText(effectiveBatch.batchKind)
   const spatialBatch = [
@@ -189,6 +192,16 @@ export async function sequenceAnimaticContinuityBatchExtract(
   const layout = helpers.asRecord(effectiveBatch.layout)
   const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
   const columns = Math.max(1, Number(layout.columns ?? 1) || 1)
+  const batchKind = helpers.readText(effectiveBatch.batchKind ?? effectiveBatch.batch_kind)
+  const generationPolicy = helpers.readText(effectiveBatch.generationPolicy ?? effectiveBatch.generation_policy ?? helpers.asRecord(config.batch).generationPolicy)
+  const strictSpotAtlasGrid = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid' || generationPolicy === 'spot_atlas_grid_rectangular_ref_v3'
+  const referenceImageCount = Number(helpers.asRecord(image).referenceImageCount ?? helpers.asRecord(image).reference_image_count ?? 0) || 0
+  if (strictSpotAtlasGrid && generationPolicy !== 'spot_atlas_grid_rectangular_ref_v3') {
+    throw new Error(`Spot atlas extraction rejected obsolete generation policy "${generationPolicy || 'missing'}". Regenerate with spot_atlas_grid_rectangular_ref_v3.`)
+  }
+  if (strictSpotAtlasGrid && referenceImageCount < 1) {
+    throw new Error('Spot atlas extraction rejected image with no parent zone map reference. Regenerate the spot atlas from the zone map.')
+  }
   const mimeType = helpers.readText(image.mimeType) || helpers.readText(image.mime_type) || 'image/webp'
   const sourceBytes = await helpers.downloadProjectAssetBytes(context.client, storagePath)
   const tempDir = await helpers.makeTempDir('graphcore-continuity-batch-')
@@ -200,6 +213,13 @@ export async function sequenceAnimaticContinuityBatchExtract(
     await helpers.writeFile(sourcePath, sourceBytes)
     const size = await helpers.probeImageSize(sourcePath)
     if (!size) throw new Error('Continuity batch extraction could not read generated image dimensions.')
+    if (strictSpotAtlasGrid) {
+      const expectedWidth = Math.max(1024, Math.min(4096, columns * 1024))
+      const expectedHeight = Math.max(1024, Math.min(4096, rows * 1024))
+      if (size.width !== expectedWidth || size.height !== expectedHeight) {
+        throw new Error(`Spot atlas extraction rejected ${size.width}x${size.height} source for ${rows}x${columns} layout; expected ${expectedWidth}x${expectedHeight}.`)
+      }
+    }
     for (let index = 0; index < targetNodes.length; index += 1) {
       const targetNode = targetNodes[index]
       const targetNodeId = helpers.readText(targetNode.id)
@@ -213,6 +233,9 @@ export async function sequenceAnimaticContinuityBatchExtract(
       const nextY = Math.floor((size.height * (row + 1)) / rows)
       const cellWidth = Math.max(1, Math.min(size.width - cropX, nextX - cropX))
       const cellHeight = Math.max(1, Math.min(size.height - cropY, nextY - cropY))
+      if (strictSpotAtlasGrid && (cellWidth !== 1024 || cellHeight !== 1024)) {
+        throw new Error(`Spot atlas extraction rejected ${cellWidth}x${cellHeight} cell for ${rows}x${columns} layout; expected 1024x1024 cells.`)
+      }
       const outputPath = `${tempDir}/${helpers.slugify(targetNodeId)}.webp`
       const crop = await helpers.runFfmpeg(['-y', '-i', sourcePath, '-vf', `crop=${cellWidth}:${cellHeight}:${cropX}:${cropY}`, outputPath])
       if (!crop.ok) throw new Error(`Continuity batch crop failed for ${targetNodeId}: ${crop.stderr.slice(0, 1200)}`)
@@ -273,7 +296,15 @@ export async function sequenceAnimaticContinuityBatchExtract(
         artifactKey: artifact.key,
         prompt: helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text']),
         referenceAssetKeys: helpers.readStringArray(config.referenceAssetKeys),
+        generationPolicy,
+        batchKind,
+        gridLayout: layout,
+        referenceImageCount,
         sourceNodeId: targetNodeId,
+        parentNodeId: helpers.readText(targetNode.parentId ?? targetNode.parent_id),
+        sourceSpotId: helpers.readText(targetNode.spotId ?? targetNode.spot_id ?? targetNode.parentId ?? targetNode.parent_id),
+        sourceZoneId: helpers.readText(targetNode.zoneId ?? targetNode.zone_id),
+        sourceSetId: helpers.readText(targetNode.setId ?? targetNode.set_id),
         assetKind: helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset',
         generatedAt: new Date().toISOString(),
         warnings: [],

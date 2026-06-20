@@ -15,6 +15,12 @@ import {
 } from '../../../domain/outputWorkflowDurableResolver'
 import type { WorldEntity } from '../../../domain/worldGraph'
 import { iconForWorldEntity } from '../../../domain/worldGraphHelpers'
+import {
+  sceneContinuityManifestForShot,
+  sceneContinuityManifestSchema,
+  shotReadinessFromManifest,
+  type SceneContinuityManifest,
+} from '../../../domain/sceneContinuityManifest'
 import type { EntityIconId } from '../../../shared/entityIcons'
 import { sequenceAnimaticFriendlyProgressLabel } from '../sequenceAnimaticViewModel'
 import { buildSequenceAnimaticArtifactIndexes } from './sequenceAnimaticArtifactIndexes'
@@ -250,6 +256,37 @@ export type SequenceAnimaticContinuityRejectedView = {
   name: string
   reason: string
   evidence: string
+}
+
+function sceneContinuityManifestsFromArtifacts(artifacts: readonly OutputArtifact[]) {
+  return artifacts
+    .map((artifact) => {
+      const metadata = readLooseRecord(artifact.metadata)
+      const parsed = sceneContinuityManifestSchema.safeParse(readLooseRecord(metadata.sceneContinuityManifest ?? metadata.scene_continuity_manifest))
+      return parsed.success ? parsed.data : null
+    })
+    .filter((manifest): manifest is SceneContinuityManifest => Boolean(manifest))
+}
+
+function sceneContinuityReadinessForShot(input: {
+  manifests: readonly SceneContinuityManifest[]
+  shot: Record<string, unknown>
+  shotId: string
+}) {
+  const sceneId = trimOptionalString(input.shot.sourceSceneId ?? input.shot.source_scene_id ?? input.shot.sceneId ?? input.shot.scene_id)
+  const manifest = sceneContinuityManifestForShot(input.manifests, { shotId: input.shotId, sceneId })
+  return {
+    manifest,
+    readiness: shotReadinessFromManifest(manifest, input.shotId),
+  }
+}
+
+function sceneContinuityReadinessLabel(input: ReturnType<typeof sceneContinuityReadinessForShot>) {
+  if (!input.manifest) return 'Prepare Scene Board refs'
+  if (input.manifest.status !== 'ready') return 'Scene continuity prep pending'
+  if (!input.readiness) return 'Prepare Scene Board refs'
+  if (input.readiness.status === 'ready' || input.readiness.status === 'keyframe_ready') return ''
+  return 'Scene continuity refs pending'
 }
 
 export type SequenceAnimaticDialogueLineView = {
@@ -1108,6 +1145,7 @@ export function buildSequenceAnimaticViewModel(input: {
     plannedKeyframeRequestByShotId,
   } = runtimeIndexes
   const assetByKey = new Map(input.assets.map((asset) => [asset.key, asset] as const))
+  const sceneContinuityManifests = sceneContinuityManifestsFromArtifacts(input.artifacts)
   const {
     completedRevisionByShotId,
     completedPlannedKeyframeByShotId,
@@ -2046,11 +2084,15 @@ export function buildSequenceAnimaticViewModel(input: {
           const keyframeDependencyRunning = keyframeDependencyTargets.some((target) => target.status === 'generating')
           const keyframeDependencyMissingCount = keyframeDependencyTargets.filter((target) => ['missing', 'stale', 'failed'].includes(target.status)).length
           const keyframeDependencyReadyCount = keyframeDependencyTargets.filter((target) => target.status === 'ready').length
+          const sceneContinuityReadiness = sceneContinuityReadinessForShot({ manifests: sceneContinuityManifests, shot: displayShot, shotId })
+          const sceneContinuityLabel = sceneContinuityReadinessLabel(sceneContinuityReadiness)
           const keyframeDependencyStatusLabel = plannedKeyframeProgressLabel
             || (keyframeDependencyRunning
             ? 'Generating keyframe refs'
             : keyframeDependencyMissingCount > 0
               ? `${keyframeDependencyMissingCount} keyframe ref${keyframeDependencyMissingCount === 1 ? '' : 's'} missing`
+              : sceneContinuityLabel
+                ? sceneContinuityLabel
               : keyframeDependencyTargets.length > 0
                 ? `${keyframeDependencyReadyCount}/${keyframeDependencyTargets.length} keyframe refs ready`
                 : 'Shot refs ready')
@@ -2134,6 +2176,8 @@ export function buildSequenceAnimaticViewModel(input: {
                   ? plannedKeyframeProgressLabel || 'Generating keyframe'
                   : keyframeDependencyRunning
                     ? 'Generating keyframe refs'
+                    : sceneContinuityLabel
+                      ? sceneContinuityLabel
                     : keyframeDependencyMissingCount > 0
                       ? 'Preparing keyframe refs'
                   : plannedKeyframeRequest
@@ -2323,11 +2367,15 @@ export function buildSequenceAnimaticViewModel(input: {
           const keyframeDependencyRunning = keyframeDependencyTargets.some((target) => target.status === 'generating')
           const keyframeDependencyMissingCount = keyframeDependencyTargets.filter((target) => ['missing', 'stale', 'failed'].includes(target.status)).length
           const keyframeDependencyReadyCount = keyframeDependencyTargets.filter((target) => target.status === 'ready').length
+          const sceneContinuityReadiness = sceneContinuityReadinessForShot({ manifests: sceneContinuityManifests, shot: displayShot, shotId })
+          const sceneContinuityLabel = sceneContinuityReadinessLabel(sceneContinuityReadiness)
           const keyframeDependencyStatusLabel = plannedKeyframeProgressLabel
             || (keyframeDependencyRunning
             ? 'Generating keyframe refs'
             : keyframeDependencyMissingCount > 0
               ? `${keyframeDependencyMissingCount} keyframe ref${keyframeDependencyMissingCount === 1 ? '' : 's'} missing`
+              : sceneContinuityLabel
+                ? sceneContinuityLabel
               : keyframeDependencyTargets.length > 0
                 ? `${keyframeDependencyReadyCount}/${keyframeDependencyTargets.length} keyframe refs ready`
                 : 'Shot refs ready')
@@ -2413,6 +2461,8 @@ export function buildSequenceAnimaticViewModel(input: {
                   ? plannedKeyframeProgressLabel || 'Generating keyframe'
                   : keyframeDependencyRunning
                     ? 'Generating keyframe refs'
+                    : sceneContinuityLabel
+                      ? sceneContinuityLabel
                     : keyframeDependencyMissingCount > 0
                       ? 'Preparing keyframe refs'
                   : plannedKeyframeRequest

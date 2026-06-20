@@ -36,12 +36,27 @@ function sequenceAnimaticContinuityAssetImagePolicy(assetKind: string, generatio
   }
 }
 
-function sequenceAnimaticContinuityBatchImagePolicy(batchKind: string, generationPolicy = '') {
+function sequenceAnimaticSpotAtlasGridImageSize(layout: { rows: number; columns: number }) {
+  const cellSize = 1024
+  const rows = Math.max(1, Math.min(4, Math.round(layout.rows) || 1))
+  const columns = Math.max(1, Math.min(4, Math.round(layout.columns) || 1))
+  return {
+    width: Math.max(1024, Math.min(4096, columns * cellSize)),
+    height: Math.max(1024, Math.min(4096, rows * cellSize)),
+  }
+}
+
+function sequenceAnimaticContinuityBatchImagePolicy(
+  batchKind: string,
+  generationPolicy = '',
+  layout: { rows: number; columns: number } = { rows: 1, columns: 1 },
+) {
   if (generationPolicy.startsWith('spot_atlas_grid') || batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid') {
+    const imageSize = sequenceAnimaticSpotAtlasGridImageSize(layout)
     return {
       quality: 'medium',
-      imageSize: { width: 3072, height: 3072 },
-      imageSizePolicy: 'spot_atlas_grid_3072',
+      imageSize,
+      imageSizePolicy: `spot_atlas_grid_${imageSize.width}x${imageSize.height}`,
     }
   }
   return {
@@ -469,6 +484,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
   assetPack: Record<string, unknown>
   coverageAssetPack?: Record<string, unknown>
   coverageAnchor?: Record<string, unknown>
+  sceneContinuityManifest?: Record<string, unknown>
   previousKeyframe?: Record<string, unknown>
   requiredReferenceAssetKeys: string[]
   omittedReferenceAssetKeys: string[]
@@ -507,6 +523,8 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
     asset_pack: input.assetPack,
     coverageAnchor: input.coverageAnchor ?? {},
     coverage_anchor: input.coverageAnchor ?? {},
+    sceneContinuityManifest: input.sceneContinuityManifest ?? {},
+    scene_continuity_manifest: input.sceneContinuityManifest ?? {},
     coverageSetup: input.coverageSetup ?? {},
     coverage_setup: input.coverageSetup ?? {},
     previousKeyframe: input.previousKeyframe ?? {},
@@ -1214,6 +1232,7 @@ export function buildSequenceAnimaticPlannedKeyframeWorkflowGraph(input: {
   shot: Record<string, unknown>
   coverageSetup: Record<string, unknown>
   coverageAnchor: Record<string, unknown>
+  sceneContinuityManifest?: Record<string, unknown>
   previousKeyframe: Record<string, unknown>
   storyboardPanel: Record<string, unknown>
   assetPack: Record<string, unknown>
@@ -1228,6 +1247,8 @@ export function buildSequenceAnimaticPlannedKeyframeWorkflowGraph(input: {
     coverage_setup: input.coverageSetup,
     coverageAnchor: input.coverageAnchor,
     coverage_anchor: input.coverageAnchor,
+    sceneContinuityManifest: input.sceneContinuityManifest ?? {},
+    scene_continuity_manifest: input.sceneContinuityManifest ?? {},
     previousKeyframe: input.previousKeyframe,
     previous_keyframe: input.previousKeyframe,
     storyboardPanel: input.storyboardPanel,
@@ -1308,7 +1329,7 @@ export function buildSequenceAnimaticContinuityBatchWorkflowGraph(input: {
   const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
   const columns = Math.max(1, Number(layout.columns ?? (input.targetNodes.length || 1)) || 1)
   const batchKind = readText(input.batch.batchKind)
-  const imagePolicy = sequenceAnimaticContinuityBatchImagePolicy(batchKind, readText(input.batch.generationPolicy))
+  const imagePolicy = sequenceAnimaticContinuityBatchImagePolicy(batchKind, readText(input.batch.generationPolicy), { rows, columns })
   const config = {
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     ...input.commonConfig,

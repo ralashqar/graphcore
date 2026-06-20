@@ -214,6 +214,13 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
     || batchKind === 'single_hero_ref'
   const generationPolicy = readText(input.batch.generationPolicy)
   const spotAtlasGridPolicy = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid' || generationPolicy.startsWith('spot_atlas_grid')
+  const spotAngleCoveragePolicy = generationPolicy === 'spot_angle_coverage_v1'
+  const spotAtlasImageSize = {
+    width: Math.max(1024, Math.min(4096, columns * 1024)),
+    height: Math.max(1024, Math.min(4096, rows * 1024)),
+  }
+  const imageSize = spotAtlasGridPolicy ? spotAtlasImageSize : { width: 2048, height: 2048 }
+  const imageShapeLabel = imageSize.width === imageSize.height ? 'square' : 'rectangular'
   const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(input.relevantShots)
   const sanitizedTargets = input.targetNodes.slice(0, rows * columns).map((node) => spatialBatch
     ? sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames })
@@ -237,6 +244,8 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
   ].filter(Boolean).join(': '))
   const kindInstruction = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
     ? 'Create a local reference atlas using the single attached zone spatial map as the only visual reference. Each populated cell must show one reusable physical staging position, sub-location, or camera-facing viewpoint inside that mapped zone. Match the zone map topology, entrances, landmarks, surfaces, weather, palette, light direction, and screen-direction logic. No people, no characters, no silhouettes, no readable marker labels, no UI.'
+    : spotAngleCoveragePolicy
+    ? 'Each populated cell must show a distinct reusable canonical camera-facing angle for the same spot. Use attached references as geometry locks: zone map for global topology and spot atlas crop for local surfaces, entrances, landmarks, scale, light direction, and screen direction. No people, no characters, no silhouettes, no labels, no UI.'
     : batchKind === 'angle_grid' || batchKind === 'viewpoint_grid'
     ? 'Each populated cell must show a distinct reusable camera-facing viewpoint from the same set, zone, or spot. Preserve architecture, landmarks, light direction, screen direction, entrances, materials, and depth. No characters, no labels, no UI.'
     : batchKind === 'parent_child_scaffold_grid'
@@ -252,11 +261,13 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
             : 'Create one high-detail hero continuity reference. It must be reusable across storyboard and shot-video generation. No labels, no borders, no UI, no watermarks.'
   const prompt = [
     `Continuity reference batch: ${batchKind}`,
-    `Grid: ${rows} rows x ${columns} columns on one square ${spotAtlasGridPolicy ? '3072x3072' : '2048x2048'} image. Fill cells left-to-right, top-to-bottom. Leave unused cells clean and empty.`,
+    `Grid: ${rows} rows x ${columns} columns on one ${imageShapeLabel} ${imageSize.width}x${imageSize.height} image. Fill the entire canvas with equal cells left-to-right, top-to-bottom; do not center a smaller square grid, do not add outer margins, and do not leave broad whitespace around the grid. Leave unused cells clean and empty inside the same equal-cell grid only.`,
     kindInstruction,
     input.referenceAssetKeys.length > 0
       ? batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
         ? 'Attached image reference: the parent zone spatial map only. Treat it as the global topology lock for every cell; do not use any set, character, prop, shot, storyboard, or sibling spot image as an atlas reference.'
+      : spotAngleCoveragePolicy
+        ? 'Attached images are hierarchy locks: parent zone map first, then spot atlas/local spot reference. Preserve topology, local surfaces, landmarks, depth, light direction, screen direction, materials, and palette.'
         : 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
       : spatialBatch
         ? 'No parent image references are available. Use only the cell assignments and project visual style; do not use shot action, character blocking, or dialogue as visual content.'
@@ -264,7 +275,7 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
     cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
     locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
-    'Provider requirements: one finished image only, exact cell order, no visible text, no captions, no labels, no arrows, no UI, no watermarks. Use clean spacing or subtle gutters only; every populated cell must crop cleanly as its own square reference.',
+    'Provider requirements: one finished image only, exact cell order, no visible text, no captions, no labels, no arrows, no UI, no watermarks. Use clean spacing or subtle gutters only; every populated cell must crop cleanly as its own equal-sized reference.',
   ].filter(Boolean).join('\n\n')
   return {
     prompt,
