@@ -424,6 +424,50 @@ function buildCinematicV3StoryboardPrompt(input: {
     helpers.readText(setup.stagingBrief ?? setup.staging_brief) ? `Staging: ${helpers.readText(setup.stagingBrief ?? setup.staging_brief)}.` : '',
     helpers.readText(setup.lighting) ? `Lighting: ${helpers.readText(setup.lighting)}.` : '',
   ].filter(Boolean).join(' '))
+  const spatialReferencePack = helpers.asRecord(input.assetPack.storyboardSpatialReferencePack ?? input.assetPack.storyboard_spatial_reference_pack)
+  const spatialShotReferences = Array.isArray(spatialReferencePack.shotSpatialReferences)
+    ? spatialReferencePack.shotSpatialReferences.map(helpers.asRecord)
+    : []
+  const spatialAssets = Array.isArray(spatialReferencePack.selectedReferenceAssets)
+    ? spatialReferencePack.selectedReferenceAssets.map(helpers.asRecord)
+    : []
+  const spatialReferenceByShotId = new Map(spatialShotReferences.map((reference) => [helpers.readText(reference.shotId), reference] as const).filter(([shotId]) => shotId))
+  const spatialRoleLabel = (role: string) => {
+    if (role === 'coverage_cell') return 'coverage cell'
+    if (role === 'spot_angle_grid') return 'spot angle grid'
+    if (role === 'spot_atlas') return 'spot atlas'
+    if (role === 'spatial_reference') return 'spatial reference'
+    return role || 'spatial reference'
+  }
+  const spatialReferenceLines = shotPlan.shots.slice(0, layout.panelCount).map((shot, index) => {
+    const reference = spatialReferenceByShotId.get(shot.id) ?? {}
+    const roles = spatialAssets
+      .filter((asset) => {
+        const shotIds = Array.isArray(asset.shotIds) ? asset.shotIds.map(helpers.readText).filter(Boolean) : []
+        return shotIds.includes(shot.id)
+      })
+      .map((asset) => spatialRoleLabel(helpers.readText(asset.role)))
+      .filter((role, roleIndex, roles) => role && roles.indexOf(role) === roleIndex)
+    const details = [
+      helpers.readText(reference.sceneId) ? `scene ${helpers.readText(reference.sceneId)}` : '',
+      helpers.readText(reference.zoneId) ? `zone ${helpers.readText(reference.zoneId)}` : '',
+      Array.isArray(reference.spotIds) && reference.spotIds.length > 0 ? `spot ${reference.spotIds.map(helpers.readText).filter(Boolean).join(', ')}` : '',
+      Array.isArray(reference.angleIds) && reference.angleIds.length > 0 ? `angle/viewpoint ${reference.angleIds.map(helpers.readText).filter(Boolean).join(', ')}` : helpers.readText(reference.viewpointId) ? `viewpoint ${helpers.readText(reference.viewpointId)}` : '',
+      helpers.readText(reference.coverageSetupId) ? `coverage setup ${helpers.readText(reference.coverageSetupId)}` : '',
+      roles.length > 0 ? `attached reference roles: ${roles.join(', ')}` : '',
+    ].filter(Boolean)
+    const blockers = Array.isArray(reference.blockers) ? reference.blockers.map(helpers.readText).filter(Boolean) : []
+    return details.length > 0 || blockers.length > 0
+      ? `Panel ${index + 1} (${shot.id}): ${details.join('; ') || 'no ready spatial reference'}${blockers.length > 0 ? `; provisional blockers: ${blockers.join(', ')}` : ''}.`
+      : ''
+  }).filter(Boolean)
+  const spatialReferenceInstruction = spatialReferenceLines.length > 0
+    ? [
+      `Spatial continuity references (${helpers.readText(spatialReferencePack.status) === 'ready' ? 'ready' : 'provisional'}):`,
+      spatialReferenceLines.join('\n'),
+      'Use attached zone maps, spot atlases, spot angle grids, and coverage cells only to ground geography, landmarks, screen direction, camera blocking, and relative positions. Do not reproduce reference-grid gutters, labels, diagrams, UI, text, or reference-sheet layout inside the storyboard panels.',
+    ].join('\n')
+    : ''
   const shotLines = shotPlan.shots.slice(0, layout.panelCount).map((shot, index) => {
     const shotRecord = shot as unknown as LooseRecord
     const caption = helpers.readText(shotRecord.caption)
@@ -471,6 +515,7 @@ function buildCinematicV3StoryboardPrompt(input: {
     storyboardGroup ? `This sheet represents one video block of ${Math.min(15, Math.max(0, Number(storyboardGroup.editorialDurationSeconds) || 0)).toFixed(1).replace(/\.0$/, '')} seconds or less. It may contain fewer than 4 panels for a slow scene; leave unused grid cells blank exactly as instructed.` : '',
     storyboardGroup?.continuityNotes.length ? `Group continuity notes: ${storyboardGroup.continuityNotes.join(' ')}` : '',
     coverageSetupLines.length > 0 ? `Reusable camera/staging coverage setups:\n${coverageSetupLines.join('\n')}` : '',
+    spatialReferenceInstruction,
     `Every panel must have an internal ${input.aspectRatio} cinematic crop and feel like frames from the same continuous sequence.`,
     'No captions, no labels, no speech bubbles, no UI, no watermark, no text inside the image.',
     'Shot panels:',

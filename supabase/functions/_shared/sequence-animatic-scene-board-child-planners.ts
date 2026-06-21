@@ -345,6 +345,37 @@ function strictSpotAtlasAssetKeysForNode(node: LooseRecord) {
     : []
 }
 
+function spatialNodeZoneId(node: LooseRecord, nodesById: Map<string, LooseRecord>, depth = 0): string {
+  if (depth > 4) return ''
+  const directZoneId = readText(node.zoneId ?? node.zone_id ?? node.sourceZoneId ?? node.source_zone_id)
+  if (directZoneId) return directZoneId
+  const parentId = readText(node.parentId ?? node.parent_id ?? node.spotId ?? node.spot_id)
+  if (!parentId) return ''
+  const parent = nodesById.get(parentId) ?? {}
+  if (spatialAssetKindForNode(parent) === 'location_zone') return readText(parent.id)
+  return spatialNodeZoneId(parent, nodesById, depth + 1)
+}
+
+function spatialNodeBelongsToZone(node: LooseRecord, zoneId: string, nodesById: Map<string, LooseRecord>) {
+  const nodeId = readText(node.id)
+  const kind = spatialAssetKindForNode(node)
+  if (!nodeId || !zoneId) return false
+  if (kind === 'location_zone') return nodeId === zoneId
+  const nodeZoneId = spatialNodeZoneId(node, nodesById)
+  return nodeZoneId === zoneId
+}
+
+function candidateSpotNodeIdsForZone(entries: readonly { spatial: Record<string, string> }[], zoneId: string, nodesById: Map<string, LooseRecord>) {
+  return uniqueTexts(entries.flatMap((entry) => [entry.spatial.primarySpotId, entry.spatial.viewpointId]))
+    .map((nodeId) => nodesById.get(nodeId) ?? {})
+    .filter((node) => {
+      const kind = spatialAssetKindForNode(node)
+      return kind === 'location_spot' || kind === 'location_viewpoint'
+    })
+    .filter((node) => spatialNodeBelongsToZone(node, zoneId, nodesById))
+    .map((node) => readText(node.id))
+}
+
 function continuityAssetStatesFromArtifacts(artifacts: readonly LooseRecord[]) {
   const states = new Map<string, LooseRecord>()
   for (const artifact of artifacts) {
@@ -651,9 +682,11 @@ function buildContinuityAssetChildSpec(input: {
   referenceAssetKeys: string[]
   generationPolicy: string
   sourceSurface: string
+  visualCanonGuard?: { text: string; hash: string; forbidden: string[] }
 }) {
   const targetNodeId = readText(input.targetNode.id)
   const assetKind = spatialAssetKindForNode(input.targetNode)
+  const visualCanonGuard = input.visualCanonGuard ?? { text: '', hash: '', forbidden: [] }
   const sourceHash = sequenceAnimaticStableHash({
     policy: input.policyVersion,
     targetNodeId,
@@ -662,6 +695,7 @@ function buildContinuityAssetChildSpec(input: {
     generationPolicy: input.generationPolicy,
     relevantShotIds: input.relevantShots.map((shot) => readText(shot.id)),
     referenceAssetKeys: input.referenceAssetKeys,
+    visualCanonGuardHash: visualCanonGuard.hash,
   })
   const workflowId = crypto.randomUUID()
   const commonConfig = {
@@ -682,6 +716,12 @@ function buildContinuityAssetChildSpec(input: {
     targetNodeId,
     assetKind,
     generationPolicy: input.generationPolicy,
+    visualCanonGuard: visualCanonGuard.text,
+    visual_canon_guard: visualCanonGuard.text,
+    visualCanonGuardHash: visualCanonGuard.hash,
+    visual_canon_guard_hash: visualCanonGuard.hash,
+    forbiddenVisualElements: visualCanonGuard.forbidden,
+    forbidden_visual_elements: visualCanonGuard.forbidden,
     readyToRun: true,
   }
   const graphPlan = buildSequenceAnimaticContinuityAssetWorkflowGraph({
@@ -768,9 +808,11 @@ function buildContinuityBatchChildSpec(input: {
   batchKind: string
   sourceSurface: string
   forceRefresh?: boolean
+  visualCanonGuard?: { text: string; hash: string; forbidden: string[] }
 }) {
   const parentNodeId = readText(input.parentNode.id) || 'scene'
   const targetNodeIds = input.targetNodes.map((node) => readText(node.id)).filter(Boolean)
+  const visualCanonGuard = input.visualCanonGuard ?? { text: '', hash: '', forbidden: [] }
   const columns = input.stage === 'spot_angles' && input.targetNodes.length === 4
     ? 2
     : Math.min(3, Math.max(1, input.targetNodes.length))
@@ -785,6 +827,7 @@ function buildContinuityBatchChildSpec(input: {
     relevantShotIds: input.relevantShots.map((shot) => readText(shot.id)),
     referenceAssetKeys: input.referenceAssetKeys,
     forceRefresh: input.forceRefresh === true,
+    visualCanonGuardHash: visualCanonGuard.hash,
   })
   const workflowId = crypto.randomUUID()
   const batchId = sequenceAnimaticStableHash({
@@ -824,6 +867,12 @@ function buildContinuityBatchChildSpec(input: {
     scene_board_continuity_identity: `${input.stage}:${batchId}:${sourceHash}`,
     parentNodeId,
     generationPolicy: input.generationPolicy,
+    visualCanonGuard: visualCanonGuard.text,
+    visual_canon_guard: visualCanonGuard.text,
+    visualCanonGuardHash: visualCanonGuard.hash,
+    visual_canon_guard_hash: visualCanonGuard.hash,
+    forbiddenVisualElements: visualCanonGuard.forbidden,
+    forbidden_visual_elements: visualCanonGuard.forbidden,
     forceRefresh: input.forceRefresh === true,
     readyToRun: true,
   }
@@ -932,6 +981,62 @@ function artStyleDescriptionForBoard(input: {
     || readText(input.directorPlan.visualStyle)
     || readText(input.assetPack.artStyleDescription)
     || readText(input.assetPack.visualStyle)
+}
+
+function visualCanonGuardForBoard(input: {
+  masterMetadata: LooseRecord
+  manifest: LooseRecord
+  directorPlan: LooseRecord
+  assetPack: LooseRecord
+}) {
+  const projectContext = asRecord(input.masterMetadata.projectContext ?? input.masterMetadata.project_context)
+  const worldWiki = asRecord(
+    input.masterMetadata.worldWiki
+      ?? input.masterMetadata.world_wiki
+      ?? projectContext.worldWiki
+      ?? projectContext.world_wiki
+      ?? input.manifest.worldWiki
+      ?? input.manifest.world_wiki
+      ?? input.directorPlan.worldWiki
+      ?? input.directorPlan.world_wiki,
+  )
+  const positiveContext = uniqueTexts([
+    readText(worldWiki.title),
+    readText(worldWiki.genre),
+    readText(worldWiki.setting),
+    readText(worldWiki.settingEra ?? worldWiki.setting_era),
+    readText(worldWiki.timePeriod ?? worldWiki.time_period),
+    readText(worldWiki.technologyLevel ?? worldWiki.technology_level),
+    readText(worldWiki.transportation ?? worldWiki.transport),
+    readText(worldWiki.architecture),
+    readText(worldWiki.materialCulture ?? worldWiki.material_culture),
+    readText(worldWiki.artStyleDescription),
+    readText(projectContext.genre),
+    readText(projectContext.setting),
+    readText(projectContext.settingEra ?? projectContext.setting_era),
+    readText(projectContext.timePeriod ?? projectContext.time_period),
+    readText(projectContext.technologyLevel ?? projectContext.technology_level),
+    readText(input.manifest.worldContext ?? input.manifest.world_context),
+    readText(input.directorPlan.worldContext ?? input.directorPlan.world_context),
+    readText(input.assetPack.artStyleDescription),
+  ]).slice(0, 8)
+  const explicitForbidden = uniqueTexts([
+    ...readStringArray(worldWiki.forbiddenVisualElements ?? worldWiki.forbidden_visual_elements),
+    ...readStringArray(worldWiki.anachronismAvoidList ?? worldWiki.anachronism_avoid_list),
+    ...readStringArray(projectContext.forbiddenVisualElements ?? projectContext.forbidden_visual_elements),
+    ...readStringArray(projectContext.anachronismAvoidList ?? projectContext.anachronism_avoid_list),
+  ])
+  const forbidden = uniqueTexts(explicitForbidden).slice(0, 12)
+  const guard = [
+    positiveContext.length > 0 ? `Project visual canon: ${positiveContext.join(' / ')}` : '',
+    forbidden.length > 0 ? `Do not introduce anachronisms or unsupported technology: ${forbidden.join(', ')}.` : '',
+    'Only show visual elements that are supported by this world context or the scene graph brief.',
+  ].filter(Boolean).join('\n')
+  return {
+    text: guard,
+    hash: sequenceAnimaticStableHash({ positiveContext, forbidden, policy: 'visual_canon_guard_v1' }),
+    forbidden,
+  }
 }
 
 function chunk<T>(items: readonly T[], size: number) {
@@ -1257,6 +1362,13 @@ export async function planSceneBoardSetRefChildren(input: SceneBoardChildPlanner
     }
   }
 
+  const manifestAssetPack = asRecord(context.manifest.assetPack)
+  const visualCanonGuard = visualCanonGuardForBoard({
+    masterMetadata: context.masterMetadata,
+    manifest: context.manifest,
+    directorPlan: context.directorPlan,
+    assetPack: manifestAssetPack,
+  })
   const requestedBy = readText(input.requestedBy) || readText(context.masterRequest.requestedBy)
   const sourceSurface = context.screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit'
   const setIds = uniqueTexts(prepared.preparedShots.map((entry) => entry.spatial.setId))
@@ -1276,6 +1388,7 @@ export async function planSceneBoardSetRefChildren(input: SceneBoardChildPlanner
       referenceAssetKeys: [],
       generationPolicy: 'location_set_reference_v1',
       sourceSurface,
+      visualCanonGuard,
     }))
 
   return {
@@ -1363,6 +1476,13 @@ export async function planSceneBoardScaffoldRefChildren(
     }
   }
 
+  const manifestAssetPack = asRecord(context.manifest.assetPack)
+  const visualCanonGuard = visualCanonGuardForBoard({
+    masterMetadata: context.masterMetadata,
+    manifest: context.manifest,
+    directorPlan: context.directorPlan,
+    assetPack: manifestAssetPack,
+  })
   const requestedBy = readText(input.requestedBy) || readText(context.masterRequest.requestedBy)
   const sourceSurface = context.screenplayAnimaticSource === 'prompt_cinematic' ? 'outputs' : 'wiki_sequence_unit'
   if (mode === 'zone_maps') {
@@ -1418,6 +1538,7 @@ export async function planSceneBoardScaffoldRefChildren(
           }),
           generationPolicy: 'zone_spatial_map_v1',
           sourceSurface,
+          visualCanonGuard,
         })
       })
     return {
@@ -1452,7 +1573,9 @@ export async function planSceneBoardScaffoldRefChildren(
       missingZoneRefs.push(zoneId)
       continue
     }
-    const spotIds = uniqueTexts(entries.flatMap((entry) => [entry.spatial.primarySpotId, entry.spatial.viewpointId]))
+    const candidateIds = uniqueTexts(entries.flatMap((entry) => [entry.spatial.primarySpotId, entry.spatial.viewpointId]))
+    const spotIds = candidateSpotNodeIdsForZone(entries, zoneId, context.nodesById)
+    const rejectedTargetIds = candidateIds.filter((nodeId) => !spotIds.includes(nodeId))
     const spotNodes = spotIds
       .map((nodeId) => context.nodesById.get(nodeId) ?? {})
       .filter((node) => readText(node.id))
@@ -1498,6 +1621,7 @@ export async function planSceneBoardScaffoldRefChildren(
           batchKind: 'angle_grid',
           sourceSurface,
           forceRefresh: input.forceRefresh,
+          visualCanonGuard,
         }))
       }
       continue
@@ -1521,7 +1645,15 @@ export async function planSceneBoardScaffoldRefChildren(
       batchKind: 'spot_atlas_grid',
       sourceSurface,
       forceRefresh: input.forceRefresh,
+      visualCanonGuard,
     }))
+    if (rejectedTargetIds.length > 0) {
+      childWorkflows[childWorkflows.length - 1].metadata = {
+        ...childWorkflows[childWorkflows.length - 1].metadata,
+        rejectedCrossZoneTargetIds: rejectedTargetIds,
+        rejected_cross_zone_target_ids: rejectedTargetIds,
+      }
+    }
   }
   if (missingZoneRefs.length > 0) {
     return {

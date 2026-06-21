@@ -152,6 +152,7 @@ export async function sequenceAnimaticContinuityBatchPrompt(
     targetNodes: effectiveTargetNodes,
     relevantShots,
     referenceAssetKeys,
+    visualCanonGuard: helpers.readText(config.visualCanonGuard ?? config.visual_canon_guard),
   })
   const prompt = promptResult.prompt
   const outputs = {
@@ -383,6 +384,7 @@ export async function sequenceAnimaticContinuityAssetPrompt(
     zoneMapPoiLines: helpers.readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
     relevantShots,
     referenceAssetKeys,
+    visualCanonGuard: helpers.readText(config.visualCanonGuard ?? config.visual_canon_guard),
   })
   const prompt = [
     promptResult.prompt,
@@ -758,6 +760,7 @@ export const sequenceAnimaticContinuityAssetWorkflowNodeScaffolds = [
       'config.referenceAssetKeys',
       'config.masterRequestId',
       'config.assetInputHash',
+      'config.visualCanonGuardHash',
     ],
     projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
   }),
@@ -773,6 +776,7 @@ export const sequenceAnimaticContinuityAssetWorkflowNodeScaffolds = [
       'config.referenceAssetKeys',
       'config.masterRequestId',
       'config.continuityBatchId',
+      'config.visualCanonGuardHash',
     ],
     projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
   }),
@@ -789,6 +793,7 @@ export const sequenceAnimaticContinuityAssetWorkflowNodeScaffolds = [
       'config.targetNodes',
       'config.assetPack',
       'config.masterRequestId',
+      'config.visualCanonGuardHash',
     ],
     projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
   }),
@@ -817,6 +822,7 @@ export const sequenceAnimaticContinuityAssetWorkflowNodeScaffolds = [
       'config.assetPack',
       'config.masterRequestId',
       'config.assetInputHash',
+      'config.visualCanonGuardHash',
     ],
     projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
   }),

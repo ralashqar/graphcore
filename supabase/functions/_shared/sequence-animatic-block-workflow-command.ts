@@ -13,11 +13,16 @@ import {
   outputRequestSelect,
   outputWorkflowRunSelect,
   outputWorkflowRunStepSelect,
+  resolveSequenceAnimaticCombinedManifest,
 } from './output-workflow.ts'
 import {
   sequenceAnimaticBlockWorkflowEnsureRequestSchema,
   sequenceAnimaticBlockWorkflowEnsureResponseSchema,
 } from '../../../src/domain/outputWorkflow.ts'
+import {
+  sceneContinuityManifestSchema,
+  type SceneContinuityManifest,
+} from '../../../src/domain/sceneContinuityManifest.ts'
 import {
   providerSafeSequenceAnimaticVideoDurationSeconds,
   sequenceAnimaticGraphSpecVersion,
@@ -58,6 +63,35 @@ function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
 function readScreenplayAnimaticSource(metadata: Record<string, unknown>, fallback: 'wiki_sequence_unit' | 'prompt_cinematic' = 'wiki_sequence_unit') {
   const source = readText(metadata.screenplayAnimaticSource)
   return source === 'prompt_cinematic' || source === 'wiki_sequence_unit' ? source : fallback
+}
+
+async function loadSequenceAnimaticChildrenForRoles(input: {
+  client: { from: (table: string) => any }
+  projectId: string
+  draftId: string
+  parentRequestId: string
+  roles: readonly string[]
+}) {
+  const byId = new Map<string, ReturnType<typeof mapOutputRequestRow>>()
+  for (const role of input.roles.map(readText).filter(Boolean)) {
+    for (const roleColumn of ['metadata->>screenplayAnimaticRole', 'metadata->>sequenceAnimaticRole']) {
+      const response = await input.client
+        .from('output_requests')
+        .select(outputRequestSelect)
+        .eq('project_id', input.projectId)
+        .eq('draft_id', input.draftId)
+        .eq('parent_request_id', input.parentRequestId)
+        .eq(roleColumn, role)
+        .order('created_at', { ascending: true })
+      if (response.error) throw new Error(response.error.message)
+      for (const row of response.data ?? []) {
+        const request = mapOutputRequestRow(row)
+        byId.set(request.id, request)
+      }
+    }
+  }
+  return Array.from(byId.values())
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
 }
 
 function continuityAnchorAssetPackEntity(anchor: Record<string, unknown>) {
@@ -169,6 +203,372 @@ function mergeAnchorIds(...groups: string[][]) {
     }
   }
   return merged
+}
+
+function compactUniqueTexts(values: readonly string[], limit = 24) {
+  const result: string[] = []
+  const seen = new Set<string>()
+  for (const value of values.map(readText).filter(Boolean)) {
+    if (seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+    if (result.length >= limit) break
+  }
+  return result
+}
+
+function appendUniqueRecord<T extends Record<string, unknown>>(items: T[], item: T, key: string) {
+  if (!key || items.some((entry) => readText(entry.assetKey) === key)) return
+  items.push(item)
+}
+
+function storyboardSpatialReferenceLabel(role: string) {
+  if (role === 'coverage_cell') return 'Coverage cell'
+  if (role === 'spot_angle_grid') return 'Spot angle grid'
+  if (role === 'spot_atlas') return 'Spot atlas'
+  if (role === 'spatial_reference') return 'Spatial reference'
+  return 'Continuity reference'
+}
+
+type StoryboardSceneContinuityManifestEntry = {
+  artifactKey: string
+  workflowId: string
+  createdAt: string
+  manifest: SceneContinuityManifest
+}
+
+async function loadSceneContinuityManifestsForStoryboardBlocks(input: {
+  client: { from: (table: string) => any }
+  projectId: string
+  draftId: string
+  children: readonly { workflowId?: string | null; metadata: unknown }[]
+}): Promise<StoryboardSceneContinuityManifestEntry[]> {
+  const sceneBoardWorkflowIds = input.children
+    .filter((child) => readScreenplayAnimaticRole(asRecord(child.metadata)) === 'scene_board_prep')
+    .map((child) => readText(child.workflowId))
+    .filter(Boolean)
+  if (sceneBoardWorkflowIds.length === 0) return []
+  const response = await input.client
+    .from('output_artifacts')
+    .select(outputArtifactSelect)
+    .eq('project_id', input.projectId)
+    .eq('draft_id', input.draftId)
+    .in('workflow_id', sceneBoardWorkflowIds)
+    .order('created_at', { ascending: false })
+  if (response.error) throw new Error(response.error.message)
+  return (response.data ?? [])
+    .map(asRecord)
+    .map((row) => {
+      const metadata = asRecord(row.metadata)
+      const manifest = asRecord(metadata.sceneContinuityManifest ?? metadata.scene_continuity_manifest)
+      const parsed = sceneContinuityManifestSchema.safeParse(manifest)
+      if (!parsed.success) return null
+      return {
+        artifactKey: readText(row.key),
+        workflowId: readText(row.workflow_id),
+        createdAt: readText(row.created_at),
+        manifest: parsed.data,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+}
+
+function buildStoryboardSpatialReferencePack(input: {
+  block: Record<string, unknown>
+  manifests: readonly StoryboardSceneContinuityManifestEntry[]
+}) {
+  const shotIds = compactUniqueTexts([
+    ...readStringArray(input.block.shotIds),
+    ...readArray(input.block.shots).map((shot) => readText(asRecord(shot).id)),
+  ], 12)
+  const shotSpatialReferences: Record<string, unknown>[] = []
+  const selectedReferenceAssets: Record<string, unknown>[] = []
+  const manifestHashes: string[] = []
+  const blockers: string[] = []
+  for (const shotId of shotIds) {
+    const match = input.manifests.find((entry) => {
+      const manifest = entry.manifest
+      return manifest.shotIds.includes(shotId) || manifest.shotReadiness.some((readiness) => readiness.shotId === shotId)
+    }) ?? null
+    const readiness = match?.manifest.shotReadiness.find((entry) => entry.shotId === shotId) ?? null
+    if (match?.manifest.sourceHash) manifestHashes.push(match.manifest.sourceHash)
+    if (!match || !readiness) {
+      blockers.push('missing_scene_continuity_manifest')
+      shotSpatialReferences.push({
+        shotId,
+        status: 'blocked',
+        blockers: ['missing_scene_continuity_manifest'],
+        referenceAssetKeys: [],
+      })
+      continue
+    }
+    const shotBlockers = compactUniqueTexts(readiness.blockers)
+    shotBlockers.forEach((blocker) => blockers.push(blocker))
+    const coverageAssetKey = readText(readiness.coverageCellAssetKey) || readText(readiness.coverageAnchorAssetKey)
+    if (coverageAssetKey) {
+      appendUniqueRecord(selectedReferenceAssets, {
+        assetKey: coverageAssetKey,
+        role: 'coverage_cell',
+        priority: 1,
+        shotIds: [shotId],
+        sceneId: readiness.sceneId,
+        zoneId: readiness.zoneId,
+        spotIds: readiness.spotIds,
+        coverageSetupId: readiness.coverageSetupId,
+        label: `Coverage cell for ${shotId}`,
+      }, coverageAssetKey)
+    }
+    for (const assetKey of readiness.spotAngleAssetKeys) {
+      appendUniqueRecord(selectedReferenceAssets, {
+        assetKey,
+        role: 'spot_angle_grid',
+        priority: 2,
+        shotIds: [shotId],
+        sceneId: readiness.sceneId,
+        zoneId: readiness.zoneId,
+        spotIds: readiness.spotIds,
+        angleIds: readiness.angleIds,
+        label: `Spot angle grid for ${readiness.spotIds[0] || shotId}`,
+      }, assetKey)
+    }
+    for (const assetKey of readiness.spotAtlasAssetKeys) {
+      appendUniqueRecord(selectedReferenceAssets, {
+        assetKey,
+        role: 'spot_atlas',
+        priority: 3,
+        shotIds: [shotId],
+        sceneId: readiness.sceneId,
+        zoneId: readiness.zoneId,
+        spotIds: readiness.spotIds,
+        label: `Spot atlas for ${readiness.spotIds[0] || shotId}`,
+      }, assetKey)
+    }
+    const known = new Set([
+      coverageAssetKey,
+      ...readiness.spotAngleAssetKeys,
+      ...readiness.spotAtlasAssetKeys,
+    ].filter(Boolean))
+    for (const assetKey of readiness.readyArtifactKeys.filter((key) => key && !known.has(key))) {
+      appendUniqueRecord(selectedReferenceAssets, {
+        assetKey,
+        role: 'spatial_reference',
+        priority: 4,
+        shotIds: [shotId],
+        sceneId: readiness.sceneId,
+        zoneId: readiness.zoneId,
+        spotIds: readiness.spotIds,
+        label: `Spatial reference for ${readiness.zoneId || shotId}`,
+      }, assetKey)
+    }
+    shotSpatialReferences.push({
+      shotId,
+      status: readiness.status,
+      sceneId: readiness.sceneId,
+      setId: readiness.setId,
+      zoneId: readiness.zoneId,
+      spotIds: readiness.spotIds,
+      viewpointId: readiness.viewpointId,
+      angleIds: readiness.angleIds,
+      coverageSetupId: readiness.coverageSetupId,
+      coverageCellAssetKey: readiness.coverageCellAssetKey,
+      coverageAnchorAssetKey: readiness.coverageAnchorAssetKey,
+      spotAtlasAssetKeys: readiness.spotAtlasAssetKeys,
+      spotAngleAssetKeys: readiness.spotAngleAssetKeys,
+      readyArtifactKeys: readiness.readyArtifactKeys,
+      blockers: shotBlockers,
+      referenceAssetKeys: compactUniqueTexts([
+        coverageAssetKey,
+        ...readiness.spotAngleAssetKeys,
+        ...readiness.spotAtlasAssetKeys,
+        ...readiness.readyArtifactKeys,
+      ], 12),
+      readinessHash: readiness.hash,
+      manifestHash: match.manifest.sourceHash,
+    })
+  }
+  const sortedAssets = selectedReferenceAssets
+    .sort((left, right) => (Number(left.priority) || 99) - (Number(right.priority) || 99))
+    .slice(0, 16)
+  const uniqueBlockers = compactUniqueTexts(blockers, 12)
+  const selectedReferenceAssetKeys = sortedAssets.map((asset) => readText(asset.assetKey)).filter(Boolean)
+  const status = uniqueBlockers.length > 0 || shotSpatialReferences.some((entry) => readStringArray(entry.referenceAssetKeys).length === 0)
+    ? 'provisional'
+    : 'ready'
+  const hash = sequenceAnimaticStableHash({
+    policy: 'storyboard_spatial_reference_pack_v1',
+    shotIds,
+    manifestHashes: compactUniqueTexts(manifestHashes, 12),
+    selectedReferenceAssetKeys,
+    blockers: uniqueBlockers,
+    shotReadinessHashes: shotSpatialReferences.map((entry) => readText(entry.readinessHash)).filter(Boolean),
+  })
+  return {
+    contractVersion: 'storyboard_spatial_reference_pack_v1',
+    status,
+    provisional: status !== 'ready',
+    staleable: status !== 'ready' || selectedReferenceAssetKeys.length > 0,
+    hash,
+    manifestHashes: compactUniqueTexts(manifestHashes, 12),
+    shotIds,
+    shotSpatialReferences,
+    selectedReferenceAssets: sortedAssets,
+    selectedReferenceAssetKeys,
+    blockers: uniqueBlockers,
+  }
+}
+
+function assetPackWithStoryboardSpatialReferences(assetPack: Record<string, unknown>, spatialPack: Record<string, unknown>) {
+  const selectedAssets = readArray(spatialPack.selectedReferenceAssets).map(asRecord)
+  if (selectedAssets.length === 0) {
+    return {
+      ...assetPack,
+      storyboardSpatialReferencePack: spatialPack,
+      storyboardSpatialReferencePackHash: readText(spatialPack.hash),
+    }
+  }
+  const existingEntities = readArray(assetPack.entities).map(asRecord)
+  const existingKeys = new Set(existingEntities.map((entity) => readText(entity.key)).filter(Boolean))
+  const existingAssetKeys = new Set(existingEntities.flatMap((entity) => [
+    readText(entity.primaryAssetKey),
+    ...readStringArray(entity.assetKeys),
+  ]).filter(Boolean))
+  const spatialEntities = selectedAssets
+    .filter((asset) => readText(asset.assetKey) && !existingAssetKeys.has(readText(asset.assetKey)))
+    .map((asset, index) => {
+      const assetKey = readText(asset.assetKey)
+      const role = readText(asset.role) || 'spatial_reference'
+      const label = readText(asset.label) || `${storyboardSpatialReferenceLabel(role)} ${index + 1}`
+      return {
+        key: `storyboard_spatial_${slugify(role)}_${sequenceAnimaticStableHash(asset).slice(0, 10)}`,
+        name: label,
+        type: 'continuity_spatial_ref',
+        role,
+        summary: `${storyboardSpatialReferenceLabel(role)} used to ground storyboard geography and camera blocking.`,
+        visualDescription: `${label}. Use as continuity reference only; do not reproduce source grid, labels, gutters, or UI.`,
+        assetKeys: [assetKey],
+        primaryAssetKey: assetKey,
+        selectedReferenceAssetKey: assetKey,
+        selectedReferenceVariantKey: 'storyboard_spatial_reference',
+        selectedReferenceVariantLabel: storyboardSpatialReferenceLabel(role),
+        selectedReferenceVariantSummary: label,
+        selectedReferenceVariantType: role,
+        storyboardSpatialReference: true,
+        shotIds: readStringArray(asset.shotIds),
+        sceneId: readText(asset.sceneId),
+        zoneId: readText(asset.zoneId),
+        spotIds: readStringArray(asset.spotIds),
+        angleIds: readStringArray(asset.angleIds),
+        coverageSetupId: readText(asset.coverageSetupId),
+        referenceSelectionReason: 'Selected from scene_continuity_manifest_v1 for sequence animatic storyboard block grounding.',
+      }
+    })
+    .filter((entity) => !existingKeys.has(readText(entity.key)))
+  return {
+    ...assetPack,
+    entities: [...existingEntities, ...spatialEntities],
+    storyboardSpatialReferencePack: spatialPack,
+    storyboardSpatialReferencePackHash: readText(spatialPack.hash),
+    storyboardSpatialReferences: spatialEntities,
+  }
+}
+
+function storyboardLayoutForShotCount(shotCount: number) {
+  const panelCount = Math.max(1, Math.min(9, Math.ceil(Number(shotCount) || 1)))
+  if (panelCount <= 1) return { rows: 1, columns: 1, panelCount }
+  if (panelCount <= 2) return { rows: 1, columns: 2, panelCount }
+  if (panelCount <= 4) return { rows: 2, columns: 2, panelCount }
+  if (panelCount <= 6) return { rows: 2, columns: 3, panelCount }
+  return { rows: 3, columns: 3, panelCount }
+}
+
+function storyboardBlockFromShots(input: {
+  block: Record<string, unknown>
+  index: number
+  shots: Record<string, unknown>[]
+}) {
+  const blockId = readText(input.block.id) || `cinematic_v3_storyboard_group_${String(input.index + 1).padStart(3, '0')}`
+  const shotIds = readStringArray(input.block.shotIds ?? input.block.shot_ids).length > 0
+    ? readStringArray(input.block.shotIds ?? input.block.shot_ids)
+    : input.shots.map((shot) => readText(shot.id)).filter(Boolean)
+  const layout = storyboardLayoutForShotCount(Math.max(shotIds.length, input.shots.length))
+  const durationSeconds = input.shots.reduce((total, shot) => total + (Number(shot.editorialDurationSeconds ?? shot.durationSeconds ?? 0) || 0), 0)
+  const title = readText(input.block.title)
+    || readText(input.block.summary)
+    || input.shots.map((shot) => readText(shot.title)).filter(Boolean).slice(0, 2).join(' / ')
+    || `Storyboard block ${input.index + 1}`
+  const storyboardGroup = {
+    ...asRecord(input.block.storyboardGroup ?? input.block.storyboard_group),
+    id: blockId,
+    index: Number(input.block.index ?? input.index + 1) || input.index + 1,
+    shotIds,
+    summary: readText(input.block.summary) || title,
+    rows: layout.rows,
+    columns: layout.columns,
+    panelCount: layout.panelCount,
+    editorialDurationSeconds: durationSeconds,
+    providerDurationSeconds: Math.max(4, Math.min(15, Number(input.block.providerDurationSeconds ?? input.block.provider_duration_seconds ?? durationSeconds) || 8)),
+    continuityNotes: readStringArray(input.block.continuityNotes ?? input.block.continuity_notes),
+  }
+  return {
+    ...input.block,
+    id: blockId,
+    index: Number(input.block.index ?? input.index + 1) || input.index + 1,
+    title,
+    shotIds,
+    shots: input.shots,
+    storyboardGroup,
+    storyboardLayout: layout,
+    durationSeconds: durationSeconds || undefined,
+  }
+}
+
+function deriveStoryboardBlocksForMaster(input: {
+  manifest: Record<string, unknown>
+  directorPlan: Record<string, unknown>
+  directorShotById: ReadonlyMap<string, Record<string, unknown>>
+}) {
+  const manifestShotPlan = asRecord(input.manifest.shotPlan ?? input.manifest.shot_plan)
+  const manifestShots = readArray(manifestShotPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
+  const manifestShotById = new Map(manifestShots.map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+  const mergedShotById = new Map<string, Record<string, unknown>>()
+  for (const shot of [...manifestShots, ...Array.from(input.directorShotById.values())]) {
+    const shotId = readText(shot.id)
+    if (!shotId) continue
+    mergedShotById.set(shotId, { ...asRecord(mergedShotById.get(shotId)), ...shot, id: shotId })
+  }
+  const normalizeBlock = (block: Record<string, unknown>, index: number) => {
+    const shotIds = readStringArray(block.shotIds ?? block.shot_ids)
+    const blockShots = shotIds
+      .map((shotId) => ({ ...asRecord(manifestShotById.get(shotId)), ...asRecord(input.directorShotById.get(shotId)), id: shotId }))
+      .filter((shot) => readText(shot.id))
+    const fallbackShots = blockShots.length > 0
+      ? blockShots
+      : readArray(block.shots).map(asRecord).filter((shot) => readText(shot.id))
+    return storyboardBlockFromShots({ block, index, shots: fallbackShots })
+  }
+
+  const manifestBlocks = readArray(input.manifest.blocks).map(asRecord).filter((block) => readText(block.id))
+  if (manifestBlocks.length > 0) return manifestBlocks.map(normalizeBlock)
+
+  const directorBlocks = readArray(input.directorPlan.blocks).map(asRecord).filter((block) => readText(block.id))
+  if (directorBlocks.length > 0) return directorBlocks.map(normalizeBlock)
+
+  const orderedShots = Array.from(mergedShotById.values())
+    .sort((left, right) => (Number(left.index ?? 0) || 0) - (Number(right.index ?? 0) || 0))
+  const chunks: Record<string, unknown>[][] = []
+  for (let index = 0; index < orderedShots.length; index += 9) {
+    chunks.push(orderedShots.slice(index, index + 9))
+  }
+  return chunks.map((shots, index) => storyboardBlockFromShots({
+    block: {
+      id: `cinematic_v3_storyboard_group_${String(index + 1).padStart(3, '0')}`,
+      index: index + 1,
+      title: `Storyboard block ${index + 1}`,
+      shotIds: shots.map((shot) => readText(shot.id)).filter(Boolean),
+    },
+    index,
+    shots,
+  }))
 }
 
 function isStoryboardPanelRole(role: string) {
@@ -293,51 +693,60 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
     const manifestArtifactRow = (artifactsResponse.data ?? [])
       .find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_manifest') ?? null
     const manifestArtifactMetadata = asRecord(asRecord(manifestArtifactRow).metadata)
-    const manifest = asRecord(manifestArtifactMetadata.manifest)
+    let manifest = asRecord(manifestArtifactMetadata.manifest)
     const directorPlanArtifactRow = (artifactsResponse.data ?? [])
       .find((row) => readText(asRecord(asRecord(row).metadata).role) === 'sequence_animatic_director_plan') ?? null
     const directorPlanMetadata = asRecord(asRecord(directorPlanArtifactRow).metadata)
-    const directorPlan = asRecord(directorPlanMetadata.directorPlan ?? directorPlanMetadata.director_plan)
+    let directorPlan = asRecord(directorPlanMetadata.directorPlan ?? directorPlanMetadata.director_plan)
+    let masterManifestArtifactKey = readText(asRecord(manifestArtifactRow).key)
+    if (Object.keys(manifest).length === 0 || Object.keys(directorPlan).length === 0) {
+      // Per-scene architecture: sequence-unit masters may only register scenes.
+      // Completed scene children own their director-plan/manifest artifacts, so
+      // combine them at read time for storyboard block creation.
+      const combined = await resolveSequenceAnimaticCombinedManifest({ client: admin, masterRequest })
+      if (combined) {
+        manifest = combined.manifest
+        directorPlan = combined.directorPlan
+        masterManifestArtifactKey = combined.manifestArtifactKey
+      }
+    }
     const directorShots = readArray(directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
     const directorShotById = new Map(directorShots.map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
-    const directorBlocks = readArray(directorPlan.blocks).map(asRecord).filter((block) => readText(block.id))
-    const directorBlockById = new Map(directorBlocks.map((block) => [readText(block.id), block] as const).filter(([id]) => id))
     const manifestHash = sequenceAnimaticStableHash(manifest)
-    const masterManifestArtifactKey = readText(asRecord(manifestArtifactRow).key)
-    const blocks = readArray(manifest.blocks).map(asRecord).filter((block) => readText(block.id)).map((block) => {
-      const blockId = readText(block.id)
-      const directorBlock = directorBlockById.get(blockId) ?? {}
-      const manifestShotIds = readStringArray(block.shotIds)
-      const directorShotIds = readStringArray(directorBlock.shotIds)
-      const shotIds = directorShotIds.length > 0 ? directorShotIds : manifestShotIds
-      const manifestShotsById = new Map(readArray(block.shots).map(asRecord).map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
-      const shots = shotIds
-        .map((shotId) => ({ ...asRecord(manifestShotsById.get(shotId)), ...asRecord(directorShotById.get(shotId)), id: shotId }))
-        .filter((shot) => readText(shot.id))
-      return {
-        ...block,
-        ...directorBlock,
-        id: blockId,
-        shotIds: shotIds.length > 0 ? shotIds : readStringArray(block.shotIds),
-        shots: shots.length > 0 ? shots : readArray(block.shots).map(asRecord),
-        storyboardGroup: asRecord(block.storyboardGroup),
-        storyboardLayout: asRecord(block.storyboardLayout),
-        durationSeconds: Number(directorBlock.durationSeconds ?? block.durationSeconds ?? 0) || Number(block.durationSeconds ?? 0) || undefined,
-      }
-    })
-    if (blocks.length === 0) throw new HttpError(409, 'Generate the screenplay animatic master first; no parsed storyboard blocks are available yet.')
+    const blocks = deriveStoryboardBlocksForMaster({ manifest, directorPlan, directorShotById })
+      .filter((block) => readText(block.id) && readArray(block.shots).length > 0)
+    if (blocks.length === 0) {
+      const manifestReady = Object.keys(manifest).length > 0
+      const directorPlanReady = Object.keys(directorPlan).length > 0
+      throw new HttpError(
+        409,
+        manifestReady || directorPlanReady
+          ? 'The screenplay animatic master has no storyboardable shots yet. Wait for the director/shot plan to finish, then try Generate storyboard again.'
+          : 'No completed scene shot plans are ready yet for storyboard generation. Wait for at least one scene shot plan to finish, then try Generate storyboard again.',
+      )
+    }
 
-    const existingChildrenResponse = await client
-      .from('output_requests')
-      .select(outputRequestSelect)
-      .eq('project_id', payload.projectId)
-      .eq('draft_id', payload.draftId)
-      .eq('parent_request_id', masterRequest.id)
-      .order('created_at', { ascending: true })
-    if (existingChildrenResponse.error) throw new Error(existingChildrenResponse.error.message)
-    const existingChildren = (existingChildrenResponse.data ?? []).map(mapOutputRequestRow)
+    const existingChildren = await loadSequenceAnimaticChildrenForRoles({
+      client,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+      parentRequestId: masterRequest.id,
+      roles: ['storyboard_block', 'continuity_pack', 'scene_board_prep'],
+    })
     const currentBlockHashById = new Map(blocks.map((block) => [readText(block.id), sequenceAnimaticStableHash(block)] as const).filter(([id]) => id))
+    const storyboardSceneContinuityManifests = await loadSceneContinuityManifestsForStoryboardBlocks({
+      client,
+      projectId: payload.projectId,
+      draftId: payload.draftId,
+      children: existingChildren,
+    })
+    const storyboardSpatialReferencePackByBlockId = new Map(blocks.map((block) => {
+      const blockId = readText(block.id)
+      if (!blockId) return null
+      return [blockId, buildStoryboardSpatialReferencePack({ block, manifests: storyboardSceneContinuityManifests })] as const
+    }).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)))
     const staleChildren: typeof existingChildren = []
+    const staleChildReasons = new Map<string, string>()
     const activeExistingChildren = existingChildren.filter((child) => {
       const metadata = asRecord(child.metadata)
       if (metadata.sequenceAnimaticStale === true) return false
@@ -345,9 +754,18 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
       if (role === 'storyboard_block') {
         const blockId = readText(metadata.storyboardBlockId)
         const currentBlockHash = currentBlockHashById.get(blockId)
-        const stale = readText(metadata.manifestHash) && readText(metadata.manifestHash) !== manifestHash
-          || currentBlockHash && readText(metadata.blockHash) && readText(metadata.blockHash) !== currentBlockHash
+        const spatialPack = storyboardSpatialReferencePackByBlockId.get(blockId) ?? null
+        const currentSpatialHash = readText(spatialPack?.hash)
+        const spatialHashMatters = Boolean(currentSpatialHash && (
+          readStringArray(spatialPack?.selectedReferenceAssetKeys).length > 0
+          || readStringArray(spatialPack?.manifestHashes).length > 0
+        ))
+        const spatialStale = spatialHashMatters && readText(metadata.storyboardSpatialReferencePackHash) !== currentSpatialHash
+        const manifestStale = Boolean(readText(metadata.manifestHash) && readText(metadata.manifestHash) !== manifestHash)
+        const blockStale = Boolean(currentBlockHash && readText(metadata.blockHash) && readText(metadata.blockHash) !== currentBlockHash)
+        const stale = manifestStale || blockStale || spatialStale
         if (stale) {
+          staleChildReasons.set(child.id, spatialStale ? 'storyboard_spatial_refs_changed' : 'master_manifest_changed')
           staleChildren.push(child)
           return false
         }
@@ -361,10 +779,12 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
         request: staleChild,
         status: 'awaiting_confirmation',
         readyToRun: false,
-        reason: 'master_manifest_changed',
+        reason: staleChildReasons.get(staleChild.id) || 'master_manifest_changed',
         metadata: {
           staleManifestHash: readText(metadata.manifestHash) || null,
           replacedByManifestHash: manifestHash,
+          staleStoryboardSpatialReferencePackHash: readText(metadata.storyboardSpatialReferencePackHash) || null,
+          replacedByStoryboardSpatialReferencePackHash: readText(storyboardSpatialReferencePackByBlockId.get(readText(metadata.storyboardBlockId))?.hash) || null,
         },
       })
     }
@@ -752,15 +1172,22 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
         })
       }
 
-      const allChildrenResponse = await client
-        .from('output_requests')
-        .select(outputRequestSelect)
-        .eq('project_id', payload.projectId)
-        .eq('draft_id', payload.draftId)
-        .or(`parent_request_id.eq.${masterRequest.id},parent_request_id.eq.${blockRequest.id}`)
-        .order('created_at', { ascending: true })
-      if (allChildrenResponse.error) throw new Error(allChildrenResponse.error.message)
-      const allChildren = (allChildrenResponse.data ?? []).map(mapOutputRequestRow)
+      const allChildren = [
+        ...await loadSequenceAnimaticChildrenForRoles({
+          client,
+          projectId: payload.projectId,
+          draftId: payload.draftId,
+          parentRequestId: masterRequest.id,
+          roles: ['storyboard_block', 'continuity_pack', 'scene_board_prep'],
+        }),
+        ...await loadSequenceAnimaticChildrenForRoles({
+          client,
+          projectId: payload.projectId,
+          draftId: payload.draftId,
+          parentRequestId: blockRequest.id,
+          roles: ['shot_video', 'shot_revision'],
+        }),
+      ]
       const [graphBundle, latestMasterRequest] = await Promise.all([
         loadChildWorkflowGraphBundle({
           client,
@@ -798,6 +1225,11 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
       const aspectRatio = readText(asRecord(manifest.assetPack).aspectRatio) || '16:9'
       const imageSize = sequenceAnimaticStoryboardImageSize(columns, rows, aspectRatio)
       const blockHash = sequenceAnimaticStableHash(block)
+      const storyboardSpatialReferencePack = storyboardSpatialReferencePackByBlockId.get(blockId)
+        ?? buildStoryboardSpatialReferencePack({ block, manifests: storyboardSceneContinuityManifests })
+      const storyboardContinuityMode = readText(storyboardSpatialReferencePack.status) || 'provisional'
+      const storyboardContinuityBlockers = readStringArray(storyboardSpatialReferencePack.blockers)
+      const storyboardSpatialReferenceAssetKeys = readStringArray(storyboardSpatialReferencePack.selectedReferenceAssetKeys)
       const workflowPayload = {
           project_id: payload.projectId,
           draft_id: payload.draftId,
@@ -818,6 +1250,12 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
             blockHash,
             continuityPackHash: continuityPackHash || null,
             masterManifestArtifactKey,
+            storyboardSpatialReferencePackHash: readText(storyboardSpatialReferencePack.hash),
+            storyboardContinuityMode,
+            storyboardContinuityBlockers,
+            storyboardSpatialReferenceAssetKeys,
+            storyboardContinuityStaleable: storyboardSpatialReferencePack.staleable === true,
+            staleable: storyboardSpatialReferencePack.staleable === true,
             sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
             sourceMasterWorkflowId: masterRequest.workflowId,
             readyToRun: true,
@@ -838,6 +1276,7 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
         continuityAnchorSource,
         blockContinuityAnchorIds,
       )
+      const blockAssetPackWithSpatialRefs = assetPackWithStoryboardSpatialReferences(blockAssetPack, storyboardSpatialReferencePack)
       const commonConfig = {
         cinematicPipelineVersion: 'v3_script_storyboards',
         graphSpecVersion: sequenceAnimaticGraphSpecVersion,
@@ -851,6 +1290,12 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
         blockHash,
         continuityPackHash: continuityPackHash || null,
         masterManifestArtifactKey,
+        storyboardSpatialReferencePack,
+        storyboardSpatialReferencePackHash: readText(storyboardSpatialReferencePack.hash),
+        storyboardContinuityMode,
+        storyboardContinuityBlockers,
+        storyboardSpatialReferenceAssetKeys,
+        storyboardContinuityStaleable: storyboardSpatialReferencePack.staleable === true,
       }
       const durationSeconds = Math.max(4, Math.min(15, Number(block.durationSeconds ?? storyboardGroup.providerDurationSeconds ?? 0) || 8))
       const graphResult = buildValidatedSequenceAnimaticTemplateGraph({
@@ -868,7 +1313,8 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
           shotPlan: blockShotPlan,
           storyboardGroup,
           storyboardLayout: { rows, columns, panelCount },
-          assetPack: blockAssetPack,
+          assetPack: blockAssetPackWithSpatialRefs,
+          storyboardSpatialReferencePack,
           aspectRatio,
           imageSize,
           durationSeconds,
@@ -894,7 +1340,9 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
           selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
           page_count: null,
           target_format: 'video',
-          planner_notes: 'Storyboard block graph prepared from a sequence animatic master manifest.',
+          planner_notes: storyboardContinuityMode === 'ready'
+            ? 'Storyboard block graph prepared with scene continuity spatial references.'
+            : 'Storyboard block graph prepared provisionally; prepare Scene Board for stronger location continuity.',
           metadata: {
             graphSpecVersion: sequenceAnimaticGraphSpecVersion,
             screenplayAnimaticRole: 'storyboard_block',
@@ -907,6 +1355,12 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
             blockHash,
             continuityPackHash: continuityPackHash || null,
             masterManifestArtifactKey,
+            storyboardSpatialReferencePackHash: readText(storyboardSpatialReferencePack.hash),
+            storyboardContinuityMode,
+            storyboardContinuityBlockers,
+            storyboardSpatialReferenceAssetKeys,
+            storyboardContinuityStaleable: storyboardSpatialReferencePack.staleable === true,
+            staleable: storyboardSpatialReferencePack.staleable === true,
             sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
             sourceMasterWorkflowId: masterRequest.workflowId,
             readyToRun: true,

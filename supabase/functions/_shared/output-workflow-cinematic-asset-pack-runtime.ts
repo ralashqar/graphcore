@@ -350,11 +350,27 @@ export function buildCinematicV3StoryboardGroupAssetPack(input: {
       .forEach((entity) => addKey(readText(entity.key)))
   }
 
-  const selectedKeys = keys.slice(0, Math.max(0, input.maxEntityCount ?? 4))
+  const maxEntityCount = Math.max(0, input.maxEntityCount ?? 4)
+  const spatialKeys: string[] = []
+  cinematicAssetPackEntities(input.assetPack)
+    .filter((entity) => {
+      const type = readText(entity.type)
+      return type === 'continuity_spatial_ref' || entity.storyboardSpatialReference === true
+    })
+    .forEach((entity) => {
+      const key = readText(entity.key)
+      if (key && byKey.has(key) && !spatialKeys.includes(key)) spatialKeys.push(key)
+    })
+  const spatialBudget = spatialKeys.length > 0 ? Math.min(spatialKeys.length, Math.max(1, Math.floor(maxEntityCount / 2))) : 0
+  const entityBudget = Math.max(0, maxEntityCount - spatialBudget)
+  const selectedKeys = [
+    ...keys.slice(0, entityBudget),
+    ...spatialKeys.slice(0, spatialBudget),
+  ].filter((key, index, array) => key && array.indexOf(key) === index)
   const groupAssetPack = filterCinematicAssetPack(
     input.assetPack,
     selectedKeys,
-    Math.max(1, input.maxEntityCount ?? 4),
+    Math.max(1, maxEntityCount),
     input.maxAssetKeysPerEntity ?? 2,
   )
   return {

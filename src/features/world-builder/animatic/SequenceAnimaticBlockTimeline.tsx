@@ -107,6 +107,9 @@ function SequenceAnimaticRouteBlockTimeline(props: SequenceAnimaticBlockTimeline
               {block.videoRunning ? 'Generating video' : 'Generate video'}
             </button>
           ) : null}
+          <small className={block.storyboardContinuityStale ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
+            {block.storyboardContinuityLabel}
+          </small>
         </div>
       </header>
       <div className="world-wiki-sequence-animatic-shot-timeline">
@@ -193,6 +196,9 @@ function SequenceAnimaticOverlayBlockTimeline(props: SequenceAnimaticBlockTimeli
           <small className={block.videoError ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
             {block.videoRunning ? <span className="world-mini-spinner" aria-hidden="true" /> : null}
             {block.videoProgressLabel}
+          </small>
+          <small className={block.storyboardContinuityStale ? 'world-wiki-sequence-animatic-video-status is-error' : 'world-wiki-sequence-animatic-video-status'}>
+            {block.storyboardContinuityLabel}
           </small>
         </div>
       </div>
@@ -822,7 +828,9 @@ function coverageAnchorForShot(model: SequenceAnimaticViewModel, shot: SequenceA
 }
 
 function sequenceAnimaticShotKeyframeReady(shot: SequenceAnimaticShotView) {
-  return shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready'
+  return shot.keyframeStatusLabel === 'Keyframe ready'
+    || shot.keyframeStatusLabel === 'Revised keyframe ready'
+    || shot.keyframeStatusLabel === 'Storyboard keyframe ready'
 }
 
 export function sequenceAnimaticShotPreviewInput(shot: SequenceAnimaticShotView) {

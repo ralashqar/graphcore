@@ -90,6 +90,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
   zoneMapPoiLines?: string[]
   relevantShots: LooseRecord[]
   referenceAssetKeys: string[]
+  visualCanonGuard?: string
 }) {
   const spatialAsset = input.assetKind === 'location_set'
     || input.assetKind === 'location_zone'
@@ -117,6 +118,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
       input.zoneMapPoiLines && input.zoneMapPoiLines.length > 0
         ? `Known spots / POIs:\n${input.zoneMapPoiLines.slice(0, 12).map((line) => `- ${line}`).join('\n')}`
         : '',
+      readText(input.visualCanonGuard) ? `Project canon guard:\n${readText(input.visualCanonGuard)}` : '',
       '',
       'Avoid: people, character silhouettes, crowds, readable labels, text, captions, UI, arrows, borders, watermarks.',
       'Output: one wide 3072x2048 spatial production map with clean readable geography.',
@@ -135,6 +137,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
         policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
         sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
         removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
+        visualCanonGuard: readText(input.visualCanonGuard),
       },
     }
   }
@@ -169,6 +172,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
       : spatialAsset
         ? 'No prior continuity asset references are available. Use only the spatial node brief and project visual style.'
         : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
+    readText(input.visualCanonGuard) ? `Project canon guard:\n${readText(input.visualCanonGuard)}` : '',
     '',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
     zoneSpatialMapPolicy
@@ -189,6 +193,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
       policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
       sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
       removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
+      visualCanonGuard: readText(input.visualCanonGuard),
     },
   }
 }
@@ -198,6 +203,7 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
   targetNodes: LooseRecord[]
   relevantShots: LooseRecord[]
   referenceAssetKeys: string[]
+  visualCanonGuard?: string
 }) {
   const batchKind = readText(input.batch.batchKind) || 'single_hero_ref'
   const layout = asRecord(input.batch.layout)
@@ -272,6 +278,7 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
       : spatialBatch
         ? 'No parent image references are available. Use only the cell assignments and project visual style; do not use shot action, character blocking, or dialogue as visual content.'
         : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
+    readText(input.visualCanonGuard) ? `Project canon guard:\n${readText(input.visualCanonGuard)}` : '',
     cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
     locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
     shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
@@ -295,6 +302,7 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
       policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
       sanitized: sanitizedTargets.some((target) => target?.changed) || locationEvidenceLines.length > 0,
       removedTerms: [...new Set(sanitizedTargets.flatMap((target) => target?.diagnostics ?? []))],
+      visualCanonGuard: readText(input.visualCanonGuard),
     },
   }
 }

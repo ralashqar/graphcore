@@ -47,6 +47,7 @@ export async function sequenceAnimaticBlockInput(
   const storyboardGroup = helpers.asRecord(config.storyboardGroup)
   const storyboardLayout = helpers.asRecord(config.storyboardLayout)
   const assetPack = helpers.asRecord(config.assetPack)
+  const storyboardSpatialReferencePack = helpers.asRecord(config.storyboardSpatialReferencePack ?? config.storyboard_spatial_reference_pack)
   const manifestSummary = helpers.asRecord(config.manifestSummary)
   const outputs = {
     block,
@@ -57,6 +58,9 @@ export async function sequenceAnimaticBlockInput(
     storyboardLayout,
     assetPack,
     asset_pack: assetPack,
+    storyboardSpatialReferencePack,
+    storyboard_spatial_reference_pack: storyboardSpatialReferencePack,
+    storyboardSpatialReferencePackHash: helpers.readText(storyboardSpatialReferencePack.hash),
     manifestSummary,
     screenplayAnimaticRole: 'storyboard_block',
     sequenceAnimaticRole: 'storyboard_block',

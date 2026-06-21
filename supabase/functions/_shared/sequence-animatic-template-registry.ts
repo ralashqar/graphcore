@@ -49,6 +49,7 @@ export const sequenceAnimaticStoryboardBlocksTemplateInputSchema = z.object({
     panelCount: z.number().int().positive(),
   }).strict().default({ rows: 1, columns: 1, panelCount: 1 }),
   assetPack: looseRecordSchema.default({}),
+  storyboardSpatialReferencePack: looseRecordSchema.default({}),
   aspectRatio: z.string().min(1).default('16:9'),
   imageSize: imageSizeSchema.default({ width: 1536, height: 864 }),
   durationSeconds: z.number().positive().default(5),
@@ -193,7 +194,7 @@ export const sequenceAnimaticStoryboardBlocksTemplateScaffold = createWorkflowTe
   policyVersion: 'sequence_animatic_storyboard_blocks_graph_v1',
   workflowFamily: 'sequence_animatic',
   commandAction: 'prepare_storyboard_blocks',
-  sourceHashKeys: ['draftId', 'commonConfig', 'block', 'storyboardGroup', 'storyboardLayout', 'assetPack', 'aspectRatio', 'imageSize'],
+  sourceHashKeys: ['draftId', 'commonConfig', 'block', 'storyboardGroup', 'storyboardLayout', 'assetPack', 'storyboardSpatialReferencePack', 'aspectRatio', 'imageSize'],
   graphStages: ['block_input', 'storyboard_prompt', 'storyboard_sheet', 'panel_extract', 'video_prompt', 'video', 'artifact'],
   requiredNodePurposes: [
     'sequence_animatic_block_input',

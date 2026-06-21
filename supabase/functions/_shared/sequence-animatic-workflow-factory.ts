@@ -296,6 +296,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
   storyboardGroup: Record<string, unknown>
   storyboardLayout: { rows: number; columns: number; panelCount: number }
   assetPack: Record<string, unknown>
+  storyboardSpatialReferencePack: Record<string, unknown>
   aspectRatio: string
   imageSize: { width: number; height: number }
   durationSeconds: number
@@ -314,6 +315,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
       storyboardGroup: input.storyboardGroup,
       storyboardLayout: input.storyboardLayout,
       assetPack: input.assetPack,
+      storyboardSpatialReferencePack: input.storyboardSpatialReferencePack,
     }),
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'storyboard_prompt', 'utility_transform', 'Storyboard Prompt', 360, 100, {
       purpose: 'cinematic_v3_storyboard_prompt',
@@ -321,6 +323,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
       aspectRatio: input.aspectRatio,
       storyboardGroup: input.storyboardGroup,
       storyboardLayout: input.storyboardLayout,
+      storyboardSpatialReferencePack: input.storyboardSpatialReferencePack,
       planningOnly: true,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_block_prompt', maxConcurrency: 1 },
     }),
@@ -338,6 +341,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
       imageSize: input.imageSize,
       aspectRatio: input.aspectRatio,
       storyboardLayout: input.storyboardLayout,
+      storyboardSpatialReferencePack: input.storyboardSpatialReferencePack,
       planningOnly: true,
       planning_only: true,
       usedAsVideoReference: true,

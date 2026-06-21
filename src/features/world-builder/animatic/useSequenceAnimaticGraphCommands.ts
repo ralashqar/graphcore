@@ -62,8 +62,13 @@ type EnsureSequenceAnimaticShotProductionGraph = (request: {
   allowProvisional?: boolean
 }) => Promise<SequenceAnimaticShotProductionGraphEnsureResponse> | SequenceAnimaticShotProductionGraphEnsureResponse
 
-function shotCanGenerateEarlyKeyframe(shot: GraphCommandShotView) {
-  return Boolean(shot.spatialBindingView?.hierarchy?.length)
+function shotCanOpenProvisionalGraph(shot: GraphCommandShotView) {
+  return Boolean(
+    shot.panelAssetKey
+    || shot.panelUrl
+    || shot.coverageSetupId
+    || shot.spatialBindingView?.hierarchy?.length,
+  )
 }
 
 export function useSequenceAnimaticGraphCommands({
@@ -236,7 +241,7 @@ export function useSequenceAnimaticGraphCommands({
     if (graphOpenKey) return
     setGraphOpenKey(nextGraphOpenKey)
     try {
-      const allowProvisional = shot.isProvisional && shotCanGenerateEarlyKeyframe(shot)
+      const allowProvisional = shotCanOpenProvisionalGraph(shot)
       if (!model.directorPlanReady && !allowProvisional) {
         throw new Error(shot.isProvisional ? 'Shot binding is not ready for early graph inspection yet.' : 'Generate the shot continuity plan first.')
       }
@@ -258,7 +263,11 @@ export function useSequenceAnimaticGraphCommands({
         allowProvisional,
       }))
       const shotRequest = ensureResult.shotRequest
-      if (!shotRequest?.workflowId) throw new Error('Shot production graph is not ready yet.')
+      if (!shotRequest?.workflowId) {
+        const nextAction = readLooseRecord(ensureResult.nextAction)
+        const reason = trimOptionalString(nextAction.reason) || trimOptionalString(nextAction.label)
+        throw new Error(reason || 'Shot production graph is not ready yet.')
+      }
       openOutputGraph(model, shotRequest.id, 'planned_keyframe_artifact')
       void Promise.resolve(onGetOutputRequestStatus(shotRequest.id)).catch((statusError) => {
         console.warn('[GraphCore] sequence animatic shot graph status refresh failed.', statusError)

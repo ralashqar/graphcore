@@ -236,6 +236,7 @@ export type SequenceAnimaticShotView = {
 
 export function sequenceAnimaticShotCanGenerateEarlyKeyframe(shot: SequenceAnimaticShotView) {
   if (!shot.isProvisional || !shot.id) return false
+  if (shot.panelAssetKey || shot.panelUrl || shot.keyframeStatusLabel === 'Storyboard keyframe ready') return true
   if (shot.coverageSetupId) return true
   if (shot.spatialBindingView.hierarchy.length > 0) return true
   return Boolean(shot.spatialContinuityLabel && shot.spatialContinuityLabel !== 'Spatial binding pending')
@@ -343,6 +344,10 @@ export type SequenceAnimaticBlockView = {
   storyboardReady: boolean
   storyboardRunning: boolean
   storyboardProgressLabel: string
+  storyboardContinuityMode: string
+  storyboardContinuityLabel: string
+  storyboardContinuityBlockers: string[]
+  storyboardContinuityStale: boolean
   videoPromptReady: boolean
   videoReady: boolean
   videoRunning: boolean
@@ -503,7 +508,7 @@ function normalizeStoryboardGroupNodeKey(groupId: string, suffix: 'prompt' | 'sh
 }
 
 export function sequenceAnimaticShotPreviewEyebrow(shot: SequenceAnimaticShotView) {
-  if (shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready') return 'Animatic keyframe'
+  if (shot.keyframeStatusLabel === 'Keyframe ready' || shot.keyframeStatusLabel === 'Revised keyframe ready' || shot.keyframeStatusLabel === 'Storyboard keyframe ready') return 'Animatic keyframe'
   if (shot.zoneCoverageCell?.assetKey && shot.panelAssetKey === shot.zoneCoverageCell.assetKey) return 'Coverage grid cell'
   if (shot.coverageSetupId && shot.panelAssetKey) return 'Coverage preview'
   if (shot.panelAssetKey) return 'Continuity preview'
@@ -1681,7 +1686,7 @@ export function buildSequenceAnimaticViewModel(input: {
   const keyframeTotalCount = rawShots.length
   const keyframeReadyCount = rawShots
     .map((shot, index) => trimOptionalString(shot.id) || `shot_${index + 1}`)
-    .filter((shotId) => completedPlannedKeyframeByShotId.has(shotId) || completedRevisionByShotId.has(shotId))
+    .filter((shotId) => completedPlannedKeyframeByShotId.has(shotId) || completedRevisionByShotId.has(shotId) || panelPreviewByShotId.has(shotId))
     .length
   const keyframeRunning = plannedKeyframeRequests.some((request) => sequenceAnimaticRequestIsActive(request, plannedKeyframeRunByRequestId.get(request.id) ?? null))
     || coverageAnchorRequests.some((request) => sequenceAnimaticRequestIsActive(request, coverageAnchorRunByRequestId.get(request.id) ?? null))
@@ -1721,6 +1726,15 @@ export function buildSequenceAnimaticViewModel(input: {
       const childMetadata = readLooseRecord(childRequest?.metadata)
       const blockContinuityPackHash = trimOptionalString(childMetadata.continuityPackHash)
       const blockContinuityChanged = Boolean(currentContinuityPackHash && blockContinuityPackHash && currentContinuityPackHash !== blockContinuityPackHash)
+      const storyboardContinuityMode = trimOptionalString(childMetadata.storyboardContinuityMode)
+      const storyboardContinuityBlockers = readLooseArray(childMetadata.storyboardContinuityBlockers).map(trimOptionalString).filter(Boolean)
+      const storyboardContinuityAssetCount = readLooseArray(childMetadata.storyboardSpatialReferenceAssetKeys).map(trimOptionalString).filter(Boolean).length
+      const storyboardContinuityStale = childMetadata.sequenceAnimaticStale === true || trimOptionalString(childMetadata.staleStoryboardSpatialReferencePackHash).length > 0
+      const storyboardContinuityLabel = storyboardContinuityStale
+        ? 'Stale: continuity refs changed, regenerate storyboard'
+        : storyboardContinuityMode === 'ready'
+          ? `Using scene continuity refs${storyboardContinuityAssetCount > 0 ? ` (${storyboardContinuityAssetCount})` : ''}`
+          : 'Provisional: prepare Scene Board for stronger location continuity'
       const rawContinuityBlockState = readLooseRecord(continuityBlockStates[groupId])
       const continuityBlockStatus = ((): SequenceAnimaticBlockView['continuityBlockStatus'] => {
         const status = trimOptionalString(rawContinuityBlockState.status)
@@ -1910,6 +1924,10 @@ export function buildSequenceAnimaticViewModel(input: {
         storyboardReady,
         storyboardRunning,
         storyboardProgressLabel,
+        storyboardContinuityMode: storyboardContinuityMode || 'provisional',
+        storyboardContinuityLabel,
+        storyboardContinuityBlockers,
+        storyboardContinuityStale,
         videoPromptReady,
         videoReady,
         videoRunning,
@@ -2105,14 +2123,14 @@ export function buildSequenceAnimaticViewModel(input: {
           const coveragePanelUrl = zoneCoverageCell?.assetUrl ?? shotCoverageAnchor?.assetUrl ?? null
           const displayPanelAssetKey = completedRevision?.keyframeAssetKey
             ?? completedPlannedKeyframe?.keyframeAssetKey
+            ?? previewAssetKey
             ?? coveragePanelAssetKey
             ?? progressPreview.assetKey
-            ?? previewAssetKey
           const displayPanelUrl = completedRevision?.keyframeUrl
             ?? completedPlannedKeyframe?.keyframeUrl
+            ?? panelUrl
             ?? coveragePanelUrl
             ?? progressPreview.assetUrl
-            ?? panelUrl
           const panelProgressRunning = coverageIntentRunning || Boolean(shotCoverageAnchor?.running) || zoneCoverageCellRunning || keyframeDependencyRunning
           return {
             id: shotId,
@@ -2159,11 +2177,13 @@ export function buildSequenceAnimaticViewModel(input: {
                       ? 'Coverage direction ready'
                     : keyframeDependencyRunning
                           ? 'Generating keyframe refs'
+                          : previewAssetKey
+                            ? 'Storyboard keyframe ready'
                           : zoneCoverageCell?.assetKey
                             ? 'Coverage grid cell ready'
                             : progressPreview.assetKey
                               ? progressPreview.statusLabel
-                              : previewAssetKey ? 'Panel ready' : panelExtractStep?.status === 'failed' ? 'Panel extraction failed' : storyboardRunning ? 'Panel extraction running' : 'Panel not generated',
+                              : panelExtractStep?.status === 'failed' ? 'Panel extraction failed' : storyboardRunning ? 'Panel extraction running' : 'Panel not generated',
             panelError: plannedKeyframeError || (panelExtractStep?.status === 'failed' ? panelExtractStep.errorMessage ?? '' : ''),
             panelAssetKey: displayPanelAssetKey,
             panelUrl: displayPanelUrl,
@@ -2174,6 +2194,8 @@ export function buildSequenceAnimaticViewModel(input: {
                 ? 'Keyframe ready'
                 : plannedKeyframeRunning
                   ? plannedKeyframeProgressLabel || 'Generating keyframe'
+                  : previewAssetKey
+                    ? 'Storyboard keyframe ready'
                   : keyframeDependencyRunning
                     ? 'Generating keyframe refs'
                     : sceneContinuityLabel
@@ -2243,6 +2265,10 @@ export function buildSequenceAnimaticViewModel(input: {
         storyboardProgressLabel: directorPlanStreamingPreview
           ? 'Final shot continuity artifact required'
           : panels.length > 0 ? 'Storyboard panels ready' : 'Ready to generate storyboard',
+        storyboardContinuityMode: 'provisional',
+        storyboardContinuityLabel: 'Provisional: prepare Scene Board for stronger location continuity',
+        storyboardContinuityBlockers: [],
+        storyboardContinuityStale: false,
         videoPromptReady: false,
         videoReady: false,
         videoRunning: false,
@@ -2388,14 +2414,14 @@ export function buildSequenceAnimaticViewModel(input: {
           const coveragePanelUrl = zoneCoverageCell?.assetUrl ?? shotCoverageAnchor?.assetUrl ?? null
           const displayPanelAssetKey = completedRevision?.keyframeAssetKey
             ?? completedPlannedKeyframe?.keyframeAssetKey
+            ?? previewAssetKey
             ?? coveragePanelAssetKey
             ?? progressPreview.assetKey
-            ?? previewAssetKey
           const displayPanelUrl = completedRevision?.keyframeUrl
             ?? completedPlannedKeyframe?.keyframeUrl
+            ?? panelUrl
             ?? coveragePanelUrl
             ?? progressPreview.assetUrl
-            ?? panelUrl
           const panelProgressRunning = coverageIntentRunning || Boolean(shotCoverageAnchor?.running) || zoneCoverageCellRunning || keyframeDependencyRunning
           return {
             id: shotId,
@@ -2444,21 +2470,25 @@ export function buildSequenceAnimaticViewModel(input: {
                       ? 'Coverage direction ready'
                     : keyframeDependencyRunning
                           ? 'Generating keyframe refs'
+                          : previewAssetKey
+                            ? 'Storyboard keyframe ready'
                           : zoneCoverageCell?.assetKey
                             ? 'Coverage grid cell ready'
                             : progressPreview.assetKey
                               ? progressPreview.statusLabel
-                              : previewAssetKey ? 'Panel ready' : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
+                              : panelStep?.status === 'failed' ? 'Panel extraction failed' : 'Panel not generated',
             panelError: plannedKeyframeError || (panelStep?.status === 'failed' ? panelStep.errorMessage ?? '' : ''),
             panelAssetKey: displayPanelAssetKey,
             panelUrl: displayPanelUrl,
             panelRunning: plannedKeyframeRunning || panelProgressRunning,
             keyframeStatusLabel: completedRevision?.keyframeAssetKey
               ? 'Revised keyframe ready'
-              : completedPlannedKeyframe?.keyframeAssetKey
-                ? 'Keyframe ready'
-                : plannedKeyframeRunning
-                  ? plannedKeyframeProgressLabel || 'Generating keyframe'
+                  : completedPlannedKeyframe?.keyframeAssetKey
+                    ? 'Keyframe ready'
+                  : plannedKeyframeRunning
+                    ? plannedKeyframeProgressLabel || 'Generating keyframe'
+                    : previewAssetKey
+                      ? 'Storyboard keyframe ready'
                   : keyframeDependencyRunning
                     ? 'Generating keyframe refs'
                     : sceneContinuityLabel
@@ -2531,6 +2561,10 @@ export function buildSequenceAnimaticViewModel(input: {
             storyboardReady: false,
             storyboardRunning: false,
             storyboardProgressLabel: 'Director plan required',
+            storyboardContinuityMode: 'provisional',
+            storyboardContinuityLabel: 'Provisional: prepare Scene Board for stronger location continuity',
+            storyboardContinuityBlockers: [],
+            storyboardContinuityStale: false,
             videoPromptReady: false,
             videoReady: false,
             videoRunning: false,
