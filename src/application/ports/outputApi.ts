@@ -55,7 +55,7 @@ export type OutputApi = {
   updateSequenceAnimaticSceneGraphNode(snapshot: ProjectSnapshot, request: {
     masterRequestId: string
     nodeId: string
-    nodeKind: 'world_location' | 'set' | 'zone' | 'spot' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
+    nodeKind: 'world_location' | 'set' | 'zone' | 'spot' | 'camera_grid' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
     visualBriefOverride?: string
     extraPromptDirection?: string
     clearOverride?: boolean

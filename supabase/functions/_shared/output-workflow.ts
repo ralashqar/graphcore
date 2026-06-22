@@ -11570,6 +11570,7 @@ export async function processFlyOutputWorkflowRuns(input: {
       if (sourceStepResponse.error) throw new Error(sourceStepResponse.error.message)
       for (const row of (sourceStepResponse.data ?? []) as OutputWorkflowRunStepRow[]) {
         const sourceStep = mapOutputWorkflowRunStepRow(row)
+        if (forceNodeKeys.has(sourceStep.nodeKey)) continue
         const existingStep = stepByNodeKey.get(sourceStep.nodeKey)
         if (!existingStep || !hasStoredOutputs(existingStep.outputs)) stepByNodeKey.set(sourceStep.nodeKey, sourceStep)
       }

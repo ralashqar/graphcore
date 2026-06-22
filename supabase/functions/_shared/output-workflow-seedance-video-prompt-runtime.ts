@@ -220,6 +220,8 @@ export function buildCompactSeedanceVideoPrompt(input: {
   resolution: string
   referenceManifest: SeedanceReferenceManifestEntry[]
   referenceInstruction?: string
+  cameraPlan?: string
+  continuityPlan?: string
   directedControls: SeedanceDirectedControls | SeedanceDirectedControls[]
   shotSectionTitle?: 'SHOT' | 'SHOTS'
   shotLines: string
@@ -243,10 +245,12 @@ export function buildCompactSeedanceVideoPrompt(input: {
     '[REFERENCE LEGEND]',
     formatSeedanceReferenceManifest(input.referenceManifest),
     readText(input.referenceInstruction),
+    input.cameraPlan ? `[CAMERA PLAN]\n${readText(input.cameraPlan)}` : '',
     controlBlocks ? '[DIRECTED CONTROLS]' : '',
     controlBlocks,
     `[${input.shotSectionTitle ?? 'SHOT'}]`,
     input.shotLines,
+    input.continuityPlan ? `[CONTINUITY]\n${readText(input.continuityPlan)}` : '',
     input.identityGuide ? `[PERFORMANCE / VOICE]\n${input.identityGuide}` : '',
     input.audioPolicy ? `[AUDIO]\n${input.audioPolicy}` : '',
     input.movementLogic ? `[MOVEMENT LOGIC]\n${input.movementLogic}` : '',

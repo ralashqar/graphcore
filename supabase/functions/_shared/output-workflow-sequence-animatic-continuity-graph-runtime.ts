@@ -410,6 +410,12 @@ export function buildDeterministicSequenceAnimaticBlockDelta(input: {
       visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 700),
       shotIds,
       storyboardBlockIds,
+      poiHints: [],
+      entrances: [],
+      sightlines: [],
+      adjacencyHints: [],
+      lightingDirection: '',
+      screenDirectionRule: '',
     })
     for (const spotId of spotIds) {
       spots.push({
@@ -420,6 +426,14 @@ export function buildDeterministicSequenceAnimaticBlockDelta(input: {
         name: spotId.includes('primary') ? spotName : sequenceAnimaticContinuityTitleFromRefLike(spotId.replace(/^spot_/, '')),
         visualBrief: compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 520),
         landmarks: readStringArray(spatial.visibleLandmarks),
+        mapX: null,
+        mapY: null,
+        directionLabel: '',
+        entrances: [],
+        sightlines: [],
+        adjacencyHints: [],
+        lightingDirection: '',
+        screenDirectionRule: '',
         shotIds,
         storyboardBlockIds,
       })

@@ -29,6 +29,7 @@ import {
   trimOptionalString,
   type StartOutputWorkflowRun,
 } from './sequenceAnimaticCommandHelpers'
+import { planSequenceAnimaticContinuityCommand } from './sequenceAnimaticContinuityCommandPlanner'
 
 function shotCanGenerateEarlyKeyframe(shot: SequenceAnimaticShotView) {
   return Boolean(shot.spatialBindingView?.hierarchy?.length)
@@ -293,6 +294,14 @@ export function useSequenceAnimaticKeyframeCommands({
       }
 
       const dependencyTargets = shotKeyframeDependencyTargets(model, shot)
+      const dependencyPlan = planSequenceAnimaticContinuityCommand({
+        model,
+        action: mode === 'regenerate' ? 'regenerate_node' : 'generate_missing',
+        targets: dependencyTargets,
+      })
+      if (dependencyPlan.status === 'blocked') {
+        throw new Error(dependencyPlan.diagnostics.join(' ') || 'Shot keyframe continuity dependencies are blocked.')
+      }
       const runningDependencyTargets = dependencyTargets.filter((target: SequenceAnimaticContinuityAssetTargetView) => target.status === 'generating')
       if (runningDependencyTargets.length > 0) {
         await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })

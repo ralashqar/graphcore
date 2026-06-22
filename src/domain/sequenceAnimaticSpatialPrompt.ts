@@ -1,6 +1,6 @@
 type LooseRecord = Record<string, unknown>
 
-export const sequenceAnimaticSpatialPromptPolicyVersion = 'spatial_location_prompt_v3'
+export const sequenceAnimaticSpatialPromptPolicyVersion = 'spatial_location_prompt_v4'
 
 function readText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''

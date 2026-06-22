@@ -21,6 +21,15 @@ import {
   type SequenceAnimaticContinuityGraphView,
 } from './sequenceAnimaticContinuityIndexes'
 import {
+  buildSequenceAnimaticContinuityGraphLayout,
+  type SequenceAnimaticContinuityGraphLayoutNode,
+} from './sequenceAnimaticContinuityGraphLayout'
+import {
+  continuityTargetCanGenerate,
+  downstreamContinuityTargetNodeIds,
+  planSequenceAnimaticContinuityCommand,
+} from './sequenceAnimaticContinuityCommandPlanner'
+import {
   sequenceAnimaticBlocksForScene,
   sequenceAnimaticSceneIdFromShotId,
   type SequenceAnimaticSceneView,
@@ -51,7 +60,7 @@ export type SequenceAnimaticContinuityGraphModalProps = {
   assetGenerationBusy: boolean
   anchorGenerationBusy: boolean
   onClose: () => void
-  onGenerateAssets: (targets?: readonly SequenceAnimaticContinuityAssetTargetView[]) => void
+  onGenerateAssets: (targets?: readonly SequenceAnimaticContinuityAssetTargetView[], options?: { batchKind?: 'spot_camera_grid'; forceRefresh?: boolean }) => void
   onGenerateCoverageAnchor: (anchor: SequenceAnimaticCoverageAnchorView) => void
   onSaveNodeOverride: (request: SequenceAnimaticContinuityGraphNodeOverrideRequest) => Promise<unknown> | unknown
   onOpenSceneBoard: (scopeNodeId?: string | null, sceneId?: string | null) => void
@@ -139,29 +148,40 @@ function scopedContinuityGraph(input: {
   } satisfies SequenceAnimaticContinuityGraphView
 }
 
-function continuityGraphNodeDepth(node: SequenceAnimaticContinuityGraphNodeView) {
-  if (node.kind === 'world_location') return 0
-  if (node.kind === 'set') return 1
-  if (node.kind === 'zone') return 2
-  if (node.kind === 'spot') return 3
-  if (node.kind === 'viewpoint' || node.kind === 'angle') return 4
-  if (node.kind === 'coverage_anchor') return 5
-  return 5
+function continuityGraphAssetPreview(node: SequenceAnimaticContinuityGraphNodeView) {
+  if (!node.assetUrl) return null
+  return (
+    <div className={`world-wiki-continuity-node-image is-${node.kind}`}>
+      <img src={node.assetUrl} alt="" />
+    </div>
+  )
 }
 
-const continuityGraphKindOrder: Record<SequenceAnimaticContinuityGraphNodeKind, number> = {
-  world_location: 0,
-  set: 1,
-  zone: 2,
-  spot: 3,
-  viewpoint: 4,
-  angle: 4,
-  coverage_anchor: 5,
-  temp_character: 6,
-  prop: 7,
-  faction: 8,
-  vehicle: 9,
-  group: 10,
+function continuityGraphPoiOverlay(input: {
+  layoutNode: SequenceAnimaticContinuityGraphLayoutNode
+  selectedNodeId: string | null
+  onSelect: (nodeId: string) => void
+}) {
+  if (input.layoutNode.poiHints.length === 0 || !input.layoutNode.node.assetUrl) return null
+  return (
+    <div className="world-wiki-continuity-node-pois" aria-label="Zone spots">
+      {input.layoutNode.poiHints.map((poi) => (
+        <button
+          key={poi.id}
+          className={input.selectedNodeId === poi.id ? 'is-active' : ''}
+          style={{ left: `${poi.x}%`, top: `${poi.y}%` }}
+          onClick={(event) => {
+            event.stopPropagation()
+            input.onSelect(poi.id)
+          }}
+          title={`${poi.label} / ${poi.status.replace(/_/g, ' ')}`}
+          type="button"
+        >
+          <span>{poi.label.slice(0, 2).toUpperCase()}</span>
+        </button>
+      ))}
+    </div>
+  )
 }
 
 export function SequenceAnimaticContinuityGraphModal({
@@ -250,17 +270,9 @@ export function SequenceAnimaticContinuityGraphModal({
     ? model.coverageAnchors.find((anchor) => anchor.id === selectedNode.id) ?? null
     : null
   const graphNodeById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node] as const)), [graph.nodes])
-  const targetByNodeId = useMemo(() => new Map(model.continuityAssetTargets.map((target) => [target.nodeId, target] as const)), [model.continuityAssetTargets])
   const canGenerateTarget = useCallback((target: SequenceAnimaticContinuityAssetTargetView) => {
-    const node = graphNodeById.get(target.nodeId)
-    if (!node || target.status === 'ready' || target.status === 'generating') return false
-    const parentId = trimOptionalString(node.parentId)
-    if (!parentId) return true
-    const parentNode = graphNodeById.get(parentId) ?? sourceGraph.nodes.find((entry) => entry.id === parentId) ?? null
-    if (!parentNode || parentNode.kind === 'world_location') return true
-    const parentTarget = targetByNodeId.get(parentId) ?? null
-    return parentTarget?.status === 'ready'
-  }, [graphNodeById, sourceGraph.nodes, targetByNodeId])
+    return continuityTargetCanGenerate({ model: { continuityGraphView: graph, continuityAssetTargets: model.continuityAssetTargets }, target }).ok
+  }, [graph, model.continuityAssetTargets])
 
   const missingTargets = model.continuityAssetTargets
     .filter((target) => graphNodeById.has(target.nodeId))
@@ -268,15 +280,75 @@ export function SequenceAnimaticContinuityGraphModal({
   const readyToGenerateTargets = missingTargets.filter(canGenerateTarget)
   const selectedParentBlocked = selectedTarget ? !canGenerateTarget(selectedTarget) && !['ready', 'generating'].includes(selectedTarget.status) : false
   const selectedGraphNodeIds = selectedNodeIds.size > 0 ? selectedNodeIds : new Set(selectedNode ? [selectedNode.id] : [])
+  const downstreamTargetsForSelectedNode = useMemo(() => {
+    if (!selectedNode) return []
+    const downstreamNodeIds = new Set(downstreamContinuityTargetNodeIds({
+      model: { continuityGraphView: graph, continuityAssetTargets: model.continuityAssetTargets },
+      sourceNodeId: selectedNode.id,
+    }))
+    return model.continuityAssetTargets
+      .filter((target) => downstreamNodeIds.has(target.nodeId))
+      .filter((target) => target.status !== 'generating')
+  }, [graph, model.continuityAssetTargets, selectedNode])
   const selectedTargets = model.continuityAssetTargets
     .filter((target) => selectedGraphNodeIds.has(target.nodeId))
     .filter(canGenerateTarget)
   const selectedCoverageAnchors = model.coverageAnchors
     .filter((anchor) => selectedGraphNodeIds.has(anchor.id))
     .filter((anchor) => !anchor.running)
+  const cameraGridTargetsForSelectedSpot = useMemo(() => {
+    if (!selectedNode || selectedNode.kind !== 'spot') return []
+    const directGridNodeIds = new Set(graph.nodes
+      .filter((node) => node.parentId === selectedNode.id && node.kind === 'camera_grid')
+      .map((node) => node.id))
+    const directTargets = model.continuityAssetTargets
+      .filter((target) => directGridNodeIds.has(target.nodeId))
+      .filter(canGenerateTarget)
+    if (directTargets.length > 0) return directTargets
+    const childNodeIds = new Set(graph.nodes
+      .filter((node) => node.parentId === selectedNode.id && (node.kind === 'viewpoint' || node.kind === 'angle'))
+      .map((node) => node.id))
+    return model.continuityAssetTargets
+      .filter((target) => childNodeIds.has(target.nodeId))
+      .filter(canGenerateTarget)
+  }, [canGenerateTarget, graph.nodes, model.continuityAssetTargets, selectedNode])
   const generateSelectedNodes = () => {
-    if (selectedTargets.length > 0) onGenerateAssets(selectedTargets)
+    const plan = planSequenceAnimaticContinuityCommand({
+      model: { continuityGraphView: graph, continuityAssetTargets: model.continuityAssetTargets },
+      action: 'generate_node',
+      targets: selectedTargets,
+    })
+    if (plan.status === 'ready') onGenerateAssets(plan.targets)
     selectedCoverageAnchors.forEach((anchor) => onGenerateCoverageAnchor(anchor))
+  }
+  const generateSelectedSpotCameraGrid = () => {
+    if (cameraGridTargetsForSelectedSpot.length === 0) return
+    const directGridTarget = cameraGridTargetsForSelectedSpot.find((target) => target.assetKind === 'spot_camera_grid')
+    if (directGridTarget) {
+      const plan = planSequenceAnimaticContinuityCommand({
+        model: { continuityGraphView: graph, continuityAssetTargets: model.continuityAssetTargets },
+        action: 'generate_camera_grid',
+        targets: [directGridTarget],
+      })
+      if (plan.status === 'ready') onGenerateAssets(plan.targets)
+      return
+    }
+    const plan = planSequenceAnimaticContinuityCommand({
+      model: { continuityGraphView: graph, continuityAssetTargets: model.continuityAssetTargets },
+      action: 'generate_camera_grid',
+      targets: cameraGridTargetsForSelectedSpot,
+      batchKind: 'spot_camera_grid',
+    })
+    if (plan.status === 'ready') onGenerateAssets(plan.targets, { batchKind: 'spot_camera_grid' })
+  }
+  const regenerateSelectedNode = () => {
+    if (!selectedTarget || selectedTarget.status === 'generating') return
+    const plan = planSequenceAnimaticContinuityCommand({
+      model: { continuityGraphView: graph, continuityAssetTargets: model.continuityAssetTargets },
+      action: 'regenerate_node',
+      targets: [selectedTarget],
+    })
+    if (plan.status === 'ready') onGenerateAssets(plan.targets, { forceRefresh: true })
   }
   const selectedUsageLabel = selectedNode
     ? [
@@ -286,83 +358,56 @@ export function SequenceAnimaticContinuityGraphModal({
     : ''
 
   const flowNodes = useMemo<Node<Record<string, unknown>>[]>(() => {
-    const spatialNodes = graph.nodes.filter((node) => node.lane === 'spatial')
-    const temporaryNodes = graph.nodes.filter((node) => node.lane === 'temporary')
-    const spatialNodeById = new Map(spatialNodes.map((node) => [node.id, node] as const))
-    const childrenByParentId = new Map<string, SequenceAnimaticContinuityGraphNodeView[]>()
-    for (const node of spatialNodes) {
-      if (!node.parentId || !spatialNodeById.has(node.parentId)) continue
-      childrenByParentId.set(node.parentId, [...(childrenByParentId.get(node.parentId) ?? []), node])
-    }
-    for (const [parentId, children] of childrenByParentId) {
-      childrenByParentId.set(parentId, [...children].sort((left, right) => (
-        continuityGraphKindOrder[left.kind] - continuityGraphKindOrder[right.kind]
-        || left.label.localeCompare(right.label)
-      )))
-    }
-
-    const roots = spatialNodes
-      .filter((node) => !node.parentId || !spatialNodeById.has(node.parentId))
-      .sort((left, right) => continuityGraphNodeDepth(left) - continuityGraphNodeDepth(right) || left.label.localeCompare(right.label))
-    const columnWidth = viewMode === 'scene_graph' ? 250 : 270
-    const rowHeight = viewMode === 'scene_graph' ? 148 : 124
-    const positionFor = (depth: number, row: number) => viewMode === 'scene_graph'
-      ? { x: 42 + row * columnWidth, y: 44 + depth * rowHeight }
-      : { x: 42 + depth * columnWidth, y: 44 + row * rowHeight }
-    const positionsById = new Map<string, { x: number; y: number }>()
-    let nextRow = 0
-    const placeNode = (node: SequenceAnimaticContinuityGraphNodeView) => {
-      const children = childrenByParentId.get(node.id) ?? []
-      const startRow = nextRow
-      if (children.length === 0) {
-        positionsById.set(node.id, positionFor(continuityGraphNodeDepth(node), nextRow))
-        nextRow += 1
-        return
-      }
-      children.forEach(placeNode)
-      positionsById.set(node.id, positionFor(continuityGraphNodeDepth(node), (startRow + nextRow - 1) / 2))
-    }
-    roots.forEach((root) => {
-      placeNode(root)
-      nextRow += 0.35
+    const layout = buildSequenceAnimaticContinuityGraphLayout({
+      nodes: graph.nodes,
+      edges: graph.edges,
+      mode: viewMode,
     })
-    const maxSpatialDepth = Math.max(4, ...spatialNodes.map(continuityGraphNodeDepth))
-    const temporaryBaseX = viewMode === 'scene_graph'
-      ? Math.max(42 + Math.ceil(nextRow + 1) * columnWidth, 42 + 5 * columnWidth)
-      : 42 + (maxSpatialDepth + 1) * columnWidth
-    temporaryNodes
-      .sort((left, right) => continuityGraphKindOrder[left.kind] - continuityGraphKindOrder[right.kind] || left.label.localeCompare(right.label))
-      .forEach((node, index) => {
-        positionsById.set(node.id, { x: temporaryBaseX, y: 44 + index * rowHeight })
-      })
-
-    const rowByColumn = new Map<number, number>()
-    return graph.nodes.map((node) => {
-      const fallbackColumn = node.lane === 'temporary' ? 4 : continuityGraphNodeDepth(node)
-      const row = rowByColumn.get(fallbackColumn) ?? 0
-      rowByColumn.set(fallbackColumn, row + 1)
+    return layout.nodes.map((layoutNode) => {
+      const node = layoutNode.node
       const isSelected = selectedNodeId === node.id || selectedNodeIds.has(node.id)
       return {
         id: node.id,
         type: 'default',
-        position: positionsById.get(node.id) ?? positionFor(fallbackColumn, row),
-        sourcePosition: viewMode === 'scene_graph' ? Position.Bottom : Position.Right,
-        targetPosition: viewMode === 'scene_graph' ? Position.Top : Position.Left,
+        position: { x: layoutNode.x, y: layoutNode.y },
+        sourcePosition: Position.Bottom,
+        targetPosition: Position.Top,
         data: {
           label: (
-            <div className={`world-wiki-continuity-flow-node is-${node.assetStatus} ${node.overrideVisualBrief || node.extraPromptDirection ? 'has-override' : ''}`}>
-              <span>
-                <EntityIcon id={sequenceAnimaticContinuityGraphIconId(node.kind)} />
-                {node.kindLabel}
-              </span>
+            <div className={[
+              'world-wiki-continuity-flow-node',
+              `is-${node.assetStatus}`,
+              `is-kind-${node.kind}`,
+              node.assetUrl ? 'has-image' : '',
+              layoutNode.poiHints.length > 0 ? 'has-pois' : '',
+              node.overrideVisualBrief || node.extraPromptDirection ? 'has-override' : '',
+            ].filter(Boolean).join(' ')}>
+              {node.assetUrl ? null : (
+                <header>
+                  <span>
+                    <EntityIcon id={sequenceAnimaticContinuityGraphIconId(node.kind)} />
+                    {layoutNode.displayKindLabel}
+                  </span>
+                  <em>{node.shotIds.length > 0 ? `${node.shotIds.length} shots` : node.assetStatusLabel}</em>
+                </header>
+              )}
               <strong>{node.label}</strong>
-              <em>{node.shotIds.length > 0 ? `${node.shotIds.length} shots` : node.assetStatusLabel}</em>
-              {node.effectiveVisualBrief ? <small>{node.effectiveVisualBrief}</small> : null}
+              {continuityGraphAssetPreview(node)}
+              {continuityGraphPoiOverlay({
+                layoutNode,
+                selectedNodeId,
+                onSelect: (nodeId) => {
+                  setSelectedNodeId(nodeId)
+                  setSelectedNodeIds(new Set([nodeId]))
+                },
+              })}
+              {!node.assetUrl && node.effectiveVisualBrief ? <small>{node.effectiveVisualBrief}</small> : null}
             </div>
           ),
         },
         style: {
-          width: 224,
+          width: layoutNode.width,
+          height: layoutNode.height,
           borderRadius: 10,
           border: isSelected ? '1px solid rgba(147, 102, 255, 0.95)' : '1px solid rgba(152, 163, 255, 0.22)',
           background: node.lane === 'temporary' ? 'rgba(30, 24, 52, 0.95)' : 'rgba(13, 18, 36, 0.95)',
@@ -372,9 +417,13 @@ export function SequenceAnimaticContinuityGraphModal({
         },
       }
     })
-  }, [graph.nodes, selectedNodeId, selectedNodeIds, viewMode])
+  }, [graph.edges, graph.nodes, selectedNodeId, selectedNodeIds, viewMode])
 
-  const flowEdges = useMemo<Edge[]>(() => graph.edges.map((edge) => ({
+  const flowEdges = useMemo<Edge[]>(() => buildSequenceAnimaticContinuityGraphLayout({
+    nodes: graph.nodes,
+    edges: graph.edges,
+    mode: viewMode,
+  }).edges.map((edge) => ({
     id: edge.id,
     source: edge.source,
     target: edge.target,
@@ -402,7 +451,7 @@ export function SequenceAnimaticContinuityGraphModal({
       fill: 'rgba(8, 12, 26, 0.86)',
       fillOpacity: 0.92,
     },
-  })), [graph.edges])
+  })), [graph.edges, graph.nodes, viewMode])
 
   const tempGroups = ([
     ['Coverage anchors', graph.nodes.filter((node) => node.kind === 'coverage_anchor')],
@@ -546,6 +595,29 @@ export function SequenceAnimaticContinuityGraphModal({
                   {selectedNode.shotIds.length > 0 ? <div><dt>Shots</dt><dd>{selectedNode.shotIds.slice(0, 12).join(', ')}{selectedNode.shotIds.length > 12 ? ` +${selectedNode.shotIds.length - 12}` : ''}</dd></div> : null}
                 </dl>
                 {selectedNode.summary ? <p>{selectedNode.summary}</p> : null}
+                {selectedNode.kind === 'zone' ? (
+                  <div className="world-wiki-continuity-graph-poi-list">
+                    <strong>Zone spots</strong>
+                    {graph.nodes.filter((node) => node.parentId === selectedNode.id && (node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle')).length === 0 ? <p>No spot pins recorded for this zone yet.</p> : null}
+                    {graph.nodes
+                      .filter((node) => node.parentId === selectedNode.id && (node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle'))
+                      .map((node) => (
+                        <button
+                          key={node.id}
+                          className={selectedNodeId === node.id ? 'is-active' : ''}
+                          onClick={() => {
+                            setSelectedNodeId(node.id)
+                            setSelectedNodeIds(new Set([node.id]))
+                          }}
+                          type="button"
+                        >
+                          {node.assetUrl ? <img src={node.assetUrl} alt="" /> : <EntityIcon id={sequenceAnimaticContinuityGraphIconId(node.kind)} />}
+                          <span>{node.label}</span>
+                          <em>{node.assetStatusLabel}</em>
+                        </button>
+                      ))}
+                  </div>
+                ) : null}
                 <div className="world-wiki-continuity-graph-prompt-editor">
                   <label>
                     <span>Visual brief</span>
@@ -570,6 +642,14 @@ export function SequenceAnimaticContinuityGraphModal({
                   {selectedNode.assetHistoryKeys.length === 0 ? <p>No generated assets recorded for this node yet.</p> : null}
                   {selectedNode.assetHistoryKeys.slice(0, 6).map((assetKey) => <span key={assetKey}>{assetKey}</span>)}
                 </div>
+                {selectedTarget?.commandStatus || selectedTarget?.generationRequestId || selectedTarget?.commandDiagnostics?.length ? (
+                  <div className="world-wiki-continuity-graph-history">
+                    <strong>Latest command</strong>
+                    {selectedTarget.commandStatus ? <span>{selectedTarget.commandStatus.replace(/_/g, ' ')}</span> : null}
+                    {selectedTarget.generationRequestId ? <span>{selectedTarget.generationRequestId}</span> : null}
+                    {(selectedTarget.commandDiagnostics ?? []).slice(0, 3).map((diagnostic) => <p key={diagnostic}>{diagnostic}</p>)}
+                  </div>
+                ) : null}
                 <div className="world-wiki-continuity-graph-node-actions">
                   <button className="ghost-button compact" onClick={() => onOpenSceneBoard(selectedNode.id, scopeSceneId ?? selectedNode.shotIds.map(sequenceAnimaticSceneIdFromShotId).find(Boolean) ?? null)} type="button">
                     <EntityIcon id="camera" />
@@ -592,18 +672,49 @@ export function SequenceAnimaticContinuityGraphModal({
                             : 'Generate anchor'}
                     </button>
                   ) : selectedTarget ? (
-                    <button
-                      className="ghost-button compact"
-                      disabled={assetGenerationBusy || selectedTarget.status === 'generating' || selectedParentBlocked}
-                      onClick={() => onGenerateAssets([selectedTarget])}
-                      type="button"
-                    >
-                      {assetGenerationBusy || selectedTarget.status === 'generating'
-                        ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</>
-                        : selectedParentBlocked
-                          ? 'Generate parent first'
-                          : selectedTarget.actionLabel}
-                    </button>
+                    <>
+                      <button
+                        className="ghost-button compact"
+                        disabled={assetGenerationBusy || selectedTarget.status === 'generating' || selectedParentBlocked}
+                        onClick={() => {
+                          if (selectedTarget.status === 'ready') regenerateSelectedNode()
+                          else onGenerateAssets([selectedTarget])
+                        }}
+                        type="button"
+                      >
+                        {assetGenerationBusy || selectedTarget.status === 'generating'
+                          ? <><span className="world-mini-spinner" aria-hidden="true" />Generating</>
+                          : selectedParentBlocked
+                            ? 'Generate parent first'
+                            : selectedTarget.actionLabel}
+                      </button>
+                      <button
+                        className="ghost-button compact"
+                        disabled={assetGenerationBusy || selectedTarget.status === 'generating' || selectedParentBlocked}
+                        onClick={regenerateSelectedNode}
+                        title={downstreamTargetsForSelectedNode.length > 0
+                          ? `Regenerates this node and marks ${downstreamTargetsForSelectedNode.length} downstream asset${downstreamTargetsForSelectedNode.length === 1 ? '' : 's'} stale.`
+                          : 'Regenerates this node.'}
+                        type="button"
+                      >
+                        {assetGenerationBusy || selectedTarget.status === 'generating'
+                          ? <><span className="world-mini-spinner" aria-hidden="true" />Regenerating</>
+                          : downstreamTargetsForSelectedNode.length > 0
+                            ? `Regenerate + stale ${downstreamTargetsForSelectedNode.length}`
+                            : 'Regenerate'}
+                      </button>
+                      {selectedNode.kind === 'spot' ? (
+                        <button
+                          className="ghost-button compact"
+                          disabled={assetGenerationBusy || cameraGridTargetsForSelectedSpot.length === 0}
+                          onClick={generateSelectedSpotCameraGrid}
+                          type="button"
+                        >
+                          <EntityIcon id="camera" />
+                          {cameraGridTargetsForSelectedSpot.length > 0 ? 'Generate camera grid' : 'No camera grid nodes'}
+                        </button>
+                      ) : null}
+                    </>
                   ) : (
                     <button className="ghost-button compact" disabled type="button">No asset target</button>
                   )}

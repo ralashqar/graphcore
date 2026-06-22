@@ -905,12 +905,24 @@ export const sequenceAnimaticDirectorPlanV1Schema = looseObjectSchema.extend({
 
 export const sequenceAnimaticContinuityAssetStatusSchema = z.enum(['missing', 'generating', 'ready', 'stale', 'failed'])
 export const sequenceAnimaticContinuityAssetGenerationStatusSchema = z.enum(['none', 'partial', 'ready', 'stale', 'failed'])
+export const sequenceAnimaticCommandLifecycleStatusSchema = z.enum(['started', 'already_running', 'already_ready', 'blocked', 'failed'])
+export const sequenceAnimaticCommandLifecycleSchema = looseObjectSchema.extend({
+  status: sequenceAnimaticCommandLifecycleStatusSchema.default('started'),
+  requestIds: z.array(z.string()).default([]),
+  workflowIds: z.array(z.string()).default([]),
+  runIds: z.array(z.string()).default([]),
+  targetNodeIds: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+  regenerationRequestId: z.string().default(''),
+  providerStartExpected: z.boolean().default(false),
+})
 export const sequenceAnimaticContinuityAssetBatchKindSchema = z.enum([
   'location_zone_board',
   'angle_grid',
   'viewpoint_grid',
   'spot_grid',
   'zone_spatial_map',
+  'spot_camera_grid',
   'spot_atlas_grid',
   'viewpoint_atlas_grid',
   'temp_character_grid',
@@ -1338,6 +1350,7 @@ export const sequenceAnimaticSceneGraphNodeKindSchema = z.enum([
   'set',
   'zone',
   'spot',
+  'camera_grid',
   'viewpoint',
   'angle',
   'coverage_anchor',
@@ -1472,13 +1485,26 @@ export const sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema = z.obje
   nodeIds: z.array(z.string().min(1)).max(9).optional(),
   batchKind: sequenceAnimaticContinuityAssetBatchKindSchema.optional(),
   mode: z.enum(['generate', 'regenerate']).default('generate'),
+  regenerationRequestId: z.string().min(1).optional(),
 })
 
 export const sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema = z.object({
   ok: z.literal(true),
+  status: sequenceAnimaticCommandLifecycleStatusSchema.default('started'),
+  commandLifecycle: sequenceAnimaticCommandLifecycleSchema.default({
+    status: 'started',
+    requestIds: [],
+    workflowIds: [],
+    runIds: [],
+    targetNodeIds: [],
+    diagnostics: [],
+    regenerationRequestId: '',
+    providerStartExpected: false,
+  }),
   masterRequest: outputRequestSchema,
   continuityRequest: outputRequestSchema.nullable().default(null),
   assetRequest: outputRequestSchema.nullable().default(null),
+  runnableRequest: outputRequestSchema.nullable().default(null),
   workflow: outputWorkflowSchema.nullable().default(null),
   nodes: z.array(outputWorkflowNodeSchema).default([]),
   edges: z.array(outputWorkflowEdgeSchema).default([]),

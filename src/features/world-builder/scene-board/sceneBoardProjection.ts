@@ -2,8 +2,8 @@ import type { OutputRequest } from '../../../domain/outputWorkflow'
 import type { WorkflowProgressViewModel } from '../../../domain/workflowProgressView'
 
 type LooseRecord = Record<string, unknown>
-export type SequenceAnimaticContinuityGraphNodeKind = 'world_location' | 'set' | 'zone' | 'spot' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
-export type SequenceAnimaticContinuityAssetTargetView = LooseRecord & { nodeId: string; name: string; assetKind: string; status: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'; statusLabel: string; actionLabel: string; assetKey: string | null; assetUrl: string | null; blockIds: string[]; shotIds: string[] }
+export type SequenceAnimaticContinuityGraphNodeKind = 'world_location' | 'set' | 'zone' | 'spot' | 'camera_grid' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
+export type SequenceAnimaticContinuityAssetTargetView = LooseRecord & { nodeId: string; name: string; assetKind: string; status: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'; statusLabel: string; actionLabel: string; assetKey: string | null; assetUrl: string | null; blockIds: string[]; shotIds: string[]; commandStatus?: string; commandDiagnostics?: string[]; generationRequestId?: string | null }
 export type SequenceAnimaticContinuityGraphNodeView = LooseRecord & { id: string; kind: SequenceAnimaticContinuityGraphNodeKind; label: string; kindLabel: string; lane?: string; parentId?: string | null; shotIds: string[]; blockIds: string[]; assetStatus?: 'missing' | 'generating' | 'ready' | 'stale' | 'failed' | 'not_required'; assetUrl?: string | null; assetStatusLabel?: string; baseVisualBrief?: string; overrideVisualBrief?: string; extraPromptDirection?: string; summary?: string }
 export type SequenceAnimaticContinuityAssetBatchKind =
   | 'location_zone_board'
@@ -11,6 +11,7 @@ export type SequenceAnimaticContinuityAssetBatchKind =
   | 'viewpoint_grid'
   | 'spot_grid'
   | 'zone_spatial_map'
+  | 'spot_camera_grid'
   | 'spot_atlas_grid'
   | 'viewpoint_atlas_grid'
   | 'temp_character_grid'
@@ -434,7 +435,7 @@ function sequenceAnimaticSceneBoardNodeFromShot(
   coverageAnchor: SequenceAnimaticCoverageAnchorView | null,
 ) {
   const normalizeKind = (kind: string): SequenceAnimaticContinuityGraphNodeKind | null => {
-    if (kind === 'world_location' || kind === 'set' || kind === 'zone' || kind === 'spot' || kind === 'viewpoint' || kind === 'angle' || kind === 'coverage_anchor') return kind
+    if (kind === 'world_location' || kind === 'set' || kind === 'zone' || kind === 'spot' || kind === 'camera_grid' || kind === 'viewpoint' || kind === 'angle' || kind === 'coverage_anchor') return kind
     return null
   }
   const hierarchy = shot.spatialBindingView.hierarchy
@@ -499,7 +500,7 @@ const sequenceAnimaticSceneBoardPrepStageOrder: SequenceAnimaticSceneBoardPrepSt
 function sequenceAnimaticSceneBoardPrepStageForNodeKind(kind: SequenceAnimaticContinuityGraphNodeKind): SequenceAnimaticSceneBoardReferenceTile['stage'] | null {
   if (kind === 'world_location' || kind === 'set') return 'set_refs'
   if (kind === 'zone') return 'zone_refs'
-  if (kind === 'spot' || kind === 'viewpoint' || kind === 'angle') return 'spot_refs'
+  if (kind === 'spot' || kind === 'camera_grid' || kind === 'viewpoint' || kind === 'angle') return 'spot_refs'
   return null
 }
 

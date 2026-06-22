@@ -7,18 +7,18 @@ import type {
 import {
   isOutputRunStepActive,
   outputRunStepForNode,
-} from './sequenceAnimaticProgressPresentation'
+} from './sequenceAnimaticProgressPresentation.ts'
 import {
   artifactBelongsToRequest,
   readOutputRequestScreenplayAnimaticRole,
   sequenceAnimaticRequestIsActive,
   sequenceAnimaticRequestUpdatedAtMs,
-} from './sequenceAnimaticRuntimePresentation'
+} from './sequenceAnimaticRuntimePresentation.ts'
 import {
   readLooseArray,
   readLooseRecord,
   trimOptionalString,
-} from './sequenceAnimaticCommandHelpers'
+} from './sequenceAnimaticCommandHelpers.ts'
 
 function latestRunForRequest(request: OutputRequest | null, runs: readonly OutputWorkflowRun[]) {
   if (!request) return null
@@ -38,6 +38,19 @@ function dedupeArtifacts(artifacts: readonly OutputArtifact[]) {
     seen.add(artifact.id)
     return true
   })
+}
+
+function requestBelongsToSequenceAnimaticMaster(input: {
+  request: OutputRequest
+  masterRequestId: string
+  childRequestIds: ReadonlySet<string>
+}) {
+  const metadata = readLooseRecord(input.request.metadata)
+  const metadataMasterRequestId = trimOptionalString(metadata.masterRequestId)
+  if (metadataMasterRequestId) return metadataMasterRequestId === input.masterRequestId
+  const metadataParentRequestId = trimOptionalString(metadata.parentRequestId)
+  const parentRequestId = input.request.parentRequestId || metadataParentRequestId
+  return parentRequestId === input.masterRequestId || input.childRequestIds.has(parentRequestId)
 }
 
 export function buildSequenceAnimaticRuntimeIndexes(input: {
@@ -70,25 +83,31 @@ export function buildSequenceAnimaticRuntimeIndexes(input: {
     .filter(([blockId]) => Boolean(blockId)))
   const childRunByRequestId = new Map(childRequests
     .map((request) => [request.id, latestRunForRequest(request, input.runs)] as const))
+  const childRequestIds = new Set(childRequests.map((request) => request.id))
+  const belongsToCurrentMaster = (request: OutputRequest) => requestBelongsToSequenceAnimaticMaster({
+    request,
+    masterRequestId: input.request.id,
+    childRequestIds,
+  })
   const shotVideoRequests = input.requests
-    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'shot_video')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'shot_video' && belongsToCurrentMaster(request))
   const shotRevisionRequests = input.requests
-    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'shot_revision')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'shot_revision' && belongsToCurrentMaster(request))
   const plannedKeyframeRequests = input.requests
     .filter((request) => {
       const role = readOutputRequestScreenplayAnimaticRole(request)
-      return role === 'shot_keyframe' || role === 'shot_production'
+      return (role === 'shot_keyframe' || role === 'shot_production') && belongsToCurrentMaster(request)
     })
   const coverageAnchorRequests = input.requests
-    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'coverage_anchor')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'coverage_anchor' && belongsToCurrentMaster(request))
   const zoneCoverageBoardRequests = input.requests
-    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'zone_coverage_board')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'zone_coverage_board' && belongsToCurrentMaster(request))
   const coverageIntentRequests = input.requests
-    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'coverage_intent_batch')
+    .filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'coverage_intent_batch' && belongsToCurrentMaster(request))
   const continuityAssetRequests = input.requests
     .filter((request) => {
       const role = readOutputRequestScreenplayAnimaticRole(request)
-      return role === 'continuity_asset' || role === 'continuity_asset_batch'
+      return (role === 'continuity_asset' || role === 'continuity_asset_batch') && belongsToCurrentMaster(request)
     })
   const readRunForRequest = (request: OutputRequest | null) => latestRunForRequest(request, input.runs)
   const rankShotVideoRequest = (request: OutputRequest) => {

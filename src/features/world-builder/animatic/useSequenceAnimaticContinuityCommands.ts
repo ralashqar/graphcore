@@ -26,6 +26,10 @@ import {
   trimOptionalString,
   type StartOutputWorkflowRun,
 } from './sequenceAnimaticCommandHelpers'
+import {
+  continuityAssetRunGroups,
+  planSequenceAnimaticContinuityCommand,
+} from './sequenceAnimaticContinuityCommandPlanner'
 
 type ContinuityCommandViewModel = SequenceAnimaticViewModel & {
   continuityRequest?: OutputRequest | null
@@ -54,69 +58,6 @@ type EnsureKeyframeWorkflows = (request: {
   coverageSetupIds?: string[]
   allowProvisional?: boolean
 }) => Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> | SequenceAnimaticKeyframeWorkflowEnsureResponse
-
-function continuityAssetRunGroups(
-  model: ContinuityCommandViewModel,
-  targets: readonly SequenceAnimaticContinuityAssetTargetView[],
-): SequenceAnimaticContinuityAssetRunGroup[] {
-  const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const targetByNodeId = new Map(model.continuityAssetTargets.map((target) => [target.nodeId, target] as const))
-  const unresolved = targets.filter((target) => ['missing', 'stale', 'failed'].includes(target.status))
-  const missingParentIds = new Set<string>()
-  for (const target of unresolved) {
-    const parentId = trimOptionalString(graphNodeById.get(target.nodeId)?.parentId)
-    const parentTarget = parentId ? targetByNodeId.get(parentId) ?? null : null
-    if (parentTarget && ['missing', 'stale', 'failed'].includes(parentTarget.status)) missingParentIds.add(parentId)
-  }
-  const consumedNodeIds = new Set<string>()
-  const scaffoldGroups: SequenceAnimaticContinuityAssetRunGroup[] = []
-  for (const parentId of missingParentIds) {
-    const parentTarget = unresolved.find((target) => target.nodeId === parentId) ?? null
-    if (!parentTarget) continue
-    const childTargets = unresolved
-      .filter((target) => trimOptionalString(graphNodeById.get(target.nodeId)?.parentId) === parentId)
-      .filter((target) => {
-        const node = graphNodeById.get(target.nodeId) ?? null
-        const kind = node?.kind
-        return kind === 'zone' || kind === 'spot' || kind === 'viewpoint' || kind === 'angle' || target.assetKind.includes('spot') || target.assetKind.includes('viewpoint') || target.assetKind.includes('angle')
-      })
-      .slice(0, 8)
-    if (childTargets.length === 0) continue
-    const groupTargets = [parentTarget, ...childTargets]
-    groupTargets.forEach((target) => consumedNodeIds.add(target.nodeId))
-    scaffoldGroups.push({ targets: groupTargets, isBatch: true })
-  }
-  const eligible = unresolved.filter((target) => !consumedNodeIds.has(target.nodeId))
-  const grouped = new Map<string, SequenceAnimaticContinuityAssetTargetView[]>()
-  const singles: SequenceAnimaticContinuityAssetRunGroup[] = []
-  for (const target of eligible) {
-    const node = graphNodeById.get(target.nodeId) ?? null
-    const kind = node?.kind
-    const isSpot = kind === 'spot' || target.assetKind.includes('spot')
-    const isViewpoint = kind === 'viewpoint' || kind === 'angle' || target.assetKind.includes('angle') || target.assetKind.includes('viewpoint')
-    if (!isSpot && !isViewpoint) {
-      singles.push({ targets: [target], isBatch: false })
-      continue
-    }
-    const parentId = trimOptionalString(node?.parentId)
-    if (!parentId) {
-      singles.push({ targets: [target], isBatch: false })
-      continue
-    }
-    const key = `${isSpot ? 'spot_grid' : 'viewpoint_grid'}:${parentId}`
-    grouped.set(key, [...(grouped.get(key) ?? []), target])
-  }
-  const batched = [...grouped.values()].flatMap((group) => {
-    if (group.length <= 1) return group.map((target) => ({ targets: [target], isBatch: false }))
-    const chunks: SequenceAnimaticContinuityAssetRunGroup[] = []
-    for (let index = 0; index < group.length; index += 9) {
-      const chunk = group.slice(index, index + 9)
-      chunks.push({ targets: chunk, isBatch: chunk.length > 1 })
-    }
-    return chunks
-  })
-  return [...scaffoldGroups, ...batched, ...singles]
-}
 
 function coverageAnchorDependencyTargets(
   model: ContinuityCommandViewModel,
@@ -164,6 +105,13 @@ export function useSequenceAnimaticContinuityCommands({
   onStartOutputWorkflowRun: StartOutputWorkflowRun
   setSequenceAnimaticErrorByKey: Dispatch<SetStateAction<Record<string, string>>>
 }) {
+  const [pendingContinuityAssets, setPendingContinuityAssets] = useState<{
+    masterRequestId: string
+    nodeIds: string[]
+    previousAssetKeys: Record<string, string>
+    forceRefresh: boolean
+    startedAt: number
+  } | null>(null)
   const [pendingCoverageAnchor, setPendingCoverageAnchor] = useState<{
     masterRequestId: string
     anchorId: string
@@ -190,8 +138,20 @@ export function useSequenceAnimaticContinuityCommands({
         batchKind: group.batchKind,
         mode: options.forceRefresh || group.targets.some((entry) => entry.status === 'stale' || entry.status === 'ready') ? 'regenerate' : 'generate',
       }))
-      const assetRequest = ensureResult.assetRequest
-      if (!assetRequest?.workflowId) continue
+      const lifecycleDiagnostics = ensureResult.commandLifecycle.diagnostics.filter(Boolean)
+      if (ensureResult.status === 'blocked' || ensureResult.status === 'failed') {
+        throw new Error(lifecycleDiagnostics.join(' ') || `Continuity asset command ${ensureResult.status}.`)
+      }
+      if (ensureResult.status === 'already_ready' && !ensureResult.runnableRequest && !ensureResult.assetRequest) {
+        continue
+      }
+      const assetRequest = ensureResult.runnableRequest ?? ensureResult.assetRequest
+      if (!assetRequest?.workflowId) {
+        if (options.forceRefresh) {
+          throw new Error(lifecycleDiagnostics.join(' ') || `Regenerate did not create a runnable continuity asset workflow for ${target.name || target.nodeId}. Refresh the animatic state and try again.`)
+        }
+        continue
+      }
       const existingRun = assetRequest.latestRunId
         ? outputWorkflowRuns.find((run) => run.id === assetRequest.latestRunId) ?? null
         : outputWorkflowRuns.find((run) => run.workflowId === assetRequest.workflowId) ?? null
@@ -247,6 +207,7 @@ export function useSequenceAnimaticContinuityCommands({
   const runContinuityAssets = useCallback(async (
     model: ContinuityCommandViewModel,
     requestedTargets?: readonly SequenceAnimaticContinuityAssetTargetView[],
+    options: { batchKind?: SequenceAnimaticContinuityAssetRunGroup['batchKind']; forceRefresh?: boolean } = {},
   ) => {
     const runKey = `${model.request.id}:continuity_assets`
     if (busyRunKeys.has(runKey)) return
@@ -256,12 +217,36 @@ export function useSequenceAnimaticContinuityCommands({
         throw new Error('Generate the shot continuity plan first.')
       }
       const targets = (requestedTargets && requestedTargets.length > 0 ? [...requestedTargets] : model.continuityAssetTargets)
-        .filter((target) => target.status === 'missing' || target.status === 'stale' || target.status === 'failed')
+        .filter((target) => options.forceRefresh
+          ? target.status !== 'generating'
+          : target.status === 'missing' || target.status === 'stale' || target.status === 'failed')
       if (targets.length === 0) {
         await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
         return
       }
-      await startContinuityAssetRunGroups(model, continuityAssetRunGroups(model, targets))
+      const plan = planSequenceAnimaticContinuityCommand({
+        model,
+        action: options.forceRefresh ? 'regenerate_node' : options.batchKind === 'spot_camera_grid' ? 'generate_camera_grid' : requestedTargets?.length ? 'generate_node' : 'generate_missing',
+        targets,
+        batchKind: options.batchKind,
+      })
+      if (plan.status !== 'ready') {
+        throw new Error(plan.diagnostics.join(' ') || 'No continuity asset workflows could start.')
+      }
+      setPendingContinuityAssets({
+        masterRequestId: model.request.id,
+        nodeIds: plan.targets.map((target) => target.nodeId),
+        previousAssetKeys: Object.fromEntries(plan.targets.map((target) => [target.nodeId, trimOptionalString(target.assetKey)])),
+        forceRefresh: plan.forceRefresh,
+        startedAt: Date.now(),
+      })
+      const startedCount = await startContinuityAssetRunGroups(model, plan.runGroups, { forceRefresh: plan.forceRefresh })
+      if (startedCount === 0) {
+        setPendingContinuityAssets(null)
+        throw new Error(options.forceRefresh
+          ? 'Regenerate did not start any continuity asset workflows. Refresh the animatic state and try again.'
+          : 'No continuity asset workflows needed to start after refreshing the animatic state.')
+      }
       await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
@@ -273,6 +258,62 @@ export function useSequenceAnimaticContinuityCommands({
       endRun(runKey)
     }
   }, [beginRun, busyRunKeys, endRun, loadAndStoreSequenceAnimaticState, setSequenceAnimaticErrorByKey, startContinuityAssetRunGroups])
+
+  useEffect(() => {
+    if (!pendingContinuityAssets || busyRunKeys.size > 0) return undefined
+    const model = previewModel?.request.id === pendingContinuityAssets.masterRequestId
+      ? previewModel
+      : modelByRequestId.get(pendingContinuityAssets.masterRequestId) ?? null
+    if (!model) return undefined
+    if (Date.now() - pendingContinuityAssets.startedAt > 20 * 60 * 1000) {
+      setPendingContinuityAssets(null)
+      return undefined
+    }
+    const targetByNodeId = new Map(model.continuityAssetTargets.map((target) => [target.nodeId, target] as const))
+    const targets = pendingContinuityAssets.nodeIds
+      .map((nodeId) => targetByNodeId.get(nodeId) ?? null)
+      .filter((target): target is SequenceAnimaticContinuityAssetTargetView => Boolean(target))
+    if (targets.length === 0) {
+      setPendingContinuityAssets(null)
+      return undefined
+    }
+    const allSettled = targets.every((target) => target.status !== 'generating')
+    const allReadyWithUrls = targets.every((target) => target.status === 'ready' && Boolean(target.assetKey && target.assetUrl))
+    const regeneratedTargetsReady = pendingContinuityAssets.forceRefresh
+      ? targets.every((target) => {
+        const previousAssetKey = pendingContinuityAssets.previousAssetKeys[target.nodeId] ?? ''
+        return target.status === 'ready'
+          && Boolean(target.assetKey && target.assetUrl)
+          && (!previousAssetKey || target.assetKey !== previousAssetKey)
+      })
+      : allReadyWithUrls
+    if (regeneratedTargetsReady) {
+      setPendingContinuityAssets(null)
+      return undefined
+    }
+    const failed = allSettled && targets.some((target) => target.status === 'failed')
+    if (failed) {
+      setPendingContinuityAssets(null)
+      return undefined
+    }
+    const timeoutId = window.setTimeout(() => {
+      void loadAndStoreSequenceAnimaticState({ masterRequestId: pendingContinuityAssets.masterRequestId, knownRevision: null })
+        .finally(() => {
+          setPendingContinuityAssets((current) => (
+            current?.masterRequestId === pendingContinuityAssets.masterRequestId
+              ? { ...current }
+              : current
+          ))
+        })
+    }, targets.some((target) => target.status === 'generating') ? 2000 : 1000)
+    return () => window.clearTimeout(timeoutId)
+  }, [
+    busyRunKeys,
+    loadAndStoreSequenceAnimaticState,
+    modelByRequestId,
+    pendingContinuityAssets,
+    previewModel,
+  ])
 
   const runCoverageAnchor = useCallback(async (
     model: ContinuityCommandViewModel,

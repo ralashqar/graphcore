@@ -7,6 +7,7 @@ import {
   continuityNodeCollections,
   continuityVisualDependencyEdges,
   dependencyNodeIdsForKeyframePlan,
+  spotCameraGridNodeId,
 } from './sequenceAnimaticContinuityDependencies.ts'
 
 test('continuity batch layout uses crop-safe 1x1, 1x2, and 2x2 grids', () => {
@@ -35,6 +36,9 @@ test('continuity batch kind supports zones, parent-child scaffolds, temporary ch
     { id: 'prop_chip', nodeKind: 'prop' },
     { id: 'prop_key', nodeKind: 'prop' },
   ]), 'prop_grid')
+  assert.equal(continuityBatchKindForNodes([
+    { id: spotCameraGridNodeId('spot_terminal'), nodeKind: 'spot_camera_grid', spotId: 'spot_terminal' },
+  ]), 'spot_camera_grid')
 })
 
 test('dependency helpers collect scene graph nodes and shot/coverage dependencies', () => {
@@ -55,6 +59,7 @@ test('dependency helpers collect scene graph nodes and shot/coverage dependencie
     'location_set',
     'location_zone',
     'location_spot',
+    'spot_camera_grid',
     'location_viewpoint',
     'temporary_character',
     'prop',
@@ -63,6 +68,8 @@ test('dependency helpers collect scene graph nodes and shot/coverage dependencie
     'world_bridge->set_bridge',
     'set_bridge->zone_console',
     'zone_console->spot_terminal',
+    'zone_console->spot_terminal::camera_grid',
+    'spot_terminal->spot_terminal::camera_grid',
     'spot_terminal->view_terminal',
   ])
   assert.deepEqual(dependencyNodeIdsForKeyframePlan({
@@ -77,5 +84,5 @@ test('dependency helpers collect scene graph nodes and shot/coverage dependencie
         },
       }],
     },
-  }), ['set_bridge', 'zone_console', 'spot_terminal', 'view_terminal', 'temp_reno', 'prop_decoder'])
+  }), ['set_bridge', 'zone_console', 'spot_terminal', 'spot_terminal::camera_grid', 'view_terminal', 'temp_reno', 'prop_decoder'])
 })

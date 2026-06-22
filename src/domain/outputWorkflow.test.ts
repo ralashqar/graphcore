@@ -33,7 +33,9 @@ import {
   continuityAssetStateSchema,
   continuityVisualDependencyEdgeSchema,
   sequenceAnimaticContinuityAssetBatchSchema,
+  sequenceAnimaticContinuityAssetBatchKindSchema,
   sequenceAnimaticContinuityPackV1Schema,
+  sequenceAnimaticCommandLifecycleStatusSchema,
   sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema,
   sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema,
   sequenceAnimaticContinuityBlockDeriveRequestSchema,
@@ -3040,6 +3042,19 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     layout: { rows: 2, columns: 2, cellCount: 2 },
     required: true,
   }).batchKind, 'viewpoint_grid')
+  assert.equal(sequenceAnimaticContinuityAssetBatchKindSchema.parse('spot_camera_grid'), 'spot_camera_grid')
+  assert.equal(sequenceAnimaticContinuityAssetBatchSchema.parse({
+    batchId: 'batch_spot_camera_console',
+    batchKind: 'spot_camera_grid',
+    targetNodeIds: ['angle_console_north', 'angle_console_reverse'],
+    sourceReferenceNodeIds: ['zone_console', 'spot_console'],
+    worldReferenceAssetKeys: [],
+    blockIds: ['block_001'],
+    layout: { rows: 2, columns: 3, cellCount: 2 },
+    generationPolicy: 'spot_camera_grid_v1',
+    referencePolicy: 'zone_and_spot_to_camera_grid',
+    required: true,
+  }).generationPolicy, 'spot_camera_grid_v1')
   assert.equal(sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
     projectId: 'project-1',
     draftId: 'draft-1',
@@ -3063,6 +3078,17 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     nodeId: 'zone_console',
     mode: 'generate',
   }).continuityRequestId, undefined)
+  assert.equal(sequenceAnimaticCommandLifecycleStatusSchema.parse('started'), 'started')
+  const regenerateRequest = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    masterRequestId: 'request-master',
+    nodeId: 'zone_console',
+    mode: 'regenerate',
+    regenerationRequestId: 'refresh-zone-console',
+  })
+  assert.equal(regenerateRequest.mode, 'regenerate')
+  assert.equal(regenerateRequest.regenerationRequestId, 'refresh-zone-console')
   assert.equal(continuityAssetStateSchema.parse({
     status: 'ready',
     inputHash: 'hash-zone-console',
@@ -3082,8 +3108,19 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     required: true,
     evidence: 'Zone belongs to the bridge set.',
   }).relationship, 'contains')
-  assert.equal(sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
+  const continuityAssetEnsureResponse = sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
     ok: true,
+    status: 'blocked',
+    commandLifecycle: {
+      status: 'blocked',
+      requestIds: [],
+      workflowIds: [],
+      runIds: [],
+      targetNodeIds: ['spot_console'],
+      diagnostics: ['Generate parent continuity asset first: Console zone.'],
+      regenerationRequestId: 'refresh-zone-console',
+      providerStartExpected: false,
+    },
     masterRequest: {
       id: 'request-master',
       projectId: 'project-1',
@@ -3120,6 +3157,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
       updatedAt: now,
     },
     assetRequest: null,
+    runnableRequest: null,
     workflow: null,
     nodes: [],
     edges: [],
@@ -3132,7 +3170,11 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
       assetKind: 'location_zone',
     },
     reused: true,
-  }).assetState?.sourceNodeId, 'zone_console')
+  })
+  assert.equal(continuityAssetEnsureResponse.assetState?.sourceNodeId, 'zone_console')
+  assert.equal(continuityAssetEnsureResponse.status, 'blocked')
+  assert.equal(continuityAssetEnsureResponse.commandLifecycle.targetNodeIds[0], 'spot_console')
+  assert.equal(continuityAssetEnsureResponse.runnableRequest, null)
   assert.equal(sequenceAnimaticContinuityPackV1Schema.parse({
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     screenplayAnimaticRole: 'continuity_pack',
@@ -3238,6 +3280,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   const sequenceAnimaticChildRunRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-child-run-runtime.ts'), 'utf8')
   const sequenceAnimaticContinuityBatchSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-batches.ts'), 'utf8')
   const sequenceAnimaticContinuityAssetRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-asset-runtime.ts'), 'utf8')
+  const sequenceAnimaticSpatialPromptSource = readFileSync(resolve(repoRoot, 'src/domain/sequenceAnimaticSpatialPrompt.ts'), 'utf8')
   const sequenceAnimaticContinuityGraphRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-graph-runtime.ts'), 'utf8')
   const sequenceAnimaticOrchestratorRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-orchestrator-runtime.ts'), 'utf8')
   const sequenceAnimaticReferenceRuntimeSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-reference-runtime.ts'), 'utf8')
@@ -3486,8 +3529,21 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Cell 1 is the parent set\/zone\/spot environment reference/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /sanitizeSequenceAnimaticSpatialNodeFields/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Location evidence/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Parent world location guide/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /parent world location guide, zone brief/)
+  assert.match(sequenceAnimaticSpatialPromptSource, /spatial_location_prompt_v4/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /promptDiagnostics/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /physical staging position or architectural sub-location/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Required spot annotations/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /numbered or lettered map markers/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /short readable spot-name label/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /short spot-name labels baked into the map/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Find the marker\/label for/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Use its baked spot labels and markers/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /labeled spot-location source of truth/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /spot_camera_grid/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /attached parent zone map and spot reference/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /2x3 camera-angle grid/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /one \${imageShapeLabel} \${imageSize\.width}x\${imageSize\.height} image/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /do not center a smaller square grid/)
   assert.doesNotMatch(workerSource, /action spot inside the same zone/)
@@ -3497,7 +3553,14 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(keyframeEnsureSource, /continuityBatchLayoutForTargetCount\(targetNodeIds\.length\)/)
   const continuityAssetEnsureSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-continuity-asset-workflow-command.ts'), 'utf8')
   assert.match(continuityAssetEnsureSource, /parent_child_scaffold_grid/)
-  assert.match(continuityAssetEnsureSource, /cellRoles = isParentChildScaffold \? \['parent', \.\.\.batchTargetIds\.slice\(1\)\.map\(\(\) => 'child'\)\]/)
+  assert.match(continuityAssetEnsureSource, /cameraCellRoles = \['north', 'east', 'south', 'west', 'high', 'low', 'insert', 'reverse', 'wide'\]/)
+  assert.match(continuityAssetEnsureSource, /isParentChildScaffold \? \['parent', \.\.\.batchTargetIds\.slice\(1\)\.map\(\(\) => 'child'\)\]/)
+  assert.match(continuityAssetEnsureSource, /spot_camera_grid_v1/)
+  assert.match(continuityAssetEnsureSource, /'spot_camera_grid'\]\.includes\(assetKind\)/)
+  assert.match(continuityAssetEnsureSource, /descendantContinuityNodeIds/)
+  assert.match(continuityAssetEnsureSource, /staleDownstreamNodeIds/)
+  assert.match(continuityAssetEnsureSource, /worldLocationVisualGuideForEntity/)
+  assert.match(continuityAssetEnsureSource, /worldLocationVisualGuide/)
   assert.match(continuityAssetEnsureSource, /parentReferenceAssetKeys/)
   assert.match(continuityAssetEnsureSource, /spatialPromptPolicyVersion/)
   assert.match(continuityAssetEnsureSource, /Generate parent continuity asset first/)
@@ -3542,6 +3605,7 @@ test('sequence animatic keyframe UI routes prereqs through keyframe orchestrator
   const graphHookSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/useSequenceAnimaticGraphCommands.ts'), 'utf8')
   const keyframeHookSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/useSequenceAnimaticKeyframeCommands.ts'), 'utf8')
   const continuityHookSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/useSequenceAnimaticContinuityCommands.ts'), 'utf8')
+  const continuityPlannerSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticContinuityCommandPlanner.ts'), 'utf8')
   assert.match(pageSource, /useSequenceAnimaticWorkflowCommands/)
   assert.match(workflowControllerSource, /useSequenceAnimaticGraphCommands/)
   assert.match(workflowControllerSource, /useSequenceAnimaticKeyframeCommands/)
@@ -3568,7 +3632,9 @@ test('sequence animatic keyframe UI routes prereqs through keyframe orchestrator
   assert.match(progressPresentationSource, /function sequenceAnimaticShotProgressPreview/)
   assert.match(progressPresentationSource, /Coverage anchor ready/)
   assert.doesNotMatch(pageSource, /shotCoverageAnchor\?\.characterRefIds/)
-  assert.match(continuityHookSource, /scaffoldGroups\.push\(\{ targets: groupTargets, isBatch: true \}\)/)
+  assert.match(continuityHookSource, /planSequenceAnimaticContinuityCommand/)
+  assert.match(keyframeHookSource, /planSequenceAnimaticContinuityCommand/)
+  assert.match(continuityPlannerSource, /scaffoldGroups\.push\(\{ targets: groupTargets, isBatch: true \}\)/)
 })
 
 test('sequence animatic shot production graph resolves shared refs before keyframe and video', () => {
@@ -4045,7 +4111,8 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(sceneBoardCoverageHookSource, /startZoneCoverageBoardRuns/)
   assert.match(sceneBoardWorkflowHookSource, /board\.prepStages\.reduce/)
   assert.match(sceneBoardProjectionSource, /index < targets\.length; index \+= 9/)
-  assert.match(continuityHookSource, /index < group\.length; index \+= 9/)
+  const continuityPlannerSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticContinuityCommandPlanner.ts'), 'utf8')
+  assert.match(continuityPlannerSource, /index < group\.length; index \+= 9/)
   assert.match(sceneBoardProjectionSource, /Math\.ceil\(coverageShots\.length \/ 9\)/)
   assert.match(pageSource, /Scene Board/)
   assert.match(coverageAnchorModalSource, /Open Scene Board/)
@@ -4383,7 +4450,7 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   const coverageIndexSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticCoverageIndexes.ts'), 'utf8')
   const sceneBoardCanvasSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/scene-board/SceneBoardCanvas.tsx'), 'utf8')
   const sceneBoardCoverageHookSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/scene-board/useSceneBoardCoverageCommands.ts'), 'utf8')
-  const continuityHookSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/useSequenceAnimaticContinuityCommands.ts'), 'utf8')
+  const continuityPlannerSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticContinuityCommandPlanner.ts'), 'utf8')
   const blockTimelineSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/SequenceAnimaticBlockTimeline.tsx'), 'utf8')
 
   assert.match(sceneBoardPackSource, /sequence_animatic_zone_coverage_board_brief/)
@@ -4480,8 +4547,8 @@ test('sequence animatic zone coverage boards generate 3x3 reusable coverage cell
   assert.match(sceneBoardCoverageHookSource, /requestIsActive\(request, existingRun\)/)
   assert.doesNotMatch(pageSource, /candidate\.missingCoverageCount === 0 \|\| candidate\.shots\.some\(\(tile\) => tile\.coverageReady\)/)
   assert.doesNotMatch(sceneBoardCanvasSource, /missingCoverageCount === 0 \|\| .*some\(\(tile\) => tile\.coverageReady\)/)
-  assert.match(continuityHookSource, /slice\(0, 8\)/)
-  assert.match(continuityHookSource, /index \+= 9/)
+  assert.match(continuityPlannerSource, /slice\(0, 8\)/)
+  assert.match(continuityPlannerSource, /index \+= 9/)
   assert.doesNotMatch(pageSource, /runMode: 'sequence_animatic_shot_production_coverage_anchor'[\s\S]*handleRegenerateSequenceAnimaticSceneCoverageAnchors/)
 })
 
@@ -5448,6 +5515,7 @@ test('sequence animatic shot videos use cropped panel keyframe mini graphs', () 
   const shotVideoHookSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/useSequenceAnimaticShotVideoCommands.ts'), 'utf8')
   const progressPresentationSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticProgressPresentation.ts'), 'utf8')
   const runtimePresentationSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticRuntimePresentation.ts'), 'utf8')
+  const workStatusSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticWorkStatus.ts'), 'utf8')
   const runtimeIndexSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticRuntimeIndexes.ts'), 'utf8')
   const graphHostSource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputGraphOverlayHost.tsx'), 'utf8')
   const flyWorkerSource = readFileSync(resolve(repoRoot, 'workers/world-generation/main.ts'), 'utf8')
@@ -5512,7 +5580,8 @@ test('sequence animatic shot videos use cropped panel keyframe mini graphs', () 
   assert.match(runtimeIndexSource, /readLooseArray\(metadata\.targetNodeIds\)/)
   assert.doesNotMatch(worldGraphSource, /sequence_animatic_continuity_asset_batch[\s\S]{0,260}assetStateByNodeId/)
   assert.match(animaticViewModelSource, /sequence_animatic_continuity_asset_batch[\s\S]{0,260}assetStateByNodeId/)
-  assert.match(animaticViewModelSource, /status === 'generating' && \(requestTerminal \|\| TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES\.has/)
+  assert.match(animaticViewModelSource, /buildSequenceAnimaticWorkStatus/)
+  assert.match(workStatusSource, /request\?\.status === 'completed' \|\| request\?\.status === 'completed_with_errors'\) return 'missing'/)
   assert.match(graphHostSource, /previousDisplayRunRef/)
   assert.match(graphHostSource, /lastGoodGraphStateRef/)
   assert.match(graphHostSource, /outputWorkflowStepHasActiveProvider/)

@@ -880,7 +880,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       if (!parentId || !graphNodeById.has(parentId)) return true
       if (assetStateReady(parentId)) return true
       const kind = readText(node.nodeKind)
-      return kind !== 'location_zone' && kind !== 'location_spot' && kind !== 'location_viewpoint' && kind !== 'location_angle'
+      return kind !== 'location_zone' && kind !== 'location_spot' && kind !== 'location_viewpoint' && kind !== 'location_angle' && kind !== 'spot_camera_grid'
     })
     for (const parentId of parentMissingIds) {
       if (!handledNodeIds.has(parentId)) initialRunnableIds.push(parentId)
@@ -890,7 +890,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       const node = graphNodeById.get(nodeId)
       if (!node) continue
       const nodeKind = readText(node.nodeKind)
-      if (nodeKind !== 'location_zone' && nodeKind !== 'location_spot' && nodeKind !== 'location_viewpoint' && nodeKind !== 'location_angle') continue
+      if (nodeKind !== 'location_zone' && nodeKind !== 'location_spot' && nodeKind !== 'location_viewpoint' && nodeKind !== 'location_angle' && nodeKind !== 'spot_camera_grid') continue
       const parentId = continuityNodeParentId(node)
       if (!parentId) continue
       allGraphNodes

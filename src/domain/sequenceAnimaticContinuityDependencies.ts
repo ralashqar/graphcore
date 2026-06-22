@@ -16,11 +16,39 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(readText).filter(Boolean) : []
 }
 
+export function spotCameraGridNodeId(spotId: string): string {
+  const cleanSpotId = readText(spotId)
+  return cleanSpotId ? `${cleanSpotId}::camera_grid` : ''
+}
+
 export function continuityNodeCollections(graph: LooseRecord): LooseRecord[] {
+  const spots = readArray(graph.spots).map(asRecord)
+  const spotCameraGridNodes = spots.map((spot) => {
+    const spotId = readText(spot.id)
+    const gridId = spotCameraGridNodeId(spotId)
+    const spotName = readText(spot.name) || readText(spot.title) || spotId
+    return {
+      id: gridId,
+      name: spotName ? `${spotName} camera grid` : 'Camera grid',
+      nodeKind: 'spot_camera_grid',
+      assetKind: 'spot_camera_grid',
+      parentId: spotId,
+      spotId,
+      spotIds: [spotId].filter(Boolean),
+      zoneId: readText(spot.zoneId),
+      setId: readText(spot.setId),
+      worldLocationRefId: readText(spot.worldLocationRefId) || readText(spot.baseLocationRefId),
+      storyboardBlockIds: readStringArray(spot.storyboardBlockIds ?? spot.storyboard_block_ids ?? spot.blockIds ?? spot.block_ids),
+      shotIds: readStringArray(spot.shotIds ?? spot.shot_ids),
+      visualBrief: `Reusable multi-angle camera grid around ${spotName || 'this spot'}, grounded in the parent zone map and local spot reference.`,
+      summary: `Reusable multi-angle camera grid around ${spotName || 'this spot'}.`,
+    }
+  }).filter((entry) => readText(entry.id))
   const nodes: LooseRecord[] = [
     ...readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_set', assetKind: 'location_set' })),
     ...readArray(graph.zones).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_zone', assetKind: 'location_zone' })),
-    ...readArray(graph.spots).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_spot', assetKind: 'location_spot' })),
+    ...spots.map((entry) => ({ ...entry, nodeKind: 'location_spot', assetKind: 'location_spot' })),
+    ...spotCameraGridNodes,
     ...readArray(graph.viewpoints).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_viewpoint', assetKind: 'location_angle' })),
     ...readArray(graph.angles).map((entry) => ({ ...asRecord(entry), nodeKind: 'location_angle', assetKind: 'location_angle' })),
     ...readArray(graph.assetAnchors ?? graph.asset_anchors).map((entry) => {
@@ -44,7 +72,13 @@ export function continuityVisualDependencyEdges(graph: LooseRecord): LooseRecord
   }
   readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map(asRecord).forEach((set) => push(readText(set.worldLocationRefId), readText(set.id), 'world_location_to_set', true))
   readArray(graph.zones).map(asRecord).forEach((zone) => push(readText(zone.setId), readText(zone.id), 'set_to_zone', true))
-  readArray(graph.spots).map(asRecord).forEach((spot) => push(readText(spot.zoneId), readText(spot.id), 'zone_to_spot', true))
+  readArray(graph.spots).map(asRecord).forEach((spot) => {
+    const spotId = readText(spot.id)
+    const gridId = spotCameraGridNodeId(spotId)
+    push(readText(spot.zoneId), spotId, 'zone_to_spot', true)
+    push(readText(spot.zoneId), gridId, 'zone_to_spot_camera_grid', true)
+    push(spotId, gridId, 'spot_to_camera_grid', true)
+  })
   const viewpoints = readArray(graph.viewpoints).length > 0 ? readArray(graph.viewpoints) : readArray(graph.angles)
   viewpoints.map(asRecord).forEach((angle) => {
     push(readText(angle.setId), readText(angle.id), 'set_to_angle', true)
@@ -79,6 +113,15 @@ export function continuityNodeParentId(node: LooseRecord): string {
       || readText(node.worldLocationRefId)
       || readText(node.baseLocationRefId)
   }
+  if (nodeKind === 'spot_camera_grid') {
+    return readText(node.spotId)
+      || readStringArray(node.spotIds)[0]
+      || readText(node.parentId)
+      || readText(node.zoneId)
+      || readText(node.setId)
+      || readText(node.worldLocationRefId)
+      || readText(node.baseLocationRefId)
+  }
   if (nodeKind === 'location_zone') return readText(node.setId) || readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
   if (nodeKind === 'location_set') return readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
   return readText(node.parentId) || readText(node.parent_id)
@@ -104,6 +147,7 @@ export function continuityBatchKindForNodes(nodes: readonly LooseRecord[]): stri
   if (kinds.length !== 1) return ''
   if (kinds[0] === 'location_zone') return 'location_zone_board'
   if (kinds[0] === 'location_spot') return 'spot_grid'
+  if (kinds[0] === 'spot_camera_grid') return 'spot_camera_grid'
   if (kinds[0] === 'location_viewpoint' || kinds[0] === 'location_angle') return 'viewpoint_grid'
   if (kinds[0] === 'temporary_character') return 'temp_character_grid'
   if (kinds[0] === 'prop') return 'prop_grid'
@@ -123,6 +167,13 @@ export function continuityAtlasLayoutForTargetCount(count: number): { rows: numb
   return { rows: 3, columns: 3, cellCount }
 }
 
+export function continuitySpotCameraGridLayoutForTargetCount(count: number): { rows: number; columns: number; cellCount: number } {
+  const cellCount = Math.max(1, Math.min(9, Math.floor(count) || 1))
+  return cellCount <= 6
+    ? { rows: 2, columns: 3, cellCount }
+    : { rows: 3, columns: 3, cellCount }
+}
+
 export function continuityNodeUsesParent(node: LooseRecord, parentId: string): boolean {
   if (!parentId) return false
   if (readText(node.id) === parentId) return false
@@ -131,11 +182,16 @@ export function continuityNodeUsesParent(node: LooseRecord, parentId: string): b
 
 export function shotSceneBindingNodeIds(shot: LooseRecord): string[] {
   const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+  const primarySpotId = readText(binding.primarySpotId ?? shot.primarySpotId)
+  const spotIds = [
+    primarySpotId,
+    ...readStringArray(binding.spotIds ?? shot.spotIds),
+  ].filter(Boolean)
   return [
     readText(binding.setId ?? shot.setId),
     readText(binding.zoneId ?? shot.zoneId),
-    readText(binding.primarySpotId ?? shot.primarySpotId),
-    ...readStringArray(binding.spotIds ?? shot.spotIds),
+    ...spotIds,
+    ...spotIds.map(spotCameraGridNodeId),
     readText(binding.viewpointId ?? shot.viewpointId),
     readText(binding.angleId ?? shot.angleId),
   ].filter(Boolean)
@@ -170,11 +226,16 @@ export function shotReferenceNodeIds(shot: LooseRecord, graphNodeIds: Set<string
 }
 
 export function coverageSetupNodeIds(setup: LooseRecord): string[] {
+  const primarySpotId = readText(setup.primarySpotId ?? setup.primary_spot_id)
+  const spotIds = [
+    primarySpotId,
+    ...readStringArray(setup.spotIds ?? setup.spot_ids),
+  ].filter(Boolean)
   return [
     readText(setup.setId ?? setup.set_id),
     readText(setup.zoneId ?? setup.zone_id),
-    readText(setup.primarySpotId ?? setup.primary_spot_id),
-    ...readStringArray(setup.spotIds ?? setup.spot_ids),
+    ...spotIds,
+    ...spotIds.map(spotCameraGridNodeId),
     readText(setup.viewpointId ?? setup.viewpoint_id),
     ...readStringArray(setup.characterRefIds ?? setup.character_ref_ids),
     ...readStringArray(setup.visibleCharacterRefIds ?? setup.visible_character_ref_ids),

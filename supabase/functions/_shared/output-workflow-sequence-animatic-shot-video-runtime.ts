@@ -34,6 +34,111 @@ export const sequenceAnimaticShotVideoTimingSchema = z.object({
   }),
 })
 
+const emptyShotVisualCallSheet = {
+  goal: {
+    shotTitle: '',
+    purpose: '',
+    emotionalBeat: '',
+    continuityLink: '',
+  },
+  camera: {
+    framing: '',
+    angle: '',
+    lens: '',
+    movement: '',
+    startFrame: '',
+    endFrame: '',
+    screenDirectionRule: '',
+    horizonAxisLock: '',
+  },
+  composition: {
+    subjectPlacement: '',
+    focusTarget: '',
+    foregroundBackgroundAnchors: '',
+    visibilityRules: '',
+  },
+  action: {
+    primary: '',
+    secondaryMotion: '',
+    startBeat: '',
+    endState: '',
+    settle: '',
+  },
+  performance: {
+    body: '',
+    face: '',
+    gaze: '',
+    dialogueDelivery: '',
+    voice: '',
+  },
+  environment: {
+    locationContinuity: '',
+    lighting: '',
+    referenceContinuity: '',
+    cameraGridUse: '',
+  },
+  video: {
+    durationSeconds: 3,
+    motionIntensity: '',
+    audioPolicy: '',
+    artifactBan: '',
+  },
+}
+
+export const sequenceAnimaticShotVisualCallSheetV1Schema = z.object({
+  version: z.literal('shot_visual_call_sheet_v1').default('shot_visual_call_sheet_v1'),
+  goal: z.object({
+    shotTitle: z.string().max(160).default(''),
+    purpose: z.string().max(260).default(''),
+    emotionalBeat: z.string().max(220).default(''),
+    continuityLink: z.string().max(220).default(''),
+  }).default(emptyShotVisualCallSheet.goal),
+  camera: z.object({
+    framing: z.string().max(180).default(''),
+    angle: z.string().max(160).default(''),
+    lens: z.string().max(140).default(''),
+    movement: z.string().max(220).default(''),
+    startFrame: z.string().max(220).default(''),
+    endFrame: z.string().max(220).default(''),
+    screenDirectionRule: z.string().max(220).default(''),
+    horizonAxisLock: z.string().max(220).default(''),
+  }).default(emptyShotVisualCallSheet.camera),
+  composition: z.object({
+    subjectPlacement: z.string().max(240).default(''),
+    focusTarget: z.string().max(180).default(''),
+    foregroundBackgroundAnchors: z.string().max(260).default(''),
+    visibilityRules: z.string().max(260).default(''),
+  }).default(emptyShotVisualCallSheet.composition),
+  action: z.object({
+    primary: z.string().max(320).default(''),
+    secondaryMotion: z.string().max(260).default(''),
+    startBeat: z.string().max(220).default(''),
+    endState: z.string().max(220).default(''),
+    settle: z.string().max(180).default(''),
+  }).default(emptyShotVisualCallSheet.action),
+  performance: z.object({
+    body: z.string().max(260).default(''),
+    face: z.string().max(220).default(''),
+    gaze: z.string().max(220).default(''),
+    dialogueDelivery: z.string().max(260).default(''),
+    voice: z.string().max(260).default(''),
+  }).default(emptyShotVisualCallSheet.performance),
+  environment: z.object({
+    locationContinuity: z.string().max(320).default(''),
+    lighting: z.string().max(220).default(''),
+    referenceContinuity: z.string().max(320).default(''),
+    cameraGridUse: z.string().max(220).default(''),
+  }).default(emptyShotVisualCallSheet.environment),
+  video: z.object({
+    durationSeconds: z.number().min(1).max(15).default(3),
+    motionIntensity: z.string().max(180).default(''),
+    audioPolicy: z.string().max(260).default(''),
+    artifactBan: z.string().max(260).default(''),
+  }).default(emptyShotVisualCallSheet.video),
+})
+
+export type SequenceAnimaticShotVisualCallSheetV1 = z.infer<typeof sequenceAnimaticShotVisualCallSheetV1Schema>
+
 function asRecord(value: unknown): LooseRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as LooseRecord : {}
 }
@@ -49,6 +154,26 @@ function readStringArray(value: unknown): string[] {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+}
+
+function readReferenceRole(entry: LooseRecord) {
+  return readText(entry.role).toLowerCase()
+}
+
+function referenceLabel(entry: LooseRecord) {
+  return readText(entry.label) || readText(entry.name) || readText(entry.imageTag) || readText(entry.tag)
+}
+
+function referenceLine(entry: LooseRecord) {
+  return readText(entry.line) || [
+    readText(entry.tag) || readText(entry.imageTag),
+    referenceLabel(entry),
+    readText(entry.guidance) || readText(entry.role),
+  ].filter(Boolean).join(' ')
+}
+
+function joinLimited(values: string[], maxWords = 42) {
+  return compactSeedanceControlText(values.filter(Boolean).join('; '), maxWords)
 }
 
 export function estimateSequenceShotVideoDurationSeconds(shot: LooseRecord) {
@@ -92,6 +217,148 @@ export function seedanceMotionIntensityForShot(shot: LooseRecord) {
   if (/\b(run|rush|dash|skid|climb|fall|spin|turn|grab|throw|slam)\b/i.test(text)) return 'moderate intensity; keep movement readable with natural follow-through'
   if (/\b(look|glance|listen|hold|wait|breathe|smile|frown|hesitate|realize|watch|stare)\b/i.test(text)) return 'low intensity; subtle face, eye, breath, ear, cloth, and prop micro-motion'
   return 'controlled intensity; natural physical motion and stable final settle'
+}
+
+export function buildSequenceAnimaticShotVisualCallSheet(input: {
+  shot: LooseRecord
+  coverageSetup?: LooseRecord
+  coverageAnchor?: LooseRecord
+  previousKeyframe?: LooseRecord
+  storyboardPanel?: LooseRecord
+  referenceManifest?: unknown[]
+  directedControls?: unknown
+  durationSeconds?: number
+  sceneStateText?: string
+}) {
+  const shot = input.shot
+  const camera = asRecord(shot.camera)
+  const coverageSetup = asRecord(input.coverageSetup)
+  const coverageAnchor = asRecord(input.coverageAnchor)
+  const controls = seedanceDirectedControlsSchema.safeParse(input.directedControls).success
+    ? seedanceDirectedControlsSchema.parse(input.directedControls)
+    : buildSeedanceDirectedControlsFromShot({ shot })
+  const rawPerformanceBeats = shot.performanceBeats ?? shot.performance
+  const performanceBeats = Array.isArray(rawPerformanceBeats)
+    ? rawPerformanceBeats.map(asRecord)
+    : []
+  const dialogue = Array.isArray(shot.dialogue) ? shot.dialogue.map(asRecord) : []
+  const references = Array.isArray(input.referenceManifest) ? input.referenceManifest.map(asRecord) : []
+  const locationRefs = references.filter((entry) => /(location|set|zone|spot|viewpoint)/i.test(readReferenceRole(entry)))
+  const cameraGridRefs = references.filter((entry) => /camera[_ -]?grid|angle[_ -]?coverage/i.test(`${readReferenceRole(entry)} ${referenceLabel(entry)} ${referenceLine(entry)}`))
+  const continuityLink = asRecord(shot.continuityLink)
+  const coverageAnchorText = readText(coverageAnchor.assetKey)
+    ? 'Match coverage anchor camera position, horizon, screen direction, and subject placement.'
+    : ''
+  const setupText = [
+    readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief),
+    readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction),
+    readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief),
+  ].filter(Boolean)
+  const bodyPerformance = performanceBeats
+    .map((beat) => [readText(beat.bodyLanguage), readText(beat.gesture), readText(beat.description)].filter(Boolean).join(', '))
+    .filter(Boolean)
+  const facePerformance = performanceBeats
+    .map((beat) => [readText(beat.emotion), readText(beat.facialExpression)].filter(Boolean).join(', '))
+    .filter(Boolean)
+  const gazePerformance = performanceBeats.map((beat) => readText(beat.gaze)).filter(Boolean)
+  const dialogueDelivery = dialogue
+    .map((line) => [readText(line.speakerName) || readText(line.speakerRefId), readText(line.emotion), readText(line.text)].filter(Boolean).join(': '))
+    .filter(Boolean)
+  const primaryAction = readText(shot.action) || readText(shot.description) || readText(shot.storyboardPanelPrompt) || readText(shot.title)
+  const videoDirection = readText(shot.videoDirection)
+  const screenDirectionRule = readText(camera.screenDirectionRule) || readText(shot.screenDirectionRule) || readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)
+  return sequenceAnimaticShotVisualCallSheetV1Schema.parse({
+    version: 'shot_visual_call_sheet_v1',
+    goal: {
+      shotTitle: readText(shot.title),
+      purpose: joinLimited([readText(shot.coverageIntent), primaryAction], 34),
+      emotionalBeat: joinLimited([readText(shot.mood), readText(shot.caption), ...facePerformance.slice(0, 2)], 28),
+      continuityLink: joinLimited([readText(continuityLink.mode), readText(continuityLink.description)], 28),
+    },
+    camera: {
+      framing: compactSeedanceControlText(readText(camera.framing), 18),
+      angle: compactSeedanceControlText(readText(camera.angle), 16),
+      lens: compactSeedanceControlText(readText(camera.lens), 14),
+      movement: compactSeedanceControlText(readText(camera.movement) || controls.cameraMotion, 22),
+      startFrame: joinLimited([coverageAnchorText, readText(asRecord(input.storyboardPanel).prompt)], 28),
+      endFrame: compactSeedanceControlText(videoDirection || primaryAction, 28),
+      screenDirectionRule: compactSeedanceControlText(screenDirectionRule, 20),
+      horizonAxisLock: coverageAnchorText || (screenDirectionRule ? 'Preserve the established screen axis and horizon.' : ''),
+    },
+    composition: {
+      subjectPlacement: joinLimited([coverageAnchorText, ...setupText], 32),
+      focusTarget: compactSeedanceControlText(controls.focusTarget || readText(shot.title), 16),
+      foregroundBackgroundAnchors: joinLimited(locationRefs.slice(0, 3).map(referenceLine), 38),
+      visibilityRules: compactSeedanceControlText(controls.visibility, 26),
+    },
+    action: {
+      primary: compactSeedanceControlText(primaryAction, 42),
+      secondaryMotion: compactSeedanceControlText(controls.subjectMotion, 30),
+      startBeat: compactSeedanceControlText(readText(asRecord(input.previousKeyframe).assetKey) ? 'Continue from the previous keyframe state.' : primaryAction, 24),
+      endState: compactSeedanceControlText(videoDirection || primaryAction, 28),
+      settle: 'End on a readable settled pose or camera hold unless the shot explicitly cuts mid-action.',
+    },
+    performance: {
+      body: joinLimited(bodyPerformance, 30),
+      face: joinLimited(facePerformance, 26),
+      gaze: joinLimited(gazePerformance, 22),
+      dialogueDelivery: joinLimited(dialogueDelivery, 34),
+      voice: compactSeedanceControlText(controls.voice, 28),
+    },
+    environment: {
+      locationContinuity: joinLimited([readText(input.sceneStateText), ...locationRefs.slice(0, 4).map(referenceLine)], 44),
+      lighting: compactSeedanceControlText(readText(shot.lighting) || readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief), 24),
+      referenceContinuity: joinLimited(references.slice(0, 6).map(referenceLine), 46),
+      cameraGridUse: cameraGridRefs.length > 0
+        ? 'Use the spot camera grid for angle vocabulary and screen direction; do not render the grid layout or multiple cells.'
+        : '',
+    },
+    video: {
+      durationSeconds: Math.max(1, Math.min(15, Number(input.durationSeconds) || estimateSequenceShotVideoDurationSeconds(shot))),
+      motionIntensity: compactSeedanceControlText(controls.motionIntensity || seedanceMotionIntensityForShot(shot), 24),
+      audioPolicy: 'Scripted dialogue and direct diegetic sound only; no music or ambience bed.',
+      artifactBan: 'No labels, captions, subtitles, UI, watermarks, board arrows, gutters, or map/grid artifacts.',
+    },
+  })
+}
+
+export function formatSequenceAnimaticShotVisualCallSheetForPrompt(callSheet: unknown) {
+  const sheet = sequenceAnimaticShotVisualCallSheetV1Schema.parse(callSheet)
+  return [
+    [sheet.goal.shotTitle, sheet.goal.purpose].filter(Boolean).join(' - '),
+    sheet.goal.emotionalBeat ? `Director beat: ${sheet.goal.emotionalBeat}.` : '',
+    sheet.goal.continuityLink ? `Continuity link: ${sheet.goal.continuityLink}.` : '',
+    formatSequenceAnimaticShotVisualCallSheetCameraPlan(sheet),
+    [sheet.composition.subjectPlacement, sheet.composition.focusTarget, sheet.composition.foregroundBackgroundAnchors, sheet.composition.visibilityRules]
+      .filter(Boolean).length > 0
+      ? `Composition: ${[sheet.composition.subjectPlacement, sheet.composition.focusTarget, sheet.composition.foregroundBackgroundAnchors, sheet.composition.visibilityRules].filter(Boolean).join('; ')}.`
+      : '',
+    [sheet.action.primary, sheet.action.secondaryMotion, sheet.action.endState, sheet.action.settle]
+      .filter(Boolean).length > 0
+      ? `Action: ${[sheet.action.primary, sheet.action.secondaryMotion, sheet.action.endState, sheet.action.settle].filter(Boolean).join('; ')}.`
+      : '',
+    [sheet.performance.body, sheet.performance.face, sheet.performance.gaze, sheet.performance.dialogueDelivery, sheet.performance.voice]
+      .filter(Boolean).length > 0
+      ? `Performance: ${[sheet.performance.body, sheet.performance.face, sheet.performance.gaze, sheet.performance.dialogueDelivery, sheet.performance.voice].filter(Boolean).join('; ')}.`
+      : '',
+    [sheet.environment.locationContinuity, sheet.environment.lighting, sheet.environment.cameraGridUse]
+      .filter(Boolean).length > 0
+      ? `Environment: ${[sheet.environment.locationContinuity, sheet.environment.lighting, sheet.environment.cameraGridUse].filter(Boolean).join('; ')}.`
+      : '',
+  ].filter(Boolean).join('\n')
+}
+
+export function formatSequenceAnimaticShotVisualCallSheetCameraPlan(callSheet: unknown) {
+  const sheet = sequenceAnimaticShotVisualCallSheetV1Schema.parse(callSheet)
+  const camera = [
+    sheet.camera.framing ? `framing ${sheet.camera.framing}` : '',
+    sheet.camera.angle ? `angle ${sheet.camera.angle}` : '',
+    sheet.camera.lens ? `lens ${sheet.camera.lens}` : '',
+    sheet.camera.movement ? `movement ${sheet.camera.movement}` : '',
+    sheet.camera.screenDirectionRule ? `screen direction ${sheet.camera.screenDirectionRule}` : '',
+    sheet.camera.horizonAxisLock ? `axis ${sheet.camera.horizonAxisLock}` : '',
+  ].filter(Boolean).join('; ')
+  return camera ? `Camera plan: ${camera}.` : ''
 }
 
 export function buildSeedanceDirectedControlsFromShot(input: {

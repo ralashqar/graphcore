@@ -118,6 +118,17 @@ export const sequenceAnimaticContinuityGraphSetSchema = z.object({
   storyboardBlockIds: z.array(z.string()).default([]),
 })
 
+export const sequenceAnimaticContinuityGraphPoiHintSchema = z.object({
+  id: z.string().default(''),
+  label: z.string().default(''),
+  targetId: z.string().default(''),
+  targetKind: z.enum(['spot', 'viewpoint', 'angle', 'entrance', 'landmark', 'sightline']).default('spot'),
+  x: z.number().min(0).max(100).default(50),
+  y: z.number().min(0).max(100).default(50),
+  directionLabel: z.string().default(''),
+  note: z.string().default(''),
+})
+
 export const sequenceAnimaticContinuityGraphZoneSchema = z.object({
   id: z.string(),
   setId: z.string(),
@@ -126,6 +137,12 @@ export const sequenceAnimaticContinuityGraphZoneSchema = z.object({
   visualBrief: z.string().default(''),
   shotIds: z.array(z.string()).default([]),
   storyboardBlockIds: z.array(z.string()).default([]),
+  poiHints: z.array(sequenceAnimaticContinuityGraphPoiHintSchema).default([]),
+  entrances: z.array(z.string()).default([]),
+  sightlines: z.array(z.string()).default([]),
+  adjacencyHints: z.array(z.string()).default([]),
+  lightingDirection: z.string().default(''),
+  screenDirectionRule: z.string().default(''),
 })
 
 export const sequenceAnimaticContinuityGraphSpotSchema = z.object({
@@ -136,6 +153,14 @@ export const sequenceAnimaticContinuityGraphSpotSchema = z.object({
   name: z.string(),
   visualBrief: z.string().default(''),
   landmarks: z.array(z.string()).default([]),
+  mapX: z.number().min(0).max(100).nullable().default(null),
+  mapY: z.number().min(0).max(100).nullable().default(null),
+  directionLabel: z.string().default(''),
+  entrances: z.array(z.string()).default([]),
+  sightlines: z.array(z.string()).default([]),
+  adjacencyHints: z.array(z.string()).default([]),
+  lightingDirection: z.string().default(''),
+  screenDirectionRule: z.string().default(''),
   shotIds: z.array(z.string()).default([]),
   storyboardBlockIds: z.array(z.string()).default([]),
 })
@@ -428,12 +453,20 @@ export const sequenceAnimaticShotContinuityStreamSceneGraphRecordSchema = z.obje
   zoneId: z.string().default(''),
   spotIds: z.array(z.string()).default([]),
   landmarks: z.array(z.string()).default([]),
+  poiHints: z.array(sequenceAnimaticContinuityGraphPoiHintSchema).default([]),
+  mapX: z.number().min(0).max(100).nullable().default(null),
+  mapY: z.number().min(0).max(100).nullable().default(null),
+  directionLabel: z.string().default(''),
+  entrances: z.array(z.string()).default([]),
+  sightlines: z.array(z.string()).default([]),
+  adjacencyHints: z.array(z.string()).default([]),
   framing: z.string().default(''),
   cameraPosition: z.string().default(''),
   facingDirection: z.string().default(''),
   subjectPosition: z.string().default(''),
   visibleLandmarks: z.array(z.string()).default([]),
   lightingDirection: z.string().default(''),
+  screenDirectionRule: z.string().default(''),
   shotIds: z.array(z.string()).default([]),
   storyboardBlockIds: z.array(z.string()).default([]),
   blockIds: z.array(z.string()).default([]),

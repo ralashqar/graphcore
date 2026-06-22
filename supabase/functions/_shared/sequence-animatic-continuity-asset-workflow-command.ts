@@ -18,6 +18,7 @@ import {
   continuityNodeCollections,
   continuityNodeParentId,
   continuityNodeUsesParent,
+  continuitySpotCameraGridLayoutForTargetCount,
   continuityVisualDependencyEdges,
 } from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
 import {
@@ -113,6 +114,44 @@ function zoneMapPoiLinesForNode(input: {
     const brief = compactPromptLine(sanitized.brief || readText(node.visualBrief) || readText(node.summary), 140)
     return brief ? `${name} (${kind}): ${brief}` : `${name} (${kind})`
   }).filter(Boolean)
+}
+
+function descendantContinuityNodeIds(input: {
+  graphNodes: readonly Record<string, unknown>[]
+  rootNodeIds: readonly string[]
+}) {
+  const rootIds = new Set(input.rootNodeIds.map(readText).filter(Boolean))
+  if (rootIds.size === 0) return new Set<string>()
+  const childrenByParentId = new Map<string, Record<string, unknown>[]>()
+  for (const node of input.graphNodes) {
+    const parentId = continuityNodeParentId(node)
+    if (!parentId) continue
+    childrenByParentId.set(parentId, [...(childrenByParentId.get(parentId) ?? []), node])
+  }
+  const descendants = new Set<string>()
+  const visit = (nodeId: string) => {
+    for (const child of childrenByParentId.get(nodeId) ?? []) {
+      const childId = readText(child.id)
+      if (!childId || descendants.has(childId) || rootIds.has(childId)) continue
+      descendants.add(childId)
+      visit(childId)
+    }
+  }
+  rootIds.forEach(visit)
+  return descendants
+}
+
+function continuityAssetRequestNodeIds(request: { metadata: unknown }) {
+  const metadata = asRecord(request.metadata)
+  const assetState = asRecord(metadata.assetState ?? metadata.asset_state)
+  const assetStateByNodeId = asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)
+  return new Set([
+    readText(metadata.targetNodeId),
+    readText(assetState.sourceNodeId),
+    ...readStringArray(metadata.targetNodeIds),
+    ...readStringArray(asRecord(metadata.batch).targetNodeIds),
+    ...Object.keys(assetStateByNodeId).map(readText),
+  ].filter(Boolean))
 }
 
 function readArtifactMetadataRecord(
@@ -229,6 +268,40 @@ function assetEntityForKey(assetKey: string, label: string) {
   }
 }
 
+function worldLocationVisualGuideForEntity(entity: Record<string, unknown> | null) {
+  if (!entity) return ''
+  const metadata = asRecord(entity.metadata)
+  const visual = asRecord(metadata.visual ?? entity.visual)
+  return [
+    readText(entity.name),
+    readText(visual.description),
+    readText(entity.visualDescription),
+    readText(entity.summary),
+    readText(entity.context),
+  ].filter(Boolean).join(' - ')
+}
+
+function commandLifecycle(input: {
+  status: 'started' | 'already_running' | 'already_ready' | 'blocked' | 'failed'
+  requests?: readonly { id?: string | null; workflowId?: string | null; latestRunId?: string | null }[]
+  targetNodeIds?: readonly string[]
+  diagnostics?: readonly string[]
+  regenerationRequestId?: string
+  providerStartExpected?: boolean
+}) {
+  const requests = input.requests ?? []
+  return {
+    status: input.status,
+    requestIds: requests.map((request) => readText(request.id)).filter(Boolean),
+    workflowIds: requests.map((request) => readText(request.workflowId)).filter(Boolean),
+    runIds: requests.map((request) => readText(request.latestRunId)).filter(Boolean),
+    targetNodeIds: [...new Set((input.targetNodeIds ?? []).map(readText).filter(Boolean))],
+    diagnostics: [...new Set((input.diagnostics ?? []).map(readText).filter(Boolean))],
+    regenerationRequestId: readText(input.regenerationRequestId),
+    providerStartExpected: input.providerStartExpected === true,
+  }
+}
+
 export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
   client: {
     from: (table: string) => any
@@ -242,6 +315,8 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
 }) {
     const { client, admin, userId } = input
     const payload = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse(input.payload)
+    const regenerationRequestId = payload.mode === 'regenerate' ? (readText(payload.regenerationRequestId) || crypto.randomUUID()) : ''
+    const regenerationKeySuffix = regenerationRequestId ? `_refresh_${slugify(regenerationRequestId).slice(0, 8)}` : ''
 
     const masterResponse = await client
       .from('output_requests')
@@ -344,8 +419,9 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       if (!batchKind) throw new HttpError(400, 'Only sibling spots or viewpoints can be generated as a continuity asset grid.')
       const inferredBatchKind = continuityBatchKindForNodes(resolvedTargetNodes)
       if ((batchKind === 'spot_atlas_grid' && inferredBatchKind !== 'spot_grid')
-        || (batchKind === 'viewpoint_atlas_grid' && inferredBatchKind !== 'viewpoint_grid')) {
-        throw new HttpError(400, 'Atlas grids require sibling spots or viewpoints with the same parent.')
+        || (batchKind === 'viewpoint_atlas_grid' && inferredBatchKind !== 'viewpoint_grid')
+        || (batchKind === 'spot_camera_grid' && inferredBatchKind !== 'viewpoint_grid' && inferredBatchKind !== 'spot_camera_grid')) {
+        throw new HttpError(400, 'Atlas and camera grids require sibling spots or viewpoints with the same parent.')
       }
       const validBatchParent = batchKind === 'parent_child_scaffold_grid'
         ? batchParentId && resolvedTargetNodes.slice(1).every((node) => continuityNodeParentId(node) === batchParentId)
@@ -428,6 +504,31 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         }
       }
     }
+    if (payload.mode === 'regenerate') {
+      const descendantNodeIds = descendantContinuityNodeIds({
+        graphNodes: allGraphNodes,
+        rootNodeIds: requestedNodeIds,
+      })
+      if (descendantNodeIds.size > 0) {
+        for (const child of assetChildren) {
+          const metadata = asRecord(child.metadata)
+          if (metadata.sequenceAnimaticStale === true) continue
+          const childNodeIds = continuityAssetRequestNodeIds(child)
+          if (![...childNodeIds].some((nodeId) => descendantNodeIds.has(nodeId))) continue
+          await markChildWorkflowStale({
+            client: admin,
+            request: child,
+            reason: `Upstream continuity node regenerated: ${requestedNodeIds.join(', ')}.`,
+            readyToRun: true,
+            metadata: {
+              staleSourceNodeIds: requestedNodeIds,
+              staleDownstreamNodeIds: [...descendantNodeIds],
+            },
+            refreshProjection: true,
+          })
+        }
+      }
+    }
     const requestedNodeIdSet = new Set(requestedNodeIds)
     const referenceAssetKeys = dependencyEdges
       .filter((edge) => requestedNodeIdSet.has(readText(edge.targetNodeId)))
@@ -447,6 +548,7 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     const assetPack = asRecord(manifest.assetPack)
     const assetPackEntities = readArray(assetPack.entities).map(asRecord)
     const targetWorldEntity = worldLocationRefId ? assetPackEntities.find((entity) => readText(entity.key) === worldLocationRefId) ?? null : null
+    const worldLocationVisualGuide = worldLocationVisualGuideForEntity(targetWorldEntity)
     const worldReferenceAssetKeys = targetWorldEntity ? [
       readText(targetWorldEntity.primaryAssetKey),
       readText(targetWorldEntity.selectedReferenceAssetKey),
@@ -472,7 +574,28 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         && (targetKind === 'location_zone' || targetKind === 'location_spot' || targetKind === 'location_viewpoint' || targetKind === 'location_angle')
         && continuityNodeParentId(targetNode) === parentNodeId
       if (!canScaffold) {
-        throw new HttpError(409, `Generate parent continuity asset first: ${parentNodeId}.`)
+        const lifecycle = commandLifecycle({
+          status: 'blocked',
+          requests: [],
+          targetNodeIds: requestedNodeIds,
+          diagnostics: [`Generate parent continuity asset first: ${parentNodeId}.`],
+          regenerationRequestId,
+          providerStartExpected: false,
+        })
+        return sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
+          ok: true,
+          status: lifecycle.status,
+          commandLifecycle: lifecycle,
+          masterRequest,
+          continuityRequest,
+          assetRequest: null,
+          runnableRequest: null,
+          workflow: null,
+          nodes: [],
+          edges: [],
+          assetState: null,
+          reused: false,
+        })
       }
       const siblingChildren = allGraphNodes
         .filter((node) => readText(node.id) !== readText(targetNode.id))
@@ -494,18 +617,64 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     const parentReferenceAssetKeys = batchParentId
       ? [readText(asRecord(assetStates[batchParentId]).assetKey)].filter(Boolean)
       : []
+    const batchParentNode = batchParentId
+      ? allGraphNodes.find((node) => readText(node.id) === batchParentId) ?? null
+      : null
+    const batchGrandparentId = batchParentNode ? continuityNodeParentId(batchParentNode) : ''
+    const grandparentReferenceAssetKeys = batchGrandparentId
+      ? [readText(asRecord(assetStates[batchGrandparentId]).assetKey)].filter(Boolean)
+      : []
     if (
       resolvedTargetNodes.length > 1
-      && (batchKind === 'spot_grid' || batchKind === 'viewpoint_grid' || batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid')
+      && (batchKind === 'spot_grid' || batchKind === 'viewpoint_grid' || batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid' || batchKind === 'spot_camera_grid')
       && parentReferenceAssetKeys.length === 0
     ) {
-      throw new HttpError(409, `Generate parent continuity asset first: ${batchParentId || 'parent spatial node'}.`)
+      const lifecycle = commandLifecycle({
+        status: 'blocked',
+        requests: [],
+        targetNodeIds: requestedNodeIds,
+        diagnostics: [`Generate parent continuity asset first: ${batchParentId || 'parent spatial node'}.`],
+        regenerationRequestId,
+        providerStartExpected: false,
+      })
+      return sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
+        ok: true,
+        status: lifecycle.status,
+        commandLifecycle: lifecycle,
+        masterRequest,
+        continuityRequest,
+        assetRequest: null,
+        runnableRequest: null,
+        workflow: null,
+        nodes: [],
+        edges: [],
+        assetState: null,
+        reused: false,
+      })
+    }
+    if (
+      resolvedTargetNodes.length > 1
+      && batchKind === 'spot_camera_grid'
+      && readText(batchParentNode?.nodeKind) !== 'location_spot'
+    ) {
+      throw new HttpError(400, 'Spot camera grids require sibling camera/viewpoint nodes under the same spot.')
+    }
+    if (
+      resolvedTargetNodes.length > 1
+      && batchKind === 'spot_camera_grid'
+      && batchGrandparentId
+      && grandparentReferenceAssetKeys.length === 0
+    ) {
+      throw new HttpError(409, `Generate parent zone map first: ${batchGrandparentId}.`)
     }
     const assetKind = readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
-    const targetIsSpatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
-    const batchIsSpatialAsset = resolvedTargetNodes.every((node) => ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(readText(node.assetKind) || readText(node.nodeKind)))
+    const targetIsSpatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(assetKind)
+    const batchIsSpatialAsset = resolvedTargetNodes.every((node) => ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(readText(node.assetKind) || readText(node.nodeKind)))
     const batchIsAtlas = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
-    const allReferenceAssetKeys = batchIsAtlas
+    const batchIsSpotCameraGrid = batchKind === 'spot_camera_grid'
+    const allReferenceAssetKeys = batchIsSpotCameraGrid
+      ? [...new Set([...grandparentReferenceAssetKeys, ...parentReferenceAssetKeys])].slice(0, 2)
+      : batchIsAtlas
       ? parentReferenceAssetKeys.slice(0, 1)
       : [...new Set([...referenceAssetKeys, ...parentReferenceAssetKeys, ...batchSiblingReferenceAssetKeys, ...worldReferenceAssetKeys])].slice(0, 8)
     const referenceEntities = allReferenceAssetKeys.map((assetKey) => assetEntityForKey(assetKey, `${readText(targetNode.name) || payload.nodeId} spatial dependency`))
@@ -532,7 +701,10 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       const batchTargetIds = resolvedTargetNodes.map((node) => readText(node.id)).filter(Boolean)
       const isParentChildScaffold = batchKind === 'parent_child_scaffold_grid'
       const isSpatialAtlas = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
-      const sourceReferenceNodeIds = isSpatialAtlas
+      const isSpotCameraGrid = batchKind === 'spot_camera_grid'
+      const sourceReferenceNodeIds = isSpotCameraGrid
+        ? [batchGrandparentId, batchParentId].filter(Boolean)
+        : isSpatialAtlas
         ? [batchParentId].filter(Boolean)
         : isParentChildScaffold
         ? [continuityNodeParentId(targetNode)].filter(Boolean)
@@ -545,9 +717,14 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
               .filter((node) => readText(asRecord(assetStates[readText(node.id)]).assetKey))
               .map((node) => readText(node.id)),
           ].filter(Boolean)
-      const generationPolicy = isParentChildScaffold ? 'parent_child_scaffold_grid' : isSpatialAtlas ? 'spot_atlas_grid_v2' : 'manual_sibling_grid'
-      const cellRoles = isParentChildScaffold ? ['parent', ...batchTargetIds.slice(1).map(() => 'child')] : batchTargetIds.map(() => 'sibling')
-      const layout = isSpatialAtlas ? continuityAtlasLayoutForTargetCount(batchTargetIds.length) : continuityBatchLayoutForTargetCount(batchTargetIds.length)
+      const generationPolicy = isSpotCameraGrid ? 'spot_camera_grid_v1' : isParentChildScaffold ? 'parent_child_scaffold_grid' : isSpatialAtlas ? 'spot_atlas_grid_v2' : 'manual_sibling_grid'
+      const cameraCellRoles = ['north', 'east', 'south', 'west', 'high', 'low', 'insert', 'reverse', 'wide']
+      const cellRoles = isSpotCameraGrid
+        ? batchTargetIds.map((_, index) => cameraCellRoles[index] ?? 'camera')
+        : isParentChildScaffold ? ['parent', ...batchTargetIds.slice(1).map(() => 'child')] : batchTargetIds.map(() => 'sibling')
+      const layout = isSpotCameraGrid
+        ? continuitySpotCameraGridLayoutForTargetCount(batchTargetIds.length)
+        : isSpatialAtlas ? continuityAtlasLayoutForTargetCount(batchTargetIds.length) : continuityBatchLayoutForTargetCount(batchTargetIds.length)
       const forbiddenNames = sequenceAnimaticSpatialForbiddenNamesFromShots(relevantShots)
       const sanitizedPromptNodes = resolvedTargetNodes.map((node) => sanitizeSequenceAnimaticSpatialNodeFields(node, { forbiddenNames }))
       const batch = {
@@ -562,23 +739,30 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         cellRoles,
         required: true,
         generationPolicy,
-        referencePolicy: isSpatialAtlas ? 'zone_map_to_spot_atlas' : isParentChildScaffold ? 'parent_child_scaffold' : 'sibling_grid',
+        referencePolicy: isSpotCameraGrid ? 'zone_and_spot_to_camera_grid' : isSpatialAtlas ? 'zone_map_to_spot_atlas' : isParentChildScaffold ? 'parent_child_scaffold' : 'sibling_grid',
       }
       const batchInputHash = sequenceAnimaticStableHash({
         spatialPromptPolicyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
         batch,
+        worldLocationVisualGuide,
         targetNodes: resolvedTargetNodes,
         sanitizedPromptNodes,
         relevantShotIds: relevantShots.map((shot) => readText(shot.id)),
         referenceAssetKeys: allReferenceAssetKeys,
         manifestHash,
       })
-      const continuityBatchIdentity = `${readText(batch.batchId)}:${batchInputHash}`
+      const continuityBatchStableIdentity = `${readText(batch.batchId)}:${batchInputHash}`
+      const continuityBatchIdentity = regenerationRequestId
+        ? `${continuityBatchStableIdentity}:refresh:${regenerationRequestId}`
+        : continuityBatchStableIdentity
       const existingBatch = assetChildren.find((child) => {
         const metadata = asRecord(child.metadata)
         return metadata.sequenceAnimaticStale !== true
           && readScreenplayAnimaticRole(metadata) === 'continuity_asset_batch'
-          && readText(metadata.continuityBatchIdentity) === continuityBatchIdentity
+          && (
+            readText(metadata.continuityBatchIdentity) === continuityBatchStableIdentity
+            || readText(metadata.continuityBatchStableIdentity) === continuityBatchStableIdentity
+          )
       }) ?? null
       let existingBatchReusable = false
       let existingBatchActive = false
@@ -609,11 +793,22 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         })
       } else
       if (existingBatch?.workflowId && existingBatchReusable) {
+        const lifecycle = commandLifecycle({
+          status: existingBatchActive ? 'already_running' : 'already_ready',
+          requests: [existingBatch],
+          targetNodeIds: batchTargetIds,
+          diagnostics: existingBatchActive ? ['Continuity asset workflow is already running.'] : ['Continuity asset workflow is already ready.'],
+          regenerationRequestId,
+          providerStartExpected: false,
+        })
         return sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
           ok: true,
+          status: lifecycle.status,
+          commandLifecycle: lifecycle,
           masterRequest,
           continuityRequest,
           assetRequest: existingBatch,
+          runnableRequest: existingBatchActive ? existingBatch : null,
           workflow: null,
           nodes: [],
           edges: [],
@@ -629,13 +824,18 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         screenplayAnimaticRole: 'continuity_asset_batch',
         screenplayAnimaticSource: readText(asRecord(masterRequest.metadata).screenplayAnimaticSource) || 'wiki_sequence_unit',
         sequenceAnimaticRole: 'continuity_asset_batch',
+        workflowCommandAction: 'generate_continuity_assets',
+        workflowCommandMode: payload.mode,
         masterRequestId: masterRequest.id,
         continuityRequestId: continuityRequest?.id ?? null,
         continuityWorkflowId: continuityRequest?.workflowId ?? null,
         continuityBatchId: readText(batch.batchId),
         continuityBatchHash: batchInputHash,
         continuityBatchIdentity,
+        continuityBatchStableIdentity,
+        regenerationRequestId,
         targetNodeIds: batchTargetIds,
+        commandTargetNodeIds: batchTargetIds,
         assetKind: batchKind,
         assetInputHash: batchInputHash,
         generationPolicy,
@@ -646,8 +846,18 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         masterManifestArtifactKey,
         sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
         worldLocationRefId,
+        worldLocationVisualGuide,
+        world_location_visual_guide: worldLocationVisualGuide,
         parentNodeIds: sourceReferenceNodeIds,
         spatialPromptPolicyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
+        lastWorkflowCommand: {
+          action: 'generate_continuity_assets',
+          mode: payload.mode,
+          targetNodeIds: batchTargetIds,
+          batchKind,
+          regenerationRequestId,
+          providerStartExpected: true,
+        },
       }
       const graphResult = buildValidatedSequenceAnimaticTemplateGraph({
         registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
@@ -672,9 +882,11 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       const workflowPayload = {
         project_id: payload.projectId,
         draft_id: payload.draftId,
-        key: `sequence_animatic_continuity_asset_batch_${slugify(assetParentRequest.id)}_${slugify(readText(batch.batchId))}_${batchInputHash.slice(0, 8)}`,
-        name: `${targetNames.slice(0, 3).join(', ')} continuity grid`,
-        description: 'Sequence animatic sibling scene-graph continuity asset grid workflow.',
+        key: `sequence_animatic_continuity_asset_batch_${slugify(assetParentRequest.id)}_${slugify(readText(batch.batchId))}_${batchInputHash.slice(0, 8)}${regenerationKeySuffix}`,
+        name: `${targetNames.slice(0, 3).join(', ')} ${isSpotCameraGrid ? 'camera grid' : 'continuity grid'}`,
+        description: isSpotCameraGrid
+          ? 'Sequence animatic spot camera grid workflow.'
+          : 'Sequence animatic sibling scene-graph continuity asset grid workflow.',
         preset: 'cinematic_episode_from_sequence',
         status: 'active',
         created_by: userId,
@@ -692,8 +904,8 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         parent_request_id: assetParentRequest.id,
         requested_by: userId,
         source_surface: masterRequest.sourceSurface === 'outputs' ? 'outputs' : 'wiki_sequence_unit',
-        prompt: `Generate continuity asset grid for ${targetNames.join(', ')}.`,
-        title: `${targetNames.slice(0, 3).join(', ')} continuity grid`,
+        prompt: `Generate ${isSpotCameraGrid ? 'spot camera grid' : 'continuity asset grid'} for ${targetNames.join(', ')}.`,
+        title: `${targetNames.slice(0, 3).join(', ')} ${isSpotCameraGrid ? 'camera grid' : 'continuity grid'}`,
         intent: 'output_generation',
         output_kind: 'cinematic_episode',
         status: 'awaiting_confirmation',
@@ -701,7 +913,9 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
         page_count: null,
         target_format: 'image',
-        planner_notes: 'Sibling continuity assets generated as one grid and cropped per scene-graph node.',
+        planner_notes: isSpotCameraGrid
+          ? 'Spot camera references generated as one reusable angle grid and cropped per camera node.'
+          : 'Sibling continuity assets generated as one grid and cropped per scene-graph node.',
         metadata: {
           ...commonConfig,
           batch,
@@ -726,11 +940,22 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         edges,
         request: requestPayload,
       })
+      const lifecycle = commandLifecycle({
+        status: 'started',
+        requests: [ensured.request],
+        targetNodeIds: batchTargetIds,
+        diagnostics: ensured.reused ? ['Continuity asset batch workflow was reused and is ready to run.'] : ['Continuity asset batch workflow was created and is ready to run.'],
+        regenerationRequestId,
+        providerStartExpected: true,
+      })
       return sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
         ok: true,
+        status: lifecycle.status,
+        commandLifecycle: lifecycle,
         masterRequest,
         continuityRequest,
         assetRequest: ensured.request,
+        runnableRequest: ensured.request,
         workflow: ensured.workflow,
         nodes: ensured.nodes,
         edges: ensured.edges,
@@ -739,9 +964,11 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       })
     }
 
-    const targetIsSpatial = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
+    const targetIsSpatial = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(assetKind)
     const singleGenerationPolicy = assetKind === 'location_zone'
       ? 'zone_spatial_map_v2'
+      : assetKind === 'spot_camera_grid'
+        ? 'spot_camera_grid_v1'
       : assetKind === 'location_spot' || assetKind === 'location_angle' || assetKind === 'location_viewpoint'
         ? 'spot_local_reference_v1'
         : ''
@@ -757,6 +984,7 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       generationPolicy: singleGenerationPolicy,
       targetNode,
       sanitizedPromptNode,
+      worldLocationVisualGuide,
       zoneMapPoiLines,
       relevantShotIds: relevantShots.map((shot) => readText(shot.id)),
       referenceAssetKeys: allReferenceAssetKeys,
@@ -764,11 +992,22 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     })
     const currentAssetState = continuityAssetStateSchema.safeParse(asRecord(assetStates[payload.nodeId]))
     if (payload.mode === 'generate' && currentAssetState.success && currentAssetState.data.status === 'ready' && currentAssetState.data.inputHash === inputHash) {
+      const lifecycle = commandLifecycle({
+        status: 'already_ready',
+        requests: [],
+        targetNodeIds: [payload.nodeId],
+        diagnostics: ['Continuity asset is already ready for the current input hash.'],
+        regenerationRequestId,
+        providerStartExpected: false,
+      })
       return sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
         ok: true,
+        status: lifecycle.status,
+        commandLifecycle: lifecycle,
         masterRequest,
         continuityRequest,
         assetRequest: null,
+        runnableRequest: null,
         workflow: null,
         nodes: [],
         edges: [],
@@ -777,12 +1016,18 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       })
     }
 
-    const assetIdentity = `${payload.nodeId}:${inputHash}`
+    const assetStableIdentity = `${payload.nodeId}:${inputHash}`
+    const assetIdentity = regenerationRequestId
+      ? `${assetStableIdentity}:refresh:${regenerationRequestId}`
+      : assetStableIdentity
     const existing = assetChildren.find((child) => {
       const metadata = asRecord(child.metadata)
       return metadata.sequenceAnimaticStale !== true
         && readScreenplayAnimaticRole(metadata) === 'continuity_asset'
-        && readText(metadata.assetIdentity) === assetIdentity
+        && (
+          readText(metadata.assetIdentity) === assetStableIdentity
+          || readText(metadata.assetStableIdentity) === assetStableIdentity
+        )
     }) ?? null
     if (existing?.workflowId) {
       let existingActive = existing.status === 'queued' || existing.status === 'running' || existing.status === 'planning'
@@ -808,11 +1053,22 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
             : 'Previous continuity asset workflow is not reusable.',
         })
       } else {
+      const lifecycle = commandLifecycle({
+        status: existingActive ? 'already_running' : 'already_ready',
+        requests: [existing],
+        targetNodeIds: [payload.nodeId],
+        diagnostics: existingActive ? ['Continuity asset workflow is already running.'] : ['Continuity asset workflow is already ready.'],
+        regenerationRequestId,
+        providerStartExpected: false,
+      })
       return sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
         ok: true,
+        status: lifecycle.status,
+        commandLifecycle: lifecycle,
         masterRequest,
         continuityRequest,
         assetRequest: existing,
+        runnableRequest: existingActive ? existing : null,
         workflow: null,
         nodes: [],
         edges: [],
@@ -829,22 +1085,37 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       screenplayAnimaticRole: 'continuity_asset',
       screenplayAnimaticSource: readText(asRecord(masterRequest.metadata).screenplayAnimaticSource) || 'wiki_sequence_unit',
       sequenceAnimaticRole: 'continuity_asset',
+      workflowCommandAction: 'generate_continuity_assets',
+      workflowCommandMode: payload.mode,
       masterRequestId: masterRequest.id,
       continuityRequestId: continuityRequest?.id ?? null,
       continuityWorkflowId: continuityRequest?.workflowId ?? null,
       targetNodeId: payload.nodeId,
+      commandTargetNodeIds: [payload.nodeId],
       assetKind,
       assetInputHash: inputHash,
       assetIdentity,
+      assetStableIdentity,
+      regenerationRequestId,
       manifestHash,
       continuityPackHash: readText(continuityPack.continuityPackHash),
       masterManifestArtifactKey,
       sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
       worldLocationRefId,
+      worldLocationVisualGuide,
+      world_location_visual_guide: worldLocationVisualGuide,
       parentNodeIds: dependencyEdges.filter((edge) => readText(edge.targetNodeId) === payload.nodeId).map((edge) => readText(edge.sourceNodeId)).filter(Boolean),
       spatialPromptPolicyVersion: targetIsSpatial ? sequenceAnimaticSpatialPromptPolicyVersion : '',
       generationPolicy: singleGenerationPolicy,
       zoneMapPoiLines,
+      lastWorkflowCommand: {
+        action: 'generate_continuity_assets',
+        mode: payload.mode,
+        targetNodeIds: [payload.nodeId],
+        batchKind: '',
+        regenerationRequestId,
+        providerStartExpected: true,
+      },
     }
     const graphResult = buildValidatedSequenceAnimaticTemplateGraph({
       registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
@@ -869,7 +1140,7 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     const workflowPayload = {
       project_id: payload.projectId,
       draft_id: payload.draftId,
-      key: `sequence_animatic_continuity_asset_${slugify(assetParentRequest.id)}_${slugify(payload.nodeId)}_${inputHash.slice(0, 8)}`,
+      key: `sequence_animatic_continuity_asset_${slugify(assetParentRequest.id)}_${slugify(payload.nodeId)}_${inputHash.slice(0, 8)}${regenerationKeySuffix}`,
       name: `${readText(targetNode.name) || payload.nodeId} continuity asset`,
       description: 'Sequence animatic node-scoped continuity asset workflow.',
       preset: 'cinematic_episode_from_sequence',
@@ -934,11 +1205,22 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       warnings: [],
       error: '',
     })
+    const lifecycle = commandLifecycle({
+      status: 'started',
+      requests: [ensured.request],
+      targetNodeIds: [payload.nodeId],
+      diagnostics: ensured.reused ? ['Continuity asset workflow was reused and is ready to run.'] : ['Continuity asset workflow was created and is ready to run.'],
+      regenerationRequestId,
+      providerStartExpected: true,
+    })
     return sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse({
       ok: true,
+      status: lifecycle.status,
+      commandLifecycle: lifecycle,
       masterRequest,
       continuityRequest,
       assetRequest: ensured.request,
+      runnableRequest: ensured.request,
       workflow: ensured.workflow,
       nodes: ensured.nodes,
       edges: ensured.edges,

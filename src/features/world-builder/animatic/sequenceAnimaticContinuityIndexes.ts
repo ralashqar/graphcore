@@ -1,6 +1,7 @@
 import { resolveAssetSourceUrl } from '../../../domain/assets'
 import type { AssetDefinition } from '../../../domain/graphcore'
 import type { OutputWorkflowRun } from '../../../domain/outputWorkflow'
+import { spotCameraGridNodeId } from '../../../domain/sequenceAnimaticContinuityDependencies'
 import { iconForWorldEntity } from '../../../domain/worldGraphHelpers'
 import type { EntityIconId } from '../../../shared/entityIcons'
 
@@ -59,9 +60,12 @@ export type SequenceAnimaticContinuityAssetTargetView = {
   assetUrl: string | null
   blockIds: string[]
   shotIds: string[]
+  commandStatus?: string
+  commandDiagnostics?: string[]
+  generationRequestId?: string | null
 }
 
-export type SequenceAnimaticContinuityGraphNodeKind = 'world_location' | 'set' | 'zone' | 'spot' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
+export type SequenceAnimaticContinuityGraphNodeKind = 'world_location' | 'set' | 'zone' | 'spot' | 'camera_grid' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
 
 export type SequenceAnimaticContinuityGraphNodeLane = 'spatial' | 'temporary'
 
@@ -358,6 +362,7 @@ export function sequenceAnimaticContinuityGraphKindLabel(kind: SequenceAnimaticC
   if (kind === 'set') return 'Set'
   if (kind === 'zone') return 'Zone'
   if (kind === 'spot') return 'Spot'
+  if (kind === 'camera_grid') return 'Camera grid'
   if (kind === 'viewpoint' || kind === 'angle') return 'Viewpoint'
   if (kind === 'coverage_anchor') return 'Coverage anchor'
   if (kind === 'temp_character') return 'Temp character'
@@ -372,7 +377,7 @@ export function sequenceAnimaticContinuityGraphIconId(kind: SequenceAnimaticCont
   if (kind === 'prop') return 'item'
   if (kind === 'faction' || kind === 'group') return 'group'
   if (kind === 'vehicle') return 'cinematic'
-  if (kind === 'viewpoint' || kind === 'angle' || kind === 'coverage_anchor') return 'camera'
+  if (kind === 'camera_grid' || kind === 'viewpoint' || kind === 'angle' || kind === 'coverage_anchor') return 'camera'
   return 'environment'
 }
 
@@ -491,6 +496,25 @@ export function buildSequenceAnimaticContinuityGraphView(input: {
       required: entry.shotIds.length > 0,
       batchId: null,
     })
+    if (kind === 'spot') {
+      const gridId = spotCameraGridNodeId(id)
+      addNode({
+        id: gridId,
+        label: 'Camera grid',
+        kind: 'camera_grid',
+        lane: 'spatial',
+        summary: `Reusable camera-angle grid around ${entry.name || displayNameFromRefId(id)}, generated from the parent zone map and spot reference.`,
+        shotIds: entry.shotIds,
+        blockIds: entry.blockIds,
+        parentId: id,
+        sourceReferenceIds: [entry.worldLocationRefId, entry.setId, entry.zoneId, id].map((value) => value ?? '').filter(Boolean),
+        assetStatus: targetByNodeId.get(gridId)?.status ?? 'missing',
+        assetKind: 'spot_camera_grid',
+        assetUrl: targetByNodeId.get(gridId)?.assetUrl ?? null,
+        required: entry.shotIds.length > 0,
+        batchId: null,
+      })
+    }
   }
   for (const entry of input.continuityLocationAngles) {
     const id = entry.id || entry.name
@@ -581,6 +605,7 @@ export function buildSequenceAnimaticContinuityGraphView(input: {
     if (child.kind === 'set') return 'world_location'
     if (child.kind === 'zone') return 'set'
     if (child.kind === 'spot') return 'zone'
+    if (child.kind === 'camera_grid') return 'spot'
     if (child.kind === 'viewpoint' || child.kind === 'angle') return 'spot'
     if (child.kind === 'coverage_anchor') return 'spot'
     return 'world_location'
@@ -621,7 +646,8 @@ export function buildSequenceAnimaticContinuityGraphView(input: {
   }
   const batchGroups = new Map<string, SequenceAnimaticContinuityAssetTargetView[]>()
   for (const target of input.continuityAssetTargets) {
-    const kindGroup = target.assetKind.includes('angle') ? 'viewpoint_grid'
+    const kindGroup = target.assetKind === 'spot_camera_grid' ? 'camera_grids'
+      : target.assetKind.includes('angle') ? 'viewpoint_grid'
       : target.assetKind.includes('spot') ? 'spot_grid'
         : target.assetKind.includes('location') ? 'location_refs'
           : target.assetKind.includes('character') ? 'temp_character_refs'

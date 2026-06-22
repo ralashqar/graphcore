@@ -818,7 +818,7 @@ type WorldGraphPageProps = {
     continuityRequestId?: string | null
     nodeId: string
     nodeIds?: string[]
-    batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
+    batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_camera_grid' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
     mode?: 'generate' | 'regenerate'
   }) => Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> | SequenceAnimaticContinuityAssetWorkflowEnsureResponse
   onEnsureSequenceAnimaticKeyframeWorkflows: (request: {
@@ -11689,7 +11689,7 @@ export function WorldGraphPage({
               setSequenceAnimaticContinuityGraphScopeWorldLocationId(null)
               setSequenceAnimaticContinuityGraphScopeSceneId(null)
             }}
-            onGenerateAssets={(targets) => void handleRunSequenceAnimaticContinuityAssets(sequenceAnimaticContinuityGraphModel, targets)}
+            onGenerateAssets={(targets, options) => void handleRunSequenceAnimaticContinuityAssets(sequenceAnimaticContinuityGraphModel, targets, options)}
             onGenerateCoverageAnchor={(anchor) => void handleRunSequenceAnimaticCoverageAnchor(
               sequenceAnimaticContinuityGraphModel,
               anchor,

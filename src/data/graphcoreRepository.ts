@@ -8878,7 +8878,7 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     continuityRequestId?: string | null
     nodeId: string
     nodeIds?: string[]
-    batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
+    batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_camera_grid' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
     mode?: 'generate' | 'regenerate'
   },
 ): Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> {
@@ -8891,6 +8891,9 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     batchKind: request.batchKind,
     mode: request.mode ?? 'generate',
     continuityRequestId: request.continuityRequestId ?? undefined,
+    regenerationRequestId: (request.mode ?? 'generate') === 'regenerate' && typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : undefined,
   })
   return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
@@ -8905,7 +8908,11 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     },
     payload: {
       continuityRequestId: payloadInput.continuityRequestId,
+      nodeId: payloadInput.nodeId,
+      nodeIds: payloadInput.nodeIds,
       batchKind: payloadInput.batchKind,
+      mode: payloadInput.mode,
+      regenerationRequestId: payloadInput.regenerationRequestId,
     },
   }, sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema)
 }
@@ -10901,7 +10908,7 @@ export async function updateSequenceAnimaticSceneGraphNode(
   request: {
     masterRequestId: string
     nodeId: string
-    nodeKind: 'world_location' | 'set' | 'zone' | 'spot' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
+    nodeKind: 'world_location' | 'set' | 'zone' | 'spot' | 'camera_grid' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
     visualBriefOverride?: string
     extraPromptDirection?: string
     clearOverride?: boolean

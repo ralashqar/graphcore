@@ -27,7 +27,12 @@ import {
   seedanceReferenceRecordsFromImages,
 } from './output-workflow-seedance-video-prompt-runtime.ts'
 import { buildCinematicV3StoryboardGroupAssetPack } from './output-workflow-cinematic-asset-pack-runtime.ts'
-import { inferSequenceShotVideoTimingRuntime } from './output-workflow-sequence-animatic-shot-video-runtime.ts'
+import {
+  buildSequenceAnimaticShotVisualCallSheet,
+  formatSequenceAnimaticShotVisualCallSheetCameraPlan,
+  formatSequenceAnimaticShotVisualCallSheetForPrompt,
+  inferSequenceShotVideoTimingRuntime,
+} from './output-workflow-sequence-animatic-shot-video-runtime.ts'
 import {
   orderSequenceAnimaticAssetPackReferences,
   scopeAssetPackToReferenceAssetKeys,
@@ -156,6 +161,19 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     .map((entry) => helpers.readText(helpers.asRecord(entry).line))
     .filter(Boolean)
     .join('\n')
+  const upstreamVisualCallSheet = helpers.readFirstUpstreamRecord(context.upstream, ['visualCallSheet', 'visual_call_sheet'])
+  const visualCallSheet = helpers.readText(upstreamVisualCallSheet.version)
+    ? upstreamVisualCallSheet
+    : buildSequenceAnimaticShotVisualCallSheet({
+      shot,
+      coverageSetup,
+      coverageAnchor,
+      previousKeyframe,
+      storyboardPanel,
+      referenceManifest,
+      sceneStateText,
+    })
+  const visualCallSheetText = formatSequenceAnimaticShotVisualCallSheetForPrompt(visualCallSheet)
   const visibleSubjects = helpers.readArray(assetPack.entities).map(helpers.asRecord)
     .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
     .map((entity) => {
@@ -167,7 +185,7 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     .slice(0, 8)
     .join('\n')
   const locationRefs = helpers.readArray(assetPack.entities).map(helpers.asRecord)
-    .filter((entity) => ['spot_reference', 'zone_reference', 'set_reference', 'viewpoint_reference', 'location_reference'].includes(sequenceAnimaticReferenceRole(entity)))
+    .filter((entity) => ['spot_reference', 'zone_reference', 'set_reference', 'viewpoint_reference', 'location_reference', 'camera_grid_reference'].includes(sequenceAnimaticReferenceRole(entity)))
     .map((entity) => {
       const name = sequenceAnimaticReferenceName(entity, 'Location ref')
       const visual = sequenceAnimaticReferenceVisual(entity, 14)
@@ -193,7 +211,9 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     return `${helpers.readText(line.speakerName) || helpers.readText(line.speakerRefId) || 'Speaker'}: "${text}"`
   }).filter(Boolean).join(' ')
   const action = helpers.compactStoryboardSentence(helpers.readText(shot.action) || helpers.readText(shot.description) || helpers.readText(shot.storyboardPanelPrompt), '', 34)
-  const cameraBrief = [helpers.readText(camera.framing), helpers.readText(camera.angle), helpers.readText(camera.lens), helpers.readText(camera.movement)].filter(Boolean).join('; ') || helpers.readText(shot.camera)
+  const cameraBrief = formatSequenceAnimaticShotVisualCallSheetCameraPlan(visualCallSheet)
+    || [helpers.readText(camera.framing), helpers.readText(camera.angle), helpers.readText(camera.lens), helpers.readText(camera.movement)].filter(Boolean).join('; ')
+    || helpers.readText(shot.camera)
   const lighting = helpers.compactStoryboardSentence(helpers.readText(shot.lighting) || helpers.readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief), '', 26)
   const coverageFallback = !helpers.readText(coverageAnchor.assetKey) && (
     helpers.readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)
@@ -209,6 +229,9 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     '',
     'Reference map',
     referenceManifestText || 'No attached image references; use only the written visual facts.',
+    '',
+    'Director call sheet',
+    visualCallSheetText,
     '',
     'Frame target',
     `${helpers.readText(shot.title) || 'Untitled shot'} - ${action || 'one clear visible moment.'}`,
@@ -253,6 +276,10 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     reference_manifest: referenceManifest,
     referenceManifestText,
     reference_manifest_text: referenceManifestText,
+    visualCallSheet,
+    visual_call_sheet: visualCallSheet,
+    visualCallSheetVersion: 'shot_visual_call_sheet_v1',
+    visual_call_sheet_version: 'shot_visual_call_sheet_v1',
     shotId: helpers.readText(shot.id) || helpers.readText(config.shotId),
     shot_id: helpers.readText(shot.id) || helpers.readText(config.shotId),
     sceneState,
@@ -317,6 +344,14 @@ export async function sequenceAnimaticPlannedKeyframeInput(
   }))
   const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
   const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
+  const visualCallSheet = buildSequenceAnimaticShotVisualCallSheet({
+    shot,
+    coverageSetup,
+    coverageAnchor,
+    previousKeyframe,
+    storyboardPanel,
+    referenceManifest,
+  })
   const outputs = {
     shot,
     coverageSetup,
@@ -333,9 +368,13 @@ export async function sequenceAnimaticPlannedKeyframeInput(
     reference_manifest: referenceManifest,
     referenceManifestText,
     reference_manifest_text: referenceManifestText,
+    visualCallSheet,
+    visual_call_sheet: visualCallSheet,
+    visualCallSheetVersion: 'shot_visual_call_sheet_v1',
+    visual_call_sheet_version: 'shot_visual_call_sheet_v1',
     shotId: helpers.readText(shot.id) || helpers.readText(config.shotId),
     shot_id: helpers.readText(shot.id) || helpers.readText(config.shotId),
-    text: JSON.stringify({ shot, coverageSetup, coverageAnchor, previousKeyframe, storyboardPanel, assetPack }, null, 2),
+    text: JSON.stringify({ shot, coverageSetup, coverageAnchor, previousKeyframe, storyboardPanel, assetPack, visualCallSheet }, null, 2),
     deterministic: true,
   }
   return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-planned-keyframe-input-v1' })
@@ -355,6 +394,7 @@ export async function sequenceAnimaticPlannedKeyframeArtifact(
     role: 'sequence_animatic_shot_keyframe',
   }) ?? {}
   const prompt = helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text'])
+  const visualCallSheet = helpers.readFirstUpstreamRecord(context.upstream, ['visualCallSheet', 'visual_call_sheet'])
   const shotId = helpers.readText(shot.id) || helpers.readText(config.shotId)
   if (!shotId) throw new Error('Shot keyframe artifact requires a shot id.')
   const assetKey = helpers.readText(image.assetKey)
@@ -372,6 +412,8 @@ export async function sequenceAnimaticPlannedKeyframeArtifact(
     assetKey,
     image,
     prompt,
+    visualCallSheet,
+    visual_call_sheet: visualCallSheet,
     qcStatus,
     qcFindings,
     status: assetKey ? 'ready' : 'failed',
@@ -412,6 +454,8 @@ export async function sequenceAnimaticPlannedKeyframeArtifact(
       qcStatus,
       qcFindings,
       prompt,
+      visualCallSheet,
+      visual_call_sheet: visualCallSheet,
       image,
       shot,
       keyframe,
@@ -447,6 +491,8 @@ export async function sequenceAnimaticPlannedKeyframeArtifact(
     image,
     shot,
     prompt,
+    visualCallSheet,
+    visual_call_sheet: visualCallSheet,
     authoringReady: true,
   }
   return result({ context, helpers, outputs, model: 'sequence-animatic-shot-keyframe-artifact-v1' })
@@ -518,6 +564,21 @@ export async function sequenceAnimaticShotVideoPrompt(
     ].slice(0, 9),
     cinematicReferenceMode: 'keyframes',
   })
+  const visualCallSheet = buildSequenceAnimaticShotVisualCallSheet({
+    shot: shot as unknown as LooseRecord,
+    referenceManifest: seedanceReferenceManifest,
+    directedControls: timing.directedControls,
+    durationSeconds: providerDurationSeconds,
+  })
+  const cameraPlan = formatSequenceAnimaticShotVisualCallSheetCameraPlan(visualCallSheet)
+  const continuityPlan = [
+    helpers.readText(visualCallSheet.environment.locationContinuity),
+    helpers.readText(visualCallSheet.environment.lighting),
+    helpers.readText(visualCallSheet.environment.cameraGridUse),
+  ].filter(Boolean).join(' ')
+  const referenceInstruction = upstreamImages.length > 0
+    ? 'Treat @Image1 as the cropped shot keyframe reference, not a storyboard sheet. Preserve composition, visible subjects, lighting, environment, and props while animating the shot.'
+    : 'Use attached references only for visible subject, location, prop, and camera-continuity guidance. No storyboard or keyframe reference is attached.'
   const characterVoiceGuide = buildSeedanceCharacterVoiceGuide({
     assetPack: voiceGuideAssetPack,
     shots: [shot as unknown as LooseRecord],
@@ -539,10 +600,12 @@ export async function sequenceAnimaticShotVideoPrompt(
     aspectRatio: helpers.readText(config.aspectRatio) || '16:9',
     resolution: helpers.readText(config.resolution) || '720p',
     referenceManifest: seedanceReferenceManifest,
-    referenceInstruction: 'Treat @Image1 as the cropped shot keyframe reference, not a storyboard sheet. Preserve composition, visible subjects, lighting, environment, and props while animating the shot.',
+    referenceInstruction,
+    cameraPlan,
     directedControls: helpers.asRecord(timing.directedControls),
     shotSectionTitle: 'SHOT',
     shotLines: shotLine || shotAction,
+    continuityPlan,
     identityGuide: characterVoiceGuide,
     audioPolicy: 'No music, score, audio bed, room tone, crowd wash, or background ambience. Use only scripted dialogue and direct diegetic sound effects caused by visible or explicitly offscreen shot action.',
     movementLogic: seedanceLabanMovementBlock([shot as unknown as LooseRecord], helpers.readText(context.run.prompt)),
@@ -572,6 +635,12 @@ export async function sequenceAnimaticShotVideoPrompt(
     primaryReferenceImage: upstreamImages[0] ?? null,
     referenceImageCount: upstreamImages.length,
     seedanceReferenceManifest,
+    visualCallSheet,
+    visual_call_sheet: visualCallSheet,
+    visualCallSheetVersion: 'shot_visual_call_sheet_v1',
+    visual_call_sheet_version: 'shot_visual_call_sheet_v1',
+    cameraPlan,
+    camera_plan: cameraPlan,
     directedControls: timing.directedControls,
     audioPolicy: 'dialogue_and_direct_diegetic_sfx_only',
     visualReferencePolicy: 'visible_characters_location_props_only',
@@ -611,6 +680,7 @@ export async function sequenceAnimaticShotVideoArtifact(
   const video = readUpstreamVideos(context.upstream, helpers, ['video', 'videos'])[0] ?? {}
   const prompt = helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text', 'providerPrompt'])
   const keyframe = helpers.readFirstUpstreamImage(context.upstream, ['keyframe', 'image', 'primaryReferenceImage'])
+  const visualCallSheet = helpers.readFirstUpstreamRecord(context.upstream, ['visualCallSheet', 'visual_call_sheet'])
   const shotId = helpers.readText(config.shotId)
   if (!shotId) throw new Error('Shot video artifact requires a shot id.')
   const assetKey = helpers.readText(video.assetKey)
@@ -619,6 +689,8 @@ export async function sequenceAnimaticShotVideoArtifact(
       video,
       prompt,
       keyframe,
+      visualCallSheet,
+      visual_call_sheet: visualCallSheet,
       assetKey: '',
       skipped: true,
       skippedReason: helpers.readText(video.skippedReason) || 'shot_video_missing_asset',
@@ -670,6 +742,8 @@ export async function sequenceAnimaticShotVideoArtifact(
       storagePath,
       prompt,
       keyframe,
+      visualCallSheet,
+      visual_call_sheet: visualCallSheet,
     },
   })
   await helpers.insertSequenceAnimaticEvent({
@@ -704,6 +778,8 @@ export async function sequenceAnimaticShotVideoArtifact(
       role: 'sequence_animatic_shot_video',
     },
     keyframe,
+    visualCallSheet,
+    visual_call_sheet: visualCallSheet,
     prompt,
     authoringReady: true,
   }
@@ -793,6 +869,7 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'upstream.previousKeyframe',
       'upstream.storyboardPanel',
       'upstream.assetPack',
+      'upstream.visualCallSheet',
       'config.shotId',
       'config.sceneState',
       'config.keyframePromptPolicyVersion',
@@ -848,6 +925,7 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
     sourceHashKeys: [
       'upstream.image',
       'upstream.prompt',
+      'upstream.visualCallSheet',
       'upstream.shot',
       'config.masterRequestId',
       'config.storyboardBlockId',
@@ -868,6 +946,7 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'upstream.assetPack',
       'upstream.image',
       'upstream.keyframe',
+      'upstream.visualCallSheet',
       'config.shotId',
       'config.storyboardBlockId',
       'config.aspectRatio',
@@ -892,6 +971,7 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'upstream.seedanceReferenceManifest',
       'upstream.durationSeconds',
       'upstream.directedControls',
+      'upstream.visualCallSheet',
       'config.shotId',
       'config.videoModel',
       'config.videoProvider',
@@ -912,6 +992,7 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'upstream.video',
       'upstream.prompt',
       'upstream.keyframe',
+      'upstream.visualCallSheet',
       'config.masterRequestId',
       'config.storyboardBlockId',
       'config.shotId',

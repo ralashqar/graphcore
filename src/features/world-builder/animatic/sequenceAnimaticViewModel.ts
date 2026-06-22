@@ -13,6 +13,7 @@ import {
   durableWorkflowTextOutput,
   resolveDurableWorkflowNodeOutput,
 } from '../../../domain/outputWorkflowDurableResolver'
+import { spotCameraGridNodeId } from '../../../domain/sequenceAnimaticContinuityDependencies'
 import type { WorldEntity } from '../../../domain/worldGraph'
 import { iconForWorldEntity } from '../../../domain/worldGraphHelpers'
 import {
@@ -65,8 +66,11 @@ import {
 } from './sequenceAnimaticProgressPresentation'
 import { buildSequenceAnimaticRuntimeIndexes } from './sequenceAnimaticRuntimeIndexes'
 import {
+  buildSequenceAnimaticWorkStatus,
+  sequenceAnimaticWorkStatusToContinuityAssetStatus,
+} from './sequenceAnimaticWorkStatus'
+import {
   FAILED_SEQUENCE_ANIMATIC_STATUSES,
-  TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES,
   artifactBelongsToRequest,
   outputWorkflowRunHasFailedExecution,
   sequenceAnimaticProjectionActiveLabel,
@@ -116,6 +120,11 @@ function readAllOutputRunRecords(run: OutputWorkflowRun | null | undefined, keys
 
 function readArtifactRole(artifact: OutputArtifact) {
   return trimOptionalString(readLooseRecord(artifact.metadata).role)
+}
+
+function outputArtifactUpdatedAtMs(artifact: OutputArtifact) {
+  const timestamp = Date.parse(artifact.updatedAt || artifact.createdAt || '')
+  return Number.isFinite(timestamp) ? timestamp : 0
 }
 
 function readArtifactMetadataRecord(
@@ -1295,35 +1304,31 @@ export function buildSequenceAnimaticViewModel(input: {
   const continuityAssetStateByNodeId = {
     ...readLooseRecord(continuityLocationSource.assetStateByNodeId ?? continuityLocationSource.asset_state_by_node_id),
   }
-  ;[...continuityArtifacts, ...continuityAssetArtifacts].forEach((artifact) => {
-    const metadata = readLooseRecord(artifact.metadata)
-    if (trimOptionalString(metadata.role) === 'sequence_animatic_continuity_asset_batch') {
-      Object.entries(readLooseRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).forEach(([nodeId, state]) => {
-        if (nodeId) continuityAssetStateByNodeId[nodeId] = state
-      })
-      return
-    }
-    if (trimOptionalString(metadata.role) !== 'sequence_animatic_continuity_asset') return
-    const state = readLooseRecord(metadata.assetState ?? metadata.asset_state)
-    const nodeId = trimOptionalString(state.sourceNodeId) || trimOptionalString(metadata.targetNodeId)
-    if (nodeId) continuityAssetStateByNodeId[nodeId] = state
-  })
+  ;[...continuityArtifacts, ...continuityAssetArtifacts]
+    .sort((left, right) => outputArtifactUpdatedAtMs(left) - outputArtifactUpdatedAtMs(right))
+    .forEach((artifact) => {
+      const metadata = readLooseRecord(artifact.metadata)
+      if (trimOptionalString(metadata.role) === 'sequence_animatic_continuity_asset_batch') {
+        Object.entries(readLooseRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+          if (nodeId) continuityAssetStateByNodeId[nodeId] = state
+        })
+        return
+      }
+      if (trimOptionalString(metadata.role) !== 'sequence_animatic_continuity_asset') return
+      const state = readLooseRecord(metadata.assetState ?? metadata.asset_state)
+      const nodeId = trimOptionalString(state.sourceNodeId) || trimOptionalString(metadata.targetNodeId)
+      if (nodeId) continuityAssetStateByNodeId[nodeId] = state
+    })
   const readContinuityAssetStatus = (nodeId: string): SequenceAnimaticContinuityAssetTargetView['status'] => {
     const request = continuityAssetRequestByNodeId.get(nodeId) ?? null
     const run = request ? continuityAssetRunByRequestId.get(request.id) ?? null : null
-    if (sequenceAnimaticRequestIsActive(request, run)) return 'generating'
-    const status = trimOptionalString(readLooseRecord(continuityAssetStateByNodeId[nodeId]).status)
-    if (status === 'ready' || status === 'stale' || status === 'failed' || status === 'missing') return status
-    const requestTerminal = ['completed', 'succeeded', 'completed_with_errors', 'failed', 'cancelled'].includes(request?.status ?? '')
-    if (
-      outputWorkflowRunHasFailedExecution(run)
-      || request?.status === 'failed'
-      || request?.status === 'cancelled'
-      || (status === 'generating' && (requestTerminal || TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run?.status ?? '')))
-    ) {
-      return 'failed'
-    }
-    return status === 'generating' || status === 'ready' || status === 'stale' || status === 'failed' || status === 'missing' ? status : 'missing'
+    const state = readLooseRecord(continuityAssetStateByNodeId[nodeId])
+    return sequenceAnimaticWorkStatusToContinuityAssetStatus(buildSequenceAnimaticWorkStatus({
+      request,
+      run,
+      assetStateStatus: trimOptionalString(state.status),
+      assetKey: trimOptionalString(state.assetKey),
+    }))
   }
   const readContinuityAssetUrl = (nodeId: string) => {
     const assetKey = trimOptionalString(readLooseRecord(continuityAssetStateByNodeId[nodeId]).assetKey)
@@ -1428,6 +1433,13 @@ export function buildSequenceAnimaticViewModel(input: {
         blockIds: entry.blockIds,
         shotIds: entry.shotIds,
       })),
+      ...continuityLocationSets.filter((entry) => entry.kind === 'spot').map((entry) => ({
+        nodeId: spotCameraGridNodeId(entry.id),
+        name: `${entry.name || 'Spot'} camera grid`,
+        assetKind: 'spot_camera_grid',
+        blockIds: entry.blockIds,
+        shotIds: entry.shotIds,
+      })),
       ...continuityLocationAngles.map((entry) => ({
         nodeId: entry.id,
         name: entry.name,
@@ -1452,6 +1464,10 @@ export function buildSequenceAnimaticViewModel(input: {
       const state = readLooseRecord(continuityAssetStateByNodeId[entry.nodeId])
       const status = readContinuityAssetStatus(entry.nodeId)
       const assetKey = trimOptionalString(state.assetKey)
+      const request = continuityAssetRequestByNodeId.get(entry.nodeId) ?? null
+      const requestMetadata = readLooseRecord(request?.metadata)
+      const lifecycle = readLooseRecord(requestMetadata.commandLifecycle ?? requestMetadata.command_lifecycle)
+      const lastWorkflowCommand = readLooseRecord(requestMetadata.lastWorkflowCommand ?? requestMetadata.last_workflow_command)
       return {
         ...entry,
         status,
@@ -1459,6 +1475,9 @@ export function buildSequenceAnimaticViewModel(input: {
         actionLabel: sequenceAnimaticContinuityAssetActionLabel(status),
         assetKey: assetKey || null,
         assetUrl: assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null,
+        commandStatus: trimOptionalString(lifecycle.status) || trimOptionalString(lastWorkflowCommand.mode) || trimOptionalString(requestMetadata.workflowCommandMode),
+        commandDiagnostics: readLooseArray(lifecycle.diagnostics).map(trimOptionalString).filter(Boolean),
+        generationRequestId: trimOptionalString(requestMetadata.regenerationRequestId) || trimOptionalString(lastWorkflowCommand.regenerationRequestId) || null,
       }
     })
   })()

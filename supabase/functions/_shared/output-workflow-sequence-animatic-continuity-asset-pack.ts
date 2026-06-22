@@ -152,6 +152,7 @@ export async function sequenceAnimaticContinuityBatchPrompt(
     targetNodes: effectiveTargetNodes,
     relevantShots,
     referenceAssetKeys,
+    worldLocationVisualGuide: helpers.readText(config.worldLocationVisualGuide ?? config.world_location_visual_guide),
     visualCanonGuard: helpers.readText(config.visualCanonGuard ?? config.visual_canon_guard),
   })
   const prompt = promptResult.prompt
@@ -381,6 +382,7 @@ export async function sequenceAnimaticContinuityAssetPrompt(
     targetNode: effectiveTargetNode,
     assetKind,
     generationPolicy: helpers.readText(config.generationPolicy),
+    worldLocationVisualGuide: helpers.readText(config.worldLocationVisualGuide ?? config.world_location_visual_guide),
     zoneMapPoiLines: helpers.readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
     relevantShots,
     referenceAssetKeys,

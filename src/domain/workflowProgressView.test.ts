@@ -561,6 +561,31 @@ test('legacyPayloadForWorkflowCommand maps generic commands to compatibility end
     draftId: undefined,
     masterRequestId: 'master_1',
   })
+
+  const continuityAsset = legacyPayloadForWorkflowCommand({
+    family: 'sequence_animatic',
+    action: 'generate_continuity_assets',
+    scope: {
+      masterRequestId: 'master_1',
+      nodeIds: ['zone_1'],
+    },
+    flags: { forceRefresh: true, regenerate: true },
+    payload: {
+      continuityRequestId: 'continuity_1',
+      batchKind: 'zone_spatial_map',
+    },
+  })
+  assert.equal(continuityAsset.endpoint, 'ensure-sequence-animatic-continuity-asset-workflow')
+  assert.deepEqual(continuityAsset.payload, {
+    projectId: undefined,
+    draftId: undefined,
+    masterRequestId: 'master_1',
+    continuityRequestId: 'continuity_1',
+    nodeId: 'zone_1',
+    nodeIds: ['zone_1'],
+    batchKind: 'zone_spatial_map',
+    mode: 'regenerate',
+  })
 })
 
 test('generic workflow command endpoint starts scene board commands directly', () => {
@@ -684,6 +709,10 @@ test('generic workflow command endpoint starts scene board commands directly', (
   assert.doesNotMatch(continuityAssetEnsureSource, /ensure_sequence_animatic_child_workflow/)
   assert.match(continuityAssetCommandSource, /ensureMappedChildWorkflow/)
   assert.match(continuityAssetCommandSource, /markChildWorkflowStale/)
+  assert.match(continuityAssetCommandSource, /regenerationRequestId/)
+  assert.match(continuityAssetCommandSource, /assetStableIdentity/)
+  assert.match(continuityAssetCommandSource, /continuityBatchStableIdentity/)
+  assert.match(continuityAssetCommandSource, /_refresh_/)
   assert.match(continuityAssetCommandSource, /role: 'continuity_asset'/)
   assert.match(continuityAssetCommandSource, /role: 'continuity_asset_batch'/)
   assert.match(continuityAssetCommandSource, /buildValidatedSequenceAnimaticTemplateGraph/)
@@ -774,6 +803,7 @@ test('generic workflow command endpoint starts scene board commands directly', (
   assert.match(repositorySource, /ensureSequenceAnimaticBlockWorkflows[\s\S]*prepare_storyboard_blocks[\s\S]*return startTypedWorkflowCommand/)
   assert.match(repositorySource, /ensureSequenceAnimaticSceneWorkflows[\s\S]*prepare_scene_shot_plans[\s\S]*return startTypedWorkflowCommand/)
   assert.match(repositorySource, /ensureSequenceAnimaticContinuityWorkflow[\s\S]*prepare_continuity_workflow[\s\S]*return startTypedWorkflowCommand/)
+  assert.match(repositorySource, /ensureSequenceAnimaticContinuityAssetWorkflow[\s\S]*generate_continuity_assets[\s\S]*nodeId: payloadInput\.nodeId[\s\S]*nodeIds: payloadInput\.nodeIds[\s\S]*mode: payloadInput\.mode/)
   assert.match(repositorySource, /ensureSequenceAnimaticKeyframeWorkflows[\s\S]*return startTypedWorkflowCommand/)
   assert.match(repositorySource, /ensureSequenceAnimaticZoneCoverageBoards[\s\S]*return startTypedWorkflowCommand/)
   assert.match(repositorySource, /ensureSequenceAnimaticShotCoverageIntents[\s\S]*return startTypedWorkflowCommand/)
@@ -1977,15 +2007,23 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.match(sequenceAnimaticShotProductionPackSource, /output-workflow-seedance-video-prompt-runtime/)
   assert.match(sequenceAnimaticShotProductionPackSource, /output-workflow-sequence-animatic-shot-video-runtime/)
   assert.match(seedanceVideoPromptRuntimeSource, /export function buildCompactSeedanceVideoPrompt/)
+  assert.match(seedanceVideoPromptRuntimeSource, /\[CAMERA PLAN\]/)
   assert.match(seedanceVideoPromptRuntimeSource, /export function buildSeedanceCharacterVoiceGuide/)
   assert.match(seedanceVideoPromptRuntimeSource, /export function buildSeedanceReferenceManifest/)
   assert.match(sequenceAnimaticShotVideoRuntimeSource, /export async function inferSequenceShotVideoTimingRuntime/)
   assert.match(sequenceAnimaticShotVideoRuntimeSource, /export const seedanceDirectedControlsSchema/)
   assert.match(sequenceAnimaticShotVideoRuntimeSource, /export const sequenceAnimaticShotVideoTimingSchema/)
+  assert.match(sequenceAnimaticShotVideoRuntimeSource, /shot_visual_call_sheet_v1/)
+  assert.match(sequenceAnimaticShotVideoRuntimeSource, /export function buildSequenceAnimaticShotVisualCallSheet/)
+  assert.match(sequenceAnimaticShotVideoRuntimeSource, /export function formatSequenceAnimaticShotVisualCallSheetCameraPlan/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /visualCallSheet/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /No storyboard or keyframe reference is attached/)
   assert.match(sequenceAnimaticShotRevisionPackSource, /output-workflow-sequence-animatic-shot-revision-runtime/)
   assert.match(sequenceAnimaticShotRevisionRuntimeSource, /export async function planSequenceAnimaticShotRevisionRuntime/)
   assert.match(sequenceAnimaticShotRevisionRuntimeSource, /export const sequenceAnimaticShotRevisionPlanSchema/)
   assert.match(sequenceAnimaticReferenceRuntimeSource, /export function scopeAssetPackToReferenceAssetKeys/)
+  assert.match(sequenceAnimaticReferenceRuntimeSource, /camera_grid_reference/)
+  assert.match(sequenceAnimaticPlanningRuntimeSource, /movement includes motivation and endpoint/)
   assert.match(cinematicAssetPackRuntimeSource, /export function buildCinematicV3StoryboardGroupAssetPack/)
   assert.match(cinematicAssetPackRuntimeSource, /export function repairCinematicV2ShotPlanVisualReferences/)
   assert.match(cinematicV3FanoutRuntimeSource, /export function buildCinematicV3StoryboardDynamicFanoutGroupRows/)

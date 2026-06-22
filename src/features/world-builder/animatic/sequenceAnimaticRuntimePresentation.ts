@@ -7,7 +7,7 @@ import type {
 import {
   readLooseRecord,
   trimOptionalString,
-} from './sequenceAnimaticCommandHelpers'
+} from './sequenceAnimaticCommandHelpers.ts'
 
 export type SequenceAnimaticRequestState = 'none' | 'in_progress' | 'animatic_ready' | 'video_ready' | 'failed'
 
