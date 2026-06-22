@@ -12,7 +12,7 @@ import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/
 import { renderOutputPdf } from './ebook-pdf-renderer.ts'
 import { createWorkerWakeScheduler, idleDelayForEmptyPolls } from './wake-scheduler.ts'
 
-const workerCodeVersion = '2026-06-22-force-regenerate-source-step-skip'
+const workerCodeVersion = '2026-06-22-zone-board-spot-cells'
 const workerId = Deno.env.get('FLY_MACHINE_ID')
   ?? Deno.env.get('GRAPHCORE_WORKER_ID')
   ?? crypto.randomUUID()

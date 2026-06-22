@@ -12,6 +12,7 @@ import type {
   OutputWorkflowStartResponse,
   OutputWorkflowUpgradeResponse,
   SequenceAnimaticSceneGraphNodeUpdateResponse,
+  SequenceAnimaticZonePoiAnalyzeResponse,
 } from '../../domain/outputWorkflow'
 import type {
   OutputInboxLoadResult,
@@ -60,6 +61,10 @@ export type OutputApi = {
     extraPromptDirection?: string
     clearOverride?: boolean
   }): Promise<SequenceAnimaticSceneGraphNodeUpdateResponse>
+  analyzeSequenceAnimaticZonePois(snapshot: ProjectSnapshot, request: {
+    masterRequestId: string
+    zoneNodeId: string
+  }): Promise<SequenceAnimaticZonePoiAnalyzeResponse>
   upgradeOutputWorkflowPreset(snapshot: ProjectSnapshot, request: {
     workflowId: string
     preset?: 'ebook_from_world'

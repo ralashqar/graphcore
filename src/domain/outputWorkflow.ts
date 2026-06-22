@@ -1395,6 +1395,22 @@ export const sequenceAnimaticSceneGraphNodeUpdateResponseSchema = z.object({
   nodeOverride: sequenceAnimaticSceneGraphNodeOverrideSchema.nullable().default(null),
 })
 
+export const sequenceAnimaticZonePoiAnalyzeRequestSchema = z.object({
+  projectId: z.string().min(1),
+  draftId: z.string().min(1),
+  masterRequestId: z.string().min(1),
+  zoneNodeId: z.string().min(1),
+})
+
+export const sequenceAnimaticZonePoiAnalyzeResponseSchema = z.object({
+  ok: z.literal(true),
+  masterRequest: outputRequestSchema,
+  analysis: looseRecordSchema.default({}),
+  assetState: looseRecordSchema.default({}),
+  continuityPackArtifact: outputArtifactSchema.nullable().default(null),
+  continuityAssetArtifact: outputArtifactSchema.nullable().default(null),
+})
+
 export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
   projectId: z.string().min(1),
   draftId: z.string().min(1),
@@ -4156,6 +4172,8 @@ export type SequenceAnimaticContinuityWorkflowEnsureResponse = z.infer<typeof se
 export type SequenceAnimaticContinuityBlockDeriveResponse = z.infer<typeof sequenceAnimaticContinuityBlockDeriveResponseSchema>
 export type SequenceAnimaticContinuityStructureDeriveResponse = z.infer<typeof sequenceAnimaticContinuityStructureDeriveResponseSchema>
 export type SequenceAnimaticContinuityAssetWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema>
+export type SequenceAnimaticZonePoiAnalyzeRequest = z.infer<typeof sequenceAnimaticZonePoiAnalyzeRequestSchema>
+export type SequenceAnimaticZonePoiAnalyzeResponse = z.infer<typeof sequenceAnimaticZonePoiAnalyzeResponseSchema>
 export type SequenceAnimaticKeyframeWorkflowEnsureResponse = z.infer<typeof sequenceAnimaticKeyframeWorkflowEnsureResponseSchema>
 export type SequenceAnimaticShotProductionGraphEnsureResponse = z.infer<typeof sequenceAnimaticShotProductionGraphEnsureResponseSchema>
 export type SequenceAnimaticZoneCoverageBoardEnsureResponse = z.infer<typeof sequenceAnimaticZoneCoverageBoardEnsureResponseSchema>

@@ -459,14 +459,26 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     })
     const relevantShots = uniqueShots.filter((shot) => targetShotIds.has(readText(shot.id))).slice(0, 12)
     const visualDependencyEdges = readArray(continuityPack.visualDependencyEdges ?? continuityPack.visual_dependency_edges).map(asRecord)
-    const dependencyEdges = visualDependencyEdges.length > 0 ? visualDependencyEdges : continuityVisualDependencyEdges(graph)
+    const computedDependencyEdges = continuityVisualDependencyEdges(graph)
+    const dependencyEdgeKeys = new Set<string>()
+    const dependencyEdges = [...visualDependencyEdges, ...computedDependencyEdges].filter((edge) => {
+      const key = `${readText(edge.sourceNodeId)}:${readText(edge.relationship)}:${readText(edge.targetNodeId)}`
+      if (dependencyEdgeKeys.has(key)) return false
+      dependencyEdgeKeys.add(key)
+      return Boolean(readText(edge.sourceNodeId) && readText(edge.targetNodeId))
+    })
     const assetParentRequest = continuityRequest ?? masterRequest
+    const assetParentRequestIds = [...new Set([
+      assetParentRequest.id,
+      masterRequest.id,
+      continuityRequest?.id ?? '',
+    ].map(readText).filter(Boolean))]
     const childResponse = await client
       .from('output_requests')
       .select(outputRequestSelect)
       .eq('project_id', payload.projectId)
       .eq('draft_id', payload.draftId)
-      .eq('parent_request_id', assetParentRequest.id)
+      .in('parent_request_id', assetParentRequestIds)
       .order('created_at', { ascending: false })
     if (childResponse.error) throw new Error(childResponse.error.message)
     const assetStates = {
@@ -554,11 +566,13 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       readText(targetWorldEntity.selectedReferenceAssetKey),
       ...readStringArray(targetWorldEntity.assetKeys),
     ].filter(Boolean).slice(0, 2) : []
+    const targetKindBeforeParentChecks = readText(targetNode.nodeKind) || readText(targetNode.assetKind)
     const graphNodeIds = new Set(allGraphNodes.map((entry) => readText(entry.id)).filter(Boolean))
     const missingParent = dependencyEdges.find((edge) => {
       if (!requestedNodeIdSet.has(readText(edge.targetNodeId)) || edge.required === false) return false
       const sourceNodeId = readText(edge.sourceNodeId)
       if (!sourceNodeId || !graphNodeIds.has(sourceNodeId)) return false
+      if (targetKindBeforeParentChecks === 'location_zone') return false
       return !readText(asRecord(assetStates[sourceNodeId]).assetKey)
     })
     if (missingParent) {
@@ -672,7 +686,16 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     const batchIsSpatialAsset = resolvedTargetNodes.every((node) => ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(readText(node.assetKind) || readText(node.nodeKind)))
     const batchIsAtlas = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
     const batchIsSpotCameraGrid = batchKind === 'spot_camera_grid'
-    const allReferenceAssetKeys = batchIsSpotCameraGrid
+    const targetIsLocationSpot = assetKind === 'location_spot'
+    const targetIsLocationZone = assetKind === 'location_zone'
+    const latestParentZoneReferenceAssetKeys = targetIsLocationSpot
+      ? [...new Set([...referenceAssetKeys, ...parentReferenceAssetKeys])].filter(Boolean).slice(0, 1)
+      : []
+    const allReferenceAssetKeys = targetIsLocationSpot
+      ? latestParentZoneReferenceAssetKeys
+      : targetIsLocationZone
+      ? []
+      : batchIsSpotCameraGrid
       ? [...new Set([...grandparentReferenceAssetKeys, ...parentReferenceAssetKeys])].slice(0, 2)
       : batchIsAtlas
       ? parentReferenceAssetKeys.slice(0, 1)

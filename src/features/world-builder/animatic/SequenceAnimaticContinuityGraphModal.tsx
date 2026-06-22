@@ -34,7 +34,11 @@ import {
   sequenceAnimaticSceneIdFromShotId,
   type SequenceAnimaticSceneView,
 } from './sequenceAnimaticSceneIndexes'
-import { trimOptionalString } from './sequenceAnimaticCommandHelpers'
+import {
+  readLooseArray,
+  readLooseRecord,
+  trimOptionalString,
+} from './sequenceAnimaticCommandHelpers'
 
 export type SequenceAnimaticContinuityGraphModalModel = {
   title: string
@@ -62,6 +66,7 @@ export type SequenceAnimaticContinuityGraphModalProps = {
   onClose: () => void
   onGenerateAssets: (targets?: readonly SequenceAnimaticContinuityAssetTargetView[], options?: { batchKind?: 'spot_camera_grid'; forceRefresh?: boolean }) => void
   onGenerateCoverageAnchor: (anchor: SequenceAnimaticCoverageAnchorView) => void
+  onAnalyzeZonePoiLabels?: (node: SequenceAnimaticContinuityGraphNodeView) => Promise<unknown> | unknown
   onSaveNodeOverride: (request: SequenceAnimaticContinuityGraphNodeOverrideRequest) => Promise<unknown> | unknown
   onOpenSceneBoard: (scopeNodeId?: string | null, sceneId?: string | null) => void
 }
@@ -193,6 +198,7 @@ export function SequenceAnimaticContinuityGraphModal({
   onClose,
   onGenerateAssets,
   onGenerateCoverageAnchor,
+  onAnalyzeZonePoiLabels,
   onSaveNodeOverride,
   onOpenSceneBoard,
 }: SequenceAnimaticContinuityGraphModalProps) {
@@ -204,6 +210,9 @@ export function SequenceAnimaticContinuityGraphModal({
   const [extraPromptDraft, setExtraPromptDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
   const [overrideError, setOverrideError] = useState('')
+  const [poiAnalysisBusyNodeId, setPoiAnalysisBusyNodeId] = useState<string | null>(null)
+  const [poiAnalysisError, setPoiAnalysisError] = useState('')
+  const [poiAnalysisResult, setPoiAnalysisResult] = useState('')
   const submittedOverrideKeyRef = useRef('')
 
   const graph = useMemo(() => scopedContinuityGraph({
@@ -229,6 +238,8 @@ export function SequenceAnimaticContinuityGraphModal({
     setVisualBriefDraft(selectedNode.overrideVisualBrief || selectedNode.baseVisualBrief || selectedNode.summary)
     setExtraPromptDraft(selectedNode.extraPromptDirection)
     setOverrideError('')
+    setPoiAnalysisError('')
+    setPoiAnalysisResult('')
   }, [selectedNode?.id])
 
   const saveSelectedOverride = useCallback(async (clearOverride = false) => {
@@ -349,6 +360,28 @@ export function SequenceAnimaticContinuityGraphModal({
       targets: [selectedTarget],
     })
     if (plan.status === 'ready') onGenerateAssets(plan.targets, { forceRefresh: true })
+  }
+  const analyzeSelectedZonePoiLabels = async () => {
+    if (!selectedNode || selectedNode.kind !== 'zone' || !selectedNode.assetUrl || !onAnalyzeZonePoiLabels) return
+    setPoiAnalysisError('')
+    setPoiAnalysisResult('')
+    setPoiAnalysisBusyNodeId(selectedNode.id)
+    try {
+      const result = await Promise.resolve(onAnalyzeZonePoiLabels(selectedNode))
+      const analysis = readLooseRecord(readLooseRecord(result).analysis)
+      const found = Number(analysis.foundCount ?? analysis.found_count)
+      const candidates = Number(analysis.candidateCount ?? analysis.candidate_count)
+      const diagnostics = readLooseArray(analysis.diagnostics).map(trimOptionalString).filter(Boolean)
+      setPoiAnalysisResult(
+        Number.isFinite(found) && Number.isFinite(candidates)
+          ? `${found}/${candidates} spot label${candidates === 1 ? '' : 's'} matched.`
+          : diagnostics[0] || 'Spot label analysis completed.',
+      )
+    } catch (error) {
+      setPoiAnalysisError(error instanceof Error ? error.message : 'Spot label analysis failed.')
+    } finally {
+      setPoiAnalysisBusyNodeId(null)
+    }
   }
   const selectedUsageLabel = selectedNode
     ? [
@@ -587,6 +620,7 @@ export function SequenceAnimaticContinuityGraphModal({
                 <dl>
                   <div><dt>Usage</dt><dd>{selectedUsageLabel}</dd></div>
                   <div><dt>Asset</dt><dd>{selectedNode.assetStatusLabel}</dd></div>
+                  {selectedNode.kind === 'zone' && selectedNode.assetUrl ? <div><dt>Spot labels</dt><dd>{selectedNode.imagePoiAnalysisLabel || 'Not analyzed'}</dd></div> : null}
                   {selectedNode.parentId ? <div><dt>Parent</dt><dd>{displayNameFromRefId(selectedNode.parentId)}</dd></div> : null}
                   {selectedNode.sourceReferenceIds.length > 0 ? <div><dt>Source refs</dt><dd>{selectedNode.sourceReferenceIds.map(displayNameFromRefId).join(', ')}</dd></div> : null}
                   {selectedCoverageAnchor?.characterRefIds.length ? <div><dt>Characters</dt><dd>{selectedCoverageAnchor.characterRefIds.map(displayNameFromRefId).join(', ')}</dd></div> : null}
@@ -598,9 +632,11 @@ export function SequenceAnimaticContinuityGraphModal({
                 {selectedNode.kind === 'zone' ? (
                   <div className="world-wiki-continuity-graph-poi-list">
                     <strong>Zone spots</strong>
-                    {graph.nodes.filter((node) => node.parentId === selectedNode.id && (node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle')).length === 0 ? <p>No spot pins recorded for this zone yet.</p> : null}
+                    {selectedNode.imagePoiAnalysisDiagnostics.length > 0 ? <p>{selectedNode.imagePoiAnalysisDiagnostics.slice(0, 2).join(' ')}</p> : null}
+                    {selectedNode.imagePoiAnchors.length === 0 ? <p>No image text labels matched to zone spots yet.</p> : null}
                     {graph.nodes
                       .filter((node) => node.parentId === selectedNode.id && (node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle'))
+                      .filter((node) => selectedNode.imagePoiAnchors.some((anchor) => anchor.spotId === node.id))
                       .map((node) => (
                         <button
                           key={node.id}
@@ -613,7 +649,7 @@ export function SequenceAnimaticContinuityGraphModal({
                         >
                           {node.assetUrl ? <img src={node.assetUrl} alt="" /> : <EntityIcon id={sequenceAnimaticContinuityGraphIconId(node.kind)} />}
                           <span>{node.label}</span>
-                          <em>{node.assetStatusLabel}</em>
+                          <em>{selectedNode.imagePoiAnchors.find((anchor) => anchor.spotId === node.id)?.matchedText || node.assetStatusLabel}</em>
                         </button>
                       ))}
                   </div>
@@ -656,6 +692,18 @@ export function SequenceAnimaticContinuityGraphModal({
                     Open Scene Board
                   </button>
                   {selectedNode.assetUrl ? <a className="ghost-button compact" href={selectedNode.assetUrl} target="_blank" rel="noreferrer">View asset</a> : null}
+                  {selectedNode.kind === 'zone' && selectedNode.assetUrl && onAnalyzeZonePoiLabels ? (
+                    <button
+                      className="ghost-button compact"
+                      disabled={poiAnalysisBusyNodeId === selectedNode.id}
+                      onClick={() => void analyzeSelectedZonePoiLabels()}
+                      type="button"
+                    >
+                      {poiAnalysisBusyNodeId === selectedNode.id ? <><span className="world-mini-spinner" aria-hidden="true" />Analyzing labels</> : 'Analyze spot labels'}
+                    </button>
+                  ) : null}
+                  {poiAnalysisError ? <p className="world-wiki-continuity-graph-error">{poiAnalysisError}</p> : null}
+                  {poiAnalysisResult ? <p className="world-wiki-continuity-graph-note">{poiAnalysisResult}</p> : null}
                   {selectedCoverageAnchor ? (
                     <button
                       className="ghost-button compact"

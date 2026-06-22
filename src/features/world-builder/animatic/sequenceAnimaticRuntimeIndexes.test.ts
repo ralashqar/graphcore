@@ -6,7 +6,9 @@ import type {
   OutputRequest,
   OutputWorkflowRun,
 } from '../../../domain/outputWorkflow.ts'
+import { sequenceAnimaticRequestIsActive as commandRequestIsActive } from './sequenceAnimaticCommandHelpers.ts'
 import { buildSequenceAnimaticRuntimeIndexes } from './sequenceAnimaticRuntimeIndexes.ts'
+import { sequenceAnimaticRequestIsActive as runtimeRequestIsActive } from './sequenceAnimaticRuntimePresentation.ts'
 
 function outputRequest(overrides: Partial<OutputRequest>): OutputRequest {
   return {
@@ -85,6 +87,20 @@ function outputArtifact(overrides: Partial<OutputArtifact>): OutputArtifact {
     ...overrides,
   }
 }
+
+test('sequence animatic active helpers treat completed latest runs as terminal', () => {
+  const request = outputRequest({
+    status: 'running',
+    latestRunId: 'run_completed',
+  })
+  const run = outputRun({
+    id: 'run_completed',
+    status: 'completed',
+  })
+
+  assert.equal(commandRequestIsActive(request, run), false)
+  assert.equal(runtimeRequestIsActive(request, run), false)
+})
 
 test('sequence animatic runtime indexes do not borrow same shot-id keyframes from another master', () => {
   const masterA = outputRequest({

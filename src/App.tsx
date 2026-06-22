@@ -6848,6 +6848,27 @@ export default function App() {
     return result
   }
 
+  async function analyzeSequenceAnimaticZonePois(request: Parameters<typeof workspaceService.analyzeSequenceAnimaticZonePois>[1]) {
+    if (!snapshot) {
+      throw new Error('Load a live GraphCore draft before analyzing animatic zone labels.')
+    }
+    if (loadedState?.source !== 'supabase') {
+      throw new Error('Animatic zone label analysis requires a live Supabase-backed draft.')
+    }
+    const result = await workspaceService.analyzeSequenceAnimaticZonePois(snapshot, request)
+    const current = snapshotRef.current ?? snapshot
+    const artifacts = [result.continuityAssetArtifact, result.continuityPackArtifact].filter((artifact): artifact is NonNullable<typeof artifact> => Boolean(artifact))
+    commitPersistedSnapshot({
+      ...current,
+      outputArtifacts: [
+        ...artifacts,
+        ...current.outputArtifacts.filter((artifact) => !artifacts.some((entry) => entry.id === artifact.id)),
+      ],
+    })
+    void invalidateOutputSurface(current.project.id, current.draft.id)
+    return result
+  }
+
   async function upgradeOutputWorkflowPreset(request: Parameters<typeof workspaceService.upgradeOutputWorkflowPreset>[1]) {
     if (!snapshot) {
       throw new Error('Load a live GraphCore draft before upgrading an output workflow.')
@@ -9022,6 +9043,7 @@ export default function App() {
                 onStartSequenceAnimaticSceneBoardWorkflowCommand={startSequenceAnimaticSceneBoardWorkflowCommand}
                 onEnsureSequenceAnimaticShotRevisionWorkflow={ensureSequenceAnimaticShotRevisionWorkflow}
                 onUpdateSequenceAnimaticSceneGraphNode={updateSequenceAnimaticSceneGraphNode}
+                onAnalyzeSequenceAnimaticZonePois={analyzeSequenceAnimaticZonePois}
                 onLoadSequenceAnimaticState={loadSequenceAnimaticState}
                 onSubscribeSequenceAnimaticStateSignals={workspaceService.subscribeSequenceAnimaticStateSignals}
                 onGetOutputRequestStatus={getOutputRequestStatus}

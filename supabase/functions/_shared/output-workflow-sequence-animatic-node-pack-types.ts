@@ -204,6 +204,22 @@ export type SequenceAnimaticWorkflowNodePackHelpers = {
     fallbackUsed: boolean
     fallbackReason: string
   }>
+  runVisionStructuredNode: <TValue>(input: {
+    nodeKey: string
+    schemaName: string
+    schema: z.ZodType<TValue>
+    instructions: string
+    input: Array<Record<string, unknown>>
+    fallback: TValue
+    maxOutputTokens?: number
+  }) => Promise<{
+    value: TValue
+    provider: string
+    model: string
+    providerRequestId?: string | null
+    fallbackUsed: boolean
+    fallbackReason: string
+  }>
   runBackgroundStructuredNode: <TValue>(input: {
     nodeKey: string
     schemaName: string

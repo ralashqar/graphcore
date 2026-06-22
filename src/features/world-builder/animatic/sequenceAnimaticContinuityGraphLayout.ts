@@ -14,6 +14,8 @@ export type SequenceAnimaticContinuityGraphPoiHint = {
   y: number
   status: string
   assetUrl: string | null
+  matchedText: string
+  confidence: number
 }
 
 export type SequenceAnimaticContinuityGraphLayoutNode = {
@@ -85,38 +87,34 @@ function shouldCollapseSet(
   return siblingSets.length <= 1
 }
 
-function deterministicPoiPosition(index: number, count: number) {
-  const safeCount = Math.max(1, count)
-  const angle = (-Math.PI / 2) + ((Math.PI * 2) * index) / safeCount
-  const radiusX = 34
-  const radiusY = 28
-  return {
-    x: Math.round(50 + Math.cos(angle) * radiusX),
-    y: Math.round(50 + Math.sin(angle) * radiusY),
-  }
-}
-
 export function buildSequenceAnimaticContinuityGraphPoiHints(input: {
   zoneNode: SequenceAnimaticContinuityGraphNodeView
   nodes: readonly SequenceAnimaticContinuityGraphNodeView[]
 }) {
-  const spotChildren = input.nodes
-    .filter((node) => node.parentId === input.zoneNode.id && (node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle'))
+  const nodeById = new Map(input.nodes.map((node) => [node.id, node] as const))
+  return input.zoneNode.imagePoiAnchors
+    .map((anchor): SequenceAnimaticContinuityGraphPoiHint | null => {
+      const node = nodeById.get(anchor.spotId) ?? null
+      if (!node || node.parentId !== input.zoneNode.id) return null
+      if (!(node.kind === 'spot' || node.kind === 'viewpoint' || node.kind === 'angle')) return null
+      if (!Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) return null
+      const x = Math.max(0, Math.min(100, anchor.x))
+      const y = Math.max(0, Math.min(100, anchor.y))
+      return {
+        id: node.id,
+        label: node.label,
+        kind: node.kind,
+        x,
+        y,
+        status: node.assetStatus,
+        assetUrl: node.assetUrl,
+        matchedText: anchor.matchedText,
+        confidence: anchor.confidence,
+      }
+    })
+    .filter((hint): hint is SequenceAnimaticContinuityGraphPoiHint => hint !== null)
     .sort((left, right) => graphKindOrder(left.kind) - graphKindOrder(right.kind) || left.label.localeCompare(right.label))
     .slice(0, 12)
-
-  return spotChildren.map((node, index): SequenceAnimaticContinuityGraphPoiHint => {
-    const position = deterministicPoiPosition(index, spotChildren.length)
-    return {
-      id: node.id,
-      label: node.label,
-      kind: node.kind,
-      x: position.x,
-      y: position.y,
-      status: node.assetStatus,
-      assetUrl: node.assetUrl,
-    }
-  })
 }
 
 export function buildSequenceAnimaticContinuityGraphLayout(input: {

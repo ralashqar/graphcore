@@ -5,6 +5,7 @@ const ASSET_RESPONSE_CACHE_KEY = 'graphcore:asset-response-cache:v1'
 const SIGNED_ASSET_URL_TTL_MS = 50 * 60 * 1000
 const SIGNED_ASSET_URL_EXPIRY_BUFFER_MS = 2 * 60 * 1000
 const SIGNED_ASSET_URL_MAX_ENTRIES = 400
+const ASSET_RESPONSE_CACHE_TIMEOUT_MS = 2500
 
 type SignedAssetUrlCacheEntry = {
   projectId: string | null
@@ -36,6 +37,14 @@ function assetResponseCacheUrl(asset: Pick<AssetDefinition, 'key' | 'projectId' 
     storagePath: asset.storagePath,
   })
   return `https://graphcore.local/asset-cache?${params.toString()}`
+}
+
+function assetAllowsResponseBodyCache(asset: Pick<AssetDefinition, 'metadata'>) {
+  const metadata = asset.metadata
+  return metadata.cacheSignedResponse === true
+    || metadata.cache_signed_response === true
+    || metadata.cacheObjectResponse === true
+    || metadata.cache_object_response === true
 }
 
 function readSignedAssetUrlCache() {
@@ -134,12 +143,16 @@ export async function getCachedAssetObjectUrl(asset: Pick<AssetDefinition, 'key'
 }
 
 export async function cacheSignedAssetResponse(
-  asset: Pick<AssetDefinition, 'key' | 'projectId' | 'storagePath' | 'kind'>,
+  asset: Pick<AssetDefinition, 'key' | 'projectId' | 'storagePath' | 'kind' | 'metadata'>,
   signedUrl: string,
 ) {
   if (asset.kind !== 'image' || !canUseCacheStorage()) return signedUrl
+  if (!assetAllowsResponseBodyCache(asset)) return signedUrl
+
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), ASSET_RESPONSE_CACHE_TIMEOUT_MS)
   try {
-    const response = await fetch(signedUrl, { cache: 'force-cache' })
+    const response = await fetch(signedUrl, { cache: 'force-cache', signal: controller.signal })
     if (!response.ok) return signedUrl
 
     const contentType = response.headers.get('content-type') ?? 'image/webp'
@@ -154,5 +167,7 @@ export async function cacheSignedAssetResponse(
     return URL.createObjectURL(blob)
   } catch {
     return signedUrl
+  } finally {
+    window.clearTimeout(timeoutId)
   }
 }

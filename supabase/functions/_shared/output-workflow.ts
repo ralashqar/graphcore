@@ -6821,6 +6821,47 @@ async function runCinematicV2StructuredNode<TValue>(input: {
   }
 }
 
+async function runCinematicV2VisionStructuredNode<TValue>(input: {
+  nodeKey: string
+  schemaName: string
+  schema: z.ZodType<TValue>
+  instructions: string
+  input: Array<Record<string, unknown>>
+  fallback: TValue
+  maxOutputTokens?: number
+}) {
+  const model = outputWorkflowTextModel()
+  const response = await runOpenAiResponses({
+    model,
+    instructions: input.instructions,
+    input: input.input,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: input.schemaName,
+        schema: normalizeStrictJsonSchema(z.toJSONSchema(input.schema)),
+        strict: true,
+      },
+    },
+    maxOutputTokens: input.maxOutputTokens ?? 2200,
+    metadata: {
+      graphcore_task: input.schemaName,
+      graphcore_node_key: input.nodeKey,
+    },
+    timeoutMs: 120_000,
+  })
+  if (!response.response.ok) {
+    const fallbackReason = `Provider request failed: ${response.response.status ?? 'unknown'} ${response.response.statusText ?? ''}`.trim()
+    return { value: input.fallback, response, provider: 'graphcore', model: `deterministic-${input.schemaName}-fallback-v1`, providerRequestId: response.id, fallbackUsed: true, fallbackReason }
+  }
+  try {
+    return { value: input.schema.parse(parseJsonObject(response.outputText)), response, provider: 'openai', model, providerRequestId: response.id, fallbackUsed: false, fallbackReason: '' }
+  } catch (error) {
+    const fallbackReason = error instanceof Error ? error.message : 'Structured vision output parse failed.'
+    return { value: input.fallback, response, provider: 'graphcore', model: `deterministic-${input.schemaName}-fallback-v1`, providerRequestId: response.id, fallbackUsed: true, fallbackReason }
+  }
+}
+
 type CinematicV2StructuredNodeBackgroundInput<TValue> = {
   nodeKey: string
   schemaName: string
@@ -8481,6 +8522,130 @@ async function collectAssetPackReferenceRecords(client: DatabaseClient, run: Out
   return references
 }
 
+async function collectReferenceAssetKeyRecords(
+  client: DatabaseClient,
+  run: OutputWorkflowRun,
+  assetKeys: readonly string[],
+  limit = 3,
+  label = 'Continuity reference',
+  role = 'continuity_reference',
+): Promise<SeedanceReferenceRecord[]> {
+  const uniqueAssetKeys = [...new Set(assetKeys.map(readText).filter(Boolean))].slice(0, Math.max(0, limit))
+  if (uniqueAssetKeys.length === 0) return []
+  return collectAssetPackReferenceRecords(client, run, {
+    entities: uniqueAssetKeys.map((assetKey, index) => ({
+      key: `direct_reference_${index + 1}_${slugify(assetKey)}`,
+      name: label,
+      role,
+      primaryAssetKey: assetKey,
+      assetKeys: [assetKey],
+      selectedReferenceAssetKey: assetKey,
+      selectedReferenceVariantKey: role,
+      selectedReferenceVariantLabel: label,
+      selectedReferenceVariantType: role,
+      referenceSelectionReason: 'Direct workflow reference asset key.',
+    })),
+  }, limit)
+}
+
+function parentZoneIdForSpotContinuityTarget(targetNode: Record<string, unknown>) {
+  return readText(targetNode.zoneId ?? targetNode.zone_id)
+    || readText(targetNode.parentZoneId ?? targetNode.parent_zone_id)
+    || readText(targetNode.parentId ?? targetNode.parent_id)
+}
+
+function mergeContinuityAssetStateFromArtifactMetadata(
+  stateByNodeId: Record<string, Record<string, unknown>>,
+  metadata: Record<string, unknown>,
+) {
+  const role = readText(metadata.role)
+  if (role === 'sequence_animatic_continuity_pack') {
+    const pack = asRecord(metadata.continuityPack ?? metadata.continuity_pack)
+    Object.entries(asRecord(pack.assetStateByNodeId ?? pack.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+      const cleanNodeId = readText(nodeId)
+      const record = asRecord(state)
+      if (cleanNodeId && Object.keys(record).length > 0) stateByNodeId[cleanNodeId] = record
+    })
+  } else if (role === 'sequence_animatic_continuity_asset') {
+    const state = asRecord(metadata.assetState ?? metadata.asset_state)
+    const nodeId = readText(state.sourceNodeId) || readText(metadata.targetNodeId)
+    if (nodeId && Object.keys(state).length > 0) stateByNodeId[nodeId] = state
+  } else if (role === 'sequence_animatic_continuity_asset_batch') {
+    Object.entries(asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+      const cleanNodeId = readText(nodeId)
+      const record = asRecord(state)
+      if (cleanNodeId && Object.keys(record).length > 0) stateByNodeId[cleanNodeId] = record
+    })
+  }
+}
+
+async function latestParentZoneAssetKeyForSpotContinuityImage(
+  client: DatabaseClient,
+  run: OutputWorkflowRun,
+  config: Record<string, unknown>,
+) {
+  const targetNode = asRecord(config.targetNode ?? config.target_node)
+  const parentZoneId = parentZoneIdForSpotContinuityTarget(targetNode)
+  if (!parentZoneId) return ''
+
+  const stateByNodeId: Record<string, Record<string, unknown>> = {}
+  const continuityPack = asRecord(config.continuityPack ?? config.continuity_pack)
+  Object.entries(asRecord(continuityPack.assetStateByNodeId ?? continuityPack.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+    const cleanNodeId = readText(nodeId)
+    const record = asRecord(state)
+    if (cleanNodeId && Object.keys(record).length > 0) stateByNodeId[cleanNodeId] = record
+  })
+
+  const draftId = readText((run as unknown as Record<string, unknown>).draftId ?? (run as unknown as Record<string, unknown>).draft_id)
+  const parentRequestIds = [...new Set([
+    readText(config.continuityRequestId ?? config.continuity_request_id),
+    readText(config.masterRequestId ?? config.master_request_id),
+  ].filter(Boolean))]
+  const workflowIds = new Set<string>()
+  const continuityWorkflowId = readText(config.continuityWorkflowId ?? config.continuity_workflow_id)
+  if (continuityWorkflowId) workflowIds.add(continuityWorkflowId)
+
+  try {
+    if (draftId && parentRequestIds.length > 0) {
+      const childResponse = await client
+        .from('output_requests')
+        .select('id, workflow_id, metadata, created_at')
+        .eq('draft_id', draftId)
+        .in('parent_request_id', parentRequestIds)
+        .order('created_at', { ascending: false })
+        .limit(100)
+      if (!childResponse.error) {
+        ;(childResponse.data ?? []).forEach((row: unknown) => {
+          const record = asRecord(row)
+          const metadata = asRecord(record.metadata)
+          const role = readText(metadata.screenplayAnimaticRole) || readText(metadata.sequenceAnimaticRole)
+          const workflowId = readText(record.workflow_id)
+          if ((role === 'continuity_asset' || role === 'continuity_asset_batch') && workflowId) workflowIds.add(workflowId)
+        })
+      }
+    }
+
+    if (draftId && workflowIds.size > 0) {
+      const artifactResponse = await client
+        .from('output_artifacts')
+        .select('id, workflow_id, metadata, updated_at')
+        .eq('draft_id', draftId)
+        .in('workflow_id', [...workflowIds])
+        .order('updated_at', { ascending: false })
+        .limit(150)
+      if (!artifactResponse.error) {
+        ;[...(artifactResponse.data ?? [])].reverse().forEach((row: unknown) => {
+          mergeContinuityAssetStateFromArtifactMetadata(stateByNodeId, asRecord(asRecord(row).metadata))
+        })
+      }
+    }
+  } catch {
+    // Fall through to the state already embedded in the workflow config.
+  }
+
+  return readText(asRecord(stateByNodeId[parentZoneId]).assetKey)
+}
+
 async function projectAssetReferenceUrl(client: DatabaseClient, storagePath: string, mimeType: string) {
   const bucket = client.storage.from('project-assets')
   if (typeof bucket.createSignedUrl === 'function') {
@@ -9918,11 +10083,26 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
       const falApiKey = Deno.env.get('FAL_KEY')
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
+      const upstreamReferenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+        .map(readText)
+        .filter(Boolean)
+      const configuredReferenceAssetKeys = readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys)
+      const directReferenceAssetKeys = upstreamReferenceAssetKeys.length > 0
+        ? upstreamReferenceAssetKeys
+        : configuredReferenceAssetKeys
       const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
       const rawAssetPack = Object.keys(upstreamAssetPack).length > 0
         ? upstreamAssetPack
         : asRecord(config.pageAssetPack ?? config.page_asset_pack ?? config.assetPack ?? config.asset_pack)
-      const referenceLimit = referenceLimitForImageNode(config, role)
+      const continuityAssetKind = readText(config.assetKind) || readText(config.asset_kind) || readText(asRecord(config.targetNode ?? config.target_node).assetKind) || readText(asRecord(config.targetNode ?? config.target_node).nodeKind)
+      const isSpotContinuityAssetImage = (purpose === 'sequence_animatic_continuity_asset_image' || role === 'sequence_animatic_continuity_asset_image') && continuityAssetKind === 'location_spot'
+      const referenceLimit = isSpotContinuityAssetImage ? 1 : referenceLimitForImageNode(config, role)
+      const latestSpotParentZoneAssetKey = isSpotContinuityAssetImage
+        ? await latestParentZoneAssetKeyForSpotContinuityImage(input.client, input.run, config)
+        : ''
+      const effectiveDirectReferenceAssetKeys = isSpotContinuityAssetImage
+        ? [latestSpotParentZoneAssetKey].map(readText).filter(Boolean).slice(0, 1)
+        : directReferenceAssetKeys
       const isSequenceAnimaticPlannedKeyframeImage = purpose === 'sequence_animatic_planned_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
       const isCinematicV3StoryboardSheet = purpose === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_v3_storyboard_sheet'
       const storyboardSheetShotPlan = isCinematicV3StoryboardSheet ? readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']) : {}
@@ -9937,7 +10117,7 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
           maxAssetKeysPerEntity: 1,
         })
         : rawAssetPack
-      const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
+      const directImageRecords = isSpotContinuityAssetImage ? [] : (await Promise.all(upstreamImages.map(async (image, index) => {
         const url = await imageReferenceToFalUrl(input.client, image, input.run)
         if (!url) return null
         const imageMetadata = asRecord(image.metadata)
@@ -9948,9 +10128,23 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
           modality: 'image' as const,
         }
       }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
-      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, referenceLimit)
+      const directReferenceAssetKeyRecords = await collectReferenceAssetKeyRecords(
+        input.client,
+        input.run,
+        effectiveDirectReferenceAssetKeys,
+        referenceLimit,
+        purpose === 'sequence_animatic_continuity_asset_image' || role === 'sequence_animatic_continuity_asset_image'
+          ? 'Scene graph continuity dependency'
+          : 'Workflow image reference',
+        purpose === 'sequence_animatic_continuity_asset_image' || role === 'sequence_animatic_continuity_asset_image'
+          ? 'continuity_dependency'
+          : 'image_reference',
+      )
+      const assetPackImageRecords = isSpotContinuityAssetImage
+        ? []
+        : await collectAssetPackReferenceRecords(input.client, input.run, assetPack, referenceLimit)
       const seenReferenceImageKeys = new Set<string>()
-      const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
+      const referenceImageRecords = [...directImageRecords, ...directReferenceAssetKeyRecords, ...assetPackImageRecords]
         .filter((entry) => {
           const url = readText(entry.url)
           if (!url || seenReferenceImageKeys.has(url)) return false
@@ -9959,6 +10153,9 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
         })
         .slice(0, referenceLimit)
       const referenceImageUrls = referenceImageRecords.map((entry) => readText(entry.url)).filter(Boolean)
+      if (isSpotContinuityAssetImage && referenceImageUrls.length !== 1) {
+        throw new Error('Spot continuity asset generation requires a ready parent zone image reference. Generate or regenerate the parent zone first; provider image request was not submitted.')
+      }
       const sequenceAnimaticProviderReferenceManifest = isSequenceAnimaticPlannedKeyframeImage
         ? sequenceAnimaticReferenceManifestTextFromRecords(referenceImageRecords)
         : ''
@@ -11350,6 +11547,7 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
       persistSequenceAnimaticDirectorPlanRequestState: persistSequenceAnimaticDirectorPlanRequestState as never,
       registerVideoArtifact: registerVideoArtifact as never,
       runStructuredNode: runCinematicV2StructuredNode,
+      runVisionStructuredNode: runCinematicV2VisionStructuredNode,
       runBackgroundStructuredNode: runCinematicV2StructuredNodeBackground,
   }
   registerSequenceAnimaticPlanningWorkflowNodePack({

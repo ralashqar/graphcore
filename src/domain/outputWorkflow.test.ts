@@ -126,8 +126,12 @@ import {
   sequenceAnimaticWorkflowTemplateRegistry,
 } from '../../supabase/functions/_shared/sequence-animatic-scene-board-workflows.ts'
 import {
+  sequenceAnimaticContinuityAssetPrompt,
   sequenceAnimaticContinuityBatchPrompt,
 } from '../../supabase/functions/_shared/output-workflow-sequence-animatic-continuity-asset-pack.ts'
+import {
+  buildSequenceAnimaticContinuityAssetPrompt,
+} from '../../supabase/functions/_shared/output-workflow-sequence-animatic-continuity-asset-runtime.ts'
 import {
   buildRecoveredOutputFromArtifact,
   resolveDurableWorkflowNodeOutput,
@@ -3408,6 +3412,15 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     })),
   })
   assert.equal(assetValidation.ok, true, assetValidation.diagnostics.join('\n'))
+  assert.ok(assetGraph.edges.some((edge) =>
+    edge.source_node_key === 'continuity_asset_prompt'
+    && edge.source_port === 'reference_asset_keys'
+    && edge.target_node_key === 'continuity_asset_image'
+    && edge.target_port === 'reference_asset_keys',
+  ), 'continuity asset image node must receive direct reference asset keys')
+  const assetImageNode = assetGraph.nodes.find((node) => node.key === 'continuity_asset_image')
+  assert.deepEqual(assetImageNode?.config.imageSize, { width: 3840, height: 2560 })
+  assert.equal(assetImageNode?.config.imageSizePolicy, 'zone_continuity_board_3840x2560')
 
   const batchGraph = buildSequenceAnimaticContinuityBatchWorkflowGraph({
     workflowId: 'workflow-continuity-batch',
@@ -3531,13 +3544,13 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Location evidence/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Parent world location guide/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /parent world location guide, zone brief/)
-  assert.match(sequenceAnimaticSpatialPromptSource, /spatial_location_prompt_v4/)
+  assert.match(sequenceAnimaticSpatialPromptSource, /spatial_location_prompt_v7/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /promptDiagnostics/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /physical staging position or architectural sub-location/)
-  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Required spot annotations/)
-  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /numbered or lettered map markers/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Map annotations/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Spot-detail cells/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /short readable spot-name label/)
-  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /short spot-name labels baked into the map/)
+  assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /dominant annotated map plus square cinematic spot-detail cells/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Find the marker\/label for/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /Use its baked spot labels and markers/)
   assert.match(sequenceAnimaticContinuityAssetRuntimeSource, /labeled spot-location source of truth/)
@@ -3562,6 +3575,8 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   assert.match(continuityAssetEnsureSource, /worldLocationVisualGuideForEntity/)
   assert.match(continuityAssetEnsureSource, /worldLocationVisualGuide/)
   assert.match(continuityAssetEnsureSource, /parentReferenceAssetKeys/)
+  assert.match(continuityAssetEnsureSource, /targetIsLocationZone[\s\S]*?\? \[\]/)
+  assert.match(continuityAssetEnsureSource, /targetKindBeforeParentChecks === 'location_zone'\) return false/)
   assert.match(continuityAssetEnsureSource, /spatialPromptPolicyVersion/)
   assert.match(continuityAssetEnsureSource, /Generate parent continuity asset first/)
   assert.doesNotMatch(continuityAssetEnsureSource, /if \(missingParent\) \{\s*throw new HttpError\(409, `Generate parent continuity asset first/)
@@ -4228,6 +4243,51 @@ test('sequence animatic spatial prompt sanitizer removes character action while 
 
   const text = sanitizeSequenceAnimaticSpatialPromptText('Akane Opposite Position [ref:actor_akane]', { forbiddenNames, maxLength: 120 }).text
   assert.doesNotMatch(text, /Akane|actor_akane/)
+})
+
+test('sequence animatic spot continuity prompt stays simple and zone-map grounded', () => {
+  const result = buildSequenceAnimaticContinuityAssetPrompt({
+    targetNode: {
+      id: 'spot_gate_bottleneck',
+      name: 'Gate Bottleneck',
+      nodeKind: 'location_spot',
+      zoneId: 'zone_gate',
+      visualBrief: 'A constricted threshold between the outer path and the inner gate.',
+    },
+    assetKind: 'location_spot',
+    relevantShots: [],
+    referenceAssetKeys: ['zone-map-asset'],
+  })
+
+  assert.match(result.prompt, /Draw the spot "Gate Bottleneck" in large from the attached zone map\./)
+  assert.match(result.prompt, /Use the attached zone map as the only visual reference\./)
+  assert.match(result.prompt, /Respect the reference image map and structure well\./)
+  assert.match(result.prompt, /Stage it with a camera angle that captures the spot clearly/i)
+  assert.doesNotMatch(result.prompt, /A constricted threshold between the outer path and the inner gate/i)
+  assert.doesNotMatch(result.prompt, /Spot note:/i)
+  assert.doesNotMatch(result.prompt, /reusable local staging reference|Spatial continuity requirements|Attached image references are continuity locks|Provider requirements|Do not invent a different location/i)
+})
+
+test('sequence animatic zone map prompt carries child spot visual placement notes', () => {
+  const result = buildSequenceAnimaticContinuityAssetPrompt({
+    targetNode: {
+      id: 'zone_gate',
+      name: 'Gate Zone',
+      nodeKind: 'location_zone',
+      visualBrief: 'Outer gate zone with a road threshold.',
+    },
+    assetKind: 'location_zone',
+    relevantShots: [],
+    referenceAssetKeys: [],
+    zoneMapPoiLines: ['Gate Bottleneck (spot): A constricted threshold between the outer path and the inner gate.'],
+  })
+
+  assert.match(result.prompt, /Known spots with visual placement notes:/)
+  assert.match(result.prompt, /Gate Bottleneck \(spot\): A constricted threshold/)
+  assert.match(result.prompt, /Use the known spot visual notes to place each marker/)
+  assert.match(result.prompt, /Spot-detail cells: For every known spot/)
+  assert.match(result.prompt, /Caption each square cell with the spot name/)
+  assert.match(result.prompt, /one large 3840x2560 zone continuity board/)
 })
 
 test('sequence animatic state polling avoids full workflow run-step payloads', () => {
@@ -4948,6 +5008,53 @@ test('spot atlas batch prompt preserves config reference keys as direct image re
   assert.doesNotMatch((assetPack.referenceDiagnostics ?? []).join('\n'), /no ready image references/i)
 })
 
+test('spot continuity asset prompt rejects missing parent zone image reference', async () => {
+  await assert.rejects(
+    sequenceAnimaticContinuityAssetPrompt({
+      inputHash: 'spot-prompt-missing-zone-ref',
+      run: { draftId: 'draft-1' },
+      node: {
+        config: {
+          targetNode: { id: 'spot_1', name: 'Spot 1', assetKind: 'location_spot', zoneId: 'zone_1' },
+          assetKind: 'location_spot',
+          assetPack: { entities: [] },
+          referenceAssetKeys: [],
+        },
+      },
+      upstream: {},
+    } as never, {
+      asRecord: (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {},
+      readArray: (value: unknown) => Array.isArray(value) ? value : [],
+      readStringArray: (value: unknown) => Array.isArray(value) ? value.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter(Boolean) : [],
+      readText: (value: unknown) => typeof value === 'string' ? value.trim() : '',
+      readFirstUpstreamRecord: () => ({}),
+      readFirstUpstreamArray: () => [],
+      hashOutputWorkflowValue,
+    } as never),
+    /requires a ready parent zone image reference/i,
+  )
+})
+
+test('spot continuity asset reference lookup scans master and continuity child scopes', () => {
+  const packSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-continuity-asset-pack.ts'), 'utf8')
+  const commandSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-continuity-asset-workflow-command.ts'), 'utf8')
+  const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
+  const factorySource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-workflow-factory.ts'), 'utf8')
+
+  assert.match(packSource, /masterRequestId = helpers\.readText\(config\.masterRequestId/)
+  assert.match(packSource, /parentRequestIds = \[\.\.\.new Set\(\[continuityRequestId, masterRequestId\]/)
+  assert.match(packSource, /\.in\('parent_request_id', parentRequestIds\)/)
+  assert.match(packSource, /input\.assetKind === 'location_spot'[\s\S]*?slice\(0, 1\)/)
+  assert.match(commandSource, /assetParentRequestIds = \[\.\.\.new Set\(/)
+  assert.match(commandSource, /\.in\('parent_request_id', assetParentRequestIds\)/)
+  assert.match(commandSource, /targetIsLocationSpot[\s\S]*?latestParentZoneReferenceAssetKeys[\s\S]*?slice\(0, 1\)/)
+  assert.match(workerSource, /latestParentZoneAssetKeyForSpotContinuityImage/)
+  assert.match(workerSource, /isSpotContinuityAssetImage \? 1 : referenceLimitForImageNode/)
+  assert.match(workerSource, /const directImageRecords = isSpotContinuityAssetImage \? \[\]/)
+  assert.match(workerSource, /const assetPackImageRecords = isSpotContinuityAssetImage[\s\S]*?\? \[\]/)
+  assert.match(factorySource, /const maxReferenceImages = input\.assetKind === 'location_spot' \? 1 : 8/)
+})
+
 test('sequence animatic continuity anchors are planned, extracted, and passed to child workflows', () => {
   const workerSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow.ts'), 'utf8')
   const sequenceAnimaticPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-sequence-animatic-pack.ts'), 'utf8')
@@ -5572,7 +5679,7 @@ test('sequence animatic shot videos use cropped panel keyframe mini graphs', () 
   assert.match(mediaRuntimeSource, /MUAPI_VIDEO_PROMPT_MAX_CHARS = 4000/)
   assert.match(mediaRuntimeSource, /compactSeedancePromptForProvider/)
   assert.doesNotMatch(workerSource, /function compactSeedancePromptForProvider/)
-  assert.match(runtimePresentationSource, /run\?\.status === 'failed' \|\| run\?\.status === 'cancelled'/)
+  assert.match(runtimePresentationSource, /isTerminalOutputWorkflowRunStatus\(run\.status\)/)
   assert.doesNotMatch(worldGraphSource, /function sequenceAnimaticRequestIsActive[\s\S]{0,220}outputWorkflowRunHasFailedExecution\(run\)/)
   assert.match(runtimePresentationSource, /ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set\(\['queued', 'planning', 'running'\]\)/)
   assert.doesNotMatch(runtimePresentationSource, /ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set\(\[[^\]]*'awaiting_confirmation'/)
@@ -7630,6 +7737,9 @@ test('cinematic v3 default graph stops at authoring timeline and keeps video nod
   assert.match(source, /readUpstreamImages\(\{ value: record \}/)
   assert.match(source, /resolveProjectAssetByKey\(client, run, assetKey\)/)
   assert.match(source, /imageReferenceToFalUrl\(input\.client, image, input\.run\)/)
+  assert.match(source, /collectReferenceAssetKeyRecords/)
+  assert.match(source, /directReferenceAssetKeys/)
+  assert.match(source, /Spot continuity asset generation requires a ready parent zone image reference/)
   assert.match(cinematicAssetPackRuntimeSource, /export function buildCinematicV3StoryboardGroupAssetPack/)
   assert.match(cinematicAssetPackRuntimeSource, /referenceScope: 'cinematic_v3_storyboard_group'/)
   assert.doesNotMatch(source, /function buildCinematicV3StoryboardGroupAssetPack/)

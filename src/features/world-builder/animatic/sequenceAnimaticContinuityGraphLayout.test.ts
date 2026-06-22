@@ -16,6 +16,7 @@ function graphNode(input: {
   kind: SequenceAnimaticContinuityGraphNodeKind
   parentId?: string | null
   assetUrl?: string | null
+  imagePoiAnchors?: SequenceAnimaticContinuityGraphNodeView['imagePoiAnchors']
 }): SequenceAnimaticContinuityGraphNodeView {
   return {
     id: input.id,
@@ -42,6 +43,10 @@ function graphNode(input: {
     generationTargetType: input.kind === 'coverage_anchor' ? 'coverage_anchor' : 'continuity_asset',
     generationRequestId: null,
     assetHistoryKeys: [],
+    imagePoiAnchors: input.imagePoiAnchors ?? [],
+    imagePoiAnalysisStatus: '',
+    imagePoiAnalysisLabel: '',
+    imagePoiAnalysisDiagnostics: [],
   }
 }
 
@@ -55,7 +60,7 @@ function hierarchyEdge(source: string, target: string): SequenceAnimaticContinui
   }
 }
 
-test('scene graph layout collapses a single set and exposes zone spot POI hints', () => {
+test('scene graph layout collapses a single set without synthetic zone POI hints', () => {
   const nodes = [
     graphNode({ id: 'loc_1', label: 'City', kind: 'world_location' }),
     graphNode({ id: 'set_1', label: 'Terminal', kind: 'set', parentId: 'loc_1' }),
@@ -83,10 +88,31 @@ test('scene graph layout collapses a single set and exposes zone spot POI hints'
   assert.ok(location)
   assert.ok(zone.y > location.y)
   assert.equal(zone.displayKindLabel, 'zone')
-  assert.equal(zone.poiHints.length, 1)
-  assert.equal(zone.poiHints[0].id, 'spot_1')
+  assert.equal(zone.poiHints.length, 0)
   const viewpoint = layout.nodes.find((node) => node.node.id === 'view_1')
   assert.equal(viewpoint?.displayKindLabel, 'Camera grid')
+})
+
+test('scene graph layout uses only OCR-derived zone POI anchors', () => {
+  const nodes = [
+    graphNode({ id: 'loc_1', label: 'City', kind: 'world_location' }),
+    graphNode({ id: 'zone_1', label: 'Gate Hall', kind: 'zone', parentId: 'loc_1', assetUrl: 'https://example.test/zone.webp', imagePoiAnchors: [
+      { spotId: 'spot_1', label: 'North Door', matchedText: 'NORTH DOOR', x: 18.5, y: 42.2, confidence: 0.91, source: 'zone_image_text_vision' },
+      { spotId: 'spot_missing', label: 'Missing', matchedText: 'MISSING', x: 50, y: 50, confidence: 0.91, source: 'zone_image_text_vision' },
+    ] }),
+    graphNode({ id: 'spot_1', label: 'North Door', kind: 'spot', parentId: 'zone_1' }),
+    graphNode({ id: 'spot_2', label: 'South Door', kind: 'spot', parentId: 'zone_1' }),
+  ]
+
+  const layout = buildSequenceAnimaticContinuityGraphLayout({ nodes, edges: [], mode: 'scene_graph' })
+  const zone = layout.nodes.find((node) => node.node.id === 'zone_1')
+
+  assert.ok(zone)
+  assert.equal(zone.poiHints.length, 1)
+  assert.equal(zone.poiHints[0].id, 'spot_1')
+  assert.equal(zone.poiHints[0].matchedText, 'NORTH DOOR')
+  assert.equal(zone.poiHints[0].x, 18.5)
+  assert.equal(zone.poiHints[0].y, 42.2)
 })
 
 test('measured scene graph layout prevents node rectangle overlap', () => {

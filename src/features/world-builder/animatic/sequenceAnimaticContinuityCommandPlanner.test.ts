@@ -3,6 +3,12 @@ import assert from 'node:assert/strict'
 
 import type { SequenceAnimaticViewModel } from '../scene-board/sceneBoardProjection'
 import {
+  continuityNodeCollections,
+  continuityNodeParentId,
+  continuityVisualDependencyEdges,
+  spotCameraGridNodeId,
+} from '../../../domain/sequenceAnimaticContinuityDependencies.ts'
+import {
   planSequenceAnimaticContinuityCommand,
 } from './sequenceAnimaticContinuityCommandPlanner.ts'
 
@@ -109,4 +115,20 @@ test('no eligible target returns explicit noop instead of silent success', () =>
   assert.equal(plan.status, 'noop')
   assert.deepEqual(plan.runGroups, [])
   assert.match(plan.diagnostics.join(' '), /No eligible continuity asset targets/)
+})
+
+test('continuity dependency graph maps snake_case spot parents to zone references', () => {
+  const graph = {
+    zones: [{ id: 'zone_market', set_id: 'set_square', name: 'Market' }],
+    spots: [{ id: 'spot_gate', zone_id: 'zone_market', set_id: 'set_square', name: 'Gate' }],
+  }
+  const nodes = continuityNodeCollections(graph)
+  const spotNode = nodes.find((node) => node.id === 'spot_gate')
+  const gridNode = nodes.find((node) => node.id === spotCameraGridNodeId('spot_gate'))
+  assert.equal(continuityNodeParentId(spotNode!), 'zone_market')
+  assert.equal(gridNode?.zoneId, 'zone_market')
+
+  const edges = continuityVisualDependencyEdges(graph)
+  assert.ok(edges.some((edge) => edge.sourceNodeId === 'zone_market' && edge.targetNodeId === 'spot_gate' && edge.relationship === 'zone_to_spot' && edge.required === true))
+  assert.ok(edges.some((edge) => edge.sourceNodeId === 'zone_market' && edge.targetNodeId === 'spot_gate::camera_grid' && edge.relationship === 'zone_to_spot_camera_grid' && edge.required === true))
 })

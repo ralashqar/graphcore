@@ -939,11 +939,26 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     const referenceAssetKeysForTargets = (targetNodes: readonly Record<string, unknown>[]) => {
       const requestedNodeIdSet = new Set(targetNodes.map((node) => readText(node.id)).filter(Boolean))
       const firstTarget = targetNodes[0] ?? {}
+      const targetKind = readText(firstTarget.nodeKind) || readText(firstTarget.assetKind)
       const parentId = continuityNodeParentId(firstTarget)
       const dependencyReferenceKeys = dependencyEdges
         .filter((edge) => requestedNodeIdSet.has(readText(edge.targetNodeId)))
         .map((edge) => readText(asRecord(continuityAssetStateByNodeId[readText(edge.sourceNodeId)]).assetKey))
         .filter(Boolean)
+      if (targetKind === 'location_spot') {
+        const zoneId = readText(firstTarget.zoneId ?? firstTarget.zone_id) || parentId
+        const zoneReferenceKey = readText(asRecord(continuityAssetStateByNodeId[zoneId]).assetKey)
+        return [...new Set([zoneReferenceKey, ...dependencyReferenceKeys].filter(Boolean))].slice(0, 2)
+      }
+      if (targetKind === 'spot_camera_grid') {
+        const zoneId = readText(firstTarget.zoneId ?? firstTarget.zone_id)
+        const spotId = readText(firstTarget.spotId ?? firstTarget.spot_id) || parentId
+        return [...new Set([
+          readText(asRecord(continuityAssetStateByNodeId[zoneId]).assetKey),
+          readText(asRecord(continuityAssetStateByNodeId[spotId]).assetKey),
+          ...dependencyReferenceKeys,
+        ].filter(Boolean))].slice(0, 4)
+      }
       const siblingReferenceKeys = parentId
         ? allGraphNodes
           .filter((node) => !requestedNodeIdSet.has(readText(node.id)))

@@ -111,25 +111,29 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
   const locationEvidenceLines: string[] = worldLocationVisualGuide ? [`Parent world location guide: ${worldLocationVisualGuide}`] : []
   if (input.assetKind === 'location_zone' && zoneSpatialMapPolicy) {
     const prompt = [
-      `Zone spatial map: ${targetName}`,
-      'Purpose: Create one rendered bird-eye or 3/4 orthographic production map for this zone. This is not a cinematic shot, not a camera angle, and not a character blocking frame.',
+      `Zone continuity board: ${targetName}`,
+      'Purpose: Create one large production continuity board for this zone. It must combine a readable annotated zone map with square cinematic spot-detail cells in the same generated image.',
       worldLocationVisualGuide ? `Parent location:\n${worldLocationVisualGuide}` : '',
       visualBrief ? `Zone brief:\n${visualBrief}` : '',
       input.referenceAssetKeys.length > 0
         ? 'Reference image usage: Use attached parent set/location image as the style, material, lighting, scale, geography, palette, and design-language anchor.'
         : 'Reference image usage: No parent image is attached. Use the parent world location guide, zone brief, known spots/POIs, and project style for materials, palette, weather, and lighting logic.',
-      'Required layout: Show the full zone boundary, entrances/exits, walkable routes, thresholds, sightlines, main surfaces, landmarks, set pieces, elevation changes, light/weather direction, material continuity, and labeled symbolic POI markers.',
+      'Required board layout: Make the zone map the largest element. Draw it as a rendered bird-eye or 3/4 orthographic map with the full zone boundary, entrances/exits, walkable routes, thresholds, sightlines, main surfaces, landmarks, set pieces, elevation changes, light/weather direction, and material continuity.',
       input.zoneMapPoiLines && input.zoneMapPoiLines.length > 0
-        ? `Known spots:\n${input.zoneMapPoiLines.slice(0, 12).map((line) => `- ${line}`).join('\n')}`
+        ? `Known spots with visual placement notes:\n${input.zoneMapPoiLines.slice(0, 12).map((line) => `- ${line}`).join('\n')}`
         : '',
       input.zoneMapPoiLines && input.zoneMapPoiLines.length > 0
-        ? 'Required spot annotations: Place clean map markers at each known spot position. Above or beside each marker, add a short readable spot-name label, limited to the spot name or a 1-3 word abbreviation. These labels are required so downstream spot generation can identify the correct spot from this zone reference.'
-        : 'Required spot annotations: Add a few clean symbolic map markers for important implied POIs. Above or beside each marker, add a short readable 1-3 word label so downstream spot generation has spatial anchors.',
-      'Style: Rendered production map in the project art style. Clear geography first, cinematic polish second.',
+        ? 'Map annotations: Use the known spot visual notes to place each marker in a believable, specific part of the zone. Above or beside each marker, add a short readable spot-name label, limited to the spot name or a 1-3 word abbreviation. These map labels are required so downstream spot generation can identify the correct area.'
+        : 'Map annotations: Add a few clean symbolic markers for important implied POIs. Above or beside each marker, add a short readable 1-3 word label so downstream spot generation has spatial anchors.',
+      input.zoneMapPoiLines && input.zoneMapPoiLines.length > 0
+        ? 'Spot-detail cells: For every known spot, also draw one square cinematic inset cell inside the overall board. Each square cell should focus on that exact spot from ground level, eye level, slight 3/4, or another clear cinematic angle. Show the local entrances, surfaces, foreground/background depth, nearby landmarks, and the main bottleneck/feature shape. Caption each square cell with the spot name so the spot can be matched visually to the map marker.'
+        : 'Spot-detail cells: Add 2-4 square cinematic inset cells for the most important implied POIs. Each square cell should expand one labeled map marker into a local ground-level or slight 3/4 environment view, with a short POI caption.',
+      'Consistency rule: The spot-detail cells must match the map exactly. Do not invent different architecture, materials, weather, lighting direction, routes, or landmarks for the cells.',
+      'Style: Rendered production board in the project art style. Clear geography first, cinematic polish second.',
       readText(input.visualCanonGuard) ? `Project canon guard:\n${readText(input.visualCanonGuard)}` : '',
       '',
-      'Avoid: people, character silhouettes, crowds, long readable paragraphs, captions, UI panels, borders, watermarks, dialogue, action beats, or unrelated text. Short spot-name labels and marker tokens on the map are allowed and required.',
-      'Output: one wide 3072x2048 spatial production map with clean readable geography.',
+      'Avoid: people, character silhouettes, crowds, long readable paragraphs, UI chrome, watermarks, dialogue, action beats, or unrelated text. Short spot-name labels on map markers and spot-detail cell captions are allowed and required.',
+      'Output: one large 3840x2560 zone continuity board with clean readable geography, one dominant annotated map, and square cinematic spot-detail cells.',
     ].filter(Boolean).join('\n\n')
     return {
       prompt,
@@ -146,6 +150,32 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
         sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
         removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
         visualCanonGuard: readText(input.visualCanonGuard),
+      },
+    }
+  }
+  if (input.assetKind === 'location_spot') {
+    const prompt = [
+      `Draw the spot "${targetName}" in large from the attached zone map.`,
+      'Use the attached zone map as the only visual reference. Find the matching marker/label for this spot and expand that exact area into a local environment view. Respect the reference image map and structure well.',
+      'Stage it with a camera angle that captures the spot clearly: medium-wide or wide, eye level or slight 3/4 angle, readable entrances, surfaces, foreground/background depth, and the main landmark or bottleneck shape.',
+      'If the attached zone map is missing, do not generate this spot asset.',
+    ].filter(Boolean).join('\n\n')
+    return {
+      prompt,
+      sanitizedTargetNode: sanitizedSpatialNode ? {
+        ...input.targetNode,
+        name: sanitizedSpatialNode.name,
+        visualBrief: sanitizedSpatialNode.brief || readText(input.targetNode.visualBrief),
+        summary: sanitizedSpatialNode.brief || readText(input.targetNode.summary),
+        spatialPromptKindLabel: sanitizedSpatialNode.kindLabel,
+      } : input.targetNode,
+      locationEvidenceLines,
+      promptDiagnostics: {
+        policyVersion: sequenceAnimaticSpatialPromptPolicyVersion,
+        sanitized: Boolean(sanitizedSpatialNode?.changed || locationEvidenceLines.length > 0),
+        removedTerms: sanitizedSpatialNode?.diagnostics ?? [],
+        visualCanonGuard: readText(input.visualCanonGuard),
+        spotPromptStyle: 'simple_zone_map_expand',
       },
     }
   }
@@ -167,7 +197,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
         ? 'Create one reusable camera-angle coverage grid for this specific spot. Use the attached parent zone map and spot reference as continuity locks. Show 2 rows x 3 columns of distinct camera views around the same spot: wide establishing, over-shoulder/reverse axis, side/profile, low angle, high/overhead, and tight insert/detail. Keep the same architecture, landmarks, entrances, surfaces, lighting direction, weather, palette, and screen-direction logic in every cell. No people, no characters, no silhouettes, no readable labels, no UI.'
       : input.assetKind === 'location_zone'
         ? zoneSpatialMapPolicy
-          ? 'Create one large rendered zone spatial map, not a cinematic camera angle: a bird-eye or 3/4 orthographic production-map view in the project art style. Show the whole zone geography inside the parent set, entrances/exits, routes, thresholds, dominant surfaces, landmarks, set pieces, light/weather direction, sightlines, and sparse annotated POI markers for known spots. Use small numbered or lettered map markers plus short readable spot-name labels above or beside markers on the image itself so later spot generation can find each spot from this zone reference. No people, characters, crowds, silhouettes, paragraph labels, captions, UI panels, borders, or watermarks.'
+          ? 'Create one large zone continuity board, not a single cinematic shot: make the annotated bird-eye or 3/4 orthographic zone map the dominant element, and include square cinematic spot-detail cells for known spots inside the same board. The cells must expand the matching map markers into local ground-level or slight 3/4 views while preserving the exact map architecture, routes, materials, weather, lighting direction, and landmarks. Short spot-name map labels and spot-cell captions are allowed and required. No people, characters, crowds, silhouettes, paragraph labels, UI chrome, or watermarks.'
           : 'Create one reusable zone environment continuity reference inside the set. Preserve sub-area geography, sightlines, access paths, landmarks, surfaces, weather, and lighting continuity. No people, no characters, no silhouettes, no labels, no UI.'
       : input.assetKind === 'location_angle'
         ? 'Create one camera-facing spatial angle reference. Preserve architecture, visible landmarks, screen direction, light direction, entrances, and depth cues. No people, no characters, no silhouettes, no labels, no UI.'
@@ -178,7 +208,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
     visualBrief ? `Visual brief: ${visualBrief}` : '',
     kindInstruction,
     input.assetKind === 'location_spot'
-      ? `Parent zone reference: ${input.referenceAssetKeys.length > 0 ? `Use the attached zone map as the spatial source of truth. Find the marker/label for "${targetName}" and generate the local environment at that exact marked spot.` : 'No zone map image is attached. Use the spot brief and project visual style while preserving implied zone geography.'}`
+      ? `Parent zone reference: Use the attached zone map as the spatial source of truth. Find the marker/label for "${targetName}" and generate the local environment at that exact marked spot. If no parent zone image is attached, do not generate this spot asset.`
       : '',
     input.assetKind === 'spot_camera_grid'
       ? 'Reference image usage: Use the attached zone map to preserve the parent geography and use the attached spot reference to preserve the exact local staging point. The grid should explore camera positions around that same spot, not invent a new location.'
@@ -203,7 +233,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
     input.assetKind === 'spot_camera_grid'
       ? 'Provider requirements: one finished square or wide production reference board containing a clean 2x3 camera-angle grid, no visible text, no labels, no borders, no watermarks.'
       : zoneSpatialMapPolicy
-      ? 'Provider requirements: one finished wide spatial production map image, clean readable geography, sparse numbered/lettered POI markers and short spot-name labels baked into the map, no paragraph labels, no captions, no UI panels, no borders, no watermarks.'
+      ? 'Provider requirements: one finished large zone continuity board image with a dominant annotated map plus square cinematic spot-detail cells, clean readable geography, short spot-name labels/captions only, no paragraph labels, no UI chrome, no watermarks.'
       : 'Provider requirements: one finished square production reference image, clean composition, no visible text, no labels, no borders, no watermarks.',
   ].filter(Boolean).join('\n\n')
   return {

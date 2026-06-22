@@ -201,6 +201,8 @@ import {
   sequenceAnimaticShotProductionGraphEnsureResponseSchema,
   sequenceAnimaticSceneGraphNodeUpdateRequestSchema,
   sequenceAnimaticSceneGraphNodeUpdateResponseSchema,
+  sequenceAnimaticZonePoiAnalyzeRequestSchema,
+  sequenceAnimaticZonePoiAnalyzeResponseSchema,
   sequenceAnimaticSceneBoardPrepRequestSchema,
   sequenceAnimaticSceneBoardPrepResponseSchema,
   sequenceAnimaticSceneBoardWorkflowCommandResponseSchema,
@@ -240,6 +242,7 @@ import {
   type SequenceAnimaticKeyframeWorkflowEnsureResponse,
   type SequenceAnimaticShotProductionGraphEnsureResponse,
   type SequenceAnimaticSceneGraphNodeUpdateResponse,
+  type SequenceAnimaticZonePoiAnalyzeResponse,
   type SequenceAnimaticShotCoverageIntentEnsureResponse,
   type SequenceAnimaticSceneBoardPrepResponse,
   type SequenceAnimaticSceneBoardWorkflowCommandAction,
@@ -10932,6 +10935,35 @@ export async function updateSequenceAnimaticSceneGraphNode(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = sequenceAnimaticSceneGraphNodeUpdateResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function analyzeSequenceAnimaticZonePois(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    zoneNodeId: string
+  },
+): Promise<SequenceAnimaticZonePoiAnalyzeResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before analyzing animatic zone labels.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Animatic zone label analysis requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticZonePoiAnalyzeRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'analyze-sequence-animatic-zone-pois',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticZonePoiAnalyzeResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

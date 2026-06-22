@@ -131,6 +131,7 @@ export const workspaceService = {
   updateWorldDerivedComposition: graphcoreWorkspaceAdapter.updateWorldDerivedComposition,
   updateOutputWorkflowNode: graphcoreWorkspaceAdapter.updateOutputWorkflowNode,
   updateSequenceAnimaticSceneGraphNode: graphcoreWorkspaceAdapter.updateSequenceAnimaticSceneGraphNode,
+  analyzeSequenceAnimaticZonePois: graphcoreWorkspaceAdapter.analyzeSequenceAnimaticZonePois,
   uploadEntityReferenceGuidanceImage: graphcoreWorkspaceAdapter.uploadEntityReferenceGuidanceImage,
   upgradeOutputWorkflowPreset: graphcoreWorkspaceAdapter.upgradeOutputWorkflowPreset,
   applyOutputCinematicDirectorPatch: graphcoreWorkspaceAdapter.applyOutputCinematicDirectorPatch,

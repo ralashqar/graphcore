@@ -20,6 +20,12 @@ import {
   scopeAssetPackToReferenceAssetKeys,
   sequenceAnimaticReferenceRole,
 } from './output-workflow-sequence-animatic-reference-runtime.ts'
+import {
+  analyzeSequenceAnimaticZonePoiLabels,
+  failedSequenceAnimaticZonePoiAnalysis,
+  mergeZonePoiAnalysisIntoAssetState,
+  type SequenceAnimaticZonePoiAnalysis,
+} from './sequence-animatic-zone-poi-analysis.ts'
 
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
@@ -32,6 +38,145 @@ function result(input: {
   return createWorkflowNodeExecutionResult<SequenceAnimaticNodeExecutionResult>(input)
 }
 
+async function latestContinuityAssetStateByNodeId(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  config: Record<string, unknown>,
+) {
+  const continuityPack = helpers.asRecord(config.continuityPack ?? config.continuity_pack)
+  const stateByNodeId: Record<string, Record<string, unknown>> = {}
+  Object.entries(helpers.asRecord(continuityPack.assetStateByNodeId ?? continuityPack.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+    const cleanNodeId = helpers.readText(nodeId)
+    const record = helpers.asRecord(state)
+    if (cleanNodeId && Object.keys(record).length > 0) stateByNodeId[cleanNodeId] = record
+  })
+
+  const continuityWorkflowId = helpers.readText(config.continuityWorkflowId)
+  const continuityRequestId = helpers.readText(config.continuityRequestId ?? config.continuity_request_id)
+  const masterRequestId = helpers.readText(config.masterRequestId ?? config.master_request_id)
+  const draftId = helpers.readText(helpers.asRecord(context.run).draftId)
+  const workflowIds = new Set<string>()
+  if (continuityWorkflowId) workflowIds.add(continuityWorkflowId)
+
+  try {
+    const client = context.client as any
+    const parentRequestIds = [...new Set([continuityRequestId, masterRequestId].map(helpers.readText).filter(Boolean))]
+    if (parentRequestIds.length > 0 && draftId) {
+      const childResponse = await client
+        .from('output_requests')
+        .select('id, workflow_id, metadata, created_at')
+        .eq('draft_id', draftId)
+        .in('parent_request_id', parentRequestIds)
+        .order('created_at', { ascending: false })
+        .limit(100)
+      if (!childResponse.error) {
+        ;(childResponse.data ?? []).forEach((row: unknown) => {
+          const record = helpers.asRecord(row)
+          const metadata = helpers.asRecord(record.metadata)
+          const role = helpers.readText(metadata.screenplayAnimaticRole) || helpers.readText(metadata.sequenceAnimaticRole)
+          const workflowId = helpers.readText(record.workflow_id)
+          if ((role === 'continuity_asset' || role === 'continuity_asset_batch') && workflowId) workflowIds.add(workflowId)
+        })
+      }
+    }
+    if (workflowIds.size === 0 || !draftId) return stateByNodeId
+
+    const response = await client
+      .from('output_artifacts')
+      .select(helpers.outputArtifactSelect)
+      .eq('draft_id', draftId)
+      .in('workflow_id', [...workflowIds])
+      .order('updated_at', { ascending: false })
+      .limit(150)
+    if (response.error) return stateByNodeId
+
+    ;[...(response.data ?? [])].reverse().forEach((row) => {
+      const metadata = helpers.asRecord(helpers.asRecord(row).metadata)
+      const role = helpers.readText(metadata.role)
+      if (role === 'sequence_animatic_continuity_pack') {
+        const pack = helpers.asRecord(metadata.continuityPack ?? metadata.continuity_pack)
+        Object.entries(helpers.asRecord(pack.assetStateByNodeId ?? pack.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+          const cleanNodeId = helpers.readText(nodeId)
+          const record = helpers.asRecord(state)
+          if (cleanNodeId && Object.keys(record).length > 0) stateByNodeId[cleanNodeId] = record
+        })
+      } else if (role === 'sequence_animatic_continuity_asset') {
+        const state = helpers.asRecord(metadata.assetState ?? metadata.asset_state)
+        const nodeId = helpers.readText(state.sourceNodeId) || helpers.readText(metadata.targetNodeId)
+        if (nodeId && Object.keys(state).length > 0) stateByNodeId[nodeId] = state
+      } else if (role === 'sequence_animatic_continuity_asset_batch') {
+        Object.entries(helpers.asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)).forEach(([nodeId, state]) => {
+          const cleanNodeId = helpers.readText(nodeId)
+          const record = helpers.asRecord(state)
+          if (cleanNodeId && Object.keys(record).length > 0) stateByNodeId[cleanNodeId] = record
+        })
+      }
+    })
+  } catch {
+    return stateByNodeId
+  }
+
+  return stateByNodeId
+}
+
+function assetKeyForContinuityNodeState(
+  stateByNodeId: Record<string, Record<string, unknown>>,
+  nodeId: string,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  return helpers.readText(helpers.asRecord(stateByNodeId[nodeId]).assetKey)
+}
+
+function parentZoneIdForTargetNode(targetNode: Record<string, unknown>, helpers: SequenceAnimaticWorkflowNodePackHelpers) {
+  return helpers.readText(targetNode.zoneId ?? targetNode.zone_id)
+    || helpers.readText(targetNode.parentZoneId ?? targetNode.parent_zone_id)
+    || helpers.readText(targetNode.parentId ?? targetNode.parent_id)
+}
+
+function spotIdForTargetNode(targetNode: Record<string, unknown>, helpers: SequenceAnimaticWorkflowNodePackHelpers) {
+  return helpers.readText(targetNode.spotId ?? targetNode.spot_id)
+    || helpers.readStringArray(targetNode.spotIds ?? targetNode.spot_ids)[0]
+    || helpers.readText(targetNode.parentId ?? targetNode.parent_id)
+    || helpers.readText(targetNode.id)
+}
+
+function latestSpatialReferenceAssetKeys(input: {
+  assetKind: string
+  targetNode: Record<string, unknown>
+  targetNodes?: Record<string, unknown>[]
+  batchKind?: string
+  stateByNodeId: Record<string, Record<string, unknown>>
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+}) {
+  const keys: string[] = []
+  if (Object.keys(input.stateByNodeId).length === 0) return null
+  const targetNodes = input.targetNodes && input.targetNodes.length > 0 ? input.targetNodes : [input.targetNode]
+  const addNodeKey = (nodeId: string) => {
+    const key = assetKeyForContinuityNodeState(input.stateByNodeId, nodeId, input.helpers)
+    if (key) keys.push(key)
+  }
+
+  if (input.assetKind === 'location_spot') {
+    targetNodes.slice(0, 1).forEach((node) => addNodeKey(parentZoneIdForTargetNode(node, input.helpers)))
+    return [...new Set(keys)].slice(0, 1)
+  }
+
+  if (input.batchKind === 'spot_grid' || input.batchKind === 'spot_atlas_grid') {
+    targetNodes.forEach((node) => addNodeKey(parentZoneIdForTargetNode(node, input.helpers)))
+    return [...new Set(keys)].slice(0, 4)
+  }
+
+  if (input.assetKind === 'spot_camera_grid' || input.batchKind === 'angle_grid' || input.batchKind === 'viewpoint_grid') {
+    targetNodes.forEach((node) => {
+      addNodeKey(parentZoneIdForTargetNode(node, input.helpers))
+      addNodeKey(spotIdForTargetNode(node, input.helpers))
+    })
+    return [...new Set(keys)].slice(0, 6)
+  }
+
+  return null
+}
+
 export async function sequenceAnimaticContinuityAssetInput(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
@@ -42,7 +187,10 @@ export async function sequenceAnimaticContinuityAssetInput(
   const relevantShots = helpers.readArray(config.relevantShots).map(helpers.asRecord)
   const shotBindings = helpers.asRecord(config.shotBindings)
   const assetPack = helpers.asRecord(config.assetPack)
-  const referenceAssetKeys = helpers.readStringArray(config.referenceAssetKeys)
+  const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+    .map(helpers.readText)
+    .filter(Boolean)
+  const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : helpers.readStringArray(config.referenceAssetKeys)
   const outputs = {
     continuityPack,
     continuity_pack: continuityPack,
@@ -122,11 +270,23 @@ export async function sequenceAnimaticContinuityBatchPrompt(
   const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
     .map(helpers.readText)
     .filter(Boolean)
-  const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0
+  const configuredReferenceAssetKeys = upstreamReferenceAssetKeys.length > 0
     ? upstreamReferenceAssetKeys
     : helpers.readStringArray(config.referenceAssetKeys)
   const effectiveBatch = Object.keys(batch).length > 0 ? batch : helpers.asRecord(config.batch)
-  const batchKind = helpers.readText(effectiveBatch.batchKind)
+  const batchKind = helpers.readText(effectiveBatch.batchKind ?? effectiveBatch.batch_kind)
+  const fallbackTargetNodes = helpers.readArray(config.targetNodes).map(helpers.asRecord)
+  const effectiveTargetNodes = targetNodes.length > 0 ? targetNodes : fallbackTargetNodes
+  const latestStateByNodeId = await latestContinuityAssetStateByNodeId(context, helpers, config)
+  const latestReferenceAssetKeys = latestSpatialReferenceAssetKeys({
+    assetKind: helpers.readText(helpers.asRecord(effectiveTargetNodes[0] ?? {}).assetKind ?? helpers.asRecord(effectiveTargetNodes[0] ?? {}).nodeKind),
+    targetNode: helpers.asRecord(effectiveTargetNodes[0] ?? {}),
+    targetNodes: effectiveTargetNodes,
+    batchKind,
+    stateByNodeId: latestStateByNodeId,
+    helpers,
+  })
+  const referenceAssetKeys = latestReferenceAssetKeys ?? configuredReferenceAssetKeys
   const spatialBatch = [
     'angle_grid',
     'viewpoint_grid',
@@ -145,14 +305,14 @@ export async function sequenceAnimaticContinuityBatchPrompt(
       limit: 8,
     })
     : assetPack
-  const fallbackTargetNodes = helpers.readArray(config.targetNodes).map(helpers.asRecord)
-  const effectiveTargetNodes = targetNodes.length > 0 ? targetNodes : fallbackTargetNodes
   const promptResult = buildSequenceAnimaticContinuityBatchPrompt({
     batch: effectiveBatch,
     targetNodes: effectiveTargetNodes,
     relevantShots,
     referenceAssetKeys,
-    worldLocationVisualGuide: helpers.readText(config.worldLocationVisualGuide ?? config.world_location_visual_guide),
+    worldLocationVisualGuide: batchKind === 'spot_grid' || batchKind === 'spot_atlas_grid' || batchKind === 'angle_grid' || batchKind === 'viewpoint_grid'
+      ? ''
+      : helpers.readText(config.worldLocationVisualGuide ?? config.world_location_visual_guide),
     visualCanonGuard: helpers.readText(config.visualCanonGuard ?? config.visual_canon_guard),
   })
   const prompt = promptResult.prompt
@@ -191,10 +351,20 @@ export async function sequenceAnimaticContinuityBatchExtract(
   const storagePath = helpers.readText(image.storagePath) || helpers.readText(image.storage_path)
   if (!assetKey || !storagePath) throw new Error('Continuity batch extraction requires a generated batch image.')
   const effectiveBatch = Object.keys(batch).length > 0 ? batch : helpers.asRecord(config.batch)
+  const batchKind = helpers.readText(effectiveBatch.batchKind)
+  const latestStateByNodeId = await latestContinuityAssetStateByNodeId(context, helpers, config)
+  const latestReferenceAssetKeys = latestSpatialReferenceAssetKeys({
+    assetKind: helpers.readText(helpers.asRecord(targetNodes[0] ?? {}).assetKind ?? helpers.asRecord(targetNodes[0] ?? {}).nodeKind),
+    targetNode: helpers.asRecord(targetNodes[0] ?? {}),
+    targetNodes,
+    batchKind,
+    stateByNodeId: latestStateByNodeId,
+    helpers,
+  })
+  const batchReferenceAssetKeys = latestReferenceAssetKeys ?? helpers.readStringArray(config.referenceAssetKeys)
   const layout = helpers.asRecord(effectiveBatch.layout)
   const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
   const columns = Math.max(1, Number(layout.columns ?? 1) || 1)
-  const batchKind = helpers.readText(effectiveBatch.batchKind ?? effectiveBatch.batch_kind)
   const generationPolicy = helpers.readText(effectiveBatch.generationPolicy ?? effectiveBatch.generation_policy ?? helpers.asRecord(config.batch).generationPolicy)
   const strictSpotAtlasGrid = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid' || generationPolicy === 'spot_atlas_grid_rectangular_ref_v3'
   const referenceImageCount = Number(helpers.asRecord(image).referenceImageCount ?? helpers.asRecord(image).reference_image_count ?? 0) || 0
@@ -297,7 +467,7 @@ export async function sequenceAnimaticContinuityBatchExtract(
         assetKey: targetAssetKey,
         artifactKey: artifact.key,
         prompt: helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text']),
-        referenceAssetKeys: helpers.readStringArray(config.referenceAssetKeys),
+        referenceAssetKeys: batchReferenceAssetKeys,
         generationPolicy,
         batchKind,
         gridLayout: layout,
@@ -363,8 +533,19 @@ export async function sequenceAnimaticContinuityAssetPrompt(
   const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
     .map(helpers.readText)
     .filter(Boolean)
-  const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : helpers.readStringArray(config.referenceAssetKeys)
   const assetKind = helpers.readText(config.assetKind) || helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset'
+  const configuredReferenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : helpers.readStringArray(config.referenceAssetKeys)
+  const latestStateByNodeId = await latestContinuityAssetStateByNodeId(context, helpers, config)
+  const latestReferenceAssetKeys = latestSpatialReferenceAssetKeys({
+    assetKind,
+    targetNode,
+    stateByNodeId: latestStateByNodeId,
+    helpers,
+  })
+  const referenceAssetKeys = latestReferenceAssetKeys ?? configuredReferenceAssetKeys
+  if (assetKind === 'location_spot' && referenceAssetKeys.length < 1) {
+    throw new Error('Spot continuity asset prompt requires a ready parent zone image reference. Generate or regenerate the parent zone first.')
+  }
   const spatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint'].includes(assetKind)
   const scopedAssetPack = spatialAsset
     ? scopeAssetPackToReferenceAssetKeys({
@@ -382,7 +563,9 @@ export async function sequenceAnimaticContinuityAssetPrompt(
     targetNode: effectiveTargetNode,
     assetKind,
     generationPolicy: helpers.readText(config.generationPolicy),
-    worldLocationVisualGuide: helpers.readText(config.worldLocationVisualGuide ?? config.world_location_visual_guide),
+    worldLocationVisualGuide: assetKind === 'location_spot' || assetKind === 'location_angle' || assetKind === 'location_viewpoint' || assetKind === 'spot_camera_grid'
+      ? ''
+      : helpers.readText(config.worldLocationVisualGuide ?? config.world_location_visual_guide),
     zoneMapPoiLines: helpers.readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
     relevantShots,
     referenceAssetKeys,
@@ -430,7 +613,12 @@ export async function sequenceAnimaticContinuityAssetArtifact(
   if (!targetNodeId) throw new Error('Continuity asset artifact requires a target node id.')
   const assetKey = helpers.readText(image.assetKey)
   if (!assetKey) throw new Error('Continuity asset image did not produce an asset key.')
-  const referenceAssetKeys = helpers.readStringArray(config.referenceAssetKeys)
+  const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+    .map(helpers.readText)
+    .filter(Boolean)
+  const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0
+    ? upstreamReferenceAssetKeys
+    : helpers.readStringArray(config.referenceAssetKeys)
   const assetKind = helpers.readText(config.assetKind) || helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset'
   const referenceRole = sequenceAnimaticReferenceRole({
     role: assetKind,
@@ -439,7 +627,7 @@ export async function sequenceAnimaticContinuityAssetArtifact(
   })
   const qcFindings = assetKey ? [] : ['Continuity asset image did not produce an asset key.']
   const qcStatus = qcFindings.length === 0 ? 'passed' : 'failed'
-  const assetState = helpers.sequenceAnimaticContinuityAssetStateParse({
+  let assetState = helpers.sequenceAnimaticContinuityAssetStateParse({
     status: assetKey ? 'ready' : 'failed',
     inputHash: helpers.readText(config.assetInputHash) || helpers.sequenceAnimaticContinuityAssetTargetInputHash(targetNode),
     assetKey: assetKey || null,
@@ -452,6 +640,38 @@ export async function sequenceAnimaticContinuityAssetArtifact(
     warnings: qcFindings,
     error: assetKey ? '' : 'Continuity asset image did not produce an asset key.',
   })
+  const storagePath = helpers.readText(image.storagePath) || helpers.readText(image.storage_path)
+  const mimeType = helpers.readText(image.mimeType) || helpers.readText(image.mime_type) || 'image/webp'
+  let zoneImagePoiAnalysis: SequenceAnimaticZonePoiAnalysis | null = null
+  if (assetKind === 'location_zone' && assetKey && storagePath) {
+    try {
+      const packForAnalysis = helpers.asRecord(config.continuityPack ?? config.continuity_pack)
+      zoneImagePoiAnalysis = await analyzeSequenceAnimaticZonePoiLabels({
+        client: context.client as never,
+        runVisionStructuredNode: helpers.runVisionStructuredNode,
+        targetNodeId,
+        targetNode,
+        continuityPack: packForAnalysis,
+        graphNodes: [],
+        image: {
+          assetKey,
+          storagePath,
+          mimeType,
+        },
+      })
+    } catch (error) {
+      zoneImagePoiAnalysis = failedSequenceAnimaticZonePoiAnalysis({
+        targetNodeId,
+        sourceAssetKey: assetKey,
+        sourceStoragePath: storagePath,
+        error,
+      })
+    }
+    assetState = helpers.sequenceAnimaticContinuityAssetStateParse(mergeZonePoiAnalysisIntoAssetState({
+      assetState,
+      analysis: zoneImagePoiAnalysis,
+    }))
+  }
   const artifactKey = `output.${helpers.slugify(context.workflow.name)}.${context.run.id.slice(0, 8)}.${helpers.slugify(targetNodeId)}.sequence-animatic-continuity-asset`
   const artifact = await helpers.registerOtherOutputArtifact({
     client: context.client,
@@ -486,6 +706,10 @@ export async function sequenceAnimaticContinuityAssetArtifact(
       qcStatus,
       qcFindings,
       assetState,
+      zoneImagePoiAnalysis,
+      zone_image_poi_analysis: zoneImagePoiAnalysis,
+      zoneImagePoiAnchors: zoneImagePoiAnalysis?.anchors ?? [],
+      zone_image_poi_anchors: zoneImagePoiAnalysis?.anchors ?? [],
       image,
       assetKey,
     },
@@ -546,6 +770,14 @@ export async function sequenceAnimaticContinuityAssetArtifact(
               artifactKey: artifact.key,
               prompt,
               referenceAssetKeys,
+              ...(zoneImagePoiAnalysis
+                ? {
+                    zoneImagePoiAnalysis,
+                    zone_image_poi_analysis: zoneImagePoiAnalysis,
+                    zoneImagePoiAnchors: zoneImagePoiAnalysis.anchors,
+                    zone_image_poi_anchors: zoneImagePoiAnalysis.anchors,
+                  }
+                : {}),
             },
           ].filter((entry) => helpers.readText(entry.assetKey)),
         }
@@ -590,12 +822,16 @@ export async function sequenceAnimaticContinuityAssetArtifact(
       assetKind,
       assetState,
       image,
+      zoneImagePoiAnalysis,
+      zone_image_poi_analysis: zoneImagePoiAnalysis,
     },
     continuity_asset: {
       targetNodeId,
       assetKind,
       assetState,
       image,
+      zoneImagePoiAnalysis,
+      zone_image_poi_analysis: zoneImagePoiAnalysis,
     },
     assetState,
     asset_state: assetState,

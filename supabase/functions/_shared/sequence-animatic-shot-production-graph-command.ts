@@ -441,7 +441,28 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
     const referenceAssetKeysForTargets = (targetNodes: readonly Record<string, unknown>[]) => {
       const requestedNodeIdSet = new Set(targetNodes.map((node) => readText(node.id)).filter(Boolean))
       const firstTarget = targetNodes[0] ?? {}
+      const targetKind = readText(firstTarget.nodeKind) || readText(firstTarget.assetKind)
       const parentId = continuityNodeParentId(firstTarget)
+      const dependencyReferenceKeys = visualDependencyEdges
+        .filter((edge) => requestedNodeIdSet.has(readText(edge.targetNodeId)))
+        .flatMap((edge) => entityAssetKeys(asRecord(graphNodeById.get(readText(edge.sourceNodeId))?.assetState ?? graphNodeById.get(readText(edge.sourceNodeId))?.asset_state)))
+        .filter(Boolean)
+      if (targetKind === 'location_spot') {
+        const zoneId = readText(firstTarget.zoneId ?? firstTarget.zone_id) || parentId
+        return uniqueTexts([
+          ...entityAssetKeys(asRecord(graphNodeById.get(zoneId)?.assetState ?? graphNodeById.get(zoneId)?.asset_state)),
+          ...dependencyReferenceKeys,
+        ]).slice(0, 2)
+      }
+      if (targetKind === 'spot_camera_grid') {
+        const zoneId = readText(firstTarget.zoneId ?? firstTarget.zone_id)
+        const spotId = readText(firstTarget.spotId ?? firstTarget.spot_id) || parentId
+        return uniqueTexts([
+          ...entityAssetKeys(asRecord(graphNodeById.get(zoneId)?.assetState ?? graphNodeById.get(zoneId)?.asset_state)),
+          ...entityAssetKeys(asRecord(graphNodeById.get(spotId)?.assetState ?? graphNodeById.get(spotId)?.asset_state)),
+          ...dependencyReferenceKeys,
+        ]).slice(0, 4)
+      }
       const siblingReferenceKeys = parentId
         ? [...graphNodeById.values()]
           .filter((node) => !requestedNodeIdSet.has(readText(node.id)))

@@ -45,6 +45,10 @@ export type SequenceAnimaticContinuityLocationView = {
   assetStatus?: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'
   assetStatusLabel?: string
   assetUrl?: string | null
+  imagePoiAnchors?: SequenceAnimaticContinuityGraphImagePoiAnchor[]
+  imagePoiAnalysisStatus?: 'ready' | 'partial' | 'missing' | 'failed' | ''
+  imagePoiAnalysisLabel?: string
+  imagePoiAnalysisDiagnostics?: string[]
   shotIds: string[]
   blockIds: string[]
 }
@@ -68,6 +72,16 @@ export type SequenceAnimaticContinuityAssetTargetView = {
 export type SequenceAnimaticContinuityGraphNodeKind = 'world_location' | 'set' | 'zone' | 'spot' | 'camera_grid' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
 
 export type SequenceAnimaticContinuityGraphNodeLane = 'spatial' | 'temporary'
+
+export type SequenceAnimaticContinuityGraphImagePoiAnchor = {
+  spotId: string
+  label: string
+  matchedText: string
+  x: number
+  y: number
+  confidence: number
+  source: string
+}
 
 export type SequenceAnimaticContinuityGraphNodeView = {
   id: string
@@ -94,6 +108,10 @@ export type SequenceAnimaticContinuityGraphNodeView = {
   generationTargetType: 'continuity_asset' | 'coverage_anchor' | 'none'
   generationRequestId: string | null
   assetHistoryKeys: string[]
+  imagePoiAnchors: SequenceAnimaticContinuityGraphImagePoiAnchor[]
+  imagePoiAnalysisStatus: 'ready' | 'partial' | 'missing' | 'failed' | ''
+  imagePoiAnalysisLabel: string
+  imagePoiAnalysisDiagnostics: string[]
 }
 
 export type SequenceAnimaticContinuityGraphEdgeView = {
@@ -413,7 +431,7 @@ export function buildSequenceAnimaticContinuityGraphView(input: {
     const id = `${kind}:${source}:${target}`
     if (!edgeById.has(id)) edgeById.set(id, { id, source, target, kind, label })
   }
-  const addNode = (node: Omit<SequenceAnimaticContinuityGraphNodeView, 'kindLabel' | 'assetStatusLabel' | 'baseVisualBrief' | 'overrideVisualBrief' | 'extraPromptDirection' | 'effectiveVisualBrief' | 'canGenerate' | 'generationTargetType' | 'generationRequestId' | 'assetHistoryKeys'>) => {
+  const addNode = (node: Omit<SequenceAnimaticContinuityGraphNodeView, 'kindLabel' | 'assetStatusLabel' | 'baseVisualBrief' | 'overrideVisualBrief' | 'extraPromptDirection' | 'effectiveVisualBrief' | 'canGenerate' | 'generationTargetType' | 'generationRequestId' | 'assetHistoryKeys' | 'imagePoiAnchors' | 'imagePoiAnalysisStatus' | 'imagePoiAnalysisLabel' | 'imagePoiAnalysisDiagnostics'> & Partial<Pick<SequenceAnimaticContinuityGraphNodeView, 'imagePoiAnchors' | 'imagePoiAnalysisStatus' | 'imagePoiAnalysisLabel' | 'imagePoiAnalysisDiagnostics'>>) => {
     if (!node.id) return
     const target = targetByNodeId.get(node.id) ?? null
     const assetStatus = target?.status ?? node.assetStatus
@@ -448,6 +466,11 @@ export function buildSequenceAnimaticContinuityGraphView(input: {
       generationTargetType: node.kind === 'coverage_anchor' ? 'coverage_anchor' : target ? 'continuity_asset' : 'none',
       generationRequestId: null,
       assetHistoryKeys,
+      imagePoiAnchors: [...(previous?.imagePoiAnchors ?? []), ...(node.imagePoiAnchors ?? [])]
+        .filter((anchor, index, values) => Boolean(anchor.spotId) && values.findIndex((entry) => entry.spotId === anchor.spotId) === index),
+      imagePoiAnalysisStatus: node.imagePoiAnalysisStatus || previous?.imagePoiAnalysisStatus || '',
+      imagePoiAnalysisLabel: node.imagePoiAnalysisLabel || previous?.imagePoiAnalysisLabel || '',
+      imagePoiAnalysisDiagnostics: [...new Set([...(previous?.imagePoiAnalysisDiagnostics ?? []), ...(node.imagePoiAnalysisDiagnostics ?? [])])],
     })
   }
   const ensureWorldLocationNode = (worldLocationRefId: string) => {
@@ -495,6 +518,10 @@ export function buildSequenceAnimaticContinuityGraphView(input: {
       assetUrl: entry.assetUrl ?? null,
       required: entry.shotIds.length > 0,
       batchId: null,
+      imagePoiAnchors: entry.imagePoiAnchors ?? [],
+      imagePoiAnalysisStatus: entry.imagePoiAnalysisStatus ?? '',
+      imagePoiAnalysisLabel: entry.imagePoiAnalysisLabel ?? '',
+      imagePoiAnalysisDiagnostics: entry.imagePoiAnalysisDiagnostics ?? [],
     })
     if (kind === 'spot') {
       const gridId = spotCameraGridNodeId(id)

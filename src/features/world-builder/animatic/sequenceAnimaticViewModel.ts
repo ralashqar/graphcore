@@ -1334,6 +1334,37 @@ export function buildSequenceAnimaticViewModel(input: {
     const assetKey = trimOptionalString(readLooseRecord(continuityAssetStateByNodeId[nodeId]).assetKey)
     return assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null
   }
+  const readContinuityImagePoiAnchors = (nodeId: string) => readLooseArray(
+    readLooseRecord(continuityAssetStateByNodeId[nodeId]).zoneImagePoiAnchors
+      ?? readLooseRecord(continuityAssetStateByNodeId[nodeId]).zone_image_poi_anchors,
+  ).map(readLooseRecord).map((entry) => ({
+    spotId: trimOptionalString(entry.spotId ?? entry.spot_id),
+    label: trimOptionalString(entry.label),
+    matchedText: trimOptionalString(entry.matchedText ?? entry.matched_text),
+    x: Number(entry.x),
+    y: Number(entry.y),
+    confidence: Number(entry.confidence),
+    source: trimOptionalString(entry.source),
+  })).filter((entry) => entry.spotId && Number.isFinite(entry.x) && Number.isFinite(entry.y))
+  const readContinuityImagePoiAnalysis = (nodeId: string) => {
+    const analysis = readLooseRecord(
+      readLooseRecord(continuityAssetStateByNodeId[nodeId]).zoneImagePoiAnalysis
+        ?? readLooseRecord(continuityAssetStateByNodeId[nodeId]).zone_image_poi_analysis,
+    )
+    const status = trimOptionalString(analysis.status)
+    const normalizedStatus: SequenceAnimaticContinuityLocationView['imagePoiAnalysisStatus'] = status === 'ready' || status === 'partial' || status === 'missing' || status === 'failed' ? status : ''
+    const found = Number(analysis.foundCount ?? analysis.found_count)
+    const candidates = Number(analysis.candidateCount ?? analysis.candidate_count)
+    return {
+      status: normalizedStatus,
+      label: Number.isFinite(found) && Number.isFinite(candidates) && candidates > 0
+        ? `${found}/${candidates} image labels matched`
+        : status
+          ? status.replace(/_/g, ' ')
+          : '',
+      diagnostics: readLooseArray(analysis.diagnostics).map(trimOptionalString).filter(Boolean),
+    }
+  }
   const continuitySetSourceEntries = readLooseArray(continuityLocationSource.locationSets ?? continuityLocationSource.location_sets).length > 0
     ? readLooseArray(continuityLocationSource.locationSets ?? continuityLocationSource.location_sets)
     : readLooseArray(continuitySceneGraphAdditions.sets)
@@ -1349,12 +1380,16 @@ export function buildSequenceAnimaticViewModel(input: {
     summary: trimOptionalString(entry.visualBrief) || trimOptionalString(entry.persistenceReason),
     kind: 'set',
     worldLocationRefId: trimOptionalString(entry.worldLocationRefId ?? entry.world_location_ref_id ?? entry.baseLocationRefId),
-    assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
-    assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
-    assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
-    shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
-    blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
-  })).filter((entry) => (entry.id || entry.name) && !sequenceAnimaticSpatialEntryLooksCharacterDerived(entry, input.worldEntities))
+      assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
+      assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
+      assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
+      imagePoiAnchors: readContinuityImagePoiAnchors(trimOptionalString(entry.id)),
+      imagePoiAnalysisStatus: readContinuityImagePoiAnalysis(trimOptionalString(entry.id)).status,
+      imagePoiAnalysisLabel: readContinuityImagePoiAnalysis(trimOptionalString(entry.id)).label,
+      imagePoiAnalysisDiagnostics: readContinuityImagePoiAnalysis(trimOptionalString(entry.id)).diagnostics,
+      shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
+      blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
+    })).filter((entry) => (entry.id || entry.name) && !sequenceAnimaticSpatialEntryLooksCharacterDerived(entry, input.worldEntities))
     .concat(continuityZoneSourceEntries.map(readLooseRecord).map((entry): SequenceAnimaticContinuityLocationView => ({
       id: trimOptionalString(entry.id),
       name: trimOptionalString(entry.name) || displayNameFromRefId(trimOptionalString(entry.id)),
@@ -1365,6 +1400,10 @@ export function buildSequenceAnimaticViewModel(input: {
       assetStatus: readContinuityAssetStatus(trimOptionalString(entry.id)),
       assetStatusLabel: sequenceAnimaticContinuityAssetStatusLabel(readContinuityAssetStatus(trimOptionalString(entry.id))),
       assetUrl: readContinuityAssetUrl(trimOptionalString(entry.id)),
+      imagePoiAnchors: readContinuityImagePoiAnchors(trimOptionalString(entry.id)),
+      imagePoiAnalysisStatus: readContinuityImagePoiAnalysis(trimOptionalString(entry.id)).status,
+      imagePoiAnalysisLabel: readContinuityImagePoiAnalysis(trimOptionalString(entry.id)).label,
+      imagePoiAnalysisDiagnostics: readContinuityImagePoiAnalysis(trimOptionalString(entry.id)).diagnostics,
       shotIds: readLooseArray(entry.shotIds).map(trimOptionalString).filter(Boolean),
       blockIds: readLooseArray(entry.storyboardBlockIds).map(trimOptionalString).filter(Boolean),
     })).filter((entry) => (entry.id || entry.name) && !sequenceAnimaticSpatialEntryLooksCharacterDerived(entry, input.worldEntities)))

@@ -1,8 +1,9 @@
-import type {
-  OutputArtifact,
-  OutputRequest,
-  OutputWorkflowRun,
-} from '../../../domain/outputWorkflow'
+import {
+  isTerminalOutputWorkflowRunStatus,
+  type OutputArtifact,
+  type OutputRequest,
+  type OutputWorkflowRun,
+} from '../../../domain/outputWorkflow.ts'
 
 import {
   readLooseRecord,
@@ -13,7 +14,6 @@ export type SequenceAnimaticRequestState = 'none' | 'in_progress' | 'animatic_re
 
 export const ACTIVE_SEQUENCE_ANIMATIC_STATUSES = new Set(['queued', 'planning', 'running'])
 export const FAILED_SEQUENCE_ANIMATIC_STATUSES = new Set(['failed', 'cancelled'])
-export const TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES = new Set(['completed', 'completed_with_errors', 'failed', 'cancelled'])
 
 function readNonEmptyLooseRecord(value: unknown): Record<string, unknown> | null {
   const record = readLooseRecord(value)
@@ -84,8 +84,7 @@ export function outputWorkflowRunHasFailedExecution(run: OutputWorkflowRun | nul
 
 export function sequenceAnimaticRequestIsActive(request: OutputRequest | null, run?: OutputWorkflowRun | null) {
   if (!request) return false
-  if (run && !TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run.status)) return true
-  if (run?.status === 'failed' || run?.status === 'cancelled') return false
+  if (run) return !isTerminalOutputWorkflowRunStatus(run.status)
   if (sequenceAnimaticProjectionTerminal(request)) return false
   const effectiveStatus = sequenceAnimaticEffectiveStatus(request)
   if (!run && (effectiveStatus === 'queued' || effectiveStatus === 'awaiting_confirmation')) return false
@@ -137,7 +136,9 @@ export function sequenceAnimaticStateForRequest(
   const requestArtifacts = artifacts.filter((artifact) => artifactBelongsToRequest(artifact, request))
   if (requestArtifacts.some((artifact) => artifact.kind === 'video' || artifact.mimeType.startsWith('video/'))) return 'video_ready'
   const hasViewablePlan = sequenceAnimaticRequestHasViewablePlan(request, artifacts, requests)
-  if (!projectionTerminal && (ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || (run && !TERMINAL_SEQUENCE_ANIMATIC_RUN_STATUSES.has(run.status)))) {
+  const runActive = run ? !isTerminalOutputWorkflowRunStatus(run.status) : false
+  const requestActive = !run && ACTIVE_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus)
+  if (!projectionTerminal && (runActive || requestActive)) {
     return 'in_progress'
   }
   if (FAILED_SEQUENCE_ANIMATIC_STATUSES.has(effectiveStatus) || outputWorkflowRunHasFailedExecution(run)) {

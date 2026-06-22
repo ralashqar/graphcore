@@ -16,6 +16,14 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(readText).filter(Boolean) : []
 }
 
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = readText(value)
+    if (text) return text
+  }
+  return ''
+}
+
 export function spotCameraGridNodeId(spotId: string): string {
   const cleanSpotId = readText(spotId)
   return cleanSpotId ? `${cleanSpotId}::camera_grid` : ''
@@ -35,9 +43,9 @@ export function continuityNodeCollections(graph: LooseRecord): LooseRecord[] {
       parentId: spotId,
       spotId,
       spotIds: [spotId].filter(Boolean),
-      zoneId: readText(spot.zoneId),
-      setId: readText(spot.setId),
-      worldLocationRefId: readText(spot.worldLocationRefId) || readText(spot.baseLocationRefId),
+      zoneId: firstText(spot.zoneId, spot.zone_id, spot.parentZoneId, spot.parent_zone_id, spot.parentId, spot.parent_id),
+      setId: firstText(spot.setId, spot.set_id),
+      worldLocationRefId: firstText(spot.worldLocationRefId, spot.world_location_ref_id, spot.baseLocationRefId, spot.base_location_ref_id),
       storyboardBlockIds: readStringArray(spot.storyboardBlockIds ?? spot.storyboard_block_ids ?? spot.blockIds ?? spot.block_ids),
       shotIds: readStringArray(spot.shotIds ?? spot.shot_ids),
       visualBrief: `Reusable multi-angle camera grid around ${spotName || 'this spot'}, grounded in the parent zone map and local spot reference.`,
@@ -70,20 +78,25 @@ export function continuityVisualDependencyEdges(graph: LooseRecord): LooseRecord
     if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return
     edges.push({ sourceNodeId, targetNodeId, relationship, required, evidence })
   }
-  readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map(asRecord).forEach((set) => push(readText(set.worldLocationRefId), readText(set.id), 'world_location_to_set', true))
-  readArray(graph.zones).map(asRecord).forEach((zone) => push(readText(zone.setId), readText(zone.id), 'set_to_zone', true))
+  readArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map(asRecord).forEach((set) => {
+    push(firstText(set.worldLocationRefId, set.world_location_ref_id, set.baseLocationRefId, set.base_location_ref_id, set.parentId, set.parent_id), readText(set.id), 'world_location_to_set', true)
+  })
+  readArray(graph.zones).map(asRecord).forEach((zone) => {
+    push(firstText(zone.setId, zone.set_id, zone.parentSetId, zone.parent_set_id, zone.parentId, zone.parent_id, zone.worldLocationRefId, zone.world_location_ref_id), readText(zone.id), 'set_to_zone', true)
+  })
   readArray(graph.spots).map(asRecord).forEach((spot) => {
     const spotId = readText(spot.id)
     const gridId = spotCameraGridNodeId(spotId)
-    push(readText(spot.zoneId), spotId, 'zone_to_spot', true)
-    push(readText(spot.zoneId), gridId, 'zone_to_spot_camera_grid', true)
+    const zoneId = firstText(spot.zoneId, spot.zone_id, spot.parentZoneId, spot.parent_zone_id, spot.parentId, spot.parent_id)
+    push(zoneId, spotId, 'zone_to_spot', true)
+    push(zoneId, gridId, 'zone_to_spot_camera_grid', true)
     push(spotId, gridId, 'spot_to_camera_grid', true)
   })
   const viewpoints = readArray(graph.viewpoints).length > 0 ? readArray(graph.viewpoints) : readArray(graph.angles)
   viewpoints.map(asRecord).forEach((angle) => {
-    push(readText(angle.setId), readText(angle.id), 'set_to_angle', true)
-    push(readText(angle.zoneId), readText(angle.id), 'zone_to_angle', true)
-    readStringArray(angle.spotIds).forEach((spotId) => push(spotId, readText(angle.id), 'spot_to_angle', false))
+    push(firstText(angle.setId, angle.set_id), readText(angle.id), 'set_to_angle', true)
+    push(firstText(angle.zoneId, angle.zone_id, angle.parentZoneId, angle.parent_zone_id), readText(angle.id), 'zone_to_angle', true)
+    readStringArray(angle.spotIds ?? angle.spot_ids).forEach((spotId) => push(spotId, readText(angle.id), 'spot_to_angle', false))
   })
   readArray(graph.edges).map(asRecord).forEach((edge) => {
     const relationship = readText(edge.relationship)
@@ -103,27 +116,19 @@ export function continuityVisualDependencyEdges(graph: LooseRecord): LooseRecord
 export function continuityNodeParentId(node: LooseRecord): string {
   const nodeKind = readText(node.nodeKind)
   if (nodeKind === 'location_spot') {
-    return readText(node.zoneId) || readText(node.setId) || readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
+    return firstText(node.zoneId, node.zone_id, node.parentZoneId, node.parent_zone_id, node.parentId, node.parent_id, node.setId, node.set_id, node.worldLocationRefId, node.world_location_ref_id, node.baseLocationRefId, node.base_location_ref_id)
   }
   if (nodeKind === 'location_viewpoint' || nodeKind === 'location_angle') {
-    return readStringArray(node.spotIds)[0]
-      || readText(node.spotId)
-      || readText(node.zoneId)
-      || readText(node.setId)
-      || readText(node.worldLocationRefId)
-      || readText(node.baseLocationRefId)
+    return readStringArray(node.spotIds ?? node.spot_ids)[0]
+      || firstText(node.spotId, node.spot_id, node.parentSpotId, node.parent_spot_id, node.parentId, node.parent_id, node.zoneId, node.zone_id, node.setId, node.set_id, node.worldLocationRefId, node.world_location_ref_id, node.baseLocationRefId, node.base_location_ref_id)
   }
   if (nodeKind === 'spot_camera_grid') {
-    return readText(node.spotId)
-      || readStringArray(node.spotIds)[0]
-      || readText(node.parentId)
-      || readText(node.zoneId)
-      || readText(node.setId)
-      || readText(node.worldLocationRefId)
-      || readText(node.baseLocationRefId)
+    return firstText(node.spotId, node.spot_id)
+      || readStringArray(node.spotIds ?? node.spot_ids)[0]
+      || firstText(node.parentId, node.parent_id, node.zoneId, node.zone_id, node.setId, node.set_id, node.worldLocationRefId, node.world_location_ref_id, node.baseLocationRefId, node.base_location_ref_id)
   }
-  if (nodeKind === 'location_zone') return readText(node.setId) || readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
-  if (nodeKind === 'location_set') return readText(node.worldLocationRefId) || readText(node.baseLocationRefId)
+  if (nodeKind === 'location_zone') return firstText(node.setId, node.set_id, node.parentSetId, node.parent_set_id, node.parentId, node.parent_id, node.worldLocationRefId, node.world_location_ref_id, node.baseLocationRefId, node.base_location_ref_id)
+  if (nodeKind === 'location_set') return firstText(node.worldLocationRefId, node.world_location_ref_id, node.baseLocationRefId, node.base_location_ref_id, node.parentId, node.parent_id)
   return readText(node.parentId) || readText(node.parent_id)
 }
 

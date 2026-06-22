@@ -905,6 +905,10 @@ type WorldGraphPageProps = {
     extraPromptDirection?: string
     clearOverride?: boolean
   }) => Promise<unknown> | unknown
+  onAnalyzeSequenceAnimaticZonePois: (request: {
+    masterRequestId: string
+    zoneNodeId: string
+  }) => Promise<unknown> | unknown
   onLoadSequenceAnimaticState: (request: {
     masterRequestId?: string | null
     sequenceUnitKey?: string | null
@@ -1616,6 +1620,7 @@ export function WorldGraphPage({
   onStartSequenceAnimaticSceneBoardWorkflowCommand,
   onEnsureSequenceAnimaticShotRevisionWorkflow,
   onUpdateSequenceAnimaticSceneGraphNode,
+  onAnalyzeSequenceAnimaticZonePois,
   onLoadSequenceAnimaticState,
   onSubscribeSequenceAnimaticStateSignals,
   onGetOutputRequestStatus,
@@ -11704,6 +11709,17 @@ export function WorldGraphPage({
                 masterRequestId: sequenceAnimaticContinuityGraphModel.request.id,
                 knownRevision: null,
               })
+            }}
+            onAnalyzeZonePoiLabels={async (node) => {
+              const result = await Promise.resolve(onAnalyzeSequenceAnimaticZonePois({
+                masterRequestId: sequenceAnimaticContinuityGraphModel.request.id,
+                zoneNodeId: node.id,
+              }))
+              await loadAndStoreSequenceAnimaticState({
+                masterRequestId: sequenceAnimaticContinuityGraphModel.request.id,
+                knownRevision: null,
+              })
+              return result
             }}
             onOpenSceneBoard={(scopeNodeId, sceneId) => {
               openSequenceAnimaticSceneBoard(sequenceAnimaticContinuityGraphModel.request.id, sceneId ?? sequenceAnimaticContinuityGraphScopeSceneId, scopeNodeId ?? sequenceAnimaticContinuityGraphScopeWorldLocationId)

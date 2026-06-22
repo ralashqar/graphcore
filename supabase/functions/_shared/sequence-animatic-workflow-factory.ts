@@ -25,8 +25,8 @@ function sequenceAnimaticContinuityAssetImagePolicy(assetKind: string, generatio
   if (generationPolicy.startsWith('zone_spatial_map') || assetKind === 'location_zone') {
     return {
       quality: 'medium',
-      imageSize: { width: 3072, height: 2048 },
-      imageSizePolicy: 'zone_spatial_map_3072x2048',
+      imageSize: { width: 3840, height: 2560 },
+      imageSizePolicy: 'zone_continuity_board_3840x2560',
     }
   }
   return {
@@ -1084,6 +1084,7 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
   aspectRatio: string
 }) {
   const imagePolicy = sequenceAnimaticContinuityAssetImagePolicy(input.assetKind, readText(input.commonConfig.generationPolicy))
+  const maxReferenceImages = input.assetKind === 'location_spot' ? 1 : 8
   const config = {
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     ...input.commonConfig,
@@ -1117,7 +1118,7 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
       referenceModel: 'openai/gpt-image-2/edit',
       quality: imagePolicy.quality,
       outputFormat: 'webp',
-      maxReferenceImages: 8,
+      maxReferenceImages,
       imageSize: imagePolicy.imageSize,
       imageSizePolicy: imagePolicy.imageSizePolicy,
       planningOnly: false,
@@ -1138,8 +1139,10 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'continuity_asset_input', 'asset_pack', 'continuity_asset_prompt', 'asset_pack', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'continuity_asset_prompt', 'text', 'continuity_asset_image', 'prompt', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'continuity_asset_prompt', 'asset_pack', 'continuity_asset_image', 'asset_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_ref_keys', 'continuity_asset_prompt', 'reference_asset_keys', 'continuity_asset_image', 'reference_asset_keys', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_target', 'continuity_asset_input', 'target_node', 'continuity_asset_artifact', 'target_node', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'continuity_asset_prompt', 'text', 'continuity_asset_artifact', 'prompt', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_refs', 'continuity_asset_prompt', 'reference_asset_keys', 'continuity_asset_artifact', 'reference_asset_keys', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'continuity_asset_image', 'image', 'continuity_asset_artifact', 'image', { optional: true, optionalDependency: true }, 'continuity_asset'),
   ]
   return { nodes, edges }
