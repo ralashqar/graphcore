@@ -22,6 +22,10 @@ function normalizeReferenceText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
 }
 
+function normalizeReadableReferenceText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 function slugify(value: string) {
   return value
     .toLowerCase()
@@ -85,6 +89,101 @@ function filterCinematicAssetPack(assetPack: LooseRecord, keys: string[], limit 
     missingReferenceEntityKeys: readStringArray(assetPack.missingReferenceEntityKeys)
       .filter((key) => selectedKeys.has(key)),
   }
+}
+
+function readStoryboardCoverageSetupId(rawShot: LooseRecord) {
+  return readText(rawShot.coverageSetupId ?? rawShot.coverage_setup_id)
+}
+
+export function storyboardCoverageSetupCharacterRefIds(storyboardGroup?: LooseRecord | null) {
+  const setups = Array.isArray(storyboardGroup?.coverageSetups)
+    ? storyboardGroup.coverageSetups.map(asRecord)
+    : []
+  const bySetupId = new Map<string, string[]>()
+  setups.forEach((setup) => {
+    const id = readText(setup.id)
+    if (!id) return
+    bySetupId.set(id, [
+      ...readStringArray(setup.characterRefIds),
+      ...readStringArray(setup.character_ref_ids),
+    ].filter((key, index, array) => key && array.indexOf(key) === index))
+  })
+  return bySetupId
+}
+
+function isPrincipalVisualEntity(entity: LooseRecord) {
+  const role = readText(entity.role).toLowerCase()
+  const type = readText(entity.type).toLowerCase()
+  return role === 'actor' || role === 'character' || type === 'actor' || type === 'character'
+}
+
+function principalNameMentionAliases(entity: LooseRecord) {
+  const aliases = [
+    readText(entity.name),
+    readText(entity.key).replace(/_/g, ' '),
+  ]
+  const nameParts = readText(entity.name).split(/\s+/).map((part) => part.trim()).filter((part) => part.length >= 3)
+  aliases.push(...nameParts)
+  return [...new Set(aliases.map(normalizeReadableReferenceText).filter((alias) => alias.length >= 3))]
+}
+
+function shotPrincipalMentionText(rawShot: LooseRecord) {
+  const dialogue = Array.isArray(rawShot.dialogue)
+    ? rawShot.dialogue.map((line) => {
+      const record = asRecord(line)
+      return [
+        record.speakerName,
+        record.speakerRefId,
+        record.text,
+      ].map(readText).filter(Boolean).join(' ')
+    })
+    : []
+  return normalizeReadableReferenceText([
+    rawShot.title,
+    rawShot.description,
+    rawShot.action,
+    rawShot.caption,
+    rawShot.storyboardPanelPrompt,
+    rawShot.videoDirection,
+    ...dialogue,
+  ].map(readText).filter(Boolean).join(' '))
+}
+
+export function storyboardPrincipalRefIdsForShot(input: {
+  shot: LooseRecord
+  assetPack: LooseRecord
+  coverageSetupCharacterRefIds?: Map<string, string[]>
+}) {
+  const byKey = new Map<string, LooseRecord>(
+    cinematicAssetPackEntities(input.assetPack)
+      .map((entity): [string, LooseRecord] => [readText(entity.key), entity])
+      .filter(([key]) => key),
+  )
+  const keys: string[] = []
+  const addPrincipalKey = (key: string) => {
+    const entity = byKey.get(key)
+    if (!key || !entity || !isPrincipalVisualEntity(entity) || keys.includes(key)) return
+    keys.push(key)
+  }
+  readStringArray(input.shot.visibleCharacterRefIds ?? input.shot.visible_character_ref_ids).forEach(addPrincipalKey)
+  const setupId = readStoryboardCoverageSetupId(input.shot)
+  if (setupId) {
+    ;(input.coverageSetupCharacterRefIds?.get(setupId) ?? []).forEach(addPrincipalKey)
+  }
+  const shotText = shotPrincipalMentionText(input.shot)
+  if (shotText) {
+    cinematicAssetPackEntities(input.assetPack)
+      .filter(isPrincipalVisualEntity)
+      .forEach((entity) => {
+        const key = readText(entity.key)
+        if (!key || keys.includes(key)) return
+        const aliases = principalNameMentionAliases(entity)
+        if (aliases.some((alias) => new RegExp(`(^|\\s)${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(shotText))) {
+          addPrincipalKey(key)
+        }
+      })
+  }
+  return keys
 }
 
 function buildFallbackCinematicV2ReferencePlan(assetPack: LooseRecord, maxReferenceCount = 16) {
@@ -289,11 +388,14 @@ export function repairCinematicV2ShotPlanVisualReferences(input: {
 export function buildCinematicV3StoryboardGroupAssetPack(input: {
   assetPack: LooseRecord
   shots: LooseRecord[]
+  storyboardGroup?: LooseRecord | null
   maxEntityCount?: number
   maxAssetKeysPerEntity?: number
+  includeContinuityAnchorRefs?: boolean
   includeSpeakerRefs?: boolean
   includePerformanceRefs?: boolean
   includeTextMentionedRefs?: boolean
+  spatialReferencePolicy?: 'all' | 'zone_only' | 'none'
 }) {
   const byKey = new Map<string, LooseRecord>(
     cinematicAssetPackEntities(input.assetPack)
@@ -305,14 +407,33 @@ export function buildCinematicV3StoryboardGroupAssetPack(input: {
     if (key && byKey.has(key) && !keys.includes(key)) keys.push(key)
   }
   const groupTextParts: string[] = []
+  const coverageSetupCharacterRefIds = storyboardCoverageSetupCharacterRefIds(input.storyboardGroup)
+  const relevantZoneIds: string[] = []
+  const addRelevantZoneId = (value: unknown) => {
+    const id = readText(value)
+    if (id && !relevantZoneIds.includes(id)) relevantZoneIds.push(id)
+  }
+  const groupCoverageSetups = Array.isArray(input.storyboardGroup?.coverageSetups)
+    ? input.storyboardGroup.coverageSetups.map(asRecord)
+    : []
+  groupCoverageSetups.forEach((setup) => {
+    addRelevantZoneId(setup.zoneId ?? setup.zone_id)
+  })
 
   input.shots.forEach((rawShot) => {
-    readStringArray(rawShot.continuityAnchorIds).forEach(addKey)
-    readStringArray(rawShot.continuityAnchorRefIds).forEach(addKey)
+    addRelevantZoneId(rawShot.continuityZoneId ?? rawShot.continuity_zone_id)
+    if (input.includeContinuityAnchorRefs !== false) {
+      readStringArray(rawShot.continuityAnchorIds).forEach(addKey)
+      readStringArray(rawShot.continuityAnchorRefIds).forEach(addKey)
+    }
+    storyboardPrincipalRefIdsForShot({
+      shot: rawShot,
+      assetPack: input.assetPack,
+      coverageSetupCharacterRefIds,
+    }).forEach(addKey)
     const parsedShot = cinematicV2ShotSchema.safeParse(rawShot)
     const shot = parsedShot.success ? parsedShot.data : null
     if (shot) {
-      shot.visibleCharacterRefIds.forEach(addKey)
       if (shot.locationRefId) addKey(shot.locationRefId)
       shot.propRefIds.forEach(addKey)
       if (input.includeSpeakerRefs !== false) {
@@ -352,15 +473,44 @@ export function buildCinematicV3StoryboardGroupAssetPack(input: {
 
   const maxEntityCount = Math.max(0, input.maxEntityCount ?? 4)
   const spatialKeys: string[] = []
-  cinematicAssetPackEntities(input.assetPack)
-    .filter((entity) => {
-      const type = readText(entity.type)
-      return type === 'continuity_spatial_ref' || entity.storyboardSpatialReference === true
-    })
-    .forEach((entity) => {
-      const key = readText(entity.key)
-      if (key && byKey.has(key) && !spatialKeys.includes(key)) spatialKeys.push(key)
-    })
+  if (input.spatialReferencePolicy !== 'none') {
+    cinematicAssetPackEntities(input.assetPack)
+      .filter((entity) => {
+        const type = readText(entity.type)
+        const role = readText(entity.role)
+        const key = readText(entity.key)
+        const sourceNodeId = readText(entity.continuitySourceNodeId ?? entity.continuity_source_node_id)
+        const spatial = type === 'continuity_spatial_ref'
+          || type === 'continuity_asset'
+          || type === 'location_spot'
+          || role === 'continuity_reference'
+          || entity.storyboardSpatialReference === true
+          || Boolean(sourceNodeId)
+        if (!spatial) return false
+        if (input.spatialReferencePolicy !== 'zone_only') return true
+        const fields = [
+          key,
+          sourceNodeId,
+          entity.type,
+          entity.role,
+          entity.selectedReferenceVariantType,
+          entity.selectedReferenceVariantLabel,
+          entity.selectedReferenceVariantSummary,
+          entity.name,
+        ].map(readText).join(' ').toLowerCase()
+        if (!fields.includes('zone')) return false
+        if (relevantZoneIds.length === 0) return true
+        return relevantZoneIds.some((zoneId) => {
+          const normalizedZoneId = zoneId.toLowerCase()
+          const readableZoneId = zoneId.replace(/_/g, ' ').toLowerCase()
+          return fields.includes(normalizedZoneId) || fields.includes(readableZoneId)
+        })
+      })
+      .forEach((entity) => {
+        const key = readText(entity.key)
+        if (key && byKey.has(key) && !spatialKeys.includes(key)) spatialKeys.push(key)
+      })
+  }
   const spatialBudget = spatialKeys.length > 0 ? Math.min(spatialKeys.length, Math.max(1, Math.floor(maxEntityCount / 2))) : 0
   const entityBudget = Math.max(0, maxEntityCount - spatialBudget)
   const selectedKeys = [
@@ -373,11 +523,20 @@ export function buildCinematicV3StoryboardGroupAssetPack(input: {
     Math.max(1, maxEntityCount),
     input.maxAssetKeysPerEntity ?? 2,
   )
-  return {
+  const selectedOrder = new Map(selectedKeys.map((key, index) => [key, index] as const))
+  const orderedEntities = cinematicAssetPackEntities(groupAssetPack)
+    .slice()
+    .sort((left, right) => (selectedOrder.get(readText(left.key)) ?? 9999) - (selectedOrder.get(readText(right.key)) ?? 9999))
+  const orderedAssetPack = {
     ...groupAssetPack,
+    entities: orderedEntities,
+    selectedEntityKeys: orderedEntities.map((entity) => readText(entity.key)).filter(Boolean),
+  }
+  return {
+    ...orderedAssetPack,
     storyboardGroupReferenceKeys: selectedKeys,
     referenceScope: 'cinematic_v3_storyboard_group',
-    text: JSON.stringify(groupAssetPack, null, 2),
+    text: JSON.stringify(orderedAssetPack, null, 2),
   }
 }
 

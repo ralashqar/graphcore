@@ -279,6 +279,7 @@ export async function sequenceAnimaticShotReferencePack(
   const upstreamImages = readUpstreamImages(context.upstream, helpers, ['image', 'keyframe', 'primaryReferenceImage'])
   const imageByAssetKey = new Map(upstreamImages.map((image) => [helpers.readText(image.assetKey), image] as const).filter(([assetKey]) => assetKey))
   const referenceAssetKeys = references.map((reference) => helpers.readText(reference.assetKey)).filter(Boolean)
+  const configuredRequiredReferenceAssetKeys = helpers.readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
   const fallbackEntities = references.map((reference, index) => {
     const assetKey = helpers.readText(reference.assetKey)
     const role = helpers.readText(reference.role) || 'continuity_asset'
@@ -306,19 +307,19 @@ export async function sequenceAnimaticShotReferencePack(
     }
   }).filter((entity) => helpers.readText(entity.primaryAssetKey))
   const scopedReferenceAssetKeys = [...new Set([
-    ...helpers.readStringArray(config.requiredReferenceAssetKeys),
-    ...referenceAssetKeys,
+    ...(configuredRequiredReferenceAssetKeys.length > 0 ? configuredRequiredReferenceAssetKeys : referenceAssetKeys),
   ])]
+  const scopedReferenceAssetKeySet = new Set(scopedReferenceAssetKeys)
   const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
     assetPack: rawAssetPack,
-    referenceAssetKeys: scopedReferenceAssetKeys.length > 0 ? scopedReferenceAssetKeys : referenceAssetKeys,
+    referenceAssetKeys: scopedReferenceAssetKeys,
     fallbackEntities,
     referenceScope: 'sequence_animatic_shot_production',
     limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
   }))
-  const coverageAnchor = references.find((reference) => helpers.readText(reference.role) === 'coverage_anchor')
-  const previousKeyframe = references.find((reference) => helpers.readText(reference.role) === 'previous_keyframe')
-  const storyboardPanel = references.find((reference) => helpers.readText(reference.role) === 'storyboard_panel')
+  const coverageAnchor = references.find((reference) => helpers.readText(reference.role) === 'coverage_anchor' && scopedReferenceAssetKeySet.has(helpers.readText(reference.assetKey)))
+  const previousKeyframe = references.find((reference) => helpers.readText(reference.role) === 'previous_keyframe' && scopedReferenceAssetKeySet.has(helpers.readText(reference.assetKey)))
+  const storyboardPanel = references.find((reference) => helpers.readText(reference.role) === 'storyboard_panel' && scopedReferenceAssetKeySet.has(helpers.readText(reference.assetKey)))
   const coverageAnchorImage = coverageAnchor ? imageByAssetKey.get(helpers.readText(coverageAnchor.assetKey)) ?? null : null
   const previousKeyframeImage = previousKeyframe ? imageByAssetKey.get(helpers.readText(previousKeyframe.assetKey)) ?? null : null
   const storyboardPanelImage = storyboardPanel ? imageByAssetKey.get(helpers.readText(storyboardPanel.assetKey)) ?? null : null

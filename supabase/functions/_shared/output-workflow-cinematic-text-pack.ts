@@ -19,7 +19,11 @@ import {
 import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
 import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import { createWorkflowNodeExecutionResult } from './output-workflow-node-pack-runtime.ts'
-import { buildCinematicV3StoryboardGroupAssetPack } from './output-workflow-cinematic-asset-pack-runtime.ts'
+import {
+  buildCinematicV3StoryboardGroupAssetPack,
+  storyboardCoverageSetupCharacterRefIds,
+  storyboardPrincipalRefIdsForShot,
+} from './output-workflow-cinematic-asset-pack-runtime.ts'
 import {
   cinematicV3StoryboardGroupShots,
   storyboardImageSizeForLayout,
@@ -359,6 +363,130 @@ function cinematicEntityByKey(
   return byKey
 }
 
+function cinematicEntityPrimaryAssetKey(entity: LooseRecord, helpers: CinematicTextWorkflowNodePackHelpers) {
+  return helpers.readText(entity.primaryAssetKey)
+    || helpers.readText(entity.selectedReferenceAssetKey)
+    || helpers.readStringArray(entity.assetKeys)[0]
+    || ''
+}
+
+function storyboardReferenceRole(entity: LooseRecord, helpers: CinematicTextWorkflowNodePackHelpers) {
+  return [
+    entity.role,
+    entity.type,
+    entity.selectedReferenceVariantType,
+    entity.selectedReferenceVariantKey,
+    entity.name,
+  ].map(helpers.readText).join(' ').toLowerCase()
+}
+
+function storyboardReferenceEntries(assetPack: LooseRecord, helpers: CinematicTextWorkflowNodePackHelpers) {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(helpers.asRecord) : []
+  return entities.map((entity, index) => {
+    const key = helpers.readText(entity.key)
+    const roleText = storyboardReferenceRole(entity, helpers)
+    const assetKey = cinematicEntityPrimaryAssetKey(entity, helpers)
+    return {
+      entity,
+      entityKey: key,
+      imageTag: `@Image${index + 1}`,
+      assetKey,
+      label: helpers.readText(entity.name) || helpers.readText(entity.selectedReferenceVariantLabel) || key || `Reference ${index + 1}`,
+      isZoneSpatial: (entity.storyboardSpatialReference === true && roleText.includes('zone'))
+        || [
+          entity.key,
+          entity.name,
+          entity.type,
+          entity.role,
+          entity.continuitySourceNodeId,
+          entity.continuity_source_node_id,
+          entity.selectedReferenceVariantType,
+          entity.selectedReferenceVariantLabel,
+        ].map(helpers.readText).join(' ').toLowerCase().includes('zone'),
+      isPrincipal: roleText.includes('actor') || roleText.includes('character') || roleText.includes('cast'),
+      isProp: roleText.includes('prop') || roleText.includes('item') || roleText.includes('object'),
+    }
+  }).filter((entry) => entry.assetKey)
+}
+
+function storyboardIncidentalRoleText(shot: z.infer<typeof cinematicV2ShotSchema>) {
+  const text = [
+    shot.title,
+    shot.description,
+    shot.action,
+    shot.caption,
+    shot.storyboardPanelPrompt,
+  ].filter(Boolean).join(' ').toLowerCase()
+  const roles = [
+    ['runner', /\brunners?\b/],
+    ['refugees', /\brefugees?\b/],
+    ['crowd', /\bcrowds?\b|\bpeople\b/],
+    ['guards', /\bguards?\b/],
+    ['villagers', /\bvillagers?\b/],
+    ['shrine keepers', /\bshrine keepers?\b/],
+  ].filter(([, pattern]) => (pattern as RegExp).test(text)).map(([label]) => label as string)
+  return [...new Set(roles)].join(', ')
+}
+
+function buildStoryboardPanelReferencePlan(input: {
+  shots: z.infer<typeof cinematicV2ShotSchema>[]
+  assetPack: LooseRecord
+  panelCount: number
+  storyboardGroup?: LooseRecord | null
+}, helpers: CinematicTextWorkflowNodePackHelpers) {
+  const entries = storyboardReferenceEntries(input.assetPack, helpers)
+  const entriesByKey = new Map(entries.map((entry) => [entry.entityKey, entry] as const).filter(([key]) => key))
+  const zoneEntries = entries.filter((entry) => entry.isZoneSpatial)
+  const principalEntries = entries.filter((entry) => entry.isPrincipal)
+  const coverageSetupCharacterRefIds = storyboardCoverageSetupCharacterRefIds(input.storyboardGroup)
+  const plan = input.shots.slice(0, input.panelCount).map((shot, index) => {
+    const panelPrincipalRefIds = storyboardPrincipalRefIdsForShot({
+      shot: shot as unknown as LooseRecord,
+      assetPack: input.assetPack,
+      coverageSetupCharacterRefIds,
+    })
+    const explicitPrincipalEntries = panelPrincipalRefIds
+      .map((key) => entriesByKey.get(key))
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry?.isPrincipal))
+    const explicitPropEntries = shot.propRefIds
+      .map((key) => entriesByKey.get(key))
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry?.isProp))
+    const allowedEntries = [...zoneEntries, ...explicitPrincipalEntries, ...explicitPropEntries]
+      .filter((entry, entryIndex, array) => array.findIndex((candidate) => candidate.assetKey === entry.assetKey) === entryIndex)
+    const allowedPrincipalRefIds = explicitPrincipalEntries.map((entry) => entry.entityKey).filter(Boolean)
+    const forbiddenPrincipalRefIds = principalEntries
+      .map((entry) => entry.entityKey)
+      .filter((key) => key && !allowedPrincipalRefIds.includes(key))
+    return {
+      panelIndex: index + 1,
+      shotId: shot.id,
+      allowedReferenceAssetKeys: allowedEntries.map((entry) => entry.assetKey),
+      allowedReferenceTags: allowedEntries.map((entry) => entry.imageTag),
+      allowedPrincipalRefIds,
+      allowedPrincipalLabels: explicitPrincipalEntries.map((entry) => `${entry.imageTag} ${entry.label}`),
+      incidentalRoleText: storyboardIncidentalRoleText(shot),
+      forbiddenPrincipalRefIds,
+    }
+  })
+  const panelUseByAssetKey = new Map<string, number[]>()
+  for (const panel of plan) {
+    panel.allowedReferenceAssetKeys.forEach((assetKey) => {
+      panelUseByAssetKey.set(assetKey, [...(panelUseByAssetKey.get(assetKey) ?? []), panel.panelIndex])
+    })
+  }
+  const legendLines = entries.map((entry) => {
+    if (entry.isZoneSpatial) return `${entry.imageTag}: Zone continuity board. Use for all geography and spot layout.`
+    const panels = panelUseByAssetKey.get(entry.assetKey) ?? []
+    const panelText = panels.length > 0 ? `Use only in panel${panels.length === 1 ? '' : 's'} ${panels.join(', ')}.` : 'Do not use unless a panel explicitly lists this reference.'
+    return `${entry.imageTag}: ${entry.label}. ${panelText}`
+  })
+  return {
+    entries,
+    legendLines,
+    plan,
+  }
+}
+
 function formatCinematicV2PerformanceDirection(
   shot: z.infer<typeof cinematicV2ShotSchema>,
 ) {
@@ -411,61 +539,21 @@ function buildCinematicV3StoryboardPrompt(input: {
     : buildCinematicV3StoryboardLayout(shotPlan.shots.length)
   const gridCellCount = layout.rows * layout.columns
   const blankCellCount = Math.max(0, gridCellCount - layout.panelCount)
-  const entities = compactCinematicEntityAnchors(input.assetPack, helpers, 12)
   const labelByKey = cinematicEntityLabelByKey(input.assetPack, helpers)
+  const referencePlan = buildStoryboardPanelReferencePlan({
+    shots: shotPlan.shots,
+    assetPack: input.assetPack,
+    panelCount: layout.panelCount,
+    storyboardGroup,
+  }, helpers)
   const coverageSetups = Array.isArray((storyboardGroup as unknown as LooseRecord | null)?.coverageSetups)
     ? ((storyboardGroup as unknown as LooseRecord).coverageSetups as unknown[]).map(helpers.asRecord)
     : []
   const coverageSetupById = new Map(coverageSetups.map((setup) => [helpers.readText(setup.id), setup] as const).filter(([id]) => id))
-  const coverageSetupLines = coverageSetups.slice(0, 12).map((setup) => [
-    `${helpers.readText(setup.id)}: ${helpers.readText(setup.title) || helpers.titleFromRefLike(helpers.readText(setup.id))}.`,
-    helpers.readText(setup.setupKind ?? setup.setup_kind) ? `Kind: ${helpers.readText(setup.setupKind ?? setup.setup_kind)}.` : '',
-    helpers.readText(setup.screenDirection ?? setup.screen_direction) ? `Screen direction: ${helpers.readText(setup.screenDirection ?? setup.screen_direction)}.` : '',
-    helpers.readText(setup.stagingBrief ?? setup.staging_brief) ? `Staging: ${helpers.readText(setup.stagingBrief ?? setup.staging_brief)}.` : '',
-    helpers.readText(setup.lighting) ? `Lighting: ${helpers.readText(setup.lighting)}.` : '',
-  ].filter(Boolean).join(' '))
-  const spatialReferencePack = helpers.asRecord(input.assetPack.storyboardSpatialReferencePack ?? input.assetPack.storyboard_spatial_reference_pack)
-  const spatialShotReferences = Array.isArray(spatialReferencePack.shotSpatialReferences)
-    ? spatialReferencePack.shotSpatialReferences.map(helpers.asRecord)
-    : []
-  const spatialAssets = Array.isArray(spatialReferencePack.selectedReferenceAssets)
-    ? spatialReferencePack.selectedReferenceAssets.map(helpers.asRecord)
-    : []
-  const spatialReferenceByShotId = new Map(spatialShotReferences.map((reference) => [helpers.readText(reference.shotId), reference] as const).filter(([shotId]) => shotId))
-  const spatialRoleLabel = (role: string) => {
-    if (role === 'coverage_cell') return 'coverage cell'
-    if (role === 'spot_angle_grid') return 'spot angle grid'
-    if (role === 'spot_atlas') return 'spot atlas'
-    if (role === 'spatial_reference') return 'spatial reference'
-    return role || 'spatial reference'
-  }
-  const spatialReferenceLines = shotPlan.shots.slice(0, layout.panelCount).map((shot, index) => {
-    const reference = spatialReferenceByShotId.get(shot.id) ?? {}
-    const roles = spatialAssets
-      .filter((asset) => {
-        const shotIds = Array.isArray(asset.shotIds) ? asset.shotIds.map(helpers.readText).filter(Boolean) : []
-        return shotIds.includes(shot.id)
-      })
-      .map((asset) => spatialRoleLabel(helpers.readText(asset.role)))
-      .filter((role, roleIndex, roles) => role && roles.indexOf(role) === roleIndex)
-    const details = [
-      helpers.readText(reference.sceneId) ? `scene ${helpers.readText(reference.sceneId)}` : '',
-      helpers.readText(reference.zoneId) ? `zone ${helpers.readText(reference.zoneId)}` : '',
-      Array.isArray(reference.spotIds) && reference.spotIds.length > 0 ? `spot ${reference.spotIds.map(helpers.readText).filter(Boolean).join(', ')}` : '',
-      Array.isArray(reference.angleIds) && reference.angleIds.length > 0 ? `angle/viewpoint ${reference.angleIds.map(helpers.readText).filter(Boolean).join(', ')}` : helpers.readText(reference.viewpointId) ? `viewpoint ${helpers.readText(reference.viewpointId)}` : '',
-      helpers.readText(reference.coverageSetupId) ? `coverage setup ${helpers.readText(reference.coverageSetupId)}` : '',
-      roles.length > 0 ? `attached reference roles: ${roles.join(', ')}` : '',
-    ].filter(Boolean)
-    const blockers = Array.isArray(reference.blockers) ? reference.blockers.map(helpers.readText).filter(Boolean) : []
-    return details.length > 0 || blockers.length > 0
-      ? `Panel ${index + 1} (${shot.id}): ${details.join('; ') || 'no ready spatial reference'}${blockers.length > 0 ? `; provisional blockers: ${blockers.join(', ')}` : ''}.`
-      : ''
-  }).filter(Boolean)
-  const spatialReferenceInstruction = spatialReferenceLines.length > 0
+  const spatialReferenceInstruction = referencePlan.entries.some((entry) => entry.isZoneSpatial)
     ? [
-      `Spatial continuity references (${helpers.readText(spatialReferencePack.status) === 'ready' ? 'ready' : 'provisional'}):`,
-      spatialReferenceLines.join('\n'),
-      'Use attached zone maps, spot atlases, spot angle grids, and coverage cells only to ground geography, landmarks, screen direction, camera blocking, and relative positions. Do not reproduce reference-grid gutters, labels, diagrams, UI, text, or reference-sheet layout inside the storyboard panels.',
+      'Use the attached zone continuity board as the only spatial image source for geography, landmarks, screen direction, camera blocking, spot layout, and relative positions.',
+      'Do not reproduce map labels, reference-grid gutters, diagrams, UI, text, or reference-board layout inside the storyboard panels.',
     ].join('\n')
     : ''
   const shotLines = shotPlan.shots.slice(0, layout.panelCount).map((shot, index) => {
@@ -477,12 +565,23 @@ function buildCinematicV3StoryboardPrompt(input: {
     const coverageSetupId = helpers.readText(shotRecord.coverageSetupId ?? shotRecord.coverage_setup_id)
     const coverageSetup = coverageSetupId ? coverageSetupById.get(coverageSetupId) ?? null : null
     const continuityLink = helpers.asRecord(shotRecord.continuityLink ?? shotRecord.continuity_link)
+    const panelReferencePlan = referencePlan.plan[index]
+    const panelReferences = panelReferencePlan?.allowedReferenceTags.length
+      ? panelReferencePlan.allowedReferenceTags.join(', ')
+      : 'none'
+    const principalLine = panelReferencePlan?.allowedPrincipalLabels.length
+      ? `Principal references: ${panelReferencePlan.allowedPrincipalLabels.join(', ')}.`
+      : 'Principal references: none. Incidental people are text-only.'
+    const incidentalLine = panelReferencePlan?.incidentalRoleText
+      ? `Incidental roles: ${panelReferencePlan.incidentalRoleText}. Describe them generically; do not use principal character appearances for them.`
+      : ''
     return [
       `Panel ${index + 1}: ${shot.title}.`,
       coverageSetupId ? `Coverage setup: ${coverageSetupId}${coverageSetup ? ` (${helpers.readText(coverageSetup.title) || helpers.readText(coverageSetup.setupKind ?? coverageSetup.setup_kind)})` : ''}. Keep this panel visually consistent with every other panel using the same setup.` : '',
       helpers.readText(continuityLink.mode) ? `Continuity link: ${helpers.readText(continuityLink.mode)}${helpers.readText(continuityLink.fromSetupId) ? ` from ${helpers.readText(continuityLink.fromSetupId)}` : ''}${helpers.readText(continuityLink.description) ? `; ${helpers.readText(continuityLink.description)}` : ''}.` : '',
-      `Required subjects (${shot.visibleCharacterRefIds.length}): ${shot.visibleCharacterRefIds.map((key) => labelByKey.get(key) || key).join(', ') || 'no named character subject'}.`,
-      shot.locationRefId ? `Required location: ${labelByKey.get(shot.locationRefId) || shot.locationRefId}.` : '',
+      `References for this panel: ${panelReferences}.`,
+      principalLine,
+      incidentalLine,
       shot.propRefIds.length > 0 ? `Required props: ${shot.propRefIds.map((key) => labelByKey.get(key) || key).join(', ')}.` : '',
       formatCinematicV2PerformanceDirection(shot) ? `Required acting/performance: ${formatCinematicV2PerformanceDirection(shot)}.` : '',
       `Action: ${shot.action || shot.description}.`,
@@ -491,7 +590,6 @@ function buildCinematicV3StoryboardPrompt(input: {
       mood ? `Mood: ${mood}.` : '',
       storyboardPanelPrompt ? `Panel composition: ${storyboardPanelPrompt}.` : '',
       `Camera: ${shot.camera.framing}; ${shot.camera.angle}; ${shot.camera.lens}; ${shot.camera.movement}.`,
-      'Do not add unlisted principal characters, duplicate versions of the same character, captions, labels, speech bubbles, UI, or panel text.',
     ].filter(Boolean).join(' ')
   }).join('\n')
   const blankCellInstruction = blankCellCount > 0
@@ -508,22 +606,27 @@ function buildCinematicV3StoryboardPrompt(input: {
       'Use straight, evenly spaced gutters that divide the sheet into identical rectangular cells so automated cropping can split the image by rows and columns.',
       'Do not create a masonry layout, irregular comic layout, unequal panel sizes, merged panels, staggered rows, inset panels, diagonal dividers, floating panels, or extra panels.',
     ]
-  return [
+  const prompt = [
     ...layoutInstruction,
     blankCellInstruction,
     storyboardGroup ? `This is storyboard sheet ${storyboardGroup.index}: ${storyboardGroup.summary}.` : '',
     storyboardGroup ? `This sheet represents one video block of ${Math.min(15, Math.max(0, Number(storyboardGroup.editorialDurationSeconds) || 0)).toFixed(1).replace(/\.0$/, '')} seconds or less. It may contain fewer than 4 panels for a slow scene; leave unused grid cells blank exactly as instructed.` : '',
     storyboardGroup?.continuityNotes.length ? `Group continuity notes: ${storyboardGroup.continuityNotes.join(' ')}` : '',
-    coverageSetupLines.length > 0 ? `Reusable camera/staging coverage setups:\n${coverageSetupLines.join('\n')}` : '',
+    referencePlan.legendLines.length > 0 ? `Attached references:\n${referencePlan.legendLines.join('\n')}` : '',
     spatialReferenceInstruction,
     `Every panel must have an internal ${input.aspectRatio} cinematic crop and feel like frames from the same continuous sequence.`,
     'No captions, no labels, no speech bubbles, no UI, no watermark, no text inside the image.',
+    'Do not add unlisted principal characters, duplicate versions of the same character, or background lookalikes of attached principal references.',
+    'Unnamed or role-only people such as runners, refugees, crowds, guards, villagers, and shrine keepers are text-only incidental figures and must not use principal character appearances.',
     'Shot panels:',
     shotLines,
-    entities.length > 0 ? `Canonical visual identity anchors:\n${helpers.compactForPrompt({ entities }, 3600)}` : '',
-    input.prompt ? `User brief: ${input.prompt}` : '',
     'Preserve character identity, costumes, props, location architecture, lighting direction, color grade, screen direction, and proportions across panels.',
   ].filter(Boolean).join('\n\n')
+  return {
+    prompt,
+    storyboardPanelReferencePlan: referencePlan.plan,
+    storyboard_panel_reference_plan: referencePlan.plan,
+  }
 }
 
 function buildCinematicV2StoryboardPrompt(input: {
@@ -1148,24 +1251,33 @@ async function cinematicV3StoryboardPromptNode(
   const assetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: rawAssetPack,
     shots: groupShots,
+    storyboardGroup,
     maxEntityCount: 8,
     maxAssetKeysPerEntity: 1,
+    includeContinuityAnchorRefs: false,
+    includeSpeakerRefs: false,
+    includePerformanceRefs: false,
+    includeTextMentionedRefs: false,
+    spatialReferencePolicy: 'zone_only',
   })
   const layout = storyboardGroup
     ? { rows: storyboardGroup.rows, columns: storyboardGroup.columns, panelCount: storyboardGroup.panelCount }
     : buildCinematicV3StoryboardLayout(cinematicV2ShotPlanSchema.parse(shotPlan).shots.length)
   const imageSize = storyboardImageSizeForLayout({ columns: layout.columns, rows: layout.rows, aspectRatio })
-  const prompt = buildCinematicV3StoryboardPrompt({
+  const promptResult = buildCinematicV3StoryboardPrompt({
     shotPlan,
     assetPack,
     storyboardGroup,
     aspectRatio,
     prompt: helpers.readText(context.run.prompt),
   }, helpers)
+  const prompt = promptResult.prompt
   const guidance = helpers.readUpstreamGuidanceBundle(context.upstream)
   const outputs = {
     prompt,
     text: prompt,
+    storyboardPanelReferencePlan: promptResult.storyboardPanelReferencePlan,
+    storyboard_panel_reference_plan: promptResult.storyboardPanelReferencePlan,
     shotPlan,
     assetPack,
     asset_pack: assetPack,

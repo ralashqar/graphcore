@@ -34,6 +34,7 @@ export const shotReferenceReadinessSchema = z.object({
   spatialNodeIds: z.array(z.string()).default([]),
   requiredArtifactKeys: z.array(z.string()).default([]),
   readyArtifactKeys: z.array(z.string()).default([]),
+  zoneAssetKeys: z.array(z.string()).default([]),
   spotAtlasAssetKeys: z.array(z.string()).default([]),
   spotAngleAssetKeys: z.array(z.string()).default([]),
   missingArtifactRoles: z.array(z.string()).default([]),
@@ -68,6 +69,7 @@ export const sceneContinuityManifestSchema = z.object({
   requiredLocalRefIds: z.array(z.string()).default([]),
   requiredSpatialNodeIds: z.array(z.string()).default([]),
   readyArtifactKeys: z.array(z.string()).default([]),
+  zoneAssetKeys: z.array(z.string()).default([]),
   spotAtlasAssetKeys: z.array(z.string()).default([]),
   spotAngleAssetKeys: z.array(z.string()).default([]),
   coverageCellAssetKeys: z.array(z.string()).default([]),
@@ -122,6 +124,7 @@ export function buildShotReferenceReadinessHash(readiness: Omit<ShotReferenceRea
     spatialNodeIds: readiness.spatialNodeIds,
     requiredArtifactKeys: readiness.requiredArtifactKeys,
     readyArtifactKeys: readiness.readyArtifactKeys,
+    zoneAssetKeys: readiness.zoneAssetKeys,
     spotAtlasAssetKeys: readiness.spotAtlasAssetKeys,
     spotAngleAssetKeys: readiness.spotAngleAssetKeys,
     missingArtifactRoles: readiness.missingArtifactRoles,
@@ -145,6 +148,7 @@ export function buildSceneContinuityManifestSourceHash(input: {
   shotIds?: readonly string[]
   spatialNodeIds?: readonly string[]
   readyArtifactKeys?: readonly string[]
+  zoneAssetKeys?: readonly string[]
   spotAtlasAssetKeys?: readonly string[]
   spotAngleAssetKeys?: readonly string[]
   coverageCellAssetKeys?: readonly string[]
@@ -160,6 +164,7 @@ export function buildSceneContinuityManifestSourceHash(input: {
     shotIds: [...(input.shotIds ?? [])].sort(),
     spatialNodeIds: [...(input.spatialNodeIds ?? [])].sort(),
     readyArtifactKeys: [...(input.readyArtifactKeys ?? [])].sort(),
+    zoneAssetKeys: [...(input.zoneAssetKeys ?? [])].sort(),
     spotAtlasAssetKeys: [...(input.spotAtlasAssetKeys ?? [])].sort(),
     spotAngleAssetKeys: [...(input.spotAngleAssetKeys ?? [])].sort(),
     coverageCellAssetKeys: [...(input.coverageCellAssetKeys ?? [])].sort(),

@@ -310,6 +310,59 @@ function isStoryboardBlockRequest(request: OutputRequest) {
   return readScreenplayAnimaticRole(readRecord(request.metadata)) === 'storyboard_block'
 }
 
+function storyboardBlockIndexFromRequest(request: OutputRequest) {
+  const metadata = readRecord(request.metadata)
+  const block = readRecord(metadata.block)
+  const index = readNumber(metadata.storyboardBlockIndex) ?? readNumber(block.index)
+  return index ?? 0
+}
+
+function storyboardBlockShotIdsFromUnknown(value: unknown) {
+  const record = readRecord(value)
+  return [
+    ...readStringArray(record.shotIds),
+    ...readStringArray(record.shot_ids),
+    ...readStringArray(readRecord(record.storyboardGroup).shotIds),
+    ...readStringArray(readRecord(record.storyboardGroup).shot_ids),
+    ...readStringArray(readRecord(record.storyboard_group).shotIds),
+    ...readStringArray(readRecord(record.storyboard_group).shot_ids),
+    ...(Array.isArray(record.shots)
+      ? record.shots.map((shot) => readTrimmedString(readRecord(shot).id)).filter(Boolean)
+      : []),
+  ].filter((id, index, ids) => ids.indexOf(id) === index)
+}
+
+function storyboardBlockShotIdsFromRequest(request: OutputRequest) {
+  const metadata = readRecord(request.metadata)
+  return storyboardBlockShotIdsFromUnknown(metadata.block)
+}
+
+function findStoryboardBlockChildRequest(childRequests: readonly OutputRequest[], block: { id: string; index: number; shots: readonly { id: string }[] }) {
+  const exact = childRequests.find((request) => {
+    const metadata = readRecord(request.metadata)
+    return readTrimmedString(metadata.storyboardBlockId) === block.id
+      || readTrimmedString(readRecord(metadata.block).id) === block.id
+  }) ?? null
+  if (exact) return exact
+
+  const indexMatches = childRequests.filter((request) => storyboardBlockIndexFromRequest(request) === block.index)
+  if (indexMatches.length === 1) return indexMatches[0] ?? null
+
+  const blockShotIds = block.shots.map((shot) => readTrimmedString(shot.id)).filter(Boolean)
+  if (blockShotIds.length === 0) return null
+  const blockShotIdSet = new Set(blockShotIds)
+  const scored = childRequests.map((request) => {
+    const childShotIds = storyboardBlockShotIdsFromRequest(request)
+    const overlap = childShotIds.filter((shotId) => blockShotIdSet.has(shotId)).length
+    const exactShotSet = overlap === blockShotIds.length && childShotIds.length === blockShotIds.length
+    const score = exactShotSet ? 100 : overlap
+    return { request, score }
+  }).filter((entry) => entry.score >= Math.min(2, blockShotIds.length))
+    .sort((left, right) => right.score - left.score)
+  if (scored.length === 0) return null
+  return scored[0]?.score === scored[1]?.score ? null : scored[0]?.request ?? null
+}
+
 function readNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -754,10 +807,15 @@ function buildScreenplayAnimaticPreviewData(input: {
   }
   const blocks = (Array.isArray(manifest.blocks) ? manifest.blocks.map(readRecord) : []).map((block, blockIndex) => {
     const blockId = readTrimmedString(block.id) || `block_${blockIndex + 1}`
-    const childRequest = childRequestByBlockId.get(blockId) ?? null
+    const blockShots = Array.isArray(block.shots) ? block.shots.map(readRecord) : []
+    const childRequest = childRequestByBlockId.get(blockId) ?? findStoryboardBlockChildRequest(childRequests, {
+      id: blockId,
+      index: Number(block.index ?? blockIndex + 1) || blockIndex + 1,
+      shots: blockShots.map((shot, shotIndex) => ({ id: readTrimmedString(shot.id) || `${blockId}_shot_${shotIndex + 1}` })),
+    })
     const childRun = childRequest?.latestRunId ? input.runs.find((run) => run.id === childRequest.latestRunId) ?? null : null
     const running = Boolean(childRun && !isTerminalOutputWorkflowRunStatus(childRun.status))
-    const shots = (Array.isArray(block.shots) ? block.shots.map(readRecord) : []).map((shot, shotIndex) => {
+    const shots = blockShots.map((shot, shotIndex) => {
       const dialogue = Array.isArray(shot.dialogue)
         ? shot.dialogue.map(readRecord).map((line) => {
           const speaker = readTrimmedString(line.speakerName) || readTrimmedString(line.speaker) || readTrimmedString(line.speakerRefId)
@@ -2562,7 +2620,7 @@ export function OutputsWorkspace({
   async function ensureScreenplayAnimaticBlockRequest(masterRequest: OutputRequest, block: ScreenplayAnimaticBlockPreview) {
     if (block.childRequest) return block.childRequest
     const ensureResult = await onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: masterRequest.id })
-    const childRequest = ensureResult.childRequests.find((request) => readTrimmedString(readRecord(request.metadata).storyboardBlockId) === block.id) ?? null
+    const childRequest = findStoryboardBlockChildRequest(ensureResult.childRequests, block)
     if (!childRequest) throw new Error('Storyboard block workflow is not ready yet.')
     return childRequest
   }

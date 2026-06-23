@@ -24,7 +24,7 @@ function slugify(value: string) {
 function sequenceAnimaticContinuityAssetImagePolicy(assetKind: string, generationPolicy = '') {
   if (generationPolicy.startsWith('zone_spatial_map') || assetKind === 'location_zone') {
     return {
-      quality: 'medium',
+      quality: 'high',
       imageSize: { width: 3840, height: 2560 },
       imageSizePolicy: 'zone_continuity_board_3840x2560',
     }

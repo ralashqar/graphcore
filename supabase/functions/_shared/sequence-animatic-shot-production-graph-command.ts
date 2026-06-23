@@ -68,7 +68,7 @@ import {
   buildShotReferenceReadinessHash,
 } from '../../../src/domain/sceneContinuityManifest.ts'
 
-const SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v7'
+const SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v8_zone_spatial_refs'
 const SHOT_GRAPH_DEPENDENCY_MODE = 'single_node_chain'
 
 function sceneGraphOverrideForNode(metadata: Record<string, unknown>, nodeId: string) {
@@ -375,22 +375,21 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
     const dependencyEdges = readArray(directorPlan.visualDependencyEdges ?? directorPlan.visual_dependency_edges).map(asRecord)
     const visualDependencyEdges = dependencyEdges.length > 0 ? dependencyEdges : continuityVisualDependencyEdges(graph)
     const assetPackEntities = readArray(assetPack.entities).map(asRecord)
+    const zoneNodeIdsForShot = () => {
+      const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+      return uniqueTexts([
+        readText(binding.zoneId ?? binding.zone_id),
+        readText(shot.zoneId ?? shot.zone_id),
+        readText(shot.continuityZoneId ?? shot.continuity_zone_id),
+        readText(coverageSetup.zoneId ?? coverageSetup.zone_id),
+      ]).filter((nodeId) => graphNodeIds.has(nodeId))
+    }
+    const zoneReferenceAssetKeys = () => uniqueTexts(zoneNodeIdsForShot()
+      .flatMap((nodeId) => entityAssetKeys(asRecord(graphNodeById.get(nodeId)?.assetState ?? graphNodeById.get(nodeId)?.asset_state))))
+      .slice(0, 1)
 
     const primaryShotSpatialNodeIds = () => {
-      const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
-      const bindingSpotIds = readStringArray(binding.spotIds ?? binding.spot_ids ?? shot.spotIds ?? shot.spot_ids ?? shot.continuitySpotIds ?? shot.continuity_spot_ids)
-      const setupSpotIds = readStringArray(coverageSetup.spotIds ?? coverageSetup.spot_ids)
-      const primarySpotId = readText(binding.primarySpotId ?? binding.primary_spot_id ?? shot.primarySpotId ?? shot.primary_spot_id)
-        || bindingSpotIds[0]
-        || readText(coverageSetup.primarySpotId ?? coverageSetup.primary_spot_id)
-        || setupSpotIds[0]
-      return [
-        readText(binding.setId ?? binding.set_id ?? shot.setId ?? shot.set_id ?? shot.continuitySetId ?? shot.continuity_set_id) || readText(coverageSetup.setId ?? coverageSetup.set_id),
-        readText(binding.zoneId ?? binding.zone_id ?? shot.zoneId ?? shot.zone_id ?? shot.continuityZoneId ?? shot.continuity_zone_id) || readText(coverageSetup.zoneId ?? coverageSetup.zone_id),
-        primarySpotId,
-        readText(binding.viewpointId ?? binding.viewpoint_id ?? shot.viewpointId ?? shot.viewpoint_id) || readText(coverageSetup.viewpointId ?? coverageSetup.viewpoint_id),
-        readText(binding.angleId ?? binding.angle_id ?? shot.angleId ?? shot.angle_id ?? shot.continuityAngleId ?? shot.continuity_angle_id),
-      ].filter(Boolean)
+      return zoneNodeIdsForShot()
     }
     const referencedAnimaticAssetNodeIds = () => {
       const candidateIds = new Set([
@@ -443,25 +442,13 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       const firstTarget = targetNodes[0] ?? {}
       const targetKind = readText(firstTarget.nodeKind) || readText(firstTarget.assetKind)
       const parentId = continuityNodeParentId(firstTarget)
-      const dependencyReferenceKeys = visualDependencyEdges
-        .filter((edge) => requestedNodeIdSet.has(readText(edge.targetNodeId)))
-        .flatMap((edge) => entityAssetKeys(asRecord(graphNodeById.get(readText(edge.sourceNodeId))?.assetState ?? graphNodeById.get(readText(edge.sourceNodeId))?.asset_state)))
-        .filter(Boolean)
       if (targetKind === 'location_spot') {
         const zoneId = readText(firstTarget.zoneId ?? firstTarget.zone_id) || parentId
-        return uniqueTexts([
-          ...entityAssetKeys(asRecord(graphNodeById.get(zoneId)?.assetState ?? graphNodeById.get(zoneId)?.asset_state)),
-          ...dependencyReferenceKeys,
-        ]).slice(0, 2)
+        return uniqueTexts(entityAssetKeys(asRecord(graphNodeById.get(zoneId)?.assetState ?? graphNodeById.get(zoneId)?.asset_state))).slice(0, 1)
       }
       if (targetKind === 'spot_camera_grid') {
         const zoneId = readText(firstTarget.zoneId ?? firstTarget.zone_id)
-        const spotId = readText(firstTarget.spotId ?? firstTarget.spot_id) || parentId
-        return uniqueTexts([
-          ...entityAssetKeys(asRecord(graphNodeById.get(zoneId)?.assetState ?? graphNodeById.get(zoneId)?.asset_state)),
-          ...entityAssetKeys(asRecord(graphNodeById.get(spotId)?.assetState ?? graphNodeById.get(spotId)?.asset_state)),
-          ...dependencyReferenceKeys,
-        ]).slice(0, 4)
+        return uniqueTexts(entityAssetKeys(asRecord(graphNodeById.get(zoneId)?.assetState ?? graphNodeById.get(zoneId)?.asset_state))).slice(0, 1)
       }
       const siblingReferenceKeys = parentId
         ? [...graphNodeById.values()]
@@ -525,6 +512,19 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       }
     })
     const scopedRefs = scopedAssetPackForShot(assetPack, shot)
+    const zoneReferenceAssetKeysForShot = zoneReferenceAssetKeys()
+    const shotKeyframeReferenceAssetKeys = uniqueTexts([
+      ...zoneReferenceAssetKeysForShot,
+      ...scopedRefs.requiredReferenceAssetKeys,
+    ]).slice(0, 8)
+    const shotKeyframeSelectedReferences = [
+      ...zoneReferenceAssetKeysForShot.map((assetKey) => ({
+        assetKey,
+        role: 'continuity_asset',
+        reason: 'Zone map selected as the only scene-graph spatial reference for this shot.',
+      })),
+      ...scopedRefs.selectedReferences,
+    ]
     const zoneCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
     const zoneCoverageCellByShotId = asRecord(zoneCoverageRegistry.coverageCellByShotId ?? zoneCoverageRegistry.coverage_cell_by_shot_id)
     const zoneCoverageCell = asRecord(zoneCoverageCellByShotId[payload.shotId])
@@ -537,7 +537,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
     const sourceReferenceHash = sequenceAnimaticVisualReferenceHash({
       shotId: payload.shotId,
       coverageSetupId,
-      requiredReferenceAssetKeys: scopedRefs.requiredReferenceAssetKeys,
+      requiredReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
       omittedReferenceAssetKeys: [],
     })
     const sourceShotHash = sequenceAnimaticStableHash({
@@ -660,7 +660,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         manifestHash,
         directorPlanHash,
         masterManifestArtifactKey,
-        requiredReferenceAssetKeys: scopedRefs.requiredReferenceAssetKeys,
+        requiredReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
         omittedReferenceAssetKeys: [],
         sourceReferenceHash,
         coverageAnchorScopeKey,
@@ -681,20 +681,12 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         continuityDependencyNodeIds: continuityDependencies.map((entry) => readText(entry.targetNodeId)).filter(Boolean),
         missingContinuityNodeIds: [],
         referenceSelection: {
-          selectedReferences: scopedRefs.selectedReferences,
+          selectedReferences: shotKeyframeSelectedReferences,
           omittedReferences: [],
         },
         sharedDependencyRequests: [
-          ...(coverageAnchorScopeKey ? [{
-            role: 'coverage_anchor',
-            identityKey: 'coverageAnchorScopeKey',
-            identityValue: coverageAnchorScopeKey,
-            coverageSetupId: coverageSetupId || null,
-            coverageAnchorSource,
-            status: 'graph_node',
-          }] : []),
-          ...scopedRefs.requiredReferenceAssetKeys.map((assetKey) => ({
-            role: 'entity_reference',
+          ...shotKeyframeReferenceAssetKeys.map((assetKey) => ({
+            role: zoneReferenceAssetKeysForShot.includes(assetKey) ? 'continuity_asset' : 'entity_reference',
             identityKey: 'assetKey',
             identityValue: assetKey,
             assetKey,
@@ -729,14 +721,14 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
           coverageAnchor: {},
           coverageSetup,
           coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
-          coverageReferenceAssetKeys: scopedRefs.requiredReferenceAssetKeys,
+          coverageReferenceAssetKeys: zoneReferenceAssetKeysForShot,
           previousKeyframe: {},
           assetPack: scopedRefs.assetPack,
           continuityDependencies,
           dependencyMode: SHOT_GRAPH_DEPENDENCY_MODE,
-          requiredReferenceAssetKeys: scopedRefs.requiredReferenceAssetKeys,
+          requiredReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
           omittedReferenceAssetKeys: [],
-          selectedReferences: scopedRefs.selectedReferences,
+          selectedReferences: shotKeyframeSelectedReferences,
           omittedReferences: [],
           sharedDependencyRequests: readArray(commonConfig.sharedDependencyRequests).map(asRecord),
           editorialDurationSeconds: Math.max(0.5, Math.min(15, Number(shot.editorialDurationSeconds ?? 0) || 3)),

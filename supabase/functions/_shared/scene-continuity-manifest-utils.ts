@@ -98,14 +98,10 @@ export function sceneContinuityBlockingReason(input: {
     return input.readiness.blockers[0] ?? 'missing_spatial_ref'
   }
   const missing = readArray(input.readiness.missingArtifactRoles).map(readText).filter(Boolean)
-  if (missing.some((role) => role.includes('spot_angle') || role.includes('angle'))) return 'missing_spot_angle' as const
-  if (missing.some((role) => role.includes('coverage'))) return 'missing_coverage_anchor' as const
   if (missing.some((role) => role.includes('local'))) return 'missing_local_ref' as const
   if (missing.length > 0) return 'missing_spatial_ref' as const
-  const spotIds = readArray(input.readiness.spotIds).map(readText).filter(Boolean)
-  const spotAngleAssetKeys = readArray(input.readiness.spotAngleAssetKeys).map(readText).filter(Boolean)
-  const coverageAssetKey = readText(input.readiness.coverageCellAssetKey) || readText(input.readiness.coverageAnchorAssetKey)
-  if (spotIds.length > 0 && spotAngleAssetKeys.length === 0) return 'missing_spot_angle' as const
-  if (!coverageAssetKey) return 'missing_coverage_anchor' as const
+  const zoneId = readText(input.readiness.zoneId)
+  const zoneAssetKeys = readArray(input.readiness.zoneAssetKeys).map(readText).filter(Boolean)
+  if (zoneId && zoneAssetKeys.length === 0) return 'missing_spatial_ref' as const
   return null
 }

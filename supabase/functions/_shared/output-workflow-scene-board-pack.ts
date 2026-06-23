@@ -734,55 +734,28 @@ async function sceneBoardCoverageCellArtifact(
     const coverageSetupId = helpers.readText(coverageCell.coverageSetupId ?? coverageCell.coverage_setup_id)
     const spotId = helpers.readText(coverageCell.spotId ?? coverageCell.spot_id) || (scopeNodeId && scopeNodeId !== zoneId && scopeNodeId !== setId ? scopeNodeId : '')
     const shotSpatialNodeIds = [setId, zoneId, spotId].filter((value, index, values) => value && values.indexOf(value) === index)
-    const setAssetKeys = setId ? helpers.readStringArray(artifactIndex.assetKeysByNodeId[setId]) : []
     const zoneAssetKeys = zoneId ? helpers.readStringArray(artifactIndex.assetKeysByNodeId[zoneId]) : []
     const spotAtlasAssetKeys = spotId ? helpers.readStringArray(artifactIndex.strictSpotAtlasAssetKeysBySpotId[spotId]) : []
     const spotAngleAssetKeys = spotId ? helpers.readStringArray(artifactIndex.spotAngleAssetKeysBySpotId[spotId]) : []
-    const requiredArtifactKeys = [...setAssetKeys, ...zoneAssetKeys, ...spotAtlasAssetKeys, ...spotAngleAssetKeys, coverageCellAssetKey].filter(Boolean)
+    const requiredArtifactKeys = zoneAssetKeys.filter(Boolean)
     const readyShotArtifactKeys = requiredArtifactKeys.filter(Boolean)
     const missingArtifactRoles = [
-      setId && setAssetKeys.length === 0 ? 'set_ref' : '',
       zoneId && zoneAssetKeys.length === 0 ? 'zone_map' : '',
-      spotId && spotAtlasAssetKeys.length === 0 ? 'spot_atlas' : '',
-      spotId && spotAngleAssetKeys.length === 0 ? 'spot_angle_coverage' : '',
-      coverageCellAssetKey ? '' : 'coverage_cell',
     ].filter(Boolean)
     const shotBlockers = [
       ...blockerReasons,
-      missingArtifactRoles.some((role) => role === 'spot_angle_coverage') ? 'missing_spot_angle' as const : null,
-      missingArtifactRoles.some((role) => role === 'coverage_cell') ? 'missing_coverage_anchor' as const : null,
-      missingArtifactRoles.some((role) => role === 'set_ref' || role === 'zone_map' || role === 'spot_atlas') ? 'missing_spatial_ref' as const : null,
+      missingArtifactRoles.some((role) => role === 'zone_map') ? 'missing_spatial_ref' as const : null,
     ].filter((reason, index, values): reason is SceneContinuityBlockerReason => Boolean(reason) && values.indexOf(reason) === index)
     const shotWaiting = waiting || missingArtifactRoles.length > 0
     const shotRecoveryActions = [
       ...recoveryActions.map((action) => ({ ...action, shotId })),
-      missingArtifactRoles.includes('spot_angle_coverage')
+      missingArtifactRoles.includes('zone_map')
         ? {
-            action: 'generate_spot_angle_coverage',
-            label: 'Generate spot angle coverage',
-            reason: 'missing_spot_angle' as const,
-            shotId,
-            nodeId: spotId,
-            coverageSetupId,
-          }
-        : null,
-      missingArtifactRoles.includes('coverage_cell')
-        ? {
-            action: 'generate_zone_coverage_grids',
-            label: 'Generate zone coverage grids',
-            reason: 'missing_coverage_anchor' as const,
-            shotId,
-            nodeId: zoneId,
-            coverageSetupId,
-          }
-        : null,
-      (missingArtifactRoles.includes('set_ref') || missingArtifactRoles.includes('zone_map') || missingArtifactRoles.includes('spot_atlas'))
-        ? {
-            action: missingArtifactRoles.includes('spot_atlas') ? 'regenerate_spot_atlas' : 'prepare_selected_board',
-            label: missingArtifactRoles.includes('spot_atlas') ? 'Regenerate spot atlas' : 'Prepare Scene Board references',
+            action: 'prepare_selected_board',
+            label: 'Prepare Scene Board references',
             reason: 'missing_spatial_ref' as const,
             shotId,
-            nodeId: missingArtifactRoles.includes('spot_atlas') ? spotId : zoneId || setId,
+            nodeId: zoneId,
             coverageSetupId,
           }
         : null,
@@ -808,6 +781,7 @@ async function sceneBoardCoverageCellArtifact(
       spatialNodeIds: shotSpatialNodeIds,
       requiredArtifactKeys,
       readyArtifactKeys: readyShotArtifactKeys,
+      zoneAssetKeys,
       spotAtlasAssetKeys,
       spotAngleAssetKeys,
       missingArtifactRoles: shotWaiting ? missingArtifactRoles : [],
@@ -835,6 +809,7 @@ async function sceneBoardCoverageCellArtifact(
     shotIds,
     spatialNodeIds,
     readyArtifactKeys,
+    zoneAssetKeys: shotReadinessEntries.flatMap((entry) => entry.zoneAssetKeys),
     spotAtlasAssetKeys: Object.values(artifactIndex.strictSpotAtlasAssetKeysBySpotId).flatMap((value) => helpers.readStringArray(value)),
     spotAngleAssetKeys: Object.values(artifactIndex.spotAngleAssetKeysBySpotId).flatMap((value) => helpers.readStringArray(value)),
     coverageCellAssetKeys: shotReadinessEntries.map((entry) => entry.coverageCellAssetKey).filter(Boolean),
@@ -877,6 +852,7 @@ async function sceneBoardCoverageCellArtifact(
     requiredLocalRefIds: [],
     requiredSpatialNodeIds: spatialNodeIds,
     readyArtifactKeys: manifestReadyArtifactKeys,
+    zoneAssetKeys: [...new Set(shotReadinessEntries.flatMap((entry) => entry.zoneAssetKeys))],
     spotAtlasAssetKeys: [...new Set(shotReadinessEntries.flatMap((entry) => entry.spotAtlasAssetKeys))],
     spotAngleAssetKeys: [...new Set(shotReadinessEntries.flatMap((entry) => entry.spotAngleAssetKeys))],
     coverageCellAssetKeys: [...new Set(shotReadinessEntries.map((entry) => entry.coverageCellAssetKey).filter(Boolean))],

@@ -332,7 +332,7 @@ export function useSequenceAnimaticKeyframeCommands({
             shot.keyframeRequestId
             && shot.keyframeWorkflowId
             && shot.keyframeDependencyMode === 'single_node_chain'
-            && shot.keyframeGraphPolicyVersion === 'primary_chain_v7',
+            && shot.keyframeGraphPolicyVersion === 'primary_chain_v8_zone_spatial_refs',
           )
           nextRequest = cachedShotGraphIsCurrent
             ? outputRequests.find((request) => request.id === shot.keyframeRequestId && request.workflowId === shot.keyframeWorkflowId) ?? null

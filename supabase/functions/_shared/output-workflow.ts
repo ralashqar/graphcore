@@ -10113,8 +10113,14 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
         ? buildCinematicV3StoryboardGroupAssetPack({
           assetPack: rawAssetPack,
           shots: storyboardSheetGroupShots,
+          storyboardGroup: asRecord(config.storyboardGroup),
           maxEntityCount: referenceLimitForImageNode(config, role),
           maxAssetKeysPerEntity: 1,
+          includeContinuityAnchorRefs: false,
+          includeSpeakerRefs: false,
+          includePerformanceRefs: false,
+          includeTextMentionedRefs: false,
+          spatialReferencePolicy: 'zone_only',
         })
         : rawAssetPack
       const directImageRecords = isSpotContinuityAssetImage ? [] : (await Promise.all(upstreamImages.map(async (image, index) => {

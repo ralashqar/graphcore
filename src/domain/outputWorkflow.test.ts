@@ -856,7 +856,10 @@ test('scene board continuity planners use current-run refs and complete per-spot
   assert.match(plannerSource, /forceRefresh: input\.forceRefresh === true/)
   assert.match(packSource, /upstreamStatus,\s*\n\s*mode: 'spot_angles'/)
   assert.match(packSource, /status: childWorkflows\.length > 0 \? 'planned' : planningBlocked \? 'blocked' : 'ready'/)
-  assert.match(packSource, /action: 'generate_spot_angle_coverage'/)
+  assert.match(packSource, /const requiredArtifactKeys = zoneAssetKeys\.filter\(Boolean\)/)
+  assert.match(packSource, /zoneAssetKeys: shotReadinessEntries\.flatMap\(\(entry\) => entry\.zoneAssetKeys\)/)
+  assert.match(packSource, /action: 'prepare_selected_board'/)
+  assert.doesNotMatch(packSource, /missingArtifactRoles\.includes\('spot_angle_coverage'\)/)
   assert.match(packSource, /status: manifestStatus/)
 })
 
@@ -936,8 +939,18 @@ test('storyboard block workflows consume scene continuity spatial references pro
   assert.match(factorySource, /storyboardSpatialReferencePack/)
   assert.match(planningPackSource, /storyboardSpatialReferencePack/)
   assert.match(cinematicAssetPackSource, /continuity_spatial_ref/)
-  assert.match(cinematicTextPackSource, /Spatial continuity references/)
-  assert.match(cinematicTextPackSource, /Do not reproduce reference-grid gutters/)
+  assert.match(cinematicAssetPackSource, /spatialReferencePolicy\?: 'all' \| 'zone_only' \| 'none'/)
+  assert.match(cinematicAssetPackSource, /storyboardCoverageSetupCharacterRefIds/)
+  assert.match(cinematicAssetPackSource, /storyboardPrincipalRefIdsForShot/)
+  assert.match(cinematicTextPackSource, /Attached references:/)
+  assert.match(cinematicTextPackSource, /References for this panel:/)
+  assert.match(cinematicTextPackSource, /Principal references: none\. Incidental people are text-only\./)
+  assert.match(cinematicTextPackSource, /storyboardPanelReferencePlan/)
+  assert.match(cinematicTextPackSource, /Use the attached zone continuity board as the only spatial image source/)
+  assert.doesNotMatch(cinematicTextPackSource, /Spatial continuity references \(/)
+  assert.doesNotMatch(cinematicTextPackSource, /Reusable camera\/staging coverage setups/)
+  assert.doesNotMatch(cinematicTextPackSource, /attached reference roles:/)
+  assert.match(cinematicTextPackSource, /Do not reproduce map labels/)
   assert.match(animaticViewModelSource, /storyboardContinuityLabel/)
   assert.match(animaticTimelineSource, /block\.storyboardContinuityLabel/)
 })
@@ -3419,6 +3432,7 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
     && edge.target_port === 'reference_asset_keys',
   ), 'continuity asset image node must receive direct reference asset keys')
   const assetImageNode = assetGraph.nodes.find((node) => node.key === 'continuity_asset_image')
+  assert.equal(assetImageNode?.config.quality, 'high')
   assert.deepEqual(assetImageNode?.config.imageSize, { width: 3840, height: 2560 })
   assert.equal(assetImageNode?.config.imageSizePolicy, 'zone_continuity_board_3840x2560')
 
@@ -3819,7 +3833,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(shotGraphEnsureSource, /sequenceAnimaticShotProductionTemplateKey/)
   assert.match(shotGraphEnsureSource, /workflowTemplateSourceHash: graphResult\.sourceHash/)
   assert.doesNotMatch(shotGraphEnsureSource, /buildSequenceAnimaticShotProductionWorkflowGraph/)
-  assert.match(shotGraphEnsureSource, /SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v7'/)
+  assert.match(shotGraphEnsureSource, /SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v8_zone_spatial_refs'/)
   assert.match(shotGraphEnsureSource, /SHOT_GRAPH_DEPENDENCY_MODE = 'single_node_chain'/)
   assert.match(childWorkflowUtilsSource, /ensureMappedChildWorkflow/)
   assert.match(childWorkflowUtilsSource, /mapChildRequestRow/)
@@ -3905,7 +3919,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(keyframeEnsureSource, /responseWorkflowIds/)
   assert.match(shotGraphEnsureSource, /prioritizedEntityAssetKeys/)
   assert.doesNotMatch(shotGraphEnsureSource, /function prioritizedEntityAssetKeys/)
-  assert.match(shotGraphEnsureSource, /coverageReferenceAssetKeys: scopedRefs\.requiredReferenceAssetKeys/)
+  assert.match(shotGraphEnsureSource, /coverageReferenceAssetKeys: zoneReferenceAssetKeysForShot/)
   assert.match(keyframeEnsureSource, /prioritizedEntityAssetKeys/)
   assert.doesNotMatch(keyframeEnsureSource, /function prioritizedEntityAssetKeys/)
   assert.match(animaticCommandUtilsSource, /function prioritizedEntityAssetKeys/)
@@ -3929,8 +3943,8 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticShotReferencePack/)
   assert.doesNotMatch(workerSource, /if \(purpose === 'sequence_animatic_shot_reference_pack'\)/)
   assert.match(sequenceAnimaticShotReferencePackSource, /const scopedReferenceAssetKeys = \[\.\.\.new Set\(\[/)
-  assert.match(sequenceAnimaticShotReferencePackSource, /\.\.\.helpers\.readStringArray\(config\.requiredReferenceAssetKeys\)/)
-  assert.match(sequenceAnimaticShotReferencePackSource, /\.\.\.referenceAssetKeys/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /configuredRequiredReferenceAssetKeys\.length > 0 \? configuredRequiredReferenceAssetKeys : referenceAssetKeys/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /scopedReferenceAssetKeySet\.has\(helpers\.readText\(reference\.assetKey\)\)/)
   assert.match(workerSource, /SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE = 'labeled_blockout_v1'/)
   assert.match(workerSource, /output-workflow-sequence-animatic-reference-runtime/)
   assert.doesNotMatch(workerSource, /function sequenceAnimaticReferenceManifestEntries/)
@@ -4024,7 +4038,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.doesNotMatch(pageSource, /const handleOpenSequenceAnimaticShotGraph = useCallback/)
   assert.match(graphHookSource, /onEnsureSequenceAnimaticShotProductionGraph/)
   assert.match(graphHookSource, /cachedShotGraphIsCurrent/)
-  assert.match(graphHookSource, /shot\.keyframeGraphPolicyVersion === 'primary_chain_v7'/)
+  assert.match(graphHookSource, /shot\.keyframeGraphPolicyVersion === 'primary_chain_v8_zone_spatial_refs'/)
   assert.match(workflowControllerSource, /useSequenceAnimaticKeyframeCommands/)
   assert.doesNotMatch(pageSource, /sequenceAnimaticShotProductionKeyframeTargetNodeKeys/)
   assert.match(keyframeHookSource, /sequenceAnimaticShotProductionKeyframeTargetNodeKeys/)
@@ -4207,7 +4221,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(artifactIndexSource, /const completedPlannedKeyframeByShotId = new Map/)
   assert.match(graphHookSource, /cachedShotGraphIsCurrent/)
   assert.match(graphHookSource, /shot\.keyframeDependencyMode === 'single_node_chain'/)
-  assert.match(graphHookSource, /shot\.keyframeGraphPolicyVersion === 'primary_chain_v7'/)
+  assert.match(graphHookSource, /shot\.keyframeGraphPolicyVersion === 'primary_chain_v8_zone_spatial_refs'/)
   assert.match(animaticViewModelSource, /filterSequenceAnimaticShotReferencesForShot/)
   assert.match(animaticViewModelSource, /anchor\?\.shotIds\.includes\(shotId\)/)
   assert.match(graphHookSource, /openOutputGraph\(model, shotRequest\.id, 'planned_keyframe_artifact'\)/)
@@ -4367,7 +4381,7 @@ test('sequence animatic keyframe ensure supports shot-scoped next actions', () =
         sequenceAnimaticRole: 'shot_production',
         shotId: 'shot_001',
         dependencyMode: 'single_node_chain',
-        shotGraphPolicyVersion: 'primary_chain_v7',
+        shotGraphPolicyVersion: 'primary_chain_v8_zone_spatial_refs',
       },
     },
     workflow: null,
@@ -4377,7 +4391,7 @@ test('sequence animatic keyframe ensure supports shot-scoped next actions', () =
     shotId: 'shot_001',
     coverageSetupId: 'setup_a',
     dependencyNodeIds: ['set_a', 'zone_a'],
-    graphPolicyVersion: 'primary_chain_v7',
+    graphPolicyVersion: 'primary_chain_v8_zone_spatial_refs',
   })
   assert.equal(shotGraphParsed.cacheStatus, 'reused')
   assert.deepEqual(shotGraphParsed.dependencyNodeIds, ['set_a', 'zone_a'])
@@ -5573,6 +5587,87 @@ test('cinematic V2 shot asset packs narrow references to visible shot refs', asy
   assert.deepEqual(keys, ['ilya', 'checkpoint'])
   assert.ok(!keys.includes('anya'))
   assert.ok(!keys.includes('aster'))
+})
+
+test('cinematic V3 storyboard asset packs use panel coverage principals without broad text fallback', async () => {
+  const imported = await import('../../supabase/functions/_shared/output-workflow-cinematic-asset-pack-runtime.ts') as {
+    buildCinematicV3StoryboardGroupAssetPack: (input: {
+      assetPack: Record<string, unknown>
+      shots: Array<Record<string, unknown>>
+      storyboardGroup?: Record<string, unknown> | null
+      maxEntityCount?: number
+      maxAssetKeysPerEntity?: number
+      includeContinuityAnchorRefs?: boolean
+      includeSpeakerRefs?: boolean
+      includePerformanceRefs?: boolean
+      includeTextMentionedRefs?: boolean
+      spatialReferencePolicy?: 'all' | 'zone_only' | 'none'
+    }) => { entities: Array<Record<string, unknown>>, storyboardGroupReferenceKeys: string[] }
+  }
+  const { buildCinematicV3StoryboardGroupAssetPack } = imported
+  const pack = buildCinematicV3StoryboardGroupAssetPack({
+    assetPack: {
+      entities: [
+        { key: 'kaji_sora', name: 'Kaji Sora', type: 'actor', role: 'actor', assetKeys: ['kaji-sheet'] },
+        { key: 'miyo_hoshika', name: 'Miyo Hoshika', type: 'actor', role: 'actor', assetKeys: ['miyo-sheet'] },
+        { key: 'rin_uzuki', name: 'Rin Uzuki', type: 'actor', role: 'actor', assetKeys: ['rin-sheet'] },
+        { key: 'oboro_shien', name: 'Lord Oboro Shien', type: 'actor', role: 'actor', assetKeys: ['oboro-sheet'] },
+        {
+          key: 'continuity_ref_zone_marsh_path_and_veranda_front',
+          name: 'Zone Marsh Path And Veranda Front',
+          type: 'location_spot',
+          role: 'continuity_reference',
+          continuitySourceNodeId: 'zone_marsh_path_and_veranda_front',
+          assetKeys: ['zone-board'],
+        },
+        {
+          key: 'continuity_ref_zone_archive_hall',
+          name: 'Zone Archive Hall',
+          type: 'location_spot',
+          role: 'continuity_reference',
+          continuitySourceNodeId: 'zone_archive_hall',
+          assetKeys: ['wrong-zone-board'],
+        },
+      ],
+    },
+    storyboardGroup: {
+      coverageSetups: [
+        {
+          id: 'scene_001_setup_wide_approach',
+          zoneId: 'zone_marsh_path_and_veranda_front',
+          characterRefIds: ['kaji_sora', 'miyo_hoshika', 'rin_uzuki'],
+        },
+      ],
+    },
+    shots: [
+      {
+        id: 'scene_001_shot_002',
+        title: 'Runner crosses behind the trio',
+        action: 'Kaji tests the submerged stilt path while Miyo hides the disc and Rin watches the tree line. A runner passes in the far background.',
+        visibleCharacterRefIds: [],
+        propRefIds: [],
+        continuityZoneId: 'zone_marsh_path_and_veranda_front',
+        coverageSetupId: 'scene_001_setup_wide_approach',
+      },
+    ],
+    maxEntityCount: 8,
+    maxAssetKeysPerEntity: 1,
+    includeSpeakerRefs: false,
+    includePerformanceRefs: false,
+    includeTextMentionedRefs: false,
+    spatialReferencePolicy: 'zone_only',
+  })
+
+  const keys = pack.entities.map((entity) => String(entity.key))
+  assert.deepEqual(keys, [
+    'kaji_sora',
+    'miyo_hoshika',
+    'rin_uzuki',
+    'continuity_ref_zone_marsh_path_and_veranda_front',
+  ])
+  assert.ok(!keys.includes('oboro_shien'))
+  assert.ok(!keys.includes('continuity_ref_zone_archive_hall'))
+  assert.deepEqual(pack.storyboardGroupReferenceKeys, keys)
 })
 
 test('cinematic V3 shot parse repairs missing visual refs before validation and manifest assembly', () => {
@@ -7752,6 +7847,10 @@ test('cinematic v3 default graph stops at authoring timeline and keeps video nod
   assert.match(cinematicTextPackSource, /runCinematicStructuredJson/)
   assert.match(cinematicTextPackSource, /buildLegacyCinematicStoryboardPrompt/)
   assert.match(cinematicTextPackSource, /buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(cinematicTextPackSource, /includeSpeakerRefs: false/)
+  assert.match(cinematicTextPackSource, /includePerformanceRefs: false/)
+  assert.match(cinematicTextPackSource, /includeTextMentionedRefs: false/)
+  assert.match(cinematicTextPackSource, /spatialReferencePolicy: 'zone_only'/)
   assert.match(cinematicTextPackSource, /buildCompactSeedanceVideoPrompt/)
   assert.match(cinematicAuthoringPackSource, /cinematic_v3_panel_extract: cinematicV3PanelExtractNode/)
   assert.match(cinematicAuthoringPackSource, /cinematic_v3_timeline_assemble: cinematicV3TimelineAssembleNode/)
@@ -7770,6 +7869,10 @@ test('cinematic v3 default graph stops at authoring timeline and keeps video nod
   assert.doesNotMatch(source, /if \(purpose === 'cinematic_v3_timeline_assemble'/)
   assert.doesNotMatch(source, /if \(purpose === 'cinematic_video_artifact'/)
   assert.match(source, /purpose === 'cinematic_v3_storyboard_sheet'[\s\S]*buildCinematicV3StoryboardGroupAssetPack/)
+  assert.match(source, /purpose === 'cinematic_v3_storyboard_sheet'[\s\S]*includeSpeakerRefs: false/)
+  assert.match(source, /purpose === 'cinematic_v3_storyboard_sheet'[\s\S]*includePerformanceRefs: false/)
+  assert.match(source, /purpose === 'cinematic_v3_storyboard_sheet'[\s\S]*includeTextMentionedRefs: false/)
+  assert.match(source, /purpose === 'cinematic_v3_storyboard_sheet'[\s\S]*spatialReferencePolicy: 'zone_only'/)
   assert.match(source, /isCinematicV3StoryboardGroupVideo[\s\S]*buildCinematicV3StoryboardGroupAssetPack/)
   assert.match(source, /rewriteSeedanceReferenceLegend\(prompt, manifest, \(isCinematicV3StoryboardGroupVideo \|\| isSequenceAnimaticShotVideo\) \? '' : referencePolicy\)/)
   assert.match(source, /if \(isCinematicV3StoryboardGroupVideo \|\| isSequenceAnimaticShotVideo\) \{[\s\S]*compactSeedancePromptForProvider\(directPrompt\)/)

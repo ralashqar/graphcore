@@ -223,6 +223,7 @@ function appendUniqueRecord<T extends Record<string, unknown>>(items: T[], item:
 }
 
 function storyboardSpatialReferenceLabel(role: string) {
+  if (role === 'zone_map') return 'Zone map'
   if (role === 'coverage_cell') return 'Coverage cell'
   if (role === 'spot_angle_grid') return 'Spot angle grid'
   if (role === 'spot_atlas') return 'Spot atlas'
@@ -304,62 +305,37 @@ function buildStoryboardSpatialReferencePack(input: {
     }
     const shotBlockers = compactUniqueTexts(readiness.blockers)
     shotBlockers.forEach((blocker) => blockers.push(blocker))
-    const coverageAssetKey = readText(readiness.coverageCellAssetKey) || readText(readiness.coverageAnchorAssetKey)
-    if (coverageAssetKey) {
+    const knownNonZoneSpatialAssetKeys = new Set([
+      readText(readiness.coverageCellAssetKey),
+      readText(readiness.coverageAnchorAssetKey),
+      ...readiness.spotAngleAssetKeys,
+      ...readiness.spotAtlasAssetKeys,
+    ].filter(Boolean))
+    const fallbackZoneAssetKeys = readiness.zoneAssetKeys.length > 0
+      ? []
+      : readiness.readyArtifactKeys.filter((assetKey) => assetKey && !knownNonZoneSpatialAssetKeys.has(assetKey)).slice(0, 1)
+    for (const assetKey of [...readiness.zoneAssetKeys, ...fallbackZoneAssetKeys]) {
       appendUniqueRecord(selectedReferenceAssets, {
-        assetKey: coverageAssetKey,
-        role: 'coverage_cell',
+        assetKey,
+        role: 'zone_map',
         priority: 1,
         shotIds: [shotId],
         sceneId: readiness.sceneId,
         zoneId: readiness.zoneId,
         spotIds: readiness.spotIds,
         coverageSetupId: readiness.coverageSetupId,
-        label: `Coverage cell for ${shotId}`,
-      }, coverageAssetKey)
-    }
-    for (const assetKey of readiness.spotAngleAssetKeys) {
-      appendUniqueRecord(selectedReferenceAssets, {
-        assetKey,
-        role: 'spot_angle_grid',
-        priority: 2,
-        shotIds: [shotId],
-        sceneId: readiness.sceneId,
-        zoneId: readiness.zoneId,
-        spotIds: readiness.spotIds,
-        angleIds: readiness.angleIds,
-        label: `Spot angle grid for ${readiness.spotIds[0] || shotId}`,
-      }, assetKey)
-    }
-    for (const assetKey of readiness.spotAtlasAssetKeys) {
-      appendUniqueRecord(selectedReferenceAssets, {
-        assetKey,
-        role: 'spot_atlas',
-        priority: 3,
-        shotIds: [shotId],
-        sceneId: readiness.sceneId,
-        zoneId: readiness.zoneId,
-        spotIds: readiness.spotIds,
-        label: `Spot atlas for ${readiness.spotIds[0] || shotId}`,
+        label: `Zone map for ${readiness.zoneId || shotId}`,
       }, assetKey)
     }
     const known = new Set([
-      coverageAssetKey,
+      ...readiness.zoneAssetKeys,
+      ...fallbackZoneAssetKeys,
+      readText(readiness.coverageCellAssetKey),
+      readText(readiness.coverageAnchorAssetKey),
       ...readiness.spotAngleAssetKeys,
       ...readiness.spotAtlasAssetKeys,
     ].filter(Boolean))
-    for (const assetKey of readiness.readyArtifactKeys.filter((key) => key && !known.has(key))) {
-      appendUniqueRecord(selectedReferenceAssets, {
-        assetKey,
-        role: 'spatial_reference',
-        priority: 4,
-        shotIds: [shotId],
-        sceneId: readiness.sceneId,
-        zoneId: readiness.zoneId,
-        spotIds: readiness.spotIds,
-        label: `Spatial reference for ${readiness.zoneId || shotId}`,
-      }, assetKey)
-    }
+    const omittedSpatialReferenceAssetKeys = readiness.readyArtifactKeys.filter((key) => key && known.has(key) && !readiness.zoneAssetKeys.includes(key) && !fallbackZoneAssetKeys.includes(key))
     shotSpatialReferences.push({
       shotId,
       status: readiness.status,
@@ -372,15 +348,15 @@ function buildStoryboardSpatialReferencePack(input: {
       coverageSetupId: readiness.coverageSetupId,
       coverageCellAssetKey: readiness.coverageCellAssetKey,
       coverageAnchorAssetKey: readiness.coverageAnchorAssetKey,
+      zoneAssetKeys: readiness.zoneAssetKeys.length > 0 ? readiness.zoneAssetKeys : fallbackZoneAssetKeys,
       spotAtlasAssetKeys: readiness.spotAtlasAssetKeys,
       spotAngleAssetKeys: readiness.spotAngleAssetKeys,
       readyArtifactKeys: readiness.readyArtifactKeys,
+      omittedSpatialReferenceAssetKeys,
       blockers: shotBlockers,
       referenceAssetKeys: compactUniqueTexts([
-        coverageAssetKey,
-        ...readiness.spotAngleAssetKeys,
-        ...readiness.spotAtlasAssetKeys,
-        ...readiness.readyArtifactKeys,
+        ...readiness.zoneAssetKeys,
+        ...fallbackZoneAssetKeys,
       ], 12),
       readinessHash: readiness.hash,
       manifestHash: match.manifest.sourceHash,
@@ -395,7 +371,7 @@ function buildStoryboardSpatialReferencePack(input: {
     ? 'provisional'
     : 'ready'
   const hash = sequenceAnimaticStableHash({
-    policy: 'storyboard_spatial_reference_pack_v1',
+    policy: 'storyboard_spatial_reference_pack_zone_only_v1',
     shotIds,
     manifestHashes: compactUniqueTexts(manifestHashes, 12),
     selectedReferenceAssetKeys,

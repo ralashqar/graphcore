@@ -50,10 +50,8 @@ import {
   continuityNodeParentId,
   continuityNodeUsesParent,
   continuityVisualDependencyEdges,
-  coverageSetupNodeIds,
   dependencyNodeIdsForKeyframePlan,
   shotReferenceNodeIds,
-  shotSceneBindingNodeIds,
 } from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
 import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceAnimaticSceneState.ts'
 import { buildSequenceAnimaticStreamedShotReadyContext } from '../../../src/domain/sequenceAnimaticStreamedShotReady.ts'
@@ -655,7 +653,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     const isShotScopedEnsure = requestedShotIds.length === 1
     const scopedShotId = requestedShotIds[0] ?? ''
     const shotGraphDependencyMode = 'single_node_chain' as const
-    const shotGraphPolicyVersion = 'primary_chain_v7' as const
+    const shotGraphPolicyVersion = 'primary_chain_v8_zone_spatial_refs' as const
     let masterMetadataForWrites = masterMetadata
     let coverageRegistry = coverageRegistryFromSources({
       masterMetadata,
@@ -805,6 +803,15 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       return role === 'continuity_asset' || role === 'continuity_asset_batch'
     })
     const assetStateReady = (nodeId: string) => Boolean(readText(asRecord(continuityAssetStateByNodeId[nodeId]).assetKey))
+    const zoneNodeIdsForShot = (shot: Record<string, unknown>, coverageSetup: Record<string, unknown> = {}) => {
+      const binding = asRecord(shot.sceneBinding ?? shot.scene_binding)
+      return uniqueTexts([
+        readText(binding.zoneId ?? binding.zone_id),
+        readText(shot.zoneId ?? shot.zone_id),
+        readText(shot.continuityZoneId ?? shot.continuity_zone_id),
+        readText(coverageSetup.zoneId ?? coverageSetup.zone_id),
+      ]).filter((nodeId) => graphNodeIds.has(nodeId))
+    }
     const dependencyTargetIds = dependencyNodeIdsForKeyframePlan({ keyframePlan: asRecord(keyframePlan), graphNodeIds })
     const missingDependencyIds = dependencyTargetIds.filter((nodeId) => !assetStateReady(nodeId))
     const shotBlockingDependencyNodeIdsByShotId: Record<string, string[]> = {}
@@ -812,8 +819,12 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       const shotId = readText(job.shotId)
       if (!shotId) continue
       const shot = asRecord(job.shot)
+      const coverageSetupId = readText(job.coverageSetupId)
+      const coverageSetup = coverageSetupId
+        ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
+        : {}
       const requiredNodeIds = [
-        ...shotSceneBindingNodeIds(shot),
+        ...zoneNodeIdsForShot(shot, coverageSetup),
         ...shotReferenceNodeIds(shot, graphNodeIds),
       ].filter((nodeId) => graphNodeIds.has(nodeId))
       const missingForShot = requiredNodeIds.filter((nodeId) => !assetStateReady(nodeId))
@@ -988,9 +999,11 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     const assetKeysForGraphNodeIds = (nodeIds: readonly string[]) => [...new Set(nodeIds
       .map((nodeId) => readText(asRecord(continuityAssetStateByNodeId[nodeId]).assetKey))
       .filter(Boolean))]
+    const zoneAssetKeysForShot = (shot: Record<string, unknown>, coverageSetup: Record<string, unknown>) => assetKeysForGraphNodeIds(zoneNodeIdsForShot(shot, coverageSetup)).slice(0, 1)
     const referenceAssetKeysForCoverageSetup = (setup: Record<string, unknown>, setupShots: readonly Record<string, unknown>[]) => {
-      const setupNodeIds = coverageSetupNodeIds(setup).filter((id) => graphNodeIds.has(id))
-      const setupNodeAssetKeys = assetKeysForGraphNodeIds(setupNodeIds)
+      const setupNodeAssetKeys = assetKeysForGraphNodeIds([
+        readText(setup.zoneId ?? setup.zone_id),
+      ].filter((id) => id && graphNodeIds.has(id))).slice(0, 1)
       const setupEntityKeys = [
         ...readStringArray(setup.characterRefIds ?? setup.character_ref_ids),
         ...setupShots.flatMap((shot) => {
@@ -1022,10 +1035,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         : {}
       const refs = asRecord(shot.refs)
       const dialogue = readArray(shot.dialogue).map(asRecord)
-      const graphAssetKeys = assetKeysForGraphNodeIds([
-        ...shotSceneBindingNodeIds(shot),
-        ...shotReferenceNodeIds(shot, graphNodeIds),
-      ])
+      const graphAssetKeys = zoneAssetKeysForShot(shot, coverageSetup)
       const coverageSetupEntityKeys = [
         ...readStringArray(coverageSetup.characterRefIds ?? coverageSetup.character_ref_ids),
         ...readStringArray(coverageSetup.visibleCharacterRefIds ?? coverageSetup.visible_character_ref_ids),
@@ -1049,9 +1059,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         ...(shotEntityKeys.length === 0 ? coverageSetupEntityKeys : []),
       ])
       const candidates = [
-        { assetKey: readText(coverageAnchorImageBySetupId.get(coverageSetupId)?.assetKey), role: 'coverage_anchor' as const, reason: 'Reusable coverage anchor for this camera setup.' },
-        { assetKey: readText(shotKeyframeImageByShotId.get(previousShotId)?.assetKey), role: 'previous_keyframe' as const, reason: 'Same-setup motion continuity reference.' },
-        ...graphAssetKeys.map((assetKey) => ({ assetKey, role: 'continuity_asset' as const, reason: 'Scene-graph spatial or local continuity reference.' })),
+        ...graphAssetKeys.map((assetKey) => ({ assetKey, role: 'continuity_asset' as const, reason: 'Zone map selected as the only scene-graph spatial reference for this shot.' })),
         ...entityAssetKeys.map((assetKey) => ({ assetKey, role: 'entity_reference' as const, reason: shotEntityKeys.length === 0 ? 'Coverage setup subject fallback reference.' : 'Shot-visible character, speaker, prop, or location reference.' })),
       ].filter((entry) => readText(entry.assetKey))
       const unique = candidates.filter((entry, index, entries) => entries.findIndex((candidate) => readText(candidate.assetKey) === readText(entry.assetKey)) === index)
@@ -2239,25 +2247,8 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
             omittedReferences: readArray(shotOmittedReferencesByShotId[shotId]).map(asRecord),
           },
           sharedDependencyRequests: [
-            ...(coverageSetupId ? [{
-              role: 'coverage_anchor',
-              identityKey: 'coverageAnchorScopeKey',
-              identityValue: coverageAnchorScopeKey,
-              coverageSetupId,
-              requestId: readText(existingByCoverageSetupId.get(coverageSetupId)?.id),
-              workflowId: readText(existingByCoverageSetupId.get(coverageSetupId)?.workflowId),
-              status: readText(coverageAnchorImageBySetupId.get(coverageSetupId)?.assetKey) ? 'ready' : 'missing',
-            }] : []),
-            ...(readText(job.previousShotId) ? [{
-              role: 'previous_keyframe',
-              identityKey: 'shotId',
-              identityValue: readText(job.previousShotId),
-              requestId: readText(existingByShotId.get(readText(job.previousShotId))?.id),
-              workflowId: readText(existingByShotId.get(readText(job.previousShotId))?.workflowId),
-              status: readText(shotKeyframeImageByShotId.get(readText(job.previousShotId))?.assetKey) ? 'ready' : 'missing',
-            }] : []),
             ...requiredReferenceAssetKeys.map((assetKey) => ({
-              role: 'continuity_asset',
+              role: graphAssetKeys.includes(assetKey) ? 'continuity_asset' : 'entity_reference',
               identityKey: 'assetKey',
               identityValue: assetKey,
               assetKey,

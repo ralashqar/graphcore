@@ -11,6 +11,7 @@ import type {
   SequenceAnimaticViewModel,
 } from '../scene-board/sceneBoardProjection'
 import {
+  readLooseArray,
   readLooseRecord,
   trimOptionalString,
   type StartOutputWorkflowRun,
@@ -71,6 +72,54 @@ function shotCanOpenProvisionalGraph(shot: GraphCommandShotView) {
   )
 }
 
+function readStoryboardBlockIndexFromRequest(request: OutputRequest) {
+  const metadata = readLooseRecord(request.metadata)
+  const block = readLooseRecord(metadata.block)
+  const value = Number(metadata.storyboardBlockIndex ?? block.index ?? 0)
+  return Number.isFinite(value) ? value : 0
+}
+
+function readStoryboardBlockShotIds(value: unknown) {
+  const record = readLooseRecord(value)
+  const storyboardGroup = readLooseRecord(record.storyboardGroup)
+  const storyboardGroupSnake = readLooseRecord(record.storyboard_group)
+  const ids = [
+    ...readLooseArray(record.shotIds).map(trimOptionalString),
+    ...readLooseArray(record.shot_ids).map(trimOptionalString),
+    ...readLooseArray(storyboardGroup.shotIds).map(trimOptionalString),
+    ...readLooseArray(storyboardGroup.shot_ids).map(trimOptionalString),
+    ...readLooseArray(storyboardGroupSnake.shotIds).map(trimOptionalString),
+    ...readLooseArray(storyboardGroupSnake.shot_ids).map(trimOptionalString),
+    ...readLooseArray(record.shots).map((shot) => trimOptionalString(readLooseRecord(shot).id)),
+  ].filter(Boolean)
+  return ids.filter((id, index) => ids.indexOf(id) === index)
+}
+
+function findStoryboardBlockChildRequest(childRequests: readonly OutputRequest[], block: GraphCommandBlockView) {
+  const exact = childRequests.find((request) => {
+    const metadata = readLooseRecord(request.metadata)
+    return trimOptionalString(metadata.storyboardBlockId) === block.id
+      || trimOptionalString(readLooseRecord(metadata.block).id) === block.id
+  }) ?? null
+  if (exact) return exact
+
+  const indexMatches = childRequests.filter((request) => readStoryboardBlockIndexFromRequest(request) === Number(block.index ?? 0))
+  if (indexMatches.length === 1) return indexMatches[0] ?? null
+
+  const blockShotIds = block.shots.map((shot) => trimOptionalString(shot.id)).filter(Boolean)
+  if (blockShotIds.length === 0) return null
+  const blockShotIdSet = new Set(blockShotIds)
+  const scored = childRequests.map((request) => {
+    const childShotIds = readStoryboardBlockShotIds(readLooseRecord(request.metadata).block)
+    const overlap = childShotIds.filter((shotId) => blockShotIdSet.has(shotId)).length
+    const exactShotSet = overlap === blockShotIds.length && childShotIds.length === blockShotIds.length
+    return { request, score: exactShotSet ? 100 : overlap }
+  }).filter((entry) => entry.score >= Math.min(2, blockShotIds.length))
+    .sort((left, right) => right.score - left.score)
+  if (scored.length === 0) return null
+  return scored[0]?.score === scored[1]?.score ? null : scored[0]?.request ?? null
+}
+
 export function useSequenceAnimaticGraphCommands({
   outputWorkflowRuns,
   busyRunKeys,
@@ -117,7 +166,7 @@ export function useSequenceAnimaticGraphCommands({
       let targetBlock = block
       if (!targetBlock.childWorkflowId) {
         const ensureResult = await Promise.resolve(onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: model.request.id }))
-        const ensuredChild = ensureResult.childRequests.find((request) => trimOptionalString(readLooseRecord(request.metadata).storyboardBlockId) === block.id) ?? null
+        const ensuredChild = findStoryboardBlockChildRequest(ensureResult.childRequests, block)
         targetBlock = {
           ...targetBlock,
           childRequestId: ensuredChild?.id ?? targetBlock.childRequestId,
@@ -249,7 +298,7 @@ export function useSequenceAnimaticGraphCommands({
         shot.keyframeRequestId
         && shot.keyframeWorkflowId
         && shot.keyframeDependencyMode === 'single_node_chain'
-        && shot.keyframeGraphPolicyVersion === 'primary_chain_v7',
+        && shot.keyframeGraphPolicyVersion === 'primary_chain_v8_zone_spatial_refs',
       )
       if (!refresh && cachedShotGraphIsCurrent && shot.keyframeRequestId) {
         openOutputGraph(model, shot.keyframeRequestId, 'planned_keyframe_artifact')
