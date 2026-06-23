@@ -5,6 +5,7 @@ import {
 import {
   sceneContinuityManifestForShot,
   sceneContinuityManifestSchema,
+  shotReferenceReadinessBlockingReason,
   shotReadinessFromManifest,
   type SceneContinuityManifest,
   type ShotReferenceReadiness,
@@ -20,10 +21,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function readText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function readArray(value: unknown) {
-  return Array.isArray(value) ? value : []
 }
 
 function manifestFromArtifactMetadata(metadata: Record<string, unknown>) {
@@ -92,16 +89,10 @@ export function sceneContinuityBlockingReason(input: {
   readiness: ShotReferenceReadiness | null
 }) {
   if (!input.manifest) return 'missing_scene_continuity_manifest' as const
-  if (input.manifest.status !== 'ready') return input.manifest.missingBlockers[0] ?? 'missing_spatial_ref'
-  if (!input.readiness) return input.manifest.shotReadiness.length === 0 ? null : 'missing_scene_continuity_manifest' as const
-  if (input.readiness.status !== 'ready' && input.readiness.status !== 'keyframe_ready') {
-    return input.readiness.blockers[0] ?? 'missing_spatial_ref'
+  if (input.readiness) {
+    return shotReferenceReadinessBlockingReason(input.readiness)
   }
-  const missing = readArray(input.readiness.missingArtifactRoles).map(readText).filter(Boolean)
-  if (missing.some((role) => role.includes('local'))) return 'missing_local_ref' as const
-  if (missing.length > 0) return 'missing_spatial_ref' as const
-  const zoneId = readText(input.readiness.zoneId)
-  const zoneAssetKeys = readArray(input.readiness.zoneAssetKeys).map(readText).filter(Boolean)
-  if (zoneId && zoneAssetKeys.length === 0) return 'missing_spatial_ref' as const
+  if (input.manifest.status !== 'ready') return input.manifest.missingBlockers[0] ?? 'missing_spatial_ref'
+  if (input.manifest.shotReadiness.length > 0) return 'missing_scene_continuity_manifest' as const
   return null
 }

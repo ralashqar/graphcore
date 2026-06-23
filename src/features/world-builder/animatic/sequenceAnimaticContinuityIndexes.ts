@@ -27,6 +27,7 @@ export type SequenceAnimaticContinuityAnchorView = {
   statusLabel: string
   progressLabel: string
   sourceAtlasNodeLabel: string
+  visualBrief: string
   shotIds: string[]
   blockIds: string[]
   usageLabel: string
@@ -57,6 +58,7 @@ export type SequenceAnimaticContinuityAssetTargetView = {
   nodeId: string
   name: string
   assetKind: string
+  visualBrief?: string
   status: 'missing' | 'generating' | 'ready' | 'stale' | 'failed'
   statusLabel: string
   actionLabel: string
@@ -342,6 +344,12 @@ export function buildSequenceAnimaticContinuityAnchorViews(input: {
       statusLabel,
       progressLabel,
       sourceAtlasNodeLabel: type === 'character' ? 'Character Anchor Atlas' : type === 'prop' ? 'Prop Anchor Atlas' : 'Location Anchor Atlas',
+      visualBrief: [
+        trimOptionalString(anchor.visualBrief),
+        trimOptionalString(anchor.visual_brief),
+        trimOptionalString(anchor.description),
+        trimOptionalString(anchor.summary),
+      ].find(Boolean) ?? '',
       shotIds: [
         ...readLooseArray(anchor.shotIds),
         ...readLooseArray(anchor.usedShotIds),

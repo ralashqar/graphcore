@@ -257,6 +257,7 @@ export type SequenceAnimaticReferenceView = {
   role: string
   iconId: EntityIconId
   iconUrl: string | null
+  referenceArtUrl?: string | null
   isContinuityAnchor?: boolean
   continuityAnchorType?: 'prop' | 'location_spot' | 'character'
   statusLabel?: string
@@ -309,6 +310,7 @@ export type SequenceAnimaticDialogueLineView = {
   speakerName: string
   speakerIconId: EntityIconId
   speakerIconUrl: string | null
+  speakerReferenceArtUrl: string | null
 }
 
 export type SequenceAnimaticPerformanceBeatView = {
@@ -317,6 +319,7 @@ export type SequenceAnimaticPerformanceBeatView = {
   characterName: string
   characterIconId: EntityIconId
   characterIconUrl: string | null
+  characterReferenceArtUrl: string | null
   emotion: string
   toneLabel: string
   valenceLabel: string
@@ -691,6 +694,7 @@ function buildSequenceAnimaticReferenceResolver(input: {
   assetByKey: ReadonlyMap<string, AssetDefinition>
   imageUrlByEntityKey: ReadonlyMap<string, string | null>
   referenceSheetIconUrlByEntityKey: ReadonlyMap<string, string | null>
+  referenceSheetUrlByEntityKey: ReadonlyMap<string, string | null>
   continuityAnchors?: readonly SequenceAnimaticContinuityAnchorView[]
 }) {
   const directLookupEntries: Array<[string, WorldEntity]> = []
@@ -746,6 +750,10 @@ function buildSequenceAnimaticReferenceResolver(input: {
           ?? input.imageUrlByEntityKey.get(entity.key)
           ?? fallbackAssetUrl
           ?? null,
+        referenceArtUrl: input.referenceSheetUrlByEntityKey.get(entity.key)
+          ?? input.imageUrlByEntityKey.get(entity.key)
+          ?? fallbackAssetUrl
+          ?? null,
       }
     }
     const anchor = animaticRefLookupAliases(cleanRefId)
@@ -758,6 +766,7 @@ function buildSequenceAnimaticReferenceResolver(input: {
       role,
       iconId: anchor.iconId,
       iconUrl: anchor.thumbnailUrl,
+      referenceArtUrl: anchor.thumbnailUrl,
       isContinuityAnchor: true,
       continuityAnchorType: anchor.type,
       statusLabel: anchor.statusLabel,
@@ -854,6 +863,7 @@ function buildSequenceAnimaticPerformanceBeats(
       characterName: character?.name ?? fallbackName,
       characterIconId: character?.iconId ?? 'character',
       characterIconUrl: character?.iconUrl ?? null,
+      characterReferenceArtUrl: character?.referenceArtUrl ?? null,
       emotion: trimOptionalString(record.emotion),
       toneLabel: animaticPerformanceToneLabel(record.valence, record.arousal),
       valenceLabel: formatAnimaticPerformanceNumber(record.valence),
@@ -935,6 +945,7 @@ function buildSequenceAnimaticDialogueLines(
       speakerName: speaker?.name ?? fallbackSpeakerName,
       speakerIconId: speaker?.iconId ?? 'character',
       speakerIconUrl: speaker?.iconUrl ?? null,
+      speakerReferenceArtUrl: speaker?.referenceArtUrl ?? null,
     }
   }).filter((line): line is SequenceAnimaticDialogueLineView => Boolean(line))
 }
@@ -1113,6 +1124,7 @@ export function buildSequenceAnimaticViewModel(input: {
   worldEntities: readonly WorldEntity[]
   imageUrlByEntityKey: ReadonlyMap<string, string | null>
   referenceSheetIconUrlByEntityKey: ReadonlyMap<string, string | null>
+  referenceSheetUrlByEntityKey: ReadonlyMap<string, string | null>
 }): SequenceAnimaticViewModel {
   const isActive = sequenceAnimaticStateForRequest(input.request, input.runs, input.artifacts) === 'in_progress'
   const masterProjectionActiveNodeKey = sequenceAnimaticProjectionActiveNodeKey(input.request)
@@ -1282,12 +1294,6 @@ export function buildSequenceAnimaticViewModel(input: {
     shotProductionCoverageRunBySetupId,
     coverageAnchorArtifactBySetupId,
   })
-  const continuityGraphAssetAnchorIds = new Set(
-    readLooseArray(continuityGraphV2.assetAnchors ?? continuityGraphV2.asset_anchors)
-      .map(readLooseRecord)
-      .map((entry) => trimOptionalString(entry.id))
-      .filter(Boolean),
-  )
   const continuityShotBindings = readLooseRecord(continuityLocationSource.shotBindings ?? continuityLocationSource.shot_bindings ?? continuityGraphV2.shotBindings)
   const continuityBlockStates = {
     ...readLooseRecord(readLooseRecord(continuityRequest?.metadata).blockStates),
@@ -1469,6 +1475,7 @@ export function buildSequenceAnimaticViewModel(input: {
         nodeId: entry.id,
         name: entry.name,
         assetKind: entry.kind === 'set' ? 'location_set' : entry.kind === 'zone' ? 'location_zone' : entry.kind === 'viewpoint' || entry.kind === 'angle' ? 'location_angle' : 'location_spot',
+        visualBrief: entry.summary,
         blockIds: entry.blockIds,
         shotIds: entry.shotIds,
       })),
@@ -1476,6 +1483,7 @@ export function buildSequenceAnimaticViewModel(input: {
         nodeId: spotCameraGridNodeId(entry.id),
         name: `${entry.name || 'Spot'} camera grid`,
         assetKind: 'spot_camera_grid',
+        visualBrief: `Camera coverage grid for ${entry.name || 'spot'}. ${entry.summary}`.trim(),
         blockIds: entry.blockIds,
         shotIds: entry.shotIds,
       })),
@@ -1483,13 +1491,15 @@ export function buildSequenceAnimaticViewModel(input: {
         nodeId: entry.id,
         name: entry.name,
         assetKind: 'location_angle',
+        visualBrief: entry.summary,
         blockIds: entry.blockIds,
         shotIds: entry.shotIds,
       })),
-      ...continuityAnchorViews.filter((anchor) => continuityGraphAssetAnchorIds.has(anchor.id)).map((anchor) => ({
+      ...continuityAnchorViews.map((anchor) => ({
         nodeId: anchor.id,
         name: anchor.name,
         assetKind: anchor.type === 'character' ? 'temporary_character' : anchor.type === 'prop' ? 'prop' : 'location_spot',
+        visualBrief: anchor.visualBrief || anchor.usageDetailLabel,
         blockIds: anchor.blockIds,
         shotIds: anchor.shotIds,
       })),
@@ -1628,6 +1638,7 @@ export function buildSequenceAnimaticViewModel(input: {
     assetByKey,
     imageUrlByEntityKey: input.imageUrlByEntityKey,
     referenceSheetIconUrlByEntityKey: input.referenceSheetIconUrlByEntityKey,
+    referenceSheetUrlByEntityKey: input.referenceSheetUrlByEntityKey,
     continuityAnchors: continuityAnchorViews,
   })
   const continuityGraphVisualDependencyEdges = [

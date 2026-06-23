@@ -117,6 +117,22 @@ test('no eligible target returns explicit noop instead of silent success', () =>
   assert.match(plan.diagnostics.join(' '), /No eligible continuity asset targets/)
 })
 
+test('missing local prop graph node can still generate from planned reference target', () => {
+  const fixture = model({
+    continuityAssetTargets: [
+      target('prop_sky_sutra_disc', 'missing', 'prop'),
+    ],
+  })
+  const plan = planSequenceAnimaticContinuityCommand({
+    model: fixture,
+    action: 'generate_node',
+    targets: [fixture.continuityAssetTargets.find((entry) => entry.nodeId === 'prop_sky_sutra_disc')!],
+  })
+  assert.equal(plan.status, 'ready')
+  assert.deepEqual(plan.targets.map((entry) => entry.nodeId), ['prop_sky_sutra_disc'])
+  assert.deepEqual(plan.runGroups.map((group) => group.targets.map((entry) => entry.nodeId)), [['prop_sky_sutra_disc']])
+})
+
 test('continuity dependency graph maps snake_case spot parents to zone references', () => {
   const graph = {
     zones: [{ id: 'zone_market', set_id: 'set_square', name: 'Market' }],

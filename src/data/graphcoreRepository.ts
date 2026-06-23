@@ -8881,6 +8881,8 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     continuityRequestId?: string | null
     nodeId: string
     nodeIds?: string[]
+    targetNode?: Record<string, unknown>
+    targetNodes?: Record<string, unknown>[]
     batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_camera_grid' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
     mode?: 'generate' | 'regenerate'
   },
@@ -8891,6 +8893,8 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     masterRequestId: request.masterRequestId,
     nodeId: request.nodeId,
     nodeIds: request.nodeIds,
+    targetNode: request.targetNode,
+    targetNodes: request.targetNodes,
     batchKind: request.batchKind,
     mode: request.mode ?? 'generate',
     continuityRequestId: request.continuityRequestId ?? undefined,
@@ -8913,6 +8917,8 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
       continuityRequestId: payloadInput.continuityRequestId,
       nodeId: payloadInput.nodeId,
       nodeIds: payloadInput.nodeIds,
+      targetNode: payloadInput.targetNode,
+      targetNodes: payloadInput.targetNodes,
       batchKind: payloadInput.batchKind,
       mode: payloadInput.mode,
       regenerationRequestId: payloadInput.regenerationRequestId,

@@ -45,6 +45,8 @@ type EnsureSequenceAnimaticContinuityAssetWorkflow = (request: {
   continuityRequestId?: string | null
   nodeId: string
   nodeIds?: string[]
+  targetNode?: Record<string, unknown>
+  targetNodes?: Record<string, unknown>[]
   batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_camera_grid' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
   mode?: 'generate' | 'regenerate'
 }) => Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> | SequenceAnimaticContinuityAssetWorkflowEnsureResponse
@@ -258,6 +260,7 @@ export function useSequenceAnimaticWorkflowCommands({
   })
 
   const {
+    pendingContinuityAssets,
     pendingCoverageAnchor,
     runContinuityAssets,
     runCoverageAnchor,
@@ -352,6 +355,7 @@ export function useSequenceAnimaticWorkflowCommands({
     prepareSceneBoardContinuity,
     cancelSceneBoardPrep,
     regenerateSceneCoverageAnchors,
+    pendingContinuityAssets,
     pendingCoverageAnchor,
     runContinuityAssets,
     runCoverageAnchor,

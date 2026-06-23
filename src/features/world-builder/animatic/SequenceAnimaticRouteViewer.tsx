@@ -1,21 +1,16 @@
 import type { OutputWorkflowRun } from '../../../domain/outputWorkflow'
 import type { WorkflowProgressViewModel } from '../../../domain/workflowProgressView'
 import { EntityIcon } from '../../../shared/entityIcons'
-import { WorkflowActiveNodeStrip } from '../../workflows/WorkflowProgressWidgets'
 import type { WorldWikiDetailModalInput } from '../wiki/WorldWikiSections'
 import {
-  SequenceAnimaticBlockTimeline,
   type SequenceAnimaticPendingShotView,
   type SequenceAnimaticShotInspectorInput,
   type SequenceAnimaticShotPromptState,
-  sequenceAnimaticShotPreviewInput,
-} from './SequenceAnimaticBlockTimeline'
-import { SequenceAnimaticPipelineRail } from './SequenceAnimaticPipelineRail'
+} from './sequenceAnimaticShotTypes'
+import { SequenceAnimaticShotWorkspace } from './SequenceAnimaticFocusedWorkspace'
 import { SequenceAnimaticThinkingState, sequenceAnimaticShouldShowThinking } from './SequenceAnimaticThinkingState'
 import { SequenceAnimaticWorkflowHeaderActions } from './SequenceAnimaticWorkflowHeaderActions'
-import { sequenceAnimaticBlockSceneId } from './sequenceAnimaticSceneIndexes'
 import {
-  sequenceAnimaticWorkflowStepChips,
   type SequenceAnimaticVideoPreview,
   type SequenceAnimaticViewModel,
 } from './sequenceAnimaticViewModel'
@@ -42,6 +37,13 @@ type SequenceAnimaticRouteViewerProps = {
   activeSceneId: string | null
   busyRunKeys: ReadonlySet<string>
   graphOpenKey: string | null
+  pendingContinuityAssets: {
+    masterRequestId: string
+    nodeIds: string[]
+    previousAssetKeys: Record<string, string>
+    forceRefresh: boolean
+    startedAt: number
+  } | null
   nextPendingShot: SequenceAnimaticPendingShotView | null
   recentlyStreamedShotIds: Readonly<Record<string, number>>
   shotPrompt: SequenceAnimaticShotPromptState | null
@@ -63,6 +65,16 @@ type SequenceAnimaticRouteViewerProps = {
   onOpenCoverageInspector: (block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, anchor: SequenceAnimaticCoverageAnchorView) => void
   onOpenContinuityGraph: (requestId: string, scopeWorldLocationId?: string | null, scopeSceneId?: string | null) => void
   onOpenSceneBoard: (requestId: string, scopeSceneId?: string | null, scopeNodeId?: string | null) => void
+  onGenerateContinuityAssets: (
+    model: SequenceAnimaticViewModel,
+    targets?: readonly SequenceAnimaticViewModel['continuityAssetTargets'][number][],
+    options?: { batchKind?: 'spot_camera_grid'; forceRefresh?: boolean },
+  ) => void
+  onGenerateCoverageAnchor: (
+    model: SequenceAnimaticViewModel,
+    anchor: SequenceAnimaticViewModel['coverageAnchors'][number],
+    mode: 'generate' | 'regenerate',
+  ) => void
   onRunKeyframes: (model: SequenceAnimaticViewModel, mode: 'generate' | 'regenerate') => void
   onOpenWorkflowGraph: (model: SequenceAnimaticViewModel, requestId: string) => void
   onRegenerateSceneCoverage: (model: SequenceAnimaticViewModel, scene: SequenceAnimaticSceneView) => void
@@ -74,6 +86,7 @@ type SequenceAnimaticRouteTimelineProps = Pick<
   | 'activeSceneId'
   | 'busyRunKeys'
   | 'graphOpenKey'
+  | 'pendingContinuityAssets'
   | 'nextPendingShot'
   | 'recentlyStreamedShotIds'
   | 'shotPrompt'
@@ -93,22 +106,24 @@ type SequenceAnimaticRouteTimelineProps = Pick<
   | 'onOpenSpatialInspector'
   | 'onOpenCoverageInspector'
   | 'onOpenWorkflowGraph'
+  | 'onOpenContinuityGraph'
+  | 'onOpenSceneBoard'
+  | 'onGenerateContinuityAssets'
+  | 'onGenerateCoverageAnchor'
 > & {
   model: SequenceAnimaticViewModel
+  error: string
 }
 
 export function SequenceAnimaticRouteViewer({
   entityKey,
-  entityName,
   model,
   hydration,
-  workflowRun,
-  workflowProgress,
-  workflowFallbackLabels,
   error,
   activeSceneId,
   busyRunKeys,
   graphOpenKey,
+  pendingContinuityAssets,
   nextPendingShot,
   recentlyStreamedShotIds,
   shotPrompt,
@@ -130,37 +145,22 @@ export function SequenceAnimaticRouteViewer({
   onOpenCoverageInspector,
   onOpenContinuityGraph,
   onOpenSceneBoard,
+  onGenerateContinuityAssets,
+  onGenerateCoverageAnchor,
   onRunKeyframes,
   onOpenWorkflowGraph,
   onRegenerateSceneCoverage,
   onOpenTimeline,
 }: SequenceAnimaticRouteViewerProps) {
   const loading = !model && hydration.status !== 'failed'
-  const workflowChips = sequenceAnimaticWorkflowStepChips({
-    run: workflowRun,
-    fallbackLabels: workflowFallbackLabels,
-  })
 
   return (
     <section className="world-wiki-entity-page world-wiki-sequence-animatic-page" data-world-wiki-entity-page={entityKey}>
       <main className="world-wiki-sequence-animatic-main">
         <header className="world-wiki-sequence-animatic-page-head">
-          <div>
-            <span className="eyebrow">Screenplay animatic</span>
-            <h2>{model?.title ?? entityName}</h2>
-            <p>{model ? `${model.blocks.length} storyboard block${model.blocks.length === 1 ? '' : 's'} / ${model.hasPanels ? 'panels available' : 'panels pending'}` : 'Loading linked animatic state directly from this chapter.'}</p>
-            {model ? (
-              <SequenceAnimaticPipelineRail
-                model={model}
-                workflowProgress={workflowProgress}
-                onOpenWorkflowGraph={() => onOpenWorkflowGraph(model, model.request.id)}
-              />
-            ) : null}
-          </div>
           <div className="world-wiki-sequence-animatic-page-actions">
             {model ? (
               <>
-                {!workflowProgress ? <WorkflowActiveNodeStrip nodes={workflowChips} className="is-end" /> : null}
                 <SequenceAnimaticWorkflowHeaderActions
                   model={model}
                   activeSceneId={activeSceneId}
@@ -197,9 +197,11 @@ export function SequenceAnimaticRouteViewer({
         {model ? (
           <SequenceAnimaticRouteTimeline
             model={model}
+            error={error}
             activeSceneId={activeSceneId}
             busyRunKeys={busyRunKeys}
             graphOpenKey={graphOpenKey}
+            pendingContinuityAssets={pendingContinuityAssets}
             nextPendingShot={nextPendingShot}
             recentlyStreamedShotIds={recentlyStreamedShotIds}
             shotPrompt={shotPrompt}
@@ -218,6 +220,10 @@ export function SequenceAnimaticRouteViewer({
             onOpenShotInspector={onOpenShotInspector}
             onOpenSpatialInspector={onOpenSpatialInspector}
             onOpenCoverageInspector={onOpenCoverageInspector}
+            onOpenContinuityGraph={onOpenContinuityGraph}
+            onOpenSceneBoard={onOpenSceneBoard}
+            onGenerateContinuityAssets={onGenerateContinuityAssets}
+            onGenerateCoverageAnchor={onGenerateCoverageAnchor}
             onOpenWorkflowGraph={onOpenWorkflowGraph}
           />
         ) : null}
@@ -228,9 +234,11 @@ export function SequenceAnimaticRouteViewer({
 
 function SequenceAnimaticRouteTimeline({
   model,
+  error,
   activeSceneId,
   busyRunKeys,
   graphOpenKey,
+  pendingContinuityAssets,
   nextPendingShot,
   recentlyStreamedShotIds,
   shotPrompt,
@@ -239,7 +247,6 @@ function SequenceAnimaticRouteTimeline({
   shotVideoRunKeyActive,
   onBindShotElement,
   onRunScene,
-  onRunBlock,
   onRunShotRevision,
   onRunShotKeyframe,
   onRunShotVideo,
@@ -249,15 +256,14 @@ function SequenceAnimaticRouteTimeline({
   onOpenShotInspector,
   onOpenSpatialInspector,
   onOpenCoverageInspector,
+  onOpenContinuityGraph,
+  onOpenSceneBoard,
+  onGenerateContinuityAssets,
+  onGenerateCoverageAnchor,
   onOpenWorkflowGraph,
 }: SequenceAnimaticRouteTimelineProps) {
   const scenes = model.scenes
   const activeScene = scenes.find((scene) => scene.id === activeSceneId) ?? scenes[0] ?? null
-  const visibleBlocks = model.blocks.filter((block) => {
-    if (scenes.length === 0 || !activeScene) return true
-    const blockSceneId = sequenceAnimaticBlockSceneId(block)
-    return !blockSceneId || blockSceneId === activeScene.id
-  })
 
   return (
     <div className="world-wiki-sequence-animatic-timeline">
@@ -277,14 +283,14 @@ function SequenceAnimaticRouteTimeline({
           <p>Shot blocks will appear here once the animatic planner saves them.</p>
         </section>
       ) : null}
-      {visibleBlocks.map((block) => (
-        <SequenceAnimaticBlockTimeline
-          key={block.id}
-          model={model}
-          block={block}
-          variant="route"
+      {model.blocks.length > 0 ? (
+          <SequenceAnimaticShotWorkspace
+            model={model}
+            commandError={error}
+            activeSceneId={activeScene?.id ?? activeSceneId}
           busyRunKeys={busyRunKeys}
           graphOpenKey={graphOpenKey}
+          pendingContinuityAssets={pendingContinuityAssets}
           nextPendingShot={nextPendingShot}
           recentlyStreamedShotIds={recentlyStreamedShotIds}
           shotPrompt={shotPrompt}
@@ -292,19 +298,21 @@ function SequenceAnimaticRouteTimeline({
           onSetShotPromptDraft={onSetShotPromptDraft}
           shotVideoRunKeyActive={shotVideoRunKeyActive}
           onBindShotElement={onBindShotElement}
-          onRunBlock={onRunBlock}
           onRunShotRevision={onRunShotRevision}
           onRunShotKeyframe={onRunShotKeyframe}
           onRunShotVideo={onRunShotVideo}
           onOpenShotGraph={onOpenShotGraph}
-          onPlayBlockVideo={onPlayVideo}
           onPlayShotVideo={onPlayVideo}
-          onOpenShotPreview={(shot) => onOpenShotPreview(sequenceAnimaticShotPreviewInput(shot))}
+          onOpenShotPreview={onOpenShotPreview}
           onOpenShotInspector={onOpenShotInspector}
           onOpenSpatialInspector={onOpenSpatialInspector}
           onOpenCoverageInspector={onOpenCoverageInspector}
+          onOpenContinuityGraph={onOpenContinuityGraph}
+          onOpenSceneBoard={onOpenSceneBoard}
+          onGenerateContinuityAssets={onGenerateContinuityAssets}
+          onGenerateCoverageAnchor={onGenerateCoverageAnchor}
         />
-      ))}
+      ) : null}
     </div>
   )
 }

@@ -4144,7 +4144,7 @@ async function startSequenceAnimaticChildRun(input: {
   client: DatabaseClient
   request: OutputRequest
   workflowId: string
-  runIntent: 'prepare_storyboard_block' | 'generate_continuity_asset' | 'generate_scene_shot_plan'
+  runIntent: 'prepare_storyboard_block' | 'generate_continuity_asset' | 'generate_scene_shot_plan' | 'generate_keyframes'
   targetNodeKeys: string[]
 }) {
   return startSequenceAnimaticChildRunRuntime({

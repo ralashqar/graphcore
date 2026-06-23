@@ -7,33 +7,21 @@ import {
   type SequenceAnimaticViewModel,
 } from './sequenceAnimaticViewModel'
 import { sequenceAnimaticShotKeyframeBusyLabel } from './sequenceAnimaticProgressPresentation'
+import type {
+  SequenceAnimaticPendingShotView,
+  SequenceAnimaticShotInspectorInput,
+  SequenceAnimaticShotPromptState,
+} from './sequenceAnimaticShotTypes'
+
+export type {
+  SequenceAnimaticPendingShotView,
+  SequenceAnimaticShotInspectorInput,
+  SequenceAnimaticShotPromptState,
+} from './sequenceAnimaticShotTypes'
 
 type SequenceAnimaticBlockView = SequenceAnimaticViewModel['blocks'][number]
 type SequenceAnimaticShotView = SequenceAnimaticBlockView['shots'][number]
 type SequenceAnimaticCoverageAnchorView = SequenceAnimaticViewModel['coverageAnchors'][number]
-
-export type SequenceAnimaticPendingShotView = {
-  blockId: string
-  shotId: string
-  index: number
-}
-
-export type SequenceAnimaticShotInspectorInput = {
-  kind: 'lighting' | 'performance'
-  blockTitle: string
-  shotTitle: string
-  content: string
-}
-
-export type SequenceAnimaticShotPromptState = {
-  masterRequestId: string
-  storyboardBlockId: string
-  shotId: string
-  shotTitle: string
-  prompt: string
-  status: 'idle' | 'rewriting' | 'generating' | 'saving' | 'failed'
-  error: string | null
-}
 
 type SequenceAnimaticBlockTimelineProps = {
   model: SequenceAnimaticViewModel

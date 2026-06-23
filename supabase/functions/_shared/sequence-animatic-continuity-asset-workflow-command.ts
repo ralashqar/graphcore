@@ -187,6 +187,74 @@ function defaultAssetStateForNode(node: Record<string, unknown>, inputHash: stri
   })
 }
 
+function localReferenceAssetNodesFromSources(...sources: readonly Record<string, unknown>[]) {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const source of sources) {
+    for (const rawReference of [
+      ...readArray(source.targetNodes ?? source.target_nodes),
+      ...[source.targetNode ?? source.target_node].filter(Boolean),
+      ...readArray(source.assetAnchors ?? source.asset_anchors),
+      ...readArray(source.outputLocalReferences ?? source.output_local_references),
+      ...readArray(source.localReferences ?? source.local_references),
+    ]) {
+      const reference = asRecord(rawReference)
+      const id = readText(reference.id ?? reference.nodeId ?? reference.node_id ?? reference.referenceId ?? reference.reference_id)
+      if (!id) continue
+      const rawType = readText(reference.type ?? reference.anchorType ?? reference.anchor_type ?? reference.assetKind ?? reference.asset_kind ?? reference.nodeKind ?? reference.node_kind)
+      const normalizedType = rawType === 'temp_character'
+        || rawType === 'temporary_character'
+        ? 'character'
+        : ['prop', 'item', 'faction', 'crowd', 'vehicle', 'animatic_only'].includes(rawType)
+          ? 'prop'
+        : rawType
+      const assetKind = normalizedType === 'character'
+        ? 'temporary_character'
+        : normalizedType === 'location_spot'
+          ? 'location_spot'
+          : 'prop'
+      const nodeKind = normalizedType === 'character'
+        ? 'temporary_character'
+        : normalizedType === 'location_spot'
+          ? 'location_anchor'
+          : 'prop'
+      const previous = byId.get(id) ?? {}
+      byId.set(id, {
+        ...previous,
+        ...reference,
+        id,
+        type: normalizedType || 'prop',
+        nodeKind,
+        assetKind,
+        name: readText(reference.name) || readText(previous.name) || id,
+        visualBrief: readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.visualBrief),
+        summary: readText(reference.summary) || readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.summary),
+        shotIds: [...new Set([
+          ...readStringArray(previous.shotIds),
+          ...readStringArray(reference.shotIds ?? reference.shot_ids),
+          ...readStringArray(reference.usedShotIds ?? reference.used_shot_ids),
+        ])],
+        storyboardBlockIds: [...new Set([
+          ...readStringArray(previous.storyboardBlockIds ?? previous.storyboard_block_ids ?? previous.blockIds ?? previous.block_ids),
+          ...readStringArray(reference.storyboardBlockIds ?? reference.storyboard_block_ids ?? reference.blockIds ?? reference.block_ids),
+        ])],
+      })
+    }
+  }
+  return [...byId.values()]
+}
+
+function mergeContinuityNodesById(...groups: readonly Record<string, unknown>[][]) {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const group of groups) {
+    for (const node of group) {
+      const id = readText(node.id)
+      if (!id) continue
+      byId.set(id, byId.has(id) ? { ...node, ...byId.get(id), id } : { ...node, id })
+    }
+  }
+  return [...byId.values()]
+}
+
 function assetGenerationStatus(assetStateByNodeId: Record<string, unknown>) {
   const states = Object.values(assetStateByNodeId).map(asRecord)
   if (states.length === 0) return 'none'
@@ -400,10 +468,20 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     })
     const graph = asRecord(continuityPack.continuityGraphV2 ?? continuityPack.continuity_graph_v2)
     if (Object.keys(graph).length === 0) throw new HttpError(409, 'Generate the shot continuity plan first.')
-    const allGraphNodes = continuityNodeCollections(graph)
+    const allGraphNodes = mergeContinuityNodesById(
+      continuityNodeCollections(graph),
+      localReferenceAssetNodesFromSources(graph, continuityPack, manifest, directorPlan, payload),
+    )
     let requestedNodeIds = [...new Set([payload.nodeId, ...readStringArray(payload.nodeIds)].map(readText).filter(Boolean))].slice(0, 9)
     const targetNodes = requestedNodeIds.map((nodeId) => allGraphNodes.find((entry) => readText(entry.id) === nodeId) ?? null)
-    if (targetNodes.some((node) => !node)) throw new HttpError(404, 'One or more continuity nodes were not found in the current scene graph.')
+    if (targetNodes.some((node) => !node)) {
+      const availableLocalNodeIds = localReferenceAssetNodesFromSources(graph, continuityPack, manifest, directorPlan, payload)
+        .map((node) => readText(node.id))
+        .filter(Boolean)
+        .slice(0, 20)
+      const missingNodeIds = requestedNodeIds.filter((nodeId) => !allGraphNodes.some((entry) => readText(entry.id) === nodeId))
+      throw new HttpError(404, `One or more continuity nodes were not found in the current scene graph. missing=${missingNodeIds.join(', ') || 'unknown'} localRefs=${availableLocalNodeIds.join(', ') || 'none'}`)
+    }
     let resolvedTargetNodes = (targetNodes as Record<string, unknown>[])
       .map((node) => applySceneGraphOverrideToNode(node, sceneGraphOverrideForNode(asRecord(masterRequest.metadata), readText(node.id))))
     let targetNode = resolvedTargetNodes[0] ?? null
@@ -684,6 +762,7 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     const assetKind = readText(targetNode.assetKind) || readText(targetNode.nodeKind) || 'continuity_asset'
     const targetIsSpatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(assetKind)
     const batchIsSpatialAsset = resolvedTargetNodes.every((node) => ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(readText(node.assetKind) || readText(node.nodeKind)))
+    const shouldUseReferenceImages = targetIsSpatialAsset || batchIsSpatialAsset
     const batchIsAtlas = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
     const batchIsSpotCameraGrid = batchKind === 'spot_camera_grid'
     const targetIsLocationSpot = assetKind === 'location_spot'
@@ -691,7 +770,7 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     const latestParentZoneReferenceAssetKeys = targetIsLocationSpot
       ? [...new Set([...referenceAssetKeys, ...parentReferenceAssetKeys])].filter(Boolean).slice(0, 1)
       : []
-    const allReferenceAssetKeys = targetIsLocationSpot
+    const candidateReferenceAssetKeys = targetIsLocationSpot
       ? latestParentZoneReferenceAssetKeys
       : targetIsLocationZone
       ? []
@@ -700,8 +779,9 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       : batchIsAtlas
       ? parentReferenceAssetKeys.slice(0, 1)
       : [...new Set([...referenceAssetKeys, ...parentReferenceAssetKeys, ...batchSiblingReferenceAssetKeys, ...worldReferenceAssetKeys])].slice(0, 8)
+    const allReferenceAssetKeys = shouldUseReferenceImages ? candidateReferenceAssetKeys : []
     const referenceEntities = allReferenceAssetKeys.map((assetKey) => assetEntityForKey(assetKey, `${readText(targetNode.name) || payload.nodeId} spatial dependency`))
-    const augmentedAssetPack = (targetIsSpatialAsset || batchIsSpatialAsset) ? {
+    const augmentedAssetPack = shouldUseReferenceImages ? {
       ...assetPack,
       entities: referenceEntities,
       selectedEntityKeys: referenceEntities.map((entity) => readText(entity.key)).filter(Boolean),
@@ -714,11 +794,15 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       ],
     } : {
       ...assetPack,
-      entities: [
-        ...assetPackEntities,
-        ...referenceEntities,
+      entities: [],
+      selectedEntityKeys: [],
+      missingReferenceEntityKeys: [],
+      continuityReferenceAssetKeys: [],
+      scopedReferenceAssetKeys: [],
+      referenceScope: 'sequence_animatic_local_continuity_text_only',
+      referenceDiagnostics: [
+        'Local temporary character and prop continuity generation is text-only. No character, prop, world, or shot reference images are passed.',
       ],
-      continuityReferenceAssetKeys: allReferenceAssetKeys,
     }
     if (resolvedTargetNodes.length > 1 && batchKind) {
       const batchTargetIds = resolvedTargetNodes.map((node) => readText(node.id)).filter(Boolean)
@@ -755,7 +839,7 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         batchKind,
         targetNodeIds: batchTargetIds,
         sourceReferenceNodeIds,
-        worldReferenceAssetKeys: isSpatialAtlas ? [] : worldReferenceAssetKeys,
+        worldReferenceAssetKeys: shouldUseReferenceImages && !isSpatialAtlas ? worldReferenceAssetKeys : [],
         blockIds: [...new Set(resolvedTargetNodes.flatMap((node) => readStringArray(node.storyboardBlockIds ?? node.blockIds)))],
         layout,
         gridLayout: layout,

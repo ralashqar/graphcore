@@ -194,3 +194,25 @@ export function shotReadinessFromManifest(
   if (!manifest) return null
   return manifest.shotReadiness.find((entry) => entry.shotId === shotId) ?? null
 }
+
+export function shotReferenceReadinessBlockingReason(
+  readiness: ShotReferenceReadiness,
+): SceneContinuityBlockerReason | null {
+  const missingArtifactRoles = readiness.missingArtifactRoles.map((role) => role.trim()).filter(Boolean)
+  if (missingArtifactRoles.some((role) => role.includes('local'))) return 'missing_local_ref'
+
+  const zoneBackedSpatialReferenceReady = Boolean(readiness.zoneId && readiness.zoneAssetKeys.length > 0)
+  const nonSpatialBlocker = readiness.blockers.find((reason) => reason !== 'missing_spatial_ref') ?? null
+  if (nonSpatialBlocker) return nonSpatialBlocker
+
+  const missingNonZoneSpatialArtifact = missingArtifactRoles.find((role) => role !== 'zone_map') ?? ''
+  if (missingNonZoneSpatialArtifact) return 'missing_spatial_ref'
+
+  if (readiness.zoneId && readiness.zoneAssetKeys.length === 0) return 'missing_spatial_ref'
+
+  if (readiness.status !== 'ready' && readiness.status !== 'keyframe_ready' && !zoneBackedSpatialReferenceReady) {
+    return readiness.blockers[0] ?? 'missing_spatial_ref'
+  }
+
+  return null
+}

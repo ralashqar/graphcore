@@ -1499,6 +1499,8 @@ export const sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema = z.obje
   continuityRequestId: z.string().min(1).nullable().optional(),
   nodeId: z.string().min(1),
   nodeIds: z.array(z.string().min(1)).max(9).optional(),
+  targetNode: looseRecordSchema.optional(),
+  targetNodes: z.array(looseRecordSchema).max(9).optional(),
   batchKind: sequenceAnimaticContinuityAssetBatchKindSchema.optional(),
   mode: z.enum(['generate', 'regenerate']).default('generate'),
   regenerationRequestId: z.string().min(1).optional(),

@@ -16,6 +16,7 @@ export type EntityIconId =
   | 'environment'
   | 'asset'
   | 'activity'
+  | 'action'
   | 'cinematic'
   | 'camera'
   | 'lighting'
@@ -223,6 +224,15 @@ function IconPath({ id }: { id: EntityIconId }) {
         <>
           <path d="M12 5.2v6.1l3.6 2.1" {...stroke} />
           <circle cx="12" cy="12" r="7.2" {...stroke} />
+        </>
+      )
+    case 'action':
+      return (
+        <>
+          <path d="M5.2 15.8c1.6-3.9 4.1-6.5 7.5-7.8" {...stroke} />
+          <path d="M12.6 4.8 18.8 7l-3.4 5.8" {...stroke} />
+          <path d="M8.2 18.8h8.2" {...stroke} />
+          <path d="M6.2 11.6l-2.1 1.2M9.4 8.3 7.8 6.5M13.6 6.2l.7-2.4" {...stroke} />
         </>
       )
     case 'cinematic':

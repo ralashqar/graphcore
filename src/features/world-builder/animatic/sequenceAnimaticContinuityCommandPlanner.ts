@@ -72,6 +72,8 @@ export function continuityTargetCanGenerate(input: {
   const graphNodeById = continuityGraphNodeById(input.model)
   const targetByNodeId = new Map(input.model.continuityAssetTargets.map((target) => [target.nodeId, target] as const))
   const node = graphNodeById.get(input.target.nodeId)
+  const targetIsLocalReference = input.target.assetKind.includes('character') || input.target.assetKind.includes('prop')
+  if (!node && targetIsLocalReference) return { ok: true, blockedParentNodeIds: [], diagnostics: [] }
   if (!node) return { ok: false, blockedParentNodeIds: [], diagnostics: [`Continuity node is not in the current scene graph: ${input.target.nodeId}.`] }
   if (input.target.status === 'generating') return { ok: false, blockedParentNodeIds: [], diagnostics: [`${input.target.name || input.target.nodeId} is already generating.`] }
   if (input.mode !== 'regenerate' && input.target.status === 'ready') {

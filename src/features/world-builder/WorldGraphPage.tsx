@@ -818,6 +818,8 @@ type WorldGraphPageProps = {
     continuityRequestId?: string | null
     nodeId: string
     nodeIds?: string[]
+    targetNode?: Record<string, unknown>
+    targetNodes?: Record<string, unknown>[]
     batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_camera_grid' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
     mode?: 'generate' | 'regenerate'
   }) => Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> | SequenceAnimaticContinuityAssetWorkflowEnsureResponse
@@ -2898,8 +2900,9 @@ export function WorldGraphPage({
       worldEntities,
       imageUrlByEntityKey: wikiImageUrlByEntityKey,
       referenceSheetIconUrlByEntityKey,
+      referenceSheetUrlByEntityKey,
     })
-  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticPreviewRequestId, sequenceAnimaticStateByRequestId, wikiImageUrlByEntityKey, worldEntities])
+  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, referenceSheetUrlByEntityKey, sequenceAnimaticPreviewRequestId, sequenceAnimaticStateByRequestId, wikiImageUrlByEntityKey, worldEntities])
   const sequenceAnimaticMasterModels = useMemo(() => {
     return outputRequests
       .filter((request) => !request.parentRequestId && readOutputRequestScreenplayAnimaticRole(request) === 'master')
@@ -2925,10 +2928,11 @@ export function WorldGraphPage({
           worldEntities,
           imageUrlByEntityKey: wikiImageUrlByEntityKey,
           referenceSheetIconUrlByEntityKey,
+          referenceSheetUrlByEntityKey,
         })
       })
       .filter((model) => model.continuityGraphView.nodes.length > 0)
-  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, sequenceAnimaticStateByRequestId, wikiImageUrlByEntityKey, worldEntities])
+  }, [assets, outputArtifacts, outputLibraryRowByRequestId, outputRequests, outputWorkflowNodes, outputWorkflowRuns, referenceSheetIconUrlByEntityKey, referenceSheetUrlByEntityKey, sequenceAnimaticStateByRequestId, wikiImageUrlByEntityKey, worldEntities])
   const sequenceAnimaticModelByRequestId = useMemo(
     () => new Map(sequenceAnimaticMasterModels.map((model) => [model.request.id, model] as const)),
     [sequenceAnimaticMasterModels],
@@ -3212,6 +3216,7 @@ export function WorldGraphPage({
     prepareSceneBoardContinuity: handlePrepareSequenceAnimaticSceneBoardContinuity,
     cancelSceneBoardPrep: handleCancelSequenceAnimaticSceneBoardPrep,
     regenerateSceneCoverageAnchors: handleRegenerateSequenceAnimaticSceneCoverageAnchors,
+    pendingContinuityAssets: sequenceAnimaticPendingContinuityAssets,
     pendingCoverageAnchor: sequenceAnimaticPendingCoverageAnchor,
     runContinuityAssets: handleRunSequenceAnimaticContinuityAssets,
     runCoverageAnchor: handleRunSequenceAnimaticCoverageAnchor,
@@ -8608,6 +8613,7 @@ export function WorldGraphPage({
             activeSceneId={sequenceAnimaticActiveSceneId}
             busyRunKeys={sequenceAnimaticBusyRunKeys}
             graphOpenKey={sequenceAnimaticGraphOpenKey}
+            pendingContinuityAssets={sequenceAnimaticPendingContinuityAssets}
             nextPendingShot={sequenceAnimaticNextPendingShot}
             recentlyStreamedShotIds={sequenceAnimaticRecentlyStreamedShotIds}
             shotPrompt={sequenceAnimaticShotPrompt}
@@ -8637,6 +8643,8 @@ export function WorldGraphPage({
             onOpenCoverageInspector={(timelineBlock, shot, anchor) => setSequenceAnimaticCoverageInspector({ masterRequestId: routeAnimaticModel?.request.id ?? routeAnimaticRequestId, blockId: timelineBlock.id, shotId: shot.id, sceneId: sequenceAnimaticSceneIdFromShotId(shot.id), blockTitle: timelineBlock.title, shotTitle: shot.title, anchor })}
             onOpenContinuityGraph={openSequenceAnimaticContinuityGraph}
             onOpenSceneBoard={openSequenceAnimaticSceneBoard}
+            onGenerateContinuityAssets={(model, targets, options) => void handleRunSequenceAnimaticContinuityAssets(model, targets, options)}
+            onGenerateCoverageAnchor={(model, anchor, mode) => void handleRunSequenceAnimaticCoverageAnchor(model, anchor, mode)}
             onRunKeyframes={(model, mode) => void handleRunSequenceAnimaticKeyframes(model, mode)}
             onOpenWorkflowGraph={openSequenceAnimaticOutputGraph}
             onRegenerateSceneCoverage={(model, scene) => void handleRegenerateSequenceAnimaticSceneCoverageAnchors(model, scene)}

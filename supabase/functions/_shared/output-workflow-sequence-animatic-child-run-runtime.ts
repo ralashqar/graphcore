@@ -16,6 +16,7 @@ export type SequenceAnimaticChildRunIntent =
   | 'prepare_storyboard_block'
   | 'generate_continuity_asset'
   | 'generate_scene_shot_plan'
+  | 'generate_keyframes'
 
 export type SequenceAnimaticChildRunStartRequest = Pick<
   OutputRequest,

@@ -47,6 +47,8 @@ type EnsureContinuityAssetWorkflow = (request: {
   continuityRequestId?: string | null
   nodeId: string
   nodeIds?: string[]
+  targetNode?: Record<string, unknown>
+  targetNodes?: Record<string, unknown>[]
   batchKind?: SequenceAnimaticContinuityAssetRunGroup['batchKind']
   mode?: 'generate' | 'regenerate'
 }) => Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> | SequenceAnimaticContinuityAssetWorkflowEnsureResponse
@@ -78,6 +80,41 @@ function coverageAnchorDependencyTargets(
     dependencyNodeIds.has(target.nodeId)
     || target.shotIds.some((shotId) => shotIds.includes(shotId))
   ))
+}
+
+function nodeKindForContinuityTarget(target: SequenceAnimaticContinuityAssetTargetView) {
+  if (target.assetKind === 'temporary_character' || target.assetKind.includes('character')) return 'temporary_character'
+  if (target.assetKind === 'prop' || target.assetKind.includes('prop') || target.assetKind.includes('item')) return 'prop'
+  if (target.assetKind === 'spot_camera_grid') return 'spot_camera_grid'
+  if (target.assetKind.includes('zone')) return 'location_zone'
+  if (target.assetKind.includes('set')) return 'location_set'
+  if (target.assetKind.includes('angle') || target.assetKind.includes('viewpoint')) return 'location_viewpoint'
+  if (target.assetKind.includes('spot')) return 'location_spot'
+  return target.assetKind || 'continuity_asset'
+}
+
+function continuityTargetPayloadNode(
+  model: ContinuityCommandViewModel,
+  target: SequenceAnimaticContinuityAssetTargetView,
+) {
+  const graphNode = model.continuityGraphView.nodes.find((node) => node.id === target.nodeId) ?? null
+  const graphRecord = readLooseRecord(graphNode)
+  const nodeKind = trimOptionalString(graphRecord.nodeKind) || trimOptionalString(graphRecord.kind) || nodeKindForContinuityTarget(target)
+  return {
+    ...graphRecord,
+    id: target.nodeId,
+    nodeId: target.nodeId,
+    name: target.name,
+    label: trimOptionalString(graphRecord.label) || target.name,
+    nodeKind,
+    kind: trimOptionalString(graphRecord.kind) || nodeKind,
+    assetKind: target.assetKind,
+    shotIds: target.shotIds,
+    blockIds: target.blockIds,
+    storyboardBlockIds: target.blockIds,
+    visualBrief: trimOptionalString(graphRecord.effectiveVisualBrief ?? graphRecord.visualBrief ?? graphRecord.summary) || target.visualBrief || target.name,
+    summary: trimOptionalString(graphRecord.summary) || target.visualBrief || target.name,
+  }
 }
 
 export function useSequenceAnimaticContinuityCommands({
@@ -129,12 +166,15 @@ export function useSequenceAnimaticContinuityCommands({
       const target = group.targets[0]
       if (!target) continue
       const targetNodeIds = group.targets.map((entry) => entry.nodeId)
+      const targetNodes = group.targets.map((entry) => continuityTargetPayloadNode(model, entry))
       const targetNames = group.targets.map((entry) => entry.name).filter(Boolean)
       const ensureResult = await Promise.resolve(onEnsureSequenceAnimaticContinuityAssetWorkflow({
         masterRequestId: model.request.id,
         continuityRequestId: model.continuityRequest?.id ?? null,
         nodeId: target.nodeId,
         nodeIds: group.isBatch ? targetNodeIds : undefined,
+        targetNode: targetNodes[0],
+        targetNodes,
         batchKind: group.batchKind,
         mode: options.forceRefresh || group.targets.some((entry) => entry.status === 'stale' || entry.status === 'ready') ? 'regenerate' : 'generate',
       }))
@@ -213,6 +253,13 @@ export function useSequenceAnimaticContinuityCommands({
     if (busyRunKeys.has(runKey)) return
     beginRun(runKey)
     try {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => {
+        if (!previous[sequenceKey]) return previous
+        const next = { ...previous }
+        delete next[sequenceKey]
+        return next
+      })
       if (model.continuityGraphView.nodes.length === 0 || model.continuityAssetTargets.length === 0) {
         throw new Error('Generate the shot continuity plan first.')
       }
@@ -249,6 +296,7 @@ export function useSequenceAnimaticContinuityCommands({
       }
       await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
     } catch (error) {
+      setPendingContinuityAssets(null)
       const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
       setSequenceAnimaticErrorByKey((previous) => ({
         ...previous,
@@ -465,6 +513,7 @@ export function useSequenceAnimaticContinuityCommands({
   ])
 
   return {
+    pendingContinuityAssets,
     pendingCoverageAnchor,
     runContinuityAssets,
     runCoverageAnchor,

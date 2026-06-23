@@ -6,14 +6,16 @@ import { WorkflowLiveStatus } from '../../workflows/WorkflowProgressWidgets'
 import type { WorldWikiDetailModalInput } from '../wiki/WorldWikiSections'
 import {
   SequenceAnimaticBlockTimeline,
-  type SequenceAnimaticPendingShotView,
-  type SequenceAnimaticShotInspectorInput,
-  type SequenceAnimaticShotPromptState,
   sequenceAnimaticShotPreviewInput,
 } from './SequenceAnimaticBlockTimeline'
 import { SequenceAnimaticPipelineRail } from './SequenceAnimaticPipelineRail'
 import { SequenceAnimaticThinkingState, sequenceAnimaticShouldShowThinking } from './SequenceAnimaticThinkingState'
 import { SequenceAnimaticWorkflowHeaderActions } from './SequenceAnimaticWorkflowHeaderActions'
+import type {
+  SequenceAnimaticPendingShotView,
+  SequenceAnimaticShotInspectorInput,
+  SequenceAnimaticShotPromptState,
+} from './sequenceAnimaticShotTypes'
 import type { SequenceAnimaticVideoPreview, SequenceAnimaticViewModel } from './sequenceAnimaticViewModel'
 
 type SequenceAnimaticBlockView = SequenceAnimaticViewModel['blocks'][number]

@@ -174,6 +174,7 @@ import {
   buildSceneContinuityManifestSourceHash,
   buildShotReferenceReadinessHash,
   sceneContinuityManifestSchema,
+  shotReferenceReadinessBlockingReason,
   shotReferenceReadinessSchema,
 } from './sceneContinuityManifest.ts'
 
@@ -274,6 +275,23 @@ test('scene continuity manifest schema and hashes track shot readiness inputs', 
     spatialNodeIds: ['set_hall', 'zone_door', 'spot_threshold'],
     readyArtifactKeys: ['asset_set', 'asset_zone', 'asset_spot'],
   }))
+})
+
+test('shot reference readiness allows zone-backed spatial references without spot art', () => {
+  const readiness = shotReferenceReadinessSchema.parse({
+    shotId: 'scene_1_shot_001',
+    status: 'blocked',
+    sceneId: 'scene_1',
+    setId: 'set_hall',
+    zoneId: 'zone_door',
+    spotIds: ['spot_threshold'],
+    spatialNodeIds: ['set_hall', 'zone_door', 'spot_threshold'],
+    readyArtifactKeys: ['asset_zone'],
+    zoneAssetKeys: ['asset_zone'],
+    blockers: ['missing_spatial_ref'],
+  })
+
+  assert.equal(shotReferenceReadinessBlockingReason(readiness), null)
 })
 
 test('output activity monitor treats compatibility terminal statuses as inactive', () => {
@@ -955,17 +973,18 @@ test('storyboard block workflows consume scene continuity spatial references pro
   assert.match(animaticTimelineSource, /block\.storyboardContinuityLabel/)
 })
 
-test('keyframe and shot production commands gate final generation on scene continuity manifests', () => {
+test('keyframe and shot production commands keep scene continuity optional for final generation', () => {
   const keyframeCommandSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-keyframe-workflows-command.ts'), 'utf8')
   const shotProductionCommandSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/sequence-animatic-shot-production-graph-command.ts'), 'utf8')
   const sceneBoardPackSource = readFileSync(resolve(repoRoot, 'supabase/functions/_shared/output-workflow-scene-board-pack.ts'), 'utf8')
   assert.match(sceneBoardPackSource, /sceneContinuityManifest/)
   assert.match(sceneBoardPackSource, /scene_continuity_manifest/)
   assert.match(keyframeCommandSource, /loadSceneContinuityManifests/)
-  assert.match(keyframeCommandSource, /missing_scene_continuity_manifest/)
   assert.match(keyframeCommandSource, /sceneContinuityManifestHash/)
-  assert.match(shotProductionCommandSource, /sceneContinuityBlockingReason/)
-  assert.match(shotProductionCommandSource, /cacheStatus: 'blocked'/)
+  assert.doesNotMatch(keyframeCommandSource, /Prepare the Scene Board before generating final keyframes/)
+  assert.doesNotMatch(keyframeCommandSource, /waiting_for_scene_continuity_manifest/)
+  assert.doesNotMatch(shotProductionCommandSource, /sceneContinuityBlockingReason/)
+  assert.doesNotMatch(shotProductionCommandSource, /Prepare the Scene Board before creating this shot production graph/)
   assert.match(shotProductionCommandSource, /sceneContinuityManifestHash/)
 })
 
@@ -3900,7 +3919,8 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(coverageIndexSource, /displayTitle/)
   assert.match(coverageIndexSource, /createdFromShotId/)
   assert.match(coverageIndexSource, /reuseReason/)
-  assert.doesNotMatch(shotGraphEnsureSource, /continuity_asset_batch/)
+  assert.match(shotGraphEnsureSource, /sequence_animatic_continuity_asset_batch/)
+  assert.match(shotGraphEnsureSource, /continuityAssetStateByNodeId/)
   assert.match(keyframeEnsureSource, /ensureMappedChildWorkflow/)
   assert.match(keyframeEnsureSource, /appendEnsuredChildWorkflow/)
   assert.match(keyframeEnsureSource, /createChildWorkflowEnsureAccumulator/)
@@ -3919,11 +3939,13 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.match(keyframeEnsureSource, /responseWorkflowIds/)
   assert.match(shotGraphEnsureSource, /prioritizedEntityAssetKeys/)
   assert.doesNotMatch(shotGraphEnsureSource, /function prioritizedEntityAssetKeys/)
-  assert.match(shotGraphEnsureSource, /coverageReferenceAssetKeys: zoneReferenceAssetKeysForShot/)
+  assert.match(shotGraphEnsureSource, /continuityReferenceEntriesForShot/)
+  assert.match(shotGraphEnsureSource, /coverageReferenceAssetKeys: shotKeyframeReferenceAssetKeys/)
   assert.match(keyframeEnsureSource, /prioritizedEntityAssetKeys/)
   assert.doesNotMatch(keyframeEnsureSource, /function prioritizedEntityAssetKeys/)
   assert.match(animaticCommandUtilsSource, /function prioritizedEntityAssetKeys/)
   assert.match(animaticCommandUtilsSource, /const primaryKeys = uniqueTexts\(entities\.map\(preferredEntityAssetKey\)\)/)
+  assert.match(keyframeEnsureSource, /continuityReferenceEntriesForShot/)
   assert.match(keyframeEnsureSource, /graphLocalReferenceKeysForShotProduction/)
   assert.match(keyframeEnsureSource, /\['entity_reference', 'continuity_asset'\]\.includes\(readText\(entry\.role\)\)/)
   assert.match(keyframeEnsureSource, /coverageReferenceAssetKeys: requiredReferenceAssetKeys/)
@@ -4026,6 +4048,7 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   const progressPresentationSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticProgressPresentation.ts'), 'utf8')
   const workflowHeaderActionsSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/SequenceAnimaticWorkflowHeaderActions.tsx'), 'utf8')
   const blockTimelineSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/SequenceAnimaticBlockTimeline.tsx'), 'utf8')
+  const focusedWorkspaceSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/SequenceAnimaticFocusedWorkspace.tsx'), 'utf8')
   const overlayViewerSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/SequenceAnimaticOverlayViewer.tsx'), 'utf8')
   const routeViewerSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/SequenceAnimaticRouteViewer.tsx'), 'utf8')
   const thinkingStateSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/SequenceAnimaticThinkingState.tsx'), 'utf8')
@@ -4091,9 +4114,13 @@ test('sequence animatic shot production graph resolves shared refs before keyfra
   assert.doesNotMatch(pageSource, /world-wiki-sequence-animatic-document/)
   assert.doesNotMatch(pageSource, /world-wiki-sequence-animatic-head-actions/)
   assert.match(routeViewerSource, /SequenceAnimaticWorkflowHeaderActions/)
-  assert.match(routeViewerSource, /SequenceAnimaticBlockTimeline/)
-  assert.match(routeViewerSource, /sequenceAnimaticShotPreviewInput/)
-  assert.match(routeViewerSource, /WorkflowActiveNodeStrip/)
+  assert.match(routeViewerSource, /SequenceAnimaticShotWorkspace/)
+  assert.doesNotMatch(routeViewerSource, /SequenceAnimaticBlockTimeline/)
+  assert.match(focusedWorkspaceSource, /sequenceAnimaticShotPreviewEyebrow/)
+  assert.match(focusedWorkspaceSource, /sequenceAnimaticKeyframePreflightForShot/)
+  assert.match(focusedWorkspaceSource, /world-wiki-shot-bottom-timeline/)
+  assert.match(focusedWorkspaceSource, /world-wiki-sequence-shot-inline-prompt/)
+  assert.doesNotMatch(routeViewerSource, /WorkflowActiveNodeStrip/)
   assert.doesNotMatch(routeViewerSource, /world-wiki-sequence-animatic-node-strip/)
   assert.match(workflowWidgetsSource, /export function WorkflowActiveNodeStrip/)
   assert.match(workflowWidgetsSource, /export function WorkflowLiveStatus/)

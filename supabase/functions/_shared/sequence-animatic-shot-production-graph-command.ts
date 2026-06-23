@@ -19,6 +19,7 @@ import {
   loadScreenplayAnimaticMasterRequest,
   prioritizedEntityAssetKeys,
   readArray,
+  readScreenplayAnimaticRole,
   readScreenplayAnimaticSource,
   readStringArray,
   readText,
@@ -55,6 +56,7 @@ import {
   continuityNodeParentId,
   continuityNodeUsesParent,
   continuityVisualDependencyEdges,
+  shotSceneBindingNodeIds,
   shotReferenceNodeIds,
 } from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
 import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceAnimaticSceneState.ts'
@@ -62,7 +64,6 @@ import { sequenceAnimaticVisualReferenceHash } from '../../../src/domain/sequenc
 import {
   loadSceneContinuityManifests,
   resolveSceneContinuityForShot,
-  sceneContinuityBlockingReason,
 } from './scene-continuity-manifest-utils.ts'
 import {
   buildShotReferenceReadinessHash,
@@ -129,6 +130,74 @@ function scopedAssetPackForShot(
       reason: 'Selected from shot-visible refs.',
     })),
   }
+}
+
+function localReferenceAssetNodesFromSources(...sources: readonly Record<string, unknown>[]) {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const source of sources) {
+    for (const rawReference of [
+      ...readArray(source.targetNodes ?? source.target_nodes),
+      ...[source.targetNode ?? source.target_node].filter(Boolean),
+      ...readArray(source.assetAnchors ?? source.asset_anchors),
+      ...readArray(source.outputLocalReferences ?? source.output_local_references),
+      ...readArray(source.localReferences ?? source.local_references),
+    ]) {
+      const reference = asRecord(rawReference)
+      const id = readText(reference.id ?? reference.nodeId ?? reference.node_id ?? reference.referenceId ?? reference.reference_id)
+      if (!id) continue
+      const rawType = readText(reference.type ?? reference.anchorType ?? reference.anchor_type ?? reference.assetKind ?? reference.asset_kind ?? reference.nodeKind ?? reference.node_kind)
+      const normalizedType = rawType === 'temp_character'
+        || rawType === 'temporary_character'
+        ? 'character'
+        : ['prop', 'item', 'faction', 'crowd', 'vehicle', 'animatic_only'].includes(rawType)
+          ? 'prop'
+          : rawType
+      const assetKind = normalizedType === 'character'
+        ? 'temporary_character'
+        : normalizedType === 'location_spot'
+          ? 'location_spot'
+          : 'prop'
+      const nodeKind = normalizedType === 'character'
+        ? 'temporary_character'
+        : normalizedType === 'location_spot'
+          ? 'location_anchor'
+          : 'prop'
+      const previous = byId.get(id) ?? {}
+      byId.set(id, {
+        ...previous,
+        ...reference,
+        id,
+        type: normalizedType || 'prop',
+        nodeKind,
+        assetKind,
+        name: readText(reference.name) || readText(previous.name) || id,
+        visualBrief: readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.visualBrief),
+        summary: readText(reference.summary) || readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.summary),
+        shotIds: uniqueTexts([
+          ...readStringArray(previous.shotIds),
+          ...readStringArray(reference.shotIds ?? reference.shot_ids),
+          ...readStringArray(reference.usedShotIds ?? reference.used_shot_ids),
+        ]),
+        storyboardBlockIds: uniqueTexts([
+          ...readStringArray(previous.storyboardBlockIds ?? previous.storyboard_block_ids ?? previous.blockIds ?? previous.block_ids),
+          ...readStringArray(reference.storyboardBlockIds ?? reference.storyboard_block_ids ?? reference.blockIds ?? reference.block_ids),
+        ]),
+      })
+    }
+  }
+  return [...byId.values()]
+}
+
+function mergeContinuityNodesById(...groups: readonly Record<string, unknown>[][]) {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const group of groups) {
+    for (const node of group) {
+      const id = readText(node.id)
+      if (!id) continue
+      byId.set(id, byId.has(id) ? { ...node, ...byId.get(id), id } : { ...node, id })
+    }
+  }
+  return [...byId.values()]
 }
 
 function mergedShotPlan(input: {
@@ -314,47 +383,35 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       manifests: sceneContinuityManifests,
       shot,
     })
-    const sceneContinuityBlockReason = payload.allowProvisional ? null : sceneContinuityBlockingReason(sceneContinuity)
-    if (sceneContinuityBlockReason) {
-      const missingNodeIds = readStringArray(sceneContinuity.readiness?.spatialNodeIds)
-      return sequenceAnimaticShotProductionGraphEnsureResponseSchema.parse({
-        ok: true,
-        masterRequest,
-        shotRequest: null,
-        workflow: null,
-        nodes: [],
-        edges: [],
-        cacheStatus: 'blocked',
-        nextAction: {
-          kind: 'blocked',
-          requestId: null,
-          workflowId: null,
-          role: null,
-          reason: sceneContinuityBlockReason === 'missing_scene_continuity_manifest'
-            ? 'Prepare the Scene Board before creating this shot production graph.'
-            : 'Scene continuity references are not ready for this shot.',
-          shotId: payload.shotId,
-          coverageSetupId: coverageSetupId || null,
-          dependencyNodeIds: missingNodeIds,
-        },
-        blockedShotKeyframes: [{
-          shotId: payload.shotId,
-          storyboardBlockId: readText(shot.storyboardBlockId ?? shot.blockId) || null,
-          reason: sceneContinuityBlockReason,
-          coverageSetupId: coverageSetupId || null,
-          previousShotId: null,
-          missingContinuityNodeIds: missingNodeIds,
-        }],
-        shotId: payload.shotId,
-        coverageSetupId: coverageSetupId || null,
-        dependencyNodeIds: missingNodeIds,
-        graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
-      })
-    }
     const sceneContinuityManifest = sceneContinuity.manifest ?? {}
     const sceneContinuityManifestHash = readText(sceneContinuity.manifest?.sourceHash)
     const shotReferenceReadinessHash = readText(sceneContinuity.readiness?.hash)
       || (sceneContinuity.readiness ? buildShotReferenceReadinessHash(sceneContinuity.readiness) : '')
+    const continuityArtifactsResponse = await client
+      .from('output_artifacts')
+      .select(outputArtifactSelect)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .contains('metadata', { masterRequestId: masterRequest.id })
+      .order('created_at', { ascending: false })
+      .limit(256)
+    if (continuityArtifactsResponse.error) throw new Error(continuityArtifactsResponse.error.message)
+    const continuityAssetStateByNodeId: Record<string, Record<string, unknown>> = {}
+    for (const artifact of (continuityArtifactsResponse.data ?? []).map(asRecord)) {
+      const metadata = asRecord(artifact.metadata)
+      const role = readText(metadata.role)
+      if (role === 'sequence_animatic_continuity_asset') {
+        const state = asRecord(metadata.assetState ?? metadata.asset_state)
+        const nodeId = readText(state.sourceNodeId) || readText(metadata.targetNodeId)
+        if (nodeId && Object.keys(state).length > 0) continuityAssetStateByNodeId[nodeId] = state
+      }
+      if (role === 'sequence_animatic_continuity_asset_batch') {
+        const stateByNodeId = asRecord(metadata.assetStateByNodeId ?? metadata.asset_state_by_node_id)
+        Object.entries(stateByNodeId).forEach(([nodeId, state]) => {
+          if (readText(nodeId) && Object.keys(asRecord(state)).length > 0) continuityAssetStateByNodeId[nodeId] = asRecord(state)
+        })
+      }
+    }
 
     const graph = asRecord(
       manifest.continuityGraphV2
@@ -362,7 +419,14 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         ?? directorPlan.continuityGraphV2
         ?? directorPlan.continuity_graph_v2,
     )
-    const allGraphNodes = continuityNodeCollections(graph)
+    const allGraphNodes = mergeContinuityNodesById(
+      continuityNodeCollections(graph),
+      localReferenceAssetNodesFromSources(graph, manifest, directorPlan),
+    ).map((node) => {
+      const nodeId = readText(node.id)
+      const state = asRecord(continuityAssetStateByNodeId[nodeId])
+      return Object.keys(state).length > 0 ? { ...node, assetState: state, asset_state: state } : node
+    })
     const graphNodeById = graphNodeMapForShot(allGraphNodes, shot)
     const graphNodeIds = new Set([...graphNodeById.keys()])
     const shotBindings = asRecord(
@@ -387,6 +451,37 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
     const zoneReferenceAssetKeys = () => uniqueTexts(zoneNodeIdsForShot()
       .flatMap((nodeId) => entityAssetKeys(asRecord(graphNodeById.get(nodeId)?.assetState ?? graphNodeById.get(nodeId)?.asset_state))))
       .slice(0, 1)
+    const continuityReferenceEntriesForShot = () => {
+      const zoneAssetKeys = zoneReferenceAssetKeys()
+      const zoneAssetKeySet = new Set(zoneAssetKeys)
+      const nodeIds = uniqueTexts([
+        ...shotSceneBindingNodeIds(shot),
+        ...shotReferenceNodeIds(shot, graphNodeIds),
+      ]).filter((nodeId) => graphNodeIds.has(nodeId))
+      const entries = nodeIds.flatMap((nodeId) => {
+        const node = graphNodeById.get(nodeId) ?? {}
+        const nodeKind = readText(node.nodeKind ?? node.assetKind)
+        const assetKey = entityAssetKeys(asRecord(node.assetState ?? node.asset_state))[0] ?? ''
+        if (!assetKey) return []
+        if (zoneAssetKeySet.has(assetKey)) return []
+        if (nodeKind === 'location_zone') return []
+        if (nodeKind === 'location_spot' && zoneAssetKeys.length > 0) return []
+        if (nodeKind === 'location_set' || nodeKind === 'spot_camera_grid' || nodeKind === 'location_viewpoint' || nodeKind === 'location_angle') return []
+        return [{
+          assetKey,
+          role: 'continuity_asset' as const,
+          reason: 'Current shot ingredient continuity asset.',
+        }]
+      })
+      return [
+        ...zoneAssetKeys.map((assetKey) => ({
+          assetKey,
+          role: 'continuity_asset' as const,
+          reason: 'Zone map selected as the only scene-graph spatial reference for this shot.',
+        })),
+        ...entries,
+      ].filter((entry, index, allEntries) => allEntries.findIndex((candidate) => readText(candidate.assetKey) === readText(entry.assetKey)) === index)
+    }
 
     const primaryShotSpatialNodeIds = () => {
       return zoneNodeIdsForShot()
@@ -512,19 +607,16 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       }
     })
     const scopedRefs = scopedAssetPackForShot(assetPack, shot)
-    const zoneReferenceAssetKeysForShot = zoneReferenceAssetKeys()
+    const continuityReferenceEntriesForShotGraph = continuityReferenceEntriesForShot()
+    const continuityReferenceAssetKeysForShot = continuityReferenceEntriesForShotGraph.map((entry) => readText(entry.assetKey)).filter(Boolean)
     const shotKeyframeReferenceAssetKeys = uniqueTexts([
-      ...zoneReferenceAssetKeysForShot,
+      ...continuityReferenceAssetKeysForShot,
       ...scopedRefs.requiredReferenceAssetKeys,
     ]).slice(0, 8)
     const shotKeyframeSelectedReferences = [
-      ...zoneReferenceAssetKeysForShot.map((assetKey) => ({
-        assetKey,
-        role: 'continuity_asset',
-        reason: 'Zone map selected as the only scene-graph spatial reference for this shot.',
-      })),
+      ...continuityReferenceEntriesForShotGraph,
       ...scopedRefs.selectedReferences,
-    ]
+    ].filter((entry, index, allEntries) => allEntries.findIndex((candidate) => readText(candidate.assetKey) === readText(entry.assetKey)) === index)
     const zoneCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
     const zoneCoverageCellByShotId = asRecord(zoneCoverageRegistry.coverageCellByShotId ?? zoneCoverageRegistry.coverage_cell_by_shot_id)
     const zoneCoverageCell = asRecord(zoneCoverageCellByShotId[payload.shotId])
@@ -686,7 +778,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         },
         sharedDependencyRequests: [
           ...shotKeyframeReferenceAssetKeys.map((assetKey) => ({
-            role: zoneReferenceAssetKeysForShot.includes(assetKey) ? 'continuity_asset' : 'entity_reference',
+            role: readText(shotKeyframeSelectedReferences.find((entry) => readText(entry.assetKey) === assetKey)?.role) || 'entity_reference',
             identityKey: 'assetKey',
             identityValue: assetKey,
             assetKey,
@@ -721,7 +813,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
           coverageAnchor: {},
           coverageSetup,
           coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
-          coverageReferenceAssetKeys: zoneReferenceAssetKeysForShot,
+          coverageReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
           previousKeyframe: {},
           assetPack: scopedRefs.assetPack,
           continuityDependencies,
