@@ -8611,6 +8611,7 @@ export function WorldGraphPage({
             workflowRun={routeAnimaticRun}
             workflowProgress={routeAnimaticWorkflowProgress}
             workflowFallbackLabels={routeAnimaticWorkflowFallbackLabels}
+            workflowProgressForRequest={workflowProgressForRequest}
             error={sequenceAnimaticError}
             activeSceneId={sequenceAnimaticActiveSceneId}
             busyRunKeys={sequenceAnimaticBusyRunKeys}

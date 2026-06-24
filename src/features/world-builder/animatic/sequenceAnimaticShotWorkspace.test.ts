@@ -183,6 +183,8 @@ function model(input: {
   testShot?: SequenceAnimaticViewModel['blocks'][number]['shots'][number]
   targets?: SequenceAnimaticViewModel['continuityAssetTargets']
   coverageAnchors?: SequenceAnimaticViewModel['coverageAnchors']
+  requestMetadata?: Record<string, unknown>
+  assetPack?: Record<string, unknown>
 } = {}): SequenceAnimaticViewModel {
   const testShot = input.testShot ?? shot()
   const targets = input.targets ?? [
@@ -211,11 +213,11 @@ function model(input: {
       targetFormat: 'video',
       plannerNotes: '',
       errorMessage: null,
-      metadata: {},
+      metadata: input.requestMetadata ?? {},
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     },
-    assetPack: {},
+    assetPack: input.assetPack ?? {},
     scenes: [{ id: 'scene_01', index: 1, title: 'Vault scene', summary: 'A vault reveal scene.', requestId: null, shotCount: 1, status: 'ready' }],
     continuityRequest: null,
     continuityRun: null,
@@ -472,6 +474,80 @@ test('sequenceAnimaticIngredientsForShot dedupes the same reference across dialo
   assert.equal(courierIngredients.length, 1)
   assert.equal(courierIngredients[0]?.kind, 'continuity_asset')
   assert.equal(courierIngredients[0]?.fullImageUrl, 'https://example.test/courier-generated.webp')
+})
+
+test('sequenceAnimaticIngredientsForShot prefers saved fixed shot references', () => {
+  const testShot = shot({
+    references: [{
+      entityKey: 'scene_002_local_sutra_disc',
+      name: 'Sutra Disc',
+      role: 'Prop',
+      iconId: 'item',
+      iconUrl: 'https://example.test/temp-disc.webp',
+      referenceArtUrl: 'https://example.test/temp-disc.webp',
+      isContinuityAnchor: true,
+      continuityAnchorType: 'prop',
+      statusLabel: 'Ready',
+    }],
+  })
+  const view = model({
+    testShot,
+    targets: [
+      target({ nodeId: 'zone_vault', name: 'Vault hall', assetKind: 'location_zone', status: 'ready', statusLabel: 'Zone ready', assetKey: 'zone_asset', assetUrl: 'https://example.test/zone.webp' }),
+      target({ nodeId: 'scene_002_local_sutra_disc', name: 'Sutra Disc', assetKind: 'item', status: 'ready', statusLabel: 'Ready', assetKey: 'temp_disc_asset', assetUrl: 'https://example.test/temp-disc.webp' }),
+    ],
+    requestMetadata: {
+      sequenceAnimaticShotReferenceOverridesByShotId: {
+        scene_01_shot_001: {
+          version: 'shot_keyframe_reference_override_v1',
+          shotId: 'scene_01_shot_001',
+          ingredientPlanHash: 'fixed_hash',
+          source: 'focused_shot_ingredient_ui',
+          ingredients: [
+            {
+              id: 'zone:zone_vault',
+              kind: 'zone_location',
+              name: 'Vault hall',
+              nodeId: 'zone_vault',
+              entityKey: 'zone_vault',
+              assetKey: 'zone_asset',
+              assetUrl: 'https://example.test/zone.webp',
+              status: 'ready',
+              role: 'zone_reference',
+              sourceArtifactRole: 'sequence_animatic_continuity_asset',
+            },
+            {
+              id: 'entity:sutra_discs',
+              kind: 'item_or_prop',
+              name: 'Sutra Discs',
+              nodeId: 'sutra_discs',
+              entityKey: 'sutra_discs',
+              assetKey: 'world_disc_asset',
+              status: 'ready',
+              role: 'item_or_prop_reference',
+              sourceArtifactRole: 'world_entity_reference',
+            },
+          ],
+        },
+      },
+    },
+    assetPack: {
+      entities: [{
+        key: 'sutra_discs',
+        name: 'Sutra Discs',
+        primaryAssetKey: 'world_disc_asset',
+        selectedReferenceAssetKey: 'world_disc_asset',
+        assetUrl: 'https://example.test/world-disc.webp',
+      }],
+    },
+  })
+
+  const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
+  const fixedDisc = ingredients.find((ingredient) => ingredient.name === 'Sutra Discs' && ingredient.assetKey === 'world_disc_asset')
+  assert.ok(fixedDisc)
+  assert.equal(fixedDisc?.fullImageUrl, 'https://example.test/world-disc.webp')
+  assert.equal(ingredients.some((ingredient) => ingredient.name === 'Sutra Disc' && ingredient.assetKey === 'temp_disc_asset'), false)
+  assert.deepEqual(sequenceAnimaticKeyframePreflightForShot(view, testShot).missingIngredients, [])
 })
 
 test('sequenceAnimaticIngredientsForShot resolves generation targets from explicit ref ids', () => {

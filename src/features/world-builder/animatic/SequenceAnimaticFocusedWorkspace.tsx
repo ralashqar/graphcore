@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 
+import type { WorkflowProgressViewModel } from '../../../domain/workflowProgressView'
 import { EntityIcon } from '../../../shared/entityIcons'
+import { WorkflowActiveNodeStrip, WorkflowNodeTimeline, WorkflowProgressSummary } from '../../workflows/WorkflowProgressWidgets'
 import {
   sequenceAnimaticShotKeyframeBusyLabel,
 } from './sequenceAnimaticProgressPresentation'
@@ -77,6 +79,11 @@ export type SequenceAnimaticShotWorkspaceProps = {
     anchor: SequenceAnimaticCoverageAnchorItem,
     mode: 'generate' | 'regenerate',
   ) => void
+  workflowProgressForRequest: (
+    requestId: string | null | undefined,
+    fallbackTitle?: string,
+    fallbackActiveLabel?: string,
+  ) => WorkflowProgressViewModel | null
 }
 
 type KeyframePreflightModalState = {
@@ -205,6 +212,7 @@ export function SequenceAnimaticShotWorkspace({
   onOpenSceneBoard,
   onGenerateContinuityAssets,
   onGenerateCoverageAnchor,
+  workflowProgressForRequest,
 }: SequenceAnimaticShotWorkspaceProps) {
   const allTimelineItems = useMemo(() => buildSequenceAnimaticShotTimelineItems(model), [model])
   const timelineItems = useMemo(() => (
@@ -360,11 +368,37 @@ export function SequenceAnimaticShotWorkspace({
   const refreshShotGraphRunKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}:refresh_shot_graph`
   const shotVideoStarting = shotVideoRunKeyActive(shotVideoRunKey)
   const shotKeyframeStarting = busyRunKeys.has(shotKeyframeRunKey)
-  const shotKeyframeBusy = shotKeyframeStarting || activeShot.keyframeRunning || activeShot.keyframeDependencyRunning
+  const shotKeyframeBusy = shotKeyframeStarting || activeShot.keyframeRunning
   const shotKeyframeBusyLabel = sequenceAnimaticShotKeyframeBusyLabel(activeShot, shotKeyframeStarting)
+  const shotKeyframeWorkflowProgress = workflowProgressForRequest(
+    activeShot.keyframeRequestId,
+    `${activeShot.title} keyframe`,
+    activeShot.keyframeProgressLabel || shotKeyframeBusyLabel,
+  )
+  const activeWorkflowNodes = shotKeyframeWorkflowProgress
+    ? shotKeyframeWorkflowProgress.nodes
+      .filter((node) => ['running', 'waiting', 'queued', 'failed', 'blocked'].includes(node.status))
+      .slice(0, 3)
+    : []
+  const shotKeyframeActiveNodes = activeWorkflowNodes.length > 0
+    ? activeWorkflowNodes
+    : shotKeyframeWorkflowProgress?.activeNodeLabel
+      ? [{
+          key: shotKeyframeWorkflowProgress.activeNodeKey || `${shotKeyframeWorkflowProgress.requestId}:active`,
+          label: shotKeyframeWorkflowProgress.activeProgressLabel || shotKeyframeWorkflowProgress.activeNodeLabel,
+          status: shotKeyframeWorkflowProgress.status,
+      }]
+      : []
+  const shotKeyframeWorkflowActive = Boolean(shotKeyframeWorkflowProgress && !shotKeyframeWorkflowProgress.terminal)
+  const shotKeyframeInFlight = shotKeyframeBusy || shotKeyframeWorkflowActive
+  const shotKeyframeStatusLabel = shotKeyframeWorkflowProgress?.activeProgressLabel
+    || shotKeyframeWorkflowProgress?.activeNodeLabel
+    || shotKeyframeBusyLabel
+  const showKeyframePanelProgress = Boolean(shotKeyframeInFlight && shotKeyframeWorkflowProgress)
+  const showKeyframePanelPending = shotKeyframeInFlight && !shotKeyframeWorkflowProgress
   const shotCanGenerateEarlyKeyframe = sequenceAnimaticShotCanGenerateEarlyKeyframe(activeShot)
   const keyframeReady = shotKeyframeReady(activeShot)
-  const keyframeDisabled = (activeShot.isProvisional && !shotCanGenerateEarlyKeyframe) || shotKeyframeBusy || busyRunKeys.has(shotRevisionRunKey)
+  const keyframeDisabled = (activeShot.isProvisional && !shotCanGenerateEarlyKeyframe) || shotKeyframeInFlight || busyRunKeys.has(shotRevisionRunKey)
   const coverageAnchor = coverageAnchorForShot(model, activeShot)
   const missingReferenceCount = preflight?.missingIngredients.length ?? 0
   const preflightRawTargets = preflightState
@@ -384,6 +418,17 @@ export function SequenceAnimaticShotWorkspace({
     || activeShot.revisionRunning
     || busyRunKeys.has(shotRevisionRunKey)
   const shotPromptDisabled = !activeShot.panelUrl || shotPromptBusy
+
+  const shotKeyframeInFlightForTimelineItem = (item: typeof timelineItems[number]) => {
+    const itemRunKey = `${model.request.id}:${item.block.id}:${item.shot.id}:keyframe`
+    if (busyRunKeys.has(itemRunKey) || item.shot.keyframeRunning) return true
+    const itemProgress = workflowProgressForRequest(
+      item.shot.keyframeRequestId,
+      `${item.shot.title} keyframe`,
+      item.shot.keyframeProgressLabel || 'Generating keyframe',
+    )
+    return Boolean(itemProgress && !itemProgress.terminal)
+  }
 
   const requestKeyframe = (mode: 'generate' | 'regenerate') => {
     onRunShotKeyframe(model, activeBlock, activeShot, mode)
@@ -435,7 +480,7 @@ export function SequenceAnimaticShotWorkspace({
   }
 
   const startShotScrub = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || panelCues.length === 0) return
+    if (event.button !== 0 || showKeyframePanelProgress || showKeyframePanelPending || panelCues.length === 0) return
     setShotScrubbing(true)
     event.currentTarget.setPointerCapture(event.pointerId)
     updateShotScrubFromPointer(event.clientX)
@@ -556,7 +601,7 @@ export function SequenceAnimaticShotWorkspace({
               </button>
               <button
                 className="primary-button compact"
-                disabled={shotKeyframeBusy}
+                disabled={shotKeyframeInFlight}
                 onClick={() => {
                   onRunShotKeyframe(model, preflightItem.block, preflightItem.shot, preflightModal.mode)
                   setPreflightModal(null)
@@ -596,17 +641,25 @@ export function SequenceAnimaticShotWorkspace({
             type="button"
             title={activeShot.keyframeDependencyStatusLabel}
           >
-            {shotKeyframeBusy
-              ? <><span className="world-mini-spinner" aria-hidden="true" />{shotKeyframeBusyLabel}</>
+            {shotKeyframeInFlight
+              ? <><span className="world-mini-spinner" aria-hidden="true" />{shotKeyframeStatusLabel}</>
               : keyframeReady ? 'Regenerate keyframe' : activeShot.isProvisional ? 'Generate early keyframe' : 'Generate keyframe'}
           </button>
-          {shotKeyframeBusy ? (
-            <span className="world-wiki-shot-workspace__active-node is-generating" title={shotKeyframeBusyLabel}>
-              <span className="world-mini-spinner" aria-hidden="true" />
-              {shotKeyframeBusyLabel}
-            </span>
+          {shotKeyframeInFlight ? (
+            shotKeyframeActiveNodes.length > 0 ? (
+              <WorkflowActiveNodeStrip
+                nodes={shotKeyframeActiveNodes}
+                className="world-wiki-shot-workspace__active-node-strip is-end"
+                label="Active shot keyframe graph node"
+              />
+            ) : (
+              <span className="world-wiki-shot-workspace__active-node is-generating" title={shotKeyframeStatusLabel}>
+                <span className="world-mini-spinner" aria-hidden="true" />
+                {shotKeyframeStatusLabel}
+              </span>
+            )
           ) : null}
-          {!shotKeyframeBusy && activeShot.keyframeError ? (
+          {!shotKeyframeInFlight && activeShot.keyframeError ? (
             <span className="world-wiki-shot-workspace__active-node is-error" title={activeShot.keyframeError}>
               Keyframe failed: {activeShot.keyframeError}
             </span>
@@ -629,7 +682,6 @@ export function SequenceAnimaticShotWorkspace({
           </button>
         </div>
       </div>
-
       <div className="world-wiki-shot-workspace__stage">
         <aside className="world-wiki-shot-ingredients" aria-label="Shot ingredients">
           <header>
@@ -661,9 +713,9 @@ export function SequenceAnimaticShotWorkspace({
             ref={panelScrubRef}
             className={[
               'world-wiki-shot-panel-focus__image',
-              activeShot.panelUrl ? 'has-image' : 'is-empty',
-              panelCues.length > 0 ? 'has-cues' : '',
-              shotScrubbing ? 'is-scrubbing' : '',
+              showKeyframePanelProgress || showKeyframePanelPending ? 'is-keyframe-progress' : activeShot.panelUrl ? 'has-image' : 'is-empty',
+              !showKeyframePanelProgress && !showKeyframePanelPending && panelCues.length > 0 ? 'has-cues' : '',
+              !showKeyframePanelProgress && !showKeyframePanelPending && shotScrubbing ? 'is-scrubbing' : '',
             ].filter(Boolean).join(' ')}
             style={{ '--world-wiki-shot-scrub-progress': `${shotScrubProgress * 100}%` } as CSSProperties}
             onPointerDown={startShotScrub}
@@ -671,7 +723,26 @@ export function SequenceAnimaticShotWorkspace({
             onPointerUp={endShotScrub}
             onPointerCancel={() => setShotScrubbing(false)}
           >
-            {activeShot.panelUrl ? (
+            {showKeyframePanelProgress && shotKeyframeWorkflowProgress ? (
+              <div className="world-wiki-shot-panel-focus__progress" aria-live="polite" aria-label="Shot keyframe workflow progress">
+                {shotKeyframeActiveNodes.length > 0 ? (
+                  <WorkflowActiveNodeStrip
+                    nodes={shotKeyframeActiveNodes}
+                    className="world-wiki-shot-panel-focus__active-node-strip"
+                    label="Active shot keyframe graph node"
+                  />
+                ) : null}
+                <WorkflowProgressSummary model={shotKeyframeWorkflowProgress} compact />
+                <WorkflowNodeTimeline nodes={shotKeyframeWorkflowProgress.nodes} limit={5} />
+                <strong>{shotKeyframeStatusLabel}</strong>
+              </div>
+            ) : showKeyframePanelPending ? (
+              <div className="world-wiki-shot-panel-focus__pending" aria-live="polite">
+                <span className="world-mini-spinner" aria-hidden="true" />
+                <strong>{shotKeyframeStatusLabel}</strong>
+                <small>Preparing shot keyframe workflow</small>
+              </div>
+            ) : activeShot.panelUrl ? (
               <>
                 <img
                   src={activeShot.panelUrl}
@@ -699,7 +770,7 @@ export function SequenceAnimaticShotWorkspace({
                 {activeShot.panelError ? <small>{activeShot.panelError}</small> : null}
               </span>
             )}
-            {activePanelCue ? (
+            {!showKeyframePanelProgress && !showKeyframePanelPending && activePanelCue ? (
               <>
                 <span className="world-wiki-shot-panel-focus__scrub-line" aria-hidden="true" />
                 <div className={`world-wiki-shot-panel-focus__cue is-${activePanelCue.kind}`}>
@@ -809,6 +880,7 @@ export function SequenceAnimaticShotWorkspace({
           {timelineItems.map((item, sceneShotIndex) => {
             const isActive = item.key === activeItem.key
             const streamedKey = `${model.request.id}:${item.blockId}:${item.shot.id}`
+            const keyframeGenerating = shotKeyframeInFlightForTimelineItem(item)
             return (
               <button
                 key={item.key}
@@ -817,6 +889,7 @@ export function SequenceAnimaticShotWorkspace({
                   'world-wiki-shot-timeline-card',
                   isActive ? 'is-active' : '',
                   item.running ? 'is-running' : '',
+                  keyframeGenerating ? 'is-keyframe-generating' : '',
                   item.keyframeReady ? 'is-ready' : '',
                   item.missingReferenceCount > 0 ? 'is-blocked' : '',
                   recentlyStreamedShotIds[streamedKey] ? 'is-streaming-new' : '',
@@ -824,10 +897,10 @@ export function SequenceAnimaticShotWorkspace({
                 onClick={() => setActiveItemKey(item.key)}
                 type="button"
               >
-                <span>{String(sceneShotIndex + 1).padStart(3, '0')}</span>
+                <span>{keyframeGenerating ? <i className="world-mini-spinner" aria-hidden="true" /> : String(sceneShotIndex + 1).padStart(3, '0')}</span>
                 <strong>{item.shot.title}</strong>
                 <em>{item.shot.timeLabel}</em>
-                <small>{item.missingReferenceCount > 0 ? `${item.missingReferenceCount} refs` : item.keyframeReady ? 'Ready' : item.running ? 'Running' : item.shot.panelStatusLabel}</small>
+                <small>{keyframeGenerating ? 'Generating keyframe' : item.missingReferenceCount > 0 ? `${item.missingReferenceCount} refs` : item.keyframeReady ? 'Ready' : item.running ? 'Running' : item.shot.panelStatusLabel}</small>
               </button>
             )
           })}

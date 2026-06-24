@@ -14,6 +14,7 @@ import {
   artifactMetadataRecord,
   assetEntityForKey,
   assetPackWithShotWorldRefs,
+  buildSequenceAnimaticShotReferenceFixCandidatePool,
   buildValidatedSequenceAnimaticTemplateGraph,
   coverageSetupEntityRefIds,
   entityAssetKeys,
@@ -817,6 +818,11 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
             nodeType: kind || role,
             node_type: kind || role,
             role,
+            visualDescription: kind.includes('character')
+              ? 'Preserve identity, face, wardrobe, silhouette, and scale from this focused-shot ingredient; adapt pose and expression to this shot.'
+              : kind.includes('location') || role.includes('zone') || role.includes('location')
+                ? 'Use this focused-shot ingredient for location geometry, materials, weather, lighting logic, and spatial continuity.'
+                : 'Preserve the focused-shot ingredient shape, scale, material, and visual continuity while adapting it to this shot.',
             assetKeys: [assetKey],
             primaryAssetKey: assetKey,
             primary_asset_key: assetKey,
@@ -833,6 +839,12 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       requiredReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
       selectedReferences: shotKeyframeSelectedReferences,
     }
+    const referenceFixCandidatePool = buildSequenceAnimaticShotReferenceFixCandidatePool({
+      assetPack: scopedShotAssetPack,
+      continuityTargets: allGraphNodes.map(referencePlanNodeRecord),
+      currentReferences: shotKeyframeSelectedReferences,
+      limit: 64,
+    })
     const zoneCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
     const zoneCoverageCellByShotId = asRecord(zoneCoverageRegistry.coverageCellByShotId ?? zoneCoverageRegistry.coverage_cell_by_shot_id)
     const zoneCoverageCell = asRecord(zoneCoverageCellByShotId[payload.shotId])
@@ -858,6 +870,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       sceneContinuityManifestHash,
       shotReferenceReadinessHash,
       referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
+      referenceFixCandidatePool,
       coverageDecision: coverageResolution.coverageDecision,
       graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
     })
@@ -939,6 +952,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         directorPlanHash,
         sourceReferenceHash,
         referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
+        referenceFixCandidatePool,
         sceneContinuityManifestHash,
         shotReferenceReadinessHash,
         graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
@@ -970,6 +984,8 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
         shotIngredientReferencePlan,
         shot_ingredient_reference_plan: shotIngredientReferencePlan,
+        referenceFixCandidatePool,
+        reference_fix_candidate_pool: referenceFixCandidatePool,
         coverageDecision: coverageResolution.coverageDecision,
         coverageDecisionReason: coverageResolution.coverageDecisionReason,
         coverageCompatibilityDiagnostics: coverageResolution.compatibilityDiagnostics,

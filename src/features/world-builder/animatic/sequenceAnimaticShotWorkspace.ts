@@ -136,6 +136,17 @@ function lookupKey(value: unknown) {
     .replace(/^_+|_+$/g, '')
 }
 
+function savedReferenceOverrideForShot(
+  model: SequenceAnimaticViewModel,
+  shot: SequenceAnimaticShotView,
+) {
+  const metadata = asRecord(model.request.metadata)
+  const overrides = asRecord(metadata.sequenceAnimaticShotReferenceOverridesByShotId ?? metadata.sequence_animatic_shot_reference_overrides_by_shot_id)
+  const override = asRecord(overrides[shot.id])
+  const ingredients = Array.isArray(override.ingredients) ? override.ingredients.map(asRecord) : []
+  return ingredients.length > 0 ? { ...override, ingredients } : null
+}
+
 function statusFromTarget(target: SequenceAnimaticContinuityAssetTargetView | null | undefined): SequenceAnimaticShotIngredient['status'] {
   if (!target) return 'not_required'
   if (target.status === 'ready') return 'ready'
@@ -292,6 +303,59 @@ function shotScopedAssetPack(model: SequenceAnimaticViewModel, shot: SequenceAni
   }
 }
 
+function assetUrlFromRecord(record: Record<string, unknown>) {
+  const metadata = asRecord(record.metadata)
+  return cleanText(record.assetUrl)
+    || cleanText(record.asset_url)
+    || cleanText(record.imageUrl)
+    || cleanText(record.image_url)
+    || cleanText(record.referenceArtUrl)
+    || cleanText(record.reference_art_url)
+    || cleanText(record.iconUrl)
+    || cleanText(record.icon_url)
+    || cleanText(record.selectedReferenceAssetUrl)
+    || cleanText(record.selected_reference_asset_url)
+    || cleanText(metadata.referenceSheetUrl)
+    || cleanText(metadata.reference_sheet_url)
+    || cleanText(metadata.thumbnailUrl)
+    || cleanText(metadata.thumbnail_url)
+    || cleanText(record.url)
+}
+
+function assetKeysFromRecord(record: Record<string, unknown>) {
+  const metadata = asRecord(record.metadata)
+  const keys = [
+    cleanText(record.assetKey),
+    cleanText(record.asset_key),
+    cleanText(record.primaryAssetKey),
+    cleanText(record.primary_asset_key),
+    cleanText(record.selectedReferenceAssetKey),
+    cleanText(record.selected_reference_asset_key),
+    cleanText(record.selectedReferenceVariantAssetKey),
+    cleanText(record.selected_reference_variant_asset_key),
+    cleanText(metadata.referenceSheetAssetKey),
+    cleanText(metadata.reference_sheet_asset_key),
+    ...(Array.isArray(record.assetKeys) ? record.assetKeys.map(cleanText) : []),
+    ...(Array.isArray(record.asset_keys) ? record.asset_keys.map(cleanText) : []),
+  ].filter(Boolean)
+  return [...new Set(keys)]
+}
+
+function assetUrlByAssetKeyFromPack(assetPack: Record<string, unknown>) {
+  const byAssetKey = new Map<string, string>()
+  const addRecord = (record: Record<string, unknown>) => {
+    const assetUrl = assetUrlFromRecord(record)
+    if (!assetUrl) return
+    for (const assetKey of assetKeysFromRecord(record)) {
+      if (!byAssetKey.has(assetKey)) byAssetKey.set(assetKey, assetUrl)
+    }
+  }
+  for (const entity of Array.isArray(assetPack.entities) ? assetPack.entities : []) addRecord(asRecord(entity))
+  for (const image of Array.isArray(assetPack.referenceImages) ? assetPack.referenceImages : []) addRecord(asRecord(image))
+  for (const image of Array.isArray(assetPack.reference_images) ? assetPack.reference_images : []) addRecord(asRecord(image))
+  return byAssetKey
+}
+
 function sceneTitleForShot(model: SequenceAnimaticViewModel, shot: SequenceAnimaticShotView) {
   const inferredSceneId = /^(.+)_shot_\d+/.exec(shot.id)?.[1] ?? ''
   return model.scenes.find((scene) => scene.id === inferredSceneId)?.title ?? (inferredSceneId.replace(/_/g, ' ') || 'Scene')
@@ -323,6 +387,8 @@ export function sequenceAnimaticIngredientsForShot(
 ) {
   const targetByNodeId = new Map(model.continuityAssetTargets.map((target) => [target.nodeId, target] as const))
   const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
+  const scopedAssetPack = shotScopedAssetPack(model, shot)
+  const assetUrlByAssetKey = assetUrlByAssetKeyFromPack(scopedAssetPack)
   const continuityTargets = model.continuityAssetTargets.map((target) => {
     const graphNode = graphNodeById.get(target.nodeId) ?? null
     return {
@@ -369,11 +435,40 @@ export function sequenceAnimaticIngredientsForShot(
     shot,
     spatialNodes,
     continuityTargets,
-    assetPack: shotScopedAssetPack(model, shot),
+    assetPack: scopedAssetPack,
     maxReferences: 8,
   })
+  const savedOverride = savedReferenceOverrideForShot(model, shot)
+  const referenceIngredients = savedOverride
+    ? savedOverride.ingredients.map((ingredient, index) => {
+        const assetKey = cleanText(ingredient.assetKey ?? ingredient.asset_key)
+        const nodeId = cleanText(ingredient.nodeId ?? ingredient.node_id)
+        const entityKey = cleanText(ingredient.entityKey ?? ingredient.entity_key) || nodeId
+        const rawKind = cleanText(ingredient.kind)
+        const kind = (rawKind === 'zone_location' || rawKind === 'world_character' || rawKind === 'temp_character' || rawKind === 'item_or_prop')
+          ? rawKind
+          : 'item_or_prop'
+        const imageUrl = cleanText(ingredient.assetUrl ?? ingredient.asset_url ?? ingredient.imageUrl ?? ingredient.image_url ?? ingredient.referenceArtUrl ?? ingredient.reference_art_url ?? ingredient.iconUrl ?? ingredient.icon_url)
+          || assetUrlByAssetKey.get(assetKey)
+          || ''
+        return {
+          id: cleanText(ingredient.id) || `${kind}:${entityKey || assetKey || index}`,
+          kind,
+          name: cleanText(ingredient.name) || displayNameFromRefId(entityKey || assetKey),
+          assetKey,
+          nodeId,
+          entityKey,
+          role: cleanText(ingredient.role) as any,
+          sourceArtifactRole: cleanText(ingredient.sourceArtifactRole ?? ingredient.source_artifact_role),
+          requiredForKeyframe: true,
+          status: assetKey ? 'ready' as const : 'missing' as const,
+          reason: 'Saved fixed shot reference.',
+          imageUrl,
+        }
+      })
+    : referencePlan.ingredients
   const shotReferenceByEntityKey = new Map(shot.references.map((reference) => [lookupKey(reference.entityKey), reference] as const).filter(([key]) => key))
-  const ingredients: SequenceAnimaticShotIngredient[] = referencePlan.ingredients.map((reference) => {
+  const ingredients: SequenceAnimaticShotIngredient[] = referenceIngredients.map((reference) => {
     const target = targetByNodeId.get(reference.nodeId) ?? targetByNodeId.get(reference.entityKey) ?? null
     const graphNode = graphNodeById.get(reference.nodeId) ?? graphNodeById.get(reference.entityKey) ?? null
     const spatialNode = shot.spatialBindingView.hierarchy.find((node) => node.id === reference.nodeId || node.id === reference.entityKey) ?? null

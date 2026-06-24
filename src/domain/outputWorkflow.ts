@@ -1059,6 +1059,8 @@ export const sequenceAnimaticShotProductionInputV1Schema = looseObjectSchema.ext
   omittedReferenceAssetKeys: z.array(z.string()).default([]),
   shotReferenceOverride: looseRecordSchema.default({}),
   shot_reference_override: looseRecordSchema.default({}),
+  referenceFixCandidatePool: looseRecordSchema.default({}),
+  reference_fix_candidate_pool: looseRecordSchema.default({}),
   sharedDependencyRequests: z.array(looseRecordSchema).default([]),
 })
 
@@ -1202,7 +1204,7 @@ export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object(
   shotId: z.string().min(1),
   coverageSetupId: z.string().nullable().default(null),
   dependencyNodeIds: z.array(z.string()).default([]),
-  graphPolicyVersion: z.string().default('primary_chain_v13_ui_ingredient_override'),
+  graphPolicyVersion: z.string().default('primary_chain_v14_reference_fix'),
 })
 
 export const sequenceAnimaticZoneCoverageBoardEnsureRequestSchema = z.object({

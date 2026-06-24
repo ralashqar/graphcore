@@ -119,6 +119,24 @@ export function preferredEntityAssetKey(entity: Record<string, unknown>) {
   return entityAssetKeys(entity)[0] ?? ''
 }
 
+function entityAssetUrl(entity: Record<string, unknown>) {
+  const metadata = asRecord(entity.metadata)
+  return readText(entity.assetUrl)
+    || readText(entity.asset_url)
+    || readText(entity.imageUrl)
+    || readText(entity.image_url)
+    || readText(entity.referenceArtUrl)
+    || readText(entity.reference_art_url)
+    || readText(entity.iconUrl)
+    || readText(entity.icon_url)
+    || readText(entity.selectedReferenceAssetUrl)
+    || readText(entity.selected_reference_asset_url)
+    || readText(metadata.referenceSheetUrl)
+    || readText(metadata.reference_sheet_url)
+    || readText(metadata.thumbnailUrl)
+    || readText(metadata.thumbnail_url)
+}
+
 export function buildValidatedSequenceAnimaticTemplateGraph<TGraph extends WorkflowTemplateGraphRows>(input: {
   registry: Map<string, AnyWorkflowTemplateRegistryEntry>
   templateKey: string
@@ -200,6 +218,145 @@ export function assetPackWithShotWorldRefs(input: {
   return {
     ...input.assetPack,
     entities: [...entitiesByKey.values()],
+  }
+}
+
+function referenceFixKindFromEntity(entity: Record<string, unknown>) {
+  const type = readText(entity.type ?? entity.nodeType ?? entity.node_type).toLowerCase()
+  if (type.includes('location') || type.includes('place') || type.includes('set') || type.includes('zone') || type.includes('spot')) return ''
+  if (type.includes('group') || type.includes('faction') || type.includes('crowd')) return 'faction_group'
+  if (type.includes('item') || type.includes('prop') || type.includes('object')) return 'item_or_prop'
+  return 'world_character'
+}
+
+function referenceFixKindFromContinuityTarget(target: Record<string, unknown>) {
+  const kind = readText(target.assetKind ?? target.asset_kind ?? target.nodeKind ?? target.node_kind ?? target.kind).toLowerCase()
+  if (kind.includes('location') || kind.includes('set') || kind.includes('zone') || kind.includes('spot') || kind.includes('coverage')) return ''
+  if (kind.includes('group') || kind.includes('faction') || kind.includes('crowd')) return 'faction_group'
+  if (kind.includes('item') || kind.includes('prop') || kind.includes('object')) return 'item_or_prop'
+  if (kind.includes('character') || kind.includes('person') || kind.includes('actor')) return 'temp_character'
+  return ''
+}
+
+function compactReferenceFixText(value: unknown, maxLength = 420) {
+  const text = readText(value).replace(/\s+/g, ' ')
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text
+}
+
+function referenceFixAliases(record: Record<string, unknown>) {
+  return uniqueTexts([
+    ...readStringArray(record.aliases),
+    ...readStringArray(record.alias_keys),
+    ...readStringArray(record.aliasKeys),
+    ...readStringArray(asRecord(record.metadata).aliases),
+    ...readStringArray(asRecord(record.metadata).aliasKeys),
+    readText(record.key),
+    readText(record.id),
+    readText(record.name),
+    readText(record.title),
+    readText(record.label),
+  ])
+}
+
+export function buildSequenceAnimaticShotReferenceFixCandidatePool(input: {
+  assetPack: Record<string, unknown>
+  continuityTargets?: readonly Record<string, unknown>[]
+  currentReferences?: readonly Record<string, unknown>[]
+  limit?: number
+}) {
+  const limit = Math.max(8, Math.min(80, Number(input.limit ?? 48) || 48))
+  const byCandidateId = new Map<string, Record<string, unknown>>()
+  const add = (candidate: Record<string, unknown>) => {
+    const candidateId = readText(candidate.candidateId ?? candidate.candidate_id)
+    const assetKey = readText(candidate.assetKey ?? candidate.asset_key)
+    if (!candidateId || !assetKey || byCandidateId.has(candidateId)) return
+    byCandidateId.set(candidateId, candidate)
+  }
+  for (const entity of readArray(input.assetPack.entities).map(asRecord)) {
+    const kind = referenceFixKindFromEntity(entity)
+    if (!kind) continue
+    const assetKey = preferredEntityAssetKey(entity)
+    if (!assetKey) continue
+    const entityKey = readText(entity.key) || readText(entity.id)
+    const name = readText(entity.name ?? entity.title ?? entity.label) || entityKey
+    const assetUrl = entityAssetUrl(entity)
+    add({
+      candidateId: `world:${entityKey || slugify(name)}:${assetKey}`,
+      candidate_id: `world:${entityKey || slugify(name)}:${assetKey}`,
+      source: 'world_reference',
+      kind,
+      role: kind === 'item_or_prop' ? 'item_or_prop_reference' : 'world_character_reference',
+      name,
+      nodeId: entityKey,
+      node_id: entityKey,
+      entityKey,
+      entity_key: entityKey,
+      assetKey,
+      asset_key: assetKey,
+      assetUrl,
+      asset_url: assetUrl,
+      aliases: referenceFixAliases(entity),
+      summary: compactReferenceFixText(entity.summary ?? entity.context ?? asRecord(entity.metadata).summary),
+      visualDescription: compactReferenceFixText(entity.visualDescription ?? entity.visual_description ?? asRecord(asRecord(entity.metadata).visual).description ?? asRecord(entity.metadata).visualDescription),
+    })
+  }
+  for (const target of input.continuityTargets ?? []) {
+    const kind = referenceFixKindFromContinuityTarget(target)
+    if (!kind) continue
+    const assetKey = readText(target.assetKey ?? target.asset_key ?? target.lastGeneratedAssetKey ?? target.last_generated_asset_key)
+    if (!assetKey) continue
+    const nodeId = readText(target.nodeId ?? target.node_id ?? target.id)
+    const name = readText(target.name ?? target.label ?? target.title) || nodeId
+    const assetUrl = readText(target.assetUrl)
+      || readText(target.asset_url)
+      || readText(target.imageUrl)
+      || readText(target.image_url)
+      || readText(target.referenceArtUrl)
+      || readText(target.reference_art_url)
+      || readText(target.iconUrl)
+      || readText(target.icon_url)
+    add({
+      candidateId: `animatic:${nodeId || slugify(name)}:${assetKey}`,
+      candidate_id: `animatic:${nodeId || slugify(name)}:${assetKey}`,
+      source: 'animatic_reference',
+      kind,
+      role: kind === 'temp_character' || kind === 'faction_group' ? 'temp_character_reference' : 'item_or_prop_reference',
+      name,
+      nodeId,
+      node_id: nodeId,
+      entityKey: nodeId,
+      entity_key: nodeId,
+      assetKey,
+      asset_key: assetKey,
+      assetUrl,
+      asset_url: assetUrl,
+      aliases: referenceFixAliases(target),
+      summary: compactReferenceFixText(target.summary ?? target.visualBrief ?? target.visual_brief),
+      visualDescription: compactReferenceFixText(target.visualDescription ?? target.visual_description ?? target.effectiveVisualBrief ?? target.effective_visual_brief),
+    })
+  }
+  const current = (input.currentReferences ?? []).map(asRecord).map((entry, index) => ({
+    candidateId: readText(entry.candidateId ?? entry.candidate_id) || `current:${readText(entry.assetKey ?? entry.asset_key) || index}`,
+    candidate_id: readText(entry.candidateId ?? entry.candidate_id) || `current:${readText(entry.assetKey ?? entry.asset_key) || index}`,
+    source: readText(entry.source) || 'current_reference',
+    kind: readText(entry.kind),
+    role: readText(entry.role),
+    name: readText(entry.name),
+    nodeId: readText(entry.nodeId ?? entry.node_id),
+    node_id: readText(entry.nodeId ?? entry.node_id),
+    entityKey: readText(entry.entityKey ?? entry.entity_key),
+    entity_key: readText(entry.entityKey ?? entry.entity_key),
+    assetKey: readText(entry.assetKey ?? entry.asset_key),
+    asset_key: readText(entry.assetKey ?? entry.asset_key),
+    assetUrl: readText(entry.assetUrl ?? entry.asset_url ?? entry.imageUrl ?? entry.image_url ?? entry.referenceArtUrl ?? entry.reference_art_url ?? entry.iconUrl ?? entry.icon_url),
+    asset_url: readText(entry.assetUrl ?? entry.asset_url ?? entry.imageUrl ?? entry.image_url ?? entry.referenceArtUrl ?? entry.reference_art_url ?? entry.iconUrl ?? entry.icon_url),
+    uiOrder: Number(entry.uiOrder ?? entry.ui_order ?? index) || index,
+  }))
+  return {
+    version: 'sequence_animatic_shot_reference_fix_candidate_pool_v1',
+    candidates: [...byCandidateId.values()].slice(0, limit),
+    currentReferences: current,
+    current_references: current,
   }
 }
 

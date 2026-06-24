@@ -111,12 +111,12 @@ export function sequenceAnimaticReferenceGuidance(role: string) {
   if (role === 'storyboard_panel') return 'loose composition only when it does not conflict with the coverage anchor'
   if (role === 'camera_grid_reference') return 'spot camera-angle coverage: choose angle vocabulary, screen direction, and framing options; do not reproduce grid cells'
   if (role === 'spot_reference' || role === 'zone_reference' || role === 'set_reference' || role === 'viewpoint_reference' || role === 'location_reference') {
-    return 'location geometry, materials, weather, lighting logic, and geography'
+    return 'Use for location geometry, materials, weather, lighting logic, and geography'
   }
-  if (role === 'prop_reference') return 'prop shape, scale, material, and visible condition'
-  if (role === 'temp_character_reference') return 'temporary character/group silhouette, wardrobe, scale, and readable role'
-  if (role === 'character_reference') return 'identity, face, wardrobe, silhouette, and scale'
-  return 'visual identity and continuity'
+  if (role === 'prop_reference') return 'Preserve prop shape, scale, material, and visible condition'
+  if (role === 'temp_character_reference') return 'Preserve temporary character/group silhouette, wardrobe, scale, and readable role; adapt pose and placement to this shot'
+  if (role === 'character_reference') return 'Preserve identity, face, wardrobe, silhouette, and scale; adapt pose and expression to this shot'
+  return 'Preserve visual identity and continuity'
 }
 
 function sequenceAnimaticReferencePriority(entity: LooseRecord, index: number) {

@@ -33,6 +33,11 @@ type SequenceAnimaticRouteViewerProps = {
   workflowRun: OutputWorkflowRun | null
   workflowProgress: WorkflowProgressViewModel | null
   workflowFallbackLabels: readonly string[]
+  workflowProgressForRequest: (
+    requestId: string | null | undefined,
+    fallbackTitle?: string,
+    fallbackActiveLabel?: string,
+  ) => WorkflowProgressViewModel | null
   error: string
   activeSceneId: string | null
   busyRunKeys: ReadonlySet<string>
@@ -106,6 +111,7 @@ type SequenceAnimaticRouteTimelineProps = Pick<
   | 'onOpenSpatialInspector'
   | 'onOpenCoverageInspector'
   | 'onOpenWorkflowGraph'
+  | 'workflowProgressForRequest'
   | 'onOpenContinuityGraph'
   | 'onOpenSceneBoard'
   | 'onGenerateContinuityAssets'
@@ -149,6 +155,7 @@ export function SequenceAnimaticRouteViewer({
   onGenerateCoverageAnchor,
   onRunKeyframes,
   onOpenWorkflowGraph,
+  workflowProgressForRequest,
   onRegenerateSceneCoverage,
   onOpenTimeline,
 }: SequenceAnimaticRouteViewerProps) {
@@ -225,6 +232,7 @@ export function SequenceAnimaticRouteViewer({
             onGenerateContinuityAssets={onGenerateContinuityAssets}
             onGenerateCoverageAnchor={onGenerateCoverageAnchor}
             onOpenWorkflowGraph={onOpenWorkflowGraph}
+            workflowProgressForRequest={workflowProgressForRequest}
           />
         ) : null}
       </main>
@@ -261,6 +269,7 @@ function SequenceAnimaticRouteTimeline({
   onGenerateContinuityAssets,
   onGenerateCoverageAnchor,
   onOpenWorkflowGraph,
+  workflowProgressForRequest,
 }: SequenceAnimaticRouteTimelineProps) {
   const scenes = model.scenes
   const activeScene = scenes.find((scene) => scene.id === activeSceneId) ?? scenes[0] ?? null
@@ -311,6 +320,7 @@ function SequenceAnimaticRouteTimeline({
           onOpenSceneBoard={onOpenSceneBoard}
           onGenerateContinuityAssets={onGenerateContinuityAssets}
           onGenerateCoverageAnchor={onGenerateCoverageAnchor}
+          workflowProgressForRequest={workflowProgressForRequest}
         />
       ) : null}
     </div>

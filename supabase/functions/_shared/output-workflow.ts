@@ -10117,13 +10117,17 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
         : directReferenceAssetKeys
       const isSequenceAnimaticPlannedKeyframeImage = purpose === 'sequence_animatic_planned_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
       const shotGraphPolicyVersion = readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version)
-      const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override'
+      const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override' || shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
       const keyframeIngredientReferenceMode = shotGraphPolicyVersion === 'primary_chain_v12_canonical_shot_refs' || uiIngredientOverrideMode
         || readText(config.dependencyMode ?? config.dependency_mode) === 'ingredient_refs'
-      const shotReferencePackAssetKeys = assetPackReferenceAssetKeys
+      const shotReferencePackAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : assetPackReferenceAssetKeys
       const canonicalKeyframeReferenceAssetKeys = readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
       if (isSequenceAnimaticPlannedKeyframeImage && keyframeIngredientReferenceMode && (canonicalKeyframeReferenceAssetKeys.length > 0 || shotReferencePackAssetKeys.length > 0)) {
-        const expected = (canonicalKeyframeReferenceAssetKeys.length > 0 ? canonicalKeyframeReferenceAssetKeys : shotReferencePackAssetKeys).map(readText).filter(Boolean)
+        const expected = (uiIngredientOverrideMode && shotReferencePackAssetKeys.length > 0
+          ? shotReferencePackAssetKeys
+          : canonicalKeyframeReferenceAssetKeys.length > 0
+            ? canonicalKeyframeReferenceAssetKeys
+            : shotReferencePackAssetKeys).map(readText).filter(Boolean)
         const actual = effectiveDirectReferenceAssetKeys.map(readText).filter(Boolean)
         if (actual.length === 0) {
           throw new Error(`Shot keyframe image is missing explicit reference_asset_keys from shot_reference_pack. Expected: ${expected.join(', ')}.`)
@@ -10210,7 +10214,7 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
       if (isSpotContinuityAssetImage && referenceImageUrls.length !== 1) {
         throw new Error('Spot continuity asset generation requires a ready parent zone image reference. Generate or regenerate the parent zone first; provider image request was not submitted.')
       }
-      const sequenceAnimaticProviderReferenceManifest = isSequenceAnimaticPlannedKeyframeImage
+      const sequenceAnimaticProviderReferenceManifest = isSequenceAnimaticPlannedKeyframeImage && !uiIngredientOverrideMode
         ? sequenceAnimaticReferenceManifestTextFromRecords(referenceImageRecords)
         : ''
       const baseModel = outputWorkflowImageModel(config.model)

@@ -18,6 +18,7 @@ import {
   artifactMetadataRecord,
   assetEntityForKey,
   assetPackWithShotWorldRefs,
+  buildSequenceAnimaticShotReferenceFixCandidatePool,
   buildValidatedSequenceAnimaticTemplateGraph,
   coverageSetupEntityRefIds,
   imageFromArtifact,
@@ -2432,6 +2433,12 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           .map((entry) => [readText(entry.assetKey), readText(entry.role)] as const)
           .filter(([assetKey]) => Boolean(assetKey)),
       )
+      const referenceFixCandidatePool = buildSequenceAnimaticShotReferenceFixCandidatePool({
+        assetPack: scopedShotAssetPack,
+        continuityTargets: allGraphNodes.map(referencePlanNodeRecord),
+        currentReferences: selectedReferencesForShotProduction,
+        limit: 64,
+      })
       const omittedReferenceAssetKeys = shotIngredientsOnlyKeyframeMode
         ? readArray(shotOmittedReferencesByShotId[shotId])
           .map(asRecord)
@@ -2450,6 +2457,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         referencePlanHash,
         requiredReferenceAssetKeys,
         selectedReferencesForShotProduction,
+        referenceFixCandidatePool,
         sourceReferenceHash,
         sceneContinuityManifestHash,
         shotReferenceReadinessHash,
@@ -2541,7 +2549,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         const blockId = readText(job.storyboardBlockId)
         const block = asRecord(asRecord(keyframePlan.blockById)[blockId])
         const continuityDependencies: Record<string, unknown>[] = []
-        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, referencePlanHash, manifestHash, directorPlanHash, sourceReferenceHash, sceneContinuityManifestHash, shotReferenceReadinessHash, graphPolicyVersion: shotGraphPolicyVersion })
+        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, referencePlanHash, referenceFixCandidatePool, manifestHash, directorPlanHash, sourceReferenceHash, sceneContinuityManifestHash, shotReferenceReadinessHash, graphPolicyVersion: shotGraphPolicyVersion })
         const commonConfig = {
           cinematicPipelineVersion: 'v3_script_storyboards',
           graphSpecVersion: sequenceAnimaticGraphSpecVersion,
@@ -2567,6 +2575,8 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           referencePlanHash,
           shotIngredientReferencePlan,
           shot_ingredient_reference_plan: shotIngredientReferencePlan,
+          referenceFixCandidatePool,
+          reference_fix_candidate_pool: referenceFixCandidatePool,
           sceneContinuityManifestStatus: readText(sceneContinuity.manifest?.status),
           manifestHash,
           directorPlanHash,
@@ -2628,7 +2638,11 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
               node_type: kind || role,
               role,
               summary: readText(entry.reason) || 'Visible focused-shot ingredient reference.',
-              visualDescription: 'Use this attached image exactly as the focused shot ingredient reference.',
+              visualDescription: kind.includes('character')
+                ? 'Preserve identity, face, wardrobe, silhouette, and scale from this focused-shot ingredient; adapt pose and expression to this shot.'
+                : kind.includes('location') || role.includes('zone') || role.includes('location')
+                  ? 'Use this focused-shot ingredient for location geometry, materials, weather, lighting logic, and spatial continuity.'
+                  : 'Preserve the focused-shot ingredient shape, scale, material, and visual continuity while adapting it to this shot.',
               assetKeys: [assetKey],
               primaryAssetKey: assetKey,
               primary_asset_key: assetKey,

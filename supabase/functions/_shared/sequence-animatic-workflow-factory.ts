@@ -599,8 +599,8 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       })
   const allResolverNodes = directIngredientRefNodes
   const resolverEdges = allResolverNodes.flatMap((node) => ([
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_pack_ref`, node.key, 'reference', 'shot_reference_pack', 'references', { optional: asRecord(node.config).required !== true, optionalDependency: asRecord(node.config).required !== true }, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_pack_image`, node.key, 'image', 'shot_reference_pack', 'references', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_fix_ref`, node.key, 'reference', 'fix_references', 'references', { optional: asRecord(node.config).required !== true, optionalDependency: asRecord(node.config).required !== true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_fix_image`, node.key, 'image', 'fix_references', 'reference_images', { optional: true, optionalDependency: true }, role),
   ]))
   const nodes = [
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_input', 'utility_transform', 'Shot Input', 80, 120, {
@@ -609,17 +609,27 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_production_input', maxConcurrency: 8 },
     }, {}, role),
     ...allResolverNodes,
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_reference_pack', 'utility_transform', 'Shot Reference Pack', 640, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'fix_references', 'utility_transform', 'Fix References', 640, 120, {
+      purpose: 'sequence_animatic_shot_reference_fix',
+      ...config,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_shot_reference_fix', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'apply_reference_fix', 'utility_transform', 'Apply Reference Fix', 820, 120, {
+      purpose: 'sequence_animatic_shot_reference_fix_apply',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_reference_fix_apply', maxConcurrency: 8 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_reference_pack', 'utility_transform', 'Shot Reference Pack', 1000, 120, {
       purpose: 'sequence_animatic_shot_reference_pack',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_reference_pack', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 920, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 1280, 120, {
       purpose: 'sequence_animatic_planned_keyframe_prompt',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_prompt', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 1200, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 1560, 120, {
       purpose: 'sequence_animatic_planned_keyframe_image',
       role: 'sequence_animatic_shot_keyframe',
       ...config,
@@ -638,7 +648,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       used_as_video_reference: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_shot_keyframes', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 1480, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 1840, 120, {
       purpose: 'sequence_animatic_planned_keyframe_artifact',
       artifactKind: 'other',
       ...config,
@@ -646,9 +656,19 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
     }, {}, role),
   ]
   const edges = [
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_pack_shot', 'shot_input', 'shot', 'shot_reference_pack', 'shot', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_pack_refs', 'shot_input', 'asset_pack', 'shot_reference_pack', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_fix_shot', 'shot_input', 'shot', 'fix_references', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_fix_refs', 'shot_input', 'asset_pack', 'fix_references', 'asset_pack', {}, role),
     ...resolverEdges,
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_shot', 'fix_references', 'shot', 'apply_reference_fix', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_refs', 'fix_references', 'fixedReferences', 'apply_reference_fix', 'fixed_references', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_asset_pack', 'fix_references', 'asset_pack', 'apply_reference_fix', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_decisions', 'fix_references', 'referenceFixDecisions', 'apply_reference_fix', 'reference_fix_decisions', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_diagnostics', 'fix_references', 'referenceFixDiagnostics', 'apply_reference_fix', 'reference_fix_diagnostics', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_images', 'fix_references', 'referenceImages', 'apply_reference_fix', 'reference_images', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_shot', 'apply_reference_fix', 'shot', 'shot_reference_pack', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_refs', 'apply_reference_fix', 'asset_pack', 'shot_reference_pack', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_fixed', 'apply_reference_fix', 'fixedReferences', 'shot_reference_pack', 'references', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_images', 'apply_reference_fix', 'referenceImages', 'shot_reference_pack', 'reference_images', { optional: true, optionalDependency: true }, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_shot', 'shot_reference_pack', 'shot', 'planned_keyframe_prompt', 'shot', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_refs', 'shot_reference_pack', 'asset_pack', 'planned_keyframe_prompt', 'asset_pack', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image', 'planned_keyframe_prompt', 'text', 'planned_keyframe_image', 'prompt', {}, role),

@@ -143,13 +143,82 @@ function readUpstreamVideos(
   return videos
 }
 
+function cleanSequenceAnimaticKeyframePromptText(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  value: unknown,
+  maxWords = 42,
+) {
+  const source = helpers.readText(value)
+    .replace(/\bThe visual continuity stays clear\.?/gi, '')
+    .replace(/\bShot\s+(\d+)\s*,\s*Shot\s+\1\b/gi, 'Shot $1')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!source) return ''
+  const clauses = source
+    .split(/(?<=[.!?])\s+|;\s+/)
+    .map((entry) => entry.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const unique = clauses.filter((entry) => {
+    const key = entry.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  const text = unique.length > 0 ? unique.join('; ') : source
+  return helpers.compactStoryboardSentence(text, '', maxWords)
+}
+
+function cleanSequenceAnimaticDialogueText(value: string) {
+  return value
+    .replace(/\s*;\s*/g, ' ')
+    .replace(/\s+([.!?,])/g, '$1')
+    .replace(/([.!?])\s*([.!?])+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function formatSequenceAnimaticKeyframeDialogueCue(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  shot: LooseRecord,
+) {
+  return helpers.readArray(shot.dialogue).map(helpers.asRecord).map((line) => {
+    const text = cleanSequenceAnimaticDialogueText(helpers.readText(line.text))
+    if (!text) return ''
+    const speaker = helpers.readText(line.speakerName) || helpers.readText(line.speakerRefId) || 'Speaker'
+    return `${speaker} says, "${text}"`
+  }).filter(Boolean).join('\n')
+}
+
+function referenceLinesForRole(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  assetPack: LooseRecord
+  roles: string[]
+  fallback: string
+  maxCount?: number
+  maxVisualWords?: number
+}) {
+  const roleSet = new Set(input.roles)
+  return input.helpers.readArray(input.assetPack.entities).map(input.helpers.asRecord)
+    .filter((entity) => roleSet.has(sequenceAnimaticReferenceRole(entity)))
+    .map((entity) => {
+      const name = sequenceAnimaticReferenceName(entity, input.fallback)
+      const visual = sequenceAnimaticReferenceVisual(entity, input.maxVisualWords ?? 14)
+      return visual ? `${name} - ${visual}` : name
+    })
+    .filter(Boolean)
+    .slice(0, input.maxCount ?? 8)
+}
+
 export async function sequenceAnimaticPlannedKeyframePrompt(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
 ) {
   const config = helpers.asRecord(context.node.config)
-  const canonicalShotReferenceMode = ['primary_chain_v12_canonical_shot_refs', 'primary_chain_v13_ui_ingredient_override']
-    .includes(helpers.readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version))
+  const shotGraphPolicyVersion = helpers.readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version)
+  const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override' || shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
+  const canonicalShotReferenceMode = ['primary_chain_v12_canonical_shot_refs', 'primary_chain_v13_ui_ingredient_override', 'primary_chain_v14_reference_fix']
+    .includes(shotGraphPolicyVersion)
     || helpers.readText(config.dependencyMode ?? config.dependency_mode) === 'ingredient_refs'
   const sceneState = helpers.asRecord(config.sceneState ?? config.scene_state)
   const sceneStateText = helpers.compactStoryboardSentence(formatSequenceAnimaticSceneStateForPrompt(sceneState as never), '', 42)
@@ -160,7 +229,13 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
   const storyboardPanel = canonicalShotReferenceMode ? {} : helpers.readFirstUpstreamRecord(context.upstream, ['storyboardPanel', 'storyboard_panel'])
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
-  const canonicalReferenceAssetKeys = helpers.readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
+  const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+    .map((entry) => helpers.readText(entry))
+    .filter(Boolean)
+  const configuredReferenceAssetKeys = helpers.readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
+  const canonicalReferenceAssetKeys = uiIngredientOverrideMode && upstreamReferenceAssetKeys.length > 0
+    ? upstreamReferenceAssetKeys
+    : configuredReferenceAssetKeys
   const referenceAssetKeys = canonicalShotReferenceMode && canonicalReferenceAssetKeys.length > 0
     ? canonicalReferenceAssetKeys
     : [...new Set([
@@ -184,54 +259,69 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
       sceneStateText,
     })
   const visualCallSheetText = formatSequenceAnimaticShotVisualCallSheetForPrompt(visualCallSheet)
-  const visibleSubjects = helpers.readArray(assetPack.entities).map(helpers.asRecord)
-    .filter((entity) => ['character_reference', 'temp_character_reference'].includes(sequenceAnimaticReferenceRole(entity)))
-    .map((entity) => {
-      const name = sequenceAnimaticReferenceName(entity, 'Subject')
-      const visual = sequenceAnimaticReferenceVisual(entity, 16)
-      return visual ? `${name} - ${visual}` : name
-    })
-    .filter(Boolean)
-    .slice(0, 8)
-    .join('\n')
-  const locationRefs = helpers.readArray(assetPack.entities).map(helpers.asRecord)
-    .filter((entity) => ['spot_reference', 'zone_reference', 'set_reference', 'viewpoint_reference', 'location_reference', 'camera_grid_reference'].includes(sequenceAnimaticReferenceRole(entity)))
-    .map((entity) => {
-      const name = sequenceAnimaticReferenceName(entity, 'Location ref')
-      const visual = sequenceAnimaticReferenceVisual(entity, 14)
-      return visual ? `${name} - ${visual}` : name
-    })
-    .filter(Boolean)
-    .slice(0, 5)
-    .join('\n')
-  const propRefs = helpers.readArray(assetPack.entities).map(helpers.asRecord)
-    .filter((entity) => sequenceAnimaticReferenceRole(entity) === 'prop_reference')
-    .map((entity) => {
-      const name = sequenceAnimaticReferenceName(entity, 'Prop')
-      const visual = sequenceAnimaticReferenceVisual(entity, 12)
-      return visual ? `${name} - ${visual}` : name
-    })
-    .filter(Boolean)
-    .slice(0, 5)
-    .join('\n')
+  const visibleSubjects = referenceLinesForRole({
+    helpers,
+    assetPack,
+    roles: ['character_reference', 'temp_character_reference'],
+    fallback: 'Subject',
+    maxCount: 8,
+    maxVisualWords: 16,
+  }).join('\n')
+  const locationRefs = referenceLinesForRole({
+    helpers,
+    assetPack,
+    roles: ['zone_reference', 'location_reference', 'viewpoint_reference'],
+    fallback: 'Location ref',
+    maxCount: 3,
+    maxVisualWords: 14,
+  }).join('\n')
+  const propRefLines = referenceLinesForRole({
+    helpers,
+    assetPack,
+    roles: ['prop_reference'],
+    fallback: 'Prop',
+    maxCount: 5,
+    maxVisualWords: 12,
+  })
+  const propRefs = propRefLines.join('\n')
   const camera = helpers.asRecord(shot.camera)
-  const dialogue = helpers.readArray(shot.dialogue).map(helpers.asRecord).map((line) => {
-    const text = helpers.readText(line.text)
-    if (!text) return ''
-    return `${helpers.readText(line.speakerName) || helpers.readText(line.speakerRefId) || 'Speaker'}: "${text}"`
-  }).filter(Boolean).join(' ')
-  const action = helpers.compactStoryboardSentence(helpers.readText(shot.action) || helpers.readText(shot.description) || helpers.readText(shot.storyboardPanelPrompt), '', 34)
-  const cameraBrief = formatSequenceAnimaticShotVisualCallSheetCameraPlan(visualCallSheet)
+  const dialogue = formatSequenceAnimaticKeyframeDialogueCue(helpers, shot)
+  const action = cleanSequenceAnimaticKeyframePromptText(helpers, helpers.readText(shot.action) || helpers.readText(shot.description) || helpers.readText(shot.storyboardPanelPrompt), 42)
+  const cameraBrief = cleanSequenceAnimaticKeyframePromptText(helpers, formatSequenceAnimaticShotVisualCallSheetCameraPlan(visualCallSheet)
     || [helpers.readText(camera.framing), helpers.readText(camera.angle), helpers.readText(camera.lens), helpers.readText(camera.movement)].filter(Boolean).join('; ')
-    || helpers.readText(shot.camera)
-  const lighting = helpers.compactStoryboardSentence(helpers.readText(shot.lighting) || helpers.readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief), '', 26)
+    || helpers.readText(shot.camera), 34)
+  const performance = cleanSequenceAnimaticKeyframePromptText(helpers, helpers.readText(shot.performance), 24)
+  const lighting = cleanSequenceAnimaticKeyframePromptText(helpers, helpers.readText(shot.lighting) || helpers.readText(coverageSetup.lightingBrief ?? coverageSetup.lighting_brief), 30)
   const coverageFallback = !helpers.readText(coverageAnchor.assetKey) && (
     helpers.readText(coverageSetup.stagingBrief ?? coverageSetup.staging_brief)
     || helpers.readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)
     || helpers.readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)
   )
   const hasCoverageAnchor = Boolean(helpers.readText(coverageAnchor.assetKey))
-  const promptText = [
+  const promptText = uiIngredientOverrideMode ? [
+    'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
+    '',
+    'References:',
+    referenceManifestText || 'No attached image references; use only the written visual facts.',
+    '',
+    'Action / Blocking:',
+    action || 'Hold the exact readable action from the shot.',
+    visibleSubjects ? `Visible subjects:\n${visibleSubjects}` : 'Visible subjects: only subjects explicitly visible in the shot action.',
+    propRefs ? `Props/items:\n${propRefs}` : '',
+    '',
+    dialogue ? 'Dialogue:' : '',
+    dialogue || '',
+    '',
+    'Camera:',
+    cameraBrief || 'Use the shot camera plan; preserve readable staging and screen direction.',
+    performance ? `Performance: ${performance}` : '',
+    '',
+    'Lighting / Environment:',
+    [lighting, locationRefs ? `Location reference:\n${locationRefs}` : '', sceneStateText ? `Continuity facts: ${cleanSequenceAnimaticKeyframePromptText(helpers, sceneStateText, 42)}` : ''].filter(Boolean).join('\n') || 'Preserve environment, weather, material, and lighting continuity.',
+    '',
+    'Negative:',
+    'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Use only the attached ingredient identities plus the written shot facts. Do not introduce unlisted major characters, props, locations, or stale visual references. Do not mention workflow, schema, IDs, or asset keys in the image.',
+  ].filter(Boolean).join('\n') : [
     'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
     !canonicalShotReferenceMode && hasCoverageAnchor
       ? 'Composition lock: @Image1 is the coverage anchor. Match its camera position, framing, screen direction, horizon/ground plane, major foreground/background shapes, and subject placement. Replace blockout placeholders with final art.'
@@ -883,6 +973,7 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'upstream.previousKeyframe',
       'upstream.storyboardPanel',
       'upstream.assetPack',
+      'upstream.referenceAssetKeys',
       'upstream.visualCallSheet',
       'config.shotId',
       'config.sceneState',

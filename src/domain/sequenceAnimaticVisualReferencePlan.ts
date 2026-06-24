@@ -35,8 +35,8 @@ export type SequenceAnimaticShotIngredientReferencePlan = {
   missingReferences: SequenceAnimaticShotIngredientReference[]
 }
 
-export const sequenceAnimaticCanonicalShotGraphPolicyVersion = 'primary_chain_v13_ui_ingredient_override'
-export const sequenceAnimaticPreviousCanonicalShotGraphPolicyVersion = 'primary_chain_v12_canonical_shot_refs'
+export const sequenceAnimaticCanonicalShotGraphPolicyVersion = 'primary_chain_v14_reference_fix'
+export const sequenceAnimaticPreviousCanonicalShotGraphPolicyVersion = 'primary_chain_v13_ui_ingredient_override'
 
 export type SequenceAnimaticVisualReferencePlan = {
   version: 'sequence_animatic_visual_reference_plan_v1'
