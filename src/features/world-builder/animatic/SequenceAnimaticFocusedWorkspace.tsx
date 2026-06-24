@@ -386,11 +386,7 @@ export function SequenceAnimaticShotWorkspace({
   const shotPromptDisabled = !activeShot.panelUrl || shotPromptBusy
 
   const requestKeyframe = (mode: 'generate' | 'regenerate') => {
-    if (!preflight || preflight.status === 'ready') {
-      onRunShotKeyframe(model, activeBlock, activeShot, mode)
-      return
-    }
-    setPreflightModal({ itemKey: activeItem.key, mode })
+    onRunShotKeyframe(model, activeBlock, activeShot, mode)
   }
 
   const markContinuityNodesGenerating = (nodeIds: readonly string[]) => {
@@ -560,14 +556,14 @@ export function SequenceAnimaticShotWorkspace({
               </button>
               <button
                 className="primary-button compact"
-                disabled={preflightStateView.status !== 'ready'}
+                disabled={shotKeyframeBusy}
                 onClick={() => {
                   onRunShotKeyframe(model, preflightItem.block, preflightItem.shot, preflightModal.mode)
                   setPreflightModal(null)
                 }}
                 type="button"
               >
-                Continue when ready
+                Continue with ready refs
               </button>
             </div>
           </section>
@@ -608,6 +604,11 @@ export function SequenceAnimaticShotWorkspace({
             <span className="world-wiki-shot-workspace__active-node is-generating" title={shotKeyframeBusyLabel}>
               <span className="world-mini-spinner" aria-hidden="true" />
               {shotKeyframeBusyLabel}
+            </span>
+          ) : null}
+          {!shotKeyframeBusy && activeShot.keyframeError ? (
+            <span className="world-wiki-shot-workspace__active-node is-error" title={activeShot.keyframeError}>
+              Keyframe failed: {activeShot.keyframeError}
             </span>
           ) : null}
           <button

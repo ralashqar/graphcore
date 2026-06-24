@@ -2225,6 +2225,17 @@ function readFirstUpstreamArray(upstream: Record<string, Record<string, unknown>
   return []
 }
 
+function readFirstUpstreamStringArray(upstream: Record<string, Record<string, unknown>>, fields: string[]) {
+  for (const outputs of Object.values(upstream)) {
+    if (Array.isArray(outputs)) return readStringArray(outputs)
+    for (const field of fields) {
+      const value = outputs[field]
+      if (Array.isArray(value)) return readStringArray(value)
+    }
+  }
+  return []
+}
+
 function readFirstUpstreamImage(upstream: Record<string, Record<string, unknown>>, fields = ['coverImage', 'image']) {
   for (const outputs of Object.values(upstream)) {
     for (const field of fields) {
@@ -10083,17 +10094,18 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
       const falApiKey = Deno.env.get('FAL_KEY')
       if (!falApiKey) throw new Error('FAL_KEY is not configured for the Fly output workflow worker.')
       const upstreamImages = readUpstreamImages(input.upstream)
-      const upstreamReferenceAssetKeys = readFirstUpstreamArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
-        .map(readText)
-        .filter(Boolean)
+      const upstreamReferenceAssetKeys = readFirstUpstreamStringArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
       const configuredReferenceAssetKeys = readStringArray(config.referenceAssetKeys ?? config.reference_asset_keys)
-      const directReferenceAssetKeys = upstreamReferenceAssetKeys.length > 0
-        ? upstreamReferenceAssetKeys
-        : configuredReferenceAssetKeys
       const upstreamAssetPack = readFirstUpstreamRecord(input.upstream, ['pageAssetPack', 'page_asset_pack', 'assetPack', 'asset_pack'])
       const rawAssetPack = Object.keys(upstreamAssetPack).length > 0
         ? upstreamAssetPack
         : asRecord(config.pageAssetPack ?? config.page_asset_pack ?? config.assetPack ?? config.asset_pack)
+      const assetPackReferenceAssetKeys = readStringArray(rawAssetPack.scopedReferenceAssetKeys ?? rawAssetPack.scoped_reference_asset_keys)
+      const directReferenceAssetKeys = upstreamReferenceAssetKeys.length > 0
+        ? upstreamReferenceAssetKeys
+        : configuredReferenceAssetKeys.length > 0
+          ? configuredReferenceAssetKeys
+          : assetPackReferenceAssetKeys
       const continuityAssetKind = readText(config.assetKind) || readText(config.asset_kind) || readText(asRecord(config.targetNode ?? config.target_node).assetKind) || readText(asRecord(config.targetNode ?? config.target_node).nodeKind)
       const isSpotContinuityAssetImage = (purpose === 'sequence_animatic_continuity_asset_image' || role === 'sequence_animatic_continuity_asset_image') && continuityAssetKind === 'location_spot'
       const referenceLimit = isSpotContinuityAssetImage ? 1 : referenceLimitForImageNode(config, role)
@@ -10104,6 +10116,40 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
         ? [latestSpotParentZoneAssetKey].map(readText).filter(Boolean).slice(0, 1)
         : directReferenceAssetKeys
       const isSequenceAnimaticPlannedKeyframeImage = purpose === 'sequence_animatic_planned_keyframe_image' || role === 'sequence_animatic_shot_keyframe'
+      const shotGraphPolicyVersion = readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version)
+      const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override'
+      const keyframeIngredientReferenceMode = shotGraphPolicyVersion === 'primary_chain_v12_canonical_shot_refs' || uiIngredientOverrideMode
+        || readText(config.dependencyMode ?? config.dependency_mode) === 'ingredient_refs'
+      const shotReferencePackAssetKeys = assetPackReferenceAssetKeys
+      const canonicalKeyframeReferenceAssetKeys = readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
+      if (isSequenceAnimaticPlannedKeyframeImage && keyframeIngredientReferenceMode && (canonicalKeyframeReferenceAssetKeys.length > 0 || shotReferencePackAssetKeys.length > 0)) {
+        const expected = (canonicalKeyframeReferenceAssetKeys.length > 0 ? canonicalKeyframeReferenceAssetKeys : shotReferencePackAssetKeys).map(readText).filter(Boolean)
+        const actual = effectiveDirectReferenceAssetKeys.map(readText).filter(Boolean)
+        if (actual.length === 0) {
+          throw new Error(`Shot keyframe image is missing explicit reference_asset_keys from shot_reference_pack. Expected: ${expected.join(', ')}.`)
+        }
+        if (expected.length !== actual.length || expected.some((assetKey, index) => actual[index] !== assetKey)) {
+          throw new Error(`Shot keyframe reference mismatch before provider submission. shot_reference_pack=${expected.join(', ')} planned_keyframe_image=${actual.join(', ')}.`)
+        }
+        if (uiIngredientOverrideMode) {
+          const selectedReferenceByAssetKey = new Map(readArray(config.selectedReferences).map(asRecord)
+            .map((entry) => [readText(entry.assetKey ?? entry.asset_key), entry] as const)
+            .filter(([assetKey]) => Boolean(assetKey)))
+          const disallowed = expected
+            .map((assetKey) => ({ assetKey, reference: selectedReferenceByAssetKey.get(assetKey) ?? {} }))
+            .filter(({ reference }) => {
+              const kind = readText(reference.kind ?? reference.type ?? reference.nodeKind ?? reference.node_kind).toLowerCase()
+              const role = readText(reference.role).toLowerCase()
+              return ['spot', 'location_spot', 'set', 'location_set', 'coverage_anchor', 'spot_camera_grid'].includes(kind)
+                || role === 'coverage_anchor'
+                || role.includes('spot_camera_grid')
+            })
+          if (disallowed.length > 0) {
+            throw new Error(`Rejected stale spot/set/coverage reference before provider submission: ${disallowed.map((entry) => entry.assetKey).join(', ')}. Shot keyframes require the focused UI ingredient override; location references must be zone_location only.`)
+          }
+        }
+      }
+      const useExactSequenceAnimaticKeyframeReferences = isSequenceAnimaticPlannedKeyframeImage && effectiveDirectReferenceAssetKeys.length > 0
       const isCinematicV3StoryboardSheet = purpose === 'cinematic_v3_storyboard_sheet' || role === 'cinematic_v3_storyboard_sheet'
       const storyboardSheetShotPlan = isCinematicV3StoryboardSheet ? readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan']) : {}
       const storyboardSheetGroupShots = isCinematicV3StoryboardSheet
@@ -10123,7 +10169,7 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
           spatialReferencePolicy: 'zone_only',
         })
         : rawAssetPack
-      const directImageRecords = isSpotContinuityAssetImage ? [] : (await Promise.all(upstreamImages.map(async (image, index) => {
+      const directImageRecords = isSpotContinuityAssetImage || useExactSequenceAnimaticKeyframeReferences ? [] : (await Promise.all(upstreamImages.map(async (image, index) => {
         const url = await imageReferenceToFalUrl(input.client, image, input.run)
         if (!url) return null
         const imageMetadata = asRecord(image.metadata)
@@ -10148,6 +10194,8 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
       )
       const assetPackImageRecords = isSpotContinuityAssetImage
         ? []
+        : useExactSequenceAnimaticKeyframeReferences
+          ? []
         : await collectAssetPackReferenceRecords(input.client, input.run, assetPack, referenceLimit)
       const seenReferenceImageKeys = new Set<string>()
       const referenceImageRecords = [...directImageRecords, ...directReferenceAssetKeyRecords, ...assetPackImageRecords]

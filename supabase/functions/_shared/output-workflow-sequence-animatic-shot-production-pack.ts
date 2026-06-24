@@ -148,15 +148,25 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
 ) {
   const config = helpers.asRecord(context.node.config)
+  const canonicalShotReferenceMode = ['primary_chain_v12_canonical_shot_refs', 'primary_chain_v13_ui_ingredient_override']
+    .includes(helpers.readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version))
+    || helpers.readText(config.dependencyMode ?? config.dependency_mode) === 'ingredient_refs'
   const sceneState = helpers.asRecord(config.sceneState ?? config.scene_state)
   const sceneStateText = helpers.compactStoryboardSentence(formatSequenceAnimaticSceneStateForPrompt(sceneState as never), '', 42)
   const shot = helpers.readFirstUpstreamRecord(context.upstream, ['shot'])
-  const coverageSetup = helpers.readFirstUpstreamRecord(context.upstream, ['coverageSetup', 'coverage_setup'])
-  const coverageAnchor = helpers.readFirstUpstreamRecord(context.upstream, ['coverageAnchor', 'coverage_anchor'])
-  const previousKeyframe = helpers.readFirstUpstreamRecord(context.upstream, ['previousKeyframe', 'previous_keyframe'])
-  const storyboardPanel = helpers.readFirstUpstreamRecord(context.upstream, ['storyboardPanel', 'storyboard_panel'])
+  const coverageSetup = canonicalShotReferenceMode ? {} : helpers.readFirstUpstreamRecord(context.upstream, ['coverageSetup', 'coverage_setup'])
+  const coverageAnchor = canonicalShotReferenceMode ? {} : helpers.readFirstUpstreamRecord(context.upstream, ['coverageAnchor', 'coverage_anchor'])
+  const previousKeyframe = canonicalShotReferenceMode ? {} : helpers.readFirstUpstreamRecord(context.upstream, ['previousKeyframe', 'previous_keyframe'])
+  const storyboardPanel = canonicalShotReferenceMode ? {} : helpers.readFirstUpstreamRecord(context.upstream, ['storyboardPanel', 'storyboard_panel'])
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+  const canonicalReferenceAssetKeys = helpers.readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
+  const referenceAssetKeys = canonicalShotReferenceMode && canonicalReferenceAssetKeys.length > 0
+    ? canonicalReferenceAssetKeys
+    : [...new Set([
+    ...helpers.readStringArray(assetPack.scopedReferenceAssetKeys ?? assetPack.scoped_reference_asset_keys),
+    ...referenceManifest.map((entry) => helpers.readText(helpers.asRecord(entry).assetKey)),
+  ].filter(Boolean))]
   const referenceManifestText = referenceManifest
     .map((entry) => helpers.readText(helpers.asRecord(entry).line))
     .filter(Boolean)
@@ -223,7 +233,7 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
   const hasCoverageAnchor = Boolean(helpers.readText(coverageAnchor.assetKey))
   const promptText = [
     'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
-    hasCoverageAnchor
+    !canonicalShotReferenceMode && hasCoverageAnchor
       ? 'Composition lock: @Image1 is the coverage anchor. Match its camera position, framing, screen direction, horizon/ground plane, major foreground/background shapes, and subject placement. Replace blockout placeholders with final art.'
       : '',
     '',
@@ -243,10 +253,10 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     '',
     'Action/blocking',
     action || 'Hold the exact readable action from the shot.',
-    hasCoverageAnchor
+    !canonicalShotReferenceMode && hasCoverageAnchor
       ? 'Use @Image1 coverage anchor as the framing/background/blocking source of truth. Do not copy labels, arrows, placeholder figures, or blockout styling.'
-      : (coverageFallback ? `Coverage facts: ${helpers.compactStoryboardSentence(coverageFallback, '', 30)}` : ''),
-    helpers.readText(previousKeyframe.assetKey) ? 'Use the previous keyframe reference only for same-setup motion continuity and established state.' : '',
+      : (!canonicalShotReferenceMode && coverageFallback ? `Coverage facts: ${helpers.compactStoryboardSentence(coverageFallback, '', 30)}` : ''),
+    !canonicalShotReferenceMode && helpers.readText(previousKeyframe.assetKey) ? 'Use the previous keyframe reference only for same-setup motion continuity and established state.' : '',
     '',
     'Camera/framing',
     cameraBrief || 'Camera and framing follow the shot plan.',
@@ -256,7 +266,9 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     [lighting, locationRefs ? `Location refs\n${locationRefs}` : '', sceneStateText ? `Visual continuity facts: ${sceneStateText}` : ''].filter(Boolean).join('\n') || 'Preserve environment, weather, material, and lighting continuity.',
     '',
     'Negative rules',
-    'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Do not render blockout labels from the coverage anchor. Do not change the coverage-anchor camera angle, lens feel, background layout, or screen direction unless the written shot facts explicitly contradict it. Do not mention workflow, schema, IDs, or asset keys in the image.',
+    canonicalShotReferenceMode
+      ? 'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Use only the attached ingredient identities plus the written shot facts; do not introduce unlisted characters, props, locations, or stale visual references. Do not mention workflow, schema, IDs, or asset keys in the image.'
+      : 'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Do not render blockout labels from the coverage anchor. Do not change the coverage-anchor camera angle, lens feel, background layout, or screen direction unless the written shot facts explicitly contradict it. Do not mention workflow, schema, IDs, or asset keys in the image.',
   ].filter(Boolean).join('\n')
   const outputs = {
     prompt: promptText,
@@ -272,6 +284,8 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     storyboard_panel: storyboardPanel,
     assetPack,
     asset_pack: assetPack,
+    referenceAssetKeys,
+    reference_asset_keys: referenceAssetKeys,
     referenceManifest,
     reference_manifest: referenceManifest,
     referenceManifestText,

@@ -97,11 +97,21 @@ export function assetEntityForKey(assetKey: string, label: string) {
 }
 
 export function entityAssetKeys(entity: Record<string, unknown>) {
+  const metadata = asRecord(entity.metadata)
   return uniqueTexts([
     readText(entity.primaryAssetKey),
+    readText(entity.primary_asset_key),
     readText(entity.selectedReferenceAssetKey),
+    readText(entity.selected_reference_asset_key),
     readText(entity.selectedReferenceVariantAssetKey),
+    readText(entity.selected_reference_variant_asset_key),
+    readText(metadata.referenceSheetAssetKey),
+    readText(metadata.reference_sheet_asset_key),
+    readStringArray(metadata.referenceSheetAssetKeys)[0] ?? '',
+    readText(entity.thumbnailAssetKey),
+    readText(entity.thumbnail_asset_key),
     ...readStringArray(entity.assetKeys),
+    ...readStringArray(entity.asset_keys),
   ])
 }
 
@@ -131,20 +141,133 @@ export function prioritizedEntityAssetKeys(entities: readonly Record<string, unk
   return uniqueTexts([...primaryKeys, ...extraKeys]).slice(0, Math.max(1, limit))
 }
 
+export function referenceSheetAssetKeyFromWorldEntity(entity: Record<string, unknown>) {
+  const metadata = asRecord(entity.metadata)
+  return readText(metadata.referenceSheetAssetKey)
+    || readText(metadata.reference_sheet_asset_key)
+    || readStringArray(metadata.referenceSheetAssetKeys)[0]
+    || readStringArray(metadata.reference_sheet_asset_keys)[0]
+    || readText(entity.thumbnailAssetKey)
+    || readText(entity.thumbnail_asset_key)
+    || ''
+}
+
+export function worldEntityAssetPackEntity(entity: Record<string, unknown>) {
+  const key = readText(entity.key)
+  const assetKey = referenceSheetAssetKeyFromWorldEntity(entity)
+  return {
+    key,
+    id: key,
+    name: readText(entity.name) || key,
+    type: readText(entity.nodeType) || readText(entity.node_type) || 'actor',
+    nodeType: readText(entity.nodeType) || readText(entity.node_type) || 'actor',
+    node_type: readText(entity.nodeType) || readText(entity.node_type) || 'actor',
+    primaryAssetKey: assetKey,
+    primary_asset_key: assetKey,
+    selectedReferenceAssetKey: assetKey,
+    selected_reference_asset_key: assetKey,
+    selectedReferenceVariantKey: assetKey ? 'entity_reference_sheet' : '',
+    selected_reference_variant_key: assetKey ? 'entity_reference_sheet' : '',
+    assetKeys: assetKey ? [assetKey] : [],
+    asset_keys: assetKey ? [assetKey] : [],
+    metadata: asRecord(entity.metadata),
+  }
+}
+
+export function assetPackWithShotWorldRefs(input: {
+  assetPack: Record<string, unknown>
+  shot: Record<string, unknown>
+  worldEntityByKey: ReadonlyMap<string, Record<string, unknown>>
+}) {
+  const entitiesByKey = new Map<string, Record<string, unknown>>()
+  const addEntity = (entity: Record<string, unknown>) => {
+    const key = readText(entity.key) || readText(entity.id)
+    if (!key) return
+    const previous = entitiesByKey.get(key)
+    if (!previous) {
+      entitiesByKey.set(key, entity)
+      return
+    }
+    const previousAssetKey = preferredEntityAssetKey(previous)
+    const nextAssetKey = preferredEntityAssetKey(entity)
+    entitiesByKey.set(key, previousAssetKey || !nextAssetKey ? { ...entity, ...previous } : { ...previous, ...entity })
+  }
+  readArray(input.assetPack.entities).map(asRecord).forEach(addEntity)
+  for (const refId of shotEntityRefIds(input.shot)) {
+    const entity = input.worldEntityByKey.get(refId)
+    if (entity) addEntity(worldEntityAssetPackEntity(entity))
+  }
+  return {
+    ...input.assetPack,
+    entities: [...entitiesByKey.values()],
+  }
+}
+
 export function shotEntityRefIds(shot: Record<string, unknown>) {
   const refs = asRecord(shot.refs ?? shot.references)
+  const referenceObjectIds = readArray(shot.references).flatMap((entry) => {
+    if (typeof entry === 'string') return [entry]
+    const record = asRecord(entry)
+    return [
+      readText(record.id),
+      readText(record.refId ?? record.ref_id),
+      readText(record.referenceId ?? record.reference_id),
+      readText(record.entityKey ?? record.entity_key),
+      readText(record.entityRefId ?? record.entity_ref_id),
+      readText(record.worldRefId ?? record.world_ref_id),
+      readText(record.worldEntityKey ?? record.world_entity_key),
+      readText(record.characterRefId ?? record.character_ref_id),
+      readText(record.speakerRefId ?? record.speaker_ref_id),
+      readText(record.propRefId ?? record.prop_ref_id),
+      readText(record.itemRefId ?? record.item_ref_id),
+    ]
+  })
   return uniqueTexts([
+    ...readStringArray(refs.referenceIds ?? refs.reference_ids),
+    ...readStringArray(refs.refIds ?? refs.ref_ids),
+    ...readStringArray(refs.entityRefIds ?? refs.entity_ref_ids),
+    ...readStringArray(refs.worldRefIds ?? refs.world_ref_ids),
+    ...readStringArray(refs.worldEntityKeys ?? refs.world_entity_keys),
     ...readStringArray(refs.characterRefIds ?? refs.character_ref_ids),
+    ...readStringArray(refs.worldCharacterRefIds ?? refs.world_character_ref_ids),
     ...readStringArray(refs.visibleCharacterRefIds ?? refs.visible_character_ref_ids),
     ...readStringArray(refs.speakerRefIds ?? refs.speaker_ref_ids),
     ...readStringArray(refs.propRefIds ?? refs.prop_ref_ids),
     ...readStringArray(refs.itemRefIds ?? refs.item_ref_ids),
+    ...readStringArray(refs.localReferenceIds ?? refs.local_reference_ids),
+    ...readStringArray(refs.locationRefIds ?? refs.location_ref_ids),
+    ...readStringArray(shot.referenceIds ?? shot.reference_ids),
+    ...readStringArray(shot.refIds ?? shot.ref_ids),
+    ...readStringArray(shot.entityRefIds ?? shot.entity_ref_ids),
+    ...readStringArray(shot.worldRefIds ?? shot.world_ref_ids),
+    ...readStringArray(shot.worldEntityKeys ?? shot.world_entity_keys),
     ...readStringArray(shot.characterRefIds ?? shot.character_ref_ids),
+    ...readStringArray(shot.worldCharacterRefIds ?? shot.world_character_ref_ids),
     ...readStringArray(shot.visibleCharacterRefIds ?? shot.visible_character_ref_ids),
     ...readStringArray(shot.speakerRefIds ?? shot.speaker_ref_ids),
     ...readStringArray(shot.propRefIds ?? shot.prop_ref_ids),
     ...readStringArray(shot.itemRefIds ?? shot.item_ref_ids),
-    ...readArray(shot.dialogue).map((line) => readText(asRecord(line).speakerRefId ?? asRecord(line).speaker_ref_id)),
+    ...readStringArray(shot.localReferenceIds ?? shot.local_reference_ids),
+    ...readStringArray(shot.locationRefIds ?? shot.location_ref_ids),
+    ...referenceObjectIds,
+    ...readArray(shot.dialogue).flatMap((line) => {
+      const record = asRecord(line)
+      return [
+        readText(record.speakerRefId ?? record.speaker_ref_id),
+        readText(record.characterRefId ?? record.character_ref_id),
+        readText(record.entityRefId ?? record.entity_ref_id),
+        readText(record.worldRefId ?? record.world_ref_id),
+      ]
+    }),
+    ...readArray(shot.performanceBeats ?? shot.performance_beats).flatMap((beat) => {
+      const record = asRecord(beat)
+      return [
+        readText(record.characterRefId ?? record.character_ref_id),
+        readText(record.speakerRefId ?? record.speaker_ref_id),
+        readText(record.entityRefId ?? record.entity_ref_id),
+        readText(record.worldRefId ?? record.world_ref_id),
+      ]
+    }),
   ])
 }
 

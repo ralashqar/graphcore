@@ -829,6 +829,7 @@ type WorldGraphPageProps = {
     shotIds?: string[]
     coverageSetupIds?: string[]
     allowProvisional?: boolean
+    shotReferenceOverride?: Record<string, unknown>
   }) => Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> | SequenceAnimaticKeyframeWorkflowEnsureResponse
   onEnsureSequenceAnimaticShotProductionGraph: (request: {
     masterRequestId: string
@@ -836,6 +837,7 @@ type WorldGraphPageProps = {
     coverageSetupId?: string | null
     forceRefresh?: boolean
     allowProvisional?: boolean
+    shotReferenceOverride?: Record<string, unknown>
   }) => Promise<SequenceAnimaticShotProductionGraphEnsureResponse> | SequenceAnimaticShotProductionGraphEnsureResponse
   onEnsureSequenceAnimaticShotCoverageIntents: (request: {
     masterRequestId: string

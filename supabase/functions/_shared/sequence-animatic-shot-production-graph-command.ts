@@ -13,6 +13,7 @@ import {
   asRecord,
   artifactMetadataRecord,
   assetEntityForKey,
+  assetPackWithShotWorldRefs,
   buildValidatedSequenceAnimaticTemplateGraph,
   coverageSetupEntityRefIds,
   entityAssetKeys,
@@ -60,7 +61,11 @@ import {
   shotReferenceNodeIds,
 } from '../../../src/domain/sequenceAnimaticContinuityDependencies.ts'
 import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceAnimaticSceneState.ts'
-import { sequenceAnimaticVisualReferenceHash } from '../../../src/domain/sequenceAnimaticVisualReferencePlan.ts'
+import {
+  buildSequenceAnimaticShotIngredientReferencePlan,
+  sequenceAnimaticCanonicalShotGraphPolicyVersion,
+  sequenceAnimaticVisualReferenceHash,
+} from '../../../src/domain/sequenceAnimaticVisualReferencePlan.ts'
 import {
   loadSceneContinuityManifests,
   resolveSceneContinuityForShot,
@@ -69,8 +74,102 @@ import {
   buildShotReferenceReadinessHash,
 } from '../../../src/domain/sceneContinuityManifest.ts'
 
-const SHOT_GRAPH_POLICY_VERSION = 'primary_chain_v8_zone_spatial_refs'
-const SHOT_GRAPH_DEPENDENCY_MODE = 'single_node_chain'
+const SHOT_GRAPH_POLICY_VERSION = sequenceAnimaticCanonicalShotGraphPolicyVersion
+const SHOT_GRAPH_DEPENDENCY_MODE = 'ingredient_refs'
+
+function normalizeShotReferenceOverride(value: unknown) {
+  const override = asRecord(value)
+  const shotId = readText(override.shotId ?? override.shot_id)
+  const ingredients = readArray(override.ingredients)
+    .map(asRecord)
+    .map((entry, index) => {
+      const assetKey = readText(entry.assetKey ?? entry.asset_key)
+      const kind = readText(entry.kind)
+      const nodeId = readText(entry.nodeId ?? entry.node_id)
+      const entityKey = readText(entry.entityKey ?? entry.entity_key)
+      return {
+        ...entry,
+        id: readText(entry.id) || `${kind || 'ingredient'}:${assetKey || nodeId || entityKey || index}`,
+        kind,
+        name: readText(entry.name) || readText(entry.label),
+        nodeId,
+        node_id: nodeId,
+        entityKey,
+        entity_key: entityKey,
+        assetKey,
+        asset_key: assetKey,
+        assetUrl: readText(entry.assetUrl ?? entry.asset_url),
+        asset_url: readText(entry.assetUrl ?? entry.asset_url),
+        status: readText(entry.status) || (assetKey ? 'ready' : 'missing'),
+        source: readText(entry.source) || 'focused_shot_ingredient_ui',
+        role: readText(entry.role) || 'shot_ingredient_reference',
+        sourceArtifactRole: readText(entry.sourceArtifactRole ?? entry.source_artifact_role),
+        source_artifact_role: readText(entry.sourceArtifactRole ?? entry.source_artifact_role),
+        requiredForKeyframe: entry.requiredForKeyframe !== false && entry.required_for_keyframe !== false,
+        required_for_keyframe: entry.requiredForKeyframe !== false && entry.required_for_keyframe !== false,
+        uiOrder: Number.isFinite(Number(entry.uiOrder ?? entry.ui_order)) ? Number(entry.uiOrder ?? entry.ui_order) : index,
+        ui_order: Number.isFinite(Number(entry.uiOrder ?? entry.ui_order)) ? Number(entry.uiOrder ?? entry.ui_order) : index,
+      }
+    })
+    .filter((entry) => entry.requiredForKeyframe)
+    .sort((left, right) => Number(left.uiOrder) - Number(right.uiOrder))
+  if (!shotId || ingredients.length === 0) return null
+  const hash = readText(override.ingredientPlanHash ?? override.ingredient_plan_hash) || sequenceAnimaticStableHash({ shotId, ingredients })
+  return {
+    version: 'shot_keyframe_reference_override_v1',
+    shotId,
+    shot_id: shotId,
+    ingredientPlanHash: hash,
+    ingredient_plan_hash: hash,
+    source: 'focused_shot_ingredient_ui',
+    ingredients,
+  }
+}
+
+function overrideReferencesFromUiIngredients(override: ReturnType<typeof normalizeShotReferenceOverride>) {
+  if (!override) return null
+  const seen = new Set<string>()
+  const selectedReferences = override.ingredients
+    .map((entry) => {
+      const assetKey = readText(entry.assetKey)
+      const status = readText(entry.status) || (assetKey ? 'ready' : 'missing')
+      if (status !== 'ready' || !assetKey || seen.has(assetKey)) return null
+      seen.add(assetKey)
+      return {
+        assetKey,
+        role: readText(entry.role) || 'shot_ingredient_reference',
+        sourceArtifactRole: readText(entry.sourceArtifactRole ?? entry.source_artifact_role),
+        reason: 'Selected explicitly from the focused shot ingredient UI.',
+        name: readText(entry.name),
+        type: readText(entry.kind),
+        kind: readText(entry.kind),
+        nodeId: readText(entry.nodeId ?? entry.node_id),
+        entityKey: readText(entry.entityKey ?? entry.entity_key),
+        status: 'ready',
+        assetUrl: readText(entry.assetUrl ?? entry.asset_url),
+        source: 'focused_shot_ingredient_ui',
+        uiOrder: Number(entry.uiOrder ?? entry.ui_order) || 0,
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+  return {
+    requiredReferenceAssetKeys: selectedReferences.map((entry) => readText(entry.assetKey)).filter(Boolean),
+    selectedReferences,
+    referencePlanHash: readText(override.ingredientPlanHash ?? override.ingredient_plan_hash),
+    shotIngredientReferencePlan: {
+      version: 'sequence_animatic_shot_ingredient_reference_plan_v1',
+      shotId: override.shotId,
+      referencePlanHash: readText(override.ingredientPlanHash ?? override.ingredient_plan_hash),
+      source: 'focused_shot_ingredient_ui',
+      ingredients: override.ingredients,
+      requiredReferenceAssetKeys: selectedReferences.map((entry) => readText(entry.assetKey)).filter(Boolean),
+      selectedReferences,
+      missingReferences: [],
+      omittedReferences: [],
+      uiOverride: true,
+    },
+  }
+}
 
 function sceneGraphOverrideForNode(metadata: Record<string, unknown>, nodeId: string) {
   const overrides = asRecord(metadata.sequenceAnimaticSceneGraphOverrides ?? metadata.sequence_animatic_scene_graph_overrides)
@@ -148,8 +247,13 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
       const rawType = readText(reference.type ?? reference.anchorType ?? reference.anchor_type ?? reference.assetKind ?? reference.asset_kind ?? reference.nodeKind ?? reference.node_kind)
       const normalizedType = rawType === 'temp_character'
         || rawType === 'temporary_character'
+        || rawType === 'character'
+        || rawType === 'person'
+        || rawType === 'crowd'
+        || rawType === 'group'
+        || rawType === 'faction'
         ? 'character'
-        : ['prop', 'item', 'faction', 'crowd', 'vehicle', 'animatic_only'].includes(rawType)
+        : ['prop', 'item', 'vehicle', 'animatic_only'].includes(rawType)
           ? 'prop'
           : rawType
       const assetKind = normalizedType === 'character'
@@ -267,6 +371,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
 }) {
     const { client, admin, userId } = input
     const payload = sequenceAnimaticShotProductionGraphEnsureRequestSchema.parse(input.payload)
+    const shotReferenceOverride = normalizeShotReferenceOverride(payload.shotReferenceOverride ?? payload.shot_reference_override)
 
     const masterRequest = await loadScreenplayAnimaticMasterRequest({
       client,
@@ -320,6 +425,22 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       directorPlan,
       shotId: payload.shotId,
     })
+    const shotWorldRefIds = uniqueTexts(shotEntityRefIds(shot))
+    const worldEntityResponse = shotWorldRefIds.length > 0
+      ? await client
+        .from('world_entities')
+        .select('key, name, node_type, thumbnail_asset_key, metadata')
+        .eq('draft_id', payload.draftId)
+        .in('key', shotWorldRefIds)
+      : { data: [], error: null }
+    if (worldEntityResponse.error) throw new Error(worldEntityResponse.error.message)
+    const worldEntityByKey = new Map(
+      (worldEntityResponse.data ?? [])
+        .map(asRecord)
+        .map((entity) => [readText(entity.key), entity] as const)
+        .filter(([key]) => key),
+    )
+    const scopedShotAssetPack = assetPackWithShotWorldRefs({ assetPack, shot, worldEntityByKey })
     const legacyCoverageSetup = coverageSetup
     const coverageRegistry = coverageRegistryFromSources({
       masterMetadata,
@@ -465,7 +586,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         if (!assetKey) return []
         if (zoneAssetKeySet.has(assetKey)) return []
         if (nodeKind === 'location_zone') return []
-        if (nodeKind === 'location_spot' && zoneAssetKeys.length > 0) return []
+        if (nodeKind === 'location_spot') return []
         if (nodeKind === 'location_set' || nodeKind === 'spot_camera_grid' || nodeKind === 'location_viewpoint' || nodeKind === 'location_angle') return []
         return [{
           assetKey,
@@ -606,17 +727,112 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         },
       }
     })
-    const scopedRefs = scopedAssetPackForShot(assetPack, shot)
-    const continuityReferenceEntriesForShotGraph = continuityReferenceEntriesForShot()
-    const continuityReferenceAssetKeysForShot = continuityReferenceEntriesForShotGraph.map((entry) => readText(entry.assetKey)).filter(Boolean)
-    const shotKeyframeReferenceAssetKeys = uniqueTexts([
-      ...continuityReferenceAssetKeysForShot,
-      ...scopedRefs.requiredReferenceAssetKeys,
-    ]).slice(0, 8)
-    const shotKeyframeSelectedReferences = [
-      ...continuityReferenceEntriesForShotGraph,
-      ...scopedRefs.selectedReferences,
-    ].filter((entry, index, allEntries) => allEntries.findIndex((candidate) => readText(candidate.assetKey) === readText(entry.assetKey)) === index)
+    const shotIngredientZoneNodeIds = () => {
+      const ids = new Set(zoneNodeIdsForShot())
+      for (const nodeId of uniqueTexts([
+        ...shotSceneBindingNodeIds(shot),
+        ...shotReferenceNodeIds(shot, graphNodeIds),
+      ])) {
+        const node = graphNodeById.get(nodeId)
+        if (!node) continue
+        const kind = readText(node.nodeKind ?? node.assetKind)
+        if (kind === 'location_zone') ids.add(nodeId)
+        if (kind === 'location_spot') {
+          const parentId = continuityNodeParentId(node)
+          const parent = parentId ? graphNodeById.get(parentId) : null
+          if (parent && readText(parent.nodeKind ?? parent.assetKind) === 'location_zone') ids.add(parentId)
+        }
+      }
+      return [...ids].filter((nodeId) => graphNodeIds.has(nodeId))
+    }
+    const referencePlanNodeRecord = (node: Record<string, unknown>) => {
+      const assetState = asRecord(node.assetState ?? node.asset_state)
+      const assetKey = entityAssetKeys(assetState)[0] ?? ''
+      return {
+        ...node,
+        kind: readText(node.nodeKind ?? node.assetKind),
+        nodeId: readText(node.id),
+        assetKey,
+        assetUrl: readText(assetState.assetUrl ?? assetState.asset_url),
+        status: assetKey ? 'ready' : 'missing',
+      }
+    }
+    const derivedShotIngredientReferencePlan = buildSequenceAnimaticShotIngredientReferencePlan({
+      shot,
+      spatialNodes: shotIngredientZoneNodeIds()
+        .map((nodeId) => graphNodeById.get(nodeId))
+        .filter((node): node is Record<string, unknown> => Boolean(node))
+        .map(referencePlanNodeRecord),
+      // Use raw continuity nodes for ingredient readiness. graphNodeById is
+      // deliberately shot-scoped for legacy spatial fallback, and can rewrite
+      // unrelated local refs as if they belong to the active shot.
+      continuityTargets: allGraphNodes.map(referencePlanNodeRecord),
+      assetPack: scopedShotAssetPack,
+      explicitReferenceIds: [
+        ...readStringArray(asRecord(shot.refs).referenceIds ?? asRecord(shot.refs).reference_ids),
+        ...shotEntityRefIds(shot),
+      ],
+      maxReferences: 8,
+    })
+    const uiOverrideReferences = shotReferenceOverride && readText(shotReferenceOverride.shotId) === payload.shotId
+      ? overrideReferencesFromUiIngredients(shotReferenceOverride)
+      : null
+    const shotIngredientReferencePlan = uiOverrideReferences?.shotIngredientReferencePlan ?? derivedShotIngredientReferencePlan
+    if (!uiOverrideReferences && derivedShotIngredientReferencePlan.missingReferences.length > 0) {
+      const missing = shotIngredientReferencePlan.missingReferences
+        .map((entry) => `${entry.name || entry.id}${entry.nodeId ? ` (${entry.nodeId})` : ''}`)
+        .join(', ')
+      throw new HttpError(409, `Generate missing shot references before keyframe generation: ${missing}`)
+    }
+    const shotKeyframeReferenceAssetKeys = uiOverrideReferences?.requiredReferenceAssetKeys ?? derivedShotIngredientReferencePlan.requiredReferenceAssetKeys
+    const shotKeyframeSelectedReferences = uiOverrideReferences?.selectedReferences ?? derivedShotIngredientReferencePlan.ingredients
+      .filter((entry) => entry.status === 'ready' && readText(entry.assetKey))
+      .map((entry) => ({
+        assetKey: entry.assetKey,
+        role: entry.role,
+        sourceArtifactRole: entry.sourceArtifactRole,
+        reason: entry.reason,
+        name: entry.name,
+        kind: entry.kind,
+        nodeId: entry.nodeId,
+        entityKey: entry.entityKey,
+      }))
+    const scopedRefs = {
+      assetPack: {
+        ...scopedShotAssetPack,
+        scopedReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
+        scoped_reference_asset_keys: shotKeyframeReferenceAssetKeys,
+        referenceAssetKeys: shotKeyframeReferenceAssetKeys,
+        reference_asset_keys: shotKeyframeReferenceAssetKeys,
+        entities: shotKeyframeSelectedReferences.map((entry, index) => {
+          const assetKey = readText(entry.assetKey)
+          const kind = readText(entry.kind ?? entry.type)
+          const role = readText(entry.role) || 'shot_ingredient_reference'
+          const name = readText(entry.name) || `Shot reference ${index + 1}`
+          return {
+            key: readText(entry.entityKey) || readText(entry.nodeId) || `ui_ref_${index + 1}`,
+            id: readText(entry.entityKey) || readText(entry.nodeId) || `ui_ref_${index + 1}`,
+            name,
+            type: kind || role,
+            nodeType: kind || role,
+            node_type: kind || role,
+            role,
+            assetKeys: [assetKey],
+            primaryAssetKey: assetKey,
+            primary_asset_key: assetKey,
+            selectedReferenceAssetKey: assetKey,
+            selected_reference_asset_key: assetKey,
+            selectedReferenceVariantKey: role,
+            selectedReferenceVariantLabel: name,
+            selectedReferenceVariantType: role,
+            referenceSelectionReason: 'Selected explicitly from the focused shot ingredient UI.',
+          }
+        }).filter((entry) => readText(entry.primaryAssetKey)),
+        referenceScope: 'sequence_animatic_shot_ingredients_only',
+      },
+      requiredReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
+      selectedReferences: shotKeyframeSelectedReferences,
+    }
     const zoneCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
     const zoneCoverageCellByShotId = asRecord(zoneCoverageRegistry.coverageCellByShotId ?? zoneCoverageRegistry.coverage_cell_by_shot_id)
     const zoneCoverageCell = asRecord(zoneCoverageCellByShotId[payload.shotId])
@@ -637,14 +853,11 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       shot,
       coverageSetupId,
       sceneGraphOverride: asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override),
-      coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
       sourceReferenceHash,
       coverageRegistryRevision: coverageRegistryNext.revision,
-      zoneCoverageRegistryRevision,
-      zoneCoverageAnchorScopeKey,
-      zoneCoverageAnchorAssetKey,
       sceneContinuityManifestHash,
       shotReferenceReadinessHash,
+      referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
       coverageDecision: coverageResolution.coverageDecision,
       graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
     })
@@ -722,11 +935,10 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         shot,
         coverageSetupId,
         sceneGraphOverride: asRecord(coverageSetup.sceneGraphOverride ?? coverageSetup.scene_graph_override),
-        coverageAnchorScopeKey,
-        coverageAnchorSource,
         manifestHash,
         directorPlanHash,
         sourceReferenceHash,
+        referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
         sceneContinuityManifestHash,
         shotReferenceReadinessHash,
         graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
@@ -755,14 +967,9 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         requiredReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
         omittedReferenceAssetKeys: [],
         sourceReferenceHash,
-        coverageAnchorScopeKey,
-        coverageAnchorSource,
-        coverage_anchor_source: coverageAnchorSource,
-        zoneCoverageBoardId: zoneCoverageBoardId || null,
-        zoneCoverageCell: Object.keys(zoneCoverageCell).length > 0 ? zoneCoverageCell : null,
-        zoneCoverageRegistryRevision,
-        coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
-        coverageAnchorScope: zoneCoverageAnchorScopeKey ? zoneCoverageAnchorScope : scopedCoverageShots.length === coverageShots.length ? 'coverage_setup' : 'shot_scoped',
+        referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
+        shotIngredientReferencePlan,
+        shot_ingredient_reference_plan: shotIngredientReferencePlan,
         coverageDecision: coverageResolution.coverageDecision,
         coverageDecisionReason: coverageResolution.coverageDecisionReason,
         coverageCompatibilityDiagnostics: coverageResolution.compatibilityDiagnostics,
@@ -770,12 +977,16 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         coverageSetupSource: coverageResolution.coverageSetupSource,
         requestedCoverageSetupId: requestedCoverageSetupId || null,
         dependencyWave: 5,
-        continuityDependencyNodeIds: continuityDependencies.map((entry) => readText(entry.targetNodeId)).filter(Boolean),
+        continuityDependencyNodeIds: [],
         missingContinuityNodeIds: [],
         referenceSelection: {
           selectedReferences: shotKeyframeSelectedReferences,
           omittedReferences: [],
         },
+        shotReferenceOverride: shotReferenceOverride && readText(shotReferenceOverride.shotId) === payload.shotId ? shotReferenceOverride : null,
+        shot_reference_override: shotReferenceOverride && readText(shotReferenceOverride.shotId) === payload.shotId ? shotReferenceOverride : null,
+        uiIngredientPlanHash: shotReferenceOverride && readText(shotReferenceOverride.shotId) === payload.shotId ? readText(shotReferenceOverride.ingredientPlanHash ?? shotReferenceOverride.ingredient_plan_hash) : '',
+        ui_ingredient_plan_hash: shotReferenceOverride && readText(shotReferenceOverride.shotId) === payload.shotId ? readText(shotReferenceOverride.ingredientPlanHash ?? shotReferenceOverride.ingredient_plan_hash) : '',
         sharedDependencyRequests: [
           ...shotKeyframeReferenceAssetKeys.map((assetKey) => ({
             role: readText(shotKeyframeSelectedReferences.find((entry) => readText(entry.assetKey) === assetKey)?.role) || 'entity_reference',
@@ -816,7 +1027,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
           coverageReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
           previousKeyframe: {},
           assetPack: scopedRefs.assetPack,
-          continuityDependencies,
+          continuityDependencies: [],
           dependencyMode: SHOT_GRAPH_DEPENDENCY_MODE,
           requiredReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
           omittedReferenceAssetKeys: [],
@@ -870,7 +1081,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
           selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
           page_count: null,
           target_format: 'video',
-          planner_notes: 'Shot production graph prepared from direct shot, coverage, continuity, and scoped reference data.',
+          planner_notes: 'Shot production graph prepared from canonical shot refs and scoped ingredient reference data.',
           metadata: { ...commonConfig, ...workflowTemplateMetadata, shot, createdFromManifestAt: new Date().toISOString() },
         },
       })

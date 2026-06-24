@@ -17,6 +17,7 @@ import {
   asRecord,
   artifactMetadataRecord,
   assetEntityForKey,
+  assetPackWithShotWorldRefs,
   buildValidatedSequenceAnimaticTemplateGraph,
   coverageSetupEntityRefIds,
   imageFromArtifact,
@@ -59,8 +60,10 @@ import {
 import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceAnimaticSceneState.ts'
 import { buildSequenceAnimaticStreamedShotReadyContext } from '../../../src/domain/sequenceAnimaticStreamedShotReady.ts'
 import {
+  buildSequenceAnimaticShotIngredientReferencePlan,
   buildSequenceAnimaticVisualReferencePlan,
   sequenceAnimaticContinuityLinkRequiresPrevious,
+  sequenceAnimaticCanonicalShotGraphPolicyVersion,
   sequenceAnimaticVisualReferenceHash,
 } from '../../../src/domain/sequenceAnimaticVisualReferencePlan.ts'
 import {
@@ -87,6 +90,101 @@ import {
 import {
   sequenceAnimaticShotProductionKeyframeTargetNodeKeys,
 } from '../../../src/domain/sequenceAnimaticNodeKeys.ts'
+
+const SHOT_KEYFRAME_UI_OVERRIDE_VERSION = 'shot_keyframe_reference_override_v1'
+
+function normalizeShotReferenceOverride(value: unknown) {
+  const override = asRecord(value)
+  const shotId = readText(override.shotId ?? override.shot_id)
+  const ingredients = readArray(override.ingredients)
+    .map(asRecord)
+    .map((entry, index) => {
+      const assetKey = readText(entry.assetKey ?? entry.asset_key)
+      const kind = readText(entry.kind)
+      const nodeId = readText(entry.nodeId ?? entry.node_id)
+      const entityKey = readText(entry.entityKey ?? entry.entity_key)
+      return {
+        ...entry,
+        id: readText(entry.id) || `${kind || 'ingredient'}:${assetKey || nodeId || entityKey || index}`,
+        kind,
+        name: readText(entry.name) || readText(entry.label),
+        nodeId,
+        node_id: nodeId,
+        entityKey,
+        entity_key: entityKey,
+        assetKey,
+        asset_key: assetKey,
+        assetUrl: readText(entry.assetUrl ?? entry.asset_url),
+        asset_url: readText(entry.assetUrl ?? entry.asset_url),
+        status: readText(entry.status) || (assetKey ? 'ready' : 'missing'),
+        source: readText(entry.source) || 'focused_shot_ingredient_ui',
+        role: readText(entry.role) || 'shot_ingredient_reference',
+        sourceArtifactRole: readText(entry.sourceArtifactRole ?? entry.source_artifact_role),
+        source_artifact_role: readText(entry.sourceArtifactRole ?? entry.source_artifact_role),
+        requiredForKeyframe: entry.requiredForKeyframe !== false && entry.required_for_keyframe !== false,
+        required_for_keyframe: entry.requiredForKeyframe !== false && entry.required_for_keyframe !== false,
+        uiOrder: Number.isFinite(Number(entry.uiOrder ?? entry.ui_order)) ? Number(entry.uiOrder ?? entry.ui_order) : index,
+        ui_order: Number.isFinite(Number(entry.uiOrder ?? entry.ui_order)) ? Number(entry.uiOrder ?? entry.ui_order) : index,
+      }
+    })
+    .filter((entry) => entry.requiredForKeyframe)
+    .sort((left, right) => Number(left.uiOrder) - Number(right.uiOrder))
+  if (!shotId || ingredients.length === 0) return null
+  return {
+    version: SHOT_KEYFRAME_UI_OVERRIDE_VERSION,
+    shotId,
+    shot_id: shotId,
+    ingredientPlanHash: readText(override.ingredientPlanHash ?? override.ingredient_plan_hash) || sequenceAnimaticStableHash({ shotId, ingredients }),
+    ingredient_plan_hash: readText(override.ingredientPlanHash ?? override.ingredient_plan_hash) || sequenceAnimaticStableHash({ shotId, ingredients }),
+    source: 'focused_shot_ingredient_ui',
+    ingredients,
+  }
+}
+
+function overrideReferencesFromUiIngredients(override: ReturnType<typeof normalizeShotReferenceOverride>) {
+  if (!override) return null
+  const seen = new Set<string>()
+  const selectedReferences = override.ingredients
+    .map((entry) => {
+      const assetKey = readText(entry.assetKey)
+      const status = readText(entry.status) || (assetKey ? 'ready' : 'missing')
+      if (status !== 'ready' || !assetKey || seen.has(assetKey)) return null
+      seen.add(assetKey)
+      return {
+        assetKey,
+        role: readText(entry.role) || 'shot_ingredient_reference',
+        sourceArtifactRole: readText(entry.sourceArtifactRole ?? entry.source_artifact_role),
+        reason: 'Selected explicitly from the focused shot ingredient UI.',
+        name: readText(entry.name),
+        type: readText(entry.kind),
+        kind: readText(entry.kind),
+        nodeId: readText(entry.nodeId ?? entry.node_id),
+        entityKey: readText(entry.entityKey ?? entry.entity_key),
+        status: 'ready',
+        assetUrl: readText(entry.assetUrl ?? entry.asset_url),
+        source: 'focused_shot_ingredient_ui',
+        uiOrder: Number(entry.uiOrder ?? entry.ui_order) || 0,
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+  return {
+    requiredReferenceAssetKeys: selectedReferences.map((entry) => readText(entry.assetKey)).filter(Boolean),
+    selectedReferences,
+    referencePlanHash: readText(override.ingredientPlanHash ?? override.ingredient_plan_hash),
+    shotIngredientReferencePlan: {
+      version: 'sequence_animatic_shot_ingredient_reference_plan_v1',
+      shotId: override.shotId,
+      referencePlanHash: readText(override.ingredientPlanHash ?? override.ingredient_plan_hash),
+      source: 'focused_shot_ingredient_ui',
+      ingredients: override.ingredients,
+      requiredReferenceAssetKeys: selectedReferences.map((entry) => readText(entry.assetKey)).filter(Boolean),
+      selectedReferences,
+      missingReferences: [],
+      omittedReferences: [],
+      uiOverride: true,
+    },
+  }
+}
 
 async function insertSequenceAnimaticEvent(input: {
   admin: {
@@ -157,8 +255,13 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
       const rawType = readText(reference.type ?? reference.anchorType ?? reference.anchor_type ?? reference.assetKind ?? reference.asset_kind ?? reference.nodeKind ?? reference.node_kind)
       const normalizedType = rawType === 'temp_character'
         || rawType === 'temporary_character'
+        || rawType === 'character'
+        || rawType === 'person'
+        || rawType === 'crowd'
+        || rawType === 'group'
+        || rawType === 'faction'
         ? 'character'
-        : ['prop', 'item', 'faction', 'crowd', 'vehicle', 'animatic_only'].includes(rawType)
+        : ['prop', 'item', 'vehicle', 'animatic_only'].includes(rawType)
           ? 'prop'
           : rawType
       const assetKind = normalizedType === 'character'
@@ -637,6 +740,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
 }) {
     const { client, admin, userId } = input
     const payload = sequenceAnimaticKeyframeWorkflowEnsureRequestSchema.parse(input.payload)
+    const shotReferenceOverride = normalizeShotReferenceOverride(payload.shotReferenceOverride ?? payload.shot_reference_override)
 
     const masterRequest = await loadScreenplayAnimaticMasterRequest({
       client,
@@ -724,8 +828,8 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     const requestedShotIds = readStringArray(payload.shotIds)
     const isShotScopedEnsure = requestedShotIds.length === 1
     const scopedShotId = requestedShotIds[0] ?? ''
-    const shotGraphDependencyMode = 'single_node_chain' as const
-    const shotGraphPolicyVersion = 'primary_chain_v8_zone_spatial_refs' as const
+    const shotGraphDependencyMode = 'ingredient_refs' as const
+    const shotGraphPolicyVersion = sequenceAnimaticCanonicalShotGraphPolicyVersion
     let masterMetadataForWrites = masterMetadata
     let coverageRegistry = coverageRegistryFromSources({
       masterMetadata,
@@ -872,6 +976,21 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       seenShotIds.add(id)
       return true
     })
+    const shotWorldRefIds = uniqueTexts(uniqueShots.flatMap((shot) => shotEntityRefIds(shot)))
+    const worldEntityResponse = shotWorldRefIds.length > 0
+      ? await client
+        .from('world_entities')
+        .select('key, name, node_type, thumbnail_asset_key, metadata')
+        .eq('draft_id', payload.draftId)
+        .in('key', shotWorldRefIds)
+      : { data: [], error: null }
+    if (worldEntityResponse.error) throw new Error(worldEntityResponse.error.message)
+    const worldEntityByKey = new Map(
+      (worldEntityResponse.data ?? [])
+        .map(asRecord)
+        .map((entity) => [readText(entity.key), entity] as const)
+        .filter(([key]) => key),
+    )
     const assetPackEntities = readArray(assetPack.entities).map(asRecord)
     const assetChildren = ensuredChildren.filter((child) => {
       const role = readScreenplayAnimaticRole(asRecord(child.metadata))
@@ -1114,7 +1233,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         if (!assetKey) return []
         if (zoneAssetKeySet.has(assetKey)) return []
         if (nodeKind === 'location_zone') return []
-        if (nodeKind === 'location_spot' && zoneAssetKeys.length > 0) return []
+        if (nodeKind === 'location_spot') return []
         if (nodeKind === 'location_set' || nodeKind === 'spot_camera_grid' || nodeKind === 'location_viewpoint' || nodeKind === 'location_angle') return []
         return [{
           assetKey,
@@ -1156,52 +1275,144 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         ...assetKeysForEntityKeys(setupEntityKeys),
       ].filter(Boolean))].slice(0, 8)
     }
-    const rankedReferenceKeysForShot = (job: Record<string, unknown>) => {
+    const referencePlanNodeRecord = (node: Record<string, unknown>): Record<string, unknown> => {
+      const nodeId = readText(node.id)
+      const assetState = asRecord(continuityAssetStateByNodeId[nodeId] ?? {})
+      const nodeRecord = node as unknown as Record<string, unknown>
+      const metadata = asRecord(node.metadata)
+      return {
+        ...nodeRecord,
+        ...metadata,
+        id: nodeId,
+        nodeId,
+        kind: readText(node.kind ?? node.nodeKind ?? node.node_kind),
+        name: readText(node.name ?? node.label ?? node.title),
+        summary: node.summary,
+        visualBrief: node.visualBrief ?? node.visual_brief,
+        assetKey: readText(assetState.assetKey) ?? readText(nodeRecord.assetKey) ?? readText(metadata.assetKey),
+        assetUrl: readText(assetState.assetUrl) ?? readText(nodeRecord.assetUrl) ?? readText(metadata.assetUrl),
+        status: readText(assetState.status) ?? readText(nodeRecord.status) ?? readText(metadata.status),
+        assetState,
+        requiredForKeyframe: true,
+      }
+    }
+    const shotIngredientZoneNodeIdsForPlan = (shot: Record<string, unknown>, coverageSetup?: Record<string, unknown> | null) => {
+      const ids = new Set<string>(zoneNodeIdsForShot(shot, coverageSetup ?? null))
+      const nodeKind = (node: Record<string, unknown> | undefined) => readText(node?.kind ?? node?.nodeKind ?? node?.node_kind ?? node?.assetKind ?? node?.asset_kind)
+      const directIds = new Set<string>([
+        ...shotSceneBindingNodeIds(shot),
+        ...shotReferenceNodeIds(shot, graphNodeIds),
+      ])
+      for (const id of directIds) {
+        const node = graphNodeById.get(id)
+        if (!node) continue
+        const kind = nodeKind(node)
+        if (kind === 'zone' || kind === 'location_zone') {
+          ids.add(id)
+          continue
+        }
+        if (kind === 'spot' || kind === 'location_spot') {
+          const parentId = readText(continuityNodeParentId(node))
+          const parent = parentId ? graphNodeById.get(parentId) : null
+          if (nodeKind(parent) === 'zone' || nodeKind(parent) === 'location_zone') ids.add(parent.id)
+        }
+      }
+      return [...ids].filter((id) => {
+        const kind = nodeKind(graphNodeById.get(id))
+        return kind === 'zone' || kind === 'location_zone'
+      })
+    }
+    const shotIngredientReferencePlanForJob = (job: Record<string, unknown>) => {
       const shot = asRecord(job.shot)
-      const shotId = readText(job.shotId)
       const coverageSetupId = readText(job.coverageSetupId)
-      const previousShotId = readText(job.previousShotId)
       const coverageSetup = coverageSetupId
         ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
         : {}
-      const refs = asRecord(shot.refs)
-      const dialogue = readArray(shot.dialogue).map(asRecord)
-      const continuityReferenceEntries = continuityReferenceEntriesForShot(shot, coverageSetup)
-      const coverageSetupEntityKeys = [
-        ...readStringArray(coverageSetup.characterRefIds ?? coverageSetup.character_ref_ids),
-        ...readStringArray(coverageSetup.visibleCharacterRefIds ?? coverageSetup.visible_character_ref_ids),
-        ...readStringArray(coverageSetup.subjectRefIds ?? coverageSetup.subject_ref_ids),
-        ...readStringArray(coverageSetup.speakerRefIds ?? coverageSetup.speaker_ref_ids),
-        ...readStringArray(coverageSetup.propRefIds ?? coverageSetup.prop_ref_ids),
-        ...readStringArray(coverageSetup.itemRefIds ?? coverageSetup.item_ref_ids),
-      ]
-      const shotEntityKeys = [
-        ...readStringArray(refs.speakerRefIds ?? refs.speaker_ref_ids),
-        ...dialogue.map((line) => readText(line.speakerRefId ?? line.speaker_ref_id)),
-        ...readStringArray(refs.visibleCharacterRefIds ?? refs.visible_character_ref_ids),
-        ...readStringArray(refs.propRefIds ?? refs.prop_ref_ids),
-        ...readStringArray(shot.speakerRefIds),
-        ...readStringArray(shot.visibleCharacterRefIds),
-        ...readStringArray(shot.propRefIds),
-        readText(shot.locationRefId),
-      ].filter(Boolean)
-      const entityAssetKeys = assetKeysForEntityKeys([
-        ...shotEntityKeys,
-        ...(shotEntityKeys.length === 0 ? coverageSetupEntityKeys : []),
-      ])
-      const candidates = [
-        ...continuityReferenceEntries,
-        ...entityAssetKeys.map((assetKey) => ({ assetKey, role: 'entity_reference' as const, reason: shotEntityKeys.length === 0 ? 'Coverage setup subject fallback reference.' : 'Shot-visible character, speaker, prop, or location reference.' })),
-      ].filter((entry) => readText(entry.assetKey))
-      const unique = candidates.filter((entry, index, entries) => entries.findIndex((candidate) => readText(candidate.assetKey) === readText(entry.assetKey)) === index)
-      const required = unique.slice(0, 8)
-      const omitted = unique.slice(8)
+      const zoneNodes = shotIngredientZoneNodeIdsForPlan(shot, coverageSetup)
+        .map((nodeId) => graphNodeById.get(nodeId))
+        .filter((node): node is Record<string, unknown> => Boolean(node))
+        .map(referencePlanNodeRecord)
+      return buildSequenceAnimaticShotIngredientReferencePlan({
+        shot,
+        spatialNodes: zoneNodes,
+        continuityTargets: Array.from(graphNodeById.values()).map(referencePlanNodeRecord),
+        assetPack: assetPackWithShotWorldRefs({ assetPack, shot, worldEntityByKey }),
+        explicitReferenceIds: [
+          ...readStringArray(asRecord(shot.refs).referenceIds ?? asRecord(shot.refs).reference_ids),
+          ...shotEntityRefIds(shot),
+        ],
+        maxReferences: 8,
+      })
+    }
+    const rankedReferenceKeysForShot = (job: Record<string, unknown>) => {
+      const shot = asRecord(job.shot)
+      const shotId = readText(job.shotId)
+      const uiOverrideReferences = shotReferenceOverride && readText(shotReferenceOverride.shotId) === shotId
+        ? overrideReferencesFromUiIngredients(shotReferenceOverride)
+        : null
+      if (uiOverrideReferences) {
+        return {
+          shotId,
+          required: uiOverrideReferences.requiredReferenceAssetKeys.slice(0, 8),
+          omitted: [],
+          selectedReferences: uiOverrideReferences.selectedReferences,
+          omittedReferences: readArray(shotReferenceOverride.ingredients)
+            .map(asRecord)
+            .filter((entry) => readText(entry.status) !== 'ready' || !readText(entry.assetKey))
+            .map((entry) => ({
+              id: readText(entry.id),
+              name: readText(entry.name),
+              type: readText(entry.kind),
+              kind: readText(entry.kind),
+              nodeId: readText(entry.nodeId ?? entry.node_id),
+              entityKey: readText(entry.entityKey ?? entry.entity_key),
+              role: readText(entry.role),
+              status: readText(entry.status),
+              assetKey: readText(entry.assetKey ?? entry.asset_key),
+              requiredForKeyframe: entry.requiredForKeyframe !== false && entry.required_for_keyframe !== false,
+              source: 'focused_shot_ingredient_ui',
+            })),
+          missingReferences: [],
+          referencePlanHash: uiOverrideReferences.referencePlanHash,
+          referencePlan: uiOverrideReferences.shotIngredientReferencePlan,
+        }
+      }
+      const referencePlan = shotIngredientReferencePlanForJob(job)
+      const required = referencePlan.requiredReferenceAssetKeys.slice(0, 8)
       return {
         shotId,
-        required: required.map((entry) => readText(entry.assetKey)),
-        omitted: omitted.map((entry) => readText(entry.assetKey)),
-        selectedReferences: required,
-        omittedReferences: omitted.map((entry) => ({ ...entry, reason: `${entry.reason} Omitted because the shot reference budget was full.` })),
+        required,
+        omitted: [],
+        selectedReferences: referencePlan.ingredients
+          .filter((reference) => reference.status === 'ready' && readText(reference.assetKey))
+          .map((reference) => ({
+            assetKey: reference.assetKey,
+            role: reference.role,
+            sourceArtifactRole: reference.sourceArtifactRole,
+            reason: reference.reason,
+            name: reference.name,
+            type: reference.kind,
+            kind: reference.kind,
+            nodeId: reference.nodeId,
+            entityKey: reference.entityKey,
+            status: reference.status,
+            assetUrl: reference.imageUrl,
+          })),
+        omittedReferences: [],
+        missingReferences: referencePlan.missingReferences.map((reference) => ({
+          id: reference.id,
+          name: reference.name,
+          type: reference.kind,
+          kind: reference.kind,
+          nodeId: reference.nodeId,
+          entityKey: reference.entityKey,
+          role: reference.role,
+          status: reference.status,
+          assetKey: reference.assetKey,
+          requiredForKeyframe: reference.requiredForKeyframe,
+        })),
+        referencePlanHash: referencePlan.referencePlanHash,
+        referencePlan,
       }
     }
     const coverageAnchorReferenceAssetKeysBySetupId = Object.fromEntries(readArray(keyframePlan.coverageAnchorJobs)
@@ -1220,19 +1431,23 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       .map(rankedReferenceKeysForShot)
     const shotRequiredReferenceAssetKeysByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.required]).filter(([shotId]) => shotId))
     const shotOmittedReferenceAssetKeysByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.omitted]).filter(([shotId]) => shotId))
+    const shotMissingReferencesByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.missingReferences ?? []]).filter(([shotId]) => shotId))
+    const shotReferencePlanHashByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, readText(entry.referencePlanHash)]).filter(([shotId]) => shotId))
+    const shotIngredientReferencePlanByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.referencePlan]).filter(([shotId]) => shotId))
     const coverageAnchorSelectedReferencesBySetupId = Object.fromEntries(Object.entries(coverageAnchorReferenceAssetKeysBySetupId)
       .map(([setupId, assetKeys]) => [setupId, readStringArray(assetKeys).map((assetKey) => ({ assetKey, role: 'selected_reference' as const, reason: 'Selected for coverage anchor generation.' }))] as const))
     const shotSelectedReferencesByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.selectedReferences]).filter(([shotId]) => shotId))
     const shotOmittedReferencesByShotId = Object.fromEntries(shotReferenceSelection.map((entry) => [entry.shotId, entry.omittedReferences]).filter(([shotId]) => shotId))
+    const shotIngredientsOnlyKeyframeMode = isShotScopedEnsure
     const graphLocalReferenceKeysForShotProduction = (shotId: string) => readArray(shotSelectedReferencesByShotId[shotId])
       .map(asRecord)
-      .filter((entry) => ['entity_reference', 'continuity_asset'].includes(readText(entry.role)))
+      .filter((entry) => readText(entry.assetKey))
       .map((entry) => readText(entry.assetKey))
       .filter(Boolean)
     const visualReferencePlan = buildSequenceAnimaticVisualReferencePlan({
       keyframePlan: asRecord(keyframePlan),
-      dependencyNodeIds: dependencyTargetIds,
-      missingDependencyNodeIds: missingDependencyIds,
+      dependencyNodeIds: shotIngredientsOnlyKeyframeMode ? [] : dependencyTargetIds,
+      missingDependencyNodeIds: shotIngredientsOnlyKeyframeMode ? [] : missingDependencyIds,
       coverageAnchorAssetKeysBySetupId,
       shotKeyframeAssetKeysByShotId,
       coverageAnchorReferenceAssetKeysBySetupId,
@@ -1241,16 +1456,21 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       coverageAnchorSelectedReferencesBySetupId,
       shotSelectedReferencesByShotId,
       shotOmittedReferencesByShotId,
-      shotBlockingDependencyNodeIdsByShotId,
+      shotBlockingDependencyNodeIdsByShotId: shotIngredientsOnlyKeyframeMode ? {} : shotBlockingDependencyNodeIdsByShotId,
+      coverageAnchorsRequiredForKeyframes: !shotIngredientsOnlyKeyframeMode,
     })
     const scopedShotJob = isShotScopedEnsure
       ? readArray(keyframePlan.shotKeyframeJobs).map(asRecord).find((job) => readText(job.shotId) === scopedShotId) ?? null
       : null
     const scopedCoverageSetupId = scopedShotJob ? readText(scopedShotJob.coverageSetupId) : ''
     const scopedPreviousShotId = scopedShotJob ? readText(scopedShotJob.previousShotId) : ''
-    const scopedMissingContinuityNodeIds = readStringArray(shotBlockingDependencyNodeIdsByShotId[scopedShotId])
+    const scopedMissingContinuityNodeIds = shotIngredientsOnlyKeyframeMode
+      ? []
+      : readStringArray(shotBlockingDependencyNodeIdsByShotId[scopedShotId])
+    const scopedMissingShotReferences = readArray(shotMissingReferencesByShotId[scopedShotId]).map(asRecord)
     const scopedKeyframeReady = Boolean(scopedShotId && readText(shotKeyframeImageByShotId.get(scopedShotId)?.assetKey))
     const scopedCoverageReady = !scopedShotJob
+      || isShotScopedEnsure
       || scopedShotJob.requiresCoverageAnchor !== true
       || !scopedCoverageSetupId
       || Boolean(readText(coverageAnchorImageBySetupId.get(scopedCoverageSetupId)?.assetKey))
@@ -1265,6 +1485,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
             ? 'ready_for_keyframe'
             : 'blocked',
       missingContinuityNodeIds: scopedMissingContinuityNodeIds,
+      missingReferences: scopedMissingShotReferences,
       coverageSetupReady: scopedCoverageReady,
       previousKeyframeReady: scopedPreviousKeyframeReady,
       keyframeReady: scopedKeyframeReady,
@@ -1301,6 +1522,46 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       coverageSetupId: scopedCoverageSetupId || null,
       dependencyNodeIds,
     })
+    if (shotIngredientsOnlyKeyframeMode && scopedMissingShotReferences.length > 0) {
+      const missingLabels = scopedMissingShotReferences
+        .map((entry) => readText(entry.name) ?? readText(entry.id) ?? readText(entry.nodeId))
+        .filter(Boolean)
+      return sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse({
+        ok: true,
+        masterRequest,
+        keyframePlan: {
+          ...keyframePlanWithSource,
+          dependencyReadiness: {
+            status: 'waiting_for_keyframe_refs',
+            dependencyNodeIds: [],
+            missingDependencyNodeIds: [],
+          },
+        },
+        visualReferencePlan,
+        nextAction: blockedNextAction(
+          `Generate missing shot references before keyframe generation${missingLabels.length > 0 ? `: ${missingLabels.join(', ')}` : '.'}`,
+          scopedMissingShotReferences.map((entry) => readText(entry.nodeId) ?? readText(entry.id)).filter(Boolean),
+        ),
+        shotReadiness,
+        blockedShotKeyframes: [{
+          shotId: scopedShotId,
+          storyboardBlockId: readText(scopedShotJob?.storyboardBlockId) || null,
+          reason: 'missing_continuity_asset' as const,
+          coverageSetupId: scopedCoverageSetupId || null,
+          previousShotId: null,
+          missingContinuityNodeIds: [],
+          missingReferences: scopedMissingShotReferences,
+        }],
+        dependencyWaves,
+        continuityAssetRequests: [],
+        coverageAnchorRequests: [],
+        shotKeyframeRequests: [],
+        childRequests: [],
+        workflows: await workflowsForCreatedIds(),
+        nodes: createdNodes,
+        edges: createdEdges,
+      })
+    }
     const sceneContinuityManifests = await loadSceneContinuityManifests({
       client,
       projectId: payload.projectId,
@@ -1629,7 +1890,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           nodeIds: groups.flatMap((group) => group.nodes.map((node) => readText(node.id)).filter(Boolean)),
         })
       }
-      if (isShotScopedEnsure && shotGraphDependencyMode !== 'single_node_chain') {
+      if (!shotIngredientsOnlyKeyframeMode) {
         const [wave, groups] = [...groupsByWave.entries()].sort(([left], [right]) => left - right)[0] ?? [1, []]
         const group = groups[0]
         const child = group ? await ensureContinuityDependencyGroup(group) : null
@@ -1669,7 +1930,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           edges: createdEdges,
         })
       }
-      if (isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain') {
+      if (shotIngredientsOnlyKeyframeMode) {
         // In the self-contained shot graph mode, missing continuity references
         // become upstream nodes inside shot_production. Keep legacy batch groups
         // computed for diagnostics, but do not create/run separate children.
@@ -1680,7 +1941,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       }
       }
     }
-    if (ensuredContinuityAssetRequests.length > 0 && !(isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain')) {
+    if (ensuredContinuityAssetRequests.length > 0 && !shotIngredientsOnlyKeyframeMode) {
       const blockedShotKeyframes = Object.entries(shotBlockingDependencyNodeIdsByShotId).map(([shotId, missingContinuityNodeIds]) => {
         const job = readArray(keyframePlan.shotKeyframeJobs).map(asRecord).find((entry) => readText(entry.shotId) === shotId) ?? {}
         return {
@@ -1722,7 +1983,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       })
     }
 
-    if (!isShotScopedEnsure || shotGraphDependencyMode !== 'single_node_chain') for (const job of readArray(keyframePlan.coverageAnchorJobs).map(asRecord)) {
+    if (!shotIngredientsOnlyKeyframeMode) for (const job of readArray(keyframePlan.coverageAnchorJobs).map(asRecord)) {
       const coverageSetupId = readText(job.coverageSetupId)
       if (!coverageSetupId) continue
       if (payload.mode === 'generate' && readText(coverageAnchorImageBySetupId.get(coverageSetupId)?.assetKey)) continue
@@ -1851,7 +2112,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       })
     }
 
-    if (isShotScopedEnsure && shotGraphDependencyMode !== 'single_node_chain' && scopedShotJob && !scopedCoverageReady) {
+    if (!shotIngredientsOnlyKeyframeMode && scopedShotJob && !scopedCoverageReady) {
       const child = scopedCoverageSetupId ? existingByCoverageSetupId.get(scopedCoverageSetupId) ?? null : null
       return sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse({
         ok: true,
@@ -2023,9 +2284,9 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     for (const job of readArray(keyframePlan.shotKeyframeJobs).map(asRecord)) {
       const shotId = readText(job.shotId)
       if (!shotId) continue
-      if (payload.mode === 'generate' && readText(shotKeyframeImageByShotId.get(shotId)?.assetKey) && !(isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain' && shotId === scopedShotId)) continue
+      if (payload.mode === 'generate' && readText(shotKeyframeImageByShotId.get(shotId)?.assetKey) && !(shotIngredientsOnlyKeyframeMode && shotId === scopedShotId)) continue
       const missingContinuityNodeIds = readStringArray(shotBlockingDependencyNodeIdsByShotId[shotId])
-      if (missingContinuityNodeIds.length > 0 && !(isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain')) {
+      if (missingContinuityNodeIds.length > 0 && !shotIngredientsOnlyKeyframeMode) {
         blockedShotKeyframes.push({
           shotId,
           storyboardBlockId: readText(job.storyboardBlockId) || null,
@@ -2037,7 +2298,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         continue
       }
       const coverageSetupIdForReadiness = readText(job.coverageSetupId)
-      if (job.requiresCoverageAnchor === true && coverageSetupIdForReadiness && !readText(coverageAnchorImageBySetupId.get(coverageSetupIdForReadiness)?.assetKey) && !(isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain')) {
+      if (job.requiresCoverageAnchor === true && coverageSetupIdForReadiness && !readText(coverageAnchorImageBySetupId.get(coverageSetupIdForReadiness)?.assetKey) && !shotIngredientsOnlyKeyframeMode) {
         // Coverage validation gate: never silently drop a shot — report why it
         // is blocked so the client can offer "generate missing anchors" instead
         // of appearing stuck.
@@ -2098,6 +2359,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       }
       let child = existingByShotId.get(shotId) ?? null
       const shot = asRecord(job.shot)
+      const scopedShotAssetPack = assetPackWithShotWorldRefs({ assetPack, shot, worldEntityByKey })
       let coverageSetupId = readText(job.coverageSetupId)
       let coverageSetup = coverageSetupId
         ? asRecord(readArray(keyframePlan.coverageAnchorJobs).map(asRecord).find((entry) => readText(entry.coverageSetupId) === coverageSetupId)?.coverageSetup)
@@ -2155,10 +2417,12 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       const scopedCoverageShots = scopedCoverageShotsForShot({ shot, coverageSetup, coverageShots })
       const visualPlanRequiredReferenceAssetKeys = readStringArray(shotRequiredReferenceAssetKeysByShotId[shotId])
       const visualPlanOmittedReferenceAssetKeys = readStringArray(shotOmittedReferenceAssetKeysByShotId[shotId])
-      const requiredReferenceAssetKeys = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+      const referencePlanHash = readText(shotReferencePlanHashByShotId[shotId]) ?? ''
+      const shotIngredientReferencePlan = asRecord(shotIngredientReferencePlanByShotId[shotId])
+      const requiredReferenceAssetKeys = shotIngredientsOnlyKeyframeMode
         ? graphLocalReferenceKeysForShotProduction(shotId)
         : visualPlanRequiredReferenceAssetKeys
-      const selectedReferencesForShotProduction = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+      const selectedReferencesForShotProduction = shotIngredientsOnlyKeyframeMode
         ? readArray(shotSelectedReferencesByShotId[shotId])
           .map(asRecord)
           .filter((entry) => requiredReferenceAssetKeys.includes(readText(entry.assetKey)))
@@ -2168,10 +2432,9 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           .map((entry) => [readText(entry.assetKey), readText(entry.role)] as const)
           .filter(([assetKey]) => Boolean(assetKey)),
       )
-      const omittedReferenceAssetKeys = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+      const omittedReferenceAssetKeys = shotIngredientsOnlyKeyframeMode
         ? readArray(shotOmittedReferencesByShotId[shotId])
           .map(asRecord)
-          .filter((entry) => ['entity_reference', 'continuity_asset'].includes(readText(entry.role)))
           .map((entry) => readText(entry.assetKey))
           .filter(Boolean)
         : visualPlanOmittedReferenceAssetKeys
@@ -2184,14 +2447,13 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       const sourceShotHash = sequenceAnimaticStableHash({
         shotId,
         shot,
-        coverageSetupId,
-        coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
+        referencePlanHash,
+        requiredReferenceAssetKeys,
+        selectedReferencesForShotProduction,
         sourceReferenceHash,
         sceneContinuityManifestHash,
         shotReferenceReadinessHash,
         graphPolicyVersion: shotGraphPolicyVersion,
-        coverageRegistryRevision: coverageRegistry.revision,
-        coverageDecision: coverageResolution.coverageDecision,
       })
       const coverageAnchorScopeKey = coverageSetupId ? sequenceAnimaticStableHash({
         coverageSetupId,
@@ -2200,7 +2462,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         subjectRefIds: shotEntityRefIds(shot),
         policy: 'shot_scoped_coverage_anchor_v1',
       }) : ''
-      if (child && isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain') {
+      if (child && shotIngredientsOnlyKeyframeMode) {
         const childMetadata = asRecord(child.metadata)
         const staleReason = payload.mode === 'regenerate' && shotId === scopedShotId
           ? 'Shot production graph refresh requested.'
@@ -2209,7 +2471,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           : readScreenplayAnimaticRole(childMetadata) !== 'shot_production'
             || readText(childMetadata.dependencyMode) !== shotGraphDependencyMode
             || readText(childMetadata.shotGraphPolicyVersion) !== shotGraphPolicyVersion
-            ? 'Shot production workflow upgraded to self-contained single-node dependency graph.'
+          ? 'Shot production workflow upgraded to ingredient-reference keyframe graph.'
             : ''
         if (staleReason) {
           const staleResponse = await admin
@@ -2278,10 +2540,8 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         const workflowId = crypto.randomUUID()
         const blockId = readText(job.storyboardBlockId)
         const block = asRecord(asRecord(keyframePlan.blockById)[blockId])
-        const continuityDependencies = shotGraphDependencyMode === 'single_node_chain'
-          ? shotContinuityDependenciesForGraph(shot, coverageSetup)
-          : []
-        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, coverageSetupId, manifestHash, directorPlanHash, sourceReferenceHash, sceneContinuityManifestHash, shotReferenceReadinessHash, graphPolicyVersion: shotGraphPolicyVersion })
+        const continuityDependencies: Record<string, unknown>[] = []
+        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, referencePlanHash, manifestHash, directorPlanHash, sourceReferenceHash, sceneContinuityManifestHash, shotReferenceReadinessHash, graphPolicyVersion: shotGraphPolicyVersion })
         const commonConfig = {
           cinematicPipelineVersion: 'v3_script_storyboards',
           graphSpecVersion: sequenceAnimaticGraphSpecVersion,
@@ -2304,6 +2564,9 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           sourceShotHash,
           sceneContinuityManifestHash,
           shotReferenceReadinessHash,
+          referencePlanHash,
+          shotIngredientReferencePlan,
+          shot_ingredient_reference_plan: shotIngredientReferencePlan,
           sceneContinuityManifestStatus: readText(sceneContinuity.manifest?.status),
           manifestHash,
           directorPlanHash,
@@ -2311,9 +2574,6 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           requiredReferenceAssetKeys,
           omittedReferenceAssetKeys,
           sourceReferenceHash,
-          coverageAnchorScopeKey,
-          coverageAnchorShotIds: scopedCoverageShots.map((entry) => readText(entry.id)).filter(Boolean),
-          coverageAnchorScope: scopedCoverageShots.length === coverageShots.length ? 'coverage_setup' : 'shot_scoped',
           visualPlanHash: readText(visualReferencePlan.visualPlanHash),
           dependencyWave: 5,
           continuityDependencyNodeIds: continuityDependencies.map((entry) => readText(entry.targetNodeId)).filter(Boolean),
@@ -2322,6 +2582,10 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
             selectedReferences: selectedReferencesForShotProduction,
             omittedReferences: readArray(shotOmittedReferencesByShotId[shotId]).map(asRecord),
           },
+          shotReferenceOverride: shotReferenceOverride && readText(shotReferenceOverride.shotId) === shotId ? shotReferenceOverride : null,
+          shot_reference_override: shotReferenceOverride && readText(shotReferenceOverride.shotId) === shotId ? shotReferenceOverride : null,
+          uiIngredientPlanHash: shotReferenceOverride && readText(shotReferenceOverride.shotId) === shotId ? readText(shotReferenceOverride.ingredientPlanHash ?? shotReferenceOverride.ingredient_plan_hash) : '',
+          ui_ingredient_plan_hash: shotReferenceOverride && readText(shotReferenceOverride.shotId) === shotId ? readText(shotReferenceOverride.ingredientPlanHash ?? shotReferenceOverride.ingredient_plan_hash) : '',
           sharedDependencyRequests: [
             ...requiredReferenceAssetKeys.map((assetKey) => ({
               role: selectedReferenceRoleByAssetKey.get(assetKey) || 'entity_reference',
@@ -2344,6 +2608,40 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           readyToRun: true,
           provisional: provisionalContext,
         }
+        const shotReferenceAssetPack = {
+          ...asRecord(scopedShotAssetPack),
+          scopedReferenceAssetKeys: requiredReferenceAssetKeys,
+          scoped_reference_asset_keys: requiredReferenceAssetKeys,
+          referenceAssetKeys: requiredReferenceAssetKeys,
+          reference_asset_keys: requiredReferenceAssetKeys,
+          entities: selectedReferencesForShotProduction.map((entry, index) => {
+            const assetKey = readText(entry.assetKey)
+            const kind = readText(entry.kind ?? entry.type)
+            const role = readText(entry.role) || 'shot_ingredient_reference'
+            const name = readText(entry.name) || `Shot reference ${index + 1}`
+            return {
+              key: readText(entry.entityKey) || readText(entry.nodeId) || `ui_ref_${index + 1}`,
+              id: readText(entry.entityKey) || readText(entry.nodeId) || `ui_ref_${index + 1}`,
+              name,
+              type: kind || role,
+              nodeType: kind || role,
+              node_type: kind || role,
+              role,
+              summary: readText(entry.reason) || 'Visible focused-shot ingredient reference.',
+              visualDescription: 'Use this attached image exactly as the focused shot ingredient reference.',
+              assetKeys: [assetKey],
+              primaryAssetKey: assetKey,
+              primary_asset_key: assetKey,
+              selectedReferenceAssetKey: assetKey,
+              selected_reference_asset_key: assetKey,
+              selectedReferenceVariantKey: role,
+              selectedReferenceVariantLabel: name,
+              selectedReferenceVariantType: role,
+              referenceSelectionReason: 'Selected explicitly from the focused shot ingredient UI.',
+              referenceDiagnostics: [`ui_ingredient_order:${index}`],
+            }
+          }).filter((entry) => readText(entry.primaryAssetKey)),
+        }
         const graphResult = buildValidatedSequenceAnimaticTemplateGraph({
           registry: sequenceAnimaticCommandWorkflowTemplateRegistry,
           templateKey: sequenceAnimaticShotProductionTemplateKey,
@@ -2354,13 +2652,13 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
             block,
             shot,
             panel: {},
-            coverageAnchor: coverageSetupId ? coverageAnchorImageBySetupId.get(coverageSetupId) ?? {} : {},
+            coverageAnchor: {},
             sceneContinuityManifest,
-            coverageSetup,
-            coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
+            coverageSetup: {},
+            coverageShots: [shot],
             coverageReferenceAssetKeys: requiredReferenceAssetKeys,
-            previousKeyframe: readText(job.previousShotId) ? shotKeyframeImageByShotId.get(readText(job.previousShotId)) ?? {} : {},
-            assetPack,
+            previousKeyframe: {},
+            assetPack: shotReferenceAssetPack,
             continuityDependencies,
             dependencyMode: shotGraphDependencyMode,
             requiredReferenceAssetKeys,
@@ -2415,7 +2713,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
             selected_sequence_unit_keys: masterRequest.selectedSequenceUnitKeys,
             page_count: null,
             target_format: 'video',
-            planner_notes: 'Shot production graph prepared from the sequence animatic shot plan, shared refs, keyframe, and downstream video node.',
+            planner_notes: 'Shot production graph prepared from canonical shot refs, scoped ingredient refs, keyframe, and downstream video node.',
             metadata: { ...commonConfig, ...workflowTemplateMetadata, shot, createdFromManifestAt: now },
           },
         })
@@ -2433,7 +2731,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         dedupeKey: 'shotId',
         dedupeValue: shotId,
       })
-      if (isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain' && shotId === scopedShotId && child.workflowId) {
+      if (shotIngredientsOnlyKeyframeMode && shotId === scopedShotId && child.workflowId) {
         const startResult = await startSequenceAnimaticChildRun({
           client: admin as never,
           request: child,
@@ -2469,7 +2767,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       if (metadata.sequenceAnimaticStale === true || !child.workflowId) return false
       const role = readScreenplayAnimaticRole(metadata)
       if (!['shot_keyframe', 'shot_production'].includes(role)) return false
-      if (isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain') {
+      if (shotIngredientsOnlyKeyframeMode) {
         return role === 'shot_production'
           && readText(metadata.shotId) === scopedShotId
           && readText(metadata.dependencyMode) === shotGraphDependencyMode
@@ -2485,16 +2783,16 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         return true
       })
     }
-    const continuityAssetRequests = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+    const continuityAssetRequests = shotIngredientsOnlyKeyframeMode
       ? []
       : ensuredChildren.filter((child) => !staleChildIds.has(child.id) && asRecord(child.metadata).sequenceAnimaticStale !== true && ['continuity_asset', 'continuity_asset_batch'].includes(readScreenplayAnimaticRole(asRecord(child.metadata))))
-    const coverageAnchorRequests = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+    const coverageAnchorRequests = shotIngredientsOnlyKeyframeMode
       ? []
       : ensuredChildren.filter((child) => !staleChildIds.has(child.id) && asRecord(child.metadata).sequenceAnimaticStale !== true && readScreenplayAnimaticRole(asRecord(child.metadata)) === 'coverage_anchor')
     const scopedExistingShotRequest = isShotScopedEnsure
       ? existingByShotId.get(scopedShotId) ?? null
       : null
-    const shotKeyframeRequests = isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+    const shotKeyframeRequests = shotIngredientsOnlyKeyframeMode
       ? dedupeRequests([scopedExistingShotRequest, ...ensuredChildren]).filter(currentShotProductionRequest)
       : ensuredChildren.filter(currentShotProductionRequest)
     const scopedShotRequest = isShotScopedEnsure
@@ -2549,7 +2847,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         ...keyframePlanWithSource,
         autoStartedShotProductionRuns,
         dependencyReadiness: {
-          status: isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+          status: shotIngredientsOnlyKeyframeMode
             ? 'ready_for_keyframes'
             : readText(asRecord(visualReferencePlan.dependencyReadiness).status) || 'ready_for_keyframes',
           dependencyNodeIds: dependencyTargetIds,
@@ -2563,7 +2861,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       continuityAssetRequests,
       coverageAnchorRequests,
       shotKeyframeRequests,
-      childRequests: isShotScopedEnsure && shotGraphDependencyMode === 'single_node_chain'
+      childRequests: shotIngredientsOnlyKeyframeMode
         ? shotKeyframeRequests
         : [...continuityAssetRequests, ...coverageAnchorRequests, ...shotKeyframeRequests],
       workflows: graphBundle.workflows,

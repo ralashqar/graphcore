@@ -226,3 +226,43 @@ test('sequence animatic runtime indexes keep legacy block-owned keyframes for cu
   assert.equal(indexes.plannedKeyframeArtifacts.map((artifact) => artifact.assetKey).join(','), 'right_keyframe_asset')
   assert.equal(indexes.plannedKeyframeRequestByShotId.get('shot_001')?.id, 'keyframe_a')
 })
+
+test('sequence animatic runtime indexes do not select stale shot production graphs as current keyframes', () => {
+  const master = outputRequest({
+    id: 'master_a',
+    workflowId: 'workflow_master_a',
+    metadata: { sequenceAnimaticRole: 'master' },
+  })
+  const staleShotProduction = outputRequest({
+    id: 'shot_production_stale',
+    parentRequestId: master.id,
+    workflowId: 'workflow_shot_production_stale',
+    metadata: {
+      sequenceAnimaticRole: 'shot_production',
+      shotId: 'shot_001',
+      shotGraphPolicyVersion: 'obsolete_shot_graph_policy',
+      sequenceAnimaticStale: true,
+    },
+    updatedAt: '2026-01-01T00:05:00.000Z',
+  })
+  const freshShotProduction = outputRequest({
+    id: 'shot_production_fresh',
+    parentRequestId: master.id,
+    workflowId: 'workflow_shot_production_fresh',
+    metadata: {
+      sequenceAnimaticRole: 'shot_production',
+      shotId: 'shot_001',
+      shotGraphPolicyVersion: 'primary_chain_v12_canonical_shot_refs',
+    },
+    updatedAt: '2026-01-01T00:04:00.000Z',
+  })
+
+  const indexes = buildSequenceAnimaticRuntimeIndexes({
+    request: master,
+    requests: [master, staleShotProduction, freshShotProduction],
+    runs: [],
+    artifacts: [],
+  })
+
+  assert.equal(indexes.plannedKeyframeRequestByShotId.get('shot_001')?.id, 'shot_production_fresh')
+})

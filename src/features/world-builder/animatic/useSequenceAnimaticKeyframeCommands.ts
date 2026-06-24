@@ -18,10 +18,11 @@ import {
 } from '../../../domain/sequenceAnimaticNodeKeys'
 import type {
   SequenceAnimaticBlockView,
-  SequenceAnimaticContinuityAssetTargetView,
   SequenceAnimaticShotView,
   SequenceAnimaticViewModel,
 } from '../scene-board/sceneBoardProjection'
+import { sequenceAnimaticCanonicalShotGraphPolicyVersion } from '../../../domain/sequenceAnimaticVisualReferencePlan'
+import { buildSequenceAnimaticShotKeyframeReferenceOverride } from './sequenceAnimaticShotWorkspace'
 import {
   readLooseArray,
   readLooseRecord,
@@ -29,163 +30,9 @@ import {
   trimOptionalString,
   type StartOutputWorkflowRun,
 } from './sequenceAnimaticCommandHelpers'
-import { planSequenceAnimaticContinuityCommand } from './sequenceAnimaticContinuityCommandPlanner'
 
 function shotCanGenerateEarlyKeyframe(shot: SequenceAnimaticShotView) {
   return Boolean(shot.spatialBindingView?.hierarchy?.length)
-}
-
-function shotSpatialNodeIsSpot(node: { kind?: string }) {
-  return node.kind === 'spot' || node.kind === 'location_spot'
-}
-
-function shotSpatialNodeIsZone(node: { kind?: string }) {
-  return node.kind === 'zone' || node.kind === 'location_zone'
-}
-
-function keyframeReferenceLookupKey(value: unknown) {
-  return trimOptionalString(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-}
-
-function addKeyframeReferenceAlias(
-  lookup: Map<string, SequenceAnimaticContinuityAssetTargetView>,
-  value: unknown,
-  target: SequenceAnimaticContinuityAssetTargetView,
-) {
-  const key = keyframeReferenceLookupKey(value)
-  if (key && !lookup.has(key)) lookup.set(key, target)
-}
-
-function shotContinuityTargetLookup(model: SequenceAnimaticViewModel) {
-  const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const lookup = new Map<string, SequenceAnimaticContinuityAssetTargetView>()
-  for (const target of model.continuityAssetTargets) {
-    const graphNode = graphNodeById.get(target.nodeId) ?? null
-    addKeyframeReferenceAlias(lookup, target.nodeId, target)
-    addKeyframeReferenceAlias(lookup, target.name, target)
-    addKeyframeReferenceAlias(lookup, graphNode?.id, target)
-    addKeyframeReferenceAlias(lookup, graphNode?.label, target)
-    for (const sourceReferenceId of readLooseArray(graphNode?.sourceReferenceIds)) {
-      addKeyframeReferenceAlias(lookup, sourceReferenceId, target)
-    }
-  }
-  return lookup
-}
-
-function shotTargetForReference(
-  targetLookup: ReadonlyMap<string, SequenceAnimaticContinuityAssetTargetView>,
-  ...values: unknown[]
-) {
-  const requestedKeys = values.map(keyframeReferenceLookupKey).filter(Boolean)
-  for (const requestedKey of requestedKeys) {
-    const exact = targetLookup.get(requestedKey)
-    if (exact) return exact
-  }
-  for (const requestedKey of requestedKeys) {
-    const matches = new Map<string, SequenceAnimaticContinuityAssetTargetView>()
-    for (const [alias, target] of targetLookup.entries()) {
-      if (
-        alias === `temp_${requestedKey}`
-        || alias.endsWith(`_${requestedKey}`)
-        || requestedKey.endsWith(`_${alias}`)
-      ) {
-        matches.set(target.nodeId, target)
-      }
-    }
-    if (matches.size === 1) return [...matches.values()][0] ?? null
-  }
-  return null
-}
-
-function preferredShotSpatialNode(shot: SequenceAnimaticShotView) {
-  const hierarchy = shot.spatialBindingView?.hierarchy ?? []
-  if (hierarchy.length === 0) return null
-  const spatialBinding = readLooseRecord(shot.spatialBindingView)
-  const targetNodeId = trimOptionalString(spatialBinding.assetTargetNodeId)
-  if (targetNodeId) {
-    const targetSpot = hierarchy.find((node) => node.id === targetNodeId && shotSpatialNodeIsSpot(node))
-    if (targetSpot) return targetSpot
-  }
-  const firstSpot = hierarchy.find(shotSpatialNodeIsSpot)
-  if (firstSpot) return firstSpot
-  if (targetNodeId) {
-    const targetNode = hierarchy.find((node) => node.id === targetNodeId)
-    if (targetNode) return targetNode
-  }
-  return hierarchy[hierarchy.length - 1] ?? null
-}
-
-function spotTargetCoveredByReadyZone(
-  model: SequenceAnimaticViewModel,
-  shot: SequenceAnimaticShotView,
-  target: SequenceAnimaticContinuityAssetTargetView,
-) {
-  const graphNode = readLooseRecord(model.continuityGraphView.nodes.find((node) => node.id === target.nodeId))
-  const graphNodeKind = trimOptionalString(graphNode.kind)
-  const isSpotTarget = target.assetKind === 'location_spot' || graphNodeKind === 'spot' || graphNodeKind === 'location_spot'
-  if (!isSpotTarget) return false
-  const hierarchy = shot.spatialBindingView?.hierarchy ?? []
-  const targetNode = hierarchy.find((node) => node.id === target.nodeId)
-  const targetIndex = targetNode ? hierarchy.findIndex((node) => node.id === targetNode.id) : -1
-  const precedingZone = targetIndex >= 0
-    ? [...hierarchy.slice(0, targetIndex)].reverse().find(shotSpatialNodeIsZone) ?? null
-    : null
-  const hierarchyZones = hierarchy.filter(shotSpatialNodeIsZone)
-  const parentId = trimOptionalString(graphNode.parentId)
-  const parentNode = readLooseRecord(model.continuityGraphView.nodes.find((node) => node.id === parentId))
-  const parentZoneId = trimOptionalString(parentNode.kind) === 'zone' ? parentId : ''
-  const candidateZoneIds = [
-    precedingZone?.id,
-    parentZoneId,
-    ...hierarchyZones.map((node) => node.id),
-  ].filter((nodeId, index, values): nodeId is string => Boolean(nodeId) && values.indexOf(nodeId) === index)
-  for (const zoneId of candidateZoneIds) {
-    const zoneNode = hierarchyZones.find((node) => node.id === zoneId) ?? null
-    const zoneGraphNode = readLooseRecord(model.continuityGraphView.nodes.find((node) => node.id === zoneId))
-    const zoneTarget = model.continuityAssetTargets.find((entry) => entry.nodeId === zoneId) ?? null
-    if (zoneTarget?.status === 'ready' || Boolean(zoneNode?.assetUrl) || Boolean(trimOptionalString(zoneGraphNode.assetUrl))) return true
-  }
-  return false
-}
-
-function shotKeyframeDependencyTargets(model: SequenceAnimaticViewModel, shot: SequenceAnimaticShotView) {
-  const coverageAnchor = shot.coverageSetupId
-    ? model.coverageAnchors.find((anchor) => anchor.id === shot.coverageSetupId) ?? null
-    : null
-  const spatialHierarchyNodeIds = new Set((shot.spatialBindingView?.hierarchy ?? []).map((node) => node.id).filter(Boolean))
-  const selectedSpatialNode = preferredShotSpatialNode(shot)
-  const spatialNodeIds = new Set(selectedSpatialNode?.id ? [selectedSpatialNode.id] : [])
-  const targetByReference = shotContinuityTargetLookup(model)
-  const references = readLooseArray(shot.references).map(readLooseRecord)
-  const dialogue = readLooseArray(shot.dialogue).map(readLooseRecord)
-  const performanceBeats = readLooseArray(shot.performanceBeats).map(readLooseRecord)
-  const aliasedReferenceTargetIds = [
-    ...references.map((reference) => shotTargetForReference(targetByReference, reference.entityKey, reference.name)?.nodeId),
-    ...dialogue.map((line) => shotTargetForReference(targetByReference, line.speakerRefId, line.speakerName)?.nodeId),
-    ...performanceBeats.map((beat) => shotTargetForReference(targetByReference, beat.characterRefId, beat.characterName)?.nodeId),
-  ]
-  const referenceNodeIds = new Set(
-    [
-      ...references.map((reference) => trimOptionalString(reference.entityKey)),
-      ...aliasedReferenceTargetIds,
-      coverageAnchor?.setId,
-      coverageAnchor?.zoneId,
-      coverageAnchor?.primarySpotId,
-      ...(coverageAnchor?.spotIds ?? []),
-      coverageAnchor?.viewpointId,
-    ].filter(Boolean),
-  )
-  return model.continuityAssetTargets.filter((target) => (
-    (!spatialHierarchyNodeIds.has(target.nodeId) || spatialNodeIds.has(target.nodeId))
-    && (
-      target.shotIds.includes(shot.id)
-      || spatialNodeIds.has(target.nodeId)
-      || referenceNodeIds.has(target.nodeId)
-    )
-  )).filter((target) => !spotTargetCoveredByReadyZone(model, shot, target))
 }
 
 type EnsureKeyframeWorkflows = (request: {
@@ -194,6 +41,7 @@ type EnsureKeyframeWorkflows = (request: {
   shotIds?: string[]
   coverageSetupIds?: string[]
   allowProvisional?: boolean
+  shotReferenceOverride?: Record<string, unknown>
 }) => Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> | SequenceAnimaticKeyframeWorkflowEnsureResponse
 
 export function useSequenceAnimaticKeyframeCommands({
@@ -262,8 +110,8 @@ export function useSequenceAnimaticKeyframeCommands({
         forceNodeKeys: kind === 'coverage_anchor'
           ? [...sequenceAnimaticCoverageAnchorForceNodeKeys]
           : isShotProduction ? [...sequenceAnimaticShotProductionKeyframeForceNodeKeys] : [...sequenceAnimaticPlannedKeyframeForceNodeKeys],
-        reuseExistingUpstreamOutputs: true,
-        allowStaleUpstreamOutputs: true,
+        reuseExistingUpstreamOutputs: !isShotProduction,
+        allowStaleUpstreamOutputs: !isShotProduction,
         debugSkipVideoGeneration: false,
         cinematicVideoApproved: false,
         sourceRunId: existingRun?.id ?? request.latestRunId ?? model.request.latestRunId,
@@ -423,27 +271,13 @@ export function useSequenceAnimaticKeyframeCommands({
         return
       }
 
-      const dependencyTargets = shotKeyframeDependencyTargets(model, shot)
-      const dependencyPlan = planSequenceAnimaticContinuityCommand({
-        model,
-        action: mode === 'regenerate' ? 'regenerate_node' : 'generate_missing',
-        targets: dependencyTargets,
-      })
-      if (dependencyPlan.status === 'blocked') {
-        throw new Error(dependencyPlan.diagnostics.join(' ') || 'Shot keyframe continuity dependencies are blocked.')
-      }
-      const runningDependencyTargets = dependencyTargets.filter((target: SequenceAnimaticContinuityAssetTargetView) => target.status === 'generating')
-      if (runningDependencyTargets.length > 0) {
-        await loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })
-        return
-      }
-
       const ensureResult = await Promise.resolve(onEnsureSequenceAnimaticKeyframeWorkflows({
         masterRequestId: model.request.id,
         mode,
         shotIds: [shot.id],
         coverageSetupIds: shot.coverageSetupId ? [shot.coverageSetupId] : undefined,
         allowProvisional,
+        shotReferenceOverride: buildSequenceAnimaticShotKeyframeReferenceOverride(model, shot),
       }))
       let startedKeyframeWork = false
       const nextAction = readLooseRecord(ensureResult.nextAction)
@@ -457,12 +291,12 @@ export function useSequenceAnimaticKeyframeCommands({
         throw new Error(trimOptionalString(nextAction.reason) || 'Shot keyframe generation is blocked.')
       } else {
         let nextRequest = requestForNextAction(ensureResult, nextRequestId)
-        if (!nextRequest && nextKind === 'run_shot_production_keyframe') {
+        if (!nextRequest && nextKind === 'run_shot_production_keyframe' && mode !== 'regenerate') {
           const cachedShotGraphIsCurrent = Boolean(
             shot.keyframeRequestId
             && shot.keyframeWorkflowId
-            && shot.keyframeDependencyMode === 'single_node_chain'
-            && shot.keyframeGraphPolicyVersion === 'primary_chain_v8_zone_spatial_refs',
+            && shot.keyframeDependencyMode === 'ingredient_refs'
+            && shot.keyframeGraphPolicyVersion === sequenceAnimaticCanonicalShotGraphPolicyVersion,
           )
           nextRequest = cachedShotGraphIsCurrent
             ? outputRequests.find((request) => request.id === shot.keyframeRequestId && request.workflowId === shot.keyframeWorkflowId) ?? null

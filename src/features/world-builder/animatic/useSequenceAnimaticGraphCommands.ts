@@ -10,6 +10,7 @@ import type {
   SequenceAnimaticShotView,
   SequenceAnimaticViewModel,
 } from '../scene-board/sceneBoardProjection'
+import { buildSequenceAnimaticShotKeyframeReferenceOverride } from './sequenceAnimaticShotWorkspace'
 import {
   readLooseArray,
   readLooseRecord,
@@ -61,6 +62,7 @@ type EnsureSequenceAnimaticShotProductionGraph = (request: {
   coverageSetupId?: string | null
   forceRefresh?: boolean
   allowProvisional?: boolean
+  shotReferenceOverride?: Record<string, unknown>
 }) => Promise<SequenceAnimaticShotProductionGraphEnsureResponse> | SequenceAnimaticShotProductionGraphEnsureResponse
 
 function shotCanOpenProvisionalGraph(shot: GraphCommandShotView) {
@@ -294,22 +296,13 @@ export function useSequenceAnimaticGraphCommands({
       if (!model.directorPlanReady && !allowProvisional) {
         throw new Error(shot.isProvisional ? 'Shot binding is not ready for early graph inspection yet.' : 'Generate the shot continuity plan first.')
       }
-      const cachedShotGraphIsCurrent = Boolean(
-        shot.keyframeRequestId
-        && shot.keyframeWorkflowId
-        && shot.keyframeDependencyMode === 'single_node_chain'
-        && shot.keyframeGraphPolicyVersion === 'primary_chain_v8_zone_spatial_refs',
-      )
-      if (!refresh && cachedShotGraphIsCurrent && shot.keyframeRequestId) {
-        openOutputGraph(model, shot.keyframeRequestId, 'planned_keyframe_artifact')
-        return
-      }
       const ensureResult = await Promise.resolve(onEnsureSequenceAnimaticShotProductionGraph({
         masterRequestId: model.request.id,
         shotId: shot.id,
         coverageSetupId: shot.coverageSetupId || null,
-        forceRefresh: refresh,
+        forceRefresh: true,
         allowProvisional,
+        shotReferenceOverride: buildSequenceAnimaticShotKeyframeReferenceOverride(model, shot),
       }))
       const shotRequest = ensureResult.shotRequest
       if (!shotRequest?.workflowId) {

@@ -126,7 +126,7 @@ export const sequenceAnimaticShotVisualCallSheetV1Schema = z.object({
   environment: z.object({
     locationContinuity: z.string().max(320).default(''),
     lighting: z.string().max(220).default(''),
-    referenceContinuity: z.string().max(320).default(''),
+    referenceContinuity: z.string().max(900).default(''),
     cameraGridUse: z.string().max(220).default(''),
   }).default(emptyShotVisualCallSheet.environment),
   video: z.object({

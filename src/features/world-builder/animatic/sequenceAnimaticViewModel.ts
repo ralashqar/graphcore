@@ -1,6 +1,7 @@
 import { buildCinematicV2TimelineProjection } from '../../../domain/cinematicTimelineProjection'
 import { resolveAssetSourceUrl } from '../../../domain/assets'
 import type { AssetDefinition } from '../../../domain/graphcore'
+import { readEntityReferenceSheetAssetKey } from '../../../domain/initialSeedReferenceSheets'
 import type {
   OutputArtifact,
   OutputRequest,
@@ -220,6 +221,7 @@ export type SequenceAnimaticShotView = {
   keyframeDependencyMode: string
   keyframeGraphPolicyVersion: string
   keyframeRunning: boolean
+  keyframeError: string
   isRevised: boolean
   originalAction: string
   originalCamera: string
@@ -256,6 +258,7 @@ export type SequenceAnimaticReferenceView = {
   name: string
   role: string
   iconId: EntityIconId
+  assetKey?: string | null
   iconUrl: string | null
   referenceArtUrl?: string | null
   isContinuityAnchor?: boolean
@@ -383,6 +386,7 @@ export type SequenceAnimaticBlockView = {
 
 export type SequenceAnimaticViewModel = {
   request: OutputRequest
+  assetPack: Record<string, unknown>
   scenes: SequenceAnimaticSceneView[]
   continuityRequest: OutputRequest | null
   continuityRun: OutputWorkflowRun | null
@@ -738,6 +742,8 @@ function buildSequenceAnimaticReferenceResolver(input: {
       .map((key) => entityByLookup.get(key) ?? null)
       .find((entry): entry is WorldEntity => Boolean(entry)) ?? null
     if (entity) {
+      const referenceSheetAssetKey = readEntityReferenceSheetAssetKey(entity)
+      const fallbackAssetKey = referenceSheetAssetKey || entity.thumbnailAssetKey || null
       const fallbackAssetUrl = entity.thumbnailAssetKey
         ? resolveAssetSourceUrl(input.assetByKey.get(entity.thumbnailAssetKey) ?? null)
         : null
@@ -746,6 +752,7 @@ function buildSequenceAnimaticReferenceResolver(input: {
         name: entity.name || cleanRefId,
         role,
         iconId: iconForWorldEntity(entity.nodeType),
+        assetKey: fallbackAssetKey,
         iconUrl: input.referenceSheetIconUrlByEntityKey.get(entity.key)
           ?? input.imageUrlByEntityKey.get(entity.key)
           ?? fallbackAssetUrl
@@ -788,36 +795,105 @@ function buildSequenceAnimaticShotReferences(
     seen.add(reference.entityKey)
     references.push(reference)
   }
+  const refIdFromRecord = (record: Record<string, unknown>) => trimOptionalString(record.entityKey)
+    || trimOptionalString(record.entity_key)
+    || trimOptionalString(record.worldRefId)
+    || trimOptionalString(record.world_ref_id)
+    || trimOptionalString(record.worldEntityKey)
+    || trimOptionalString(record.world_entity_key)
+    || trimOptionalString(record.entityRefId)
+    || trimOptionalString(record.entity_ref_id)
+    || trimOptionalString(record.referenceId)
+    || trimOptionalString(record.reference_id)
+    || trimOptionalString(record.refId)
+    || trimOptionalString(record.ref_id)
+    || trimOptionalString(record.characterRefId)
+    || trimOptionalString(record.character_ref_id)
+    || trimOptionalString(record.speakerRefId)
+    || trimOptionalString(record.speaker_ref_id)
+    || trimOptionalString(record.propRefId)
+    || trimOptionalString(record.prop_ref_id)
+    || trimOptionalString(record.itemRefId)
+    || trimOptionalString(record.item_ref_id)
+  for (const entry of readLooseArray(shot.references)) {
+    if (typeof entry === 'string') {
+      addRef(trimOptionalString(entry), 'Reference')
+      continue
+    }
+    const record = readLooseRecord(entry)
+    addRef(refIdFromRecord(record), trimOptionalString(record.role) || trimOptionalString(record.type) || 'Reference')
+  }
   for (const line of readLooseArray(shot.dialogue).map(readLooseRecord)) {
-    addRef(trimOptionalString(line.speakerRefId) || trimOptionalString(line.speaker) || trimOptionalString(line.characterRefId), 'Speaker')
+    addRef(refIdFromRecord(line), 'Speaker')
   }
   for (const beat of [
     ...readLooseArray(shot.performanceBeats),
     ...readLooseArray(shot.performance),
   ].map(readLooseRecord)) {
-    addRef(trimOptionalString(beat.characterRefId) || trimOptionalString(beat.characterName) || trimOptionalString(beat.name), 'Performance')
+    addRef(refIdFromRecord(beat), 'Performance')
   }
   for (const refId of [
+    ...readLooseArray(shot.referenceIds),
+    ...readLooseArray(shot.reference_ids),
+    ...readLooseArray(shot.refIds),
+    ...readLooseArray(shot.ref_ids),
+    ...readLooseArray(shot.entityRefIds),
+    ...readLooseArray(shot.entity_ref_ids),
+    ...readLooseArray(shot.worldRefIds),
+    ...readLooseArray(shot.world_ref_ids),
+    ...readLooseArray(shot.worldEntityKeys),
+    ...readLooseArray(shot.world_entity_keys),
+    ...readLooseArray(refs.referenceIds),
+    ...readLooseArray(refs.reference_ids),
+    ...readLooseArray(refs.refIds),
+    ...readLooseArray(refs.ref_ids),
+    ...readLooseArray(refs.entityRefIds),
+    ...readLooseArray(refs.entity_ref_ids),
+    ...readLooseArray(refs.worldRefIds),
+    ...readLooseArray(refs.world_ref_ids),
+    ...readLooseArray(refs.worldEntityKeys),
+    ...readLooseArray(refs.world_entity_keys),
+  ].map(trimOptionalString).filter(Boolean)) addRef(refId, 'Reference')
+  for (const refId of [
     ...readLooseArray(shot.speakerRefIds),
+    ...readLooseArray(shot.speaker_ref_ids),
     ...readLooseArray(refs.speakerRefIds),
+    ...readLooseArray(refs.speaker_ref_ids),
   ].map(trimOptionalString).filter(Boolean)) addRef(refId, 'Speaker')
   for (const refId of [
     ...readLooseArray(shot.visibleCharacterRefIds),
+    ...readLooseArray(shot.visible_character_ref_ids),
+    ...readLooseArray(shot.worldCharacterRefIds),
+    ...readLooseArray(shot.world_character_ref_ids),
     ...readLooseArray(refs.visibleCharacterRefIds),
+    ...readLooseArray(refs.visible_character_ref_ids),
+    ...readLooseArray(refs.worldCharacterRefIds),
+    ...readLooseArray(refs.world_character_ref_ids),
   ].map(trimOptionalString).filter(Boolean)) addRef(refId, 'Character')
   for (const refId of [
     trimOptionalString(shot.locationRefId),
+    trimOptionalString(shot.location_ref_id),
+    trimOptionalString(shot.worldLocationRefId),
+    trimOptionalString(shot.world_location_ref_id),
     trimOptionalString(sceneBinding.worldLocationRefId ?? sceneBinding.world_location_ref_id),
     ...readLooseArray(refs.locationRefIds).map(trimOptionalString),
+    ...readLooseArray(refs.location_ref_ids).map(trimOptionalString),
   ].filter(Boolean)) addRef(refId, 'Location')
   for (const refId of [
     ...readLooseArray(shot.propRefIds),
+    ...readLooseArray(shot.prop_ref_ids),
     ...readLooseArray(refs.propRefIds),
+    ...readLooseArray(refs.prop_ref_ids),
+    ...readLooseArray(shot.itemRefIds),
+    ...readLooseArray(shot.item_ref_ids),
+    ...readLooseArray(refs.itemRefIds),
+    ...readLooseArray(refs.item_ref_ids),
   ].map(trimOptionalString).filter(Boolean)) addRef(refId, 'Prop')
   for (const refId of readLooseArray(shot.continuityAnchorIds).map(trimOptionalString).filter(Boolean)) addRef(refId, 'Continuity')
   for (const refId of readLooseArray(shot.continuityAnchorRefIds).map(trimOptionalString).filter(Boolean)) addRef(refId, 'Continuity')
   for (const refId of [
     ...readLooseArray(refs.localReferenceIds),
+    ...readLooseArray(refs.local_reference_ids),
     ...readLooseArray(sceneBinding.localReferenceIds ?? sceneBinding.local_reference_ids),
   ].map(trimOptionalString).filter(Boolean)) addRef(refId, 'Local ref')
   return references.slice(0, 8)
@@ -2283,6 +2359,7 @@ export function buildSequenceAnimaticViewModel(input: {
             keyframeDependencyMode: trimOptionalString(readLooseRecord(plannedKeyframeRequest?.metadata).dependencyMode),
             keyframeGraphPolicyVersion: trimOptionalString(readLooseRecord(plannedKeyframeRequest?.metadata).shotGraphPolicyVersion),
             keyframeRunning: plannedKeyframeRunning,
+            keyframeError: plannedKeyframeError,
             isRevised: Boolean(completedRevision),
             originalAction: trimOptionalString(shot.action) || trimOptionalString(shot.description) || trimOptionalString(shot.storyboardPanelPrompt),
             originalCamera: cameraLineFromShot(shot),
@@ -2576,6 +2653,7 @@ export function buildSequenceAnimaticViewModel(input: {
             keyframeDependencyMode: trimOptionalString(readLooseRecord(plannedKeyframeRequest?.metadata).dependencyMode),
             keyframeGraphPolicyVersion: trimOptionalString(readLooseRecord(plannedKeyframeRequest?.metadata).shotGraphPolicyVersion),
             keyframeRunning: plannedKeyframeRunning,
+            keyframeError: plannedKeyframeError,
             isRevised: Boolean(completedRevision),
             originalAction: trimOptionalString(shot.action) || trimOptionalString(shot.description) || trimOptionalString(shot.storyboardPanelPrompt),
             originalCamera: cameraLineFromShot(shot),
@@ -2702,6 +2780,7 @@ export function buildSequenceAnimaticViewModel(input: {
               keyframeDependencyMode: '',
               keyframeGraphPolicyVersion: '',
               keyframeRunning: false,
+              keyframeError: '',
               isRevised: false,
               originalAction: shot.screenplayText || shot.title,
               originalCamera: '',
@@ -2744,6 +2823,7 @@ export function buildSequenceAnimaticViewModel(input: {
     continuityCoverageLabel,
     continuityStructureRunning,
     continuityAssetGenerationStatus,
+    assetPack: readLooseRecord(readLooseRecord(manifest).assetPack ?? readLooseRecord(manifest).asset_pack),
     continuityAssetTargets,
     continuityGraphView,
     title: trimOptionalString(fallbackScreenplay?.title) || input.request.title || 'Sequence screenplay animatic',

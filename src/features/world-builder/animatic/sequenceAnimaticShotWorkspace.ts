@@ -1,4 +1,8 @@
 import type { EntityIconId } from '../../../shared/entityIcons'
+import {
+  buildSequenceAnimaticShotIngredientReferencePlan,
+  sequenceAnimaticVisualReferenceHash,
+} from '../../../domain/sequenceAnimaticVisualReferencePlan.ts'
 import type {
   SequenceAnimaticShotView,
   SequenceAnimaticViewModel,
@@ -47,6 +51,7 @@ export type SequenceAnimaticShotIngredient = {
   actionLabel: string
   usageLabel: string
   nodeId: string | null
+  assetKey: string
   target: SequenceAnimaticContinuityAssetTargetView | null
   coverageAnchor: SequenceAnimaticCoverageAnchorView | null
   spatialNode: SequenceAnimaticSpatialBindingNodeView | null
@@ -65,6 +70,39 @@ export type SequenceAnimaticShotKeyframePreflight = {
   coverageAnchor: SequenceAnimaticCoverageAnchorView | null
 }
 
+export type SequenceAnimaticShotKeyframeReferenceOverrideIngredient = {
+  id: string
+  kind: string
+  name: string
+  nodeId: string | null
+  node_id: string | null
+  entityKey: string | null
+  entity_key: string | null
+  assetKey: string
+  asset_key: string
+  assetUrl: string
+  asset_url: string
+  status: string
+  source: 'focused_shot_ingredient_ui'
+  role: string
+  sourceArtifactRole: string
+  source_artifact_role: string
+  requiredForKeyframe: boolean
+  required_for_keyframe: boolean
+  uiOrder: number
+  ui_order: number
+}
+
+export type SequenceAnimaticShotKeyframeReferenceOverride = {
+  version: 'shot_keyframe_reference_override_v1'
+  shotId: string
+  shot_id: string
+  ingredientPlanHash: string
+  ingredient_plan_hash: string
+  source: 'focused_shot_ingredient_ui'
+  ingredients: SequenceAnimaticShotKeyframeReferenceOverrideIngredient[]
+}
+
 export type SequenceAnimaticShotPanelCue = {
   id: string
   kind: 'action' | 'dialogue'
@@ -81,6 +119,10 @@ function cleanText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
 function displayNameFromRefId(refId: string) {
   return refId
     .replace(/_/g, ' ')
@@ -92,52 +134,6 @@ function lookupKey(value: unknown) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
-}
-
-function addLookupAlias<T>(lookup: Map<string, T>, value: unknown, target: T) {
-  const key = lookupKey(value)
-  if (key && !lookup.has(key)) lookup.set(key, target)
-}
-
-function continuityTargetLookup(model: SequenceAnimaticViewModel) {
-  const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const lookup = new Map<string, SequenceAnimaticContinuityAssetTargetView>()
-  for (const target of model.continuityAssetTargets) {
-    const graphNode = graphNodeById.get(target.nodeId) ?? null
-    addLookupAlias(lookup, target.nodeId, target)
-    addLookupAlias(lookup, target.name, target)
-    addLookupAlias(lookup, graphNode?.id, target)
-    addLookupAlias(lookup, graphNode?.label, target)
-    for (const sourceReferenceId of graphNode?.sourceReferenceIds ?? []) {
-      addLookupAlias(lookup, sourceReferenceId, target)
-    }
-  }
-  return lookup
-}
-
-function targetForReference(
-  targetLookup: ReadonlyMap<string, SequenceAnimaticContinuityAssetTargetView>,
-  ...values: unknown[]
-) {
-  const requestedKeys = values.map(lookupKey).filter(Boolean)
-  for (const value of values) {
-    const target = targetLookup.get(lookupKey(value))
-    if (target) return target
-  }
-  for (const requestedKey of requestedKeys) {
-    const matches = new Map<string, SequenceAnimaticContinuityAssetTargetView>()
-    for (const [alias, target] of targetLookup.entries()) {
-      if (
-        alias === `temp_${requestedKey}`
-        || alias.endsWith(`_${requestedKey}`)
-        || requestedKey.endsWith(`_${alias}`)
-      ) {
-        matches.set(target.nodeId, target)
-      }
-    }
-    if (matches.size === 1) return [...matches.values()][0] ?? null
-  }
-  return null
 }
 
 function statusFromTarget(target: SequenceAnimaticContinuityAssetTargetView | null | undefined): SequenceAnimaticShotIngredient['status'] {
@@ -184,20 +180,6 @@ function actionLabelForIngredient(status: SequenceAnimaticShotIngredient['status
   return ''
 }
 
-function referenceFallbackStatus(input: {
-  isContinuityAnchor?: boolean
-  statusLabel?: string
-  hasReferenceArt: boolean
-}): SequenceAnimaticShotIngredient['status'] {
-  if (input.hasReferenceArt) return 'ready'
-  if (!input.isContinuityAnchor) return 'not_required'
-  const label = cleanText(input.statusLabel).toLowerCase()
-  if (label.includes('generating') || label.includes('extracting') || label.includes('splitting')) return 'generating'
-  if (label.includes('failed')) return 'failed'
-  if (label.includes('stale')) return 'stale'
-  return 'missing'
-}
-
 function ingredientDedupeKey(ingredient: SequenceAnimaticShotIngredient) {
   if (ingredient.coverageAnchor) return `coverage:${ingredient.coverageAnchor.id}`
   const nodeId = cleanText(ingredient.target?.nodeId || ingredient.nodeId)
@@ -236,6 +218,7 @@ function mergeIngredientRows(
     imageUrl: primary.imageUrl || secondary.imageUrl,
     fullImageUrl: primary.fullImageUrl || secondary.fullImageUrl,
     iconUrl: primary.iconUrl || secondary.iconUrl,
+    assetKey: primary.assetKey || secondary.assetKey,
     target: primary.target ?? secondary.target,
     coverageAnchor: primary.coverageAnchor ?? secondary.coverageAnchor,
     spatialNode: primary.spatialNode ?? secondary.spatialNode,
@@ -258,108 +241,55 @@ function dedupeIngredients(ingredients: SequenceAnimaticShotIngredient[]) {
   return [...byId.values()]
 }
 
-function preferredSpatialIngredientNode(shot: SequenceAnimaticShotView) {
-  const hierarchy = shot.spatialBindingView.hierarchy
-  if (hierarchy.length === 0) return null
-  const targetNodeId = cleanText(shot.spatialBindingView.assetTargetNodeId)
-  const isSpotLike = (node: SequenceAnimaticSpatialBindingNodeView) => (
-    node.kind === 'spot' || node.kind === 'location_spot'
-  )
-  if (targetNodeId) {
-    const targetSpot = hierarchy.find((node) => node.id === targetNodeId && isSpotLike(node))
-    if (targetSpot) return targetSpot
+function shotReferenceAssetPackEntity(reference: SequenceAnimaticShotView['references'][number]) {
+  if (reference.isContinuityAnchor) return null
+  const entityKey = cleanText(reference.entityKey)
+  if (!entityKey) return null
+  const assetKey = cleanText(reference.assetKey)
+  return {
+    key: entityKey,
+    id: entityKey,
+    name: reference.name || displayNameFromRefId(entityKey),
+    type: reference.iconId === 'item' ? 'object' : reference.iconId === 'environment' ? 'place' : 'actor',
+    nodeType: reference.iconId === 'item' ? 'object' : reference.iconId === 'environment' ? 'place' : 'actor',
+    node_type: reference.iconId === 'item' ? 'object' : reference.iconId === 'environment' ? 'place' : 'actor',
+    primaryAssetKey: assetKey,
+    primary_asset_key: assetKey,
+    selectedReferenceAssetKey: assetKey,
+    selected_reference_asset_key: assetKey,
+    assetUrl: reference.referenceArtUrl || reference.iconUrl || '',
+    asset_url: reference.referenceArtUrl || reference.iconUrl || '',
+    iconUrl: reference.iconUrl || '',
+    icon_url: reference.iconUrl || '',
   }
-  const firstSpot = hierarchy.find(isSpotLike)
-  if (firstSpot) return firstSpot
-  if (targetNodeId) {
-    const targetNode = hierarchy.find((node) => node.id === targetNodeId)
-    if (targetNode) return targetNode
+}
+
+function shotScopedAssetPack(model: SequenceAnimaticViewModel, shot: SequenceAnimaticShotView) {
+  const base = asRecord(model.assetPack)
+  const entitiesByKey = new Map<string, Record<string, unknown>>()
+  const addEntity = (entity: Record<string, unknown>) => {
+    const key = lookupKey(entity.key || entity.id)
+    if (!key) return
+    const previous = entitiesByKey.get(key)
+    if (!previous) {
+      entitiesByKey.set(key, entity)
+      return
+    }
+    const previousAssetKey = cleanText(previous.primaryAssetKey || previous.primary_asset_key || previous.selectedReferenceAssetKey || previous.selected_reference_asset_key)
+    const nextAssetKey = cleanText(entity.primaryAssetKey || entity.primary_asset_key || entity.selectedReferenceAssetKey || entity.selected_reference_asset_key)
+    entitiesByKey.set(key, previousAssetKey || !nextAssetKey ? { ...entity, ...previous } : { ...previous, ...entity })
   }
-  return hierarchy[hierarchy.length - 1] ?? null
-}
-
-function selectedSpatialDependencyNodeIdsForShot(shot: SequenceAnimaticShotView) {
-  const node = preferredSpatialIngredientNode(shot)
-  return new Set(node?.id ? [node.id] : [])
-}
-
-function isSpotLikeNode(node: { kind?: string }) {
-  return node.kind === 'spot' || node.kind === 'location_spot'
-}
-
-function isZoneLikeNode(node: { kind?: string }) {
-  return node.kind === 'zone' || node.kind === 'location_zone'
-}
-
-function isSpotLikeTarget(
-  model: SequenceAnimaticViewModel,
-  target: SequenceAnimaticContinuityAssetTargetView,
-) {
-  const graphNode = model.continuityGraphView.nodes.find((node) => node.id === target.nodeId) ?? null
-  return target.assetKind === 'location_spot'
-    || graphNode?.kind === 'spot'
-}
-
-function shotReadyZoneReference(
-  model: SequenceAnimaticViewModel,
-  shot: SequenceAnimaticShotView,
-  preferredZoneId = '',
-) {
-  const targetByNodeId = new Map(model.continuityAssetTargets.map((entry) => [entry.nodeId, entry] as const))
-  const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const hierarchyZones = shot.spatialBindingView.hierarchy.filter(isZoneLikeNode)
-  const candidateZoneIds = [
-    preferredZoneId,
-    ...hierarchyZones.map((node) => node.id),
-  ].filter((nodeId, index, values) => nodeId && values.indexOf(nodeId) === index)
-
-  for (const zoneId of candidateZoneIds) {
-    const zoneTarget = targetByNodeId.get(zoneId) ?? null
-    const zoneNode = hierarchyZones.find((node) => node.id === zoneId) ?? null
-    const graphNode = graphNodeById.get(zoneId) ?? null
-    if (zoneTarget?.status === 'ready' || zoneNode?.assetUrl || graphNode?.assetUrl) return true
+  for (const entity of Array.isArray(base.entities) ? base.entities : []) {
+    addEntity(asRecord(entity))
   }
-  return false
-}
-
-function spatialZoneReferenceForNode(
-  shot: SequenceAnimaticShotView,
-  node: SequenceAnimaticSpatialBindingNodeView,
-  targetByNodeId: Map<string, SequenceAnimaticContinuityAssetTargetView>,
-) {
-  if (!isSpotLikeNode(node)) return null
-  const hierarchy = shot.spatialBindingView.hierarchy
-  const nodeIndex = hierarchy.findIndex((entry) => entry.id === node.id)
-  const precedingZone = nodeIndex >= 0
-    ? [...hierarchy.slice(0, nodeIndex)].reverse().find(isZoneLikeNode) ?? null
-    : null
-  const fallbackZone = hierarchy.find(isZoneLikeNode) ?? null
-  const zoneNode = precedingZone ?? fallbackZone
-  if (!zoneNode) return null
-  const zoneTarget = targetByNodeId.get(zoneNode.id) ?? null
-  if (!zoneTarget && !zoneNode.assetUrl) return null
-  return { zoneNode, zoneTarget }
-}
-
-function spatialTargetCoveredByZone(
-  model: SequenceAnimaticViewModel,
-  shot: SequenceAnimaticShotView,
-  target: SequenceAnimaticContinuityAssetTargetView,
-) {
-  if (!isSpotLikeTarget(model, target)) return false
-  const graphNode = model.continuityGraphView.nodes.find((node) => node.id === target.nodeId) ?? null
-  const targetNode = shot.spatialBindingView.hierarchy.find((node) => node.id === target.nodeId)
-  const parentNode = graphNode?.parentId
-    ? model.continuityGraphView.nodes.find((node) => node.id === graphNode.parentId) ?? null
-    : null
-  const preferredZoneId = parentNode?.kind === 'zone' ? cleanText(parentNode.id) : ''
-  const targetByNodeId = new Map(model.continuityAssetTargets.map((entry) => [entry.nodeId, entry] as const))
-  const zoneReference = targetNode && isSpotLikeNode(targetNode)
-    ? spatialZoneReferenceForNode(shot, targetNode, targetByNodeId)
-    : null
-  return zoneReference?.zoneTarget?.status === 'ready'
-    || Boolean(zoneReference?.zoneNode.assetUrl)
-    || shotReadyZoneReference(model, shot, preferredZoneId)
+  for (const reference of shot.references) {
+    const entity = shotReferenceAssetPackEntity(reference)
+    if (entity) addEntity(entity)
+  }
+  return {
+    ...base,
+    entities: [...entitiesByKey.values()],
+  }
 }
 
 function sceneTitleForShot(model: SequenceAnimaticViewModel, shot: SequenceAnimaticShotView) {
@@ -387,138 +317,105 @@ export function buildSequenceAnimaticShotTimelineItems(model: SequenceAnimaticVi
   }))
 }
 
-export function sequenceAnimaticDependencyTargetsForShot(
-  model: SequenceAnimaticViewModel,
-  shot: SequenceAnimaticShotView,
-) {
-  const targetByReference = continuityTargetLookup(model)
-  const coverageAnchor = shot.coverageSetupId
-    ? model.coverageAnchors.find((anchor) => anchor.id === shot.coverageSetupId) ?? null
-    : null
-  const aliasedReferenceTargetIds = [
-    ...shot.references.map((reference) => targetForReference(targetByReference, reference.entityKey, reference.name)?.nodeId),
-    ...shot.dialogue.map((line) => targetForReference(targetByReference, line.speakerRefId, line.speakerName)?.nodeId),
-    ...shot.performanceBeats.map((beat) => targetForReference(targetByReference, beat.characterRefId, beat.characterName)?.nodeId),
-  ]
-  const spatialHierarchyNodeIds = new Set(shot.spatialBindingView.hierarchy.map((node) => node.id).filter(Boolean))
-  const selectedSpatialNodeIds = selectedSpatialDependencyNodeIdsForShot(shot)
-  const dependencyNodeIds = new Set([
-    ...selectedSpatialNodeIds,
-    ...shot.references.map((reference) => reference.entityKey),
-    ...aliasedReferenceTargetIds,
-    coverageAnchor?.setId,
-    coverageAnchor?.zoneId,
-    coverageAnchor?.primarySpotId,
-    ...(coverageAnchor?.spotIds ?? []),
-    coverageAnchor?.viewpointId,
-  ].map(cleanText).filter(Boolean))
-
-  return model.continuityAssetTargets.filter((target) => (
-    (!spatialHierarchyNodeIds.has(target.nodeId) || selectedSpatialNodeIds.has(target.nodeId))
-    && (target.shotIds.includes(shot.id) || dependencyNodeIds.has(target.nodeId))
-  )).filter((target) => !spatialTargetCoveredByZone(model, shot, target))
-}
-
 export function sequenceAnimaticIngredientsForShot(
   model: SequenceAnimaticViewModel,
   shot: SequenceAnimaticShotView,
 ) {
   const targetByNodeId = new Map(model.continuityAssetTargets.map((target) => [target.nodeId, target] as const))
-  const targetByReference = continuityTargetLookup(model)
   const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
-  const dependencyTargets = new Set(sequenceAnimaticDependencyTargetsForShot(model, shot).map((target) => target.nodeId))
-  const ingredients: SequenceAnimaticShotIngredient[] = []
-
-  const spatialNode = preferredSpatialIngredientNode(shot)
-  for (const node of spatialNode ? [spatialNode] : []) {
+  const continuityTargets = model.continuityAssetTargets.map((target) => {
+    const graphNode = graphNodeById.get(target.nodeId) ?? null
+    return {
+      ...graphNode,
+      ...target,
+      id: target.nodeId,
+      nodeId: target.nodeId,
+      node_id: target.nodeId,
+      name: target.name,
+      assetKind: target.assetKind,
+      asset_kind: target.assetKind,
+      nodeKind: graphNode?.kind ?? target.assetKind,
+      node_kind: graphNode?.kind ?? target.assetKind,
+      assetKey: target.assetKey ?? '',
+      asset_key: target.assetKey ?? '',
+      assetUrl: target.assetUrl ?? graphNode?.assetUrl ?? '',
+      asset_url: target.assetUrl ?? graphNode?.assetUrl ?? '',
+      shotIds: target.shotIds,
+      shot_ids: target.shotIds,
+    }
+  })
+  const spatialNodes = shot.spatialBindingView.hierarchy.map((node) => {
     const target = targetByNodeId.get(node.id) ?? null
-    const targetStatus = statusFromTarget(target)
-    const zoneReference = targetStatus === 'ready'
-      ? null
-      : spatialZoneReferenceForNode(shot, node, targetByNodeId)
-    const zoneStatus = statusFromTarget(zoneReference?.zoneTarget)
-    const zoneCanCover = Boolean(
-      zoneReference
-      && (
-        zoneReference.zoneTarget?.status === 'ready'
-        || zoneReference.zoneTarget?.status === 'generating'
-        || zoneReference.zoneNode.assetUrl
-      ),
-    )
-    const displayTarget = zoneCanCover ? zoneReference?.zoneTarget ?? null : target
-    const displayNode = zoneCanCover ? zoneReference?.zoneNode ?? node : node
     const graphNode = graphNodeById.get(node.id) ?? null
-    const displayGraphNode = graphNodeById.get(displayNode.id) ?? null
-    const status = zoneCanCover
-      ? zoneReference?.zoneTarget ? zoneStatus : 'ready'
-      : target ? targetStatus : node.assetUrl ? 'ready' : 'not_required'
-    ingredients.push({
-      id: `scene:${node.id}`,
-      name: node.label || displayNameFromRefId(node.id),
-      typeLabel: zoneCanCover
-        ? `${node.kindLabel || graphNode?.kindLabel || 'Spot'} from ${displayNode.label || displayNameFromRefId(displayNode.id)}`
-        : node.kindLabel || graphNode?.kindLabel || 'Scene node',
-      kind: displayTarget ? 'continuity_asset' : 'scene_graph',
-      iconId: iconForIngredientKind(node.kind),
-      iconUrl: null,
-      imageUrl: displayTarget?.assetUrl ?? displayNode.assetUrl ?? displayGraphNode?.assetUrl ?? node.assetUrl ?? graphNode?.assetUrl ?? null,
-      fullImageUrl: displayTarget?.assetUrl ?? displayNode.assetUrl ?? displayGraphNode?.assetUrl ?? node.assetUrl ?? graphNode?.assetUrl ?? null,
-      status,
-      statusLabel: zoneCanCover
-        ? statusLabelForIngredient({ status, target: displayTarget, fallback: displayNode.assetStatusLabel || 'Zone reference ready' })
-        : statusLabelForIngredient({ status, target, fallback: node.assetStatusLabel }),
-      actionLabel: actionLabelForIngredient(status, displayTarget),
-      usageLabel: node.shotIds.length > 0 ? `${node.shotIds.length} shot${node.shotIds.length === 1 ? '' : 's'}` : 'Used by this shot',
+    return {
+      ...graphNode,
+      ...node,
+      id: node.id,
       nodeId: node.id,
-      target: displayTarget,
-      coverageAnchor: null,
-      spatialNode: node,
-      requiredForKeyframe: dependencyTargets.has(node.id) || Boolean(displayTarget && dependencyTargets.has(displayTarget.nodeId)),
-      canGenerate: Boolean(displayTarget && status !== 'generating' && !zoneCanCover),
-      visualBrief: zoneCanCover
-        ? [
-          graphNode?.effectiveVisualBrief || graphNode?.summary || node.summary || '',
-          `Use the generated zone reference "${displayNode.label || displayNameFromRefId(displayNode.id)}" to stage this spot.`,
-        ].filter(Boolean).join(' ')
-        : graphNode?.effectiveVisualBrief || graphNode?.summary || node.summary || '',
-    })
-  }
-
-  for (const reference of shot.references) {
-    const target = targetForReference(targetByReference, reference.entityKey, reference.name) ?? null
-    const graphNode = graphNodeById.get(target?.nodeId ?? reference.entityKey) ?? null
-    const status = statusFromTarget(target)
-    const hasReferenceArt = Boolean(reference.referenceArtUrl || reference.iconUrl || graphNode?.assetUrl)
-    const fallbackStatus = referenceFallbackStatus({
-      isContinuityAnchor: reference.isContinuityAnchor,
-      statusLabel: reference.statusLabel,
-      hasReferenceArt,
-    })
-    const effectiveStatus = target ? status : fallbackStatus
-    ingredients.push({
-      id: `reference:${reference.entityKey}`,
+      node_id: node.id,
+      name: node.label || graphNode?.label || displayNameFromRefId(node.id),
+      kind: node.kind,
+      nodeKind: graphNode?.kind ?? node.kind,
+      node_kind: graphNode?.kind ?? node.kind,
+      assetKind: graphNode?.kind ?? node.kind,
+      asset_kind: graphNode?.kind ?? node.kind,
+      assetKey: target?.assetKey ?? '',
+      asset_key: target?.assetKey ?? '',
+      assetUrl: target?.assetUrl ?? node.assetUrl ?? graphNode?.assetUrl ?? '',
+      asset_url: target?.assetUrl ?? node.assetUrl ?? graphNode?.assetUrl ?? '',
+    }
+  })
+  const referencePlan = buildSequenceAnimaticShotIngredientReferencePlan({
+    shot,
+    spatialNodes,
+    continuityTargets,
+    assetPack: shotScopedAssetPack(model, shot),
+    maxReferences: 8,
+  })
+  const shotReferenceByEntityKey = new Map(shot.references.map((reference) => [lookupKey(reference.entityKey), reference] as const).filter(([key]) => key))
+  const ingredients: SequenceAnimaticShotIngredient[] = referencePlan.ingredients.map((reference) => {
+    const target = targetByNodeId.get(reference.nodeId) ?? targetByNodeId.get(reference.entityKey) ?? null
+    const graphNode = graphNodeById.get(reference.nodeId) ?? graphNodeById.get(reference.entityKey) ?? null
+    const spatialNode = shot.spatialBindingView.hierarchy.find((node) => node.id === reference.nodeId || node.id === reference.entityKey) ?? null
+    const shotReference = shotReferenceByEntityKey.get(lookupKey(reference.nodeId)) ?? shotReferenceByEntityKey.get(lookupKey(reference.entityKey)) ?? null
+    const targetStatus = statusFromTarget(target)
+    const status = target && target.status !== 'ready'
+      ? targetStatus
+      : reference.status === 'ready' ? 'ready' : 'missing'
+    const iconKind = reference.kind === 'zone_location'
+      ? 'zone'
+      : reference.kind === 'world_character' || reference.kind === 'temp_character'
+        ? 'character'
+        : 'item'
+    return {
+      id: reference.id,
       name: reference.name,
-      typeLabel: reference.isContinuityAnchor
-        ? reference.continuityAnchorType === 'character' ? 'Temp character' : reference.continuityAnchorType === 'location_spot' ? 'Location spot' : 'Prop'
-        : reference.role || 'Reference',
+      typeLabel: reference.kind === 'zone_location'
+        ? 'Spot from zone'
+        : reference.kind === 'world_character'
+          ? 'World character'
+          : reference.kind === 'temp_character'
+            ? 'Temp character'
+            : 'Item/prop',
       kind: target ? 'continuity_asset' : 'reference',
-      iconId: reference.iconId,
-      iconUrl: reference.iconUrl,
-      imageUrl: reference.iconUrl ?? target?.assetUrl ?? graphNode?.assetUrl ?? reference.referenceArtUrl ?? null,
-      fullImageUrl: target?.assetUrl ?? graphNode?.assetUrl ?? reference.referenceArtUrl ?? reference.iconUrl,
-      status: effectiveStatus,
-      statusLabel: statusLabelForIngredient({ status: effectiveStatus, target, fallback: reference.statusLabel }),
+      iconId: iconForIngredientKind(iconKind),
+      iconUrl: reference.imageUrl || target?.assetUrl || graphNode?.assetUrl || shotReference?.iconUrl || null,
+      imageUrl: reference.imageUrl || target?.assetUrl || graphNode?.assetUrl || shotReference?.iconUrl || shotReference?.referenceArtUrl || null,
+      fullImageUrl: reference.imageUrl || target?.assetUrl || graphNode?.assetUrl || shotReference?.referenceArtUrl || shotReference?.iconUrl || null,
+      status,
+      statusLabel: statusLabelForIngredient({ status, target }),
       actionLabel: actionLabelForIngredient(status, target),
-      usageLabel: 'Used by this shot',
-      nodeId: target?.nodeId ?? reference.entityKey,
+      usageLabel: reference.reason || 'Used by this shot',
+      nodeId: reference.nodeId || reference.entityKey,
+      assetKey: reference.assetKey,
       target,
       coverageAnchor: null,
-      spatialNode: null,
-      requiredForKeyframe: dependencyTargets.has(target?.nodeId ?? reference.entityKey) || (reference.isContinuityAnchor === true && effectiveStatus !== 'not_required'),
+      spatialNode,
+      requiredForKeyframe: reference.requiredForKeyframe,
       canGenerate: Boolean(target && status !== 'generating'),
-      visualBrief: graphNode?.effectiveVisualBrief || graphNode?.summary || '',
-    })
-  }
+      visualBrief: graphNode?.effectiveVisualBrief || graphNode?.summary || reference.reason,
+    }
+  })
 
   if (cleanText(shot.camera)) {
     ingredients.push({
@@ -535,6 +432,7 @@ export function sequenceAnimaticIngredientsForShot(
       actionLabel: '',
       usageLabel: 'Camera description',
       nodeId: null,
+      assetKey: '',
       target: null,
       coverageAnchor: null,
       spatialNode: null,
@@ -559,72 +457,13 @@ export function sequenceAnimaticIngredientsForShot(
       actionLabel: '',
       usageLabel: 'Lighting description',
       nodeId: null,
+      assetKey: '',
       target: null,
       coverageAnchor: null,
       spatialNode: null,
       requiredForKeyframe: false,
       canGenerate: false,
       visualBrief: shot.lighting,
-    })
-  }
-
-  for (const line of shot.dialogue) {
-    if (!line.speakerRefId && !line.speakerName) continue
-    const nodeId = line.speakerRefId || line.speakerName
-    const target = targetForReference(targetByReference, line.speakerRefId, line.speakerName) ?? null
-    const graphNode = graphNodeById.get(target?.nodeId ?? nodeId) ?? null
-    const status = statusFromTarget(target)
-    const hasReferenceArt = Boolean(line.speakerReferenceArtUrl || line.speakerIconUrl || graphNode?.assetUrl)
-    ingredients.push({
-      id: `dialogue:${nodeId}`,
-      name: line.speakerName || displayNameFromRefId(nodeId),
-      typeLabel: 'Dialogue',
-      kind: target ? 'continuity_asset' : 'dialogue',
-      iconId: line.speakerIconId,
-      iconUrl: line.speakerIconUrl,
-      imageUrl: line.speakerIconUrl ?? target?.assetUrl ?? graphNode?.assetUrl ?? null,
-      fullImageUrl: target?.assetUrl ?? graphNode?.assetUrl ?? line.speakerReferenceArtUrl ?? line.speakerIconUrl,
-      status: target ? status : hasReferenceArt ? 'ready' : 'not_required',
-      statusLabel: statusLabelForIngredient({ status: target ? status : hasReferenceArt ? 'ready' : 'not_required', target, fallback: hasReferenceArt ? 'Ready' : 'Reference only' }),
-      actionLabel: actionLabelForIngredient(status, target),
-      usageLabel: 'Dialogue in this shot',
-      nodeId: target?.nodeId ?? nodeId,
-      target,
-      coverageAnchor: null,
-      spatialNode: null,
-      requiredForKeyframe: Boolean(target && dependencyTargets.has(target.nodeId)),
-      canGenerate: Boolean(target && status !== 'generating'),
-      visualBrief: line.text,
-    })
-  }
-
-  for (const beat of shot.performanceBeats) {
-    if (!beat.characterRefId && !beat.characterName) continue
-    const nodeId = beat.characterRefId || beat.characterName
-    const target = targetForReference(targetByReference, beat.characterRefId, beat.characterName) ?? null
-    const graphNode = graphNodeById.get(target?.nodeId ?? nodeId) ?? null
-    const status = statusFromTarget(target)
-    const hasReferenceArt = Boolean(beat.characterReferenceArtUrl || beat.characterIconUrl || graphNode?.assetUrl)
-    ingredients.push({
-      id: `performance:${nodeId}`,
-      name: beat.characterName || displayNameFromRefId(nodeId),
-      typeLabel: 'Performance',
-      kind: target ? 'continuity_asset' : 'performance',
-      iconId: beat.characterIconId,
-      iconUrl: beat.characterIconUrl,
-      imageUrl: beat.characterIconUrl ?? target?.assetUrl ?? graphNode?.assetUrl ?? null,
-      fullImageUrl: target?.assetUrl ?? graphNode?.assetUrl ?? beat.characterReferenceArtUrl ?? beat.characterIconUrl,
-      status: target ? status : hasReferenceArt ? 'ready' : 'not_required',
-      statusLabel: statusLabelForIngredient({ status: target ? status : hasReferenceArt ? 'ready' : 'not_required', target, fallback: hasReferenceArt ? 'Ready' : 'Reference only' }),
-      actionLabel: actionLabelForIngredient(status, target),
-      usageLabel: 'Performance beat',
-      nodeId: target?.nodeId ?? nodeId,
-      target,
-      coverageAnchor: null,
-      spatialNode: null,
-      requiredForKeyframe: Boolean(target && dependencyTargets.has(target.nodeId)),
-      canGenerate: Boolean(target && status !== 'generating'),
-      visualBrief: [beat.facialExpression, beat.bodyLanguage, beat.gaze, beat.gesture].filter(Boolean).join(' / '),
     })
   }
 
@@ -639,35 +478,109 @@ export function sequenceAnimaticKeyframePreflightForShot(
   shot: SequenceAnimaticShotView,
 ) {
   const ingredients = sequenceAnimaticIngredientsForShot(model, shot)
-  const dependencyTargets = sequenceAnimaticDependencyTargetsForShot(model, shot)
-  const blockingTargets = dependencyTargets.filter((target) => target.status === 'missing' || target.status === 'stale' || target.status === 'failed')
-  const generatingTargets = dependencyTargets.filter((target) => target.status === 'generating')
   const coverageAnchor = shot.coverageSetupId
     ? model.coverageAnchors.find((anchor) => anchor.id === shot.coverageSetupId) ?? null
     : null
-  const coverageMissing = Boolean(coverageAnchor && coverageAnchor.status !== 'ready' && !coverageAnchor.running)
-  const coverageGenerating = Boolean(coverageAnchor?.running || coverageAnchor?.status === 'generating' || coverageAnchor?.status === 'queued')
   const missingIngredients = ingredients.filter((ingredient) => (
     ingredient.requiredForKeyframe
     && (ingredient.status === 'missing' || ingredient.status === 'stale' || ingredient.status === 'failed')
   ))
   const generatingIngredients = ingredients.filter((ingredient) => ingredient.requiredForKeyframe && ingredient.status === 'generating')
   const readyIngredients = ingredients.filter((ingredient) => ingredient.requiredForKeyframe && ingredient.status === 'ready')
-  const blockingIngredientTargetIds = new Set(missingIngredients.map((ingredient) => ingredient.target?.nodeId).filter(Boolean))
-  const generatingIngredientTargetIds = new Set(generatingIngredients.map((ingredient) => ingredient.target?.nodeId).filter(Boolean))
   return {
-    status: generatingIngredients.length > 0 || coverageGenerating
+    status: generatingIngredients.length > 0
       ? 'generating'
-      : missingIngredients.length > 0 || coverageMissing
+      : missingIngredients.length > 0
         ? 'blocked'
         : 'ready',
     missingIngredients,
     generatingIngredients,
     readyIngredients,
-    blockingTargets: blockingTargets.filter((target) => blockingIngredientTargetIds.has(target.nodeId)),
-    generatingTargets: generatingTargets.filter((target) => generatingIngredientTargetIds.has(target.nodeId)),
+    blockingTargets: missingIngredients.map((ingredient) => ingredient.target).filter((target): target is SequenceAnimaticContinuityAssetTargetView => Boolean(target)),
+    generatingTargets: generatingIngredients.map((ingredient) => ingredient.target).filter((target): target is SequenceAnimaticContinuityAssetTargetView => Boolean(target)),
     coverageAnchor,
   } satisfies SequenceAnimaticShotKeyframePreflight
+}
+
+function roleForOverrideIngredient(ingredient: SequenceAnimaticShotIngredient) {
+  const type = ingredient.typeLabel.toLowerCase()
+  if (type.includes('zone') || type.includes('spot from zone')) return 'zone_reference'
+  if (type.includes('world character')) return 'world_character_reference'
+  if (type.includes('temp character')) return 'temp_character_reference'
+  if (type.includes('item') || type.includes('prop')) return 'item_or_prop_reference'
+  return 'shot_ingredient_reference'
+}
+
+function overrideKindForIngredient(ingredient: SequenceAnimaticShotIngredient) {
+  const type = ingredient.typeLabel.toLowerCase()
+  if (type.includes('zone') || type.includes('spot from zone')) return 'zone_location'
+  if (type.includes('world character')) return 'world_character'
+  if (type.includes('temp character')) return 'temp_character'
+  if (type.includes('item') || type.includes('prop')) return 'item_or_prop'
+  return ingredient.kind
+}
+
+export function buildSequenceAnimaticShotKeyframeReferenceOverride(
+  model: any,
+  shot: any,
+): SequenceAnimaticShotKeyframeReferenceOverride {
+  const ingredients = sequenceAnimaticIngredientsForShot(model, shot)
+  const visualIngredients = ingredients
+    .filter((ingredient) => ingredient.requiredForKeyframe)
+    .filter((ingredient) => ingredient.kind !== 'camera' && ingredient.kind !== 'lighting' && ingredient.kind !== 'dialogue' && ingredient.kind !== 'performance')
+    .map((ingredient, index) => {
+      const assetKey = cleanText(ingredient.assetKey || ingredient.target?.assetKey)
+      const assetUrl = cleanText(ingredient.fullImageUrl || ingredient.imageUrl || ingredient.iconUrl)
+      const kind = overrideKindForIngredient(ingredient)
+      const role = roleForOverrideIngredient(ingredient)
+      const nodeId = cleanText(ingredient.nodeId)
+      return {
+        id: ingredient.id,
+        kind,
+        name: ingredient.name,
+        nodeId: nodeId || null,
+        node_id: nodeId || null,
+        entityKey: nodeId || null,
+        entity_key: nodeId || null,
+        assetKey,
+        asset_key: assetKey,
+        assetUrl,
+        asset_url: assetUrl,
+        status: ingredient.status,
+        source: 'focused_shot_ingredient_ui' as const,
+        role,
+        sourceArtifactRole: ingredient.target ? 'sequence_animatic_continuity_asset' : 'world_entity_reference',
+        source_artifact_role: ingredient.target ? 'sequence_animatic_continuity_asset' : 'world_entity_reference',
+        requiredForKeyframe: true,
+        required_for_keyframe: true,
+        uiOrder: index,
+        ui_order: index,
+      }
+    })
+
+  const ingredientPlanHash = sequenceAnimaticVisualReferenceHash({
+    version: 'shot_keyframe_reference_override_v1',
+    shotId: shot.id,
+    ingredients: visualIngredients.map((ingredient) => ({
+      id: ingredient.id,
+      kind: ingredient.kind,
+      nodeId: ingredient.nodeId,
+      entityKey: ingredient.entityKey,
+      assetKey: ingredient.assetKey,
+      status: ingredient.status,
+      uiOrder: ingredient.uiOrder,
+    })),
+  })
+
+  return {
+    version: 'shot_keyframe_reference_override_v1',
+    shotId: shot.id,
+    shot_id: shot.id,
+    ingredientPlanHash,
+    ingredient_plan_hash: ingredientPlanHash,
+    source: 'focused_shot_ingredient_ui',
+    ingredients: visualIngredients,
+  }
 }
 
 export function buildSequenceAnimaticShotPanelCues(shot: SequenceAnimaticShotView): SequenceAnimaticShotPanelCue[] {

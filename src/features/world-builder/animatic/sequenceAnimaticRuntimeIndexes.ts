@@ -139,6 +139,7 @@ export function buildSequenceAnimaticRuntimeIndexes(input: {
   for (const request of plannedKeyframeRequests) {
     if (readOutputRequestScreenplayAnimaticRole(request) !== 'shot_production') continue
     const requestMetadata = readLooseRecord(request.metadata)
+    if (requestMetadata.sequenceAnimaticStale === true) continue
     const setupId = trimOptionalString(requestMetadata.coverageSetupId)
     const shotId = trimOptionalString(requestMetadata.shotId)
     const run = plannedKeyframeRunByRequestId.get(request.id) ?? null
@@ -213,7 +214,9 @@ export function buildSequenceAnimaticRuntimeIndexes(input: {
     if (leftPriority !== rightPriority) return rightPriority - leftPriority
     return right.updatedAt.localeCompare(left.updatedAt)
   })) {
-    const shotId = trimOptionalString(readLooseRecord(request.metadata).shotId)
+    const metadata = readLooseRecord(request.metadata)
+    if (metadata.sequenceAnimaticStale === true) continue
+    const shotId = trimOptionalString(metadata.shotId)
     if (shotId && !plannedKeyframeRequestByShotId.has(shotId)) plannedKeyframeRequestByShotId.set(shotId, request)
   }
 

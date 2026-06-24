@@ -89,6 +89,7 @@ function shot(overrides: ShotOverrides = {}): SequenceAnimaticViewModel['blocks'
     keyframeDependencyMode: '',
     keyframeGraphPolicyVersion: '',
     keyframeRunning: false,
+    keyframeError: '',
     isRevised: false,
     originalAction: 'The courier opens the vault door.',
     originalCamera: 'Low dolly toward the threshold.',
@@ -214,6 +215,7 @@ function model(input: {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     },
+    assetPack: {},
     scenes: [{ id: 'scene_01', index: 1, title: 'Vault scene', summary: 'A vault reveal scene.', requestId: null, shotCount: 1, status: 'ready' }],
     continuityRequest: null,
     continuityRun: null,
@@ -354,10 +356,10 @@ test('buildSequenceAnimaticShotTimelineItems flattens blocks and surfaces missin
   assert.equal(items.length, 1)
   assert.equal(items[0]?.sceneTitle, 'Vault scene')
   assert.equal(items[0]?.blockTitle, 'Opening block')
-  assert.equal(items[0]?.missingReferenceCount, 2)
+  assert.equal(items[0]?.missingReferenceCount, 1)
 })
 
-test('sequenceAnimaticIngredientsForShot merges spatial nodes, temp refs, and coverage anchors', () => {
+test('sequenceAnimaticIngredientsForShot uses shared-plan refs and display-only camera lighting', () => {
   const testShot = shot({
     coverageSetupId: 'coverage_door',
     references: [{
@@ -374,16 +376,60 @@ test('sequenceAnimaticIngredientsForShot merges spatial nodes, temp refs, and co
   })
   const view = model({ testShot, coverageAnchors: [coverageAnchor()] })
   const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
-  const courier = ingredients.find((ingredient) => ingredient.id === 'reference:temp_courier')
+  const courier = ingredients.find((ingredient) => ingredient.nodeId === 'temp_courier')
 
-  assert.ok(ingredients.some((ingredient) => ingredient.id === 'scene:spot_door' && ingredient.status === 'missing'))
-  assert.equal(ingredients.filter((ingredient) => ingredient.kind === 'scene_graph' || ingredient.kind === 'continuity_asset' && ingredient.spatialNode).length, 1)
-  assert.ok(ingredients.some((ingredient) => ingredient.id === 'reference:temp_courier' && ingredient.typeLabel === 'Temp character'))
+  assert.ok(!ingredients.some((ingredient) => ingredient.nodeId === 'spot_door' && ingredient.requiredForKeyframe))
+  assert.equal(ingredients.filter((ingredient) => ingredient.kind === 'scene_graph' || ingredient.kind === 'continuity_asset' && ingredient.spatialNode).length, 0)
+  assert.ok(ingredients.some((ingredient) => ingredient.nodeId === 'temp_courier' && ingredient.typeLabel === 'Temp character'))
   assert.ok(!ingredients.some((ingredient) => ingredient.kind === 'coverage_anchor'))
   assert.ok(ingredients.some((ingredient) => ingredient.id === 'field:scene_01_shot_001:camera' && ingredient.visualBrief === 'Low dolly toward the threshold.'))
   assert.ok(ingredients.some((ingredient) => ingredient.id === 'field:scene_01_shot_001:lighting' && ingredient.visualBrief === 'Cold edge light through the doorway.'))
   assert.equal(courier?.imageUrl, 'https://example.test/courier-crop.webp')
   assert.equal(courier?.fullImageUrl, 'https://example.test/courier-sheet.webp')
+})
+
+test('sequenceAnimaticIngredientsForShot restores ready world refs from resolved shot references', () => {
+  const testShot = shot({
+    references: [
+      {
+        entityKey: 'miyo_hoshika',
+        name: 'Miyo Hoshika',
+        role: 'Character',
+        iconId: 'character',
+        assetKey: 'miyo_sheet_asset',
+        iconUrl: 'https://example.test/miyo-icon.webp',
+        referenceArtUrl: 'https://example.test/miyo-sheet.webp',
+        statusLabel: 'Ready',
+      },
+      {
+        entityKey: 'rin_uzuki',
+        name: 'Rin Uzuki',
+        role: 'Character',
+        iconId: 'character',
+        assetKey: 'rin_sheet_asset',
+        iconUrl: 'https://example.test/rin-icon.webp',
+        referenceArtUrl: 'https://example.test/rin-sheet.webp',
+        statusLabel: 'Ready',
+      },
+    ],
+  })
+  const view = model({
+    testShot,
+    targets: [
+      target({ nodeId: 'zone_vault', name: 'Vault hall', assetKind: 'location_zone', status: 'ready', statusLabel: 'Zone ready', assetKey: 'zone_asset', assetUrl: 'https://example.test/zone.webp' }),
+    ],
+  })
+  const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
+  const names = ingredients.map((ingredient) => ingredient.name)
+  const preflight = sequenceAnimaticKeyframePreflightForShot(view, testShot)
+
+  assert.ok(names.includes('Miyo Hoshika'))
+  assert.ok(names.includes('Rin Uzuki'))
+  assert.equal(ingredients.find((ingredient) => ingredient.nodeId === 'miyo_hoshika')?.status, 'ready')
+  assert.equal(ingredients.find((ingredient) => ingredient.nodeId === 'rin_uzuki')?.fullImageUrl, 'https://example.test/rin-sheet.webp')
+  assert.deepEqual(preflight.missingIngredients.map((ingredient) => ingredient.name), [])
+  assert.ok(preflight.readyIngredients.some((ingredient) => ingredient.nodeId === 'miyo_hoshika'))
+  assert.ok(preflight.readyIngredients.some((ingredient) => ingredient.nodeId === 'rin_uzuki'))
 })
 
 test('sequenceAnimaticIngredientsForShot dedupes the same reference across dialogue and shot refs', () => {
@@ -417,20 +463,21 @@ test('sequenceAnimaticIngredientsForShot dedupes the same reference across dialo
     targets: [
       target({ nodeId: 'set_station', name: 'Station', status: 'ready', statusLabel: 'Asset ready', assetKey: 'set_asset', assetUrl: 'https://example.test/set.webp' }),
       target({ nodeId: 'spot_door', name: 'Vault door' }),
+      target({ nodeId: 'temp_courier', name: 'Courier', assetKind: 'temporary_character', status: 'ready', statusLabel: 'Ready', assetKey: 'courier_asset', assetUrl: 'https://example.test/courier-generated.webp' }),
     ],
   })
   const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
   const courierIngredients = ingredients.filter((ingredient) => ingredient.nodeId === 'temp_courier')
 
   assert.equal(courierIngredients.length, 1)
-  assert.equal(courierIngredients[0]?.kind, 'reference')
-  assert.equal(courierIngredients[0]?.fullImageUrl, 'https://example.test/courier-sheet.webp')
+  assert.equal(courierIngredients[0]?.kind, 'continuity_asset')
+  assert.equal(courierIngredients[0]?.fullImageUrl, 'https://example.test/courier-generated.webp')
 })
 
-test('sequenceAnimaticIngredientsForShot resolves generation targets by reference name alias', () => {
+test('sequenceAnimaticIngredientsForShot resolves generation targets from explicit ref ids', () => {
   const testShot = shot({
     references: [{
-      entityKey: 'archive_attendants',
+      entityKey: 'temp_archive_attendants',
       name: 'Archive attendants',
       role: 'Character',
       iconId: 'character',
@@ -449,7 +496,7 @@ test('sequenceAnimaticIngredientsForShot resolves generation targets by referenc
     ],
   })
   const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
-  const archiveAttendants = ingredients.find((ingredient) => ingredient.name === 'Archive attendants')
+  const archiveAttendants = ingredients.find((ingredient) => ingredient.nodeId === 'temp_archive_attendants')
   const preflight = sequenceAnimaticKeyframePreflightForShot(view, testShot)
 
   assert.equal(archiveAttendants?.target?.nodeId, 'temp_archive_attendants')
@@ -460,7 +507,7 @@ test('sequenceAnimaticIngredientsForShot resolves generation targets by referenc
   assert.ok(preflight.blockingTargets.some((target) => target.nodeId === 'temp_archive_attendants'))
 })
 
-test('sequenceAnimaticIngredientsForShot resolves temp-prefixed target ids when names differ', () => {
+test('sequenceAnimaticIngredientsForShot does not repair mismatched temp-prefixed ids by name', () => {
   const testShot = shot({
     references: [{
       entityKey: 'archive_attendants',
@@ -478,21 +525,18 @@ test('sequenceAnimaticIngredientsForShot resolves temp-prefixed target ids when 
     targets: [
       target({ nodeId: 'set_station', name: 'Station', status: 'ready', statusLabel: 'Asset ready', assetKey: 'set_asset', assetUrl: 'https://example.test/set.webp' }),
       target({ nodeId: 'spot_door', name: 'Vault door', status: 'ready', statusLabel: 'Asset ready', assetKey: 'spot_asset', assetUrl: 'https://example.test/spot.webp' }),
-      target({ nodeId: 'temp_archive_attendants', name: 'Attendant batch', assetKind: 'temporary_character', status: 'missing', statusLabel: 'Asset missing' }),
+      target({ nodeId: 'temp_archive_attendants', name: 'Attendant batch', assetKind: 'temporary_character', status: 'missing', statusLabel: 'Asset missing', shotIds: [] }),
     ],
   })
   const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
-  const archiveAttendants = ingredients.find((ingredient) => ingredient.name === 'Archive attendants')
+  const archiveAttendants = ingredients.find((ingredient) => ingredient.nodeId === 'temp_archive_attendants')
   const preflight = sequenceAnimaticKeyframePreflightForShot(view, testShot)
   const timeline = buildSequenceAnimaticShotTimelineItems(view)
 
-  assert.equal(archiveAttendants?.target?.nodeId, 'temp_archive_attendants')
-  assert.equal(archiveAttendants?.status, 'missing')
-  assert.equal(archiveAttendants?.canGenerate, true)
-  assert.equal(archiveAttendants?.requiredForKeyframe, true)
-  assert.equal(preflight.status, 'blocked')
-  assert.deepEqual(preflight.blockingTargets.map((entry) => entry.nodeId), ['temp_archive_attendants'])
-  assert.equal(timeline[0]?.missingReferenceCount, 1)
+  assert.equal(archiveAttendants, undefined)
+  assert.equal(preflight.status, 'ready')
+  assert.deepEqual(preflight.blockingTargets.map((entry) => entry.nodeId), [])
+  assert.equal(timeline[0]?.missingReferenceCount, 0)
 })
 
 test('sequenceAnimaticKeyframePreflightForShot counts planned temp prop ingredients as missing', () => {
@@ -584,11 +628,11 @@ test('sequenceAnimaticIngredientsForShot uses a ready zone reference for a missi
     ],
   })
   const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
-  const spot = ingredients.find((ingredient) => ingredient.id === 'scene:spot_door')
+  const spot = ingredients.find((ingredient) => ingredient.nodeId === 'zone_vault')
   const preflight = sequenceAnimaticKeyframePreflightForShot(view, testShot)
   const timeline = buildSequenceAnimaticShotTimelineItems(view)
 
-  assert.equal(spot?.name, 'Vault door')
+  assert.equal(spot?.name, 'Vault hall')
   assert.equal(spot?.status, 'ready')
   assert.equal(spot?.target?.nodeId, 'zone_vault')
   assert.equal(spot?.fullImageUrl, 'https://example.test/zone.webp')
@@ -763,19 +807,19 @@ test('sequenceAnimaticKeyframePreflightForShot blocks on missing or failed refer
   const result = sequenceAnimaticKeyframePreflightForShot(view, view.blocks[0]!.shots[0]!)
 
   assert.equal(result.status, 'blocked')
-  assert.deepEqual(result.blockingTargets.map((entry) => entry.nodeId).sort(), ['spot_door', 'temp_courier'])
+  assert.deepEqual(result.blockingTargets.map((entry) => entry.nodeId).sort(), ['temp_courier'])
 })
 
 test('sequenceAnimaticKeyframePreflightForShot reports generating references before blocking', () => {
   const view = model({
     targets: [
       target({ nodeId: 'set_station', name: 'Station', status: 'ready', statusLabel: 'Asset ready', assetKey: 'set_asset', assetUrl: 'https://example.test/set.webp' }),
-      target({ nodeId: 'spot_door', name: 'Vault door', status: 'generating', statusLabel: 'Generating asset' }),
-      target({ nodeId: 'temp_courier', name: 'Courier', assetKind: 'temporary_character', status: 'ready', statusLabel: 'Asset ready', assetKey: 'char_asset', assetUrl: 'https://example.test/char.webp' }),
+      target({ nodeId: 'spot_door', name: 'Vault door', status: 'ready', statusLabel: 'Asset ready', assetKey: 'spot_asset', assetUrl: 'https://example.test/spot.webp' }),
+      target({ nodeId: 'temp_courier', name: 'Courier', assetKind: 'temporary_character', status: 'generating', statusLabel: 'Generating asset' }),
     ],
   })
   const result = sequenceAnimaticKeyframePreflightForShot(view, view.blocks[0]!.shots[0]!)
 
   assert.equal(result.status, 'generating')
-  assert.deepEqual(result.generatingTargets.map((entry) => entry.nodeId), ['spot_door'])
+  assert.deepEqual(result.generatingTargets.map((entry) => entry.nodeId), ['temp_courier'])
 })

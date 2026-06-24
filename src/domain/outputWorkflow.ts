@@ -1049,7 +1049,7 @@ export const sequenceAnimaticShotProductionInputV1Schema = looseObjectSchema.ext
   shot: looseRecordSchema,
   panel: looseRecordSchema.default({}),
   assetPack: looseRecordSchema.default({}),
-  dependencyMode: z.enum(['single_node_chain', 'batch_grid']).default('single_node_chain'),
+  dependencyMode: z.literal('ingredient_refs').default('ingredient_refs'),
   continuityDependencies: z.array(looseRecordSchema).default([]),
   continuityDependencyNodeIds: z.array(z.string()).default([]),
   missingContinuityNodeIds: z.array(z.string()).default([]),
@@ -1057,7 +1057,42 @@ export const sequenceAnimaticShotProductionInputV1Schema = looseObjectSchema.ext
   providerDurationSeconds: z.number().positive(),
   requiredReferenceAssetKeys: z.array(z.string()).default([]),
   omittedReferenceAssetKeys: z.array(z.string()).default([]),
+  shotReferenceOverride: looseRecordSchema.default({}),
+  shot_reference_override: looseRecordSchema.default({}),
   sharedDependencyRequests: z.array(looseRecordSchema).default([]),
+})
+
+export const sequenceAnimaticShotKeyframeReferenceOverrideIngredientSchema = looseObjectSchema.extend({
+  id: z.string().default(''),
+  kind: z.string().default(''),
+  name: z.string().default(''),
+  nodeId: z.string().nullable().default(null),
+  node_id: z.string().nullable().default(null),
+  entityKey: z.string().nullable().default(null),
+  entity_key: z.string().nullable().default(null),
+  assetKey: z.string().default(''),
+  asset_key: z.string().default(''),
+  assetUrl: z.string().default(''),
+  asset_url: z.string().default(''),
+  status: z.string().default(''),
+  source: z.string().default(''),
+  role: z.string().default(''),
+  sourceArtifactRole: z.string().default(''),
+  source_artifact_role: z.string().default(''),
+  requiredForKeyframe: z.boolean().default(true),
+  required_for_keyframe: z.boolean().default(true),
+  uiOrder: z.number().int().nonnegative().default(0),
+  ui_order: z.number().int().nonnegative().default(0),
+})
+
+export const sequenceAnimaticShotKeyframeReferenceOverrideSchema = looseObjectSchema.extend({
+  version: z.literal('shot_keyframe_reference_override_v1').default('shot_keyframe_reference_override_v1'),
+  shotId: z.string().default(''),
+  shot_id: z.string().default(''),
+  ingredientPlanHash: z.string().default(''),
+  ingredient_plan_hash: z.string().default(''),
+  source: z.literal('focused_shot_ingredient_ui').default('focused_shot_ingredient_ui'),
+  ingredients: z.array(sequenceAnimaticShotKeyframeReferenceOverrideIngredientSchema).default([]),
 })
 
 export const sequenceAnimaticShotRevisionArtifactV1Schema = looseObjectSchema.extend({
@@ -1084,6 +1119,8 @@ export const sequenceAnimaticKeyframeWorkflowEnsureRequestSchema = z.object({
   shotIds: z.array(z.string().min(1)).max(150).optional(),
   coverageSetupIds: z.array(z.string().min(1)).max(150).optional(),
   allowProvisional: z.boolean().default(false),
+  shotReferenceOverride: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
+  shot_reference_override: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
 })
 
 export const sequenceAnimaticBlockedShotKeyframeSchema = z.object({
@@ -1148,6 +1185,8 @@ export const sequenceAnimaticShotProductionGraphEnsureRequestSchema = z.object({
   coverageSetupId: z.string().min(1).optional(),
   forceRefresh: z.boolean().default(false),
   allowProvisional: z.boolean().default(false),
+  shotReferenceOverride: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
+  shot_reference_override: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
 })
 
 export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object({
@@ -1163,7 +1202,7 @@ export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object(
   shotId: z.string().min(1),
   coverageSetupId: z.string().nullable().default(null),
   dependencyNodeIds: z.array(z.string()).default([]),
-  graphPolicyVersion: z.string().default('primary_chain_v5'),
+  graphPolicyVersion: z.string().default('primary_chain_v13_ui_ingredient_override'),
 })
 
 export const sequenceAnimaticZoneCoverageBoardEnsureRequestSchema = z.object({

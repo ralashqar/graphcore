@@ -8934,6 +8934,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     shotIds?: string[]
     coverageSetupIds?: string[]
     allowProvisional?: boolean
+    shotReferenceOverride?: Record<string, unknown>
   },
 ): Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> {
   const payload = sequenceAnimaticKeyframeWorkflowEnsureRequestSchema.parse({
@@ -8944,6 +8945,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     shotIds: request.shotIds,
     coverageSetupIds: request.coverageSetupIds,
     allowProvisional: request.allowProvisional ?? false,
+    shotReferenceOverride: request.shotReferenceOverride,
   })
   return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
@@ -8954,9 +8956,12 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
       coverageSetupIds: payload.coverageSetupIds,
     },
     flags: {
-      forceRefresh: payload.mode === 'regenerate',
-      regenerate: payload.mode === 'regenerate',
+      forceRefresh: payload.mode === 'regenerate' || Boolean(payload.shotReferenceOverride),
+      regenerate: payload.mode === 'regenerate' || Boolean(payload.shotReferenceOverride),
       allowProvisional: payload.allowProvisional,
+    },
+    payload: {
+      shotReferenceOverride: payload.shotReferenceOverride,
     },
   }, sequenceAnimaticKeyframeWorkflowEnsureResponseSchema)
 }
@@ -8969,6 +8974,7 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     coverageSetupId?: string | null
     forceRefresh?: boolean
     allowProvisional?: boolean
+    shotReferenceOverride?: Record<string, unknown>
   },
 ): Promise<SequenceAnimaticShotProductionGraphEnsureResponse> {
   const payload = sequenceAnimaticShotProductionGraphEnsureRequestSchema.parse({
@@ -8979,6 +8985,7 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     coverageSetupId: request.coverageSetupId || undefined,
     forceRefresh: request.forceRefresh ?? false,
     allowProvisional: request.allowProvisional ?? false,
+    shotReferenceOverride: request.shotReferenceOverride,
   })
   return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
@@ -8991,6 +8998,9 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     flags: {
       forceRefresh: payload.forceRefresh,
       allowProvisional: payload.allowProvisional,
+    },
+    payload: {
+      shotReferenceOverride: payload.shotReferenceOverride,
     },
   }, sequenceAnimaticShotProductionGraphEnsureResponseSchema)
 }

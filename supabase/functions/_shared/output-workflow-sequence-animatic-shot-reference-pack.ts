@@ -273,13 +273,23 @@ export async function sequenceAnimaticShotReferencePack(
   const config = helpers.asRecord(context.node.config)
   const shot = helpers.readFirstUpstreamRecord(context.upstream, ['shot'])
   const rawAssetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
-  const references = Object.values(context.upstream)
+  const allReferences = Object.values(context.upstream)
     .map((outputs) => helpers.asRecord(outputs.reference))
+    .filter((reference) => helpers.readText(reference.status) || helpers.readText(reference.assetKey) || helpers.readText(reference.identityValue))
+  const references = allReferences
     .filter((reference) => helpers.readText(reference.status) === 'ready' && helpers.readText(reference.assetKey))
   const upstreamImages = readUpstreamImages(context.upstream, helpers, ['image', 'keyframe', 'primaryReferenceImage'])
   const imageByAssetKey = new Map(upstreamImages.map((image) => [helpers.readText(image.assetKey), image] as const).filter(([assetKey]) => assetKey))
-  const referenceAssetKeys = references.map((reference) => helpers.readText(reference.assetKey)).filter(Boolean)
+  const resolvedReferenceAssetKeys = references.map((reference) => helpers.readText(reference.assetKey)).filter(Boolean)
   const configuredRequiredReferenceAssetKeys = helpers.readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
+  const uiIngredientOverrideMode = helpers.readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version) === 'primary_chain_v13_ui_ingredient_override'
+  const shotReferenceOverride = helpers.asRecord(config.shotReferenceOverride ?? config.shot_reference_override)
+  const uiOverrideIngredients = helpers.readArray(shotReferenceOverride.ingredients).map(helpers.asRecord)
+  const uiIngredientPlanHash = helpers.readText(config.uiIngredientPlanHash ?? config.ui_ingredient_plan_hash ?? shotReferenceOverride.ingredientPlanHash ?? shotReferenceOverride.ingredient_plan_hash)
+  const uiOverrideAssetKeys = uiOverrideIngredients
+    .filter((entry) => helpers.readText(entry.status) === 'ready')
+    .map((entry) => helpers.readText(entry.assetKey ?? entry.asset_key))
+    .filter(Boolean)
   const fallbackEntities = references.map((reference, index) => {
     const assetKey = helpers.readText(reference.assetKey)
     const role = helpers.readText(reference.role) || 'continuity_asset'
@@ -307,9 +317,70 @@ export async function sequenceAnimaticShotReferencePack(
     }
   }).filter((entity) => helpers.readText(entity.primaryAssetKey))
   const scopedReferenceAssetKeys = [...new Set([
-    ...(configuredRequiredReferenceAssetKeys.length > 0 ? configuredRequiredReferenceAssetKeys : referenceAssetKeys),
+    ...(uiIngredientOverrideMode && uiOverrideAssetKeys.length > 0
+      ? uiOverrideAssetKeys
+      : configuredRequiredReferenceAssetKeys.length > 0 ? configuredRequiredReferenceAssetKeys : resolvedReferenceAssetKeys),
   ])]
+  if (uiIngredientOverrideMode && uiOverrideAssetKeys.length > 0) {
+    const mismatch = scopedReferenceAssetKeys.length !== uiOverrideAssetKeys.length || scopedReferenceAssetKeys.some((assetKey, index) => assetKey !== uiOverrideAssetKeys[index])
+    if (mismatch) {
+      throw new Error(`Shot reference pack mismatch with UI ingredient override. ui=${uiOverrideAssetKeys.join(', ')} pack=${scopedReferenceAssetKeys.join(', ')}.`)
+    }
+    const disallowed = uiOverrideIngredients
+      .filter((entry) => scopedReferenceAssetKeys.includes(helpers.readText(entry.assetKey ?? entry.asset_key)))
+      .filter((entry) => {
+        const kind = helpers.readText(entry.kind).toLowerCase()
+        const role = helpers.readText(entry.role).toLowerCase()
+        return ['spot', 'location_spot', 'set', 'location_set', 'coverage_anchor', 'spot_camera_grid'].includes(kind)
+          || role === 'coverage_anchor'
+          || role.includes('spot_camera_grid')
+      })
+    if (disallowed.length > 0) {
+      throw new Error(`Rejected stale spot/set/coverage reference in UI ingredient override: ${disallowed.map((entry) => helpers.readText(entry.assetKey ?? entry.asset_key)).filter(Boolean).join(', ')}.`)
+    }
+  }
   const scopedReferenceAssetKeySet = new Set(scopedReferenceAssetKeys)
+  const referenceImages = scopedReferenceAssetKeys
+    .map((assetKey) => {
+      const reference = references.find((entry) => helpers.readText(entry.assetKey) === assetKey) ?? {}
+      const image = imageByAssetKey.get(assetKey) ?? {}
+      const role = helpers.readText(reference.role) || 'shot_ingredient_reference'
+      return {
+        ...image,
+        ...reference,
+        assetKey,
+        role,
+        name: helpers.readText(reference.name)
+          || helpers.readText(image.name)
+          || helpers.titleFromRefLike(role),
+        label: helpers.readText(reference.name)
+          || helpers.readText(image.name)
+          || helpers.titleFromRefLike(role),
+        referenceRole: role,
+      }
+    })
+  const missingConfiguredReferences = scopedReferenceAssetKeys
+    .filter((assetKey) => !references.some((reference) => helpers.readText(reference.assetKey) === assetKey))
+    .map((assetKey) => ({
+      status: 'missing',
+      assetKey,
+      role: 'shot_ingredient_reference',
+      identityKey: 'assetKey',
+      identityValue: assetKey,
+      blockingReason: 'missing_shot_ingredient_reference',
+    }))
+  const missingReferences = [
+    ...missingConfiguredReferences,
+    ...allReferences
+    .filter((reference) => {
+      const assetKey = helpers.readText(reference.assetKey)
+      return helpers.readText(reference.status) !== 'ready' || (assetKey && !scopedReferenceAssetKeySet.has(assetKey))
+    })
+  ]
+    .filter((reference, index, entries) => {
+      const key = helpers.readText(reference.assetKey) || helpers.readText(reference.identityValue) || helpers.readText(reference.role) || String(index)
+      return entries.findIndex((entry) => (helpers.readText(entry.assetKey) || helpers.readText(entry.identityValue) || helpers.readText(entry.role) || String(index)) === key) === index
+    })
   const assetPack = orderSequenceAnimaticAssetPackReferences(scopeAssetPackToReferenceAssetKeys({
     assetPack: rawAssetPack,
     referenceAssetKeys: scopedReferenceAssetKeys,
@@ -323,9 +394,13 @@ export async function sequenceAnimaticShotReferencePack(
   const coverageAnchorImage = coverageAnchor ? imageByAssetKey.get(helpers.readText(coverageAnchor.assetKey)) ?? null : null
   const previousKeyframeImage = previousKeyframe ? imageByAssetKey.get(helpers.readText(previousKeyframe.assetKey)) ?? null : null
   const storyboardPanelImage = storyboardPanel ? imageByAssetKey.get(helpers.readText(storyboardPanel.assetKey)) ?? null : null
-  const primaryImage = coverageAnchorImage ?? storyboardPanelImage ?? previousKeyframeImage ?? upstreamImages[0] ?? null
+  const primaryImage = referenceImages.find((image) => helpers.readText(image.assetKey)) ?? coverageAnchorImage ?? storyboardPanelImage ?? previousKeyframeImage ?? null
   const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
   const referenceManifestText = sequenceAnimaticReferenceManifestText(assetPack)
+  const referencePlanHash = helpers.readText(config.referencePlanHash ?? config.reference_plan_hash)
+  const omittedIngredients = uiIngredientOverrideMode
+    ? uiOverrideIngredients.filter((entry) => helpers.readText(entry.status) !== 'ready' || !helpers.readText(entry.assetKey ?? entry.asset_key))
+    : []
   const outputs = {
     shot,
     shots: Object.keys(shot).length > 0 ? [shot] : [],
@@ -336,8 +411,24 @@ export async function sequenceAnimaticShotReferencePack(
     referenceManifestText,
     reference_manifest_text: referenceManifestText,
     references,
-    referenceAssetKeys,
-    reference_asset_keys: referenceAssetKeys,
+    allReferences,
+    all_references: allReferences,
+    referenceAssetKeys: scopedReferenceAssetKeys,
+    reference_asset_keys: scopedReferenceAssetKeys,
+    referenceImages,
+    reference_images: referenceImages,
+    referencePlanHash,
+    reference_plan_hash: referencePlanHash,
+    uiIngredientPlanHash,
+    ui_ingredient_plan_hash: uiIngredientPlanHash,
+    shotReferenceOverride,
+    shot_reference_override: shotReferenceOverride,
+    omittedIngredients,
+    omitted_ingredients: omittedIngredients,
+    missingReferences,
+    missing_references: missingReferences,
+    resolvedReferenceAssetKeys,
+    resolved_reference_asset_keys: resolvedReferenceAssetKeys,
     coverageAnchor: coverageAnchorImage ? { ...coverageAnchorImage, ...helpers.asRecord(coverageAnchor) } : coverageAnchor ?? {},
     coverage_anchor: coverageAnchorImage ? { ...coverageAnchorImage, ...helpers.asRecord(coverageAnchor) } : coverageAnchor ?? {},
     previousKeyframe: previousKeyframeImage ? { ...previousKeyframeImage, ...helpers.asRecord(previousKeyframe) } : previousKeyframe ?? {},
@@ -345,7 +436,7 @@ export async function sequenceAnimaticShotReferencePack(
     storyboardPanel: storyboardPanelImage ? { ...storyboardPanelImage, ...helpers.asRecord(storyboardPanel) } : storyboardPanel ?? {},
     storyboard_panel: storyboardPanelImage ? { ...storyboardPanelImage, ...helpers.asRecord(storyboardPanel) } : storyboardPanel ?? {},
     ...(primaryImage ? { image: primaryImage, keyframe: primaryImage, primaryReferenceImage: primaryImage } : {}),
-    text: JSON.stringify({ shot, references, referenceAssetKeys }, null, 2),
+    text: JSON.stringify({ shot, references, referenceAssetKeys: scopedReferenceAssetKeys, resolvedReferenceAssetKeys }, null, 2),
     deterministic: true,
   }
   return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-shot-reference-pack-v1' })

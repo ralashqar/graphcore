@@ -270,6 +270,52 @@ function normalizeSequenceAnimaticDirectorShot(input: {
     visibleCharacterRefIds,
     speakerRefIds: allSpeakerRefIds,
   })
+  const propRefIds = readStringArray(shot.propRefIds ?? shot.prop_ref_ids).length > 0
+    ? readStringArray(shot.propRefIds ?? shot.prop_ref_ids)
+    : shotRefs.propRefIds.length > 0
+      ? shotRefs.propRefIds
+      : readStringArray(fallback.propRefIds ?? fallback.prop_ref_ids)
+  const itemRefIds = [
+    ...readStringArray(shot.itemRefIds ?? shot.item_ref_ids),
+    ...shotRefs.itemRefIds,
+    ...readStringArray(fallback.itemRefIds ?? fallback.item_ref_ids),
+  ].filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const localReferenceIds = shotRefs.localReferenceIds.filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const locationRefIds = shotRefs.locationRefIds.length > 0
+    ? shotRefs.locationRefIds
+    : [
+      readText(shot.locationRefId) || readText(shot.location_ref_id),
+      readText(shot.worldLocationRefId) || readText(shot.world_location_ref_id),
+      readText(fallback.locationRefId) || readText(fallback.location_ref_id),
+      readText(fallback.worldLocationRefId) || readText(fallback.world_location_ref_id),
+    ].filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const referenceIds = [
+    ...shotRefs.referenceIds,
+    ...visibleCharacterRefIds,
+    ...allSpeakerRefIds,
+    ...propRefIds,
+    ...itemRefIds,
+    ...localReferenceIds,
+    ...locationRefIds,
+  ].filter((value, valueIndex, values) => value && values.indexOf(value) === valueIndex)
+  const normalizedRefs = {
+    referenceIds,
+    reference_ids: referenceIds,
+    visibleCharacterRefIds,
+    visible_character_ref_ids: visibleCharacterRefIds,
+    speakerRefIds: allSpeakerRefIds,
+    speaker_ref_ids: allSpeakerRefIds,
+    characterRefIds: visibleCharacterRefIds,
+    character_ref_ids: visibleCharacterRefIds,
+    propRefIds,
+    prop_ref_ids: propRefIds,
+    itemRefIds,
+    item_ref_ids: itemRefIds,
+    localReferenceIds,
+    local_reference_ids: localReferenceIds,
+    locationRefIds,
+    location_ref_ids: locationRefIds,
+  }
   const parsedShot = cinematicV2ShotSchema.parse({
     ...fallback,
     ...shot,
@@ -298,11 +344,13 @@ function normalizeSequenceAnimaticDirectorShot(input: {
     continuityZoneId: readText(effectiveBinding.zoneId),
     continuitySpotIds: readStringArray(effectiveBinding.spotIds),
     continuityAngleId: readText(effectiveBinding.angleId),
-    propRefIds: readStringArray(shot.propRefIds ?? shot.prop_ref_ids).length > 0
-      ? readStringArray(shot.propRefIds ?? shot.prop_ref_ids)
-      : shotRefs.propRefIds.length > 0
-        ? shotRefs.propRefIds
-        : readStringArray(fallback.propRefIds ?? fallback.prop_ref_ids),
+    propRefIds,
+    itemRefIds,
+    localReferenceIds,
+    locationRefIds,
+    refs: normalizedRefs,
+    referenceAssignments: normalizedRefs,
+    reference_assignments: normalizedRefs,
     continuityInputs: readArray(shot.continuityInputs ?? shot.continuity_inputs).length > 0
       ? readArray(shot.continuityInputs ?? shot.continuity_inputs).map(asRecord)
       : readArray(fallback.continuityInputs ?? fallback.continuity_inputs).map(asRecord),
@@ -321,6 +369,25 @@ function normalizeSequenceAnimaticDirectorShot(input: {
   })
   return {
     ...parsedShot,
+    refs: normalizedRefs,
+    referenceAssignments: normalizedRefs,
+    reference_assignments: normalizedRefs,
+    referenceIds,
+    reference_ids: referenceIds,
+    visibleCharacterRefIds,
+    visible_character_ref_ids: visibleCharacterRefIds,
+    speakerRefIds: allSpeakerRefIds,
+    speaker_ref_ids: allSpeakerRefIds,
+    propRefIds,
+    prop_ref_ids: propRefIds,
+    itemRefIds,
+    item_ref_ids: itemRefIds,
+    localReferenceIds,
+    local_reference_ids: localReferenceIds,
+    locationRefIds,
+    location_ref_ids: locationRefIds,
+    shotReferencePlanVersion: 'sequence_animatic_canonical_shot_refs_v1',
+    shot_reference_plan_version: 'sequence_animatic_canonical_shot_refs_v1',
     sourceScriptShotIds,
     sourceAnchorIds,
   }
