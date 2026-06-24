@@ -141,6 +141,47 @@ function referenceImageUrl(helpers: SequenceAnimaticWorkflowNodePackHelpers, ref
   )
 }
 
+function referenceRecordAssetKeys(helpers: SequenceAnimaticWorkflowNodePackHelpers, reference: LooseRecord) {
+  const metadata = helpers.asRecord(reference.metadata)
+  const keys = [
+    helpers.readText(reference.assetKey),
+    helpers.readText(reference.asset_key),
+    helpers.readText(reference.primaryAssetKey),
+    helpers.readText(reference.primary_asset_key),
+    helpers.readText(reference.selectedReferenceAssetKey),
+    helpers.readText(reference.selected_reference_asset_key),
+    helpers.readText(reference.selectedReferenceVariantAssetKey),
+    helpers.readText(reference.selected_reference_variant_asset_key),
+    helpers.readText(metadata.referenceSheetAssetKey),
+    helpers.readText(metadata.reference_sheet_asset_key),
+    helpers.readText(metadata.thumbnailAssetKey),
+    helpers.readText(metadata.thumbnail_asset_key),
+    ...helpers.readArray(reference.assetKeys).map((key) => helpers.readText(key)),
+    ...helpers.readArray(reference.asset_keys).map((key) => helpers.readText(key)),
+  ].filter(Boolean)
+  return [...new Set(keys)]
+}
+
+function referenceAssetUrlByKey(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  assetPack: LooseRecord,
+  extraRecords: LooseRecord[] = [],
+) {
+  const byAssetKey = new Map<string, string>()
+  const addRecord = (record: LooseRecord) => {
+    const assetUrl = referenceImageUrl(helpers, record)
+    if (!assetUrl) return
+    for (const assetKey of referenceRecordAssetKeys(helpers, record)) {
+      if (!byAssetKey.has(assetKey)) byAssetKey.set(assetKey, assetUrl)
+    }
+  }
+  for (const entity of helpers.readArray(assetPack.entities).map(helpers.asRecord)) addRecord(entity)
+  for (const image of helpers.readArray(assetPack.referenceImages).map(helpers.asRecord)) addRecord(image)
+  for (const image of helpers.readArray(assetPack.reference_images).map(helpers.asRecord)) addRecord(image)
+  for (const record of extraRecords) addRecord(record)
+  return byAssetKey
+}
+
 function referenceKind(helpers: SequenceAnimaticWorkflowNodePackHelpers, reference: LooseRecord) {
   return helpers.readText(reference.kind ?? reference.type).toLowerCase()
 }
@@ -569,10 +610,11 @@ export async function sequenceAnimaticShotReferenceFix(
     referenceScope: 'sequence_animatic_shot_reference_fix',
     limit: referenceAssetKeys.length,
   }))
+  const assetUrlByKey = referenceAssetUrlByKey(helpers, assetPack, [...upstreamImages, ...currentReferences, ...fixedReferences])
   const referenceImages = fixedReferences.map((reference) => {
     const assetKey = referenceAssetKey(helpers, reference)
     const image = imageByAssetKey.get(assetKey) ?? {}
-    const assetUrl = referenceImageUrl(helpers, reference) || referenceImageUrl(helpers, image)
+    const assetUrl = referenceImageUrl(helpers, reference) || referenceImageUrl(helpers, image) || assetUrlByKey.get(assetKey) || ''
     return {
       ...image,
       ...reference,
@@ -637,6 +679,7 @@ export async function sequenceAnimaticShotReferenceFixApply(
   const referenceImages = helpers.readFirstUpstreamArray(context.upstream, ['referenceImages', 'reference_images']).map(helpers.asRecord)
   const imageByAssetKey = new Map(referenceImages.map((image) => [referenceAssetKey(helpers, image), image] as const).filter(([assetKey]) => assetKey))
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
+  const assetUrlByKey = referenceAssetUrlByKey(helpers, assetPack, [...referenceImages, ...fixedReferences])
   const decisions = helpers.readFirstUpstreamArray(context.upstream, ['referenceFixDecisions', 'reference_fix_decisions']).map(helpers.asRecord)
   const diagnostics = helpers.readFirstUpstreamArray(context.upstream, ['referenceFixDiagnostics', 'reference_fix_diagnostics']).map((entry) => helpers.readText(entry)).filter(Boolean)
   const shotId = helpers.readText(shot.id ?? config.shotId)
@@ -656,7 +699,7 @@ export async function sequenceAnimaticShotReferenceFixApply(
   const ingredients = fixedReferences.map((reference, index) => {
     const assetKey = referenceAssetKey(helpers, reference)
     const image = imageByAssetKey.get(assetKey) ?? {}
-    const assetUrl = referenceImageUrl(helpers, reference) || referenceImageUrl(helpers, image)
+    const assetUrl = referenceImageUrl(helpers, reference) || referenceImageUrl(helpers, image) || assetUrlByKey.get(assetKey) || ''
     return {
       id: helpers.readText(reference.id) || `${helpers.readText(reference.kind) || 'ref'}:${helpers.readText(reference.nodeId ?? reference.node_id) || assetKey || index}`,
       kind: helpers.readText(reference.kind),

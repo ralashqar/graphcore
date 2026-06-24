@@ -173,10 +173,9 @@ function readArtifactMediaRecords(artifacts: readonly OutputArtifact[], roles: s
 }
 
 function resolveSequenceAnimaticMediaUrl(media: Record<string, unknown> | null | undefined, assetByKey: ReadonlyMap<string, AssetDefinition>) {
-  const directUrl = trimOptionalString(media?.url) || trimOptionalString(media?.sourceUrl) || trimOptionalString(media?.previewUrl)
-  if (directUrl) return directUrl
   const assetKey = trimOptionalString(media?.assetKey)
-  return assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null
+  const assetUrl = assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null
+  return assetUrl || trimOptionalString(media?.url) || trimOptionalString(media?.sourceUrl) || trimOptionalString(media?.previewUrl) || null
 }
 
 function sequenceAnimaticAssetKeysFromRecord(record: Record<string, unknown>) {
@@ -204,6 +203,9 @@ function hydrateSequenceAnimaticAssetPackUrls(
   const hydrateRecord = (value: unknown) => {
     const record = readLooseRecord(value)
     if (Object.keys(record).length === 0) return record
+    const assetKeyUrl = sequenceAnimaticAssetKeysFromRecord(record)
+      .map((assetKey) => resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null))
+      .find((url): url is string => Boolean(url)) || ''
     const existingUrl = trimOptionalString(record.assetUrl)
       || trimOptionalString(record.asset_url)
       || trimOptionalString(record.imageUrl)
@@ -213,20 +215,18 @@ function hydrateSequenceAnimaticAssetPackUrls(
       || trimOptionalString(record.iconUrl)
       || trimOptionalString(record.icon_url)
       || trimOptionalString(record.url)
-    const assetUrl = existingUrl || sequenceAnimaticAssetKeysFromRecord(record)
-      .map((assetKey) => resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null))
-      .find((url): url is string => Boolean(url)) || ''
+    const assetUrl = assetKeyUrl || existingUrl
     return assetUrl
       ? {
           ...record,
-          assetUrl: trimOptionalString(record.assetUrl) || assetUrl,
-          asset_url: trimOptionalString(record.asset_url) || assetUrl,
-          imageUrl: trimOptionalString(record.imageUrl) || assetUrl,
-          image_url: trimOptionalString(record.image_url) || assetUrl,
-          referenceArtUrl: trimOptionalString(record.referenceArtUrl) || assetUrl,
-          reference_art_url: trimOptionalString(record.reference_art_url) || assetUrl,
-          iconUrl: trimOptionalString(record.iconUrl) || assetUrl,
-          icon_url: trimOptionalString(record.icon_url) || assetUrl,
+          assetUrl,
+          asset_url: assetUrl,
+          imageUrl: assetUrl,
+          image_url: assetUrl,
+          referenceArtUrl: assetUrl,
+          reference_art_url: assetUrl,
+          iconUrl: assetUrl,
+          icon_url: assetUrl,
         }
       : record
   }

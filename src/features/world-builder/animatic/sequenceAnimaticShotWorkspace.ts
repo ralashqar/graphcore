@@ -341,18 +341,33 @@ function assetKeysFromRecord(record: Record<string, unknown>) {
   return [...new Set(keys)]
 }
 
+function addAssetUrlRecordToMap(byAssetKey: Map<string, string>, record: Record<string, unknown>) {
+  const assetUrl = assetUrlFromRecord(record)
+  if (!assetUrl) return
+  for (const assetKey of assetKeysFromRecord(record)) {
+    if (!byAssetKey.has(assetKey)) byAssetKey.set(assetKey, assetUrl)
+  }
+}
+
 function assetUrlByAssetKeyFromPack(assetPack: Record<string, unknown>) {
   const byAssetKey = new Map<string, string>()
-  const addRecord = (record: Record<string, unknown>) => {
-    const assetUrl = assetUrlFromRecord(record)
-    if (!assetUrl) return
-    for (const assetKey of assetKeysFromRecord(record)) {
-      if (!byAssetKey.has(assetKey)) byAssetKey.set(assetKey, assetUrl)
-    }
-  }
-  for (const entity of Array.isArray(assetPack.entities) ? assetPack.entities : []) addRecord(asRecord(entity))
-  for (const image of Array.isArray(assetPack.referenceImages) ? assetPack.referenceImages : []) addRecord(asRecord(image))
-  for (const image of Array.isArray(assetPack.reference_images) ? assetPack.reference_images : []) addRecord(asRecord(image))
+  for (const entity of Array.isArray(assetPack.entities) ? assetPack.entities : []) addAssetUrlRecordToMap(byAssetKey, asRecord(entity))
+  for (const image of Array.isArray(assetPack.referenceImages) ? assetPack.referenceImages : []) addAssetUrlRecordToMap(byAssetKey, asRecord(image))
+  for (const image of Array.isArray(assetPack.reference_images) ? assetPack.reference_images : []) addAssetUrlRecordToMap(byAssetKey, asRecord(image))
+  return byAssetKey
+}
+
+function assetUrlByAssetKeyForShot(
+  model: SequenceAnimaticViewModel,
+  shot: SequenceAnimaticShotView,
+  assetPack: Record<string, unknown>,
+) {
+  const byAssetKey = assetUrlByAssetKeyFromPack(assetPack)
+  for (const target of model.continuityAssetTargets) addAssetUrlRecordToMap(byAssetKey, asRecord(target))
+  for (const node of model.continuityGraphView.nodes) addAssetUrlRecordToMap(byAssetKey, asRecord(node))
+  for (const node of shot.spatialBindingView.hierarchy) addAssetUrlRecordToMap(byAssetKey, asRecord(node))
+  for (const reference of shot.references) addAssetUrlRecordToMap(byAssetKey, asRecord(reference))
+  for (const anchor of model.coverageAnchors) addAssetUrlRecordToMap(byAssetKey, asRecord(anchor))
   return byAssetKey
 }
 
@@ -388,7 +403,7 @@ export function sequenceAnimaticIngredientsForShot(
   const targetByNodeId = new Map(model.continuityAssetTargets.map((target) => [target.nodeId, target] as const))
   const graphNodeById = new Map(model.continuityGraphView.nodes.map((node) => [node.id, node] as const))
   const scopedAssetPack = shotScopedAssetPack(model, shot)
-  const assetUrlByAssetKey = assetUrlByAssetKeyFromPack(scopedAssetPack)
+  const assetUrlByAssetKey = assetUrlByAssetKeyForShot(model, shot, scopedAssetPack)
   const continuityTargets = model.continuityAssetTargets.map((target) => {
     const graphNode = graphNodeById.get(target.nodeId) ?? null
     return {
@@ -448,8 +463,8 @@ export function sequenceAnimaticIngredientsForShot(
         const kind = (rawKind === 'zone_location' || rawKind === 'world_character' || rawKind === 'temp_character' || rawKind === 'item_or_prop')
           ? rawKind
           : 'item_or_prop'
-        const imageUrl = cleanText(ingredient.assetUrl ?? ingredient.asset_url ?? ingredient.imageUrl ?? ingredient.image_url ?? ingredient.referenceArtUrl ?? ingredient.reference_art_url ?? ingredient.iconUrl ?? ingredient.icon_url)
-          || assetUrlByAssetKey.get(assetKey)
+        const imageUrl = assetUrlByAssetKey.get(assetKey)
+          || cleanText(ingredient.assetUrl ?? ingredient.asset_url ?? ingredient.imageUrl ?? ingredient.image_url ?? ingredient.referenceArtUrl ?? ingredient.reference_art_url ?? ingredient.iconUrl ?? ingredient.icon_url)
           || ''
         return {
           id: cleanText(ingredient.id) || `${kind}:${entityKey || assetKey || index}`,

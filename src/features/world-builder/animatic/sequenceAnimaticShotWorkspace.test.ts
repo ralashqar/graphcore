@@ -495,6 +495,7 @@ test('sequenceAnimaticIngredientsForShot prefers saved fixed shot references', (
     targets: [
       target({ nodeId: 'zone_vault', name: 'Vault hall', assetKind: 'location_zone', status: 'ready', statusLabel: 'Zone ready', assetKey: 'zone_asset', assetUrl: 'https://example.test/zone.webp' }),
       target({ nodeId: 'scene_002_local_sutra_disc', name: 'Sutra Disc', assetKind: 'item', status: 'ready', statusLabel: 'Ready', assetKey: 'temp_disc_asset', assetUrl: 'https://example.test/temp-disc.webp' }),
+      target({ nodeId: 'scene_002_local_choice_coin', name: 'Choice Coin', assetKind: 'item', status: 'ready', statusLabel: 'Ready', assetKey: 'choice_coin_asset', assetUrl: 'https://example.test/choice-coin.webp' }),
     ],
     requestMetadata: {
       sequenceAnimaticShotReferenceOverridesByShotId: {
@@ -511,7 +512,7 @@ test('sequenceAnimaticIngredientsForShot prefers saved fixed shot references', (
               nodeId: 'zone_vault',
               entityKey: 'zone_vault',
               assetKey: 'zone_asset',
-              assetUrl: 'https://example.test/zone.webp',
+              assetUrl: 'https://expired.example.test/zone.webp',
               status: 'ready',
               role: 'zone_reference',
               sourceArtifactRole: 'sequence_animatic_continuity_asset',
@@ -526,6 +527,18 @@ test('sequenceAnimaticIngredientsForShot prefers saved fixed shot references', (
               status: 'ready',
               role: 'item_or_prop_reference',
               sourceArtifactRole: 'world_entity_reference',
+            },
+            {
+              id: 'entity:scene_002_local_choice_coin',
+              kind: 'item_or_prop',
+              name: 'Choice Coin',
+              nodeId: 'scene_002_local_choice_coin',
+              entityKey: 'scene_002_local_choice_coin',
+              assetKey: 'choice_coin_asset',
+              assetUrl: 'https://expired.example.test/choice-coin.webp',
+              status: 'ready',
+              role: 'item_or_prop_reference',
+              sourceArtifactRole: 'sequence_animatic_continuity_asset',
             },
           ],
         },
@@ -543,9 +556,13 @@ test('sequenceAnimaticIngredientsForShot prefers saved fixed shot references', (
   })
 
   const ingredients = sequenceAnimaticIngredientsForShot(view, testShot)
+  const fixedZone = ingredients.find((ingredient) => ingredient.name === 'Vault hall' && ingredient.assetKey === 'zone_asset')
   const fixedDisc = ingredients.find((ingredient) => ingredient.name === 'Sutra Discs' && ingredient.assetKey === 'world_disc_asset')
+  const fixedCoin = ingredients.find((ingredient) => ingredient.name === 'Choice Coin' && ingredient.assetKey === 'choice_coin_asset')
+  assert.equal(fixedZone?.fullImageUrl, 'https://example.test/zone.webp')
   assert.ok(fixedDisc)
   assert.equal(fixedDisc?.fullImageUrl, 'https://example.test/world-disc.webp')
+  assert.equal(fixedCoin?.fullImageUrl, 'https://example.test/choice-coin.webp')
   assert.equal(ingredients.some((ingredient) => ingredient.name === 'Sutra Disc' && ingredient.assetKey === 'temp_disc_asset'), false)
   assert.deepEqual(sequenceAnimaticKeyframePreflightForShot(view, testShot).missingIngredients, [])
 })
