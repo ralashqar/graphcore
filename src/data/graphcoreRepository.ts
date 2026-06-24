@@ -8935,6 +8935,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     coverageSetupIds?: string[]
     allowProvisional?: boolean
     shotReferenceOverride?: Record<string, unknown>
+    shotContinuityOptions?: Record<string, unknown>
   },
 ): Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> {
   const payload = sequenceAnimaticKeyframeWorkflowEnsureRequestSchema.parse({
@@ -8946,6 +8947,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     coverageSetupIds: request.coverageSetupIds,
     allowProvisional: request.allowProvisional ?? false,
     shotReferenceOverride: request.shotReferenceOverride,
+    shotContinuityOptions: request.shotContinuityOptions,
   })
   return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
@@ -8962,6 +8964,7 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     },
     payload: {
       shotReferenceOverride: payload.shotReferenceOverride,
+      shotContinuityOptions: payload.shotContinuityOptions,
     },
   }, sequenceAnimaticKeyframeWorkflowEnsureResponseSchema)
 }
@@ -8975,6 +8978,7 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     forceRefresh?: boolean
     allowProvisional?: boolean
     shotReferenceOverride?: Record<string, unknown>
+    shotContinuityOptions?: Record<string, unknown>
   },
 ): Promise<SequenceAnimaticShotProductionGraphEnsureResponse> {
   const payload = sequenceAnimaticShotProductionGraphEnsureRequestSchema.parse({
@@ -8986,6 +8990,7 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     forceRefresh: request.forceRefresh ?? false,
     allowProvisional: request.allowProvisional ?? false,
     shotReferenceOverride: request.shotReferenceOverride,
+    shotContinuityOptions: request.shotContinuityOptions,
   })
   return startTypedWorkflowCommand(snapshot, {
     family: 'sequence_animatic',
@@ -9001,6 +9006,7 @@ export async function ensureSequenceAnimaticShotProductionGraph(
     },
     payload: {
       shotReferenceOverride: payload.shotReferenceOverride,
+      shotContinuityOptions: payload.shotContinuityOptions,
     },
   }, sequenceAnimaticShotProductionGraphEnsureResponseSchema)
 }

@@ -499,6 +499,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
   coverageSetup?: Record<string, unknown>
   coverageShots?: Record<string, unknown>[]
   coverageReferenceAssetKeys?: string[]
+  previousKeyframeGridContext?: Record<string, unknown>
   dependencyMode?: 'ingredient_refs'
   editorialDurationSeconds: number
   providerDurationSeconds: number
@@ -523,6 +524,8 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
     coverage_setup: {},
     previousKeyframe: {},
     previous_keyframe: {},
+    previousKeyframeGridContext: input.previousKeyframeGridContext ?? {},
+    previous_keyframe_grid_context: input.previousKeyframeGridContext ?? {},
     requiredReferenceAssetKeys: input.requiredReferenceAssetKeys,
     omittedReferenceAssetKeys: input.omittedReferenceAssetKeys,
     selectedReferences: input.selectedReferences,
@@ -602,6 +605,18 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_fix_ref`, node.key, 'reference', 'fix_references', 'references', { optional: asRecord(node.config).required !== true, optionalDependency: asRecord(node.config).required !== true }, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_fix_image`, node.key, 'image', 'fix_references', 'reference_images', { optional: true, optionalDependency: true }, role),
   ]))
+  const previousKeyframeGridContext = asRecord(input.previousKeyframeGridContext)
+  const includePreviousKeyframeGrid = previousKeyframeGridContext.enabled === true
+    && readRecordArray(previousKeyframeGridContext.selectedPriorKeyframes ?? previousKeyframeGridContext.selected_prior_keyframes).length > 0
+  const previousKeyframeGridNode = includePreviousKeyframeGrid
+    ? sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'previous_keyframe_grid', 'utility_transform', 'Previous Keyframes Grid', 1000, 300, {
+      purpose: 'sequence_animatic_previous_keyframe_grid',
+      ...config,
+      previousKeyframeGridContext,
+      previous_keyframe_grid_context: previousKeyframeGridContext,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_previous_keyframe_grid', maxConcurrency: 4 },
+    }, {}, role)
+    : null
   const nodes = [
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_input', 'utility_transform', 'Shot Input', 80, 120, {
       purpose: 'sequence_animatic_shot_input',
@@ -619,17 +634,24 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_reference_fix_apply', maxConcurrency: 8 },
     }, {}, role),
+    ...(previousKeyframeGridNode ? [previousKeyframeGridNode] : []),
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_reference_pack', 'utility_transform', 'Shot Reference Pack', 1000, 120, {
       purpose: 'sequence_animatic_shot_reference_pack',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_reference_pack', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 1280, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'keyframe_prompt_plan', 'utility_transform', 'Keyframe Prompt Plan', 1240, 120, {
+      purpose: 'sequence_animatic_keyframe_prompt_plan',
+      ...config,
+      keyframePromptPlanPolicyVersion: 'sequence_animatic_keyframe_prompt_plan_v1',
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_keyframe_prompt_plan', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 1480, 120, {
       purpose: 'sequence_animatic_planned_keyframe_prompt',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_prompt', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 1560, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 1760, 120, {
       purpose: 'sequence_animatic_planned_keyframe_image',
       role: 'sequence_animatic_shot_keyframe',
       ...config,
@@ -637,7 +659,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       referenceModel: 'openai/gpt-image-2/edit',
       quality: 'low',
       outputFormat: 'webp',
-      maxReferenceImages: 8,
+      maxReferenceImages: 10,
       imageSize: input.aspectRatio === '9:16'
         ? { width: 864, height: 1536 }
         : input.aspectRatio === '1:1'
@@ -648,7 +670,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       used_as_video_reference: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_shot_keyframes', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 1840, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 2040, 120, {
       purpose: 'sequence_animatic_planned_keyframe_artifact',
       artifactKind: 'other',
       ...config,
@@ -669,8 +691,21 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_refs', 'apply_reference_fix', 'asset_pack', 'shot_reference_pack', 'asset_pack', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_fixed', 'apply_reference_fix', 'fixedReferences', 'shot_reference_pack', 'references', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_images', 'apply_reference_fix', 'referenceImages', 'shot_reference_pack', 'reference_images', { optional: true, optionalDependency: true }, role),
+    ...(previousKeyframeGridNode ? [
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__previous_grid_shot', 'apply_reference_fix', 'shot', 'previous_keyframe_grid', 'shot', { optional: true, optionalDependency: true }, role),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'previous_grid__reference_pack_ref', 'previous_keyframe_grid', 'reference', 'shot_reference_pack', 'references', { optional: true, optionalDependency: true }, role),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'previous_grid__reference_pack_image', 'previous_keyframe_grid', 'image', 'shot_reference_pack', 'reference_images', { optional: true, optionalDependency: true }, role),
+      sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'previous_grid__reference_pack_asset_pack', 'previous_keyframe_grid', 'asset_pack', 'shot_reference_pack', 'asset_pack', { optional: true, optionalDependency: true }, role),
+    ] : []),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_shot', 'shot_reference_pack', 'shot', 'keyframe_prompt_plan', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_refs', 'shot_reference_pack', 'asset_pack', 'keyframe_prompt_plan', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_ref_keys', 'shot_reference_pack', 'referenceAssetKeys', 'keyframe_prompt_plan', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_manifest', 'shot_reference_pack', 'referenceManifest', 'keyframe_prompt_plan', 'reference_manifest', { optional: true, optionalDependency: true }, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_shot', 'shot_reference_pack', 'shot', 'planned_keyframe_prompt', 'shot', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_refs', 'shot_reference_pack', 'asset_pack', 'planned_keyframe_prompt', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_ref_keys', 'shot_reference_pack', 'referenceAssetKeys', 'planned_keyframe_prompt', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt_plan__keyframe_prompt_plan', 'keyframe_prompt_plan', 'promptPlan', 'planned_keyframe_prompt', 'prompt_plan', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt_plan__keyframe_prompt_diagnostics', 'keyframe_prompt_plan', 'promptPlanDiagnostics', 'planned_keyframe_prompt', 'prompt_plan_diagnostics', { optional: true, optionalDependency: true }, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image', 'planned_keyframe_prompt', 'text', 'planned_keyframe_image', 'prompt', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image_refs', 'planned_keyframe_prompt', 'asset_pack', 'planned_keyframe_image', 'asset_pack', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image_ref_keys', 'planned_keyframe_prompt', 'reference_asset_keys', 'planned_keyframe_image', 'reference_asset_keys', {}, role),

@@ -7,7 +7,7 @@ import {
   type SequenceAnimaticShotInspectorInput,
   type SequenceAnimaticShotPromptState,
 } from './sequenceAnimaticShotTypes'
-import { SequenceAnimaticShotWorkspace } from './SequenceAnimaticFocusedWorkspace'
+import { SequenceAnimaticShotWorkspace, type SequenceAnimaticShotContinuityOptions } from './SequenceAnimaticFocusedWorkspace'
 import { SequenceAnimaticThinkingState, sequenceAnimaticShouldShowThinking } from './SequenceAnimaticThinkingState'
 import { SequenceAnimaticWorkflowHeaderActions } from './SequenceAnimaticWorkflowHeaderActions'
 import {
@@ -60,9 +60,9 @@ type SequenceAnimaticRouteViewerProps = {
   onRunScene: (model: SequenceAnimaticViewModel, scene: SequenceAnimaticSceneView) => void
   onRunBlock: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, mode: 'regenerate_storyboard' | 'generate_video') => void
   onRunShotRevision: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, prompt: string) => void
-  onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate') => void
+  onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate', continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onRunShotVideo: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
-  onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean) => void
+  onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean, continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onPlayVideo: (preview: SequenceAnimaticVideoPreview) => void
   onOpenShotPreview: (input: WorldWikiDetailModalInput) => void
   onOpenShotInspector: (input: SequenceAnimaticShotInspectorInput) => void

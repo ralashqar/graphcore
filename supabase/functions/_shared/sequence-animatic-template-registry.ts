@@ -93,6 +93,7 @@ export const sequenceAnimaticShotProductionTemplateInputSchema = z.object({
   coverageAnchor: looseRecordSchema.optional(),
   sceneContinuityManifest: looseRecordSchema.optional(),
   previousKeyframe: looseRecordSchema.optional(),
+  previousKeyframeGridContext: looseRecordSchema.optional(),
   requiredReferenceAssetKeys: z.array(z.string()).default([]),
   omittedReferenceAssetKeys: z.array(z.string()).default([]),
   selectedReferences: looseRecordArraySchema.default([]),
@@ -273,16 +274,17 @@ export const sequenceAnimaticShotProductionTemplateScaffold = createWorkflowTemp
   key: sequenceAnimaticShotProductionTemplateKey,
   label: 'Sequence Animatic Shot Production',
   inputSchema: sequenceAnimaticShotProductionTemplateInputSchema,
-  policyVersion: 'sequence_animatic_shot_production_graph_v14_reference_fix',
+  policyVersion: 'sequence_animatic_shot_production_graph_v16_structured_prompt_plan',
   workflowFamily: 'sequence_animatic',
   commandAction: 'prepare_shot_production_graph',
   sourceHashKeys: ['draftId', 'commonConfig', 'shot', 'assetPack', 'sceneContinuityManifest', 'dependencyMode', 'requiredReferenceAssetKeys', 'selectedReferences', 'aspectRatio'],
-  graphStages: ['shot_input', 'fix_references', 'apply_reference_fix', 'shot_reference_pack', 'planned_keyframe_prompt', 'planned_keyframe_image', 'planned_keyframe_artifact'],
+  graphStages: ['shot_input', 'fix_references', 'apply_reference_fix', 'shot_reference_pack', 'keyframe_prompt_plan', 'planned_keyframe_prompt', 'planned_keyframe_image', 'planned_keyframe_artifact'],
   requiredNodePurposes: [
     'sequence_animatic_shot_input',
     'sequence_animatic_shot_reference_fix',
     'sequence_animatic_shot_reference_fix_apply',
     'sequence_animatic_shot_reference_pack',
+    'sequence_animatic_keyframe_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
     'sequence_animatic_planned_keyframe_image',
     'sequence_animatic_planned_keyframe_artifact',
@@ -291,7 +293,7 @@ export const sequenceAnimaticShotProductionTemplateScaffold = createWorkflowTemp
   projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'providerStatus', 'readyArtifactCount', 'recoveryHints'],
   compatibilityWrappers: ['ensure-sequence-animatic-shot-production-graph'],
   buildGraph: buildSequenceAnimaticShotProductionWorkflowGraph,
-  sourceHash: (input) => templateSourceHash('sequence_animatic_shot_production_graph_v14_reference_fix', input),
+  sourceHash: (input) => templateSourceHash('sequence_animatic_shot_production_graph_v16_structured_prompt_plan', input),
 })
 
 export const sequenceAnimaticShotKeyframesTemplateScaffold = createWorkflowTemplateExtensionScaffold<

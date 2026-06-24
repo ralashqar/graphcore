@@ -33,6 +33,7 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   coverageAnchorImage: 'coverage_anchor_image',
   coverageAnchorArtifact: 'coverage_anchor_artifact',
   // Planned shot keyframe workflow
+  keyframePromptPlan: 'keyframe_prompt_plan',
   plannedKeyframePrompt: 'planned_keyframe_prompt',
   plannedKeyframeImage: 'planned_keyframe_image',
   plannedKeyframeArtifact: 'planned_keyframe_artifact',
@@ -127,6 +128,7 @@ export const sequenceAnimaticShotProductionKeyframeTargetNodeKeys = [
 
 export const sequenceAnimaticShotProductionKeyframeForceNodeKeys = [
   SEQUENCE_ANIMATIC_NODE_KEYS.shotReferencePack,
+  SEQUENCE_ANIMATIC_NODE_KEYS.keyframePromptPlan,
   SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframePrompt,
   SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeImage,
   SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeArtifact,

@@ -42,6 +42,7 @@ type EnsureKeyframeWorkflows = (request: {
   coverageSetupIds?: string[]
   allowProvisional?: boolean
   shotReferenceOverride?: Record<string, unknown>
+  shotContinuityOptions?: Record<string, unknown>
 }) => Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> | SequenceAnimaticKeyframeWorkflowEnsureResponse
 
 export function useSequenceAnimaticKeyframeCommands({
@@ -249,6 +250,7 @@ export function useSequenceAnimaticKeyframeCommands({
     block: SequenceAnimaticBlockView,
     shot: SequenceAnimaticShotView,
     mode: 'generate' | 'regenerate' = 'generate',
+    shotContinuityOptions?: Record<string, unknown>,
   ) => {
     const runKey = `${model.request.id}:${block.id}:${shot.id}:keyframe`
     if (busyRunKeys.has(runKey)) return
@@ -278,6 +280,7 @@ export function useSequenceAnimaticKeyframeCommands({
         coverageSetupIds: shot.coverageSetupId ? [shot.coverageSetupId] : undefined,
         allowProvisional,
         shotReferenceOverride: buildSequenceAnimaticShotKeyframeReferenceOverride(model, shot),
+        shotContinuityOptions,
       }))
       let startedKeyframeWork = false
       const nextAction = readLooseRecord(ensureResult.nextAction)

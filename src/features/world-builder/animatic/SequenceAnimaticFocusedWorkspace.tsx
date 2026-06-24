@@ -31,6 +31,10 @@ type SequenceAnimaticShotView = SequenceAnimaticBlockView['shots'][number]
 type SequenceAnimaticCoverageAnchorItem = SequenceAnimaticViewModel['coverageAnchors'][number]
 type SequenceAnimaticContinuityAssetTargetItem = SequenceAnimaticViewModel['continuityAssetTargets'][number]
 
+export type SequenceAnimaticShotContinuityOptions = {
+  includePreviousKeyframeGrid: boolean
+}
+
 export type SequenceAnimaticShotWorkspaceProps = {
   model: SequenceAnimaticViewModel
   commandError: string
@@ -52,9 +56,9 @@ export type SequenceAnimaticShotWorkspaceProps = {
   shotVideoRunKeyActive: (runKey: string) => boolean
   onBindShotElement: (shotElementKey: string, node: HTMLElement | null) => void
   onRunShotRevision: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, prompt: string) => void
-  onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate') => void
+  onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate', continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onRunShotVideo: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
-  onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean) => void
+  onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean, continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onPlayShotVideo: (preview: SequenceAnimaticVideoPreview) => void
   onOpenShotPreview: (input: {
     title: string
@@ -229,6 +233,27 @@ export function SequenceAnimaticShotWorkspace({
   const [shotScrubProgress, setShotScrubProgress] = useState(0)
   const [shotScrubbing, setShotScrubbing] = useState(false)
   const [localGeneratingNodeIds, setLocalGeneratingNodeIds] = useState<ReadonlySet<string>>(() => new Set())
+  const previousKeyframeGridStorageKey = useMemo(() => {
+    const draftId = typeof model.request.draftId === 'string' && model.request.draftId ? model.request.draftId : 'draft'
+    return `graphcore.sequenceAnimatic.previousKeyframeGrid.v1:${draftId}:${model.request.id}`
+  }, [model.request.draftId, model.request.id])
+  const [includePreviousKeyframeGrid, setIncludePreviousKeyframeGrid] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem(previousKeyframeGridStorageKey) !== 'false'
+  })
+  const shotContinuityOptions = useMemo<SequenceAnimaticShotContinuityOptions>(() => ({
+    includePreviousKeyframeGrid,
+  }), [includePreviousKeyframeGrid])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setIncludePreviousKeyframeGrid(window.localStorage.getItem(previousKeyframeGridStorageKey) !== 'false')
+  }, [previousKeyframeGridStorageKey])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(previousKeyframeGridStorageKey, includePreviousKeyframeGrid ? 'true' : 'false')
+  }, [includePreviousKeyframeGrid, previousKeyframeGridStorageKey])
 
   useEffect(() => {
     if (timelineItems.length === 0) {
@@ -428,7 +453,7 @@ export function SequenceAnimaticShotWorkspace({
   }
 
   const requestKeyframe = (mode: 'generate' | 'regenerate') => {
-    onRunShotKeyframe(model, activeBlock, activeShot, mode)
+    onRunShotKeyframe(model, activeBlock, activeShot, mode, shotContinuityOptions)
   }
 
   const markContinuityNodesGenerating = (nodeIds: readonly string[]) => {
@@ -600,7 +625,7 @@ export function SequenceAnimaticShotWorkspace({
                 className="primary-button compact"
                 disabled={shotKeyframeInFlight}
                 onClick={() => {
-                  onRunShotKeyframe(model, preflightItem.block, preflightItem.shot, preflightModal.mode)
+                  onRunShotKeyframe(model, preflightItem.block, preflightItem.shot, preflightModal.mode, shotContinuityOptions)
                   setPreflightModal(null)
                 }}
                 type="button"
@@ -619,6 +644,14 @@ export function SequenceAnimaticShotWorkspace({
       <div className="world-wiki-shot-workspace__topbar">
         <h3>Shot {activeSceneShotNumber}: {activeShot.title}</h3>
         <div className="world-wiki-shot-workspace__actions">
+          <label className="world-wiki-shot-workspace__toggle" title="Append a storyboard grid of up to six previous keyframes from this scene as a continuity reference.">
+            <input
+              type="checkbox"
+              checked={includePreviousKeyframeGrid}
+              onChange={(event) => setIncludePreviousKeyframeGrid(event.currentTarget.checked)}
+            />
+            <span>Use previous keyframes for continuity</span>
+          </label>
           <button
             className={preflight?.status === 'ready' ? 'is-ready' : preflight?.status === 'generating' ? 'is-generating' : 'is-blocked'}
             onClick={() => setPreflightModal({ itemKey: activeItem.key, mode: keyframeReady ? 'regenerate' : 'generate' })}
@@ -664,7 +697,7 @@ export function SequenceAnimaticShotWorkspace({
           <button
             className="ghost-button compact"
             disabled={(activeShot.isProvisional && !shotCanGenerateEarlyKeyframe) || graphOpenKey === shotGraphRunKey}
-            onClick={() => onOpenShotGraph(model, activeBlock, activeShot)}
+            onClick={() => onOpenShotGraph(model, activeBlock, activeShot, false, shotContinuityOptions)}
             type="button"
           >
             {graphOpenKey === shotGraphRunKey ? <><span className="world-mini-spinner" aria-hidden="true" />Opening graph</> : 'Shot graph'}
@@ -672,7 +705,7 @@ export function SequenceAnimaticShotWorkspace({
           <button
             className="ghost-button compact"
             disabled={(activeShot.isProvisional && !shotCanGenerateEarlyKeyframe) || Boolean(graphOpenKey)}
-            onClick={() => onOpenShotGraph(model, activeBlock, activeShot, true)}
+            onClick={() => onOpenShotGraph(model, activeBlock, activeShot, true, shotContinuityOptions)}
             type="button"
           >
             {graphOpenKey === refreshShotGraphRunKey ? <><span className="world-mini-spinner" aria-hidden="true" />Refreshing graph</> : 'Refresh graph'}

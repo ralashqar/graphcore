@@ -4,7 +4,7 @@ export type SequenceAnimaticVisualReferenceStatus = 'ready' | 'missing' | 'block
 
 export type SequenceAnimaticReferenceDiagnostic = {
   assetKey: string
-  role: 'coverage_anchor' | 'previous_keyframe' | 'continuity_asset' | 'entity_reference' | 'selected_reference' | 'zone_reference' | 'world_character_reference' | 'temp_character_reference' | 'item_or_prop_reference'
+  role: 'coverage_anchor' | 'previous_keyframe' | 'previous_keyframes_continuity_grid' | 'continuity_asset' | 'entity_reference' | 'selected_reference' | 'zone_reference' | 'world_character_reference' | 'temp_character_reference' | 'item_or_prop_reference'
   reason: string
 }
 
@@ -35,8 +35,8 @@ export type SequenceAnimaticShotIngredientReferencePlan = {
   missingReferences: SequenceAnimaticShotIngredientReference[]
 }
 
-export const sequenceAnimaticCanonicalShotGraphPolicyVersion = 'primary_chain_v14_reference_fix'
-export const sequenceAnimaticPreviousCanonicalShotGraphPolicyVersion = 'primary_chain_v13_ui_ingredient_override'
+export const sequenceAnimaticCanonicalShotGraphPolicyVersion = 'primary_chain_v16_structured_prompt_plan'
+export const sequenceAnimaticPreviousCanonicalShotGraphPolicyVersion = 'primary_chain_v15_previous_keyframe_grid'
 
 export type SequenceAnimaticVisualReferencePlan = {
   version: 'sequence_animatic_visual_reference_plan_v1'

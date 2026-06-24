@@ -91,6 +91,7 @@ export function sequenceAnimaticReferenceRole(entity: LooseRecord) {
     entity.name,
   ].map(readText).join(' ').toLowerCase()
   if (fields.includes('coverage_anchor') && !fields.includes('coverage_anchor_dependency')) return 'coverage_anchor'
+  if (fields.includes('previous_keyframes_continuity_grid')) return 'previous_keyframes_continuity_grid'
   if (fields.includes('previous_keyframe')) return 'previous_keyframe'
   if (fields.includes('storyboard_panel')) return 'storyboard_panel'
   if (fields.includes('spot_camera_grid') || fields.includes('camera_grid') || fields.includes('camera grid') || fields.includes('angle_coverage')) return 'camera_grid_reference'
@@ -107,6 +108,7 @@ export function sequenceAnimaticReferenceRole(entity: LooseRecord) {
 
 export function sequenceAnimaticReferenceGuidance(role: string) {
   if (role === 'coverage_anchor') return 'composition lock: match camera, framing, screen direction, subject placement, horizon, and background massing; do not copy labels, arrows, placeholder figures, or blockout styling'
+  if (role === 'previous_keyframes_continuity_grid') return 'previous shot keyframes: continuity context for staging, lighting progression, screen direction, costume/prop continuity, and visual rhythm; do not treat this as a new character/location identity reference'
   if (role === 'previous_keyframe') return 'same-setup motion continuity and established state only'
   if (role === 'storyboard_panel') return 'loose composition only when it does not conflict with the coverage anchor'
   if (role === 'camera_grid_reference') return 'spot camera-angle coverage: choose angle vocabulary, screen direction, and framing options; do not reproduce grid cells'
@@ -130,6 +132,7 @@ function sequenceAnimaticReferencePriority(entity: LooseRecord, index: number) {
               : role === 'character_reference' ? 30
                 : role === 'temp_character_reference' ? 31
                   : role === 'prop_reference' ? 40
+                    : role === 'previous_keyframes_continuity_grid' ? 89
                     : role === 'storyboard_panel' ? 90
                       : 50
   return priority * 1000 + index

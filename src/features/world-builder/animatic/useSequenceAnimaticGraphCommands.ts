@@ -63,6 +63,7 @@ type EnsureSequenceAnimaticShotProductionGraph = (request: {
   forceRefresh?: boolean
   allowProvisional?: boolean
   shotReferenceOverride?: Record<string, unknown>
+  shotContinuityOptions?: Record<string, unknown>
 }) => Promise<SequenceAnimaticShotProductionGraphEnsureResponse> | SequenceAnimaticShotProductionGraphEnsureResponse
 
 function shotCanOpenProvisionalGraph(shot: GraphCommandShotView) {
@@ -287,6 +288,7 @@ export function useSequenceAnimaticGraphCommands({
     block: GraphCommandBlockView,
     shot: GraphCommandShotView,
     refresh = false,
+    shotContinuityOptions?: Record<string, unknown>,
   ) => {
     const nextGraphOpenKey = `${model.request.id}:${block.id}:${shot.id}:${refresh ? 'refresh_shot_graph' : 'shot_graph'}`
     if (graphOpenKey) return
@@ -303,6 +305,7 @@ export function useSequenceAnimaticGraphCommands({
         forceRefresh: true,
         allowProvisional,
         shotReferenceOverride: buildSequenceAnimaticShotKeyframeReferenceOverride(model, shot),
+        shotContinuityOptions,
       }))
       const shotRequest = ensureResult.shotRequest
       if (!shotRequest?.workflowId) {

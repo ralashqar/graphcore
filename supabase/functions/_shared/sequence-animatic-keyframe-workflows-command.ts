@@ -18,11 +18,13 @@ import {
   artifactMetadataRecord,
   assetEntityForKey,
   assetPackWithShotWorldRefs,
+  buildSequenceAnimaticPreviousKeyframeGridContext,
   buildSequenceAnimaticShotReferenceFixCandidatePool,
   buildValidatedSequenceAnimaticTemplateGraph,
   coverageSetupEntityRefIds,
   imageFromArtifact,
   loadScreenplayAnimaticMasterRequest,
+  normalizeSequenceAnimaticShotContinuityOptions,
   prioritizedEntityAssetKeys,
   readArray,
   readScreenplayAnimaticRole,
@@ -742,6 +744,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     const { client, admin, userId } = input
     const payload = sequenceAnimaticKeyframeWorkflowEnsureRequestSchema.parse(input.payload)
     const shotReferenceOverride = normalizeShotReferenceOverride(payload.shotReferenceOverride ?? payload.shot_reference_override)
+    const shotContinuityOptions = normalizeSequenceAnimaticShotContinuityOptions(payload.shotContinuityOptions ?? payload.shot_continuity_options)
 
     const masterRequest = await loadScreenplayAnimaticMasterRequest({
       client,
@@ -2451,6 +2454,12 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
       const sceneContinuityManifestHash = readText(sceneContinuity.manifest?.sourceHash)
       const shotReferenceReadinessHash = readText(sceneContinuity.readiness?.hash)
         || (sceneContinuity.readiness ? buildShotReferenceReadinessHash(sceneContinuity.readiness) : '')
+      const previousKeyframeGridContext = buildSequenceAnimaticPreviousKeyframeGridContext({
+        shotId,
+        shotKeyframeJobs: readArray(keyframePlan.shotKeyframeJobs).map(asRecord),
+        shotKeyframeImageByShotId,
+        shotContinuityOptions,
+      })
       const sourceShotHash = sequenceAnimaticStableHash({
         shotId,
         shot,
@@ -2458,6 +2467,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         requiredReferenceAssetKeys,
         selectedReferencesForShotProduction,
         referenceFixCandidatePool,
+        previousKeyframeGridContext,
         sourceReferenceHash,
         sceneContinuityManifestHash,
         shotReferenceReadinessHash,
@@ -2549,7 +2559,19 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         const blockId = readText(job.storyboardBlockId)
         const block = asRecord(asRecord(keyframePlan.blockById)[blockId])
         const continuityDependencies: Record<string, unknown>[] = []
-        const keyframeHash = sequenceAnimaticStableHash({ shotId, shot, referencePlanHash, referenceFixCandidatePool, manifestHash, directorPlanHash, sourceReferenceHash, sceneContinuityManifestHash, shotReferenceReadinessHash, graphPolicyVersion: shotGraphPolicyVersion })
+        const keyframeHash = sequenceAnimaticStableHash({
+          shotId,
+          shot,
+          referencePlanHash,
+          referenceFixCandidatePool,
+          previousKeyframeGridContext,
+          manifestHash,
+          directorPlanHash,
+          sourceReferenceHash,
+          sceneContinuityManifestHash,
+          shotReferenceReadinessHash,
+          graphPolicyVersion: shotGraphPolicyVersion,
+        })
         const commonConfig = {
           cinematicPipelineVersion: 'v3_script_storyboards',
           graphSpecVersion: sequenceAnimaticGraphSpecVersion,
@@ -2577,6 +2599,10 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           shot_ingredient_reference_plan: shotIngredientReferencePlan,
           referenceFixCandidatePool,
           reference_fix_candidate_pool: referenceFixCandidatePool,
+          shotContinuityOptions,
+          shot_continuity_options: shotContinuityOptions,
+          previousKeyframeGridContext,
+          previous_keyframe_grid_context: previousKeyframeGridContext,
           sceneContinuityManifestStatus: readText(sceneContinuity.manifest?.status),
           manifestHash,
           directorPlanHash,
@@ -2672,6 +2698,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
             coverageShots: [shot],
             coverageReferenceAssetKeys: requiredReferenceAssetKeys,
             previousKeyframe: {},
+            previousKeyframeGridContext,
             assetPack: shotReferenceAssetPack,
             continuityDependencies,
             dependencyMode: shotGraphDependencyMode,

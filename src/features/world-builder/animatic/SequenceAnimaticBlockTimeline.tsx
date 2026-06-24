@@ -12,6 +12,7 @@ import type {
   SequenceAnimaticShotInspectorInput,
   SequenceAnimaticShotPromptState,
 } from './sequenceAnimaticShotTypes'
+import type { SequenceAnimaticShotContinuityOptions } from './SequenceAnimaticFocusedWorkspace'
 
 export type {
   SequenceAnimaticPendingShotView,
@@ -38,9 +39,9 @@ type SequenceAnimaticBlockTimelineProps = {
   onBindShotElement: (shotElementKey: string, node: HTMLElement | null) => void
   onRunBlock: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, mode: 'regenerate_storyboard' | 'generate_video') => void
   onRunShotRevision: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, prompt: string) => void
-  onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate') => void
+  onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate', continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onRunShotVideo: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
-  onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean) => void
+  onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean, continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onPlayBlockVideo: (preview: SequenceAnimaticVideoPreview) => void
   onPlayShotVideo: (preview: SequenceAnimaticVideoPreview) => void
   onOpenShotPreview: (shot: SequenceAnimaticShotView) => void

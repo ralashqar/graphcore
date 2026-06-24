@@ -14,11 +14,14 @@ import {
   artifactMetadataRecord,
   assetEntityForKey,
   assetPackWithShotWorldRefs,
+  buildSequenceAnimaticPreviousKeyframeGridContext,
   buildSequenceAnimaticShotReferenceFixCandidatePool,
   buildValidatedSequenceAnimaticTemplateGraph,
   coverageSetupEntityRefIds,
   entityAssetKeys,
   loadScreenplayAnimaticMasterRequest,
+  imageFromArtifact,
+  normalizeSequenceAnimaticShotContinuityOptions,
   prioritizedEntityAssetKeys,
   readArray,
   readScreenplayAnimaticRole,
@@ -373,6 +376,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
     const { client, admin, userId } = input
     const payload = sequenceAnimaticShotProductionGraphEnsureRequestSchema.parse(input.payload)
     const shotReferenceOverride = normalizeShotReferenceOverride(payload.shotReferenceOverride ?? payload.shot_reference_override)
+    const shotContinuityOptions = normalizeSequenceAnimaticShotContinuityOptions(payload.shotContinuityOptions ?? payload.shot_continuity_options)
 
     const masterRequest = await loadScreenplayAnimaticMasterRequest({
       client,
@@ -845,6 +849,45 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       currentReferences: shotKeyframeSelectedReferences,
       limit: 64,
     })
+    const siblingResponse = await client
+      .from('output_requests')
+      .select(outputRequestSelect)
+      .eq('project_id', payload.projectId)
+      .eq('draft_id', payload.draftId)
+      .eq('parent_request_id', masterRequest.id)
+      .or('metadata->>screenplayAnimaticRole.eq.shot_production,metadata->>sequenceAnimaticRole.eq.shot_production,metadata->>screenplayAnimaticRole.eq.shot_keyframe,metadata->>sequenceAnimaticRole.eq.shot_keyframe')
+      .or('metadata->>sequenceAnimaticStale.is.null,metadata->>sequenceAnimaticStale.neq.true')
+      .order('created_at', { ascending: true })
+    if (siblingResponse.error) throw new Error(siblingResponse.error.message)
+    const siblingWorkflowIds = (siblingResponse.data ?? [])
+      .map(asRecord)
+      .map((child) => readText(child.workflow_id))
+      .filter(Boolean)
+    const siblingArtifactsResponse = siblingWorkflowIds.length > 0
+      ? await client
+        .from('output_artifacts')
+        .select(outputArtifactSelect)
+        .eq('project_id', payload.projectId)
+        .eq('draft_id', payload.draftId)
+        .in('workflow_id', siblingWorkflowIds)
+        .order('created_at', { ascending: false })
+      : { data: [], error: null }
+    if (siblingArtifactsResponse.error) throw new Error(siblingArtifactsResponse.error.message)
+    const shotKeyframeImageByShotId = new Map<string, Record<string, unknown>>()
+    for (const artifact of (siblingArtifactsResponse.data ?? []).map(asRecord)) {
+      const metadata = asRecord(artifact.metadata)
+      if (readText(metadata.role) !== 'sequence_animatic_shot_keyframe') continue
+      const artifactShotId = readText(metadata.shotId ?? metadata.shot_id)
+      if (artifactShotId && !shotKeyframeImageByShotId.has(artifactShotId)) {
+        shotKeyframeImageByShotId.set(artifactShotId, imageFromArtifact(artifact))
+      }
+    }
+    const previousKeyframeGridContext = buildSequenceAnimaticPreviousKeyframeGridContext({
+      shotId: payload.shotId,
+      shotKeyframeJobs: mergedShots.map((entry) => ({ shotId: readText(entry.id), shot: entry })),
+      shotKeyframeImageByShotId,
+      shotContinuityOptions,
+    })
     const zoneCoverageRegistry = asRecord(masterMetadata.sequenceAnimaticZoneCoverageRegistry ?? masterMetadata.sequence_animatic_zone_coverage_registry)
     const zoneCoverageCellByShotId = asRecord(zoneCoverageRegistry.coverageCellByShotId ?? zoneCoverageRegistry.coverage_cell_by_shot_id)
     const zoneCoverageCell = asRecord(zoneCoverageCellByShotId[payload.shotId])
@@ -871,6 +914,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
       shotReferenceReadinessHash,
       referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
       referenceFixCandidatePool,
+      previousKeyframeGridContext,
       coverageDecision: coverageResolution.coverageDecision,
       graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
     })
@@ -953,6 +997,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         sourceReferenceHash,
         referencePlanHash: shotIngredientReferencePlan.referencePlanHash,
         referenceFixCandidatePool,
+        previousKeyframeGridContext,
         sceneContinuityManifestHash,
         shotReferenceReadinessHash,
         graphPolicyVersion: SHOT_GRAPH_POLICY_VERSION,
@@ -986,6 +1031,10 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         shot_ingredient_reference_plan: shotIngredientReferencePlan,
         referenceFixCandidatePool,
         reference_fix_candidate_pool: referenceFixCandidatePool,
+        shotContinuityOptions,
+        shot_continuity_options: shotContinuityOptions,
+        previousKeyframeGridContext,
+        previous_keyframe_grid_context: previousKeyframeGridContext,
         coverageDecision: coverageResolution.coverageDecision,
         coverageDecisionReason: coverageResolution.coverageDecisionReason,
         coverageCompatibilityDiagnostics: coverageResolution.compatibilityDiagnostics,
@@ -1042,6 +1091,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
           coverageShots: scopedCoverageShots.length > 0 ? scopedCoverageShots : [shot],
           coverageReferenceAssetKeys: shotKeyframeReferenceAssetKeys,
           previousKeyframe: {},
+          previousKeyframeGridContext,
           assetPack: scopedRefs.assetPack,
           continuityDependencies: [],
           dependencyMode: SHOT_GRAPH_DEPENDENCY_MODE,

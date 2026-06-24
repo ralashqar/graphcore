@@ -182,6 +182,61 @@ function referenceAssetUrlByKey(
   return byAssetKey
 }
 
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function wrapCaption(value: string, maxChars = 56) {
+  const words = value.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean)
+  const lines: string[] = []
+  let current = ''
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word
+    if (next.length > maxChars && current) {
+      lines.push(current)
+      current = word
+    } else {
+      current = next
+    }
+    if (lines.length >= 2) break
+  }
+  if (lines.length < 2 && current) lines.push(current)
+  if (words.join(' ').length > lines.join(' ').length && lines.length > 0) {
+    lines[lines.length - 1] = `${lines[lines.length - 1].replace(/[.。…]+$/, '')}...`
+  }
+  return lines.slice(0, 2)
+}
+
+function previousKeyframeGridLayout(count: number) {
+  if (count <= 1) return { columns: 1, rows: 1 }
+  if (count <= 3) return { columns: count, rows: 1 }
+  if (count === 4) return { columns: 2, rows: 2 }
+  return { columns: 3, rows: 2 }
+}
+
+async function loadProjectAssetRows(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  assetKeys: string[],
+) {
+  const client = context.client as { from: (table: string) => any }
+  if (assetKeys.length === 0) return new Map<string, LooseRecord>()
+  const response = await client
+    .from('project_assets')
+    .select('key, name, kind, mime_type, storage_path, metadata')
+    .eq('project_id', context.run.projectId)
+    .in('key', [...new Set(assetKeys)])
+  if (response.error) throw new Error(response.error.message)
+  return new Map<string, LooseRecord>((response.data ?? [])
+    .map((entry: unknown) => helpers.asRecord(entry))
+    .map((row: LooseRecord) => [helpers.readText(row.key), row] as const)
+    .filter(([key]: readonly [string, LooseRecord]) => key))
+}
+
 function referenceKind(helpers: SequenceAnimaticWorkflowNodePackHelpers, reference: LooseRecord) {
   return helpers.readText(reference.kind ?? reference.type).toLowerCase()
 }
@@ -811,6 +866,208 @@ export async function sequenceAnimaticShotReferenceFixApply(
   return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-shot-reference-fix-apply-v1' })
 }
 
+export async function sequenceAnimaticPreviousKeyframeGrid(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const gridContext = helpers.asRecord(config.previousKeyframeGridContext ?? config.previous_keyframe_grid_context)
+  const enabled = gridContext.enabled === true && gridContext.includePreviousKeyframeGrid !== false && gridContext.include_previous_keyframe_grid !== false
+  const priorKeyframes = helpers.readArray(gridContext.selectedPriorKeyframes ?? gridContext.selected_prior_keyframes)
+    .map(helpers.asRecord)
+    .filter((entry) => helpers.readText(entry.assetKey ?? entry.asset_key))
+    .slice(0, 6)
+  if (!enabled || priorKeyframes.length === 0) {
+    const outputs = {
+      skipped: true,
+      skippedReason: helpers.readText(gridContext.skippedReason ?? gridContext.skipped_reason) || 'no_prior_ready_scene_keyframes',
+      reference: {},
+      references: [],
+      referenceImages: [],
+      reference_images: [],
+      referenceAssetKeys: [],
+      reference_asset_keys: [],
+      deterministic: true,
+    }
+    return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-previous-keyframe-grid-skip-v1' })
+  }
+
+  const assetRows = await loadProjectAssetRows(
+    context,
+    helpers,
+    priorKeyframes.map((entry) => helpers.readText(entry.assetKey ?? entry.asset_key)),
+  )
+  const cellWidth = 512
+  const cellHeight = 288
+  const layout = previousKeyframeGridLayout(priorKeyframes.length)
+  const width = layout.columns * cellWidth
+  const height = layout.rows * cellHeight
+  const importSharp = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<{ default: any }>
+  const sharpModule = await importSharp('npm:sharp@0.33.5')
+  const sharp = sharpModule.default
+  const composites: Array<{ input: Uint8Array, left: number, top: number }> = []
+  for (let index = 0; index < priorKeyframes.length; index += 1) {
+    const entry = priorKeyframes[index]
+    const assetKey = helpers.readText(entry.assetKey ?? entry.asset_key)
+    const row = helpers.asRecord(assetRows.get(assetKey))
+    const storagePath = helpers.readText(entry.storagePath ?? entry.storage_path) || helpers.readText(row.storage_path)
+    if (!storagePath) continue
+    const sourceBytes = await helpers.downloadProjectAssetBytes(context.client, storagePath)
+    const cell = await sharp(sourceBytes)
+      .resize(cellWidth, cellHeight, { fit: 'cover', position: 'center' })
+      .webp({ quality: 86 })
+      .toBuffer()
+    composites.push({
+      input: cell,
+      left: (index % layout.columns) * cellWidth,
+      top: Math.floor(index / layout.columns) * cellHeight,
+    })
+  }
+  if (composites.length === 0) {
+    throw new Error('Previous keyframe grid could not load any prior keyframe image assets.')
+  }
+
+  const overlayCells = priorKeyframes.slice(0, composites.length).map((entry, index) => {
+    const left = (index % layout.columns) * cellWidth
+    const top = Math.floor(index / layout.columns) * cellHeight
+    const captionLines = wrapCaption(helpers.readText(entry.action) || helpers.readText(entry.title) || `Previous shot ${index + 1}`)
+    const lineNodes = captionLines.map((line, lineIndex) => (
+      `<text x="${left + 18}" y="${top + cellHeight - 42 + lineIndex * 20}" fill="rgba(248,250,252,0.96)" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">${escapeXml(line)}</text>`
+    )).join('')
+    return [
+      `<rect x="${left}" y="${top + cellHeight - 68}" width="${cellWidth}" height="68" fill="rgba(2,6,23,0.72)" />`,
+      `<rect x="${left + 14}" y="${top + 14}" width="38" height="38" rx="19" fill="rgba(15,23,42,0.82)" stroke="rgba(248,250,252,0.72)" stroke-width="2" />`,
+      `<text x="${left + 33}" y="${top + 40}" text-anchor="middle" fill="white" font-size="22" font-family="Arial, Helvetica, sans-serif" font-weight="800">${index + 1}</text>`,
+      lineNodes,
+    ].join('')
+  }).join('')
+  const overlaySvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${overlayCells}</svg>`
+  const gridBytes = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: { r: 2, g: 6, b: 23, alpha: 1 },
+    },
+  })
+    .composite([...composites, { input: new TextEncoder().encode(overlaySvg), left: 0, top: 0 }])
+    .webp({ quality: 88 })
+    .toBuffer()
+
+  const sourceHash = helpers.readText(gridContext.sourceHash ?? gridContext.source_hash) || helpers.hashOutputWorkflowValue(gridContext)
+  const shotId = helpers.readText(gridContext.shotId ?? gridContext.shot_id ?? config.shotId)
+  const assetKey = `output.${helpers.slugify(context.workflow.name)}.${helpers.slugify(shotId || context.node.key)}.${sourceHash.slice(0, 12)}.previous-keyframe-grid`
+  const storagePath = `generated/output-workflows/${context.run.projectId}/${context.run.id}/${helpers.slugify(shotId || context.node.key)}-previous-keyframes.webp`
+  await helpers.uploadBytes(context.client, storagePath, gridBytes, 'image/webp')
+  const metadata = {
+    generatedBy: 'output_workflow',
+    workflowId: context.workflow.id,
+    workflowKey: context.workflow.key,
+    runId: context.run.id,
+    nodeId: context.node.id,
+    nodeKey: context.node.key,
+    provider: 'graphcore',
+    model: 'sharp-sequence-animatic-previous-keyframe-grid-v1',
+    role: 'sequence_animatic_previous_keyframe_grid',
+    referenceRole: 'previous_keyframes_continuity_grid',
+    sequenceAnimaticRole: 'shot_production',
+    screenplayAnimaticRole: 'shot_production',
+    masterRequestId: helpers.readText(config.masterRequestId),
+    storyboardBlockId: helpers.readText(config.storyboardBlockId),
+    shotId,
+    priorShotIds: priorKeyframes.map((entry) => helpers.readText(entry.shotId ?? entry.shot_id)).filter(Boolean),
+    sourceAssetKeys: priorKeyframes.map((entry) => helpers.readText(entry.assetKey ?? entry.asset_key)).filter(Boolean),
+    previousKeyframeGridContext: gridContext,
+    previous_keyframe_grid_context: gridContext,
+    width,
+    height,
+    storageBucket: 'project-assets',
+    storagePath,
+  }
+  const artifact = await helpers.registerImageArtifact({
+    client: context.client,
+    run: context.run,
+    workflow: context.workflow,
+    node: context.node,
+    assetKey,
+    storagePath,
+    name: 'Previous Shot Keyframes Continuity Grid',
+    summary: 'Scene-local storyboard grid composed from prior shot keyframes for keyframe continuity.',
+    mimeType: 'image/webp',
+    metadata,
+  })
+  const reference = {
+    id: 'previous_keyframe_grid',
+    kind: 'previous_keyframe_grid',
+    name: 'Previous shot keyframes',
+    label: 'Previous shot keyframes',
+    role: 'previous_keyframes_continuity_grid',
+    referenceRole: 'previous_keyframes_continuity_grid',
+    reference_role: 'previous_keyframes_continuity_grid',
+    source: 'previous_keyframe_grid_node',
+    sourceArtifactRole: 'sequence_animatic_previous_keyframe_grid',
+    source_artifact_role: 'sequence_animatic_previous_keyframe_grid',
+    status: 'ready',
+    assetKey,
+    asset_key: assetKey,
+    storagePath,
+    storage_path: storagePath,
+    mimeType: 'image/webp',
+    mime_type: 'image/webp',
+    visualDescription: 'Previous shot keyframes: continuity context for staging, lighting progression, screen direction, costume/prop continuity, and visual rhythm. Do not treat this as a new character/location identity reference.',
+    referenceSelectionReason: 'Appended as scene-local previous-keyframe continuity context.',
+  }
+  const assetPack = {
+    entities: [{
+      key: 'previous_keyframe_grid',
+      id: 'previous_keyframe_grid',
+      name: 'Previous shot keyframes',
+      type: 'continuity_asset',
+      nodeType: 'continuity_asset',
+      node_type: 'continuity_asset',
+      role: 'previous_keyframes_continuity_grid',
+      summary: 'Scene-local storyboard grid of previous keyframes.',
+      visualDescription: reference.visualDescription,
+      assetKeys: [assetKey],
+      asset_keys: [assetKey],
+      primaryAssetKey: assetKey,
+      primary_asset_key: assetKey,
+      selectedReferenceAssetKey: assetKey,
+      selected_reference_asset_key: assetKey,
+      selectedReferenceVariantKey: 'previous_keyframes_continuity_grid',
+      selectedReferenceVariantLabel: 'Previous shot keyframes',
+      selectedReferenceVariantType: 'continuity_asset',
+      referenceSelectionReason: reference.referenceSelectionReason,
+    }],
+    referenceAssetKeys: [assetKey],
+    reference_asset_keys: [assetKey],
+    scopedReferenceAssetKeys: [assetKey],
+    scoped_reference_asset_keys: [assetKey],
+  }
+  const outputs = {
+    reference,
+    references: [reference],
+    image: reference,
+    keyframe: reference,
+    referenceImages: [reference],
+    reference_images: [reference],
+    referenceAssetKeys: [assetKey],
+    reference_asset_keys: [assetKey],
+    assetPack,
+    asset_pack: assetPack,
+    artifact,
+    assetKey,
+    asset_key: assetKey,
+    storagePath,
+    storage_path: storagePath,
+    previousKeyframeGrid: reference,
+    previous_keyframe_grid: reference,
+    text: JSON.stringify({ assetKey, priorKeyframes, width, height }, null, 2),
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'sharp-sequence-animatic-previous-keyframe-grid-v1' })
+}
+
 export async function sequenceAnimaticShotReferencePack(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
@@ -822,7 +1079,14 @@ export async function sequenceAnimaticShotReferencePack(
     .filter((reference) => helpers.readText(reference.status) || helpers.readText(reference.assetKey ?? reference.asset_key) || helpers.readText(reference.identityValue))
   const references: LooseRecord[] = allReferences
     .filter((reference) => helpers.readText(reference.status) === 'ready' && referenceAssetKey(helpers, reference))
-    .map((reference) => ({ ...reference, assetKey: referenceAssetKey(helpers, reference), asset_key: referenceAssetKey(helpers, reference) }))
+    .map((reference): LooseRecord => ({ ...reference, assetKey: referenceAssetKey(helpers, reference), asset_key: referenceAssetKey(helpers, reference) }))
+    .sort((left, right) => {
+      const leftRole = helpers.readText(left.role)
+      const rightRole = helpers.readText(right.role)
+      const leftWeight = leftRole === 'previous_keyframes_continuity_grid' ? 99 : 0
+      const rightWeight = rightRole === 'previous_keyframes_continuity_grid' ? 99 : 0
+      return leftWeight - rightWeight
+    })
   const upstreamImages = readUpstreamImages(context.upstream, helpers, ['image', 'keyframe', 'primaryReferenceImage', 'referenceImages', 'reference_images'])
   const imageByAssetKey = new Map(upstreamImages.map((image) => [helpers.readText(image.assetKey), image] as const).filter(([assetKey]) => assetKey))
   const resolvedReferenceAssetKeys = references.map((reference) => helpers.readText(reference.assetKey)).filter(Boolean)
@@ -830,6 +1094,8 @@ export async function sequenceAnimaticShotReferencePack(
   const shotGraphPolicyVersion = helpers.readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version)
   const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override'
   const referenceFixMode = shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
+    || shotGraphPolicyVersion === 'primary_chain_v15_previous_keyframe_grid'
+    || shotGraphPolicyVersion === 'primary_chain_v16_structured_prompt_plan'
   const shotReferenceOverride = helpers.asRecord(config.shotReferenceOverride ?? config.shot_reference_override)
   const uiOverrideIngredients = helpers.readArray(shotReferenceOverride.ingredients).map(helpers.asRecord)
   const uiIngredientPlanHash = helpers.readText(config.uiIngredientPlanHash ?? config.ui_ingredient_plan_hash ?? shotReferenceOverride.ingredientPlanHash ?? shotReferenceOverride.ingredient_plan_hash)
@@ -844,6 +1110,8 @@ export async function sequenceAnimaticShotReferencePack(
       ? 'Coverage anchor'
       : role === 'previous_keyframe'
         ? 'Previous keyframe'
+        : role === 'previous_keyframes_continuity_grid'
+          ? 'Previous shot keyframes'
         : role === 'storyboard_panel'
           ? 'Storyboard panel'
           : `${helpers.titleFromRefLike(role)} ${index + 1}`
@@ -852,8 +1120,12 @@ export async function sequenceAnimaticShotReferencePack(
       name: label,
       type: role.includes('character') ? 'character' : role.includes('prop') ? 'prop' : 'continuity_asset',
       role,
-      summary: 'Shot-scoped visual reference resolved from the sequence animatic graph.',
-      visualDescription: 'Use this attached reference for identity, spatial, material, lighting, and continuity grounding.',
+      summary: role === 'previous_keyframes_continuity_grid'
+        ? 'Scene-local previous-keyframe storyboard grid appended for shot continuity.'
+        : 'Shot-scoped visual reference resolved from the sequence animatic graph.',
+      visualDescription: role === 'previous_keyframes_continuity_grid'
+        ? 'Previous shot keyframes: continuity context for staging, lighting progression, screen direction, costume/prop continuity, and visual rhythm. Do not treat this as a new character/location identity reference.'
+        : 'Use this attached reference for identity, spatial, material, lighting, and continuity grounding.',
       assetKeys: [assetKey],
       primaryAssetKey: assetKey,
       selectedReferenceAssetKey: assetKey,
@@ -962,13 +1234,15 @@ export async function sequenceAnimaticShotReferencePack(
     referenceAssetKeys: scopedReferenceAssetKeys,
     fallbackEntities,
     referenceScope: 'sequence_animatic_shot_production',
-    limit: Math.max(0, Math.min(8, Number(config.assetPackReferenceLimit ?? 8) || 8)),
+    limit: Math.max(0, Math.min(10, Number(config.assetPackReferenceLimit ?? 10) || 10)),
   }))
   const coverageAnchor = references.find((reference) => helpers.readText(reference.role) === 'coverage_anchor' && scopedReferenceAssetKeySet.has(helpers.readText(reference.assetKey)))
   const previousKeyframe = references.find((reference) => helpers.readText(reference.role) === 'previous_keyframe' && scopedReferenceAssetKeySet.has(helpers.readText(reference.assetKey)))
+  const previousKeyframeGrid = references.find((reference) => helpers.readText(reference.role) === 'previous_keyframes_continuity_grid' && scopedReferenceAssetKeySet.has(helpers.readText(reference.assetKey)))
   const storyboardPanel = references.find((reference) => helpers.readText(reference.role) === 'storyboard_panel' && scopedReferenceAssetKeySet.has(helpers.readText(reference.assetKey)))
   const coverageAnchorImage = coverageAnchor ? imageByAssetKey.get(helpers.readText(coverageAnchor.assetKey)) ?? null : null
   const previousKeyframeImage = previousKeyframe ? imageByAssetKey.get(helpers.readText(previousKeyframe.assetKey)) ?? null : null
+  const previousKeyframeGridImage = previousKeyframeGrid ? imageByAssetKey.get(helpers.readText(previousKeyframeGrid.assetKey)) ?? null : null
   const storyboardPanelImage = storyboardPanel ? imageByAssetKey.get(helpers.readText(storyboardPanel.assetKey)) ?? null : null
   const primaryImage = referenceImages.find((image) => helpers.readText(image.assetKey)) ?? coverageAnchorImage ?? storyboardPanelImage ?? previousKeyframeImage ?? null
   const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
@@ -1009,6 +1283,8 @@ export async function sequenceAnimaticShotReferencePack(
     coverage_anchor: coverageAnchorImage ? { ...coverageAnchorImage, ...helpers.asRecord(coverageAnchor) } : coverageAnchor ?? {},
     previousKeyframe: previousKeyframeImage ? { ...previousKeyframeImage, ...helpers.asRecord(previousKeyframe) } : previousKeyframe ?? {},
     previous_keyframe: previousKeyframeImage ? { ...previousKeyframeImage, ...helpers.asRecord(previousKeyframe) } : previousKeyframe ?? {},
+    previousKeyframeGrid: previousKeyframeGridImage ? { ...previousKeyframeGridImage, ...helpers.asRecord(previousKeyframeGrid) } : previousKeyframeGrid ?? {},
+    previous_keyframe_grid: previousKeyframeGridImage ? { ...previousKeyframeGridImage, ...helpers.asRecord(previousKeyframeGrid) } : previousKeyframeGrid ?? {},
     storyboardPanel: storyboardPanelImage ? { ...storyboardPanelImage, ...helpers.asRecord(storyboardPanel) } : storyboardPanel ?? {},
     storyboard_panel: storyboardPanelImage ? { ...storyboardPanelImage, ...helpers.asRecord(storyboardPanel) } : storyboardPanel ?? {},
     ...(primaryImage ? { image: primaryImage, keyframe: primaryImage, primaryReferenceImage: primaryImage } : {}),
@@ -1023,6 +1299,7 @@ const sequenceAnimaticShotReferenceHandlers = {
   sequence_animatic_shared_asset_ref: sequenceAnimaticSharedAssetRef,
   sequence_animatic_shot_reference_fix: sequenceAnimaticShotReferenceFix,
   sequence_animatic_shot_reference_fix_apply: sequenceAnimaticShotReferenceFixApply,
+  sequence_animatic_previous_keyframe_grid: sequenceAnimaticPreviousKeyframeGrid,
   sequence_animatic_shot_reference_pack: sequenceAnimaticShotReferencePack,
 }
 
@@ -1108,6 +1385,23 @@ export const sequenceAnimaticShotReferenceWorkflowNodeScaffolds = [
       'config.sourceWorkflowId',
       'config.sourceRequestId',
       'config.required',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
+      'readyArtifactCount',
+      'scopedAssetKeys',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticShotReferenceNodeScaffold({
+    purpose: 'sequence_animatic_previous_keyframe_grid',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'config.previousKeyframeGridContext',
+      'config.previous_keyframe_grid_context',
+      'config.shotId',
+      'config.masterRequestId',
     ],
     projectionMetadataKeys: [
       'activeManifestPurpose',

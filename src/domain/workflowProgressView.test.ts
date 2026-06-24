@@ -1020,6 +1020,7 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_director_plan_artifact',
   ])
   assert.deepEqual(sequenceAnimaticShotProductionWorkflowNodeHandlerKeys, [
+    'sequence_animatic_keyframe_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
     'sequence_animatic_planned_keyframe_input',
     'sequence_animatic_planned_keyframe_image',
@@ -1070,6 +1071,9 @@ test('scene board media utility and sequence animatic node packs expose register
   assert.deepEqual(sequenceAnimaticShotReferenceWorkflowNodeHandlerKeys, [
     'sequence_animatic_shot_input',
     'sequence_animatic_shared_asset_ref',
+    'sequence_animatic_shot_reference_fix',
+    'sequence_animatic_shot_reference_fix_apply',
+    'sequence_animatic_previous_keyframe_grid',
     'sequence_animatic_shot_reference_pack',
   ])
   assert.deepEqual(sequenceAnimaticShotRevisionWorkflowNodeHandlerKeys, [
@@ -1722,7 +1726,10 @@ test('sequence animatic shot reference nodes are backed by workflow node extensi
   const expectedShotReferenceHandlers = [
     'sequence_animatic_shot_input',
     'sequence_animatic_shared_asset_ref',
+    'sequence_animatic_previous_keyframe_grid',
     'sequence_animatic_shot_reference_pack',
+    'sequence_animatic_shot_reference_fix',
+    'sequence_animatic_shot_reference_fix_apply',
   ]
   assert.deepEqual(sequenceAnimaticShotReferenceWorkflowNodeScaffoldHandlerKeys, expectedShotReferenceHandlers)
 
@@ -1750,12 +1757,19 @@ test('sequence animatic shot reference nodes are backed by workflow node extensi
     sequenceAnimaticShotReferenceWorkflowNodeScaffolds
       .filter((scaffold) => scaffold.runtimeKind === 'deterministic_transform')
       .map((scaffold) => scaffold.manifest.purpose),
-    expectedShotReferenceHandlers,
+    [
+      'sequence_animatic_shot_input',
+      'sequence_animatic_shared_asset_ref',
+      'sequence_animatic_previous_keyframe_grid',
+      'sequence_animatic_shot_reference_pack',
+      'sequence_animatic_shot_reference_fix_apply',
+    ],
   )
 })
 
 test('sequence animatic shot production nodes are backed by workflow node extension scaffolds', () => {
   const expectedShotProductionHandlers = [
+    'sequence_animatic_keyframe_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
     'sequence_animatic_planned_keyframe_input',
     'sequence_animatic_planned_keyframe_image',

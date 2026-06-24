@@ -11,6 +11,7 @@ import {
   type OutputRequest,
   type WorkflowTemplateGraphRows,
 } from '../../../src/domain/outputWorkflow.ts'
+import { sequenceAnimaticStableHash } from './sequence-animatic-workflow-factory.ts'
 
 export function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -73,8 +74,135 @@ export function imageFromArtifact(artifact: Record<string, unknown> | null) {
   return {
     ...image,
     assetKey,
+    asset_key: assetKey,
     artifactKey: readText(artifact.key),
+    artifact_key: readText(artifact.key),
+    storagePath: readText(image.storagePath ?? image.storage_path) || readText(metadata.storagePath ?? metadata.storage_path),
+    storage_path: readText(image.storagePath ?? image.storage_path) || readText(metadata.storagePath ?? metadata.storage_path),
+    shotId: readText(metadata.shotId ?? metadata.shot_id) || readText(image.shotId ?? image.shot_id),
+    shot_id: readText(metadata.shotId ?? metadata.shot_id) || readText(image.shotId ?? image.shot_id),
     role: readText(metadata.role),
+  }
+}
+
+export function normalizeSequenceAnimaticShotContinuityOptions(value: unknown) {
+  const options = asRecord(value)
+  return {
+    includePreviousKeyframeGrid: options.includePreviousKeyframeGrid !== false
+      && options.include_previous_keyframe_grid !== false,
+    include_previous_keyframe_grid: options.includePreviousKeyframeGrid !== false
+      && options.include_previous_keyframe_grid !== false,
+  }
+}
+
+function sequenceAnimaticSceneIdFromShot(input: {
+  shotId: string
+  shot?: Record<string, unknown>
+  job?: Record<string, unknown>
+}) {
+  return readText(input.job?.sceneId ?? input.job?.scene_id)
+    || readText(input.shot?.sceneId ?? input.shot?.scene_id)
+    || readText(input.shot?.sceneKey ?? input.shot?.scene_key)
+    || readText(input.shot?.storySceneId ?? input.shot?.story_scene_id)
+    || /^(.+)_shot_\d+/.exec(input.shotId)?.[1]
+    || ''
+}
+
+function sequenceAnimaticShotActionCaption(shot: Record<string, unknown>, job: Record<string, unknown>) {
+  return readText(shot.action)
+    || readText(shot.description)
+    || readText(shot.storyboardPanelPrompt ?? shot.storyboard_panel_prompt)
+    || readText(job.action)
+    || readText(job.description)
+    || readText(shot.title)
+    || readText(job.title)
+    || 'Previous shot keyframe.'
+}
+
+export function buildSequenceAnimaticPreviousKeyframeGridContext(input: {
+  shotId: string
+  shotKeyframeJobs: readonly Record<string, unknown>[]
+  shotKeyframeImageByShotId: ReadonlyMap<string, Record<string, unknown>>
+  shotContinuityOptions?: Record<string, unknown> | null
+  maxShots?: number
+}) {
+  const shotId = readText(input.shotId)
+  const options = normalizeSequenceAnimaticShotContinuityOptions(input.shotContinuityOptions)
+  const includePreviousKeyframeGrid = options.includePreviousKeyframeGrid
+  const jobs = input.shotKeyframeJobs.map(asRecord)
+  const activeIndex = jobs.findIndex((job) => readText(job.shotId ?? job.shot_id ?? asRecord(job.shot).id) === shotId)
+  const activeJob = activeIndex >= 0 ? jobs[activeIndex] ?? {} : {}
+  const activeShot = asRecord(activeJob.shot)
+  const sceneId = sequenceAnimaticSceneIdFromShot({ shotId, shot: activeShot, job: activeJob })
+  const maxShots = Math.max(1, Math.min(6, Number(input.maxShots ?? 6) || 6))
+  const selected = includePreviousKeyframeGrid && activeIndex > 0
+    ? jobs
+      .slice(0, activeIndex)
+      .map((job, index) => {
+        const previousShot = asRecord(job.shot)
+        const previousShotId = readText(job.shotId ?? job.shot_id ?? previousShot.id)
+        const previousSceneId = sequenceAnimaticSceneIdFromShot({ shotId: previousShotId, shot: previousShot, job })
+        const image = previousShotId ? asRecord(input.shotKeyframeImageByShotId.get(previousShotId)) : {}
+        const assetKey = readText(image.assetKey ?? image.asset_key)
+        return {
+          shotId: previousShotId,
+          shot_id: previousShotId,
+          sceneId: previousSceneId,
+          scene_id: previousSceneId,
+          index,
+          assetKey,
+          asset_key: assetKey,
+          storagePath: readText(image.storagePath ?? image.storage_path),
+          storage_path: readText(image.storagePath ?? image.storage_path),
+          artifactKey: readText(image.artifactKey ?? image.artifact_key),
+          artifact_key: readText(image.artifactKey ?? image.artifact_key),
+          title: readText(previousShot.title ?? job.title),
+          action: sequenceAnimaticShotActionCaption(previousShot, job),
+        }
+      })
+      .filter((entry) => entry.sceneId === sceneId && readText(entry.assetKey))
+      .slice(-maxShots)
+      .map((entry, index) => ({
+        ...entry,
+        order: index + 1,
+        order_index: index + 1,
+      }))
+    : []
+  const referenceAssetKeys = selected.map((entry) => entry.assetKey).filter(Boolean)
+  const skippedReason = !includePreviousKeyframeGrid
+    ? 'disabled'
+    : selected.length === 0
+      ? 'no_prior_ready_scene_keyframes'
+      : ''
+  const sourceHash = sequenceAnimaticStableHash({
+    version: 'sequence_animatic_previous_keyframe_grid_context_v1',
+    shotId,
+    sceneId,
+    includePreviousKeyframeGrid,
+    previous: selected.map((entry) => ({
+      shotId: entry.shotId,
+      assetKey: entry.assetKey,
+      action: entry.action,
+      order: entry.order,
+    })),
+  })
+  return {
+    version: 'sequence_animatic_previous_keyframe_grid_context_v1',
+    enabled: includePreviousKeyframeGrid && selected.length > 0,
+    includePreviousKeyframeGrid,
+    include_previous_keyframe_grid: includePreviousKeyframeGrid,
+    skippedReason,
+    skipped_reason: skippedReason,
+    shotId,
+    shot_id: shotId,
+    sceneId,
+    scene_id: sceneId,
+    selectedPriorKeyframes: selected,
+    selected_prior_keyframes: selected,
+    referenceAssetKeys,
+    reference_asset_keys: referenceAssetKeys,
+    sourceHash,
+    source_hash: sourceHash,
   }
 }
 

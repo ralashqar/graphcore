@@ -8,6 +8,7 @@ import {
 } from '../../../src/domain/outputWorkflowManifests.ts'
 import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
 import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
+import { z } from 'zod'
 import type {
   LooseRecord,
   SequenceAnimaticNodeExecutionContext,
@@ -210,14 +211,440 @@ function referenceLinesForRole(input: {
     .slice(0, input.maxCount ?? 8)
 }
 
+const keyframePromptReferenceKindSchema = z.enum(['location', 'character', 'group_character', 'prop_item', 'continuity_grid'])
+
+const keyframePromptPlanSchema = z.object({
+  version: z.literal('sequence_animatic_keyframe_prompt_plan_v1').default('sequence_animatic_keyframe_prompt_plan_v1'),
+  referenceAssetKeys: z.array(z.string()).default([]),
+  reference_asset_keys: z.array(z.string()).default([]),
+  referenceBindings: z.array(z.object({
+    imageTag: z.string().default(''),
+    image_tag: z.string().default(''),
+    assetKey: z.string().default(''),
+    asset_key: z.string().default(''),
+    name: z.string().default(''),
+    kind: keyframePromptReferenceKindSchema.default('prop_item'),
+    usage: z.string().default(''),
+    identityScope: z.string().default(''),
+    identity_scope: z.string().default(''),
+  })).default([]),
+  reference_bindings: z.array(z.object({
+    imageTag: z.string().default(''),
+    image_tag: z.string().default(''),
+    assetKey: z.string().default(''),
+    asset_key: z.string().default(''),
+    name: z.string().default(''),
+    kind: keyframePromptReferenceKindSchema.default('prop_item'),
+    usage: z.string().default(''),
+    identityScope: z.string().default(''),
+    identity_scope: z.string().default(''),
+  })).default([]),
+  subjectRoster: z.array(z.object({
+    name: z.string().default(''),
+    count: z.number().int().min(1).max(20).default(1),
+    sourceImageTag: z.string().default(''),
+    source_image_tag: z.string().default(''),
+    sourceAssetKey: z.string().default(''),
+    source_asset_key: z.string().default(''),
+    actionPose: z.string().default(''),
+    action_pose: z.string().default(''),
+    screenPlacement: z.string().default(''),
+    screen_placement: z.string().default(''),
+    notes: z.string().default(''),
+  })).default([]),
+  subject_roster: z.array(z.object({
+    name: z.string().default(''),
+    count: z.number().int().min(1).max(20).default(1),
+    sourceImageTag: z.string().default(''),
+    source_image_tag: z.string().default(''),
+    sourceAssetKey: z.string().default(''),
+    source_asset_key: z.string().default(''),
+    actionPose: z.string().default(''),
+    action_pose: z.string().default(''),
+    screenPlacement: z.string().default(''),
+    screen_placement: z.string().default(''),
+    notes: z.string().default(''),
+  })).default([]),
+  stagingPlan: z.string().default(''),
+  staging_plan: z.string().default(''),
+  continuityNotes: z.array(z.string()).default([]),
+  continuity_notes: z.array(z.string()).default([]),
+  negativeRules: z.array(z.string()).default([]),
+  negative_rules: z.array(z.string()).default([]),
+  diagnostics: z.array(z.string()).default([]),
+})
+
+type KeyframePromptPlan = z.infer<typeof keyframePromptPlanSchema>
+type KeyframePromptReferenceKind = z.infer<typeof keyframePromptReferenceKindSchema>
+
+function keyframePromptPlanBindings(plan: LooseRecord) {
+  return (Array.isArray(plan.referenceBindings) ? plan.referenceBindings : Array.isArray(plan.reference_bindings) ? plan.reference_bindings : [])
+    .map((entry) => entry && typeof entry === 'object' ? entry as LooseRecord : {})
+}
+
+function keyframePromptPlanSubjects(plan: LooseRecord) {
+  return (Array.isArray(plan.subjectRoster) ? plan.subjectRoster : Array.isArray(plan.subject_roster) ? plan.subject_roster : [])
+    .map((entry) => entry && typeof entry === 'object' ? entry as LooseRecord : {})
+}
+
+function normalizedKeyframePromptReferenceKind(role: string, name: string, shotText = ''): KeyframePromptReferenceKind {
+  const haystack = `${role} ${name}`.toLowerCase()
+  if (haystack.includes('previous_keyframes_continuity_grid')) return 'continuity_grid'
+  if (haystack.includes('zone') || haystack.includes('location') || haystack.includes('set_reference') || haystack.includes('viewpoint')) return 'location'
+  const groupish = /\b(group|faction|crowd|company|crew|team|attendants?|guards?|soldiers?|monks?|workers?|children|people|figures|men|women|villagers?|pilgrims?|servants?|students?|order|clan|cult)\b/
+  if (groupish.test(haystack)) return 'group_character'
+  if (haystack.includes('character')) {
+    const lowerName = name.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim()
+    const text = shotText.toLowerCase()
+    const pluralish = groupish.test(lowerName)
+      || /\b(they|them|their|rise|emerge|surround|approach|enter|stand|watch)\b/.test(text) && /\b[a-z]+s\b/.test(lowerName)
+    return pluralish ? 'group_character' : 'character'
+  }
+  return 'prop_item'
+}
+
+function uniqueCleanKeyframePromptLines(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  values: unknown[],
+) {
+  const seen = new Set<string>()
+  const lines: string[] = []
+  for (const value of values) {
+    const text = helpers.readText(value).replace(/\s+/g, ' ').trim()
+    if (!text) continue
+    const key = text.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    lines.push(text)
+  }
+  return lines
+}
+
+function conciseKeyframeReferenceUsage(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  kind: KeyframePromptReferenceKind | string
+  usage: unknown
+}) {
+  const usage = input.helpers.readText(input.usage)
+  if (input.kind === 'group_character') {
+    return /prop|shape|material|condition/i.test(usage)
+      ? 'Preserve group identity, wardrobe, silhouettes, scale, and count; adapt poses to this shot.'
+      : usage || 'Preserve group identity, wardrobe, silhouettes, scale, and count; adapt poses to this shot.'
+  }
+  if (input.kind === 'character') {
+    return usage || 'Preserve identity, face, wardrobe, silhouette, and scale; adapt pose and expression.'
+  }
+  if (input.kind === 'location') {
+    return usage || 'Use for location geometry, materials, weather, lighting logic, and geography.'
+  }
+  if (input.kind === 'continuity_grid') {
+    return usage || 'Use for continuity of staging, lighting progression, screen direction, and visual rhythm only.'
+  }
+  return usage || 'Preserve prop/item shape, scale, material, and visual continuity.'
+}
+
+function fallbackKeyframePromptPlan(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  shot: LooseRecord
+  referenceManifest: LooseRecord[]
+  referenceAssetKeys: string[]
+  action: string
+  cameraBrief: string
+  lighting: string
+  sceneStateText: string
+}) {
+  const shotText = [
+    input.action,
+    input.helpers.readText(input.shot.title),
+    input.helpers.readText(input.shot.description),
+    input.helpers.readText(input.shot.performance),
+    input.helpers.readArray(input.shot.dialogue).map(input.helpers.asRecord).map((line) => input.helpers.readText(line.text)).join(' '),
+  ].join(' ')
+  const bindings = input.referenceManifest.map((entry, index) => {
+    const role = input.helpers.readText(entry.role)
+    const name = input.helpers.readText(entry.label) || `Reference ${index + 1}`
+    const kind = normalizedKeyframePromptReferenceKind(role, name, shotText)
+    return {
+      imageTag: input.helpers.readText(entry.imageTag) || `@Image${index + 1}`,
+      assetKey: input.helpers.readText(entry.assetKey),
+      name,
+      kind,
+      usage: conciseKeyframeReferenceUsage({ helpers: input.helpers, kind, usage: entry.guidance }),
+      identityScope: kind === 'character'
+        ? `Use only for ${name}. Do not transfer this identity to other figures.`
+        : kind === 'group_character'
+          ? `Use only for the ${name} group/people.`
+          : kind === 'continuity_grid'
+            ? 'Use as continuity context only, not as a new identity or location reference.'
+            : kind === 'location'
+              ? 'Use as location/environment reference only.'
+              : 'Use as prop/item reference only.',
+    }
+  }).filter((entry) => entry.assetKey)
+  const subjects = bindings
+    .filter((binding) => binding.kind === 'character' || binding.kind === 'group_character')
+    .map((binding) => ({
+      name: binding.name,
+      count: binding.kind === 'group_character' ? 3 : 1,
+      sourceImageTag: binding.imageTag,
+      sourceAssetKey: binding.assetKey,
+      actionPose: binding.kind === 'group_character' ? 'Follow the shot action for this group.' : 'Follow the shot action for this character.',
+      screenPlacement: 'Use the shot blocking and camera plan.',
+      notes: binding.identityScope,
+    }))
+  return keyframePromptPlanSchema.parse({
+    referenceAssetKeys: input.referenceAssetKeys,
+    reference_asset_keys: input.referenceAssetKeys,
+    referenceBindings: bindings,
+    reference_bindings: bindings,
+    subjectRoster: subjects,
+    subject_roster: subjects,
+    stagingPlan: input.cameraBrief,
+    staging_plan: input.cameraBrief,
+    continuityNotes: [],
+    continuity_notes: [],
+    negativeRules: [
+      'Do not duplicate, merge, or swap named character identities.',
+      'Do not use one character reference for a different named character.',
+      'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text.',
+    ].filter((rule) => bindings.some((binding) => binding.kind === 'continuity_grid') || !rule.includes('continuity grid')),
+    negative_rules: [
+      'Do not duplicate, merge, or swap named character identities.',
+      'Do not use one character reference for a different named character.',
+      'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text.',
+    ].filter((rule) => bindings.some((binding) => binding.kind === 'continuity_grid') || !rule.includes('continuity grid')),
+    diagnostics: ['Fallback prompt plan built deterministically from reference roles.'],
+  })
+}
+
+function validateKeyframePromptPlan(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  plan: KeyframePromptPlan
+  referenceAssetKeys: string[]
+}) {
+  const diagnostics = [...input.plan.diagnostics]
+  const bindings = keyframePromptPlanBindings(input.plan as unknown as LooseRecord)
+  const bindingAssetKeys = bindings.map((binding) => input.helpers.readText(binding.assetKey ?? binding.asset_key)).filter(Boolean)
+  const expected = input.referenceAssetKeys
+  const sameKeys = expected.length === bindingAssetKeys.length && expected.every((key, index) => bindingAssetKeys[index] === key)
+  if (!sameKeys) diagnostics.push(`Rejected prompt-plan reference key mismatch. expected=${expected.join(', ')} actual=${bindingAssetKeys.join(', ')}`)
+  const tagCounts = new Map<string, number>()
+  for (const binding of bindings) {
+    const tag = input.helpers.readText(binding.imageTag ?? binding.image_tag)
+    if (tag) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+  }
+  for (const [tag, count] of tagCounts.entries()) {
+    if (count !== 1) diagnostics.push(`Rejected duplicate prompt-plan image binding: ${tag}`)
+  }
+  const locationOrGridAssets = new Set(bindings
+    .filter((binding) => {
+      const kind = input.helpers.readText(binding.kind)
+      return kind === 'location' || kind === 'continuity_grid'
+    })
+    .map((binding) => input.helpers.readText(binding.assetKey ?? binding.asset_key))
+    .filter(Boolean))
+  for (const subject of keyframePromptPlanSubjects(input.plan as unknown as LooseRecord)) {
+    const sourceAssetKey = input.helpers.readText(subject.sourceAssetKey ?? subject.source_asset_key)
+    if (sourceAssetKey && locationOrGridAssets.has(sourceAssetKey)) {
+      diagnostics.push(`Rejected prompt-plan subject using non-subject reference: ${input.helpers.readText(subject.name) || sourceAssetKey}`)
+    }
+  }
+  return { valid: sameKeys && diagnostics.length === input.plan.diagnostics.length, diagnostics }
+}
+
+function renderKeyframePromptFromPlan(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  plan: LooseRecord
+  action: string
+  dialogue: string
+  cameraBrief: string
+  lighting: string
+  locationRefs: string
+  sceneStateText: string
+}) {
+  const bindings = keyframePromptPlanBindings(input.plan)
+  const subjects = keyframePromptPlanSubjects(input.plan)
+  const bindingLines = bindings.map((binding) => {
+    const tag = input.helpers.readText(binding.imageTag ?? binding.image_tag)
+    const name = input.helpers.readText(binding.name) || 'Reference'
+    const kind = input.helpers.readText(binding.kind)
+    const usage = conciseKeyframeReferenceUsage({ helpers: input.helpers, kind, usage: binding.usage })
+    const scope = input.helpers.readText(binding.identityScope ?? binding.identity_scope)
+    const roleText = kind === 'character'
+      ? 'character identity only'
+      : kind === 'group_character'
+        ? 'group/people identity only'
+        : kind === 'location'
+          ? 'location/environment only'
+          : kind === 'continuity_grid'
+            ? 'previous-keyframe continuity only'
+            : 'prop/item only'
+    return `${tag} ${name}: ${roleText}. ${uniqueCleanKeyframePromptLines(input.helpers, [usage, scope]).join(' ')}`
+  }).filter(Boolean)
+  const subjectLines = subjects.map((subject) => {
+    const name = input.helpers.readText(subject.name)
+    const count = Number(subject.count) || 1
+    const tag = input.helpers.readText(subject.sourceImageTag ?? subject.source_image_tag)
+    const pose = input.helpers.readText(subject.actionPose ?? subject.action_pose)
+    const placement = input.helpers.readText(subject.screenPlacement ?? subject.screen_placement)
+    const exact = count === 1 ? `Exactly one ${name}` : `Exactly ${count} ${name}`
+    return `${exact}${tag ? `, using ${tag} only` : ''}. ${uniqueCleanKeyframePromptLines(input.helpers, [pose, placement]).join(' ')}`
+  }).filter(Boolean)
+  const hasContinuityGrid = bindings.some((binding) => input.helpers.readText(binding.kind) === 'continuity_grid')
+  const characterNames = subjects
+    .filter((subject) => Number(subject.count) === 1)
+    .map((subject) => input.helpers.readText(subject.name))
+    .filter(Boolean)
+  const negativeRules = uniqueCleanKeyframePromptLines(input.helpers, [
+    ...input.helpers.readArray(input.plan.negativeRules ?? input.plan.negative_rules).map((entry) => input.helpers.readText(entry)).filter(Boolean),
+    hasContinuityGrid ? 'Do not treat the continuity grid as a new identity or location source.' : '',
+    characterNames.length > 1 ? `Do not duplicate, merge, or swap these identities: ${characterNames.join(', ')}.` : '',
+    'Do not introduce unlisted major characters, props, locations, or stale visual references.',
+    'Do not mention workflow, schema, IDs, or asset keys in the image.',
+  ])
+  const continuityNotes = uniqueCleanKeyframePromptLines(input.helpers, [
+    input.lighting,
+    input.locationRefs ? `Location reference: ${input.locationRefs}` : '',
+    input.sceneStateText ? `Continuity facts: ${input.sceneStateText}` : '',
+    ...input.helpers.readArray(input.plan.continuityNotes ?? input.plan.continuity_notes),
+  ])
+  const cameraPlan = uniqueCleanKeyframePromptLines(input.helpers, [
+    input.cameraBrief,
+    input.helpers.readText(input.plan.stagingPlan ?? input.plan.staging_plan),
+  ]).filter((line) => line !== input.action).join(' ')
+  return [
+    'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
+    '',
+    'Reference bindings:',
+    bindingLines.join('\n') || 'No attached image references; use only the written visual facts.',
+    '',
+    'Visible subject roster:',
+    subjectLines.join('\n') || 'Only subjects explicitly visible in the shot action.',
+    '',
+    'Action / Blocking:',
+    input.action || input.helpers.readText(input.plan.stagingPlan ?? input.plan.staging_plan) || 'Hold the exact readable action from the shot.',
+    '',
+    input.dialogue ? `Dialogue:\n${input.dialogue}` : '',
+    '',
+    'Camera / Staging:',
+    cameraPlan || 'Use the shot camera plan; preserve readable staging and screen direction.',
+    '',
+    'Lighting / Environment:',
+    continuityNotes.join('\n') || 'Preserve environment, weather, material, and lighting continuity.',
+    '',
+    'Negative:',
+    negativeRules.join(' '),
+  ].filter(Boolean).join('\n')
+}
+
+export async function sequenceAnimaticKeyframePromptPlan(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const sceneState = helpers.asRecord(config.sceneState ?? config.scene_state)
+  const sceneStateText = helpers.compactStoryboardSentence(formatSequenceAnimaticSceneStateForPrompt(sceneState as never), '', 42)
+  const shot = helpers.readFirstUpstreamRecord(context.upstream, ['shot'])
+  const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
+  const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack).map((entry) => entry as unknown as LooseRecord)
+  const scopedReferenceAssetKeys = helpers.readStringArray(assetPack.scopedReferenceAssetKeys ?? assetPack.scoped_reference_asset_keys)
+  const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+    .map((entry) => helpers.readText(entry))
+    .filter(Boolean)
+  const manifestReferenceAssetKeys = referenceManifest
+    .map((entry) => helpers.readText(entry.assetKey ?? entry.asset_key))
+    .filter(Boolean)
+  const referenceAssetKeys = [...new Set((
+    scopedReferenceAssetKeys.length > 0
+      ? scopedReferenceAssetKeys
+      : upstreamReferenceAssetKeys.length > 0
+        ? upstreamReferenceAssetKeys
+        : manifestReferenceAssetKeys
+  ).map((entry) => helpers.readText(entry)).filter(Boolean))]
+  const camera = helpers.asRecord(shot.camera)
+  const action = cleanSequenceAnimaticKeyframePromptText(helpers, helpers.readText(shot.action) || helpers.readText(shot.description) || helpers.readText(shot.storyboardPanelPrompt), 42)
+  const cameraBrief = cleanSequenceAnimaticKeyframePromptText(helpers, [helpers.readText(camera.framing), helpers.readText(camera.angle), helpers.readText(camera.lens), helpers.readText(camera.movement), helpers.readText(camera.screenDirection ?? camera.screen_direction)].filter(Boolean).join('; ') || helpers.readText(shot.camera), 34)
+  const lighting = cleanSequenceAnimaticKeyframePromptText(helpers, helpers.readText(shot.lighting), 30)
+  const fallback = fallbackKeyframePromptPlan({ helpers, shot, referenceManifest, referenceAssetKeys, action, cameraBrief, lighting, sceneStateText })
+  const prompt = [
+    'Plan a cinematic image-generation prompt from structured shot data.',
+    'Return strict JSON only. Do not add, remove, rename, or reorder image references. Bind every image exactly once.',
+    'Classify references semantically as location, character, group_character, prop_item, or continuity_grid.',
+    'Use group_character for factions, crowds, attendants, guards, crews, groups, or any reference used as people in the action.',
+    'Location and previous-keyframe continuity-grid references must never become visible subjects.',
+    'Create a one-to-one subject roster so named characters cannot be duplicated, merged, or swapped.',
+    '',
+    JSON.stringify({
+      version: 'sequence_animatic_keyframe_prompt_plan_input_v1',
+      shot: {
+        id: helpers.readText(shot.id ?? config.shotId),
+        title: helpers.readText(shot.title),
+        action: helpers.readText(shot.action) || helpers.readText(shot.description),
+        dialogue: helpers.readArray(shot.dialogue).map(helpers.asRecord).slice(0, 8),
+        performance: helpers.readText(shot.performance) || helpers.readArray(shot.performanceBeats ?? shot.performance_beats).map(helpers.asRecord).slice(0, 8),
+        camera: shot.camera ?? {},
+        lighting: helpers.readText(shot.lighting),
+      },
+      sceneState,
+      references: referenceManifest.map((entry, index) => ({
+        imageTag: helpers.readText(entry.imageTag) || `@Image${index + 1}`,
+        assetKey: helpers.readText(entry.assetKey),
+        name: helpers.readText(entry.label),
+        role: helpers.readText(entry.role),
+        guidance: helpers.readText(entry.guidance),
+        visualDescription: helpers.readText(entry.visualDescription),
+        line: helpers.readText(entry.line),
+      })),
+      requiredReferenceAssetKeys: referenceAssetKeys,
+    }, null, 2),
+  ].join('\n')
+  const structured = await helpers.runStructuredNode({
+    nodeKey: context.node.key,
+    schemaName: 'sequence_animatic_keyframe_prompt_plan',
+    schema: keyframePromptPlanSchema,
+    instructions: 'Return strict JSON only. Do not add, remove, rename, or reorder image references. Use only provided reference asset keys and image tags.',
+    prompt,
+    fallback,
+    maxOutputTokens: 3000,
+  })
+  const parsed = keyframePromptPlanSchema.parse(structured.value)
+  const validation = validateKeyframePromptPlan({ helpers, plan: parsed, referenceAssetKeys })
+  const promptPlan = validation.valid ? parsed : {
+    ...fallback,
+    diagnostics: [...fallback.diagnostics, ...validation.diagnostics],
+  }
+  const outputs = {
+    promptPlan,
+    prompt_plan: promptPlan,
+    promptPlanDiagnostics: validation.valid ? parsed.diagnostics : validation.diagnostics,
+    prompt_plan_diagnostics: validation.valid ? parsed.diagnostics : validation.diagnostics,
+    referenceAssetKeys,
+    reference_asset_keys: referenceAssetKeys,
+    referenceManifest,
+    reference_manifest: referenceManifest,
+    shot,
+    assetPack,
+    asset_pack: assetPack,
+    text: JSON.stringify(promptPlan, null, 2),
+    prompt,
+    fallbackUsed: structured.fallbackUsed || !validation.valid,
+    fallbackReason: !validation.valid ? 'Prompt-plan validation failed; deterministic fallback plan used.' : structured.fallbackReason,
+    deterministic: structured.fallbackUsed || !validation.valid,
+  }
+  return result({ context, helpers, outputs, provider: structured.provider, model: structured.model })
+}
+
 export async function sequenceAnimaticPlannedKeyframePrompt(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
 ) {
   const config = helpers.asRecord(context.node.config)
   const shotGraphPolicyVersion = helpers.readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version)
-  const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override' || shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
-  const canonicalShotReferenceMode = ['primary_chain_v12_canonical_shot_refs', 'primary_chain_v13_ui_ingredient_override', 'primary_chain_v14_reference_fix']
+  const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override'
+    || shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
+    || shotGraphPolicyVersion === 'primary_chain_v15_previous_keyframe_grid'
+    || shotGraphPolicyVersion === 'primary_chain_v16_structured_prompt_plan'
+  const canonicalShotReferenceMode = ['primary_chain_v12_canonical_shot_refs', 'primary_chain_v13_ui_ingredient_override', 'primary_chain_v14_reference_fix', 'primary_chain_v15_previous_keyframe_grid', 'primary_chain_v16_structured_prompt_plan']
     .includes(shotGraphPolicyVersion)
     || helpers.readText(config.dependencyMode ?? config.dependency_mode) === 'ingredient_refs'
   const sceneState = helpers.asRecord(config.sceneState ?? config.scene_state)
@@ -229,12 +656,13 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
   const storyboardPanel = canonicalShotReferenceMode ? {} : helpers.readFirstUpstreamRecord(context.upstream, ['storyboardPanel', 'storyboard_panel'])
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
   const referenceManifest = sequenceAnimaticReferenceManifestEntries(assetPack)
+  const assetPackReferenceAssetKeys = helpers.readStringArray(assetPack.scopedReferenceAssetKeys ?? assetPack.scoped_reference_asset_keys)
   const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
     .map((entry) => helpers.readText(entry))
     .filter(Boolean)
   const configuredReferenceAssetKeys = helpers.readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
-  const canonicalReferenceAssetKeys = uiIngredientOverrideMode && upstreamReferenceAssetKeys.length > 0
-    ? upstreamReferenceAssetKeys
+  const canonicalReferenceAssetKeys = uiIngredientOverrideMode && (assetPackReferenceAssetKeys.length > 0 || upstreamReferenceAssetKeys.length > 0)
+    ? (assetPackReferenceAssetKeys.length > 0 ? assetPackReferenceAssetKeys : upstreamReferenceAssetKeys)
     : configuredReferenceAssetKeys
   const referenceAssetKeys = canonicalShotReferenceMode && canonicalReferenceAssetKeys.length > 0
     ? canonicalReferenceAssetKeys
@@ -284,6 +712,10 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     maxVisualWords: 12,
   })
   const propRefs = propRefLines.join('\n')
+  const upstreamPromptPlan = helpers.readFirstUpstreamRecord(context.upstream, ['promptPlan', 'prompt_plan'])
+  const promptPlanDiagnostics = helpers.readFirstUpstreamArray(context.upstream, ['promptPlanDiagnostics', 'prompt_plan_diagnostics'])
+    .map((entry) => helpers.readText(entry))
+    .filter(Boolean)
   const camera = helpers.asRecord(shot.camera)
   const dialogue = formatSequenceAnimaticKeyframeDialogueCue(helpers, shot)
   const action = cleanSequenceAnimaticKeyframePromptText(helpers, helpers.readText(shot.action) || helpers.readText(shot.description) || helpers.readText(shot.storyboardPanelPrompt), 42)
@@ -298,7 +730,7 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     || helpers.readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief)
   )
   const hasCoverageAnchor = Boolean(helpers.readText(coverageAnchor.assetKey))
-  const promptText = uiIngredientOverrideMode ? [
+  const fallbackPromptText = uiIngredientOverrideMode ? [
     'Generate one finished cinematic keyframe for this exact animatic shot. Single final frame only.',
     '',
     'References:',
@@ -360,6 +792,19 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
       ? 'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Use only the attached ingredient identities plus the written shot facts; do not introduce unlisted characters, props, locations, or stale visual references. Do not mention workflow, schema, IDs, or asset keys in the image.'
       : 'No captions, labels, arrows, UI, watermarks, borders, split panels, speech bubbles, or visible text. Do not render blockout labels from the coverage anchor. Do not change the coverage-anchor camera angle, lens feel, background layout, or screen direction unless the written shot facts explicitly contradict it. Do not mention workflow, schema, IDs, or asset keys in the image.',
   ].filter(Boolean).join('\n')
+  const hasPromptPlan = keyframePromptPlanBindings(upstreamPromptPlan).length > 0
+  const promptText = hasPromptPlan
+    ? renderKeyframePromptFromPlan({
+      helpers,
+      plan: upstreamPromptPlan,
+      action: action || 'Hold the exact readable action from the shot.',
+      dialogue,
+      cameraBrief,
+      lighting,
+      locationRefs,
+      sceneStateText,
+    })
+    : fallbackPromptText
   const outputs = {
     prompt: promptText,
     text: promptText,
@@ -382,6 +827,10 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     reference_manifest_text: referenceManifestText,
     visualCallSheet,
     visual_call_sheet: visualCallSheet,
+    promptPlan: upstreamPromptPlan,
+    prompt_plan: upstreamPromptPlan,
+    promptPlanDiagnostics,
+    prompt_plan_diagnostics: promptPlanDiagnostics,
     visualCallSheetVersion: 'shot_visual_call_sheet_v1',
     visual_call_sheet_version: 'shot_visual_call_sheet_v1',
     shotId: helpers.readText(shot.id) || helpers.readText(config.shotId),
@@ -898,6 +1347,7 @@ export async function sequenceAnimaticShotVideo(
 }
 
 const sequenceAnimaticShotProductionHandlers = {
+  sequence_animatic_keyframe_prompt_plan: sequenceAnimaticKeyframePromptPlan,
   sequence_animatic_planned_keyframe_prompt: sequenceAnimaticPlannedKeyframePrompt,
   sequence_animatic_planned_keyframe_input: sequenceAnimaticPlannedKeyframeInput,
   sequence_animatic_planned_keyframe_image: sequenceAnimaticPlannedKeyframeImage,
@@ -964,6 +1414,25 @@ const shotProductionProjectionMetadataKeys = [
 
 export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
   createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'sequence_animatic_keyframe_prompt_plan',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.shot',
+      'upstream.assetPack',
+      'upstream.referenceAssetKeys',
+      'upstream.referenceManifest',
+      'config.shotId',
+      'config.sceneState',
+      'config.keyframePromptPlanPolicyVersion',
+      'config.shotGraphPolicyVersion',
+    ],
+    projectionMetadataKeys: [
+      ...shotProductionProjectionMetadataKeys,
+      'providerStatus',
+      'providerRequestId',
+    ],
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
     purpose: 'sequence_animatic_planned_keyframe_prompt',
     runtimeKind: 'deterministic_transform',
     sourceHashKeys: [
@@ -975,6 +1444,8 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'upstream.assetPack',
       'upstream.referenceAssetKeys',
       'upstream.visualCallSheet',
+      'upstream.promptPlan',
+      'upstream.promptPlanDiagnostics',
       'config.shotId',
       'config.sceneState',
       'config.keyframePromptPolicyVersion',

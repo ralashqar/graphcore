@@ -1059,6 +1059,10 @@ export const sequenceAnimaticShotProductionInputV1Schema = looseObjectSchema.ext
   omittedReferenceAssetKeys: z.array(z.string()).default([]),
   shotReferenceOverride: looseRecordSchema.default({}),
   shot_reference_override: looseRecordSchema.default({}),
+  shotContinuityOptions: looseRecordSchema.default({}),
+  shot_continuity_options: looseRecordSchema.default({}),
+  previousKeyframeGridContext: looseRecordSchema.default({}),
+  previous_keyframe_grid_context: looseRecordSchema.default({}),
   referenceFixCandidatePool: looseRecordSchema.default({}),
   reference_fix_candidate_pool: looseRecordSchema.default({}),
   sharedDependencyRequests: z.array(looseRecordSchema).default([]),
@@ -1097,6 +1101,11 @@ export const sequenceAnimaticShotKeyframeReferenceOverrideSchema = looseObjectSc
   ingredients: z.array(sequenceAnimaticShotKeyframeReferenceOverrideIngredientSchema).default([]),
 })
 
+export const sequenceAnimaticShotContinuityOptionsSchema = looseObjectSchema.extend({
+  includePreviousKeyframeGrid: z.boolean().optional(),
+  include_previous_keyframe_grid: z.boolean().optional(),
+})
+
 export const sequenceAnimaticShotRevisionArtifactV1Schema = looseObjectSchema.extend({
   graphSpecVersion: sequenceAnimaticGraphSpecVersionSchema.default('sequence_animatic_graph_v1'),
   screenplayAnimaticRole: z.literal('shot_revision'),
@@ -1123,6 +1132,8 @@ export const sequenceAnimaticKeyframeWorkflowEnsureRequestSchema = z.object({
   allowProvisional: z.boolean().default(false),
   shotReferenceOverride: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
   shot_reference_override: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
+  shotContinuityOptions: sequenceAnimaticShotContinuityOptionsSchema.optional(),
+  shot_continuity_options: sequenceAnimaticShotContinuityOptionsSchema.optional(),
 })
 
 export const sequenceAnimaticBlockedShotKeyframeSchema = z.object({
@@ -1189,6 +1200,8 @@ export const sequenceAnimaticShotProductionGraphEnsureRequestSchema = z.object({
   allowProvisional: z.boolean().default(false),
   shotReferenceOverride: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
   shot_reference_override: sequenceAnimaticShotKeyframeReferenceOverrideSchema.optional(),
+  shotContinuityOptions: sequenceAnimaticShotContinuityOptionsSchema.optional(),
+  shot_continuity_options: sequenceAnimaticShotContinuityOptionsSchema.optional(),
 })
 
 export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object({
@@ -1204,7 +1217,7 @@ export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object(
   shotId: z.string().min(1),
   coverageSetupId: z.string().nullable().default(null),
   dependencyNodeIds: z.array(z.string()).default([]),
-  graphPolicyVersion: z.string().default('primary_chain_v14_reference_fix'),
+  graphPolicyVersion: z.string().default('primary_chain_v16_structured_prompt_plan'),
 })
 
 export const sequenceAnimaticZoneCoverageBoardEnsureRequestSchema = z.object({

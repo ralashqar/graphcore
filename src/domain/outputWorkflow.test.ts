@@ -3806,7 +3806,7 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
       shotId: 'shot_001',
       coverageSetupId: 'setup_a',
       coverageAnchorScopeKey: 'setup_a_spot_lab_ava',
-      shotGraphPolicyVersion: 'primary_chain_v14_reference_fix',
+      shotGraphPolicyVersion: 'primary_chain_v16_structured_prompt_plan',
     },
     block: { id: 'block_001', title: 'Block' },
     shot: { id: 'shot_001', index: 1, title: 'Reveal', action: 'Ava enters.', visibleCharacterRefIds: ['ava'] },
@@ -3814,6 +3814,17 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
     assetPack: { entities: [{ key: 'ava', name: 'Ava', primaryAssetKey: 'ava_sheet', assetKeys: ['ava_sheet'] }] },
     coverageAnchor: { assetKey: 'coverage_asset' },
     previousKeyframe: {},
+    previousKeyframeGridContext: {
+      enabled: true,
+      includePreviousKeyframeGrid: true,
+      shotId: 'shot_001',
+      sceneId: 'scene_001',
+      sourceHash: 'prev-grid-hash',
+      selectedPriorKeyframes: [
+        { shotId: 'shot_000', order: 1, assetKey: 'shot_000_keyframe', action: 'Ava waits in the lab doorway.' },
+      ],
+      referenceAssetKeys: ['shot_000_keyframe'],
+    },
     requiredReferenceAssetKeys: ['ava_sheet', 'zone_sheet'],
     omittedReferenceAssetKeys: [],
     selectedReferences: [
@@ -3842,7 +3853,9 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   const ingredientNodeKeys = ingredientGraph.nodes.map((node) => node.key)
   assert.ok(ingredientNodeKeys.includes('fix_references'))
   assert.ok(ingredientNodeKeys.includes('apply_reference_fix'))
+  assert.ok(ingredientNodeKeys.includes('previous_keyframe_grid'))
   assert.ok(ingredientNodeKeys.includes('shot_reference_pack'))
+  assert.ok(ingredientNodeKeys.includes('keyframe_prompt_plan'))
   assert.ok(ingredientNodeKeys.includes('planned_keyframe_artifact'))
   assert.ok(ingredientNodeKeys.includes('ui_ingredient_ref_ava'))
   assert.ok(ingredientNodeKeys.includes('ui_ingredient_ref_zone_lab'))
@@ -3851,6 +3864,10 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'ui_ingredient_ref_zone_lab' && edge.target_node_key === 'fix_references'))
   assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'fix_references' && edge.target_node_key === 'apply_reference_fix'))
   assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'apply_reference_fix' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'apply_reference_fix' && edge.target_node_key === 'previous_keyframe_grid'))
+  assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'previous_keyframe_grid' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'shot_reference_pack' && edge.target_node_key === 'keyframe_prompt_plan'))
+  assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'keyframe_prompt_plan' && edge.target_node_key === 'planned_keyframe_prompt'))
   assert.ok(ingredientGraph.edges.some((edge) =>
     edge.source_node_key === 'planned_keyframe_prompt'
     && edge.source_port === 'reference_asset_keys'
@@ -4061,7 +4078,7 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.match(sequenceAnimaticShotReferencePackSource, /scopedReferenceAssetKeySet\.has\(helpers\.readText\(reference\.assetKey\)\)/)
   assert.match(sequenceAnimaticShotProductionPackSource, /const upstreamReferenceAssetKeys = helpers\.readFirstUpstreamArray\(context\.upstream, \['referenceAssetKeys', 'reference_asset_keys'\]\)/)
   assert.match(sequenceAnimaticShotProductionPackSource, /const configuredReferenceAssetKeys = helpers\.readStringArray\(config\.requiredReferenceAssetKeys/)
-  assert.match(sequenceAnimaticShotProductionPackSource, /uiIngredientOverrideMode && upstreamReferenceAssetKeys\.length > 0/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /uiIngredientOverrideMode && \(assetPackReferenceAssetKeys\.length > 0 \|\| upstreamReferenceAssetKeys\.length > 0\)/)
   assert.match(sequenceAnimaticShotProductionPackSource, /canonicalShotReferenceMode && canonicalReferenceAssetKeys\.length > 0/)
   assert.match(workerSource, /SEQUENCE_ANIMATIC_COVERAGE_ANCHOR_MODE = 'labeled_blockout_v1'/)
   assert.match(workerSource, /output-workflow-sequence-animatic-reference-runtime/)
@@ -4090,7 +4107,15 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.match(sequenceAnimaticReferenceRuntimeSource, /adapt pose and expression to this shot/)
   assert.match(sequenceAnimaticReferenceRuntimeSource, /Use for location geometry/)
   assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_planned_keyframe_prompt/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_keyframe_prompt_plan/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /keyframePromptPlanSchema/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /renderKeyframePromptFromPlan/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /const scopedReferenceAssetKeys = helpers\.readStringArray\(assetPack\.scopedReferenceAssetKeys/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /const manifestReferenceAssetKeys = referenceManifest/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /const groupish = \/\\b\(group\|faction\|crowd\|company\|crew\|team\|attendants\?/)
+  assert.match(workflowFactorySource, /keyframe_prompt_plan/)
   assert.doesNotMatch(workerSource, /if \(purpose === 'sequence_animatic_planned_keyframe_prompt'\)/)
+  assert.doesNotMatch(workerSource, /if \(purpose === 'sequence_animatic_keyframe_prompt_plan'\)/)
   assert.match(sequenceAnimaticShotProductionPackSource, /Action \/ Blocking:/)
   assert.match(sequenceAnimaticShotProductionPackSource, /formatSequenceAnimaticKeyframeDialogueCue/)
   assert.doesNotMatch(sequenceAnimaticShotProductionPackSource, /Use this attached image exactly/)
@@ -4120,12 +4145,16 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.match(sequenceAnimaticShotProductionPackSource, /sequenceAnimaticReferenceManifestEntries/)
   assert.match(sequenceAnimaticShotProductionPackSource, /const referenceAssetKeys = canonicalShotReferenceMode && canonicalReferenceAssetKeys\.length > 0/)
   assert.match(sequenceAnimaticShotProductionPackSource, /reference_asset_keys: referenceAssetKeys/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /Do not add, remove, rename, or reorder image references/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /group_character/)
   assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /sequenceAnimaticReferenceManifestEntries:/)
   assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /cinematicAssetPackEntityKeys:/)
   assert.doesNotMatch(sequenceAnimaticNodePackTypesSource, /parseSequenceAnimaticShotPlan:/)
   assert.match(workerSource, /sequenceAnimaticReferenceManifestTextFromRecords\(referenceImageRecords\)/)
   assert.match(workerSource, /const useExactSequenceAnimaticKeyframeReferences = isSequenceAnimaticPlannedKeyframeImage && effectiveDirectReferenceAssetKeys\.length > 0/)
   assert.match(workerSource, /const directImageRecords = isSpotContinuityAssetImage \|\| useExactSequenceAnimaticKeyframeReferences \? \[\]/)
+  assert.match(workerSource, /const orderedDirectReferenceAssetKeys = isSequenceAnimaticPlannedKeyframeImage && uiIngredientOverrideMode && shotReferencePackAssetKeys\.length > 0/)
+  assert.match(workerSource, /collectReferenceAssetKeyRecords\(\s*input\.client,\s*input\.run,\s*orderedDirectReferenceAssetKeys/s)
   assert.match(workerSource, /useExactSequenceAnimaticKeyframeReferences\s*\?\s*\[\]/)
   assert.match(sequenceAnimaticReferenceRuntimeSource, /export function sequenceAnimaticReferenceManifestTextFromRecords/)
   assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_shot_video_artifact/)
@@ -4377,6 +4406,8 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.match(artifactIndexSource, /const completedPlannedKeyframeByShotId = new Map/)
   assert.doesNotMatch(graphHookSource, /cachedShotGraphIsCurrent/)
   assert.match(graphHookSource, /shotReferenceOverride: buildSequenceAnimaticShotKeyframeReferenceOverride\(model, shot\)/)
+  assert.match(graphHookSource, /shotContinuityOptions/)
+  assert.match(repositorySource, /shotContinuityOptions: payload\.shotContinuityOptions/)
   assert.match(animaticViewModelSource, /filterSequenceAnimaticShotReferencesForShot/)
   assert.match(animaticViewModelSource, /anchor\?\.shotIds\.includes\(shotId\)/)
   assert.match(graphHookSource, /openOutputGraph\(model, shotRequest\.id, 'planned_keyframe_artifact'\)/)

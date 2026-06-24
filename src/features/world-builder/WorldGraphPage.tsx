@@ -830,6 +830,7 @@ type WorldGraphPageProps = {
     coverageSetupIds?: string[]
     allowProvisional?: boolean
     shotReferenceOverride?: Record<string, unknown>
+    shotContinuityOptions?: Record<string, unknown>
   }) => Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> | SequenceAnimaticKeyframeWorkflowEnsureResponse
   onEnsureSequenceAnimaticShotProductionGraph: (request: {
     masterRequestId: string
@@ -838,6 +839,7 @@ type WorldGraphPageProps = {
     forceRefresh?: boolean
     allowProvisional?: boolean
     shotReferenceOverride?: Record<string, unknown>
+    shotContinuityOptions?: Record<string, unknown>
   }) => Promise<SequenceAnimaticShotProductionGraphEnsureResponse> | SequenceAnimaticShotProductionGraphEnsureResponse
   onEnsureSequenceAnimaticShotCoverageIntents: (request: {
     masterRequestId: string
@@ -8636,9 +8638,9 @@ export function WorldGraphPage({
             onRunScene={(model, scene) => void handleRunSequenceAnimaticScene(model, scene)}
             onRunBlock={(model, timelineBlock, mode) => void handleRunSequenceAnimaticBlock(model, timelineBlock, mode)}
             onRunShotRevision={(model, timelineBlock, shot, prompt) => void handleRunSequenceAnimaticShotRevision(model, timelineBlock, shot, prompt)}
-            onRunShotKeyframe={(model, timelineBlock, shot, mode) => void handleRunSequenceAnimaticShotKeyframe(model, timelineBlock, shot, mode)}
+            onRunShotKeyframe={(model, timelineBlock, shot, mode, continuityOptions) => void handleRunSequenceAnimaticShotKeyframe(model, timelineBlock, shot, mode, continuityOptions)}
             onRunShotVideo={(model, timelineBlock, shot) => void handleRunSequenceAnimaticShotVideo(model, timelineBlock, shot)}
-            onOpenShotGraph={(model, timelineBlock, shot, refresh) => void handleOpenSequenceAnimaticShotGraph(model, timelineBlock, shot, refresh)}
+            onOpenShotGraph={(model, timelineBlock, shot, refresh, continuityOptions) => void handleOpenSequenceAnimaticShotGraph(model, timelineBlock, shot, refresh, continuityOptions)}
             onPlayVideo={setSequenceAnimaticVideoPreview}
             onOpenShotPreview={openWikiDetailModal}
             onOpenShotInspector={setSequenceAnimaticShotInspector}
@@ -11550,9 +11552,9 @@ export function WorldGraphPage({
           onClose={() => setSequenceAnimaticPreviewRequestId(null)}
           onRunBlock={(model, timelineBlock, mode) => void handleRunSequenceAnimaticBlock(model, timelineBlock, mode)}
           onRunShotRevision={(model, timelineBlock, shot, prompt) => void handleRunSequenceAnimaticShotRevision(model, timelineBlock, shot, prompt)}
-          onRunShotKeyframe={(model, timelineBlock, shot, mode) => void handleRunSequenceAnimaticShotKeyframe(model, timelineBlock, shot, mode)}
+          onRunShotKeyframe={(model, timelineBlock, shot, mode, continuityOptions) => void handleRunSequenceAnimaticShotKeyframe(model, timelineBlock, shot, mode, continuityOptions)}
           onRunShotVideo={(model, timelineBlock, shot) => void handleRunSequenceAnimaticShotVideo(model, timelineBlock, shot)}
-          onOpenShotGraph={(model, timelineBlock, shot, refresh) => void handleOpenSequenceAnimaticShotGraph(model, timelineBlock, shot, refresh)}
+          onOpenShotGraph={(model, timelineBlock, shot, refresh, continuityOptions) => void handleOpenSequenceAnimaticShotGraph(model, timelineBlock, shot, refresh, continuityOptions)}
           onPlayVideo={setSequenceAnimaticVideoPreview}
           onOpenShotPreview={openWikiDetailModal}
           onOpenShotInspector={(input) => setSequenceAnimaticShotInspector(input)}

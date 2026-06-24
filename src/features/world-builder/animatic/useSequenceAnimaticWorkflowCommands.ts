@@ -58,6 +58,7 @@ type EnsureSequenceAnimaticKeyframeWorkflows = (request: {
   coverageSetupIds?: string[]
   allowProvisional?: boolean
   shotReferenceOverride?: Record<string, unknown>
+  shotContinuityOptions?: Record<string, unknown>
 }) => Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> | SequenceAnimaticKeyframeWorkflowEnsureResponse
 
 type EnsureSequenceAnimaticShotProductionGraph = (request: {
@@ -67,6 +68,7 @@ type EnsureSequenceAnimaticShotProductionGraph = (request: {
   forceRefresh?: boolean
   allowProvisional?: boolean
   shotReferenceOverride?: Record<string, unknown>
+  shotContinuityOptions?: Record<string, unknown>
 }) => Promise<SequenceAnimaticShotProductionGraphEnsureResponse> | SequenceAnimaticShotProductionGraphEnsureResponse
 
 type EnsureSequenceAnimaticZoneCoverageBoards = (request: {
