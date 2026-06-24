@@ -370,11 +370,13 @@ export function SequenceAnimaticShotWorkspace({
   const shotKeyframeStarting = busyRunKeys.has(shotKeyframeRunKey)
   const shotKeyframeBusy = shotKeyframeStarting || activeShot.keyframeRunning
   const shotKeyframeBusyLabel = sequenceAnimaticShotKeyframeBusyLabel(activeShot, shotKeyframeStarting)
-  const shotKeyframeWorkflowProgress = workflowProgressForRequest(
-    activeShot.keyframeRequestId,
-    `${activeShot.title} keyframe`,
-    activeShot.keyframeProgressLabel || shotKeyframeBusyLabel,
-  )
+  const shotKeyframeWorkflowProgress = shotKeyframeBusy
+    ? workflowProgressForRequest(
+        activeShot.keyframeRequestId,
+        `${activeShot.title} keyframe`,
+        activeShot.keyframeProgressLabel || shotKeyframeBusyLabel,
+      )
+    : null
   const activeWorkflowNodes = shotKeyframeWorkflowProgress
     ? shotKeyframeWorkflowProgress.nodes
       .filter((node) => ['running', 'waiting', 'queued', 'failed', 'blocked'].includes(node.status))
@@ -422,12 +424,7 @@ export function SequenceAnimaticShotWorkspace({
   const shotKeyframeInFlightForTimelineItem = (item: typeof timelineItems[number]) => {
     const itemRunKey = `${model.request.id}:${item.block.id}:${item.shot.id}:keyframe`
     if (busyRunKeys.has(itemRunKey) || item.shot.keyframeRunning) return true
-    const itemProgress = workflowProgressForRequest(
-      item.shot.keyframeRequestId,
-      `${item.shot.title} keyframe`,
-      item.shot.keyframeProgressLabel || 'Generating keyframe',
-    )
-    return Boolean(itemProgress && !itemProgress.terminal)
+    return false
   }
 
   const requestKeyframe = (mode: 'generate' | 'regenerate') => {

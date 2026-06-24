@@ -9498,12 +9498,16 @@ function readOutputRequestScreenplayAnimaticRole(request: OutputRequest) {
 }
 
 function collectSequenceAnimaticStateAssetKeys(input: {
+  requests?: OutputRequest[]
   artifacts: OutputArtifact[]
   runs?: OutputWorkflowRun[]
   projections: OutputFeedResponse['projections']
 }) {
   const keys = new Set<string>()
   const known = new Set<string>()
+  for (const request of input.requests ?? []) {
+    collectOutputAssetReferences(request.metadata, known, keys)
+  }
   for (const artifact of input.artifacts) {
     const artifactKey = readRepositoryString(artifact.assetKey)
     if (artifactKey) keys.add(artifactKey)
@@ -10259,7 +10263,7 @@ async function loadSequenceAnimaticStateDirect(
     createdAt: readRepositoryString(row.created_at),
   }))
   const runsBeforeAssetHydration = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, artifacts))
-  const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ artifacts, runs: runsBeforeAssetHydration, projections }))
+  const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ requests, artifacts, runs: runsBeforeAssetHydration, projections }))
   const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
   const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, hydratedArtifacts))
   const shotContinuityStreamState = deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events })

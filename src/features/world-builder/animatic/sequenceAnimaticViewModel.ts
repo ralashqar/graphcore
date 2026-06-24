@@ -179,6 +179,132 @@ function resolveSequenceAnimaticMediaUrl(media: Record<string, unknown> | null |
   return assetKey ? resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null) : null
 }
 
+function sequenceAnimaticAssetKeysFromRecord(record: Record<string, unknown>) {
+  const metadata = readLooseRecord(record.metadata)
+  return [...new Set([
+    trimOptionalString(record.assetKey),
+    trimOptionalString(record.asset_key),
+    trimOptionalString(record.primaryAssetKey),
+    trimOptionalString(record.primary_asset_key),
+    trimOptionalString(record.selectedReferenceAssetKey),
+    trimOptionalString(record.selected_reference_asset_key),
+    trimOptionalString(record.selectedReferenceVariantAssetKey),
+    trimOptionalString(record.selected_reference_variant_asset_key),
+    trimOptionalString(metadata.referenceSheetAssetKey),
+    trimOptionalString(metadata.reference_sheet_asset_key),
+    ...readLooseArray(record.assetKeys).map(trimOptionalString),
+    ...readLooseArray(record.asset_keys).map(trimOptionalString),
+  ].filter(Boolean))]
+}
+
+function hydrateSequenceAnimaticAssetPackUrls(
+  assetPack: Record<string, unknown>,
+  assetByKey: ReadonlyMap<string, AssetDefinition>,
+) {
+  const hydrateRecord = (value: unknown) => {
+    const record = readLooseRecord(value)
+    if (Object.keys(record).length === 0) return record
+    const existingUrl = trimOptionalString(record.assetUrl)
+      || trimOptionalString(record.asset_url)
+      || trimOptionalString(record.imageUrl)
+      || trimOptionalString(record.image_url)
+      || trimOptionalString(record.referenceArtUrl)
+      || trimOptionalString(record.reference_art_url)
+      || trimOptionalString(record.iconUrl)
+      || trimOptionalString(record.icon_url)
+      || trimOptionalString(record.url)
+    const assetUrl = existingUrl || sequenceAnimaticAssetKeysFromRecord(record)
+      .map((assetKey) => resolveAssetSourceUrl(assetByKey.get(assetKey) ?? null))
+      .find((url): url is string => Boolean(url)) || ''
+    return assetUrl
+      ? {
+          ...record,
+          assetUrl: trimOptionalString(record.assetUrl) || assetUrl,
+          asset_url: trimOptionalString(record.asset_url) || assetUrl,
+          imageUrl: trimOptionalString(record.imageUrl) || assetUrl,
+          image_url: trimOptionalString(record.image_url) || assetUrl,
+          referenceArtUrl: trimOptionalString(record.referenceArtUrl) || assetUrl,
+          reference_art_url: trimOptionalString(record.reference_art_url) || assetUrl,
+          iconUrl: trimOptionalString(record.iconUrl) || assetUrl,
+          icon_url: trimOptionalString(record.icon_url) || assetUrl,
+        }
+      : record
+  }
+  return {
+    ...assetPack,
+    entities: readLooseArray(assetPack.entities).map(hydrateRecord),
+    referenceImages: readLooseArray(assetPack.referenceImages).map(hydrateRecord),
+    reference_images: readLooseArray(assetPack.reference_images).map(hydrateRecord),
+  }
+}
+
+function sequenceAnimaticWorldEntityAssetPackRecords(input: {
+  worldEntities: readonly WorldEntity[]
+  assetByKey: ReadonlyMap<string, AssetDefinition>
+  imageUrlByEntityKey: ReadonlyMap<string, string | null>
+  referenceSheetIconUrlByEntityKey: ReadonlyMap<string, string | null>
+  referenceSheetUrlByEntityKey: ReadonlyMap<string, string | null>
+}) {
+  return input.worldEntities.flatMap((entity) => {
+    const referenceSheetAssetKey = readEntityReferenceSheetAssetKey(entity)
+    const assetKey = referenceSheetAssetKey || entity.thumbnailAssetKey || ''
+    if (!assetKey) return []
+    const assetUrl = input.referenceSheetUrlByEntityKey.get(entity.key)
+      ?? input.imageUrlByEntityKey.get(entity.key)
+      ?? resolveAssetSourceUrl(input.assetByKey.get(assetKey) ?? null)
+      ?? ''
+    const iconUrl = input.referenceSheetIconUrlByEntityKey.get(entity.key)
+      ?? input.imageUrlByEntityKey.get(entity.key)
+      ?? assetUrl
+    return [{
+      key: entity.key,
+      id: entity.key,
+      name: entity.name,
+      type: entity.nodeType,
+      nodeType: entity.nodeType,
+      node_type: entity.nodeType,
+      role: entity.nodeType === 'object' ? 'item_or_prop_reference' : entity.nodeType === 'group' ? 'faction_group_reference' : 'world_character_reference',
+      primaryAssetKey: assetKey,
+      primary_asset_key: assetKey,
+      selectedReferenceAssetKey: assetKey,
+      selected_reference_asset_key: assetKey,
+      assetKeys: [assetKey],
+      asset_keys: [assetKey],
+      assetUrl,
+      asset_url: assetUrl,
+      imageUrl: assetUrl,
+      image_url: assetUrl,
+      referenceArtUrl: assetUrl,
+      reference_art_url: assetUrl,
+      iconUrl: iconUrl || assetUrl,
+      icon_url: iconUrl || assetUrl,
+      visualDescription: trimOptionalString(entity.metadata.visualDescription)
+        || trimOptionalString(readLooseRecord(readLooseRecord(entity.metadata).visual).description)
+        || entity.summary,
+    } as Record<string, unknown>]
+  })
+}
+
+function mergeSequenceAnimaticAssetPackWithWorldRefs(
+  assetPack: Record<string, unknown>,
+  worldReferenceEntities: readonly Record<string, unknown>[],
+) {
+  const entities = readLooseArray(assetPack.entities).map(readLooseRecord)
+  const seen = new Set(entities.map((entity) => trimOptionalString(entity.key) || trimOptionalString(entity.id)).filter(Boolean))
+  return {
+    ...assetPack,
+    entities: [
+      ...entities,
+      ...worldReferenceEntities.filter((entity) => {
+        const key = trimOptionalString(entity.key) || trimOptionalString(entity.id)
+        if (!key || seen.has(key)) return false
+        seen.add(key)
+        return true
+      }),
+    ],
+  }
+}
+
 export type SequenceAnimaticShotView = {
   id: string
   index: number
@@ -1262,6 +1388,20 @@ export function buildSequenceAnimaticViewModel(input: {
     plannedKeyframeRequests,
   })
   const manifest = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_manifest'], ['manifest', 'sequenceAnimaticManifest', 'sequence_animatic_manifest'])
+  const worldReferenceAssetPackEntities = sequenceAnimaticWorldEntityAssetPackRecords({
+    worldEntities: input.worldEntities,
+    assetByKey,
+    imageUrlByEntityKey: input.imageUrlByEntityKey,
+    referenceSheetIconUrlByEntityKey: input.referenceSheetIconUrlByEntityKey,
+    referenceSheetUrlByEntityKey: input.referenceSheetUrlByEntityKey,
+  })
+  const manifestAssetPack = hydrateSequenceAnimaticAssetPackUrls(
+    mergeSequenceAnimaticAssetPackWithWorldRefs(
+      readLooseRecord(readLooseRecord(manifest).assetPack ?? readLooseRecord(manifest).asset_pack),
+      worldReferenceAssetPackEntities,
+    ),
+    assetByKey,
+  )
   const artifactDirectorPlan = readArtifactMetadataRecord(requestArtifacts, ['sequence_animatic_director_plan'], ['shotContinuityPlan', 'shot_continuity_plan', 'directorPlan', 'director_plan'])
   const stateDirectorPlan = readLooseRecord(input.sequenceState?.directorPlan ?? input.sequenceState?.shotContinuityPlan)
   const streamedDirectorPlan = readLooseRecord(input.sequenceState?.streamedShotContinuityPlan)
@@ -2823,7 +2963,7 @@ export function buildSequenceAnimaticViewModel(input: {
     continuityCoverageLabel,
     continuityStructureRunning,
     continuityAssetGenerationStatus,
-    assetPack: readLooseRecord(readLooseRecord(manifest).assetPack ?? readLooseRecord(manifest).asset_pack),
+    assetPack: manifestAssetPack,
     continuityAssetTargets,
     continuityGraphView,
     title: trimOptionalString(fallbackScreenplay?.title) || input.request.title || 'Sequence screenplay animatic',
