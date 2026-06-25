@@ -82,6 +82,8 @@ export const graphcoreOutputApi: OutputApi = {
   getOutputWorkflowStatus: graphcoreRepository.getOutputWorkflowStatus,
   cancelOutputWorkflowRun: graphcoreRepository.cancelOutputWorkflowRun,
   updateOutputWorkflowNode: graphcoreRepository.updateOutputWorkflowNode,
+  updateSequenceAnimaticSceneGraphNode: graphcoreRepository.updateSequenceAnimaticSceneGraphNode,
+  analyzeSequenceAnimaticZonePois: graphcoreRepository.analyzeSequenceAnimaticZonePois,
   upgradeOutputWorkflowPreset: graphcoreRepository.upgradeOutputWorkflowPreset,
   startOutputRequest: graphcoreRepository.startOutputRequest,
   getOutputRequestStatus: graphcoreRepository.getOutputRequestStatus,

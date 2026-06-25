@@ -100,7 +100,8 @@ export function isTransientRequestError(error: unknown) {
     : typeof error === 'string'
       ? error
       : ''
-  return /failed to fetch|failed to send a request|network|timeout|err_insufficient_resources|load failed|temporarily unavailable/i.test(message)
+  const name = error instanceof Error ? error.name : ''
+  return /failed to fetch|failed to send a request|network|timeout|err_insufficient_resources|load failed|temporarily unavailable|service unavailable|bad gateway|gateway timeout|signal is aborted/i.test(`${name} ${message}`)
 }
 
 function retryDelayForAttempt(attemptIndex: number, policy: Required<RequestRetryPolicy>, error: unknown) {

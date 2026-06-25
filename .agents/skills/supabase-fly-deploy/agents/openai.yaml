@@ -1,0 +1,4 @@
+interface:
+  display_name: "Supabase + Fly Deploy"
+  short_description: "Deploy Edge and Fly worker together"
+  default_prompt: "Use $supabase-fly-deploy to verify and deploy shared GraphCore Supabase Edge and Fly worker changes."

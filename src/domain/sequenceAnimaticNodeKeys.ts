@@ -20,7 +20,15 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   continuityBatchImage: 'continuity_batch_image',
   continuityBatchExtract: 'continuity_batch_extract',
   continuityBatchArtifact: 'continuity_batch_artifact',
+  // Scene-level zone coverage board workflow
+  zoneCoverageBoardInput: 'zone_coverage_board_input',
+  zoneCoverageBoardBrief: 'zone_coverage_board_brief',
+  zoneCoverageBoardPrompt: 'zone_coverage_board_prompt',
+  zoneCoverageBoardImage: 'zone_coverage_board_image',
+  zoneCoverageBoardExtract: 'zone_coverage_board_extract',
+  zoneCoverageBoardArtifact: 'zone_coverage_board_artifact',
   // Coverage anchor workflow
+  coverageAnchorBrief: 'coverage_anchor_brief',
   coverageAnchorPrompt: 'coverage_anchor_prompt',
   coverageAnchorImage: 'coverage_anchor_image',
   coverageAnchorArtifact: 'coverage_anchor_artifact',
@@ -28,6 +36,9 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   plannedKeyframePrompt: 'planned_keyframe_prompt',
   plannedKeyframeImage: 'planned_keyframe_image',
   plannedKeyframeArtifact: 'planned_keyframe_artifact',
+  // Graph-native shot production workflow
+  shotReferencePack: 'shot_reference_pack',
+  shotVideoArtifact: 'shot_video_artifact',
   // Shot video workflow
   shotVideoPrompt: 'shot_video_prompt',
   shotVideo: 'shot_video',
@@ -66,12 +77,26 @@ export const sequenceAnimaticContinuityBatchTargetNodeKeys = [
   SEQUENCE_ANIMATIC_NODE_KEYS.continuityBatchArtifact,
 ] as const
 
+/** Force/target node lists for scene-level zone coverage boards. */
+export const sequenceAnimaticZoneCoverageBoardTargetNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardArtifact,
+] as const
+
+export const sequenceAnimaticZoneCoverageBoardForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardBrief,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardPrompt,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardImage,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardExtract,
+  SEQUENCE_ANIMATIC_NODE_KEYS.zoneCoverageBoardArtifact,
+] as const
+
 /** Force/target node lists for coverage anchors, keyframes, and shot video runs. */
 export const sequenceAnimaticCoverageAnchorTargetNodeKeys = [
   SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorArtifact,
 ] as const
 
 export const sequenceAnimaticCoverageAnchorForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorBrief,
   SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorPrompt,
   SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorImage,
   SEQUENCE_ANIMATIC_NODE_KEYS.coverageAnchorArtifact,
@@ -94,6 +119,27 @@ export const sequenceAnimaticShotVideoTargetNodeKeys = [
 export const sequenceAnimaticShotVideoForceNodeKeys = [
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoPrompt,
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideo,
+] as const
+
+export const sequenceAnimaticShotProductionKeyframeTargetNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeArtifact,
+] as const
+
+export const sequenceAnimaticShotProductionKeyframeForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotReferencePack,
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframePrompt,
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeImage,
+  SEQUENCE_ANIMATIC_NODE_KEYS.plannedKeyframeArtifact,
+] as const
+
+export const sequenceAnimaticShotProductionVideoTargetNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoArtifact,
+] as const
+
+export const sequenceAnimaticShotProductionVideoForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoPrompt,
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideo,
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoArtifact,
 ] as const
 
 /**

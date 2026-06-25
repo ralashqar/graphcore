@@ -21,7 +21,10 @@ import {
   validateOutputWorkflowGraph,
 } from '../_shared/output-workflow.ts'
 import { outputWorkflowRunStartRequestSchema } from '../../../src/domain/outputWorkflow.ts'
-import { outputWorkflowRunIntentDefaults } from '../../../src/domain/outputWorkflowNodeContracts.ts'
+import {
+  getWorkflowNodeManifest,
+  outputWorkflowRunIntentDefaults,
+} from '../../../src/domain/outputWorkflowNodeContracts.ts'
 import { notifyWorkerWakeBestEffort } from '../_shared/worker-wake.ts'
 
 function readStringArray(value: unknown) {
@@ -30,6 +33,27 @@ function readStringArray(value: unknown) {
 
 function isRunStepNodeForeignKeyError(error: { code?: string; message?: string } | null | undefined) {
   return error?.code === '23503' && String(error.message ?? '').includes('output_workflow_run_steps_node_id_fkey')
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function readText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function nodeBelongsToRetiredCinematicPipeline(node: { key: string; config: unknown }) {
+  const config = readRecord(node.config)
+  const purpose = readText(config.purpose)
+  const role = readText(config.role)
+  const pipelineVersion = readText(config.cinematicPipelineVersion)
+  return pipelineVersion === 'v1_take_blocks'
+    || pipelineVersion === 'v2_shot_orchestration'
+    || node.key === 'cinematic_dynamic_take_fanout'
+    || node.key === 'cinematic_v2_dynamic_shot_fanout'
+    || purpose.startsWith('cinematic_v2_')
+    || role.startsWith('cinematic_v2_')
 }
 
 Deno.serve(async (request) => {
@@ -84,6 +108,9 @@ Deno.serve(async (request) => {
     const edges = (edgeResponse.data ?? [])
       .map(mapOutputWorkflowEdgeRow)
       .filter((edge) => nodeKeySet.has(edge.sourceNodeKey) && nodeKeySet.has(edge.targetNodeKey))
+    if (nodes.some(nodeBelongsToRetiredCinematicPipeline)) {
+      throw new HttpError(410, 'Legacy cinematic workflow rerun is no longer supported. Historical v1/v2 outputs remain viewable, but new generation must use the current screenplay animatic pipeline.')
+    }
     const validation = validateOutputWorkflowGraph({ nodes, edges })
     if (!validation.ok) throw new HttpError(400, validation.diagnostics.join(' '))
 
@@ -176,6 +203,8 @@ Deno.serve(async (request) => {
         order_index: index,
         label: node.label,
         metadata: {
+          manifestPurpose: getWorkflowNodeManifest(node)?.purpose ?? (readText(readRecord(node.config).purpose) || null),
+          progressLabel: getWorkflowNodeManifest(node)?.progressLabel ?? node.label,
           executionLevel: executionLevelByNodeKey.get(node.key) ?? 0,
           resourceClass: getOutputWorkflowNodeExecutionMetadata(node).resourceClass,
           groupKey: getOutputWorkflowNodeExecutionMetadata(node).groupKey ?? null,

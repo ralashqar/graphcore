@@ -232,6 +232,19 @@ import {
   sequenceAnimaticContinuityWorkflowEnsureResponseSchema,
   sequenceAnimaticKeyframeWorkflowEnsureRequestSchema,
   sequenceAnimaticKeyframeWorkflowEnsureResponseSchema,
+  sequenceAnimaticShotProductionGraphEnsureRequestSchema,
+  sequenceAnimaticShotProductionGraphEnsureResponseSchema,
+  sequenceAnimaticSceneGraphNodeUpdateRequestSchema,
+  sequenceAnimaticSceneGraphNodeUpdateResponseSchema,
+  sequenceAnimaticZonePoiAnalyzeRequestSchema,
+  sequenceAnimaticZonePoiAnalyzeResponseSchema,
+  sequenceAnimaticSceneBoardPrepRequestSchema,
+  sequenceAnimaticSceneBoardPrepResponseSchema,
+  sequenceAnimaticSceneBoardWorkflowCommandResponseSchema,
+  sequenceAnimaticShotCoverageIntentEnsureRequestSchema,
+  sequenceAnimaticShotCoverageIntentEnsureResponseSchema,
+  sequenceAnimaticZoneCoverageBoardEnsureRequestSchema,
+  sequenceAnimaticZoneCoverageBoardEnsureResponseSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema,
   sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema,
   sequenceAnimaticStateRequestSchema,
@@ -262,10 +275,25 @@ import {
   type SequenceAnimaticContinuityStructureDeriveResponse,
   type SequenceAnimaticContinuityWorkflowEnsureResponse,
   type SequenceAnimaticKeyframeWorkflowEnsureResponse,
+  type SequenceAnimaticShotProductionGraphEnsureResponse,
+  type SequenceAnimaticSceneGraphNodeUpdateResponse,
+  type SequenceAnimaticZonePoiAnalyzeResponse,
+  type SequenceAnimaticShotCoverageIntentEnsureResponse,
+  type SequenceAnimaticSceneBoardPrepResponse,
+  type SequenceAnimaticSceneBoardWorkflowCommandAction,
+  type SequenceAnimaticSceneBoardWorkflowCommandResponse,
+  type SequenceAnimaticZoneCoverageBoardEnsureResponse,
   type SequenceAnimaticShotRevisionWorkflowEnsureResponse,
   type SequenceAnimaticStateResponse,
   type OutputWorkflowNodeOutputResponse,
 } from '../domain/outputWorkflow'
+import {
+  workflowCommandProxyResponseSchema,
+  workflowCommandSchema,
+  type WorkflowCommandInput,
+  type WorkflowCommandProxyResponse,
+} from '../domain/workflowCommandRegistry'
+import type { z } from 'zod'
 import type { PromptIntentClassificationResult } from '../domain/promptIntentClassifier'
 import { buildUrlSourceContextFromExtractionResponse } from '../domain/onboardingSource'
 import {
@@ -342,6 +370,7 @@ import { supabase } from '../utils/supabase'
 import { supabasePublishableKey, supabaseUrl } from '../config/supabaseConfig'
 import type { FunctionsHttpError, Session } from '@supabase/supabase-js'
 import {
+  isTransientRequestError,
   logRateLimitedRequestWarning,
   runCoalescedRequest,
   runLimitedRequest,
@@ -451,6 +480,7 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
   if (!(context instanceof Response)) {
     return error.message
   }
+  const fallbackHttpMessage = `Supabase Edge Function request failed with HTTP ${context.status}${context.statusText ? ` (${context.statusText})` : ''}.`
 
   try {
     const payload = await context.clone().json() as { error?: unknown }
@@ -469,14 +499,24 @@ async function readFunctionsErrorMessage(error: FunctionsHttpError | Error) {
   } catch {
     try {
       const text = await context.clone().text()
+      const compactText = text.replace(/\s+/g, ' ').trim()
+      const looksLikeHtml = /<!doctype html|<html|cloudflare|web server is down/i.test(compactText)
+      const htmlTitle = compactText.match(/<title>(.*?)<\/title>/i)?.[1]
+        ?.replace(/\s+/g, ' ')
+        .trim()
       console.error('[GraphCore] edge function error text', {
         status: context.status,
         statusText: context.statusText,
-        text,
+        text: compactText.slice(0, 800),
       })
-      return text || error.message
+      if (looksLikeHtml) {
+        return htmlTitle
+          ? `${fallbackHttpMessage} ${htmlTitle}. Retry in a minute.`
+          : `${fallbackHttpMessage} Supabase returned an HTML error page. Retry in a minute.`
+      }
+      return compactText || fallbackHttpMessage || error.message
     } catch {
-      return error.message
+      return fallbackHttpMessage || error.message
     }
   }
 }
@@ -597,10 +637,15 @@ async function getValidatedSessionInner(signInMessage: string) {
       return session
     }
 
+    const transientUserCheckError = isTransientRequestError(initialUserCheck.error)
     const warningNow = Date.now()
-    if (warningNow - lastSessionUserCheckWarningAt > 30_000) {
+    if (!transientUserCheckError && warningNow - lastSessionUserCheckWarningAt > 30_000) {
       lastSessionUserCheckWarningAt = warningNow
       console.warn('[GraphCore] Supabase session user check failed before live request; continuing with cached session token.', {
+        message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
+      })
+    } else if (transientUserCheckError && import.meta.env.DEV && import.meta.env.VITE_GRAPHCORE_OUTPUT_MONITOR_DEBUG === 'true') {
+      console.info('[GraphCore] Supabase session user check skipped after transient failure; continuing with cached session token.', {
         message: initialUserCheck.error?.message ?? 'Unknown auth validation error.',
       })
     }
@@ -1419,6 +1464,15 @@ function isReadLikeEdgeFunction(functionName: string) {
   )
 }
 
+function isRetrySafeTransientEdgeFunction(functionName: string) {
+  return (
+    isReadLikeEdgeFunction(functionName)
+    || functionName.startsWith('ensure-sequence-animatic-')
+    || functionName.startsWith('derive-sequence-animatic-')
+    || functionName === 'repair-output-workflow-state'
+  )
+}
+
 function edgeFunctionClassName(functionName: string) {
   if (functionName === 'get-visual-generation-status') return 'visual-status'
   if (functionName === 'sign-project-asset-urls') return 'asset-signing'
@@ -1512,6 +1566,41 @@ function isUnauthorizedFunctionsError(error: FunctionsHttpError | Error) {
   return context instanceof Response && context.status === 401
 }
 
+function isTransientFunctionsError(error: FunctionsHttpError | Error) {
+  const message = error.message || ''
+  if (/failed to send a request|failed to fetch|network|timeout|temporarily unavailable/i.test(message)) {
+    return true
+  }
+  if (!('context' in error)) return false
+  const context = (error as FunctionsHttpError & { context?: unknown }).context
+  return context instanceof Response && (
+    context.status === 408
+    || context.status === 409
+    || context.status === 425
+    || context.status === 429
+    || context.status >= 500
+  )
+}
+
+async function retryTransientFunctionInvoke<TResponse>(
+  functionName: string,
+  body: Record<string, unknown>,
+  session: Session,
+  response: Awaited<ReturnType<typeof invokeAuthedFunction<TResponse>>>,
+) {
+  if (!response.error || !isRetrySafeTransientEdgeFunction(functionName) || !isTransientFunctionsError(response.error)) {
+    return response
+  }
+
+  let latest = response
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 900 + attempt * 800 + Math.round(Math.random() * 500)))
+    latest = await invokeAuthedFunction<TResponse>(functionName, body, session)
+    if (!latest.error || !isTransientFunctionsError(latest.error)) return latest
+  }
+  return latest
+}
+
 async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
   functionName: string,
   body: Record<string, unknown>,
@@ -1519,6 +1608,7 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
 ) {
   let activeSession = session
   let response = await invokeAuthedFunction<TResponse>(functionName, body, session)
+  response = await retryTransientFunctionInvoke(functionName, body, activeSession, response)
 
   if (response.error && isUnauthorizedFunctionsError(response.error)) {
     const refreshed = await supabase.auth.refreshSession()
@@ -1532,6 +1622,7 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
 
     activeSession = refreshed.data.session
     response = await invokeAuthedFunction<TResponse>(functionName, body, activeSession)
+    response = await retryTransientFunctionInvoke(functionName, body, activeSession, response)
   }
 
   if (response.error && isUnauthorizedFunctionsError(response.error)) {
@@ -1548,19 +1639,6 @@ async function invokeAuthedFunctionWithSessionRecovery<TResponse>(
 
   if (!response.error) {
     return response
-  }
-
-  const isTransientNetworkFailure =
-    response.error.message === 'Failed to send a request to the Edge Function'
-    || ('context' in response.error && (response.error as FunctionsHttpError & { context?: unknown }).context instanceof Response
-      && ((response.error as FunctionsHttpError & { context?: Response }).context?.status ?? 0) >= 500)
-
-  if (isTransientNetworkFailure && isReadLikeEdgeFunction(functionName)) {
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 1200 + Math.round(Math.random() * 500)))
-    response = await invokeAuthedFunction<TResponse>(functionName, body, session)
-    if (!response.error) {
-      return response
-    }
   }
 
   const suppressExpectedFallbackLog = functionName === 'get-sequence-animatic-state'
@@ -2259,10 +2337,10 @@ const OUTPUT_WORKFLOW_EDGE_SELECT =
   'id, workflow_id, key, source_node_key, source_port, target_node_key, target_port, metadata, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_SELECT =
   'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, input, outputs, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
+const OUTPUT_WORKFLOW_RUN_STATUS_SELECT =
+  'id, project_id, draft_id, workflow_id, requested_by, status, preset, prompt, target_format, world_snapshot_fingerprint, error_message, worker_id, heartbeat_at, attempt_count, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT =
   'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
-const OUTPUT_WORKFLOW_RUN_STEP_SELECT =
-  'id, run_id, workflow_id, node_id, node_key, node_type, status, order_index, label, input_hash, output_hash, outputs, provider, model, provider_request_id, error_message, metadata, started_at, completed_at, created_at, updated_at'
 const OUTPUT_ARTIFACT_SELECT =
   'id, project_id, draft_id, workflow_id, run_id, node_id, key, name, kind, asset_key, mime_type, summary, metadata, created_at, updated_at'
 const OUTPUT_REQUEST_SELECT =
@@ -3114,6 +3192,7 @@ type SignProjectAssetUrlsResponse = {
 export type SignedProjectAssetUrlEntry = SignProjectAssetUrlsResponse['urls'][number]
 
 const PROJECT_ASSET_SIGNING_BATCH_SIZE = 100
+const PROJECT_ASSET_DIRECT_LOOKUP_BATCH_SIZE = 25
 const PROJECT_ASSET_SIGNING_BATCH_WINDOW_MS = 75
 const SEQUENCE_ANIMATIC_STATE_EDGE_UNAVAILABLE_TTL_MS = 5 * 60 * 1000
 const USE_SEQUENCE_ANIMATIC_STATE_EDGE_FUNCTION = false
@@ -3346,6 +3425,20 @@ function readRepositoryRecord(value: unknown): Record<string, unknown> {
 
 function readRepositoryString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function postgrestResponseError(
+  response: { error?: { message?: string | null } | null; status?: number; statusText?: string | null },
+  fallbackMessage: string,
+) {
+  const message = readRepositoryString(response.error?.message)
+    || readRepositoryString(response.statusText)
+    || fallbackMessage
+  const error = new Error(message)
+  if (typeof response.status === 'number') {
+    ;(error as Error & { status?: number }).status = response.status
+  }
+  return error
 }
 
 function readRepositoryArray(value: unknown) {
@@ -3590,14 +3683,61 @@ export async function signProjectAssetUrls(projectId: string, assetKeys: string[
   const cleanKeys = Array.from(new Set(assetKeys.map((key) => key.trim()).filter(Boolean)))
   if (cleanKeys.length === 0) return []
 
-  const response = await supabase
-    .from('project_assets')
-    .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
-    .eq('project_id', projectId)
-    .in('key', cleanKeys)
-  if (response.error) throw new Error(response.error.message)
+  const rows: AssetRow[] = []
+  const seenIds = new Set<string>()
+  for (let index = 0; index < cleanKeys.length; index += PROJECT_ASSET_DIRECT_LOOKUP_BATCH_SIZE) {
+    const batch = cleanKeys.slice(index, index + PROJECT_ASSET_DIRECT_LOOKUP_BATCH_SIZE)
+    const response = await supabase
+      .from('project_assets')
+      .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+      .eq('project_id', projectId)
+      .in('key', batch)
+    if (!response.error) {
+      for (const row of (response.data ?? []) as AssetRow[]) {
+        if (!row.id || seenIds.has(row.id)) continue
+        seenIds.add(row.id)
+        rows.push(row)
+      }
+      continue
+    }
 
-  const assets = ((response.data ?? []) as AssetRow[]).map(mapAssetRow)
+    if (isTransientRequestError(response.error)) {
+      logRateLimitedRequestWarning('asset-signing:direct-lookup-batch-transient', '[GraphCore] project asset batch lookup failed transiently; skipping exact key burst and waiting for retry.', {
+        projectId,
+        batchSize: batch.length,
+        message: response.error.message,
+      })
+      continue
+    }
+
+    logRateLimitedRequestWarning('asset-signing:direct-lookup-batch', '[GraphCore] project asset batch lookup failed; retrying exact key lookups.', {
+      projectId,
+      batchSize: batch.length,
+      message: response.error.message,
+    })
+    for (const key of batch) {
+      const exactResponse = await supabase
+        .from('project_assets')
+        .select('id, project_id, key, name, kind, mime_type, storage_path, metadata, llm_hints')
+        .eq('project_id', projectId)
+        .eq('key', key)
+        .maybeSingle()
+      if (exactResponse.error) {
+        logRateLimitedRequestWarning(`asset-signing:direct-lookup-key:${key}`, '[GraphCore] project asset exact lookup failed during hydration.', {
+          projectId,
+          assetKey: key,
+          message: exactResponse.error.message,
+        })
+        continue
+      }
+      const row = exactResponse.data as AssetRow | null
+      if (!row?.id || seenIds.has(row.id)) continue
+      seenIds.add(row.id)
+      rows.push(row)
+    }
+  }
+
+  const assets = rows.map(mapAssetRow)
   return hydrateStorageAssetUrls(projectId, assets)
 }
 
@@ -9032,10 +9172,6 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     panelAssetKey?: string
   },
 ): Promise<SequenceAnimaticBlockWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic block workflows.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic block workflows require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticBlockWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -9046,27 +9182,40 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     shotId: request.shotId,
     panelAssetKey: request.panelAssetKey,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-block-workflows',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
+  if ((request.sequenceAnimaticMode ?? 'storyboard_blocks') === 'shot_video') {
+    return startTypedWorkflowCommand(snapshot, {
+      family: 'sequence_animatic',
+      action: 'generate_shot_video',
+      scope: {
+        masterRequestId: payload.masterRequestId,
+        storyboardBlockId: payload.storyboardBlockId,
+        shotId: payload.shotId,
+      },
+      payload: {
+        blockRequestId: payload.blockRequestId,
+        panelAssetKey: payload.panelAssetKey,
+      },
+    }, sequenceAnimaticBlockWorkflowEnsureResponseSchema)
   }
-  const parsed = sequenceAnimaticBlockWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_storyboard_blocks',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+    },
+    payload: {
+      blockRequestId: payload.blockRequestId,
+      storyboardBlockId: payload.storyboardBlockId,
+      shotId: payload.shotId,
+      panelAssetKey: payload.panelAssetKey,
+    },
+  }, sequenceAnimaticBlockWorkflowEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticSceneWorkflows(
   snapshot: ProjectSnapshot,
   request: { masterRequestId: string; sceneIds?: string[]; startSceneId?: string },
 ): Promise<SequenceAnimaticSceneWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic scenes.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic scene workflows require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticSceneWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -9074,43 +9223,36 @@ export async function ensureSequenceAnimaticSceneWorkflows(
     sceneIds: request.sceneIds,
     startSceneId: request.startSceneId,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-scene-workflows',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticSceneWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_scene_shot_plans',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      sceneIds: payload.sceneIds ?? [],
+      sceneId: payload.startSceneId,
+    },
+    payload: {
+      startSceneId: payload.startSceneId,
+    },
+  }, sequenceAnimaticSceneWorkflowEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticContinuityWorkflow(
   snapshot: ProjectSnapshot,
   request: { masterRequestId: string },
 ): Promise<SequenceAnimaticContinuityWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic continuity.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic continuity requires a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticContinuityWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     masterRequestId: request.masterRequestId,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-continuity-workflow',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticContinuityWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_continuity_workflow',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+    },
+  }, sequenceAnimaticContinuityWorkflowEnsureResponseSchema)
 }
 
 export async function deriveSequenceAnimaticContinuityBlock(
@@ -9188,34 +9330,49 @@ export async function ensureSequenceAnimaticContinuityAssetWorkflow(
     continuityRequestId?: string | null
     nodeId: string
     nodeIds?: string[]
+    targetNode?: Record<string, unknown>
+    targetNodes?: Record<string, unknown>[]
+    batchKind?: 'location_zone_board' | 'angle_grid' | 'viewpoint_grid' | 'spot_grid' | 'zone_spatial_map' | 'spot_camera_grid' | 'spot_atlas_grid' | 'viewpoint_atlas_grid' | 'temp_character_grid' | 'prop_grid' | 'single_hero_ref'
     mode?: 'generate' | 'regenerate'
   },
 ): Promise<SequenceAnimaticContinuityAssetWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating sequence animatic continuity assets.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic continuity assets require a live Supabase-backed draft.')
-  }
-  const payloadInput: Record<string, unknown> = {
+  const payloadInput = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
     masterRequestId: request.masterRequestId,
     nodeId: request.nodeId,
     nodeIds: request.nodeIds,
+    targetNode: request.targetNode,
+    targetNodes: request.targetNodes,
+    batchKind: request.batchKind,
     mode: request.mode ?? 'generate',
-  }
-  if (request.continuityRequestId) payloadInput.continuityRequestId = request.continuityRequestId
-  const payload = sequenceAnimaticContinuityAssetWorkflowEnsureRequestSchema.parse(payloadInput)
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-continuity-asset-workflow',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+    continuityRequestId: request.continuityRequestId ?? undefined,
+    regenerationRequestId: (request.mode ?? 'generate') === 'regenerate' && typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : undefined,
+  })
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'generate_continuity_assets',
+    scope: {
+      masterRequestId: request.masterRequestId,
+      nodeIds: payloadInput.nodeIds?.length ? payloadInput.nodeIds : [payloadInput.nodeId],
+    },
+    flags: {
+      forceRefresh: payloadInput.mode === 'regenerate',
+      regenerate: payloadInput.mode === 'regenerate',
+    },
+    payload: {
+      continuityRequestId: payloadInput.continuityRequestId,
+      nodeId: payloadInput.nodeId,
+      nodeIds: payloadInput.nodeIds,
+      targetNode: payloadInput.targetNode,
+      targetNodes: payloadInput.targetNodes,
+      batchKind: payloadInput.batchKind,
+      mode: payloadInput.mode,
+      regenerationRequestId: payloadInput.regenerationRequestId,
+    },
+  }, sequenceAnimaticContinuityAssetWorkflowEnsureResponseSchema)
 }
 
 export async function ensureSequenceAnimaticKeyframeWorkflows(
@@ -9226,12 +9383,9 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     shotIds?: string[]
     coverageSetupIds?: string[]
     allowProvisional?: boolean
+    shotReferenceOverride?: Record<string, unknown>
   },
 ): Promise<SequenceAnimaticKeyframeWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before generating sequence animatic keyframes.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic keyframes require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticKeyframeWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -9240,18 +9394,299 @@ export async function ensureSequenceAnimaticKeyframeWorkflows(
     shotIds: request.shotIds,
     coverageSetupIds: request.coverageSetupIds,
     allowProvisional: request.allowProvisional ?? false,
+    shotReferenceOverride: request.shotReferenceOverride,
+  })
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'generate_keyframes',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      shotIds: payload.shotIds,
+      coverageSetupIds: payload.coverageSetupIds,
+    },
+    flags: {
+      forceRefresh: payload.mode === 'regenerate' || Boolean(payload.shotReferenceOverride),
+      regenerate: payload.mode === 'regenerate' || Boolean(payload.shotReferenceOverride),
+      allowProvisional: payload.allowProvisional,
+    },
+    payload: {
+      shotReferenceOverride: payload.shotReferenceOverride,
+    },
+  }, sequenceAnimaticKeyframeWorkflowEnsureResponseSchema)
+}
+
+export async function ensureSequenceAnimaticShotProductionGraph(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    shotId: string
+    coverageSetupId?: string | null
+    forceRefresh?: boolean
+    allowProvisional?: boolean
+    shotReferenceOverride?: Record<string, unknown>
+  },
+): Promise<SequenceAnimaticShotProductionGraphEnsureResponse> {
+  const payload = sequenceAnimaticShotProductionGraphEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    shotId: request.shotId,
+    coverageSetupId: request.coverageSetupId || undefined,
+    forceRefresh: request.forceRefresh ?? false,
+    allowProvisional: request.allowProvisional ?? false,
+    shotReferenceOverride: request.shotReferenceOverride,
+  })
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'prepare_shot_production_graph',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      shotId: payload.shotId,
+      coverageSetupIds: payload.coverageSetupId ? [payload.coverageSetupId] : [],
+    },
+    flags: {
+      forceRefresh: payload.forceRefresh,
+      allowProvisional: payload.allowProvisional,
+    },
+    payload: {
+      shotReferenceOverride: payload.shotReferenceOverride,
+    },
+  }, sequenceAnimaticShotProductionGraphEnsureResponseSchema)
+}
+
+export async function ensureSequenceAnimaticZoneCoverageBoards(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    sceneId: string
+    setId?: string | null
+    zoneId?: string | null
+    shotIds?: string[]
+    scopedShots?: Record<string, unknown>[]
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticZoneCoverageBoardEnsureResponse> {
+  const payload = sequenceAnimaticZoneCoverageBoardEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    sceneId: request.sceneId,
+    setId: request.setId ?? null,
+    zoneId: request.zoneId ?? null,
+    shotIds: request.shotIds ?? [],
+    scopedShots: request.scopedShots ?? [],
+    forceRefresh: request.forceRefresh ?? false,
+  })
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'scene_board',
+    action: 'generate_zone_coverage_grids',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      sceneId: payload.sceneId,
+      setId: payload.setId,
+      zoneId: payload.zoneId,
+      shotIds: payload.shotIds,
+    },
+    flags: {
+      forceRefresh: payload.forceRefresh,
+    },
+    payload: {
+      scopedShots: payload.scopedShots,
+    },
+  }, sequenceAnimaticZoneCoverageBoardEnsureResponseSchema)
+}
+
+export async function ensureSequenceAnimaticShotCoverageIntents(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    sceneId: string
+    setId?: string | null
+    zoneId?: string | null
+    shotIds: string[]
+    scopedShots?: Record<string, unknown>[]
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticShotCoverageIntentEnsureResponse> {
+  const payload = sequenceAnimaticShotCoverageIntentEnsureRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    sceneId: request.sceneId,
+    setId: request.setId ?? null,
+    zoneId: request.zoneId ?? null,
+    shotIds: request.shotIds,
+    scopedShots: request.scopedShots ?? [],
+    forceRefresh: request.forceRefresh ?? false,
+  })
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'scene_board',
+    action: 'generate_coverage_intents',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      sceneId: payload.sceneId,
+      setId: payload.setId,
+      zoneId: payload.zoneId,
+      shotIds: payload.shotIds,
+    },
+    flags: {
+      forceRefresh: payload.forceRefresh,
+    },
+    payload: {
+      scopedShots: payload.scopedShots,
+    },
+  }, sequenceAnimaticShotCoverageIntentEnsureResponseSchema)
+}
+
+export async function prepareSequenceAnimaticSceneBoard(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    runId?: string
+    runKey?: string
+    sceneId: string
+    setId?: string | null
+    zoneId?: string | null
+    scopeNodeId?: string | null
+    shotIds?: string[]
+    stage?: 'idle' | 'set_refs' | 'scaffold_refs' | 'spot_angles' | 'coverage_directions' | 'coverage_grids' | 'complete' | 'failed' | 'cancelled'
+    status?: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled'
+    activeUnitId?: string | null
+    activeUnitLabel?: string
+    stageLabel?: string
+    message?: string
+    queued?: number
+    running?: number
+    ready?: number
+    failed?: number
+    activeRequestIds?: string[]
+    activeRunIds?: string[]
+    activeReferenceNodeIds?: string[]
+    activeCoverageShotIds?: string[]
+    activeRunStepKey?: string
+    error?: string
+    action?: 'start' | 'update' | 'complete' | 'fail' | 'cancel' | 'resume'
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticSceneBoardPrepResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before preparing sequence animatic scene boards.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Sequence animatic scene board prep requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticSceneBoardPrepRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    masterRequestId: request.masterRequestId,
+    runId: request.runId,
+    runKey: request.runKey,
+    sceneId: request.sceneId,
+    setId: request.setId ?? null,
+    zoneId: request.zoneId ?? null,
+    scopeNodeId: request.scopeNodeId ?? null,
+    shotIds: request.shotIds ?? [],
+    stage: request.stage,
+    status: request.status,
+    activeUnitId: request.activeUnitId,
+    activeUnitLabel: request.activeUnitLabel,
+    stageLabel: request.stageLabel,
+    message: request.message,
+    queued: request.queued,
+    running: request.running,
+    ready: request.ready,
+    failed: request.failed,
+    activeRequestIds: request.activeRequestIds,
+    activeRunIds: request.activeRunIds,
+    activeReferenceNodeIds: request.activeReferenceNodeIds,
+    activeCoverageShotIds: request.activeCoverageShotIds,
+    activeRunStepKey: request.activeRunStepKey,
+    error: request.error,
+    action: request.action ?? 'update',
+    forceRefresh: request.forceRefresh ?? false,
   })
   const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-keyframe-workflows',
+    'prepare-sequence-animatic-scene-board',
     payload,
     session,
   )
   if (response.error) {
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
-  const parsed = sequenceAnimaticKeyframeWorkflowEnsureResponseSchema.parse(response.data)
+  const parsed = sequenceAnimaticSceneBoardPrepResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
+}
+
+export async function startSequenceAnimaticSceneBoardWorkflowCommand(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    sceneId: string
+    action?: SequenceAnimaticSceneBoardWorkflowCommandAction
+    setId?: string | null
+    zoneId?: string | null
+    scopeNodeId?: string | null
+    shotIds?: string[]
+    forceRefresh?: boolean
+  },
+): Promise<SequenceAnimaticSceneBoardWorkflowCommandResponse> {
+  const legacyAction = request.action ?? 'prepare_selected_board'
+  const action = legacyAction === 'regenerate_zone_top_down'
+    ? 'regenerate_scene_board_zone'
+    : legacyAction === 'generate_zone_coverage_grids'
+      ? 'generate_zone_coverage_grids'
+      : legacyAction === 'generate_selected_coverage_anchors'
+        ? 'generate_coverage_anchors'
+        : 'prepare_scene_board'
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'scene_board',
+    action,
+    scope: {
+      masterRequestId: request.masterRequestId,
+      sceneId: request.sceneId,
+      setId: request.setId ?? null,
+      zoneId: request.zoneId ?? null,
+      scopeNodeId: request.scopeNodeId ?? null,
+      shotIds: request.shotIds ?? [],
+    },
+    flags: {
+      forceRefresh: request.forceRefresh ?? legacyAction === 'regenerate_zone_top_down',
+    },
+  }, sequenceAnimaticSceneBoardWorkflowCommandResponseSchema)
+}
+
+export async function startWorkflowCommand(
+  snapshot: ProjectSnapshot,
+  request: Omit<WorkflowCommandInput, 'projectId' | 'draftId'> & Partial<Pick<WorkflowCommandInput, 'projectId' | 'draftId'>>,
+): Promise<WorkflowCommandProxyResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before starting workflow commands.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Workflow commands require a live Supabase-backed draft.')
+  }
+  const payload = workflowCommandSchema.parse({
+    ...request,
+    projectId: request.projectId ?? snapshot.project.id,
+    draftId: request.draftId ?? snapshot.draft.id,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'start-workflow-command',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = workflowCommandProxyResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+async function startTypedWorkflowCommand<T>(
+  snapshot: ProjectSnapshot,
+  request: Omit<WorkflowCommandInput, 'projectId' | 'draftId'> & Partial<Pick<WorkflowCommandInput, 'projectId' | 'draftId'>>,
+  resultSchema: z.ZodType<T>,
+): Promise<T> {
+  const response = await startWorkflowCommand(snapshot, request)
+  return resultSchema.parse(response.result)
 }
 
 export async function ensureSequenceAnimaticShotRevisionWorkflow(
@@ -9263,10 +9698,6 @@ export async function ensureSequenceAnimaticShotRevisionWorkflow(
     prompt: string
   },
 ): Promise<SequenceAnimaticShotRevisionWorkflowEnsureResponse> {
-  const session = await getValidatedSession('Sign in and load a live GraphCore draft before revising a sequence animatic shot.')
-  if (!hasLiveSnapshotIds(snapshot)) {
-    throw new Error('Sequence animatic shot revisions require a live Supabase-backed draft.')
-  }
   const payload = sequenceAnimaticShotRevisionWorkflowEnsureRequestSchema.parse({
     projectId: snapshot.project.id,
     draftId: snapshot.draft.id,
@@ -9275,17 +9706,22 @@ export async function ensureSequenceAnimaticShotRevisionWorkflow(
     shotId: request.shotId,
     prompt: request.prompt,
   })
-  const response = await invokeAuthedFunctionWithSessionRecovery(
-    'ensure-sequence-animatic-shot-revision-workflow',
-    payload,
-    session,
-  )
-  if (response.error) {
-    throw new Error(await readFunctionsErrorMessage(response.error))
-  }
-  const parsed = sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema.parse(response.data)
-  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
-  return parsed
+  return startTypedWorkflowCommand(snapshot, {
+    family: 'sequence_animatic',
+    action: 'revise_shot',
+    scope: {
+      masterRequestId: payload.masterRequestId,
+      storyboardBlockId: payload.storyboardBlockId,
+      shotId: payload.shotId,
+    },
+    flags: {
+      forceRefresh: true,
+      regenerate: true,
+    },
+    payload: {
+      prompt: payload.prompt,
+    },
+  }, sequenceAnimaticShotRevisionWorkflowEnsureResponseSchema)
 }
 
 export async function loadSequenceAnimaticState(
@@ -9307,6 +9743,7 @@ export async function loadSequenceAnimaticState(
     className: 'output-graph',
     key: `sequence-animatic-state:${payload.projectId}:${payload.draftId}:${payload.masterRequestId ?? ''}:${payload.sequenceUnitKey ?? ''}:${payload.knownRevision ?? ''}`,
     ttlMs: 300,
+    retryPolicy: { attempts: 3, baseDelayMs: 900, maxDelayMs: 6000, retryTransient: true },
     fn: async () => {
       if (!USE_SEQUENCE_ANIMATIC_STATE_EDGE_FUNCTION
         || (payload.sequenceUnitKey && !payload.masterRequestId)
@@ -9510,12 +9947,16 @@ function readOutputRequestScreenplayAnimaticRole(request: OutputRequest) {
 }
 
 function collectSequenceAnimaticStateAssetKeys(input: {
+  requests?: OutputRequest[]
   artifacts: OutputArtifact[]
   runs?: OutputWorkflowRun[]
   projections: OutputFeedResponse['projections']
 }) {
   const keys = new Set<string>()
   const known = new Set<string>()
+  for (const request of input.requests ?? []) {
+    collectOutputAssetReferences(request.metadata, known, keys)
+  }
   for (const artifact of input.artifacts) {
     const artifactKey = readRepositoryString(artifact.assetKey)
     if (artifactKey) keys.add(artifactKey)
@@ -9627,6 +10068,177 @@ function deriveSequenceAnimaticDirectorState(input: {
     shotContinuityPlan: Object.keys(directorPlan).length > 0 ? directorPlan : null,
     shotContinuityPlanStatus: directorPlanStatus,
   }
+}
+
+function deriveSequenceAnimaticPlanShots(plan: Record<string, unknown>, manifest: Record<string, unknown>) {
+  const manifestShotPlan = readRepositoryRecord(manifest.shotPlan ?? manifest.shot_plan)
+  const manifestDirectorPlan = readRepositoryRecord(manifest.directorPlan ?? manifest.director_plan ?? manifest.shotContinuityPlan ?? manifest.shot_continuity_plan)
+  return readRepositoryArray(plan.shots)
+    .concat(readRepositoryArray(manifestDirectorPlan.shots))
+    .concat(readRepositoryArray(manifestShotPlan.shots))
+    .map(readRepositoryRecord)
+    .filter((shot, index, shots) => {
+      const id = readRepositoryString(shot.id)
+      return id && shots.findIndex((candidate) => readRepositoryString(candidate.id) === id) === index
+    })
+}
+
+function deriveSequenceAnimaticPlanBlocks(plan: Record<string, unknown>, manifest: Record<string, unknown>) {
+  const manifestShotPlan = readRepositoryRecord(manifest.shotPlan ?? manifest.shot_plan)
+  const manifestDirectorPlan = readRepositoryRecord(manifest.directorPlan ?? manifest.director_plan ?? manifest.shotContinuityPlan ?? manifest.shot_continuity_plan)
+  return readRepositoryArray(plan.blocks)
+    .concat(readRepositoryArray(manifestDirectorPlan.blocks))
+    .concat(readRepositoryArray(manifestShotPlan.blocks ?? manifestShotPlan.groups))
+    .map(readRepositoryRecord)
+    .filter((block, index, blocks) => {
+      const id = readRepositoryString(block.id)
+      return id && blocks.findIndex((candidate) => readRepositoryString(candidate.id) === id) === index
+    })
+}
+
+function deriveSequenceAnimaticShotSceneId(shot: Record<string, unknown>) {
+  const binding = readRepositoryRecord(shot.sceneBinding ?? shot.scene_binding)
+  const explicit = readRepositoryString(shot.sourceSceneId ?? shot.source_scene_id ?? shot.sceneId ?? shot.scene_id ?? binding.sceneId ?? binding.scene_id)
+  if (explicit) return explicit
+  return /^scene_\d+/i.exec(readRepositoryString(shot.id))?.[0] ?? ''
+}
+
+function deriveSequenceAnimaticSceneChildFinalState(input: {
+  masterRequest: OutputRequest | null
+  sceneChildren: OutputRequest[]
+  artifacts: OutputArtifact[]
+  streamedScenes: Record<string, unknown>[]
+}) {
+  const sceneStatesById = new Map<string, Record<string, unknown>>()
+  for (const scene of input.streamedScenes) {
+    const sceneId = readRepositoryString(scene.id ?? scene.sceneId ?? scene.scene_id)
+    if (sceneId) sceneStatesById.set(sceneId, { ...scene, id: sceneId })
+  }
+  const scenePlans: Array<{
+    sceneId: string
+    request: OutputRequest
+    manifest: Record<string, unknown>
+    directorPlan: Record<string, unknown>
+    shots: Record<string, unknown>[]
+    blocks: Record<string, unknown>[]
+  }> = []
+  input.sceneChildren.forEach((request, index) => {
+    const metadata = readRepositoryRecord(request.metadata)
+    const sceneId = readRepositoryString(metadata.sceneId ?? metadata.scene_id ?? metadata.sourceSceneId ?? metadata.source_scene_id)
+      || `scene_${String(index + 1).padStart(3, '0')}`
+    const requestArtifacts = input.artifacts.filter((artifact) => artifact.workflowId === request.workflowId)
+    const manifestMetadata = requestArtifacts
+      .map((artifact) => readRepositoryRecord(artifact.metadata))
+      .find((entry) => readRepositoryString(entry.role) === 'sequence_animatic_manifest') ?? {}
+    const planMetadata = requestArtifacts
+      .map((artifact) => readRepositoryRecord(artifact.metadata))
+      .find((entry) => readRepositoryString(entry.role) === 'sequence_animatic_director_plan') ?? {}
+    const manifest = readRepositoryRecord(manifestMetadata.manifest ?? manifestMetadata.sequenceAnimaticManifest ?? manifestMetadata.sequence_animatic_manifest)
+    const manifestPlan = readRepositoryRecord(manifest.directorPlan ?? manifest.director_plan ?? manifest.shotContinuityPlan ?? manifest.shot_continuity_plan)
+    const explicitPlan = readRepositoryRecord(planMetadata.shotContinuityPlan ?? planMetadata.shot_continuity_plan ?? planMetadata.directorPlan ?? planMetadata.director_plan)
+    const directorPlan = Object.keys(explicitPlan).length > 0 ? explicitPlan : manifestPlan
+    const shots = deriveSequenceAnimaticPlanShots(directorPlan, manifest)
+    const blocks = deriveSequenceAnimaticPlanBlocks(directorPlan, manifest)
+    const manifestReady = Object.keys(manifest).length > 0
+    const directorPlanReady = Object.keys(directorPlan).length > 0 && shots.length > 0
+    const sceneState = {
+      ...readRepositoryRecord(sceneStatesById.get(sceneId)),
+      id: sceneId,
+      sceneId,
+      requestId: request.id,
+      workflowId: request.workflowId,
+      runId: request.latestRunId,
+      status: directorPlanReady || manifestReady ? 'ready' : request.status,
+      manifestReady,
+      directorPlanReady,
+      shotCount: shots.length,
+      shotIds: shots.map((shot) => readRepositoryString(shot.id)).filter(Boolean),
+      source: directorPlanReady || manifestReady ? 'scene_child_final' : 'streamed_scene_plan',
+      manifestHash: manifestReady ? hashOutputWorkflowValue(manifest) : '',
+      directorPlanHash: directorPlanReady ? hashOutputWorkflowValue(directorPlan) : '',
+      updatedAt: request.updatedAt,
+    }
+    sceneStatesById.set(sceneId, sceneState)
+    if (directorPlanReady) scenePlans.push({ sceneId, request, manifest, directorPlan, shots, blocks })
+  })
+  scenePlans.sort((left, right) => {
+    const leftIndex = Number(readRepositoryRecord(sceneStatesById.get(left.sceneId)).index ?? 0) || Number(left.sceneId.match(/\d+/)?.[0] ?? 0) || 0
+    const rightIndex = Number(readRepositoryRecord(sceneStatesById.get(right.sceneId)).index ?? 0) || Number(right.sceneId.match(/\d+/)?.[0] ?? 0) || 0
+    return leftIndex - rightIndex || left.request.createdAt.localeCompare(right.request.createdAt)
+  })
+  if (scenePlans.length === 0) return { scenes: [...sceneStatesById.values()], directorPlan: null }
+
+  const shots = scenePlans.flatMap((scenePlan) => scenePlan.shots.map((shot, index) => ({
+    ...shot,
+    sourceSceneId: deriveSequenceAnimaticShotSceneId(shot) || scenePlan.sceneId,
+    sceneId: deriveSequenceAnimaticShotSceneId(shot) || scenePlan.sceneId,
+    index: Number(shot.index ?? 0) || index + 1,
+  })))
+  const blocks = scenePlans.flatMap((scenePlan, sceneIndex) => scenePlan.blocks.length > 0
+    ? scenePlan.blocks.map((block, blockIndex) => ({
+      ...block,
+      sourceSceneId: scenePlan.sceneId,
+      sceneId: scenePlan.sceneId,
+      index: Number(block.index ?? 0) || sceneIndex + blockIndex + 1,
+    }))
+    : [{
+      id: `${scenePlan.sceneId}_block_001`,
+      index: sceneIndex + 1,
+      title: readRepositoryString(readRepositoryRecord(sceneStatesById.get(scenePlan.sceneId)).title) || `Scene ${sceneIndex + 1}`,
+      summary: readRepositoryString(readRepositoryRecord(sceneStatesById.get(scenePlan.sceneId)).summary),
+      shotIds: scenePlan.shots.map((shot) => readRepositoryString(shot.id)).filter(Boolean),
+      status: 'planned',
+      sourceSceneId: scenePlan.sceneId,
+      sceneId: scenePlan.sceneId,
+    }])
+  const firstPlan = scenePlans[0]?.directorPlan ?? {}
+  const sceneGraphAdditions = {
+    sets: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).sets).map(readRepositoryRecord)),
+    zones: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).zones).map(readRepositoryRecord)),
+    spots: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).spots).map(readRepositoryRecord)),
+    viewpoints: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).viewpoints).map(readRepositoryRecord)),
+    angles: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).angles).map(readRepositoryRecord)),
+    edges: scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.sceneGraphAdditions ?? entry.directorPlan.scene_graph_additions).edges).map(readRepositoryRecord)),
+  }
+  const graphSets = scenePlans.flatMap((entry) => {
+    const graph = readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2)
+    return readRepositoryArray(graph.locationSets ?? graph.location_sets ?? graph.sets).map(readRepositoryRecord)
+  }).concat(sceneGraphAdditions.sets)
+  const graphZones = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).zones).map(readRepositoryRecord)).concat(sceneGraphAdditions.zones)
+  const graphSpots = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).spots).map(readRepositoryRecord)).concat(sceneGraphAdditions.spots)
+  const graphViewpoints = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).viewpoints).map(readRepositoryRecord)).concat(sceneGraphAdditions.viewpoints)
+  const graphAngles = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).angles).map(readRepositoryRecord)).concat(sceneGraphAdditions.angles)
+  const graphEdges = scenePlans.flatMap((entry) => readRepositoryArray(readRepositoryRecord(entry.directorPlan.continuityGraphV2 ?? entry.directorPlan.continuity_graph_v2).edges).map(readRepositoryRecord)).concat(sceneGraphAdditions.edges)
+  const directorPlan = {
+    ...firstPlan,
+    role: 'sequence_animatic_director_plan',
+    graphSpecVersion: 'sequence_animatic_graph_v2',
+    screenplayAnimaticRole: 'director_plan',
+    sequenceAnimaticRole: 'director_plan',
+    masterRequestId: input.masterRequest?.id ?? null,
+    planningMode: readRepositoryString(firstPlan.planningMode) || 'single_director_pass',
+    contractVersion: readRepositoryString(firstPlan.contractVersion) || 'combined_scene_child_plan_v1',
+    source: 'scene_child_final',
+    shotReadySource: 'scene_child_final',
+    scenes: [...sceneStatesById.values()],
+    shots,
+    blocks,
+    coverageSetups: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.coverageSetups ?? entry.directorPlan.coverage_setups).map(readRepositoryRecord)),
+    coverageSetupByShotId: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.coverageSetupByShotId ?? entry.directorPlan.coverage_setup_by_shot_id))),
+    coverage_setup_by_shot_id: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.coverage_setup_by_shot_id ?? entry.directorPlan.coverageSetupByShotId))),
+    shotBindings: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.shotBindings ?? entry.directorPlan.shot_bindings))),
+    shot_bindings: Object.assign({}, ...scenePlans.map((entry) => readRepositoryRecord(entry.directorPlan.shot_bindings ?? entry.directorPlan.shotBindings))),
+    continuityGraphV2: { locationSets: graphSets, location_sets: graphSets, sets: graphSets, zones: graphZones, spots: graphSpots, viewpoints: graphViewpoints, angles: graphAngles, edges: graphEdges },
+    continuity_graph_v2: { locationSets: graphSets, location_sets: graphSets, sets: graphSets, zones: graphZones, spots: graphSpots, viewpoints: graphViewpoints, angles: graphAngles, edges: graphEdges },
+    sceneGraphAdditions,
+    localReferences: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.localReferences ?? entry.directorPlan.local_references).map(readRepositoryRecord)),
+    outputLocalReferences: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.outputLocalReferences ?? entry.directorPlan.output_local_references).map(readRepositoryRecord)),
+    assetRequirements: scenePlans.flatMap((entry) => readRepositoryArray(entry.directorPlan.assetRequirements ?? entry.directorPlan.asset_requirements).map(readRepositoryRecord)),
+    notes: ['Combined from finalized scene child plans. Master manifest may still be pending.'],
+    manifestHash: hashOutputWorkflowValue(scenePlans.map((entry) => entry.manifest)),
+    shotPlanHash: hashOutputWorkflowValue({ shots, blocks }),
+  }
+  return { scenes: [...sceneStatesById.values()], directorPlan }
 }
 
 function deriveSequenceAnimaticShotContinuityStreamState(input: {
@@ -9926,6 +10538,24 @@ function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResp
   const masterRequest = parsed.masterRequest
     ? hydrated.requests.find((request) => request.id === parsed.masterRequest?.id) ?? parsed.masterRequest
     : null
+  const shotContinuityStreamState = deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events: parsed.events })
+  const sceneChildFinalState = deriveSequenceAnimaticSceneChildFinalState({
+    masterRequest,
+    sceneChildren: hydrated.requests.filter((request) => request.parentRequestId === masterRequest?.id && readOutputRequestScreenplayAnimaticRole(request) === 'scene_shot_plan'),
+    artifacts: hydrated.artifacts,
+    streamedScenes: readRepositoryArray(shotContinuityStreamState.scenes).map(readRepositoryRecord),
+  })
+  const masterDirectorState = deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydrated.artifacts })
+  const directorState = masterDirectorState.directorPlanStatus === 'ready'
+    ? masterDirectorState
+    : sceneChildFinalState.directorPlan
+      ? {
+        directorPlan: sceneChildFinalState.directorPlan,
+        directorPlanStatus: 'ready' as const,
+        shotContinuityPlan: sceneChildFinalState.directorPlan,
+        shotContinuityPlanStatus: 'ready' as const,
+      }
+      : masterDirectorState
   return sequenceAnimaticStateResponseSchema.parse({
     ...parsed,
     masterRequest,
@@ -9934,8 +10564,9 @@ function finalizeSequenceAnimaticStateResponse(parsed: SequenceAnimaticStateResp
     artifacts: hydrated.artifacts,
     assets,
     ...deriveSequenceAnimaticScriptShotState({ runs: hydrated.runs, artifacts: hydrated.artifacts }),
-    ...deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydrated.artifacts }),
-    ...deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events: parsed.events }),
+    ...directorState,
+    ...shotContinuityStreamState,
+    scenes: sceneChildFinalState.scenes,
     ...deriveSequenceAnimaticContinuityState({ requests: hydrated.requests, artifacts: hydrated.artifacts }),
   })
 }
@@ -9953,7 +10584,7 @@ async function loadSequenceAnimaticStateDirect(
       .eq('draft_id', payload.draftId)
       .eq('id', payload.masterRequestId)
       .maybeSingle()
-    if (masterResponse.error) throw new Error(masterResponse.error.message)
+    if (masterResponse.error) throw postgrestResponseError(masterResponse, 'Failed to load screenplay animatic master request.')
     if (!masterResponse.data) throw new Error('Screenplay animatic master request not found.')
     masterRequest = mapOutputRequestRow(masterResponse.data as OutputRequestRow)
   } else {
@@ -9967,7 +10598,7 @@ async function loadSequenceAnimaticStateDirect(
       .contains('selected_sequence_unit_keys', [sequenceUnitKey])
       .order('updated_at', { ascending: false })
       .limit(25)
-    if (lookupResponse.error) throw new Error(lookupResponse.error.message)
+    if (lookupResponse.error) throw postgrestResponseError(lookupResponse, 'Failed to look up screenplay animatic master request.')
     masterRequest = ((lookupResponse.data ?? []) as OutputRequestRow[])
       .map(mapOutputRequestRow)
       .find((request) => (
@@ -10007,7 +10638,7 @@ async function loadSequenceAnimaticStateDirect(
     .eq('draft_id', payload.draftId)
     .eq('parent_request_id', masterRequest.id)
     .order('created_at', { ascending: true })
-  if (directChildrenResponse.error) throw new Error(directChildrenResponse.error.message)
+  if (directChildrenResponse.error) throw postgrestResponseError(directChildrenResponse, 'Failed to load screenplay animatic child requests.')
   const directChildren = ((directChildrenResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
   const blockRequestIds = directChildren
     .filter((child) => readOutputRequestScreenplayAnimaticRole(child) === 'storyboard_block')
@@ -10026,7 +10657,7 @@ async function loadSequenceAnimaticStateDirect(
       .eq('draft_id', payload.draftId)
       .in('parent_request_id', nestedParentRequestIds)
       .order('created_at', { ascending: true })
-    if (shotChildrenResponse.error) throw new Error(shotChildrenResponse.error.message)
+    if (shotChildrenResponse.error) throw postgrestResponseError(shotChildrenResponse, 'Failed to load screenplay animatic shot child requests.')
     shotChildren = ((shotChildrenResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
   }
 
@@ -10040,10 +10671,10 @@ async function loadSequenceAnimaticStateDirect(
       ? supabase.from('output_workflows').select(OUTPUT_WORKFLOW_SELECT).eq('draft_id', payload.draftId).in('id', workflowIds)
       : Promise.resolve({ data: [], error: null }),
     runIds.length > 0
-      ? supabase.from('output_workflow_runs').select(OUTPUT_WORKFLOW_RUN_SELECT).eq('draft_id', payload.draftId).in('id', runIds)
+      ? supabase.from('output_workflow_runs').select(OUTPUT_WORKFLOW_RUN_STATUS_SELECT).eq('draft_id', payload.draftId).in('id', runIds)
       : Promise.resolve({ data: [], error: null }),
     runIds.length > 0
-      ? supabase.from('output_workflow_run_steps').select(OUTPUT_WORKFLOW_RUN_STEP_SELECT).in('run_id', runIds).order('order_index', { ascending: true })
+      ? supabase.from('output_workflow_run_steps').select(OUTPUT_WORKFLOW_RUN_STEP_STATUS_SELECT).in('run_id', runIds).order('order_index', { ascending: true })
       : Promise.resolve({ data: [], error: null }),
     workflowIds.length > 0
       ? supabase.from('output_artifacts').select(OUTPUT_ARTIFACT_SELECT).eq('draft_id', payload.draftId).in('workflow_id', workflowIds).order('created_at', { ascending: false })
@@ -10059,12 +10690,12 @@ async function loadSequenceAnimaticStateDirect(
       .order('sequence', { ascending: true })
       .limit(500),
   ])
-  if (workflowResponse.error) throw new Error(workflowResponse.error.message)
-  if (runResponse.error) throw new Error(runResponse.error.message)
-  if (stepResponse.error) throw new Error(stepResponse.error.message)
-  if (artifactResponse.error) throw new Error(artifactResponse.error.message)
-  if (projectionResponse.error) throw new Error(projectionResponse.error.message)
-  if (eventResponse.error) throw new Error(eventResponse.error.message)
+  if (workflowResponse.error) throw postgrestResponseError(workflowResponse, 'Failed to load screenplay animatic workflows.')
+  if (runResponse.error) throw postgrestResponseError(runResponse, 'Failed to load screenplay animatic workflow runs.')
+  if (stepResponse.error) throw postgrestResponseError(stepResponse, 'Failed to load screenplay animatic workflow steps.')
+  if (artifactResponse.error) throw postgrestResponseError(artifactResponse, 'Failed to load screenplay animatic artifacts.')
+  if (projectionResponse.error) throw postgrestResponseError(projectionResponse, 'Failed to load screenplay animatic progress projections.')
+  if (eventResponse.error) throw postgrestResponseError(eventResponse, 'Failed to load screenplay animatic events.')
 
   const workflows = ((workflowResponse.data ?? []) as OutputWorkflowRow[]).map(mapOutputWorkflowRow)
   const artifacts = ((artifactResponse.data ?? []) as OutputArtifactRow[]).map(mapOutputArtifactRow)
@@ -10081,10 +10712,27 @@ async function loadSequenceAnimaticStateDirect(
     createdAt: readRepositoryString(row.created_at),
   }))
   const runsBeforeAssetHydration = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, artifacts))
-  const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ artifacts, runs: runsBeforeAssetHydration, projections }))
+  const assets = await signProjectAssetUrls(payload.projectId, collectSequenceAnimaticStateAssetKeys({ requests, artifacts, runs: runsBeforeAssetHydration, projections }))
   const hydratedArtifacts = hydrateOutputArtifactsFromAssets(artifacts, assets)
   const runs = ((runResponse.data ?? []) as OutputWorkflowRunRow[]).map((row) => mapOutputWorkflowRunRow(row, steps, hydratedArtifacts))
   const shotContinuityStreamState = deriveSequenceAnimaticShotContinuityStreamState({ masterRequest, events })
+  const sceneChildFinalState = deriveSequenceAnimaticSceneChildFinalState({
+    masterRequest,
+    sceneChildren: directChildren.filter((request) => readOutputRequestScreenplayAnimaticRole(request) === 'scene_shot_plan'),
+    artifacts: hydratedArtifacts,
+    streamedScenes: readRepositoryArray(shotContinuityStreamState.scenes).map(readRepositoryRecord),
+  })
+  const masterDirectorState = deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydratedArtifacts })
+  const directorState = masterDirectorState.directorPlanStatus === 'ready'
+    ? masterDirectorState
+    : sceneChildFinalState.directorPlan
+      ? {
+        directorPlan: sceneChildFinalState.directorPlan,
+        directorPlanStatus: 'ready' as const,
+        shotContinuityPlan: sceneChildFinalState.directorPlan,
+        shotContinuityPlanStatus: 'ready' as const,
+      }
+      : masterDirectorState
   const revision = hashOutputWorkflowValue({
     requests: requests.map((request) => ({
       id: request.id,
@@ -10127,6 +10775,8 @@ async function loadSequenceAnimaticStateDirect(
       shotCount: shotContinuityStreamState.streamedShotCount,
       blockCount: shotContinuityStreamState.streamedBlockCount,
       planHash: hashOutputWorkflowValue(shotContinuityStreamState.streamedShotContinuityPlan ?? {}),
+      sceneHash: hashOutputWorkflowValue(sceneChildFinalState.scenes),
+      sceneDirectorHash: hashOutputWorkflowValue(sceneChildFinalState.directorPlan ?? {}),
     },
   })
   if (readRepositoryString(payload.knownRevision) === revision) {
@@ -10144,8 +10794,9 @@ async function loadSequenceAnimaticStateDirect(
       projections: [],
       events: [],
       ...scriptShotState,
-      ...deriveSequenceAnimaticDirectorState({ masterRequest, artifacts: hydratedArtifacts }),
+      ...directorState,
       ...shotContinuityStreamState,
+      scenes: sceneChildFinalState.scenes,
       ...deriveSequenceAnimaticContinuityState({ requests, artifacts: hydratedArtifacts }),
     })
   }
@@ -10162,7 +10813,9 @@ async function loadSequenceAnimaticStateDirect(
     assets,
     projections,
     events,
+    ...directorState,
     ...shotContinuityStreamState,
+    scenes: sceneChildFinalState.scenes,
   }))
 }
 
@@ -10267,6 +10920,7 @@ export async function loadOutputProgress(input: {
     className: 'output-status',
     key: `output-progress:${input.projectId}:${input.draftId}:${requestIds.join(',')}`,
     ttlMs: 500,
+    retryPolicy: { attempts: 3, baseDelayMs: 900, maxDelayMs: 6000, retryTransient: true },
     fn: async () => {
       const [requestResponse, projectionResponse] = await Promise.all([
         supabase
@@ -10282,8 +10936,8 @@ export async function loadOutputProgress(input: {
           .eq('draft_id', input.draftId)
           .in('request_id', requestIds),
       ])
-      if (requestResponse.error) throw new Error(requestResponse.error.message)
-      if (projectionResponse.error) throw new Error(projectionResponse.error.message)
+      if (requestResponse.error) throw postgrestResponseError(requestResponse, 'Failed to load output request progress.')
+      if (projectionResponse.error) throw postgrestResponseError(projectionResponse, 'Failed to load output status projections.')
 
       const requestsBeforeProjection = ((requestResponse.data ?? []) as OutputRequestRow[]).map(mapOutputRequestRow)
       const projections = ((projectionResponse.data ?? []) as Record<string, unknown>[]).map(mapOutputRequestStatusProjectionRow)
@@ -10717,6 +11371,68 @@ export async function updateOutputWorkflowNode(
     throw new Error(await readFunctionsErrorMessage(response.error))
   }
   const parsed = outputWorkflowNodeUpdateResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function updateSequenceAnimaticSceneGraphNode(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    nodeId: string
+    nodeKind: 'world_location' | 'set' | 'zone' | 'spot' | 'camera_grid' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
+    visualBriefOverride?: string
+    extraPromptDirection?: string
+    clearOverride?: boolean
+  },
+): Promise<SequenceAnimaticSceneGraphNodeUpdateResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before editing the animatic scene graph.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Animatic scene graph editing requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticSceneGraphNodeUpdateRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'update-sequence-animatic-scene-graph-node',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticSceneGraphNodeUpdateResponseSchema.parse(response.data)
+  await clearProjectCache(snapshot.project.id, snapshot.draft.id)
+  return parsed
+}
+
+export async function analyzeSequenceAnimaticZonePois(
+  snapshot: ProjectSnapshot,
+  request: {
+    masterRequestId: string
+    zoneNodeId: string
+  },
+): Promise<SequenceAnimaticZonePoiAnalyzeResponse> {
+  const session = await getValidatedSession('Sign in and load a live GraphCore draft before analyzing animatic zone labels.')
+  if (!hasLiveSnapshotIds(snapshot)) {
+    throw new Error('Animatic zone label analysis requires a live Supabase-backed draft.')
+  }
+  const payload = sequenceAnimaticZonePoiAnalyzeRequestSchema.parse({
+    projectId: snapshot.project.id,
+    draftId: snapshot.draft.id,
+    ...request,
+  })
+  const response = await invokeAuthedFunctionWithSessionRecovery(
+    'analyze-sequence-animatic-zone-pois',
+    payload,
+    session,
+  )
+  if (response.error) {
+    throw new Error(await readFunctionsErrorMessage(response.error))
+  }
+  const parsed = sequenceAnimaticZonePoiAnalyzeResponseSchema.parse(response.data)
   await clearProjectCache(snapshot.project.id, snapshot.draft.id)
   return parsed
 }

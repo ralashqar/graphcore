@@ -17,6 +17,55 @@ function readRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.map((entry) => asRecord(entry)) : []
 }
 
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64) || 'node'
+}
+
+function sequenceAnimaticContinuityAssetImagePolicy(assetKind: string, generationPolicy = '') {
+  if (generationPolicy.startsWith('zone_spatial_map') || assetKind === 'location_zone') {
+    return {
+      quality: 'high',
+      imageSize: { width: 3840, height: 2560 },
+      imageSizePolicy: 'zone_continuity_board_3840x2560',
+    }
+  }
+  return {
+    quality: 'low',
+    imageSize: { width: 1536, height: 1536 },
+    imageSizePolicy: 'single_square_ref_1536',
+  }
+}
+
+function sequenceAnimaticSpotAtlasGridImageSize(layout: { rows: number; columns: number }) {
+  const cellSize = 1024
+  const rows = Math.max(1, Math.min(4, Math.round(layout.rows) || 1))
+  const columns = Math.max(1, Math.min(4, Math.round(layout.columns) || 1))
+  return {
+    width: Math.max(1024, Math.min(4096, columns * cellSize)),
+    height: Math.max(1024, Math.min(4096, rows * cellSize)),
+  }
+}
+
+function sequenceAnimaticContinuityBatchImagePolicy(
+  batchKind: string,
+  generationPolicy = '',
+  layout: { rows: number; columns: number } = { rows: 1, columns: 1 },
+) {
+  if (generationPolicy.startsWith('spot_atlas_grid') || batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid') {
+    const imageSize = sequenceAnimaticSpotAtlasGridImageSize(layout)
+    return {
+      quality: 'medium',
+      imageSize,
+      imageSizePolicy: `spot_atlas_grid_${imageSize.width}x${imageSize.height}`,
+    }
+  }
+  return {
+    quality: 'medium',
+    imageSize: { width: 2048, height: 2048 },
+    imageSizePolicy: 'continuity_batch_grid_2048',
+  }
+}
+
 type ContinuityWorkflowBlock = {
   id: string
   index: number
@@ -247,6 +296,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
   storyboardGroup: Record<string, unknown>
   storyboardLayout: { rows: number; columns: number; panelCount: number }
   assetPack: Record<string, unknown>
+  storyboardSpatialReferencePack: Record<string, unknown>
   aspectRatio: string
   imageSize: { width: number; height: number }
   durationSeconds: number
@@ -265,6 +315,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
       storyboardGroup: input.storyboardGroup,
       storyboardLayout: input.storyboardLayout,
       assetPack: input.assetPack,
+      storyboardSpatialReferencePack: input.storyboardSpatialReferencePack,
     }),
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'storyboard_prompt', 'utility_transform', 'Storyboard Prompt', 360, 100, {
       purpose: 'cinematic_v3_storyboard_prompt',
@@ -272,6 +323,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
       aspectRatio: input.aspectRatio,
       storyboardGroup: input.storyboardGroup,
       storyboardLayout: input.storyboardLayout,
+      storyboardSpatialReferencePack: input.storyboardSpatialReferencePack,
       planningOnly: true,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_block_prompt', maxConcurrency: 1 },
     }),
@@ -289,6 +341,7 @@ export function buildSequenceAnimaticBlockWorkflowGraph(input: {
       imageSize: input.imageSize,
       aspectRatio: input.aspectRatio,
       storyboardLayout: input.storyboardLayout,
+      storyboardSpatialReferencePack: input.storyboardSpatialReferencePack,
       planningOnly: true,
       planning_only: true,
       usedAsVideoReference: true,
@@ -425,6 +478,209 @@ export function buildSequenceAnimaticShotVideoWorkflowGraph(input: {
   return { nodes, edges }
 }
 
+export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
+  workflowId: string
+  draftId: string
+  commonConfig: Record<string, unknown>
+  block: Record<string, unknown>
+  shot: Record<string, unknown>
+  panel: Record<string, unknown>
+  assetPack: Record<string, unknown>
+  coverageAssetPack?: Record<string, unknown>
+  coverageAnchor?: Record<string, unknown>
+  sceneContinuityManifest?: Record<string, unknown>
+  previousKeyframe?: Record<string, unknown>
+  requiredReferenceAssetKeys: string[]
+  omittedReferenceAssetKeys: string[]
+  selectedReferences: Record<string, unknown>[]
+  omittedReferences: Record<string, unknown>[]
+  sharedDependencyRequests: Record<string, unknown>[]
+  continuityDependencies?: Record<string, unknown>[]
+  coverageSetup?: Record<string, unknown>
+  coverageShots?: Record<string, unknown>[]
+  coverageReferenceAssetKeys?: string[]
+  dependencyMode?: 'ingredient_refs'
+  editorialDurationSeconds: number
+  providerDurationSeconds: number
+  aspectRatio: string
+}) {
+  const role = 'shot_production'
+  const dependencyMode = 'ingredient_refs' as const
+  const config = {
+    graphSpecVersion: sequenceAnimaticGraphSpecVersionV2,
+    ...input.commonConfig,
+    dependencyMode,
+    block: input.block,
+    shot: input.shot,
+    panel: input.panel,
+    assetPack: input.assetPack,
+    asset_pack: input.assetPack,
+    coverageAnchor: {},
+    coverage_anchor: {},
+    sceneContinuityManifest: input.sceneContinuityManifest ?? {},
+    scene_continuity_manifest: input.sceneContinuityManifest ?? {},
+    coverageSetup: {},
+    coverage_setup: {},
+    previousKeyframe: {},
+    previous_keyframe: {},
+    requiredReferenceAssetKeys: input.requiredReferenceAssetKeys,
+    omittedReferenceAssetKeys: input.omittedReferenceAssetKeys,
+    selectedReferences: input.selectedReferences,
+    omittedReferences: input.omittedReferences,
+    sharedDependencyRequests: input.sharedDependencyRequests,
+    continuityDependencies: [],
+    continuity_dependencies: [],
+    editorialDurationSeconds: input.editorialDurationSeconds,
+    providerDurationSeconds: input.providerDurationSeconds,
+    aspectRatio: input.aspectRatio,
+    screenplayAnimaticRole: role,
+    sequenceAnimaticRole: role,
+  }
+  const refNode = (
+    key: string,
+    label: string,
+    refConfig: Record<string, unknown>,
+    x: number,
+    y: number,
+  ) => sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, key, 'utility_transform', label, x, y, {
+    ...config,
+    ...refConfig,
+    purpose: 'sequence_animatic_shared_asset_ref',
+    execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shared_asset_ref', maxConcurrency: 8 },
+  }, {}, role)
+  const selectedReferenceAssetKeys = new Set(readStringArray(input.requiredReferenceAssetKeys))
+  const selectedReferenceByAssetKey = new Map(readRecordArray(input.selectedReferences)
+    .map((entry) => [readText(entry.assetKey), entry] as const)
+    .filter(([assetKey]) => Boolean(assetKey)))
+  const directIngredientRefNodes = readStringArray(input.requiredReferenceAssetKeys)
+      .filter((assetKey) => assetKey && selectedReferenceAssetKeys.has(assetKey))
+      .slice(0, 8)
+      .map((assetKey, index) => {
+        const selectedReference = selectedReferenceByAssetKey.get(assetKey) ?? {}
+        const referenceKind = readText(selectedReference.kind ?? selectedReference.type)
+        const roleName = readText(selectedReference.role)
+          || (referenceKind === 'zone_location'
+            ? 'zone_reference'
+            : referenceKind === 'world_character'
+              ? 'world_character_reference'
+              : referenceKind === 'temp_character'
+                ? 'temp_character_reference'
+                : referenceKind === 'item_or_prop'
+                  ? 'item_or_prop_reference'
+                  : 'shot_ingredient_reference')
+        const baseId = readText(selectedReference.entityKey)
+          || readText(selectedReference.nodeId)
+          || readText(selectedReference.id)
+          || assetKey
+        const nodePrefix = 'ui_ingredient_ref'
+        const label = readText(selectedReference.name)
+          || (referenceKind === 'zone_location'
+            ? 'Zone Location'
+            : referenceKind === 'world_character'
+              ? `World Character ${index + 1}`
+              : referenceKind === 'temp_character'
+                ? `Temp Character ${index + 1}`
+                : referenceKind === 'item_or_prop'
+                  ? `Item/Prop ${index + 1}`
+                  : `Ingredient ${index + 1}`)
+        return refNode(`${nodePrefix}_${slugify(baseId)}`, `${label} Ref`, {
+          referenceRole: roleName,
+          sourceArtifactRole: readText(selectedReference.sourceArtifactRole) || '',
+          identityKey: 'assetKey',
+          identityValue: assetKey,
+          expectedAssetKey: assetKey,
+          required: true,
+          directReference: {
+            ...selectedReference,
+            role: roleName,
+            assetKey,
+          },
+        }, 360, -120 + index * 80)
+      })
+  const allResolverNodes = directIngredientRefNodes
+  const resolverEdges = allResolverNodes.flatMap((node) => ([
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_fix_ref`, node.key, 'reference', 'fix_references', 'references', { optional: asRecord(node.config).required !== true, optionalDependency: asRecord(node.config).required !== true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${node.key}__reference_fix_image`, node.key, 'image', 'fix_references', 'reference_images', { optional: true, optionalDependency: true }, role),
+  ]))
+  const nodes = [
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_input', 'utility_transform', 'Shot Input', 80, 120, {
+      purpose: 'sequence_animatic_shot_input',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_production_input', maxConcurrency: 8 },
+    }, {}, role),
+    ...allResolverNodes,
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'fix_references', 'utility_transform', 'Fix References', 640, 120, {
+      purpose: 'sequence_animatic_shot_reference_fix',
+      ...config,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_shot_reference_fix', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'apply_reference_fix', 'utility_transform', 'Apply Reference Fix', 820, 120, {
+      purpose: 'sequence_animatic_shot_reference_fix_apply',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_reference_fix_apply', maxConcurrency: 8 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_reference_pack', 'utility_transform', 'Shot Reference Pack', 1000, 120, {
+      purpose: 'sequence_animatic_shot_reference_pack',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_reference_pack', maxConcurrency: 8 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 1280, 120, {
+      purpose: 'sequence_animatic_planned_keyframe_prompt',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_prompt', maxConcurrency: 8 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 1560, 120, {
+      purpose: 'sequence_animatic_planned_keyframe_image',
+      role: 'sequence_animatic_shot_keyframe',
+      ...config,
+      model: 'openai/gpt-image-2',
+      referenceModel: 'openai/gpt-image-2/edit',
+      quality: 'low',
+      outputFormat: 'webp',
+      maxReferenceImages: 8,
+      imageSize: input.aspectRatio === '9:16'
+        ? { width: 864, height: 1536 }
+        : input.aspectRatio === '1:1'
+          ? { width: 1024, height: 1024 }
+          : { width: 1536, height: 864 },
+      aspectRatio: input.aspectRatio,
+      usedAsVideoReference: true,
+      used_as_video_reference: true,
+      execution: { resourceClass: 'image', groupKey: 'sequence_animatic_shot_keyframes', maxConcurrency: 8 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 1840, 120, {
+      purpose: 'sequence_animatic_planned_keyframe_artifact',
+      artifactKind: 'other',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_artifact', maxConcurrency: 8 },
+    }, {}, role),
+  ]
+  const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_fix_shot', 'shot_input', 'shot', 'fix_references', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_fix_refs', 'shot_input', 'asset_pack', 'fix_references', 'asset_pack', {}, role),
+    ...resolverEdges,
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_shot', 'fix_references', 'shot', 'apply_reference_fix', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_refs', 'fix_references', 'fixedReferences', 'apply_reference_fix', 'fixed_references', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_asset_pack', 'fix_references', 'asset_pack', 'apply_reference_fix', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_decisions', 'fix_references', 'referenceFixDecisions', 'apply_reference_fix', 'reference_fix_decisions', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_diagnostics', 'fix_references', 'referenceFixDiagnostics', 'apply_reference_fix', 'reference_fix_diagnostics', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix__apply_images', 'fix_references', 'referenceImages', 'apply_reference_fix', 'reference_images', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_shot', 'apply_reference_fix', 'shot', 'shot_reference_pack', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_refs', 'apply_reference_fix', 'asset_pack', 'shot_reference_pack', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_fixed', 'apply_reference_fix', 'fixedReferences', 'shot_reference_pack', 'references', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_fix_apply__reference_pack_images', 'apply_reference_fix', 'referenceImages', 'shot_reference_pack', 'reference_images', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_shot', 'shot_reference_pack', 'shot', 'planned_keyframe_prompt', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_refs', 'shot_reference_pack', 'asset_pack', 'planned_keyframe_prompt', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image', 'planned_keyframe_prompt', 'text', 'planned_keyframe_image', 'prompt', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image_refs', 'planned_keyframe_prompt', 'asset_pack', 'planned_keyframe_image', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image_ref_keys', 'planned_keyframe_prompt', 'reference_asset_keys', 'planned_keyframe_image', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__artifact_shot', 'shot_reference_pack', 'shot', 'planned_keyframe_artifact', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_image__artifact', 'planned_keyframe_image', 'image', 'planned_keyframe_artifact', 'image', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__artifact_prompt', 'planned_keyframe_prompt', 'text', 'planned_keyframe_artifact', 'prompt', {}, role),
+  ]
+  return { nodes, edges }
+}
+
 export function buildSequenceAnimaticShotRevisionWorkflowGraph(input: {
   workflowId: string
   draftId: string
@@ -527,6 +783,8 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
   visualDependencyEdges: Record<string, unknown>[]
   aspectRatio: string
 }) {
+  const imagePolicy = sequenceAnimaticContinuityAssetImagePolicy(input.assetKind, readText(input.commonConfig.generationPolicy))
+  const maxReferenceImages = input.assetKind === 'location_spot' ? 1 : 8
   const config = {
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     ...input.commonConfig,
@@ -558,10 +816,11 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
       ...config,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'low',
+      quality: imagePolicy.quality,
       outputFormat: 'webp',
-      maxReferenceImages: 8,
-      imageSize: { width: 1536, height: 1536 },
+      maxReferenceImages,
+      imageSize: imagePolicy.imageSize,
+      imageSizePolicy: imagePolicy.imageSizePolicy,
       planningOnly: false,
       planning_only: false,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_asset_image', maxConcurrency: 2, continueOnError: true },
@@ -580,8 +839,10 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'continuity_asset_input', 'asset_pack', 'continuity_asset_prompt', 'asset_pack', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'continuity_asset_prompt', 'text', 'continuity_asset_image', 'prompt', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'continuity_asset_prompt', 'asset_pack', 'continuity_asset_image', 'asset_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_ref_keys', 'continuity_asset_prompt', 'reference_asset_keys', 'continuity_asset_image', 'reference_asset_keys', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_target', 'continuity_asset_input', 'target_node', 'continuity_asset_artifact', 'target_node', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'continuity_asset_prompt', 'text', 'continuity_asset_artifact', 'prompt', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_refs', 'continuity_asset_prompt', 'reference_asset_keys', 'continuity_asset_artifact', 'reference_asset_keys', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'continuity_asset_image', 'image', 'continuity_asset_artifact', 'image', { optional: true, optionalDependency: true }, 'continuity_asset'),
   ]
   return { nodes, edges }
@@ -620,12 +881,17 @@ export function buildSequenceAnimaticCoverageAnchorWorkflowGraph(input: {
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_input', maxConcurrency: 4 },
     }, {}, 'coverage_anchor'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_prompt', 'utility_transform', 'Coverage Anchor Prompt', 360, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_brief', 'utility_transform', 'Coverage Anchor Brief', 360, 120, {
+      purpose: 'sequence_animatic_coverage_anchor_brief',
+      ...config,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_coverage_anchor_brief', maxConcurrency: 4 },
+    }, {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_prompt', 'utility_transform', 'Coverage Anchor Prompt', 640, 120, {
       purpose: 'sequence_animatic_coverage_anchor_prompt',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_coverage_anchor_prompt', maxConcurrency: 4 },
     }, {}, 'coverage_anchor'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_image', 'image_generation', 'Coverage Anchor Image', 640, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_image', 'image_generation', 'Coverage Anchor Image', 920, 120, {
       purpose: 'sequence_animatic_coverage_anchor_image',
       role: 'sequence_animatic_coverage_anchor_image',
       ...config,
@@ -640,7 +906,7 @@ export function buildSequenceAnimaticCoverageAnchorWorkflowGraph(input: {
       used_as_video_reference: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_coverage_anchors', maxConcurrency: 2 },
     }, {}, 'coverage_anchor'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_artifact', 'output_artifact', 'Register Coverage Anchor', 920, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'coverage_anchor_artifact', 'output_artifact', 'Register Coverage Anchor', 1200, 120, {
       purpose: 'sequence_animatic_coverage_anchor_artifact',
       artifactKind: 'other',
       ...config,
@@ -648,9 +914,14 @@ export function buildSequenceAnimaticCoverageAnchorWorkflowGraph(input: {
     }, {}, 'coverage_anchor'),
   ]
   const edges = [
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__brief_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_brief', 'coverage_setup', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__brief_shots', 'coverage_anchor_input', 'shots', 'coverage_anchor_brief', 'shots', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__brief_refs', 'coverage_anchor_input', 'asset_pack', 'coverage_anchor_brief', 'asset_pack', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_prompt', 'coverage_setup', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_shots', 'coverage_anchor_input', 'shots', 'coverage_anchor_prompt', 'shots', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'coverage_anchor_input', 'asset_pack', 'coverage_anchor_prompt', 'asset_pack', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'brief__prompt', 'coverage_anchor_brief', 'coverage_brief', 'coverage_anchor_prompt', 'coverage_brief', {}, 'coverage_anchor'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'brief__prompt_text', 'coverage_anchor_brief', 'prompt_brief', 'coverage_anchor_prompt', 'prompt_brief', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'coverage_anchor_prompt', 'text', 'coverage_anchor_image', 'prompt', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'coverage_anchor_prompt', 'asset_pack', 'coverage_anchor_image', 'asset_pack', {}, 'coverage_anchor'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_setup', 'coverage_anchor_input', 'coverage_setup', 'coverage_anchor_artifact', 'coverage_setup', {}, 'coverage_anchor'),
@@ -668,6 +939,7 @@ export function buildSequenceAnimaticPlannedKeyframeWorkflowGraph(input: {
   shot: Record<string, unknown>
   coverageSetup: Record<string, unknown>
   coverageAnchor: Record<string, unknown>
+  sceneContinuityManifest?: Record<string, unknown>
   previousKeyframe: Record<string, unknown>
   storyboardPanel: Record<string, unknown>
   assetPack: Record<string, unknown>
@@ -682,6 +954,8 @@ export function buildSequenceAnimaticPlannedKeyframeWorkflowGraph(input: {
     coverage_setup: input.coverageSetup,
     coverageAnchor: input.coverageAnchor,
     coverage_anchor: input.coverageAnchor,
+    sceneContinuityManifest: input.sceneContinuityManifest ?? {},
+    scene_continuity_manifest: input.sceneContinuityManifest ?? {},
     previousKeyframe: input.previousKeyframe,
     previous_keyframe: input.previousKeyframe,
     storyboardPanel: input.storyboardPanel,
@@ -737,6 +1011,7 @@ export function buildSequenceAnimaticPlannedKeyframeWorkflowGraph(input: {
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'planned_keyframe_input', 'asset_pack', 'planned_keyframe_prompt', 'asset_pack', {}, 'shot_keyframe'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'planned_keyframe_prompt', 'text', 'planned_keyframe_image', 'prompt', {}, 'shot_keyframe'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'planned_keyframe_prompt', 'asset_pack', 'planned_keyframe_image', 'asset_pack', {}, 'shot_keyframe'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_ref_keys', 'planned_keyframe_prompt', 'reference_asset_keys', 'planned_keyframe_image', 'reference_asset_keys', {}, 'shot_keyframe'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_shot', 'planned_keyframe_input', 'shot', 'planned_keyframe_artifact', 'shot', {}, 'shot_keyframe'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'planned_keyframe_image', 'image', 'planned_keyframe_artifact', 'image', { optional: true, optionalDependency: true }, 'shot_keyframe'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'planned_keyframe_prompt', 'text', 'planned_keyframe_artifact', 'prompt', {}, 'shot_keyframe'),
@@ -761,6 +1036,8 @@ export function buildSequenceAnimaticContinuityBatchWorkflowGraph(input: {
   const layout = asRecord(input.batch.layout)
   const rows = Math.max(1, Number(layout.rows ?? 1) || 1)
   const columns = Math.max(1, Number(layout.columns ?? (input.targetNodes.length || 1)) || 1)
+  const batchKind = readText(input.batch.batchKind)
+  const imagePolicy = sequenceAnimaticContinuityBatchImagePolicy(batchKind, readText(input.batch.generationPolicy), { rows, columns })
   const config = {
     graphSpecVersion: sequenceAnimaticGraphSpecVersion,
     ...input.commonConfig,
@@ -793,10 +1070,11 @@ export function buildSequenceAnimaticContinuityBatchWorkflowGraph(input: {
       ...config,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'medium',
+      quality: imagePolicy.quality,
       outputFormat: 'webp',
       maxReferenceImages: 8,
-      imageSize: { width: Math.max(1024, Math.min(4096, columns * 1024)), height: Math.max(1024, Math.min(4096, rows * 1024)) },
+      imageSize: imagePolicy.imageSize,
+      imageSizePolicy: imagePolicy.imageSizePolicy,
       planningOnly: false,
       planning_only: false,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_batch_image', maxConcurrency: 2, continueOnError: true },

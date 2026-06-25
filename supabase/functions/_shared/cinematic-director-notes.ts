@@ -19,15 +19,11 @@ import {
   type OutputWorkflowRun,
 } from '../../../src/domain/outputWorkflow.ts'
 import {
-  mapOutputWorkflowEdgeRow,
-  mapOutputWorkflowNodeRow,
-  mapOutputWorkflowRow,
-  outputWorkflowEdgeSelect,
-  outputWorkflowNodeSelect,
-  outputWorkflowNodeStatusSelect,
-  outputWorkflowSelect,
   loadOutputWorkflowRunBundle,
 } from './output-workflow.ts'
+import {
+  loadChildWorkflowGraphBundle,
+} from './output-workflow-child-utils.ts'
 
 type DatabaseClient = {
   from: (table: string) => unknown
@@ -86,28 +82,12 @@ export async function loadCinematicDirectorContext(
     edges = bundle.edges
     run = bundle.run
   } else {
-    const [workflowResponse, nodeResponse, edgeResponse] = await Promise.all([
-      (client.from('output_workflows') as any)
-        .select(outputWorkflowSelect)
-        .eq('id', input.workflowId)
-        .eq('project_id', input.projectId)
-        .eq('draft_id', input.draftId)
-        .single(),
-      (client.from('output_workflow_nodes') as any)
-        .select(outputWorkflowNodeSelect)
-        .eq('workflow_id', input.workflowId)
-        .order('created_at', { ascending: true }),
-      (client.from('output_workflow_edges') as any)
-        .select(outputWorkflowEdgeSelect)
-        .eq('workflow_id', input.workflowId)
-        .order('created_at', { ascending: true }),
-    ])
-    if (workflowResponse.error || !workflowResponse.data) throw new Error(workflowResponse.error?.message ?? 'Output workflow not found.')
-    if (nodeResponse.error) throw new Error(nodeResponse.error.message)
-    if (edgeResponse.error) throw new Error(edgeResponse.error.message)
-    workflow = mapOutputWorkflowRow(workflowResponse.data)
-    nodes = (nodeResponse.data ?? []).map(mapOutputWorkflowNodeRow)
-    edges = (edgeResponse.data ?? []).map(mapOutputWorkflowEdgeRow)
+    const bundle = await loadChildWorkflowGraphBundle({ client: client as never, workflowIds: [input.workflowId] })
+    const loadedWorkflow = bundle.workflows[0]
+    if (!loadedWorkflow) throw new Error('Output workflow not found.')
+    workflow = loadedWorkflow
+    nodes = bundle.nodes
+    edges = bundle.edges
   }
 
   if (workflow.id !== input.workflowId || workflow.projectId !== input.projectId || workflow.draftId !== input.draftId) {
@@ -203,7 +183,7 @@ export async function applyCinematicDirectorPatchToWorkflow(input: {
   const workflowResponse = await (input.client.from('output_workflows') as any)
     .update({ metadata: workflowMetadata, updated_at: now })
     .eq('id', input.context.workflow.id)
-    .select(outputWorkflowSelect)
+    .select('id')
     .single()
   if (workflowResponse.error || !workflowResponse.data) throw new Error(workflowResponse.error?.message ?? 'Failed to update output workflow.')
 
@@ -255,16 +235,17 @@ export async function applyCinematicDirectorPatchToWorkflow(input: {
     if (response.error) throw new Error(response.error.message)
   }))
 
-  const refreshedNodesResponse = await (input.client.from('output_workflow_nodes') as any)
-    .select(outputWorkflowNodeStatusSelect)
-    .eq('workflow_id', input.context.workflow.id)
-    .order('created_at', { ascending: true })
-  if (refreshedNodesResponse.error) throw new Error(refreshedNodesResponse.error.message)
+  const refreshedGraph = await loadChildWorkflowGraphBundle({
+    client: input.client as never,
+    workflowIds: [input.context.workflow.id],
+  })
+  const refreshedWorkflow = refreshedGraph.workflows[0]
+  if (!refreshedWorkflow) throw new Error('Updated output workflow was not found.')
 
   return {
     versionId,
-    workflow: mapOutputWorkflowRow(workflowResponse.data),
-    nodes: (refreshedNodesResponse.data ?? []).map(mapOutputWorkflowNodeRow),
+    workflow: refreshedWorkflow,
+    nodes: refreshedGraph.nodes,
     regenerationRunRequest: preview.regenerationPlan.targetNodeKeys.length > 0
       ? buildCinematicDirectorRunMetadata({ preview, sourceRunId: input.context.run?.id ?? null })
       : null,

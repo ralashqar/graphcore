@@ -216,12 +216,12 @@ test('provider capability checks fail before quote or billing', () => {
 test('spatial product includes authoring, processing, telemetry, and cinematic viewpoint references', () => {
   const migration = readFileSync('supabase/migrations/20260614111618_complete_spatial_world_product.sql', 'utf8')
   const viewport = readFileSync('src/features/viewer3d/ThreeSceneViewport.tsx', 'utf8')
-  const outputWorkflow = readFileSync('supabase/functions/_shared/output-workflow.ts', 'utf8')
+  const childRunRuntime = readFileSync('supabase/functions/_shared/output-workflow-sequence-animatic-child-run-runtime.ts', 'utf8')
   assert.match(migration, /spatial_world_processing_jobs/)
   assert.match(migration, /spatial_world_performance_events/)
   assert.match(viewport, /PointerLockControls/)
   assert.match(viewport, /TransformControls/)
-  assert.match(outputWorkflow, /spatialViewpointReferenceAssetKeys/)
+  assert.match(childRunRuntime, /spatialViewpointReferenceAssetKeys/)
 })
 
 test('spatial comparison report summarizes provider artifacts', () => {

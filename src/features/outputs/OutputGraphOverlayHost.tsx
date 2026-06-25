@@ -78,6 +78,30 @@ function readNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+const sequenceAnimaticCoverageAnchorOnwardForceNodeKeys = [
+  'coverage_anchor_input',
+  'coverage_anchor_brief',
+  'coverage_anchor_prompt',
+  'coverage_anchor_image',
+  'coverage_anchor_artifact',
+  'shot_reference_pack',
+  'planned_keyframe_prompt',
+  'planned_keyframe_image',
+  'planned_keyframe_artifact',
+]
+
+function readScreenplayAnimaticRole(metadata: Record<string, unknown>) {
+  return readTrimmedString(metadata.screenplayAnimaticRole) || readTrimmedString(metadata.sequenceAnimaticRole)
+}
+
+function isSequenceAnimaticCoverageAnchorNodeKey(key: string) {
+  return key === 'coverage_anchor_input'
+    || key === 'coverage_anchor_brief'
+    || key === 'coverage_anchor_prompt'
+    || key === 'coverage_anchor_image'
+    || key === 'coverage_anchor_artifact'
+}
+
 function readOutputRequestGraphRevision(request: OutputRequest | null | undefined) {
   const projection = readRecord(readRecord(request?.metadata).outputStatusProjection)
   return readTrimmedString(projection.graphRevision)
@@ -252,6 +276,7 @@ export function OutputGraphOverlayHost({
     [displayRun, edges, nodes, request, workflow],
   )
   const knownGraphRevision = readOutputRequestGraphRevision(request) || graphRevisionRef.current
+  const loadedGraphNodeCount = displayGraphState?.nodes.length ?? nodes.length
 
   const runTargetedNodes = async (
     targetNodes: OutputWorkflowNode[],
@@ -280,15 +305,26 @@ export function OutputGraphOverlayHost({
       sourceSequenceUnitKeys: readStringArray(workflowMetadata.sourceSequenceUnitKeys),
       pageCount: readNumber(workflowMetadata.pageCount) ?? undefined,
     }
-    const targetNodeKeys = runScope === 'artifact_rebake'
-      ? ['artifact']
-      : nodeKeys
-    const forceNodeKeys = runScope === 'artifact_rebake'
-      ? Array.from(new Set([...nodeKeys, 'artifact']))
-      : nodeKeys
+    const graphNodes = displayGraphState?.nodes ?? nodes
+    const graphNodeKeySet = new Set(graphNodes.map((node) => node.key))
+    const coverageAnchorOnwardRun = runScope === 'node_and_downstream'
+      && readScreenplayAnimaticRole(workflowMetadata) === 'shot_production'
+      && nodeKeys.some(isSequenceAnimaticCoverageAnchorNodeKey)
+      && graphNodeKeySet.has('planned_keyframe_artifact')
+    const effectiveRunScope: OutputWorkflowRunScope = coverageAnchorOnwardRun ? 'upstream_to_node' : runScope
+    const targetNodeKeys = coverageAnchorOnwardRun
+      ? ['planned_keyframe_artifact']
+      : runScope === 'artifact_rebake'
+        ? ['artifact']
+        : nodeKeys
+    const forceNodeKeys = coverageAnchorOnwardRun
+      ? sequenceAnimaticCoverageAnchorOnwardForceNodeKeys.filter((key) => graphNodeKeySet.has(key))
+      : runScope === 'artifact_rebake'
+        ? Array.from(new Set([...nodeKeys, 'artifact']))
+        : nodeKeys
 
     setRunBusy(true)
-    setTargetedRunScope(runScope)
+    setTargetedRunScope(effectiveRunScope)
     setTargetedNodeKeys(nodeKeys)
     setSyncMessage(`Starting ${nodeKeys.length === 1 ? nodeKeys[0] : `${nodeKeys.length} nodes`}...`)
     try {
@@ -304,8 +340,8 @@ export function OutputGraphOverlayHost({
           sourceRunId: activeRun?.id ?? null,
           runMode: nodeKeys.length === 1 ? 'targeted_node_preview' : 'targeted_node_batch_preview',
           requestedRunScope: runScope,
-          effectiveRunScope: runScope,
-          runScope,
+          effectiveRunScope,
+          runScope: effectiveRunScope,
           targetNodeKeys,
           forceNodeKeys,
           reuseExistingUpstreamOutputs: true,
@@ -366,13 +402,15 @@ export function OutputGraphOverlayHost({
 
   const refreshGraph = (quiet = false) => {
     const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
-    if (!targetWorkflow) return
+    const targetWorkflowId = targetWorkflow?.id ?? request?.workflowId ?? null
+    if (!targetWorkflowId) return
     if (quiet && graphRefreshInFlightRef.current) return
     graphRefreshInFlightRef.current = true
     if (!quiet) setRefreshingGraph(true)
     lastRefreshAtRef.current = Date.now()
-    void Promise.resolve(onLoadOutputWorkflowGraph(targetWorkflow.id, activeRun?.id ?? request?.latestRunId ?? displayGraphState?.displayRun?.id ?? null, selectedNodeKey, {
-      knownGraphRevision,
+    const shouldUseKnownRevision = loadedGraphNodeCount > 0
+    void Promise.resolve(onLoadOutputWorkflowGraph(targetWorkflowId, activeRun?.id ?? request?.latestRunId ?? displayGraphState?.displayRun?.id ?? null, selectedNodeKey, {
+      knownGraphRevision: shouldUseKnownRevision ? knownGraphRevision : null,
       assetHydrationMode: selectedNodeKey ? 'selected' : 'preview',
     })).then((result) => {
       if (result?.graphRevision) graphRevisionRef.current = result.graphRevision
@@ -405,8 +443,10 @@ export function OutputGraphOverlayHost({
 
   useEffect(() => {
     const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null
+    const targetWorkflowId = targetWorkflow?.id ?? request?.workflowId ?? null
+    if (!targetWorkflowId) return undefined
+    refreshGraph(loadedGraphNodeCount > 0)
     if (!targetWorkflow) return undefined
-    refreshGraph(nodes.length > 0)
     const scheduleRefresh = (delayMs = 450) => {
       if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
       refreshTimerRef.current = window.setTimeout(() => {
@@ -432,7 +472,7 @@ export function OutputGraphOverlayHost({
       if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
       window.clearInterval(watchdog)
     }
-  }, [activeRun?.id, activeRun?.status, displayGraphState?.displayRun?.id, displayGraphState?.workflow.id, workflow?.id, openIntent?.nonce])
+  }, [activeRun?.id, activeRun?.status, displayGraphState?.displayRun?.id, displayGraphState?.workflow.id, loadedGraphNodeCount, request?.workflowId, workflow?.id, openIntent?.nonce])
 
   useEffect(() => {
     const targetWorkflow = workflow ?? displayGraphState?.workflow ?? null

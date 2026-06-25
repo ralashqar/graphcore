@@ -11,6 +11,8 @@ import type {
   OutputWorkflowRunStatusResponse,
   OutputWorkflowStartResponse,
   OutputWorkflowUpgradeResponse,
+  SequenceAnimaticSceneGraphNodeUpdateResponse,
+  SequenceAnimaticZonePoiAnalyzeResponse,
 } from '../../domain/outputWorkflow'
 import type {
   OutputInboxLoadResult,
@@ -51,6 +53,18 @@ export type OutputApi = {
     inputs?: { prompt?: string }
     metadata?: { displayLabel?: string; note?: string }
   }): Promise<OutputWorkflowNodeUpdateResponse>
+  updateSequenceAnimaticSceneGraphNode(snapshot: ProjectSnapshot, request: {
+    masterRequestId: string
+    nodeId: string
+    nodeKind: 'world_location' | 'set' | 'zone' | 'spot' | 'camera_grid' | 'viewpoint' | 'angle' | 'coverage_anchor' | 'temp_character' | 'prop' | 'faction' | 'vehicle' | 'group'
+    visualBriefOverride?: string
+    extraPromptDirection?: string
+    clearOverride?: boolean
+  }): Promise<SequenceAnimaticSceneGraphNodeUpdateResponse>
+  analyzeSequenceAnimaticZonePois(snapshot: ProjectSnapshot, request: {
+    masterRequestId: string
+    zoneNodeId: string
+  }): Promise<SequenceAnimaticZonePoiAnalyzeResponse>
   upgradeOutputWorkflowPreset(snapshot: ProjectSnapshot, request: {
     workflowId: string
     preset?: 'ebook_from_world'
