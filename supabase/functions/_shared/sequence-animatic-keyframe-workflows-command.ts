@@ -68,6 +68,7 @@ import {
   buildSequenceAnimaticVisualReferencePlan,
   sequenceAnimaticContinuityLinkRequiresPrevious,
   sequenceAnimaticCanonicalShotGraphPolicyVersion,
+  sequenceAnimaticShotReferenceSubstitutionsFromMetadata,
   sequenceAnimaticVisualReferenceHash,
 } from '../../../src/domain/sequenceAnimaticVisualReferencePlan.ts'
 import {
@@ -1477,6 +1478,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
           ...readStringArray(asRecord(shot.refs).referenceIds ?? asRecord(shot.refs).reference_ids),
           ...shotEntityRefIds(shot),
         ],
+        referenceSubstitutions: sequenceAnimaticShotReferenceSubstitutionsFromMetadata(masterMetadataForWrites),
         maxReferences: 8,
       })
     }

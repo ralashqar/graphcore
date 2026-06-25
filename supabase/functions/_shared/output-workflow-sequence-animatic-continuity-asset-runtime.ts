@@ -111,6 +111,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
   zoneMapPoiLines?: string[]
   relevantShots: LooseRecord[]
   referenceAssetKeys: string[]
+  referenceUsageInstruction?: string
   visualCanonGuard?: string
 }) {
   const spatialAsset = input.assetKind === 'location_set'
@@ -234,8 +235,13 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
     input.assetKind === 'location_spot'
       ? 'No action: This is not a shot from the scene. Do not include characters, crowds, silhouettes, dialogue, action, or story beats.'
       : '',
+    input.referenceAssetKeys.length > 0 && readText(input.referenceUsageInstruction)
+      ? `Reference binding: ${readText(input.referenceUsageInstruction)}`
+      : '',
     input.referenceAssetKeys.length > 0
-      ? 'Attached image references are continuity locks. Match their style, materials, palette, lighting logic, architecture, scale, and design language without copying visible layout artifacts.'
+      ? spatialAsset
+        ? 'Attached image references are continuity locks. Match their style, materials, palette, lighting logic, architecture, scale, and design language without copying visible layout artifacts.'
+        : 'Use attached image references only as visual design grounding for the named target asset. Keep the target asset distinct when its brief describes a fragment, variant, damaged part, or local derivative.'
       : spatialAsset
         ? 'No prior continuity asset references are available. Use only the spatial node brief and project visual style.'
         : 'No prior continuity asset references are available. Use the visual brief and project style only.',

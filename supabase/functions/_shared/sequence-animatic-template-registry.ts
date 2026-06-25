@@ -162,6 +162,7 @@ export const sequenceAnimaticContinuityAssetTemplateInputSchema = z.object({
   shotBindings: looseRecordSchema.default({}),
   assetPack: looseRecordSchema.default({}),
   referenceAssetKeys: z.array(z.string()).default([]),
+  worldReferenceCatalog: looseRecordArraySchema.default([]),
   visualDependencyEdges: looseRecordArraySchema.default([]),
   aspectRatio: z.string().min(1).default('16:9'),
 }).strict()
@@ -378,13 +379,14 @@ export const sequenceAnimaticContinuityAssetTemplateScaffold = createWorkflowTem
   key: sequenceAnimaticContinuityAssetTemplateKey,
   label: 'Sequence Animatic Continuity Asset',
   inputSchema: sequenceAnimaticContinuityAssetTemplateInputSchema,
-  policyVersion: 'sequence_animatic_continuity_asset_graph_v1',
+  policyVersion: 'sequence_animatic_continuity_asset_graph_v2_world_reference_match',
   workflowFamily: 'sequence_animatic',
   commandAction: 'generate_continuity_assets',
-  sourceHashKeys: ['draftId', 'commonConfig', 'continuityPack', 'targetNodeId', 'targetNode', 'assetKind', 'assetPack', 'referenceAssetKeys', 'visualDependencyEdges', 'aspectRatio'],
-  graphStages: ['continuity_asset_input', 'continuity_asset_prompt', 'continuity_asset_image', 'continuity_asset_artifact'],
+  sourceHashKeys: ['draftId', 'commonConfig', 'continuityPack', 'targetNodeId', 'targetNode', 'assetKind', 'assetPack', 'referenceAssetKeys', 'worldReferenceCatalog', 'visualDependencyEdges', 'aspectRatio'],
+  graphStages: ['continuity_asset_input', 'continuity_asset_reference_match', 'continuity_asset_prompt', 'continuity_asset_image', 'continuity_asset_artifact'],
   requiredNodePurposes: [
     'sequence_animatic_continuity_asset_input',
+    'sequence_animatic_continuity_asset_reference_match',
     'sequence_animatic_continuity_asset_prompt',
     'sequence_animatic_continuity_asset_image',
     'sequence_animatic_continuity_asset_artifact',
@@ -393,7 +395,7 @@ export const sequenceAnimaticContinuityAssetTemplateScaffold = createWorkflowTem
   projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'providerStatus', 'readyArtifactCount', 'recoveryHints'],
   compatibilityWrappers: ['ensure-sequence-animatic-continuity-asset-workflow'],
   buildGraph: buildSequenceAnimaticContinuityAssetWorkflowGraph,
-  sourceHash: (input) => templateSourceHash('sequence_animatic_continuity_asset_graph_v1', input),
+  sourceHash: (input) => templateSourceHash('sequence_animatic_continuity_asset_graph_v2_world_reference_match', input),
 })
 
 export const sequenceAnimaticContinuityBatchTemplateScaffold = createWorkflowTemplateExtensionScaffold<

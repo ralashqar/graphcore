@@ -8,7 +8,7 @@ export type SequenceAnimaticReferenceDiagnostic = {
   reason: string
 }
 
-export type SequenceAnimaticShotIngredientReferenceKind = 'zone_location' | 'world_character' | 'temp_character' | 'item_or_prop'
+export type SequenceAnimaticShotIngredientReferenceKind = 'zone_location' | 'world_character' | 'temp_character' | 'item_or_prop' | 'faction_group'
 
 export type SequenceAnimaticShotIngredientReference = {
   id: string
@@ -24,6 +24,8 @@ export type SequenceAnimaticShotIngredientReference = {
   reason: string
   imageUrl?: string
 }
+
+export type SequenceAnimaticShotReferenceSubstitution = LooseRecord
 
 export type SequenceAnimaticShotIngredientReferencePlan = {
   version: 'sequence_animatic_shot_ingredient_reference_plan_v1'
@@ -307,12 +309,115 @@ function makeShotIngredientReference(input: {
   }
 }
 
+function normalizeSubstitutionEntries(value: unknown): LooseRecord[] {
+  if (Array.isArray(value)) return value.map(asRecord).filter((entry) => Object.keys(entry).length > 0)
+  const record = asRecord(value)
+  return Object.values(record).map(asRecord).filter((entry) => Object.keys(entry).length > 0)
+}
+
+export function sequenceAnimaticShotReferenceSubstitutionsFromMetadata(metadata: unknown): SequenceAnimaticShotReferenceSubstitution[] {
+  const record = asRecord(metadata)
+  return normalizeSubstitutionEntries(
+    record.sequenceAnimaticShotReferenceSubstitutions
+      ?? record.sequence_animatic_shot_reference_substitutions,
+  )
+}
+
+function substitutionReplacementRecord(substitution: LooseRecord) {
+  return asRecord(
+    substitution.replacement
+      ?? substitution.replacementReference
+      ?? substitution.replacement_reference
+      ?? substitution.newReference
+      ?? substitution.new_reference,
+  )
+}
+
+function substitutionReplacedRecord(substitution: LooseRecord) {
+  return asRecord(
+    substitution.replaced
+      ?? substitution.replacedReference
+      ?? substitution.replaced_reference
+      ?? substitution.oldReference
+      ?? substitution.old_reference,
+  )
+}
+
+function replacementKind(kind: string, fallback: SequenceAnimaticShotIngredientReferenceKind): SequenceAnimaticShotIngredientReferenceKind {
+  const normalized = kind.toLowerCase()
+  if (normalized === 'zone_location') return 'zone_location'
+  if (normalized === 'world_character') return 'world_character'
+  if (normalized === 'temp_character') return 'temp_character'
+  if (normalized === 'item_or_prop') return 'item_or_prop'
+  if (normalized === 'faction_group' || normalized.includes('group') || normalized.includes('faction') || normalized.includes('crowd')) return 'faction_group'
+  if (normalized.includes('item') || normalized.includes('prop') || normalized.includes('object')) return 'item_or_prop'
+  if (normalized.includes('character') || normalized.includes('person') || normalized.includes('actor')) return 'world_character'
+  return fallback
+}
+
+function substitutionMatchesIngredient(
+  substitution: LooseRecord,
+  ingredient: SequenceAnimaticShotIngredientReference,
+) {
+  if (ingredient.kind === 'zone_location') return false
+  const replaced = substitutionReplacedRecord(substitution)
+  const oldCandidateId = readText(substitution.oldCandidateId ?? substitution.old_candidate_id ?? substitution.replacedCandidateId ?? substitution.replaced_candidate_id)
+  const oldAssetKey = readText(substitution.oldAssetKey ?? substitution.old_asset_key ?? replaced.assetKey ?? replaced.asset_key)
+  const oldNodeId = readText(substitution.oldNodeId ?? substitution.old_node_id ?? replaced.nodeId ?? replaced.node_id ?? replaced.id)
+  const oldEntityKey = readText(substitution.oldEntityKey ?? substitution.old_entity_key ?? replaced.entityKey ?? replaced.entity_key)
+  const oldAliases = new Set<string>()
+  ;[oldCandidateId, oldAssetKey, oldNodeId, oldEntityKey].forEach((value) => addReferenceAlias(oldAliases, value))
+  return Boolean(
+    (oldAssetKey && ingredient.assetKey === oldAssetKey)
+      || aliasesMatch(oldAliases, ingredient.nodeId, ingredient.entityKey, ingredient.id),
+  )
+}
+
+export function applySequenceAnimaticShotReferenceSubstitutionsToIngredients(
+  ingredients: SequenceAnimaticShotIngredientReference[],
+  substitutions: readonly SequenceAnimaticShotReferenceSubstitution[] | undefined,
+): SequenceAnimaticShotIngredientReference[] {
+  const substitutionEntries = normalizeSubstitutionEntries(substitutions ?? [])
+  if (substitutionEntries.length === 0) return ingredients
+  return ingredients.map((ingredient) => {
+    const substitution = substitutionEntries.find((entry) => substitutionMatchesIngredient(entry, ingredient))
+    if (!substitution) return ingredient
+    const replacement = substitutionReplacementRecord(substitution)
+    const newAssetKey = readText(substitution.newAssetKey ?? substitution.new_asset_key ?? replacement.assetKey ?? replacement.asset_key)
+    const newNodeId = readText(substitution.newNodeId ?? substitution.new_node_id ?? replacement.nodeId ?? replacement.node_id ?? replacement.id)
+    const newEntityKey = readText(substitution.newEntityKey ?? substitution.new_entity_key ?? replacement.entityKey ?? replacement.entity_key) || newNodeId
+    const newKind = replacementKind(readText(substitution.newKind ?? substitution.new_kind ?? replacement.kind ?? replacement.type), ingredient.kind)
+    const newName = readText(substitution.newName ?? substitution.new_name ?? replacement.name ?? replacement.title ?? replacement.label) || ingredient.name
+    const newRole = readText(substitution.newRole ?? substitution.new_role ?? replacement.role) as SequenceAnimaticReferenceDiagnostic['role']
+    const newImageUrl = readText(substitution.newAssetUrl ?? substitution.new_asset_url ?? replacement.assetUrl ?? replacement.asset_url ?? replacement.imageUrl ?? replacement.image_url ?? replacement.referenceArtUrl ?? replacement.reference_art_url ?? replacement.iconUrl ?? replacement.icon_url)
+    return {
+      ...ingredient,
+      id: `substituted:${newEntityKey || newNodeId || newAssetKey || ingredient.id}`,
+      kind: newKind,
+      name: newName,
+      assetKey: newAssetKey || ingredient.assetKey,
+      nodeId: newNodeId || newEntityKey || ingredient.nodeId,
+      entityKey: newEntityKey || newNodeId || ingredient.entityKey,
+      role: newRole || (newKind === 'item_or_prop'
+        ? 'item_or_prop_reference'
+        : newKind === 'temp_character'
+          ? 'temp_character_reference'
+          : 'world_character_reference'),
+      sourceArtifactRole: readText(substitution.newSourceArtifactRole ?? substitution.new_source_artifact_role ?? replacement.sourceArtifactRole ?? replacement.source_artifact_role) || 'world_entity_reference',
+      status: newAssetKey || ingredient.assetKey ? 'ready' : 'missing',
+      reason: `Cured reference substitution: ${ingredient.name} -> ${newName}.`,
+      imageUrl: newImageUrl || ingredient.imageUrl,
+    }
+  })
+}
+
 export function buildSequenceAnimaticShotIngredientReferencePlan(input: {
   shot: LooseRecord
   spatialNodes?: LooseRecord[]
   continuityTargets?: LooseRecord[]
   assetPack?: LooseRecord
   explicitReferenceIds?: string[]
+  referenceSubstitutions?: readonly SequenceAnimaticShotReferenceSubstitution[]
   maxReferences?: number
 }): SequenceAnimaticShotIngredientReferencePlan {
   const shotId = readText(input.shot.id ?? input.shot.shotId ?? input.shot.shot_id)
@@ -392,7 +497,17 @@ export function buildSequenceAnimaticShotIngredientReferencePlan(input: {
     }))
   }
 
-  const limitedIngredients = ingredients.slice(0, maxReferences)
+  const substitutedIngredients = applySequenceAnimaticShotReferenceSubstitutionsToIngredients(
+    ingredients,
+    input.referenceSubstitutions,
+  )
+  const uniqueIngredients = substitutedIngredients.filter((ingredient, index, entries) => {
+    const key = ingredient.assetKey ? `asset:${ingredient.assetKey}` : `id:${ingredient.kind}:${ingredient.nodeId || ingredient.entityKey || ingredient.name}`
+    return entries.findIndex((entry) => (
+      entry.assetKey ? `asset:${entry.assetKey}` : `id:${entry.kind}:${entry.nodeId || entry.entityKey || entry.name}`
+    ) === key) === index
+  })
+  const limitedIngredients = uniqueIngredients.slice(0, maxReferences)
   const requiredReferenceAssetKeys = uniqueStrings(limitedIngredients.map((entry) => entry.assetKey).filter(Boolean))
   const missingReferences = limitedIngredients.filter((entry) => entry.status !== 'ready')
   const selectedReferences = limitedIngredients

@@ -346,6 +346,83 @@ function assetEntityForKey(assetKey: string, label: string) {
   }
 }
 
+function worldEntityReferenceAssetKey(entity: Record<string, unknown>) {
+  const metadata = asRecord(entity.metadata)
+  return readText(entity.thumbnail_asset_key)
+    || readText(entity.thumbnailAssetKey)
+    || readText(metadata.referenceSheetAssetKey)
+    || readText(metadata.reference_sheet_asset_key)
+    || readText(metadata.primaryAssetKey)
+    || readText(metadata.primary_asset_key)
+    || readText(metadata.iconAssetKey)
+    || readText(metadata.icon_asset_key)
+}
+
+function worldEntityReferenceCategory(entity: Record<string, unknown>) {
+  const raw = readText(entity.node_type ?? entity.nodeType ?? entity.type ?? asRecord(entity.metadata).entityType ?? asRecord(entity.metadata).entity_type).toLowerCase()
+  if (['character', 'person', 'actor', 'cast', 'faction', 'group', 'organization'].some((token) => raw.includes(token))) return 'character_or_group'
+  if (['item', 'prop', 'object', 'artifact', 'weapon', 'vehicle'].some((token) => raw.includes(token))) return 'item_or_prop'
+  if (['location', 'place', 'set', 'zone', 'spot', 'environment'].some((token) => raw.includes(token))) return 'location'
+  return raw
+}
+
+function worldEntityVisualDescription(entity: Record<string, unknown>) {
+  const metadata = asRecord(entity.metadata)
+  const visual = asRecord(metadata.visual ?? entity.visual)
+  return readText(visual.description)
+    || readText(metadata.visualDescription)
+    || readText(metadata.visual_description)
+    || readText(entity.visualDescription)
+    || readText(entity.visual_description)
+}
+
+function compactWorldReferenceText(value: unknown, maxLength = 420) {
+  const text = readText(value).replace(/\s+/g, ' ')
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text
+}
+
+async function loadWorldReferenceCatalogForContinuityAssets(input: {
+  admin: any
+  draftId: string
+}) {
+  const response = await input.admin
+    .from('world_entities')
+    .select('key,name,node_type,thumbnail_asset_key,summary,context,metadata')
+    .eq('draft_id', input.draftId)
+    .limit(300)
+  if (response.error) throw new Error(response.error.message)
+  return ((response.data ?? []) as Record<string, unknown>[])
+    .map((entity) => {
+      const assetKey = worldEntityReferenceAssetKey(entity)
+      const category = worldEntityReferenceCategory(entity)
+      const entityKey = readText(entity.key)
+      return {
+        candidateId: `world:${entityKey}:${assetKey}`,
+        candidate_id: `world:${entityKey}:${assetKey}`,
+        source: 'world_entity_reference',
+        entityKey,
+        entity_key: entityKey,
+        name: readText(entity.name),
+        aliases: readArray(asRecord(entity.metadata).aliases).map(readText).filter(Boolean),
+        type: readText(entity.node_type),
+        nodeType: readText(entity.node_type),
+        node_type: readText(entity.node_type),
+        category,
+        summary: compactWorldReferenceText(entity.summary),
+        context: compactWorldReferenceText(entity.context),
+        visualDescription: compactWorldReferenceText(worldEntityVisualDescription(entity)),
+        visual_description: compactWorldReferenceText(worldEntityVisualDescription(entity)),
+        assetKey,
+        asset_key: assetKey,
+        primaryAssetKey: assetKey,
+        primary_asset_key: assetKey,
+      }
+    })
+    .filter((candidate) => readText(candidate.entityKey) && readText(candidate.assetKey))
+    .filter((candidate) => candidate.category !== 'location')
+    .slice(0, 80)
+}
+
 function worldLocationVisualGuideForEntity(entity: Record<string, unknown> | null) {
   if (!entity) return ''
   const metadata = asRecord(entity.metadata)
@@ -773,6 +850,19 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
     const targetIsSpatialAsset = ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(assetKind)
     const batchIsSpatialAsset = resolvedTargetNodes.every((node) => ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(readText(node.assetKind) || readText(node.nodeKind)))
     const shouldUseReferenceImages = targetIsSpatialAsset || batchIsSpatialAsset
+    const targetUsesWorldReferenceMatch = !targetIsSpatialAsset && ['temporary_character', 'temp_character', 'character', 'person', 'crowd', 'group', 'faction', 'prop', 'item', 'vehicle', 'animatic_only'].includes(assetKind)
+    const worldReferenceCatalog = targetUsesWorldReferenceMatch
+      ? await loadWorldReferenceCatalogForContinuityAssets({ admin, draftId: payload.draftId })
+      : []
+    const worldReferenceCatalogHash = targetUsesWorldReferenceMatch
+      ? sequenceAnimaticStableHash(worldReferenceCatalog.map((candidate) => ({
+          candidateId: readText(candidate.candidateId),
+          assetKey: readText(candidate.assetKey),
+          name: readText(candidate.name),
+          category: readText(candidate.category),
+          visualDescription: readText(candidate.visualDescription),
+        })))
+      : ''
     const batchIsAtlas = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
     const batchIsSpotCameraGrid = batchKind === 'spot_camera_grid'
     const targetIsLocationSpot = assetKind === 'location_spot'
@@ -811,7 +901,9 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       scopedReferenceAssetKeys: [],
       referenceScope: 'sequence_animatic_local_continuity_text_only',
       referenceDiagnostics: [
-        'Local temporary character and prop continuity generation is text-only. No character, prop, world, or shot reference images are passed.',
+        targetUsesWorldReferenceMatch
+          ? 'Local temporary character and prop continuity generation starts text-only; the graph-native reference match node may add one high-confidence world reference image.'
+          : 'Local continuity generation is text-only. No character, prop, world, or shot reference images are passed.',
       ],
     }
     if (resolvedTargetNodes.length > 1 && batchKind) {
@@ -1105,6 +1197,8 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       zoneMapPoiLines,
       relevantShotIds: relevantShots.map((shot) => readText(shot.id)),
       referenceAssetKeys: allReferenceAssetKeys,
+      worldReferenceCatalogHash,
+      referenceMatchPolicyVersion: targetUsesWorldReferenceMatch ? 'sequence_animatic_temp_asset_world_reference_match_v1' : '',
       manifestHash,
     })
     const currentAssetState = continuityAssetStateSchema.safeParse(asRecord(assetStates[payload.nodeId]))
@@ -1224,6 +1318,20 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
       parentNodeIds: dependencyEdges.filter((edge) => readText(edge.targetNodeId) === payload.nodeId).map((edge) => readText(edge.sourceNodeId)).filter(Boolean),
       spatialPromptPolicyVersion: targetIsSpatial ? sequenceAnimaticSpatialPromptPolicyVersion : '',
       generationPolicy: singleGenerationPolicy,
+      worldReferenceCatalog,
+      world_reference_catalog: worldReferenceCatalog,
+      worldReferenceCatalogHash,
+      world_reference_catalog_hash: worldReferenceCatalogHash,
+      referenceMatchPolicy: {
+        version: 'sequence_animatic_temp_asset_world_reference_match_v1',
+        enabled: targetUsesWorldReferenceMatch,
+        confidenceThreshold: 0.82,
+      },
+      reference_match_policy: {
+        version: 'sequence_animatic_temp_asset_world_reference_match_v1',
+        enabled: targetUsesWorldReferenceMatch,
+        confidence_threshold: 0.82,
+      },
       zoneMapPoiLines,
       lastWorkflowCommand: {
         action: 'generate_continuity_assets',
@@ -1249,6 +1357,7 @@ export async function runSequenceAnimaticContinuityAssetWorkflowCommand(input: {
         shotBindings: bindings,
         assetPack: augmentedAssetPack,
         referenceAssetKeys: allReferenceAssetKeys,
+        worldReferenceCatalog,
         visualDependencyEdges: dependencyEdges,
         aspectRatio: readText(assetPack.aspectRatio) || '16:9',
       },

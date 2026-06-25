@@ -1,6 +1,8 @@
 import type { EntityIconId } from '../../../shared/entityIcons'
 import {
+  applySequenceAnimaticShotReferenceSubstitutionsToIngredients,
   buildSequenceAnimaticShotIngredientReferencePlan,
+  sequenceAnimaticShotReferenceSubstitutionsFromMetadata,
   sequenceAnimaticVisualReferenceHash,
 } from '../../../domain/sequenceAnimaticVisualReferencePlan.ts'
 import type {
@@ -451,16 +453,18 @@ export function sequenceAnimaticIngredientsForShot(
     spatialNodes,
     continuityTargets,
     assetPack: scopedAssetPack,
+    referenceSubstitutions: sequenceAnimaticShotReferenceSubstitutionsFromMetadata(model.request.metadata),
     maxReferences: 8,
   })
   const savedOverride = savedReferenceOverrideForShot(model, shot)
+  const referenceSubstitutions = sequenceAnimaticShotReferenceSubstitutionsFromMetadata(model.request.metadata)
   const referenceIngredients = savedOverride
-    ? savedOverride.ingredients.map((ingredient, index) => {
+    ? applySequenceAnimaticShotReferenceSubstitutionsToIngredients(savedOverride.ingredients.map((ingredient, index) => {
         const assetKey = cleanText(ingredient.assetKey ?? ingredient.asset_key)
         const nodeId = cleanText(ingredient.nodeId ?? ingredient.node_id)
         const entityKey = cleanText(ingredient.entityKey ?? ingredient.entity_key) || nodeId
         const rawKind = cleanText(ingredient.kind)
-        const kind = (rawKind === 'zone_location' || rawKind === 'world_character' || rawKind === 'temp_character' || rawKind === 'item_or_prop')
+        const kind = (rawKind === 'zone_location' || rawKind === 'world_character' || rawKind === 'temp_character' || rawKind === 'item_or_prop' || rawKind === 'faction_group')
           ? rawKind
           : 'item_or_prop'
         const imageUrl = assetUrlByAssetKey.get(assetKey)
@@ -480,7 +484,7 @@ export function sequenceAnimaticIngredientsForShot(
           reason: 'Saved fixed shot reference.',
           imageUrl,
         }
-      })
+      }), referenceSubstitutions)
     : referencePlan.ingredients
   const shotReferenceByEntityKey = new Map(shot.references.map((reference) => [lookupKey(reference.entityKey), reference] as const).filter(([key]) => key))
   const ingredients: SequenceAnimaticShotIngredient[] = referenceIngredients.map((reference) => {
@@ -506,6 +510,8 @@ export function sequenceAnimaticIngredientsForShot(
           ? 'World character'
           : reference.kind === 'temp_character'
             ? 'Temp character'
+            : reference.kind === 'faction_group'
+              ? 'World group'
             : 'Item/prop',
       kind: target ? 'continuity_asset' : 'reference',
       iconId: iconForIngredientKind(iconKind),
@@ -616,6 +622,7 @@ function roleForOverrideIngredient(ingredient: SequenceAnimaticShotIngredient) {
   const type = ingredient.typeLabel.toLowerCase()
   if (type.includes('zone') || type.includes('spot from zone')) return 'zone_reference'
   if (type.includes('world character')) return 'world_character_reference'
+  if (type.includes('world group')) return 'world_character_reference'
   if (type.includes('temp character')) return 'temp_character_reference'
   if (type.includes('item') || type.includes('prop')) return 'item_or_prop_reference'
   return 'shot_ingredient_reference'
@@ -625,6 +632,7 @@ function overrideKindForIngredient(ingredient: SequenceAnimaticShotIngredient) {
   const type = ingredient.typeLabel.toLowerCase()
   if (type.includes('zone') || type.includes('spot from zone')) return 'zone_location'
   if (type.includes('world character')) return 'world_character'
+  if (type.includes('world group')) return 'faction_group'
   if (type.includes('temp character')) return 'temp_character'
   if (type.includes('item') || type.includes('prop')) return 'item_or_prop'
   return ingredient.kind

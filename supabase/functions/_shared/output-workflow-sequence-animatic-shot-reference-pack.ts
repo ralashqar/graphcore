@@ -302,6 +302,144 @@ function normalizedReferenceFromCandidate(
   }
 }
 
+function referenceFixCandidateMap(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  config: LooseRecord,
+  fixedReferences: readonly LooseRecord[],
+) {
+  const candidatePool = helpers.asRecord(config.referenceFixCandidatePool ?? config.reference_fix_candidate_pool)
+  const candidates = [
+    ...helpers.readArray(candidatePool.currentReferences ?? candidatePool.current_references).map(helpers.asRecord),
+    ...helpers.readArray(candidatePool.candidates).map(helpers.asRecord),
+    ...fixedReferences,
+  ]
+  const byId = new Map<string, LooseRecord>()
+  const byAssetKey = new Map<string, LooseRecord>()
+  for (const rawCandidate of candidates) {
+    const assetKey = referenceAssetKey(helpers, rawCandidate)
+    const candidateId = helpers.readText(rawCandidate.candidateId ?? rawCandidate.candidate_id)
+      || (assetKey ? `current:${assetKey}` : '')
+    if (!candidateId && !assetKey) continue
+    const candidate = {
+      ...rawCandidate,
+      candidateId,
+      candidate_id: candidateId,
+      assetKey,
+      asset_key: assetKey,
+    }
+    if (candidateId && !byId.has(candidateId)) byId.set(candidateId, candidate)
+    if (assetKey && !byAssetKey.has(assetKey)) byAssetKey.set(assetKey, candidate)
+  }
+  return { byId, byAssetKey }
+}
+
+function referenceFixSource(helpers: SequenceAnimaticWorkflowNodePackHelpers, reference: LooseRecord) {
+  return helpers.readText(reference.source).toLowerCase()
+}
+
+function referenceFixIsWorldCandidate(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  candidateId: string,
+  reference: LooseRecord,
+) {
+  const source = referenceFixSource(helpers, reference)
+  return candidateId.startsWith('world:') || source === 'world_reference' || source === 'world_entity_reference'
+}
+
+function referenceFixSubstitutionKey(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  substitution: LooseRecord,
+) {
+  return helpers.readText(substitution.oldCandidateId ?? substitution.old_candidate_id)
+    || helpers.readText(substitution.oldNodeId ?? substitution.old_node_id)
+    || helpers.readText(substitution.oldEntityKey ?? substitution.old_entity_key)
+    || helpers.readText(substitution.oldAssetKey ?? substitution.old_asset_key)
+}
+
+function buildReferenceFixSubstitutions(input: {
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+  config: LooseRecord
+  decisions: readonly LooseRecord[]
+  fixedReferences: readonly LooseRecord[]
+  shotId: string
+  context: SequenceAnimaticNodeExecutionContext
+}) {
+  const { helpers, config, decisions, fixedReferences, shotId, context } = input
+  const candidateMaps = referenceFixCandidateMap(helpers, config, fixedReferences)
+  const substitutions: LooseRecord[] = []
+  for (const decision of decisions) {
+    const action = helpers.readText(decision.action).toLowerCase()
+    if (action !== 'replace' && action !== 'remove_duplicate') continue
+    const newCandidateId = helpers.readText(decision.candidateId ?? decision.candidate_id)
+    const oldCandidateId = helpers.readText(decision.replacedCandidateId ?? decision.replaced_candidate_id)
+    if (!newCandidateId || !oldCandidateId || newCandidateId === oldCandidateId) continue
+    const replacement = candidateMaps.byId.get(newCandidateId)
+      ?? candidateMaps.byAssetKey.get(newCandidateId)
+      ?? {}
+    const replaced = candidateMaps.byId.get(oldCandidateId)
+      ?? candidateMaps.byAssetKey.get(oldCandidateId)
+      ?? {}
+    const newAssetKey = referenceAssetKey(helpers, replacement)
+    const oldAssetKey = referenceAssetKey(helpers, replaced)
+    if (!newAssetKey || !oldAssetKey) continue
+    if (!referenceFixIsWorldCandidate(helpers, newCandidateId, replacement)) continue
+    if (isLocationLikeReference(helpers, replacement) || isLocationLikeReference(helpers, replaced)) continue
+    const replacementReference = normalizedReferenceFromCandidate(helpers, replacement, 0)
+    const replacedReference = normalizedReferenceFromCandidate(helpers, replaced, 0)
+    substitutions.push({
+      version: 'sequence_animatic_reference_substitution_v1',
+      source: 'shot_reference_fix',
+      action,
+      confidence: Number(decision.confidence ?? 0) || 0,
+      rationale: helpers.readText(decision.rationale),
+      appliedByShotId: shotId,
+      applied_by_shot_id: shotId,
+      oldCandidateId,
+      old_candidate_id: oldCandidateId,
+      newCandidateId,
+      new_candidate_id: newCandidateId,
+      oldAssetKey,
+      old_asset_key: oldAssetKey,
+      newAssetKey,
+      new_asset_key: newAssetKey,
+      oldNodeId: helpers.readText(replacedReference.nodeId ?? replacedReference.node_id),
+      old_node_id: helpers.readText(replacedReference.nodeId ?? replacedReference.node_id),
+      oldEntityKey: helpers.readText(replacedReference.entityKey ?? replacedReference.entity_key),
+      old_entity_key: helpers.readText(replacedReference.entityKey ?? replacedReference.entity_key),
+      oldName: helpers.readText(replacedReference.name),
+      old_name: helpers.readText(replacedReference.name),
+      oldKind: helpers.readText(replacedReference.kind),
+      old_kind: helpers.readText(replacedReference.kind),
+      newNodeId: helpers.readText(replacementReference.nodeId ?? replacementReference.node_id),
+      new_node_id: helpers.readText(replacementReference.nodeId ?? replacementReference.node_id),
+      newEntityKey: helpers.readText(replacementReference.entityKey ?? replacementReference.entity_key),
+      new_entity_key: helpers.readText(replacementReference.entityKey ?? replacementReference.entity_key),
+      newName: helpers.readText(replacementReference.name),
+      new_name: helpers.readText(replacementReference.name),
+      newKind: helpers.readText(replacementReference.kind),
+      new_kind: helpers.readText(replacementReference.kind),
+      newRole: helpers.readText(replacementReference.role),
+      new_role: helpers.readText(replacementReference.role),
+      newSourceArtifactRole: helpers.readText(replacementReference.sourceArtifactRole ?? replacementReference.source_artifact_role),
+      new_source_artifact_role: helpers.readText(replacementReference.sourceArtifactRole ?? replacementReference.source_artifact_role),
+      newAssetUrl: referenceImageUrl(helpers, replacementReference),
+      new_asset_url: referenceImageUrl(helpers, replacementReference),
+      replacement: replacementReference,
+      replacement_reference: replacementReference,
+      replacedReference,
+      replaced_reference: replacedReference,
+      workflowId: context.workflow.id,
+      workflow_id: context.workflow.id,
+      runId: context.run.id,
+      run_id: context.run.id,
+      nodeKey: context.node.key,
+      node_key: context.node.key,
+      at: new Date().toISOString(),
+    })
+  }
+  return substitutions
+}
+
 const shotReferenceFixDecisionSchema = z.object({
   action: z.enum(['keep', 'add', 'replace', 'remove_duplicate']),
   candidateId: z.string().default(''),
@@ -793,6 +931,14 @@ export async function sequenceAnimaticShotReferenceFixApply(
     source: 'focused_shot_ingredient_ui',
     ingredients,
   }
+  const substitutions = buildReferenceFixSubstitutions({
+    helpers,
+    config,
+    decisions,
+    fixedReferences,
+    shotId,
+    context,
+  })
   const auditEntry = {
     at: new Date().toISOString(),
     workflowId: context.workflow.id,
@@ -804,6 +950,7 @@ export async function sequenceAnimaticShotReferenceFixApply(
     referenceAssetKeys,
     decisions,
     diagnostics,
+    substitutions,
   }
   if (masterRequestId && shotId) {
     const client = context.client as {
@@ -826,12 +973,28 @@ export async function sequenceAnimaticShotReferenceFixApply(
     if (currentResponse.error) throw new Error(currentResponse.error.message)
     const currentMetadata = helpers.asRecord(currentResponse.data?.metadata)
     const existingOverrides = helpers.asRecord(currentMetadata.sequenceAnimaticShotReferenceOverridesByShotId ?? currentMetadata.sequence_animatic_shot_reference_overrides_by_shot_id)
+    const rawExistingSubstitutions = currentMetadata.sequenceAnimaticShotReferenceSubstitutions ?? currentMetadata.sequence_animatic_shot_reference_substitutions
+    const existingSubstitutions = (Array.isArray(rawExistingSubstitutions)
+      ? rawExistingSubstitutions
+      : Object.values(helpers.asRecord(rawExistingSubstitutions))).map(helpers.asRecord)
     const existingAudit = helpers.readArray(currentMetadata.sequenceAnimaticShotReferenceFixAudit ?? currentMetadata.sequence_animatic_shot_reference_fix_audit).map(helpers.asRecord)
     const nextOverrides = { ...existingOverrides, [shotId]: override }
+    const substitutionByKey = new Map<string, LooseRecord>()
+    for (const substitution of existingSubstitutions) {
+      const key = referenceFixSubstitutionKey(helpers, substitution)
+      if (key) substitutionByKey.set(key, substitution)
+    }
+    for (const substitution of substitutions) {
+      const key = referenceFixSubstitutionKey(helpers, substitution)
+      if (key) substitutionByKey.set(key, substitution)
+    }
+    const nextSubstitutions = [...substitutionByKey.values()]
     const nextMetadata = {
       ...currentMetadata,
       sequenceAnimaticShotReferenceOverridesByShotId: nextOverrides,
       sequence_animatic_shot_reference_overrides_by_shot_id: nextOverrides,
+      sequenceAnimaticShotReferenceSubstitutions: nextSubstitutions,
+      sequence_animatic_shot_reference_substitutions: nextSubstitutions,
       sequenceAnimaticShotReferenceFixAudit: [...existingAudit, auditEntry].slice(-50),
       sequence_animatic_shot_reference_fix_audit: [...existingAudit, auditEntry].slice(-50),
     }
@@ -858,6 +1021,8 @@ export async function sequenceAnimaticShotReferenceFixApply(
     reference_fix_diagnostics: diagnostics,
     referenceFixPatch: auditEntry,
     reference_fix_patch: auditEntry,
+    referenceSubstitutions: substitutions,
+    reference_substitutions: substitutions,
     shotReferenceOverride: override,
     shot_reference_override: override,
     text: JSON.stringify({ shotId, referenceAssetKeys, decisions, diagnostics }, null, 2),

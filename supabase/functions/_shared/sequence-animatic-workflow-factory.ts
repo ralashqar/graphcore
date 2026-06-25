@@ -815,6 +815,7 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
   shotBindings: Record<string, unknown>
   assetPack: Record<string, unknown>
   referenceAssetKeys: string[]
+  worldReferenceCatalog?: Record<string, unknown>[]
   visualDependencyEdges: Record<string, unknown>[]
   aspectRatio: string
 }) {
@@ -831,6 +832,8 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
     shotBindings: input.shotBindings,
     assetPack: input.assetPack,
     referenceAssetKeys: input.referenceAssetKeys,
+    worldReferenceCatalog: input.worldReferenceCatalog ?? [],
+    world_reference_catalog: input.worldReferenceCatalog ?? [],
     visualDependencyEdges: input.visualDependencyEdges,
     aspectRatio: input.aspectRatio,
   }
@@ -840,12 +843,17 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_asset_input', maxConcurrency: 4 },
     }, {}, 'continuity_asset'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_prompt', 'utility_transform', 'Continuity Asset Prompt', 360, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_reference_match', 'utility_transform', 'Match World Reference', 360, 120, {
+      purpose: 'sequence_animatic_continuity_asset_reference_match',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_asset_reference_match', maxConcurrency: 4 },
+    }, {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_prompt', 'utility_transform', 'Continuity Asset Prompt', 640, 120, {
       purpose: 'sequence_animatic_continuity_asset_prompt',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_continuity_asset_prompt', maxConcurrency: 4 },
     }, {}, 'continuity_asset'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_image', 'image_generation', 'Continuity Asset Image', 640, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_image', 'image_generation', 'Continuity Asset Image', 920, 120, {
       purpose: 'sequence_animatic_continuity_asset_image',
       role: 'sequence_animatic_continuity_asset_image',
       ...config,
@@ -860,7 +868,7 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
       planning_only: false,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_continuity_asset_image', maxConcurrency: 2, continueOnError: true },
     }, {}, 'continuity_asset'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_artifact', 'output_artifact', 'Register Continuity Asset', 920, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'continuity_asset_artifact', 'output_artifact', 'Register Continuity Asset', 1200, 120, {
       purpose: 'sequence_animatic_continuity_asset_artifact',
       artifactKind: 'other',
       ...config,
@@ -868,16 +876,27 @@ export function buildSequenceAnimaticContinuityAssetWorkflowGraph(input: {
     }, {}, 'continuity_asset'),
   ]
   const edges = [
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_target', 'continuity_asset_input', 'target_node', 'continuity_asset_prompt', 'target_node', {}, 'continuity_asset'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_pack', 'continuity_asset_input', 'continuity_pack', 'continuity_asset_prompt', 'continuity_pack', {}, 'continuity_asset'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_shots', 'continuity_asset_input', 'relevant_shots', 'continuity_asset_prompt', 'relevant_shots', {}, 'continuity_asset'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__prompt_refs', 'continuity_asset_input', 'asset_pack', 'continuity_asset_prompt', 'asset_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__match_target', 'continuity_asset_input', 'target_node', 'continuity_asset_reference_match', 'target_node', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__match_shots', 'continuity_asset_input', 'relevant_shots', 'continuity_asset_reference_match', 'relevant_shots', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__match_refs', 'continuity_asset_input', 'asset_pack', 'continuity_asset_reference_match', 'asset_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_target', 'continuity_asset_reference_match', 'target_node', 'continuity_asset_prompt', 'target_node', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_pack', 'continuity_asset_reference_match', 'asset_pack', 'continuity_asset_prompt', 'asset_pack', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_shots', 'continuity_asset_reference_match', 'relevant_shots', 'continuity_asset_prompt', 'relevant_shots', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_ref_keys', 'continuity_asset_reference_match', 'reference_asset_keys', 'continuity_asset_prompt', 'reference_asset_keys', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_usage', 'continuity_asset_reference_match', 'reference_usage_instruction', 'continuity_asset_prompt', 'reference_usage_instruction', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_world_ref', 'continuity_asset_reference_match', 'selected_world_reference', 'continuity_asset_prompt', 'selected_world_reference', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_decision', 'continuity_asset_reference_match', 'match_decision', 'continuity_asset_prompt', 'match_decision', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'match__prompt_diagnostics', 'continuity_asset_reference_match', 'match_diagnostics', 'continuity_asset_prompt', 'match_diagnostics', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image', 'continuity_asset_prompt', 'text', 'continuity_asset_image', 'prompt', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_refs', 'continuity_asset_prompt', 'asset_pack', 'continuity_asset_image', 'asset_pack', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__image_ref_keys', 'continuity_asset_prompt', 'reference_asset_keys', 'continuity_asset_image', 'reference_asset_keys', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'input__artifact_target', 'continuity_asset_input', 'target_node', 'continuity_asset_artifact', 'target_node', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_prompt', 'continuity_asset_prompt', 'text', 'continuity_asset_artifact', 'prompt', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_refs', 'continuity_asset_prompt', 'reference_asset_keys', 'continuity_asset_artifact', 'reference_asset_keys', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_world_ref', 'continuity_asset_prompt', 'selected_world_reference', 'continuity_asset_artifact', 'selected_world_reference', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_ref_usage', 'continuity_asset_prompt', 'reference_usage_instruction', 'continuity_asset_artifact', 'reference_usage_instruction', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_match_decision', 'continuity_asset_prompt', 'match_decision', 'continuity_asset_artifact', 'match_decision', {}, 'continuity_asset'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact_match_diagnostics', 'continuity_asset_prompt', 'match_diagnostics', 'continuity_asset_artifact', 'match_diagnostics', {}, 'continuity_asset'),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'image__artifact', 'continuity_asset_image', 'image', 'continuity_asset_artifact', 'image', { optional: true, optionalDependency: true }, 'continuity_asset'),
   ]
   return { nodes, edges }

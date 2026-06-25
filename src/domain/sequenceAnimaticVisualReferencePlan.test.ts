@@ -416,3 +416,56 @@ test('shot ingredient reference plan does not let scene-local refs leak across s
   assert.equal(plan.ingredients.some((entry) => entry.nodeId === 'scene_002_local_sky_sutra_disc'), false)
   assert.equal(plan.ingredients.some((entry) => entry.nodeId === 'scene_002_local_choice_coin'), false)
 })
+
+test('shot ingredient reference plan applies cured animatic-to-world substitutions across shots', () => {
+  const plan = buildSequenceAnimaticShotIngredientReferencePlan({
+    shot: {
+      id: 'scene_2_shot_8',
+      references: [
+        { entityKey: 'scene_002_local_sky_sutra_disc', name: 'Sky Sutra Disc' },
+      ],
+      dialogue: [],
+    },
+    spatialNodes: [
+      { id: 'zone_archive', kind: 'location_zone', name: 'Archive Zone', assetKey: 'zone_asset' },
+    ],
+    assetPack: {
+      entities: [
+        { key: 'sky_sutra_discs', name: 'Sky Sutra Discs', type: 'prop', primaryAssetKey: 'world_disc_asset', assetUrl: 'https://example.test/world-disc.webp' },
+      ],
+    },
+    continuityTargets: [
+      {
+        nodeId: 'scene_002_local_sky_sutra_disc',
+        name: 'Sky Sutra Disc',
+        assetKind: 'prop',
+        assetKey: 'temp_disc_asset',
+        status: 'ready',
+        shotIds: ['scene_2_shot_8'],
+      },
+    ],
+    referenceSubstitutions: [
+      {
+        oldCandidateId: 'animatic:scene_002_local_sky_sutra_disc:temp_disc_asset',
+        oldNodeId: 'scene_002_local_sky_sutra_disc',
+        oldEntityKey: 'scene_002_local_sky_sutra_disc',
+        oldAssetKey: 'temp_disc_asset',
+        newCandidateId: 'world:sky_sutra_discs:world_disc_asset',
+        newNodeId: 'sky_sutra_discs',
+        newEntityKey: 'sky_sutra_discs',
+        newName: 'Sky Sutra Discs',
+        newKind: 'item_or_prop',
+        newRole: 'item_or_prop_reference',
+        newAssetKey: 'world_disc_asset',
+        newAssetUrl: 'https://example.test/world-disc.webp',
+      },
+    ],
+  })
+
+  assert.deepEqual(plan.requiredReferenceAssetKeys, ['zone_asset', 'world_disc_asset'])
+  assert.equal(plan.requiredReferenceAssetKeys.includes('temp_disc_asset'), false)
+  assert.equal(plan.ingredients[0].kind, 'zone_location')
+  assert.equal(plan.ingredients[1].entityKey, 'sky_sutra_discs')
+  assert.equal(plan.ingredients[1].name, 'Sky Sutra Discs')
+  assert.equal(plan.ingredients[1].imageUrl, 'https://example.test/world-disc.webp')
+})

@@ -4,6 +4,7 @@ import {
   type WorkflowNodeExtensionScaffold,
   type WorkflowNodeRuntimeKind,
 } from '../../../src/domain/outputWorkflowManifests.ts'
+import { z } from 'zod'
 import { outputWorkflowNodeManifestsByPurpose } from '../../../src/domain/outputWorkflowNodeContracts.ts'
 import { defineWorkflowNodePack } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
 import type {
@@ -53,6 +54,89 @@ function normalizedContinuityAssetKind(
   if (raw === 'location_spot' || raw === 'location_zone' || raw === 'location_set' || raw === 'location_angle' || raw === 'location_viewpoint' || raw === 'spot_camera_grid') return raw
   return config || raw
 }
+
+function isSpatialContinuityAssetKind(assetKind: string) {
+  return ['location_set', 'location_zone', 'location_spot', 'location_angle', 'location_viewpoint', 'spot_camera_grid'].includes(assetKind)
+}
+
+function isReferenceMatchEligibleContinuityAssetKind(assetKind: string) {
+  return assetKind === 'temporary_character' || assetKind === 'prop' || assetKind === 'item' || assetKind === 'group' || assetKind === 'faction'
+}
+
+function continuityReferenceMatchCategory(assetKind: string) {
+  return assetKind === 'temporary_character' || assetKind === 'group' || assetKind === 'faction'
+    ? 'character_or_group'
+    : assetKind === 'prop' || assetKind === 'item'
+      ? 'item_or_prop'
+      : ''
+}
+
+function continuityReferenceCandidateCategory(candidate: Record<string, unknown>, helpers: SequenceAnimaticWorkflowNodePackHelpers) {
+  const raw = helpers.readText(candidate.category ?? candidate.kind ?? candidate.type ?? candidate.nodeType ?? candidate.node_type).toLowerCase()
+  if (['character', 'person', 'actor', 'cast', 'faction', 'group', 'organization', 'temporary_character'].some((token) => raw.includes(token))) return 'character_or_group'
+  if (['item', 'prop', 'object', 'artifact', 'weapon', 'vehicle'].some((token) => raw.includes(token))) return 'item_or_prop'
+  if (['location', 'place', 'set', 'zone', 'spot', 'environment'].some((token) => raw.includes(token))) return 'location'
+  return raw
+}
+
+function continuityAssetReferenceAssetKey(candidate: Record<string, unknown>, helpers: SequenceAnimaticWorkflowNodePackHelpers) {
+  return helpers.readText(candidate.assetKey ?? candidate.asset_key ?? candidate.primaryAssetKey ?? candidate.primary_asset_key ?? candidate.referenceAssetKey ?? candidate.reference_asset_key)
+}
+
+function readContinuityTargetVisualBrief(targetNode: Record<string, unknown>, helpers: SequenceAnimaticWorkflowNodePackHelpers) {
+  const visual = helpers.asRecord(targetNode.visual)
+  const metadata = helpers.asRecord(targetNode.metadata)
+  const metadataVisual = helpers.asRecord(metadata.visual)
+  const candidates = [
+    targetNode.visualDescription,
+    targetNode.visual_description,
+    visual.description,
+    visual.visualDescription,
+    targetNode.visualBrief,
+    targetNode.visual_brief,
+    targetNode.description,
+    metadata.visualDescription,
+    metadata.visual_description,
+    metadataVisual.description,
+    metadataVisual.visualDescription,
+    targetNode.summary,
+  ]
+  for (const candidate of candidates) {
+    const text = helpers.readText(candidate).replace(/\s+/g, ' ').trim()
+    if (!text) continue
+    if (/^blocks?\s+[^/]+\/\s*shots?\s+/i.test(text)) continue
+    if (/^shots?\s+[\w_,\s-]+$/i.test(text)) continue
+    return text.length > 900 ? `${text.slice(0, 900).trim()}...` : text
+  }
+  return ''
+}
+
+function readFirstUpstreamTextCompat(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  fields: string[],
+) {
+  const directReader = (helpers as unknown as { readFirstUpstreamText?: (upstream: Record<string, Record<string, unknown>>, fields?: string[]) => string }).readFirstUpstreamText
+  if (typeof directReader === 'function') return directReader(context.upstream, fields)
+  for (const output of Object.values(context.upstream ?? {})) {
+    const record = helpers.asRecord(output)
+    for (const field of fields) {
+      const text = helpers.readText(record[field])
+      if (text) return text
+    }
+  }
+  return ''
+}
+
+const continuityAssetReferenceMatchSchema = z.object({
+  selectedCandidateId: z.string().default(''),
+  selected_candidate_id: z.string().default(''),
+  confidence: z.number().min(0).max(1).default(0),
+  rationale: z.string().default(''),
+  usageInstruction: z.string().default(''),
+  usage_instruction: z.string().default(''),
+  diagnostics: z.array(z.string()).default([]),
+})
 
 async function latestContinuityAssetStateByNodeId(
   context: SequenceAnimaticNodeExecutionContext,
@@ -482,7 +566,7 @@ export async function sequenceAnimaticContinuityBatchExtract(
         inputHash: helpers.readText(config.continuityBatchHash) || helpers.readText(config.assetInputHash) || helpers.hashOutputWorkflowValue({ targetNode, assetKey }),
         assetKey: targetAssetKey,
         artifactKey: artifact.key,
-        prompt: helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text']),
+        prompt: readFirstUpstreamTextCompat(context, helpers, ['prompt', 'text']),
         referenceAssetKeys: batchReferenceAssetKeys,
         generationPolicy,
         batchKind,
@@ -533,6 +617,220 @@ export async function sequenceAnimaticContinuityBatchExtract(
   return result({ context, helpers, outputs, model: 'sequence-animatic-continuity-batch-extract-v1' })
 }
 
+export async function sequenceAnimaticContinuityAssetReferenceMatch(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const upstreamTargetNode = helpers.readFirstUpstreamRecord(context.upstream, ['targetNode', 'target_node'])
+  const targetNode = Object.keys(upstreamTargetNode).length > 0 ? upstreamTargetNode : helpers.asRecord(config.targetNode)
+  const relevantShots = helpers.readFirstUpstreamArray(context.upstream, ['relevantShots', 'relevant_shots']).map(helpers.asRecord)
+  const upstreamAssetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
+  const assetPack = Object.keys(upstreamAssetPack).length > 0 ? upstreamAssetPack : helpers.asRecord(config.assetPack)
+  const assetKind = normalizedContinuityAssetKind(helpers, config.assetKind, targetNode)
+  const eligibleCategory = continuityReferenceMatchCategory(assetKind)
+  const rawPolicy = helpers.asRecord(config.referenceMatchPolicy ?? config.reference_match_policy)
+  const threshold = Math.max(0, Math.min(1, Number(rawPolicy.confidenceThreshold ?? rawPolicy.confidence_threshold ?? 0.82) || 0.82))
+  const configuredCatalog = helpers.readArray(config.worldReferenceCatalog ?? config.world_reference_catalog).map(helpers.asRecord)
+  const candidateCatalog: Record<string, unknown>[] = configuredCatalog
+    .map((candidate) => {
+      const candidateId = helpers.readText(candidate.candidateId ?? candidate.candidate_id ?? candidate.entityKey ?? candidate.entity_key ?? candidate.key)
+      const assetKey = continuityAssetReferenceAssetKey(candidate, helpers)
+      const category = continuityReferenceCandidateCategory(candidate, helpers)
+      return {
+        ...candidate,
+        candidateId,
+        candidate_id: candidateId,
+        assetKey,
+        asset_key: assetKey,
+        category,
+      }
+    })
+    .filter((candidate) => helpers.readText(candidate.candidateId) && helpers.readText(candidate.assetKey))
+    .filter((candidate) => continuityReferenceCandidateCategory(candidate, helpers) !== 'location')
+    .slice(0, 80)
+  const noMatchOutputs = (diagnostics: string[], model = 'sequence-animatic-continuity-asset-reference-match-skip-v1') => result({
+    context,
+    helpers,
+    model,
+    outputs: {
+      text: diagnostics.join('\n'),
+      targetNode,
+      target_node: targetNode,
+      relevantShots,
+      relevant_shots: relevantShots,
+      assetPack,
+      asset_pack: assetPack,
+      selectedWorldReference: null,
+      selected_world_reference: null,
+      referenceAssetKeys: [],
+      reference_asset_keys: [],
+      referenceUsageInstruction: '',
+      reference_usage_instruction: '',
+      matchDecision: { selected: false, confidence: 0, rationale: '', threshold },
+      match_decision: { selected: false, confidence: 0, rationale: '', threshold },
+      matchDiagnostics: diagnostics,
+      match_diagnostics: diagnostics,
+      deterministic: true,
+    },
+  })
+  if (isSpatialContinuityAssetKind(assetKind)) {
+    return noMatchOutputs(['Reference matching skipped for spatial continuity assets.'])
+  }
+  if (!isReferenceMatchEligibleContinuityAssetKind(assetKind) || !eligibleCategory) {
+    return noMatchOutputs([`Reference matching skipped for unsupported asset kind: ${assetKind || 'unknown'}.`])
+  }
+  if (candidateCatalog.length === 0) {
+    return noMatchOutputs(['No ready world reference candidates are available for this temp continuity asset.'])
+  }
+  const targetName = helpers.readText(targetNode.name ?? targetNode.title) || helpers.titleFromRefLike(helpers.readText(targetNode.id))
+  const targetVisualBrief = readContinuityTargetVisualBrief(targetNode, helpers)
+  const prompt = [
+    'Decide whether this animatic-local continuity asset should be grounded by one existing world visual reference image.',
+    'This is not an identity substitution. A selected world reference is only a visual source design/material/markings reference for generating the local temp asset.',
+    'Use only candidateId values from the provided world reference catalog. Select at most one candidate.',
+    `Only select a match with confidence >= ${threshold}. If uncertain, select nothing.`,
+    'Reject locations/spatial references. Match item/prop targets only to item/prop candidates. Match character/group targets only to character/group candidates unless the target brief explicitly justifies otherwise.',
+    'Fragments, damaged variants, singular/plural names, and near-identical object names are good evidence when visual descriptions are compatible.',
+    '',
+    'Target temp asset',
+    JSON.stringify({
+      id: helpers.readText(targetNode.id),
+      name: targetName,
+      assetKind,
+      category: eligibleCategory,
+      visualBrief: targetVisualBrief,
+      summary: helpers.readText(targetNode.summary),
+      aliases: helpers.readArray(targetNode.aliases).slice(0, 12),
+      relevantShots: relevantShots.slice(0, 6).map((shot) => ({
+        id: helpers.readText(shot.id),
+        title: helpers.readText(shot.title),
+        action: helpers.readText(shot.action) || helpers.readText(shot.description),
+      })),
+    }, null, 2),
+    '',
+    'World reference catalog',
+    JSON.stringify(candidateCatalog.map((candidate) => ({
+      candidateId: helpers.readText(candidate.candidateId),
+      entityKey: helpers.readText(candidate.entityKey ?? candidate.entity_key ?? candidate.key),
+      name: helpers.readText(candidate.name),
+      aliases: helpers.readArray(candidate.aliases).slice(0, 12),
+      category: helpers.readText(candidate.category),
+      type: helpers.readText(candidate.type ?? candidate.nodeType ?? candidate.node_type),
+      summary: helpers.readText(candidate.summary),
+      visualDescription: helpers.readText(candidate.visualDescription ?? candidate.visual_description),
+      assetKey: helpers.readText(candidate.assetKey),
+    })), null, 2),
+  ].join('\n')
+  const structured = await helpers.runStructuredNode({
+    nodeKey: context.node.key,
+    schemaName: 'sequence_animatic_continuity_asset_reference_match',
+    schema: continuityAssetReferenceMatchSchema,
+    instructions: 'Return strict JSON only. Select at most one candidateId from the catalog when the world reference should ground the temp asset.',
+    prompt,
+    fallback: continuityAssetReferenceMatchSchema.parse({
+      selectedCandidateId: '',
+      confidence: 0,
+      rationale: 'Fallback kept temp asset generation text-only.',
+      usageInstruction: '',
+      diagnostics: ['Fallback kept temp asset generation text-only.'],
+    }),
+    maxOutputTokens: 1400,
+  })
+  const selectedCandidateId = helpers.readText(structured.value.selectedCandidateId || structured.value.selected_candidate_id)
+  const diagnostics = [...structured.value.diagnostics]
+  const confidence = Math.max(0, Math.min(1, Number(structured.value.confidence) || 0))
+  const candidate = selectedCandidateId ? candidateCatalog.find((entry) => helpers.readText(entry.candidateId) === selectedCandidateId) : null
+  if (!candidate) {
+    if (selectedCandidateId) diagnostics.push(`Rejected unknown world reference candidate: ${selectedCandidateId}.`)
+    return noMatchOutputs(diagnostics.length > 0 ? diagnostics : ['No confident world reference match selected.'], structured.model)
+  }
+  const candidateCategory = continuityReferenceCandidateCategory(candidate, helpers)
+  if (candidateCategory !== eligibleCategory) {
+    diagnostics.push(`Rejected incompatible world reference category: ${candidateCategory || 'unknown'} for ${eligibleCategory}.`)
+    return noMatchOutputs(diagnostics, structured.model)
+  }
+  if (confidence < threshold) {
+    diagnostics.push(`Rejected low-confidence world reference match (${confidence.toFixed(2)} < ${threshold.toFixed(2)}).`)
+    return noMatchOutputs(diagnostics, structured.model)
+  }
+  const assetKey = continuityAssetReferenceAssetKey(candidate, helpers)
+  if (!assetKey) {
+    diagnostics.push('Rejected world reference match without an asset key.')
+    return noMatchOutputs(diagnostics, structured.model)
+  }
+  const candidateName = helpers.readText(candidate.name) || helpers.titleFromRefLike(assetKey)
+  const usageInstruction = helpers.readText(structured.value.usageInstruction || structured.value.usage_instruction)
+    || `@Image1 ${candidateName}: use as canonical source design/material/markings; generate ${targetName} as a distinct animatic-local asset derived from it.`
+  const fallbackEntity = {
+    key: helpers.readText(candidate.entityKey ?? candidate.entity_key ?? candidate.key) || selectedCandidateId,
+    id: helpers.readText(candidate.entityKey ?? candidate.entity_key ?? candidate.key) || selectedCandidateId,
+    name: candidateName,
+    type: helpers.readText(candidate.type ?? candidate.nodeType ?? candidate.node_type) || candidateCategory,
+    nodeType: helpers.readText(candidate.nodeType ?? candidate.node_type ?? candidate.type) || candidateCategory,
+    node_type: helpers.readText(candidate.nodeType ?? candidate.node_type ?? candidate.type) || candidateCategory,
+    summary: helpers.readText(candidate.summary),
+    visualDescription: helpers.readText(candidate.visualDescription ?? candidate.visual_description),
+    aliases: helpers.readArray(candidate.aliases),
+    assetKeys: [assetKey],
+    primaryAssetKey: assetKey,
+    primary_asset_key: assetKey,
+    selectedReferenceAssetKey: assetKey,
+    selected_reference_asset_key: assetKey,
+    selectedReferenceVariantKey: 'world_reference_match',
+    selectedReferenceVariantLabel: candidateName,
+    selectedReferenceVariantType: candidateCategory,
+    referenceSelectionReason: 'Selected by continuity asset reference match node.',
+  }
+  const scopedAssetPack = scopeAssetPackToReferenceAssetKeys({
+    assetPack,
+    referenceAssetKeys: [assetKey],
+    fallbackEntities: [fallbackEntity],
+    referenceScope: 'sequence_animatic_temp_asset_world_reference_match',
+    limit: 1,
+  })
+  const selectedWorldReference = {
+    ...candidate,
+    candidateId: selectedCandidateId,
+    candidate_id: selectedCandidateId,
+    confidence,
+    assetKey,
+    asset_key: assetKey,
+    usageInstruction,
+    usage_instruction: usageInstruction,
+  }
+  const matchDecision = {
+    selected: true,
+    candidateId: selectedCandidateId,
+    candidate_id: selectedCandidateId,
+    confidence,
+    threshold,
+    rationale: helpers.readText(structured.value.rationale),
+  }
+  const outputs = {
+    text: JSON.stringify({ selectedWorldReference, matchDecision, diagnostics }, null, 2),
+    targetNode,
+    target_node: targetNode,
+    relevantShots,
+    relevant_shots: relevantShots,
+    assetPack: scopedAssetPack,
+    asset_pack: scopedAssetPack,
+    selectedWorldReference,
+    selected_world_reference: selectedWorldReference,
+    referenceAssetKeys: [assetKey],
+    reference_asset_keys: [assetKey],
+    referenceUsageInstruction: usageInstruction,
+    reference_usage_instruction: usageInstruction,
+    matchDecision,
+    match_decision: matchDecision,
+    matchDiagnostics: diagnostics,
+    match_diagnostics: diagnostics,
+    fallbackUsed: structured.fallbackUsed,
+    fallbackReason: structured.fallbackReason,
+  }
+  return result({ context, helpers, outputs, provider: structured.provider, model: structured.model })
+}
+
 export async function sequenceAnimaticContinuityAssetPrompt(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
@@ -549,6 +847,10 @@ export async function sequenceAnimaticContinuityAssetPrompt(
   const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
     .map(helpers.readText)
     .filter(Boolean)
+  const referenceUsageInstruction = readFirstUpstreamTextCompat(context, helpers, ['referenceUsageInstruction', 'reference_usage_instruction'])
+  const selectedWorldReference = helpers.readFirstUpstreamRecord(context.upstream, ['selectedWorldReference', 'selected_world_reference'])
+  const matchDecision = helpers.readFirstUpstreamRecord(context.upstream, ['matchDecision', 'match_decision'])
+  const matchDiagnostics = helpers.readFirstUpstreamArray(context.upstream, ['matchDiagnostics', 'match_diagnostics']).map(helpers.readText).filter(Boolean)
   const assetKind = normalizedContinuityAssetKind(helpers, config.assetKind, targetNode)
   const configuredReferenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : helpers.readStringArray(config.referenceAssetKeys)
   const latestStateByNodeId = await latestContinuityAssetStateByNodeId(context, helpers, config)
@@ -585,6 +887,7 @@ export async function sequenceAnimaticContinuityAssetPrompt(
     zoneMapPoiLines: helpers.readStringArray(config.zoneMapPoiLines ?? config.zone_map_poi_lines),
     relevantShots,
     referenceAssetKeys,
+    referenceUsageInstruction,
     visualCanonGuard: helpers.readText(config.visualCanonGuard ?? config.visual_canon_guard),
   })
   const prompt = [
@@ -611,6 +914,14 @@ export async function sequenceAnimaticContinuityAssetPrompt(
     asset_pack: scopedAssetPack,
     referenceAssetKeys,
     reference_asset_keys: referenceAssetKeys,
+    selectedWorldReference,
+    selected_world_reference: selectedWorldReference,
+    referenceUsageInstruction,
+    reference_usage_instruction: referenceUsageInstruction,
+    matchDecision,
+    match_decision: matchDecision,
+    matchDiagnostics,
+    match_diagnostics: matchDiagnostics,
     deterministic: true,
   }
   return result({ context, helpers, outputs, model: 'sequence-animatic-continuity-asset-prompt-v1' })
@@ -624,7 +935,7 @@ export async function sequenceAnimaticContinuityAssetArtifact(
   const upstreamTargetNode = helpers.readFirstUpstreamRecord(context.upstream, ['targetNode', 'target_node'])
   const targetNode = Object.keys(upstreamTargetNode).length > 0 ? upstreamTargetNode : helpers.asRecord(config.targetNode)
   const image = helpers.readFirstUpstreamImage(context.upstream, ['image']) ?? {}
-  const prompt = helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text'])
+  const prompt = readFirstUpstreamTextCompat(context, helpers, ['prompt', 'text'])
   const targetNodeId = helpers.readText(config.targetNodeId) || helpers.readText(targetNode.id)
   if (!targetNodeId) throw new Error('Continuity asset artifact requires a target node id.')
   const assetKey = helpers.readText(image.assetKey)
@@ -632,6 +943,10 @@ export async function sequenceAnimaticContinuityAssetArtifact(
   const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
     .map(helpers.readText)
     .filter(Boolean)
+  const selectedWorldReference = helpers.readFirstUpstreamRecord(context.upstream, ['selectedWorldReference', 'selected_world_reference'])
+  const referenceUsageInstruction = readFirstUpstreamTextCompat(context, helpers, ['referenceUsageInstruction', 'reference_usage_instruction'])
+  const matchDecision = helpers.readFirstUpstreamRecord(context.upstream, ['matchDecision', 'match_decision'])
+  const matchDiagnostics = helpers.readFirstUpstreamArray(context.upstream, ['matchDiagnostics', 'match_diagnostics']).map(helpers.readText).filter(Boolean)
   const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0
     ? upstreamReferenceAssetKeys
     : helpers.readStringArray(config.referenceAssetKeys)
@@ -653,6 +968,10 @@ export async function sequenceAnimaticContinuityAssetArtifact(
     sourceNodeId: targetNodeId,
     assetKind,
     generatedAt: new Date().toISOString(),
+    sourceWorldReference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
+    referenceUsageInstruction,
+    referenceMatchDecision: Object.keys(matchDecision).length > 0 ? matchDecision : null,
+    referenceMatchDiagnostics: matchDiagnostics,
     warnings: qcFindings,
     error: assetKey ? '' : 'Continuity asset image did not produce an asset key.',
   })
@@ -719,6 +1038,14 @@ export async function sequenceAnimaticContinuityAssetArtifact(
       targetNode,
       prompt,
       referenceAssetKeys,
+      sourceWorldReference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
+      source_world_reference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
+      referenceUsageInstruction,
+      reference_usage_instruction: referenceUsageInstruction,
+      referenceMatchDecision: Object.keys(matchDecision).length > 0 ? matchDecision : null,
+      reference_match_decision: Object.keys(matchDecision).length > 0 ? matchDecision : null,
+      referenceMatchDiagnostics: matchDiagnostics,
+      reference_match_diagnostics: matchDiagnostics,
       qcStatus,
       qcFindings,
       assetState,
@@ -786,6 +1113,14 @@ export async function sequenceAnimaticContinuityAssetArtifact(
               artifactKey: artifact.key,
               prompt,
               referenceAssetKeys,
+              sourceWorldReference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
+              source_world_reference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
+              referenceUsageInstruction,
+              reference_usage_instruction: referenceUsageInstruction,
+              referenceMatchDecision: Object.keys(matchDecision).length > 0 ? matchDecision : null,
+              reference_match_decision: Object.keys(matchDecision).length > 0 ? matchDecision : null,
+              referenceMatchDiagnostics: matchDiagnostics,
+              reference_match_diagnostics: matchDiagnostics,
               ...(zoneImagePoiAnalysis
                 ? {
                     zoneImagePoiAnalysis,
@@ -838,6 +1173,8 @@ export async function sequenceAnimaticContinuityAssetArtifact(
       assetKind,
       assetState,
       image,
+      sourceWorldReference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
+      source_world_reference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
       zoneImagePoiAnalysis,
       zone_image_poi_analysis: zoneImagePoiAnalysis,
     },
@@ -846,6 +1183,8 @@ export async function sequenceAnimaticContinuityAssetArtifact(
       assetKind,
       assetState,
       image,
+      sourceWorldReference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
+      source_world_reference: Object.keys(selectedWorldReference).length > 0 ? selectedWorldReference : null,
       zoneImagePoiAnalysis,
       zone_image_poi_analysis: zoneImagePoiAnalysis,
     },
@@ -872,7 +1211,7 @@ export async function sequenceAnimaticContinuityBatchArtifact(
 ) {
   const config = helpers.asRecord(context.node.config)
   const batch = helpers.readFirstUpstreamRecord(context.upstream, ['batch'])
-  const prompt = helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text'])
+  const prompt = readFirstUpstreamTextCompat(context, helpers, ['prompt', 'text'])
   const assets = helpers.readFirstUpstreamArray(context.upstream, ['assets', 'extractedAssets', 'extracted_assets']).map(helpers.asRecord)
   const upstreamState = helpers.readFirstUpstreamRecord(context.upstream, ['assetStateByNodeId', 'asset_state_by_node_id'])
   const batchId = helpers.readText(batch.batchId) || helpers.readText(config.continuityBatchId) || helpers.readText(helpers.asRecord(config.batch).batchId)
@@ -941,6 +1280,7 @@ const sequenceAnimaticContinuityAssetHandlers = {
   sequence_animatic_continuity_batch_input: sequenceAnimaticContinuityBatchInput,
   sequence_animatic_continuity_batch_prompt: sequenceAnimaticContinuityBatchPrompt,
   sequence_animatic_continuity_batch_extract: sequenceAnimaticContinuityBatchExtract,
+  sequence_animatic_continuity_asset_reference_match: sequenceAnimaticContinuityAssetReferenceMatch,
   sequence_animatic_continuity_asset_prompt: sequenceAnimaticContinuityAssetPrompt,
   sequence_animatic_continuity_asset_artifact: sequenceAnimaticContinuityAssetArtifact,
   sequence_animatic_continuity_batch_artifact: sequenceAnimaticContinuityBatchArtifact,
@@ -1065,6 +1405,23 @@ export const sequenceAnimaticContinuityAssetWorkflowNodeScaffolds = [
     projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
   }),
   createSequenceAnimaticContinuityAssetNodeScaffold({
+    purpose: 'sequence_animatic_continuity_asset_reference_match',
+    runtimeKind: 'structured_llm',
+    sourceHashKeys: [
+      'upstream.targetNode',
+      'upstream.relevantShots',
+      'upstream.assetPack',
+      'config.targetNode',
+      'config.assetKind',
+      'config.worldReferenceCatalog',
+      'config.referenceMatchPolicy',
+      'config.masterRequestId',
+      'config.assetInputHash',
+      'config.visualCanonGuardHash',
+    ],
+    projectionMetadataKeys: continuityAssetProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticContinuityAssetNodeScaffold({
     purpose: 'sequence_animatic_continuity_asset_prompt',
     runtimeKind: 'deterministic_transform',
     sourceHashKeys: [
@@ -1072,6 +1429,8 @@ export const sequenceAnimaticContinuityAssetWorkflowNodeScaffolds = [
       'upstream.relevantShots',
       'upstream.assetPack',
       'upstream.referenceAssetKeys',
+      'upstream.referenceUsageInstruction',
+      'upstream.selectedWorldReference',
       'config.targetNode',
       'config.assetPack',
       'config.masterRequestId',

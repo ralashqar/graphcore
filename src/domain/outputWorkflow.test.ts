@@ -3426,10 +3426,12 @@ test('sequence animatic continuity sidecar has typed role, pack schema, and grap
   const assetPurposes = assetGraph.nodes.map((node) => readConfigPurpose({ config: node.config }))
   assert.deepEqual(assetPurposes, [
     'sequence_animatic_continuity_asset_input',
+    'sequence_animatic_continuity_asset_reference_match',
     'sequence_animatic_continuity_asset_prompt',
     'sequence_animatic_continuity_asset_image',
     'sequence_animatic_continuity_asset_artifact',
   ])
+  assert.ok(assetGraph.edges.some((edge) => edge.source_node_key === 'continuity_asset_reference_match' && edge.target_node_key === 'continuity_asset_prompt'))
   assert.ok(assetGraph.edges.some((edge) => edge.source_node_key === 'continuity_asset_prompt' && edge.target_node_key === 'continuity_asset_image'))
   const assetValidation = validateOutputWorkflowGraph({
     nodes: assetGraph.nodes.map((node) => ({
@@ -4072,16 +4074,23 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticShotReferenceFix/)
   assert.match(sequenceAnimaticShotReferencePackSource, /sequence_animatic_shot_reference_fix_apply/)
   assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticShotReferenceFixApply/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /sequenceAnimaticShotReferenceSubstitutions/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /buildReferenceFixSubstitutions/)
+  assert.match(sequenceAnimaticShotReferencePackSource, /referenceFixIsWorldCandidate/)
   assert.match(sequenceAnimaticShotReferencePackSource, /referenceAssetUrlByKey/)
   assert.match(sequenceAnimaticShotReferencePackSource, /assetUrlByKey\.get\(assetKey\)/)
   assert.match(animaticCommandUtilsSource, /buildSequenceAnimaticShotReferenceFixCandidatePool/)
   assert.match(keyframeEnsureSource, /referenceFixCandidatePool/)
   assert.match(shotGraphEnsureSource, /referenceFixCandidatePool/)
+  assert.match(keyframeEnsureSource, /sequenceAnimaticShotReferenceSubstitutionsFromMetadata/)
+  assert.match(shotGraphEnsureSource, /sequenceAnimaticShotReferenceSubstitutionsFromMetadata/)
   assert.match(workflowFactorySource, /fix_references/)
   assert.match(workflowFactorySource, /apply_reference_fix/)
   assert.doesNotMatch(workflowFactorySource, /llm_transform/)
   assert.match(focusedShotWorkspaceProjectionSource, /savedReferenceOverrideForShot/)
   assert.match(focusedShotWorkspaceProjectionSource, /sequenceAnimaticShotReferenceOverridesByShotId/)
+  assert.match(focusedShotWorkspaceProjectionSource, /applySequenceAnimaticShotReferenceSubstitutionsToIngredients/)
+  assert.match(focusedShotWorkspaceProjectionSource, /sequenceAnimaticShotReferenceSubstitutionsFromMetadata/)
   assert.match(focusedShotWorkspaceProjectionSource, /assetUrlByAssetKeyForShot/)
   assert.match(animaticViewModelSource, /sequenceAnimaticWorldEntityAssetPackRecords/)
   assert.match(animaticViewModelSource, /mergeSequenceAnimaticAssetPackWithWorldRefs/)

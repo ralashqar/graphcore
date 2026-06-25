@@ -69,6 +69,7 @@ import { deriveSequenceAnimaticSceneStates } from '../../../src/domain/sequenceA
 import {
   buildSequenceAnimaticShotIngredientReferencePlan,
   sequenceAnimaticCanonicalShotGraphPolicyVersion,
+  sequenceAnimaticShotReferenceSubstitutionsFromMetadata,
   sequenceAnimaticVisualReferenceHash,
 } from '../../../src/domain/sequenceAnimaticVisualReferencePlan.ts'
 import {
@@ -887,6 +888,7 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
         ...readStringArray(asRecord(shot.refs).referenceIds ?? asRecord(shot.refs).reference_ids),
         ...shotEntityRefIds(shot),
       ],
+      referenceSubstitutions: sequenceAnimaticShotReferenceSubstitutionsFromMetadata(masterMetadata),
       maxReferences: 8,
     })
     const uiOverrideReferences = shotReferenceOverride && readText(shotReferenceOverride.shotId) === payload.shotId

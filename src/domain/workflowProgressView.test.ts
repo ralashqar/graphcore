@@ -1053,6 +1053,7 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_continuity_batch_input',
     'sequence_animatic_continuity_batch_prompt',
     'sequence_animatic_continuity_batch_extract',
+    'sequence_animatic_continuity_asset_reference_match',
     'sequence_animatic_continuity_asset_prompt',
     'sequence_animatic_continuity_asset_artifact',
     'sequence_animatic_continuity_batch_artifact',
@@ -1619,6 +1620,7 @@ test('sequence animatic continuity asset nodes are backed by workflow node exten
     'sequence_animatic_continuity_batch_input',
     'sequence_animatic_continuity_batch_prompt',
     'sequence_animatic_continuity_batch_extract',
+    'sequence_animatic_continuity_asset_reference_match',
     'sequence_animatic_continuity_asset_prompt',
     'sequence_animatic_continuity_asset_artifact',
     'sequence_animatic_continuity_batch_artifact',
@@ -1664,6 +1666,14 @@ test('sequence animatic continuity asset nodes are backed by workflow node exten
       'sequence_animatic_continuity_batch_input',
       'sequence_animatic_continuity_batch_prompt',
       'sequence_animatic_continuity_asset_prompt',
+    ],
+  )
+  assert.deepEqual(
+    sequenceAnimaticContinuityAssetWorkflowNodeScaffolds
+      .filter((scaffold) => scaffold.runtimeKind === 'structured_llm')
+      .map((scaffold) => scaffold.manifest.purpose),
+    [
+      'sequence_animatic_continuity_asset_reference_match',
     ],
   )
 })
@@ -2641,6 +2651,7 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_input: sequenceAnimaticContinuityBatchInput/)
   assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_prompt: sequenceAnimaticContinuityBatchPrompt/)
   assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_extract: sequenceAnimaticContinuityBatchExtract/)
+  assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_asset_reference_match: sequenceAnimaticContinuityAssetReferenceMatch/)
   assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_asset_prompt: sequenceAnimaticContinuityAssetPrompt/)
   assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_asset_artifact: sequenceAnimaticContinuityAssetArtifact/)
   assert.match(sequenceAnimaticAssetPackSource, /sequence_animatic_continuity_batch_artifact: sequenceAnimaticContinuityBatchArtifact/)
@@ -2650,6 +2661,7 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
     'sequence_animatic_continuity_batch_input',
     'sequence_animatic_continuity_batch_prompt',
     'sequence_animatic_continuity_batch_extract',
+    'sequence_animatic_continuity_asset_reference_match',
     'sequence_animatic_continuity_asset_prompt',
     'sequence_animatic_continuity_asset_artifact',
     'sequence_animatic_continuity_batch_artifact',
