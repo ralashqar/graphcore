@@ -17,6 +17,7 @@ import {
   buildSequenceAnimaticPreviousKeyframeGridContext,
   buildSequenceAnimaticShotReferenceFixCandidatePool,
   buildValidatedSequenceAnimaticTemplateGraph,
+  canonicalizeSequenceAnimaticSceneScopedPlanIds,
   coverageSetupEntityRefIds,
   entityAssetKeys,
   loadScreenplayAnimaticMasterRequest,
@@ -271,6 +272,9 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
           ? 'location_anchor'
           : 'prop'
       const previous = byId.get(id) ?? {}
+      const metadata = asRecord(reference.metadata)
+      const visualDescription = readText(reference.visualDescription ?? reference.visual_description ?? asRecord(reference.visual).description ?? metadata.visualDescription ?? asRecord(metadata.visual).description)
+      const visualBrief = readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || visualDescription || readText(previous.visualBrief)
       byId.set(id, {
         ...previous,
         ...reference,
@@ -279,8 +283,10 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
         nodeKind,
         assetKind,
         name: readText(reference.name) || readText(previous.name) || id,
-        visualBrief: readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.visualBrief),
-        summary: readText(reference.summary) || readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.summary),
+        visualDescription: visualDescription || readText(previous.visualDescription),
+        visual_description: visualDescription || readText(previous.visual_description),
+        visualBrief,
+        summary: visualBrief || readText(reference.summary) || readText(previous.summary),
         shotIds: uniqueTexts([
           ...readStringArray(previous.shotIds),
           ...readStringArray(reference.shotIds ?? reference.shot_ids),
@@ -313,8 +319,88 @@ function mergedShotPlan(input: {
   directorPlan: Record<string, unknown>
   shotId: string
 }) {
-  const manifestBlocks = readArray(input.manifest.blocks).map(asRecord).filter((block) => readText(block.id))
-  const directorShots = readArray(input.directorPlan.shots).map(asRecord).filter((shot) => readText(shot.id))
+  const sceneIdFromPlanValue = (value: unknown) => /^(scene_\d+)_/.exec(readText(value))?.[1] ?? ''
+  const usableSceneId = (value: unknown) => {
+    const text = readText(value)
+    return text && text !== 'sequence_animatic_master' ? text : ''
+  }
+  const sceneScopedPlanId = (sceneId: string, value: unknown, kind: 'shot' | 'block') => {
+    const text = readText(value)
+    if (!sceneId || !text) return text
+    if (text.startsWith(`${sceneId}_`)) return text
+    if (kind === 'shot' && /^shot_\d+$/i.test(text)) return `${sceneId}_${text}`
+    if (kind === 'block' && /^block_\d+$/i.test(text)) return `${sceneId}_${text}`
+    return text
+  }
+  const planSceneId = (entry: Record<string, unknown>, fallback = '') => usableSceneId(entry.sourceSceneId ?? entry.source_scene_id)
+    || usableSceneId(entry.sceneId ?? entry.scene_id)
+    || sceneIdFromPlanValue(entry.id)
+    || sceneIdFromPlanValue(entry.shotId ?? entry.shot_id)
+    || sceneIdFromPlanValue(entry.blockId ?? entry.block_id ?? entry.storyboardBlockId ?? entry.storyboard_block_id)
+    || sceneIdFromPlanValue(entry.coverageSetupId ?? entry.coverage_setup_id ?? entry.setupId ?? entry.setup_id)
+    || fallback
+  const normalizePlanLink = (sceneId: string, value: unknown) => {
+    const link = asRecord(value)
+    if (Object.keys(link).length === 0) return link
+    return {
+      ...link,
+      fromShotId: sceneScopedPlanId(sceneId, link.fromShotId ?? link.from_shot_id, 'shot'),
+      from_shot_id: sceneScopedPlanId(sceneId, link.from_shot_id ?? link.fromShotId, 'shot'),
+    }
+  }
+  const normalizePlanShot = (shot: Record<string, unknown>, fallbackSceneId = '') => {
+    const sceneId = planSceneId(shot, fallbackSceneId)
+    const shotId = sceneScopedPlanId(sceneId, shot.id ?? shot.shotId ?? shot.shot_id, 'shot')
+    const blockId = sceneScopedPlanId(sceneId, shot.blockId ?? shot.block_id ?? shot.storyboardBlockId ?? shot.storyboard_block_id, 'block')
+    return {
+      ...shot,
+      id: shotId,
+      shotId,
+      shot_id: shotId,
+      sceneId,
+      scene_id: sceneId,
+      sourceSceneId: sceneId,
+      source_scene_id: sceneId,
+      blockId,
+      block_id: blockId,
+      storyboardBlockId: sceneScopedPlanId(sceneId, shot.storyboardBlockId ?? shot.storyboard_block_id ?? blockId, 'block'),
+      storyboard_block_id: sceneScopedPlanId(sceneId, shot.storyboard_block_id ?? shot.storyboardBlockId ?? blockId, 'block'),
+      previousShotId: sceneScopedPlanId(sceneId, shot.previousShotId ?? shot.previous_shot_id, 'shot'),
+      previous_shot_id: sceneScopedPlanId(sceneId, shot.previous_shot_id ?? shot.previousShotId, 'shot'),
+      continuityLink: normalizePlanLink(sceneId, shot.continuityLink ?? shot.continuity_link),
+      continuity_link: normalizePlanLink(sceneId, shot.continuity_link ?? shot.continuityLink),
+    }
+  }
+  const normalizePlanBlock = (block: Record<string, unknown>) => {
+    const firstShot = asRecord(readArray(block.shots)[0])
+    const sceneId = planSceneId(block, planSceneId(firstShot))
+    const blockId = sceneScopedPlanId(sceneId, block.id ?? block.blockId ?? block.block_id, 'block')
+    const shots = readArray(block.shots).map(asRecord).map((shot) => normalizePlanShot({ ...shot, blockId }, sceneId))
+    const shotIds = readArray(block.shotIds ?? block.shot_ids).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean)
+    return {
+      ...block,
+      id: blockId,
+      blockId,
+      block_id: blockId,
+      sceneId,
+      scene_id: sceneId,
+      sourceSceneId: sceneId,
+      source_scene_id: sceneId,
+      shots,
+      shotIds: shotIds.length > 0 ? shotIds : shots.map((shot) => readText(shot.id)).filter(Boolean),
+      shot_ids: shotIds.length > 0 ? shotIds : shots.map((shot) => readText(shot.id)).filter(Boolean),
+    }
+  }
+  const normalizePlanSetup = (setup: Record<string, unknown>) => {
+    const sceneId = planSceneId(setup)
+    return {
+      ...setup,
+      shotIds: readArray(setup.shotIds ?? setup.shot_ids).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean),
+      shot_ids: readArray(setup.shot_ids ?? setup.shotIds).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean),
+    }
+  }
+  const manifestBlocks = readArray(input.manifest.blocks).map(asRecord).map(normalizePlanBlock).filter((block) => readText(block.id))
+  const directorShots = readArray(input.directorPlan.shots).map(asRecord).map((shot) => normalizePlanShot(shot)).filter((shot) => readText(shot.id))
   const directorShotsById = new Map(directorShots.map((shot) => [readText(shot.id), shot] as const))
   const blockMap = new Map<string, Record<string, unknown>>()
   const manifestShots = manifestBlocks.flatMap((block) => {
@@ -353,7 +439,7 @@ function mergedShotPlan(input: {
   if (!shot) throw new HttpError(404, `Shot ${input.shotId} was not found in the animatic director plan.`)
   const blockId = readText(shot.storyboardBlockId ?? shot.blockId)
   const block = blockMap.get(blockId) ?? { id: blockId || `${input.shotId}_block`, title: readText(shot.sourceSceneTitle ?? shot.sceneTitle) || 'Shot Block', shots: [shot] }
-  const coverageSetups = readArray(input.directorPlan.coverageSetups ?? input.directorPlan.coverage_setups).map(asRecord).filter((setup) => readText(setup.id))
+  const coverageSetups = readArray(input.directorPlan.coverageSetups ?? input.directorPlan.coverage_setups).map(asRecord).map(normalizePlanSetup).filter((setup) => readText(setup.id))
   const coverageSetupId = readText(shot.coverageSetupId ?? shot.coverage_setup_id)
   const coverageSetup = coverageSetupId ? coverageSetups.find((setup) => readText(setup.id) === coverageSetupId) ?? { id: coverageSetupId, title: coverageSetupId } : {}
   const coverageShots = coverageSetupId
@@ -420,16 +506,40 @@ export async function runSequenceAnimaticShotProductionGraphCommand(input: {
     if (Object.keys(manifest).length === 0) throw new HttpError(409, 'Generate the screenplay animatic manifest first.')
     if (Object.keys(directorPlan).length === 0) throw new HttpError(409, 'Generate the shot continuity plan first.')
 
-    const manifestHash = sequenceAnimaticStableHash(manifest)
-    const directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
-    const masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key) || combinedManifestArtifactKey
-    const assetPack = asRecord(manifest.assetPack)
-    const aspectRatio = readText(assetPack.aspectRatio) || '16:9'
-    let { shot, block, mergedShots, coverageSetup, coverageSetupId, coverageShots, sceneState } = mergedShotPlan({
-      manifest,
-      directorPlan,
-      shotId: payload.shotId,
-    })
+    ;({ manifest, directorPlan } = canonicalizeSequenceAnimaticSceneScopedPlanIds({ manifest, directorPlan }))
+    let manifestHash = sequenceAnimaticStableHash(manifest)
+    let directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
+    let masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key) || combinedManifestArtifactKey
+    let assetPack = asRecord(manifest.assetPack)
+    let aspectRatio = readText(assetPack.aspectRatio) || '16:9'
+    let mergedPlan: ReturnType<typeof mergedShotPlan>
+    try {
+      mergedPlan = mergedShotPlan({
+        manifest,
+        directorPlan,
+        shotId: payload.shotId,
+      })
+    } catch (error) {
+      if (shotReadySource === 'combined_scene_plan') throw error
+      const combined = await resolveSequenceAnimaticCombinedManifest({ client: admin, masterRequest })
+      if (!combined) throw error
+      manifest = combined.manifest
+      directorPlan = combined.directorPlan
+      ;({ manifest, directorPlan } = canonicalizeSequenceAnimaticSceneScopedPlanIds({ manifest, directorPlan }))
+      combinedManifestArtifactKey = combined.manifestArtifactKey
+      shotReadySource = 'combined_scene_plan'
+      manifestHash = sequenceAnimaticStableHash(manifest)
+      directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
+      masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key) || combinedManifestArtifactKey
+      assetPack = asRecord(manifest.assetPack)
+      aspectRatio = readText(assetPack.aspectRatio) || '16:9'
+      mergedPlan = mergedShotPlan({
+        manifest,
+        directorPlan,
+        shotId: payload.shotId,
+      })
+    }
+    let { shot, block, mergedShots, coverageSetup, coverageSetupId, coverageShots, sceneState } = mergedPlan
     const shotWorldRefIds = uniqueTexts(shotEntityRefIds(shot))
     const worldEntityResponse = shotWorldRefIds.length > 0
       ? await client

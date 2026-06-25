@@ -42,13 +42,33 @@ function compactSequenceAnimaticText(value: unknown, maxLength = 900) {
   return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text
 }
 
-function compactSequenceAnimaticCamera(shot: LooseRecord) {
-  const camera = asRecord(shot.camera)
-  return {
-    framing: compactSequenceAnimaticText(camera.framing ?? shot.framing, 220),
-    angle: compactSequenceAnimaticText(camera.angle ?? shot.cameraAngle, 220),
-    movement: compactSequenceAnimaticText(camera.movement ?? shot.cameraMovement, 260),
+function readTargetVisualBrief(targetNode: LooseRecord, fallback = '') {
+  const directVisual = asRecord(targetNode.visual)
+  const metadata = asRecord(targetNode.metadata)
+  const metadataVisual = asRecord(metadata.visual)
+  const candidates = [
+    targetNode.visualDescription,
+    targetNode.visual_description,
+    directVisual.description,
+    directVisual.visualDescription,
+    targetNode.visualBrief,
+    targetNode.visual_brief,
+    targetNode.description,
+    metadata.visualDescription,
+    metadata.visual_description,
+    metadataVisual.description,
+    metadataVisual.visualDescription,
+    targetNode.summary,
+    fallback,
+  ]
+  for (const candidate of candidates) {
+    const text = compactSequenceAnimaticText(candidate, 900)
+    if (!text) continue
+    if (/^blocks?\s+[^/]+\/\s*shots?\s+/i.test(text)) continue
+    if (/^shots?\s+[\w_,\s-]+$/i.test(text)) continue
+    return text
   }
+  return ''
 }
 
 export function buildSequenceAnimaticAnchorAtlasPrompt(input: {
@@ -104,7 +124,7 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
     ? sanitizeSequenceAnimaticSpatialNodeFields(input.targetNode, { forbiddenNames })
     : null
   const targetName = sanitizedSpatialNode?.name || readText(input.targetNode.name) || titleFromRefLike(readText(input.targetNode.id))
-  const visualBrief = sanitizedSpatialNode?.brief || readText(input.targetNode.visualBrief) || readText(input.targetNode.summary)
+  const visualBrief = sanitizedSpatialNode?.brief || readTargetVisualBrief(input.targetNode)
   const generationPolicy = readText(input.generationPolicy)
   const zoneSpatialMapPolicy = input.assetKind === 'location_zone' || generationPolicy.startsWith('zone_spatial_map')
   const worldLocationVisualGuide = compactSequenceAnimaticText(input.worldLocationVisualGuide, 900)
@@ -179,16 +199,8 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
       },
     }
   }
-  const shotLines = spatialAsset ? [] : input.relevantShots.slice(0, 8).map((shot) => {
-    const camera = compactSequenceAnimaticCamera(shot)
-    return [
-      readText(shot.title),
-      compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 240),
-      [camera.framing, camera.angle, camera.movement].filter(Boolean).join(' / '),
-    ].filter(Boolean).join(': ')
-  })
   const kindInstruction = input.assetKind === 'temporary_character'
-    ? 'Create one neutral temporary supporting-character continuity reference sheet. Show body shape, silhouette, wardrobe, face/species cues, and scale clearly. No action scene, no text, no captions.'
+    ? 'Create one neutral supporting-character continuity reference sheet. Show body shape, silhouette, wardrobe, face/species cues, and scale clearly. No action scene, no text, no captions.'
     : input.assetKind === 'prop'
       ? 'Create one isolated reusable prop continuity reference sheet. Show the object clearly with material, shape, wear, function, and a clean cinematic close-up. No labels, no UI, no text.'
       : input.assetKind === 'location_set'
@@ -226,10 +238,9 @@ export function buildSequenceAnimaticContinuityAssetPrompt(input: {
       ? 'Attached image references are continuity locks. Match their style, materials, palette, lighting logic, architecture, scale, and design language without copying visible layout artifacts.'
       : spatialAsset
         ? 'No prior continuity asset references are available. Use only the spatial node brief and project visual style.'
-        : 'No prior continuity asset references are available. Ground the image in the written shot evidence and project visual style.',
+        : 'No prior continuity asset references are available. Use the visual brief and project style only.',
     readText(input.visualCanonGuard) ? `Project canon guard:\n${readText(input.visualCanonGuard)}` : '',
     '',
-    shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
     input.assetKind === 'spot_camera_grid'
       ? 'Provider requirements: one finished square or wide production reference board containing a clean 2x3 camera-angle grid, no visible text, no labels, no borders, no watermarks.'
       : zoneSpatialMapPolicy
@@ -299,15 +310,11 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
       `Cell ${index + 1} (row ${row}, column ${column}, ${role}):`,
       sanitized?.name || readText(node.name) || titleFromRefLike(readText(node.id)),
       sanitized?.kindLabel || readText(node.assetKind) || readText(node.nodeKind),
-      sanitized?.brief || readText(node.visualBrief) || readText(node.summary),
+      sanitized?.brief || readTargetVisualBrief(node),
     ].filter(Boolean).join(' ')
   })
   const worldLocationVisualGuide = compactSequenceAnimaticText(input.worldLocationVisualGuide, 900)
   const locationEvidenceLines: string[] = worldLocationVisualGuide ? [`Parent world location guide: ${worldLocationVisualGuide}`] : []
-  const shotLines = spatialBatch ? [] : input.relevantShots.slice(0, 8).map((shot) => [
-    readText(shot.title),
-    compactSequenceAnimaticText(readText(shot.action) || readText(shot.description), 220),
-  ].filter(Boolean).join(': '))
   const kindInstruction = batchKind === 'spot_atlas_grid' || batchKind === 'viewpoint_atlas_grid'
     ? 'Create a local reference atlas using the single attached zone spatial map as the only visual reference. For each cell, find the matching spot marker/label in the zone map and generate that exact local staging position, sub-location, or camera-facing viewpoint. Match the zone map topology, entrances, adjacent landmarks, route direction, surfaces, weather, palette, light direction, and screen-direction logic. The generated cells themselves should be clean local references with no people, no characters, no silhouettes, no visible labels, no map overlays, and no UI.'
     : batchKind === 'spot_camera_grid'
@@ -342,11 +349,10 @@ export function buildSequenceAnimaticContinuityBatchPrompt(input: {
         : 'Attached images are hierarchy/dependency references. Preserve their project style, lighting logic, materials, design language, and spatial continuity.'
       : spatialBatch
         ? 'No parent image references are available. Use only the cell assignments and project visual style; do not use shot action, character blocking, or dialogue as visual content.'
-        : 'No parent image references are available. Ground the batch in shot evidence and project visual style.',
+        : 'No parent image references are available. Use the cell visual briefs and project style only.',
     readText(input.visualCanonGuard) ? `Project canon guard:\n${readText(input.visualCanonGuard)}` : '',
     cellLines.length > 0 ? `Cell assignments:\n${cellLines.join('\n')}` : '',
     locationEvidenceLines.length > 0 ? `Location evidence:\n${locationEvidenceLines.join('\n')}` : '',
-    shotLines.length > 0 ? `Shot evidence:\n${shotLines.join('\n')}` : '',
     'Provider requirements: one finished image only, exact cell order, no visible text, no captions, no labels, no arrows, no UI, no watermarks. Use clean spacing or subtle gutters only; every populated cell must crop cleanly as its own equal-sized reference.',
   ].filter(Boolean).join('\n\n')
   return {

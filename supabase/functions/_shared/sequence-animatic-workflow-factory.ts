@@ -657,7 +657,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       ...config,
       model: 'openai/gpt-image-2',
       referenceModel: 'openai/gpt-image-2/edit',
-      quality: 'low',
+      quality: 'medium',
       outputFormat: 'webp',
       maxReferenceImages: 10,
       imageSize: input.aspectRatio === '9:16'

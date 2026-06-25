@@ -38,6 +38,22 @@ function result(input: {
   return createWorkflowNodeExecutionResult<SequenceAnimaticNodeExecutionResult>(input)
 }
 
+function normalizedContinuityAssetKind(
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+  configKind: unknown,
+  targetNode: Record<string, unknown>,
+) {
+  const targetKind = helpers.readText(targetNode.assetKind ?? targetNode.asset_kind ?? targetNode.nodeKind ?? targetNode.node_kind ?? targetNode.type ?? targetNode.anchorType ?? targetNode.anchor_type)
+  const config = helpers.readText(configKind)
+  const raw = targetKind || config || 'continuity_asset'
+  if (raw === 'temp_character' || raw === 'temporary_character' || raw === 'character' || raw === 'person' || raw === 'crowd' || raw === 'group' || raw === 'faction') {
+    return 'temporary_character'
+  }
+  if (raw === 'prop' || raw === 'item' || raw === 'vehicle' || raw === 'animatic_only') return 'prop'
+  if (raw === 'location_spot' || raw === 'location_zone' || raw === 'location_set' || raw === 'location_angle' || raw === 'location_viewpoint' || raw === 'spot_camera_grid') return raw
+  return config || raw
+}
+
 async function latestContinuityAssetStateByNodeId(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
@@ -477,7 +493,7 @@ export async function sequenceAnimaticContinuityBatchExtract(
         sourceSpotId: helpers.readText(targetNode.spotId ?? targetNode.spot_id ?? targetNode.parentId ?? targetNode.parent_id),
         sourceZoneId: helpers.readText(targetNode.zoneId ?? targetNode.zone_id),
         sourceSetId: helpers.readText(targetNode.setId ?? targetNode.set_id),
-        assetKind: helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset',
+        assetKind: normalizedContinuityAssetKind(helpers, null, targetNode),
         generatedAt: new Date().toISOString(),
         warnings: [],
         error: '',
@@ -533,7 +549,7 @@ export async function sequenceAnimaticContinuityAssetPrompt(
   const upstreamReferenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
     .map(helpers.readText)
     .filter(Boolean)
-  const assetKind = helpers.readText(config.assetKind) || helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset'
+  const assetKind = normalizedContinuityAssetKind(helpers, config.assetKind, targetNode)
   const configuredReferenceAssetKeys = upstreamReferenceAssetKeys.length > 0 ? upstreamReferenceAssetKeys : helpers.readStringArray(config.referenceAssetKeys)
   const latestStateByNodeId = await latestContinuityAssetStateByNodeId(context, helpers, config)
   const latestReferenceAssetKeys = latestSpatialReferenceAssetKeys({
@@ -619,7 +635,7 @@ export async function sequenceAnimaticContinuityAssetArtifact(
   const referenceAssetKeys = upstreamReferenceAssetKeys.length > 0
     ? upstreamReferenceAssetKeys
     : helpers.readStringArray(config.referenceAssetKeys)
-  const assetKind = helpers.readText(config.assetKind) || helpers.readText(targetNode.assetKind) || helpers.readText(targetNode.nodeKind) || 'continuity_asset'
+  const assetKind = normalizedContinuityAssetKind(helpers, config.assetKind, targetNode)
   const referenceRole = sequenceAnimaticReferenceRole({
     role: assetKind,
     type: assetKind,

@@ -278,8 +278,14 @@ export function buildSequenceAnimaticContinuityAnchorViews(input: {
   return [...mergedByKey.values()].filter((anchor) => {
     const rawAnchorType = trimOptionalString(anchor.anchorType) || trimOptionalString(anchor.type)
     const anchorType = rawAnchorType === 'temp_character'
+      || rawAnchorType === 'temporary_character'
+      || rawAnchorType === 'character'
+      || rawAnchorType === 'person'
+      || rawAnchorType === 'crowd'
+      || rawAnchorType === 'group'
+      || rawAnchorType === 'faction'
       ? 'character'
-      : ['prop', 'item', 'faction', 'crowd', 'vehicle', 'animatic_only'].includes(rawAnchorType)
+      : ['prop', 'item', 'vehicle', 'animatic_only'].includes(rawAnchorType)
         ? 'prop'
         : rawAnchorType
     return anchorType === 'character' || anchorType === 'prop' || anchorType === 'location_spot'
@@ -287,8 +293,14 @@ export function buildSequenceAnimaticContinuityAnchorViews(input: {
     const id = trimOptionalString(anchor.id)
     const rawAnchorType = trimOptionalString(anchor.anchorType) || trimOptionalString(anchor.type)
     const anchorType = rawAnchorType === 'temp_character'
+      || rawAnchorType === 'temporary_character'
+      || rawAnchorType === 'character'
+      || rawAnchorType === 'person'
+      || rawAnchorType === 'crowd'
+      || rawAnchorType === 'group'
+      || rawAnchorType === 'faction'
       ? 'character'
-      : ['prop', 'item', 'faction', 'crowd', 'vehicle', 'animatic_only'].includes(rawAnchorType)
+      : ['prop', 'item', 'vehicle', 'animatic_only'].includes(rawAnchorType)
         ? 'prop'
         : rawAnchorType
     const type: SequenceAnimaticContinuityAnchorView['type'] = anchorType === 'character'
@@ -345,6 +357,8 @@ export function buildSequenceAnimaticContinuityAnchorViews(input: {
       progressLabel,
       sourceAtlasNodeLabel: type === 'character' ? 'Character Anchor Atlas' : type === 'prop' ? 'Prop Anchor Atlas' : 'Location Anchor Atlas',
       visualBrief: [
+        trimOptionalString(anchor.visualDescription),
+        trimOptionalString(anchor.visual_description),
         trimOptionalString(anchor.visualBrief),
         trimOptionalString(anchor.visual_brief),
         trimOptionalString(anchor.description),

@@ -21,6 +21,7 @@ import {
   buildSequenceAnimaticPreviousKeyframeGridContext,
   buildSequenceAnimaticShotReferenceFixCandidatePool,
   buildValidatedSequenceAnimaticTemplateGraph,
+  canonicalizeSequenceAnimaticSceneScopedPlanIds,
   coverageSetupEntityRefIds,
   imageFromArtifact,
   loadScreenplayAnimaticMasterRequest,
@@ -278,6 +279,9 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
           ? 'location_anchor'
           : 'prop'
       const previous = byId.get(id) ?? {}
+      const metadata = asRecord(reference.metadata)
+      const visualDescription = readText(reference.visualDescription ?? reference.visual_description ?? asRecord(reference.visual).description ?? metadata.visualDescription ?? asRecord(metadata.visual).description)
+      const visualBrief = readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || visualDescription || readText(previous.visualBrief)
       byId.set(id, {
         ...previous,
         ...reference,
@@ -286,8 +290,10 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
         nodeKind,
         assetKind,
         name: readText(reference.name) || readText(previous.name) || id,
-        visualBrief: readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.visualBrief),
-        summary: readText(reference.summary) || readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.summary),
+        visualDescription: visualDescription || readText(previous.visualDescription),
+        visual_description: visualDescription || readText(previous.visual_description),
+        visualBrief,
+        summary: visualBrief || readText(reference.summary) || readText(previous.summary),
         shotIds: [...new Set([
           ...readStringArray(previous.shotIds),
           ...readStringArray(reference.shotIds ?? reference.shot_ids),
@@ -321,14 +327,96 @@ function deriveKeyframePlan(input: {
   requestedShotIds: string[]
   requestedCoverageSetupIds: string[]
 }) {
-  const blocks = readArray(input.manifest.blocks).map(asRecord).filter((block) => readText(block.id))
+  const sceneIdFromPlanValue = (value: unknown) => /^(scene_\d+)_/.exec(readText(value))?.[1] ?? ''
+  const usableSceneId = (value: unknown) => {
+    const text = readText(value)
+    return text && text !== 'sequence_animatic_master' ? text : ''
+  }
+  const sceneScopedPlanId = (sceneId: string, value: unknown, kind: 'shot' | 'block') => {
+    const text = readText(value)
+    if (!sceneId || !text) return text
+    if (text.startsWith(`${sceneId}_`)) return text
+    if (kind === 'shot' && /^shot_\d+$/i.test(text)) return `${sceneId}_${text}`
+    if (kind === 'block' && /^block_\d+$/i.test(text)) return `${sceneId}_${text}`
+    return text
+  }
+  const planSceneId = (entry: Record<string, unknown>, fallback = '') => usableSceneId(entry.sourceSceneId ?? entry.source_scene_id)
+    || usableSceneId(entry.sceneId ?? entry.scene_id)
+    || sceneIdFromPlanValue(entry.id)
+    || sceneIdFromPlanValue(entry.shotId ?? entry.shot_id)
+    || sceneIdFromPlanValue(entry.blockId ?? entry.block_id ?? entry.storyboardBlockId ?? entry.storyboard_block_id)
+    || sceneIdFromPlanValue(entry.coverageSetupId ?? entry.coverage_setup_id ?? entry.setupId ?? entry.setup_id)
+    || fallback
+  const normalizePlanLink = (sceneId: string, value: unknown) => {
+    const link = asRecord(value)
+    if (Object.keys(link).length === 0) return link
+    return {
+      ...link,
+      fromShotId: sceneScopedPlanId(sceneId, link.fromShotId ?? link.from_shot_id, 'shot'),
+      from_shot_id: sceneScopedPlanId(sceneId, link.from_shot_id ?? link.fromShotId, 'shot'),
+    }
+  }
+  const normalizePlanShot = (shot: Record<string, unknown>, fallbackSceneId = '') => {
+    const sceneId = planSceneId(shot, fallbackSceneId)
+    const shotId = sceneScopedPlanId(sceneId, shot.id ?? shot.shotId ?? shot.shot_id, 'shot')
+    const blockId = sceneScopedPlanId(sceneId, shot.blockId ?? shot.block_id ?? shot.storyboardBlockId ?? shot.storyboard_block_id, 'block')
+    return {
+      ...shot,
+      id: shotId,
+      shotId,
+      shot_id: shotId,
+      sceneId,
+      scene_id: sceneId,
+      sourceSceneId: sceneId,
+      source_scene_id: sceneId,
+      blockId,
+      block_id: blockId,
+      storyboardBlockId: sceneScopedPlanId(sceneId, shot.storyboardBlockId ?? shot.storyboard_block_id ?? blockId, 'block'),
+      storyboard_block_id: sceneScopedPlanId(sceneId, shot.storyboard_block_id ?? shot.storyboardBlockId ?? blockId, 'block'),
+      previousShotId: sceneScopedPlanId(sceneId, shot.previousShotId ?? shot.previous_shot_id, 'shot'),
+      previous_shot_id: sceneScopedPlanId(sceneId, shot.previous_shot_id ?? shot.previousShotId, 'shot'),
+      continuityLink: normalizePlanLink(sceneId, shot.continuityLink ?? shot.continuity_link),
+      continuity_link: normalizePlanLink(sceneId, shot.continuity_link ?? shot.continuityLink),
+    }
+  }
+  const normalizePlanBlock = (block: Record<string, unknown>) => {
+    const firstShot = asRecord(readArray(block.shots)[0])
+    const sceneId = planSceneId(block, planSceneId(firstShot))
+    const blockId = sceneScopedPlanId(sceneId, block.id ?? block.blockId ?? block.block_id, 'block')
+    const shots = readArray(block.shots).map(asRecord).map((shot) => normalizePlanShot({ ...shot, blockId }, sceneId))
+    const shotIds = readArray(block.shotIds ?? block.shot_ids).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean)
+    return {
+      ...block,
+      id: blockId,
+      blockId,
+      block_id: blockId,
+      sceneId,
+      scene_id: sceneId,
+      sourceSceneId: sceneId,
+      source_scene_id: sceneId,
+      shots,
+      shotIds: shotIds.length > 0 ? shotIds : shots.map((shot) => readText(shot.id)).filter(Boolean),
+      shot_ids: shotIds.length > 0 ? shotIds : shots.map((shot) => readText(shot.id)).filter(Boolean),
+    }
+  }
+  const normalizePlanSetup = (setup: Record<string, unknown>) => {
+    const sceneId = planSceneId(setup)
+    return {
+      ...setup,
+      shotIds: readArray(setup.shotIds ?? setup.shot_ids).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean),
+      shot_ids: readArray(setup.shot_ids ?? setup.shotIds).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean),
+      storyboardBlockIds: readArray(setup.storyboardBlockIds ?? setup.storyboard_block_ids).map((blockId) => sceneScopedPlanId(sceneId, blockId, 'block')).filter(Boolean),
+      storyboard_block_ids: readArray(setup.storyboard_block_ids ?? setup.storyboardBlockIds).map((blockId) => sceneScopedPlanId(sceneId, blockId, 'block')).filter(Boolean),
+    }
+  }
+  const blocks = readArray(input.manifest.blocks).map(asRecord).map(normalizePlanBlock).filter((block) => readText(block.id))
   const blockById = new Map(blocks.map((block) => [readText(block.id), block] as const))
   const shots = blocks.flatMap((block) => readArray(block.shots).map(asRecord).map((shot) => ({
     ...shot,
     blockId: readText(shot.blockId) || readText(shot.storyboardBlockId) || readText(block.id),
     storyboardBlockId: readText(shot.storyboardBlockId) || readText(shot.blockId) || readText(block.id),
   }))).filter((shot) => readText(shot.id))
-  const directorShotsById = new Map(readArray(input.directorPlan.shots).map(asRecord).map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
+  const directorShotsById = new Map(readArray(input.directorPlan.shots).map(asRecord).map((shot) => normalizePlanShot(shot)).map((shot) => [readText(shot.id), shot] as const).filter(([id]) => id))
   const mergedShots = shots.map((shot) => ({
     ...shot,
     ...asRecord(directorShotsById.get(readText(shot.id))),
@@ -341,6 +429,7 @@ function deriveKeyframePlan(input: {
   const includedShotIds = new Set(requestedShotSet.size > 0 ? input.requestedShotIds : mergedShots.map((shot) => readText(shot.id)).filter(Boolean))
   const coverageSetups = readArray(input.directorPlan.coverageSetups ?? input.directorPlan.coverage_setups)
     .map(asRecord)
+    .map(normalizePlanSetup)
     .filter((setup) => readText(setup.id))
   const setupById = new Map(coverageSetups.map((setup) => [readText(setup.id), setup] as const))
   const shotsBySetupId = new Map<string, Record<string, unknown>[]>()
@@ -393,7 +482,7 @@ function deriveKeyframePlan(input: {
   // reverse pairs, speaker coverage, establishing coverage) before any image
   // generation is paid for.
   const continuityLint = lintSequenceAnimaticContinuity({ shots: mergedShots, coverageSetups })
-  const shotKeyframeJobs = filteredShots.map((shot) => {
+  const buildShotKeyframeJob = (shot: Record<string, unknown>, dependencyOnly: boolean) => {
     const setupId = readText(shot.coverageSetupId ?? shot.coverage_setup_id)
     const sceneState = sceneStates.get(readText(shot.id)) ?? null
     return {
@@ -404,21 +493,39 @@ function deriveKeyframePlan(input: {
       coverageSetupId: setupId,
       requiresCoverageAnchor: Boolean(setupId && coverageAnchorJobs.some((job) => job.coverageSetupId === setupId)),
       previousShotId: sequenceAnimaticContinuityLinkRequiresPrevious(shot) ? readText(asRecord(sceneState).previousSameSetupShotId) : '',
-      dependencyOnly: requestedShotSet.size > 0 && !requestedShotSet.has(readText(shot.id)),
+      dependencyOnly,
       sceneState,
     }
-  })
+  }
+  const shotKeyframeJobs = filteredShots.map((shot) => buildShotKeyframeJob(
+    shot,
+    requestedShotSet.size > 0 && !requestedShotSet.has(readText(shot.id)),
+  ))
+  const allShotKeyframeJobs = mergedShots.map((shot) => buildShotKeyframeJob(shot, false))
   return {
     version: 'sequence_animatic_keyframe_plan_v1',
     continuityLint,
     coverageAnchorJobs,
     shotKeyframeJobs,
+    allShotKeyframeJobs,
     coverageAnchorCount: coverageAnchorJobs.length,
     shotKeyframeCount: shotKeyframeJobs.length,
     blockCount: blocks.length,
     shotCount: mergedShots.length,
     blockById: Object.fromEntries(blocks.map((block) => [readText(block.id), block]).filter(([id]) => id)),
   }
+}
+
+function keyframePlanContainsRequestedShots(keyframePlan: Record<string, unknown>, requestedShotIds: readonly string[]) {
+  const requested = readStringArray(requestedShotIds)
+  if (requested.length === 0) return true
+  const plannedShotIds = new Set(
+    readArray(keyframePlan.allShotKeyframeJobs ?? keyframePlan.shotKeyframeJobs)
+      .map(asRecord)
+      .map((job) => readText(job.shotId))
+      .filter(Boolean),
+  )
+  return requested.every((shotId) => plannedShotIds.has(shotId))
 }
 
 function stepOutputRecord(
@@ -818,17 +925,42 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
     }
     if (Object.keys(manifest).length === 0) throw new HttpError(409, 'Generate the screenplay animatic manifest first.')
     if (Object.keys(directorPlan).length === 0) throw new HttpError(409, 'Generate the shot continuity plan first.')
-    const manifestHash = sequenceAnimaticStableHash(manifest)
-    const directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
-    const masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key) || combinedManifestArtifactKey
-    const assetPack = asRecord(manifest.assetPack)
-    const aspectRatio = readText(assetPack.aspectRatio) || '16:9'
-    const keyframePlan = deriveKeyframePlan({
+    ;({ manifest, directorPlan } = canonicalizeSequenceAnimaticSceneScopedPlanIds({ manifest, directorPlan }))
+    let manifestHash = sequenceAnimaticStableHash(manifest)
+    let directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
+    let masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key) || combinedManifestArtifactKey
+    let assetPack = asRecord(manifest.assetPack)
+    let aspectRatio = readText(assetPack.aspectRatio) || '16:9'
+    let keyframePlan = deriveKeyframePlan({
       manifest,
       directorPlan,
       requestedShotIds: payload.shotIds ?? [],
       requestedCoverageSetupIds: payload.coverageSetupIds ?? [],
     })
+    if (!keyframePlanContainsRequestedShots(asRecord(keyframePlan), payload.shotIds ?? []) && keyframePlanSource !== 'combined_scene_plan') {
+      const combined = await resolveSequenceAnimaticCombinedManifest({ client: admin, masterRequest })
+      if (combined) {
+        const combinedPlan = deriveKeyframePlan({
+          manifest: combined.manifest,
+          directorPlan: combined.directorPlan,
+          requestedShotIds: payload.shotIds ?? [],
+          requestedCoverageSetupIds: payload.coverageSetupIds ?? [],
+        })
+        if (keyframePlanContainsRequestedShots(asRecord(combinedPlan), payload.shotIds ?? [])) {
+          manifest = combined.manifest
+          directorPlan = combined.directorPlan
+          ;({ manifest, directorPlan } = canonicalizeSequenceAnimaticSceneScopedPlanIds({ manifest, directorPlan }))
+          combinedManifestArtifactKey = combined.manifestArtifactKey
+          keyframePlanSource = 'combined_scene_plan'
+          keyframePlan = combinedPlan
+          manifestHash = sequenceAnimaticStableHash(manifest)
+          directorPlanHash = readText(directorPlan.shotPlanHash) || sequenceAnimaticStableHash(directorPlan)
+          masterManifestArtifactKey = readText(masterArtifacts.find((row) => readText(asRecord(row.metadata).role) === 'sequence_animatic_manifest')?.key) || combinedManifestArtifactKey
+          assetPack = asRecord(manifest.assetPack)
+          aspectRatio = readText(assetPack.aspectRatio) || '16:9'
+        }
+      }
+    }
     const requestedShotIds = readStringArray(payload.shotIds)
     const isShotScopedEnsure = requestedShotIds.length === 1
     const scopedShotId = requestedShotIds[0] ?? ''
@@ -2456,7 +2588,7 @@ export async function runSequenceAnimaticKeyframeWorkflowsCommand(input: {
         || (sceneContinuity.readiness ? buildShotReferenceReadinessHash(sceneContinuity.readiness) : '')
       const previousKeyframeGridContext = buildSequenceAnimaticPreviousKeyframeGridContext({
         shotId,
-        shotKeyframeJobs: readArray(keyframePlan.shotKeyframeJobs).map(asRecord),
+        shotKeyframeJobs: readArray(keyframePlan.allShotKeyframeJobs ?? keyframePlan.shotKeyframeJobs).map(asRecord),
         shotKeyframeImageByShotId,
         shotContinuityOptions,
       })

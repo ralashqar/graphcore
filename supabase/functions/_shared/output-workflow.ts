@@ -4433,6 +4433,76 @@ export async function resolveSequenceAnimaticCombinedManifest(input: {
     }
     return [...byId.values()]
   }
+  const sceneScopedId = (sceneId: string, id: unknown, kind: 'shot' | 'block') => {
+    const value = readText(id)
+    if (!sceneId || !value) return value
+    if (value.startsWith(`${sceneId}_`)) return value
+    if (kind === 'shot' && /^shot_\d+$/i.test(value)) return `${sceneId}_${value}`
+    if (kind === 'block' && /^block_\d+$/i.test(value)) return `${sceneId}_${value}`
+    return value
+  }
+  const scopedShotId = (sceneId: string, id: unknown) => sceneScopedId(sceneId, id, 'shot')
+  const scopedBlockId = (sceneId: string, id: unknown) => sceneScopedId(sceneId, id, 'block')
+  const normalizeContinuityLink = (sceneId: string, value: unknown) => {
+    const link = asRecord(value)
+    if (Object.keys(link).length === 0) return link
+    return {
+      ...link,
+      fromShotId: scopedShotId(sceneId, link.fromShotId ?? link.from_shot_id),
+      from_shot_id: scopedShotId(sceneId, link.from_shot_id ?? link.fromShotId),
+    }
+  }
+  const normalizeSceneShot = (sceneId: string, shot: Record<string, unknown>) => {
+    const shotId = scopedShotId(sceneId, shot.id)
+    const blockId = scopedBlockId(sceneId, shot.blockId ?? shot.block_id ?? shot.storyboardBlockId ?? shot.storyboard_block_id)
+    return {
+      ...shot,
+      id: shotId,
+      sceneId: readText(shot.sceneId ?? shot.scene_id) === 'sequence_animatic_master'
+        ? 'sequence_animatic_master'
+        : readText(shot.sceneId ?? shot.scene_id) || sceneId,
+      scene_id: readText(shot.scene_id ?? shot.sceneId) === 'sequence_animatic_master'
+        ? 'sequence_animatic_master'
+        : readText(shot.scene_id ?? shot.sceneId) || sceneId,
+      sourceSceneId: readText(shot.sourceSceneId ?? shot.source_scene_id) || sceneId,
+      source_scene_id: readText(shot.source_scene_id ?? shot.sourceSceneId) || sceneId,
+      blockId,
+      block_id: blockId,
+      storyboardBlockId: scopedBlockId(sceneId, shot.storyboardBlockId ?? shot.storyboard_block_id ?? blockId),
+      storyboard_block_id: scopedBlockId(sceneId, shot.storyboard_block_id ?? shot.storyboardBlockId ?? blockId),
+      previousShotId: scopedShotId(sceneId, shot.previousShotId ?? shot.previous_shot_id),
+      previous_shot_id: scopedShotId(sceneId, shot.previous_shot_id ?? shot.previousShotId),
+      continuityLink: normalizeContinuityLink(sceneId, shot.continuityLink ?? shot.continuity_link),
+      continuity_link: normalizeContinuityLink(sceneId, shot.continuity_link ?? shot.continuityLink),
+    }
+  }
+  const normalizeSceneBlock = (sceneId: string, block: Record<string, unknown>) => {
+    const blockId = scopedBlockId(sceneId, block.id)
+    const rawShots = readArray(block.shots).map(asRecord).map((shot) => normalizeSceneShot(sceneId, { ...shot, blockId }))
+    const shotIds = readArray(block.shotIds ?? block.shot_ids)
+      .map((shotId) => scopedShotId(sceneId, shotId))
+      .filter(Boolean)
+    return {
+      ...block,
+      id: blockId,
+      sceneId: readText(block.sceneId ?? block.scene_id) || sceneId,
+      scene_id: readText(block.scene_id ?? block.sceneId) || sceneId,
+      shotIds: shotIds.length > 0 ? shotIds : rawShots.map((shot) => readText(shot.id)).filter(Boolean),
+      shot_ids: shotIds.length > 0 ? shotIds : rawShots.map((shot) => readText(shot.id)).filter(Boolean),
+      shots: rawShots,
+    }
+  }
+  const normalizeShotIdArrays = (sceneId: string, entry: Record<string, unknown>) => ({
+    ...entry,
+    shotId: scopedShotId(sceneId, entry.shotId ?? entry.shot_id),
+    shot_id: scopedShotId(sceneId, entry.shot_id ?? entry.shotId),
+    shotIds: readArray(entry.shotIds ?? entry.shot_ids).map((shotId) => scopedShotId(sceneId, shotId)).filter(Boolean),
+    shot_ids: readArray(entry.shot_ids ?? entry.shotIds).map((shotId) => scopedShotId(sceneId, shotId)).filter(Boolean),
+    blockId: scopedBlockId(sceneId, entry.blockId ?? entry.block_id ?? entry.storyboardBlockId ?? entry.storyboard_block_id),
+    block_id: scopedBlockId(sceneId, entry.block_id ?? entry.blockId ?? entry.storyboardBlockId ?? entry.storyboard_block_id),
+    storyboardBlockId: scopedBlockId(sceneId, entry.storyboardBlockId ?? entry.storyboard_block_id ?? entry.blockId ?? entry.block_id),
+    storyboard_block_id: scopedBlockId(sceneId, entry.storyboard_block_id ?? entry.storyboardBlockId ?? entry.blockId ?? entry.block_id),
+  })
   const blocks: Record<string, unknown>[] = []
   const shots: Record<string, unknown>[] = []
   const planShots: Record<string, unknown>[] = []
@@ -4447,33 +4517,37 @@ export async function resolveSequenceAnimaticCombinedManifest(input: {
   let blockIndex = 1
   let shotIndex = 1
   for (const child of sceneChildren) {
+    const sceneId = readText(asRecord(child.metadata).sceneId)
     const manifestRow = latestByWorkflowAndRole.get(`${child.workflowId}:sequence_animatic_manifest`)
     const planRow = latestByWorkflowAndRole.get(`${child.workflowId}:sequence_animatic_director_plan`)
     const sceneManifest = asRecord(asRecord(manifestRow?.metadata).manifest)
     const scenePlan = asRecord(asRecord(planRow?.metadata).shotContinuityPlan ?? asRecord(planRow?.metadata).directorPlan)
     if (Object.keys(sceneManifest).length === 0) continue
-    readySceneIds.push(readText(asRecord(child.metadata).sceneId))
+    readySceneIds.push(sceneId)
     if (manifestRow) manifestKeys.push(readText(manifestRow.key))
     if (Object.keys(assetPack).length === 0) assetPack = asRecord(sceneManifest.assetPack)
     for (const block of readArray(sceneManifest.blocks).map(asRecord)) {
-      blocks.push({ ...block, index: blockIndex })
+      blocks.push({ ...normalizeSceneBlock(sceneId, block), index: blockIndex })
       blockIndex += 1
     }
     for (const shot of readArray(asRecord(sceneManifest.shotPlan).shots).map(asRecord)) {
-      shots.push({ ...shot, index: shotIndex })
+      shots.push({ ...normalizeSceneShot(sceneId, shot), index: shotIndex })
       shotIndex += 1
     }
     const planSource = Object.keys(scenePlan).length > 0 ? scenePlan : asRecord(sceneManifest.directorPlan)
-    for (const shot of readArray(planSource.shots).map(asRecord)) planShots.push(shot)
-    for (const block of readArray(planSource.blocks).map(asRecord)) planBlocks.push(block)
-    for (const setup of readArray(planSource.coverageSetups ?? planSource.coverage_setups).map(asRecord)) coverageSetups.push(setup)
-    for (const reference of readArray(planSource.localReferences ?? planSource.outputLocalReferences).map(asRecord)) localReferences.push(reference)
-    Object.assign(shotBindings, asRecord(planSource.shotBindings ?? planSource.shot_bindings))
+    for (const shot of readArray(planSource.shots).map(asRecord)) planShots.push(normalizeSceneShot(sceneId, shot))
+    for (const block of readArray(planSource.blocks).map(asRecord)) planBlocks.push(normalizeSceneBlock(sceneId, block))
+    for (const setup of readArray(planSource.coverageSetups ?? planSource.coverage_setups).map(asRecord)) coverageSetups.push(normalizeShotIdArrays(sceneId, setup))
+    for (const reference of readArray(planSource.localReferences ?? planSource.outputLocalReferences).map(asRecord)) localReferences.push(normalizeShotIdArrays(sceneId, reference))
+    for (const [shotId, binding] of Object.entries(asRecord(planSource.shotBindings ?? planSource.shot_bindings))) {
+      const normalizedShotId = scopedShotId(sceneId, shotId)
+      shotBindings[normalizedShotId] = normalizeShotIdArrays(sceneId, { ...asRecord(binding), shotId: normalizedShotId })
+    }
     const graph = asRecord(planSource.continuityGraphV2 ?? planSource.continuity_graph_v2 ?? sceneManifest.continuityGraphV2)
     const sceneGraphAdditions = asRecord(planSource.sceneGraphAdditions ?? planSource.scene_graph_additions ?? sceneManifest.sceneGraphAdditions ?? sceneManifest.scene_graph_additions)
     for (const field of Object.keys(graphArrays)) {
-      for (const node of readArray(graph[field]).map(asRecord)) graphArrays[field].push(node)
-      for (const node of readArray(sceneGraphAdditions[field]).map(asRecord)) graphArrays[field].push(node)
+      for (const node of readArray(graph[field]).map(asRecord)) graphArrays[field].push(normalizeShotIdArrays(sceneId, node))
+      for (const node of readArray(sceneGraphAdditions[field]).map(asRecord)) graphArrays[field].push(normalizeShotIdArrays(sceneId, node))
     }
   }
   if (blocks.length === 0 || planShots.length === 0) return null

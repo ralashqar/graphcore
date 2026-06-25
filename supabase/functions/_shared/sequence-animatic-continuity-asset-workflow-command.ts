@@ -203,8 +203,13 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
       const rawType = readText(reference.type ?? reference.anchorType ?? reference.anchor_type ?? reference.assetKind ?? reference.asset_kind ?? reference.nodeKind ?? reference.node_kind)
       const normalizedType = rawType === 'temp_character'
         || rawType === 'temporary_character'
+        || rawType === 'character'
+        || rawType === 'person'
+        || rawType === 'crowd'
+        || rawType === 'group'
+        || rawType === 'faction'
         ? 'character'
-        : ['prop', 'item', 'faction', 'crowd', 'vehicle', 'animatic_only'].includes(rawType)
+        : ['prop', 'item', 'vehicle', 'animatic_only'].includes(rawType)
           ? 'prop'
         : rawType
       const assetKind = normalizedType === 'character'
@@ -218,6 +223,9 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
           ? 'location_anchor'
           : 'prop'
       const previous = byId.get(id) ?? {}
+      const metadata = asRecord(reference.metadata)
+      const visualDescription = readText(reference.visualDescription ?? reference.visual_description ?? asRecord(reference.visual).description ?? metadata.visualDescription ?? asRecord(metadata.visual).description)
+      const visualBrief = readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || visualDescription || readText(previous.visualBrief)
       byId.set(id, {
         ...previous,
         ...reference,
@@ -226,8 +234,10 @@ function localReferenceAssetNodesFromSources(...sources: readonly Record<string,
         nodeKind,
         assetKind,
         name: readText(reference.name) || readText(previous.name) || id,
-        visualBrief: readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.visualBrief),
-        summary: readText(reference.summary) || readText(reference.visualBrief ?? reference.visual_brief ?? reference.description) || readText(previous.summary),
+        visualDescription: visualDescription || readText(previous.visualDescription),
+        visual_description: visualDescription || readText(previous.visual_description),
+        visualBrief,
+        summary: visualBrief || readText(reference.summary) || readText(previous.summary),
         shotIds: [...new Set([
           ...readStringArray(previous.shotIds),
           ...readStringArray(reference.shotIds ?? reference.shot_ids),

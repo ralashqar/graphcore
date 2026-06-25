@@ -95,16 +95,183 @@ export function normalizeSequenceAnimaticShotContinuityOptions(value: unknown) {
   }
 }
 
+function sceneIdFromScopedId(value: unknown, kind: 'shot' | 'block') {
+  const text = readText(value)
+  const pattern = kind === 'shot' ? /^(scene_\d+)_shot_\d+$/i : /^(scene_\d+)_block_\d+$/i
+  return pattern.exec(text)?.[1] ?? ''
+}
+
+function sceneIdFromSetupId(value: unknown) {
+  return /^(scene_\d+)_/.exec(readText(value))?.[1] ?? ''
+}
+
+function usableSceneId(value: unknown) {
+  const text = readText(value)
+  return text && text !== 'sequence_animatic_master' ? text : ''
+}
+
+function sceneScopedPlanId(sceneId: string, value: unknown, kind: 'shot' | 'block') {
+  const text = readText(value)
+  if (!sceneId || !text) return text
+  if (text.startsWith(`${sceneId}_`)) return text
+  if (kind === 'shot' && /^shot_\d+$/i.test(text)) return `${sceneId}_${text}`
+  if (kind === 'block' && /^block_\d+$/i.test(text)) return `${sceneId}_${text}`
+  return text
+}
+
+function sceneIdFromPlanEntry(entry: Record<string, unknown>, kind: 'shot' | 'block', fallbackSceneId = '') {
+  return usableSceneId(entry.sourceSceneId ?? entry.source_scene_id)
+    || usableSceneId(entry.sceneId ?? entry.scene_id)
+    || sceneIdFromScopedId(entry.id, kind)
+    || sceneIdFromScopedId(entry.shotId ?? entry.shot_id, 'shot')
+    || sceneIdFromScopedId(entry.blockId ?? entry.block_id ?? entry.storyboardBlockId ?? entry.storyboard_block_id, 'block')
+    || sceneIdFromSetupId(entry.coverageSetupId ?? entry.coverage_setup_id ?? entry.setupId ?? entry.setup_id)
+    || fallbackSceneId
+}
+
+function normalizeSceneScopedLinkIds(sceneId: string, value: unknown) {
+  const link = asRecord(value)
+  if (Object.keys(link).length === 0) return link
+  return {
+    ...link,
+    fromShotId: sceneScopedPlanId(sceneId, link.fromShotId ?? link.from_shot_id, 'shot'),
+    from_shot_id: sceneScopedPlanId(sceneId, link.from_shot_id ?? link.fromShotId, 'shot'),
+  }
+}
+
+function normalizeSceneScopedShot(shot: Record<string, unknown>, fallbackSceneId = '') {
+  const sceneId = sceneIdFromPlanEntry(shot, 'shot', readText(fallbackSceneId))
+  const shotId = sceneScopedPlanId(sceneId, shot.id ?? shot.shotId ?? shot.shot_id, 'shot')
+  const blockId = sceneScopedPlanId(sceneId, shot.blockId ?? shot.block_id ?? shot.storyboardBlockId ?? shot.storyboard_block_id, 'block')
+  const explicitSceneId = usableSceneId(shot.sceneId ?? shot.scene_id)
+  const sourceSceneId = usableSceneId(shot.sourceSceneId ?? shot.source_scene_id) || sceneId
+  return {
+    ...shot,
+    id: shotId,
+    shotId,
+    shot_id: shotId,
+    sceneId: explicitSceneId || sourceSceneId || sceneId,
+    scene_id: explicitSceneId || sourceSceneId || sceneId,
+    sourceSceneId,
+    source_scene_id: sourceSceneId,
+    blockId,
+    block_id: blockId,
+    storyboardBlockId: sceneScopedPlanId(sceneId, shot.storyboardBlockId ?? shot.storyboard_block_id ?? blockId, 'block'),
+    storyboard_block_id: sceneScopedPlanId(sceneId, shot.storyboard_block_id ?? shot.storyboardBlockId ?? blockId, 'block'),
+    previousShotId: sceneScopedPlanId(sceneId, shot.previousShotId ?? shot.previous_shot_id, 'shot'),
+    previous_shot_id: sceneScopedPlanId(sceneId, shot.previous_shot_id ?? shot.previousShotId, 'shot'),
+    continuityLink: normalizeSceneScopedLinkIds(sceneId, shot.continuityLink ?? shot.continuity_link),
+    continuity_link: normalizeSceneScopedLinkIds(sceneId, shot.continuity_link ?? shot.continuityLink),
+  }
+}
+
+function normalizeSceneScopedBlock(block: Record<string, unknown>, fallbackSceneId = '') {
+  const firstShot = asRecord(readArray(block.shots)[0])
+  const sceneId = sceneIdFromPlanEntry(block, 'block', sceneIdFromPlanEntry(firstShot, 'shot', fallbackSceneId))
+  const blockId = sceneScopedPlanId(sceneId, block.id ?? block.blockId ?? block.block_id, 'block')
+  const shots = readArray(block.shots).map(asRecord).map((shot) => normalizeSceneScopedShot({ ...shot, blockId }, sceneId))
+  const shotIds = readArray(block.shotIds ?? block.shot_ids)
+    .map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot'))
+    .filter(Boolean)
+  return {
+    ...block,
+    id: blockId,
+    blockId,
+    block_id: blockId,
+    sceneId: usableSceneId(block.sceneId ?? block.scene_id) || sceneId,
+    scene_id: usableSceneId(block.scene_id ?? block.sceneId) || sceneId,
+    sourceSceneId: usableSceneId(block.sourceSceneId ?? block.source_scene_id) || sceneId,
+    source_scene_id: usableSceneId(block.source_scene_id ?? block.sourceSceneId) || sceneId,
+    shots,
+    shotIds: shotIds.length > 0 ? shotIds : shots.map((shot) => readText(shot.id)).filter(Boolean),
+    shot_ids: shotIds.length > 0 ? shotIds : shots.map((shot) => readText(shot.id)).filter(Boolean),
+  }
+}
+
+function normalizeSceneScopedShotIdArrays(entry: Record<string, unknown>, fallbackSceneId = '') {
+  const sceneId = sceneIdFromPlanEntry(entry, 'shot', fallbackSceneId)
+  return {
+    ...entry,
+    sceneId: usableSceneId(entry.sceneId ?? entry.scene_id) || sceneId,
+    scene_id: usableSceneId(entry.scene_id ?? entry.sceneId) || sceneId,
+    sourceSceneId: usableSceneId(entry.sourceSceneId ?? entry.source_scene_id) || sceneId,
+    source_scene_id: usableSceneId(entry.source_scene_id ?? entry.sourceSceneId) || sceneId,
+    shotId: sceneScopedPlanId(sceneId, entry.shotId ?? entry.shot_id, 'shot'),
+    shot_id: sceneScopedPlanId(sceneId, entry.shot_id ?? entry.shotId, 'shot'),
+    shotIds: readArray(entry.shotIds ?? entry.shot_ids).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean),
+    shot_ids: readArray(entry.shot_ids ?? entry.shotIds).map((shotId) => sceneScopedPlanId(sceneId, shotId, 'shot')).filter(Boolean),
+    blockId: sceneScopedPlanId(sceneId, entry.blockId ?? entry.block_id ?? entry.storyboardBlockId ?? entry.storyboard_block_id, 'block'),
+    block_id: sceneScopedPlanId(sceneId, entry.block_id ?? entry.blockId ?? entry.storyboardBlockId ?? entry.storyboard_block_id, 'block'),
+    storyboardBlockId: sceneScopedPlanId(sceneId, entry.storyboardBlockId ?? entry.storyboard_block_id ?? entry.blockId ?? entry.block_id, 'block'),
+    storyboard_block_id: sceneScopedPlanId(sceneId, entry.storyboard_block_id ?? entry.storyboardBlockId ?? entry.blockId ?? entry.block_id, 'block'),
+  }
+}
+
+export function canonicalizeSequenceAnimaticSceneScopedPlanIds(input: {
+  manifest: Record<string, unknown>
+  directorPlan: Record<string, unknown>
+}) {
+  const manifest = asRecord(input.manifest)
+  const directorPlan = asRecord(input.directorPlan)
+  const blocks = readArray(manifest.blocks).map(asRecord).map((block) => normalizeSceneScopedBlock(block))
+  const blockSceneById = new Map(blocks.map((block) => [readText(block.id), readText(block.sourceSceneId ?? block.sceneId)] as const).filter(([id]) => id))
+  const normalizeShotWithKnownBlock = (shot: Record<string, unknown>) => {
+    const blockId = readText(shot.blockId ?? shot.block_id ?? shot.storyboardBlockId ?? shot.storyboard_block_id)
+    return normalizeSceneScopedShot(shot, blockSceneById.get(blockId) ?? '')
+  }
+  const directorShots = readArray(directorPlan.shots).map(asRecord).map(normalizeShotWithKnownBlock)
+  const coverageSetups = readArray(directorPlan.coverageSetups ?? directorPlan.coverage_setups)
+    .map(asRecord)
+    .map((setup) => normalizeSceneScopedShotIdArrays(setup))
+  const localReferences = readArray(directorPlan.localReferences ?? directorPlan.outputLocalReferences)
+    .map(asRecord)
+    .map((reference) => normalizeSceneScopedShotIdArrays(reference))
+  const shotBindings = Object.fromEntries(Object.entries(asRecord(directorPlan.shotBindings ?? directorPlan.shot_bindings))
+    .map(([shotId, binding]) => {
+      const entry = normalizeSceneScopedShotIdArrays({ ...asRecord(binding), shotId })
+      return [readText(entry.shotId) || shotId, entry]
+    }))
+  const shotPlan = {
+    ...asRecord(manifest.shotPlan ?? manifest.shot_plan),
+    shots: readArray(asRecord(manifest.shotPlan ?? manifest.shot_plan).shots)
+      .map(asRecord)
+      .map(normalizeShotWithKnownBlock),
+  }
+  return {
+    manifest: {
+      ...manifest,
+      blocks,
+      shotPlan,
+      shot_plan: shotPlan,
+    },
+    directorPlan: {
+      ...directorPlan,
+      shots: directorShots,
+      coverageSetups,
+      coverage_setups: coverageSetups,
+      localReferences,
+      outputLocalReferences: localReferences,
+      shotBindings,
+      shot_bindings: shotBindings,
+    },
+  }
+}
+
 function sequenceAnimaticSceneIdFromShot(input: {
   shotId: string
   shot?: Record<string, unknown>
   job?: Record<string, unknown>
 }) {
-  return readText(input.job?.sceneId ?? input.job?.scene_id)
+  const shotIdScene = /^(.+)_shot_\d+/.exec(input.shotId)?.[1] || ''
+  const explicitSceneId = readText(input.job?.sceneId ?? input.job?.scene_id)
     || readText(input.shot?.sceneId ?? input.shot?.scene_id)
+  const usableExplicitSceneId = explicitSceneId && explicitSceneId !== 'sequence_animatic_master'
+    ? explicitSceneId
+    : ''
+  return usableExplicitSceneId
+    || shotIdScene
     || readText(input.shot?.sceneKey ?? input.shot?.scene_key)
     || readText(input.shot?.storySceneId ?? input.shot?.story_scene_id)
-    || /^(.+)_shot_\d+/.exec(input.shotId)?.[1]
     || ''
 }
 
