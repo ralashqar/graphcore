@@ -147,6 +147,15 @@ function readText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.map(readText).filter(Boolean)
@@ -174,6 +183,45 @@ function referenceLine(entry: LooseRecord) {
 
 function joinLimited(values: string[], maxWords = 42) {
   return compactSeedanceControlText(values.filter(Boolean).join('; '), maxWords)
+}
+
+function performanceAxisLabel(axis: 'valence' | 'arousal' | 'confidence' | 'dominance', value: unknown) {
+  const number = readNumber(value)
+  if (number === null) return ''
+  if (axis === 'valence') {
+    if (number <= -0.35) return 'low valence'
+    if (number >= 0.35) return 'high valence'
+    return 'neutral valence'
+  }
+  if (axis === 'arousal') {
+    if (number >= 0.67) return 'high arousal'
+    if (number <= 0.33) return 'low arousal'
+    return 'medium arousal'
+  }
+  if (axis === 'confidence') {
+    if (number >= 0.67) return 'high confidence'
+    if (number <= 0.33) return 'low confidence'
+    return 'medium confidence'
+  }
+  if (number >= 0.67) return 'high dominance'
+  if (number <= 0.33) return 'low dominance'
+  return 'medium dominance'
+}
+
+function performanceCueName(beat: LooseRecord) {
+  return readText(beat.characterName ?? beat.character_name)
+    || readText(beat.name)
+    || readText(beat.characterRefId ?? beat.character_ref_id)
+    || readText(beat.character)
+}
+
+function performanceAxisSummary(beat: LooseRecord) {
+  return [
+    performanceAxisLabel('valence', beat.valence),
+    performanceAxisLabel('arousal', beat.arousal),
+    performanceAxisLabel('confidence', beat.confidence),
+    performanceAxisLabel('dominance', beat.dominance),
+  ].filter(Boolean).join(', ')
 }
 
 export function estimateSequenceShotVideoDurationSeconds(shot: LooseRecord) {
@@ -255,15 +303,39 @@ export function buildSequenceAnimaticShotVisualCallSheet(input: {
     readText(coverageSetup.cameraBrief ?? coverageSetup.camera_brief),
   ].filter(Boolean)
   const bodyPerformance = performanceBeats
-    .map((beat) => [readText(beat.bodyLanguage), readText(beat.gesture), readText(beat.description)].filter(Boolean).join(', '))
+    .map((beat) => {
+      const who = performanceCueName(beat)
+      const parts = [readText(beat.bodyLanguage ?? beat.body_language), readText(beat.gesture), readText(beat.description), performanceAxisSummary(beat)].filter(Boolean).join(', ')
+      return parts ? [who, parts].filter(Boolean).join(': ') : ''
+    })
     .filter(Boolean)
   const facePerformance = performanceBeats
-    .map((beat) => [readText(beat.emotion), readText(beat.facialExpression)].filter(Boolean).join(', '))
+    .map((beat) => {
+      const who = performanceCueName(beat)
+      const parts = [readText(beat.emotion), readText(beat.facialExpression ?? beat.facial_expression), performanceAxisSummary(beat)].filter(Boolean).join(', ')
+      return parts ? [who, parts].filter(Boolean).join(': ') : ''
+    })
     .filter(Boolean)
-  const gazePerformance = performanceBeats.map((beat) => readText(beat.gaze)).filter(Boolean)
+  const gazePerformance = performanceBeats.map((beat) => {
+    const gaze = readText(beat.gaze)
+    return gaze ? [performanceCueName(beat), gaze].filter(Boolean).join(': ') : ''
+  }).filter(Boolean)
   const dialogueDelivery = dialogue
-    .map((line) => [readText(line.speakerName) || readText(line.speakerRefId), readText(line.emotion), readText(line.text)].filter(Boolean).join(': '))
+    .map((line) => {
+      const speaker = readText(line.speakerName ?? line.speaker_name) || readText(line.speakerRefId ?? line.speaker_ref_id)
+      const parts = [
+        readText(line.emotion),
+        readText(line.delivery) ? `delivery ${readText(line.delivery)}` : '',
+        readText(line.subtext) ? `subtext ${readText(line.subtext)}` : '',
+        readText(line.text),
+      ].filter(Boolean).join(', ')
+      return parts ? [speaker, parts].filter(Boolean).join(': ') : ''
+    })
     .filter(Boolean)
+  const voiceEnergy = performanceBeats.map((beat) => {
+    const voice = readText(beat.voiceEnergy ?? beat.voice_energy)
+    return voice ? [performanceCueName(beat), voice].filter(Boolean).join(': ') : ''
+  }).filter(Boolean)
   const primaryAction = readText(shot.action) || readText(shot.description) || readText(shot.storyboardPanelPrompt) || readText(shot.title)
   const videoDirection = readText(shot.videoDirection)
   const screenDirectionRule = readText(camera.screenDirectionRule) || readText(shot.screenDirectionRule) || readText(coverageSetup.screenDirection ?? coverageSetup.screen_direction)
@@ -303,7 +375,7 @@ export function buildSequenceAnimaticShotVisualCallSheet(input: {
       face: joinLimited(facePerformance, 26),
       gaze: joinLimited(gazePerformance, 22),
       dialogueDelivery: joinLimited(dialogueDelivery, 34),
-      voice: compactSeedanceControlText(controls.voice, 28),
+      voice: joinLimited([compactSeedanceControlText(controls.voice, 28), ...voiceEnergy], 34),
     },
     environment: {
       locationContinuity: joinLimited([readText(input.sceneStateText), ...locationRefs.slice(0, 4).map(referenceLine)], 44),
@@ -390,7 +462,7 @@ export function buildSeedanceDirectedControlsFromShot(input: {
     })
     .filter(Boolean)
   const dialogueEmotion = dialogueRecords
-    .map((line) => readText(line.emotion))
+    .map((line) => [readText(line.emotion), readText(line.delivery), readText(line.subtext)].filter(Boolean).join(', '))
     .filter(Boolean)
     .slice(0, 2)
     .join(', ')
@@ -399,6 +471,8 @@ export function buildSeedanceDirectedControlsFromShot(input: {
     .map((beat) => {
       const who = entityName(readText(beat.characterRefId))
       const parts = [
+        readText(beat.emotion),
+        performanceAxisSummary(beat),
         readText(beat.bodyLanguage),
         readText(beat.facialExpression),
         readText(beat.gaze),

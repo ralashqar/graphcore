@@ -41,6 +41,8 @@ export const SEQUENCE_ANIMATIC_NODE_KEYS = {
   shotReferencePack: 'shot_reference_pack',
   shotVideoArtifact: 'shot_video_artifact',
   // Shot video workflow
+  shotVideoReferencePack: 'shot_video_reference_pack',
+  shotVideoPromptPlan: 'shot_video_prompt_plan',
   shotVideoPrompt: 'shot_video_prompt',
   shotVideo: 'shot_video',
   // Storyboard block workflow terminal artifact node
@@ -114,12 +116,15 @@ export const sequenceAnimaticPlannedKeyframeForceNodeKeys = [
 ] as const
 
 export const sequenceAnimaticShotVideoTargetNodeKeys = [
-  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideo,
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoArtifact,
 ] as const
 
 export const sequenceAnimaticShotVideoForceNodeKeys = [
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoReferencePack,
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoPromptPlan,
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoPrompt,
   SEQUENCE_ANIMATIC_NODE_KEYS.shotVideo,
+  SEQUENCE_ANIMATIC_NODE_KEYS.shotVideoArtifact,
 ] as const
 
 export const sequenceAnimaticShotProductionKeyframeTargetNodeKeys = [

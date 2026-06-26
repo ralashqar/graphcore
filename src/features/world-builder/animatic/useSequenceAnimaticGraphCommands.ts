@@ -10,7 +10,10 @@ import type {
   SequenceAnimaticShotView,
   SequenceAnimaticViewModel,
 } from '../scene-board/sceneBoardProjection'
-import { buildSequenceAnimaticShotKeyframeReferenceOverride } from './sequenceAnimaticShotWorkspace'
+import {
+  buildSequenceAnimaticShotKeyframeReferenceOverride,
+  buildSequenceAnimaticShotVideoReferenceOverride,
+} from './sequenceAnimaticShotWorkspace'
 import {
   readLooseArray,
   readLooseRecord,
@@ -48,6 +51,7 @@ type EnsureSequenceAnimaticBlockWorkflows = (request: {
   storyboardBlockId?: string
   shotId?: string
   panelAssetKey?: string
+  shotVideoReferenceOverride?: Record<string, unknown>
 }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
 
 type EnsureSequenceAnimaticSceneWorkflows = (request: {
@@ -121,6 +125,16 @@ function findStoryboardBlockChildRequest(childRequests: readonly OutputRequest[]
     .sort((left, right) => right.score - left.score)
   if (scored.length === 0) return null
   return scored[0]?.score === scored[1]?.score ? null : scored[0]?.request ?? null
+}
+
+function findShotVideoChildRequest(childRequests: readonly OutputRequest[], blockRequestId: string, shotId: string) {
+  return childRequests.find((request) => {
+    const metadata = readLooseRecord(request.metadata)
+    return request.parentRequestId === blockRequestId
+      && trimOptionalString(metadata.sequenceAnimaticRole) === 'shot_video'
+      && trimOptionalString(metadata.shotId) === shotId
+      && metadata.sequenceAnimaticStale !== true
+  }) ?? null
 }
 
 export function useSequenceAnimaticGraphCommands({
@@ -338,10 +352,61 @@ export function useSequenceAnimaticGraphCommands({
     setSequenceAnimaticErrorByKey,
   ])
 
+  const openShotVideoGraph = useCallback(async (
+    model: GraphCommandViewModel,
+    block: GraphCommandBlockView,
+    shot: GraphCommandShotView,
+    refresh = false,
+  ) => {
+    const nextGraphOpenKey = `${model.request.id}:${block.id}:${shot.id}:${refresh ? 'refresh_shot_video_graph' : 'shot_video_graph'}`
+    if (graphOpenKey) return
+    setGraphOpenKey(nextGraphOpenKey)
+    try {
+      const ensureBlocks = await Promise.resolve(onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: model.request.id }))
+      const refreshedBlockRequest = findStoryboardBlockChildRequest(ensureBlocks.childRequests, block)
+      const blockRequestId = refreshedBlockRequest?.id ?? block.childRequestId ?? null
+      if (!blockRequestId) throw new Error('Storyboard block workflow is not ready yet.')
+      const ensureShot = await Promise.resolve(onEnsureSequenceAnimaticBlockWorkflows({
+        masterRequestId: model.request.id,
+        sequenceAnimaticMode: 'shot_video',
+        blockRequestId,
+        storyboardBlockId: block.id,
+        shotId: shot.id,
+        panelAssetKey: trimOptionalString(shot.panelAssetKey) || undefined,
+        shotVideoReferenceOverride: buildSequenceAnimaticShotVideoReferenceOverride(model, block, shot) as unknown as Record<string, unknown>,
+      }))
+      const shotRequest = findShotVideoChildRequest(ensureShot.childRequests, blockRequestId, shot.id)
+      if (!shotRequest?.workflowId) throw new Error('Shot video graph is not ready yet.')
+      openOutputGraph(model, shotRequest.id, 'shot_video_artifact')
+      void Promise.resolve(onGetOutputRequestStatus(shotRequest.id)).catch((statusError) => {
+        console.warn('[GraphCore] sequence animatic shot video graph status refresh failed.', statusError)
+      })
+      void Promise.resolve(loadAndStoreSequenceAnimaticState({ masterRequestId: model.request.id, knownRevision: null })).catch((stateError) => {
+        console.warn('[GraphCore] sequence animatic state refresh after shot video graph open failed.', stateError)
+      })
+    } catch (error) {
+      const sequenceKey = model.request.selectedSequenceUnitKeys[0] ?? model.request.id
+      setSequenceAnimaticErrorByKey((previous) => ({
+        ...previous,
+        [sequenceKey]: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setGraphOpenKey(null)
+    }
+  }, [
+    graphOpenKey,
+    loadAndStoreSequenceAnimaticState,
+    onEnsureSequenceAnimaticBlockWorkflows,
+    onGetOutputRequestStatus,
+    openOutputGraph,
+    setSequenceAnimaticErrorByKey,
+  ])
+
   return {
     graphOpenKey,
     runBlock,
     runScene,
     openShotGraph,
+    openShotVideoGraph,
   }
 }

@@ -12,6 +12,7 @@ import type {
   SequenceAnimaticShotView,
   SequenceAnimaticViewModel,
 } from '../scene-board/sceneBoardProjection'
+import { buildSequenceAnimaticShotVideoReferenceOverride } from './sequenceAnimaticShotWorkspace'
 import {
   readLooseRecord,
   trimOptionalString,
@@ -29,6 +30,7 @@ type EnsureSequenceAnimaticBlockWorkflows = (request: {
   storyboardBlockId?: string
   shotId?: string
   panelAssetKey?: string
+  shotVideoReferenceOverride?: Record<string, unknown>
 }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
 
 export function useSequenceAnimaticShotVideoCommands({
@@ -68,7 +70,7 @@ export function useSequenceAnimaticShotVideoCommands({
     })?.id ?? null
     const blockRequestId = refreshedBlockRequestId ?? readOptionalString(block.childRequestId)
     if (!blockRequestId) throw new Error('Storyboard block workflow is not ready yet.')
-    if (!shot.panelUrl) throw new Error('Generate/extract the storyboard panel before generating shot video.')
+    const shotVideoReferenceOverride = buildSequenceAnimaticShotVideoReferenceOverride(model, block, shot) as unknown as Record<string, unknown>
     const ensureShot = await Promise.resolve(onEnsureSequenceAnimaticBlockWorkflows({
       masterRequestId: model.request.id,
       sequenceAnimaticMode: 'shot_video',
@@ -76,6 +78,7 @@ export function useSequenceAnimaticShotVideoCommands({
       storyboardBlockId: block.id,
       shotId: shot.id,
       panelAssetKey: readOptionalString(shot.panelAssetKey) ?? undefined,
+      shotVideoReferenceOverride,
     }))
     const shotRequest = ensureShot.childRequests.find((request) => {
       const metadata = readLooseRecord(request.metadata)
@@ -136,6 +139,7 @@ export function useSequenceAnimaticShotVideoCommands({
           sequenceAnimaticRole: 'shot_video',
           storyboardBlockId: block.id,
           shotId: shot.id,
+          shotVideoReferenceOverride: buildSequenceAnimaticShotVideoReferenceOverride(model, block, shot),
         },
       }))
       await Promise.resolve(onGetOutputRequestStatus(shotRequest.id))

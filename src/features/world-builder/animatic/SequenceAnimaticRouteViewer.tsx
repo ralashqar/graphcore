@@ -63,6 +63,7 @@ type SequenceAnimaticRouteViewerProps = {
   onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate', continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onRunShotVideo: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean, continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
+  onOpenShotVideoGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onPlayVideo: (preview: SequenceAnimaticVideoPreview) => void
   onOpenShotPreview: (input: WorldWikiDetailModalInput) => void
   onOpenShotInspector: (input: SequenceAnimaticShotInspectorInput) => void
@@ -105,6 +106,7 @@ type SequenceAnimaticRouteTimelineProps = Pick<
   | 'onRunShotKeyframe'
   | 'onRunShotVideo'
   | 'onOpenShotGraph'
+  | 'onOpenShotVideoGraph'
   | 'onPlayVideo'
   | 'onOpenShotPreview'
   | 'onOpenShotInspector'
@@ -144,6 +146,7 @@ export function SequenceAnimaticRouteViewer({
   onRunShotKeyframe,
   onRunShotVideo,
   onOpenShotGraph,
+  onOpenShotVideoGraph,
   onPlayVideo,
   onOpenShotPreview,
   onOpenShotInspector,
@@ -222,6 +225,7 @@ export function SequenceAnimaticRouteViewer({
             onRunShotKeyframe={onRunShotKeyframe}
             onRunShotVideo={onRunShotVideo}
             onOpenShotGraph={onOpenShotGraph}
+            onOpenShotVideoGraph={onOpenShotVideoGraph}
             onPlayVideo={onPlayVideo}
             onOpenShotPreview={onOpenShotPreview}
             onOpenShotInspector={onOpenShotInspector}
@@ -259,6 +263,7 @@ function SequenceAnimaticRouteTimeline({
   onRunShotKeyframe,
   onRunShotVideo,
   onOpenShotGraph,
+  onOpenShotVideoGraph,
   onPlayVideo,
   onOpenShotPreview,
   onOpenShotInspector,
@@ -311,6 +316,7 @@ function SequenceAnimaticRouteTimeline({
           onRunShotKeyframe={onRunShotKeyframe}
           onRunShotVideo={onRunShotVideo}
           onOpenShotGraph={onOpenShotGraph}
+          onOpenShotVideoGraph={onOpenShotVideoGraph}
           onPlayShotVideo={onPlayVideo}
           onOpenShotPreview={onOpenShotPreview}
           onOpenShotInspector={onOpenShotInspector}

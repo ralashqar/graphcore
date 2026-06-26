@@ -807,6 +807,9 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
       const shotId = readText(payload.shotId)
       const requestedStoryboardBlockId = readText(payload.storyboardBlockId)
       const requestedPanelAssetKey = readText(payload.panelAssetKey)
+      const shotVideoReferenceOverride = asRecord(payload.shotVideoReferenceOverride ?? payload.shot_video_reference_override)
+      const shotVideoReferenceOverrideHash = readText(shotVideoReferenceOverride.ingredientPlanHash ?? shotVideoReferenceOverride.ingredient_plan_hash)
+        || (Object.keys(shotVideoReferenceOverride).length > 0 ? sequenceAnimaticStableHash(shotVideoReferenceOverride) : '')
       if (!blockRequestId && !requestedStoryboardBlockId) {
         throw new HttpError(400, 'blockRequestId or storyboardBlockId is required when preparing a shot video workflow.')
       }
@@ -897,6 +900,25 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
           shotChild = null
         }
       }
+      if (shotChild && shotVideoReferenceOverrideHash) {
+        const existingMetadata = asRecord(shotChild.metadata)
+        const existingReferenceHash = readText(existingMetadata.shotVideoReferenceOverrideHash)
+        if (existingReferenceHash !== shotVideoReferenceOverrideHash) {
+          await markChildWorkflowStale({
+            client: admin,
+            request: shotChild,
+            reason: 'shot_video_reference_override_changed',
+            staleAtField: 'staleMarkedAt',
+            now,
+            metadata: {
+              staleShotVideoReferenceOverrideHash: existingReferenceHash,
+              replacementShotVideoReferenceOverrideHash: shotVideoReferenceOverrideHash,
+            },
+            refreshProjection: true,
+          })
+          shotChild = null
+        }
+      }
       if (!shotChild) {
         const panelArtifactsResponse = await client
           .from('output_artifacts')
@@ -951,7 +973,7 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
           if (panelAssetResponse.error) throw new Error(panelAssetResponse.error.message)
           if (panelAssetResponse.data) panelArtifact = storyboardPanelRecordFromAsset(panelAssetResponse.data, shotId)
         }
-        if (!panelArtifact) {
+        if (!panelArtifact && requestedPanelAssetKey) {
           const availableShotSummary = Array.from(availableArtifactPanelShotIds).slice(0, 12).join(', ')
           throw new HttpError(
             409,
@@ -981,7 +1003,7 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
         const editorialDurationSeconds = Math.max(0.5, Math.min(15, Number(effectiveShot.editorialDurationSeconds ?? 0) || Number(panelMetadata.editorialDurationSeconds ?? 0) || 3))
         const providerDurationSeconds = providerSafeSequenceAnimaticVideoDurationSeconds(effectiveShot.providerDurationSeconds ?? editorialDurationSeconds)
         const blockHash = sequenceAnimaticStableHash(block)
-        const shotHash = sequenceAnimaticStableHash({ blockId: storyboardBlockId, shot: effectiveShot, panelAssetKey: readText(panelArtifactRecord.asset_key) })
+        const shotHash = sequenceAnimaticStableHash({ blockId: storyboardBlockId, shot: effectiveShot, panelAssetKey: readText(panelArtifactRecord.asset_key), shotVideoReferenceOverrideHash })
         const workflowPayload = {
             project_id: payload.projectId,
             draft_id: payload.draftId,
@@ -1003,6 +1025,7 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
               manifestHash,
               blockHash,
               shotHash,
+              shotVideoReferenceOverrideHash: shotVideoReferenceOverrideHash || null,
               continuityPackHash: continuityPackHash || null,
               masterManifestArtifactKey,
               sequenceUnitKey: masterRequest.selectedSequenceUnitKeys[0] ?? null,
@@ -1026,6 +1049,9 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
           manifestHash,
           blockHash,
           shotHash,
+          shotVideoReferenceOverrideHash: shotVideoReferenceOverrideHash || null,
+          shotVideoReferenceOverride,
+          shot_video_reference_override: shotVideoReferenceOverride,
           continuityPackHash: continuityPackHash || null,
           masterManifestArtifactKey,
         }
@@ -1065,6 +1091,7 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
             shot: effectiveShot,
             panel,
             assetPack: shotAssetPack,
+            shotVideoReferenceOverride,
             editorialDurationSeconds,
             providerDurationSeconds,
             aspectRatio,
@@ -1103,6 +1130,7 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
               manifestHash,
               blockHash: sequenceAnimaticStableHash(block),
               shotHash,
+              shotVideoReferenceOverrideHash: shotVideoReferenceOverrideHash || null,
               continuityPackHash: continuityPackHash || null,
               masterManifestArtifactKey,
               shotIndex: Number(shot.index ?? 0) || shots.indexOf(shot) + 1,
@@ -1110,6 +1138,8 @@ export async function runSequenceAnimaticBlockWorkflowCommand(input: {
               sourceMasterWorkflowId: masterRequest.workflowId,
               sourceBlockWorkflowId: blockRequest.workflowId,
               panelAssetKey: readText(panelArtifactRecord.asset_key),
+              shotVideoReferenceOverride,
+              shot_video_reference_override: shotVideoReferenceOverride,
               editorialDurationSeconds,
               providerDurationSeconds,
               readyToRun: true,

@@ -8,6 +8,7 @@ import {
   sequenceAnimaticShotKeyframeBusyLabel,
 } from './sequenceAnimaticProgressPresentation'
 import {
+  sequenceAnimaticPerformanceBeatLine,
   sequenceAnimaticShotCanGenerateEarlyKeyframe,
   sequenceAnimaticShotPreviewEyebrow,
   type SequenceAnimaticVideoPreview,
@@ -59,6 +60,7 @@ export type SequenceAnimaticShotWorkspaceProps = {
   onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate', continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onRunShotVideo: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean, continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
+  onOpenShotVideoGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onPlayShotVideo: (preview: SequenceAnimaticVideoPreview) => void
   onOpenShotPreview: (input: {
     title: string
@@ -202,11 +204,11 @@ export function SequenceAnimaticShotWorkspace({
   shotPromptDraftByKey,
   onSetShotPromptDraft,
   shotVideoRunKeyActive,
-  onBindShotElement,
   onRunShotRevision,
   onRunShotKeyframe,
   onRunShotVideo,
   onOpenShotGraph,
+  onOpenShotVideoGraph,
   onPlayShotVideo,
   onOpenShotPreview,
   onOpenShotInspector,
@@ -228,6 +230,7 @@ export function SequenceAnimaticShotWorkspace({
   const [selectedIngredient, setSelectedIngredient] = useState<SequenceAnimaticShotIngredient | null>(null)
   const [preflightModal, setPreflightModal] = useState<KeyframePreflightModalState | null>(null)
   const activeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const timelineTrackRef = useRef<HTMLDivElement | null>(null)
   const panelScrubRef = useRef<HTMLDivElement | null>(null)
   const lastSyncedSceneIdRef = useRef<string | null>(null)
   const [shotScrubProgress, setShotScrubProgress] = useState(0)
@@ -273,7 +276,14 @@ export function SequenceAnimaticShotWorkspace({
   }, [activeSceneId, timelineItems])
 
   useEffect(() => {
-    activeButtonRef.current?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+    const activeButton = activeButtonRef.current
+    const timelineTrack = timelineTrackRef.current
+    if (!activeButton || !timelineTrack) {
+      return
+    }
+    const activeButtonCenter = activeButton.offsetLeft + activeButton.offsetWidth / 2
+    const nextScrollLeft = Math.max(0, activeButtonCenter - timelineTrack.clientWidth / 2)
+    timelineTrack.scrollTo({ left: nextScrollLeft, behavior: 'smooth' })
   }, [activeItemKey])
 
   const activeItem = timelineItems.find((item) => item.key === activeItemKey) ?? timelineItems[0] ?? null
@@ -385,12 +395,12 @@ export function SequenceAnimaticShotWorkspace({
     )
   }
 
-  const shotElementKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}`
   const shotRevisionRunKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}:shot_revision`
   const shotKeyframeRunKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}:keyframe`
   const shotVideoRunKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}:shot_video`
   const shotGraphRunKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}:shot_graph`
   const refreshShotGraphRunKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}:refresh_shot_graph`
+  const shotVideoGraphRunKey = `${model.request.id}:${activeBlock.id}:${activeShot.id}:shot_video_graph`
   const shotVideoStarting = shotVideoRunKeyActive(shotVideoRunKey)
   const shotKeyframeStarting = busyRunKeys.has(shotKeyframeRunKey)
   const shotKeyframeBusy = shotKeyframeStarting || activeShot.keyframeRunning
@@ -640,7 +650,7 @@ export function SequenceAnimaticShotWorkspace({
   )
 
   return (
-    <section className="world-wiki-shot-workspace" ref={(node) => onBindShotElement(shotElementKey, node)}>
+    <section className="world-wiki-shot-workspace">
       <div className="world-wiki-shot-workspace__topbar">
         <h3>Shot {activeSceneShotNumber}: {activeShot.title}</h3>
         <div className="world-wiki-shot-workspace__actions">
@@ -824,6 +834,7 @@ export function SequenceAnimaticShotWorkspace({
           <span className="eyebrow">Action</span>
           <p>{activeShot.action || 'Shot action is still being parsed.'}</p>
           <SequenceAnimaticFocusedDialogue shot={activeShot} />
+          <SequenceAnimaticFocusedPerformance shot={activeShot} />
           <form
             className={activeShotPrompt?.status === 'failed' ? 'world-wiki-sequence-shot-inline-prompt is-error' : 'world-wiki-sequence-shot-inline-prompt'}
             onSubmit={(event) => {
@@ -898,15 +909,23 @@ export function SequenceAnimaticShotWorkspace({
               Play shot take
             </button>
           ) : (
-            <button className="ghost-button compact" disabled={activeShot.isProvisional || !activeShot.panelUrl || activeShot.shotVideoRunning || shotVideoStarting} onClick={() => onRunShotVideo(model, activeBlock, activeShot)} type="button">
+            <button className="ghost-button compact" disabled={activeShot.isProvisional || activeShot.shotVideoRunning || shotVideoStarting} onClick={() => onRunShotVideo(model, activeBlock, activeShot)} type="button">
               {activeShot.shotVideoRunning || shotVideoStarting ? <><span className="world-mini-spinner" aria-hidden="true" />{activeShot.shotVideoRunning ? activeShot.shotVideoProgressLabel : 'Starting shot video'}</> : 'Generate shot video'}
             </button>
           )}
+          <button
+            className="ghost-button compact"
+            disabled={activeShot.isProvisional || Boolean(graphOpenKey)}
+            onClick={() => onOpenShotVideoGraph(model, activeBlock, activeShot)}
+            type="button"
+          >
+            {graphOpenKey === shotVideoGraphRunKey ? <><span className="world-mini-spinner" aria-hidden="true" />Opening video graph</> : 'Video graph'}
+          </button>
         </section>
       </div>
 
       <nav className="world-wiki-shot-bottom-timeline" aria-label="Shot timeline">
-        <div className="world-wiki-shot-bottom-timeline__track">
+        <div ref={timelineTrackRef} className="world-wiki-shot-bottom-timeline__track">
           {timelineItems.map((item, sceneShotIndex) => {
             const isActive = item.key === activeItem.key
             const streamedKey = `${model.request.id}:${item.blockId}:${item.shot.id}`
@@ -963,12 +982,71 @@ function SequenceAnimaticFocusedDialogue({ shot }: { shot: SequenceAnimaticShotV
           </span>
           <p>
             {line.text}
-            {[line.emotion, line.delivery, line.subtext].filter(Boolean).length > 0 ? (
-              <small>{[line.emotion, line.delivery, line.subtext].filter(Boolean).join(' / ')}</small>
-            ) : null}
+            <SequenceAnimaticDialogueCueLine emotion={line.emotion} delivery={line.delivery} subtext={line.subtext} />
           </p>
         </div>
       ))}
+    </div>
+  )
+}
+
+function SequenceAnimaticDialogueCueLine({ emotion, delivery, subtext }: { emotion: string; delivery: string; subtext: string }) {
+  const cues = [
+    emotion ? { label: 'Emotion', value: emotion } : null,
+    delivery ? { label: 'Delivery', value: delivery } : null,
+    subtext ? { label: 'Subtext', value: subtext } : null,
+  ].filter((cue): cue is { label: string; value: string } => Boolean(cue))
+  if (cues.length === 0) return null
+  return (
+    <small className="world-wiki-shot-dialogue-cues">
+      {cues.map((cue) => (
+        <span key={cue.label}><em>{cue.label}</em>{cue.value}</span>
+      ))}
+    </small>
+  )
+}
+
+function SequenceAnimaticFocusedPerformance({ shot }: { shot: SequenceAnimaticShotView }) {
+  if (shot.performanceBeats.length === 0 && !shot.performance) return null
+
+  return (
+    <div className="world-wiki-shot-performance" aria-label="Shot performance cues">
+      {shot.performanceBeats.length > 0 ? (
+        shot.performanceBeats.map((beat) => {
+          const notes = [
+            beat.bodyLanguage ? `Body: ${beat.bodyLanguage}` : '',
+            beat.facialExpression ? `Face: ${beat.facialExpression}` : '',
+            beat.gaze ? `Gaze: ${beat.gaze}` : '',
+            beat.gesture ? `Gesture: ${beat.gesture}` : '',
+            beat.voiceEnergy ? `Voice: ${beat.voiceEnergy}` : '',
+          ].filter(Boolean)
+          return (
+            <article key={beat.id} title={sequenceAnimaticPerformanceBeatLine(beat)}>
+              <header>
+                <span>
+                  {beat.characterIconUrl ? <img src={beat.characterIconUrl} alt="" /> : <EntityIcon id={beat.characterIconId} />}
+                  <strong>{beat.characterName}</strong>
+                </span>
+                <em>{beat.emotion || beat.toneLabel}</em>
+              </header>
+              <div className="world-wiki-shot-performance__metrics" aria-label={`${beat.characterName} emotional state`}>
+                <span>Valence {beat.valenceLabel}</span>
+                <span>Arousal {beat.arousalLabel}</span>
+                {beat.confidenceLabel ? <span>Confidence {beat.confidenceLabel}</span> : null}
+                {beat.dominanceLabel ? <span>Dominance {beat.dominanceLabel}</span> : null}
+              </div>
+              {notes.length > 0 ? <p>{notes.join(' / ')}</p> : null}
+            </article>
+          )
+        })
+      ) : (
+        <article>
+          <header>
+            <span><EntityIcon id="character" /><strong>Performance</strong></span>
+          </header>
+          <p>{shot.performance}</p>
+        </article>
+      )}
     </div>
   )
 }

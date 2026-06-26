@@ -129,6 +129,8 @@ type OutputsWorkspaceProps = {
     blockRequestId?: string
     storyboardBlockId?: string
     shotId?: string
+    panelAssetKey?: string
+    shotVideoReferenceOverride?: Record<string, unknown>
   }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
   onPreviewCinematicDirectorNote: (request: {
     workflowId: string

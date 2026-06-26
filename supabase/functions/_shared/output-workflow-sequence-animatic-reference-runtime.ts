@@ -60,7 +60,7 @@ function compactReferenceSentence(value: unknown, maxWords = 22) {
 }
 
 export function sequenceAnimaticReferenceName(entity: LooseRecord, fallback = 'Reference') {
-  const name = readText(entity.name) || readText(entity.title) || readText(entity.label)
+  const name = readText(entity.displayName) || readText(entity.display_name) || readText(entity.name) || readText(entity.title) || readText(entity.label)
   if (name) return name
   const variantLabel = readText(entity.selectedReferenceVariantLabel)
   if (variantLabel) return variantLabel
@@ -91,6 +91,7 @@ export function sequenceAnimaticReferenceRole(entity: LooseRecord) {
     entity.name,
   ].map(readText).join(' ').toLowerCase()
   if (fields.includes('coverage_anchor') && !fields.includes('coverage_anchor_dependency')) return 'coverage_anchor'
+  if (fields.includes('shot_keyframe_reference') || fields.includes('shot_video_keyframe') || fields.includes('shot_keyframe')) return 'shot_keyframe_reference'
   if (fields.includes('previous_keyframes_continuity_grid')) return 'previous_keyframes_continuity_grid'
   if (fields.includes('previous_keyframe')) return 'previous_keyframe'
   if (fields.includes('storyboard_panel')) return 'storyboard_panel'
@@ -108,6 +109,7 @@ export function sequenceAnimaticReferenceRole(entity: LooseRecord) {
 
 export function sequenceAnimaticReferenceGuidance(role: string) {
   if (role === 'coverage_anchor') return 'composition lock: match camera, framing, screen direction, subject placement, horizon, and background massing; do not copy labels, arrows, placeholder figures, or blockout styling'
+  if (role === 'shot_keyframe_reference') return 'current shot keyframe: use for composition, pose, staging, lighting, and motion start-state; animate from it without adding production marks'
   if (role === 'previous_keyframes_continuity_grid') return 'previous shot keyframes: continuity context for staging, lighting progression, screen direction, costume/prop continuity, and visual rhythm; do not treat this as a new character/location identity reference'
   if (role === 'previous_keyframe') return 'same-setup motion continuity and established state only'
   if (role === 'storyboard_panel') return 'loose composition only when it does not conflict with the coverage anchor'
@@ -124,6 +126,7 @@ export function sequenceAnimaticReferenceGuidance(role: string) {
 function sequenceAnimaticReferencePriority(entity: LooseRecord, index: number) {
   const role = sequenceAnimaticReferenceRole(entity)
   const priority = role === 'coverage_anchor' ? 0
+    : role === 'shot_keyframe_reference' ? 5
     : role === 'previous_keyframe' ? 10
       : role === 'camera_grid_reference' ? 19
         : role === 'spot_reference' || role === 'viewpoint_reference' ? 20
@@ -163,7 +166,11 @@ export function sequenceAnimaticReferenceManifestEntries(assetPack: LooseRecord)
       index: index + 1,
       imageTag: `@Image${index + 1}`,
       label,
+      displayName: label,
+      display_name: label,
       role,
+      kind: readText(entity.kind ?? entity.type),
+      type: readText(entity.type ?? entity.kind),
       guidance,
       visualDescription: visual,
       assetKey,

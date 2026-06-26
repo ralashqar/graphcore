@@ -76,6 +76,11 @@ export type SequenceAnimaticShotKeyframeReferenceOverrideIngredient = {
   id: string
   kind: string
   name: string
+  label: string
+  displayName: string
+  display_name: string
+  sourceIngredientId: string
+  source_ingredient_id: string
   nodeId: string | null
   node_id: string | null
   entityKey: string | null
@@ -87,6 +92,7 @@ export type SequenceAnimaticShotKeyframeReferenceOverrideIngredient = {
   status: string
   source: 'focused_shot_ingredient_ui'
   role: string
+  usage: string
   sourceArtifactRole: string
   source_artifact_role: string
   requiredForKeyframe: boolean
@@ -103,6 +109,22 @@ export type SequenceAnimaticShotKeyframeReferenceOverride = {
   ingredient_plan_hash: string
   source: 'focused_shot_ingredient_ui'
   ingredients: SequenceAnimaticShotKeyframeReferenceOverrideIngredient[]
+}
+
+export type SequenceAnimaticShotVideoReferenceOverride = {
+  version: 'shot_video_reference_override_v1'
+  shotId: string
+  shot_id: string
+  storyboardBlockId: string
+  storyboard_block_id: string
+  ingredientPlanHash: string
+  ingredient_plan_hash: string
+  source: 'focused_shot_ingredient_ui'
+  ingredients: SequenceAnimaticShotKeyframeReferenceOverrideIngredient[]
+  omittedIngredients: SequenceAnimaticShotKeyframeReferenceOverrideIngredient[]
+  omitted_ingredients: SequenceAnimaticShotKeyframeReferenceOverrideIngredient[]
+  panelAssetKey: string
+  panel_asset_key: string
 }
 
 export type SequenceAnimaticShotPanelCue = {
@@ -638,6 +660,16 @@ function overrideKindForIngredient(ingredient: SequenceAnimaticShotIngredient) {
   return ingredient.kind
 }
 
+function usageForOverrideIngredient(ingredient: SequenceAnimaticShotIngredient) {
+  const name = cleanText(ingredient.name) || 'this reference'
+  const kind = overrideKindForIngredient(ingredient)
+  if (kind === 'zone_location') return 'environment geometry, weather, lighting logic, and spatial continuity'
+  if (kind === 'world_character' || kind === 'temp_character') return `use only for ${name} identity, wardrobe, silhouette, and scale`
+  if (kind === 'faction_group') return `use only for the ${name} group identity, wardrobe, silhouettes, and count`
+  if (kind === 'item_or_prop') return `use only for ${name} prop/item shape, material, scale, and continuity`
+  return 'shot-specific visual continuity'
+}
+
 export function buildSequenceAnimaticShotKeyframeReferenceOverride(
   model: any,
   shot: any,
@@ -652,10 +684,17 @@ export function buildSequenceAnimaticShotKeyframeReferenceOverride(
       const kind = overrideKindForIngredient(ingredient)
       const role = roleForOverrideIngredient(ingredient)
       const nodeId = cleanText(ingredient.nodeId)
+      const displayName = cleanText(ingredient.name) || cleanText(ingredient.target?.name) || cleanText(ingredient.id) || `Ingredient ${index + 1}`
+      const usage = usageForOverrideIngredient({ ...ingredient, name: displayName })
       return {
         id: ingredient.id,
         kind,
-        name: ingredient.name,
+        name: displayName,
+        label: displayName,
+        displayName,
+        display_name: displayName,
+        sourceIngredientId: ingredient.id,
+        source_ingredient_id: ingredient.id,
         nodeId: nodeId || null,
         node_id: nodeId || null,
         entityKey: nodeId || null,
@@ -667,6 +706,7 @@ export function buildSequenceAnimaticShotKeyframeReferenceOverride(
         status: ingredient.status,
         source: 'focused_shot_ingredient_ui' as const,
         role,
+        usage,
         sourceArtifactRole: ingredient.target ? 'sequence_animatic_continuity_asset' : 'world_entity_reference',
         source_artifact_role: ingredient.target ? 'sequence_animatic_continuity_asset' : 'world_entity_reference',
         requiredForKeyframe: true,
@@ -698,6 +738,68 @@ export function buildSequenceAnimaticShotKeyframeReferenceOverride(
     ingredient_plan_hash: ingredientPlanHash,
     source: 'focused_shot_ingredient_ui',
     ingredients: visualIngredients,
+  }
+}
+
+export function buildSequenceAnimaticShotVideoReferenceOverride(
+  model: any,
+  block: any,
+  shot: any,
+): SequenceAnimaticShotVideoReferenceOverride {
+  const keyframeOverride = buildSequenceAnimaticShotKeyframeReferenceOverride(model, shot)
+  const readyVisualIngredients = keyframeOverride.ingredients
+    .filter((ingredient) => ingredient.status === 'ready' && Boolean(cleanText(ingredient.assetKey || ingredient.asset_key)))
+    .map((ingredient, index) => ({
+      ...ingredient,
+      uiOrder: index + 1,
+      ui_order: index + 1,
+    }))
+  const omittedIngredients = keyframeOverride.ingredients
+    .filter((ingredient) => ingredient.status !== 'ready' || !cleanText(ingredient.assetKey || ingredient.asset_key))
+    .map((ingredient, index) => ({
+      ...ingredient,
+      uiOrder: readyVisualIngredients.length + index + 1,
+      ui_order: readyVisualIngredients.length + index + 1,
+    }))
+  const panelAssetKey = cleanText(shot.panelAssetKey)
+  const ingredientPlanHash = sequenceAnimaticVisualReferenceHash({
+    version: 'shot_video_reference_override_v1',
+    shotId: shot.id,
+    storyboardBlockId: block.id,
+    panelAssetKey,
+    ingredients: readyVisualIngredients.map((ingredient) => ({
+      id: ingredient.id,
+      kind: ingredient.kind,
+      nodeId: ingredient.nodeId,
+      entityKey: ingredient.entityKey,
+      assetKey: ingredient.assetKey,
+      status: ingredient.status,
+      uiOrder: ingredient.uiOrder,
+    })),
+    omittedIngredients: omittedIngredients.map((ingredient) => ({
+      id: ingredient.id,
+      kind: ingredient.kind,
+      nodeId: ingredient.nodeId,
+      entityKey: ingredient.entityKey,
+      assetKey: ingredient.assetKey,
+      status: ingredient.status,
+    })),
+  })
+
+  return {
+    version: 'shot_video_reference_override_v1',
+    shotId: shot.id,
+    shot_id: shot.id,
+    storyboardBlockId: block.id,
+    storyboard_block_id: block.id,
+    ingredientPlanHash,
+    ingredient_plan_hash: ingredientPlanHash,
+    source: 'focused_shot_ingredient_ui',
+    ingredients: readyVisualIngredients,
+    omittedIngredients,
+    omitted_ingredients: omittedIngredients,
+    panelAssetKey,
+    panel_asset_key: panelAssetKey,
   }
 }
 

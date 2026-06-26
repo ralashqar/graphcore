@@ -793,6 +793,7 @@ type WorldGraphPageProps = {
     storyboardBlockId?: string
     shotId?: string
     panelAssetKey?: string
+    shotVideoReferenceOverride?: Record<string, unknown>
   }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
   onEnsureSequenceAnimaticSceneWorkflows: (request: {
     masterRequestId: string
@@ -2537,6 +2538,7 @@ export function WorldGraphPage({
   const sequenceAnimaticShotElementRefs = useRef<Record<string, HTMLElement | null>>({})
   const sequenceAnimaticKnownStreamedShotKeysRef = useRef<Set<string>>(new Set())
   const sequenceAnimaticStateRevisionByRequestRef = useRef<Record<string, string | null>>({})
+  const sequenceAnimaticRouteActive = Boolean(activeWikiEntityPage?.animaticRequestId)
   const loadAndStoreSequenceAnimaticState = useCallback(async (request: {
     masterRequestId?: string | null
     sequenceUnitKey?: string | null
@@ -2983,13 +2985,14 @@ export function WorldGraphPage({
     ? sequenceAnimaticSpatialInspectorModel.continuityAssetTargets.find((target) => target.nodeId === sequenceAnimaticSpatialInspector.assetTargetNodeId) ?? null
     : null
   const sequenceAnimaticStreamedShotKeys = useMemo(() => {
+    if (sequenceAnimaticRouteActive) return []
     if (!sequenceAnimaticPreviewModel) return []
     return sequenceAnimaticPreviewModel.blocks.flatMap((block) => (
       block.shots
         .filter((shot) => shot.isProvisional)
         .map((shot) => `${sequenceAnimaticPreviewModel.request.id}:${block.id}:${shot.id}`)
     ))
-  }, [sequenceAnimaticPreviewModel])
+  }, [sequenceAnimaticPreviewModel, sequenceAnimaticRouteActive])
   const sequenceAnimaticNextPendingShot = useMemo(() => {
     if (!sequenceAnimaticPreviewModel) return null
     for (const block of sequenceAnimaticPreviewModel.blocks) {
@@ -3009,19 +3012,27 @@ export function WorldGraphPage({
   }, [sequenceAnimaticPreviewModel])
   const sequenceAnimaticLatestStreamedShotKey = sequenceAnimaticStreamedShotKeys[sequenceAnimaticStreamedShotKeys.length - 1] ?? null
   const handleSequenceAnimaticViewerScroll = useCallback(() => {
+    if (sequenceAnimaticRouteActive) return
     const element = sequenceAnimaticViewerRef.current
     if (!element) return
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
     setSequenceAnimaticFollowLatest(distanceFromBottom < 220)
-  }, [])
+  }, [sequenceAnimaticRouteActive])
   const jumpToLatestSequenceAnimaticShot = useCallback(() => {
+    if (sequenceAnimaticRouteActive) return
     const key = sequenceAnimaticLatestStreamedShotKey
     const element = key ? sequenceAnimaticShotElementRefs.current[key] : null
     if (element) {
       element.scrollIntoView({ behavior: 'smooth', block: 'center' })
       setSequenceAnimaticFollowLatest(true)
     }
-  }, [sequenceAnimaticLatestStreamedShotKey])
+  }, [sequenceAnimaticLatestStreamedShotKey, sequenceAnimaticRouteActive])
+  useEffect(() => {
+    if (!sequenceAnimaticRouteActive) return
+    sequenceAnimaticShotElementRefs.current = {}
+    sequenceAnimaticKnownStreamedShotKeysRef.current = new Set()
+    setSequenceAnimaticFollowLatest(false)
+  }, [sequenceAnimaticRouteActive])
   useEffect(() => {
     sequenceAnimaticKnownStreamedShotKeysRef.current = new Set()
     setSequenceAnimaticRecentlyStreamedShotIds({})
@@ -3032,7 +3043,7 @@ export function WorldGraphPage({
     const current = new Set(sequenceAnimaticStreamedShotKeys)
     const newKeys = sequenceAnimaticStreamedShotKeys.filter((key) => !previous.has(key))
     sequenceAnimaticKnownStreamedShotKeysRef.current = current
-    if (!sequenceAnimaticPreviewModel || newKeys.length === 0) return undefined
+    if (sequenceAnimaticRouteActive || !sequenceAnimaticPreviewModel || newKeys.length === 0) return undefined
     const now = Date.now()
     setSequenceAnimaticRecentlyStreamedShotIds((existing) => {
       const next = { ...existing }
@@ -3059,7 +3070,7 @@ export function WorldGraphPage({
       })
     }, 1200)
     return () => window.clearTimeout(timeoutId)
-  }, [sequenceAnimaticFollowLatest, sequenceAnimaticPreviewModel, sequenceAnimaticStreamedShotKeys])
+  }, [sequenceAnimaticFollowLatest, sequenceAnimaticPreviewModel, sequenceAnimaticRouteActive, sequenceAnimaticStreamedShotKeys])
   useEffect(() => {
     const previewRequestId = sequenceAnimaticPreviewRequestId
     if (!previewRequestId) return undefined
@@ -3232,6 +3243,7 @@ export function WorldGraphPage({
     runBlock: handleRunSequenceAnimaticBlock,
     runScene: handleRunSequenceAnimaticScene,
     openShotGraph: handleOpenSequenceAnimaticShotGraph,
+    openShotVideoGraph: handleOpenSequenceAnimaticShotVideoGraph,
     shotPrompt: sequenceAnimaticShotPrompt,
     shotPromptDraftByKey: sequenceAnimaticShotPromptDraftByKey,
     setShotPromptDraft: setSequenceAnimaticShotPromptDraft,
@@ -8625,7 +8637,7 @@ export function WorldGraphPage({
             shotPromptDraftByKey={sequenceAnimaticShotPromptDraftByKey}
             onSetShotPromptDraft={setSequenceAnimaticShotPromptDraft}
             shotVideoRunKeyActive={sequenceAnimaticShotVideoRunKeyActive}
-            onBindShotElement={(shotElementKey, node) => { sequenceAnimaticShotElementRefs.current[shotElementKey] = node }}
+            onBindShotElement={() => {}}
             onRetryHydration={() => {
               setSequenceAnimaticPreviewHydration({ status: 'checking', error: null })
               void Promise.resolve(loadAndStoreSequenceAnimaticState({ masterRequestId: routeAnimaticRequestId, knownRevision: null }))
@@ -8641,6 +8653,7 @@ export function WorldGraphPage({
             onRunShotKeyframe={(model, timelineBlock, shot, mode, continuityOptions) => void handleRunSequenceAnimaticShotKeyframe(model, timelineBlock, shot, mode, continuityOptions)}
             onRunShotVideo={(model, timelineBlock, shot) => void handleRunSequenceAnimaticShotVideo(model, timelineBlock, shot)}
             onOpenShotGraph={(model, timelineBlock, shot, refresh, continuityOptions) => void handleOpenSequenceAnimaticShotGraph(model, timelineBlock, shot, refresh, continuityOptions)}
+            onOpenShotVideoGraph={(model, timelineBlock, shot) => void handleOpenSequenceAnimaticShotVideoGraph(model, timelineBlock, shot)}
             onPlayVideo={setSequenceAnimaticVideoPreview}
             onOpenShotPreview={openWikiDetailModal}
             onOpenShotInspector={setSequenceAnimaticShotInspector}
@@ -11555,6 +11568,7 @@ export function WorldGraphPage({
           onRunShotKeyframe={(model, timelineBlock, shot, mode, continuityOptions) => void handleRunSequenceAnimaticShotKeyframe(model, timelineBlock, shot, mode, continuityOptions)}
           onRunShotVideo={(model, timelineBlock, shot) => void handleRunSequenceAnimaticShotVideo(model, timelineBlock, shot)}
           onOpenShotGraph={(model, timelineBlock, shot, refresh, continuityOptions) => void handleOpenSequenceAnimaticShotGraph(model, timelineBlock, shot, refresh, continuityOptions)}
+          onOpenShotVideoGraph={(model, timelineBlock, shot) => void handleOpenSequenceAnimaticShotVideoGraph(model, timelineBlock, shot)}
           onPlayVideo={setSequenceAnimaticVideoPreview}
           onOpenShotPreview={openWikiDetailModal}
           onOpenShotInspector={(input) => setSequenceAnimaticShotInspector(input)}

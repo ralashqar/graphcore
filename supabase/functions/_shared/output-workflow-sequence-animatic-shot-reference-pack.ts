@@ -259,6 +259,25 @@ function isLocationLikeReference(helpers: SequenceAnimaticWorkflowNodePackHelper
     || role.includes('coverage')
 }
 
+function isGenericSequenceAnimaticReferenceLabel(value: string) {
+  return /^(world|temp|zone|shot|current|previous)\s+(character|group|item|prop|location|keyframe|reference)(\s+reference)?\s+\d+$/i.test(value.trim())
+    || /^(world character reference|temp character reference|zone reference|shot keyframe reference)\s+\d+$/i.test(value.trim())
+}
+
+function preferredReferenceDisplayName(helpers: SequenceAnimaticWorkflowNodePackHelpers, reference: LooseRecord, image: LooseRecord = {}, fallback = 'Reference') {
+  const candidates = [
+    helpers.readText(reference.displayName ?? reference.display_name),
+    helpers.readText(reference.name),
+    helpers.readText(reference.label),
+    helpers.readText(image.displayName ?? image.display_name),
+    helpers.readText(image.name),
+    helpers.readText(image.label),
+    fallback,
+  ].filter(Boolean)
+  const concrete = candidates.find((candidate) => !isGenericSequenceAnimaticReferenceLabel(candidate))
+  return concrete || candidates[0] || fallback
+}
+
 function normalizedReferenceFromCandidate(
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
   candidate: LooseRecord,
@@ -479,9 +498,6 @@ export async function sequenceAnimaticShotInput(
   })
   const panel = helpers.asRecord(config.panel)
   const panelAssetKey = helpers.readText(panel.assetKey)
-  if (!panelAssetKey && !isShotProduction) {
-    throw new Error('Sequence animatic shot video requires a cropped panel asset. Generate/extract the storyboard panel before generating shot video.')
-  }
   const assetPack = buildCinematicV3StoryboardGroupAssetPack({
     assetPack: helpers.asRecord(config.assetPack),
     shots: [shot as unknown as LooseRecord],
@@ -519,7 +535,7 @@ export async function sequenceAnimaticShotInput(
       dialogueTrackCount: shot.dialogue.length > 0 ? 1 : 0,
       placeholderOnly: true,
     },
-    diagnostics: ['Sequence animatic shot input built from a cropped storyboard panel.'],
+    diagnostics: [panelAssetKey ? 'Sequence animatic shot input built with a cropped storyboard panel.' : 'Sequence animatic shot input built without a panel; video will use shot ingredient references only.'],
   })
   const outputs = {
     shot: { ...shot, editorialDurationSeconds, providerDurationSeconds },
@@ -607,15 +623,30 @@ export async function sequenceAnimaticSharedAssetRef(
     },
   } : null
   const reference = {
+    ...directReference,
     status: ready ? 'ready' : 'missing',
     assetKey: assetKey || null,
+    asset_key: assetKey || null,
     artifactKey: helpers.readText(artifactFromDirect.key) || helpers.readText(artifact?.key) || null,
+    artifact_key: helpers.readText(artifactFromDirect.key) || helpers.readText(artifact?.key) || null,
     role: referenceRole,
+    kind: helpers.readText(directReference.kind ?? directReference.type),
+    type: helpers.readText(directReference.kind ?? directReference.type),
+    name: helpers.readText(directReference.name) || helpers.readText(directReference.label),
+    label: helpers.readText(directReference.name) || helpers.readText(directReference.label),
     sourceArtifactRole: sourceArtifactRole || helpers.readText(metadata.role) || null,
+    source_artifact_role: sourceArtifactRole || helpers.readText(metadata.role) || null,
     sourceWorkflowId: helpers.readText(artifact?.workflowId) || helpers.readText(config.sourceWorkflowId) || null,
+    source_workflow_id: helpers.readText(artifact?.workflowId) || helpers.readText(config.sourceWorkflowId) || null,
     sourceRequestId: helpers.readText(config.sourceRequestId) || null,
+    source_request_id: helpers.readText(config.sourceRequestId) || null,
     identityKey,
     identityValue,
+    identity_key: identityKey,
+    identity_value: identityValue,
+    uiOrder: Number(directReference.uiOrder ?? directReference.ui_order ?? 0) || 0,
+    ui_order: Number(directReference.uiOrder ?? directReference.ui_order ?? 0) || 0,
+    source: helpers.readText(directReference.source),
     blockingReason: ready ? '' : `missing_${referenceRole}`,
   }
   const outputs = {
@@ -1246,6 +1277,11 @@ export async function sequenceAnimaticShotReferencePack(
     .filter((reference) => helpers.readText(reference.status) === 'ready' && referenceAssetKey(helpers, reference))
     .map((reference): LooseRecord => ({ ...reference, assetKey: referenceAssetKey(helpers, reference), asset_key: referenceAssetKey(helpers, reference) }))
     .sort((left, right) => {
+      const leftOrder = Number(left.uiOrder ?? left.ui_order)
+      const rightOrder = Number(right.uiOrder ?? right.ui_order)
+      if (Number.isFinite(leftOrder) || Number.isFinite(rightOrder)) {
+        return (Number.isFinite(leftOrder) ? leftOrder : 999) - (Number.isFinite(rightOrder) ? rightOrder : 999)
+      }
       const leftRole = helpers.readText(left.role)
       const rightRole = helpers.readText(right.role)
       const leftWeight = leftRole === 'previous_keyframes_continuity_grid' ? 99 : 0
@@ -1257,13 +1293,19 @@ export async function sequenceAnimaticShotReferencePack(
   const resolvedReferenceAssetKeys = references.map((reference) => helpers.readText(reference.assetKey)).filter(Boolean)
   const configuredRequiredReferenceAssetKeys = helpers.readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
   const shotGraphPolicyVersion = helpers.readText(config.shotGraphPolicyVersion ?? config.shot_graph_policy_version)
+  const shotVideoGraphPolicyVersion = helpers.readText(config.shotVideoGraphPolicyVersion ?? config.shot_video_graph_policy_version)
+  const shotVideoUiIngredientMode = shotVideoGraphPolicyVersion === 'sequence_animatic_shot_video_graph_v2_ui_ingredients_seedance'
+    || shotVideoGraphPolicyVersion === 'sequence_animatic_shot_video_graph_v3_named_director_prompt'
   const uiIngredientOverrideMode = shotGraphPolicyVersion === 'primary_chain_v13_ui_ingredient_override'
+    || shotVideoUiIngredientMode
   const referenceFixMode = shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
     || shotGraphPolicyVersion === 'primary_chain_v15_previous_keyframe_grid'
     || shotGraphPolicyVersion === 'primary_chain_v16_structured_prompt_plan'
   const shotReferenceOverride = helpers.asRecord(config.shotReferenceOverride ?? config.shot_reference_override)
-  const uiOverrideIngredients = helpers.readArray(shotReferenceOverride.ingredients).map(helpers.asRecord)
-  const uiIngredientPlanHash = helpers.readText(config.uiIngredientPlanHash ?? config.ui_ingredient_plan_hash ?? shotReferenceOverride.ingredientPlanHash ?? shotReferenceOverride.ingredient_plan_hash)
+  const shotVideoReferenceOverride = helpers.asRecord(config.shotVideoReferenceOverride ?? config.shot_video_reference_override)
+  const effectiveUiOverride = shotVideoUiIngredientMode ? shotVideoReferenceOverride : shotReferenceOverride
+  const uiOverrideIngredients = helpers.readArray(effectiveUiOverride.ingredients).map(helpers.asRecord)
+  const uiIngredientPlanHash = helpers.readText(config.uiIngredientPlanHash ?? config.ui_ingredient_plan_hash ?? effectiveUiOverride.ingredientPlanHash ?? effectiveUiOverride.ingredient_plan_hash)
   const uiOverrideAssetKeys = uiOverrideIngredients
     .filter((entry) => helpers.readText(entry.status) === 'ready')
     .map((entry) => helpers.readText(entry.assetKey ?? entry.asset_key))
@@ -1271,26 +1313,33 @@ export async function sequenceAnimaticShotReferencePack(
   const fallbackEntities = references.map((reference, index) => {
     const assetKey = helpers.readText(reference.assetKey)
     const role = helpers.readText(reference.role) || 'continuity_asset'
-    const label = role === 'coverage_anchor'
+    const fallbackLabel = role === 'coverage_anchor'
       ? 'Coverage anchor'
       : role === 'previous_keyframe'
         ? 'Previous keyframe'
         : role === 'previous_keyframes_continuity_grid'
           ? 'Previous shot keyframes'
-        : role === 'storyboard_panel'
-          ? 'Storyboard panel'
-          : `${helpers.titleFromRefLike(role)} ${index + 1}`
+          : role === 'storyboard_panel'
+            ? 'Storyboard panel'
+            : `${helpers.titleFromRefLike(role)} ${index + 1}`
+    const label = preferredReferenceDisplayName(helpers, reference, {}, fallbackLabel)
     return {
       key: `shot_ref_${index + 1}_${helpers.slugify(assetKey || role)}`,
       name: label,
+      label,
+      displayName: label,
+      display_name: label,
       type: role.includes('character') ? 'character' : role.includes('prop') ? 'prop' : 'continuity_asset',
       role,
+      kind: helpers.readText(reference.kind ?? reference.type),
+      sourceIngredientId: helpers.readText(reference.sourceIngredientId ?? reference.source_ingredient_id ?? reference.id) || null,
+      source_ingredient_id: helpers.readText(reference.sourceIngredientId ?? reference.source_ingredient_id ?? reference.id) || null,
       summary: role === 'previous_keyframes_continuity_grid'
         ? 'Scene-local previous-keyframe storyboard grid appended for shot continuity.'
         : 'Shot-scoped visual reference resolved from the sequence animatic graph.',
-      visualDescription: role === 'previous_keyframes_continuity_grid'
+      visualDescription: helpers.readText(reference.visualDescription ?? reference.visual_description ?? reference.usage) || (role === 'previous_keyframes_continuity_grid'
         ? 'Previous shot keyframes: continuity context for staging, lighting progression, screen direction, costume/prop continuity, and visual rhythm. Do not treat this as a new character/location identity reference.'
-        : 'Use this attached reference for identity, spatial, material, lighting, and continuity grounding.',
+        : 'Use this attached reference for identity, spatial, material, lighting, and continuity grounding.'),
       assetKeys: [assetKey],
       primaryAssetKey: assetKey,
       selectedReferenceAssetKey: assetKey,
@@ -1301,13 +1350,15 @@ export async function sequenceAnimaticShotReferencePack(
     }
   }).filter((entity) => helpers.readText(entity.primaryAssetKey))
   const scopedReferenceAssetKeys = [...new Set([
-    ...(referenceFixMode && resolvedReferenceAssetKeys.length > 0
+    ...(shotVideoUiIngredientMode && configuredRequiredReferenceAssetKeys.length > 0
+      ? configuredRequiredReferenceAssetKeys
+      : referenceFixMode && resolvedReferenceAssetKeys.length > 0
       ? resolvedReferenceAssetKeys
       : uiIngredientOverrideMode && uiOverrideAssetKeys.length > 0
       ? uiOverrideAssetKeys
       : configuredRequiredReferenceAssetKeys.length > 0 ? configuredRequiredReferenceAssetKeys : resolvedReferenceAssetKeys),
   ])]
-  if (uiIngredientOverrideMode && uiOverrideAssetKeys.length > 0) {
+  if (uiIngredientOverrideMode && !shotVideoUiIngredientMode && uiOverrideAssetKeys.length > 0) {
     const mismatch = scopedReferenceAssetKeys.length !== uiOverrideAssetKeys.length || scopedReferenceAssetKeys.some((assetKey, index) => assetKey !== uiOverrideAssetKeys[index])
     if (mismatch) {
       throw new Error(`Shot reference pack mismatch with UI ingredient override. ui=${uiOverrideAssetKeys.join(', ')} pack=${scopedReferenceAssetKeys.join(', ')}.`)
@@ -1349,6 +1400,7 @@ export async function sequenceAnimaticShotReferencePack(
       const image: LooseRecord = imageByAssetKey.get(assetKey) ?? {}
       const role = helpers.readText(reference.role) || 'shot_ingredient_reference'
       const assetUrl = referenceImageUrl(helpers, reference) || referenceImageUrl(helpers, image)
+      const displayName = preferredReferenceDisplayName(helpers, reference, image, helpers.titleFromRefLike(role))
       return {
         ...image,
         ...reference,
@@ -1363,12 +1415,13 @@ export async function sequenceAnimaticShotReferencePack(
         iconUrl: assetUrl,
         icon_url: assetUrl,
         role,
-        name: helpers.readText(reference.name)
-          || helpers.readText(image.name)
-          || helpers.titleFromRefLike(role),
-        label: helpers.readText(reference.name)
-          || helpers.readText(image.name)
-          || helpers.titleFromRefLike(role),
+        name: displayName,
+        label: displayName,
+        displayName,
+        display_name: displayName,
+        usage: helpers.readText(reference.usage) || helpers.readText(image.usage),
+        sourceIngredientId: helpers.readText(reference.sourceIngredientId ?? reference.source_ingredient_id ?? reference.id) || null,
+        source_ingredient_id: helpers.readText(reference.sourceIngredientId ?? reference.source_ingredient_id ?? reference.id) || null,
         referenceRole: role,
       }
     })
@@ -1438,6 +1491,8 @@ export async function sequenceAnimaticShotReferencePack(
     ui_ingredient_plan_hash: uiIngredientPlanHash,
     shotReferenceOverride,
     shot_reference_override: shotReferenceOverride,
+    shotVideoReferenceOverride,
+    shot_video_reference_override: shotVideoReferenceOverride,
     omittedIngredients,
     omitted_ingredients: omittedIngredients,
     missingReferences,

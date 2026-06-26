@@ -21,6 +21,7 @@ type EnsureSequenceAnimaticBlockWorkflows = (request: {
   storyboardBlockId?: string
   shotId?: string
   panelAssetKey?: string
+  shotVideoReferenceOverride?: Record<string, unknown>
 }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
 
 type EnsureSequenceAnimaticShotRevisionWorkflow = (request: {

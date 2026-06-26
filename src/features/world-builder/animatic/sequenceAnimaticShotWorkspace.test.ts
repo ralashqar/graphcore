@@ -3,6 +3,7 @@ import { test } from 'node:test'
 
 import type { SequenceAnimaticViewModel } from './sequenceAnimaticViewModel.ts'
 import {
+  buildSequenceAnimaticShotVideoReferenceOverride,
   buildSequenceAnimaticShotPanelCues,
   buildSequenceAnimaticShotTimelineItems,
   sequenceAnimaticIngredientsForShot,
@@ -120,7 +121,7 @@ function shot(overrides: ShotOverrides = {}): SequenceAnimaticViewModel['blocks'
     shotVideoReady: false,
     shotVideoRunning: false,
     shotVideoUrl: null,
-    shotVideoProgressLabel: 'Panel required',
+    shotVideoProgressLabel: 'Ready for shot video',
     shotVideoError: '',
     ...overrides,
   }
@@ -369,6 +370,7 @@ test('sequenceAnimaticIngredientsForShot uses shared-plan refs and display-only 
       name: 'Courier',
       role: 'Character',
       iconId: 'character',
+      assetKey: 'courier_asset',
       iconUrl: 'https://example.test/courier-crop.webp',
       referenceArtUrl: 'https://example.test/courier-sheet.webp',
       isContinuityAnchor: true,
@@ -388,6 +390,54 @@ test('sequenceAnimaticIngredientsForShot uses shared-plan refs and display-only 
   assert.ok(ingredients.some((ingredient) => ingredient.id === 'field:scene_01_shot_001:lighting' && ingredient.visualBrief === 'Cold edge light through the doorway.'))
   assert.equal(courier?.imageUrl, 'https://example.test/courier-crop.webp')
   assert.equal(courier?.fullImageUrl, 'https://example.test/courier-sheet.webp')
+})
+
+test('buildSequenceAnimaticShotVideoReferenceOverride preserves visible ingredient names for video refs', () => {
+  const testShot = shot({
+    references: [{
+      entityKey: 'temp_courier',
+      name: 'Courier',
+      role: 'Character',
+      iconId: 'character',
+      iconUrl: 'https://example.test/courier-crop.webp',
+      referenceArtUrl: 'https://example.test/courier-sheet.webp',
+      statusLabel: 'Ready',
+    }],
+    panelAssetKey: 'panel_asset',
+  })
+  const view = model({
+    testShot,
+    requestMetadata: {
+      sequenceAnimaticShotReferenceOverridesByShotId: {
+        scene_01_shot_001: {
+          ingredients: [{
+            id: 'temp_character:temp_courier',
+            kind: 'temp_character',
+            name: 'Courier',
+            nodeId: 'temp_courier',
+            entityKey: 'temp_courier',
+            assetKey: 'courier_asset',
+            assetUrl: 'https://example.test/courier-sheet.webp',
+            status: 'ready',
+            role: 'temp_character_reference',
+          }],
+        },
+      },
+    },
+    targets: [
+      target({ nodeId: 'set_station', name: 'Station', status: 'ready', statusLabel: 'Asset ready', assetKey: 'set_asset', assetUrl: 'https://example.test/set.webp' }),
+      target({ nodeId: 'spot_door', name: 'Vault door' }),
+      target({ nodeId: 'temp_courier', name: 'Courier', assetKind: 'temporary_character', status: 'ready', statusLabel: 'Asset ready', assetKey: 'courier_asset', assetUrl: 'https://example.test/courier-sheet.webp' }),
+    ],
+  })
+  const override = buildSequenceAnimaticShotVideoReferenceOverride(view, view.blocks[0]!, testShot)
+  const courier = override.ingredients.find((ingredient) => ingredient.name === 'Courier')
+
+  assert.equal(courier?.displayName, 'Courier')
+  assert.equal(courier?.display_name, 'Courier')
+  assert.equal(courier?.sourceIngredientId, courier?.id)
+  assert.match(String(courier?.usage), /Courier identity/)
+  assert.ok(!override.ingredients.some((ingredient) => /^Temp Character Reference/i.test(String(ingredient.name))))
 })
 
 test('sequenceAnimaticIngredientsForShot restores ready world refs from resolved shot references', () => {

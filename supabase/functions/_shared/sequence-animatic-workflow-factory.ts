@@ -417,13 +417,120 @@ export function buildSequenceAnimaticShotVideoWorkflowGraph(input: {
   shot: Record<string, unknown>
   panel: Record<string, unknown>
   assetPack: Record<string, unknown>
+  shotVideoReferenceOverride?: Record<string, unknown>
   editorialDurationSeconds: number
   providerDurationSeconds: number
   aspectRatio: string
 }) {
+  const role = 'shot_video'
+  const shotVideoGraphPolicyVersion = 'sequence_animatic_shot_video_graph_v3_named_director_prompt'
+  const shotVideoReferenceOverride = asRecord(input.shotVideoReferenceOverride)
+  const overrideIngredients = readRecordArray(shotVideoReferenceOverride.ingredients)
+  const omittedIngredients = readRecordArray(shotVideoReferenceOverride.omittedIngredients ?? shotVideoReferenceOverride.omitted_ingredients)
+  const panelAssetKey = readText(input.panel.assetKey)
+  const readyIngredientRefs: Record<string, unknown>[] = overrideIngredients
+    .filter((ingredient) => readText(ingredient.status) === 'ready' && readText(ingredient.assetKey ?? ingredient.asset_key))
+    .map((ingredient, index): Record<string, unknown> => {
+      const assetKey = readText(ingredient.assetKey ?? ingredient.asset_key)
+      const uiOrder = Number(ingredient.uiOrder ?? ingredient.ui_order ?? index + 1) || index + 1
+      return {
+        ...ingredient,
+        assetKey,
+        asset_key: assetKey,
+        uiOrder,
+        ui_order: uiOrder,
+      }
+    })
+    .sort((left, right) => (Number(left.uiOrder ?? left.ui_order ?? 0) || 0) - (Number(right.uiOrder ?? right.ui_order ?? 0) || 0))
+  const referenceNodeSpecs: Array<{
+    nodeKey: string
+    label: string
+    referenceRole: string
+    sourceArtifactRole?: string
+    identityValue: string
+    directReference: Record<string, unknown>
+  }> = [
+    ...(panelAssetKey ? [{
+      nodeKey: 'ui_ingredient_ref_keyframe',
+      label: 'Current Keyframe Reference',
+      referenceRole: 'shot_keyframe_reference',
+      sourceArtifactRole: readText(asRecord(input.panel.metadata).role) || 'sequence_animatic_shot_keyframe',
+      identityValue: panelAssetKey,
+      directReference: {
+        ...input.panel,
+        id: `shot_keyframe:${readText(input.shot.id) || readText(input.commonConfig.shotId)}`,
+        kind: 'shot_keyframe',
+        type: 'shot_keyframe',
+        name: readText(input.panel.name) || 'Current shot keyframe',
+        label: readText(input.panel.name) || 'Current shot keyframe',
+        displayName: readText(input.panel.name) || 'Current shot keyframe',
+        display_name: readText(input.panel.name) || 'Current shot keyframe',
+        assetKey: panelAssetKey,
+        asset_key: panelAssetKey,
+        status: 'ready',
+        role: 'shot_keyframe_reference',
+        source: 'focused_shot_keyframe',
+        sourceIngredientId: `shot_keyframe:${readText(input.shot.id) || readText(input.commonConfig.shotId)}`,
+        source_ingredient_id: `shot_keyframe:${readText(input.shot.id) || readText(input.commonConfig.shotId)}`,
+        usage: 'primary composition, lighting, pose layout, and motion start-state',
+        uiOrder: 0,
+        ui_order: 0,
+        usedAsVideoReference: true,
+        used_as_video_reference: true,
+      },
+    }] : []),
+    ...readyIngredientRefs.map((ingredient, index) => {
+      const assetKey = readText(ingredient.assetKey ?? ingredient.asset_key)
+      const name = readText(ingredient.displayName ?? ingredient.display_name ?? ingredient.name ?? ingredient.label) || `Ingredient ${index + 1}`
+      const kind = readText(ingredient.kind)
+      const roleName = readText(ingredient.role) || (
+        kind === 'zone_location' ? 'zone_reference'
+          : kind === 'world_character' || kind === 'faction_group' ? 'world_character_reference'
+            : kind === 'temp_character' ? 'temp_character_reference'
+              : 'item_or_prop_reference'
+      )
+      return {
+        nodeKey: `ui_ingredient_ref_${String(index + 1).padStart(2, '0')}_${slugify(assetKey || name)}`,
+        label: name,
+        referenceRole: roleName,
+        sourceArtifactRole: readText(ingredient.sourceArtifactRole ?? ingredient.source_artifact_role),
+        identityValue: assetKey,
+        directReference: {
+          ...ingredient,
+          name,
+          label: name,
+          displayName: name,
+          display_name: name,
+          sourceIngredientId: readText(ingredient.sourceIngredientId ?? ingredient.source_ingredient_id ?? ingredient.id) || null,
+          source_ingredient_id: readText(ingredient.sourceIngredientId ?? ingredient.source_ingredient_id ?? ingredient.id) || null,
+          assetKey,
+          asset_key: assetKey,
+          status: 'ready',
+          role: roleName,
+          usage: readText(ingredient.usage) || '',
+          source: readText(ingredient.source) || 'focused_shot_ingredient_ui',
+          uiOrder: Number(ingredient.uiOrder ?? ingredient.ui_order ?? index + 1) || index + 1,
+          ui_order: Number(ingredient.uiOrder ?? ingredient.ui_order ?? index + 1) || index + 1,
+        },
+      }
+    }),
+  ]
+  const referenceAssetKeys = referenceNodeSpecs
+    .map((spec) => readText(spec.directReference.assetKey ?? spec.directReference.asset_key))
+    .filter(Boolean)
   const config = {
-    graphSpecVersion: sequenceAnimaticGraphSpecVersion,
+    graphSpecVersion: sequenceAnimaticGraphSpecVersionV2,
     ...input.commonConfig,
+    shotVideoGraphPolicyVersion,
+    shot_video_graph_policy_version: shotVideoGraphPolicyVersion,
+    shotVideoReferenceOverride,
+    shot_video_reference_override: shotVideoReferenceOverride,
+    uiIngredientPlanHash: readText(shotVideoReferenceOverride.ingredientPlanHash ?? shotVideoReferenceOverride.ingredient_plan_hash),
+    ui_ingredient_plan_hash: readText(shotVideoReferenceOverride.ingredientPlanHash ?? shotVideoReferenceOverride.ingredient_plan_hash),
+    requiredReferenceAssetKeys: referenceAssetKeys,
+    required_reference_asset_keys: referenceAssetKeys,
+    omittedIngredients,
+    omitted_ingredients: omittedIngredients,
   }
   const nodes = [
     sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_input', 'utility_transform', 'Shot Input', 80, 100, {
@@ -436,8 +543,38 @@ export function buildSequenceAnimaticShotVideoWorkflowGraph(input: {
       editorialDurationSeconds: input.editorialDurationSeconds,
       providerDurationSeconds: input.providerDurationSeconds,
       aspectRatio: input.aspectRatio,
-    }, {}, 'shot_video'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_video_prompt', 'utility_transform', 'Shot Video Prompt', 360, 100, {
+    }, {}, role),
+    ...referenceNodeSpecs.map((spec, index) => sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, spec.nodeKey, 'utility_transform', spec.label, 360, -120 + (index * 110), {
+      purpose: 'sequence_animatic_shared_asset_ref',
+      ...config,
+      referenceRole: spec.referenceRole,
+      sourceArtifactRole: spec.sourceArtifactRole,
+      identityKey: 'assetKey',
+      identityValue: spec.identityValue,
+      expectedAssetKey: spec.identityValue,
+      directReference: spec.directReference,
+      required: false,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_video_refs', maxConcurrency: 8 },
+    }, {}, role)),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_video_reference_pack', 'utility_transform', 'Shot Video References', 640, 100, {
+      purpose: 'sequence_animatic_shot_reference_pack',
+      ...config,
+      assetPackReferenceLimit: Math.max(1, Math.min(10, referenceAssetKeys.length || 10)),
+      referenceScope: 'sequence_animatic_shot_video',
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_video_reference_pack', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_video_prompt_plan', 'utility_transform', 'Shot Video Prompt Plan', 920, 100, {
+      purpose: 'sequence_animatic_shot_video_prompt_plan',
+      ...config,
+      editorialDurationSeconds: input.editorialDurationSeconds,
+      providerDurationSeconds: input.providerDurationSeconds,
+      durationSeconds: input.providerDurationSeconds,
+      aspectRatio: input.aspectRatio,
+      resolution: '720p',
+      generateAudio: false,
+      execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_shot_video_prompt_plan', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_video_prompt', 'utility_transform', 'Shot Video Prompt', 1200, 100, {
       purpose: 'sequence_animatic_shot_video_prompt',
       ...config,
       editorialDurationSeconds: input.editorialDurationSeconds,
@@ -447,8 +584,8 @@ export function buildSequenceAnimaticShotVideoWorkflowGraph(input: {
       resolution: '720p',
       generateAudio: false,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_video_prompt', maxConcurrency: 4 },
-    }, {}, 'shot_video'),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_video', 'video_generation', 'Shot Video', 640, 100, {
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_video', 'video_generation', 'Shot Video', 1480, 100, {
       purpose: 'sequence_animatic_shot_video',
       role: 'sequence_animatic_shot_video',
       ...config,
@@ -459,21 +596,38 @@ export function buildSequenceAnimaticShotVideoWorkflowGraph(input: {
       resolution: '720p',
       quality: 'high',
       generateAudio: false,
-      cinematicReferenceMode: 'keyframes',
-      assetPackReferenceLimit: 6,
-      debugSkipVideoGeneration: true,
+      cinematicReferenceMode: panelAssetKey ? 'keyframes' : 'shot_reference_sheet',
+      assetPackReferenceLimit: Math.max(1, Math.min(10, referenceAssetKeys.length || 10)),
+      debugSkipVideoGeneration: false,
       manualOnly: true,
       manual_only: true,
       execution: { resourceClass: 'video', groupKey: 'sequence_animatic_shot_video', maxConcurrency: 1, manualOnly: true },
-    }, {}, 'shot_video'),
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'shot_video_artifact', 'output_artifact', 'Register Shot Video', 1760, 100, {
+      purpose: 'sequence_animatic_shot_video_artifact',
+      artifactKind: 'video',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_video_artifact', maxConcurrency: 1 },
+    }, {}, role),
   ]
   const edges = [
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__prompt_plan', 'shot_input', 'shot', 'shot_video_prompt', 'shot', {}, 'shot_video'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__prompt_refs', 'shot_input', 'asset_pack', 'shot_video_prompt', 'asset_pack', {}, 'shot_video'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_panel__prompt_refs', 'shot_input', 'image', 'shot_video_prompt', 'references', {}, 'shot_video'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_prompt__video', 'shot_video_prompt', 'text', 'shot_video', 'prompt', {}, 'shot_video'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_panel__video_refs', 'shot_input', 'image', 'shot_video', 'references', {}, 'shot_video'),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__video_refs', 'shot_input', 'asset_pack', 'shot_video', 'asset_pack', {}, 'shot_video'),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_pack_shot', 'shot_input', 'shot', 'shot_video_reference_pack', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'shot_input__reference_pack_asset_pack', 'shot_input', 'asset_pack', 'shot_video_reference_pack', 'asset_pack', {}, role),
+    ...referenceNodeSpecs.map((spec) => sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, `${spec.nodeKey}__reference_pack`, spec.nodeKey, 'reference', 'shot_video_reference_pack', 'reference', {}, role)),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_shot', 'shot_video_reference_pack', 'shot', 'shot_video_prompt_plan', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_refs', 'shot_video_reference_pack', 'asset_pack', 'shot_video_prompt_plan', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_images', 'shot_video_reference_pack', 'referenceImages', 'shot_video_prompt_plan', 'referenceImages', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_shot', 'shot_video_reference_pack', 'shot', 'shot_video_prompt', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_refs', 'shot_video_reference_pack', 'asset_pack', 'shot_video_prompt', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_refs_legacy', 'shot_video_reference_pack', 'referenceImages', 'shot_video_prompt', 'references', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt_plan__prompt', 'shot_video_prompt_plan', 'promptPlan', 'shot_video_prompt', 'promptPlan', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__video', 'shot_video_prompt', 'text', 'shot_video', 'prompt', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__video_refs', 'shot_video_reference_pack', 'referenceAssetKeys', 'shot_video', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__video_refs_legacy', 'shot_video_reference_pack', 'referenceImages', 'shot_video', 'references', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__video_asset_pack', 'shot_video_reference_pack', 'asset_pack', 'shot_video', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'video__artifact', 'shot_video', 'video', 'shot_video_artifact', 'video', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt__artifact', 'shot_video_prompt', 'text', 'shot_video_artifact', 'prompt', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__artifact', 'shot_video_reference_pack', 'image', 'shot_video_artifact', 'keyframe', { optional: true, optionalDependency: true }, role),
   ]
   return { nodes, edges }
 }

@@ -42,6 +42,7 @@ type SequenceAnimaticBlockTimelineProps = {
   onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate', continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onRunShotVideo: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean, continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
+  onOpenShotVideoGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onPlayBlockVideo: (preview: SequenceAnimaticVideoPreview) => void
   onPlayShotVideo: (preview: SequenceAnimaticVideoPreview) => void
   onOpenShotPreview: (shot: SequenceAnimaticShotView) => void
@@ -217,6 +218,7 @@ function SequenceAnimaticRouteShotCard({
   onRunShotKeyframe,
   onRunShotVideo,
   onOpenShotGraph,
+  onOpenShotVideoGraph,
   onPlayShotVideo,
   onOpenShotPreview,
   onOpenShotInspector,
@@ -347,6 +349,7 @@ function SequenceAnimaticRouteShotCard({
           onRunShotKeyframe={onRunShotKeyframe}
           onRunShotVideo={onRunShotVideo}
           onOpenShotGraph={onOpenShotGraph}
+          onOpenShotVideoGraph={onOpenShotVideoGraph}
           onPlayShotVideo={onPlayShotVideo}
           onOpenShotPreview={onOpenShotPreview}
           extraKeyframeDisabled={busyRunKeys.has(shotRevisionRunKey)}
@@ -368,6 +371,7 @@ function SequenceAnimaticOverlayShotCard({
   onRunShotKeyframe,
   onRunShotVideo,
   onOpenShotGraph,
+  onOpenShotVideoGraph,
   onPlayShotVideo,
   onOpenShotPreview,
   onOpenCoverageInspector,
@@ -451,6 +455,7 @@ function SequenceAnimaticOverlayShotCard({
         onRunShotKeyframe={onRunShotKeyframe}
         onRunShotVideo={onRunShotVideo}
         onOpenShotGraph={onOpenShotGraph}
+        onOpenShotVideoGraph={onOpenShotVideoGraph}
         onPlayShotVideo={onPlayShotVideo}
         onOpenShotPreview={onOpenShotPreview}
       />
@@ -472,6 +477,7 @@ function SequenceAnimaticShotPanel({
   onRunShotKeyframe,
   onRunShotVideo,
   onOpenShotGraph,
+  onOpenShotVideoGraph,
   onPlayShotVideo,
   onOpenShotPreview,
   extraKeyframeDisabled = false,
@@ -489,12 +495,14 @@ function SequenceAnimaticShotPanel({
   onRunShotKeyframe: SequenceAnimaticBlockTimelineProps['onRunShotKeyframe']
   onRunShotVideo: SequenceAnimaticBlockTimelineProps['onRunShotVideo']
   onOpenShotGraph: SequenceAnimaticBlockTimelineProps['onOpenShotGraph']
+  onOpenShotVideoGraph: SequenceAnimaticBlockTimelineProps['onOpenShotVideoGraph']
   onPlayShotVideo: SequenceAnimaticBlockTimelineProps['onPlayShotVideo']
   onOpenShotPreview: SequenceAnimaticBlockTimelineProps['onOpenShotPreview']
   extraKeyframeDisabled?: boolean
 }) {
   const shotGraphRunKey = `${model.request.id}:${block.id}:${shot.id}:shot_graph`
   const refreshShotGraphRunKey = `${model.request.id}:${block.id}:${shot.id}:refresh_shot_graph`
+  const shotVideoGraphRunKey = `${model.request.id}:${block.id}:${shot.id}:shot_video_graph`
   const keyframeDisabled = (shot.isProvisional && !shotCanGenerateEarlyKeyframe) || shotKeyframeBusy || extraKeyframeDisabled
 
   return (
@@ -549,7 +557,7 @@ function SequenceAnimaticShotPanel({
         ) : (
           <button
             className={variant === 'route' ? 'ghost-button compact world-wiki-sequence-animatic-video-action world-wiki-sequence-animatic-shot-video-primary' : 'ghost-button compact world-wiki-sequence-animatic-video-action'}
-            disabled={shot.isProvisional || !shot.panelUrl || shot.shotVideoRunning || shotVideoStarting}
+            disabled={shot.isProvisional || shot.shotVideoRunning || shotVideoStarting}
             onClick={() => onRunShotVideo(model, block, shot)}
             type="button"
           >
@@ -568,6 +576,16 @@ function SequenceAnimaticShotPanel({
             Regenerate
           </button>
         ) : null}
+        <button
+          className="ghost-button compact"
+          disabled={shot.isProvisional || Boolean(graphOpenKey)}
+          onClick={() => onOpenShotVideoGraph(model, block, shot)}
+          type="button"
+        >
+          {graphOpenKey === shotVideoGraphRunKey
+            ? <><span className="world-mini-spinner" aria-hidden="true" />Opening video graph</>
+            : 'Video graph'}
+        </button>
         <button
           className="ghost-button compact"
           disabled={(shot.isProvisional && !shotCanGenerateEarlyKeyframe) || graphOpenKey === shotGraphRunKey}

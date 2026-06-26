@@ -8588,19 +8588,19 @@ async function collectAssetPackReferenceRecords(client: DatabaseClient, run: Out
     const referenceRecord = sequenceAnimaticAssetPackReferenceRecord(entity)
     for (const assetKey of entityReferenceAssetKeys) {
       if (isDirectReferenceUrl(assetKey)) {
-        references.push({ url: assetKey, label: referenceRecord.label, role: referenceRecord.role, modality: 'image' })
+        references.push({ url: assetKey, label: referenceRecord.label, role: referenceRecord.role, modality: 'image', assetKey } as SeedanceReferenceRecord)
         if (references.length >= limit) return references
         continue
       }
       if (isProjectAssetStoragePath(assetKey)) {
-        references.push({ url: await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)), label: referenceRecord.label, role: referenceRecord.role, modality: 'image' })
+        references.push({ url: await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)), label: referenceRecord.label, role: referenceRecord.role, modality: 'image', assetKey } as SeedanceReferenceRecord)
         if (references.length >= limit) return references
         continue
       }
       const asset = await resolveProjectAssetByKey(client, run, assetKey)
       const storagePath = readText(asset?.storagePath) || readText(asset?.storage_path)
       if (!storagePath) continue
-      references.push({ url: await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'), label: referenceRecord.label, role: referenceRecord.role, modality: 'image' })
+      references.push({ url: await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'), label: referenceRecord.label, role: referenceRecord.role, modality: 'image', assetKey } as SeedanceReferenceRecord)
       if (references.length >= limit) return references
     }
   }
@@ -10722,6 +10722,22 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
       const rawAssetPack = readFirstUpstreamRecord(input.upstream, ['assetPack', 'asset_pack'])
       const isCinematicV3StoryboardGroupVideo = readText(config.purpose) === 'cinematic_v3_storyboard_group_video' || readText(config.role) === 'cinematic_v3_storyboard_group_video'
       const isSequenceAnimaticShotVideo = readText(config.purpose) === 'sequence_animatic_shot_video' || readText(config.role) === 'sequence_animatic_shot_video'
+      const shotVideoGraphPolicyVersion = readText(config.shotVideoGraphPolicyVersion ?? config.shot_video_graph_policy_version)
+      const exactSequenceAnimaticShotVideoReferences = isSequenceAnimaticShotVideo
+        && (
+          shotVideoGraphPolicyVersion === 'sequence_animatic_shot_video_graph_v2_ui_ingredients_seedance'
+          || shotVideoGraphPolicyVersion === 'sequence_animatic_shot_video_graph_v3_named_director_prompt'
+        )
+      const upstreamShotVideoReferenceAssetKeys = readFirstUpstreamStringArray(input.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+      const configuredShotVideoReferenceAssetKeys = readStringArray(config.requiredReferenceAssetKeys ?? config.required_reference_asset_keys)
+      const assetPackShotVideoReferenceAssetKeys = readStringArray(rawAssetPack.scopedReferenceAssetKeys ?? rawAssetPack.scoped_reference_asset_keys)
+      const exactShotVideoReferenceAssetKeys = [...new Set((
+        upstreamShotVideoReferenceAssetKeys.length > 0
+          ? upstreamShotVideoReferenceAssetKeys
+          : configuredShotVideoReferenceAssetKeys.length > 0
+            ? configuredShotVideoReferenceAssetKeys
+            : assetPackShotVideoReferenceAssetKeys
+      ).map(readText).filter(Boolean))]
       const upstreamShotPlanForVideo = readFirstUpstreamRecord(input.upstream, ['shotPlan', 'shot_plan'])
       const cinematicV3VideoGroupShots = isCinematicV3StoryboardGroupVideo
         ? cinematicV3StoryboardGroupShots({ shotPlan: upstreamShotPlanForVideo, storyboardGroup: asRecord(config.storyboardGroup) })
@@ -10730,7 +10746,9 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
       const sequenceAnimaticShotForVideo = isSequenceAnimaticShotVideo
         ? asRecord(readFirstUpstreamRecord(input.upstream, ['shot']) || (Array.isArray(upstreamVideoShotPlanShots) ? upstreamVideoShotPlanShots.map(asRecord)[0] : null))
         : {}
-      const assetPack = isCinematicV3StoryboardGroupVideo && cinematicV3VideoGroupShots.length > 0
+      const assetPack = exactSequenceAnimaticShotVideoReferences
+        ? rawAssetPack
+        : isCinematicV3StoryboardGroupVideo && cinematicV3VideoGroupShots.length > 0
         ? buildCinematicV3StoryboardGroupAssetPack({
           assetPack: rawAssetPack,
           shots: cinematicV3VideoGroupShots,
@@ -10747,7 +10765,9 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
         : rawAssetPack
       const cinematicReferenceMode = normalizeCinematicReferenceMode(config.cinematicReferenceMode)
       const upstreamImages = orderCinematicVideoReferenceImages(
-        readUpstreamImages(input.upstream, ['image', 'coverImage', 'primaryReferenceImage', 'keyframe']),
+        exactSequenceAnimaticShotVideoReferences
+          ? []
+          : readUpstreamImages(input.upstream, ['image', 'coverImage', 'primaryReferenceImage', 'keyframe']),
         cinematicReferenceMode,
       )
       const directImageRecords = (await Promise.all(upstreamImages.map(async (image, index) => {
@@ -10766,9 +10786,15 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
           modality: 'image' as const,
         }
       }))).filter((entry): entry is SeedanceReferenceRecord => Boolean(entry?.url))
-      const assetPackReferenceLimit = Math.max(1, Math.min(9, Number(config.assetPackReferenceLimit ?? 9) || 9))
-      const totalReferenceImageLimit = Math.max(1, Math.min(9, directImageRecords.length + assetPackReferenceLimit))
-      const assetPackImageRecords = await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
+      const assetPackReferenceLimit = exactSequenceAnimaticShotVideoReferences
+        ? Math.max(1, Math.min(10, exactShotVideoReferenceAssetKeys.length || Number(config.assetPackReferenceLimit ?? 10) || 10))
+        : Math.max(1, Math.min(9, Number(config.assetPackReferenceLimit ?? 9) || 9))
+      const totalReferenceImageLimit = exactSequenceAnimaticShotVideoReferences
+        ? Math.max(1, Math.min(10, directImageRecords.length + assetPackReferenceLimit))
+        : Math.max(1, Math.min(9, directImageRecords.length + assetPackReferenceLimit))
+      const assetPackImageRecords = exactSequenceAnimaticShotVideoReferences
+        ? await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
+        : await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
       const seenReferenceImageUrls = new Set<string>()
       const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
         .filter((entry) => {
@@ -10782,8 +10808,19 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
       if (isCinematicV3StoryboardGroupVideo && cinematicReferenceMode === 'storyboard_sheet' && directImageRecords.length === 0) {
         throw new Error('Cinematics V3 storyboard video generation requires the storyboard sheet reference. Generate the storyboard sheet before generating video.')
       }
-      if (isSequenceAnimaticShotVideo && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
-        throw new Error('Sequence animatic shot video generation requires the cropped shot panel as @Image1. Generate/extract the storyboard panel before generating shot video.')
+      if (isSequenceAnimaticShotVideo && !exactSequenceAnimaticShotVideoReferences && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
+        throw new Error('Sequence animatic shot video generation needs at least one visual reference or shot keyframe for this legacy graph. Refresh the shot video graph from the focused shot workspace.')
+      }
+      if (exactSequenceAnimaticShotVideoReferences && exactShotVideoReferenceAssetKeys.length !== referenceImageRecords.length) {
+        throw new Error(`Shot video reference mismatch before provider submission. shot_video_reference_pack=${exactShotVideoReferenceAssetKeys.join(', ')} provider_refs=${referenceImageRecords.map((entry) => readText(asRecord(entry).assetKey ?? entry.label)).join(', ')}.`)
+      }
+      if (exactSequenceAnimaticShotVideoReferences) {
+        const providerReferenceAssetKeys = referenceImageRecords.map((entry) => readText(asRecord(entry).assetKey)).filter(Boolean)
+        const mismatch = exactShotVideoReferenceAssetKeys.length !== providerReferenceAssetKeys.length
+          || exactShotVideoReferenceAssetKeys.some((assetKey, index) => providerReferenceAssetKeys[index] !== assetKey)
+        if (mismatch) {
+          throw new Error(`Shot video reference key mismatch before provider submission. shot_video_reference_pack=${exactShotVideoReferenceAssetKeys.join(', ')} provider_submitted=${providerReferenceAssetKeys.join(', ')}.`)
+        }
       }
       if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
         throw new Error('Cinematics V2 video generation requires a shot keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
@@ -10831,16 +10868,21 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
         ].filter(Boolean).join('\n'))
       }
       const primaryReferenceOnlyRecords = directImageRecords.slice(0, 1)
-      const referenceAttempts = [
+      const referenceAttempts = exactSequenceAnimaticShotVideoReferences
+        ? [
+          { policy: 'ui_ingredient_refs', imageRecords: referenceImageRecords },
+        ]
+        : [
         { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs', imageRecords: referenceImageRecords },
         { policy: cinematicReferenceMode === 'keyframes' ? 'keyframes_only' : 'storyboard_only', imageRecords: primaryReferenceOnlyRecords },
         { policy: 'text_only_no_image_refs', imageRecords: [] },
-      ].filter((attempt, index, attempts) => (
+      ]
+      const dedupedReferenceAttempts = referenceAttempts.filter((attempt, index, attempts) => (
         index === attempts.findIndex((candidate) => candidate.policy === attempt.policy
           && candidate.imageRecords.map((entry) => readText(entry.url)).join('\n') === attempt.imageRecords.map((entry) => readText(entry.url)).join('\n'))
       ))
       const priorFailedReferencePolicy = isFalReferencePolicyError(input.priorStep?.errorMessage)
-      const startAttemptIndex = priorFailedReferencePolicy && referenceAttempts.length > 1 ? 1 : 0
+      const startAttemptIndex = !exactSequenceAnimaticShotVideoReferences && priorFailedReferencePolicy && dedupedReferenceAttempts.length > 1 ? 1 : 0
       let providerResult: {
         requestId: string
         videoUrl: string
@@ -10856,8 +10898,8 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
       let usedReferenceImageUrls = referenceImageUrls
       let usedSeedanceReferenceManifest: SeedanceReferenceManifestEntry[] = []
       let referencePolicy = cinematicReferenceMode === 'keyframes' ? 'keyframes_and_asset_refs' : 'storyboard_and_asset_refs'
-      for (let attemptIndex = startAttemptIndex; attemptIndex < referenceAttempts.length; attemptIndex += 1) {
-        const attempt = referenceAttempts[attemptIndex]
+      for (let attemptIndex = startAttemptIndex; attemptIndex < dedupedReferenceAttempts.length; attemptIndex += 1) {
+        const attempt = dedupedReferenceAttempts[attemptIndex]
         providerPrompt = buildProviderPrompt(attempt.imageRecords, attempt.policy)
         usedReferenceImageUrls = attempt.imageRecords.map((entry) => readText(entry.url)).filter(Boolean)
         usedSeedanceReferenceManifest = buildSeedanceReferenceManifest({
@@ -10968,7 +11010,7 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
           }
           break
         } catch (error) {
-          if (isFalReferencePolicyError(error) && attemptIndex < referenceAttempts.length - 1) {
+          if (!exactSequenceAnimaticShotVideoReferences && isFalReferencePolicyError(error) && attemptIndex < dedupedReferenceAttempts.length - 1) {
             continue
           }
           throw error

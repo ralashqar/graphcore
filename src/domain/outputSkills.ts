@@ -596,7 +596,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     category: 'provider',
     modality: 'video',
     appliesToNodeTypes: ['utility_transform', 'video_generation'],
-    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
+    appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt_plan', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
       'Write the reference legend from the actual submitted provider reference order. Only name @ImageN, @VideoN, or @AudioN references that are attached in that order.',
       'Give each reference one job: storyboard keyframes, shot keyframe, character/variant identity, shot-location environment, prop continuity, motion reference, or audio reference.',
@@ -645,7 +645,7 @@ export const OUTPUT_SKILL_REGISTRY: readonly OutputSkill[] = [
     appliesToPurposes: ['cinematic_video_prompt', 'cinematic_block_video', 'cinematic_v2_video_prompt', 'cinematic_v2_shot_video', 'cinematic_v3_storyboard_group_video_prompt', 'cinematic_v3_storyboard_group_video', 'sequence_animatic_shot_video_prompt', 'sequence_animatic_shot_video'],
     guidance: [
       'For V3 storyboard-block videos, prefer the storyboard sheet first, then selected character/location/prop variant references, then optional video/audio references.',
-      'For sequence animatic per-shot videos, use the cropped panel as @Image1 keyframe, include only shot-scoped refs, and use the inferred shot duration as the provider duration and prompt shot range.',
+      'For sequence animatic per-shot videos, use the focused shot ingredient references in UI order, optionally prefix the existing keyframe as motion/composition reference, and use the inferred shot duration as the provider duration and prompt shot range.',
       'For offscreen dialogue, keep the speaker in voice/performance guidance but do not attach their visual reference unless they are visible in the shot.',
       'Voice guidance should include available character context such as age/gender cue, accent, pitch, register, pace, and delivery quality without adding offscreen visual references.',
       'For sequence animatic per-shot videos, audio should be scripted dialogue plus direct diegetic sound effects only; forbid music, score, audio beds, room tone, crowd wash, and general ambience.',

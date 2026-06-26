@@ -32,6 +32,7 @@ type EnsureSequenceAnimaticBlockWorkflows = (request: {
   storyboardBlockId?: string
   shotId?: string
   panelAssetKey?: string
+  shotVideoReferenceOverride?: Record<string, unknown>
 }) => Promise<{ childRequests: OutputRequest[] }> | { childRequests: OutputRequest[] }
 
 type EnsureSequenceAnimaticSceneWorkflows = (request: {
@@ -319,6 +320,7 @@ export function useSequenceAnimaticWorkflowCommands({
     runBlock,
     runScene,
     openShotGraph,
+    openShotVideoGraph,
   } = useSequenceAnimaticGraphCommands({
     outputWorkflowRuns,
     busyRunKeys,
@@ -371,6 +373,7 @@ export function useSequenceAnimaticWorkflowCommands({
     runBlock,
     runScene,
     openShotGraph,
+    openShotVideoGraph,
     shotPrompt,
     shotPromptDraftByKey,
     setShotPromptDraft,

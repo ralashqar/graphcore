@@ -8721,6 +8721,7 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     storyboardBlockId?: string
     shotId?: string
     panelAssetKey?: string
+    shotVideoReferenceOverride?: Record<string, unknown>
   },
 ): Promise<SequenceAnimaticBlockWorkflowEnsureResponse> {
   const payload = sequenceAnimaticBlockWorkflowEnsureRequestSchema.parse({
@@ -8732,6 +8733,7 @@ export async function ensureSequenceAnimaticBlockWorkflows(
     storyboardBlockId: request.storyboardBlockId,
     shotId: request.shotId,
     panelAssetKey: request.panelAssetKey,
+    shotVideoReferenceOverride: request.shotVideoReferenceOverride,
   })
   if ((request.sequenceAnimaticMode ?? 'storyboard_blocks') === 'shot_video') {
     return startTypedWorkflowCommand(snapshot, {
@@ -8745,6 +8747,7 @@ export async function ensureSequenceAnimaticBlockWorkflows(
       payload: {
         blockRequestId: payload.blockRequestId,
         panelAssetKey: payload.panelAssetKey,
+        shotVideoReferenceOverride: payload.shotVideoReferenceOverride,
       },
     }, sequenceAnimaticBlockWorkflowEnsureResponseSchema)
   }

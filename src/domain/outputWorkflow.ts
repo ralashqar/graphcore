@@ -1034,6 +1034,8 @@ export const sequenceAnimaticShotVideoInputV1Schema = looseObjectSchema.extend({
   shot: looseRecordSchema,
   panel: looseRecordSchema,
   assetPack: looseRecordSchema.default({}),
+  shotVideoReferenceOverride: looseRecordSchema.default({}),
+  shot_video_reference_override: looseRecordSchema.default({}),
   editorialDurationSeconds: z.number().positive(),
   providerDurationSeconds: z.number().positive(),
 })
@@ -1474,6 +1476,8 @@ export const sequenceAnimaticBlockWorkflowEnsureRequestSchema = z.object({
   storyboardBlockId: z.string().min(1).optional(),
   shotId: z.string().min(1).optional(),
   panelAssetKey: z.string().min(1).optional(),
+  shotVideoReferenceOverride: looseRecordSchema.optional(),
+  shot_video_reference_override: looseRecordSchema.optional(),
 })
 
 export const sequenceAnimaticBlockWorkflowEnsureResponseSchema = z.object({

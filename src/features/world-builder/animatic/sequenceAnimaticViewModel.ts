@@ -2330,9 +2330,7 @@ export function buildSequenceAnimaticViewModel(input: {
                 ? 'Shot take saved; loading preview'
                 : shotVideoError
                   ? shotVideoError
-                  : previewAssetKey
-                    ? 'Ready for shot video'
-                    : 'Panel required'
+                  : 'Ready for shot video'
           const shotContinuityAnchorsPending = shotContinuityAnchorIds.some((anchorId) => {
             const anchor = continuityAnchorById.get(anchorId)
             return anchor && !['ready', 'skipped'].includes(anchor.status)
@@ -2815,7 +2813,7 @@ export function buildSequenceAnimaticViewModel(input: {
             shotVideoUrl: null,
             shotVideoProgressLabel: directorPlanStreamingPreview
               ? 'Final shot continuity artifact required'
-              : previewAssetKey ? 'Ready for shot video' : 'Panel required',
+              : 'Ready for shot video',
             shotVideoError: '',
           }
         }),

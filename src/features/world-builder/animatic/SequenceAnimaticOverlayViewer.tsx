@@ -49,6 +49,7 @@ type SequenceAnimaticOverlayViewerProps = {
   onRunShotKeyframe: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, mode: 'generate' | 'regenerate', continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
   onRunShotVideo: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onOpenShotGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView, refresh?: boolean, continuityOptions?: SequenceAnimaticShotContinuityOptions) => void
+  onOpenShotVideoGraph: (model: SequenceAnimaticViewModel, block: SequenceAnimaticBlockView, shot: SequenceAnimaticShotView) => void
   onPlayVideo: (preview: SequenceAnimaticVideoPreview) => void
   onOpenShotPreview: (input: WorldWikiDetailModalInput) => void
   onOpenShotInspector: (input: SequenceAnimaticShotInspectorInput) => void
@@ -84,6 +85,7 @@ export function SequenceAnimaticOverlayViewer({
   onRunShotKeyframe,
   onRunShotVideo,
   onOpenShotGraph,
+  onOpenShotVideoGraph,
   onPlayVideo,
   onOpenShotPreview,
   onOpenShotInspector,
@@ -159,6 +161,7 @@ export function SequenceAnimaticOverlayViewer({
                 onRunShotKeyframe={onRunShotKeyframe}
                 onRunShotVideo={onRunShotVideo}
                 onOpenShotGraph={onOpenShotGraph}
+                onOpenShotVideoGraph={onOpenShotVideoGraph}
                 onPlayBlockVideo={onPlayVideo}
                 onPlayShotVideo={onPlayVideo}
                 onOpenShotPreview={(shot) => onOpenShotPreview(sequenceAnimaticShotPreviewInput(shot))}

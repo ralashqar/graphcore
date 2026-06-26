@@ -220,7 +220,7 @@ const workflowCommandManifests: WorkflowCommandManifest[] = [
     family: 'sequence_animatic',
     action: 'generate_shot_video',
     label: 'Generate Shot Video',
-    description: 'Generate a shot video workflow from an approved panel or keyframe.',
+    description: 'Generate a shot video workflow from focused shot ingredients and an optional keyframe.',
     templateKey: 'sequence_animatic_shot_video',
     legacyEndpoint: 'ensure-sequence-animatic-block-workflows',
     targetRole: 'shot_video',

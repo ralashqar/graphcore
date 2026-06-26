@@ -1021,6 +1021,7 @@ test('scene board media utility and sequence animatic node packs expose register
   ])
   assert.deepEqual(sequenceAnimaticShotProductionWorkflowNodeHandlerKeys, [
     'sequence_animatic_keyframe_prompt_plan',
+    'sequence_animatic_shot_video_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
     'sequence_animatic_planned_keyframe_input',
     'sequence_animatic_planned_keyframe_image',
@@ -1780,6 +1781,7 @@ test('sequence animatic shot reference nodes are backed by workflow node extensi
 test('sequence animatic shot production nodes are backed by workflow node extension scaffolds', () => {
   const expectedShotProductionHandlers = [
     'sequence_animatic_keyframe_prompt_plan',
+    'sequence_animatic_shot_video_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
     'sequence_animatic_planned_keyframe_input',
     'sequence_animatic_planned_keyframe_image',
@@ -2041,7 +2043,7 @@ test('output workflow worker requires explicit legacy or pack node handlers', ()
   assert.match(sequenceAnimaticShotVideoRuntimeSource, /export function buildSequenceAnimaticShotVisualCallSheet/)
   assert.match(sequenceAnimaticShotVideoRuntimeSource, /export function formatSequenceAnimaticShotVisualCallSheetCameraPlan/)
   assert.match(sequenceAnimaticShotProductionPackSource, /visualCallSheet/)
-  assert.match(sequenceAnimaticShotProductionPackSource, /No storyboard or keyframe reference is attached/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /No shot keyframe is attached/)
   assert.match(sequenceAnimaticShotRevisionPackSource, /output-workflow-sequence-animatic-shot-revision-runtime/)
   assert.match(sequenceAnimaticShotRevisionRuntimeSource, /export async function planSequenceAnimaticShotRevisionRuntime/)
   assert.match(sequenceAnimaticShotRevisionRuntimeSource, /export const sequenceAnimaticShotRevisionPlanSchema/)

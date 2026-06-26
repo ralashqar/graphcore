@@ -405,6 +405,18 @@ const cinematicSequenceContracts = [
     manualOnly: false,
   },
   {
+    purpose: 'sequence_animatic_shot_video_prompt_plan',
+    label: 'Shot Video Prompt Plan',
+    requiredInputs: ['shot', 'asset_pack'],
+    producedOutputs: ['text', 'promptPlan', 'prompt_plan', 'referenceAssetKeys', 'reference_asset_keys', 'referenceManifest', 'reference_manifest', 'shot', 'asset_pack'],
+    artifactRoles: [],
+    previewRoles: ['text'],
+    recoveryStrategy: 'node_step',
+    progressLabel: 'Planning shot video prompt',
+    providerBacked: true,
+    manualOnly: false,
+  },
+  {
     purpose: 'sequence_animatic_shot_video',
     label: 'Shot Video',
     requiredInputs: ['prompt', 'references'],
