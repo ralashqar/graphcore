@@ -1,0 +1,24 @@
+do $$ declare d uuid:=current_setting('graphcore.game.test_draft')::uuid; actor uuid:=current_setting('graphcore.game.test_actor')::uuid; p uuid; rev integer; cmd jsonb; r jsonb; jid uuid; before_build uuid; begin
+ select project_id,revision,active_build_id into p,rev,before_build from public.game_workspaces where draft_id=d;
+ cmd:=jsonb_build_object('projectId',p,'draftId',d,'idempotencyKey',gen_random_uuid(),'expectedRevision',rev,'action','save','design',jsonb_build_object('schemaVersion',2,'nodes',jsonb_build_array(jsonb_build_object('id','ability.bolt','kind','ability','amount',25)),'assets','[]'::jsonb));
+ perform public.game_commit_command(actor,cmd);
+ rev:=rev+1;
+ if not exists(select 1 from public.game_spec_nodes where draft_id=d and revision=rev and node_id='ability.bolt') then raise exception 'Node revision not captured'; end if;
+ cmd:=jsonb_build_object('projectId',p,'draftId',d,'idempotencyKey',gen_random_uuid(),'expectedRevision',rev,'action','save','nodeEdits',jsonb_build_array(jsonb_build_object('id','ability.bolt','kind','ability','amount',30)));
+ r:=public.game_commit_command(actor,cmd);
+ if public.game_commit_command(actor,cmd)<>r then raise exception 'Node edit not idempotent'; end if;
+ rev:=rev+1;
+ if (select spec->>'amount' from public.game_spec_nodes where draft_id=d and revision=rev-1 and node_id='ability.bolt')<>'25' then raise exception 'Old node revision changed'; end if;
+ if (select spec->>'amount' from public.game_spec_nodes where draft_id=d and revision=rev and node_id='ability.bolt')<>'30' then raise exception 'Node edit not applied'; end if;
+ cmd:=jsonb_build_object('projectId',p,'draftId',d,'idempotencyKey',gen_random_uuid(),'expectedRevision',rev,'action','test','targetNodeIds',jsonb_build_array('ability.bolt'));
+ r:=public.game_commit_command(actor,cmd);jid:=(r->>'jobId')::uuid;
+ if not (select (input->>'testOnly')::boolean from public.game_jobs where id=jid) then raise exception 'Test-only metadata missing'; end if;
+ update public.game_jobs set status='running',lease_owner='module-test',lease_until=now()+interval '90 seconds',fence=1 where id=jid;
+ if public.game_write_step(jid,'wrong',1,'simulation',repeat('a',64),'running') then raise exception 'Wrong owner wrote step'; end if;
+ if not public.game_write_step(jid,'module-test',1,'simulation',repeat('a',64),'running') then raise exception 'Step admission failed'; end if;
+ perform public.game_write_step(jid,'module-test',1,'simulation',repeat('a',64),'completed','{"passed":true}');
+ perform public.game_finish_job(jid,'module-test',1,jsonb_build_object('accepted',true,'manifest','{}'::jsonb,'reports','[]'::jsonb));
+ if (select active_build_id from public.game_workspaces where draft_id=d) is distinct from before_build then raise exception 'Test run promoted build'; end if;
+ if public.game_write_step(jid,'module-test',1,'late',repeat('b',64),'running') then raise exception 'Late step write accepted'; end if;
+ if has_table_privilege('anon','public.game_spec_nodes','select') or has_table_privilege('authenticated','public.game_job_steps','insert') or has_function_privilege('authenticated','public.game_write_step(uuid,text,bigint,text,text,text,jsonb,text,jsonb)','execute') then raise exception 'Module grants too broad'; end if;
+end $$;

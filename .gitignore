@@ -39,3 +39,16 @@ tmp/ffmpeg-static-runtime/
 tmp/sb-keys.json
 tmp/test-full-output.txt
 tmp/*.mjs
+dist-game/
+output/game-smoke/
+output/game-asset-smoke/
+output/game-rig-smoke/
+output/game-workspace-smoke/
+output/game-live/
+output/game-*.log
+output/game-module-*/
+output/game-interactions-*/
+output/game-live-candidate/
+output/game-download.mjs
+output/game-unified-*/
+output/game-unified-*.log

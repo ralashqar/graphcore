@@ -1,9 +1,11 @@
-export type AppRoute = 'landing' | 'app' | 'billing'
+export type AppRoute = 'landing' | 'app' | 'game' | 'billing'
 
 export const APP_ROUTE_PATH = '/app'
+export const GAME_ROUTE_PATH = '/app/game'
 export const BILLING_ROUTE_PATH = '/billing'
 
 export function routeFromPathname(pathname: string): AppRoute {
+  if (pathname === GAME_ROUTE_PATH || pathname.startsWith(`${GAME_ROUTE_PATH}/`)) return 'game'
   if (pathname === APP_ROUTE_PATH || pathname.startsWith(`${APP_ROUTE_PATH}/`)) {
     return 'app'
   }

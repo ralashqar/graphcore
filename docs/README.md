@@ -39,3 +39,10 @@ Those older docs are still useful as background, but when they disagree with the
   - Recommended graph-first Prompt-to-App pipeline from initial app graph through readiness repair, screen designs, Expo code generation, and sandbox iframe preview.
 - [`ugc-mastery/README.md`](./ugc-mastery/README.md)
   - Distilled GraphCore-owned knowledge base for UGC psychology, virality mechanics, script formulas, format systems, and preset integration guidance.
+
+- [27. Prompt-to-game architecture review](27-prompt-to-game-architecture-review.md) — repository findings, contracts, engine and asset-pipeline recommendations.
+- [28. Game workspace implementation](28-game-workspace-implementation.md) — adventure template, scoped planners, runtime, workers, migration, deployment and verification.
+- [29. Fabric gameplay reuse review](29-fabric-gameplay-reuse-review.md) — source findings and selective gameplay transfer recommendations.
+- [30. Gameplay module implementation](30-gameplay-modules-implementation.md) — combat/traversal nodes, procedural poses, durable workflows, deployment and acceptance.
+- [31. Spatial interactions](31-spatial-interactions-implementation.md) — reusable contacts, quadruped mounting, seating, vehicle control, mechanisms and interaction acceptance.
+- [32. Unified gameplay](32-unified-gameplay-implementation.md) — reviewed plans, reusable actor instances, objective graphs, independent recipes and scenario-driven acceptance.

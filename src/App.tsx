@@ -114,7 +114,7 @@ import { SpecializedDefinitionWorkspace } from './features/content/SpecializedDe
 import type { OutputGraphOverlayIntent } from './features/outputs/OutputGraphOverlayHost'
 import type { OutputStudioReturnTarget } from './features/world-builder/wiki/outputLibraryPresentation'
 import { useEditorStore } from './state/editorStore'
-import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
+import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, GAME_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
 import type {
   AuthMode,
   GameSummary,
@@ -220,6 +220,7 @@ const GlobalWorkspace = lazy(() =>
 const LandingPage = lazy(() =>
   import('./features/landing/LandingPage').then((module) => ({ default: module.LandingPage })),
 )
+const GameWorkspace = lazy(() => import('./features/game-builder/GameWorkspaceRouter').then(module => ({ default: module.GameWorkspace })))
 
 const librarySections: Array<{ id: LibrarySection; label: string; icon: EntityIconId }> = [
   { id: 'characters', label: 'Characters', icon: 'character' },
@@ -1905,7 +1906,7 @@ export default function App() {
   useEffect(() => {
     let active = true
     async function bootstrap() {
-      setLoading(appRoute === 'app' || appRoute === 'billing')
+      setLoading(appRoute === 'app' || appRoute === 'game' || appRoute === 'billing')
       setBootStatus('Checking Supabase auth session...')
       try {
         const currentSession = await withAppTimeout(
@@ -1949,7 +1950,7 @@ export default function App() {
           return
         }
 
-        if (appRoute !== 'app') {
+        if (appRoute !== 'app' && appRoute !== 'game') {
           setLoading(false)
           return
         }
@@ -1989,11 +1990,11 @@ export default function App() {
   }, [appRoute, setSelectedDefinitionKey, setSelectedGraphKey])
 
   useEffect(() => {
-    if (appRoute !== 'app') return
+    if (appRoute !== 'app' && appRoute !== 'game') return
     if (loadedState?.source !== 'supabase' || !snapshot) return
-    if (activeTab !== 'graph' && activeTab !== 'library' && activeTab !== 'global' && activeTab !== 'outputs') return
+    if (appRoute === 'app' && activeTab !== 'graph' && activeTab !== 'library' && activeTab !== 'global' && activeTab !== 'outputs') return
     const draftId = snapshot.draft.id
-    const targetProfile = activeTab === 'library' ? 'content' : 'world'
+    const targetProfile = appRoute === 'game' ? 'world' : activeTab === 'library' ? 'content' : 'world'
     const surfaceKey = surfaceHydrationKey(snapshot.project.id, draftId, targetProfile)
     const currentProfile = loadedState.profile ?? null
     const targetAlreadyHydrated = targetProfile === 'content'
@@ -3246,6 +3247,7 @@ export default function App() {
   }
 
   function openOutputsLibrary() {
+    if (appRoute === 'game') navigateToPath(APP_ROUTE_PATH)
     setActiveTab('graph')
     setWorldViewMode('wiki')
     setWorldWikiSubView('outputs')
@@ -8847,7 +8849,7 @@ export default function App() {
     return promise
   }, [])
 
-  if (appRoute !== 'app') {
+  if (appRoute !== 'app' && appRoute !== 'game') {
     if (appRoute === 'billing') {
       return (
         <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing SynArc...</p></main>}>
@@ -8875,7 +8877,9 @@ export default function App() {
   }
 
   const activeHydrationProfile: WorkspaceSurfaceProfile =
-    activeTab === 'library'
+    appRoute === 'game'
+      ? 'world'
+      : activeTab === 'library'
       ? 'content'
       : activeTab === 'outputs' || (activeTab === 'graph' && worldViewMode === 'wiki' && worldWikiSubView === 'outputs')
         ? 'outputs'
@@ -8901,7 +8905,7 @@ export default function App() {
 
   return (
     <main className="app-shell" data-hydration-status={activeHydrationStatus}>
-      <div className={activeTab === 'library' ? 'workspace-frame is-library-workspace' : 'workspace-frame'}>
+      <div className={appRoute !== 'game' && activeTab === 'library' ? 'workspace-frame is-library-workspace' : 'workspace-frame'}>
         <WorkspaceTopbar
           activeTab={activeTab}
           activeGameId={snapshot.project.id}
@@ -8917,10 +8921,18 @@ export default function App() {
           onOpenBilling={() => navigateToPath(BILLING_ROUTE_PATH)}
           onOpenNewGame={handleOpenNewGame}
           onOpenOutputsLibrary={openOutputsLibrary}
+          onOpenGameBuilder={import.meta.env.VITE_GAME_BUILDER_ENABLED === 'true' ? () => navigateToPath(GAME_ROUTE_PATH) : undefined}
+          gameBuilderActive={appRoute === 'game'}
           onResetProjectWorld={handleRequestResetProjectWorld}
           onSelectGame={handleSelectGame}
-          onSetActiveTab={setActiveTab}
-          onSetWorldViewMode={handleSetWorldViewMode}
+          onSetActiveTab={(tab) => {
+            if (appRoute === 'game') navigateToPath(APP_ROUTE_PATH)
+            setActiveTab(tab)
+          }}
+          onSetWorldViewMode={(mode) => {
+            if (appRoute === 'game') navigateToPath(APP_ROUTE_PATH)
+            handleSetWorldViewMode(mode)
+          }}
           onSignOut={handleSignOut}
           projectType={snapshot.projectContext?.projectType ?? null}
           projectName={snapshot.project.name}
@@ -8941,7 +8953,8 @@ export default function App() {
 
         <section className="workspace-stage">
           <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing workspace…</h3></div>}>
-            {activeTab === 'graph' ? (
+            {appRoute === 'game' ? (import.meta.env.VITE_GAME_BUILDER_ENABLED === 'true' ? <GameWorkspace key={snapshot.draft.id} snapshot={snapshot} canRun={loadedState?.source === 'supabase'} onOpenWorld={() => { setWorldViewMode('wiki'); setActiveTab('graph'); navigateToPath(APP_ROUTE_PATH) }} /> : <div className="detail-stack"><h3>Game workspace is not enabled.</h3><button onClick={() => navigateToPath(APP_ROUTE_PATH)}>Back to world</button></div>) : null}
+            {appRoute === 'app' && activeTab === 'graph' ? (
               <WorldGraphPage
                 key={snapshot.project.id}
                 assets={snapshot.assets}
@@ -9113,7 +9126,7 @@ export default function App() {
                 }}
               />
             ) : null}
-            {activeTab === 'outputs' ? (
+            {appRoute === 'app' && activeTab === 'outputs' ? (
               <OutputsWorkspace
                 canRunOutputs={loadedState?.source === 'supabase'}
                 openIntent={pendingOutputOpenIntent}
@@ -9182,7 +9195,7 @@ export default function App() {
                 )}
               />
             ) : null}
-            {activeTab === 'library' ? (
+            {appRoute === 'app' && activeTab === 'library' ? (
               <div className="library-shell">
                 <aside className="library-rail" aria-label="Library sections">
                   {librarySections.map((section) => (
@@ -9356,7 +9369,7 @@ export default function App() {
                 </div>
               </div>
             ) : null}
-            {activeTab === 'global' ? (
+            {appRoute === 'app' && activeTab === 'global' ? (
               <GlobalWorkspace
                 autoFocusReleasesNonce={globalWorkspaceAutoFocusReleasesNonce}
                 artStyleDescription={
@@ -9397,7 +9410,7 @@ export default function App() {
           </Suspense>
         </section>
 
-        {activeTab !== 'graph' && activeTab !== 'outputs' ? (
+        {appRoute === 'app' && activeTab !== 'graph' && activeTab !== 'outputs' ? (
           <Suspense fallback={null}>
             <PromptDock
               activeTab={activeTab}

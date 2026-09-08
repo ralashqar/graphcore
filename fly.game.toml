@@ -1,0 +1,21 @@
+app = "graphcore-game"
+primary_region = "lhr"
+kill_timeout = 300
+[build]
+  dockerfile = "workers/game/Dockerfile"
+[env]
+  GAME_WORKER_KIND = "build"
+[processes]
+  build = "deno run --allow-env --allow-net --allow-read --allow-write --allow-run=node,blender --allow-sys --config workers/game/deno.json --node-modules-dir=auto workers/game/main.ts"
+  generate = "env GAME_WORKER_KIND=generate deno run --allow-env --allow-net --allow-read --allow-write --allow-run=node,blender --allow-sys --config workers/game/deno.json --node-modules-dir=auto workers/game/main.ts"
+  asset = "env GAME_WORKER_KIND=asset deno run --allow-env --allow-net --allow-read --allow-write --allow-run=node,blender --allow-sys --config workers/game/deno.json --node-modules-dir=auto workers/game/main.ts"
+[[vm]]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2
+  processes = ["build", "generate"]
+[[vm]]
+  memory = "4gb"
+  cpu_kind = "shared"
+  cpus = 2
+  processes = ["asset"]

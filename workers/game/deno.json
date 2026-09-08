@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "zod": "npm:zod@4.3.6",
+    "npm:@supabase/supabase-js@2": "npm:@supabase/supabase-js@2.103.3",
+    "@dimforge/rapier3d-compat": "npm:@dimforge/rapier3d-compat@0.17.3",
+    "@dimforge/rapier3d-compat/rapier.es.js": "npm:@dimforge/rapier3d-compat@0.17.3/rapier.es.js"
+  }
+}

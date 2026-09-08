@@ -19,5 +19,7 @@ tmp
 !.env.example
 !.env.local.example
 deno.lock
+!workers/game/deno.lock
 supabase/.branches
 supabase/.temp
+dist-game
