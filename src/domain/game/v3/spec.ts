@@ -185,7 +185,7 @@ export const manifestSchema = z
     if (new Set(manifest.assets.map(clip => clip.id)).size !== manifest.assets.length || new Set(manifest.assets.map(clip => clip.recipeKey)).size !== manifest.assets.length) issue('Duplicate animation asset')
     if (new Set(manifest.animations.graphs.map(graph => graph.actorDefinition)).size !== manifest.animations.graphs.length) issue('Duplicate actor animation graph')
     for (const graph of manifest.animations.graphs) {
-      if(manifest.design.mechanics?.performance&&manifest.animations.rigs.find(r=>r.revision===graph.rigRevision)?.id!=='humanoid.soma.v2')issue('Pose programs require the SOMA mannequin rig')
+      if(manifest.design.mechanics?.performance&&!['humanoid.soma.v2','humanoid.fabric-ybot.v1'].includes(manifest.animations.rigs.find(r=>r.revision===graph.rigRevision)?.id??''))issue('Pose programs require the SOMA mannequin rig')
       if (!actors.has(graph.actorDefinition)) issue('Animation graph references a missing actor definition')
       if (!rigs.has(graph.rigRevision)) issue('Animation graph references a missing rig')
       validateAnimationBindings(graph, manifest.assets).forEach(issue)

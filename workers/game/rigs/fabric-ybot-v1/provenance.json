@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "repository": "https://github.com/ank1t-a404a/fabric",
+  "commit": "ece321fe728af45ad88a7c068a2c02fa50e985ba",
+  "path": "public/HumanoidAnimations/ybot_mixamo.glb",
+  "sourceSha256": "f9e5bc5361fce240862268c82dfcf38e037a85f5b5039663910d5edfe8be980d",
+  "derivedSha256": "3b2cddc11230ff73855d6c513ba6f38a4b6e23eba2ebd60590dba2fdfb9d6c5e",
+  "derivation": "canonical humanoid names, meters/Y-up, rest mesh and weights only; no source animations",
+  "meshParts": 2,
+  "jointCount": 77
+}

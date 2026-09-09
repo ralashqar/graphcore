@@ -3,7 +3,7 @@ import { hashGameValue } from '../../../src/domain/game/compiler.ts'
 import { designSchema } from '../../../src/domain/game/v3/spec.ts'
 import { animationCommandSchema } from '../../../src/domain/game/v3/animationCommands.ts'
 import { ANIMATION_VERSION } from '../../../src/domain/game/v3/animation.ts'
-import { humanoidMannequin, somaMannequin, SOMA_RIG } from '../../../src/domain/game/v3/mannequin.ts'
+import { humanoidMannequin, somaMannequin, fabricMannequin, isCanonicalHumanoid } from '../../../src/domain/game/v3/mannequin.ts'
 import { runpodUrl } from '../../../src/domain/game/v3/animationTransport.ts'
 import { animationProvider, validateProviderRecipe } from '../../../src/domain/game/v3/animationProviders.ts'
 import { HttpError } from './http.ts'
@@ -17,11 +17,12 @@ export async function animationCommand(admin: any, actor: string, raw: unknown) 
     const users = (Deno.env.get('GAME_GENERATION_USERS') ?? '').split(',').map(s => s.trim())
     const adapter = animationProvider(command.recipe), prefix = adapter.prefix
     if (Deno.env.get('GAME_GENERATION_ENABLED') !== 'true' || Deno.env.get('GAME_UNIFIED_ENABLED') !== 'true' || Deno.env.get(`${prefix}_ENABLED`) !== 'true' || !users.includes(actor)) throw new HttpError(503, 'Hosted animations are awaiting motion acceptance')
-    rig = (await Promise.all([humanoidMannequin(),somaMannequin()])).find(r=>r.revision===command.recipe.rigRevision)??null
+    rig = (await Promise.all([humanoidMannequin(),somaMannequin(),fabricMannequin()])).find(r=>r.revision===command.recipe.rigRevision)??null
     validateProviderRecipe(command.recipe)
     if (!rig) throw new HttpError(400, 'Only the supported humanoid mannequin is admitted')
+    if (rig.id === 'humanoid.fabric-ybot.v1' && (command.recipe.version !== 2 || command.recipe.retargetRevision !== 'g1-humanoid-1.2.0')) throw new HttpError(400, 'Fabric mannequin requires the coordinated humanoid adapter')
     if (command.recipe.version === 2) {
-      if (rig.id !== SOMA_RIG) throw new HttpError(400, 'MotionBricks requires the versioned SOMA mannequin')
+      if (!isCanonicalHumanoid(rig.id)) throw new HttpError(400, 'MotionBricks requires a supported canonical humanoid')
       if (command.recipe.purpose === 'clip' && Deno.env.get('GAME_MOTIONBRICKS_CLIPS_ENABLED') !== 'true') throw new HttpError(503, 'MotionBricks G1-to-SOMA clip acceptance is pending')
     }
     if(command.recipe.motionContract){

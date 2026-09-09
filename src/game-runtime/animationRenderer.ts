@@ -1,7 +1,7 @@
 import { presentPose } from './presentation'
 import { compatibleReplacement } from '../domain/game/v3/performanceMotion'
 import { evaluateSequence } from '../domain/game/v3/poseSequence'
-import { somaMannequin, SOMA_RIG } from '../domain/game/v3/mannequin'
+import { somaMannequin, isCanonicalHumanoid } from '../domain/game/v3/mannequin'
 import { estimateSomaPose, contactPose, type Rig, type SkeletalPose } from '../domain/game/v3/somaPose'
 import { createSomaVisual } from './somaVisual'
 import { LoadAssetContainerAsync } from '@babylonjs/core/Loading/sceneLoader'
@@ -30,7 +30,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
     for (const instance of of(manifest.design, 'actor_instance')) {
       const graph = manifest.animations?.graphs.find(g => g.actorDefinition === instance.definition)
       const rig=manifest.animations?.rigs.find(r=>r.revision===graph?.rigRevision) ?? (manifest.design.mechanics?.motionProfile?await somaMannequin():undefined)
-      if (!graph?.bindings.length && rig?.id!==SOMA_RIG) continue
+      if (!graph?.bindings.length && !isCanonicalHumanoid(rig?.id)) continue
       expected += graph?.bindings.length??0
       const root = new TransformNode(`animated.${instance.id}`, scene), clips = new Map<AnimationState, Clip>()
       let targets: Map<string, TransformNode> | null = null
@@ -53,13 +53,13 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
         }
         if (tracks.length) { clips.set(binding.state, { contract:asset.motionContract&&compatibleReplacement(asset,asset.motionContract,manifest.design.mechanics?.performance?.sequences.find(s=>s.role===asset.state)?.duration??-1)?asset.motionContract:undefined,duration: asset.duration, loop: asset.loop, speed: asset.naturalSpeed, tracks }); loaded++ }
       }
-      if(!targets && rig?.id===SOMA_RIG)targets=createSomaVisual(scene,root,rig)
+      if(!targets && isCanonicalHumanoid(rig?.id))targets=createSomaVisual(scene,root,rig)
       root.setEnabled(false)
       actors.set(instance.id, { root, targets:targets??new Map(),rig,samples:new Map(), clips, transitions: graph?.transitions??[], blend: emptyAnimationBlend(), clock:{active:null,times:{}}, previous: { ...instance.position }, velocity: { x: 0, z: 0 }, tick: 0, mode: '', enteredFrom: '', elapsed: 0, gait: 0 })
     }
   } catch { containers.forEach(c => c.dispose()); actors.forEach(a => a.root.dispose()); return { update: () => new Set<string>(), metrics: () => ({ animationLoadFailed: true, animationBindings: 0, expectedAnimationBindings: expected, playedAnimations: [] as string[] }) } }
   scene.onDisposeObservable.add(() => containers.forEach(c => c.dispose()))
-  return { metrics: () => ({ presentationPositions: Object.fromEntries([...actors].map(([id,a])=>[id,a.root.position.asArray()])), somaActors:[...actors].filter(([,a])=>a.rig?.id===SOMA_RIG).map(([id])=>id),proceduralFrames,contactRejections,animationLoadFailed: loaded !== expected, animationBindings: loaded, expectedAnimationBindings: expected, playedAnimations: [...played], animationLoops: { ...loops } }), update(sim: Simulation,frame?:PresentationFrame) {
+  return { metrics: () => ({ presentationPositions: Object.fromEntries([...actors].map(([id,a])=>[id,a.root.position.asArray()])), somaActors:[...actors].filter(([,a])=>isCanonicalHumanoid(a.rig?.id)).map(([id])=>id),proceduralFrames,contactRejections,animationLoadFailed: loaded !== expected, animationBindings: loaded, expectedAnimationBindings: expected, playedAnimations: [...played], animationLoops: { ...loops } }), update(sim: Simulation,frame?:PresentationFrame) {
     const rendered = new Set<string>()
     for (const actor of sim.state.actors) {
       const visual = actors.get(actor.id)
@@ -93,7 +93,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
       const supported = Object.entries(weights).filter(([s,w]) => w > .001 && visual.clips.has(s as AnimationState)) as Array<[AnimationState, number]>
       const total = supported.reduce((sum, [,w]) => sum+w, 0)
       const mechanic=(sim as Simulation & {mechanicStates?:Record<string,{phase:string}>}).mechanicStates?.[actor.id]
-      const soma=visual.rig?.id===SOMA_RIG
+      const soma=isCanonicalHumanoid(visual.rig?.id)
       const procedural=performance?!replacement:!!actor.action || actor.mode==='air' || actor.mode==='hang' || actor.mode==='climb' || mechanic?.phase==='attached' || sim.interactions.poses.has(actor.id) || total<.99
       const show = soma ? actor.health>0 : actor.health > 0 && total > .99 && !sim.interactions.poses.has(actor.id) && mechanic?.phase!=='attached' && !actor.action?.ability.startsWith('runtime.')
       visual.root.setEnabled(show)

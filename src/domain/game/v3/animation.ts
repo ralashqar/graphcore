@@ -49,7 +49,7 @@ export const motionRecipeSchema = z.discriminatedUnion('version', [
   z.object({ ...recipeFields, version: z.literal(1), model: z.literal(KIMODO_MODEL) }).strict(),
   z.object({ ...recipeFields, version: z.literal(2), model: z.literal(MOTIONBRICKS_MODEL),
     provider: z.literal('motionbricks'), purpose: z.enum(['clip', 'diagnostic']),
-    retargetRevision: z.literal('g1-soma-1.1.0').optional(),
+    retargetRevision: z.enum(['g1-soma-1.1.0','g1-humanoid-1.2.0']).optional(),
     provenance: motionbricksProvenanceSchema, primitive: z.enum(['idle', 'walk', 'idle_walk_turn_stop']),
   }).strict(),
 ]).superRefine((recipe, ctx) => {
@@ -74,7 +74,7 @@ export const clipRevisionSchema = z.object({
   version: z.literal(1), id: z.string().uuid(), recipeHash: hash, rigRevision: hash, sourceHash: hash, glbHash: hash,
   motionContract: hash.optional(),
   provenance: motionbricksProvenanceSchema.optional(),
-  retargetRevision: z.literal('g1-soma-1.1.0').optional(),
+  retargetRevision: z.enum(['g1-soma-1.1.0','g1-humanoid-1.2.0']).optional(),
   storagePath: z.string().min(1).max(500).refine(p => !p.includes('..') && !p.includes('://') && !p.startsWith('/')),
   state: animationStateSchema, duration: finite.positive().max(8), fps: z.literal(30), loop: z.boolean(), naturalSpeed: finite.nonnegative(),
   rootMode: z.enum(['in_place', 'controller_curve', 'anchor_relative']),

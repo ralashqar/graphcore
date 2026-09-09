@@ -61,6 +61,8 @@ output/game-animation-*.json
 output/game-animation-*.sql
 tmp/game-animation-tools/
 tmp/kimodo-source/
+tmp/fabric-rig-source/
+output/game-rig-evaluation/
 tmp/game-commit-check/
 
 # Pinned upstream inspection checkout and local MotionBricks experiment artifacts.

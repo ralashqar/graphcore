@@ -100,7 +100,7 @@ export async function produceAnimation(ctx: JobContext) {
       if (recipe.version === 2) {
         for (const stage of ['native_export', 'source_convert']) {
           const artifact = await step(ctx, `animation.${stage}.${index}`, { ...frozen, sourcePath }, async () => {
-              const script = stage === 'source_convert' && recipe.retargetRevision === 'g1-soma-1.1.0'
+              const script = stage === 'source_convert' && recipe.retargetRevision === 'g1-humanoid-1.2.0' ? 'workers/game/motionbricks/bake_adapter_v1_2.py' : stage === 'source_convert' && recipe.retargetRevision === 'g1-soma-1.1.0'
                 ? 'workers/game/motionbricks/bake_adapter_v1_1.py' : 'workers/game/motionbricks/bake_adapter.py'
               await runTool(Deno.env.get('GAME_BLENDER_BINARY') ?? 'blender', ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', script, '--', directory, stage], 180000)
             const file = stage === 'native_export' ? 'native.glb' : 'converted-source.json'
@@ -119,7 +119,7 @@ export async function produceAnimation(ctx: JobContext) {
             if (stored.error) throw new Error('Converted motion checkpoint is missing')
             const bytes = new Uint8Array(await stored.data.arrayBuffer())
             const converted = sourceMotionSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))
-            if (converted.version !== 2 || converted.space !== 'soma') throw new Error('Invalid SOMA conversion checkpoint')
+            if (converted.version !== 2 || converted.space !== (rig.id === 'humanoid.fabric-ybot.v1' ? 'fabric_ybot' : 'soma')) throw new Error('Invalid SOMA conversion checkpoint')
             await Deno.writeFile(`${directory}/source.json`, bytes)
           }
         }

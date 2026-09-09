@@ -4,6 +4,10 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### Human leg retargeting and Fabric mannequin (September 2026)
+
+MotionBricks CPU adapter `g1-humanoid-1.2.0` solves coordinated fixed-length human legs, bounds reach correction, and checks knee-plane error and crossed feet after GLB export. Old adapter revisions remain available. `humanoid.fabric-ybot.v1` derives the requested Fabric `ybot_mixamo.glb` rest mesh/skin/proportions at pinned commit `ece321fe728af45ad88a7c068a2c02fa50e985ba`, with source hashes and no copied animation tracks. Its separate rig revision and `fabric_ybot` transport space preserve canonical gameplay sockets and procedural poses without pretending it is SOMA. The animation UI selects a target mannequin and explains incompatible binding replacement; acceptance remains separate from technical validation. The new rig is admitted only with the new MotionBricks adapter, with existing owner/provider gates. Saved sources can be re-baked without inference or budget reservations. Deploy the affected game Edge functions and both isolated Fly game apps together. Details: [docs/40-human-leg-retarget-and-fabric-rig.md](docs/40-human-leg-retarget-and-fabric-rig.md).
+
 GraphCore employs multiple specialized AI agents working in concert to transform natural language prompts into structured game content. The system uses a layered architecture where different agents handle specific aspects of content creation, from initial concept generation to detailed asset production.
 
 ## Maintenance Requirements

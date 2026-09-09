@@ -14,6 +14,7 @@ export type AnimationPreviewClip = Pick<ClipRevision, 'id' | 'glbHash' | 'state'
 export function AnimationPreview({ url, clip, followRoot = false }: { url: string; clip: AnimationPreviewClip; followRoot?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null), [error, setError] = useState('')
   const groups = useRef<AnimationGroup[]>([])
+  const cameraRef = useRef<ArcRotateCamera | null>(null)
   const source=useRef({url,clip});source.current={url,clip}
   const [retry,setRetry]=useState(0)
   const [playing,setPlaying]=useState(true),[speed,setSpeed]=useState(1),[position,setPosition]=useState(0),[overlays,setOverlays]=useState(false)
@@ -22,6 +23,8 @@ export function AnimationPreview({ url, clip, followRoot = false }: { url: strin
     const {url,clip}=source.current
     const engine = new Engine(canvas.current!, true), scene = new Scene(engine)
     const camera = new ArcRotateCamera('animation-camera', -Math.PI/2, 1.1, 4, new Vector3(0, 1, 0), scene)
+    cameraRef.current=camera
+    camera.lowerRadiusLimit=1.2;camera.upperRadiusLimit=12;camera.wheelDeltaPercentage=.01
     camera.attachControl(canvas.current, true)
     new HemisphericLight('animation-light', new Vector3(0, 1, 0), scene)
     let disposed = false
@@ -47,11 +50,12 @@ export function AnimationPreview({ url, clip, followRoot = false }: { url: strin
     }).catch(() => { if (!disposed) setError('Animation preview could not load') })
     engine.runRenderLoop(() => scene.render())
     const resize = new ResizeObserver(() => engine.resize()); resize.observe(canvas.current!)
-    return () => { disposed = true; groups.current=[];overlayMeshes.current=[];resize.disconnect(); scene.dispose(); engine.dispose() }
+    return () => { disposed = true; cameraRef.current=null;groups.current=[];overlayMeshes.current=[];resize.disconnect(); scene.dispose(); engine.dispose() }
   }, [clip.id, clip.glbHash, retry, followRoot])
   return <div><canvas ref={canvas} style={{ width: '100%', height: 300 }} aria-label={`Repeated ${clip.state} animation preview`} />
     <p>Drag to orbit · Scroll to zoom · {clip.duration.toFixed(2)}s · {clip.naturalSpeed.toFixed(2)} m/s</p>
     <button onClick={()=>{groups.current.forEach(g=>playing?g.pause():g.play(true));setPlaying(!playing)}}>{playing?'Pause':'Play'}</button>
+    {(['Front','Side'] as const).map(view=><button key={view} onClick={()=>{const camera=cameraRef.current;if(camera){camera.alpha=view==='Front'?-Math.PI/2:0;camera.beta=Math.PI/2;camera.radius=2.6}}}>{view}</button>)}
     <label>Speed <input type="range" min="0.1" max="2" step="0.1" value={speed} onChange={e=>{const v=Number(e.target.value);setSpeed(v);groups.current.forEach(g=>g.speedRatio=v)}} />{speed}×</label>
     <label>Scrub <input type="range" min="0" max="1" step="0.001" value={position} onChange={e=>{const v=Number(e.target.value);setPosition(v);setPlaying(false);groups.current.forEach(g=>{g.pause();g.goToFrame(g.from+(g.to-g.from)*v)})}} /></label>
     <label><input type="checkbox" checked={overlays} onChange={e=>{setOverlays(e.target.checked);overlayMeshes.current.forEach(m=>m.setEnabled(e.target.checked))}} />Contact and root-path overlays</label>

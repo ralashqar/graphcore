@@ -11,10 +11,11 @@ import { AnimationPreview, type AnimationPreviewClip } from './AnimationPreview'
 import { AnimationGraphView } from './AnimationGraphView'
 import { actorAnimationRequirements, locomotionStates } from '../../domain/game/v3/animationRequirements'
 type Candidate = { id: string; job_id: string; clip: ClipRevision | null; diagnostics: { purpose?: 'clip'|'diagnostic'; preview?: AnimationPreviewClip; motionbricksArtifacts?:{native_export?:{preview?:AnimationPreviewClip}}; failures?: string[]; metrics?: Record<string, number> } }
-type Data = { motionbricks?: {enabled:boolean;reservationCents:number;rig:{revision:string}}; artifactUrls?:Record<string,Record<string,string>>; rig: { revision: string }; enabled: boolean; performanceEnabled?:boolean; reservationCents: number; recipes: Array<{ job_id: string; recipe: MotionRecipe }>; candidates: Candidate[]; graphs: Array<{ actor_definition: string; graph: AnimationGraph }>; urls: Record<string, string>; reviews: Array<{candidate_id:string;decision:'accepted'|'rejected'}>; jobs:Array<{id:string;status:string;phase:string;error:string|null}> }
+type Data = { motionbricks?: {enabled:boolean;reservationCents:number;rig:{revision:string};rigs?:Array<{id:string;revision:string}>}; artifactUrls?:Record<string,Record<string,string>>; rig: { revision: string }; enabled: boolean; performanceEnabled?:boolean; reservationCents: number; recipes: Array<{ job_id: string; recipe: MotionRecipe }>; candidates: Candidate[]; graphs: Array<{ actor_definition: string; graph: AnimationGraph }>; urls: Record<string, string>; reviews: Array<{candidate_id:string;decision:'accepted'|'rejected'}>; jobs:Array<{id:string;status:string;phase:string;error:string|null}> }
 export function AnimationsWorkspace({ projectId, draftId, revision, design, onChanged }: { projectId: string; draftId: string; revision: number; design: Design; onChanged: () => Promise<void> }) {
   const [data, setData] = useState<Data | null>(null), [state, setState] = useState<MotionRecipe['state']>('idle'), [prompt, setPrompt] = useState('A humanoid stands in a relaxed idle pose.'), [busy, setBusy] = useState(false), [error, setError] = useState(''), [selected, setSelected] = useState(''), [actor, setActor] = useState(of(design, 'actor_definition')[0]?.id ?? ''), [details, setDetails] = useState<unknown>(null), [pending, setPending] = useState<AnimationCommand | null>(null)
   const pendingKey = (userId: string) => `graphcore.animation.pending.${userId}.${projectId}.${draftId}`
+  const [targetRig,setTargetRig]=useState('humanoid.fabric-ybot.v1')
   const [provider,setProvider]=useState<'kimodo'|'motionbricks'>('kimodo')
   const [comparison,setComparison]=useState(''),[graphEdits,setGraphEdits]=useState<AnimationGraph|null>(null)
   const [inspectedJob,setInspectedJob]=useState('')
@@ -59,7 +60,7 @@ export function AnimationsWorkspace({ projectId, draftId, revision, design, onCh
   const compare = data.candidates.find(c=>c.id===comparison)
   const review = data.reviews.find(r=>r.candidate_id===selected)?.decision
   const requirements = actorAnimationRequirements(design,actor)
-  const bindingGraph = (clip:ClipRevision):AnimationGraph => ({ version:1,id:`animation.${actor}`,actorDefinition:actor,rigRevision:clip.rigRevision,bindings:[...(graph?.bindings.filter(b=>b.state!==clip.state)??[]),{state:clip.state,clipRevision:clip.id}],transitions:graph?.transitions??[] })
+  const bindingGraph = (clip:ClipRevision):AnimationGraph => ({ version:1,id:`animation.${actor}`,actorDefinition:actor,rigRevision:clip.rigRevision,bindings:[...((graph?.rigRevision===clip.rigRevision?graph.bindings.filter(b=>b.state!==clip.state):[])),{state:clip.state,clipRevision:clip.id}],transitions:graph?.rigRevision===clip.rigRevision?graph.transitions:[] })
   const common = () => ({projectId,draftId,expectedRevision:revision,idempotencyKey:crypto.randomUUID()})
   const jobAction=async(jobId:string,action:'cancel'|'retry')=>{setBusy(true);try{await invokeGame('game-command',{...common(),jobId,action,template:'unified.v1'});await refresh();await onChanged()}catch(e){setError(String(e))}finally{setBusy(false)}}
   const approximations=design.mechanics?.performance?.sequences.filter(s=>s.role!=='custom')??[]
@@ -73,12 +74,13 @@ export function AnimationsWorkspace({ projectId, draftId, revision, design, onCh
     {!data.enabled && <p>Hosted generation is disabled until deployment and motion acceptance pass.</p>}
     <label>Motion <select aria-label="Motion" value={state} onChange={e => {setState(e.target.value as MotionRecipe['state']);if(!['idle','walk'].includes(e.target.value))setProvider('kimodo')}}>{animationStates.map(s => <option key={s}>{s}</option>)}</select></label>
     <label>Motion provider <select value={provider} onChange={e=>setProvider(e.target.value as 'kimodo'|'motionbricks')}><option value="kimodo">Kimodo</option><option value="motionbricks" disabled={!motionbricksAvailable}>MotionBricks · experimental idle/walk</option></select></label>
-    {provider==='motionbricks'&&<p>Uses NVIDIA’s supplied G1 locomotion primitive and retargets it to SOMA. The description labels your request; arbitrary text-directed poses and contact constraints are not supported. {!data.motionbricks?.enabled?'Generation is gated until native and SOMA acceptance pass.':''}</p>}
+    {provider==='motionbricks'&&data.motionbricks?.rigs&&<label>Target mannequin <select value={targetRig} onChange={e=>setTargetRig(e.target.value)}>{data.motionbricks.rigs.map(r=><option key={r.id} value={r.id}>{r.id==='humanoid.fabric-ybot.v1'?'Fabric Y-Bot · mesh mannequin':'SOMA · diagnostic mannequin'}</option>)}</select></label>}
+    {provider==='motionbricks'&&<p>Uses NVIDIA’s supplied G1 locomotion primitive and retargets it to your selected mannequin. The description labels your request; arbitrary text-directed poses and contact constraints are not supported. {!data.motionbricks?.enabled?'Generation is gated until native and target-rig acceptance pass.':''}</p>}
     <label>Description <textarea value={prompt} onChange={e => setPrompt(e.target.value)} maxLength={1500} /></label>
     <p>Setup reservation: ${(reservation / 100).toFixed(2)}. The one-time setup allowance is $30; admissions stop at $25.</p>
     <button disabled={busy || !!pending || !generationEnabled || !(locomotionStates as readonly string[]).includes(state)} onClick={() => {
       let recipe = motionRecipeSchema.parse({ version: 1, id: `humanoid.${state}`, state, rigRevision: data.rig.revision, model: KIMODO_MODEL, prompt, duration: 4, candidates: 1, seed: 42, loop: ['idle','walk','run','backward','strafe_left','strafe_right'].includes(state), targetSpeed: state === 'run' ? 4 : state === 'idle' ? 0 : 1.5, rootMode: 'in_place', contacts: [], poses: [], path: [], thresholds: { version: 1, maxContactError: .03, maxBoneLengthError: .005, maxSeamAngle: .1, maxSeamVelocity: .2, maxCorrection: .1 } })
-      if(provider==='motionbricks')recipe=motionbricksRecipe({...recipe,rigRevision:data.motionbricks!.rig.revision})
+      if(provider==='motionbricks')recipe=motionbricksRecipe({...recipe,rigRevision:data.motionbricks!.rigs?.find(r=>r.id===targetRig)?.revision??data.motionbricks!.rig.revision})
       void send({ projectId, draftId, expectedRevision: revision, idempotencyKey: crypto.randomUUID(), action: 'generate_animation', recipe })
     }}>Generate candidate</button>
     {['catch','hang','shimmy_left','shimmy_right','climb'].includes(state) && <p>Ledge generation requires an authored milestone/contact recipe.</p>}
@@ -99,10 +101,11 @@ export function AnimationsWorkspace({ projectId, draftId, revision, design, onCh
     <h3>Candidates</h3>
     {data.candidates.map(c => <button key={c.id} onClick={() => setSelected(c.id)} aria-pressed={selected === c.id}>{c.clip?.state ?? (c.diagnostics.purpose==='diagnostic'?'G1 diagnostic · cannot bind':'Validation failed')} · {data.reviews.find(r=>r.candidate_id===c.id)?.decision??'Pending review'} · {c.id.slice(0, 8)}</button>)}
     {candidate && <div>
+      {candidate.clip&&graph&&candidate.clip.rigRevision!==graph.rigRevision&&<p>Binding this candidate switches this actor’s rig and clears incompatible clip bindings. Accept alone keeps the current rig.</p>}
       {candidate.clip && data.urls[candidate.id] && <AnimationPreview clip={candidate.clip} url={data.urls[candidate.id]} />}
       {candidate.diagnostics.purpose==='diagnostic'&&<p>Diagnostic sequence only. Technical validation cannot make this sequence bindable.</p>}
       {candidate.diagnostics.motionbricksArtifacts?.native_export?.preview&&data.artifactUrls?.[candidate.id]?.native&&<><h4>Native G1</h4><AnimationPreview clip={candidate.diagnostics.motionbricksArtifacts.native_export.preview} url={data.artifactUrls[candidate.id].native} followRoot/></>}
-      {!candidate.clip&&candidate.diagnostics.preview&&data.artifactUrls?.[candidate.id]?.preview&&<><h4>SOMA conversion preview</h4><AnimationPreview clip={candidate.diagnostics.preview} url={data.artifactUrls[candidate.id].preview}/></>}
+      {!candidate.clip&&candidate.diagnostics.preview&&data.artifactUrls?.[candidate.id]?.preview&&<><h4>Retargeted mannequin preview</h4><AnimationPreview clip={candidate.diagnostics.preview} url={data.artifactUrls[candidate.id].preview}/></>}
       {Object.entries(data.artifactUrls?.[candidate.id]??{}).map(([label,url])=><a key={label} href={url} target="_blank" rel="noreferrer">Download {label} </a>)}
       <pre>{JSON.stringify(candidate.diagnostics, null, 2)}</pre>
       {candidate.diagnostics.failures?.length? <ul>{candidate.diagnostics.failures.map((failure,i)=><li key={i}>{failure}</li>)}</ul>:<p>Technical validation passed. Acceptance is a separate decision.</p>}
@@ -111,7 +114,7 @@ export function AnimationsWorkspace({ projectId, draftId, revision, design, onCh
       {!review&&<button disabled={busy||!!pending} onClick={()=>void send({...common(),action:'reject_animation',candidateId:candidate.id,reason:''})}>Reject candidate</button>}
       {candidate.clip && review==='accepted' && <button disabled={busy || !!pending || !actor} onClick={() => {
         const clip = candidate.clip!
-        const next: AnimationGraph = { version: 1, id: `animation.${actor}`, actorDefinition: actor, rigRevision: clip.rigRevision, bindings: [...(graph?.bindings.filter(b => b.state !== clip.state) ?? []), { state: clip.state, clipRevision: clip.id }], transitions: graph?.transitions ?? [] }
+        const next: AnimationGraph = { version: 1, id: `animation.${actor}`, actorDefinition: actor, rigRevision: clip.rigRevision, bindings: [...((graph?.rigRevision===clip.rigRevision?graph.bindings.filter(b => b.state !== clip.state):[])), { state: clip.state, clipRevision: clip.id }], transitions: graph?.rigRevision===clip.rigRevision?graph.transitions:[] }
         void send({ projectId, draftId, expectedRevision: revision, idempotencyKey: crypto.randomUUID(), action: 'bind_animation', graph: next })
       }}>Bind accepted clip</button>}
     </div>}

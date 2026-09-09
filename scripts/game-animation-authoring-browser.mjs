@@ -9,7 +9,7 @@ const directory='output/game-animation-authoring-browser'
 const stylesheet=await readFile('src/styles/features/game-builder.css','utf8')
 await mkdir(directory,{recursive:true})
 const fixture=JSON.parse(await readFile('output/game-animation-locomotion-browser/candidate.json','utf8'))
-const data={rig:fixture.manifest.animations.rigs[0],enabled:false,reservationCents:100,recipes:[],jobs:[],graphs:[],reviews:[],candidates:fixture.manifest.assets.map(clip=>({id:clip.id,job_id:clip.id,clip,diagnostics:{failures:[],metrics:clip.validation.metrics}})),urls:Object.fromEntries(fixture.manifest.assets.map(c=>[c.id,`/${c.state}.glb`]))}
+const data={motionbricks:{enabled:false,reservationCents:100,rig:fixture.manifest.animations.rigs[0],rigs:[{id:'humanoid.soma.v2',revision:fixture.manifest.animations.rigs[0].revision},{id:'humanoid.fabric-ybot.v1',revision:'f'.repeat(64)}]},rig:fixture.manifest.animations.rigs[0],enabled:false,reservationCents:100,recipes:[],jobs:[],graphs:[],reviews:[],candidates:fixture.manifest.assets.map(clip=>({id:clip.id,job_id:clip.id,clip,diagnostics:{failures:[],metrics:clip.validation.metrics}})),urls:Object.fromEntries(fixture.manifest.assets.map(c=>[c.id,`/${c.state}.glb`]))}
 await build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import {AnimationsWorkspace} from './src/features/game-builder/AnimationsWorkspace';createRoot(document.getElementById('root')).render(React.createElement(AnimationsWorkspace,{projectId:${JSON.stringify(fixture.manifest.projectId)},draftId:${JSON.stringify(fixture.manifest.draftId)},revision:1,design:${JSON.stringify(fixture.manifest.design)},onChanged:async()=>{}}));`,resolveDir:process.cwd(),loader:'tsx'},bundle:true,format:'esm',outfile:`${directory}/app.js`,jsx:'automatic',plugins:[{name:'isolated-command-fixture',setup(b){
  b.onLoad({filter:/src[\\/]data[\\/](auth|gameRepository)\.ts$/},args=>({loader:'js',contents:args.path.endsWith('auth.ts')?`export async function getCurrentSession(){return {user:{id:'fixture-user'},access_token:'local-fixture-only'}}`:`const data=${JSON.stringify(data)};window.fixtureCommands=[];export async function invokeGame(name,command){if(name==='get-game-workspace')return structuredClone(data);window.fixtureCommands.push(command);if(command.action==='generate_animation')throw Error('Paid generation prohibited in fixture');if(command.action==='accept_animation'||command.action==='reject_animation')data.reviews.push({candidate_id:command.candidateId,decision:command.action==='accept_animation'?'accepted':'rejected'});if(command.graph)data.graphs=[{actor_definition:command.graph.actorDefinition,graph:command.graph}];return {revision:1};}`}))
 }}]})
@@ -20,6 +20,8 @@ page.on('pageerror',e=>errors.push(e.message))
 try{
  await page.goto(`http://127.0.0.1:${server.address().port}`)
  await page.getByLabel('Motion provider').selectOption('motionbricks')
+ if(await page.getByLabel('Target mannequin').inputValue()!=='humanoid.fabric-ybot.v1')throw Error('Fabric target not available')
+ await page.getByLabel('Target mannequin').selectOption('humanoid.soma.v2')
  if(!await page.getByRole('button',{name:'Generate candidate',exact:true}).isDisabled())throw Error('Unvalidated MotionBricks generation enabled')
  await page.getByLabel('Motion',{exact:true}).selectOption('roll')
  if(await page.getByLabel('Motion provider').inputValue()!=='kimodo')throw Error('Unsupported MotionBricks mechanic selected')

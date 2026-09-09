@@ -10,7 +10,7 @@ import { motionbricksRecipe, providerRequest, decodeProviderMotion } from '../sr
 import { motionRecipeSchema, ANIMATION_VERSION } from '../src/domain/game/v3/animation.ts'
 import { RunpodTransport } from '../src/domain/game/v3/animationTransport.ts'
 const mode=process.argv[2]??'status', caseName=process.argv[3]??'diagnostic', baseDirectory='output/game-motionbricks-compatibility'
-if(!['diagnostic','idle','walk','walk-generated','idle-retargeted','walk-retargeted'].includes(caseName))throw Error('Unknown motion case')
+if(!['diagnostic','idle','walk','walk-generated','idle-retargeted','walk-retargeted','soma-idle-1-2','soma-walk-1-2','fabric-idle-1-2','fabric-walk-1-2'].includes(caseName))throw Error('Unknown motion case')
 const directory=caseName==='diagnostic'?baseDirectory:`${baseDirectory}/${caseName}`
 if(!['submit','status','import','review','derive','reserve','reprocess','audit'].includes(mode))throw Error('Unsupported compatibility operation')
 if(mode==='submit'&&!['diagnostic','walk-generated'].includes(caseName))throw Error('Derived clips reuse source; GPU submission prohibited')

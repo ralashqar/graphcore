@@ -33,7 +33,7 @@ export function providerRequest(recipe: MotionRecipe) {
 }
 export function motionbricksRecipe(recipe: MotionRecipe): MotionRecipe {
   if (!['idle', 'walk'].includes(recipe.state)) throw new Error('MotionBricks has no accepted capability for this state')
-  return motionRecipeSchema.parse({ ...recipe, version: 2, provider: 'motionbricks', model: 'MotionBricks-G1-v1', purpose: 'clip', primitive: recipe.state, retargetRevision: 'g1-soma-1.1.0',
+  return motionRecipeSchema.parse({ ...recipe, version: 2, provider: 'motionbricks', model: 'MotionBricks-G1-v1', purpose: 'clip', primitive: recipe.state, retargetRevision: 'g1-humanoid-1.2.0',
     provenance: { provider: 'motionbricks', modelRevision: motionbricksRelease.model, sourceRevision: motionbricksRelease.source, skeleton: 'g1skel34', adapter: motionbricksRelease.adapter, validation: ANIMATION_VERSION },
   })
 }

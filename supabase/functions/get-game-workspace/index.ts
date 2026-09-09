@@ -1,7 +1,7 @@
 import { z } from 'npm:zod@4'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { humanoidMannequin, somaMannequin } from '../../../src/domain/game/v3/mannequin.ts'
+import { humanoidMannequin, somaMannequin, fabricMannequin } from '../../../src/domain/game/v3/mannequin.ts'
 const schema = z.object({ projectId: z.string().uuid(), draftId: z.string().uuid(), animations: z.boolean().optional(), buildId: z.string().uuid().optional(), jobId: z.string().uuid().optional(), nodeId: z.string().max(64).optional() }).strict()
 Deno.serve(async request => {
   const preflight = maybeHandleOptions(request); if (preflight) return preflight
@@ -38,7 +38,7 @@ Deno.serve(async request => {
       }
       const workspace=await client.from('game_workspaces').select('design').eq('draft_id',input.draftId).single()
       if(workspace.error)throw workspace.error
-      return json({ rig: await (workspace.data.design?.mechanics?.motionProfile?somaMannequin():humanoidMannequin()), motionbricks: { enabled: Deno.env.get('GAME_MOTIONBRICKS_ENABLED')==='true' && Deno.env.get('GAME_MOTIONBRICKS_CLIPS_ENABLED')==='true', reservationCents: Number(Deno.env.get('GAME_MOTIONBRICKS_RESERVATION_CENTS')??'100'), rig: await somaMannequin() }, artifactUrls, recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, reviews: reviews.data, jobs: jobs.data, urls, urlsExpireAt: Date.now()+3500000, performanceEnabled:Deno.env.get('GAME_PERFORMANCE_ANIMATION_ENABLED')==='true', enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
+      return json({ rig: await (workspace.data.design?.mechanics?.motionProfile?somaMannequin():humanoidMannequin()), motionbricks: { enabled: Deno.env.get('GAME_MOTIONBRICKS_ENABLED')==='true' && Deno.env.get('GAME_MOTIONBRICKS_CLIPS_ENABLED')==='true', reservationCents: Number(Deno.env.get('GAME_MOTIONBRICKS_RESERVATION_CENTS')??'100'), rig: await somaMannequin(), rigs: [await somaMannequin(), await fabricMannequin()] }, artifactUrls, recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, reviews: reviews.data, jobs: jobs.data, urls, urlsExpireAt: Date.now()+3500000, performanceEnabled:Deno.env.get('GAME_PERFORMANCE_ANIMATION_ENABLED')==='true', enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
     }
     if (input.jobId) {
       let query = client.from('game_job_steps').select('node_id,input_hash,status,attempt,output,diagnostic,dependencies,updated_at').eq('draft_id', input.draftId).eq('job_id', input.jobId)

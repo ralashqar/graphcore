@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { motionRecipeSchema, clipRevisionSchema } from './animation.ts'
 import { animationRecipeProfile } from './animationProfiles.ts'
 import { motionbricksRecipe, providerRequest, decodeProviderMotion } from './animationProviders.ts'
-import { inferenceRequestSchema, motionbricksRequestSchema, RunpodTransport } from './animationTransport.ts'
+import { inferenceRequestSchema, motionbricksRequestSchema, RunpodTransport, sourceMotionSchema } from './animationTransport.ts'
+import { fabricMannequin, somaMannequin } from './mannequin.ts'
 
 const legacy=animationRecipeProfile('walk','a'.repeat(64))
 const recipe=motionbricksRecipe(legacy)
@@ -39,8 +40,23 @@ test('uncertain MotionBricks submissions are attempted once, without retry',asyn
 test('CPU retarget upgrades preserve the exact native inference request',()=>{
  if(recipe.version!==2)throw new Error('Wrong provider')
  const {retargetRevision,...original}=recipe
- assert.equal(retargetRevision,'g1-soma-1.1.0')
+ assert.equal(retargetRevision,'g1-humanoid-1.2.0')
  assert.deepEqual(providerRequest(recipe),providerRequest(original))
  assert.equal(motionRecipeSchema.parse(original).version,2)
  assert.equal(motionRecipeSchema.safeParse({...recipe,retargetRevision:'unversioned'}).success,false)
+})
+
+test('Fabric target has a separate immutable rig and cannot masquerade as SOMA or inference',async()=>{
+ const rig=await fabricMannequin(),soma=await somaMannequin()
+ assert.notEqual(rig.revision,soma.revision)
+ assert.equal(rig.joints.length,77)
+ const positions:number[][]=[]
+ const joints=rig.joints.map(j=>{const parent=rig.joints.findIndex(p=>p.id===j.parent);const rest=j.translation.map((v,k)=>v+(parent>=0?positions[parent][k]:0));positions.push(rest);return {name:j.id,parent,rest:rest.map((v,k)=>v-positions[0][k])}})
+ if(recipe.version!==2)throw Error('Wrong provider')
+ const source={version:2,model:recipe.model,modelRevision:recipe.provenance.modelRevision,provenance:recipe.provenance,space:'fabric_ybot',fps:30,seed:42,joints,restRotations:joints.map(()=>[0,0,0,1]),frames:Array.from({length:120},()=>({root:[0,1,0],rotations:joints.map(()=>[0,0,0,1])}))}
+ assert.equal(sourceMotionSchema.safeParse(source).success,true)
+ assert.equal(sourceMotionSchema.safeParse({...source,space:'soma'}).success,false)
+ assert.throws(()=>decodeProviderMotion(recipe,source))
+ const malformed=structuredClone(source);malformed.joints[5].rest[0]+=.01
+ assert.equal(sourceMotionSchema.safeParse(malformed).success,false)
 })

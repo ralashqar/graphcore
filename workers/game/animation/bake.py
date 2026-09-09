@@ -272,6 +272,28 @@ def create_rig(rig):
         bone.tail = bone.head + Vector((0, .06, 0))
         if joint['parent']: bone.parent = data.edit_bones[joint['parent']]
     bpy.ops.object.mode_set(mode='OBJECT')
+    if rig['id'] == 'humanoid.fabric-ybot.v1':
+        from mathutils import Matrix
+        asset = Path(__file__).resolve().parents[1]/'rigs/fabric-ybot-v1'
+        expected = json.loads((asset/'profile.json').read_text())
+        if {k:v for k,v in rig.items() if k != 'revision'} != expected:
+            raise ValueError('Fabric mannequin revision does not match its mesh')
+        before = set(bpy.data.objects)
+        bpy.ops.import_scene.gltf(filepath=str(asset/'mannequin.glb'))
+        added = set(bpy.data.objects)-before
+        imported = next(o for o in added if o.type == 'ARMATURE')
+        imported.data.pose_position='REST';bpy.context.view_layer.update()
+        axis = Matrix(((1,0,0,0),(0,0,1,0),(0,-1,0,0),(0,0,0,1)))
+        meshes = [o for o in added if o.type=='MESH' and any(m.type=='ARMATURE' and m.object==imported for m in o.modifiers)]
+        if len(meshes)!=2: raise ValueError('Fabric mannequin lost a mesh part')
+        for mesh in meshes:
+            transform = axis @ mesh.matrix_world
+            for vertex in mesh.data.vertices: vertex.co = transform @ vertex.co
+            mesh.parent=None;mesh.matrix_world=Matrix.Identity(4)
+            mesh.modifiers.clear();mesh.modifiers.new('Skin','ARMATURE').object=arm;mesh.parent=arm
+        for obj in added:
+            if obj not in meshes: bpy.data.objects.remove(obj,do_unlink=True)
+        return arm
     material = bpy.data.materials.new('Mannequin')
     material.diffuse_color = (.35, .65, .8, 1)
     for joint in rig['joints']:
@@ -370,11 +392,26 @@ def validate(directory, recipe, rig):
     arm = next((o for o in bpy.context.scene.objects if o.type == 'ARMATURE'), None)
     export_error = 0
     bone_error = 0
+    knee_plane_error = 0
+    crossed_feet = 0
     if arm is None: failures.append('Export has no skeleton')
     else:
         for index, frame in enumerate(frames):
             bpy.context.scene.frame_set(index)
             expected = world_positions(frame, rig)
+            if recipe.get('retargetRevision') == 'g1-humanoid-1.2.0':
+                actual_points = {}
+                for name in ('Hips','LeftLeg','RightLeg','LeftShin','RightShin','LeftFoot','RightFoot'):
+                    point = arm.matrix_world @ arm.pose.bones[name].head
+                    actual_points[name] = Vector((point.x,point.z,-point.y))
+                pelvis = quat(frame['rotations'][0])
+                forward = pelvis @ Vector((0,0,1))
+                for side in ('Left','Right'):
+                    hip,knee,foot = (actual_points[side+n] for n in ('Leg','Shin','Foot'))
+                    normal = (foot-hip).cross(forward)
+                    if normal.length>.001: knee_plane_error=max(knee_plane_error,abs((knee-hip).dot(normal.normalized())))
+                gap = (pelvis.inverted() @ (actual_points['LeftFoot']-actual_points['RightFoot'])).x
+                crossed_feet=max(crossed_feet,max(0,-gap))
             for joint in rig['joints']:
                 bone = arm.pose.bones.get(joint['id'])
                 if bone is None: failures.append('Export lost a joint'); continue
@@ -391,7 +428,10 @@ def validate(directory, recipe, rig):
         milestone_error += export_error
         if milestone_error > .12: failures.append('Exported replacement misses approved milestone pose')
     if bone_error > thresholds['maxBoneLengthError']: failures.append('Broken bone lengths')
-    save(directory, 'validate.json', {'policy': PROCESSING_VERSION, 'accepted': not failures, 'failures': sorted(set(failures)), 'metrics': {'maxMilestoneError': milestone_error, 'maxCorrection': processed['maxCorrection'], 'maxContactError': contact_error, 'maxBoneLengthError': bone_error, 'maxSeamAngle': angle, 'maxSeamVelocity': velocity, 'maxExportError': export_error, 'maxRootSpeed': root_speed, 'leftStanceCoverage': coverage['left_foot'], 'rightStanceCoverage': coverage['right_foot']}})
+    if recipe.get('retargetRevision') == 'g1-humanoid-1.2.0':
+        if knee_plane_error>.025: failures.append('Exported knee leaves the human bend plane')
+        if crossed_feet>.005: failures.append('Exported locomotion crosses its feet')
+    save(directory, 'validate.json', {'policy': PROCESSING_VERSION, 'accepted': not failures, 'failures': sorted(set(failures)), 'metrics': {'maxMilestoneError': milestone_error, 'maxCorrection': processed['maxCorrection'], 'maxContactError': contact_error, 'maxBoneLengthError': bone_error, 'maxSeamAngle': angle, 'maxSeamVelocity': velocity, 'maxExportError': export_error, 'maxRootSpeed': root_speed, 'leftStanceCoverage': coverage['left_foot'], 'rightStanceCoverage': coverage['right_foot'], **({'maxKneePlaneError':knee_plane_error,'maxFootCrossing':crossed_feet} if recipe.get('retargetRevision')=='g1-humanoid-1.2.0' else {})}})
 
 
 if __name__ == '__main__':

@@ -12,7 +12,7 @@ import { sourceMotionSchema } from '../src/domain/game/v3/animationTransport.ts'
 const directory=mkdtempSync(join(tmpdir(),'graphcore-g1-bake-'))
 const blender=process.env.GAME_BLENDER_BINARY??'C:/Program Files/Blender Foundation/Blender 5.0/blender.exe'
 try {
- const rig=await somaMannequin(),recipe=motionbricksRecipe(animationRecipeProfile('idle',rig.revision))
+ const rig=await somaMannequin(),recipe={...motionbricksRecipe(animationRecipeProfile('idle',rig.revision)),retargetRevision:'g1-soma-1.1.0'}
  const floor=-Math.min(...g1Skeleton.map(j=>j.rest[1]))
  const source=sourceMotionSchema.parse({version:2,model:recipe.model,modelRevision:recipe.provenance.modelRevision,provenance:recipe.provenance,space:'g1',fps:30,seed:42,joints:g1Skeleton,restRotations:g1Skeleton.map(()=>[0,0,0,1]),frames:Array.from({length:120},(_,i)=>{
   const angle=Math.sin(i/119*Math.PI*2)*.03

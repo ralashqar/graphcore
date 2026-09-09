@@ -1,7 +1,13 @@
 import { rigProfileSchema } from './animation.ts'
 import { hashGameValue } from '../compiler.ts'
 import { somaSkeleton } from './somaSkeleton.ts'
+import { fabricYbotProfile } from './fabricYbotProfile.ts'
 export const SOMA_RIG = 'humanoid.soma.v2'
+export const FABRIC_RIG = 'humanoid.fabric-ybot.v1'
+export const isCanonicalHumanoid = (id: string | undefined) => id === SOMA_RIG || id === FABRIC_RIG
+export async function fabricMannequin() {
+  return rigProfileSchema.parse({...fabricYbotProfile,revision:await hashGameValue(fabricYbotProfile)})
+}
 export async function somaMannequin() {
   const floor = Math.min(...somaSkeleton.joints.map(j => j.rest[1]))
   const profile = {

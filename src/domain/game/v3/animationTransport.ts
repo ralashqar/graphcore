@@ -1,3 +1,4 @@
+import { fabricYbotProfile } from './fabricYbotProfile.ts'
 import { z } from 'zod'
 import { KIMODO_MODEL, motionRecipeSchema, motionbricksProvenanceSchema } from './animation.ts'
 import { MOTIONBRICKS_MODEL, motionbricksRelease } from './motionbricksRelease.ts'
@@ -22,12 +23,14 @@ const motionFields = {
 export const sourceMotionSchema = z.discriminatedUnion('version', [
   z.object({ ...motionFields, version: z.literal(1), model: z.literal(KIMODO_MODEL), modelRevision: z.literal(kimodoRelease.model) }).strict(),
   z.object({ ...motionFields, version: z.literal(2), model: z.literal(MOTIONBRICKS_MODEL), modelRevision: z.literal(motionbricksRelease.model),
-    provenance: motionbricksProvenanceSchema, space: z.enum(['g1', 'soma']), restRotations: z.array(quaternion).min(15).max(100),
+    provenance: motionbricksProvenanceSchema, space: z.enum(['g1', 'soma', 'fabric_ybot']), restRotations: z.array(quaternion).min(15).max(100),
   }).strict(),
 ]).superRefine((motion, ctx) => {
   if (motion.version === 2 && (motion.restRotations.length !== motion.joints.length || motion.joints.length !== (motion.space === 'g1' ? 34 : 77))) ctx.addIssue({ code: 'custom', message: 'MotionBricks skeleton does not match its declared space' })
   if (motion.version === 2) {
-    const expected = motion.space === 'g1' ? g1Skeleton : somaSkeleton.joints
+    const fabricRest: number[][] = []
+    const fabricJoints = fabricYbotProfile.joints.map(j=>{const parent=fabricYbotProfile.joints.findIndex(p=>p.id===j.parent);const rest=j.translation.map((v,k)=>v+(parent>=0?fabricRest[parent][k]:0));fabricRest.push(rest);return {name:j.id,parent,rest:rest.map((v,k)=>v-fabricRest[0][k])}})
+    const expected = motion.space === 'g1' ? g1Skeleton : motion.space === 'fabric_ybot' ? fabricJoints : somaSkeleton.joints
     if (motion.joints.some((j,i)=>j.name!==expected[i]?.name || j.parent!==expected[i]?.parent)) ctx.addIssue({ code:'custom', message:'MotionBricks skeleton topology mismatch' })
     if (motion.joints.some((j,i)=>j.rest.some((v,k)=>Math.abs(v-(expected[i]?.rest[k]??Infinity))>1e-5))) ctx.addIssue({ code:'custom', message:'MotionBricks rest proportions differ from the pinned skeleton' })
   }
