@@ -1,6 +1,7 @@
 import { MOTION_PROFILE } from './motionPresentation.ts'
 import { type ActionPackage, actionRecipe } from './actionMechanics.ts'
 import { z } from 'zod'
+import { performanceSchema, type Performance } from './performance.ts'
 import {
   type MechanicBundle,
   mechanicBundleSchema,
@@ -44,7 +45,15 @@ export function mergeScopedMechanics(
   packages: MechanicPackage[],
   surfaces: SurfaceProfile[],
   actions: ActionPackage[] = [],
+  performance?: Performance,
 ) {
+  if(performance?.abilities.some(a=>a.actorDefinition!==actor))throw new Error('Planner changed performance actor scope')
+  const old=current?.performance
+  const mergedPerformance=performance?performanceSchema.parse({version:1,
+    sequences:[...(old?.sequences.filter(s=>!performance.sequences.some(n=>n.id===s.id))??[]),...performance.sequences],
+    abilities:[...(old?.abilities.filter(s=>!performance.abilities.some(n=>n.id===s.id))??[]),...performance.abilities],
+    reactions:[...(old?.reactions.filter(s=>!performance.reactions.some(n=>n.id===s.id))??[]),...performance.reactions],
+  }):old
   for (const p of actions) {
     if (
       p.actorDefinition !== actor ||
@@ -75,6 +84,7 @@ export function mergeScopedMechanics(
   })
   return mechanicBundleSchema.parse({
     version: 1,
+    ...(mergedPerformance?{performance:mergedPerformance}:{}),
     motionProfile:current?.motionProfile??MOTION_PROFILE,
     ...(actions.length || current?.actions
       ? {

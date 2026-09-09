@@ -1,3 +1,4 @@
+import { presentPose } from './presentation'
 import type { PresentationFrame } from './animationRenderer'
 import { Engine } from '@babylonjs/core/Engines/engine'
 import { Scene } from '@babylonjs/core/scene'
@@ -166,7 +167,7 @@ export async function createCombatPlayer(
         'Space',
         'KeyE',
         'KeyV',
-        'KeyQ',
+        'KeyQ','KeyZ','KeyX',
         'KeyR',
         'KeyF',
         'Digit1','Digit2','Digit3','Digit4',
@@ -231,6 +232,7 @@ export async function createCombatPlayer(
           cancel: edges.has('Escape'),
           attack: edges.has('KeyF'),
           dash: edges.has('KeyQ'),
+          roll:edges.has('KeyZ'),uppercut:edges.has('KeyX'),
           ability: ['Digit1','Digit2','Digit3','Digit4'].some(k=>edges.has(k))
             ? spec.abilities.filter(id=>!id.startsWith('runtime.'))[['Digit1','Digit2','Digit3','Digit4'].findIndex(k=>edges.has(k))]
             : edges.has('KeyV')
@@ -340,11 +342,10 @@ export async function createCombatPlayer(
     }
     debugMeshes.forEach((m) => m.setEnabled(debug))
     interactionVisuals.update(sim.interactions, sim.state.tick, debug)
-    camera.target.copyFromFloats(
-      sim.player.position.x,
-      sim.player.position.y + 1,
-      sim.player.position.z,
-    )
+    const cameraPose = animated?.has(sim.player.id)
+      ? presentPose(sim.player, previousPoses.get(sim.player.id), accumulator/DT)
+      : sim.player
+    camera.target.copyFromFloats(cameraPose.position.x, cameraPose.position.y + 1, cameraPose.position.z)
     const event = sim.state.events.at(-1)
     if (event) lastEvent = event.detail
     onUpdate(
@@ -388,6 +389,7 @@ export async function createCombatPlayer(
       debug = v
     },
     metrics: () => ({
+      cameraTarget: camera.target.asArray(),
       ...animationVisuals?.metrics?.(),
       mechanics: structuredClone((sim as Simulation & { mechanicStates?: unknown }).mechanicStates ?? {}),
       fps: engine.getFps(),

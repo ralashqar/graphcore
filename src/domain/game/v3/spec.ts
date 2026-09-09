@@ -1,3 +1,4 @@
+import { PERFORMANCE_RUNTIME } from './poseSequence.ts'
 import { MOTION_RUNTIME } from './motionPresentation.ts'
 import { ACTION_RUNTIME } from './actionMechanics.ts'
 import { z } from 'zod'
@@ -153,7 +154,7 @@ export const manifestSchema = z
     draftId: z.string().uuid(),
     sourceRevision: z.number().int().nonnegative(),
     sourceHash: z.string().length(64),
-    runtimeVersion: z.enum([VERSION, ANIMATED_VERSION, MECHANIC_RUNTIME, ACTION_RUNTIME, MOTION_RUNTIME]),
+    runtimeVersion: z.enum([VERSION, ANIMATED_VERSION, MECHANIC_RUNTIME, ACTION_RUNTIME, MOTION_RUNTIME, PERFORMANCE_RUNTIME]),
     catalogVersion: z.literal(CATALOG),
     design: designSchema,
     nodeHashes: z.record(z.string(), z.string()),
@@ -163,13 +164,20 @@ export const manifestSchema = z
   .strict()
   .superRefine((manifest, ctx) => {
     const issue = (message: string) => ctx.addIssue({ code: 'custom', message })
-    if(manifest.design.mechanics&&manifest.runtimeVersion!==MECHANIC_RUNTIME&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME)issue('Mechanics require runtime gameplay-3.2.0 or newer')
-    if(manifest.design.mechanics?.actions?.length&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME)issue('Action mechanics require runtime gameplay-3.3.0')
-    if(manifest.design.mechanics?.motionProfile && manifest.runtimeVersion!==MOTION_RUNTIME)issue('Motion profile requires runtime gameplay-3.4.0')
+    if(manifest.design.mechanics&&manifest.runtimeVersion!==MECHANIC_RUNTIME&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Mechanics require runtime gameplay-3.2.0 or newer')
+    if(manifest.design.mechanics?.actions?.length&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Action mechanics require runtime gameplay-3.3.0')
+    if(manifest.design.mechanics?.motionProfile && manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Motion profile requires runtime gameplay-3.4.0 or newer')
+    if(manifest.design.mechanics?.performance&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Pose programs require runtime gameplay-3.5.0')
     if (manifest.runtimeVersion === VERSION && (manifest.animations || manifest.assets.length)) issue('Animations require runtime gameplay-3.1.0')
     if (!manifest.animations) {
       if (manifest.assets.length) issue('Animation assets require graph metadata')
       return
+    }
+    for(const graph of manifest.animations.graphs)for(const binding of graph.bindings){
+      const clip=manifest.assets.find(c=>c.id===binding.clipRevision)
+      if(!clip?.motionContract)continue
+      const sequence=manifest.design.mechanics?.performance?.sequences.find(s=>s.role===binding.state)
+      if(!sequence||clip.motionContract!==manifest.nodeHashes[`motion.${sequence.id}`]||Math.abs(clip.duration-sequence.duration)>1/30+.001||clip.validation.metrics.maxMilestoneError===undefined||clip.validation.metrics.maxMilestoneError>.12)issue('Animation replacement does not match approved pose program')
     }
     const rigs = new Set(manifest.animations.rigs.map(rig => rig.revision))
     const actors = new Set(manifest.design.nodes.filter(node => node.kind === 'actor_definition').map(node => node.id))
@@ -177,6 +185,7 @@ export const manifestSchema = z
     if (new Set(manifest.assets.map(clip => clip.id)).size !== manifest.assets.length || new Set(manifest.assets.map(clip => clip.recipeKey)).size !== manifest.assets.length) issue('Duplicate animation asset')
     if (new Set(manifest.animations.graphs.map(graph => graph.actorDefinition)).size !== manifest.animations.graphs.length) issue('Duplicate actor animation graph')
     for (const graph of manifest.animations.graphs) {
+      if(manifest.design.mechanics?.performance&&manifest.animations.rigs.find(r=>r.revision===graph.rigRevision)?.id!=='humanoid.soma.v2')issue('Pose programs require the SOMA mannequin rig')
       if (!actors.has(graph.actorDefinition)) issue('Animation graph references a missing actor definition')
       if (!rigs.has(graph.rigRevision)) issue('Animation graph references a missing rig')
       validateAnimationBindings(graph, manifest.assets).forEach(issue)

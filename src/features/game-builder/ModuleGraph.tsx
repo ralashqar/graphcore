@@ -160,9 +160,9 @@ export function ModuleGraph({
       style: {
         width: 190,
         padding: 15,
-        background: r.id === selected.id ? '#3c5748' : '#25382f',
-        color: '#edf3ec',
-        border: '1px solid #607363',
+        background: r.id === selected.id ? 'var(--brand-active, #172c4e)' : 'var(--brand-panel-strong, #0a1220)',
+        color: 'var(--text, #f7fbff)',
+        border: '1px solid var(--line-bright, #294264)',
         whiteSpace: 'pre-line',
         borderRadius: 6,
       },
@@ -172,7 +172,7 @@ export function ModuleGraph({
     ...e,
     id: `edge${i}`,
     markerEnd: { type: MarkerType.ArrowClosed },
-    style: { stroke: '#91aa9a' },
+    style: { stroke: 'var(--game-muted, #9aa8bd)' },
     labelStyle: { fill: '#aebfb0', fontSize: 10 },
   }))
   return (

@@ -31,7 +31,7 @@ export async function step<T>(
 ): Promise<T> {
   const planner = id === 'scope' || id.startsWith('plan.') || id === 'mechanic.capabilities'
   const hash = await hashGameValue({
-        implementation: ctx.job.input.design?.mechanics?.motionProfile ? 'gameplay-3.4.0' : ctx.job.input.mechanicRequest || ctx.job.input.design?.mechanics ? (ctx.job.input.context?.actionCatalog || ctx.job.input.design?.mechanics?.actions?.length ? 'gameplay-3.3.0' : 'gameplay-3.2.0') : ctx.job.input.template === 'unified.v1' ? 'gameplay-3.0.0' : IMPLEMENTATION,
+        implementation: ctx.job.input.context?.performanceCatalog || ctx.job.input.design?.mechanics?.performance ? 'gameplay-3.5.2' : ctx.job.input.design?.mechanics?.motionProfile ? 'gameplay-3.4.0' : ctx.job.input.mechanicRequest || ctx.job.input.design?.mechanics ? (ctx.job.input.context?.actionCatalog || ctx.job.input.design?.mechanics?.actions?.length ? 'gameplay-3.3.0' : 'gameplay-3.2.0') : ctx.job.input.template === 'unified.v1' ? 'gameplay-3.0.0' : IMPLEMENTATION,
       input,
       ...(planner
         ? {

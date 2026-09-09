@@ -25,9 +25,20 @@ Deno.serve(async request => {
         if (signed.error) throw signed.error
         urls[candidate.id] = signed.data.signedUrl
       }
+      const artifactUrls: Record<string, Record<string, string>> = {}
+      for (const candidate of candidates.data ?? []) {
+        const base = `generated/game/${input.draftId}/${candidate.job_id}/`
+        const paths = { source: candidate.source_path, native: candidate.diagnostics?.motionbricksArtifacts?.native_export?.path,
+          convertedSource: candidate.diagnostics?.motionbricksArtifacts?.source_convert?.path, preview: candidate.diagnostics?.previewPath }
+        for (const [label, path] of Object.entries(paths)) if (typeof path === 'string' && path.startsWith(base) && !path.includes('..')) {
+          const signed = await admin.storage.from('project-assets').createSignedUrl(path, 3600)
+          if (signed.error) throw signed.error
+          artifactUrls[candidate.id] = { ...artifactUrls[candidate.id], [label]: signed.data.signedUrl }
+        }
+      }
       const workspace=await client.from('game_workspaces').select('design').eq('draft_id',input.draftId).single()
       if(workspace.error)throw workspace.error
-      return json({ rig: await (workspace.data.design?.mechanics?.motionProfile?somaMannequin():humanoidMannequin()), recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, reviews: reviews.data, jobs: jobs.data, urls, urlsExpireAt: Date.now()+3500000, enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
+      return json({ rig: await (workspace.data.design?.mechanics?.motionProfile?somaMannequin():humanoidMannequin()), motionbricks: { enabled: Deno.env.get('GAME_MOTIONBRICKS_ENABLED')==='true' && Deno.env.get('GAME_MOTIONBRICKS_CLIPS_ENABLED')==='true', reservationCents: Number(Deno.env.get('GAME_MOTIONBRICKS_RESERVATION_CENTS')??'100'), rig: await somaMannequin() }, artifactUrls, recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, reviews: reviews.data, jobs: jobs.data, urls, urlsExpireAt: Date.now()+3500000, performanceEnabled:Deno.env.get('GAME_PERFORMANCE_ANIMATION_ENABLED')==='true', enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
     }
     if (input.jobId) {
       let query = client.from('game_job_steps').select('node_id,input_hash,status,attempt,output,diagnostic,dependencies,updated_at').eq('draft_id', input.draftId).eq('job_id', input.jobId)
@@ -36,7 +47,13 @@ Deno.serve(async request => {
       if (result.error) throw result.error
       const job=await client.from('game_jobs').select('checkpoint').eq('draft_id',input.draftId).eq('id',input.jobId).single()
       if(job.error)throw job.error
-      return json({ steps: result.data, plan:job.data.checkpoint?.plan??null, animationProposals:job.data.checkpoint?.animationProposals??[] })
+      const admin=createAdminClient('get-game-workspace')
+      const artifacts=await Promise.all((result.data??[]).filter(s=>s.node_id.startsWith('animation.')&&typeof s.output?.path==='string'&&s.output.path.startsWith(`generated/game/${input.draftId}/${input.jobId}/`)&&!s.output.path.includes('..')).map(async s=>{
+        const signed=await admin.storage.from('project-assets').createSignedUrl(s.output.path,3600)
+        if(signed.error)throw signed.error
+        return{nodeId:s.node_id,url:signed.data.signedUrl,preview:s.output.preview??null}
+      }))
+      return json({ steps: result.data, artifacts, plan:job.data.checkpoint?.plan??null, animationProposals:job.data.checkpoint?.animationProposals??[] })
     }
     if (input.buildId) {
       const build = await client.from('game_builds').select('manifest,status').eq('id', input.buildId).eq('draft_id', input.draftId).single()

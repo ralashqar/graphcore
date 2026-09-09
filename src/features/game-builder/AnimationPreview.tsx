@@ -10,7 +10,8 @@ import '@babylonjs/loaders/glTF'
 import type { ClipRevision } from '../../domain/game/v3/animation'
 import type { AnimationGroup } from '@babylonjs/core/Animations/animationGroup'
 
-export function AnimationPreview({ url, clip }: { url: string; clip: ClipRevision }) {
+export type AnimationPreviewClip = Pick<ClipRevision, 'id' | 'glbHash' | 'state' | 'duration' | 'naturalSpeed' | 'rootCurve' | 'contacts'>
+export function AnimationPreview({ url, clip, followRoot = false }: { url: string; clip: AnimationPreviewClip; followRoot?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null), [error, setError] = useState('')
   const groups = useRef<AnimationGroup[]>([])
   const source=useRef({url,clip});source.current={url,clip}
@@ -28,6 +29,12 @@ export function AnimationPreview({ url, clip }: { url: string; clip: ClipRevisio
     void LoadAssetContainerAsync(url, scene, { pluginExtension: '.glb' }).then(container => {
       if (disposed) { container.dispose(); return }
       container.addAllToScene()
+      if (followRoot) {
+        // Native trajectories can travel outside the mesh's bind-pose bounds.
+        container.meshes.forEach(mesh => { mesh.alwaysSelectAsActiveMesh = true })
+        const root = container.transformNodes.find(node => node.name === 'pelvis_skel')
+        if (root) scene.onBeforeRenderObservable.add(() => camera.target.copyFrom(root.getAbsolutePosition()))
+      }
       groups.current=container.animationGroups
       setPlaying(true);setSpeed(1);setPosition(0)
       container.animationGroups.forEach(group => group.start(true))
@@ -41,7 +48,7 @@ export function AnimationPreview({ url, clip }: { url: string; clip: ClipRevisio
     engine.runRenderLoop(() => scene.render())
     const resize = new ResizeObserver(() => engine.resize()); resize.observe(canvas.current!)
     return () => { disposed = true; groups.current=[];overlayMeshes.current=[];resize.disconnect(); scene.dispose(); engine.dispose() }
-  }, [clip.id, clip.glbHash, retry])
+  }, [clip.id, clip.glbHash, retry, followRoot])
   return <div><canvas ref={canvas} style={{ width: '100%', height: 300 }} aria-label={`Repeated ${clip.state} animation preview`} />
     <p>Drag to orbit · Scroll to zoom · {clip.duration.toFixed(2)}s · {clip.naturalSpeed.toFixed(2)} m/s</p>
     <button onClick={()=>{groups.current.forEach(g=>playing?g.pause():g.play(true));setPlaying(!playing)}}>{playing?'Pause':'Play'}</button>

@@ -1,3 +1,5 @@
+import {performanceRecipe} from '../src/domain/game/v3/performance.ts'
+import {mergeScopedMechanics} from '../src/domain/game/v3/mechanicCommands.ts'
 import { actionRecipe, ACTION_CATALOG } from '../src/domain/game/v3/actionMechanics.ts'
 // Hosted acceptance against the explicitly marked game fixture. No GPU calls.
 import { readFileSync,writeFileSync,mkdirSync,existsSync } from 'node:fs'
@@ -8,7 +10,7 @@ import { createClient } from '@supabase/supabase-js'
 import { mechanicProposalSchema } from '../src/domain/game/v3/mechanicCommands.ts'
 import { mechanicRecipe } from '../src/domain/game/v3/mechanics.ts'
 const mode=process.argv[2]??'status'
-if(!['bootstrap','plan','accept','install-tested','install-actions','install-motion','build','status','publish'].includes(mode))throw Error('Unknown fixture operation')
+if(!['bootstrap','plan','accept','install-tested','install-actions','install-motion','install-performance','build','status','publish'].includes(mode))throw Error('Unknown fixture operation')
 const fixture=JSON.parse(readFileSync('output/game-unified-live-courier/fixture.json','utf8'))
 const fly=process.platform==='win32'?join(homedir(),'.fly','bin','fly.exe'):'fly'
 const machines=spawnSync(fly,['machine','list','-a','graphcore-game','--json'],{encoding:'utf8'})
@@ -35,6 +37,13 @@ if(mode==='bootstrap'){
  const d=structuredClone(w.design),actor=d.nodes.find(n=>n.id===d.player).definition
  d.mechanics={version:1,packages:['wall_run','wall_slide','wall_jump'].map(c=>mechanicRecipe(c,actor)),surfaces:[{id:'surface.mechanic.wall',collider:'mechanic.wall',face:'x-',capabilities:['wall_run','wall_slide','wall_jump']}]}
  console.log(JSON.stringify(unwrap(await admin.rpc('game_commit_command',{p_actor:fixture.actor,p_command:{...common,template:'unified.v1',action:'save',design:d}}))))
+}else if(mode==='install-performance'){
+ const d=structuredClone(w.design),actor=d.nodes.find(n=>n.id===d.player).definition
+ const receivers=d.nodes.filter(n=>n.kind==='actor_definition'&&n.team==='hostile').map(n=>n.id)
+ d.mechanics=mergeScopedMechanics(d.mechanics,actor,[],[],[],performanceRecipe('roll',actor))
+ d.mechanics=mergeScopedMechanics(d.mechanics,actor,[],[],[],performanceRecipe('uppercut',actor,receivers))
+ if(JSON.stringify(d)===JSON.stringify(w.design))console.log('Performance fixtures already installed')
+ else console.log(JSON.stringify(unwrap(await admin.rpc('game_commit_command',{p_actor:fixture.actor,p_command:{...common,template:'unified.v1',action:'save',design:d}}))))
 }else if(mode==='install-motion'){
  const d=structuredClone(w.design);if(!d.mechanics)throw Error('Install fixture mechanics first')
  d.mechanics.motionProfile='motion-1.0.0'

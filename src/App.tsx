@@ -8956,7 +8956,7 @@ export default function App() {
           />
         ) : null}
 
-        <section className="workspace-stage">
+        <section className={`workspace-stage${appRoute === 'game' ? ' is-game-workspace' : ''}`}>
           <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing workspace…</h3></div>}>
             {appRoute === 'game' ? (import.meta.env.VITE_GAME_BUILDER_ENABLED === 'true' ? <GameWorkspace key={snapshot.draft.id} snapshot={snapshot} canRun={loadedState?.source === 'supabase'} onOpenWorld={() => { setWorldViewMode('wiki'); setActiveTab('graph'); navigateToPath(APP_ROUTE_PATH) }} /> : <div className="detail-stack"><h3>Game workspace is not enabled.</h3><button onClick={() => navigateToPath(APP_ROUTE_PATH)}>Back to world</button></div>) : null}
             {appRoute === 'vibe' ? (

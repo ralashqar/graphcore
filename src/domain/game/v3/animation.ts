@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MOTIONBRICKS_MODEL, motionbricksRelease } from './motionbricksRelease.ts'
 
 export const ANIMATION_VERSION = 'animation-1.1.0'
 export const KIMODO_MODEL = 'Kimodo-SOMA-RP-v1.1'
@@ -7,7 +8,7 @@ const finite = z.number().finite()
 const vec = z.tuple([finite, finite, finite])
 const rotation = z.tuple([finite, finite, finite, finite]).refine(q => Math.abs(Math.hypot(...q) - 1) < 0.001, 'Quaternion must be normalized')
 const hash = z.string().regex(/^[a-f0-9]{64}$/)
-export const animationStates = ['idle', 'walk', 'run', 'backward', 'strafe_left', 'strafe_right', 'takeoff', 'airborne', 'landing', 'roll', 'catch', 'hang', 'shimmy_left', 'shimmy_right', 'climb'] as const
+export const animationStates = ['idle', 'walk', 'run', 'backward', 'strafe_left', 'strafe_right', 'takeoff', 'airborne', 'landing', 'roll', 'catch', 'hang', 'shimmy_left', 'shimmy_right', 'climb','uppercut','recoil','fall_back','prone','get_up'] as const
 export const animationStateSchema = z.enum(animationStates)
 export const animationStages = ['constraints', 'inference', 'retarget', 'process', 'export', 'validate', 'register'] as const
 export const rigProfileSchema = z.object({
@@ -27,9 +28,10 @@ export const rigProfileSchema = z.object({
   for (const socket of Object.values(rig.sockets)) if (!seen.has(socket.joint)) ctx.addIssue({ code: 'custom', message: `Unknown socket joint ${socket.joint}` })
 })
 const contactSchema = z.object({ effector: z.enum(['left_hand', 'right_hand', 'left_foot', 'right_foot']), start: finite.nonnegative(), end: finite.nonnegative(), position: vec, rotation: rotation.optional() }).strict()
-export const motionRecipeSchema = z.object({
-  version: z.literal(1), id, state: animationStateSchema,
-  rigRevision: hash, model: z.literal(KIMODO_MODEL), prompt: z.string().min(10).max(1500),
+const recipeFields = {
+  id, state: animationStateSchema,
+  motionContract: hash.optional(),
+  rigRevision: hash, prompt: z.string().min(10).max(1500),
   duration: finite.min(0.5).max(8), candidates: z.number().int().min(1).max(3), seed: z.number().int().min(0).max(2147483647),
   loop: z.boolean(), targetSpeed: finite.min(0).max(12),
   rootMode: z.enum(['in_place', 'controller_curve', 'anchor_relative']),
@@ -37,7 +39,27 @@ export const motionRecipeSchema = z.object({
   poses: z.array(z.object({ time: finite.nonnegative(), joints: z.record(id, vec) }).strict()).max(16),
   path: z.array(z.object({ time: finite.nonnegative(), x: finite, z: finite }).strict()).max(241),
   thresholds: z.object({ version: z.literal(1), maxContactError: finite.positive().max(0.05), maxBoneLengthError: finite.positive().max(0.01), maxSeamAngle: finite.positive().max(0.15), maxSeamVelocity: finite.positive().max(0.3), maxCorrection: finite.positive().max(0.15) }).strict(),
-}).strict().superRefine((recipe, ctx) => {
+}
+export const motionbricksProvenanceSchema = z.object({
+  provider: z.literal('motionbricks'), modelRevision: z.literal(motionbricksRelease.model),
+  sourceRevision: z.literal(motionbricksRelease.source), skeleton: z.literal('g1skel34'),
+  adapter: z.literal(motionbricksRelease.adapter), validation: z.literal(ANIMATION_VERSION),
+}).strict()
+export const motionRecipeSchema = z.discriminatedUnion('version', [
+  z.object({ ...recipeFields, version: z.literal(1), model: z.literal(KIMODO_MODEL) }).strict(),
+  z.object({ ...recipeFields, version: z.literal(2), model: z.literal(MOTIONBRICKS_MODEL),
+    provider: z.literal('motionbricks'), purpose: z.enum(['clip', 'diagnostic']),
+    retargetRevision: z.literal('g1-soma-1.1.0').optional(),
+    provenance: motionbricksProvenanceSchema, primitive: z.enum(['idle', 'walk', 'idle_walk_turn_stop']),
+  }).strict(),
+]).superRefine((recipe, ctx) => {
+  if (recipe.version === 2) {
+    if (recipe.candidates !== 1) ctx.addIssue({ code: 'custom', message: 'MotionBricks admits one candidate per experiment' })
+    if (recipe.contacts.length || recipe.poses.length || recipe.path.length || recipe.motionContract) ctx.addIssue({ code: 'custom', message: 'G1 adapter does not yet support contact, pose, path or ability constraints; they cannot be silently omitted' })
+    if (recipe.rootMode !== 'in_place') ctx.addIssue({ code: 'custom', message: 'G1 clips require controller-owned movement' })
+    if (recipe.purpose === 'clip' && (!['idle', 'walk'].includes(recipe.state) || recipe.primitive !== recipe.state || !recipe.loop)) ctx.addIssue({ code: 'custom', message: 'Only looping idle and forward walk are eligible for MotionBricks binding' })
+    if (recipe.purpose === 'diagnostic' && (recipe.primitive !== 'idle_walk_turn_stop' || recipe.loop || recipe.state !== 'idle')) ctx.addIssue({ code: 'custom', message: 'Diagnostic sequences cannot represent a bindable animation state' })
+  }
   for (const c of recipe.contacts) if (c.start > c.end || c.end > recipe.duration) ctx.addIssue({ code: 'custom', message: 'Contact lies outside motion duration' })
   for (const p of [...recipe.poses, ...recipe.path]) if (p.time > recipe.duration) ctx.addIssue({ code: 'custom', message: 'Constraint lies outside motion duration' })
   if (recipe.path.some((p, i) => i > 0 && p.time <= recipe.path[i - 1].time)) ctx.addIssue({ code: 'custom', message: 'Path times must strictly increase' })
@@ -50,6 +72,9 @@ export const motionRecipeSchema = z.object({
 export type MotionRecipe = z.infer<typeof motionRecipeSchema>
 export const clipRevisionSchema = z.object({
   version: z.literal(1), id: z.string().uuid(), recipeHash: hash, rigRevision: hash, sourceHash: hash, glbHash: hash,
+  motionContract: hash.optional(),
+  provenance: motionbricksProvenanceSchema.optional(),
+  retargetRevision: z.literal('g1-soma-1.1.0').optional(),
   storagePath: z.string().min(1).max(500).refine(p => !p.includes('..') && !p.includes('://') && !p.startsWith('/')),
   state: animationStateSchema, duration: finite.positive().max(8), fps: z.literal(30), loop: z.boolean(), naturalSpeed: finite.nonnegative(),
   rootMode: z.enum(['in_place', 'controller_curve', 'anchor_relative']),
@@ -57,6 +82,8 @@ export const clipRevisionSchema = z.object({
   contacts: z.array(contactSchema).max(32),
   validation: z.object({ policy: z.enum(['animation-1.0.0', ANIMATION_VERSION]), accepted: z.literal(true), metrics: z.record(z.string(), finite.nonnegative()) }).strict(),
 }).strict().superRefine((clip, ctx) => {
+  if (clip.retargetRevision && !clip.provenance) ctx.addIssue({ code: 'custom', message: 'Retarget revision requires MotionBricks provenance' })
+  if (clip.provenance && (!['idle', 'walk'].includes(clip.state) || !clip.loop || clip.motionContract)) ctx.addIssue({ code: 'custom', message: 'Unsupported MotionBricks clip binding' })
   if (clip.rootCurve.some((p, i) => p.time > clip.duration || (i > 0 && p.time <= clip.rootCurve[i - 1].time))) ctx.addIssue({ code: 'custom', message: 'Invalid root curve times' })
   if (clip.contacts.some(c => c.start > c.end || c.end > clip.duration)) ctx.addIssue({ code: 'custom', message: 'Invalid clip contact times' })
 })

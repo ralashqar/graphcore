@@ -1,5 +1,6 @@
 import { motionRecipeSchema, rigProfileSchema, clipRevisionSchema, ANIMATION_VERSION } from '../../src/domain/game/v3/animation.ts'
-import { kimodoRelease, sourceMotionSchema, RunpodTransport, validateKimodoConstraints } from '../../src/domain/game/v3/animationTransport.ts'
+import { sourceMotionSchema, RunpodTransport } from '../../src/domain/game/v3/animationTransport.ts'
+import { animationProvider, validateProviderRecipe, providerRequest, decodeProviderMotion } from '../../src/domain/game/v3/animationProviders.ts'
 import { bytesHash, runTool } from './io.ts'
 import { step } from './modules.ts'
 import { hashGameValue } from '../../src/domain/game/compiler.ts'
@@ -29,10 +30,11 @@ export async function cancelAnimationJobs(admin: JobContext['admin']) {
 export async function produceAnimation(ctx: JobContext) {
   const { job, admin } = ctx, input = job.input.animation
   const recipe = motionRecipeSchema.parse(input.recipe), rig = rigProfileSchema.parse(input.rig)
-  const frozen = { recipe, rig, modelRevision: kimodoRelease.model, processingVersion: ANIMATION_VERSION, jobId: job.id }
+  const adapter = animationProvider(recipe)
+  const frozen = { recipe, rig, modelRevision: adapter.release.model, processingVersion: ANIMATION_VERSION, jobId: job.id }
   await step(ctx, 'animation.constraints', frozen, async () => {
-    validateKimodoConstraints(recipe)
-    if (recipe.rigRevision !== rig.revision || input.provider.modelRevision !== kimodoRelease.model || input.provider.processingVersion !== ANIMATION_VERSION) throw new Error('Animation snapshot is incompatible; resume with its frozen processing version')
+    validateProviderRecipe(recipe)
+    if (recipe.rigRevision !== rig.revision || input.provider.modelRevision !== adapter.release.model || input.provider.processingVersion !== ANIMATION_VERSION) throw new Error('Animation snapshot is incompatible; resume with its frozen processing version')
     return { recipeHash: await hashGameValue(recipe) }
   })
   const base = `generated/game/${job.draft_id}/${job.id}`
@@ -55,7 +57,7 @@ export async function produceAnimation(ctx: JobContext) {
       await ctx.checkpoint('animation.inference', { ...job.checkpoint, pendingProvider: true })
       const intent = await admin.rpc('game_animation_update_setup', { p_id: job.id, p_status: 'uncertain' })
       if (intent.error) throw intent.error
-      const id = await transport.submit(input.provider.run, { version: 1, recipe, modelRevision: kimodoRelease.model })
+      const id = await transport.submit(input.provider.run, providerRequest(recipe))
       await ctx.checkpoint('animation.inference', { ...job.checkpoint, pendingProvider: false, animationRequestId: id, animationDeadline: Date.now() + 900000 })
       const ledger = await admin.rpc('game_animation_update_setup', { p_id: job.id, p_status: 'submitted', p_request_id: id })
       if (ledger.error) throw ledger.error
@@ -68,8 +70,7 @@ export async function produceAnimation(ctx: JobContext) {
         if (!Array.isArray(candidates) || candidates.length !== recipe.candidates) throw new Error('Invalid animation candidate count')
         const paths: string[] = []
         for (const [index, candidate] of candidates.entries()) {
-          const source = sourceMotionSchema.parse(candidate)
-          if (source.frames.length !== Math.round(recipe.duration * 30)) throw new Error('Motion duration mismatch')
+          const source = decodeProviderMotion(recipe, candidate)
           paths.push(await upload(`${base}/source-${index}.json`, new TextEncoder().encode(JSON.stringify(source)), 'application/json'))
         }
         await ctx.checkpoint('animation.inference', { ...job.checkpoint, animationSources: paths, providerExecutionMs: response.executionTime ?? null })
@@ -91,12 +92,40 @@ export async function produceAnimation(ctx: JobContext) {
     try {
       const sourceBytes = new Uint8Array(await source.data.arrayBuffer())
       if (input.import && await bytesHash(sourceBytes) !== input.import.sourceHash) throw new Error('Imported source hash mismatch')
-      sourceMotionSchema.parse(JSON.parse(new TextDecoder().decode(sourceBytes)))
+      const originalMotion = sourceMotionSchema.parse(JSON.parse(new TextDecoder().decode(sourceBytes)))
       await Deno.writeFile(`${directory}/source.json`, sourceBytes)
       await Deno.writeTextFile(`${directory}/recipe.json`, JSON.stringify(recipe))
       await Deno.writeTextFile(`${directory}/rig.json`, JSON.stringify(rig))
+      let motionbricksArtifacts: Record<string, unknown> | undefined
+      if (recipe.version === 2) {
+        for (const stage of ['native_export', 'source_convert']) {
+          const artifact = await step(ctx, `animation.${stage}.${index}`, { ...frozen, sourcePath }, async () => {
+              const script = stage === 'source_convert' && recipe.retargetRevision === 'g1-soma-1.1.0'
+                ? 'workers/game/motionbricks/bake_adapter_v1_1.py' : 'workers/game/motionbricks/bake_adapter.py'
+              await runTool(Deno.env.get('GAME_BLENDER_BINARY') ?? 'blender', ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', script, '--', directory, stage], 180000)
+            const file = stage === 'native_export' ? 'native.glb' : 'converted-source.json'
+            const bytes = await Deno.readFile(`${directory}/${file}`)
+            const path = await upload(`${base}/${index}/${file}`, bytes, stage === 'native_export' ? 'model/gltf-binary' : 'application/json')
+            const diagnostics = stage === 'source_convert' ? JSON.parse(await Deno.readTextFile(`${directory}/adapter.json`)) : null
+            const hash = await bytesHash(bytes)
+            const preview = stage === 'native_export' ? { id: `${job.id}.native.${index}`, glbHash: hash, state: recipe.state,
+              duration: (originalMotion.frames.length - 1)/30, naturalSpeed: 0,
+              rootCurve: originalMotion.frames.map((f,i)=>({time:i/30,position:f.root})), contacts: [] } : undefined
+            return { path, file, hash, diagnostics, ...(preview ? { preview } : {}) }
+          }, ['animation.inference'])
+          motionbricksArtifacts = { ...motionbricksArtifacts, [stage]: artifact }
+          if (stage === 'source_convert') {
+            const stored = await admin.storage.from('project-assets').download(artifact.path)
+            if (stored.error) throw new Error('Converted motion checkpoint is missing')
+            const bytes = new Uint8Array(await stored.data.arrayBuffer())
+            const converted = sourceMotionSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))
+            if (converted.version !== 2 || converted.space !== 'soma') throw new Error('Invalid SOMA conversion checkpoint')
+            await Deno.writeFile(`${directory}/source.json`, bytes)
+          }
+        }
+      }
       for (const [stageIndex, stage] of ['retarget', 'process', 'export', 'validate'].entries()) {
-        const prior = stageIndex === 0 ? 'animation.inference' : `animation.${['retarget', 'process', 'export'][stageIndex - 1]}.${index}`
+        const prior = stageIndex === 0 ? recipe.version === 2 ? `animation.source_convert.${index}` : 'animation.inference' : `animation.${['retarget', 'process', 'export'][stageIndex - 1]}.${index}`
         // Every stage persists its output so a different machine can resume it.
         const artifact = await step(ctx, `animation.${stage}.${index}`, { ...frozen, sourcePath, stage }, async () => {
           await runTool(Deno.env.get('GAME_BLENDER_BINARY') ?? 'blender', ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', 'workers/game/animation/bake.py', '--', directory, stage], 180000)
@@ -111,13 +140,15 @@ export async function produceAnimation(ctx: JobContext) {
       const validation = JSON.parse(await Deno.readTextFile(`${directory}/validate.json`))
       const processed = JSON.parse(await Deno.readTextFile(`${directory}/process.json`))
       const id = crypto.randomUUID()
-      const clip = validation.accepted ? clipRevisionSchema.parse({
+      const clip = validation.accepted && !(recipe.version === 2 && recipe.purpose === 'diagnostic') ? clipRevisionSchema.parse({
         version: 1, id, recipeHash: await hashGameValue(recipe), rigRevision: rig.revision,
         sourceHash: await bytesHash(sourceBytes), glbHash: await bytesHash(await Deno.readFile(`${directory}/output.glb`)), storagePath: `${base}/${index}/output.glb`,
+        ...(recipe.motionContract?{motionContract:recipe.motionContract}:{}),
+        ...(recipe.version === 2 ? { provenance: recipe.provenance, ...(recipe.retargetRevision ? {retargetRevision:recipe.retargetRevision} : {}) } : {}),
         state: recipe.state, duration: processed.duration, fps: 30, loop: recipe.loop, naturalSpeed: processed.naturalSpeed,
         rootMode: recipe.rootMode, rootCurve: processed.rootCurve, contacts: processed.contacts, validation: { policy: ANIMATION_VERSION, accepted: true, metrics: validation.metrics },
       }) : null
-      candidates.push({ id, index, sourcePath, clip, diagnostics: validation })
+      candidates.push({ id, index, sourcePath, clip, diagnostics: { ...validation, ...(motionbricksArtifacts ? { motionbricksArtifacts, purpose: recipe.version === 2 ? recipe.purpose : 'clip', preview: { id, glbHash: await bytesHash(await Deno.readFile(`${directory}/output.glb`)), state: recipe.state, duration: processed.duration, naturalSpeed: processed.naturalSpeed, rootCurve: processed.rootCurve, contacts: processed.contacts }, previewPath: `${base}/${index}/output.glb` } : {}) } })
     } finally { await Deno.remove(directory, { recursive: true }) }
   }
   await ctx.checkpoint('animation.register', { ...job.checkpoint, animationCandidates: candidates })

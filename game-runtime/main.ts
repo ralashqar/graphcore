@@ -20,7 +20,7 @@ async function loadBuild(data: unknown, assetUrls: Record<string, string> = {}) 
     player?.dispose(); player = null; buildId = manifest.id
     document.querySelector('#title')!.textContent = manifest.design.title
     document.querySelector('#objective')!.textContent = manifest.design.brief
-    document.querySelector('small')!.textContent = `WASD move · Space jump · ${manifest.schemaVersion===3&&manifest.design.mechanics?'V wall traversal · ':''}E grip/climb/activate · C drop · F attack · Q dodge · R shield · 1–4 original abilities`
+    document.querySelector('small')!.textContent = `WASD move · Space jump · ${manifest.schemaVersion===3&&manifest.design.mechanics?'V wall traversal · ':''}E grip/climb/activate · C drop · F attack · Q dash/dodge · ${manifest.schemaVersion===3&&manifest.design.mechanics?.performance?.abilities.some(a=>a.kind==='roll')?'Z roll · ':''}${manifest.schemaVersion===3&&manifest.design.mechanics?.performance?.abilities.some(a=>a.kind==='uppercut')?'X uppercut · ':''}R shield · 1–4 original abilities`
     const update = (text:string, detail:string) => { status.textContent = text; feedback.textContent = detail }
     const next = manifest.schemaVersion===3?await createUnifiedPlayer(canvas,manifest,update,assetUrls):await createCombatPlayer(canvas, manifest, update)
     if (mine !== generation) { next.dispose(); return }

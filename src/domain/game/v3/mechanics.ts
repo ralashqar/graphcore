@@ -1,3 +1,4 @@
+import { performanceSchema } from './performance.ts'
 import { actionPackageSchema } from './actionMechanics.ts'
 import { MOTION_PROFILE } from './motionPresentation.ts'
 import { z } from 'zod'
@@ -82,6 +83,7 @@ export const surfaceProfileSchema = z.object({
     .max(3),
 }).strict()
 export const mechanicBundleSchema = z.object({
+  performance: performanceSchema.optional(),
   motionProfile: z.literal(MOTION_PROFILE).optional(),
   version: z.literal(1),
   packages: z.array(mechanicPackageSchema).max(12),

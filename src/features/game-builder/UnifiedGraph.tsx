@@ -101,20 +101,20 @@ export function UnifiedGraph({
           position: { x: (i % 3) * 240, y: Math.floor(i / 3) * 110 },
           style: {
             whiteSpace: 'pre-line',
-            background: n.id===selected.id?'#3c5748':'#25382f',
-            color:'#edf3ec',
+            background: n.id===selected.id?'var(--brand-active, #172c4e)':'var(--brand-panel-strong, #0a1220)',
+            color:'var(--text, #f7fbff)',
             width:190,
             padding:15,
-            border: n.id === selected.id ? '2px solid #958657' : '1px solid #607363',
+            border: n.id === selected.id ? '2px solid var(--game-accent, #39d8ff)' : '1px solid var(--line-bright, #294264)',
           },
         }))}
         edges={links.map((e, i) => ({
           ...e,
           id: String(i),
           markerEnd: { type: MarkerType.ArrowClosed },
-          style:{stroke:'#91aa9a'},
-          labelStyle:{fill:'#edf3ec',fontSize:11},
-          labelBgStyle:{fill:'#182b22'},
+          style:{stroke:'var(--game-muted, #9aa8bd)'},
+          labelStyle:{fill:'var(--text, #f7fbff)',fontSize:11},
+          labelBgStyle:{fill:'var(--brand-panel-strong, #0a1220)'},
         }))}
         onNodeClick={(_, n) => onSelect(n.id)}
         nodesConnectable={false}

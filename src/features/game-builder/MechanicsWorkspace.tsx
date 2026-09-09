@@ -1,3 +1,5 @@
+import { PosePreview } from './PosePreview'
+import { performanceGraph } from '../../domain/game/v3/performance'
 import {
   type ActionPackage,
   actionPackageSchema,
@@ -26,6 +28,7 @@ export function MechanicsWorkspace(
     revision,
     design,
     blocked,
+    online = true,
     jobId,
     jobPhase,
     credits,
@@ -38,6 +41,7 @@ export function MechanicsWorkspace(
     revision: number
     design: Design
     blocked: boolean
+    online?: boolean
     jobId?: string
     jobPhase?: string
     credits: number
@@ -67,11 +71,14 @@ export function MechanicsWorkspace(
       Awaited<ReturnType<typeof pendingMechanic>>
     >(null)
   const [selected, setSelected] = useState('')
+  const [motionId,setMotionId]=useState('')
+  const [poseGraphOpen,setPoseGraphOpen]=useState(false)
   useEffect(() => {
+    if (!online) return
     void pendingMechanic(draftId).then(setPending).catch((e) =>
       setError(String(e))
     )
-  }, [draftId])
+  }, [draftId, online])
   useEffect(() => {
     if (!jobId) return
     let current = true
@@ -95,6 +102,8 @@ export function MechanicsWorkspace(
     }
   }, [projectId, draftId, jobId, jobPhase, blocked])
   const bundle = proposal?.bundle ?? design.mechanics
+  const performance=bundle?.performance,sequence=performance?.sequences.find(s=>s.id===motionId)??performance?.sequences[0]
+  const poseGraph=performance?performanceGraph(performance):null
   const packages = [...(bundle?.packages ?? []), ...(bundle?.actions ?? [])]
   const package_ = packages.find((p) => p.id === selected) ?? packages[0]
   const graph = useMemo(
@@ -142,15 +151,12 @@ export function MechanicsWorkspace(
     }
   }
   return (
-    <section className='game-columns'>
+    <section className='game-columns game-mechanics'>
       <div>
-        <h2>Mechanics · experimental</h2>
-        <p>
-          Compose three-hit combos, forward dashes and authored wall traversal.
-          Planning creates a proposal; review it, then build and validate before
-          playing. Hold V to traverse and Space to jump away. Tap F for combo
-          strikes and Q to dash.
-        </p>
+        <span className="game-eyebrow">PROMPT TO GAMEPLAY · EXPERIMENTAL</span>
+        <h2>Shape how it plays</h2>
+        <p>Describe an ability or a key-pose animation. Review the proposed behavior and motion before building it into your game.</p>
+        <details><summary>Supported mechanics and keyboard controls</summary><p>Roll (Z), uppercut (X), combo strikes (F), dash (Q), and authored wall traversal (hold V, Space to jump away). Key-pose previews can later be replaced with generated clips.</p></details>
         <label>
           Actor{' '}
           <select
@@ -163,6 +169,7 @@ export function MechanicsWorkspace(
             ))}
           </select>
         </label>
+        <details><summary>Wall traversal setup (optional)</summary>
         <label>
           Wall collider{' '}
           <select
@@ -182,19 +189,30 @@ export function MechanicsWorkspace(
             {['x+', 'x-', 'z+', 'z-'].map((f) => <option key={f}>{f}</option>)}
           </select>
         </label>
+        </details>
         <textarea
           aria-label='Mechanic prompt'
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
         />
-        <button
+        <button className="game-primary"
           disabled={blocked || busy || !!pending || !actor ||
             !prompt.trim()}
           onClick={() => void submit('plan_mechanic')}
         >
           Plan mechanic · {credits} design credits
         </button>
-        <p>Procedural poses. No animation inference or GPU reservation.</p>
+        <p className="game-prompt-note">Review key poses before accepting. Planning uses design credits; it does not start GPU generation.</p>{blocked && <p role="status" className="game-alert">{online ? 'Save the design and wait for any active command before planning another mechanic.' : 'Sign in to a live project to generate mechanics. You can explore the prompt examples and play the local sandbox now.'}</p>}
+        <button disabled={busy} onClick={()=>setPrompt('Give this character a forward roll with tuck, shoulder roll and feet-under-body recovery key poses.')}>Try forward roll</button>
+        <button disabled={busy} onClick={()=>setPrompt('Give this character an uppercut. On a confirmed hit, damage the opponent, push them back, fall onto their back, wait until grounded, then get up. Generate key-pose approximations for each phase.')}>Try uppercut and recovery</button>
+        <button disabled={busy} onClick={()=>setPrompt('Animation only: approximate a short right-hand greeting with three key poses. Do not add an ability.')}>Try animation only</button>
+        {sequence&&<section aria-label="Pose program review">
+          <h3>{proposal?'Proposed':'Saved'} pose programs</h3>
+          <label>Motion <select value={sequence.id} onChange={e=>setMotionId(e.target.value)}>{performance!.sequences.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
+          <PosePreview sequence={sequence}/>
+          {poseGraph&&<details onToggle={e=>setPoseGraphOpen(e.currentTarget.open)}><summary>Behavior and animation graph</summary>{poseGraphOpen&&<div style={{height:360}}><ReactFlow nodes={poseGraph.nodes.map((n,i)=>({id:n.id,position:{x:(i%3)*230,y:Math.floor(i/3)*100},data:{label:`${n.group}: ${n.label}`}}))} edges={poseGraph.links.map((e,i)=>({id:String(i),source:e.from,target:e.to}))} fitView nodesDraggable={false} nodesConnectable={false}><Background/><Controls/></ReactFlow></div>}</details>}
+          <p>Accepting updates the design. Build and validate before applying at a safe checkpoint. Existing published gameplay is preserved until then.</p>
+        </section>}
         {pending && (
           <button
             disabled={busy}
@@ -241,11 +259,14 @@ export function MechanicsWorkspace(
       </div>
       <aside>
         <h3>Runtime composition</h3>
+        {!packages.length && <p>Plan an ability to inspect its movement, effects and animation states here. Nothing is activated until you review and build it.</p>}
         <select
+          disabled={!packages.length}
           aria-label='Mechanic package'
           value={package_?.id ?? ''}
           onChange={(e) => setSelected(e.target.value)}
         >
+          {!packages.length && <option value="">No mechanic packages yet</option>}
           {packages.map((p) => (
             <option key={p.id} value={p.id}>{p.label}</option>
           ))}
@@ -266,18 +287,18 @@ export function MechanicsWorkspace(
                   },
                   style: {
                     whiteSpace: 'pre-line',
-                    background: '#25382f',
-                    color: '#edf3ec',
+                    background: 'var(--brand-panel-strong, #0a1220)',
+                    color: 'var(--text, #f7fbff)',
                     width: 190,
                     padding: 15,
-                    border: '1px solid #607363',
+                    border: '1px solid var(--line-bright, #294264)',
                   },
                 }))}
                 edges={graph.links.map((l, i) => ({
                   id: String(i),
                   source: l.from,
                   target: l.to,
-                  style: { stroke: '#91aa9a' },
+                  style: { stroke: 'var(--game-muted, #9aa8bd)' },
                 }))}
               >
                 <Background />

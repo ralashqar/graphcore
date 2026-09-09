@@ -336,6 +336,16 @@ def validate(directory, recipe, rig):
                 # Y was retained in the skeletal pose, so do not apply it twice.
                 position.y -= processed['rootCurve'][index]['position'][1]
                 contact_error = max(contact_error, (position-Vector(contact['position'])).length)
+    milestone_error = 0
+    if recipe.get('motionContract'):
+        if abs(processed['duration']-recipe['duration']) > 1/30+.001:
+            failures.append('Replacement duration differs from gameplay contract')
+        for milestone in recipe['poses']:
+            frame = frames[min(len(frames)-1, round(milestone['time']*30))]
+            positions = world_positions(frame, rig)
+            for joint, point in milestone['joints'].items():
+                milestone_error = max(milestone_error, (positions[joint]-Vector(point)).length)
+        if milestone_error > .12: failures.append('Replacement misses approved milestone pose')
     thresholds = recipe['thresholds']
     root_speed = 0
     for a, b in zip(processed['rootCurve'], processed['rootCurve'][1:]):
@@ -377,8 +387,11 @@ def validate(directory, recipe, rig):
                     length = (expected[joint['id']] - expected[joint['parent']]).length
                     bone_error = max(bone_error, abs(length-Vector(joint['translation']).length))
         if export_error > .005: failures.append('Export pose differs from validated motion')
+    if recipe.get('motionContract'):
+        milestone_error += export_error
+        if milestone_error > .12: failures.append('Exported replacement misses approved milestone pose')
     if bone_error > thresholds['maxBoneLengthError']: failures.append('Broken bone lengths')
-    save(directory, 'validate.json', {'policy': PROCESSING_VERSION, 'accepted': not failures, 'failures': sorted(set(failures)), 'metrics': {'maxCorrection': processed['maxCorrection'], 'maxContactError': contact_error, 'maxBoneLengthError': bone_error, 'maxSeamAngle': angle, 'maxSeamVelocity': velocity, 'maxExportError': export_error, 'maxRootSpeed': root_speed, 'leftStanceCoverage': coverage['left_foot'], 'rightStanceCoverage': coverage['right_foot']}})
+    save(directory, 'validate.json', {'policy': PROCESSING_VERSION, 'accepted': not failures, 'failures': sorted(set(failures)), 'metrics': {'maxMilestoneError': milestone_error, 'maxCorrection': processed['maxCorrection'], 'maxContactError': contact_error, 'maxBoneLengthError': bone_error, 'maxSeamAngle': angle, 'maxSeamVelocity': velocity, 'maxExportError': export_error, 'maxRootSpeed': root_speed, 'leftStanceCoverage': coverage['left_foot'], 'rightStanceCoverage': coverage['right_foot']}})
 
 
 if __name__ == '__main__':

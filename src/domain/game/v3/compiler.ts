@@ -1,3 +1,8 @@
+import { motionContractHash } from './performanceMotion.ts'
+import { somaMannequin } from './mannequin.ts'
+import { validateSequence } from './poseSequence.ts'
+import { programNodes } from './performance.ts'
+import { PERFORMANCE_RUNTIME } from './poseSequence.ts'
 import { MOTION_RUNTIME } from './motionPresentation.ts'
 import { actionNodes, ACTION_RUNTIME } from './actionMechanics.ts'
 import {
@@ -88,7 +93,7 @@ export function runtimeDesign(d: Design): LegacyDesign {
     assets: [],
     nodes: [
       ...nodes,
-      ...actionNodes(d.mechanics?.actions ?? []),
+      ...[...actionNodes(d.mechanics?.actions ?? []),...programNodes(d.mechanics?.performance)],
       ...actors,
       {
         id: 'runtime.scenario',
@@ -128,6 +133,13 @@ export function validate(input: unknown) {
   for(const s of d.mechanics?.surfaces??[])if(!of(d,'world')[0]?.boxes.some(b=>b.id===s.collider&&!b.ramp))fail(s.id,'Surface requires an existing static box collider')
   for(const p of d.mechanics?.actions??[]){
     if(!of(d,'actor_instance').some(a=>a.id===d.player&&a.definition===p.actorDefinition))fail(p.id,'Action mechanics require the player actor definition')
+  }
+  for(const p of d.mechanics?.performance?.abilities??[]){
+    if(!of(d,'actor_instance').some(a=>a.id===d.player&&a.definition===p.actorDefinition))fail(p.id,'Pose abilities require the player actor definition')
+    if(!of(d,'actor_definition').some(a=>a.id===p.actorDefinition&&a.height>=1.65&&a.height<=1.95))fail(p.id,'Pose abilities require supported humanoid proportions')
+  }
+  for(const r of d.mechanics?.performance?.reactions??[])for(const id of r.actorDefinitions){
+    if(!of(d,'actor_definition').some(a=>a.id===id&&a.height>=1.65&&a.height<=1.95))fail(r.id,'Reaction requires a supported humanoid actor')
   }
   if (d.nodes.some((n) => n.id.startsWith('runtime.')))
     fail('design', 'Reserved runtime namespace')
@@ -246,7 +258,11 @@ export async function compile(
   if (errors.length)
     throw new Error(errors.map((e) => `${e.nodeKey}: ${e.message}`).join('\n'))
   const nodeHashes: Record<string, string> = {}
-  if(d.mechanics)nodeHashes['mechanics']=await hashGameValue({runtime:d.mechanics.motionProfile?MOTION_RUNTIME:d.mechanics.actions?.length?ACTION_RUNTIME:MECHANIC_RUNTIME,bundle:d.mechanics})
+  if(d.mechanics?.performance){const rig=await somaMannequin();for(const sequence of d.mechanics.performance.sequences){
+    const failures=validateSequence(rig,sequence);if(failures.length)throw new Error(`${sequence.id}: ${failures.join('; ')}`)
+    nodeHashes[`motion.${sequence.id}`]=await motionContractHash(sequence,rig.revision)
+  }}
+  if(d.mechanics)nodeHashes['mechanics']=await hashGameValue({runtime:d.mechanics.performance?PERFORMANCE_RUNTIME:d.mechanics.motionProfile?MOTION_RUNTIME:d.mechanics.actions?.length?ACTION_RUNTIME:MECHANIC_RUNTIME,bundle:d.mechanics})
   for (const n of d.nodes)
     nodeHashes[n.id] = await hashGameValue({
       runtime: VERSION,
@@ -259,7 +275,7 @@ export async function compile(
   return manifestSchema.parse({
     ...identity,
     schemaVersion: 3,
-    runtimeVersion: d.mechanics?.motionProfile ? MOTION_RUNTIME : d.mechanics?.actions?.length ? ACTION_RUNTIME : d.mechanics ? MECHANIC_RUNTIME : VERSION,
+    runtimeVersion: d.mechanics?.performance ? PERFORMANCE_RUNTIME : d.mechanics?.motionProfile ? MOTION_RUNTIME : d.mechanics?.actions?.length ? ACTION_RUNTIME : d.mechanics ? MECHANIC_RUNTIME : VERSION,
     catalogVersion: CATALOG,
     sourceHash: await hashGameValue({ d, VERSION, CATALOG }),
     nodeHashes,

@@ -7,6 +7,6 @@ export function AnimationGraphView({graph}:{graph:AnimationGraph}) {
       const from=points.find(p=>p.state===transition.from),to=points.find(p=>p.state===transition.to)
       return from&&to?<g key={i}><title>{`${transition.from} to ${transition.to}: ${transition.event}, ${transition.blendSeconds} seconds`}</title><line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="currentColor" opacity=".2" /></g>:null
     })}
-    {points.map(p=><g key={p.state}><title>{`${p.state}: accepted clip ${p.clipRevision}`}</title><rect x={p.x-65} y={p.y-17} width="130" height="34" rx="6" fill="var(--background, #181818)" stroke="currentColor"/><text x={p.x} y={p.y+5} textAnchor="middle" fill="currentColor" fontSize="13">{p.state}</text></g>)}
+    {points.map(p=><g key={p.state}><title>{`${p.state}: accepted clip ${p.clipRevision}`}</title><rect x={p.x-65} y={p.y-17} width="130" height="34" rx="6" fill="var(--brand-panel-strong, #0a1220)" stroke="currentColor"/><text x={p.x} y={p.y+5} textAnchor="middle" fill="currentColor" fontSize="13">{p.state}</text></g>)}
   </svg>
 }

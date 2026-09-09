@@ -19,6 +19,11 @@ const browser=await chromium.launch({headless:true}), page=await browser.newPage
 page.on('pageerror',e=>errors.push(e.message))
 try{
  await page.goto(`http://127.0.0.1:${server.address().port}`)
+ await page.getByLabel('Motion provider').selectOption('motionbricks')
+ if(!await page.getByRole('button',{name:'Generate candidate',exact:true}).isDisabled())throw Error('Unvalidated MotionBricks generation enabled')
+ await page.getByLabel('Motion',{exact:true}).selectOption('roll')
+ if(await page.getByLabel('Motion provider').inputValue()!=='kimodo')throw Error('Unsupported MotionBricks mechanic selected')
+ await page.getByLabel('Motion',{exact:true}).selectOption('idle')
  await page.getByRole('button',{name:/idle · Pending review/}).click()
  await page.getByRole('button',{name:'Pause',exact:true}).click()
  await page.getByLabel('Scrub',{exact:true}).fill('0.5')

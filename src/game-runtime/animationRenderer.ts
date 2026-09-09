@@ -1,3 +1,6 @@
+import { presentPose } from './presentation'
+import { compatibleReplacement } from '../domain/game/v3/performanceMotion'
+import { evaluateSequence } from '../domain/game/v3/poseSequence'
 import { somaMannequin, SOMA_RIG } from '../domain/game/v3/mannequin'
 import { estimateSomaPose, contactPose, type Rig, type SkeletalPose } from '../domain/game/v3/somaPose'
 import { createSomaVisual } from './somaVisual'
@@ -15,7 +18,7 @@ import type { Animation } from '@babylonjs/core/Animations/animation'
 
 export type PresentationFrame={alpha:number;previous:Map<string,{position:ActorState['position'];yaw:number}>;dt:number}
 type Track = { target: TransformNode; property: 'position' | 'rotationQuaternion' | 'scaling'; animation: Animation }
-type Clip = { duration: number; loop: boolean; speed: number; tracks: Track[] }
+type Clip = { contract?:string; duration: number; loop: boolean; speed: number; tracks: Track[] }
 export async function animationVisuals(scene: Scene, manifest: Manifest, urls: Record<string, string>) {
   const actors = new Map<string, { root: TransformNode; targets: Map<string,TransformNode>; rig:Rig|undefined; samples:Map<TransformNode,{rotation:Quaternion;position:Vector3}>; clips: Map<AnimationState, Clip>; transitions: AnimationGraph['transitions']; blend: AnimationBlend; clock:ActionClipClock; previous: ActorState['position']; velocity: { x: number; z: number }; tick: number; mode: string; enteredFrom: string; elapsed: number; gait: number }>()
   const containers: AssetContainer[] = []
@@ -48,7 +51,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
           const target = targets.get(track.target.name), property = track.animation.targetProperty
           if (target && ['position', 'rotationQuaternion', 'scaling'].includes(property)) tracks.push({ target, property: property as Track['property'], animation: track.animation })
         }
-        if (tracks.length) { clips.set(binding.state, { duration: asset.duration, loop: asset.loop, speed: asset.naturalSpeed, tracks }); loaded++ }
+        if (tracks.length) { clips.set(binding.state, { contract:asset.motionContract&&compatibleReplacement(asset,asset.motionContract,manifest.design.mechanics?.performance?.sequences.find(s=>s.role===asset.state)?.duration??-1)?asset.motionContract:undefined,duration: asset.duration, loop: asset.loop, speed: asset.naturalSpeed, tracks }); loaded++ }
       }
       if(!targets && rig?.id===SOMA_RIG)targets=createSomaVisual(scene,root,rig)
       root.setEnabled(false)
@@ -56,19 +59,24 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
     }
   } catch { containers.forEach(c => c.dispose()); actors.forEach(a => a.root.dispose()); return { update: () => new Set<string>(), metrics: () => ({ animationLoadFailed: true, animationBindings: 0, expectedAnimationBindings: expected, playedAnimations: [] as string[] }) } }
   scene.onDisposeObservable.add(() => containers.forEach(c => c.dispose()))
-  return { metrics: () => ({ somaActors:[...actors].filter(([,a])=>a.rig?.id===SOMA_RIG).map(([id])=>id),proceduralFrames,contactRejections,animationLoadFailed: loaded !== expected, animationBindings: loaded, expectedAnimationBindings: expected, playedAnimations: [...played], animationLoops: { ...loops } }), update(sim: Simulation,frame?:PresentationFrame) {
+  return { metrics: () => ({ presentationPositions: Object.fromEntries([...actors].map(([id,a])=>[id,a.root.position.asArray()])), somaActors:[...actors].filter(([,a])=>a.rig?.id===SOMA_RIG).map(([id])=>id),proceduralFrames,contactRejections,animationLoadFailed: loaded !== expected, animationBindings: loaded, expectedAnimationBindings: expected, playedAnimations: [...played], animationLoops: { ...loops } }), update(sim: Simulation,frame?:PresentationFrame) {
     const rendered = new Set<string>()
     for (const actor of sim.state.actors) {
       const visual = actors.get(actor.id)
       if (!visual) continue
       const tickDelta = sim.state.tick-visual.tick
       if (tickDelta < 0 || tickDelta > 6) { visual.previous = { ...actor.position }; visual.velocity = { x: 0, z: 0 }; visual.elapsed = 0; visual.gait = 0; visual.mode = ''; visual.enteredFrom = ''; visual.blend = emptyAnimationBlend();visual.samples.clear() }
-      const dt = Math.max(0, Math.min(.1, tickDelta/60))
-      const velocity = dt ? { x: (actor.position.x-visual.previous.x)/dt, z: (actor.position.z-visual.previous.z)/dt } : visual.velocity
+      const simulationDt = Math.max(0, Math.min(.1, tickDelta/60))
+      const dt = frame ? Math.max(0, Math.min(.1, frame.dt)) : simulationDt
+      const velocity = simulationDt ? { x: (actor.position.x-visual.previous.x)/simulationDt, z: (actor.position.z-visual.previous.z)/simulationDt } : visual.velocity
       visual.velocity = velocity
       visual.previous = { ...actor.position }; visual.tick = sim.state.tick
       visual.elapsed += dt
       if (visual.mode !== actor.mode) { visual.enteredFrom = visual.mode; visual.elapsed = 0; visual.mode = actor.mode }
+      const performance='performanceMotion' in sim?(sim as import('../domain/game/v3/simulation').UnifiedSimulation).performanceMotion(actor):undefined
+      const presentationOffset = frame ? (frame.alpha-1)/60 : 0
+      const performanceSeconds = performance ? Math.max(0,performance.seconds+presentationOffset) : 0
+      const replacement=performance&&visual.clips.get(performance.sequence.role as AnimationState)?.contract===manifest.nodeHashes[`motion.${performance.sequence.id}`]&&!!manifest.nodeHashes[`motion.${performance.sequence.id}`]
       let state: AnimationState | null = null
       const ability = sim.design.nodes.find(n => n.kind === 'ability' && n.id === actor.action?.ability)
       if (ability?.kind === 'ability' && ability.op === 'roll') state = 'roll'
@@ -76,6 +84,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
       else if (actor.mode === 'hang') state = visual.enteredFrom === 'air' && visual.elapsed < (visual.clips.get('catch')?.duration ?? 0) ? 'catch' : Math.abs(velocity.x) > .1 ? velocity.x < 0 ? 'shimmy_left' : 'shimmy_right' : 'hang'
       else if (actor.mode === 'air') state = actor.vy > 0 && visual.elapsed < Math.min(.2, visual.clips.get('takeoff')?.duration ?? 0) ? 'takeoff' : 'airborne'
       else if (actor.mode === 'ground' && visual.enteredFrom === 'air' && visual.elapsed < Math.min(.2, visual.clips.get('landing')?.duration ?? 0)) state = 'landing'
+      if(performance&&performance.sequence.role!=='custom')state=performance.sequence.role
       const localX = velocity.x*Math.cos(actor.yaw)-velocity.z*Math.sin(actor.yaw), localZ = velocity.x*Math.sin(actor.yaw)+velocity.z*Math.cos(actor.yaw)
       if(tickDelta<0||tickDelta>6)visual.clock={active:null,times:{}}
       visual.clock=advanceActionClipClock(visual.clock,state,dt)
@@ -85,19 +94,23 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
       const total = supported.reduce((sum, [,w]) => sum+w, 0)
       const mechanic=(sim as Simulation & {mechanicStates?:Record<string,{phase:string}>}).mechanicStates?.[actor.id]
       const soma=visual.rig?.id===SOMA_RIG
-      const procedural=!!actor.action || actor.mode==='air' || actor.mode==='hang' || actor.mode==='climb' || mechanic?.phase==='attached' || sim.interactions.poses.has(actor.id) || total<.99
+      const procedural=performance?!replacement:!!actor.action || actor.mode==='air' || actor.mode==='hang' || actor.mode==='climb' || mechanic?.phase==='attached' || sim.interactions.poses.has(actor.id) || total<.99
       const show = soma ? actor.health>0 : actor.health > 0 && total > .99 && !sim.interactions.poses.has(actor.id) && mechanic?.phase!=='attached' && !actor.action?.ability.startsWith('runtime.')
       visual.root.setEnabled(show)
       if (!show) continue
-      const cycle = supported.reduce((sum, [s,w]) => sum + visual.clips.get(s)!.duration*w, 0)/Math.max(.001,total)
-      const naturalSpeed = supported.reduce((sum, [s,w]) => sum + visual.clips.get(s)!.speed*w, 0)/Math.max(.001,total)
-      const playbackRate = !state && naturalSpeed > .1 ? Math.max(.25, Math.min(2, Math.hypot(velocity.x, velocity.z)/naturalSpeed)) : 1
+      // Keep the underlying gait clock alive while a full-body action hides it.
+      // Action blend weights can approach zero and must not collapse cycle length.
+      const gaitClips = Object.entries(locomotionWeights(localX,localZ)).filter(([s,w])=>w>0&&visual.clips.has(s as AnimationState)) as Array<[AnimationState,number]>
+      const gaitWeight = gaitClips.reduce((sum,[,w])=>sum+w,0)
+      const cycle = gaitClips.reduce((sum,[s,w])=>sum+visual.clips.get(s)!.duration*w,0)/Math.max(.001,gaitWeight)
+      const naturalSpeed = gaitClips.reduce((sum,[s,w])=>sum+visual.clips.get(s)!.speed*w,0)/Math.max(.001,gaitWeight)
+      const playbackRate = naturalSpeed > .1 ? Math.max(.25, Math.min(2, Math.hypot(velocity.x, velocity.z)/naturalSpeed)) : 1
       const nextGait = visual.gait + dt*playbackRate/Math.max(.1, cycle)
       if (nextGait >= 1) for (const [name, weight] of supported) if (weight > .1 && visual.clips.get(name)!.loop) loops[`${actor.id}:${name}`] = (loops[`${actor.id}:${name}`] ?? 0)+1
       visual.gait = nextGait % 1
       const values = new Map<TransformNode, Map<string, { value: Vector3 | Quaternion; weight: number }>>()
       for (const [name, weight] of supported) {
-        const clip = visual.clips.get(name)!, time = clip.loop ? visual.gait*clip.duration : Math.min(visual.clock.times[name]??0, clip.duration)
+        const clip = visual.clips.get(name)!, time = performance&&replacement&&name===state?Math.min(performanceSeconds,clip.duration):clip.loop ? visual.gait*clip.duration : Math.min(visual.clock.times[name]??0, clip.duration)
         played.add(`${actor.id}:${name}`)
         for (const track of clip.tracks) {
           const value = track.animation.evaluate(time*track.animation.framePerSecond)
@@ -119,7 +132,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
         if(procedural){
           proceduralFrames++
           const id=actor.action?.ability??'',kind=id.includes('dash')?'dash':ability?.kind==='ability'?ability.op:'idle'
-          const pose=estimateSomaPose(rig,{time:sim.state.tick/60,speed:Math.hypot(velocity.x,velocity.z),mode:actor.mode,action:actor.action&&ability?.kind==='ability'?{kind,index:Number(id.split('.').at(-1))||0,seconds:actor.action.tick/60,windup:ability.windup,active:ability.active,recovery:ability.recovery}:undefined})
+          const pose=performance?evaluateSequence(rig,performance.sequence,performanceSeconds):estimateSomaPose(rig,{time:sim.state.tick/60+presentationOffset,speed:Math.hypot(velocity.x,velocity.z),mode:actor.mode,action:actor.action&&ability?.kind==='ability'?{kind,index:Number(id.split('.').at(-1))||0,seconds:Math.max(0,actor.action.tick/60+presentationOffset),windup:ability.windup,active:ability.active,recovery:ability.recovery}:undefined})
           for(const j of rig.joints){const target=visual.targets.get(j.id);if(target){target.rotationQuaternion=Quaternion.FromArray(pose.rotations[j.id]);target.position.copyFromFloats(...(j.parent?j.translation:pose.root))}}
         }
         // Blend the previous displayed pose, including interrupted action time.
@@ -141,14 +154,9 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
         }
         for(const j of rig.joints){const target=visual.targets.get(j.id);if(!target)continue;target.rotationQuaternion=Quaternion.FromArray(posed.rotations[j.id]);visual.samples.set(target,{rotation:target.rotationQuaternion.clone(),position:target.position.clone()})}
       }
-      visual.root.position.set(actor.position.x, actor.position.y, actor.position.z)
-      visual.root.rotation.y = actor.yaw
-      const previous=frame?.previous.get(actor.id)
-      if(soma&&previous&&tickDelta>=0&&tickDelta<=6&&Vector3.Distance(Vector3.FromArray([previous.position.x,previous.position.y,previous.position.z]),visual.root.position)<1){
-        visual.root.position=Vector3.Lerp(new Vector3(previous.position.x,previous.position.y,previous.position.z),visual.root.position,frame!.alpha)
-        const delta=Math.atan2(Math.sin(actor.yaw-previous.yaw),Math.cos(actor.yaw-previous.yaw))
-        visual.root.rotation.y=previous.yaw+delta*frame!.alpha
-      }
+      const display = presentPose(actor, frame?.previous.get(actor.id), frame?.alpha ?? 1)
+      visual.root.position.set(display.position.x, display.position.y, display.position.z)
+      visual.root.rotation.y = display.yaw
       rendered.add(actor.id)
     }
     return rendered

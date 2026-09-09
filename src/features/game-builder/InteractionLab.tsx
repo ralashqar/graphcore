@@ -140,14 +140,14 @@ export function InteractionLab({
           role="img"
           aria-label="Participant pose and target anchors"
         >
-          {body&&<g opacity=".45"><rect x={260-(side?body.length:body.width)*55} y={330-(body.family==='quadruped'?body.height*.85:body.height)*110} width={(side?body.length:body.width)*110} height={(body.family==='quadruped'?.45:body.height)*110} rx="8" fill="#607b6d" stroke="#a9eaa5"/>{body.family==='quadruped'&&[-1,1].map(n=><line key={n} x1={260+n*(side?body.length:body.width)*40} y1={330-body.height*.65*110} x2={260+n*(side?body.length:body.width)*40} y2={330} stroke="#a9eaa5" strokeWidth="7"/>)}</g>}
-          <line x1="15" x2="545" y1="330" y2="330" stroke="#7e9785" />
+          {body&&<g opacity=".45"><rect x={260-(side?body.length:body.width)*55} y={330-(body.family==='quadruped'?body.height*.85:body.height)*110} width={(side?body.length:body.width)*110} height={(body.family==='quadruped'?.45:body.height)*110} rx="8" fill="var(--brand-active, #172c4e)" stroke="var(--game-accent, #39d8ff)"/>{body.family==='quadruped'&&[-1,1].map(n=><line key={n} x1={260+n*(side?body.length:body.width)*40} y1={330-body.height*.65*110} x2={260+n*(side?body.length:body.width)*40} y2={330} stroke="var(--game-accent, #39d8ff)" strokeWidth="7"/>)}</g>}
+          <line x1="15" x2="545" y1="330" y2="330" stroke="var(--game-muted, #9aa8bd)" />
           {anchors.anchors.map((a) => {
             const p = project(anchorAt(anchors, a.id, frame).position)
             return (
               <g key={a.id}>
-                <circle cx={p.x} cy={p.y} r="4" fill="#a9eaa5" />
-                <text x={p.x + (a.id.includes('left')?-6:6)} textAnchor={a.id.includes('left')?'end':'start'} y={p.y - 6} fill="#a9eaa5" fontSize="10">
+                <circle cx={p.x} cy={p.y} r="4" fill="var(--game-accent, #39d8ff)" />
+                <text x={p.x + (a.id.includes('left')?-6:6)} textAnchor={a.id.includes('left')?'end':'start'} y={p.y - 6} fill="var(--game-accent, #39d8ff)" fontSize="10">
                   {a.id}
                 </text>
               </g>

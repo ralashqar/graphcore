@@ -3,6 +3,11 @@ import { KIMODO_MODEL, motionRecipeSchema, type MotionRecipe } from './animation
 /** Versioned experimental recipes. Availability never implies motion acceptance. */
 export function animationRecipeProfile(state: MotionRecipe['state'], rigRevision: string, seed = 42): MotionRecipe {
   const descriptions: Record<MotionRecipe['state'], string> = {
+    uppercut:'A humanoid winds up, strikes upward with the right fist, and recovers.',
+    recoil:'A humanoid recoils from a hit to the upper body.',
+    fall_back:'A humanoid loses balance and falls onto their back.',
+    prone:'A humanoid lies still on their back.',
+    get_up:'A humanoid rises from lying on their back to standing.',
     idle: 'A humanoid stands relaxed, breathing gently with both feet planted.',
     walk: 'A humanoid walks forward steadily with a natural repeating gait.',
     run: 'A humanoid runs forward steadily with a natural repeating gait.',

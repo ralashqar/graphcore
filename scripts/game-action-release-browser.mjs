@@ -1,17 +1,18 @@
+import { acceptPerformanceGame } from './game-performance-browser-acceptance.mjs'
 import { chromium } from 'playwright'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { acceptActionGame } from './game-action-browser-acceptance.mjs'
 
 const id = process.argv[2]
 if (!/^[a-f0-9-]{36}$/.test(id ?? '')) throw Error('Supply a published build UUID')
-const directory = process.argv.includes('--motion')?'output/game-motion-release-browser':'output/game-action-release-browser'
+const directory = process.argv.includes('--performance')?'output/game-performance-release-browser':process.argv.includes('--motion')?'output/game-motion-release-browser':'output/game-action-release-browser'
 await mkdir(directory, { recursive: true })
 const response = await fetch('https://znwdatidqdkzidempvkt.supabase.co/functions/v1/get-game-release', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ buildId: id }),
 })
 if (!response.ok) throw Error(`Release HTTP ${response.status}`)
 const { manifest } = await response.json()
-if (!['gameplay-3.3.0','gameplay-3.4.0'].includes(manifest.runtimeVersion) || manifest.design.mechanics?.actions?.length !== 2) throw Error('Expected published combo/dash fixture')
+if (!['gameplay-3.3.0','gameplay-3.4.0','gameplay-3.5.0'].includes(manifest.runtimeVersion) || manifest.design.mechanics?.actions?.length !== 2) throw Error('Expected published combo/dash fixture')
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext(), page = await context.newPage(), errors = [], providerCalls = [], reports = []
 await context.route(/(runpod\.(ai|io)|fal\.(ai|run))/, route => { providerCalls.push(route.request().url().split('?')[0]); return route.abort() })
@@ -20,8 +21,9 @@ try {
   await page.goto(`https://graphcore-game-preview.fly.dev/?release=${id}&acceptance=1`)
   await page.waitForFunction(() => window.__gameAcceptance?.ready, undefined, { timeout: 90000 })
   await acceptActionGame(page, reports, manifest.design)
+  await acceptPerformanceGame(page,reports,manifest.design)
   const presentation=await page.evaluate(()=>window.__gameAcceptance.metrics())
-  if(manifest.runtimeVersion==='gameplay-3.4.0'&&(!presentation.somaActors?.includes(manifest.design.player)||!presentation.proceduralFrames))throw Error('SOMA procedural presentation did not run')
+  if(['gameplay-3.4.0','gameplay-3.5.0'].includes(manifest.runtimeVersion)&&(!presentation.somaActors?.includes(manifest.design.player)||!presentation.proceduralFrames))throw Error('SOMA procedural presentation did not run')
   const before = await page.evaluate(() => window.__gameAcceptance.state())
   await page.locator('#save').click()
   await page.reload()

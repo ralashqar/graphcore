@@ -63,6 +63,11 @@ tmp/game-animation-tools/
 tmp/kimodo-source/
 tmp/game-commit-check/
 
+# Pinned upstream inspection checkout and local MotionBricks experiment artifacts.
+output/motionbricks-upstream/
+output/game-motionbricks-compatibility/
+output/motionbricks-build.log
+
 # Local Director deployment responses and generated Edge bundles.
 output/director-*.json
 output/director-*.mjs

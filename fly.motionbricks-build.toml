@@ -1,0 +1,5 @@
+# Build-only configuration. This image is served by Runpod, never a Fly Machine.
+app = "graphcore-game"
+primary_region = "lhr"
+[build]
+  dockerfile = "workers/game/motionbricks/Dockerfile"

@@ -12,8 +12,8 @@ export function GameGraph({ design, selected, onSelect, workflow = false, job }:
     const rank = (key: string): number => { const dependencies = design.systems.find(system => system.key === key)?.dependencies ?? []; return dependencies.length ? 1 + Math.max(...dependencies.map(rank)) : 0 }
     const rows = new Map<number, number>()
     return {
-      nodes: design.systems.map(system => { const depth = rank(system.key), column = rows.get(depth) ?? 0; rows.set(depth, column + 1); return { id: system.key, position: { x: column * 280, y: depth * 130 }, data: { label: `${system.label}\n${system.owns.join(' · ')}` }, style: { background: selected === system.key ? '#415b4d' : '#26332f', color: '#edf2ed', border: '1px solid #506257', borderRadius: 8, width: 220, padding: 18, whiteSpace: 'pre-line' as const } } }),
-      edges: design.systems.flatMap(system => system.dependencies.map(dep => ({ id: `${dep}-${system.key}`, source: dep, target: system.key, markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: '#8b9d90' } }))),
+      nodes: design.systems.map(system => { const depth = rank(system.key), column = rows.get(depth) ?? 0; rows.set(depth, column + 1); return { id: system.key, position: { x: column * 280, y: depth * 130 }, data: { label: `${system.label}\n${system.owns.join(' · ')}` }, style: { background: selected === system.key ? 'var(--brand-active, #172c4e)' : 'var(--brand-panel-strong, #0a1220)', color: 'var(--text, #f7fbff)', border: '1px solid var(--line-bright, #294264)', borderRadius: 8, width: 220, padding: 18, whiteSpace: 'pre-line' as const } } }),
+      edges: design.systems.flatMap(system => system.dependencies.map(dep => ({ id: `${dep}-${system.key}`, source: dep, target: system.key, markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: 'var(--game-muted, #9aa8bd)' } }))),
     }
   }, [design, selected, workflow])
   if (workflow) return <GameWorkflowGraph kind="generate" job={job} owner={selected === 'movement' || selected === 'inventory' ? selected : selected === 'presentation' ? 'style' : selected === 'dialogue' || selected === 'quest' ? 'brief' : 'scene'} />
@@ -25,8 +25,8 @@ export function GameWorkflowGraph({ kind, job, owner }: { kind: keyof typeof gam
   const nodes: Node[] = stages.map((stage, i) => {
     const recorded = job?.progress.find(p => p.key === stage.key)?.status
     const status = recorded === 'skipped' ? 'skipped' : job?.status === 'completed' ? 'completed' : recorded ?? 'planned'
-    return { id: stage.key, position: { x: i * 240, y: 90 }, sourcePosition: Position.Right, targetPosition: Position.Left, data: { label: `${stage.label}\n${status}` }, style: { background: status === 'running' ? '#415b4d' : '#26332f', color: '#edf2ed', border: '1px solid #506257', borderRadius: 8, width: 195, padding: 15, whiteSpace: 'pre-line' } }
+    return { id: stage.key, position: { x: i * 240, y: 90 }, sourcePosition: Position.Right, targetPosition: Position.Left, data: { label: `${stage.label}\n${status}` }, style: { background: status === 'running' ? 'var(--brand-active, #172c4e)' : 'var(--brand-panel-strong, #0a1220)', color: 'var(--text, #f7fbff)', border: '1px solid var(--line-bright, #294264)', borderRadius: 8, width: 195, padding: 15, whiteSpace: 'pre-line' } }
   })
-  const edges: Edge[] = stages.slice(1).map((stage, i) => ({ id: `${stages[i].key}.${stage.key}`, source: stages[i].key, target: stage.key, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: '#8b9d90' } }))
+  const edges: Edge[] = stages.slice(1).map((stage, i) => ({ id: `${stages[i].key}.${stage.key}`, source: stages[i].key, target: stage.key, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed }, style: { stroke: 'var(--game-muted, #9aa8bd)' } }))
   return <div className="game-graph"><ReactFlow key={`${kind}.${owner ?? 'all'}`} nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: .2 }} nodesConnectable={false} nodesDraggable={false} minZoom={.15} maxZoom={1.5}><Background gap={24} color="#ffffff0c" /><Controls /></ReactFlow></div>
 }

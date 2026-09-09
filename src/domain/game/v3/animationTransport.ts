@@ -1,5 +1,8 @@
 import { z } from 'zod'
-import { KIMODO_MODEL, motionRecipeSchema } from './animation.ts'
+import { KIMODO_MODEL, motionRecipeSchema, motionbricksProvenanceSchema } from './animation.ts'
+import { MOTIONBRICKS_MODEL, motionbricksRelease } from './motionbricksRelease.ts'
+import { g1Skeleton } from './g1Skeleton.ts'
+import { somaSkeleton } from './somaSkeleton.ts'
 
 export const kimodoRelease = Object.freeze({
   source: '1aece8c124d73d255ceff5086d983b844c9f4e94',
@@ -11,12 +14,23 @@ export const kimodoRelease = Object.freeze({
 const scalar = z.number().finite()
 const vector = z.tuple([scalar, scalar, scalar])
 const quaternion = z.tuple([scalar, scalar, scalar, scalar]).refine(q => Math.abs(Math.hypot(...q) - 1) < .002)
-export const sourceMotionSchema = z.object({
-  version: z.literal(1), model: z.literal(KIMODO_MODEL), modelRevision: z.literal(kimodoRelease.model),
+const motionFields = {
   fps: z.literal(30), seed: z.number().int().nonnegative(),
   joints: z.array(z.object({ name: z.string().min(1).max(100), parent: z.number().int().min(-1), rest: vector }).strict()).min(15).max(100),
   frames: z.array(z.object({ root: vector, rotations: z.array(quaternion).min(15).max(100) }).strict()).min(15).max(240),
-}).strict().superRefine((motion, ctx) => {
+}
+export const sourceMotionSchema = z.discriminatedUnion('version', [
+  z.object({ ...motionFields, version: z.literal(1), model: z.literal(KIMODO_MODEL), modelRevision: z.literal(kimodoRelease.model) }).strict(),
+  z.object({ ...motionFields, version: z.literal(2), model: z.literal(MOTIONBRICKS_MODEL), modelRevision: z.literal(motionbricksRelease.model),
+    provenance: motionbricksProvenanceSchema, space: z.enum(['g1', 'soma']), restRotations: z.array(quaternion).min(15).max(100),
+  }).strict(),
+]).superRefine((motion, ctx) => {
+  if (motion.version === 2 && (motion.restRotations.length !== motion.joints.length || motion.joints.length !== (motion.space === 'g1' ? 34 : 77))) ctx.addIssue({ code: 'custom', message: 'MotionBricks skeleton does not match its declared space' })
+  if (motion.version === 2) {
+    const expected = motion.space === 'g1' ? g1Skeleton : somaSkeleton.joints
+    if (motion.joints.some((j,i)=>j.name!==expected[i]?.name || j.parent!==expected[i]?.parent)) ctx.addIssue({ code:'custom', message:'MotionBricks skeleton topology mismatch' })
+    if (motion.joints.some((j,i)=>j.rest.some((v,k)=>Math.abs(v-(expected[i]?.rest[k]??Infinity))>1e-5))) ctx.addIssue({ code:'custom', message:'MotionBricks rest proportions differ from the pinned skeleton' })
+  }
   const names = new Set<string>()
   motion.joints.forEach((j, i) => {
     if (names.has(j.name) || (i === 0 ? j.parent !== -1 : j.parent < 0 || j.parent >= i)) ctx.addIssue({ code: 'custom', message: 'Invalid source skeleton' })
@@ -45,7 +59,10 @@ export function validateKimodoConstraints(recipe: z.infer<typeof motionRecipeSch
 
 export const inferenceRequestSchema = z.object({
   version: z.literal(1), recipe: motionRecipeSchema, modelRevision: z.literal(kimodoRelease.model),
-}).strict()
+}).strict().refine(r => r.recipe.version === 1, 'Kimodo only accepts legacy Kimodo recipes')
+export const motionbricksRequestSchema = z.object({
+  version: z.literal(2), recipe: motionRecipeSchema, modelRevision: z.literal(motionbricksRelease.model),
+}).strict().refine(r => r.recipe.version === 2, 'MotionBricks requires a versioned G1 recipe')
 
 // Server-only callers supply URLs copied from Runpod's endpoint requestUrls.
 // Never accept a provider URL or credential from a browser command.
@@ -79,11 +96,12 @@ export class RunpodTransport {
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
     return JSON.parse(new TextDecoder().decode(bytes))
   }
-  async submit(url: string, input: z.infer<typeof inferenceRequestSchema>) {
+  async submit(url: string, input: z.infer<typeof inferenceRequestSchema> | z.infer<typeof motionbricksRequestSchema>) {
     const target = runpodUrl(url)
     if (!target.pathname.endsWith('/run')) throw new Error('Expected Runpod submission URL')
     // Deliberately no retry: caller must persist a submission marker first.
-    const data = await this.call(target, { input: inferenceRequestSchema.parse(input), policy: { executionTimeout: 600000, lowPriority: false, ttl: 900000 } })
+    const validated = input.version === 2 ? motionbricksRequestSchema.parse(input) : inferenceRequestSchema.parse(input)
+    const data = await this.call(target, { input: validated, policy: { executionTimeout: 600000, lowPriority: false, ttl: 900000 } })
     return z.object({ id: z.string().regex(/^[a-zA-Z0-9_-]{1,150}$/) }).parse(data).id
   }
   async status(url: string, jobId: string) {

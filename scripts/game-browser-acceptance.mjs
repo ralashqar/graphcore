@@ -37,7 +37,7 @@ try {
     const candidate = JSON.parse(await readFile(resolve(directory, 'candidate.json'), 'utf8'))
     await acceptUnifiedGame(page,reports,candidate.manifest.design)
     await acceptMechanicGame(page,reports,candidate.manifest.design)
-    if (process.argv.includes('--locomotion')) {
+    if (process.argv.includes('--locomotion') || process.argv.includes('--partial-locomotion')) {
       await page.locator('#restart').click()
       await page.locator('canvas').focus()
       const hold = async (keys, ms) => {
@@ -55,9 +55,21 @@ try {
       }
       await page.waitForTimeout(4500)
       const metrics = await page.evaluate(() => window.__gameAcceptance.metrics())
-      for (const state of ['idle', 'walk', 'run', 'backward', 'strafe_left', 'strafe_right']) {
+      const requiredStates = process.argv.includes('--partial-locomotion')
+        ? [...new Set(candidate.manifest.animations.graphs.flatMap(g=>g.bindings.map(b=>b.state)))]
+        : ['idle', 'walk', 'run', 'backward', 'strafe_left', 'strafe_right']
+      for (const state of requiredStates) {
         const key = `${candidate.manifest.design.player}:${state}`
         reports.push({ nodeKey: `animations.loop.${state}`, passed: (metrics.animationLoops?.[key] ?? 0) >= 2, message: 'Real-keyboard movement repeatedly played the baked loop', measured: { loops: metrics.animationLoops?.[key] ?? 0 } })
+      }
+      if (process.argv.includes('--partial-locomotion')) {
+        await page.locator('#save').click()
+        const saved = await page.evaluate(()=>{const s=window.__gameAcceptance.state();return s.actors.find(a=>a.id===s.player).position})
+        await page.reload()
+        await page.waitForFunction(()=>window.__gameAcceptance?.ready,undefined,{timeout:45000})
+        await page.locator('#load').click()
+        const loaded = await page.evaluate(()=>{const s=window.__gameAcceptance.state();return s.actors.find(a=>a.id===s.player).position})
+        reports.push({nodeKey:'animations.offline_restore',passed:Math.hypot(saved.x-loaded.x,saved.z-loaded.z)<.02,message:'Fresh-page checkpoint restoration with every external origin blocked',measured:{saved,loaded}})
       }
     }
     if (candidate.manifest.animations) {

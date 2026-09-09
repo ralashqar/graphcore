@@ -1,3 +1,4 @@
+import { PerformanceController } from './performanceController.ts'
 import { ActionController } from './actionController.ts'
 import { dashStep, MOTION_PROFILE } from './motionPresentation.ts'
 import { z } from 'zod'
@@ -33,16 +34,20 @@ const missionSchema = z
   .strict()
 export type MissionState = z.infer<typeof missionSchema>
 export class UnifiedSimulation extends Simulation {
-  override actionDisplacement(_actor:ActorState, ability:Ability, action:Action, displacement:{x:number;z:number}) {
-    if(this.source.mechanics?.motionProfile!==MOTION_PROFILE || action.ability!=='runtime.dash.0')return displacement
+  override actionDisplacement(actor:ActorState, ability:Ability, action:Action, displacement:{x:number;z:number}, input:Input) {
+    if(this.source.mechanics?.motionProfile!==MOTION_PROFILE || action.ability!=='runtime.dash.0'&&action.ability!=='runtime.program.roll')return displacement
     const ticks=(seconds:number)=>Math.max(1,Math.round(seconds*60))
     const distance=dashStep(action.tick-ticks(ability.windup),ticks(ability.active),ticks(ability.recovery),ability.distance)
-    return {x:action.direction.x*distance,z:action.direction.z*distance}
+    const motion={x:action.direction.x*distance,z:action.direction.z*distance}
+    return action.ability==='runtime.program.roll'?this.performanceController.rollDisplacement(this,actor,ability,action,input,motion):motion
   }
+  performanceController = new PerformanceController()
+  performanceMotion(actor:ActorState){return this.performanceController.motion(this,actor)}
+  override ai(actor:ActorState):Input{return this.performanceController.reactions[actor.id]?{}:super.ai(actor)}
   actionController = new ActionController()
-  startComposedAction(id:string,input:Input){return super.activate(this.player,id,input)}
+  startComposedAction(id:string,input:Input){if(this.performanceController.reactions[this.player.id])return false;return super.activate(this.player,id,input)}
   override activate(actor:ActorState,id:string,input:Input){
-    if(id.startsWith('runtime.'))return false
+    if(id.startsWith('runtime.')||this.performanceController.reactions[actor.id])return false
     return super.activate(actor,id,input)
   }
   override actorSpec(actor:ActorState){
@@ -54,7 +59,7 @@ export class UnifiedSimulation extends Simulation {
   mechanicStates:Record<string,MechanicState>={}
   mechanicPoses:Record<string,Record<string,Vec>>={}
   forcedMovement:Record<string,Vec>={}
-  override canSave(){return super.canSave()&&Object.keys(this.forcedMovement).length===0}
+  override canSave(){return super.canSave()&&Object.keys(this.forcedMovement).length===0&&Object.keys(this.performanceController.reactions).length===0}
   declare state: State & { mission: MissionState }
   source: Design
   applyMechanics(design:Design,buildId:string){
@@ -63,7 +68,7 @@ export class UnifiedSimulation extends Simulation {
     if(errors.length)throw new Error(errors.map(e=>e.message).join('; '))
     const compiled=runtimeDesign(design)
     const previous={source:this.source,design:this.design,buildId:this.state.buildId,mechanics:this.mechanicStates}
-    try{this.source=structuredClone(design);this.design=compiled;this.state.buildId=buildId;this.mechanicStates={};this.mechanicPoses={};this.actionController.reset()}
+    try{this.source=structuredClone(design);this.design=compiled;this.state.buildId=buildId;this.mechanicStates={};this.mechanicPoses={};this.actionController.reset();this.performanceController.reset()}
     catch(error){this.design=previous.design;this.source=previous.source;this.state.buildId=previous.buildId;this.mechanicStates=previous.mechanics;throw error}
   }
   mechanicPose(actor:ActorState,positions:Record<string,Vec>){
@@ -81,6 +86,7 @@ export class UnifiedSimulation extends Simulation {
     else this.mechanicPoses[actor.id]=pose.joints
   }
   override traversal(actor:ActorState,input:Input){
+    if(this.performanceController.move(this,actor))return true
     if(!this.source.mechanics)return super.traversal(actor,input)
     const forced=this.forcedMovement[actor.id]
     if(forced){
@@ -267,7 +273,7 @@ export class UnifiedSimulation extends Simulation {
     this.event(this.player, 'objective', objective.label)
   }
   override step(input: Input = {}) {
-    input=this.actionController.prepare(this,input)
+    input=this.performanceController.prepare(this,this.actionController.prepare(this,input))
     for(const id of Object.keys(this.forcedMovement)){
       const actor=this.state.actors.find(a=>a.id===id)
       if(!actor||actor.health<=0){delete this.forcedMovement[id];continue}
@@ -302,7 +308,9 @@ export class UnifiedSimulation extends Simulation {
     }
     const serial = this.state.serial,
       claimed = input.interact && this.interactMission()
-    super.step(claimed ? { ...input, interact: false } : input)
+      const previousPosition = { ...this.player.position }
+      super.step(claimed ? { ...input, interact: false } : input)
+      this.performanceController.velocity = { x:(this.player.position.x-previousPosition.x)*60,z:(this.player.position.z-previousPosition.z)*60 }
     const m = this.state.mission
     for (const event of this.state.events.filter(
       (e) =>
@@ -435,7 +443,7 @@ export class UnifiedSimulation extends Simulation {
         throw new Error('Invalid objective prerequisites')
     }
     super.restore(state)
-    this.actionController.reset()
+    this.actionController.reset();this.performanceController.reset()
     this.mechanicStates=restoredMechanics
     this.mechanicPoses={};this.forcedMovement={}
     this.state.mission = m
@@ -455,7 +463,7 @@ export class UnifiedSimulation extends Simulation {
     ability: string,
   ) {
     const hit = super.hit(source, target, amount, ability)
-    if (hit) this.applyEffects(source, target, ability, 'hit')
+    if (hit) {this.applyEffects(source, target, ability, 'hit');this.performanceController.hit(this,source,target,ability)}
     return hit
   }
   applyEffects(

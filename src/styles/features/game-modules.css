@@ -105,7 +105,7 @@
 .module-pose svg,
 .module-level {
   width: 100%;
-  background: #17271f;
+  background: var(--brand-control, #070d19);
   border: 1px solid var(--game-line);
   border-radius: 8px;
   max-height: 480px;
@@ -117,21 +117,21 @@
 .module-switch {
   margin: 12px 25px;
   background: none;
-  border: 1px solid #627668;
+  border: 1px solid var(--line-bright, #294264);
   color: inherit;
   padding: 8px;
   border-radius: 4px;
 }
 .module-workspace select {
-  background: #23352c;
-  color: #e4ede7;
+  background: var(--brand-control, #070d19);
+  color: var(--text, #f7fbff);
   padding: 10px;
-  border: 1px solid #627668;
+  border: 1px solid var(--line-bright, #294264);
   border-radius: 5px;
 }
 .module-workspace button.is-active {
-  color: #c8efaa;
-  border-color: #a6be8e;
+  color: var(--game-accent);
+  border-color: var(--game-accent);
 }
 .module-level {
   display: block;
@@ -176,7 +176,7 @@
   height: 390px;
 }
 .module-node .react-flow__edge-textbg {
-  fill: #24392d;
+  fill: var(--game-panel);
 }
 .module-workspace .game-eyebrow {
   font-size: 10px;

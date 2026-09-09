@@ -34,8 +34,17 @@
             "hang",
             "shimmy_left",
             "shimmy_right",
-            "climb"
+            "climb",
+            "uppercut",
+            "recoil",
+            "fall_back",
+            "prone",
+            "get_up"
           ]
+        },
+        "motionContract": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         },
         "rigRevision": {
           "type": "string",

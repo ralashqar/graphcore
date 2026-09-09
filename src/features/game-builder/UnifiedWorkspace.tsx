@@ -176,8 +176,8 @@ export function UnifiedWorkspace({
       setBuild(
         await compile(design, {
           id: crypto.randomUUID(),
-          projectId,
-          draftId,
+          projectId: canRun ? projectId : crypto.randomUUID(),
+          draftId: canRun ? draftId : crypto.randomUUID(),
           sourceRevision: workspace.revision,
         }),
       )
@@ -199,7 +199,8 @@ export function UnifiedWorkspace({
           </p>
         </div>
         <div className="game-header-actions">
-          <button
+          <button onClick={() => setTab('Mechanics')}>Prompt an ability</button>
+          <button className="game-primary"
             disabled={blocked || !!findings.length}
             onClick={() => void command({ action: 'save', design })}
           >
@@ -210,7 +211,7 @@ export function UnifiedWorkspace({
           </button>
         </div>
       </header>
-      <nav className="game-tabs">
+      <nav className="game-tabs" aria-label="Game workspace sections">
         {['Plan', 'Systems', 'Level', 'Interactions', 'Mechanics', 'Assets', 'Animations', 'Build'].map(
           (t) => (
             <button
@@ -461,7 +462,7 @@ export function UnifiedWorkspace({
         />
       )}
       {tab === 'Animations' && <AnimationsWorkspace projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} onChanged={refresh} />}
-      {tab === 'Mechanics' && <MechanicsWorkspace projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} blocked={blocked||dirty||!workspace.design} jobId={inspectedMechanicJob?.id} jobPhase={inspectedMechanicJob?.phase} credits={workspace.pricing?.planCredits??25} onChanged={refreshMechanics} onEdit={editMechanic} onEditAction={editAction} />}
+      {tab === 'Mechanics' && <MechanicsWorkspace online={canRun} projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} blocked={blocked||dirty||!workspace.design} jobId={inspectedMechanicJob?.id} jobPhase={inspectedMechanicJob?.phase} credits={workspace.pricing?.planCredits??25} onChanged={refreshMechanics} onEdit={editMechanic} onEditAction={editAction} />}
       {tab === 'Assets' && (
         <section>
           <h2>Gameplay visuals</h2>
@@ -497,7 +498,7 @@ export function UnifiedWorkspace({
               onDiagnostic={setError}
             />
           )}
-          {build&&<details><summary>Author mechanics while playing</summary><MechanicsWorkspace projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} blocked={blocked||dirty||!workspace.design} jobId={inspectedMechanicJob?.id} jobPhase={inspectedMechanicJob?.phase} credits={workspace.pricing?.planCredits??25} onChanged={refreshMechanics} onEdit={editMechanic} onEditAction={editAction}/></details>}
+          {build&&<section className="game-sandbox-authoring" aria-label="Author mechanics while playing"><div className="game-panel-heading"><div><span className="game-eyebrow">SANDBOX AUTHORING</span><h2>What should your character do?</h2><p>Describe an ability, review its poses and behavior, then build to try it.</p></div></div><MechanicsWorkspace online={canRun} projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} blocked={blocked||dirty||!workspace.design} jobId={inspectedMechanicJob?.id} jobPhase={inspectedMechanicJob?.phase} credits={workspace.pricing?.planCredits??25} onChanged={refreshMechanics} onEdit={editMechanic} onEditAction={editAction}/></section>}
           <div className="game-build-list">
             {workspace.builds.map((b) => (
               <article key={b.id}>
