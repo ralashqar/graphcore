@@ -1,4 +1,6 @@
+import { acceptActions } from './actionAcceptance.ts'
 import { UnifiedSimulation } from './simulation.ts'
+import { acceptMechanics } from './mechanicAcceptance.ts'
 import { of, type Design } from './spec.ts'
 import { interactionPath } from '../interactions/navigation.ts'
 
@@ -179,5 +181,7 @@ export async function runAcceptance(design: Design, buildId: string) {
   } finally {
     sim.dispose()
   }
+  if(design.mechanics)reports.push(...await acceptMechanics(design,buildId))
+  reports.push(...await acceptActions(design,buildId))
   return reports
 }

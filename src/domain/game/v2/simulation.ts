@@ -13,6 +13,9 @@ import {
 } from '../interactions/spec.ts'
 export const DT = 1 / 60
 export type Input = {
+  attack?: boolean
+  dash?: boolean
+  traverse?: boolean
   x?: number
   z?: number
   sprint?: boolean
@@ -127,6 +130,7 @@ export const stateSchema = z
   .strict()
 const ticks = (seconds: number) => Math.max(1, Math.round(seconds / DT))
 export class Simulation {
+  actionDisplacement(_actor: ActorState, _ability: Ability, _action: Action, displacement: {x:number;z:number}) { return displacement }
   state: State
   physics: Physics
   design: Design
@@ -529,6 +533,8 @@ export class Simulation {
             }
           }
         }
+        const displacement = this.actionDisplacement(a, ability, action, {x:dx,z:dz})
+        dx = displacement.x; dz = displacement.z
         if (action.tick >= end + ticks(ability.recovery)) a.action = null
       }
       a.vy -= m.gravity * DT

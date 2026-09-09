@@ -20,7 +20,7 @@ end $$;
 -- Redirect only this transaction's command function to the isolated test budget.
 -- The live reservations and function definition are untouched after rollback.
 do $$ begin
- execute replace(pg_get_functiondef('public.game_animation_command(uuid,jsonb,jsonb,jsonb)'::regprocedure), 'kimodo-initial-2026-09', 'animation-transaction-test');
+ execute replace(pg_get_functiondef('public.game_animation_before_review(uuid,jsonb,jsonb,jsonb)'::regprocedure), 'kimodo-initial-2026-09', 'animation-transaction-test');
 end $$;
 
 do $$ declare p uuid; d uuid; actor uuid; rev integer; cmd jsonb; result jsonb; jid uuid; rig jsonb; begin
@@ -52,4 +52,31 @@ do $$ declare p uuid; d uuid; actor uuid; rev integer; cmd jsonb; result jsonb; 
  result:=public.game_retry_animation_command(actor,cmd);
  if public.game_retry_animation_command(actor,cmd)<>result then raise exception 'Animation recovery not idempotent'; end if;
  if (select count(*) from public.game_animation_setup_spend where id=jid)<>1 then raise exception 'Recovery duplicated reservation'; end if;
+end $$;
+
+do $$ declare w public.game_workspaces; actor uuid; candidate uuid:=gen_random_uuid(); jid uuid; graph jsonb; cmd jsonb; result jsonb; count_before integer; manifest jsonb; imported uuid:=gen_random_uuid(); begin
+ if not has_schema_privilege('service_role','app_private','usage') then raise exception 'Animation server cannot access authorization helpers'; end if;
+ select * into w from public.game_workspaces where design->>'schemaVersion'='3' limit 1;
+ select m.user_id into actor from public.projects p join public.workspace_memberships m on m.workspace_id=p.workspace_id and m.role='owner' where p.id=w.project_id limit 1;
+ jid:=gen_random_uuid();
+ insert into public.game_animation_rigs(draft_id,revision,profile) values(w.draft_id,repeat('b',64),jsonb_build_object('revision',repeat('b',64))) on conflict do nothing;
+ insert into public.game_jobs(id,draft_id,kind,input,requested_by) values(jid,w.draft_id,'asset','{}',actor);
+ insert into public.game_animation_recipes(job_id,draft_id,recipe,rig_revision,model_revision,processing_version) values(jid,w.draft_id,'{}',repeat('b',64),'test','animation-1.1.0');
+ insert into public.game_animation_candidates(id,job_id,draft_id,candidate_index,source_path,clip,diagnostics) values(candidate,jid,w.draft_id,0,'test',jsonb_build_object('state','idle','rigRevision',repeat('b',64),'validation',jsonb_build_object('accepted',true)),'{}');
+ graph:=jsonb_build_object('version',1,'id','test.graph','actorDefinition',(select n->>'id' from jsonb_array_elements(w.design->'nodes') n where n->>'kind'='actor_definition' limit 1),'rigRevision',repeat('b',64),'bindings',jsonb_build_array(jsonb_build_object('state','idle','clipRevision',candidate)),'transitions','[]'::jsonb);
+ cmd:=jsonb_build_object('projectId',w.project_id,'draftId',w.draft_id,'expectedRevision',w.revision,'idempotencyKey',gen_random_uuid(),'action','bind_animation','graph',graph);
+ begin perform public.game_animation_command(actor,cmd); raise exception 'Unreviewed binding accepted'; exception when others then if sqlerrm<>'Binding requires a reviewed compatible animation' then raise; end if; end;
+ cmd:=cmd-'graph'||jsonb_build_object('action','accept_animation','candidateId',candidate);
+ begin perform public.game_animation_command(gen_random_uuid(),cmd); raise exception 'Other user reviewed candidate'; exception when insufficient_privilege then null; end;
+ result:=public.game_animation_command(actor,cmd);
+ if public.game_animation_command(actor,cmd)<>result then raise exception 'Review is not idempotent'; end if;
+ perform public.game_animation_command(actor,(cmd-'candidateId')||jsonb_build_object('idempotencyKey',gen_random_uuid(),'action','bind_animation','graph',graph));
+ select * into w from public.game_workspaces where draft_id=w.draft_id;
+ select count(*) into count_before from public.game_animation_setup_spend;
+ manifest:=jsonb_build_object('projectId',w.project_id,'draftId',w.draft_id,'expectedRevision',w.revision,'idempotencyKey',gen_random_uuid(),'processingVersion','animation-1.1.0','modelRevision','test','rig',jsonb_build_object('revision',repeat('b',64)),
+  'clips',jsonb_build_array(jsonb_build_object('jobId',imported,'sourcePath','generated/game/'||w.draft_id||'/'||imported||'/source-0.json','sourceHash',repeat('a',64),'recipe',jsonb_build_object('rigRevision',repeat('b',64),'candidates',1,'state','idle'))));
+ result:=public.game_animation_import(actor,manifest);
+ if public.game_animation_import(actor,manifest)<>result then raise exception 'Import not idempotent'; end if;
+ if (select count(*) from public.game_animation_setup_spend)<>count_before then raise exception 'Import reserved inference budget'; end if;
+ if has_function_privilege('authenticated','public.game_animation_import(uuid,jsonb)','execute') or has_table_privilege('authenticated','public.game_animation_reviews','insert') then raise exception 'Review/import privilege leak'; end if;
 end $$;

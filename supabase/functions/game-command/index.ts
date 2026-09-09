@@ -7,6 +7,7 @@ import { validateGameDesign } from '../../../src/domain/game/compiler.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { animationCommand } from '../_shared/game-animation-command.ts'
+import { mechanicCommand } from '../_shared/game-mechanic-command.ts'
 
 Deno.serve(async request => {
   const preflight = maybeHandleOptions(request); if (preflight) return preflight
@@ -14,7 +15,12 @@ Deno.serve(async request => {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed')
     const { client, user } = await requireUserClient(request, 'game-command')
     const raw = await request.json(), admin = createAdminClient('game-command')
-    if (['generate_animation', 'bind_animation'].includes(raw?.action)) return json(await animationCommand(admin, user.id, raw))
+    if (['plan_mechanic', 'materialize_mechanic'].includes(raw?.action)) {
+      const draft=await client.from('project_drafts').select('id').eq('id',raw.draftId).eq('project_id',raw.projectId).single()
+      if(draft.error||!draft.data)throw new HttpError(404,'Project draft not found')
+      return json(await mechanicCommand(admin, user.id, raw))
+    }
+    if (['generate_animation', 'bind_animation', 'accept_animation', 'reject_animation'].includes(raw?.action)) return json(await animationCommand(admin, user.id, raw))
     const command = anyCommandSchema.parse(raw)
     const unified = 'template' in command && command.template === 'unified.v1'
     const moduleCommand = unified || ('template' in command && command.template === 'combat_traversal.v1')
@@ -53,6 +59,7 @@ Deno.serve(async request => {
       if (Deno.env.get('GAME_GENERATION_ENABLED') !== 'true' || (!users.includes('*') && !users.includes(user.id))) throw new HttpError(503, 'Game generation is awaiting the game-worker rollout. Saved designs remain available.')
       const current = await client.from('game_workspaces').select('design').eq('draft_id', command.draftId).maybeSingle()
       if (current.error) throw new HttpError(400, current.error.message)
+      if(current.data?.design?.mechanics&&Deno.env.get('GAME_MECHANICS_ENABLED')!=='true')throw new HttpError(503,'Mechanic builds are awaiting traversal acceptance.')
       if((unified||current.data?.design?.schemaVersion===3)&&Deno.env.get('GAME_UNIFIED_ENABLED')!=='true')throw new HttpError(503,'Unified gameplay is awaiting runtime acceptance.')
       if ((moduleCommand || current.data?.design?.schemaVersion === 2) && Deno.env.get('GAME_MODULES_ENABLED') !== 'true') throw new HttpError(503, 'Combat and traversal is awaiting runtime acceptance.')
       reserve = ['generate','plan'].includes(command.action) ? Number(Deno.env.get('GAME_PLAN_CREDITS') ?? '25') : command.action === 'asset' ? Number(Deno.env.get('GAME_ASSET_CREDITS') ?? '150') : 0

@@ -12,6 +12,7 @@ COPY src ./src
 COPY supabase/functions/_shared ./supabase/functions/_shared
 COPY workers/game ./workers/game
 COPY scripts/game-browser-acceptance.mjs scripts/game-module-browser.mjs scripts/game-interaction-browser.mjs scripts/game-unified-browser.mjs scripts/game-validate-glb.mjs ./scripts/
+COPY scripts/game-mechanic-browser-acceptance.mjs scripts/game-action-browser-acceptance.mjs ./scripts/
 COPY game-runtime ./game-runtime
 COPY vite.game.config.ts ./
 RUN npx vite build --config vite.game.config.ts

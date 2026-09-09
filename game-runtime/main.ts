@@ -8,6 +8,7 @@ import { manifestSchema as unifiedManifest } from '../src/domain/game/v3/spec'
 import { createUnifiedPlayer } from '../src/game-runtime/unifiedRenderer'
 
 let player: GamePlayer | CombatPlayer | null = null, generation = 0, buildId = '', paused = false
+let creatorSession = '', applying = false
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!
 const status = document.querySelector<HTMLElement>('#status')!
 const feedback = document.createElement('p'); feedback.setAttribute('aria-live', 'polite'); status.after(feedback)
@@ -19,7 +20,7 @@ async function loadBuild(data: unknown, assetUrls: Record<string, string> = {}) 
     player?.dispose(); player = null; buildId = manifest.id
     document.querySelector('#title')!.textContent = manifest.design.title
     document.querySelector('#objective')!.textContent = manifest.design.brief
-    document.querySelector('small')!.textContent = 'WASD move · Space jump · E grip/climb/activate · C drop · F attack · Q dodge · R shield'
+    document.querySelector('small')!.textContent = `WASD move · Space jump · ${manifest.schemaVersion===3&&manifest.design.mechanics?'V wall traversal · ':''}E grip/climb/activate · C drop · F attack · Q dodge · R shield · 1–4 original abilities`
     const update = (text:string, detail:string) => { status.textContent = text; feedback.textContent = detail }
     const next = manifest.schemaVersion===3?await createUnifiedPlayer(canvas,manifest,update,assetUrls):await createCombatPlayer(canvas, manifest, update)
     if (mine !== generation) { next.dispose(); return }
@@ -49,7 +50,21 @@ async function loadBuild(data: unknown, assetUrls: Record<string, string> = {}) 
 }
 window.addEventListener('message', event => {
   if (event.source !== parent || !parentOrigin || event.origin !== parentOrigin || event.data?.protocol !== 'graphcore.game.v1') return
-  if (event.data.type === 'load') void loadBuild(event.data.manifest, event.data.assetUrls ?? {}).catch(error => { status.textContent = String(error); notify('error', { message: String(error) }) })
+  if (new URLSearchParams(location.search).has('release')) return
+  if (event.data.type === 'load') {
+    if(applying)return
+    creatorSession=typeof event.data.session==='string'?event.data.session:''
+    void loadBuild(event.data.manifest, event.data.assetUrls ?? {}).catch(error => { status.textContent = String(error); notify('error', { message: String(error) }) })
+  }
+  if(event.data.type==='apply_mechanics'&&!applying&&creatorSession&&event.data.session===creatorSession&&event.data.fromBuildId===buildId){
+    const target=player,requestId=event.data.requestId,mine=generation
+    if(!target||!('replaceMechanics' in target))return
+    applying=true
+    void target.replaceMechanics(event.data.manifest).then(()=>{
+      if(mine!==generation)return
+      buildId=target.state().buildId;notify('mechanics_applied',{session:creatorSession,requestId});canvas.focus()
+    }).catch(error=>notify('mechanics_rejected',{session:creatorSession,requestId,message:String(error)})).finally(()=>{applying=false})
+  }
 })
 document.querySelector('#save')!.addEventListener('click', () => { if (player) { try { localStorage.setItem(`graphcore.game.save.${buildId}`, JSON.stringify(player.save())); status.textContent = 'Saved.' } catch { status.textContent = 'Saving is unavailable in this browser.' } } })
 document.querySelector('#load')!.addEventListener('click', () => { try { const data = localStorage.getItem(`graphcore.game.save.${buildId}`); if (!data) throw new Error('No save for this build.'); player?.restore(JSON.parse(data)); status.textContent = 'Loaded.' } catch (error) { status.textContent = String(error) } })

@@ -1,6 +1,28 @@
 # Hosted game animation implementation status
 
-The approved release is **not complete**. Five generated locomotion clips now pass local motion validation; project-owned publication and the ledge sequence remain unvalidated. Keep animation admissions disabled. The dated sections below preserve the setup history.
+The full three-milestone release is **not complete**. Hosted locomotion import, review, binding, build and publication now pass. Jump/roll and ledge generated-motion acceptance remain outstanding. Paid animation admissions remain disabled. The current status below supersedes the historical setup notes further down.
+
+## Hosted locomotion milestone — 9 September 2026
+
+Six existing sources were imported into the marked Courier acceptance project (`6fee993a-9583-4fd6-8546-11274c5cb7b3`, draft `8afdea20-3709-4ffa-9e8f-360aa20b01a8`). The service-only import freezes hashes, recipes, rig, processing policy and original provider IDs. All six completed fixed Blender baking on Fly and passed `animation-1.1.0`; no new inference or inference reservations were created. Their technical validation did not bind them. Explicit automated acceptance was subsequently exercised only in that marked test project, followed by binding and publication.
+
+Published test build: `693ebd0a-8c4f-4d07-8da2-4791af1f0a20`, available at https://graphcore-game-preview.fly.dev/?release=693ebd0a-8c4f-4d07-8da2-4791af1f0a20 . The immutable manifest includes six clips and a mannequin rig/graph snapshot. Hosted simulation and Chromium keyboard acceptance passed. A fresh browser with Runpod/Fal domains blocked loaded all six GLBs, completed Courier objectives and restored the checkpoint after page reload. Evidence: `output/game-animation-release-browser/report.json`.
+
+The Animations area has actor-specific requirements, candidate review, Accept and Accept & bind, rejection, comparison, orbit/zoom, speed, pause, scrubbing, contact/root overlays, signed downloads, stage inspection, saved-motion retry, explicit regeneration estimates and transition editing. Review and binding status are displayed separately from technical workflow stages. Its browser component test uses an explicitly mocked local command API; hosted command/ownership checks are separate database tests. Evidence: `output/game-animation-authoring-browser/report.json`. This does not claim an authenticated production-browser review test.
+
+Deployment: migrations `20260909052407`, `20260909070941`, `20260909072525`; Edge `game-command`, `get-game-workspace`, `get-game-release`; Fly game worker `game-animation-review-3.1.1` and isolated preview are deployed and healthy. The permissions migration repairs service-role access to existing private authorization helpers, found by the real import. Shared world-worker execution code was not changed, so no world-worker deployment was needed. Main frontend remains local pending its hosting destination.
+
+Verification passed: TypeScript, application/runtime builds, 715 standard tests (8 skipped), focused animation tests, rollback database tests, authoring controls and published gameplay/browser checkpoint checks. Development server starts successfully. Existing bundle-size and landing-image build warnings remain.
+
+### Remaining gates and budget
+
+Runpod endpoint `dr79dd76cb16de` remains min=0/max=0. The dashboard shows a $99.94 balance after a $100 reload and $0/hour current spend. The September 9 billing API now reports $0.011712366715073586 for this endpoint, less than the dashboard's $0.06 debit; reconciliation is incomplete. Both existing $10 reservations remain held. No new GPU requests were made during this milestone. The $30 total, $25 admission ceiling and $5 buffer are unchanged.
+
+Versioned jump/roll and canonical ledge recipe profiles are present in `animationProfiles.ts` and pass contract/constraint checks. They are experimental inputs, not accepted motions. Outgoing action clip times are preserved during interrupted crossfades. Still required: paid candidate generation after billing reconciliation; measured jump/roll quality; authored ledge contact correction and attachment bounds; elevated-platform generated-animation acceptance; broader capability-gap planning and authenticated end-to-end authoring acceptance. Do not describe those milestones as supported until their motion and runtime gates pass.
+
+Reproduction: `node --experimental-strip-types scripts/game-animation-hosted.mjs status`; import mode reuses its durable manifest. `test-bind` is restricted to projects marked `gameUnifiedFixture`; never use it to approve normal user candidates. Browser checks: `node scripts/game-animation-authoring-browser.mjs` and `node scripts/game-animation-release-browser.mjs 693ebd0a-8c4f-4d07-8da2-4791af1f0a20`. SQL checks: `node scripts/verify-game-animation-db.mjs --existing`.
+
+## Historical setup notes
 
 ## Provider and budget — 9 September 2026
 

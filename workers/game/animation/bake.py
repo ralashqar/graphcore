@@ -275,14 +275,22 @@ def create_rig(rig):
     material = bpy.data.materials.new('Mannequin')
     material.diffuse_color = (.35, .65, .8, 1)
     for joint in rig['joints']:
+        soma = rig['id'] == 'humanoid.soma.v2'
+        name = joint['id']
+        if soma and (name.endswith('End') or name in ('Jaw', 'LeftEye', 'RightEye', 'Neck2') or ('Hand' in name and name not in ('LeftHand', 'RightHand'))): continue
         children = [j for j in rig['joints'] if j['parent'] == joint['id']]
         head = positions[joint['id']]
         tail = positions[children[0]['id']] if children else head + Vector((0, .09, 0))
+        if soma:
+            endpoint = {'Chest':'Neck1','Head':'HeadEnd','LeftHand':'LeftHandMiddle2','RightHand':'RightHandMiddle2'}.get(name)
+            if endpoint: tail = positions[endpoint]
         delta = tail-head
         bpy.ops.mesh.primitive_uv_sphere_add(segments=8, ring_count=4, location=(head+tail)*.5)
         mesh = bpy.context.object
         mesh.name = 'body.'+joint['id']
-        mesh.scale = (.065, .065, max(.04, delta.length/2))
+        torso = name in ('Hips','Spine1','Spine2','Chest')
+        radius = .14 if torso else .09 if name == 'Head' else .05
+        mesh.scale = (radius, .085 if torso else radius, max(.04, delta.length/2)) if soma else (.065, .065, max(.04, delta.length/2))
         if delta.length > .001: mesh.rotation_mode = 'QUATERNION'; mesh.rotation_quaternion = delta.to_track_quat('Z', 'Y')
         bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
         group = mesh.vertex_groups.new(name=joint['id'])

@@ -4,6 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "test:game-mechanics": "node --experimental-strip-types --test src/domain/game/v3/mechanics.test.ts src/domain/game/v3/actionMechanics.test.ts src/domain/game/v3/motionPresentation.test.ts",
+    "test:game-mechanics-browser": "node --experimental-strip-types scripts/game-mechanics-browser.mjs",
+    "test:game-mechanics-db": "node scripts/verify-game-mechanics-db.mjs",
     "test:game-modules": "node --experimental-strip-types --test src/domain/game/v2/gameplay.test.ts",
     "test:game-modules-browser": "node --experimental-strip-types scripts/game-module-smoke.mjs",
     "test:game-modules-workspace": "node scripts/game-module-workspace-smoke.mjs",

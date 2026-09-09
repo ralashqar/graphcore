@@ -1,4 +1,8 @@
 export async function acceptUnifiedGame(page, reports, design) {
+  const playerDefinition=design.nodes.find(n=>n.id===design.nodes.find(a=>a.id===design.player)?.definition)
+  const attackId=playerDefinition?.abilities.find(id=>design.nodes.some(n=>n.id===id&&n.op==='bolt'))??playerDefinition?.abilities.find(id=>design.nodes.some(n=>n.id===id&&n.op==='strike'))
+  const attackSlot=playerDefinition?.abilities.indexOf(attackId)??-1
+  const attackKey=design.mechanics?.actions?.some(p=>p.capability==='combo')&&attackSlot>=0?String(attackSlot+1):'f'
   const state = () => page.evaluate(() => window.__gameAcceptance.state())
   const idle = (ms) => page.waitForTimeout(ms)
   await page.locator('canvas').focus()
@@ -35,7 +39,7 @@ export async function acceptUnifiedGame(page, reports, design) {
               ) < 12,
           )
         ) {
-          await page.keyboard.press('f')
+          await page.keyboard.press(attackKey)
           lastAttack = Date.now()
         }
         const key =
@@ -153,7 +157,7 @@ export async function acceptUnifiedGame(page, reports, design) {
           await idle(180)
           await stop()
         }
-        await page.keyboard.press('f')
+        await page.keyboard.press(attackKey)
         await idle(650)
       }
     } else {

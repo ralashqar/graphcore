@@ -29,14 +29,14 @@ export async function step<T>(
   run: () => Promise<T>,
   deps: string[] = [],
 ): Promise<T> {
-  const planner = id === 'scope' || id.startsWith('plan.')
+  const planner = id === 'scope' || id.startsWith('plan.') || id === 'mechanic.capabilities'
   const hash = await hashGameValue({
-      implementation: ctx.job.input.template === 'unified.v1' ? 'gameplay-3.0.0' : IMPLEMENTATION,
+        implementation: ctx.job.input.design?.mechanics?.motionProfile ? 'gameplay-3.4.0' : ctx.job.input.mechanicRequest || ctx.job.input.design?.mechanics ? (ctx.job.input.context?.actionCatalog || ctx.job.input.design?.mechanics?.actions?.length ? 'gameplay-3.3.0' : 'gameplay-3.2.0') : ctx.job.input.template === 'unified.v1' ? 'gameplay-3.0.0' : IMPLEMENTATION,
       input,
       ...(planner
         ? {
             context: ctx.job.input.context,
-            model: Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1',
+            model: ctx.job.input.mechanicRequest ? ctx.job.input.context?.mechanicModel ?? Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1' : Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1',
           }
         : {}),
     }),
@@ -93,11 +93,12 @@ export async function ask<T>(
   instructions?: string,
 ): Promise<T> {
   const { job, admin } = ctx
+  const model = job.input.mechanicRequest ? job.input.context?.mechanicModel ?? Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1' : Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1'
   const request = { input, frozenWorldContext: job.input.context ?? {} }
   const hash = await hashGameValue({
     id,
     request,
-    model: Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1',
+    model,
   })
   if (
     job.checkpoint.providerInputHash === hash &&
@@ -121,7 +122,7 @@ export async function ask<T>(
       idempotencyKey: `${job.id}:${id}:${hash}`,
     },
     payload: {
-      model: Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1',
+      model,
       maxOutputTokens: 12000,
       timeoutMs: 180000,
       instructions: instructions ??

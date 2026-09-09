@@ -1,7 +1,7 @@
 import { z } from 'npm:zod@4'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
-import { humanoidMannequin } from '../../../src/domain/game/v3/mannequin.ts'
+import { humanoidMannequin, somaMannequin } from '../../../src/domain/game/v3/mannequin.ts'
 const schema = z.object({ projectId: z.string().uuid(), draftId: z.string().uuid(), animations: z.boolean().optional(), buildId: z.string().uuid().optional(), jobId: z.string().uuid().optional(), nodeId: z.string().max(64).optional() }).strict()
 Deno.serve(async request => {
   const preflight = maybeHandleOptions(request); if (preflight) return preflight
@@ -11,19 +11,23 @@ Deno.serve(async request => {
     const draft = await client.from('project_drafts').select('id').eq('id', input.draftId).eq('project_id', input.projectId).single()
     if (!draft.data || draft.error) throw new HttpError(404, 'Draft not found')
     if (input.animations) {
-      const [recipes, candidates, graphs] = await Promise.all([
+      const [recipes, candidates, graphs, reviews, jobs] = await Promise.all([
         client.from('game_animation_recipes').select('*').eq('draft_id', input.draftId).limit(100),
         client.from('game_animation_candidates').select('*').eq('draft_id', input.draftId).order('created_at', { ascending: false }).limit(100),
         client.from('game_animation_graphs').select('*').eq('draft_id', input.draftId).order('revision', { ascending: false }).limit(100),
+        client.from('game_animation_reviews').select('*').eq('draft_id', input.draftId).limit(100),
+        client.from('game_jobs').select('id,status,phase,error,progress').eq('draft_id', input.draftId).not('input->animation','is',null).order('created_at',{ascending:false}).limit(100),
       ])
-      for (const result of [recipes, candidates, graphs]) if (result.error) throw result.error
+      for (const result of [recipes, candidates, graphs, reviews, jobs]) if (result.error) throw result.error
       const admin = createAdminClient('get-game-workspace'), urls: Record<string, string> = {}
       for (const candidate of candidates.data ?? []) if (candidate.clip) {
         const signed = await admin.storage.from('project-assets').createSignedUrl(candidate.clip.storagePath, 3600)
         if (signed.error) throw signed.error
         urls[candidate.id] = signed.data.signedUrl
       }
-      return json({ rig: await humanoidMannequin(), recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, urls, enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
+      const workspace=await client.from('game_workspaces').select('design').eq('draft_id',input.draftId).single()
+      if(workspace.error)throw workspace.error
+      return json({ rig: await (workspace.data.design?.mechanics?.motionProfile?somaMannequin():humanoidMannequin()), recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, reviews: reviews.data, jobs: jobs.data, urls, urlsExpireAt: Date.now()+3500000, enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
     }
     if (input.jobId) {
       let query = client.from('game_job_steps').select('node_id,input_hash,status,attempt,output,diagnostic,dependencies,updated_at').eq('draft_id', input.draftId).eq('job_id', input.jobId)
@@ -32,7 +36,7 @@ Deno.serve(async request => {
       if (result.error) throw result.error
       const job=await client.from('game_jobs').select('checkpoint').eq('draft_id',input.draftId).eq('id',input.jobId).single()
       if(job.error)throw job.error
-      return json({ steps: result.data, plan:job.data.checkpoint?.plan??null })
+      return json({ steps: result.data, plan:job.data.checkpoint?.plan??null, animationProposals:job.data.checkpoint?.animationProposals??[] })
     }
     if (input.buildId) {
       const build = await client.from('game_builds').select('manifest,status').eq('id', input.buildId).eq('draft_id', input.draftId).single()

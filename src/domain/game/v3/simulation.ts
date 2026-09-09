@@ -1,3 +1,5 @@
+import { ActionController } from './actionController.ts'
+import { dashStep, MOTION_PROFILE } from './motionPresentation.ts'
 import { z } from 'zod'
 import {
   Simulation,
@@ -10,7 +12,13 @@ import { initPhysics } from '../v2/physics.ts'
 import { type Ability } from '../v2/spec.ts'
 import { of, type Design } from './spec.ts'
 import { runtimeDesign, validate } from './compiler.ts'
-import { sub, length } from '../v2/pose.ts'
+import { sub, length,poseAt,add,rotate } from '../v2/pose.ts'
+import { emptyMechanicState, mechanicStateSchema, type MechanicState } from './mechanics.ts'
+import { mechanicMotor } from './mechanicMotor.ts'
+import { primitive } from './mechanics.ts'
+import { queryMechanicSurfaces } from './mechanicSurfaces.ts'
+import { wallContactPose } from './mechanicPose.ts'
+import type { Vec } from '../v2/spec.ts'
 
 const missionSchema = z
   .object({
@@ -25,8 +33,68 @@ const missionSchema = z
   .strict()
 export type MissionState = z.infer<typeof missionSchema>
 export class UnifiedSimulation extends Simulation {
+  override actionDisplacement(_actor:ActorState, ability:Ability, action:Action, displacement:{x:number;z:number}) {
+    if(this.source.mechanics?.motionProfile!==MOTION_PROFILE || action.ability!=='runtime.dash.0')return displacement
+    const ticks=(seconds:number)=>Math.max(1,Math.round(seconds*60))
+    const distance=dashStep(action.tick-ticks(ability.windup),ticks(ability.active),ticks(ability.recovery),ability.distance)
+    return {x:action.direction.x*distance,z:action.direction.z*distance}
+  }
+  actionController = new ActionController()
+  startComposedAction(id:string,input:Input){return super.activate(this.player,id,input)}
+  override activate(actor:ActorState,id:string,input:Input){
+    if(id.startsWith('runtime.'))return false
+    return super.activate(actor,id,input)
+  }
+  override actorSpec(actor:ActorState){
+    const spec=super.actorSpec(actor)
+    if(actor.id!==this.state.player)return spec
+    const ids=this.design.nodes.filter(n=>n.kind==='ability'&&n.id.startsWith('runtime.')).map(n=>n.id)
+    return {...spec,abilities:[...spec.abilities,...ids]}
+  }
+  mechanicStates:Record<string,MechanicState>={}
+  mechanicPoses:Record<string,Record<string,Vec>>={}
+  forcedMovement:Record<string,Vec>={}
+  override canSave(){return super.canSave()&&Object.keys(this.forcedMovement).length===0}
   declare state: State & { mission: MissionState }
   source: Design
+  applyMechanics(design:Design,buildId:string){
+    if(!this.canSave()||this.state.actors.some(a=>this.interactions.owns(a.id))||Object.values(this.mechanicStates).some(s=>s.phase!=='inactive'))throw new Error('Apply at a grounded checkpoint with no active actions, attachments or projectiles.')
+    const errors=validate(design)
+    if(errors.length)throw new Error(errors.map(e=>e.message).join('; '))
+    const compiled=runtimeDesign(design)
+    const previous={source:this.source,design:this.design,buildId:this.state.buildId,mechanics:this.mechanicStates}
+    try{this.source=structuredClone(design);this.design=compiled;this.state.buildId=buildId;this.mechanicStates={};this.mechanicPoses={};this.actionController.reset()}
+    catch(error){this.design=previous.design;this.source=previous.source;this.state.buildId=previous.buildId;this.mechanicStates=previous.mechanics;throw error}
+  }
+  mechanicPose(actor:ActorState,positions:Record<string,Vec>){
+    return this.mechanicStates[actor.id]?.phase==='attached'?this.mechanicPoses[actor.id]??positions:positions
+  }
+  updateMechanicPose(actor:ActorState){
+    const state=this.mechanicStates[actor.id],bundle=this.source.mechanics
+    if(!bundle||state?.phase!=='attached')return
+    const p=bundle.packages.find(p=>p.id===state.packageId),spec=this.actorSpec(actor)
+    const surface=queryMechanicSurfaces(of(this.source,'world')[0],bundle.surfaces,actor.position,spec.radius,spec.height).find(s=>s.surface===state.surface)
+    if(!p||!surface)return
+    const positions=Object.fromEntries(Object.entries(poseAt(this.design,null,0,spec.height)).map(([key,p])=>[key,add(actor.position,rotate(p,actor.yaw))]))
+    const contact=primitive(p,'contact_pose'),pose=wallContactPose(positions,surface,state.elapsed,spec.height,contact.hands,contact.maximumCorrection,state.contacts,state.direction)
+    if(pose.errors.length){state.phase='departing';state.cooldown=p.cooldown;state.packageId=null;state.surface=null;state.contacts={};this.event(actor,'mechanic_contact_rejected',pose.errors.join('; '))}
+    else this.mechanicPoses[actor.id]=pose.joints
+  }
+  override traversal(actor:ActorState,input:Input){
+    if(!this.source.mechanics)return super.traversal(actor,input)
+    const forced=this.forcedMovement[actor.id]
+    if(forced){
+      delete this.forcedMovement[actor.id];actor.action=null
+      this.mechanicStates[actor.id]=emptyMechanicState(actor.position)
+      actor.position=this.physics.move(actor.id,actor.position,forced).position
+      return true
+    }
+    const state=this.mechanicStates[actor.id]??=emptyMechanicState(actor.position)
+    const definition=of(this.source,'actor_instance').find(a=>a.id===actor.id)?.definition
+    const spec=this.actorSpec(actor),movement=this.design.nodes.find(n=>n.kind==='movement'&&n.id===spec.movement)
+    if(definition&&movement?.kind==='movement'&&mechanicMotor(this.source.mechanics,state,actor,definition,input,of(this.source,'world')[0],this.physics,spec,movement.gravity)){this.updateMechanicPose(actor);return true}
+    return super.traversal(actor,input)
+  }
   constructor(design: Design, id: string) {
     super(runtimeDesign(design), id, 'mage', true)
     this.source = design
@@ -199,6 +267,16 @@ export class UnifiedSimulation extends Simulation {
     this.event(this.player, 'objective', objective.label)
   }
   override step(input: Input = {}) {
+    input=this.actionController.prepare(this,input)
+    for(const id of Object.keys(this.forcedMovement)){
+      const actor=this.state.actors.find(a=>a.id===id)
+      if(!actor||actor.health<=0){delete this.forcedMovement[id];continue}
+      const session=this.interactions.state.sessions[id]
+      if(session){
+        this.interactions.abort(session,'Forced movement interrupted attachment')
+        if(this.interactions.owns(id)){delete this.forcedMovement[id];this.event(actor,'impulse_blocked','Attachment has no safe exit')}
+      }
+    }
     if (input.ability && !input.aim) {
       const ability = this.design.nodes.find(
         (n) => n.kind === 'ability' && n.id === input.ability,
@@ -313,11 +391,18 @@ export class UnifiedSimulation extends Simulation {
     return this.interactions.hint(this.player.id)
   }
   override save() {
-    return { ...super.save(), mission: structuredClone(this.state.mission) }
+    return { ...super.save(), mission: structuredClone(this.state.mission),...(this.source.mechanics?{mechanics:{bundle:this.source.mechanics,states:structuredClone(this.mechanicStates)}}:{}) }
   }
   override restore(value: unknown) {
-    const { mission, ...state } = value as Record<string, unknown>,
-      m = missionSchema.parse(mission)
+    const { mission, mechanics, ...state } = value as Record<string, unknown>,
+        m = missionSchema.parse(mission)
+    let restoredMechanics:Record<string,MechanicState>={}
+    if(this.source.mechanics){
+      const saved=mechanics as {bundle:unknown;states:unknown}|undefined
+      if(!saved||JSON.stringify(saved.bundle)!==JSON.stringify(this.source.mechanics))throw new Error('Mechanic checkpoint revision mismatch')
+      restoredMechanics=z.record(z.string(),mechanicStateSchema).parse(saved.states)
+      for(const [actor,s] of Object.entries(restoredMechanics))if(!of(this.source,'actor_instance').some(a=>a.id===actor)||s.phase!=='inactive'||s.packageId!==null||s.surface!==null||s.cooldown>3||s.elapsed>3)throw new Error('Invalid grounded mechanic checkpoint')
+    }else if(mechanics)throw new Error('Mechanic checkpoint requires its original runtime')
     for (const [ids, kind] of [
       [m.completed, 'objective'],
       [m.pickups, 'pickup'],
@@ -350,6 +435,9 @@ export class UnifiedSimulation extends Simulation {
         throw new Error('Invalid objective prerequisites')
     }
     super.restore(state)
+    this.actionController.reset()
+    this.mechanicStates=restoredMechanics
+    this.mechanicPoses={};this.forcedMovement={}
     this.state.mission = m
     this.state.complete = of(this.source, 'objective')
       .filter((o) => o.required)
@@ -397,7 +485,12 @@ export class UnifiedSimulation extends Simulation {
           a.slowFactor = e.amount
           a.slowUntil = this.state.tick + Math.ceil(e.duration * 60)
         }
-        if (e.op === 'impulse') {
+          if (e.op === 'impulse') {
+            if(this.source.mechanics){
+              const previous=this.forcedMovement[a.id]??{x:0,y:0,z:0}
+              this.forcedMovement[a.id]={x:Math.max(-2,Math.min(2,previous.x+Math.sin(source.yaw)*e.amount*.1)),y:0,z:Math.max(-2,Math.min(2,previous.z+Math.cos(source.yaw)*e.amount*.1))}
+              continue
+            }
           const moved = this.physics.move(a.id, a.position, {
             x: Math.sin(source.yaw) * e.amount * 0.1,
             y: 0,

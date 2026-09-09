@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 const directory = mkdtempSync(join(tmpdir(), 'graphcore-animation-sql-'))
 try {
-  const migrations = ['supabase/migrations/20260909051220_game_animation_pipeline.sql', 'supabase/migrations/20260909052407_game_animation_jobs.sql']
+  const migrations = ['supabase/migrations/20260909051220_game_animation_pipeline.sql', 'supabase/migrations/20260909052407_game_animation_jobs.sql', 'supabase/migrations/20260909070941_game_animation_review_import.sql', 'supabase/migrations/20260909072525_game_animation_service_permissions.sql']
   const paths = [...(process.argv.includes('--existing') ? [] : process.argv.includes('--budget-existing') ? migrations.slice(1) : migrations), 'supabase/tests/game_animation.sql']
   const file = join(directory, 'verify.sql')
   writeFileSync(file, ['begin;', "set local graphcore.animation_test_transaction = 'on';", ...paths.map(p => readFileSync(p, 'utf8')), 'rollback;'].join('\n'))

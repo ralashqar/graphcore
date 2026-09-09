@@ -1,3 +1,4 @@
+import type { PresentationFrame } from './animationRenderer'
 import { Engine } from '@babylonjs/core/Engines/engine'
 import { Scene } from '@babylonjs/core/scene'
 import { Vector3, Quaternion } from '@babylonjs/core/Maths/math.vector'
@@ -21,7 +22,7 @@ export async function createCombatPlayer(
   canvas: HTMLCanvasElement,
   manifest: Manifest,
   onUpdate: (text: string, feedback: string) => void,
-  extensions?: { create: () => Simulation; summary: (sim: Simulation) => string; hint: (sim: Simulation) => string; visuals?: (scene: Scene) => Promise<{ update: (sim: Simulation) => Set<string>; metrics?: () => Record<string, unknown> }>; decorate?: (scene: Scene, sim: () => Simulation) => (() => void) },
+  extensions?: { create: () => Simulation; replaceMechanics?: (sim: Simulation, manifest: unknown) => Promise<void>; summary: (sim: Simulation) => string; hint: (sim: Simulation) => string; visuals?: (scene: Scene) => Promise<{ update: (sim: Simulation, frame?:PresentationFrame) => Set<string>; metrics?: () => Record<string, unknown> }>; decorate?: (scene: Scene, sim: () => Simulation) => (() => void) },
 ) {
   let sim = extensions ? extensions.create() : await Simulation.create(manifest.design, manifest.id),
     paused = false,
@@ -29,6 +30,7 @@ export async function createCombatPlayer(
     debug = false,
     lastEvent = '',
     disposed = false
+  const previousPoses=new Map<string,{position:{x:number;y:number;z:number};yaw:number}>()
   const engine = new Engine(canvas, true, { preserveDrawingBuffer: true }),
     scene = new Scene(engine)
   scene.clearColor = new Color4(0.1, 0.13, 0.14, 1)
@@ -163,9 +165,11 @@ export async function createCombatPlayer(
         'KeyD',
         'Space',
         'KeyE',
+        'KeyV',
         'KeyQ',
         'KeyR',
         'KeyF',
+        'Digit1','Digit2','Digit3','Digit4',
         'KeyC',
         'Escape',
         'ShiftLeft',
@@ -208,9 +212,9 @@ export async function createCombatPlayer(
         const spec = sim.actorSpec(sim.player),
           primary = spec.abilities.find(
             (id) =>
-              nodesOf(manifest.design, 'ability').find((a) => a.id === id)
+              nodesOf(sim.design, 'ability').find((a) => a.id === id)
                 ?.op === (spec.role === 'mage' ? 'bolt' : 'strike'),
-          ) ?? spec.abilities.find(id => nodesOf(manifest.design,'ability').some(a=>a.id===id&&(a.op==='strike'||a.op==='bolt')))
+          ) ?? spec.abilities.find(id => nodesOf(sim.design,'ability').some(a=>a.id===id&&(a.op==='strike'||a.op==='bolt')))
         const x = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0),
           z = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0),
           yaw = -camera.alpha - Math.PI / 2,
@@ -219,27 +223,34 @@ export async function createCombatPlayer(
           x: movement.x,
           z: movement.z,
           sprint: keys.has('ShiftLeft'),
+          traverse: keys.has('KeyV'),
           strafe: keys.has('AltLeft'),
           jump: edges.has('Space'),
           interact: edges.has('KeyE'),
           drop: edges.has('KeyC'),
           cancel: edges.has('Escape'),
-          ability: edges.has('KeyV')
-            ? spec.abilities.find(id=>nodesOf(manifest.design,'ability').some(a=>a.id===id&&a.op==='roll'))
+          attack: edges.has('KeyF'),
+          dash: edges.has('KeyQ'),
+          ability: ['Digit1','Digit2','Digit3','Digit4'].some(k=>edges.has(k))
+            ? spec.abilities.filter(id=>!id.startsWith('runtime.'))[['Digit1','Digit2','Digit3','Digit4'].findIndex(k=>edges.has(k))]
+            : edges.has('KeyV')
+            ? spec.abilities.find(id=>nodesOf(sim.design,'ability').some(a=>a.id===id&&a.op==='roll'))
             : edges.has('KeyF')
-            ? primary
+            ? (spec.abilities.includes('runtime.combo.0') ? undefined : primary)
             : edges.has('KeyQ')
-              ? spec.abilities.find(id=>nodesOf(manifest.design,'ability').some(a=>a.id===id&&a.op==='dodge'))
+              ? (spec.abilities.includes('runtime.dash.0') ? undefined : spec.abilities.find(id=>nodesOf(sim.design,'ability').some(a=>a.id===id&&a.op==='dodge')))
               : edges.has('KeyR')
-                ? spec.abilities.find(id=>nodesOf(manifest.design,'ability').some(a=>a.id===id&&a.op==='shield'))
+                ? spec.abilities.find(id=>nodesOf(sim.design,'ability').some(a=>a.id===id&&a.op==='shield'))
                 : undefined,
         }
+        previousPoses.clear()
+        for(const actor of sim.state.actors)previousPoses.set(actor.id,{position:{...actor.position},yaw:actor.yaw})
         sim.step(input)
         edges.clear()
         accumulator -= DT
       }
     }
-    const animated = animationVisuals?.update(sim) ?? new Set<string>()
+    const animated = animationVisuals?.update(sim,{alpha:accumulator/DT,previous:previousPoses,dt:paused?0:Math.min(.1,engine.getDeltaTime()/1000)}) ?? new Set<string>()
     for (const a of sim.state.actors) {
       const meshes = actorMeshes.get(a.id)!
       meshes.head.setEnabled(a.health > 0 && !animated.has(a.id))
@@ -247,7 +258,7 @@ export async function createCombatPlayer(
       meshes.socket.setEnabled(debug && a.health > 0)
       if (a.health <= 0) continue
       const action = a.action,
-        ability = nodesOf(manifest.design, 'ability').find(
+        ability = nodesOf(sim.design, 'ability').find(
           (v) => v.id === action?.ability,
         ),
         progress =
@@ -259,7 +270,7 @@ export async function createCombatPlayer(
               )
             : 0,
         joints = poseAt(
-          manifest.design,
+          sim.design,
           ability?.pose ?? null,
           progress,
           sim.actorSpec(a).height,
@@ -271,6 +282,8 @@ export async function createCombatPlayer(
             add(a.position, rotate(p, a.yaw)),
           ]),
         )
+      const composedPose=(sim as Simulation & {mechanicPose?:(actor:typeof a,p:Record<string,{x:number;y:number;z:number}>)=>Record<string,{x:number;y:number;z:number}>}).mechanicPose?.(a,positions)
+      if(composedPose)Object.assign(positions,composedPose)
       const ledge = world.ledges.find((l) => l.id === a.ledge)
       const contactJoints = sim.interactions.poses.get(a.id)
       if (contactJoints) Object.assign(positions, contactJoints)
@@ -355,6 +368,11 @@ export async function createCombatPlayer(
         world,
       ),
     save: () => sim.save(),
+    replaceMechanics: async (value:unknown) => {
+      if(!extensions?.replaceMechanics)throw new Error('This runtime does not support live mechanics')
+      await extensions.replaceMechanics(sim,value)
+      blur()
+    },
     restore: (v: unknown) => sim.restore(v),
     pause: (v: boolean) => {
       paused = v
@@ -371,6 +389,7 @@ export async function createCombatPlayer(
     },
     metrics: () => ({
       ...animationVisuals?.metrics?.(),
+      mechanics: structuredClone((sim as Simulation & { mechanicStates?: unknown }).mechanicStates ?? {}),
       fps: engine.getFps(),
       meshes: scene.meshes.length,
       vertices: scene.getTotalVertices(),

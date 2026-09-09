@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { locomotionWeights, advanceAnimationBlend, emptyAnimationBlend } from './animationMixer.ts'
+import { locomotionWeights, advanceAnimationBlend, emptyAnimationBlend, advanceActionClipClock } from './animationMixer.ts'
 import { createCombatTemplate } from '../v2/template.ts'
 import { nodesOf } from '../v2/spec.ts'
 import { Simulation } from '../v2/simulation.ts'
@@ -44,6 +44,15 @@ test('graph transitions crossfade and preserve the current mixture when interrup
   blend = advanceAnimationBlend(blend, { roll: 1 }, [...transitions], .05)
   assert.deepEqual(blend.weights, { roll: 1 })
   assert.throws(() => advanceAnimationBlend(blend, { walk: NaN }, [], 0))
+})
+test('interrupted action clips retain their outgoing pose time',()=>{
+ let clock=advanceActionClipClock({active:null,times:{}},'roll',0)
+ clock=advanceActionClipClock(clock,'roll',.2)
+ clock=advanceActionClipClock(clock,null,.016)
+ assert.equal(clock.times.roll,.2)
+ clock=advanceActionClipClock(clock,'takeoff',.016)
+ assert.equal(clock.times.roll,.2);assert.equal(clock.times.takeoff,0)
+ clock=advanceActionClipClock(clock,'roll',.016);assert.equal(clock.times.roll,0)
 })
 test('roll displacement is bounded and does not grant dodge protection', async () => {
   const design = createCombatTemplate(), roll = nodesOf(design,'ability').find(a=>a.op==='dodge')!

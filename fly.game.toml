@@ -5,6 +5,7 @@ kill_timeout = 300
   dockerfile = "workers/game/Dockerfile"
 [env]
   GAME_WORKER_KIND = "build"
+  GAME_ANIMATION_WORKER_ENABLED = "true"
 [processes]
   build = "deno run --allow-env --allow-net --allow-read --allow-write --allow-run=node,blender --allow-sys --config workers/game/deno.json --node-modules-dir=auto workers/game/main.ts"
   generate = "env GAME_WORKER_KIND=generate deno run --allow-env --allow-net --allow-read --allow-write --allow-run=node,blender --allow-sys --config workers/game/deno.json --node-modules-dir=auto workers/game/main.ts"

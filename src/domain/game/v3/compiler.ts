@@ -1,3 +1,5 @@
+import { MOTION_RUNTIME } from './motionPresentation.ts'
+import { actionNodes, ACTION_RUNTIME } from './actionMechanics.ts'
 import {
   designSchema,
   of,
@@ -15,6 +17,7 @@ import {
 } from '../v2/spec.ts'
 import { validateComponents } from '../v2/compiler.ts'
 import { hashGameValue } from '../compiler.ts'
+import { MECHANIC_RUNTIME } from './mechanics.ts'
 
 export function dependencies(n: Node): string[] {
   switch (n.kind) {
@@ -85,6 +88,7 @@ export function runtimeDesign(d: Design): LegacyDesign {
     assets: [],
     nodes: [
       ...nodes,
+      ...actionNodes(d.mechanics?.actions ?? []),
       ...actors,
       {
         id: 'runtime.scenario',
@@ -116,6 +120,15 @@ export function validate(input: unknown) {
       fail(n.id, `Expected ${kinds.join('/')} at ${id}`)
   }
   if (byId.size !== d.nodes.length) fail('design', 'Duplicate node IDs')
+  for(const p of d.mechanics?.packages??[])if(!of(d,'actor_definition').some(a=>a.id===p.actorDefinition))fail(p.id,'Mechanic actor definition is missing')
+  for(const p of d.mechanics?.packages??[]){
+    const actor=of(d,'actor_definition').find(a=>a.id===p.actorDefinition)
+    if(actor&&(actor.height<1.65||actor.height>1.95))fail(p.id,'Wall contacts currently require supported humanoid proportions (1.65–1.95 m)')
+  }
+  for(const s of d.mechanics?.surfaces??[])if(!of(d,'world')[0]?.boxes.some(b=>b.id===s.collider&&!b.ramp))fail(s.id,'Surface requires an existing static box collider')
+  for(const p of d.mechanics?.actions??[]){
+    if(!of(d,'actor_instance').some(a=>a.id===d.player&&a.definition===p.actorDefinition))fail(p.id,'Action mechanics require the player actor definition')
+  }
   if (d.nodes.some((n) => n.id.startsWith('runtime.')))
     fail('design', 'Reserved runtime namespace')
   if (of(d, 'world').length !== 1)
@@ -233,6 +246,7 @@ export async function compile(
   if (errors.length)
     throw new Error(errors.map((e) => `${e.nodeKey}: ${e.message}`).join('\n'))
   const nodeHashes: Record<string, string> = {}
+  if(d.mechanics)nodeHashes['mechanics']=await hashGameValue({runtime:d.mechanics.motionProfile?MOTION_RUNTIME:d.mechanics.actions?.length?ACTION_RUNTIME:MECHANIC_RUNTIME,bundle:d.mechanics})
   for (const n of d.nodes)
     nodeHashes[n.id] = await hashGameValue({
       runtime: VERSION,
@@ -245,7 +259,7 @@ export async function compile(
   return manifestSchema.parse({
     ...identity,
     schemaVersion: 3,
-    runtimeVersion: VERSION,
+    runtimeVersion: d.mechanics?.motionProfile ? MOTION_RUNTIME : d.mechanics?.actions?.length ? ACTION_RUNTIME : d.mechanics ? MECHANIC_RUNTIME : VERSION,
     catalogVersion: CATALOG,
     sourceHash: await hashGameValue({ d, VERSION, CATALOG }),
     nodeHashes,

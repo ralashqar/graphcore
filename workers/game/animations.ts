@@ -9,6 +9,11 @@ export async function cancelAnimationJobs(admin: JobContext['admin']) {
   const jobs = await admin.from('game_jobs').select('id,checkpoint,input,provider_started').eq('status', 'cancelled').not('input->animation', 'is', null).is('checkpoint->animationCancelled', null).limit(20)
   if (jobs.error) throw jobs.error
   for (const job of jobs.data ?? []) {
+    if (job.input.animation.import) {
+      const saved = await admin.from('game_jobs').update({ checkpoint: { ...job.checkpoint, animationCancelled: true } }).eq('id', job.id).eq('status', 'cancelled')
+      if (saved.error) throw saved.error
+      continue
+    }
     if (job.checkpoint.animationRequestId) {
       await new RunpodTransport(Deno.env.get('RUNPOD_GRAPHCORE') ?? '').cancel(job.input.animation.provider.cancel, job.checkpoint.animationRequestId)
     } else if (!job.provider_started) {
@@ -30,7 +35,6 @@ export async function produceAnimation(ctx: JobContext) {
     if (recipe.rigRevision !== rig.revision || input.provider.modelRevision !== kimodoRelease.model || input.provider.processingVersion !== ANIMATION_VERSION) throw new Error('Animation snapshot is incompatible; resume with its frozen processing version')
     return { recipeHash: await hashGameValue(recipe) }
   })
-  const transport = new RunpodTransport(Deno.env.get('RUNPOD_GRAPHCORE') ?? '')
   const base = `generated/game/${job.draft_id}/${job.id}`
   async function upload(path: string, bytes: Uint8Array, contentType: string) {
     const result = await admin.storage.from('project-assets').upload(path, bytes, { contentType, upsert: true })
@@ -43,6 +47,8 @@ export async function produceAnimation(ctx: JobContext) {
       if (!saved.every((path, index) => path === `${base}/source-${index}.json`)) throw new Error('Invalid stored animation source checkpoint')
       return saved
     }
+    if (input.import) throw new Error('Imported source checkpoint is missing; inference is prohibited')
+    const transport = new RunpodTransport(Deno.env.get('RUNPOD_GRAPHCORE') ?? '')
     if (!job.checkpoint.animationRequestId) {
       if (job.checkpoint.pendingProvider) throw new Error('Uncertain animation submission requires reconciliation')
       // The fenced checkpoint commits before the one and only submission attempt.
@@ -84,6 +90,7 @@ export async function produceAnimation(ctx: JobContext) {
     const directory = await Deno.makeTempDir({ prefix: 'game-animation-' })
     try {
       const sourceBytes = new Uint8Array(await source.data.arrayBuffer())
+      if (input.import && await bytesHash(sourceBytes) !== input.import.sourceHash) throw new Error('Imported source hash mismatch')
       sourceMotionSchema.parse(JSON.parse(new TextDecoder().decode(sourceBytes)))
       await Deno.writeFile(`${directory}/source.json`, sourceBytes)
       await Deno.writeTextFile(`${directory}/recipe.json`, JSON.stringify(recipe))

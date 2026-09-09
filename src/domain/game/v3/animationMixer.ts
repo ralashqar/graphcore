@@ -12,6 +12,13 @@ export function locomotionWeights(x: number, z: number, runSpeed = 4): Partial<R
 type Weights = Partial<Record<AnimationState, number>>
 export type AnimationBlend = { state: AnimationState | null; weights: Weights; from: Weights; elapsed: number; duration: number }
 export const emptyAnimationBlend = (): AnimationBlend => ({ state: null, weights: {}, from: {}, elapsed: 0, duration: 0 })
+export type ActionClipClock = { active: AnimationState | null; times: Partial<Record<AnimationState, number>> }
+export function advanceActionClipClock(previous: ActionClipClock, active: AnimationState | null, dt: number): ActionClipClock {
+  if(!Number.isFinite(dt)||dt<0)throw new Error('Invalid animation clock delta')
+  const times={...previous.times}
+  if(active)times[active]=active===previous.active?(times[active]??0)+dt:0
+  return {active,times}
+}
 export function advanceAnimationBlend(previous: AnimationBlend, target: Weights, transitions: AnimationGraph['transitions'], dt: number): AnimationBlend {
   if (!Number.isFinite(dt) || dt < 0 || Object.values(target).some(w => !Number.isFinite(w) || w < 0)) throw new Error('Invalid animation blend input')
   const state = (Object.entries(target).sort((a, b) => b[1]-a[1])[0]?.[0] as AnimationState | undefined) ?? null

@@ -1,4 +1,7 @@
+import { MOTION_RUNTIME } from './motionPresentation.ts'
+import { ACTION_RUNTIME } from './actionMechanics.ts'
 import { z } from 'zod'
+import { mechanicBundleSchema, MECHANIC_RUNTIME } from './mechanics.ts'
 import { clipRevisionSchema, animationGraphSchema, rigProfileSchema, validateAnimationBindings } from './animation.ts'
 import {
   nodeSchema as legacyNode,
@@ -138,6 +141,7 @@ export const designSchema = z
     inventoryCapacity: z.number().int().min(1).max(50),
     nodes: z.array(nodeSchema).min(4).max(240),
     assets: z.array(z.never()).length(0),
+    mechanics: mechanicBundleSchema.optional(),
   })
   .strict()
 export type Design = z.infer<typeof designSchema>
@@ -149,7 +153,7 @@ export const manifestSchema = z
     draftId: z.string().uuid(),
     sourceRevision: z.number().int().nonnegative(),
     sourceHash: z.string().length(64),
-    runtimeVersion: z.enum([VERSION, ANIMATED_VERSION]),
+    runtimeVersion: z.enum([VERSION, ANIMATED_VERSION, MECHANIC_RUNTIME, ACTION_RUNTIME, MOTION_RUNTIME]),
     catalogVersion: z.literal(CATALOG),
     design: designSchema,
     nodeHashes: z.record(z.string(), z.string()),
@@ -159,6 +163,9 @@ export const manifestSchema = z
   .strict()
   .superRefine((manifest, ctx) => {
     const issue = (message: string) => ctx.addIssue({ code: 'custom', message })
+    if(manifest.design.mechanics&&manifest.runtimeVersion!==MECHANIC_RUNTIME&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME)issue('Mechanics require runtime gameplay-3.2.0 or newer')
+    if(manifest.design.mechanics?.actions?.length&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME)issue('Action mechanics require runtime gameplay-3.3.0')
+    if(manifest.design.mechanics?.motionProfile && manifest.runtimeVersion!==MOTION_RUNTIME)issue('Motion profile requires runtime gameplay-3.4.0')
     if (manifest.runtimeVersion === VERSION && (manifest.animations || manifest.assets.length)) issue('Animations require runtime gameplay-3.1.0')
     if (!manifest.animations) {
       if (manifest.assets.length) issue('Animation assets require graph metadata')

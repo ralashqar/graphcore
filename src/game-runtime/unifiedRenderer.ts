@@ -9,6 +9,7 @@ import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { Color3 } from '@babylonjs/core/Maths/math.color'
 import { animationVisuals } from './animationRenderer'
+import { assertMechanicReplacement } from '../domain/game/v3/mechanicLive'
 
 export async function createUnifiedPlayer(
   canvas: HTMLCanvasElement,
@@ -31,6 +32,11 @@ export async function createUnifiedPlayer(
     onUpdate,
     {
       create: () => new UnifiedSimulation(manifest.design, manifest.id),
+      replaceMechanics: async (sim,value) => {
+        const next=await assertMechanicReplacement(manifest,value)
+        ;(sim as UnifiedSimulation).applyMechanics(next.design,next.id)
+        manifest=next
+      },
       visuals: scene => animationVisuals(scene, manifest, assetUrls),
       summary: (sim) => (sim as UnifiedSimulation).summary(),
       hint: (sim) => (sim as UnifiedSimulation).hint(),

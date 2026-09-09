@@ -4,6 +4,7 @@ import { resolve, sep, extname } from 'node:path'
 import { chromium } from 'playwright'
 import { acceptModuleGame } from './game-module-browser.mjs'
 import { acceptUnifiedGame } from './game-unified-browser.mjs'
+import { acceptMechanicGame } from './game-mechanic-browser-acceptance.mjs'
 
 const directory = resolve(process.argv[2] ?? ''), runtime = resolve('dist-game')
 if (!process.argv[2]) throw new Error('Candidate directory is required')
@@ -35,6 +36,7 @@ try {
   if (await page.evaluate(() => window.__gameAcceptance.version === 3)) {
     const candidate = JSON.parse(await readFile(resolve(directory, 'candidate.json'), 'utf8'))
     await acceptUnifiedGame(page,reports,candidate.manifest.design)
+    await acceptMechanicGame(page,reports,candidate.manifest.design)
     if (process.argv.includes('--locomotion')) {
       await page.locator('#restart').click()
       await page.locator('canvas').focus()

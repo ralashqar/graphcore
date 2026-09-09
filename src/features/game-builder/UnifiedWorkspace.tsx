@@ -1,3 +1,4 @@
+import type { ActionPackage } from '../../domain/game/v3/actionMechanics'
 import { useCallback, useEffect, useState, useMemo } from 'react'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import { createUnified, materialize } from '../../domain/game/v3/recipes'
@@ -23,6 +24,8 @@ import { UnifiedGraph } from './UnifiedGraph'
 import { contract } from '../../domain/game/v3/catalog'
 import { InteractionLab } from './InteractionLab'
 import { AnimationsWorkspace } from './AnimationsWorkspace'
+import { MechanicsWorkspace } from './MechanicsWorkspace'
+import type { MechanicPackage } from '../../domain/game/v3/mechanics'
 import { GamePreview, gamePreviewUrl } from './GamePreview'
 import '../../styles/features/game-builder.css'
 import '../../styles/features/game-modules.css'
@@ -61,6 +64,9 @@ export function UnifiedWorkspace({
     [planJobId, setPlanJobId] = useState(''),
     [steps, setSteps] = useState<Step[]>([]),
     [build, setBuild] = useState<Manifest | null>(null),
+    [buildAssets, setBuildAssets] = useState<Record<string,string>>(noAssets),
+    [liveCandidate,setLiveCandidate] = useState<Manifest|null>(null),
+    [mechanicJob,setMechanicJob] = useState(''),
     [pending, setPending] = useState<Command | null>(null)
   const projectId = snapshot.project.id,
     draftId = snapshot.draft.id
@@ -81,7 +87,7 @@ export function UnifiedWorkspace({
         value.jobs[0].id,
       )) as { steps: Step[]; plan?: GamePlan }
       setSteps(details.steps)
-      if (details.plan) {
+      if (details.plan && 'intent' in details.plan) {
         setPlan(details.plan)
         setPlanJobId(value.jobs[0].id)
       }
@@ -153,8 +159,20 @@ export function UnifiedWorkspace({
   }
   const findings = validate(design),
     blocked = busy || active || !canRun || !!pending
+  const inspectedMechanicJob=workspace.jobs.find(j=>j.id===mechanicJob)??workspace.jobs[0]
+  const refreshMechanics=async()=>{setMechanicJob('');await refresh()}
+  const editAction=(p:ActionPackage)=>{
+    if(!design.mechanics)return
+    setDesign({...design,mechanics:{...design.mechanics,actions:design.mechanics.actions?.map(old=>old.id===p.id?p:old)}})
+    setDirty(true)
+  }
+  const editMechanic=(package_:MechanicPackage)=>{
+    if(active||!design.mechanics)return
+    setDesign({...design,mechanics:{...design.mechanics,packages:design.mechanics.packages.map(p=>p.id===package_.id?package_:p)}});setDirty(true)
+  }
   const local = async () => {
     try {
+      setBuildAssets(noAssets)
       setBuild(
         await compile(design, {
           id: crypto.randomUUID(),
@@ -193,7 +211,7 @@ export function UnifiedWorkspace({
         </div>
       </header>
       <nav className="game-tabs">
-        {['Plan', 'Systems', 'Level', 'Interactions', 'Assets', 'Animations', 'Build'].map(
+        {['Plan', 'Systems', 'Level', 'Interactions', 'Mechanics', 'Assets', 'Animations', 'Build'].map(
           (t) => (
             <button
               key={t}
@@ -443,6 +461,7 @@ export function UnifiedWorkspace({
         />
       )}
       {tab === 'Animations' && <AnimationsWorkspace projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} onChanged={refresh} />}
+      {tab === 'Mechanics' && <MechanicsWorkspace projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} blocked={blocked||dirty||!workspace.design} jobId={inspectedMechanicJob?.id} jobPhase={inspectedMechanicJob?.phase} credits={workspace.pricing?.planCredits??25} onChanged={refreshMechanics} onEdit={editMechanic} onEditAction={editAction} />}
       {tab === 'Assets' && (
         <section>
           <h2>Gameplay visuals</h2>
@@ -473,10 +492,12 @@ export function UnifiedWorkspace({
           {build && (
             <GamePreview
               manifest={build}
-              assetUrls={noAssets}
+              assetUrls={buildAssets}
+              liveCandidate={liveCandidate}
               onDiagnostic={setError}
             />
           )}
+          {build&&<details><summary>Author mechanics while playing</summary><MechanicsWorkspace projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} blocked={blocked||dirty||!workspace.design} jobId={inspectedMechanicJob?.id} jobPhase={inspectedMechanicJob?.phase} credits={workspace.pricing?.planCredits??25} onChanged={refreshMechanics} onEdit={editMechanic} onEditAction={editAction}/></details>}
           <div className="game-build-list">
             {workspace.builds.map((b) => (
               <article key={b.id}>
@@ -491,9 +512,10 @@ export function UnifiedWorkspace({
                       draftId,
                       buildId: b.id,
                     })
-                      .then((v) =>
-                        setBuild((v as { manifest: Manifest }).manifest),
-                      )
+                      .then((v) => {
+                        const result = v as { manifest: Manifest; assetUrls: Record<string,string> }
+                        setBuild(result.manifest); setBuildAssets(result.assetUrls)
+                      })
                       .catch((e) => setError(String(e)))
                   }
                 >
@@ -507,6 +529,7 @@ export function UnifiedWorkspace({
                 >
                   Publish
                 </button>
+                <button disabled={!build||b.status!=='accepted'||b.id===build.id} onClick={()=>void invokeGame('get-game-workspace',{projectId,draftId,buildId:b.id}).then(v=>setLiveCandidate((v as {manifest:Manifest}).manifest)).catch(e=>setError(String(e)))}>Stage live mechanic replacement</button>
                 {b.reports
                   .filter((r) => !r.passed)
                   .map((r, i) => (
@@ -546,10 +569,11 @@ export function UnifiedWorkspace({
                   .then((v) => {
                     setSteps(v.steps)
                     const p = (v as { plan?: GamePlan }).plan
-                    if (p) {
+                    if (p && 'intent' in p) {
                       setPlan(p)
                       setPlanJobId(j.id)
                     }
+                    if(p&&'bundle' in p){setMechanicJob(j.id);setTab('Mechanics')}
                   })
                   .catch((e) => setError(String(e)))
               }
