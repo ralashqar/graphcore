@@ -283,6 +283,10 @@ async function comicPagePrompt(context: ComicNodeExecutionContext, helpers: Comi
   const pageCount = Math.max(1, Number(config.pageCount ?? 8))
   const script = helpers.readFirstUpstreamRecord(context.upstream, ['script'])
   const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
+  const previousPageReferences = Object.entries(context.upstream)
+    .filter(([nodeKey]) => /^page_\d{3}_image$/.test(nodeKey))
+    .map(([, outputs]) => helpers.asRecord(outputs))
+    .filter((entry) => Object.keys(entry).length > 0)
   const guidance = helpers.readUpstreamGuidanceBundle(context.upstream)
   const scriptPage = helpers.comicScriptPage(script, pageNumber)
   const pagePrompt = helpers.buildDeterministicComicPageImagePrompt({ script, assetPack, pageNumber, pageCount, prompt: context.run.prompt, guidance })
@@ -295,6 +299,8 @@ async function comicPagePrompt(context: ComicNodeExecutionContext, helpers: Comi
     scriptPage,
     pageAssetPack,
     page_asset_pack: pageAssetPack,
+    previousPageReferences,
+    previous_page_references: previousPageReferences,
     pageReferenceEntityKeys: helpers.readStringArray(pageAssetPack.pageReferenceEntityKeys),
     assetPack,
     guidance,

@@ -36,6 +36,7 @@ tmp/presentations/
 # Local runtime scratch directories
 tmp/chrome-landing-profile/
 tmp/ffmpeg-static-runtime/
+tmp/director-media-runtime/
 tmp/sb-keys.json
 tmp/test-full-output.txt
 tmp/*.mjs
@@ -52,3 +53,17 @@ output/game-live-candidate/
 output/game-download.mjs
 output/game-unified-*/
 output/game-unified-*.log
+
+# Local animation benchmarks, diagnostics and tool runtimes (retain on disk).
+output/kimodo-*/
+output/game-animation-*/
+output/game-animation-*.json
+output/game-animation-*.sql
+tmp/game-animation-tools/
+tmp/kimodo-source/
+tmp/game-commit-check/
+
+# Local Director deployment responses and generated Edge bundles.
+output/director-*.json
+output/director-*.mjs
+output/director-edge-bundles/

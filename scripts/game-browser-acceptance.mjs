@@ -35,6 +35,33 @@ try {
   if (await page.evaluate(() => window.__gameAcceptance.version === 3)) {
     const candidate = JSON.parse(await readFile(resolve(directory, 'candidate.json'), 'utf8'))
     await acceptUnifiedGame(page,reports,candidate.manifest.design)
+    if (process.argv.includes('--locomotion')) {
+      await page.locator('#restart').click()
+      await page.locator('canvas').focus()
+      const hold = async (keys, ms) => {
+        try { for (const key of keys) await page.keyboard.down(key); await page.waitForTimeout(ms) }
+        finally { for (const key of [...keys].reverse()) await page.keyboard.up(key) }
+        await page.waitForTimeout(200)
+      }
+      for (let i = 0; i < 3; i++) {
+        await hold(['w'], 1800)
+        await hold(['AltLeft', 's'], 1800)
+        await hold(['ShiftLeft', 'w'], 900)
+        await hold(['AltLeft', 's'], 2400)
+        await hold(['AltLeft', 'a'], 1800)
+        await hold(['AltLeft', 'd'], 1800)
+      }
+      await page.waitForTimeout(4500)
+      const metrics = await page.evaluate(() => window.__gameAcceptance.metrics())
+      for (const state of ['idle', 'walk', 'run', 'backward', 'strafe_left', 'strafe_right']) {
+        const key = `${candidate.manifest.design.player}:${state}`
+        reports.push({ nodeKey: `animations.loop.${state}`, passed: (metrics.animationLoops?.[key] ?? 0) >= 2, message: 'Real-keyboard movement repeatedly played the baked loop', measured: { loops: metrics.animationLoops?.[key] ?? 0 } })
+      }
+    }
+    if (candidate.manifest.animations) {
+      const metrics = await page.evaluate(() => window.__gameAcceptance.metrics())
+      reports.push({ nodeKey: 'animations.load', passed: !metrics.animationLoadFailed && metrics.animationBindings === metrics.expectedAnimationBindings, message: 'Frozen animation bindings loaded on the supported rig', measured: metrics })
+    }
   } else if (await page.evaluate(() => window.__gameAcceptance.version === 2)) {
     const candidate = JSON.parse(await readFile(resolve(directory, 'candidate.json'), 'utf8'))
     await acceptModuleGame(page, reports, candidate.manifest.design)

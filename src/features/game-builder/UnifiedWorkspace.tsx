@@ -22,6 +22,7 @@ import { createPollGroup } from '../../data/requestCoordinator'
 import { UnifiedGraph } from './UnifiedGraph'
 import { contract } from '../../domain/game/v3/catalog'
 import { InteractionLab } from './InteractionLab'
+import { AnimationsWorkspace } from './AnimationsWorkspace'
 import { GamePreview, gamePreviewUrl } from './GamePreview'
 import '../../styles/features/game-builder.css'
 import '../../styles/features/game-modules.css'
@@ -192,7 +193,7 @@ export function UnifiedWorkspace({
         </div>
       </header>
       <nav className="game-tabs">
-        {['Plan', 'Systems', 'Level', 'Interactions', 'Assets', 'Build'].map(
+        {['Plan', 'Systems', 'Level', 'Interactions', 'Assets', 'Animations', 'Build'].map(
           (t) => (
             <button
               key={t}
@@ -441,6 +442,7 @@ export function UnifiedWorkspace({
           onPlay={() => void local()}
         />
       )}
+      {tab === 'Animations' && <AnimationsWorkspace projectId={projectId} draftId={draftId} revision={workspace.revision} design={design} onChanged={refresh} />}
       {tab === 'Assets' && (
         <section>
           <h2>Gameplay visuals</h2>

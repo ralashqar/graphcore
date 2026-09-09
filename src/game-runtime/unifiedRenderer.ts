@@ -8,11 +8,13 @@ import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { Color3 } from '@babylonjs/core/Maths/math.color'
+import { animationVisuals } from './animationRenderer'
 
 export async function createUnifiedPlayer(
   canvas: HTMLCanvasElement,
   manifest: Manifest,
   onUpdate: (text: string, detail: string) => void,
+  assetUrls: Record<string, string> = {},
 ) {
   await initPhysics()
   return createCombatPlayer(
@@ -24,10 +26,12 @@ export async function createUnifiedPlayer(
       templateVersion: 'combat_traversal.v1',
       physicsVersion: '0.17.3',
       design: runtimeDesign(manifest.design),
+      assets: [],
     },
     onUpdate,
     {
       create: () => new UnifiedSimulation(manifest.design, manifest.id),
+      visuals: scene => animationVisuals(scene, manifest, assetUrls),
       summary: (sim) => (sim as UnifiedSimulation).summary(),
       hint: (sim) => (sim as UnifiedSimulation).hint(),
       decorate: (scene, getSim) => {

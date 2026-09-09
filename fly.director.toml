@@ -1,0 +1,45 @@
+app = "graphcore-director"
+primary_region = "lhr"
+kill_signal = "SIGTERM"
+kill_timeout = "120s"
+
+[build]
+  dockerfile = "workers/director/Dockerfile"
+
+[processes]
+  orchestration = "orchestration"
+  media = "media"
+  export = "export"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  processes = ["orchestration", "media", "export"]
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  processes = ["orchestration"]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "1gb"
+[[vm]]
+  processes = ["media"]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "2gb"
+[[vm]]
+  processes = ["export"]
+  cpu_kind = "shared"
+  cpus = 2
+  memory = "4gb"

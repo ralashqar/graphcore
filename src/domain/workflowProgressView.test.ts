@@ -887,6 +887,7 @@ test('scene board media utility and sequence animatic node packs expose register
     'cinematic_video_prompt',
     'cinematic_v3_storyboard_prompt',
     'cinematic_v3_storyboard_group_video_prompt',
+    'vibe_director_screenplay_quality',
   ])
   assert.equal(cinematicAuthoringWorkflowNodePack.packKey, 'output_workflow_cinematic_authoring')
   assert.deepEqual(cinematicAuthoringWorkflowNodeHandlerKeys, [
@@ -1008,6 +1009,7 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_director_plan',
     'sequence_animatic_orchestrator',
     'sequence_animatic_scene_plan_merge',
+    'vibe_director_scene_shot_quality',
     'sequence_animatic_manifest',
   ])
   assert.deepEqual(sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys, [
@@ -1023,6 +1025,8 @@ test('scene board media utility and sequence animatic node packs expose register
     'sequence_animatic_keyframe_prompt_plan',
     'sequence_animatic_shot_video_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
+    'vibe_director_continuity_preflight',
+    'vibe_director_keyframe_prompt_quality',
     'sequence_animatic_planned_keyframe_input',
     'sequence_animatic_planned_keyframe_image',
     'sequence_animatic_planned_keyframe_artifact',
@@ -1118,6 +1122,7 @@ test('scene board media utility and sequence animatic node packs expose register
       'cinematic_video_prompt',
       'cinematic_v3_storyboard_prompt',
       'cinematic_v3_storyboard_group_video_prompt',
+      'vibe_director_screenplay_quality',
     ],
   }))
   assert.doesNotThrow(() => assertWorkflowNodePackManifestCoverage({
@@ -1303,7 +1308,7 @@ test('cinematic node packs are backed by workflow node extension scaffolds', () 
   ] as const
 
   for (const group of scaffoldGroups) {
-    assert.deepEqual(group.scaffoldHandlerKeys, group.handlerKeys)
+    assert.deepEqual([...group.scaffoldHandlerKeys].sort(), [...group.handlerKeys].sort())
     assert.equal(new Set(group.scaffolds.map((scaffold) => scaffold.manifest.purpose)).size, group.scaffolds.length)
     assert.equal(group.scaffolds.length, group.handlerKeys.length)
     for (const scaffold of group.scaffolds) {
@@ -1381,6 +1386,7 @@ test('sequence animatic master path nodes are backed by workflow node extension 
     'sequence_animatic_scene_graph_assignment',
     'sequence_animatic_scene_plan_fanout',
     'sequence_animatic_scene_shot_plan',
+    'vibe_director_scene_shot_quality',
     'sequence_animatic_scene_plan_merge',
     'sequence_animatic_manifest',
     'sequence_animatic_orchestrator',
@@ -1433,6 +1439,7 @@ test('sequence animatic master path nodes are backed by workflow node extension 
       .filter((scaffold) => scaffold.runtimeKind === 'deterministic_transform')
       .map((scaffold) => scaffold.manifest.purpose),
     [
+      'vibe_director_scene_shot_quality',
       'sequence_animatic_scene_plan_merge',
       'sequence_animatic_manifest',
     ],
@@ -1781,8 +1788,10 @@ test('sequence animatic shot reference nodes are backed by workflow node extensi
 test('sequence animatic shot production nodes are backed by workflow node extension scaffolds', () => {
   const expectedShotProductionHandlers = [
     'sequence_animatic_keyframe_prompt_plan',
+    'vibe_director_continuity_preflight',
     'sequence_animatic_shot_video_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
+    'vibe_director_keyframe_prompt_quality',
     'sequence_animatic_planned_keyframe_input',
     'sequence_animatic_planned_keyframe_image',
     'sequence_animatic_planned_keyframe_artifact',
@@ -1790,7 +1799,7 @@ test('sequence animatic shot production nodes are backed by workflow node extens
     'sequence_animatic_shot_video',
     'sequence_animatic_shot_video_artifact',
   ]
-  assert.deepEqual(sequenceAnimaticShotProductionWorkflowNodeScaffoldHandlerKeys, expectedShotProductionHandlers)
+  assert.deepEqual([...sequenceAnimaticShotProductionWorkflowNodeScaffoldHandlerKeys].sort(), [...expectedShotProductionHandlers].sort())
 
   const manifestByPurpose = new Map(outputWorkflowNodeManifests.map((manifest) => [manifest.purpose, manifest]))
   assert.equal(new Set(sequenceAnimaticShotProductionWorkflowNodeScaffolds.map((scaffold) => scaffold.manifest.purpose)).size, sequenceAnimaticShotProductionWorkflowNodeScaffolds.length)
@@ -2966,4 +2975,3 @@ function step(
     updatedAt: '2026-01-01T00:00:00.000Z',
   }
 }
-

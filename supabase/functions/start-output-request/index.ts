@@ -579,6 +579,14 @@ Deno.serve(async (request) => {
       || planner.outputKind === 'cinematic_trailer'
       || planner.outputKind === 'ugc_episode'
     const effectivePageCount = comicOutput ? payload.pageCount ?? 8 : null
+    const comicOptions = comicOutput
+      ? {
+        continuityMode: payload.comicContinuityMode ?? 'parallel',
+        approvedReferenceEntityKeys: payload.comicApprovedReferenceEntityKeys,
+        pageReferenceDepth: payload.comicPageReferenceDepth ?? (payload.comicContinuityMode === 'previous_page' ? 1 : 0),
+        qualityGateMode: payload.qualityGateMode ?? 'standard',
+      }
+      : null
     const debugSkipVideoGeneration = payload.debugSkipVideoGeneration ?? true
     const cinematicReferenceMode = payload.cinematicReferenceMode ?? aiGenerationSettings.outputWorkflow.cinematicReferenceModeDefault
     const cinematicV2AnimaticMode = payload.cinematicV2AnimaticMode ?? 'fast_panels'
@@ -663,6 +671,8 @@ Deno.serve(async (request) => {
               debugSkipVideoGeneration,
             }
             : null,
+          vibeDirector: payload.vibeDirector ?? null,
+          comicOptions,
           screenplayAnimaticRole,
           screenplayAnimaticSource,
           sequenceAnimaticRole,
@@ -693,6 +703,10 @@ Deno.serve(async (request) => {
       selectedEntityKeys: planner.selectedEntityKeys,
       selectedSequenceUnitKeys: planner.selectedSequenceUnitKeys,
       pageCount: effectivePageCount ?? undefined,
+      comicContinuityMode: payload.comicContinuityMode,
+      comicApprovedReferenceEntityKeys: payload.comicApprovedReferenceEntityKeys,
+      comicPageReferenceDepth: payload.comicPageReferenceDepth,
+      qualityGateMode: payload.qualityGateMode,
       targetFormat: planner.targetFormat,
       documentMode: planner.documentMode === 'designed_reference'
         ? 'designed_reference'
@@ -715,6 +729,7 @@ Deno.serve(async (request) => {
       cinematicStoryboardStyleOverride,
       sequenceAnimaticMode,
       cinematicAnimaticMode,
+      vibeDirector: payload.vibeDirector,
       debugSkipVideoGeneration,
       snapshot: payload.snapshot,
     }, planner.outputKind)
@@ -748,6 +763,7 @@ Deno.serve(async (request) => {
           pageSize: planner.documentMode === 'designed_reference' ? 'a4' : null,
           imageQuality: payload.imageQuality ?? null,
           imageOutputFormat: payload.imageOutputFormat ?? null,
+          comicOptions,
           cinematicOptions: cinematicOutput
             ? {
               videoBlockCount: payload.videoBlockCount ?? null,
@@ -766,6 +782,7 @@ Deno.serve(async (request) => {
               debugSkipVideoGeneration,
             }
             : null,
+          vibeDirector: payload.vibeDirector ?? null,
           screenplayAnimaticRole,
           screenplayAnimaticSource,
           sequenceAnimaticRole,
@@ -825,6 +842,11 @@ Deno.serve(async (request) => {
       sourceEntityKeys: plan.sourceEntityKeys,
       sourceSequenceUnitKeys: plan.sourceSequenceUnitKeys,
       ...(effectivePageCount ? { pageCount: effectivePageCount } : {}),
+      ...(comicOptions ? { comicOptions } : {}),
+      ...(payload.comicContinuityMode ? { comicContinuityMode: payload.comicContinuityMode } : {}),
+      ...(payload.comicApprovedReferenceEntityKeys.length > 0 ? { comicApprovedReferenceEntityKeys: payload.comicApprovedReferenceEntityKeys } : {}),
+      ...(typeof payload.comicPageReferenceDepth === 'number' ? { comicPageReferenceDepth: payload.comicPageReferenceDepth } : {}),
+      ...(payload.qualityGateMode ? { qualityGateMode: payload.qualityGateMode } : {}),
       documentMode: planner.documentMode,
       pageSize: planner.documentMode === 'designed_reference' ? 'a4' : null,
       imagePolicy: planner.documentMode === 'designed_reference' ? 'inline_entity_images' : 'none',
@@ -844,8 +866,10 @@ Deno.serve(async (request) => {
           debugCinematicStoryboardStyleSafeMode,
           cinematicStoryboardStyleOverride,
           debugSkipVideoGeneration,
+          vibeDirector: payload.vibeDirector ?? null,
         }
         : {}),
+      ...(payload.vibeDirector ? { vibeDirector: payload.vibeDirector } : {}),
     }
     const runResponse = await client
       .from('output_workflow_runs')
@@ -872,6 +896,7 @@ Deno.serve(async (request) => {
           pageSize: planner.documentMode === 'designed_reference' ? 'a4' : null,
           imageQuality: payload.imageQuality ?? null,
           imageOutputFormat: payload.imageOutputFormat ?? null,
+          comicOptions,
           cinematicOptions: cinematicOutput
             ? {
               videoBlockCount: payload.videoBlockCount ?? null,
@@ -890,6 +915,7 @@ Deno.serve(async (request) => {
               debugSkipVideoGeneration,
             }
             : null,
+          vibeDirector: payload.vibeDirector ?? null,
           screenplayAnimaticRole,
           screenplayAnimaticSource,
           usageEstimate: plan.usageEstimate ?? null,
@@ -951,6 +977,7 @@ Deno.serve(async (request) => {
           plannedSections: planner.sections,
           imageQuality: payload.imageQuality ?? null,
           imageOutputFormat: payload.imageOutputFormat ?? null,
+          comicOptions,
           cinematicOptions: cinematicOutput
             ? {
               videoBlockCount: payload.videoBlockCount ?? null,
@@ -969,6 +996,7 @@ Deno.serve(async (request) => {
               debugSkipVideoGeneration,
             }
             : null,
+          vibeDirector: payload.vibeDirector ?? null,
           screenplayAnimaticRole,
           screenplayAnimaticSource,
           sequenceAnimaticRole,

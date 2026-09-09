@@ -26,6 +26,10 @@ import {
 import {
   buildSequenceAnimaticManifestRuntime,
 } from './output-workflow-sequence-animatic-manifest-runtime.ts'
+import {
+  vibeDirectorQualityPassSchema,
+  vibeDirectorShotDirectionSchema,
+} from '../../../src/domain/vibeDirector.ts'
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
   helpers: SequenceAnimaticWorkflowNodePackHelpers
@@ -240,6 +244,95 @@ export async function sequenceAnimaticScenePlanMerge(
   return result({ context, helpers, outputs: executed.outputs, model: executed.model })
 }
 
+export async function vibeDirectorSceneShotQuality(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const vibeDirector = helpers.asRecord(config.vibeDirector ?? config.vibe_director)
+  const shotNotes = helpers.asRecord(vibeDirector.shotDirectingNotesByShotId ?? vibeDirector.shot_directing_notes_by_shot_id)
+  const scenePlan = helpers.readFirstUpstreamRecord(context.upstream, ['scenePlan', 'scene_plan', 'directorPlan', 'director_plan'])
+  const upstreamShots = helpers.readFirstUpstreamArray(context.upstream, ['shots'])
+  const planShots = Array.isArray(scenePlan.shots)
+    ? scenePlan.shots.map((shot) => helpers.asRecord(shot))
+    : upstreamShots.map((shot) => helpers.asRecord(shot))
+  const shotDirections = planShots.map((shot, index) => {
+    const shotId = helpers.readText(shot.id) || helpers.readText(shot.shotId) || `shot_${String(index + 1).padStart(3, '0')}`
+    const camera = helpers.asRecord(shot.camera)
+    return vibeDirectorShotDirectionSchema.parse({
+      version: 'vibe_director_shot_direction_v1',
+      shotId,
+      note: helpers.readText(shotNotes[shotId]) || helpers.readText(vibeDirector.directingStyle) || '',
+      camera: [helpers.readText(camera.framing), helpers.readText(camera.angle), helpers.readText(camera.lens)].filter(Boolean).join('; '),
+      movement: helpers.readText(camera.movement) || helpers.readText(shot.movement),
+      performance: helpers.readText(shot.performance) || helpers.readText(vibeDirector.performanceMode),
+      continuity: helpers.readText(shot.continuity) || helpers.readText(scenePlan.continuity),
+      source: helpers.readText(shotNotes[shotId]) ? 'user' : 'recommendation',
+    })
+  })
+  const shotsWithoutCamera = planShots.filter((shot) => {
+    const camera = helpers.asRecord(shot.camera)
+    return !helpers.readText(camera.framing) && !helpers.readText(camera.angle) && !helpers.readText(camera.lens) && !helpers.readText(shot.camera)
+  }).length
+  const dialogueShots = planShots.filter((shot) => helpers.readText(shot.dialogue) || helpers.readText(shot.dialogueCue ?? shot.dialogue_cue)).length
+  const dialogueWithoutPerformance = planShots.filter((shot) => {
+    if (!helpers.readText(shot.dialogue) && !helpers.readText(shot.dialogueCue ?? shot.dialogue_cue)) return false
+    return !helpers.readText(shot.performance)
+  }).length
+  const findingRecords = [
+    planShots.length > 0
+      ? { severity: 'info', text: `Coverage: ${planShots.length} shot${planShots.length === 1 ? '' : 's'} planned for this scene.` }
+      : { severity: 'high', text: 'Coverage: no shots found in the scene plan.' },
+    shotsWithoutCamera === 0
+      ? { severity: 'info', text: 'Camera: all shots include camera language.' }
+      : { severity: shotsWithoutCamera > Math.max(1, planShots.length / 2) ? 'medium' : 'low', text: `Camera: ${shotsWithoutCamera} shot${shotsWithoutCamera === 1 ? '' : 's'} need stronger camera grammar.` },
+    dialogueWithoutPerformance === 0
+      ? { severity: 'info', text: dialogueShots > 0 ? 'Performance: dialogue shots include performance direction.' : 'Performance: no dialogue-led shots require performance notes.' }
+      : { severity: 'medium', text: `Performance: ${dialogueWithoutPerformance} dialogue shot${dialogueWithoutPerformance === 1 ? '' : 's'} need acting/performance specificity.` },
+  ]
+  const findings = findingRecords.map((finding) => finding.text)
+  const highFindings = findingRecords.filter((finding) => finding.severity === 'high').length
+  const mediumFindings = findingRecords.filter((finding) => finding.severity === 'medium').length
+  const qualityPass = vibeDirectorQualityPassSchema.parse({
+    version: 'vibe_director_quality_pass_v1',
+    target: 'scene_shot_plan',
+    status: highFindings > 0 ? 'blocked' : mediumFindings > 0 ? 'warning' : 'passed',
+    score: Math.max(0.2, Math.min(1, 1 - highFindings * 0.3 - mediumFindings * 0.12)),
+    findings,
+    fixesApplied: [],
+    recommendedActions: [
+      planShots.length === 0 ? 'Regenerate the scene shot plan.' : '',
+      shotsWithoutCamera > 0 ? 'Add framing, lens, and movement decisions to underspecified shots.' : '',
+      dialogueWithoutPerformance > 0 ? 'Add performance beats to dialogue shots before keyframe prompts.' : '',
+    ].filter(Boolean),
+  })
+  const enrichedScenePlan = {
+    ...scenePlan,
+    shots: planShots,
+    vibeDirectorQualityPass: qualityPass,
+    vibe_director_quality_pass: qualityPass,
+    shotDirections,
+    shot_directions: shotDirections,
+  }
+  const outputs = {
+    text: JSON.stringify({ qualityPass, shotDirections }, null, 2),
+    scenePlan: enrichedScenePlan,
+    scene_plan: enrichedScenePlan,
+    sceneShotPlan: enrichedScenePlan,
+    scene_shot_plan: enrichedScenePlan,
+    shotContinuityPlan: enrichedScenePlan,
+    shot_continuity_plan: enrichedScenePlan,
+    directorPlan: enrichedScenePlan,
+    director_plan: enrichedScenePlan,
+    qualityPass,
+    quality_pass: qualityPass,
+    shotDirections,
+    shot_directions: shotDirections,
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'deterministic-vibe-director-scene-shot-quality-v1' })
+}
+
 export async function sequenceAnimaticManifest(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
@@ -257,6 +350,7 @@ const sequenceAnimaticPlanningHandlers = {
   sequence_animatic_director_plan: sequenceAnimaticDirectorPlan,
   sequence_animatic_orchestrator: sequenceAnimaticOrchestrator,
   sequence_animatic_scene_plan_merge: sequenceAnimaticScenePlanMerge,
+  vibe_director_scene_shot_quality: vibeDirectorSceneShotQuality,
   sequence_animatic_manifest: sequenceAnimaticManifest,
 }
 
@@ -371,6 +465,7 @@ export const sequenceAnimaticPlanningWorkflowNodeScaffolds = [
       'config.resolution',
       'config.sceneShotPlanPolicyVersion',
       'config.referenceAssetKeys',
+      'config.vibeDirector',
     ],
     projectionMetadataKeys: [
       'activeManifestPurpose',
@@ -381,6 +476,24 @@ export const sequenceAnimaticPlanningWorkflowNodeScaffolds = [
       'streamingEventCount',
       'streamingPartialArtifactKeys',
       'streamingResumeToken',
+      'readyArtifactCount',
+      'recoveryHints',
+    ],
+  }),
+  createSequenceAnimaticPlanningNodeScaffold({
+    purpose: 'vibe_director_scene_shot_quality',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.scenePlan',
+      'upstream.scene_plan',
+      'upstream.directorPlan',
+      'upstream.director_plan',
+      'config.vibeDirector',
+      'config.qualityGateMode',
+    ],
+    projectionMetadataKeys: [
+      'activeManifestPurpose',
+      'activeProgressLabel',
       'readyArtifactCount',
       'recoveryHints',
     ],

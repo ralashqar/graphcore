@@ -5,6 +5,8 @@ import {
   designSchema,
   nodeSchema,
   CATALOG,
+  ANIMATED_VERSION,
+  manifestSchema,
   type GamePlan,
   type Node,
 } from '../../src/domain/game/v3/spec.ts'
@@ -19,6 +21,7 @@ import {
   dependencies,
 } from '../../src/domain/game/v3/compiler.ts'
 import { runAcceptance } from '../../src/domain/game/v3/acceptance.ts'
+import { hashGameValue } from '../../src/domain/game/compiler.ts'
 import { runTool } from './io.ts'
 import type { JobContext } from './main.ts'
 
@@ -248,14 +251,16 @@ export async function buildUnified(ctx: JobContext) {
   const manifest = await step(
     ctx,
     'unified.compile',
-    { design, id: job.id },
-    () =>
-      compile(design, {
+    { design, id: job.id, animations: job.input.animationSnapshot, clips: job.input.animationClips },
+    async () => {
+      const base = await compile(design, {
         id: job.id,
         projectId: job.input.projectId,
         draftId: job.draft_id,
         sourceRevision: job.input.sourceRevision,
-      }),
+      })
+        return job.input.animationSnapshot?.graphs?.length ? manifestSchema.parse({ ...base, sourceHash: await hashGameValue({ base: base.sourceHash, animations: job.input.animationSnapshot, clips: job.input.animationClips, runtimeVersion: ANIMATED_VERSION }), runtimeVersion: ANIMATED_VERSION, assets: job.input.animationClips, animations: job.input.animationSnapshot }) : base
+    },
   )
   const reports = await step(ctx, 'unified.simulation', { design }, () =>
     runAcceptance(design, job.id),
@@ -264,9 +269,22 @@ export async function buildUnified(ctx: JobContext) {
     return { manifest, reports, accepted: false }
   const dir = await Deno.makeTempDir({ prefix: 'game-unified-' })
   try {
+      const assetUrls: Record<string, string> = {}
+      for (const asset of manifest.assets) {
+        const downloaded = await ctx.admin.storage.from('project-assets').download(asset.storagePath)
+        if (downloaded.error) throw downloaded.error
+        if (downloaded.data.size > 64 * 1024 * 1024) throw new Error('Animation GLB exceeds acceptance size limit')
+        const bytes = new Uint8Array(await downloaded.data.arrayBuffer())
+        const digest = await crypto.subtle.digest('SHA-256', bytes)
+        const hash = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('')
+        if (hash !== asset.glbHash) throw new Error('Animation GLB differs from accepted revision')
+        const filename = `animation-${asset.id}.glb`
+        await Deno.writeFile(`${dir}/${filename}`, bytes)
+        assetUrls[asset.recipeKey] = `/staged/${filename}`
+      }
     await Deno.writeTextFile(
       `${dir}/candidate.json`,
-      JSON.stringify({ manifest, assetUrls: {} }),
+      JSON.stringify({ manifest, assetUrls }),
     )
     const browser = await step(
       ctx,

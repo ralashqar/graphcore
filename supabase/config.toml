@@ -597,11 +597,24 @@ import_map = "./functions/healthcheck/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
 entrypoint = "./functions/healthcheck/index.ts"
+
+# These functions validate bearer tokens with auth.getUser through requireUserClient;
+# the legacy gateway JWT verifier does not support the project's newer signing keys.
+[functions.director-command]
+verify_jwt = false
+[functions.get-director-session]
+verify_jwt = false
+[functions.director-live-gateway]
+verify_jwt = false
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/healthcheck/*.html" ]
 
-# Game functions validate authentication in their request handlers.
+[functions.director-fal-webhook]
+verify_jwt = false
+
+[functions.director-recover]
+verify_jwt = false
 [functions.game-command]
 verify_jwt = false
 

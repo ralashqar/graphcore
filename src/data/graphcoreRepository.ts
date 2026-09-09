@@ -8536,6 +8536,10 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
   selectedEntityKeys?: string[]
   selectedSequenceUnitKeys?: string[]
   pageCount?: number
+  comicContinuityMode?: 'previous_page' | 'parallel' | 'selected_references'
+  comicApprovedReferenceEntityKeys?: string[]
+  comicPageReferenceDepth?: number
+  qualityGateMode?: 'standard' | 'strict' | 'off'
   videoBlockCount?: number
   durationPerBlockSeconds?: number
   aspectRatio?: string
@@ -8576,6 +8580,10 @@ function buildOutputWorkflowRunInput(snapshot: ProjectSnapshot, request?: {
     sourceEntityKeys: selectedEntityKeys,
     sourceSequenceUnitKeys: selectedSequenceUnitKeys,
     pageCount: request?.pageCount,
+    comicContinuityMode: request?.comicContinuityMode,
+    comicApprovedReferenceEntityKeys: request?.comicApprovedReferenceEntityKeys ?? [],
+    comicPageReferenceDepth: request?.comicPageReferenceDepth,
+    qualityGateMode: request?.qualityGateMode,
     videoBlockCount: request?.videoBlockCount,
     durationPerBlockSeconds: request?.durationPerBlockSeconds,
     aspectRatio: request?.aspectRatio,
@@ -8611,6 +8619,10 @@ export async function planOutputWorkflow(
     selectedEntityKeys: request?.selectedEntityKeys ?? [],
     selectedSequenceUnitKeys: request?.selectedSequenceUnitKeys ?? [],
     pageCount: request?.pageCount,
+    comicContinuityMode: request?.comicContinuityMode,
+    comicApprovedReferenceEntityKeys: request?.comicApprovedReferenceEntityKeys ?? [],
+    comicPageReferenceDepth: request?.comicPageReferenceDepth,
+    qualityGateMode: request?.qualityGateMode,
     targetFormat: request?.targetFormat ?? 'pdf',
     imageQuality: request?.imageQuality,
     imageOutputFormat: request?.imageOutputFormat,
@@ -8676,6 +8688,10 @@ export async function startOutputWorkflowRun(
     selectedEntityKeys?: string[]
     selectedSequenceUnitKeys?: string[]
     pageCount?: number
+    comicContinuityMode?: 'previous_page' | 'parallel' | 'selected_references'
+    comicApprovedReferenceEntityKeys?: string[]
+    comicPageReferenceDepth?: number
+    qualityGateMode?: 'standard' | 'strict' | 'off'
     input?: Record<string, unknown>
     metadata?: Record<string, unknown>
     cinematicVideoApproved?: boolean
@@ -10763,6 +10779,10 @@ export async function startOutputRequest(
     imageQuality?: 'low' | 'medium' | 'high'
     imageOutputFormat?: 'png' | 'jpeg' | 'webp'
     pageCount?: number
+    comicContinuityMode?: 'previous_page' | 'parallel' | 'selected_references'
+    comicApprovedReferenceEntityKeys?: string[]
+    comicPageReferenceDepth?: number
+    qualityGateMode?: 'standard' | 'strict' | 'off'
     videoBlockCount?: number
     durationPerBlockSeconds?: number
     aspectRatio?: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
@@ -10774,6 +10794,7 @@ export async function startOutputRequest(
     cinematicV2AnimaticMode?: 'fast_panels' | 'quality_keyframes'
     sequenceAnimaticMode?: 'full_sequence_unit' | 'master_script_only'
     cinematicAnimaticMode?: 'prompt_cinematic_master'
+    vibeDirector?: Record<string, unknown>
     debugCinematicStoryboardStyleSafeMode?: boolean
     cinematicStoryboardStyleOverride?: string
     debugSkipVideoGeneration?: boolean
@@ -10795,6 +10816,10 @@ export async function startOutputRequest(
     imageQuality: request.imageQuality,
     imageOutputFormat: request.imageOutputFormat,
     pageCount: request.pageCount,
+    comicContinuityMode: request.comicContinuityMode,
+    comicApprovedReferenceEntityKeys: request.comicApprovedReferenceEntityKeys ?? [],
+    comicPageReferenceDepth: request.comicPageReferenceDepth,
+    qualityGateMode: request.qualityGateMode,
     videoBlockCount: request.videoBlockCount,
     durationPerBlockSeconds: request.durationPerBlockSeconds,
     aspectRatio: request.aspectRatio,
@@ -10806,6 +10831,7 @@ export async function startOutputRequest(
     cinematicV2AnimaticMode: request.cinematicV2AnimaticMode ?? 'fast_panels',
     sequenceAnimaticMode: request.sequenceAnimaticMode,
     cinematicAnimaticMode: request.cinematicAnimaticMode,
+    vibeDirector: request.vibeDirector,
     debugCinematicStoryboardStyleSafeMode: request.debugCinematicStoryboardStyleSafeMode ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStyleSafeModeDefault,
     cinematicStoryboardStyleOverride: request.cinematicStoryboardStyleOverride ?? aiGenerationSettings.outputWorkflow.debugCinematicStoryboardStylePrompt,
     debugSkipVideoGeneration: request.debugSkipVideoGeneration ?? aiGenerationSettings.outputWorkflow.debugSkipVideoGenerationDefault,

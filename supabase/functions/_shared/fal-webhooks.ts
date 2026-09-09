@@ -51,7 +51,7 @@ function hexToBytes(value: string) {
 }
 
 async function sha256Hex(body: Uint8Array) {
-  const digest = await crypto.subtle.digest('SHA-256', body)
+  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(body))
   return bytesToHex(new Uint8Array(digest))
 }
 

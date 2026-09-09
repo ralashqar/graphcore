@@ -40,6 +40,12 @@ import {
   sequenceAnimaticReferenceRole,
   sequenceAnimaticReferenceVisual,
 } from './output-workflow-sequence-animatic-reference-runtime.ts'
+import {
+  formatVibeDirectorWorkflowBriefForPrompt,
+  vibeDirectorContinuityReadinessSchema,
+  vibeDirectorQualityPassSchema,
+  vibeDirectorShotDirectionSchema,
+} from '../../../src/domain/vibeDirector.ts'
 
 function result(input: {
   context: SequenceAnimaticNodeExecutionContext
@@ -52,6 +58,50 @@ function result(input: {
 }): SequenceAnimaticNodeExecutionResult {
   return createWorkflowNodeExecutionResult<SequenceAnimaticNodeExecutionResult>(input)
 }
+
+function readVibeDirectorConfig(config: Record<string, unknown>, helpers: SequenceAnimaticWorkflowNodePackHelpers) {
+  const direct = helpers.asRecord(config.vibeDirector ?? config.vibe_director)
+  if (Object.keys(direct).length > 0) return direct
+  const continuityOptions = helpers.asRecord(config.shotContinuityOptions ?? config.shot_continuity_options)
+  return helpers.asRecord(continuityOptions.vibeDirector ?? continuityOptions.vibe_director)
+}
+
+function vibeDirectorShotDirection(input: {
+  shot: Record<string, unknown>
+  shotId: string
+  vibeDirector: Record<string, unknown>
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+}) {
+  const { helpers, shot, shotId, vibeDirector } = input
+  const shotNotes = helpers.asRecord(vibeDirector.shotDirectingNotesByShotId ?? vibeDirector.shot_directing_notes_by_shot_id)
+  const camera = helpers.asRecord(shot.camera)
+  return vibeDirectorShotDirectionSchema.parse({
+    version: 'vibe_director_shot_direction_v1',
+    shotId,
+    note: helpers.readText(shotNotes[shotId]) || helpers.readText(vibeDirector.directingStyle),
+    camera: [helpers.readText(camera.framing), helpers.readText(camera.angle), helpers.readText(camera.lens)].filter(Boolean).join('; ') || helpers.readText(shot.camera),
+    movement: helpers.readText(camera.movement) || helpers.readText(shot.movement),
+    performance: helpers.readText(shot.performance) || helpers.readText(vibeDirector.performanceMode),
+    continuity: helpers.readText(shot.continuity),
+    source: helpers.readText(shotNotes[shotId]) ? 'user' : 'recommendation',
+  })
+}
+
+function referenceRoleCounts(input: {
+  referenceManifest: Array<Record<string, unknown>>
+  helpers: SequenceAnimaticWorkflowNodePackHelpers
+}) {
+  const { helpers, referenceManifest } = input
+  const roles = referenceManifest.map((entry) => helpers.readText(entry.role)).filter(Boolean)
+  const roleIncludes = (needles: string[]) => roles.filter((role) => needles.some((needle) => role.includes(needle))).length
+  return {
+    canonical: roleIncludes(['character', 'world_', 'entity', 'prop', 'item']),
+    spatial: roleIncludes(['zone', 'location', 'set', 'spot', 'viewpoint', 'coverage']),
+    previous: roleIncludes(['previous', 'keyframe']),
+    storyboard: roleIncludes(['storyboard', 'panel', 'comic']),
+  }
+}
+
 function readPreferredUpstreamImage(input: {
   upstream: Record<string, Record<string, unknown>>
   helpers: SequenceAnimaticWorkflowNodePackHelpers
@@ -784,8 +834,11 @@ const videoPromptDirectorShotSchema = z.object({
   dialogue_beats: z.array(videoPromptDialogueBeatSchema).default([]),
   subjectPerformance: z.array(z.string()).default([]),
   subject_performance: z.array(z.string()).default([]),
+  environmentContinuity: z.string().default(''),
+  environment_continuity: z.string().default(''),
   endState: z.string().default(''),
   end_state: z.string().default(''),
+  constraints: z.array(z.string()).default([]),
 })
 const emptyVideoPromptDirectorShot = {
   durationSeconds: null,
@@ -797,8 +850,11 @@ const emptyVideoPromptDirectorShot = {
   dialogue_beats: [],
   subjectPerformance: [],
   subject_performance: [],
+  environmentContinuity: '',
+  environment_continuity: '',
   endState: '',
   end_state: '',
+  constraints: [],
 }
 
 const videoPromptPlanSchema = z.object({
@@ -849,6 +905,10 @@ const videoPromptPlanSchema = z.object({
     screenPlacement: z.string().default(''),
     screen_placement: z.string().default(''),
     action: z.string().default(''),
+    shotAction: z.string().default(''),
+    shot_action: z.string().default(''),
+    roleInShot: z.string().default(''),
+    role_in_shot: z.string().default(''),
   })).default([]),
   subject_roster: z.array(z.object({
     subject: z.string().default(''),
@@ -858,6 +918,10 @@ const videoPromptPlanSchema = z.object({
     screenPlacement: z.string().default(''),
     screen_placement: z.string().default(''),
     action: z.string().default(''),
+    shotAction: z.string().default(''),
+    shot_action: z.string().default(''),
+    roleInShot: z.string().default(''),
+    role_in_shot: z.string().default(''),
   })).default([]),
   timeBeats: z.array(z.object({
     timeRange: z.string().default(''),
@@ -1031,16 +1095,17 @@ function fallbackVideoPromptPlan(input: {
       usage: videoReferenceUsage(kind, name),
     }
   }).filter((entry) => entry.assetKey)
+  const action = input.helpers.readText(input.shot.action) || input.helpers.readText(input.shot.description)
   const beats = bindings
     .filter((binding) => binding.kind === 'character' || binding.kind === 'group_character')
     .map((binding) => ({
       subject: binding.name,
       sourceImageTag: binding.imageTag,
       source_image_tag: binding.imageTag,
-      motion: 'Follow the shot action without swapping identity.',
-      performance: 'Keep readable facial/body performance from the shot facts.',
-      screenPlacement: 'Follow shot blocking and screen direction.',
-      screen_placement: 'Follow shot blocking and screen direction.',
+      motion: subjectSpecificShotAction(binding.name, action),
+      performance: '',
+      screenPlacement: '',
+      screen_placement: '',
     }))
   const subjectRoster = beats.map((beat) => ({
     subject: beat.subject,
@@ -1050,10 +1115,14 @@ function fallbackVideoPromptPlan(input: {
     screenPlacement: beat.screenPlacement,
     screen_placement: beat.screenPlacement,
     action: beat.motion,
+    shotAction: beat.motion,
+    shot_action: beat.motion,
+    roleInShot: beat.motion,
+    role_in_shot: beat.motion,
   }))
   const performanceDirection = videoPerformanceCueLines(input.helpers, input.cuePack)
   const dialogueDeliveryPlan = videoDialogueDeliveryCueLines(input.helpers, input.cuePack)
-  const action = input.helpers.readText(input.shot.action) || input.helpers.readText(input.shot.description)
+  const endState = compactShotVideoEndState(action)
   const plan = {
     referenceAssetKeys: input.referenceAssetKeys,
     reference_asset_keys: input.referenceAssetKeys,
@@ -1085,8 +1154,13 @@ function fallbackVideoPromptPlan(input: {
       })),
       subjectPerformance: performanceDirection,
       subject_performance: performanceDirection,
-      endState: 'End on a readable settled pose or camera hold unless the shot explicitly cuts mid-action.',
-      end_state: 'End on a readable settled pose or camera hold unless the shot explicitly cuts mid-action.',
+      environmentContinuity: '',
+      environment_continuity: '',
+      endState,
+      end_state: endState,
+      constraints: [
+        'Do not render captions, subtitles, UI, logos, watermarks, labels, arrows, panel borders, or production-board marks.',
+      ],
     },
     director_shot: {
       durationSeconds: null,
@@ -1108,8 +1182,13 @@ function fallbackVideoPromptPlan(input: {
       })),
       subjectPerformance: performanceDirection,
       subject_performance: performanceDirection,
-      endState: 'End on a readable settled pose or camera hold unless the shot explicitly cuts mid-action.',
-      end_state: 'End on a readable settled pose or camera hold unless the shot explicitly cuts mid-action.',
+      environmentContinuity: '',
+      environment_continuity: '',
+      endState,
+      end_state: endState,
+      constraints: [
+        'Do not render captions, subtitles, UI, logos, watermarks, labels, arrows, panel borders, or production-board marks.',
+      ],
     },
     cameraDirection: input.cameraPlan,
     camera_direction: input.cameraPlan,
@@ -1175,6 +1254,18 @@ function validateVideoPromptPlan(input: {
       diagnostics.push(`Rejected unnamed video prompt-plan subject reference for ${input.helpers.readText(binding.imageTag ?? binding.image_tag) || `@Image${index + 1}`}.`)
     }
   })
+  for (const subject of videoPromptSubjectRoster(input.plan as unknown as LooseRecord)) {
+    const subjectName = input.helpers.readText(subject.subject)
+    const fragments = [
+      input.helpers.readText(subject.screenPlacement ?? subject.screen_placement),
+      input.helpers.readText(subject.action),
+      input.helpers.readText(subject.shotAction ?? subject.shot_action),
+      input.helpers.readText(subject.roleInShot ?? subject.role_in_shot),
+    ].filter(Boolean)
+    if (fragments.some(isGenericShotVideoSubjectFragment)) {
+      diagnostics.push(`Rejected generic video prompt-plan subject action for ${subjectName || 'unnamed subject'}.`)
+    }
+  }
   return { valid: sameKeys && diagnostics.length === input.plan.diagnostics.length, diagnostics }
 }
 
@@ -1248,7 +1339,12 @@ export async function sequenceAnimaticShotVideoPromptPlan(
     'Location references are environment only. Continuity grids are continuity only. They are not subjects.',
     'Characters/groups/items must be bound one-to-one to their own reference images; do not swap identities.',
     'Use performanceCues to write compact performanceDirection and dialogueDeliveryPlan arrays. Preserve delivery, subtext, valence, arousal, confidence, dominance, gaze, face, gesture, body language, and voice energy when present.',
-    'Also write directorShot as one compact call sheet: durationSeconds if known, camera, actionBeats, dialogueBeats with delivery immediately attached to each spoken line, subjectPerformance, and endState.',
+    'Also write directorShot as one compact call sheet: durationSeconds if known, camera, actionBeats, dialogueBeats with delivery immediately attached to each spoken line, subjectPerformance, environmentContinuity, endState, and constraints.',
+    'For every visible subject, write subjectRoster.roleInShot or subjectRoster.shotAction as a concrete shot-specific physical role. Never use filler such as "Follow shot blocking" or "Follow the shot action".',
+    'For groups, make count natural and concrete when the shot specifies it. If one member of a group acts, describe it as one member/attendant/guard from the named group, not as the whole plural group.',
+    'Write environmentContinuity as one clean sentence using only location, lighting, weather, screen direction, and relevant prop placement. Do not repeat reference-role boilerplate.',
+    'Write endState only when there is a useful final frame or final action for this shot. Do not use a generic settled-pose fallback.',
+    'Constraints should be short and deduplicated. Include production-board/no-text/no-watermark restrictions only once.',
     'Do not create overlapping timing ranges. Prefer one duration plus relative cue wording over multiple timestamp formats.',
     'Offscreen speakers may appear in dialogueDeliveryPlan as voice-only cues, but must not become visible subjects unless the shot/reference roster says they are visible.',
     'Native audio must be narrow: scripted dialogue and direct diegetic SFX only.',
@@ -1442,7 +1538,8 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     || shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
     || shotGraphPolicyVersion === 'primary_chain_v15_previous_keyframe_grid'
     || shotGraphPolicyVersion === 'primary_chain_v16_structured_prompt_plan'
-  const canonicalShotReferenceMode = ['primary_chain_v12_canonical_shot_refs', 'primary_chain_v13_ui_ingredient_override', 'primary_chain_v14_reference_fix', 'primary_chain_v15_previous_keyframe_grid', 'primary_chain_v16_structured_prompt_plan']
+    || shotGraphPolicyVersion === 'primary_chain_v17_vibe_director_quality'
+  const canonicalShotReferenceMode = ['primary_chain_v12_canonical_shot_refs', 'primary_chain_v13_ui_ingredient_override', 'primary_chain_v14_reference_fix', 'primary_chain_v15_previous_keyframe_grid', 'primary_chain_v16_structured_prompt_plan', 'primary_chain_v17_vibe_director_quality']
     .includes(shotGraphPolicyVersion)
     || helpers.readText(config.dependencyMode ?? config.dependency_mode) === 'ingredient_refs'
   const sceneState = helpers.asRecord(config.sceneState ?? config.scene_state)
@@ -1643,6 +1740,156 @@ export async function sequenceAnimaticPlannedKeyframePrompt(
     deterministic: true,
   }
   return result({ context, helpers, outputs, model: 'deterministic-sequence-animatic-planned-keyframe-prompt-v3' })
+}
+
+export async function vibeDirectorContinuityPreflight(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const vibeDirector = readVibeDirectorConfig(config, helpers)
+  const shot = helpers.readFirstUpstreamRecord(context.upstream, ['shot'])
+  const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
+  const referenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+    .map((entry) => helpers.readText(entry))
+    .filter(Boolean)
+  const upstreamReferenceManifest = helpers.readFirstUpstreamArray(context.upstream, ['referenceManifest', 'reference_manifest'])
+    .map((entry) => helpers.asRecord(entry))
+  const referenceManifest = upstreamReferenceManifest.length > 0
+    ? upstreamReferenceManifest
+    : sequenceAnimaticReferenceManifestEntries(assetPack).map((entry) => helpers.asRecord(entry))
+  const shotId = helpers.readText(shot.id) || helpers.readText(shot.shotId) || helpers.readText(config.shotId) || 'shot'
+  const counts = referenceRoleCounts({ referenceManifest, helpers })
+  const shotText = [
+    helpers.readText(shot.action),
+    helpers.readText(shot.description),
+    helpers.readText(shot.dialogue),
+    helpers.readText(shot.dialogueCue ?? shot.dialogue_cue),
+  ].filter(Boolean).join(' ')
+  const appearsSubjectLed = /\b(says|speaks|looks|stares|face|hand|walks|runs|turns|dialogue|voice)\b/i.test(shotText)
+  const appearsLocationLed = /\b(in|through|across|room|street|hall|zone|set|spot|location|door|window)\b/i.test(shotText)
+  const warnings = [
+    referenceAssetKeys.length === 0 ? 'No reference asset keys are attached to this shot.' : '',
+    appearsSubjectLed && counts.canonical === 0 ? 'Subject-led shot has no canonical character/prop reference in the manifest.' : '',
+    appearsLocationLed && counts.spatial === 0 ? 'Location-led shot has no spatial, zone, set, spot, viewpoint, or coverage reference.' : '',
+  ].filter(Boolean)
+  const readiness = vibeDirectorContinuityReadinessSchema.parse({
+    version: 'vibe_director_continuity_readiness_v1',
+    shotId,
+    status: referenceAssetKeys.length === 0 || (appearsLocationLed && counts.spatial === 0) ? 'blocked' : warnings.length > 0 ? 'warning' : 'ready',
+    canonicalRefCount: counts.canonical,
+    spatialRefCount: counts.spatial,
+    previousVisualRefCount: counts.previous,
+    storyboardRefCount: counts.storyboard,
+    warnings,
+    referencePriority: [
+      'Use canonical character, item, and location sheets as identity authority.',
+      'Use zone/spot/viewpoint or coverage references as spatial authority.',
+      'Use previous keyframes and comic/storyboard pages only for action, pose, and continuity hints.',
+    ],
+  })
+  const shotDirection = vibeDirectorShotDirection({ shot, shotId, vibeDirector, helpers })
+  const outputs = {
+    text: JSON.stringify({ readiness, shotDirection }, null, 2),
+    shot,
+    assetPack,
+    asset_pack: assetPack,
+    referenceAssetKeys,
+    reference_asset_keys: referenceAssetKeys,
+    referenceManifest,
+    reference_manifest: referenceManifest,
+    continuityReadiness: readiness,
+    continuity_readiness: readiness,
+    shotDirection,
+    shot_direction: shotDirection,
+    vibeDirector,
+    vibe_director: vibeDirector,
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'deterministic-vibe-director-continuity-preflight-v1' })
+}
+
+export async function vibeDirectorKeyframePromptQuality(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const vibeDirector = readVibeDirectorConfig(config, helpers)
+  const promptText = helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text'])
+  const shot = helpers.readFirstUpstreamRecord(context.upstream, ['shot'])
+  const assetPack = helpers.readFirstUpstreamRecord(context.upstream, ['assetPack', 'asset_pack'])
+  const referenceAssetKeys = helpers.readFirstUpstreamArray(context.upstream, ['referenceAssetKeys', 'reference_asset_keys'])
+    .map((entry) => helpers.readText(entry))
+    .filter(Boolean)
+  const referenceManifest = helpers.readFirstUpstreamArray(context.upstream, ['referenceManifest', 'reference_manifest'])
+    .map((entry) => helpers.asRecord(entry))
+  const continuityReadiness = helpers.readFirstUpstreamRecord(context.upstream, ['continuityReadiness', 'continuity_readiness'])
+  const shotId = helpers.readText(shot.id) || helpers.readText(shot.shotId) || helpers.readText(config.shotId) || 'shot'
+  const existingShotDirection = helpers.readFirstUpstreamRecord(context.upstream, ['shotDirection', 'shot_direction'])
+  const shotDirection = helpers.readText(existingShotDirection.shotId)
+    ? existingShotDirection
+    : vibeDirectorShotDirection({ shot, shotId, vibeDirector, helpers })
+  const briefText = formatVibeDirectorWorkflowBriefForPrompt(vibeDirector)
+  const findingRecords = [
+    promptText.includes('Negative') || promptText.includes('No captions')
+      ? { severity: 'info', text: 'Artifact safety: prompt includes negative rules against text/UI artifacts.' }
+      : { severity: 'medium', text: 'Artifact safety: prompt is missing explicit negative rules against labels, UI, captions, and watermarks.' },
+    referenceAssetKeys.length > 0
+      ? { severity: 'info', text: `Continuity: ${referenceAssetKeys.length} reference asset${referenceAssetKeys.length === 1 ? '' : 's'} are bound.` }
+      : { severity: 'high', text: 'Continuity: prompt has no bound reference assets.' },
+    briefText && !promptText.includes('Vibe Director locks')
+      ? { severity: 'low', text: 'Direction: Vibe Director locks will be appended for directorial consistency.' }
+      : { severity: 'info', text: 'Direction: directorial locks are present or not configured.' },
+  ]
+  const findings = findingRecords.map((finding) => finding.text)
+  const highFindings = findingRecords.filter((finding) => finding.severity === 'high').length
+  const mediumFindings = findingRecords.filter((finding) => finding.severity === 'medium').length
+  const qualityPass = vibeDirectorQualityPassSchema.parse({
+    version: 'vibe_director_quality_pass_v1',
+    target: 'keyframe_prompt',
+    status: highFindings > 0 ? 'blocked' : mediumFindings > 0 ? 'warning' : 'passed',
+    score: Math.max(0.2, Math.min(1, 1 - highFindings * 0.28 - mediumFindings * 0.12)),
+    findings,
+    fixesApplied: briefText && !promptText.includes('Vibe Director locks')
+      ? ['Appended compact Vibe Director locks for style, camera, performance, and reference authority.']
+      : [],
+    recommendedActions: [
+      referenceAssetKeys.length === 0 ? 'Re-run shot reference pack before generating this keyframe.' : '',
+      mediumFindings > 0 ? 'Keep negative artifact rules visible in the final image prompt.' : '',
+    ].filter(Boolean),
+  })
+  const directionLines = [
+    briefText,
+    helpers.readText(shotDirection.note) ? `Shot note: ${helpers.readText(shotDirection.note)}` : '',
+    helpers.readText(shotDirection.camera) ? `Camera: ${helpers.readText(shotDirection.camera)}` : '',
+    helpers.readText(shotDirection.movement) ? `Movement: ${helpers.readText(shotDirection.movement)}` : '',
+    helpers.readText(shotDirection.performance) ? `Performance: ${helpers.readText(shotDirection.performance)}` : '',
+    helpers.readText(shotDirection.continuity) ? `Continuity: ${helpers.readText(shotDirection.continuity)}` : '',
+  ].filter(Boolean)
+  const improvedPrompt = directionLines.length > 0 && !promptText.includes('Vibe Director locks')
+    ? `${promptText}\n\nVibe Director locks:\n${directionLines.join('\n')}`
+    : promptText
+  const outputs = {
+    prompt: improvedPrompt,
+    text: improvedPrompt,
+    originalPrompt: promptText,
+    original_prompt: promptText,
+    shot,
+    assetPack,
+    asset_pack: assetPack,
+    referenceAssetKeys,
+    reference_asset_keys: referenceAssetKeys,
+    referenceManifest,
+    reference_manifest: referenceManifest,
+    continuityReadiness,
+    continuity_readiness: continuityReadiness,
+    shotDirection,
+    shot_direction: shotDirection,
+    qualityPass,
+    quality_pass: qualityPass,
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'deterministic-vibe-director-keyframe-prompt-quality-v1' })
 }
 
 export async function sequenceAnimaticPlannedKeyframeInput(
@@ -1865,6 +2112,113 @@ function cleanVideoPromptFragment(value: string) {
   return value.replace(/\s+/g, ' ').replace(/\s+([.;,:])/g, '$1').trim().replace(/[.]+$/, '')
 }
 
+function isGenericShotVideoSubjectFragment(value: string) {
+  const text = cleanVideoPromptFragment(value).toLowerCase()
+  if (!text) return true
+  return /^follow (the )?shot\b/.test(text)
+    || /^follow shot\b/.test(text)
+    || /^use (the )?shot blocking\b/.test(text)
+    || /^keep readable facial\/body performance from the shot facts\b/.test(text)
+    || /^animate the shot action clearly\b/.test(text)
+    || /^animate the visible shot action\b/.test(text)
+    || /^keep focus on the shot action\b/.test(text)
+}
+
+function cleanUsableShotVideoFragment(value: string) {
+  const cleaned = cleanVideoPromptFragment(value)
+  return isGenericShotVideoSubjectFragment(cleaned) ? '' : cleaned
+}
+
+function singularizeEnglishLabel(value: string) {
+  const text = value.trim()
+  if (/attendants$/i.test(text)) return text.replace(/attendants$/i, 'attendant')
+  if (/guards$/i.test(text)) return text.replace(/guards$/i, 'guard')
+  if (/soldiers$/i.test(text)) return text.replace(/soldiers$/i, 'soldier')
+  if (/monks$/i.test(text)) return text.replace(/monks$/i, 'monk')
+  if (/workers$/i.test(text)) return text.replace(/workers$/i, 'worker')
+  if (/servants$/i.test(text)) return text.replace(/servants$/i, 'servant')
+  if (/villagers$/i.test(text)) return text.replace(/villagers$/i, 'villager')
+  if (/pilgrims$/i.test(text)) return text.replace(/pilgrims$/i, 'pilgrim')
+  if (/figures$/i.test(text)) return text.replace(/figures$/i, 'figure')
+  if (/people$/i.test(text)) return 'person'
+  if (/men$/i.test(text)) return 'man'
+  if (/women$/i.test(text)) return 'woman'
+  if (/children$/i.test(text)) return 'child'
+  if (/s$/i.test(text) && !/ss$/i.test(text)) return text.replace(/s$/i, '')
+  return text
+}
+
+function groupSubjectCountLabel(input: { subject: string; count: number; isGroup: boolean }) {
+  if (input.count > 1) return `Exactly ${input.count} ${input.subject}`
+  if (!input.isGroup) return `One ${input.subject}`
+  const member = singularizeEnglishLabel(input.subject)
+  return member && member.toLowerCase() !== input.subject.toLowerCase()
+    ? `One ${member} from ${input.subject}`
+    : `One member of ${input.subject}`
+}
+
+function subjectSearchTerms(subject: string) {
+  const normalized = subject.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim()
+  const words = normalized.split(/\s+/).filter((word) => word.length > 2)
+  const terms = new Set(words)
+  for (const word of words) terms.add(singularizeEnglishLabel(word).toLowerCase())
+  return Array.from(terms).filter(Boolean)
+}
+
+function splitShotActionClauses(action: string) {
+  return action
+    .split(/(?<=[.!?;])\s+|\s+while\s+|\s+as\s+|\s+then\s+/i)
+    .map((entry) => cleanVideoPromptFragment(entry))
+    .filter(Boolean)
+}
+
+function subjectSpecificShotAction(subject: string, action: string) {
+  const clauses = splitShotActionClauses(action)
+  const terms = subjectSearchTerms(subject)
+  if (terms.length === 0) return ''
+  const exact = clauses.find((clause) => {
+    const lower = clause.toLowerCase()
+    return terms.some((term) => new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(lower))
+  })
+  return exact || ''
+}
+
+function compactShotVideoEndState(action: string) {
+  const clauses = splitShotActionClauses(action)
+  const last = clauses[clauses.length - 1] || cleanVideoPromptFragment(action)
+  if (!last) return ''
+  return `End with ${last.charAt(0).toLowerCase()}${last.slice(1)}`
+}
+
+function cleanShotVideoContinuityLine(value: string) {
+  const cleaned = cleanVideoPromptFragment(value)
+    .replace(/\benvironment or shot-location continuity reference\b/gi, '')
+    .replace(/\buse for environment geometry, weather, lighting logic, and spatial continuity\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([.;,:])/g, '$1')
+    .trim()
+  return cleanVideoPromptFragment(cleaned)
+}
+
+function dedupeShotVideoConstraintLines(helpers: SequenceAnimaticWorkflowNodePackHelpers, lines: string[]) {
+  const seen = new Set<string>()
+  const normalizedArtifactBan = /production-board|captions|subtitles|watermarks|guide boxes|panel borders|grid gutters/i
+  let artifactBanIncluded = false
+  return uniqueCleanKeyframePromptLines(helpers, lines)
+    .map(cleanVideoPromptFragment)
+    .filter(Boolean)
+    .filter((line) => {
+      const key = line.toLowerCase()
+      if (seen.has(key)) return false
+      if (normalizedArtifactBan.test(line)) {
+        if (artifactBanIncluded) return false
+        artifactBanIncluded = true
+      }
+      seen.add(key)
+      return true
+    })
+}
+
 function formatShotVideoReferenceBindings(input: {
   helpers: SequenceAnimaticWorkflowNodePackHelpers
   seedanceReferenceManifest: ReturnType<typeof buildSeedanceReferenceManifest>
@@ -1964,6 +2318,15 @@ function shotVideoSubjectLines(input: {
   promptPlan: LooseRecord
 }) {
   const roster = videoPromptSubjectRoster(input.promptPlan)
+  const bindingKindByTag = new Map<string, string>()
+  const bindingKindByName = new Map<string, string>()
+  for (const binding of videoPromptPlanBindings(input.promptPlan)) {
+    const tag = input.helpers.readText(binding.imageTag ?? binding.image_tag)
+    const name = input.helpers.readText(binding.name)
+    const kind = input.helpers.readText(binding.kind)
+    if (tag) bindingKindByTag.set(tag, kind)
+    if (name) bindingKindByName.set(name.toLowerCase(), kind)
+  }
   const fallback = videoPromptPlanBindings(input.promptPlan)
     .filter((binding) => ['character', 'group_character'].includes(input.helpers.readText(binding.kind)))
     .map((binding) => ({
@@ -1979,9 +2342,16 @@ function shotVideoSubjectLines(input: {
     if (!subject) return ''
     const tag = input.helpers.readText(entry.sourceImageTag ?? entry.source_image_tag)
     const count = Math.max(1, Number(entry.count) || 1)
-    const placement = cleanVideoPromptFragment(input.helpers.readText(entry.screenPlacement ?? entry.screen_placement))
-    const action = cleanVideoPromptFragment(input.helpers.readText(entry.action))
-    return `- ${count === 1 ? 'One' : `Exactly ${count}`} ${subject}${tag ? ` using ${tag}` : ''}${placement ? `; ${placement}` : ''}${action ? `; ${action}` : ''}.`
+    const kind = bindingKindByTag.get(tag) || bindingKindByName.get(subject.toLowerCase()) || ''
+    const isGroup = kind === 'group_character'
+    const placement = cleanUsableShotVideoFragment(input.helpers.readText(entry.screenPlacement ?? entry.screen_placement))
+    const action = cleanUsableShotVideoFragment(
+      input.helpers.readText(entry.shotAction ?? entry.shot_action)
+      || input.helpers.readText(entry.roleInShot ?? entry.role_in_shot)
+      || input.helpers.readText(entry.action),
+    )
+    const countLabel = groupSubjectCountLabel({ subject, count, isGroup })
+    return `- ${countLabel}${tag ? ` using ${tag}` : ''}${placement ? `; ${placement}` : ''}${action ? `; ${action}` : ''}.`
   }).filter(Boolean)
 }
 
@@ -2021,16 +2391,18 @@ function buildSequenceAnimaticShotVideoDirectorPrompt(input: {
     entityByKey: input.entityByKey,
   })
   const camera = cleanVideoPromptFragment(input.helpers.readText(director.camera) || input.cameraPlan)
-  const endState = cleanVideoPromptFragment(input.helpers.readText(director.endState ?? director.end_state) || 'End on a readable settled pose or camera hold unless the shot explicitly cuts mid-action.')
+  const endState = cleanUsableShotVideoFragment(input.helpers.readText(director.endState ?? director.end_state))
   const lighting = cleanVideoPromptFragment(input.helpers.readText(input.shot.lighting))
-  const continuity = cleanVideoPromptFragment(input.continuityPlan)
-  const audioLines = uniqueCleanKeyframePromptLines(input.helpers, [
+  const continuity = cleanShotVideoContinuityLine(input.helpers.readText(director.environmentContinuity ?? director.environment_continuity) || input.continuityPlan)
+  const constraintLines = input.helpers.readArray(director.constraints).map((entry) => input.helpers.readText(entry))
+  const audioLines = dedupeShotVideoConstraintLines(input.helpers, [
     input.audioPolicy,
     input.characterVoiceGuide ? `Voice identities: ${input.characterVoiceGuide.replace(/\n+/g, ' ')}` : '',
     input.movementLogic,
     input.artifactBan,
-    'Preserve attached references and keyframe composition. Do not render production-board artifacts.',
-  ]).map(cleanVideoPromptFragment).filter(Boolean)
+    ...constraintLines,
+    'Preserve attached references and keyframe composition.',
+  ])
   return [
     `Generate one Seedance 2 clip for this single shot, ${input.aspectRatio}, ${input.resolution}.`,
     '',
@@ -2051,7 +2423,7 @@ function buildSequenceAnimaticShotVideoDirectorPrompt(input: {
     performanceLines.length > 0 ? `Performance:\n${performanceLines.map((line) => `- ${line}.`).join('\n')}` : '',
     lighting ? `Lighting: ${lighting}.` : '',
     continuity ? `Continuity: ${continuity}.` : '',
-    `End state: ${endState}.`,
+    endState ? `End state: ${endState}.` : '',
     '',
     '[AUDIO / CONSTRAINTS]',
     audioLines.join('\n'),
@@ -2370,6 +2742,8 @@ const sequenceAnimaticShotProductionHandlers = {
   sequence_animatic_keyframe_prompt_plan: sequenceAnimaticKeyframePromptPlan,
   sequence_animatic_shot_video_prompt_plan: sequenceAnimaticShotVideoPromptPlan,
   sequence_animatic_planned_keyframe_prompt: sequenceAnimaticPlannedKeyframePrompt,
+  vibe_director_continuity_preflight: vibeDirectorContinuityPreflight,
+  vibe_director_keyframe_prompt_quality: vibeDirectorKeyframePromptQuality,
   sequence_animatic_planned_keyframe_input: sequenceAnimaticPlannedKeyframeInput,
   sequence_animatic_planned_keyframe_image: sequenceAnimaticPlannedKeyframeImage,
   sequence_animatic_planned_keyframe_artifact: sequenceAnimaticPlannedKeyframeArtifact,
@@ -2446,12 +2820,27 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'config.sceneState',
       'config.keyframePromptPlanPolicyVersion',
       'config.shotGraphPolicyVersion',
+      'config.vibeDirector',
     ],
     projectionMetadataKeys: [
       ...shotProductionProjectionMetadataKeys,
       'providerStatus',
       'providerRequestId',
     ],
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'vibe_director_continuity_preflight',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.shot',
+      'upstream.assetPack',
+      'upstream.referenceAssetKeys',
+      'upstream.referenceManifest',
+      'config.shotId',
+      'config.vibeDirector',
+      'config.shotContinuityOptions',
+    ],
+    projectionMetadataKeys: shotProductionProjectionMetadataKeys,
   }),
   createSequenceAnimaticShotProductionNodeScaffold({
     purpose: 'sequence_animatic_shot_video_prompt_plan',
@@ -2493,6 +2882,24 @@ export const sequenceAnimaticShotProductionWorkflowNodeScaffolds = [
       'config.sceneState',
       'config.keyframePromptPolicyVersion',
       'config.referenceAssetKeys',
+      'config.vibeDirector',
+    ],
+    projectionMetadataKeys: shotProductionProjectionMetadataKeys,
+  }),
+  createSequenceAnimaticShotProductionNodeScaffold({
+    purpose: 'vibe_director_keyframe_prompt_quality',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: [
+      'upstream.prompt',
+      'upstream.shot',
+      'upstream.assetPack',
+      'upstream.referenceAssetKeys',
+      'upstream.referenceManifest',
+      'upstream.continuityReadiness',
+      'upstream.shotDirection',
+      'config.shotId',
+      'config.vibeDirector',
+      'config.shotContinuityOptions',
     ],
     projectionMetadataKeys: shotProductionProjectionMetadataKeys,
   }),

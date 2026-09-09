@@ -1301,6 +1301,7 @@ export async function sequenceAnimaticShotReferencePack(
   const referenceFixMode = shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
     || shotGraphPolicyVersion === 'primary_chain_v15_previous_keyframe_grid'
     || shotGraphPolicyVersion === 'primary_chain_v16_structured_prompt_plan'
+    || shotGraphPolicyVersion === 'primary_chain_v17_vibe_director_quality'
   const shotReferenceOverride = helpers.asRecord(config.shotReferenceOverride ?? config.shot_reference_override)
   const shotVideoReferenceOverride = helpers.asRecord(config.shotVideoReferenceOverride ?? config.shot_video_reference_override)
   const effectiveUiOverride = shotVideoUiIngredientMode ? shotVideoReferenceOverride : shotReferenceOverride

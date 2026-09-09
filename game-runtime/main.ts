@@ -21,7 +21,7 @@ async function loadBuild(data: unknown, assetUrls: Record<string, string> = {}) 
     document.querySelector('#objective')!.textContent = manifest.design.brief
     document.querySelector('small')!.textContent = 'WASD move · Space jump · E grip/climb/activate · C drop · F attack · Q dodge · R shield'
     const update = (text:string, detail:string) => { status.textContent = text; feedback.textContent = detail }
-    const next = manifest.schemaVersion===3?await createUnifiedPlayer(canvas,manifest,update):await createCombatPlayer(canvas, manifest, update)
+    const next = manifest.schemaVersion===3?await createUnifiedPlayer(canvas,manifest,update,assetUrls):await createCombatPlayer(canvas, manifest, update)
     if (mine !== generation) { next.dispose(); return }
     player = next; paused = false; canvas.focus(); notify('ready')
     const debug = document.querySelector<HTMLButtonElement>('#debug') ?? document.createElement('button'); debug.id = 'debug'; debug.textContent = 'Show sockets'; let shown = false; debug.onclick = () => { shown = !shown; next.debug(shown); debug.textContent = shown ? 'Hide sockets' : 'Show sockets' }; document.querySelector('#actions')!.append(debug)

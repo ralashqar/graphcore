@@ -114,6 +114,7 @@ import {
   worldWikiPresentationMetadataSchema,
 } from './worldGraph.ts'
 import { worldThreadSchema } from './worldThread.ts'
+import { vibeDirectorWorkflowBriefSchema } from './vibeDirector.ts'
 
 const looseRecordSchema = z.record(z.string(), z.unknown())
 const looseObjectSchema = z.object({}).catchall(z.unknown())
@@ -483,6 +484,10 @@ export const outputWorkflowPlanRequestSchema = z.object({
   imageOutputFormat: outputImageGenerationOutputFormatSchema.optional(),
   preset: outputWorkflowPresetSchema.optional(),
   pageCount: z.number().int().min(1).max(12).default(8),
+  comicContinuityMode: z.enum(['previous_page', 'parallel', 'selected_references']).optional(),
+  comicApprovedReferenceEntityKeys: z.array(z.string()).default([]),
+  comicPageReferenceDepth: z.number().int().min(0).max(4).optional(),
+  qualityGateMode: z.enum(['standard', 'strict', 'off']).optional(),
   videoBlockCount: z.number().int().min(1).max(6).optional(),
   durationPerBlockSeconds: z.number().int().min(4).max(15).optional(),
   aspectRatio: z.enum(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).optional(),
@@ -494,6 +499,7 @@ export const outputWorkflowPlanRequestSchema = z.object({
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   sequenceAnimaticMode: sequenceAnimaticModeSchema.optional(),
   cinematicAnimaticMode: cinematicAnimaticModeSchema.optional(),
+  vibeDirector: vibeDirectorWorkflowBriefSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -528,6 +534,10 @@ export const outputRequestStartRequestSchema = z.object({
   imageQuality: outputImageGenerationQualitySchema.optional(),
   imageOutputFormat: outputImageGenerationOutputFormatSchema.optional(),
   pageCount: z.number().int().min(1).max(12).optional(),
+  comicContinuityMode: z.enum(['previous_page', 'parallel', 'selected_references']).optional(),
+  comicApprovedReferenceEntityKeys: z.array(z.string()).default([]),
+  comicPageReferenceDepth: z.number().int().min(0).max(4).optional(),
+  qualityGateMode: z.enum(['standard', 'strict', 'off']).optional(),
   videoBlockCount: z.number().int().min(1).max(6).optional(),
   durationPerBlockSeconds: z.number().int().min(4).max(15).optional(),
   aspectRatio: z.enum(['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).optional(),
@@ -539,6 +549,7 @@ export const outputRequestStartRequestSchema = z.object({
   cinematicV2AnimaticMode: cinematicV2AnimaticModeSchema.optional(),
   sequenceAnimaticMode: sequenceAnimaticModeSchema.optional(),
   cinematicAnimaticMode: cinematicAnimaticModeSchema.optional(),
+  vibeDirector: vibeDirectorWorkflowBriefSchema.optional(),
   debugCinematicStoryboardStyleSafeMode: z.boolean().optional(),
   cinematicStoryboardStyleOverride: optionalTrimmedNonEmptyStringSchema,
   debugSkipVideoGeneration: z.boolean().optional(),
@@ -1106,6 +1117,8 @@ export const sequenceAnimaticShotKeyframeReferenceOverrideSchema = looseObjectSc
 export const sequenceAnimaticShotContinuityOptionsSchema = looseObjectSchema.extend({
   includePreviousKeyframeGrid: z.boolean().optional(),
   include_previous_keyframe_grid: z.boolean().optional(),
+  vibeDirector: vibeDirectorWorkflowBriefSchema.optional(),
+  vibe_director: vibeDirectorWorkflowBriefSchema.optional(),
 })
 
 export const sequenceAnimaticShotRevisionArtifactV1Schema = looseObjectSchema.extend({
@@ -1219,7 +1232,7 @@ export const sequenceAnimaticShotProductionGraphEnsureResponseSchema = z.object(
   shotId: z.string().min(1),
   coverageSetupId: z.string().nullable().default(null),
   dependencyNodeIds: z.array(z.string()).default([]),
-  graphPolicyVersion: z.string().default('primary_chain_v16_structured_prompt_plan'),
+  graphPolicyVersion: z.string().default('primary_chain_v17_vibe_director_quality'),
 })
 
 export const sequenceAnimaticZoneCoverageBoardEnsureRequestSchema = z.object({
@@ -3338,14 +3351,20 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
   const requestedSequenceKeys = request.selectedSequenceUnitKeys.filter(Boolean)
   const selectedSequenceUnitKey = requestedSequenceKeys[0] ?? sequenceUnits[0]?.key ?? 'comic-sequence'
   const selectedSequenceUnit = sequenceUnits.find((entity) => entity.key === selectedSequenceUnitKey) ?? sequenceUnits[0] ?? null
+  const approvedReferenceEntityKeys = [...new Set(request.comicApprovedReferenceEntityKeys.filter(Boolean))]
   const selectedEntityKeys = chooseComicEntityKeys({
-    selectedEntityKeys: request.selectedEntityKeys,
+    selectedEntityKeys: approvedReferenceEntityKeys.length > 0
+      ? [...approvedReferenceEntityKeys, ...request.selectedEntityKeys]
+      : request.selectedEntityKeys,
     selectedSequenceUnitKey,
     sequenceUnit: selectedSequenceUnit,
     worldEntities: request.snapshot.worldEntities,
     worldRelationships: request.snapshot.worldRelationships,
   })
   const pageCount = Math.min(COMIC_PAGE_FANOUT_LIMIT, Math.max(1, request.pageCount ?? DEFAULT_COMIC_PAGE_COUNT))
+  const comicContinuityMode = request.comicContinuityMode ?? 'parallel'
+  const comicPageReferenceDepth = request.comicPageReferenceDepth ?? (comicContinuityMode === 'previous_page' ? 1 : 0)
+  const qualityGateMode = request.qualityGateMode ?? 'standard'
   const prompt = request.prompt.trim() || 'Create a comic issue from this sequence unit, preserving world canon and generating full comic pages.'
   const title = worldWiki.title || request.snapshot.project.name
   const sequenceTitle = selectedSequenceUnit?.name || 'Selected Sequence'
@@ -3364,6 +3383,9 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       pageCount,
       sequenceUnitKey: selectedSequenceUnitKey,
       sequenceUnitName: sequenceTitle,
+      continuityMode: comicContinuityMode,
+      previousPageReferenceDepth: comicPageReferenceDepth,
+      qualityGateMode,
       deterministic: true,
       execution: { resourceClass: 'utility', groupKey: 'comic_page_prompts', maxConcurrency: 8 },
     },
@@ -3392,10 +3414,13 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       outputFormat: resolveOutputImageGenerationOutputFormat({ requestedFormat: request.imageOutputFormat }),
       imageSize: { width: 1600, height: 2480 },
       maxReferenceImages: 6,
+      continuityMode: comicContinuityMode,
+      previousPageReferenceDepth: comicPageReferenceDepth,
+      qualityGateMode,
       skillKeys: ['storyboard_panel_prompting', 'image_prompt_visual_only', 'entity_reference_fidelity', 'character_reference_continuity', 'provider_prompt_hygiene'],
       autoSkillTags: ['comic_page', 'image_prompt', 'visual_only', 'entity_reference', 'reference_continuity'],
       guidanceMode: 'strict',
-      execution: { resourceClass: 'image', groupKey: 'comic_pages', maxConcurrency: 8 },
+      execution: { resourceClass: 'image', groupKey: 'comic_pages', maxConcurrency: comicContinuityMode === 'previous_page' ? 1 : 8 },
     },
   }))
   const nodes = [
@@ -3454,6 +3479,8 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
         pageCount,
         sequenceUnitKey: selectedSequenceUnitKey,
         sequenceUnitName: sequenceTitle,
+        continuityMode: comicContinuityMode,
+        qualityGateMode,
         skillKeys: ['comic_scene_dramatization', 'comic_dialogue_lettering', 'comic_adaptation_compression', 'provider_prompt_hygiene'],
         autoSkillTags: ['comic', 'scene_script', 'adaptation'],
         guidanceMode: 'strict',
@@ -3472,6 +3499,8 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
         pageCount,
         sequenceUnitKey: selectedSequenceUnitKey,
         sequenceUnitName: sequenceTitle,
+        continuityMode: comicContinuityMode,
+        qualityGateMode,
         skillKeys: ['comic_page_pacing', 'comic_panel_storytelling', 'comic_adaptation_compression', 'provider_prompt_hygiene'],
         autoSkillTags: ['comic', 'page_plan', 'pacing'],
         guidanceMode: 'strict',
@@ -3490,6 +3519,8 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
         pageCount,
         sequenceUnitKey: selectedSequenceUnitKey,
         sequenceUnitName: sequenceTitle,
+        continuityMode: comicContinuityMode,
+        qualityGateMode,
         skillKeys: ['comic_panel_storytelling', 'comic_dialogue_lettering', 'storyboard_panel_prompting', 'provider_prompt_hygiene'],
         autoSkillTags: ['comic', 'script', 'storyboard', 'panel_storytelling'],
         guidanceMode: 'strict',
@@ -3540,6 +3571,9 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       edgeBase('comic_script', 'script', node.key, 'script'),
       edgeBase('relevant_entities', 'asset_pack', node.key, 'asset_pack'),
       edgeBase('skill_context', 'guidance', node.key, 'guidance'),
+      ...(comicContinuityMode === 'previous_page' && index > 0
+        ? [edgeBase(pageImageNodes[index - 1].key, 'image', node.key, 'previous_page', { referenceDepth: comicPageReferenceDepth })]
+        : []),
       edgeBase(node.key, 'text', pageImageNodes[index].key, 'prompt'),
       edgeBase(node.key, 'asset_pack', pageImageNodes[index].key, 'asset_pack'),
     ]),
@@ -3566,6 +3600,7 @@ export function buildComicIssueFromSequencePlan(request: z.infer<typeof outputWo
       ...graphValidation.diagnostics,
       ...(requestedSequenceKeys.length !== 1 ? ['Comic V1 expects one selected sequence_unit; the first available sequence unit was used.'] : []),
       ...(request.pageCount > COMIC_PAGE_FANOUT_LIMIT ? [`Comic page fan-out is capped at ${COMIC_PAGE_FANOUT_LIMIT} pages in V1.`] : []),
+      ...(comicContinuityMode === 'previous_page' ? [`Comic pages will use the previous ${comicPageReferenceDepth} generated page reference(s) for continuity.`] : []),
     ],
   })
 }
@@ -3718,6 +3753,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
       ? `${title} - ${sequenceTitle} Cinematic`
       : `${title} Cinematic`
   const maxShotCount = screenplayAnimaticMaster ? sequenceAnimaticMasterMaxShotCount : deriveCinematicV2MaxShotCount(null)
+  const vibeDirector = request.vibeDirector ?? null
   const nodes = [
     nodeBase({
       key: 'world_context',
@@ -3733,6 +3769,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
         strictSourceEntityFilter: sourceSequenceUnitKeys.length > 0,
         sequenceAnimaticMode,
         cinematicAnimaticMode,
+        vibeDirector,
         execution: { resourceClass: 'utility' },
       },
     }),
@@ -3804,10 +3841,28 @@ export function buildCinematicV3ScriptStoryboardPlan(
         presetFamily,
         sequenceAnimaticMode,
         cinematicAnimaticMode,
+        vibeDirector,
         maxShotCount,
         skillKeys: ['cinematic_screenwriting_craft', 'cinematic_sequence_structure', 'provider_prompt_hygiene'],
         guidanceMode: 'append',
         execution: { resourceClass: 'llm', groupKey: 'cinematic_v3_planning', maxConcurrency: 1 },
+      },
+    }),
+    nodeBase({
+      key: 'vibe_director_screenplay_quality',
+      nodeType: 'utility_transform',
+      label: 'Vibe Screenplay Quality',
+      x: 1180,
+      y: 300,
+      inputs: { prompt: 'Evaluate screenplay taste, pace, dialogue, continuity, and directing fit.' },
+      config: {
+        purpose: 'vibe_director_screenplay_quality',
+        cinematicPipelineVersion: 'v3_script_storyboards' satisfies CinematicPipelineVersion,
+        sequenceAnimaticMode,
+        cinematicAnimaticMode,
+        vibeDirector,
+        qualityGateMode: request.qualityGateMode ?? 'standard',
+        execution: { resourceClass: 'utility', groupKey: 'vibe_director_screenplay_quality', maxConcurrency: 1 },
       },
     }),
     ...(screenplayAnimaticMaster
@@ -3828,6 +3883,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
             maxShotCount,
             sequenceAnimaticMode,
             cinematicAnimaticMode,
+            vibeDirector,
             aspectRatio,
             resolution,
             execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_scene_graph_assignment', maxConcurrency: 1 },
@@ -3848,6 +3904,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
             maxShotCount,
             sequenceAnimaticMode,
             cinematicAnimaticMode,
+            vibeDirector,
             aspectRatio,
             resolution,
             autoStartFirstScene: true,
@@ -3869,6 +3926,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
             maxShotCount,
             sequenceAnimaticMode,
             cinematicAnimaticMode,
+            vibeDirector,
             aspectRatio,
             resolution,
             maxPanelsPerSheet: 9,
@@ -3889,6 +3947,7 @@ export function buildCinematicV3ScriptStoryboardPlan(
             maxShotCount,
             sequenceAnimaticMode,
             cinematicAnimaticMode,
+            vibeDirector,
             aspectRatio,
             resolution,
             maxPanelsPerSheet: 9,
@@ -3911,27 +3970,29 @@ export function buildCinematicV3ScriptStoryboardPlan(
     edgeBase('world_context', 'context', 'cinematic_v3_screenplay_author', 'context'),
     edgeBase('skill_context', 'guidance', 'cinematic_v3_screenplay_author', 'guidance'),
     edgeBase('cinematic_v3_reference_select', 'asset_pack', 'cinematic_v3_screenplay_author', 'asset_pack'),
+    edgeBase('cinematic_v3_screenplay_author', 'text', 'vibe_director_screenplay_quality', 'screenplay'),
+    edgeBase('cinematic_v3_screenplay_author', 'screenplayDraft', 'vibe_director_screenplay_quality', 'screenplay_draft', { optional: true }),
     ...(screenplayAnimaticMaster
       ? [
         edgeBase('world_context', 'context', 'sequence_animatic_scene_graph_assignment', 'context'),
         edgeBase('skill_context', 'guidance', 'sequence_animatic_scene_graph_assignment', 'guidance'),
         edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_scene_graph_assignment', 'asset_pack'),
-        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_scene_graph_assignment', 'screenplay'),
+        edgeBase('vibe_director_screenplay_quality', 'text', 'sequence_animatic_scene_graph_assignment', 'screenplay'),
         edgeBase('world_context', 'context', 'sequence_animatic_scene_register', 'context'),
         edgeBase('skill_context', 'guidance', 'sequence_animatic_scene_register', 'guidance'),
         edgeBase('cinematic_v3_reference_select', 'asset_pack', 'sequence_animatic_scene_register', 'asset_pack'),
-        edgeBase('cinematic_v3_screenplay_author', 'text', 'sequence_animatic_scene_register', 'screenplay'),
+        edgeBase('vibe_director_screenplay_quality', 'text', 'sequence_animatic_scene_register', 'screenplay'),
         edgeBase('sequence_animatic_scene_graph_assignment', 'scene_package', 'sequence_animatic_scene_register', 'scene_package'),
       ]
       : [
         edgeBase('world_context', 'context', 'cinematic_v3_shot_break_plan', 'context'),
         edgeBase('skill_context', 'guidance', 'cinematic_v3_shot_break_plan', 'guidance'),
         edgeBase('cinematic_v3_reference_select', 'asset_pack', 'cinematic_v3_shot_break_plan', 'asset_pack'),
-        edgeBase('cinematic_v3_screenplay_author', 'text', 'cinematic_v3_shot_break_plan', 'screenplay'),
+        edgeBase('vibe_director_screenplay_quality', 'text', 'cinematic_v3_shot_break_plan', 'screenplay'),
         edgeBase('world_context', 'context', 'cinematic_v3_dynamic_shot_parse_fanout', 'context'),
         edgeBase('skill_context', 'guidance', 'cinematic_v3_dynamic_shot_parse_fanout', 'guidance'),
         edgeBase('cinematic_v3_reference_select', 'asset_pack', 'cinematic_v3_dynamic_shot_parse_fanout', 'asset_pack'),
-        edgeBase('cinematic_v3_screenplay_author', 'text', 'cinematic_v3_dynamic_shot_parse_fanout', 'screenplay'),
+        edgeBase('vibe_director_screenplay_quality', 'text', 'cinematic_v3_dynamic_shot_parse_fanout', 'screenplay'),
         edgeBase('cinematic_v3_shot_break_plan', 'text', 'cinematic_v3_dynamic_shot_parse_fanout', 'shot_break_plan'),
       ]),
   ]

@@ -16,6 +16,7 @@ If you are an AI agent trying to understand the codebase, start with the current
 5. [`13-supabase-edge-function-runbook.md`](./13-supabase-edge-function-runbook.md)
 6. [`14-supabase-project-operations.md`](./14-supabase-project-operations.md)
 7. [`23-supabase-db-performance-and-security-runbook.md`](./23-supabase-db-performance-and-security-runbook.md)
+8. [`24-synarc-technical-infrastructure-spec.md`](./24-synarc-technical-infrastructure-spec.md)
 
 ## Important Note
 
@@ -29,6 +30,8 @@ Those older docs are still useful as background, but when they disagree with the
 
 ## Research And Planning Docs
 
+- [`25-vibe-director-h3-workspace.md`](./25-vibe-director-h3-workspace.md) — H3 workspace architecture, saved takes/branching/export, gated live capture, deployment, and release checks.
+
 - [`16-cinematic-presets-and-ugc-research.md`](./16-cinematic-presets-and-ugc-research.md)
   - Research base for cinematic preset families, UGC workflows, Seedance 2 patterns, and manual take-node still generation planning.
 - [`17-world-build-context-and-ugc-current-state.md`](./17-world-build-context-and-ugc-current-state.md)
@@ -40,6 +43,7 @@ Those older docs are still useful as background, but when they disagree with the
 - [`ugc-mastery/README.md`](./ugc-mastery/README.md)
   - Distilled GraphCore-owned knowledge base for UGC psychology, virality mechanics, script formulas, format systems, and preset integration guidance.
 
+- [26. Director runtime and rollout](26-director-runtime.md) — isolated workers, durable recovery, compatibility boundaries, and release gates.
 - [27. Prompt-to-game architecture review](27-prompt-to-game-architecture-review.md) — repository findings, contracts, engine and asset-pipeline recommendations.
 - [28. Game workspace implementation](28-game-workspace-implementation.md) — adventure template, scoped planners, runtime, workers, migration, deployment and verification.
 - [29. Fabric gameplay reuse review](29-fabric-gameplay-reuse-review.md) — source findings and selective gameplay transfer recommendations.

@@ -233,7 +233,14 @@ export function buildSequenceAnimaticSceneWorkflowGraph(input: {
       maxShotCount: input.maxShotCount,
       execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_scene_shot_plan', maxConcurrency: 1 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_scene_plan_merge', 'utility_transform', 'Normalize Scene Shot Plan', 640, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'vibe_director_scene_shot_quality', 'utility_transform', 'Vibe Shot Quality', 640, 120, {
+      ...config,
+      purpose: 'vibe_director_scene_shot_quality',
+      role: 'vibe_director_scene_shot_quality',
+      maxShotCount: input.maxShotCount,
+      execution: { resourceClass: 'utility', groupKey: 'vibe_director_scene_shot_quality', maxConcurrency: 4 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_scene_plan_merge', 'utility_transform', 'Normalize Scene Shot Plan', 920, 120, {
       ...config,
       purpose: 'sequence_animatic_scene_plan_merge',
       role: 'sequence_animatic_director_plan',
@@ -244,19 +251,19 @@ export function buildSequenceAnimaticSceneWorkflowGraph(input: {
       preserveSceneScopedIds: true,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_scene_plan_merge', maxConcurrency: 1 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_director_plan_artifact', 'output_artifact', 'Register Scene Shot Plan', 920, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_director_plan_artifact', 'output_artifact', 'Register Scene Shot Plan', 1200, 120, {
       ...config,
       purpose: 'sequence_animatic_director_plan_artifact',
       artifactKind: 'other',
       execution: { resourceClass: 'utility' },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_manifest', 'utility_transform', 'Build Scene Manifest', 1200, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'sequence_animatic_manifest', 'utility_transform', 'Build Scene Manifest', 1480, 120, {
       ...config,
       purpose: 'sequence_animatic_manifest',
       role: 'sequence_animatic_manifest',
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_manifest', maxConcurrency: 1 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'artifact', 'output_artifact', 'Register Scene Manifest', 1480, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'artifact', 'output_artifact', 'Register Scene Manifest', 1760, 120, {
       ...config,
       purpose: 'sequence_animatic_manifest_artifact',
       artifactKind: 'other',
@@ -271,7 +278,8 @@ export function buildSequenceAnimaticSceneWorkflowGraph(input: {
     edge('scene_input__shot_plan_context', 'scene_input', 'context', shotPlanNodeKey, 'context'),
     edge('scene_input__shot_plan_guidance', 'scene_input', 'guidance', shotPlanNodeKey, 'guidance'),
     edge('scene_input__shot_plan_asset_pack', 'scene_input', 'asset_pack', shotPlanNodeKey, 'asset_pack'),
-    edge('shot_plan__scene_plan_merge', shotPlanNodeKey, 'scene_plan', 'sequence_animatic_scene_plan_merge', 'scene_plan'),
+    edge('shot_plan__vibe_quality', shotPlanNodeKey, 'scene_plan', 'vibe_director_scene_shot_quality', 'scene_plan'),
+    edge('vibe_quality__scene_plan_merge', 'vibe_director_scene_shot_quality', 'scene_plan', 'sequence_animatic_scene_plan_merge', 'scene_plan'),
     edge('scene_input__merge_scene_package', 'scene_input', 'scene_package', 'sequence_animatic_scene_plan_merge', 'scene_package'),
     edge('scene_input__merge_screenplay', 'scene_input', 'screenplay', 'sequence_animatic_scene_plan_merge', 'screenplay'),
     edge('scene_input__merge_asset_pack', 'scene_input', 'asset_pack', 'sequence_animatic_scene_plan_merge', 'asset_pack'),
@@ -794,18 +802,28 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_shot_reference_pack', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'keyframe_prompt_plan', 'utility_transform', 'Keyframe Prompt Plan', 1240, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'vibe_director_continuity_preflight', 'utility_transform', 'Vibe Continuity Preflight', 1240, 120, {
+      purpose: 'vibe_director_continuity_preflight',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'vibe_director_continuity_preflight', maxConcurrency: 8 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'keyframe_prompt_plan', 'utility_transform', 'Keyframe Prompt Plan', 1480, 120, {
       purpose: 'sequence_animatic_keyframe_prompt_plan',
       ...config,
       keyframePromptPlanPolicyVersion: 'sequence_animatic_keyframe_prompt_plan_v1',
       execution: { resourceClass: 'llm', groupKey: 'sequence_animatic_keyframe_prompt_plan', maxConcurrency: 4 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 1480, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_prompt', 'utility_transform', 'Shot Keyframe Prompt', 1720, 120, {
       purpose: 'sequence_animatic_planned_keyframe_prompt',
       ...config,
       execution: { resourceClass: 'utility', groupKey: 'sequence_animatic_planned_keyframe_prompt', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 1760, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'vibe_director_keyframe_prompt_quality', 'utility_transform', 'Vibe Prompt Quality', 1960, 120, {
+      purpose: 'vibe_director_keyframe_prompt_quality',
+      ...config,
+      execution: { resourceClass: 'utility', groupKey: 'vibe_director_keyframe_prompt_quality', maxConcurrency: 8 },
+    }, {}, role),
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_image', 'image_generation', 'Shot Keyframe Image', 2240, 120, {
       purpose: 'sequence_animatic_planned_keyframe_image',
       role: 'sequence_animatic_shot_keyframe',
       ...config,
@@ -824,7 +842,7 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       used_as_video_reference: true,
       execution: { resourceClass: 'image', groupKey: 'sequence_animatic_shot_keyframes', maxConcurrency: 8 },
     }, {}, role),
-    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 2040, 120, {
+    sequenceAnimaticWorkflowNode(input.workflowId, input.draftId, 'planned_keyframe_artifact', 'output_artifact', 'Register Shot Keyframe', 2520, 120, {
       purpose: 'sequence_animatic_planned_keyframe_artifact',
       artifactKind: 'other',
       ...config,
@@ -851,21 +869,33 @@ export function buildSequenceAnimaticShotProductionWorkflowGraph(input: {
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'previous_grid__reference_pack_image', 'previous_keyframe_grid', 'image', 'shot_reference_pack', 'reference_images', { optional: true, optionalDependency: true }, role),
       sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'previous_grid__reference_pack_asset_pack', 'previous_keyframe_grid', 'asset_pack', 'shot_reference_pack', 'asset_pack', { optional: true, optionalDependency: true }, role),
     ] : []),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_shot', 'shot_reference_pack', 'shot', 'keyframe_prompt_plan', 'shot', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_refs', 'shot_reference_pack', 'asset_pack', 'keyframe_prompt_plan', 'asset_pack', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_ref_keys', 'shot_reference_pack', 'referenceAssetKeys', 'keyframe_prompt_plan', 'reference_asset_keys', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__prompt_plan_manifest', 'shot_reference_pack', 'referenceManifest', 'keyframe_prompt_plan', 'reference_manifest', { optional: true, optionalDependency: true }, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_shot', 'shot_reference_pack', 'shot', 'planned_keyframe_prompt', 'shot', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_refs', 'shot_reference_pack', 'asset_pack', 'planned_keyframe_prompt', 'asset_pack', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__keyframe_prompt_ref_keys', 'shot_reference_pack', 'referenceAssetKeys', 'planned_keyframe_prompt', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__vibe_preflight_shot', 'shot_reference_pack', 'shot', 'vibe_director_continuity_preflight', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__vibe_preflight_refs', 'shot_reference_pack', 'asset_pack', 'vibe_director_continuity_preflight', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__vibe_preflight_ref_keys', 'shot_reference_pack', 'referenceAssetKeys', 'vibe_director_continuity_preflight', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__vibe_preflight_manifest', 'shot_reference_pack', 'referenceManifest', 'vibe_director_continuity_preflight', 'reference_manifest', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__prompt_plan_shot', 'vibe_director_continuity_preflight', 'shot', 'keyframe_prompt_plan', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__prompt_plan_refs', 'vibe_director_continuity_preflight', 'asset_pack', 'keyframe_prompt_plan', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__prompt_plan_ref_keys', 'vibe_director_continuity_preflight', 'referenceAssetKeys', 'keyframe_prompt_plan', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__prompt_plan_manifest', 'vibe_director_continuity_preflight', 'referenceManifest', 'keyframe_prompt_plan', 'reference_manifest', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__keyframe_prompt_shot', 'vibe_director_continuity_preflight', 'shot', 'planned_keyframe_prompt', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__keyframe_prompt_refs', 'vibe_director_continuity_preflight', 'asset_pack', 'planned_keyframe_prompt', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__keyframe_prompt_ref_keys', 'vibe_director_continuity_preflight', 'referenceAssetKeys', 'planned_keyframe_prompt', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__keyframe_prompt_readiness', 'vibe_director_continuity_preflight', 'continuityReadiness', 'planned_keyframe_prompt', 'continuity_readiness', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__keyframe_prompt_direction', 'vibe_director_continuity_preflight', 'shotDirection', 'planned_keyframe_prompt', 'shot_direction', { optional: true, optionalDependency: true }, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt_plan__keyframe_prompt_plan', 'keyframe_prompt_plan', 'promptPlan', 'planned_keyframe_prompt', 'prompt_plan', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'prompt_plan__keyframe_prompt_diagnostics', 'keyframe_prompt_plan', 'promptPlanDiagnostics', 'planned_keyframe_prompt', 'prompt_plan_diagnostics', { optional: true, optionalDependency: true }, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image', 'planned_keyframe_prompt', 'text', 'planned_keyframe_image', 'prompt', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image_refs', 'planned_keyframe_prompt', 'asset_pack', 'planned_keyframe_image', 'asset_pack', {}, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__image_ref_keys', 'planned_keyframe_prompt', 'reference_asset_keys', 'planned_keyframe_image', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__vibe_quality_prompt', 'planned_keyframe_prompt', 'text', 'vibe_director_keyframe_prompt_quality', 'prompt', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__vibe_quality_shot', 'planned_keyframe_prompt', 'shot', 'vibe_director_keyframe_prompt_quality', 'shot', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__vibe_quality_refs', 'planned_keyframe_prompt', 'asset_pack', 'vibe_director_keyframe_prompt_quality', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__vibe_quality_ref_keys', 'planned_keyframe_prompt', 'reference_asset_keys', 'vibe_director_keyframe_prompt_quality', 'reference_asset_keys', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__vibe_quality_readiness', 'vibe_director_continuity_preflight', 'continuityReadiness', 'vibe_director_keyframe_prompt_quality', 'continuity_readiness', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'vibe_preflight__vibe_quality_direction', 'vibe_director_continuity_preflight', 'shotDirection', 'vibe_director_keyframe_prompt_quality', 'shot_direction', { optional: true, optionalDependency: true }, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt_quality__image', 'vibe_director_keyframe_prompt_quality', 'text', 'planned_keyframe_image', 'prompt', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt_quality__image_refs', 'vibe_director_keyframe_prompt_quality', 'asset_pack', 'planned_keyframe_image', 'asset_pack', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt_quality__image_ref_keys', 'vibe_director_keyframe_prompt_quality', 'reference_asset_keys', 'planned_keyframe_image', 'reference_asset_keys', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'reference_pack__artifact_shot', 'shot_reference_pack', 'shot', 'planned_keyframe_artifact', 'shot', {}, role),
     sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_image__artifact', 'planned_keyframe_image', 'image', 'planned_keyframe_artifact', 'image', { optional: true, optionalDependency: true }, role),
-    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt__artifact_prompt', 'planned_keyframe_prompt', 'text', 'planned_keyframe_artifact', 'prompt', {}, role),
+    sequenceAnimaticWorkflowEdge(input.workflowId, input.draftId, 'keyframe_prompt_quality__artifact_prompt', 'vibe_director_keyframe_prompt_quality', 'text', 'planned_keyframe_artifact', 'prompt', {}, role),
   ]
   return { nodes, edges }
 }

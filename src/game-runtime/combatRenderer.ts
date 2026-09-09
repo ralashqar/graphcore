@@ -21,7 +21,7 @@ export async function createCombatPlayer(
   canvas: HTMLCanvasElement,
   manifest: Manifest,
   onUpdate: (text: string, feedback: string) => void,
-  extensions?: { create: () => Simulation; summary: (sim: Simulation) => string; hint: (sim: Simulation) => string; decorate?: (scene: Scene, sim: () => Simulation) => (() => void) },
+  extensions?: { create: () => Simulation; summary: (sim: Simulation) => string; hint: (sim: Simulation) => string; visuals?: (scene: Scene) => Promise<{ update: (sim: Simulation) => Set<string>; metrics?: () => Record<string, unknown> }>; decorate?: (scene: Scene, sim: () => Simulation) => (() => void) },
 ) {
   let sim = extensions ? extensions.create() : await Simulation.create(manifest.design, manifest.id),
     paused = false,
@@ -153,6 +153,7 @@ export async function createCombatPlayer(
     edges = new Set<string>()
   const interactionVisuals = createInteractionVisuals(scene, manifest.design)
   const updateDecoration = extensions?.decorate?.(scene, () => sim)
+  const animationVisuals = await extensions?.visuals?.(scene)
   const down = (e: KeyboardEvent) => {
     if (
       [
@@ -169,6 +170,8 @@ export async function createCombatPlayer(
         'Escape',
         'ShiftLeft',
         'ShiftRight',
+        'AltLeft',
+        'KeyV',
       ].includes(e.code)
     ) {
       e.preventDefault()
@@ -216,11 +219,14 @@ export async function createCombatPlayer(
           x: movement.x,
           z: movement.z,
           sprint: keys.has('ShiftLeft'),
+          strafe: keys.has('AltLeft'),
           jump: edges.has('Space'),
           interact: edges.has('KeyE'),
           drop: edges.has('KeyC'),
           cancel: edges.has('Escape'),
-          ability: edges.has('KeyF')
+          ability: edges.has('KeyV')
+            ? spec.abilities.find(id=>nodesOf(manifest.design,'ability').some(a=>a.id===id&&a.op==='roll'))
+            : edges.has('KeyF')
             ? primary
             : edges.has('KeyQ')
               ? spec.abilities.find(id=>nodesOf(manifest.design,'ability').some(a=>a.id===id&&a.op==='dodge'))
@@ -233,10 +239,11 @@ export async function createCombatPlayer(
         accumulator -= DT
       }
     }
+    const animated = animationVisuals?.update(sim) ?? new Set<string>()
     for (const a of sim.state.actors) {
       const meshes = actorMeshes.get(a.id)!
-      meshes.head.setEnabled(a.health > 0)
-      meshes.links.forEach((m) => m.setEnabled(a.health > 0))
+      meshes.head.setEnabled(a.health > 0 && !animated.has(a.id))
+      meshes.links.forEach((m) => m.setEnabled(a.health > 0 && !animated.has(a.id)))
       meshes.socket.setEnabled(debug && a.health > 0)
       if (a.health <= 0) continue
       const action = a.action,
@@ -363,6 +370,7 @@ export async function createCombatPlayer(
       debug = v
     },
     metrics: () => ({
+      ...animationVisuals?.metrics?.(),
       fps: engine.getFps(),
       meshes: scene.meshes.length,
       vertices: scene.getTotalVertices(),

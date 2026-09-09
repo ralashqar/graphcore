@@ -43,7 +43,7 @@ export const abilitySchema = z
   .object({
     ...base,
     kind: z.literal('ability'),
-    op: z.enum(['strike', 'bolt', 'dodge', 'shield']),
+    op: z.enum(['strike', 'bolt', 'dodge', 'shield', 'roll']),
     pose: idSchema,
     projectile: idSchema.nullable(),
     cost: z.number().min(0).max(80),

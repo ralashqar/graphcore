@@ -46,6 +46,10 @@ import {
   buildSequenceAnimaticScriptShotProjection,
 } from './output-workflow-sequence-animatic-planning-runtime.ts'
 import {
+  formatVibeDirectorWorkflowBriefForPrompt,
+  vibeDirectorQualityPassSchema,
+} from '../../../src/domain/vibeDirector.ts'
+import {
   buildCinematicBlockScriptInstruction,
   buildCinematicScriptAuthoringInstruction,
   buildCinematicSequencePlanInstruction,
@@ -242,6 +246,21 @@ function result(input: {
   model: string
 }): CinematicTextNodeExecutionResult {
   return createWorkflowNodeExecutionResult<CinematicTextNodeExecutionResult>(input)
+}
+
+function readFirstCinematicUpstreamText(
+  helpers: CinematicTextWorkflowNodePackHelpers,
+  upstream: Record<string, Record<string, unknown>>,
+  fields: string[],
+) {
+  for (const outputs of Object.values(upstream)) {
+    const record = helpers.asRecord(outputs)
+    for (const field of fields) {
+      const text = helpers.readText(record[field])
+      if (text) return text
+    }
+  }
+  return ''
 }
 
 function compactCinematicEntityAnchors(
@@ -1826,6 +1845,74 @@ async function cinematicV3StoryboardGroupVideoPromptNode(
   return result({ context, helpers, outputs, model: 'deterministic-cinematic-v3-storyboard-group-video-prompt-v1' })
 }
 
+async function vibeDirectorScreenplayQualityNode(
+  context: CinematicTextNodeExecutionContext,
+  helpers: CinematicTextWorkflowNodePackHelpers,
+) {
+  const config = helpers.asRecord(context.node.config)
+  const screenplay = readFirstCinematicUpstreamText(helpers, context.upstream, ['screenplay', 'text', 'prompt'])
+  const screenplayDraft = helpers.readFirstUpstreamRecord(context.upstream, ['screenplayDraft', 'screenplay_draft'])
+  const vibeDirector = helpers.asRecord(config.vibeDirector ?? config.vibe_director)
+  const qualityGateMode = helpers.readText(config.qualityGateMode ?? config.quality_gate_mode) || helpers.readText(vibeDirector.qualityGateMode) || 'advisory'
+  const sceneCount = (screenplay.match(/^#Scene\b/gm) ?? []).length
+  const dialogueLineCount = (screenplay.match(/^[A-Z][A-Z0-9 '._-]{1,64}\s+\[ref:[^\]]+\]:/gm) ?? []).length
+  const dialogueLikeLineCount = (screenplay.match(/^[A-Z][A-Z0-9 '._-]{1,64}\s*:/gm) ?? []).length
+  const actionParagraphCount = screenplay
+    .split(/\n{2,}/)
+    .map((part: string) => part.trim())
+    .filter((part: string) => part && !part.startsWith('#') && !/^[A-Z][A-Z0-9 '._-]{1,64}\s*[:[]/.test(part))
+    .length
+  const findingRecords = [
+    sceneCount > 0
+      ? { severity: 'info', text: `Structure: screenplay has ${sceneCount} parseable scene tag${sceneCount === 1 ? '' : 's'}.` }
+      : { severity: qualityGateMode === 'strict' ? 'high' : 'medium', text: 'Structure: screenplay has no #Scene tag; downstream scene assignment may be broad.' },
+    dialogueLineCount > 0
+      ? { severity: 'info', text: `Dialogue: ${dialogueLineCount} line${dialogueLineCount === 1 ? '' : 's'} include canonical ref tags.` }
+      : dialogueLikeLineCount > 0
+        ? { severity: qualityGateMode === 'strict' ? 'high' : 'medium', text: 'Dialogue: dialogue-like lines exist, but canonical [ref:key] tags are missing.' }
+        : { severity: 'low', text: 'Dialogue: no dialogue lines detected; acceptable for silent or action-led scenes.' },
+    actionParagraphCount >= Math.max(1, sceneCount)
+      ? { severity: 'info', text: 'Pace: action prose is present for shot-readable staging.' }
+      : { severity: 'medium', text: 'Pace: action/staging prose is sparse; shots may need stronger blocking inference.' },
+  ]
+  const findings = findingRecords.map((finding) => finding.text)
+  const highFindings = findingRecords.filter((finding) => finding.severity === 'high').length
+  const mediumFindings = findingRecords.filter((finding) => finding.severity === 'medium').length
+  const score = Math.max(0.2, Math.min(1, 1 - highFindings * 0.22 - mediumFindings * 0.1))
+  const qualityPass = vibeDirectorQualityPassSchema.parse({
+    version: 'vibe_director_quality_pass_v1',
+    target: 'screenplay',
+    status: highFindings > 0 ? (qualityGateMode === 'strict' ? 'blocked' : 'warning') : mediumFindings > 0 ? 'warning' : 'passed',
+    score,
+    findings,
+    fixesApplied: [],
+    recommendedActions: [
+      sceneCount === 0 ? 'Add explicit #Scene headings before scene graph assignment.' : '',
+      dialogueLikeLineCount > 0 && dialogueLineCount === 0 ? 'Retag dialogue as CHARACTER [ref:canonical_key]: line.' : '',
+      actionParagraphCount < Math.max(1, sceneCount) ? 'Add concrete physical blocking and emotional turns per scene.' : '',
+    ].filter(Boolean),
+  })
+  const briefText = Object.keys(vibeDirector).length > 0
+    ? formatVibeDirectorWorkflowBriefForPrompt(vibeDirector as never)
+    : ''
+  const outputs = {
+    text: screenplay,
+    screenplay,
+    screenplayDraft,
+    screenplay_draft: screenplayDraft,
+    qualityPass,
+    quality_pass: qualityPass,
+    findings,
+    vibeDirector,
+    vibe_director: vibeDirector,
+    qualityGateMode,
+    quality_gate_mode: qualityGateMode,
+    briefText,
+    deterministic: true,
+  }
+  return result({ context, helpers, outputs, model: 'deterministic-vibe-director-screenplay-quality-v1' })
+}
+
 const cinematicTextHandlers = {
   cinematic_atlas_prompt: cinematicAtlasPromptNode,
   cinematic_v2_screenplay_author: cinematicV3ScreenplayAuthorNode,
@@ -1842,6 +1929,7 @@ const cinematicTextHandlers = {
   cinematic_video_prompt: cinematicVideoPromptNode,
   cinematic_v3_storyboard_prompt: cinematicV3StoryboardPromptNode,
   cinematic_v3_storyboard_group_video_prompt: cinematicV3StoryboardGroupVideoPromptNode,
+  vibe_director_screenplay_quality: vibeDirectorScreenplayQualityNode,
 }
 
 const cinematicTextWorkflowNodePackKey = 'output_workflow_cinematic_text'
@@ -1907,8 +1995,14 @@ export const cinematicTextWorkflowNodeScaffolds = [
   createCinematicTextNodeScaffold({
     purpose: 'cinematic_v3_screenplay_author',
     runtimeKind: 'structured_llm',
-    sourceHashKeys: ['upstream.worldContext', 'upstream.assetPack', 'upstream.guidance', 'config.sequenceAnimaticMode', 'config.cinematicAnimaticMode', 'config.presetFamily', 'config.maxShotCount', 'run.prompt'],
+    sourceHashKeys: ['upstream.worldContext', 'upstream.assetPack', 'upstream.guidance', 'config.sequenceAnimaticMode', 'config.cinematicAnimaticMode', 'config.presetFamily', 'config.maxShotCount', 'config.vibeDirector', 'run.prompt'],
     projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'providerStatus', 'scopedAssetKeys', 'recoveryHints'],
+  }),
+  createCinematicTextNodeScaffold({
+    purpose: 'vibe_director_screenplay_quality',
+    runtimeKind: 'deterministic_transform',
+    sourceHashKeys: ['upstream.screenplay', 'upstream.text', 'upstream.screenplayDraft', 'config.vibeDirector', 'config.qualityGateMode', 'run.prompt'],
+    projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'scopedAssetKeys', 'recoveryHints'],
   }),
   createCinematicTextNodeScaffold({
     purpose: 'cinematic_script_authoring',

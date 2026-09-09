@@ -55,6 +55,7 @@ import {
   registerWorkflowNodeHandler,
   type WorkflowNodeHandler,
 } from '../../../src/domain/workflowNodeHandlerRegistry.ts'
+import { executeDirectorWorkflow } from './director-workflow-runtime.ts'
 import {
   sequenceAnimaticStableHash,
 } from './sequence-animatic-workflow-factory.ts'
@@ -8607,6 +8608,64 @@ async function collectAssetPackReferenceRecords(client: DatabaseClient, run: Out
   return references
 }
 
+async function collectExactAssetPackReferenceRecordsByKey(
+  client: DatabaseClient,
+  run: OutputWorkflowRun,
+  assetPack: Record<string, unknown>,
+  assetKeys: readonly string[],
+  limit = 10,
+): Promise<SeedanceReferenceRecord[]> {
+  const entities = Array.isArray(assetPack.entities) ? assetPack.entities.map(asRecord) : []
+  const entitiesByAssetKey = new Map<string, Record<string, unknown>>()
+  for (const entity of entities) {
+    const keys = [
+      readText(entity.primaryAssetKey),
+      readText(entity.selectedReferenceAssetKey),
+      readText(entity.selectedReferenceVariantAssetKey),
+      ...readStringArray(entity.assetKeys),
+    ].filter(Boolean)
+    for (const key of keys) {
+      if (!entitiesByAssetKey.has(key)) entitiesByAssetKey.set(key, entity)
+    }
+  }
+  const references: SeedanceReferenceRecord[] = []
+  const uniqueAssetKeys = [...new Set(assetKeys.map(readText).filter(Boolean))].slice(0, Math.max(0, limit))
+  for (const assetKey of uniqueAssetKeys) {
+    const entity = entitiesByAssetKey.get(assetKey) ?? {
+      name: `Reference ${references.length + 1}`,
+      role: 'entity_reference',
+      primaryAssetKey: assetKey,
+      assetKeys: [assetKey],
+    }
+    const referenceRecord = sequenceAnimaticAssetPackReferenceRecord(entity)
+    if (isDirectReferenceUrl(assetKey)) {
+      references.push({ url: assetKey, label: referenceRecord.label, role: referenceRecord.role, modality: 'image', assetKey })
+      continue
+    }
+    if (isProjectAssetStoragePath(assetKey)) {
+      references.push({
+        url: await projectAssetReferenceUrl(client, assetKey.replace(/^project-assets\//i, ''), mimeTypeForStoragePath(assetKey)),
+        label: referenceRecord.label,
+        role: referenceRecord.role,
+        modality: 'image',
+        assetKey,
+      })
+      continue
+    }
+    const asset = await resolveProjectAssetByKey(client, run, assetKey)
+    const storagePath = readText(asset?.storagePath) || readText(asset?.storage_path)
+    if (!storagePath) continue
+    references.push({
+      url: await projectAssetReferenceUrl(client, storagePath, readText(asset?.mimeType) || readText(asset?.mime_type) || 'image/png'),
+      label: referenceRecord.label,
+      role: referenceRecord.role,
+      modality: 'image',
+      assetKey,
+    })
+  }
+  return references
+}
+
 async function collectReferenceAssetKeyRecords(
   client: DatabaseClient,
   run: OutputWorkflowRun,
@@ -10195,6 +10254,7 @@ async function executeOutputWorkflowImageGeneration(input: OutputWorkflowNodeExe
         || shotGraphPolicyVersion === 'primary_chain_v14_reference_fix'
         || shotGraphPolicyVersion === 'primary_chain_v15_previous_keyframe_grid'
         || shotGraphPolicyVersion === 'primary_chain_v16_structured_prompt_plan'
+        || shotGraphPolicyVersion === 'primary_chain_v17_vibe_director_quality'
       const keyframeIngredientReferenceMode = shotGraphPolicyVersion === 'primary_chain_v12_canonical_shot_refs' || uiIngredientOverrideMode
         || readText(config.dependencyMode ?? config.dependency_mode) === 'ingredient_refs'
       const shotReferencePackAssetKeys = uiIngredientOverrideMode && assetPackReferenceAssetKeys.length > 0
@@ -10793,7 +10853,7 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
         ? Math.max(1, Math.min(10, directImageRecords.length + assetPackReferenceLimit))
         : Math.max(1, Math.min(9, directImageRecords.length + assetPackReferenceLimit))
       const assetPackImageRecords = exactSequenceAnimaticShotVideoReferences
-        ? await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
+        ? await collectExactAssetPackReferenceRecordsByKey(input.client, input.run, assetPack, exactShotVideoReferenceAssetKeys, assetPackReferenceLimit)
         : await collectAssetPackReferenceRecords(input.client, input.run, assetPack, assetPackReferenceLimit)
       const seenReferenceImageUrls = new Set<string>()
       const referenceImageRecords = [...directImageRecords, ...assetPackImageRecords]
@@ -10822,7 +10882,7 @@ async function executeOutputWorkflowVideoGeneration(input: OutputWorkflowNodeExe
           throw new Error(`Shot video reference key mismatch before provider submission. shot_video_reference_pack=${exactShotVideoReferenceAssetKeys.join(', ')} provider_submitted=${providerReferenceAssetKeys.join(', ')}.`)
         }
       }
-      if (isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
+      if (!isSequenceAnimaticShotVideo && isCinematicV2ProductionNode(config, input.node) && cinematicReferenceMode === 'keyframes' && directImageRecords.length === 0) {
         throw new Error('Cinematics V2 video generation requires a shot keyframe image as @Image1. Run the shot keyframe node first, then rerun this video node.')
       }
       const upstreamVideos = readUpstreamVideos(input.upstream, ['videoReferences', 'referenceVideos'])
@@ -11154,6 +11214,7 @@ let defaultOutputWorkflowNodeHandlersRegistered = false
 
 function assertNoImplicitMonolithWorkflowNodeHandlers() {
   const explicitlyRegisteredHandlerKeys = new Set([
+    'director_workspace',
     ...legacyMonolithWorkflowNodeHandlerKeys,
     ...cinematicTextWorkflowNodeHandlerKeys,
     ...cinematicAuthoringWorkflowNodeHandlerKeys,
@@ -11191,6 +11252,7 @@ function assertNoImplicitMonolithWorkflowNodeHandlers() {
 function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
   if (defaultOutputWorkflowNodeHandlersRegistered) return
   assertNoImplicitMonolithWorkflowNodeHandlers()
+  registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, 'director_workspace', input => executeDirectorWorkflow(input as never), { replace: true })
   const mediaRuntime = createWorkflowMediaRuntime({
     executeImageGeneration: (context) => executeOutputWorkflowImageGeneration(context as never) as never,
     executeVideoGeneration: (context) => executeOutputWorkflowVideoGeneration(context as never) as never,

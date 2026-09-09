@@ -16,6 +16,7 @@ export type Input = {
   x?: number
   z?: number
   sprint?: boolean
+  strafe?: boolean
   jump?: boolean
   interact?: boolean
   drop?: boolean
@@ -469,7 +470,7 @@ export class Simulation {
       const norm = Math.max(1, Math.hypot(x, z))
       x /= norm
       z /= norm
-      if (!a.action && Math.hypot(x, z) > 0.01) a.yaw = Math.atan2(x, z)
+      if (!a.action && !intent.strafe && Math.hypot(x, z) > 0.01) a.yaw = Math.atan2(x, z)
       if (intent.jump && a.mode === 'ground' && !a.action) {
         a.vy = m.jump
         this.transition(a, 'air')
@@ -503,8 +504,8 @@ export class Simulation {
         if (action.tick >= start && !action.released)
           this.release(a, ability, action)
         if (action.tick >= start && action.tick <= end) {
-          if (ability.op === 'dodge') {
-            a.shieldUntil = this.state.tick + 1
+          if (ability.op === 'dodge' || (ability.op === 'roll' && action.tick > start)) {
+            if (ability.op === 'dodge') a.shieldUntil = this.state.tick + 1
             dx = (action.direction.x * ability.distance) / ticks(ability.active)
             dz = (action.direction.z * ability.distance) / ticks(ability.active)
           }

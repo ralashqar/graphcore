@@ -1,4 +1,5 @@
-import { requireUserClient } from '../_shared/auth.ts'
+import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
+import { wakeDirector } from '../_shared/director-runtime/wake.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { cancelOpenAiResponse } from '../_shared/openai.ts'
 import {
@@ -41,8 +42,19 @@ Deno.serve(async (request) => {
 
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.')
-    const { client } = await requireUserClient(request, 'cancel-output-workflow-run')
+    const { client, user } = await requireUserClient(request, 'cancel-output-workflow-run')
     const payload = outputWorkflowRunStatusRequestSchema.parse(await request.json())
+    const owned = await client.from('output_workflow_runs').select('metadata').eq('id',payload.runId).maybeSingle()
+    if (owned.error) throw owned.error
+    if (owned.data?.metadata?.executionOwner === 'director_v2') {
+      const cancelled = await createAdminClient('cancel-output-workflow-run').rpc('director_cancel_job',{p_actor:user.id,p_run:payload.runId})
+      if (cancelled.error) throw new HttpError(403,cancelled.error.message)
+      void wakeDirector()
+      const workflowClient = { from: client.from.bind(client), storage: client.storage,
+        rpc: async (fn: string,args?: Record<string,unknown>) => await client.rpc(fn,args) }
+      const run = (await loadOutputWorkflowRunBundle(workflowClient,payload.runId)).run
+      return json(outputWorkflowCancelResponseSchema.parse({ok:true,run,cancelled:cancelled.data}))
+    }
     await cancelOpenAiProviderSteps(client, payload.runId)
     const cancelResponse = await client.rpc('cancel_output_workflow_run', { run_id: payload.runId })
     if (cancelResponse.error) throw new Error(cancelResponse.error.message)

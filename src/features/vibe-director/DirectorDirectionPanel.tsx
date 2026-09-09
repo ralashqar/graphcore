@@ -1,0 +1,29 @@
+import { ArrowUpRight, ArrowClockwise, Stop, SlidersHorizontal } from '@phosphor-icons/react'
+import type { ProjectSnapshot } from '../../domain/graphcore'
+import type { DirectorController } from './useDirectorController'
+import { estimateH3Cost } from '../../domain/h3Video'
+
+export function DirectorDirectionPanel({ controller: c, snapshot, onOpenWiki }: { controller: DirectorController; snapshot: ProjectSnapshot; onOpenWiki: () => void }) {
+  const active = c.state.takes.find(t => ['queued','preparing','generating','saving'].includes(t.status))
+  const selected = c.state.takes.find(t => t.id === c.ui.takeId)
+  const selectedClip = c.state.edits.find(e => e.id === c.state.session?.active_edit_id)?.clips.find(clip => clip.takeId === selected?.id)
+  const estimate = estimateH3Cost(c.ui.settings, c.ui.settings.firstFrameAssetKey ? [{ assetKey: c.ui.settings.firstFrameAssetKey, label: 'Opening frame', kind: 'image' }] : c.ui.entityKeys.map(key => ({ assetKey: key, label: key, kind: 'image' as const })))
+  const settings = c.ui.settings
+  const modify = (change: Partial<typeof settings>) => c.ui.patch({ settings: { ...settings, ...change } })
+  const savedSource = c.state.session?.source
+  return <aside className="director-direction"><div className="director-panel-heading"><span>Direction</span><button aria-label="Toggle scene inspector" onClick={() => c.ui.patch({ inspector: !c.ui.inspector })}><SlidersHorizontal size={18} /></button></div>
+    <div className="director-conversation" aria-live="polite">{c.state.messages.length ? c.state.messages.map(m => <div className={`director-message is-${m.role}`} key={m.id}><span>{m.role === 'user' ? 'You' : 'Director'}</span><p>{m.text}</p></div>) : <div className="director-conversation-intro"><strong>What should happen in this take?</strong><p>Describe the action, camera, and performance. Your world references stay attached.</p></div>}</div>
+    {c.ui.inspector && <div className="director-inspector"><details open><summary>Scene</summary><p>{String(savedSource?.script || 'No screenplay selected.')}</p></details><details open><summary>World references</summary><div className="director-reference-list">{snapshot.worldEntities.filter(e => !['sequence_unit','concept'].includes(e.nodeType)).map(e => <label key={e.key}><input type="checkbox" checked={c.ui.entityKeys.includes(e.key)} onChange={event => c.ui.patch({ entityKeys: event.target.checked ? [...c.ui.entityKeys, e.key] : c.ui.entityKeys.filter(k => k !== e.key) })} />{e.name}</label>)}</div><button onClick={onOpenWiki}>Prepare references in Wiki <ArrowUpRight size={13} /></button></details>
+      <label>Starting frame<select value={settings.firstFrameAssetKey} onChange={e => modify({ firstFrameAssetKey: e.target.value })}><option value="">Use world references</option>{snapshot.assets.filter(a => a.kind === 'image').map(a => <option value={a.key} key={a.key}>{a.name}</option>)}</select></label>
+      <label>Ending frame<select value={settings.endFrameAssetKey} onChange={e => modify({ endFrameAssetKey: e.target.value })}><option value="">No ending frame</option>{snapshot.assets.filter(a => a.kind === 'image').map(a => <option value={a.key} key={a.key}>{a.name}</option>)}</select></label>
+      <label>Aspect ratio<select value={settings.aspectRatio} onChange={e => modify({ aspectRatio: e.target.value as typeof settings.aspectRatio })}>{['16:9','9:16','1:1','21:9','4:3','3:4'].map(r => <option key={r}>{r}</option>)}</select></label>
+      <p className="director-muted">Each take keeps a snapshot of its world references. New world edits apply to future takes.</p>
+    </div>}
+    <div className="director-compose"><label htmlFor="director-direction-input">Next take</label><textarea id="director-direction-input" placeholder="A slow push toward her face. She pauses before answering…" value={c.ui.direction} onChange={e => c.ui.patch({ direction: e.target.value })} rows={4} />
+      <div className="director-settings"><label>Mode<select value={settings.mode} onChange={e => modify({ mode: e.target.value as typeof settings.mode })}><option value="scripted">Follow script</option><option value="explore">Explore scene</option></select></label><label>Model<select value={settings.speed} onChange={e => modify({ speed: e.target.value as typeof settings.speed })}><option value="standard">H3 Max</option><option value="turbo">H3 Max Turbo</option></select></label><label>Resolution<select value={settings.resolution} onChange={e => modify({ resolution: e.target.value as typeof settings.resolution })}><option>768p</option><option>480p</option></select></label><label>Cut length<input type="number" min="1" max="15" step="1" value={settings.durationSeconds} onChange={e => modify({ durationSeconds: Math.max(1, Math.min(15, Number(e.target.value) || 5)) })} /></label></div>
+      <p className="director-estimate">Estimated from ${estimate.toFixed(2)} · {Math.max(5, Math.ceil(settings.durationSeconds))}s generated</p>
+      <button className="director-primary" disabled={!c.canRun || c.ui.busy || !c.state.session || !c.ui.direction.trim() || Boolean(active)} onClick={() => void c.generate()}>Generate take <ArrowUpRight size={18} /></button>
+      <div className="director-inline-actions"><button disabled={c.ui.busy || !selected || Boolean(active)} onClick={() => void c.generate()}><ArrowClockwise size={14} /> Try again</button><button disabled={c.ui.busy || selected?.status !== 'completed' || !selectedClip || Boolean(active)} onClick={() => selected && void c.generate({ parentTakeId: selected.id, branchSeconds: selectedClip?.outSeconds ?? 0, branchMode: 'frame' })}>Continue</button>{active && <button disabled={c.ui.busy} onClick={() => void c.execute({ action: 'cancel', takeId: active.id })}><Stop size={14} /> Cancel</button>}</div>
+    </div>
+  </aside>
+}

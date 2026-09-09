@@ -95,6 +95,7 @@ import {
   buildSequenceAnimaticContinuityBatchWorkflowGraph,
   buildSequenceAnimaticContinuityAssetWorkflowGraph,
   buildSequenceAnimaticContinuityWorkflowGraph,
+  buildSequenceAnimaticSceneWorkflowGraph,
   buildSequenceAnimaticShotProductionWorkflowGraph,
   buildSequenceAnimaticShotRevisionWorkflowGraph,
   sequenceAnimaticGraphSpecVersion,
@@ -2272,6 +2273,7 @@ test('story cinematic requests build scene-graph-assigned parallel animatic grap
   assert.ok(plan.sourceEntityKeys.length < snapshot.worldEntities.filter((entity) => entity.nodeType !== 'sequence_unit').length + 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_reference_select').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v3_screenplay_author').length, 1)
+  assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'vibe_director_screenplay_quality').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_graph_assignment').length, 1)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_package').length, 0)
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'sequence_animatic_scene_plan_fanout').length, 0)
@@ -2287,7 +2289,8 @@ test('story cinematic requests build scene-graph-assigned parallel animatic grap
   assert.equal(plan.nodes.filter((node) => readConfigPurpose(node) === 'cinematic_v2_shot_plan').length, 0)
   assert.equal(plan.nodes.filter((node) => node.nodeType === 'video_generation').length, 0)
   assert.ok(!plan.nodes.some((node) => readConfigPurpose(node) === 'cinematic_dynamic_take_fanout'))
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'sequence_animatic_scene_graph_assignment'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'vibe_director_screenplay_quality'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'vibe_director_screenplay_quality' && edge.targetNodeKey === 'sequence_animatic_scene_graph_assignment'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'sequence_animatic_scene_graph_assignment' && edge.targetNodeKey === 'sequence_animatic_scene_register'))
   assert.ok(plan.diagnostics.some((line) => line.includes('scene-graph assignment mode')))
   assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
@@ -2534,7 +2537,8 @@ test('wiki sequence-unit animatics use full chapter screenplay master mode', () 
   assert.equal(directorNode, undefined)
   assert.equal(manifestNode, undefined)
   assert.equal(orchestratorNode, undefined)
-  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'sequence_animatic_scene_graph_assignment'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'cinematic_v3_screenplay_author' && edge.targetNodeKey === 'vibe_director_screenplay_quality'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'vibe_director_screenplay_quality' && edge.targetNodeKey === 'sequence_animatic_scene_graph_assignment'))
   assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'sequence_animatic_scene_graph_assignment' && edge.targetNodeKey === 'sequence_animatic_scene_register'))
   assert.ok(plan.diagnostics.some((line) => line.includes('Sequence-unit screenplay animatic mode')))
   assert.ok(plan.diagnostics.some((line) => line.includes('scene-graph assignment mode')))
@@ -3699,6 +3703,43 @@ test('sequence animatic keyframe UI routes prereqs through keyframe orchestrator
   assert.match(continuityPlannerSource, /scaffoldGroups\.push\(\{ targets: groupTargets, isBatch: true \}\)/)
 })
 
+test('sequence animatic scene workflow routes shot plans through vibe director quality', () => {
+  const graph = buildSequenceAnimaticSceneWorkflowGraph({
+    workflowId: 'workflow-scene-shot-plan',
+    draftId: 'draft-1',
+    commonConfig: {
+      masterRequestId: 'request-master',
+      vibeDirector: {
+        version: 'vibe_director_workflow_brief_v1',
+        sourceSurface: 'vibe_director',
+        directingStyle: 'Classical continuity with tense close coverage.',
+      },
+    },
+    sceneId: 'scene_001',
+    sceneIndex: 1,
+    sceneTitle: 'Opening',
+    scenePackageOutput: { sceneId: 'scene_001', title: 'Opening' },
+    screenplayText: '#Scene Opening\nAVA [ref:ava]: We start now.',
+    assetPack: { entities: [{ key: 'ava', name: 'Ava' }] },
+    context: {},
+    guidance: {},
+    maxShotCount: 8,
+    aspectRatio: '16:9',
+    resolution: '720p',
+  })
+
+  const nodeKeys = graph.nodes.map((node) => node.key)
+  assert.ok(nodeKeys.includes('vibe_director_scene_shot_quality'))
+  assert.ok(graph.edges.some((edge) =>
+    edge.source_node_key === graph.shotPlanNodeKey
+    && edge.target_node_key === 'vibe_director_scene_shot_quality'
+  ))
+  assert.ok(graph.edges.some((edge) =>
+    edge.source_node_key === 'vibe_director_scene_shot_quality'
+    && edge.target_node_key === 'sequence_animatic_scene_plan_merge'
+  ))
+})
+
 test('sequence animatic shot production graph uses UI ingredient refs before keyframe only', () => {
   assert.equal(sequenceAnimaticGraphRoleSchema.parse('shot_production'), 'shot_production')
   const graph = buildSequenceAnimaticShotProductionWorkflowGraph({
@@ -3777,6 +3818,8 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   })
   const nodeKeys = graph.nodes.map((node) => node.key)
   assert.ok(nodeKeys.includes('shot_reference_pack'))
+  assert.ok(nodeKeys.includes('vibe_director_continuity_preflight'))
+  assert.ok(nodeKeys.includes('vibe_director_keyframe_prompt_quality'))
   assert.ok(nodeKeys.includes('ui_ingredient_ref_ava'))
   assert.ok(nodeKeys.includes('ui_ingredient_ref_zone_lab'))
   assert.ok(nodeKeys.includes('planned_keyframe_artifact'))
@@ -3786,6 +3829,10 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.ok(graph.edges.some((edge) => edge.source_node_key === 'ui_ingredient_ref_ava' && edge.target_node_key === 'fix_references'))
   assert.ok(graph.edges.some((edge) => edge.source_node_key === 'ui_ingredient_ref_zone_lab' && edge.target_node_key === 'fix_references'))
   assert.ok(graph.edges.some((edge) => edge.source_node_key === 'apply_reference_fix' && edge.target_node_key === 'shot_reference_pack'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'shot_reference_pack' && edge.target_node_key === 'vibe_director_continuity_preflight'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'vibe_director_continuity_preflight' && edge.target_node_key === 'keyframe_prompt_plan'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'planned_keyframe_prompt' && edge.target_node_key === 'vibe_director_keyframe_prompt_quality'))
+  assert.ok(graph.edges.some((edge) => edge.source_node_key === 'vibe_director_keyframe_prompt_quality' && edge.target_node_key === 'planned_keyframe_image'))
   assert.ok(!graph.edges.some((edge) => edge.source_node_key.startsWith('coverage_anchor_')))
   assert.ok(!graph.edges.some((edge) => edge.source_node_key.startsWith('continuity_')))
   assert.ok(!graph.edges.some((edge) => edge.target_node_key === 'shot_video_prompt'))
@@ -3817,7 +3864,7 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
       shotId: 'shot_001',
       coverageSetupId: 'setup_a',
       coverageAnchorScopeKey: 'setup_a_spot_lab_ava',
-      shotGraphPolicyVersion: 'primary_chain_v16_structured_prompt_plan',
+      shotGraphPolicyVersion: 'primary_chain_v17_vibe_director_quality',
     },
     block: { id: 'block_001', title: 'Block' },
     shot: { id: 'shot_001', index: 1, title: 'Reveal', action: 'Ava enters.', visibleCharacterRefIds: ['ava'] },
@@ -3866,7 +3913,9 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.ok(ingredientNodeKeys.includes('apply_reference_fix'))
   assert.ok(ingredientNodeKeys.includes('previous_keyframe_grid'))
   assert.ok(ingredientNodeKeys.includes('shot_reference_pack'))
+  assert.ok(ingredientNodeKeys.includes('vibe_director_continuity_preflight'))
   assert.ok(ingredientNodeKeys.includes('keyframe_prompt_plan'))
+  assert.ok(ingredientNodeKeys.includes('vibe_director_keyframe_prompt_quality'))
   assert.ok(ingredientNodeKeys.includes('planned_keyframe_artifact'))
   assert.ok(ingredientNodeKeys.includes('ui_ingredient_ref_ava'))
   assert.ok(ingredientNodeKeys.includes('ui_ingredient_ref_zone_lab'))
@@ -3877,10 +3926,11 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'apply_reference_fix' && edge.target_node_key === 'shot_reference_pack'))
   assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'apply_reference_fix' && edge.target_node_key === 'previous_keyframe_grid'))
   assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'previous_keyframe_grid' && edge.target_node_key === 'shot_reference_pack'))
-  assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'shot_reference_pack' && edge.target_node_key === 'keyframe_prompt_plan'))
+  assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'shot_reference_pack' && edge.target_node_key === 'vibe_director_continuity_preflight'))
+  assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'vibe_director_continuity_preflight' && edge.target_node_key === 'keyframe_prompt_plan'))
   assert.ok(ingredientGraph.edges.some((edge) => edge.source_node_key === 'keyframe_prompt_plan' && edge.target_node_key === 'planned_keyframe_prompt'))
   assert.ok(ingredientGraph.edges.some((edge) =>
-    edge.source_node_key === 'planned_keyframe_prompt'
+    edge.source_node_key === 'vibe_director_keyframe_prompt_quality'
     && edge.source_port === 'reference_asset_keys'
     && edge.target_node_key === 'planned_keyframe_image'
     && edge.target_port === 'reference_asset_keys',
@@ -4297,10 +4347,14 @@ test('sequence animatic shot production graph uses UI ingredient refs before key
   assert.match(focusedWorkspaceSource, /WorkflowNodeTimeline/)
   assert.match(focusedWorkspaceSource, /const shotKeyframeWorkflowProgress = shotKeyframeBusy\s*\?\s*workflowProgressForRequest/)
   assert.match(focusedWorkspaceSource, /const showKeyframePanelProgress = Boolean\(shotKeyframeInFlight && shotKeyframeWorkflowProgress\)/)
+  assert.match(focusedWorkspaceSource, /const activeShotVideoDisplay = !showKeyframePanelProgress && !showKeyframePanelPending && activeShot\.shotVideoReady && Boolean\(activeShot\.shotVideoUrl\)/)
   assert.doesNotMatch(focusedWorkspaceSource, /showKeyframePanelProgress[\s\S]{0,180}keyframeDependencyRunning/)
   assert.match(focusedWorkspaceSource, /world-wiki-shot-panel-focus__image[\s\S]*showKeyframePanelProgress && shotKeyframeWorkflowProgress[\s\S]*WorkflowProgressSummary[\s\S]*WorkflowNodeTimeline/)
-  assert.match(focusedWorkspaceSource, /showKeyframePanelProgress && shotKeyframeWorkflowProgress \? \([\s\S]*\) : showKeyframePanelPending \? \([\s\S]*\) : activeShot\.panelUrl \?/)
-  assert.match(focusedWorkspaceSource, /!showKeyframePanelProgress && !showKeyframePanelPending && activePanelCue/)
+  assert.match(focusedWorkspaceSource, /showKeyframePanelProgress && shotKeyframeWorkflowProgress \? \([\s\S]*\) : showKeyframePanelPending \? \([\s\S]*\) : activeShotVideoDisplay \? \(/)
+  assert.match(focusedWorkspaceSource, /<video[\s\S]*className="world-wiki-shot-panel-focus__video"[\s\S]*src=\{activeShot\.shotVideoUrl \?\? ''\}[\s\S]*controls/)
+  assert.match(focusedWorkspaceSource, /!showKeyframePanelProgress && !showKeyframePanelPending && !activeShotVideoDisplay && activePanelCue/)
+  assert.match(wikiShellStylesSource, /\.world-wiki-shot-panel-focus__image\.has-video/)
+  assert.match(wikiShellStylesSource, /\.world-wiki-shot-panel-focus__video[\s\S]*object-fit: contain/)
   assert.doesNotMatch(focusedWorkspaceSource, /world-wiki-shot-workspace__workflow-progress/)
   assert.match(focusedWorkspaceSource, /shotKeyframeInFlightForTimelineItem/)
   assert.doesNotMatch(focusedWorkspaceSource, /const shotKeyframeBusy = [^\n]*keyframeDependencyRunning/)
@@ -5983,6 +6037,14 @@ test('sequence animatic shot videos use focused ingredient reference graphs', ()
   const runtimeIndexSource = readFileSync(resolve(repoRoot, 'src/features/world-builder/animatic/sequenceAnimaticRuntimeIndexes.ts'), 'utf8')
   const graphHostSource = readFileSync(resolve(repoRoot, 'src/features/outputs/OutputGraphOverlayHost.tsx'), 'utf8')
   const flyWorkerSource = readFileSync(resolve(repoRoot, 'workers/world-generation/main.ts'), 'utf8')
+  const shotVideoFallbackSource = sequenceAnimaticShotProductionPackSource.slice(
+    sequenceAnimaticShotProductionPackSource.indexOf('function fallbackVideoPromptPlan'),
+    sequenceAnimaticShotProductionPackSource.indexOf('function validateVideoPromptPlan'),
+  )
+  const shotVideoRendererSource = sequenceAnimaticShotProductionPackSource.slice(
+    sequenceAnimaticShotProductionPackSource.indexOf('function buildSequenceAnimaticShotVideoDirectorPrompt'),
+    sequenceAnimaticShotProductionPackSource.indexOf('export async function sequenceAnimaticShotVideoPrompt'),
+  )
 
   assert.match(ensureSource, /sequenceAnimaticMode === 'shot_video'/)
   assert.match(ensureSource, /buildValidatedSequenceAnimaticTemplateGraph/)
@@ -6009,6 +6071,18 @@ test('sequence animatic shot videos use focused ingredient reference graphs', ()
   assert.match(sequenceAnimaticShotProductionPackSource, /Dialogue:\\n\$\{dialogueBlocks\.join\('\\n'\)\}/)
   assert.match(sequenceAnimaticShotProductionPackSource, /Delivery: \$\{deliveryParts\.join\('; '\)\}\./)
   assert.match(sequenceAnimaticShotProductionPackSource, /Duration: \$\{input\.providerDurationSeconds\} seconds\./)
+  assert.match(sequenceAnimaticShotProductionPackSource, /roleInShot/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /environmentContinuity/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /cleanUsableShotVideoFragment/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /groupSubjectCountLabel/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /dedupeShotVideoConstraintLines/)
+  assert.match(sequenceAnimaticShotProductionPackSource, /cleanShotVideoContinuityLine/)
+  assert.doesNotMatch(shotVideoFallbackSource, /Follow shot blocking/)
+  assert.doesNotMatch(shotVideoFallbackSource, /Follow the shot action/)
+  assert.doesNotMatch(shotVideoFallbackSource, /End on a readable settled pose/)
+  assert.doesNotMatch(shotVideoRendererSource, /End on a readable settled pose/)
+  assert.doesNotMatch(shotVideoRendererSource, /Preserve attached references and keyframe composition\. Do not render production-board artifacts/)
+  assert.doesNotMatch(shotVideoRendererSource, /environment or shot-location continuity reference/)
   assert.doesNotMatch(sequenceAnimaticShotProductionPackSource, /shotLines: \[shotLine \|\| shotAction/)
   assert.doesNotMatch(sequenceAnimaticShotProductionPackSource, /buildCompactSeedanceVideoPrompt\(\{/)
   assert.doesNotMatch(sequenceAnimaticShotProductionPackSource, /entity identity, wardrobe, variant, or prop continuity reference/)
@@ -6032,6 +6106,9 @@ test('sequence animatic shot videos use focused ingredient reference graphs', ()
   assert.doesNotMatch(workerSource, /purpose === 'sequence_animatic_shot_video_prompt'/)
   assert.match(sequenceAnimaticShotProductionPackSource, /sequence_animatic_shot_video/)
   assert.match(sequenceAnimaticShotProductionPackSource, /executeVideoGeneration/)
+  assert.match(workerSource, /collectExactAssetPackReferenceRecordsByKey/)
+  assert.match(workerSource, /exactSequenceAnimaticShotVideoReferences[\s\S]*collectExactAssetPackReferenceRecordsByKey\(input\.client, input\.run, assetPack, exactShotVideoReferenceAssetKeys, assetPackReferenceLimit\)/)
+  assert.match(workerSource, /Shot video reference key mismatch before provider submission/)
   assert.doesNotMatch(workerSource, /legacyMonolithWorkflowNodeHandlerKeys = \[[\s\S]*'sequence_animatic_shot_video'/)
   assert.match(workerSource, /const isSequenceAnimaticShotVideo = readText\(config\.purpose\) === 'sequence_animatic_shot_video'/)
   assert.doesNotMatch(workerSource, /isSequenceAnimaticShotVideoConfig/)
@@ -6040,6 +6117,7 @@ test('sequence animatic shot videos use focused ingredient reference graphs', ()
   assert.match(sequenceAnimaticShotProductionPackSource, /focused_shot_ui_ingredients_only/)
   assert.match(workerSource, /exactSequenceAnimaticShotVideoReferences/)
   assert.match(workerSource, /ui_ingredient_refs/)
+  assert.match(workerSource, /!isSequenceAnimaticShotVideo && isCinematicV2ProductionNode\(config, input\.node\) && cinematicReferenceMode === 'keyframes'/)
   assert.doesNotMatch(workerSource, /shot video generation requires the cropped shot panel as @Image1/)
   assert.match(sequenceAnimaticShotProductionPackSource, /audioPolicy: 'dialogue_and_direct_diegetic_sfx_only'/)
   assert.match(sequenceAnimaticShotProductionPackSource, /visualReferencePolicy: 'focused_shot_ui_ingredients_only'/)
@@ -7683,6 +7761,39 @@ test('comic issue page images run in parallel and PDF waits for all pages', () =
     'relevant_entities',
     'skill_context',
   ])
+})
+
+test('comic issue previous-page continuity serializes page prompts and image generation', () => {
+  const plan = planOutputWorkflow({
+    projectId: 'project-1',
+    draftId: 'draft-1',
+    prompt: 'comic from chapter one with continuity',
+    selectedEntityKeys: ['hero'],
+    selectedSequenceUnitKeys: ['chapter-1'],
+    comicApprovedReferenceEntityKeys: ['archive'],
+    comicContinuityMode: 'previous_page',
+    comicPageReferenceDepth: 1,
+    qualityGateMode: 'strict',
+    pageCount: 3,
+    targetFormat: 'pdf',
+    snapshot,
+  })
+  const executionPlan = buildOutputWorkflowExecutionPlan(plan.nodes, plan.edges)
+  const pageOneImage = plan.nodes.find((node) => node.key === 'page_001_image')
+  const pageTwoPrompt = plan.nodes.find((node) => node.key === 'page_002_prompt')
+  const pageTwoImage = plan.nodes.find((node) => node.key === 'page_002_image')
+
+  assert.ok(plan.sourceEntityKeys.includes('hero'))
+  assert.ok(plan.sourceEntityKeys.includes('archive'))
+  assert.deepEqual(pageOneImage?.config.execution, { resourceClass: 'image', groupKey: 'comic_pages', maxConcurrency: 1 })
+  assert.equal(pageTwoImage?.config.continuityMode, 'previous_page')
+  assert.equal(pageTwoImage?.config.qualityGateMode, 'strict')
+  assert.equal(pageTwoPrompt?.config.previousPageReferenceDepth, 1)
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'page_001_image' && edge.targetNodeKey === 'page_002_prompt' && edge.targetPort === 'previous_page'))
+  assert.ok(plan.edges.some((edge) => edge.sourceNodeKey === 'page_002_image' && edge.targetNodeKey === 'page_003_prompt' && edge.targetPort === 'previous_page'))
+  assert.ok(executionPlan.dependencyKeysByNodeKey.page_002_prompt.includes('page_001_image'))
+  assert.ok(executionPlan.dependencyKeysByNodeKey.page_003_prompt.includes('page_002_image'))
+  assert.equal(validateOutputWorkflowGraph({ nodes: plan.nodes, edges: plan.edges }).ok, true)
 })
 
 test('optional cover branch failure still allows document render to run with errors', async () => {

@@ -222,14 +222,15 @@ export const sequenceAnimaticSceneShotPlansTemplateScaffold = createWorkflowTemp
   key: sequenceAnimaticSceneShotPlansTemplateKey,
   label: 'Sequence Animatic Scene Shot Plan',
   inputSchema: sequenceAnimaticSceneShotPlansTemplateInputSchema,
-  policyVersion: 'sequence_animatic_scene_shot_plans_graph_v1',
+  policyVersion: 'sequence_animatic_scene_shot_plans_graph_v2_vibe_quality',
   workflowFamily: 'sequence_animatic',
   commandAction: 'prepare_scene_shot_plans',
   sourceHashKeys: ['draftId', 'commonConfig', 'sceneId', 'scenePackageOutput', 'screenplayText', 'assetPack', 'context', 'guidance', 'maxShotCount'],
-  graphStages: ['scene_input', 'sequence_animatic_scene_plan_merge', 'sequence_animatic_director_plan_artifact', 'sequence_animatic_manifest', 'artifact'],
+  graphStages: ['scene_input', 'vibe_director_scene_shot_quality', 'sequence_animatic_scene_plan_merge', 'sequence_animatic_director_plan_artifact', 'sequence_animatic_manifest', 'artifact'],
   requiredNodePurposes: [
     'sequence_animatic_scene_input',
     'sequence_animatic_scene_shot_plan',
+    'vibe_director_scene_shot_quality',
     'sequence_animatic_scene_plan_merge',
     'sequence_animatic_director_plan_artifact',
     'sequence_animatic_manifest',
@@ -239,7 +240,7 @@ export const sequenceAnimaticSceneShotPlansTemplateScaffold = createWorkflowTemp
   projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'providerStatus', 'readyArtifactCount', 'recoveryHints'],
   compatibilityWrappers: ['ensure-sequence-animatic-scene-workflows'],
   buildGraph: buildSequenceAnimaticSceneWorkflowGraph,
-  sourceHash: (input) => templateSourceHash('sequence_animatic_scene_shot_plans_graph_v1', input),
+  sourceHash: (input) => templateSourceHash('sequence_animatic_scene_shot_plans_graph_v2_vibe_quality', input),
 })
 
 export const sequenceAnimaticContinuityWorkflowTemplateScaffold = createWorkflowTemplateExtensionScaffold<
@@ -276,18 +277,20 @@ export const sequenceAnimaticShotProductionTemplateScaffold = createWorkflowTemp
   key: sequenceAnimaticShotProductionTemplateKey,
   label: 'Sequence Animatic Shot Production',
   inputSchema: sequenceAnimaticShotProductionTemplateInputSchema,
-  policyVersion: 'sequence_animatic_shot_production_graph_v16_structured_prompt_plan',
+  policyVersion: 'sequence_animatic_shot_production_graph_v17_vibe_director_quality',
   workflowFamily: 'sequence_animatic',
   commandAction: 'prepare_shot_production_graph',
   sourceHashKeys: ['draftId', 'commonConfig', 'shot', 'assetPack', 'sceneContinuityManifest', 'dependencyMode', 'requiredReferenceAssetKeys', 'selectedReferences', 'aspectRatio'],
-  graphStages: ['shot_input', 'fix_references', 'apply_reference_fix', 'shot_reference_pack', 'keyframe_prompt_plan', 'planned_keyframe_prompt', 'planned_keyframe_image', 'planned_keyframe_artifact'],
+  graphStages: ['shot_input', 'fix_references', 'apply_reference_fix', 'shot_reference_pack', 'vibe_director_continuity_preflight', 'keyframe_prompt_plan', 'planned_keyframe_prompt', 'vibe_director_keyframe_prompt_quality', 'planned_keyframe_image', 'planned_keyframe_artifact'],
   requiredNodePurposes: [
     'sequence_animatic_shot_input',
     'sequence_animatic_shot_reference_fix',
     'sequence_animatic_shot_reference_fix_apply',
     'sequence_animatic_shot_reference_pack',
+    'vibe_director_continuity_preflight',
     'sequence_animatic_keyframe_prompt_plan',
     'sequence_animatic_planned_keyframe_prompt',
+    'vibe_director_keyframe_prompt_quality',
     'sequence_animatic_planned_keyframe_image',
     'sequence_animatic_planned_keyframe_artifact',
   ],
@@ -295,7 +298,7 @@ export const sequenceAnimaticShotProductionTemplateScaffold = createWorkflowTemp
   projectionMetadataKeys: ['activeManifestPurpose', 'activeProgressLabel', 'providerStatus', 'readyArtifactCount', 'recoveryHints'],
   compatibilityWrappers: ['ensure-sequence-animatic-shot-production-graph'],
   buildGraph: buildSequenceAnimaticShotProductionWorkflowGraph,
-  sourceHash: (input) => templateSourceHash('sequence_animatic_shot_production_graph_v16_structured_prompt_plan', input),
+  sourceHash: (input) => templateSourceHash('sequence_animatic_shot_production_graph_v17_vibe_director_quality', input),
 })
 
 export const sequenceAnimaticShotKeyframesTemplateScaffold = createWorkflowTemplateExtensionScaffold<

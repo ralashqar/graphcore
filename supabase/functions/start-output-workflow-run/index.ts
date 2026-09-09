@@ -1,4 +1,5 @@
-import { requireUserClient } from '../_shared/auth.ts'
+import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
+import { wakeDirector } from '../_shared/director-runtime/wake.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import {
   buildOutputWorkflowInputFingerprint,
@@ -19,6 +20,7 @@ import {
   outputWorkflowRunStepSelect,
   selectOutputWorkflowRunSubgraph,
   validateOutputWorkflowGraph,
+  loadOutputWorkflowRunBundle,
 } from '../_shared/output-workflow.ts'
 import { outputWorkflowRunStartRequestSchema } from '../../../src/domain/outputWorkflow.ts'
 import {
@@ -78,12 +80,24 @@ Deno.serve(async (request) => {
 
     const workflowResponse = await client
       .from('output_workflows')
-      .select('id, project_id, draft_id, preset')
+      .select('id, project_id, draft_id, preset, metadata')
       .eq('id', payload.workflowId)
       .eq('project_id', payload.projectId)
       .eq('draft_id', payload.draftId)
       .single()
     if (workflowResponse.error || !workflowResponse.data) throw new HttpError(404, 'Output workflow not found or not editable.')
+    if (workflowResponse.data.metadata?.executionOwner === 'director_v2') {
+      const owned = await client.from('output_workflow_runs').select('id').eq('workflow_id',payload.workflowId).contains('metadata',{executionOwner:'director_v2'}).single()
+      if (owned.error) throw owned.error
+      const recovery = await createAdminClient('start-output-workflow-run').rpc('director_recover_job',{p_actor:user.id,p_run:owned.data.id})
+      if (recovery.error) throw new HttpError(409,recovery.error.message)
+      const workflowClient = { from: client.from.bind(client), storage: client.storage,
+        rpc: async (fn: string,args?: Record<string,unknown>) => await client.rpc(fn,args) }
+      const run = (await loadOutputWorkflowRunBundle(workflowClient,owned.data.id)).run
+      void wakeDirector()
+      return json(outputWorkflowRunStatusResponseSchema.parse({ok:true,run,terminal:isTerminalOutputWorkflowRunStatus(run.status)}))
+    }
+    delete metadata.executionOwner
 
     const [nodeResponse, edgeResponse] = await Promise.all([
       client

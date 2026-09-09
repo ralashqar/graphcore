@@ -339,7 +339,7 @@ export async function runTrackedOpenAiImages(input: {
     nodeLabel: '',
     nodeType: '',
     provider: 'openai',
-    model,
+    model: model ?? '',
     modality: 'image',
     operation: 'image_generation',
     status: result.response.ok ? 'succeeded' : 'failed',

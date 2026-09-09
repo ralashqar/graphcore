@@ -5,6 +5,7 @@ import { produceAsset } from './assets.ts'
 import { gameWorkflowStages } from '../../src/domain/game/workflows.ts'
 import { planModules, buildModules } from './modules.ts'
 import { generateUnified, buildUnified } from './unified.ts'
+import { produceAnimation, cancelAnimationJobs } from './animations.ts'
 const WORKER_VERSION = 'game-unified-3.0.0'
 
 type Job = { id: string; draft_id: string; requested_by: string; lease_owner: string; kind: 'generate' | 'build' | 'asset'; fence: number; phase: string; checkpoint: Record<string, any>; input: Record<string, any>; provider_started: boolean }
@@ -31,6 +32,7 @@ export async function processGameJob(admin: SupabaseClient, worker: string, job:
   try {
     if (job.checkpoint.pendingProvider) throw new Error('Uncertain provider submission requires reconciliation')
     const ctx = { job, admin, checkpoint }
+    if (job.input.animation) { await produceAnimation(ctx); return }
     const modules = job.input.design?.schemaVersion === 2 || job.input.template === 'combat_traversal.v1'
     const unified = job.input.design?.schemaVersion === 3 || job.input.template === 'unified.v1'
     const result = unified ? job.kind === 'build' ? await buildUnified(ctx) : await generateUnified(ctx) : modules && job.kind === 'generate' ? await planModules(ctx) : modules && job.kind === 'build' ? await buildModules(ctx) : job.kind === 'generate' ? await planGame(ctx) : job.kind === 'build' ? await buildGame(ctx) : await produceAsset(ctx)
@@ -50,10 +52,14 @@ if (import.meta.main) {
   const kind = Deno.env.get('GAME_WORKER_KIND') ?? 'build'
   if (!['generate', 'build', 'asset'].includes(kind)) throw new Error('Invalid game worker kind')
   let lastPoll = Date.now(), stopped = false
+  let lastAnimationMaintenance = 0
   Deno.serve({ port: Number(Deno.env.get('PORT') ?? 8080) }, () => Response.json({ version: WORKER_VERSION, kind, healthy: Date.now() - lastPoll < 240000 }, { status: Date.now() - lastPoll < 240000 ? 200 : 503 }))
   Deno.addSignalListener('SIGTERM', () => { stopped = true })
   while (!stopped) {
     try {
+      if (kind === 'asset' && Deno.env.get('GAME_ANIMATION_WORKER_ENABLED') === 'true' && Date.now() - lastAnimationMaintenance > 30000) {
+        await cancelAnimationJobs(admin); lastAnimationMaintenance = Date.now()
+      }
       const claim = await admin.rpc('game_claim_job', { p_worker: worker, p_kind: kind })
       if (claim.error) throw claim.error
       lastPoll = Date.now()

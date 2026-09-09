@@ -4,6 +4,7 @@ export type SeedanceReferenceRecord = {
   label: string
   role?: string
   url?: string
+  assetKey?: string
   modality?: SeedanceReferenceModality
 }
 

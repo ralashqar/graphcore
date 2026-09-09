@@ -6,18 +6,26 @@ import { validate as validateUnified } from '../../../src/domain/game/v3/compile
 import { validateGameDesign } from '../../../src/domain/game/compiler.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
+import { animationCommand } from '../_shared/game-animation-command.ts'
 
 Deno.serve(async request => {
   const preflight = maybeHandleOptions(request); if (preflight) return preflight
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed')
     const { client, user } = await requireUserClient(request, 'game-command')
-    const command = anyCommandSchema.parse(await request.json()), admin = createAdminClient('game-command')
+    const raw = await request.json(), admin = createAdminClient('game-command')
+    if (['generate_animation', 'bind_animation'].includes(raw?.action)) return json(await animationCommand(admin, user.id, raw))
+    const command = anyCommandSchema.parse(raw)
     const unified = 'template' in command && command.template === 'unified.v1'
     const moduleCommand = unified || ('template' in command && command.template === 'combat_traversal.v1')
-    const retryFunction = moduleCommand ? 'game_retry_module_command' : 'game_retry_asset_command'
+    let retryFunction = moduleCommand ? 'game_retry_module_command' : 'game_retry_asset_command'
     const draft = await client.from('project_drafts').select('id,project_id,metadata').eq('id', command.draftId).eq('project_id', command.projectId).single()
     if (draft.error || !draft.data) throw new HttpError(404, 'Project draft not found')
+    if (command.action === 'retry') {
+      const target = await admin.from('game_jobs').select('input').eq('id', command.jobId).eq('draft_id', command.draftId).maybeSingle()
+      if (target.error) throw new HttpError(400, 'Could not inspect recovery target')
+      if (target.data?.input?.animation) retryFunction = 'game_retry_animation_command'
+    }
     // Acknowledgements can be recovered even when admission has since been disabled.
     const prior = await admin.from('game_commands').select('result,actor,command').eq('draft_id', command.draftId).eq('idempotency_key', command.idempotencyKey).maybeSingle()
     if (prior.data) {

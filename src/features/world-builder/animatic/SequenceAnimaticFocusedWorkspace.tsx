@@ -433,6 +433,7 @@ export function SequenceAnimaticShotWorkspace({
     || shotKeyframeBusyLabel
   const showKeyframePanelProgress = Boolean(shotKeyframeInFlight && shotKeyframeWorkflowProgress)
   const showKeyframePanelPending = shotKeyframeInFlight && !shotKeyframeWorkflowProgress
+  const activeShotVideoDisplay = !showKeyframePanelProgress && !showKeyframePanelPending && activeShot.shotVideoReady && Boolean(activeShot.shotVideoUrl)
   const shotCanGenerateEarlyKeyframe = sequenceAnimaticShotCanGenerateEarlyKeyframe(activeShot)
   const keyframeReady = shotKeyframeReady(activeShot)
   const keyframeDisabled = (activeShot.isProvisional && !shotCanGenerateEarlyKeyframe) || shotKeyframeInFlight || busyRunKeys.has(shotRevisionRunKey)
@@ -753,14 +754,14 @@ export function SequenceAnimaticShotWorkspace({
             ref={panelScrubRef}
             className={[
               'world-wiki-shot-panel-focus__image',
-              showKeyframePanelProgress || showKeyframePanelPending ? 'is-keyframe-progress' : activeShot.panelUrl ? 'has-image' : 'is-empty',
-              !showKeyframePanelProgress && !showKeyframePanelPending && panelCues.length > 0 ? 'has-cues' : '',
-              !showKeyframePanelProgress && !showKeyframePanelPending && shotScrubbing ? 'is-scrubbing' : '',
+              showKeyframePanelProgress || showKeyframePanelPending ? 'is-keyframe-progress' : activeShotVideoDisplay ? 'has-video' : activeShot.panelUrl ? 'has-image' : 'is-empty',
+              !showKeyframePanelProgress && !showKeyframePanelPending && !activeShotVideoDisplay && panelCues.length > 0 ? 'has-cues' : '',
+              !showKeyframePanelProgress && !showKeyframePanelPending && !activeShotVideoDisplay && shotScrubbing ? 'is-scrubbing' : '',
             ].filter(Boolean).join(' ')}
             style={{ '--world-wiki-shot-scrub-progress': `${shotScrubProgress * 100}%` } as CSSProperties}
-            onPointerDown={startShotScrub}
-            onPointerMove={moveShotScrub}
-            onPointerUp={endShotScrub}
+            onPointerDown={activeShotVideoDisplay ? undefined : startShotScrub}
+            onPointerMove={activeShotVideoDisplay ? undefined : moveShotScrub}
+            onPointerUp={activeShotVideoDisplay ? undefined : endShotScrub}
             onPointerCancel={() => setShotScrubbing(false)}
           >
             {showKeyframePanelProgress && shotKeyframeWorkflowProgress ? (
@@ -782,6 +783,16 @@ export function SequenceAnimaticShotWorkspace({
                 <strong>{shotKeyframeStatusLabel}</strong>
                 <small>Preparing shot keyframe workflow</small>
               </div>
+            ) : activeShotVideoDisplay ? (
+              <video
+                className="world-wiki-shot-panel-focus__video"
+                src={activeShot.shotVideoUrl ?? ''}
+                poster={activeShot.panelUrl ?? undefined}
+                controls
+                playsInline
+                preload="metadata"
+                aria-label={`${activeShot.title} generated shot video`}
+              />
             ) : activeShot.panelUrl ? (
               <>
                 <img
@@ -810,7 +821,7 @@ export function SequenceAnimaticShotWorkspace({
                 {activeShot.panelError ? <small>{activeShot.panelError}</small> : null}
               </span>
             )}
-            {!showKeyframePanelProgress && !showKeyframePanelPending && activePanelCue ? (
+            {!showKeyframePanelProgress && !showKeyframePanelPending && !activeShotVideoDisplay && activePanelCue ? (
               <>
                 <span className="world-wiki-shot-panel-focus__scrub-line" aria-hidden="true" />
                 <div className={`world-wiki-shot-panel-focus__cue is-${activePanelCue.kind}`}>

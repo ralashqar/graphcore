@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { clipRevisionSchema, animationGraphSchema, rigProfileSchema, validateAnimationBindings } from './animation.ts'
 import {
   nodeSchema as legacyNode,
   actorSchema,
@@ -7,6 +8,7 @@ import {
 } from '../v2/spec.ts'
 
 export const VERSION = 'gameplay-3.0.0' as const
+export const ANIMATED_VERSION = 'gameplay-3.1.0' as const
 export const CATALOG = 'modules-3.0.0' as const
 const base = { id, label: z.string().min(1).max(500), version: z.literal(1) }
 export const actorDefinition = actorSchema
@@ -147,13 +149,33 @@ export const manifestSchema = z
     draftId: z.string().uuid(),
     sourceRevision: z.number().int().nonnegative(),
     sourceHash: z.string().length(64),
-    runtimeVersion: z.literal(VERSION),
+    runtimeVersion: z.enum([VERSION, ANIMATED_VERSION]),
     catalogVersion: z.literal(CATALOG),
     design: designSchema,
     nodeHashes: z.record(z.string(), z.string()),
-    assets: z.array(z.never()).length(0),
+    assets: z.array(clipRevisionSchema.safeExtend({ recipeKey: z.string() })).max(100),
+    animations: z.object({ version: z.literal(1), rigs: z.array(rigProfileSchema).max(10), graphs: z.array(animationGraphSchema).max(40) }).strict().optional(),
   })
   .strict()
+  .superRefine((manifest, ctx) => {
+    const issue = (message: string) => ctx.addIssue({ code: 'custom', message })
+    if (manifest.runtimeVersion === VERSION && (manifest.animations || manifest.assets.length)) issue('Animations require runtime gameplay-3.1.0')
+    if (!manifest.animations) {
+      if (manifest.assets.length) issue('Animation assets require graph metadata')
+      return
+    }
+    const rigs = new Set(manifest.animations.rigs.map(rig => rig.revision))
+    const actors = new Set(manifest.design.nodes.filter(node => node.kind === 'actor_definition').map(node => node.id))
+    if (rigs.size !== manifest.animations.rigs.length) issue('Duplicate rig revision')
+    if (new Set(manifest.assets.map(clip => clip.id)).size !== manifest.assets.length || new Set(manifest.assets.map(clip => clip.recipeKey)).size !== manifest.assets.length) issue('Duplicate animation asset')
+    if (new Set(manifest.animations.graphs.map(graph => graph.actorDefinition)).size !== manifest.animations.graphs.length) issue('Duplicate actor animation graph')
+    for (const graph of manifest.animations.graphs) {
+      if (!actors.has(graph.actorDefinition)) issue('Animation graph references a missing actor definition')
+      if (!rigs.has(graph.rigRevision)) issue('Animation graph references a missing rig')
+      validateAnimationBindings(graph, manifest.assets).forEach(issue)
+    }
+    for (const clip of manifest.assets) if (!rigs.has(clip.rigRevision)) issue('Animation clip references a missing rig')
+  })
 export type Manifest = z.infer<typeof manifestSchema>
 export const recipeName = z.enum(['chair', 'horse', 'car', 'door'])
 export const planSchema = z
