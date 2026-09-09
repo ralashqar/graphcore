@@ -1,6 +1,9 @@
 """Typed Runpod Kimodo handler. No executable user input or arbitrary downloads."""
 import json
 import math
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 MODEL_REVISION = '6c9233af1180b8151e3c4703477104af5dce9dd5'
@@ -32,12 +35,40 @@ def validate_input(value):
         if isinstance(node, list):
             for child in node: finite(child)
     finite(value)
+    frame_count = round(recipe['duration'] * 30)
+    for section in ('path', 'poses'):
+        indices = [min(frame_count - 1, math.floor(p['time'] * 30 + .5)) for p in recipe[section]]
+        if len(indices) != len(set(indices)):
+            raise ValueError('Constraint times collide at 30 fps')
+    effectors = {'left_hand': 'LeftHand', 'right_hand': 'RightHand', 'left_foot': 'LeftFoot', 'right_foot': 'RightFoot'}
+    required = {'Hips', 'LeftLeg', 'RightLeg'}
+    allowed = required | set(effectors.values())
+    for pose in recipe['poses']:
+        joints = set(pose['joints'])
+        if not required.issubset(joints) or not joints.intersection(effectors.values()) or joints - allowed:
+            raise ValueError('Milestones require pelvis, hips and supported end effectors')
+    for contact in recipe['contacts']:
+        if 'rotation' in contact and abs(math.sqrt(sum(v*v for v in contact['rotation'])) - 1) >= .001:
+            raise ValueError('Contact rotation must be normalized')
+        for time in (contact['start'], contact['end']):
+            if not any(abs(p['time'] - time) < 1/60 and p['joints'].get(effectors[contact['effector']]) == contact['position'] for p in recipe['poses']):
+                raise ValueError('Contact boundary requires a matching milestone pose')
     return recipe
 
 
 def load_model():
     global _model
     if _model is None:
+        marker = Path('/models/base-encoder/.graphcore-ready')
+        if not marker.exists() or marker.read_text() != '8afb486c1db24fe5011ec46dfbe5b5dccdb575c2':
+            environment = {**os.environ, 'HF_HUB_OFFLINE': '0', 'TRANSFORMERS_OFFLINE': '0'}
+            if not environment.get('HF_TOKEN'):
+                raise RuntimeError('Gated base encoder is missing and HF_TOKEN is not configured')
+            try:
+                subprocess.run([sys.executable, str(Path(__file__).with_name('download_models.py')), '--base-only'], env=environment, check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except (subprocess.SubprocessError, OSError):
+                raise RuntimeError('Pinned base encoder download failed or exceeded the five-minute startup limit') from None
+        os.environ.pop('HF_TOKEN', None)
         import kimodo
         from kimodo.model import LLM2VecEncoder
         encoder = LLM2VecEncoder(base_model_name_or_path='/models/encoder', peft_model_name_or_path='/models/adapter', dtype='bfloat16', llm_dim=4096, device='cuda:0')

@@ -29,6 +29,16 @@ class AdmissionTests(unittest.TestCase):
         self.input['modelRevision'] = 'latest'
         with self.assertRaises(Exception): validate_input(self.input)
 
+    def test_invalid_constraints_rejected_before_model_initialization(self):
+        for patch in [
+            {'path': [{'time': 0, 'x': 0, 'z': 0}, {'time': .001, 'x': 0, 'z': 0}]},
+            {'poses': [{'time': 0, 'joints': {'LeftHand': [0, 1, 0]}}]},
+            {'contacts': [{'effector': 'left_hand', 'start': 0, 'end': 1, 'position': [0, 1, 0]}]},
+        ]:
+            value = copy.deepcopy(self.input)
+            value['recipe'].update(patch)
+            with self.assertRaises(ValueError): validate_input(value)
+
 
 if __name__ == '__main__':
     unittest.main()
