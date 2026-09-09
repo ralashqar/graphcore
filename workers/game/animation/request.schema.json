@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "recipe": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "walk",
+            "run",
+            "backward",
+            "strafe_left",
+            "strafe_right",
+            "takeoff",
+            "airborne",
+            "landing",
+            "roll",
+            "catch",
+            "hang",
+            "shimmy_left",
+            "shimmy_right",
+            "climb"
+          ]
+        },
+        "rigRevision": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "model": {
+          "type": "string",
+          "const": "Kimodo-SOMA-RP-v1.1"
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 1500
+        },
+        "duration": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 8
+        },
+        "candidates": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "loop": {
+          "type": "boolean"
+        },
+        "targetSpeed": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 12
+        },
+        "rootMode": {
+          "type": "string",
+          "enum": [
+            "in_place",
+            "controller_curve",
+            "anchor_relative"
+          ]
+        },
+        "contacts": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "effector": {
+                "type": "string",
+                "enum": [
+                  "left_hand",
+                  "right_hand",
+                  "left_foot",
+                  "right_foot"
+                ]
+              },
+              "start": {
+                "type": "number",
+                "minimum": 0
+              },
+              "end": {
+                "type": "number",
+                "minimum": 0
+              },
+              "position": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "rotation": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "effector",
+              "start",
+              "end",
+              "position"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "poses": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "time": {
+                "type": "number",
+                "minimum": 0
+              },
+              "joints": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$"
+                },
+                "additionalProperties": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "time",
+              "joints"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "path": {
+          "maxItems": 241,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "time": {
+                "type": "number",
+                "minimum": 0
+              },
+              "x": {
+                "type": "number"
+              },
+              "z": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "time",
+              "x",
+              "z"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "thresholds": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "number",
+              "const": 1
+            },
+            "maxContactError": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.05
+            },
+            "maxBoneLengthError": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.01
+            },
+            "maxSeamAngle": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.15
+            },
+            "maxSeamVelocity": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.3
+            },
+            "maxCorrection": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 0.15
+            }
+          },
+          "required": [
+            "version",
+            "maxContactError",
+            "maxBoneLengthError",
+            "maxSeamAngle",
+            "maxSeamVelocity",
+            "maxCorrection"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "state",
+        "rigRevision",
+        "model",
+        "prompt",
+        "duration",
+        "candidates",
+        "seed",
+        "loop",
+        "targetSpeed",
+        "rootMode",
+        "contacts",
+        "poses",
+        "path",
+        "thresholds"
+      ],
+      "additionalProperties": false
+    },
+    "modelRevision": {
+      "type": "string",
+      "const": "6c9233af1180b8151e3c4703477104af5dce9dd5"
+    }
+  },
+  "required": [
+    "version",
+    "recipe",
+    "modelRevision"
+  ],
+  "additionalProperties": false
+}
