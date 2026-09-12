@@ -48,6 +48,7 @@
     "fly:worker:deploy": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& \\\"$env:USERPROFILE\\.fly\\bin\\fly.exe\\\" deploy --config fly.world-generation.toml --remote-only\"",
     "fly:worker:logs": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& \\\"$env:USERPROFILE\\.fly\\bin\\fly.exe\\\" logs --config fly.world-generation.toml\"",
     "fly:director:deploy": "node scripts/deploy-director.mjs",
+    "functions:deploy-bundled": "node scripts/deploy-bundled-functions.mjs",
     "test:director-runtime": "npx deno test --allow-env --allow-read --allow-write --node-modules-dir=auto --config workers/director/deno.json workers/director/runtime.test.ts",
     "test:director-db": "node scripts/verify-director-runtime.mjs",
     "test:game-interactions": "node --experimental-strip-types --test src/domain/game/interactions/interactions.test.ts",
