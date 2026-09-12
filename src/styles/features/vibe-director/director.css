@@ -318,3 +318,21 @@
 .director-prep-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 14px; }
 .director-prep-steps li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
 .director-prep-step-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Chapter shot brief (animatic-sourced sessions) */
+.director-shot-brief { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+.director-shot-detail { display: flex; flex-direction: column; gap: 8px; }
+.director-shot-action { color: var(--director-text); font-size: 12.5px; }
+.director-shot-dialogue { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.director-shot-dialogue strong { font-weight: 600; margin-right: 4px; }
+.director-shot-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; margin: 0; font-size: 11.5px; }
+.director-shot-meta dt { color: var(--director-muted); }
+.director-shot-meta dd { margin: 0; color: var(--director-text); overflow-wrap: anywhere; }
+.director-ingredients { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.director-ingredient { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px; border-radius: 10px; border: 1px solid var(--director-line); background: var(--director-control); }
+.director-ingredient.is-ready { border-color: rgba(57, 216, 255, 0.2); }
+.director-ingredient.is-failed { border-color: rgba(248, 113, 113, 0.3); }
+.director-ingredient img, .director-ingredient-blank { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: var(--director-panel-strong); display: block; }
+.director-ingredient-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; }
+.director-ingredient-body strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.director-ingredient-body .director-muted { font-size: 10.5px; }

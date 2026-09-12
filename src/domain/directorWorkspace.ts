@@ -64,7 +64,28 @@ export const directorProgressSchema = z.object({
   exports: z.array(directorExportSchema).optional(),
 })
 const commandBase = z.object({ projectId: z.string().uuid(), draftId: z.string().uuid(), sessionId: z.string().uuid(), idempotencyKey: z.string().uuid(), expectedRevision: z.number().int().nonnegative().optional() })
-const sourceSchema = z.object({ sequenceKey: z.string().optional(), requestId: z.string().optional(), shotId: z.string().optional(), script: z.string().max(50000).default(''), legacyImported: z.boolean().optional() })
+/** Shot ingredient references (continuity anchors, coverage keyframes) attached from the animatic view model. */
+export const directorSourceReferenceSchema = z.object({ assetKey: z.string().min(1), label: z.string().max(200).default(''), kind: z.string().max(60).default('reference') })
+export const directorSourceSchema = z.object({
+  sequenceKey: z.string().optional(), requestId: z.string().optional(), shotId: z.string().optional(), sceneId: z.string().optional(),
+  script: z.string().max(50000).default(''), legacyImported: z.boolean().optional(),
+  /** Explicit image references from the shot's ingredients; the server validates project ownership and caps at nine images. */
+  references: z.array(directorSourceReferenceSchema).max(12).optional(),
+})
+const sourceSchema = directorSourceSchema
+export type DirectorSource = z.infer<typeof directorSourceSchema>
+export type DirectorSourceReference = z.infer<typeof directorSourceReferenceSchema>
+/** H3 accepts nine images: cast sheets first (identity), then shot ingredients in order until the cap. */
+export function mergeDirectorImageReferences(cast: DirectorReference[], shot: DirectorReference[], limit = 9) {
+  const seen = new Set<string>()
+  const merged: DirectorReference[] = []
+  for (const ref of [...cast, ...shot]) {
+    if (seen.has(ref.assetKey) || merged.length >= limit) continue
+    seen.add(ref.assetKey)
+    merged.push(ref)
+  }
+  return merged
+}
 export const directorCommandSchema = z.discriminatedUnion('action', [
   commandBase.extend({ action: z.literal('create'), title: z.string().min(1).max(200), source: sourceSchema, entityKeys: z.array(z.string()).max(50).default([]), settings: directorSettingsSchema }),
   commandBase.extend({ action: z.literal('source'), source: sourceSchema }),

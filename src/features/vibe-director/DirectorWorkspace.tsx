@@ -20,12 +20,23 @@ import { DirectorFramePicker } from './DirectorFramePicker'
 import { DirectorNewEntityForm, type NewEntityInput } from './DirectorNewEntityForm'
 import { DirectorPrepProgress } from './DirectorPrepProgress'
 import { useDirectorPrepRun } from './useDirectorPrepRun'
+import { DirectorShotBrief } from './DirectorShotBrief'
+import { directionFromShot, scriptFromShot, useDirectorShotModel } from './useDirectorShotModel'
+import { directorSourceSchema } from '../../domain/directorWorkspace'
 
 const DirectorLivePanel = lazy(() => import('./live/DirectorLivePanel'))
 
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}
 const text = (v: unknown) => typeof v === 'string' ? v.trim() : ''
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+
+/** Ready visual ingredients (location/prop anchors, coverage keyframes) as explicit take references. */
+function shotIngredientReferences(ingredients: ReturnType<ReturnType<typeof useDirectorShotModel>['ingredientsFor']>) {
+  return ingredients
+    .filter((ingredient) => ingredient.status === 'ready' && ingredient.assetKey && !['camera', 'lighting', 'dialogue', 'performance'].includes(ingredient.kind))
+    .slice(0, 12)
+    .map((ingredient) => ({ assetKey: ingredient.assetKey, label: ingredient.name.slice(0, 200), kind: ingredient.kind }))
+}
 
 /** Entities whose names appear in the script are a sensible opening cast. */
 function suggestCast(entities: WorldEntity[], script: string, limit = 6) {
@@ -76,6 +87,30 @@ export function DirectorWorkspace(props: VibeDirectorPageProps) {
     },
   })
   const graphPrepAvailable = Boolean(props.onLoadOutputWorkflowGraph && props.canRun)
+
+  // Chapter shots: for animatic-sourced sessions the scene/shot list, brief and ingredients come from the
+  // animatic view model (same contract as the World page) instead of scraped artifact metadata.
+  const sessionSource = directorSourceSchema.safeParse(c.state.session?.source)
+  const source = sessionSource.success ? sessionSource.data : null
+  const shotModel = useDirectorShotModel({ snapshot, masterRequestId: source?.requestId || null, onLoadSequenceAnimaticState: props.onLoadSequenceAnimaticState })
+  const pickedShot = shotModel.findShot(source?.shotId)
+  const shotIngredients = useMemo(() => shotModel.ingredientsFor(pickedShot?.shot ?? null), [shotModel, pickedShot?.shot])
+  const attachShot = async (shotId: string) => {
+    const found = shotModel.findShot(shotId)
+    if (!found || !source) return
+    const references = shotIngredientReferences(shotModel.ingredientsFor(found.shot))
+    const result = await c.execute({ action: 'source', source: { requestId: source.requestId, sequenceKey: source.sequenceKey, shotId, sceneId: found.sceneId, script: scriptFromShot(found.shot, found.sceneTitle), references } })
+    if (result) {
+      c.setDirection(directionFromShot(found.shot) || 'Direct this shot, preserving the scripted action and dialogue.')
+      notice(`${found.shot.title}: ${references.length} ingredient reference${references.length === 1 ? '' : 's'} attached from the chapter animatic.`)
+    }
+  }
+  const refreshShotIngredients = async () => {
+    if (!pickedShot || !source) return
+    const references = shotIngredientReferences(shotIngredients)
+    await c.execute({ action: 'source', source: { ...source, references } })
+    notice(`${references.length} ingredient reference${references.length === 1 ? '' : 's'} attached to future takes.`)
+  }
 
   // Visual jobs started here are polled until terminal, then the snapshot refresh brings the new sheet/frame in.
   const tracked = useRef(new Map<string, ReturnType<typeof setInterval>>())
@@ -317,7 +352,21 @@ export function DirectorWorkspace(props: VibeDirectorPageProps) {
         <DirectorSceneSetup sources={sources} busy={c.ui.busy} canRun={props.canRun} hasSession={Boolean(session)} canImportLegacy={!c.state.sessions.some((s) => s.source.legacyImported) && Boolean(legacyDirectorImport(snapshot))} onOpen={openScene} onPrepareScript={prepareScript} onImportLegacy={importLegacy} onCancel={() => setCreating(false)} />
       ) : (
         <div className="director-studio">
-          <DirectorSceneRail controller={c} snapshot={snapshot} sources={sources} activeSource={activeSource} cast={cast} actions={railActions} />
+          <DirectorSceneRail controller={c} snapshot={snapshot} sources={sources} activeSource={activeSource} cast={cast} actions={railActions} shotBrief={source?.requestId ? (
+            <DirectorShotBrief
+              scenes={shotModel.scenes}
+              shot={pickedShot?.shot ?? null}
+              sceneTitle={pickedShot?.sceneTitle ?? ''}
+              ingredients={shotIngredients}
+              loading={shotModel.loading}
+              error={shotModel.error}
+              busy={c.ui.busy || !c.canRun}
+              attachedCount={source?.references?.length ?? 0}
+              onPickShot={(shotId) => void attachShot(shotId)}
+              onUseBrief={() => pickedShot && c.setDirection(directionFromShot(pickedShot.shot))}
+              onRefreshIngredients={() => void refreshShotIngredients()}
+            />
+          ) : null} />
           <main className="director-stage">
             {prep.run ? <DirectorPrepProgress run={prep.run} onDismiss={prep.dismiss} /> : null}
             <DirectorPlayer controller={c} />

@@ -126,6 +126,8 @@ export function directorEstimateReferences(input: {
   settings: DirectorSettings
   cast: DirectorCastMember[]
   assets: AssetDefinition[]
+  /** Shot ingredient references stored on the session source (continuity anchors, coverage keyframes). */
+  shotReferences?: Array<{ assetKey: string; label?: string }>
   branch?: { mode: 'frame' | 'motion'; seconds: number } | null
 }): DirectorReference[] {
   const byKey = new Map(input.assets.map((asset) => [asset.key, asset] as const))
@@ -133,8 +135,10 @@ export function directorEstimateReferences(input: {
   if (input.branch?.mode === 'frame') return [image(`branch:${input.branch.seconds}`, 'Exact opening frame')]
   if (input.branch?.mode === 'motion') return [{ assetKey: 'branch-motion', label: 'Previous motion', kind: 'video', durationSeconds: Math.min(3, input.branch.seconds) }]
   if (input.settings.firstFrameAssetKey) return [image(input.settings.firstFrameAssetKey, 'Opening frame')]
-  const keys = [...new Set(input.cast.map((member) => member.referenceAssetKey).filter((key): key is string => Boolean(key)))]
-  return keys.map((key) => image(key, byKey.get(key)?.name || key))
+  const castKeys = [...new Set(input.cast.map((member) => member.referenceAssetKey).filter((key): key is string => Boolean(key)))]
+  const seen = new Set(castKeys)
+  const shot = (input.shotReferences ?? []).filter((ref) => ref.assetKey && !seen.has(ref.assetKey) && seen.add(ref.assetKey))
+  return [...castKeys.map((key) => image(key, byKey.get(key)?.name || key)), ...shot.map((ref) => image(ref.assetKey, ref.label || byKey.get(ref.assetKey)?.name || ref.assetKey))].slice(0, 9)
 }
 
 export type DirectorFrameGroupId = 'composed' | 'takes' | 'keyframes' | 'sheets' | 'images'

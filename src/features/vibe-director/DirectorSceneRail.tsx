@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { ArrowsClockwise, ImageSquare, Plus, Sparkle, UserPlus, X } from '@phosphor-icons/react'
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import { EntityIcon } from '../../shared/entityIcons'
@@ -23,13 +24,15 @@ export type DirectorRailActions = {
   sheetJobsStarting: Set<string>
 }
 
-export function DirectorSceneRail({ controller: c, snapshot, sources, activeSource, cast, actions }: {
+export function DirectorSceneRail({ controller: c, snapshot, sources, activeSource, cast, actions, shotBrief }: {
   controller: DirectorController
   snapshot: ProjectSnapshot
   sources: DirectorSource[]
   activeSource: DirectorSource | undefined
   cast: DirectorCastMember[]
   actions: DirectorRailActions
+  /** Chapter shot picker and brief for animatic-sourced sessions. */
+  shotBrief?: ReactNode
 }) {
   const session = c.state.session
   const script = String(session?.source.script ?? '')
@@ -78,9 +81,10 @@ export function DirectorSceneRail({ controller: c, snapshot, sources, activeSour
             </details>
           ) : <p className="director-muted">No script text. Your direction carries the scene.</p>}
         </div>
+        {shotBrief}
         {sources.length ? (
           <label className="director-field">
-            <span className="section-label">Switch scene or shot</span>
+            <span className="section-label">{shotBrief ? 'Switch to another source' : 'Switch scene or shot'}</span>
             <select value="" disabled={c.ui.busy || !c.canRun} onChange={(e) => { const next = sources.find((s) => s.id === e.target.value); if (next) actions.onChangeSource(next) }}>
               <option value="">Keep current scene</option>
               {(['shot', 'output', 'sequence'] as const).filter((kind) => sources.some((s) => s.kind === kind)).map((kind) => (

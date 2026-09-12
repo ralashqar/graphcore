@@ -3,7 +3,7 @@ import { ArrowClockwise, ArrowUDownLeft, ArrowUpRight, MagicWand, Sparkle, Stop 
 import type { ProjectSnapshot } from '../../domain/graphcore'
 import type { DirectorController } from './useDirectorController'
 import { isActiveTakeStatus } from './useDirectorController'
-import { directorAspectRatios, directorResolutions } from '../../domain/directorWorkspace'
+import { directorAspectRatios, directorResolutions, directorSourceSchema } from '../../domain/directorWorkspace'
 import { estimateH3Cost, h3Model } from '../../domain/h3Video'
 import { directorEstimateReferences, type DirectorCastMember } from '../../domain/directorCast'
 import { VIBE_DIRECTING_STYLE_PRESETS } from '../../domain/vibeDirector'
@@ -28,7 +28,8 @@ export function DirectorDirectionPanel({ controller: c, cast, snapshot, onOpenCa
   const active = c.state.takes.find((t) => isActiveTakeStatus(t.status))
   const selected = c.state.takes.find((t) => t.id === c.ui.takeId)
   const selectedClip = c.state.edits.find((e) => e.id === session?.active_edit_id)?.clips.find((clip) => clip.takeId === selected?.id)
-  const references = useMemo(() => directorEstimateReferences({ settings, cast, assets: snapshot.assets }), [settings, cast, snapshot.assets])
+  const shotReferences = useMemo(() => { const parsed = directorSourceSchema.safeParse(session?.source); return parsed.success ? (parsed.data.references ?? []) : [] }, [session?.source])
+  const references = useMemo(() => directorEstimateReferences({ settings, cast, assets: snapshot.assets, shotReferences }), [settings, cast, snapshot.assets, shotReferences])
   const estimate = estimateH3Cost(settings, references)
   const credits = Math.max(1, Math.ceil(estimate * CREDITS_PER_USD))
   const readyCast = cast.filter((member) => member.status === 'ready')
