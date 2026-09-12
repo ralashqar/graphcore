@@ -3,6 +3,7 @@ import { recordAiUsageEvent } from '../ai-provider-gateway.ts'
 import { type Client, fence, type Job, type Phase, rpc } from './types.ts'
 import { ingestTake, prepareTake, renderEdit } from './media.ts'
 import * as provider from './provider.ts'
+import { insertDirectorMessage, takeAttentionMessage, takeCompletedMessage, takeFailedMessage } from '../director-messages.ts'
 
 function usage(job: Job) {
   const t = job.snapshot.take!
@@ -33,14 +34,20 @@ function usage(job: Job) {
   }
 }
 export async function executePhase(client: Client, job: Job) {
-  const checkpoint = (phase: Phase, patch: Record<string, unknown> = {}, delay = 0, error: string | null = null) =>
-    rpc(client, 'director_checkpoint', {
+  // Conversation-log outcomes are best effort and only for takes (exports have no message thread entry).
+  const note = (text: string) => job.take_id ? insertDirectorMessage(client as never, job.session_id, 'system', text) : Promise.resolve(false)
+  const checkpoint = async (phase: Phase, patch: Record<string, unknown> = {}, delay = 0, error: string | null = null) => {
+    const result = await rpc(client, 'director_checkpoint', {
       ...fence(job),
       p_phase: phase,
       p_patch: patch,
       p_delay: delay,
       p_error: error,
     })
+    if (phase === 'attention' && error) await note(takeAttentionMessage(error))
+    else if (phase === 'failed' && error) await note(takeFailedMessage(error))
+    return result
+  }
   try {
     if (job.phase === 'prepare') {
       if (job.operation === 'export') await checkpoint('finalize', { asset: await renderEdit(client, job) })
@@ -107,6 +114,15 @@ export async function executePhase(client: Client, job: Job) {
       await checkpoint('finalize', { asset: await ingestTake(client, job) })
     } else if (job.phase === 'finalize') {
       await rpc(client, 'director_finalize_job', { ...fence(job), p_usage: job.take_id ? usage(job) : null })
+      if (job.take_id) {
+        const take = job.snapshot.take
+        await note(takeCompletedMessage({
+          durationSeconds: job.checkpoint.asset?.durationSeconds,
+          estimatedCostUsd: take?.estimated_cost_usd,
+          model: job.checkpoint.model,
+          branch: take?.parent_take_id ? take.branch_mode : null,
+        }))
+      }
     } else if (job.phase === 'cancel') {
       if (!job.submission_started) {
         if (job.take_id) await rpc(client, 'director_settle_credits', { p_take: job.take_id, p_charge: 0 })

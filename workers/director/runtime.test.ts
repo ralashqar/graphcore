@@ -20,6 +20,8 @@ function fixture(overrides: Partial<Job> = {}) {
           order: () => ({ limit: async () => ({ data: inbox.map((payload) => ({ payload })), error: null }) }),
         }),
       }),
+      // Conversation-log outcome messages are best effort and not asserted here.
+      insert: async () => ({ error: null }),
     }),
   } as unknown as Client
   const job = {

@@ -1,4 +1,5 @@
 import { aiGenerationSettings } from '../../../src/config/aiGenerationSettings.ts'
+import { buildH3WorkflowVideoBody, isH3FalModel } from '../../../src/domain/h3Video.ts'
 
 declare const Deno: {
   env: {
@@ -372,7 +373,8 @@ export async function submitFalVideoRequest(input: {
   referenceVideoUrls?: string[]
   referenceAudioUrls?: string[]
 }) {
-  const body = buildFalVideoRequestBody(input)
+  // H3 endpoints take the same node inputs but a different request contract (reference lists, `768P`, no audio flag).
+  const body = isH3FalModel(input.model) ? buildH3WorkflowVideoBody(input) : buildFalVideoRequestBody(input)
   return fetchFalJson(`${FAL_QUEUE_BASE_URL}/${input.model}`, {
     method: 'POST',
     headers: buildFalHeaders(input.apiKey),

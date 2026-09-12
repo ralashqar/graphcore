@@ -32,7 +32,7 @@ type DatabaseClient = {
 }
 
 type VisualJobStatus = 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'
-type VisualJobKind = 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'entity_reference_sheet' | 'character_sheet' | 'wiki_visual' | 'app_screen_mockup' | 'app_screen_analysis'
+type VisualJobKind = 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'entity_reference_sheet' | 'character_sheet' | 'director_frame' | 'wiki_visual' | 'app_screen_mockup' | 'app_screen_analysis'
 
 type VisualJob = {
   id: string
@@ -1858,6 +1858,98 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   return { assetKey, entityKey, sheetKind }
 }
 
+/** Frame size for a composed Director start frame; H3 image-to-video inherits this ratio. */
+function directorFrameImageSize(aspectRatio: string) {
+  switch (aspectRatio) {
+    case '9:16': return { width: 1152, height: 2048 }
+    case '1:1': return { width: 2048, height: 2048 }
+    case '4:3': return { width: 2048, height: 1536 }
+    case '3:4': return { width: 1536, height: 2048 }
+    case '21:9': return { width: 2048, height: 880 }
+    default: return { width: 2048, height: 1152 }
+  }
+}
+
+/**
+ * Vibe Director "Compose start frame": one cinematic still from the scene, direction and up to four cast
+ * reference sheets. The asset is tagged `role: director_frame` so the director's frame picker groups it.
+ */
+async function processDirectorFrameJob(client: DatabaseClient, job: VisualJob, workerId: string) {
+  const prompt = readString(job.input.prompt)
+  if (!prompt) throw new Error('Director frame job is missing a prompt.')
+  const sessionId = readString(job.input.sessionId) || readString(job.targetKeys.sessionId)
+  const assetKey = readString(job.input.assetKey) || readString(job.targetKeys.assetKey) || `director_frame_${job.id.replace(/-/g, '').slice(0, 12)}`
+  const storagePath = readString(job.input.storagePath) || `generated/director-frames/${job.draftId}/${assetKey}.webp`
+  const aspectRatio = readString(job.input.aspectRatio) || '16:9'
+  const imageSize = directorFrameImageSize(aspectRatio === 'adaptive' ? '16:9' : aspectRatio)
+  await heartbeat(client, job.id, workerId, { phase: 'director_frame_loading_references', sessionId })
+  const referenceAssets = await loadProjectAssetRows(client, job.projectId, readStringArray(job.input.referenceImageAssetKeys).slice(0, 4))
+  const referenceImageUrls = await createProjectAssetSignedUrls(client, referenceAssets)
+  const quality = readString(job.input.quality) || Deno.env.get('VISUAL_GENERATION_DIRECTOR_FRAME_QUALITY') || 'medium'
+  const requestedModel = readString(job.input.model) || readString(Deno.env.get('VISUAL_GENERATION_DIRECTOR_FRAME_MODEL')) || job.model || 'openai/gpt-image-2'
+
+  const imageResult = await generateVisualImage({
+    client,
+    job,
+    workerId,
+    model: requestedModel,
+    prompt,
+    phasePrefix: 'director_frame',
+    imageSize,
+    quality,
+    outputFormat: 'webp',
+    referenceImageUrls,
+  })
+  await ensureVisualJobStillRunning(client, job.id, 'director_frame_uploading_asset')
+  await heartbeat(client, job.id, workerId, { phase: 'director_frame_uploading_asset', imageBytes: imageResult.imageBytes.byteLength, assetKey })
+  await uploadBytes(client, storagePath, imageResult.imageBytes, 'image/webp')
+  await upsertAssetRows(client, [{
+    project_id: job.projectId,
+    key: assetKey,
+    name: 'Director start frame',
+    kind: 'image',
+    mime_type: 'image/webp',
+    storage_path: storagePath,
+    metadata: buildGeneratedAssetMetadata({
+      job,
+      generatedBy: 'director_frame',
+      model: imageResult.model,
+      prompt,
+      storagePath,
+      imageResult,
+      extra: {
+        role: 'director_frame',
+        sessionId,
+        aspectRatio,
+        width: imageSize.width,
+        height: imageSize.height,
+        imageSize,
+        quality,
+        referenceAssetKeys: referenceAssets.map((asset: Record<string, unknown>) => readString(asset.key)).filter(Boolean),
+      },
+    }),
+  }])
+  const outputs = {
+    assets: [{ assetKey, storagePath, targetKind: 'director_session', targetKey: sessionId, role: 'director_frame' }],
+    assetKey,
+    sessionId,
+  }
+  await completeJob(client, job.id, workerId, outputs, {
+    phase: 'completed',
+    provider: imageResult.provider,
+    model: imageResult.model,
+    falRequestId: imageResult.provider === 'fal' ? imageResult.requestId : undefined,
+    falImageUrl: imageResult.provider === 'fal' ? imageResult.imageUrl : undefined,
+    openAiResponseId: imageResult.provider === 'openai' ? imageResult.responseId : undefined,
+    assetKey,
+    sessionId,
+    requestedImageSize: imageSize,
+    requestedQuality: quality,
+    referenceImageCount: referenceImageUrls.length,
+  })
+  return { assetKey, sessionId }
+}
+
 async function processAppScreenMockupJob(client: DatabaseClient, job: VisualJob, workerId: string) {
   const prompt = readString(job.input.prompt) || readString(job.input.imagePrompt)
   if (!prompt) throw new Error('App screen mockup visual job is missing an image prompt.')
@@ -2248,6 +2340,8 @@ export async function processFlyVisualGenerationJobs(input: {
       await processWikiVisualJob(input.client, job, input.workerId)
     } else if (job.kind === 'entity_reference_sheet' || job.kind === 'character_sheet') {
       await processEntityReferenceSheetJob(input.client, job, input.workerId)
+    } else if (job.kind === 'director_frame') {
+      await processDirectorFrameJob(input.client, job, input.workerId)
     } else if (job.kind === 'app_screen_mockup') {
       await processAppScreenMockupJob(input.client, job, input.workerId)
     } else if (job.kind === 'app_screen_analysis') {

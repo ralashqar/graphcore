@@ -112,7 +112,7 @@ export function WorkspaceTopbar({
             {onOpenGameBuilder && (projectType === 'game' || gameBuilderActive) ? <button className={gameBuilderActive ? 'tab-button is-active' : 'tab-button'} onClick={onOpenGameBuilder} type="button">Game</button> : null}
             {onOpenVibeDirector ? (
               <button
-                className={vibeDirectorActive ? 'topbar-vibe-button is-active' : 'topbar-vibe-button'}
+                className={vibeDirectorActive ? 'tab-button is-active' : 'tab-button'}
                 onClick={onOpenVibeDirector}
                 type="button"
               >

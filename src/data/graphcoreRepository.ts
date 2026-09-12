@@ -8371,7 +8371,7 @@ function mapVisualGenerationJobRow(row: Record<string, unknown>) {
 
 export async function listActiveVisualGenerationJobs(
   snapshot: ProjectSnapshot,
-  kinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet'],
+  kinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet', 'director_frame'],
 ): Promise<VisualGenerationJob[]> {
   if (!hasLiveSnapshotIds(snapshot)) return []
 

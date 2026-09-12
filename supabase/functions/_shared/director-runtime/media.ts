@@ -1,6 +1,7 @@
-import { compileDirectorPrompt } from '../../../../src/domain/directorWorkspace.ts'
+import { compileDirectorPrompt, directorExportFrame } from '../../../../src/domain/directorWorkspace.ts'
 import { h3Model } from '../../../../src/domain/h3Video.ts'
 import { probeDirectorMedia, runDirectorFfmpeg } from '../director-media.ts'
+import { DIRECTOR_EXPORT_CLIP_CONCURRENCY, directorClipCacheKey, directorClipCachePath, directorClipNormalizeArgs, mapWithConcurrency, readCachedDirectorClip, writeCachedDirectorClip } from '../director-clip-cache.ts'
 import type { Asset, Client, FrozenReference, Job } from './types.ts'
 
 const MAX_FILE = 256 * 1024 * 1024
@@ -164,53 +165,28 @@ export function renderEdit(client: Client, job: Job): Promise<Asset> {
   if (!clips.length || duration > MAX_EXPORT_SECONDS || clips.length > 100) {
     throw new Error('Export limit is 100 clips / 10 minutes; split this edit')
   }
-  const settings = job.snapshot.settings
-  const [rw, rh] = settings.aspectRatio.split(':').map(Number)
-  const height = settings.resolution === '768p' ? 768 : 480, width = Math.round(height * rw / rh / 2) * 2
+  const { width, height } = directorExportFrame(job.snapshot.settings)
   return withTemp(job, async (dir) => {
     let diskBytes = 0
     const started = Date.now()
-    for (const [i, clip] of clips.entries()) {
+    // Clips normalise in parallel (bounded) and reuse cached renders keyed by source, trim range and frame size.
+    await mapWithConcurrency([...clips.entries()], DIRECTOR_EXPORT_CLIP_CONCURRENCY, async ([i, clip]) => {
       if (Date.now() - started > 600000) throw new Error('Export processing deadline exceeded; split this edit')
-      const source = `${dir}/source.mp4`, output = `${dir}/clip-${i}.mp4`
-      await downloadFile(await signedPath(client, clip.storagePath), source)
-      const probe = await probeDirectorMedia(source)
-      await runDirectorFfmpeg([
-        '-i',
-        source,
-        ...(!probe.hasAudio ? ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo'] : []),
-        '-ss',
-        String(clip.inSeconds),
-        '-t',
-        String(clip.outSeconds - clip.inSeconds),
-        '-map',
-        '0:v:0',
-        '-map',
-        probe.hasAudio ? '0:a:0' : '1:a:0',
-        '-vf',
-        `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24`,
-        '-c:v',
-        'libx264',
-        '-pix_fmt',
-        'yuv420p',
-        '-preset',
-        'fast',
-        '-crf',
-        '20',
-        '-c:a',
-        'aac',
-        '-ar',
-        '48000',
-        '-ac',
-        '2',
-        '-fs',
-        String(MAX_FILE),
-        output,
-      ])
-      await Deno.remove(source)
+      const source = `${dir}/source-${i}.mp4`, output = `${dir}/clip-${i}.mp4`
+      const cachePath = directorClipCachePath(job.draft_id, await directorClipCacheKey({ source: clip.storagePath, inSeconds: clip.inSeconds, outSeconds: clip.outSeconds, width, height }))
+      const cached = await readCachedDirectorClip(client as never, cachePath)
+      if (cached) {
+        await Deno.writeFile(output, cached)
+      } else {
+        await downloadFile(await signedPath(client, clip.storagePath), source)
+        const probe = await probeDirectorMedia(source)
+        await runDirectorFfmpeg(directorClipNormalizeArgs({ source, output, hasAudio: probe.hasAudio, inSeconds: clip.inSeconds, outSeconds: clip.outSeconds, width, height, maxBytes: MAX_FILE }))
+        await Deno.remove(source)
+        await writeCachedDirectorClip(client as never, cachePath, await Deno.readFile(output))
+      }
       diskBytes += (await Deno.stat(output)).size
       if (diskBytes > MAX_FILE) throw new Error('Export exceeds disk budget; split this edit')
-    }
+    })
     await Deno.writeTextFile(`${dir}/concat.txt`, clips.map((_, i) => `file 'clip-${i}.mp4'`).join('\n'))
     await runDirectorFfmpeg([
       '-f',

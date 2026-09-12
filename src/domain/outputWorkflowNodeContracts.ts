@@ -17,6 +17,27 @@ const cinematicSequenceContracts = [
     producedOutputs: ['director'], artifactRoles: ['director_edit'], previewRoles: [],
     recoveryStrategy: 'node_step' as const, progressLabel: 'Directing footage', providerBacked: true, manualOnly: false,
   },
+  // Director take preparation graph (src/domain/directorPrep.ts): fan-out cast sheets, optional start frame, readiness.
+  {
+    purpose: 'director_prep_context', label: 'Director Cast Context', requiredInputs: [],
+    producedOutputs: ['cast', 'artDirection', 'script'], artifactRoles: [], previewRoles: [],
+    recoveryStrategy: 'node_step' as const, progressLabel: 'Loading cast and scene', providerBacked: false, manualOnly: false,
+  },
+  {
+    purpose: 'director_cast_sheet', label: 'Cast Reference Sheet', requiredInputs: [],
+    producedOutputs: ['entityKey', 'assetKey'], artifactRoles: [], previewRoles: [],
+    recoveryStrategy: 'node_step' as const, progressLabel: 'Generating reference sheet', providerBacked: true, manualOnly: false,
+  },
+  {
+    purpose: 'director_frame_compose', label: 'Director Start Frame', requiredInputs: [],
+    producedOutputs: ['assetKey'], artifactRoles: [], previewRoles: [],
+    recoveryStrategy: 'node_step' as const, progressLabel: 'Composing start frame', providerBacked: true, manualOnly: false,
+  },
+  {
+    purpose: 'director_prep_ready', label: 'Director Take Readiness', requiredInputs: [],
+    producedOutputs: ['ready', 'referenceAssetKeys', 'firstFrameAssetKey'], artifactRoles: [], previewRoles: [],
+    recoveryStrategy: 'node_step' as const, progressLabel: 'Checking take readiness', providerBacked: false, manualOnly: false,
+  },
   {
     purpose: 'vibe_director_screenplay_quality',
     label: 'Vibe Screenplay Quality',

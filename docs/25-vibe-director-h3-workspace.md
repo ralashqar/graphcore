@@ -74,3 +74,56 @@ Sources: [H3 reference-to-video](https://fal.ai/models/minimax/h3-max/reference-
 - All three new endpoints returned 401 to unauthenticated requests. The new scene setup rendered at desktop and 390px mobile width without browser console errors.
 - Fly deployment was attempted but blocked by missing local Fly authentication. Run `fly auth login`, then `npm run fly:worker:deploy`, verify worker version/startup and media tooling, then set `DIRECTOR_GENERATION_ENABLED=true`.
 - The authenticated generate/branch/export smoke test and paid live capture were not run; the available browser was signed out. Live beta remains disabled.
+
+## 2026-09-11 — workspace overhaul and rollout completion
+
+State found before this work (verified read-only): no `DIRECTOR_*` secrets on Supabase; migration `20260906202603_director_isolated_runtime.sql` unapplied while the repo's `director-command`/`get-director-session` already depended on it; legacy Fly worker last released June 26 (before the `director_workspace` handler existed); `graphcore-director` Fly app absent. Generation could not run.
+
+### What changed
+
+- **H3 contract** (`src/domain/directorWorkspace.ts`, `src/domain/h3Video.ts`): `resolution` adds `1080p` ($0.16/s list rate); `aspectRatio` adds `adaptive` (reference-to-video only; text-to-video rejects it, image-to-video ignores it); new `promptExpansion: balanced | quality` sent as `prompt_expansion_mode`. Export renderers derive frame size via `directorExportFrame` (adaptive normalises to 16:9). Pricing snapshot policy is `h3_list_rate_estimate_v2`. Reference-token rate for 1080p video is scaled by pixel count and is an estimate.
+- **Outcome messages**: both take executors write `system` rows to `director_messages` on completion/failure/attention through `_shared/director-messages.ts`. The client performs a full read when a take reaches a terminal state so the log updates.
+- **Assistant**: new `director-assist` function (`intent: polish | suggest`) using `resolveOutputTextModelPolicy('utility_prompt')` with strict JSON output; it appends an `assistant` message and records usage. No session mutation, no credits.
+- **Composed start frames**: new visual-generation kind `director_frame` (`processDirectorFrameJob` in `_shared/visual-generation-worker.ts`): gpt-image-2 (edit when cast sheets are attached, max 4), size from aspect ratio, asset tagged `role: director_frame` and `sessionId`. The App polls it like reference sheets (`activeVisualJobKinds`).
+- **Workspace** (`src/features/vibe-director/`): `DirectorWorkspace` split into header, scene setup, rail (scene / cast & ingredients / frames), player (scrubber, edit markers), take cards (status pills, elapsed time, cost, recover on any take), drag-trim timeline (redo of latest revision plus a revision list), direction panel (style preset chips, settings incl. 1080p/adaptive/expansion, estimate from the real reference assets, assistant buttons), exports, entity picker, frame picker, new-entity form. Direction autosaves on blur and before switching sessions. `VibeDirectorPageProps` lives in `directorTypes.ts`; App passes `visualGenerationJobs`, `onCreateWorldEntity`, `onRefineWorldEntityVisualProfile`, `onGetVisualGenerationStatus`.
+- **Cast**: `src/domain/directorCast.ts` derives reference status with the same rule as `director-context.ts` (`referenceSheetAssetKey || thumbnailAssetKey`) plus active sheet jobs; new characters/locations/props are created with `createWorldEntity`, optionally refined with `refine-entity-visual-profile`, then sheeted with `entity_reference_sheet` — all from the director.
+- **Styling**: `src/styles/features/vibe-director/director.css` replaces the olive `directorWorkspace.css`; tokens alias `--app-*`/`--accent`/`--muted` (game-builder pattern), primitives (`.primary-button`, `.ghost-button`, `.eyebrow`, `.chip`, `.tabbar`) are used directly, director selectors joined the `primitives.css` shim, `.workspace-stage.is-vibe-workspace` owns scrolling, and the topbar entry is a regular `.tab-button`. Legacy view is reachable only via `VITE_VIBE_DIRECTOR_V2=false`.
+
+### Deployment (both runtimes)
+
+1. Commit, then `npm run test:director-db`; apply only `20260906202603_director_isolated_runtime.sql`.
+2. Deploy `director-command`, `get-director-session`, `director-recover`, `director-fal-webhook`, `director-live-gateway`, `director-assist`, `start-visual-generation-job`, `start-output-workflow-run`, `cancel-output-workflow-run`, `fal-webhook` and every function bundling changed `_shared` modules (esbuild the oversized three; keep each `verify_jwt`).
+3. `npm run fly:worker:deploy` (legacy worker gains the Director handler, compat claim RPC and `director_frame`).
+4. Create `graphcore-director`; Fly secrets `SUPABASE_URL`, `SB_SECRET_KEY`, `FAL_KEY`, `DIRECTOR_WORKER_WAKE_SECRET`, `DIRECTOR_FAL_WEBHOOK_URL`; Edge secrets `DIRECTOR_WORKER_WAKE_SECRET`, `DIRECTOR_WORKER_WAKE_URL`; `npm run fly:director:deploy`; one healthy machine per process group.
+5. Edge `DIRECTOR_RUNTIME_ENABLED=true`, `DIRECTOR_RUNTIME_USERS=<uuid>`, then `DIRECTOR_GENERATION_ENABLED=true`.
+6. Paid acceptance: one 480p 5 s take on each path, one `director_frame`, one sheet from the director; check `ai_usage_events`.
+
+Verification on 2026-09-11 (local): `npx tsc --noEmit`, `npm run build`, `npm test` (721 passed / 8 skipped), `npm run test:director-runtime` (11), Deno checks for `director-command`, `get-director-session`, `director-assist`, `_shared/director-*.ts`; the visual worker's 7 pre-existing Deno errors are unchanged. Paid provider acceptance and the deployment above have not been run.
+
+## 2026-09-12 — take preparation on the workflow graph, parallel export, H3 as a graph video model
+
+### Take preparation graph (`src/domain/directorPrep.ts`, `_shared/output-workflow-director-pack.ts`, `director-prepare`)
+
+One workflow per session (`director.prep.<sessionId>`), rebuilt on each prepare request and executed by the regular output-workflow runtime (parallel per resource class, cached by input hash, lease-based retries, `waiting` requeue):
+
+```
+director_prep_context ─┬─ director_cast_sheet__<entity>  (×N, image class, groupKey director_cast_sheets, 4 wide)
+                       ├─ …                              └─ director_frame_compose (optional, after all sheets)
+                       └────────────────────────────────────── director_prep_ready
+```
+
+- `director-prepare` (RLS) resolves the cast (`referenceSheetAssetKey || thumbnailAssetKey`), builds the rows with `buildDirectorPrepGraphRows`, upserts nodes/edges on `(workflow_id,key)`, deletes stale nodes, and preserves cached outputs of nodes whose `metadata.compileHash` is unchanged. The client then starts the run through `start-output-workflow-run` (same wake, defaults and RLS as every graph run).
+- Node handlers delegate media to the existing `visual_generation_jobs` pipeline: a sheet node inserts one `entity_reference_sheet` job (idempotent through a `directorPrepRunId/directorPrepNodeKey` marker in job metadata), returns `waiting` (8 s) until the job is terminal, then outputs `{entityKey, assetKey}`. `director_frame_compose` does the same with a `director_frame` job using the fresh sheets as references. `director_prep_ready` summarises references and the frame.
+- Manifests live in `cinematicSequenceContracts`; the pack registers through `defineWorkflowNodePack` and is spread into the explicit handler-key set of the monolith.
+- Client: `useDirectorPrepRun` starts the run, follows it via `subscribeOutputWorkflowGraphSignals` + `loadOutputWorkflowGraph` every 4 s, renders `DirectorPrepProgress` (one row per node), refreshes the snapshot when terminal, and sets the composed frame as the start frame when empty. "Prepare N sheets" and "Compose start frame" use this path; a single sheet button still starts a direct job. Without a graph loader prop the workspace falls back to the direct jobs.
+- The paid H3 take remains on the director runtime (credit reservation, submit-once, permits); the graph only prepares its inputs.
+
+### Export
+
+Both executors normalise clips in parallel (`DIRECTOR_EXPORT_CLIP_CONCURRENCY`, default 3) and reuse cached renders from `generated/director-clips/<draftId>/<sha>.mp4`, keyed by source media, trim range and frame size (`_shared/director-clip-cache.ts`). A re-export after one trim re-encodes only the changed clip. Cache misses or write failures fall back to encoding.
+
+### H3 in the generic video node
+
+`submitFalVideoRequest` builds an H3 body (`buildH3WorkflowVideoBody` in `src/domain/h3Video.ts`) when the node's `config.model` is an H3 endpoint: reference images/videos/audio become `reference_*_urls` (or the first image becomes `image_url` for image-to-video), `720p`→`768P`, duration clamped to 5–15 s, no `generate_audio`. Result URLs are read by the existing `extractFalVideoUrl`. This lets a shot video node in the animatic graph run on H3 by configuration; writing director takes back into shot production graphs is not implemented yet.
+
+Verification 2026-09-12: `npx tsc --noEmit`, `npm run build`, `npm test` (726 passed / 8 skipped), Deno checks for `director-prepare`, the director pack, both runtimes and the media runtime; the monolith's pre-existing Deno error count is unchanged (187) with no Director-related entries. Deploy note: `director-prepare` is a new function; the pack ships with every function that bundles `_shared/output-workflow.ts` and with the world-generation worker.

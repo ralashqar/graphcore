@@ -281,6 +281,7 @@ import {
   registerWorkflowUtilityNodePack,
   workflowUtilityNodeHandlerKeys,
 } from './output-workflow-utility-pack.ts'
+import { directorWorkflowNodeHandlerKeys, registerDirectorWorkflowNodePack } from './output-workflow-director-pack.ts'
 import {
   legacyMonolithWorkflowNodeHandlerKeys,
 } from './output-workflow-legacy-handlers.ts'
@@ -11227,6 +11228,7 @@ function assertNoImplicitMonolithWorkflowNodeHandlers() {
     ...comicWorkflowNodeHandlerKeys,
     ...documentWorkflowNodeHandlerKeys,
     ...workflowUtilityNodeHandlerKeys,
+    ...directorWorkflowNodeHandlerKeys,
     ...sceneBoardWorkflowNodeHandlerKeys,
     ...sequenceAnimaticPlanningWorkflowNodeHandlerKeys,
     ...sequenceAnimaticSceneLifecycleWorkflowNodeHandlerKeys,
@@ -11267,6 +11269,12 @@ function ensureDefaultOutputWorkflowNodeHandlersRegistered() {
       readStringArray,
       hashOutputWorkflowValue,
     },
+    register: (handlerKey, handler) => {
+      registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
+    },
+  })
+  registerDirectorWorkflowNodePack({
+    helpers: { asRecord, readText, readStringArray, hashOutputWorkflowValue },
     register: (handlerKey, handler) => {
       registerWorkflowNodeHandler(outputWorkflowNodeHandlerRegistry, handlerKey, handler as never, { replace: true })
     },

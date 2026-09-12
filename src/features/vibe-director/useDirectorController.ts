@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectSnapshot } from '../../domain/graphcore'
-import { type DirectorCommand, type DirectorState, directorStateSchema } from '../../domain/directorWorkspace'
+import {
+  type DirectorAssistRequest,
+  type DirectorCommand,
+  type DirectorSettings,
+  type DirectorState,
+  directorStateSchema,
+} from '../../domain/directorWorkspace'
+import { directorReferenceAssetKey } from '../../domain/directorCast'
 import {
   DirectorRequestError,
   invokeDirector,
   loadDirectorProgress,
   loadDirectorState,
+  requestDirectorAssist,
   sendDirectorCommand,
 } from '../../data/directorRepository'
 import { getCurrentSession } from '../../data/auth'
@@ -14,11 +22,17 @@ import { pendingCommandKey, readPendingCommand, savePendingCommand } from './dir
 import { signProjectAssetUrlEntries } from '../../data/graphcoreRepository'
 import { createPollGroup } from '../../data/requestCoordinator'
 import { useDirectorStore } from './directorStore'
+
 type Action = DirectorCommand extends infer C
   ? C extends DirectorCommand ? Omit<C, 'projectId' | 'draftId' | 'sessionId' | 'idempotencyKey' | 'expectedRevision'>
   : never
   : never
+
+export const ACTIVE_TAKE_STATUSES = ['queued', 'preparing', 'generating', 'saving'] as const
+export const isActiveTakeStatus = (status: string) => (ACTIVE_TAKE_STATUSES as readonly string[]).includes(status)
+
 const empty = () => directorStateSchema.parse({ sessions: [], session: null, takes: [], edits: [], messages: [] })
+
 export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) {
   const ui = useDirectorStore()
   const [state, setState] = useState<DirectorState>(empty)
@@ -34,6 +48,7 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
   const [hasPending, setHasPending] = useState(false)
   const projectId = snapshot.project.id
   const draftId = snapshot.draft.id
+
   const accept = useCallback((next: DirectorState, hydrate = false) => {
     stateRef.current = next
     setState(next)
@@ -44,23 +59,26 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
         settings: next.session.settings,
         direction: next.session.direction,
         entityKeys: next.session.entity_keys,
+        dirty: false,
+        assistUndo: null,
         takeId: next.takes[0]?.id ?? null,
       })
     }
   }, [])
+
   const refresh = useCallback(async (hydrate = false, selected = sessionId.current, progressOnly = false) => {
     const epoch = alive.current
     const previous = stateRef.current
     if (progressOnly && selected && previous.session) {
-      const progress = await loadDirectorProgress({
-        projectId,
-        draftId,
-        sessionId: selected,
-        revision: previous.session.revision,
-      })
+      const progress = await loadDirectorProgress({ projectId, draftId, sessionId: selected, revision: previous.session.revision })
       if (epoch !== alive.current) return
       if (stateRef.current.session?.revision !== previous.session.revision) return
-      if (!progress.needsRefresh) {
+      // A take reaching a terminal state also produces a conversation-log message; load the full session for it.
+      const finished = (progress.takes ?? []).some((next) => {
+        const current = stateRef.current.takes.find((t) => t.id === next.id)
+        return current && isActiveTakeStatus(current.status) && next.status && !isActiveTakeStatus(next.status)
+      })
+      if (!progress.needsRefresh && !finished) {
         accept({
           ...stateRef.current,
           takes: stateRef.current.takes.map((t) => ({ ...t, ...progress.takes?.find((next) => next.id === t.id) })),
@@ -72,10 +90,7 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
     }
     const next = await loadDirectorState({ projectId, draftId, sessionId: selected })
     if (epoch === alive.current) {
-      if (
-        next.session?.id === stateRef.current.session?.id &&
-        (next.session?.revision ?? 0) < (stateRef.current.session?.revision ?? 0)
-      ) return
+      if (next.session?.id === stateRef.current.session?.id && (next.session?.revision ?? 0) < (stateRef.current.session?.revision ?? 0)) return
       // Retain paginated history and old signed URLs through transient status failures.
       const older = stateRef.current.session?.id === next.session?.id
         ? stateRef.current.takes.filter((t) => !next.takes.some((n) => n.id === t.id))
@@ -83,6 +98,7 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       accept({ ...next, takes: [...next.takes, ...older] }, hydrate)
     }
   }, [projectId, draftId, accept])
+
   useEffect(() => {
     alive.current++
     sessionId.current = undefined
@@ -112,12 +128,9 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       intervalMs: 5000,
       maxPerTick: 1,
       getItems: () => {
-        const active = stateRef.current.takes.some((t) =>
-          ['queued', 'preparing', 'generating', 'saving'].includes(t.status)
-        ) || stateRef.current.exports.some((e) => ['queued', 'running'].includes(e.status))
-        return !document.hidden && !inFlight.current && sessionId.current && (active || !connected.current)
-          ? [sessionId.current]
-          : []
+        const active = stateRef.current.takes.some((t) => isActiveTakeStatus(t.status))
+          || stateRef.current.exports.some((e) => ['queued', 'running'].includes(e.status))
+        return !document.hidden && !inFlight.current && sessionId.current && (active || !connected.current) ? [sessionId.current] : []
       },
       pollItem: () => refresh(false, sessionId.current, true),
       onError: (error) => useDirectorStore.getState().patch({ error: `Refresh delayed: ${String(error)}` }),
@@ -129,6 +142,7 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       poll.stop()
     }
   }, [draftId, refresh])
+
   useEffect(() => {
     connected.current = false
     if (!state.session?.id) return
@@ -147,11 +161,21 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       void supabase.removeChannel(channel)
     }
   }, [state.session?.id, refresh])
+
+  // Signed URLs: takes, exports, frames and the current cast's reference sheets.
+  const castReferenceKeys = useMemo(() => {
+    const byKey = new Map(snapshot.worldEntities.map((entity) => [entity.key, entity] as const))
+    return ui.entityKeys.map((key) => byKey.get(key)).map((entity) => (entity ? directorReferenceAssetKey(entity) : null))
+  }, [snapshot.worldEntities, ui.entityKeys])
+  const [extraKeys, setExtraKeys] = useState<string[]>([])
   const assetKeys = [
     ...new Set([
       ...state.takes.map((t) => t.asset_key),
       ...state.exports.map((e) => (e.outputs.director as { assetKey?: string })?.assetKey),
       ui.settings.firstFrameAssetKey,
+      ui.settings.endFrameAssetKey,
+      ...castReferenceKeys,
+      ...extraKeys,
     ]),
   ].filter((k): k is string => Boolean(k))
   const assetKeySignature = assetKeys.join('|')
@@ -163,10 +187,7 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       if (assetKeys.length) {
         void signProjectAssetUrlEntries({ projectId, assetKeys }).then((rows) => {
           if (!disposed) {
-            setUrls((old) => ({
-              ...old,
-              ...Object.fromEntries(rows.filter((r) => r.signedUrl).map((r) => [r.assetKey, r.signedUrl!])),
-            }))
+            setUrls((old) => ({ ...old, ...Object.fromEntries(rows.filter((r) => r.signedUrl).map((r) => [r.assetKey, r.signedUrl!])) }))
           }
         }).catch((error) => {
           if (!disposed) useDirectorStore.getState().patch({ error: `Media loading delayed: ${String(error)}` })
@@ -182,6 +203,16 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
     // The signature deliberately tracks keys instead of array identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, assetKeySignature, urlRefresh])
+  /** Pickers call this with the candidates they show; the keys join the periodic re-signing set. */
+  const signAssets = useCallback((keys: string[]) => {
+    const wanted = keys.filter(Boolean)
+    if (!wanted.length) return
+    setExtraKeys((current) => {
+      const merged = [...new Set([...current, ...wanted])]
+      return merged.length === current.length ? current : merged.slice(-240)
+    })
+  }, [])
+
   const execute = useCallback(async (action: Action, id?: string, retryPending = false) => {
     if (!canRun) {
       useDirectorStore.getState().patch({ error: 'This workspace is read-only.' })
@@ -192,9 +223,7 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
     useDirectorStore.getState().patch({ busy: true, error: null })
     const epoch = alive.current
     try {
-      if (pending.current && !retryPending) {
-        throw new Error('A previous command is awaiting confirmation. Retry the pending command first.')
-      }
+      if (pending.current && !retryPending) throw new Error('A previous command is awaiting confirmation. Retry the pending command first.')
       const command = retryPending && pending.current ? pending.current : {
         ...action,
         projectId,
@@ -206,9 +235,7 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       const auth = await getCurrentSession()
       if (!auth) throw new Error('Sign in to use Director')
       const key = pendingCommandKey(projectId, draftId, auth.user.id)
-      if (retryPending && pendingKey.current !== key) {
-        throw new Error('Sign in with the account that issued this pending command')
-      }
+      if (retryPending && pendingKey.current !== key) throw new Error('Sign in with the account that issued this pending command')
       pendingKey.current = key
       savePendingCommand(sessionStorage, key, command)
       pending.current = command
@@ -219,8 +246,11 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       pending.current = null
       setHasPending(false)
       sessionId.current = result.sessionId
-      await refresh(action.action === 'create', result.sessionId)
-      if (result.takeId) useDirectorStore.getState().patch({ takeId: result.takeId })
+      await refresh(command.action === 'create', result.sessionId)
+      const patch: Parameters<typeof ui.patch>[0] = {}
+      if (result.takeId) patch.takeId = result.takeId
+      if (['direct', 'generate', 'create'].includes(command.action)) patch.dirty = false
+      if (Object.keys(patch).length) useDirectorStore.getState().patch(patch)
       return result
     } catch (error) {
       useDirectorStore.getState().patch({ error: String(error) })
@@ -235,14 +265,23 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
       useDirectorStore.getState().patch({ busy: false })
     }
   }, [projectId, draftId, refresh, canRun])
-  const saveDirection = () =>
-    execute({ action: 'direct', direction: ui.direction, entityKeys: ui.entityKeys, settings: ui.settings })
+
+  const setDirection = (direction: string) => ui.patch({ direction, dirty: true })
+  const updateSettings = (change: Partial<DirectorSettings>) => ui.patch({ settings: { ...useDirectorStore.getState().settings, ...change }, dirty: true })
+  const setEntityKeys = (entityKeys: string[]) => ui.patch({ entityKeys: [...new Set(entityKeys)].slice(0, 50), dirty: true })
+
+  const saveDirection = async () => {
+    const current = useDirectorStore.getState()
+    if (!stateRef.current.session) return
+    return execute({ action: 'direct', direction: current.direction, entityKeys: current.entityKeys, settings: current.settings })
+  }
   const generate = async (branch?: { parentTakeId: string; branchSeconds: number; branchMode: 'frame' | 'motion' }) => {
+    const current = useDirectorStore.getState()
     await execute({
       action: 'generate',
-      direction: ui.direction,
-      settings: ui.settings,
-      entityKeys: ui.entityKeys,
+      direction: current.direction,
+      settings: current.settings,
+      entityKeys: current.entityKeys,
       branchMode: 'frame',
       ...branch,
     })
@@ -257,6 +296,12 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
     }
   }
   const selectSession = async (id: string) => {
+    if (id === sessionId.current) return
+    // Unsaved direction is persisted before leaving; a failed save keeps the current session open.
+    if (useDirectorStore.getState().dirty && stateRef.current.session) {
+      await saveDirection()
+      if (useDirectorStore.getState().error) return
+    }
     alive.current++
     sessionId.current = id
     await refresh(true, id)
@@ -268,13 +313,40 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
     if (epoch !== alive.current) return
     accept({
       ...stateRef.current,
-      takes: [
-        ...stateRef.current.takes,
-        ...next.takes.filter((t) => !stateRef.current.takes.some((old) => old.id === t.id)),
-      ],
+      takes: [...stateRef.current.takes, ...next.takes.filter((t) => !stateRef.current.takes.some((old) => old.id === t.id))],
       nextCursor: next.nextCursor,
     })
   }
+  const assist = async (intent: DirectorAssistRequest['intent']) => {
+    const current = useDirectorStore.getState()
+    const session = stateRef.current.session
+    if (!session || !canRun || inFlight.current) return null
+    inFlight.current = true
+    ui.patch({ busy: true, error: null })
+    try {
+      const result = await requestDirectorAssist({
+        projectId, draftId, sessionId: session.id, direction: current.direction, intent, entityKeys: current.entityKeys, settings: current.settings,
+      })
+      if (intent === 'polish' && result.direction.trim()) {
+        useDirectorStore.getState().patch({ assistUndo: current.direction, direction: result.direction.trim(), dirty: true })
+      }
+      inFlight.current = false
+      await refresh(false, session.id).catch(() => {})
+      return result
+    } catch (error) {
+      useDirectorStore.getState().patch({ error: String(error) })
+      return null
+    } finally {
+      inFlight.current = false
+      useDirectorStore.getState().patch({ busy: false })
+    }
+  }
+  const undoAssist = () => {
+    const current = useDirectorStore.getState()
+    if (current.assistUndo === null) return
+    ui.patch({ direction: current.assistUndo, assistUndo: null, dirty: true })
+  }
+
   return {
     ui,
     state,
@@ -284,13 +356,19 @@ export function useDirectorController(snapshot: ProjectSnapshot, canRun = true) 
     execute,
     generate,
     saveDirection,
+    setDirection,
+    updateSettings,
+    setEntityKeys,
     selectSession,
     loadMore,
     refresh,
     refreshMedia,
+    signAssets,
     hasPending,
     retryPending,
     recover,
+    assist,
+    undoAssist,
   }
 }
 export type DirectorController = ReturnType<typeof useDirectorController>

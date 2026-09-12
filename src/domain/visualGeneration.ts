@@ -17,6 +17,7 @@ export const visualGenerationKindSchema = z.enum([
   'screen_mockup',
   'entity_reference_sheet',
   'character_sheet',
+  'director_frame',
   'wiki_visual',
   'app_screen_mockup',
   'app_screen_analysis',

@@ -85,3 +85,9 @@ Implementation verification on September 6: application suite 659 passed / 8 ski
 The new runtime migration has **not** been applied and this architecture upgrade has **not** been deployed. Local Fly authentication remains unavailable, so paid browser/provider acceptance and deployed performance measurements remain pending. The earlier V1 Director migration/Edge rollout is documented separately in document 25.
 
 References: [Fal asynchronous queue](https://fal.ai/docs/documentation/model-apis/inference/queue), [Supabase Postgres Changes](https://supabase.com/docs/guides/realtime/postgres-changes), [Fly process groups](https://fly.io/docs/launch/processes/).
+
+## 2026-09-11 status
+
+The isolated runtime is still not deployed (`graphcore-director` does not exist; migration `20260906202603` unapplied). The Director workspace overhaul (doc 25, 2026-09-11 section) targets both paths: the legacy worker executes `executionOwner=legacy` takes, `live_finalize` and `director_frame` visual jobs; allowlisted users route to this runtime once created. `runner.ts` now writes conversation-log outcome messages through `_shared/director-messages.ts`; `media.ts` derives export frame size with `directorExportFrame` (adds 1080p).
+
+`media.ts renderEdit` now normalises clips in parallel with a storage-backed clip cache (`_shared/director-clip-cache.ts`); see doc 25 (2026-09-12).

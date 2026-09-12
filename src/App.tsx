@@ -2316,7 +2316,7 @@ export default function App() {
   useEffect(() => {
     if (loadedState?.source !== 'supabase' || !snapshot) return undefined
     let cancelled = false
-    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet', 'world_entity_icon_grid']
+    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet', 'director_frame', 'world_entity_icon_grid']
     workspaceService.listActiveVisualGenerationJobs(snapshot, activeVisualJobKinds)
       .then((jobs) => {
         if (cancelled) return
@@ -2334,7 +2334,7 @@ export default function App() {
     if (loadedState?.source !== 'supabase' || !snapshot) return undefined
     if (!initialSeedGenerationPending && !activeInitialSeedSessionOpen) return undefined
     let cancelled = false
-    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet', 'world_entity_icon_grid']
+    const activeVisualJobKinds: VisualGenerationKind[] = ['wiki_visual', 'entity_reference_sheet', 'character_sheet', 'director_frame', 'world_entity_icon_grid']
     const refreshActiveVisualJobs = async () => {
       const current = snapshotRef.current ?? snapshot
       if (!current || current.draft.id !== snapshot.draft.id) return
@@ -8956,13 +8956,18 @@ export default function App() {
           />
         ) : null}
 
-        <section className={`workspace-stage${appRoute === 'game' ? ' is-game-workspace' : ''}`}>
+        <section className={`workspace-stage${appRoute === 'game' ? ' is-game-workspace' : appRoute === 'vibe' ? ' is-vibe-workspace' : ''}`}>
           <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing workspace…</h3></div>}>
             {appRoute === 'game' ? (import.meta.env.VITE_GAME_BUILDER_ENABLED === 'true' ? <GameWorkspace key={snapshot.draft.id} snapshot={snapshot} canRun={loadedState?.source === 'supabase'} onOpenWorld={() => { setWorldViewMode('wiki'); setActiveTab('graph'); navigateToPath(APP_ROUTE_PATH) }} /> : <div className="detail-stack"><h3>Game workspace is not enabled.</h3><button onClick={() => navigateToPath(APP_ROUTE_PATH)}>Back to world</button></div>) : null}
             {appRoute === 'vibe' ? (
               <VibeDirectorPage
                 canRun={loadedState?.source === 'supabase'}
                 snapshot={snapshot}
+                visualGenerationJobs={visualGenerationJobs}
+                onCreateWorldEntity={createWorldEntity}
+                onRefineWorldEntityVisualProfile={refineWorldEntityVisualProfile}
+                onGetVisualGenerationStatus={getVisualGenerationStatus}
+                onLoadOutputWorkflowGraph={loadOutputWorkflowGraph}
                 onGenerateWorldBrandAtlasImage={generateWorldBrandAtlasImage}
                 onStartVisualGenerationJob={startVisualGenerationJob}
                 onStartWorldPromptTurn={startWorldPromptTurn}

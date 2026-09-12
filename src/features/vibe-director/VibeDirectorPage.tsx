@@ -1,8 +1,15 @@
-import { lazy, Suspense, useState } from 'react'
-import type { VibeDirectorPageProps } from './LegacyVibeDirectorPage'
+import { lazy, Suspense } from 'react'
+import type { VibeDirectorPageProps } from './directorTypes'
 import { DirectorWorkspace } from './DirectorWorkspace'
-const LegacyDirector = lazy(() => import('./LegacyVibeDirectorPage').then(module => ({ default: module.VibeDirectorPage })))
+
+export type { VibeDirectorPageProps } from './directorTypes'
+
+// The legacy phase-wizard stays reachable only through VITE_VIBE_DIRECTOR_V2=false (development escape hatch).
+const LegacyDirector = lazy(() => import('./LegacyVibeDirectorPage').then((module) => ({ default: module.VibeDirectorPage })))
+
 export function VibeDirectorPage(props: VibeDirectorPageProps) {
-  const [legacy, setLegacy] = useState(import.meta.env.VITE_VIBE_DIRECTOR_V2 === 'false')
-  return legacy ? <Suspense fallback={<p>Loading director…</p>}><button className="ghost-button compact" onClick={() => setLegacy(false)}>Open new Vibe Director</button><LegacyDirector {...props} /></Suspense> : <DirectorWorkspace {...props} onOpenLegacy={() => setLegacy(true)} />
+  if (import.meta.env.VITE_VIBE_DIRECTOR_V2 === 'false') {
+    return <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing director…</h3></div>}><LegacyDirector {...props} /></Suspense>
+  }
+  return <DirectorWorkspace {...props} />
 }

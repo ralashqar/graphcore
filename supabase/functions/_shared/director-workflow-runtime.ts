@@ -1,4 +1,6 @@
-import { directorTakeSchema, directorSettingsSchema, directorClipSchema, compileDirectorPrompt, type DirectorReference } from '../../../src/domain/directorWorkspace.ts'
+import { directorTakeSchema, directorSettingsSchema, directorClipSchema, directorExportFrame, compileDirectorPrompt, type DirectorReference } from '../../../src/domain/directorWorkspace.ts'
+import { insertDirectorMessage, takeCompletedMessage, takeFailedMessage } from './director-messages.ts'
+import { DIRECTOR_EXPORT_CLIP_CONCURRENCY, directorClipCacheKey, directorClipCachePath, directorClipNormalizeArgs, mapWithConcurrency, readCachedDirectorClip, writeCachedDirectorClip } from './director-clip-cache.ts'
 import { buildH3VideoRequest, h3Model } from '../../../src/domain/h3Video.ts'
 import { aiUsageLineSchema } from '../../../src/domain/aiUsage.ts'
 import { recordAiUsageEvent } from './ai-provider-gateway.ts'
@@ -117,6 +119,7 @@ async function runTake(input: Input) {
     await settleCredits(input, take.id, take.credits_reserved)
     await recordAiUsageEvent(input.client as never, { idempotencyKey: `director:${take.id}`, creditsCharged: take.credits_reserved, context: { projectId: input.run.projectId, draftId: input.run.draftId, outputWorkflowRunId: input.run.id, userId: input.run.requestedBy ?? undefined }, line: aiUsageLineSchema.parse({ provider: 'fal', model, modality: 'video', operation: 'video_generation', status: 'succeeded', requestId, media: { durationSeconds: probe.duration }, cost: { estimatedCostUsd: take.estimated_cost_usd, estimatedCredits: Math.ceil(take.estimated_cost_usd * 100), pricingSource: 'h3_list_rate_estimate' } }) })
     await updateTake(input, take.id, { status: 'completed', asset_key: asset.assetKey, duration_seconds: probe.duration, error_message: null })
+    await insertDirectorMessage(input.client as never, take.session_id, 'system', takeCompletedMessage({ durationSeconds: probe.duration, estimatedCostUsd: take.estimated_cost_usd, model, branch: take.parent_take_id ? take.branch_mode : null }))
     return { ...asset, takeId: take.id, durationSeconds: probe.duration }
   } catch (error) {
     const cancelled = await input.client.from('director_takes').select('status,submission_started').eq('id', take.id).single()
@@ -125,6 +128,7 @@ async function runTake(input: Input) {
       await checkedJson(`https://queue.fal.run/${model.split('/').slice(0, 2).join('/')}/requests/${requestId}/cancel`, Deno.env.get('FAL_KEY') ?? '', { method: 'PUT' }).catch(() => {})
     }
     await input.client.from('director_takes').update({ status: 'failed', error_message: String(error), updated_at: new Date().toISOString() }).eq('id', take.id).neq('status', 'cancelled')
+    if (cancelled.data?.status !== 'cancelled') await insertDirectorMessage(input.client as never, take.session_id, 'system', takeFailedMessage(error))
     throw error
   } finally { await Deno.remove(temp, { recursive: true }) }
 }
@@ -135,20 +139,28 @@ async function runExport(input: Input) {
   const clips = directorClipSchema.array().parse(edit.data.clips)
   if (!clips.length) throw new Error('The selected edit is empty.')
   const settings = directorSettingsSchema.parse(input.run.input.settings)
-  const [rw, rh] = settings.aspectRatio.split(':').map(Number)
-  const height = settings.resolution === '768p' ? 768 : 480
-  const width = Math.round(height * rw / rh / 2) * 2
+  const { width, height } = directorExportFrame(settings)
   const temp = await Deno.makeTempDir({ prefix: 'director-export-' })
   try {
-    for (const [i, clip] of clips.entries()) {
+    // Clips normalise in parallel; a clip whose (source, trim, frame) was rendered before is reused from the cache.
+    await mapWithConcurrency([...clips.entries()], DIRECTOR_EXPORT_CLIP_CONCURRENCY, async ([i, clip]) => {
       await assertRunning(input)
       const take = await input.client.from('director_takes').select('asset_key').eq('id', clip.takeId).eq('session_id', edit.data.session_id).eq('status', 'completed').single()
       if (take.error || !take.data.asset_key) throw new Error('An edit references unavailable footage.')
+      const output = `${temp}/clip-${i}.mp4`
+      const cachePath = directorClipCachePath(input.run.draftId, await directorClipCacheKey({ source: take.data.asset_key, inSeconds: clip.inSeconds, outSeconds: clip.outSeconds, width, height }))
+      const cached = await readCachedDirectorClip(input.client as never, cachePath)
+      if (cached) {
+        await Deno.writeFile(output, cached)
+        return
+      }
       const path = `${temp}/source-${i}.mp4`
       await Deno.writeFile(path, await downloadDirectorMedia(await directorAssetUrl(input.client, input.run.projectId, take.data.asset_key)))
       const probe = await probeDirectorMedia(path)
-      await runDirectorFfmpeg(['-i', path, ...(!probe.hasAudio ? ['-f','lavfi','-i','anullsrc=r=48000:cl=stereo'] : []), '-ss', String(clip.inSeconds), '-t', String(clip.outSeconds - clip.inSeconds), '-map', '0:v:0', '-map', probe.hasAudio ? '0:a:0' : '1:a:0', '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24`, '-c:v','libx264','-pix_fmt','yuv420p','-preset','fast','-crf','20','-c:a','aac','-ar','48000','-ac','2', `${temp}/clip-${i}.mp4`])
-    }
+      await runDirectorFfmpeg(directorClipNormalizeArgs({ source: path, output, hasAudio: probe.hasAudio, inSeconds: clip.inSeconds, outSeconds: clip.outSeconds, width, height }))
+      await Deno.remove(path).catch(() => {})
+      await writeCachedDirectorClip(input.client as never, cachePath, await Deno.readFile(output))
+    })
     await Deno.writeTextFile(`${temp}/concat.txt`, clips.map((_, i) => `file 'clip-${i}.mp4'`).join('\n'))
     await runDirectorFfmpeg(['-f','concat','-safe','0','-i',`${temp}/concat.txt`,'-c','copy','-movflags','+faststart',`${temp}/edit.mp4`])
     await assertRunning(input)

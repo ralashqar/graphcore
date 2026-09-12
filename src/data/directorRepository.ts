@@ -1,4 +1,5 @@
-import { directorCommandSchema, directorStateSchema, type DirectorCommand, type DirectorState, type DirectorTake } from '../domain/directorWorkspace'
+import { directorAssistRequestSchema, directorAssistResponseSchema, directorCommandSchema, directorProgressSchema, directorStateSchema, type DirectorAssistRequest, type DirectorCommand, type DirectorProgress } from '../domain/directorWorkspace'
+import { directorPrepareRequestSchema, directorPrepareResponseSchema, type DirectorPrepareRequestInput } from '../domain/directorPrep'
 import { supabase } from '../utils/supabase'
 import { getCurrentSession } from './auth'
 import { runCoalescedRequest, runLimitedRequest } from './requestCoordinator'
@@ -25,10 +26,20 @@ export async function invokeDirector<T>(name: string, body: Record<string, unkno
 export function loadDirectorState(input: { projectId: string; draftId: string; sessionId?: string; cursor?: string }) {
   return runCoalescedRequest({ key: `director-read:${JSON.stringify(input)}`, className: 'edge-function', fn: async () => directorStateSchema.parse(await invokeDirector('get-director-session', input)) })
 }
-export function loadDirectorProgress(input:{projectId:string;draftId:string;sessionId:string;revision:number}) {
-  return runCoalescedRequest({key:`director-progress:${input.sessionId}:${input.revision}`,className:'edge-function',fn:()=>invokeDirector<{
-    needsRefresh:boolean;takes?:Array<Partial<DirectorTake>&{id:string}>;jobs?:DirectorState['jobs'];exports?:DirectorState['exports']
-  }>('get-director-session',{...input,progressOnly:true})})
+export function loadDirectorProgress(input: { projectId: string; draftId: string; sessionId: string; revision: number }): Promise<DirectorProgress> {
+  return runCoalescedRequest({
+    key: `director-progress:${input.sessionId}:${input.revision}`,
+    className: 'edge-function',
+    fn: async () => directorProgressSchema.parse(await invokeDirector('get-director-session', { ...input, progressOnly: true })),
+  })
+}
+export function requestDirectorPrepare(input: DirectorPrepareRequestInput) {
+  const parsed = directorPrepareRequestSchema.parse(input)
+  return runLimitedRequest({ className: 'mutation', resourceKey: `director:${parsed.sessionId}`, fn: async () => directorPrepareResponseSchema.parse(await invokeDirector('director-prepare', parsed)) })
+}
+export function requestDirectorAssist(input: DirectorAssistRequest) {
+  const parsed = directorAssistRequestSchema.parse(input)
+  return runLimitedRequest({ className: 'mutation', resourceKey: `director:${parsed.sessionId}`, fn: async () => directorAssistResponseSchema.parse(await invokeDirector('director-assist', parsed)) })
 }
 export function sendDirectorCommand(command: DirectorCommand) {
   const parsed = directorCommandSchema.parse(command)

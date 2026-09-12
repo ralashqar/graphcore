@@ -1,4 +1,5 @@
 import { directorCommandSchema } from '../../../src/domain/directorWorkspace.ts'
+import { H3_FREE_REFERENCE_TOKENS, H3_USD_PER_SECOND, H3_USD_PER_THOUSAND_REFERENCE_TOKENS } from '../../../src/domain/h3Video.ts'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
 import { prepareDirectorGeneration } from '../_shared/director-context.ts'
@@ -47,7 +48,7 @@ Deno.serve(async request => {
     const creditsPerUsd = Number.isFinite(configuredRate) && configuredRate > 0 ? configuredRate : 100
     const allowlist = (Deno.env.get('DIRECTOR_RUNTIME_USERS') ?? '').split(',').map(s => s.trim())
     const owned = Deno.env.get('DIRECTOR_RUNTIME_ENABLED') === 'true' && (allowlist.includes('*') || allowlist.includes(user.id))
-    const pricingSnapshot={policy:'h3_list_rate_estimate_v1',creditsPerUsd,usdPerSecond480p:0.05,usdPerSecond768p:0.08,usdPerThousandReferenceTokens:0.02,freeReferenceTokens:4096,quotedAt:new Date().toISOString()}
+    const pricingSnapshot={policy:'h3_list_rate_estimate_v2',creditsPerUsd,usdPerSecond480p:H3_USD_PER_SECOND['480p'],usdPerSecond768p:H3_USD_PER_SECOND['768p'],usdPerSecond1080p:H3_USD_PER_SECOND['1080p'],usdPerThousandReferenceTokens:H3_USD_PER_THOUSAND_REFERENCE_TOKENS,freeReferenceTokens:H3_FREE_REFERENCE_TOKENS,quotedAt:new Date().toISOString()}
     const result = await admin.rpc('director_commit_command', { p_actor: user.id, p_command: { ...command, ...prepared, creditsPerUsd, pricingSnapshot, executionVersion: owned ? 'director_v2' : 'legacy' } })
     if (result.error) throw new HttpError(result.error.code === '40001' ? 409 : result.error.code === '42501' ? 403 : 400, result.error.message)
     if (result.data?.runId) {
